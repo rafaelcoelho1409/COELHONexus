@@ -1,7 +1,7 @@
 """Prompt builders for mgsr replan + repair, and the compact formatters they consume."""
 from __future__ import annotations
+from . import params
 
-from .params import MAX_ACTIONS_PER_REPLAN
 
 
 def _format_outline_compact(outline_sections: list[dict]) -> str:
@@ -92,7 +92,7 @@ def build_replan_prompt(
         f'      "insert_after":     "s_id" (when applicable),\n'
         f'      "insert_before":    "s_id" (when applicable)\n'
         f'    }},\n'
-        f'    ... 0-{MAX_ACTIONS_PER_REPLAN} actions ...\n'
+        f'    ... 0-{params.MAX_ACTIONS_PER_REPLAN} actions ...\n'
         f'  ],\n'
         f'  "halt":              true | false,\n'
         f'  "confidence":        0.0-1.0,\n'

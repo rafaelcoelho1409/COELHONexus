@@ -1,11 +1,12 @@
 """Celery bridge for ingestion. Queued from POST /api/v1/docs-distiller/runs;
 progress + manifest flow back through Redis."""
+from __future__ import annotations
+from . import dispatch
 import asyncio
 import logging
 
 from infra.celery import app
 
-from .dispatch import run as _run_dispatch
 
 
 logger = logging.getLogger(__name__)
@@ -23,7 +24,7 @@ def run_ingestion(self, run_id: str, slug: str) -> dict:
     """Run docs ingestion for `slug`; manifest lands at `dd:runs:{run_id}:*`."""
     logger.info(f"[task] run_ingestion run_id={run_id} slug={slug}")
     try:
-        return asyncio.run(_run_dispatch(run_id, slug))
+        return asyncio.run(dispatch.service.run(run_id, slug))
     except Exception as e:
         logger.exception(f"[task] run_ingestion failed: {e}")
         return {

@@ -1,10 +1,10 @@
 """order_chapters — pure helpers (parse, Borda aggregate, foundational
 prefix rule, outline loader). Prompt builder lives in prompts.py."""
 from __future__ import annotations
+from . import patterns
 
 import json
 
-from .patterns import FOUNDATIONAL_RE, JSON_RE
 
 
 def load_outline(text: str) -> dict:
@@ -27,7 +27,7 @@ def is_foundational(title: str) -> bool:
     """install/setup/cli/quickstart — must anchor at position 0."""
     if not title:
         return False
-    return bool(FOUNDATIONAL_RE.search(title))
+    return bool(patterns.FOUNDATIONAL_RE.search(title))
 
 
 def parse_order_response(text: str, n_chapters: int) -> list[int] | None:
@@ -42,7 +42,7 @@ def parse_order_response(text: str, n_chapters: int) -> list[int] | None:
 
             parsed = json_repair.loads(text.strip())  # type: ignore
         except Exception:
-            m = JSON_RE.search(text)
+            m = patterns.JSON_RE.search(text)
             if not m:
                 return None
             try:

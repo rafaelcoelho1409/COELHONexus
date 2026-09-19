@@ -1,5 +1,7 @@
 """MinIO adapter + per-framework Store. Redis manifest keyed by run_id (live); MinIO manifest keyed by framework_slug (canonical on finalize). ensure_bucket() is idempotent."""
 from __future__ import annotations
+import domains
+from . import entities, keys, params
 
 import asyncio
 import json
@@ -7,6 +9,7 @@ import logging
 import os
 import time
 from dataclasses import asdict, fields
+from datetime import datetime, timezone
 from typing import Optional
 
 import aioboto3
@@ -14,39 +17,6 @@ import httpx
 import redis.asyncio as redis_aio
 from botocore.config import Config
 from botocore.exceptions import ClientError
-
-from ..artifacts import extract_and_save_artifacts_from_md
-from ...synth.nodes.corpus_normalize import normalize_doc
-from ...synth.nodes.vault import build_manifest
-from .entities import ContentType, ManifestEntry
-from .keys import (
-    artifact_key,
-    framework_prefix,
-    live_manifest_key,
-    manifest_key,
-    page_key,
-    raw_page_key,
-    vault_manifest_key,
-    vault_sentinelized_key,
-)
-from .params import (
-    CONNECT_TIMEOUT_S,
-    COPY_MAX_CONCURRENT,
-    DELETE_MAX_CONCURRENT,
-    LIVE_MANIFEST_THROTTLE_S,
-    MAX_POOL_CONNECTIONS,
-    MAX_RETRY_ATTEMPTS,
-    READ_CHUNK_SIZE,
-    READ_CHUNK_TIMEOUT_S,
-    READ_MAX_CHUNK_RETRIES,
-    READ_MAX_CONCURRENT,
-    READ_TIMEOUT_S,
-    TTL_S,
-    WRITE_CHUNK_SIZE,
-    WRITE_CHUNK_TIMEOUT_S,
-    WRITE_MAX_CHUNK_RETRIES,
-    WRITE_MAX_CONCURRENT,
-)
 
 
 logger = logging.getLogger(__name__)
@@ -86,10 +56,10 @@ class MinIOStorage:
         # MinIO requires s3v4 (default v2 fails).
         self._boto_config = Config(
             signature_version = "s3v4",
-            max_pool_connections = MAX_POOL_CONNECTIONS,
-            connect_timeout = CONNECT_TIMEOUT_S,
-            read_timeout = READ_TIMEOUT_S,
-            retries = {"max_attempts": MAX_RETRY_ATTEMPTS, "mode": "standard"},
+            max_pool_connections = params.MAX_POOL_CONNECTIONS,
+            connect_timeout = params.CONNECT_TIMEOUT_S,
+            read_timeout = params.READ_TIMEOUT_S,
+            retries = {"max_attempts": params.MAX_RETRY_ATTEMPTS, "mode": "standard"},
         )
 
     def _client(self):
@@ -119,7 +89,7 @@ class MinIOStorage:
         self,
         key: str,
         content: str | bytes,
-        content_type: ContentType = "text/markdown",
+        content_type: entities.ContentType = "text/markdown",
     ) -> int:
         body = content.encode("utf-8") if isinstance(content, str) else content
         for attempt in range(3):
@@ -205,7 +175,7 @@ class MinIOStorage:
 
     async def copy_prefix(
         self, src_prefix: str, dst_prefix: str,
-        max_concurrent: int = COPY_MAX_CONCURRENT,
+        max_concurrent: int = params.COPY_MAX_CONCURRENT,
         skip_substring: str | None = None,
     ) -> int:
         """Recursive server-side copy. `skip_substring` excludes paths
@@ -236,7 +206,7 @@ class MinIOStorage:
         keys = await self.list(prefix)
         if not keys:
             return 0
-        sem = asyncio.BoundedSemaphore(DELETE_MAX_CONCURRENT)
+        sem = asyncio.BoundedSemaphore(params.DELETE_MAX_CONCURRENT)
         async with self._client() as s3:
             async def _one(k: str) -> None:
                 async with sem:
@@ -246,11 +216,11 @@ class MinIOStorage:
 
     async def write_many(
         self,
-        items: list[tuple[str, str | bytes, ContentType]],
-        max_concurrent: int = WRITE_MAX_CONCURRENT,
-        chunk_size: int = WRITE_CHUNK_SIZE,
-        chunk_timeout_s: float = WRITE_CHUNK_TIMEOUT_S,
-        max_chunk_retries: int = WRITE_MAX_CHUNK_RETRIES,
+        items: list[tuple[str, str | bytes, entities.ContentType]],
+        max_concurrent: int = params.WRITE_MAX_CONCURRENT,
+        chunk_size: int = params.WRITE_CHUNK_SIZE,
+        chunk_timeout_s: float = params.WRITE_CHUNK_TIMEOUT_S,
+        max_chunk_retries: int = params.WRITE_MAX_CHUNK_RETRIES,
     ) -> list[int]:
         if not items:
             return []
@@ -285,12 +255,12 @@ class MinIOStorage:
 
     async def _write_chunk(
         self,
-        chunk: list[tuple[str, str | bytes, ContentType]],
+        chunk: list[tuple[str, str | bytes, entities.ContentType]],
         max_concurrent: int,
     ) -> list[int]:
         sem = asyncio.BoundedSemaphore(max_concurrent)
         async with self._client() as s3:
-            async def _put_one(k: str, c: str | bytes, ct: ContentType) -> int:
+            async def _put_one(k: str, c: str | bytes, ct: entities.ContentType) -> int:
                 body = c.encode("utf-8") if isinstance(c, str) else c
                 async with sem:
                     await s3.put_object(
@@ -304,10 +274,10 @@ class MinIOStorage:
     async def read_many(
         self,
         keys: list[str],
-        max_concurrent: int = READ_MAX_CONCURRENT,
-        chunk_size: int = READ_CHUNK_SIZE,
-        chunk_timeout_s: float = READ_CHUNK_TIMEOUT_S,
-        max_chunk_retries: int = READ_MAX_CHUNK_RETRIES,
+        max_concurrent: int = params.READ_MAX_CONCURRENT,
+        chunk_size: int = params.READ_CHUNK_SIZE,
+        chunk_timeout_s: float = params.READ_CHUNK_TIMEOUT_S,
+        max_chunk_retries: int = params.READ_MAX_CHUNK_RETRIES,
         encoding: str = "utf-8",
     ) -> list[str]:
         """Parallel chunked read; one shared client per chunk (TLS+SigV4 cost).
@@ -393,7 +363,7 @@ class Store:
         self.framework_slug = framework_slug
         self.r = r
         self.minio = minio
-        self._cached_manifest: list[ManifestEntry] = []
+        self._cached_manifest: list[entities.ManifestEntry] = []
         # idx-assign region atomic; slow MinIO PUT outside the lock.
         self._add_lock = asyncio.Lock()
         self._live_last_flush = 0.0
@@ -409,13 +379,13 @@ class Store:
         body: str,
         tier: str,
         title: str = "",
-    ) -> ManifestEntry:
+    ) -> entities.ManifestEntry:
         """Stream page to store. idx-assign+manifest append are locked; MinIO PUT is not (concurrent writes to distinct keys). Raw body also → ingestion-raw/ for normalizer-version reversibility."""
         # Markdown-side artifact hook for tiers 1/2/3/5 (tier4 uses HTML-stage).
         if url:
             try:
                 client = await self._get_artifact_client()
-                body, n_art = await extract_and_save_artifacts_from_md(
+                body, n_art = await domains.dd.ingestion.artifacts.service.extract_and_save_artifacts_from_md(
                     body, 
                     url, 
                     slug = self.framework_slug,
@@ -435,7 +405,7 @@ class Store:
         # Normalize before MinIO write; best-effort fall-through on bug.
         normalized_body = body
         try:
-            normalized_body = normalize_doc(body).body
+            normalized_body = domains.dd.synth.nodes.corpus_normalize.domain.normalize_doc(body).body
         except Exception as e:
             logger.warning(
                 f"[store] normalize_doc failed for slug={slug!r}: "
@@ -444,8 +414,8 @@ class Store:
         normalized_bytes = len(normalized_body.encode("utf-8"))
         async with self._add_lock:
             idx = len(self._cached_manifest)
-            key = page_key(self.framework_slug, idx, slug)
-            entry = ManifestEntry(
+            key = keys.page_key(self.framework_slug, idx, slug)
+            entry = entities.ManifestEntry(
                 idx = idx, 
                 slug = slug, 
                 url = url, 
@@ -458,7 +428,7 @@ class Store:
         await asyncio.gather(
             self.minio.write(key, normalized_body, content_type = "text/markdown"),
             self.minio.write(
-                raw_page_key(self.framework_slug, idx, slug),
+                keys.raw_page_key(self.framework_slug, idx, slug),
                 body, content_type = "text/markdown",
             ),
         )
@@ -502,7 +472,7 @@ class Store:
         url_pos = {u: i for i, u in enumerate(url_list)}
         sentinel = len(url_list)
 
-        def _key(entry: ManifestEntry) -> tuple[int, int]:
+        def _key(entry: entities.ManifestEntry) -> tuple[int, int]:
             base = (entry.url or "").split("#", 1)[0]
             return (url_pos.get(base, sentinel), entry.idx)
 
@@ -528,7 +498,7 @@ class Store:
                 f"[store] add_artifact slug mismatch: got {slug!r}, "
                 f"store is bound to {self.framework_slug!r}; using bound slug"
             )
-        key = artifact_key(self.framework_slug, name)
+        key = keys.artifact_key(self.framework_slug, name)
         await self.minio.write(key, data, content_type = content_type)
         return key
 
@@ -537,14 +507,14 @@ class Store:
     ) -> None:
         """Sentinelize body + persist vault manifest + sentinelized text.
         Empty vaults still get written so synth has a uniform read path."""
-        source_key = page_key(self.framework_slug, idx, slug)
-        sentinelized, manifest = build_manifest(
+        source_key = keys.page_key(self.framework_slug, idx, slug)
+        sentinelized, manifest = domains.dd.synth.nodes.vault.domain.build_manifest(
             framework = self.framework_slug,
             source_key = source_key,
             md_text = body,
         )
-        vk = vault_manifest_key(self.framework_slug, idx, slug)
-        sk = vault_sentinelized_key(self.framework_slug, idx, slug)
+        vk = keys.vault_manifest_key(self.framework_slug, idx, slug)
+        sk = keys.vault_sentinelized_key(self.framework_slug, idx, slug)
         await asyncio.gather(
             self.minio.write(
                 vk, 
@@ -576,7 +546,7 @@ class Store:
         except Exception as e:
             logger.info(f"[store] delete body idx={idx} skipped: {e}")
 
-    async def replace_manifest(self, entries: list[ManifestEntry]) -> None:
+    async def replace_manifest(self, entries: list[entities.ManifestEntry]) -> None:
         """Atomically replace the manifest. Caller writes new bodies first."""
         self._cached_manifest = list(entries)
         await self._write_live_manifest(force=True)
@@ -606,7 +576,7 @@ class Store:
             payload.update(extra)
         try:
             await self.minio.write(
-                manifest_key(self.framework_slug),
+                keys.manifest_key(self.framework_slug),
                 json.dumps(payload, separators = (",", ":")),
                 content_type = "application/json",
             )
@@ -615,20 +585,20 @@ class Store:
 
     async def _write_live_manifest(self, force: bool = False) -> None:
         now = time.monotonic()
-        if not force and (now - self._live_last_flush) < LIVE_MANIFEST_THROTTLE_S:
+        if not force and (now - self._live_last_flush) < params.LIVE_MANIFEST_THROTTLE_S:
             return
         self._live_last_flush = now
         try:
             await self.r.set(
-                live_manifest_key(self.run_id),
+                keys.live_manifest_key(self.run_id),
                 json.dumps([asdict(e) for e in self._cached_manifest]),
-                ex = TTL_S,
+                ex = params.TTL_S,
             )
         except Exception as e:
             logger.warning(f"[store] live manifest write failed: {e}")
 
     @property
-    def manifest(self) -> list[ManifestEntry]:
+    def manifest(self) -> list[entities.ManifestEntry]:
         return list(self._cached_manifest)
 
     @classmethod
@@ -643,9 +613,9 @@ class Store:
         s = cls(run_id, framework_slug, r, minio)
         m = await read_framework_manifest(minio, framework_slug)
         if m:
-            valid = {f.name for f in fields(ManifestEntry)}
+            valid = {f.name for f in fields(entities.ManifestEntry)}
             for e in m.get("entries", []):
-                s._cached_manifest.append(ManifestEntry(
+                s._cached_manifest.append(entities.ManifestEntry(
                     **{k: v for k, v in e.items() if k in valid}
                 ))
         return s
@@ -654,7 +624,7 @@ class Store:
 async def read_live_manifest(r: redis_aio.Redis, run_id: str) -> list[dict]:
     """Manifest for an in-flight run (Redis), polled by /runs/{id}."""
     try:
-        raw = await r.get(live_manifest_key(run_id))
+        raw = await r.get(keys.live_manifest_key(run_id))
     except Exception:
         return []
     if not raw:
@@ -672,7 +642,7 @@ async def read_framework_manifest(
 ) -> Optional[dict]:
     """Canonical per-framework manifest. None if no run finalized for slug."""
     try:
-        raw = await minio.read_text(manifest_key(framework_slug))
+        raw = await minio.read_text(keys.manifest_key(framework_slug))
     except Exception:
         return None
     try:
@@ -691,7 +661,7 @@ async def read_framework_page(
     entries = m.get("entries", [])
     if idx < 0 or idx >= len(entries):
         return None
-    key = entries[idx].get("key") or page_key(
+    key = entries[idx].get("key") or keys.page_key(
         framework_slug, idx, entries[idx].get("slug", ""),
     )
     try:
@@ -699,3 +669,93 @@ async def read_framework_page(
     except Exception as e:
         logger.info(f"[store] page read failed (idx={idx}, key={key}): {e}")
         return None
+
+
+# --- MinIO snapshot/restore per framework (debug router only; not on the
+# ingestion path). ts format YYYYMMDDTHHMMSSZ so alphabetical listing =
+# chronological. ---
+
+def _snapshot_now_ts() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+async def take_snapshot(
+    minio: MinIOStorage,
+    framework_slug: str,
+    *,
+    label: str | None = None,
+) -> dict:
+    """Copy the current canonical content into `_snapshots/{ts}/`. Skips
+    the `_snapshots/` subtree itself so we don't snapshot snapshots."""
+    src = keys.framework_prefix(framework_slug)
+    ts = _snapshot_now_ts() + (f"-{label}" if label else "")
+    dst = keys.snapshot_prefix(framework_slug, ts)
+    t0 = time.monotonic()
+    n = await minio.copy_prefix(
+        src, dst, skip_substring = f"/{params.SNAPSHOTS_SUBDIR}",
+    )
+    dt_ms = int((time.monotonic() - t0) * 1000)
+    logger.info(
+        f"[snapshot] {framework_slug} → {ts}: {n} files in {dt_ms}ms"
+    )
+    return {
+        "framework_slug": framework_slug, "ts": ts,
+        "files_copied": n, "took_ms": dt_ms,
+    }
+
+
+async def list_snapshots(
+    minio: MinIOStorage, framework_slug: str,
+) -> list[str]:
+    """Return snapshot timestamps for `slug`, newest first."""
+    snaps_prefix = keys.framework_prefix(framework_slug) + params.SNAPSHOTS_SUBDIR
+    names = await minio.list_subfolders(snaps_prefix)
+    return sorted(names, reverse = True)
+
+
+async def restore_snapshot(
+    minio: MinIOStorage,
+    framework_slug: str,
+    ts: str,
+) -> dict:
+    """Overwrite canonical content with the snapshot. Deletes current
+    canonical (preserving `_snapshots/`) then copies snapshot back."""
+    src = keys.snapshot_prefix(framework_slug, ts)
+    snap_keys = await minio.list(src)
+    if not snap_keys:
+        raise ValueError(
+            f"snapshot {ts!r} not found for {framework_slug!r}"
+        )
+
+    canonical_prefix = keys.framework_prefix(framework_slug)
+    cur = await minio.list(canonical_prefix)
+    cur = [k for k in cur if f"/{params.SNAPSHOTS_SUBDIR}" not in k]
+    deleted = 0
+    if cur:
+        sem = asyncio.BoundedSemaphore(32)
+        async with minio._client() as s3:
+            async def _one(k: str) -> None:
+                async with sem:
+                    await s3.delete_object(Bucket = minio.bucket, Key = k)
+            await asyncio.gather(*(_one(k) for k in cur))
+        deleted = len(cur)
+
+    t0 = time.monotonic()
+    copied = await minio.copy_prefix(src, canonical_prefix)
+    dt_ms = int((time.monotonic() - t0) * 1000)
+    logger.info(
+        f"[snapshot] restored {framework_slug} from {ts}: "
+        f"-{deleted} +{copied} in {dt_ms}ms"
+    )
+    return {
+        "framework_slug": framework_slug, "ts": ts,
+        "deleted": deleted, "copied": copied, "took_ms": dt_ms,
+    }
+
+
+async def delete_snapshot(
+    minio: MinIOStorage, framework_slug: str, ts: str,
+) -> dict:
+    prefix = keys.snapshot_prefix(framework_slug, ts)
+    n = await minio.delete_prefix(prefix)
+    return {"framework_slug": framework_slug, "ts": ts, "deleted": n}

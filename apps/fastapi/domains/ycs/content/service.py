@@ -522,7 +522,7 @@ _service: YtDlpSearchService | None = None
 
 
 def get_search_service() -> YtDlpSearchService:
-    """Singleton accessor — mirror of `domains.dd.ingestion.storage.get_storage`."""
+    """Singleton accessor — mirror of `domains.dd.ingestion.storage.service.get_storage`."""
     global _service
     if _service is None:
         _service = YtDlpSearchService()

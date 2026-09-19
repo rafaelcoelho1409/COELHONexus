@@ -1,5 +1,7 @@
 """Tier 3 — `sitemap.xml` → per-page fanout."""
-from .service import run
+from __future__ import annotations
+
+from . import domain, params, service
 
 
-__all__ = ["run"]
+__all__ = ["domain", "params", "service"]

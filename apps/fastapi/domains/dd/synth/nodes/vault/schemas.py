@@ -1,13 +1,12 @@
 """vault — Pydantic schemas (LLM/storage boundary validation)."""
 from __future__ import annotations
+from . import params, versions
 
 from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from .params import VAULT_HASH_LEN
-from .versions import HASH_ALGO, SENTINEL_FORMAT_VERSION
 
 
 class VaultEntry(BaseModel):
@@ -15,7 +14,7 @@ class VaultEntry(BaseModel):
     with `fence_text` byte-exactly; `info_string` carries Mintlify attrs
     etc. so the source-doc rendering can reproduce them later."""
     hash:          str = Field(
-        min_length = VAULT_HASH_LEN, max_length = VAULT_HASH_LEN,
+        min_length = params.VAULT_HASH_LEN, max_length = params.VAULT_HASH_LEN,
     )
     fence_text:    str = Field(
         description = (
@@ -49,8 +48,8 @@ class VaultManifest(BaseModel):
     entries:                  dict[str, VaultEntry] = Field(
         default_factory = dict,
     )
-    sentinel_format_version:  int = SENTINEL_FORMAT_VERSION
-    hash_algo:                str = HASH_ALGO
+    sentinel_format_version:  int = versions.SENTINEL_FORMAT_VERSION
+    hash_algo:                str = versions.HASH_ALGO
     built_at:                 str = Field(
         default_factory = lambda: datetime.now(timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%SZ",

@@ -1,8 +1,8 @@
 from __future__ import annotations
+from . import params
 
 import re
 
-from .params import DEFAULT_EXCLUDE_PATH_PATTERNS
 
 
 # Localization paths dropped when target language is English-biased.
@@ -13,6 +13,6 @@ NON_TARGET_LANGUAGE_PATH_RE = re.compile(
 
 
 DEFAULT_EXCLUDE_RE = re.compile(
-    "|".join(f"(?:{p})" for p in DEFAULT_EXCLUDE_PATH_PATTERNS),
+    "|".join(f"(?:{p})" for p in params.DEFAULT_EXCLUDE_PATH_PATTERNS),
     re.IGNORECASE,
 )

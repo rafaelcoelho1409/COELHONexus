@@ -1,5 +1,6 @@
 """Pure HTML→Markdown: strip chrome, normalize KaTeX/MathJax triple-print math (MathML + visual + LaTeX all in DOM) to $…$/$$$…$$$ text nodes so markdownify sees one clean representation."""
 from __future__ import annotations
+from . import params
 
 import logging
 import re
@@ -8,20 +9,19 @@ from typing import Optional
 from bs4 import BeautifulSoup, NavigableString, Tag
 from markdownify import markdownify as _md
 
-from .params import CHROME_SELECTORS, CONTENT_SELECTORS
 
 
 logger = logging.getLogger(__name__)
 
 
 def strip_chrome(soup: BeautifulSoup) -> None:
-    for sel in CHROME_SELECTORS:
+    for sel in params.CHROME_SELECTORS:
         for el in soup.select(sel):
             el.decompose()
 
 
 def find_content_root(soup: BeautifulSoup):
-    for sel in CONTENT_SELECTORS:
+    for sel in params.CONTENT_SELECTORS:
         node = soup.select_one(sel)
         if node and node.get_text(strip = True):
             return node

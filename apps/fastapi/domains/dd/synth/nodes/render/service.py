@@ -1,49 +1,22 @@
 """Render + audit + persist for one chapter. Vault sentinels prevent SAWC from copying code — byte-exact guarantee holds at materialization.
 LLM normalization pass (cached per-content-hash) fixes ingestion-time drift; plain-text/output blocks bypass it."""
 from __future__ import annotations
+import domains
+from . import domain, keys, schemas, versions
 
-import ast
 import asyncio
 import json
 import logging
 import os
 import random
-import re
 import time
 
-from domains.llm.rotator.chain import chat_judge_bandit_async
 
-from ....ingestion.storage import get_storage
-from ...runtime.progress import emit_progress
-from ...state import SynthState
 
-from .domain import (
-    build_section_context,
-    compute_audit,
-    compute_manifest_hash,
-    dedupe_and_align_sections,
-    merge_vault_entries,
-    render_chapter_md,
-    sha256_bytes,
-)
-from .keys import (
-    artifact_key,
-    latest_blob_key,
-    mgsr_latest_key,
-    planner_latest_key,
-    sawc_latest_key,
-    source_key_to_vault_key,
-    versioned_blob_key,
-)
-from .schemas import CodeRefResolution, RenderedArtifact, RenderResult
-from .versions import RENDER_TEMPLATE_VERSION
 
 
 logger = logging.getLogger(__name__)
 
-
-_NORMALIZE_PROMPT_VERSION = "v3-2026-06-08"
-_NORMALIZE_CACHE_PREFIX = "synth-vault/{slug}/normalized/" + _NORMALIZE_PROMPT_VERSION
 
 # Languages where the LLM call is skipped — content is either plain
 # text (no formatting concept) or terminal output (whitespace is
@@ -56,68 +29,6 @@ _SKIP_LANGS = frozenset({
 
 # Python gets AST validation (stdlib, no deps) — observed Mintlify MDX flattening strips function-body indent. Fail → retry LLM with error; second fail → keep best attempt.
 _PYTHON_LANGS = frozenset({"python", "py", "py3", "python3"})
-
-
-def _normalize_cache_key(slug: str, vault_hash: str) -> str:
-    return (_NORMALIZE_CACHE_PREFIX.format(slug = slug) +
-            "/" + vault_hash + ".txt")
-
-
-def _strip_code_fences(s: str) -> str:
-    """Peel leading and trailing fence lines independently — earlier version only stripped trailing when leading existed, causing stray empty code blocks (ch-02 browser-use bug)."""
-    s = (s or "").strip("\n")
-    if not s:
-        return s
-    lines = s.split("\n")
-    if lines and lines[0].lstrip().startswith(("```", "~~~")):
-        lines = lines[1:]
-    if lines and lines[-1].lstrip().startswith(("```", "~~~")):
-        lines = lines[:-1]
-    return "\n".join(lines)
-
-
-# Recovery: LLM ignores "NO fences" instruction and returns prose + nested code block; pull the largest inner fenced block body (observed ch-03 browser-use run).
-_INNER_FENCE_RE = re.compile(
-    r'(?P<open>```+|~~~+)(?P<info>[^\n]*)\n(?P<body>.*?)\n(?P=open)',
-    re.DOTALL,
-)
-
-
-def _extract_largest_fenced_body(s: str) -> str | None:
-    """Return body of the longest fenced block; recovery when _strip_code_fences leaves residual markers (LLM returned commentary + nested fence)."""
-    candidates = [m.group("body") for m in _INNER_FENCE_RE.finditer(s)]
-    if not candidates:
-        return None
-    return max(candidates, key = len)
-
-
-# vault fence_text = full fenced block; normalize ONLY the body so info-string + markers are byte-preserved regardless of LLM output.
-_FENCE_RE = re.compile(
-    r'^(?P<open>```+|~~~+)(?P<info>[^\n]*)\n'
-    r'(?P<body>.*?)'
-    r'\n(?P<close>```+|~~~+)\s*$',
-    re.DOTALL,
-)
-
-
-def _split_fence(fence_text: str):
-    """Return (open_marker, info_string, body, close_marker) or None when
-    the value doesn't look like a fenced block (defensive — handles
-    runtime-sentinelized entries that might be raw bodies)."""
-    if not fence_text:
-        return None
-    m = _FENCE_RE.match(fence_text.strip("\n"))
-    if not m:
-        return None
-    return (m.group("open"), m.group("info"),
-            m.group("body"), m.group("close"))
-
-
-def _lang_from_info(info_string: str) -> str:
-    """First whitespace-separated token of the info-string is the lang
-    hint (e.g. `python theme={...}` → "python")."""
-    info = (info_string or "").strip()
-    return info.split()[0].lower() if info else ""
 
 
 _NORMALIZE_PROMPT_BASE = (
@@ -167,17 +78,6 @@ _NORMALIZE_PROMPT_PYTHON_RETRY = (
 )
 
 
-def _python_ast_valid(body: str) -> tuple[bool, str]:
-    """Return (ok, error): stdlib ast (no dep); truth source for python/py blocks because biggest failure mode is unindented function/class bodies."""
-    try:
-        ast.parse(body)
-        return True, ""
-    except SyntaxError as e:
-        return False, f"line {e.lineno}: {e.msg}"
-    except Exception as e:
-        return False, f"{type(e).__name__}: {e}"
-
-
 _NORMALIZE_MAX_CALL_ATTEMPTS = 2
 
 
@@ -189,7 +89,7 @@ async def _llm_normalize_body(
     response: str | None = None
     for call_attempt in range(_NORMALIZE_MAX_CALL_ATTEMPTS):
         try:
-            response, _meta = await chat_judge_bandit_async(
+            response, _meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
                 prompt,
                 max_tokens = min(8000, max(512, 2 * len(body))),
                 temperature = 0.0,
@@ -215,13 +115,13 @@ async def _llm_normalize_body(
         )
         return None
 
-    fixed = _strip_code_fences(response or "")
+    fixed = domain.strip_code_fences(response or "")
 
     # Recovery path: residual ``` / ~~~ markers mean the LLM nested a
     # fenced code block inside its response (often after a "this looks
     # correct" preamble). Pull the largest inner block's body.
     if "```" in fixed or "~~~" in fixed:
-        inner = _extract_largest_fenced_body(response or "")
+        inner = domain.extract_largest_fenced_body(response or "")
         if inner and inner.strip():
             fixed = inner
         else:
@@ -247,17 +147,17 @@ async def _normalize_code_block(
         # Empty / oversized — skip (cache blow-out + diminishing returns).
         return fence_text, False
 
-    parts = _split_fence(fence_text)
+    parts = domain.split_fence(fence_text)
     if parts is None:
         return fence_text, False
     open_marker, info_string, body, close_marker = parts
-    lang = _lang_from_info(info_string)
+    lang = domain.lang_from_info(info_string)
     if lang in _SKIP_LANGS:
         return fence_text, False
     if not body.strip():
         return fence_text, False
 
-    cache_key = _normalize_cache_key(slug, vault_hash)
+    cache_key = keys.normalize_cache_key(slug, vault_hash)
     try:
         if await minio.exists(cache_key):
             cached = await minio.read_text(cache_key)
@@ -279,7 +179,7 @@ async def _normalize_code_block(
 
     # Python AST retry: re-prompt with parser error to rescue Mintlify-flatten cases (small models return body unchanged).
     if lang in _PYTHON_LANGS:
-        ok, err = _python_ast_valid(fixed_body)
+        ok, err = domain.python_ast_valid(fixed_body)
         if not ok:
             retry = await _llm_normalize_body(
                 body = body, lang = lang,
@@ -288,7 +188,7 @@ async def _normalize_code_block(
                 ),
             )
             if retry is not None:
-                retry_ok, _ = _python_ast_valid(retry)
+                retry_ok, _ = domain.python_ast_valid(retry)
                 if retry_ok or len(retry) >= len(fixed_body):
                     fixed_body = retry
             else:
@@ -359,13 +259,11 @@ async def _load_per_source_vaults(
     source_keys: list[str],
 ) -> tuple[dict[str, str], int, int]:
     """Load + merge per-source vault manifests; falls back to runtime sentinelization when per-source vault is missing (otherwise n_resolved=0 and zero code blocks in the chapter)."""
-    from ..vault.domain import sentinelize_doc as _sentinelize_doc
-
     manifests: list[dict] = []
     n_skipped = 0
     n_runtime = 0
     for source_key in source_keys:
-        vault_key = source_key_to_vault_key(source_key, slug)
+        vault_key = keys.source_key_to_vault_key(source_key, slug)
         if await minio.exists(vault_key):
             try:
                 text = await minio.read_text(vault_key)
@@ -383,7 +281,7 @@ async def _load_per_source_vaults(
             if not raw or "<code-ref hash=" in raw:
                 n_skipped += 1
                 continue
-            _, entries = _sentinelize_doc(raw)
+            _, entries = domains.dd.synth.nodes.vault.domain.sentinelize_doc(raw)
             if entries:
                 # merge_vault_entries expects (entries dict keyed by hash).
                 manifests.append({
@@ -402,7 +300,7 @@ async def _load_per_source_vaults(
                 f"{source_key!r}: {type(e).__name__}: {e}"
             )
 
-    merged = merge_vault_entries(manifests)
+    merged = domain.merge_vault_entries(manifests)
     if n_runtime:
         logger.info(
             f"[render_audit_write] {slug}: runtime-sentinelized "
@@ -427,7 +325,7 @@ async def _verify_cache_hit_artifacts(
     return True
 
 
-async def render_audit_write_run(state: SynthState) -> dict:
+async def render_audit_write_run(state: domains.dd.synth.state.SynthState) -> dict:
     """Render + audit + persist for one chapter. The render/audit/persist
     path itself is deterministic (zero LLM calls); the vault-normalize
     pass it calls into hits the Rotator once per unique code hash ever
@@ -447,7 +345,7 @@ async def render_audit_write_run(state: SynthState) -> dict:
         }
 
     t0 = time.monotonic()
-    minio = get_storage()
+    minio = domains.dd.ingestion.storage.service.get_storage()
 
     # Prefer the best-seen iteration over whatever ran last. Fixed
     # 2026-09-05 — this used to always read the latest pointer, so a
@@ -459,8 +357,8 @@ async def render_audit_write_run(state: SynthState) -> dict:
     # swap — falls back to the latest pointer if best-seen was never set
     # (e.g. a graph resumed mid-run from an older checkpoint).
     best_seen_path = state.get("best_seen_sawc_path")
-    sawc_key = best_seen_path or sawc_latest_key(slug, chapter_id)
-    mgsr_key = mgsr_latest_key(slug, chapter_id)
+    sawc_key = best_seen_path or keys.sawc_latest_key(slug, chapter_id)
+    mgsr_key = keys.mgsr_latest_key(slug, chapter_id)
 
     if not await minio.exists(sawc_key):
         return {
@@ -523,7 +421,7 @@ async def render_audit_write_run(state: SynthState) -> dict:
     sawc_manifest_hash = sawc.get("sawc_manifest_hash") or ""
     mgsr_manifest_hash = mgsr.get("mgsr_manifest_hash") or ""
 
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "render_audit_write", "start",
         chapter_id = chapter_id,
         chapter_title = chapter_title,
@@ -532,12 +430,12 @@ async def render_audit_write_run(state: SynthState) -> dict:
         mgsr_halt_reason = mgsr_decision.get("halt_reason", "?"),
     )
 
-    manifest_hash = compute_manifest_hash(
+    manifest_hash = domain.compute_manifest_hash(
         sawc_manifest_hash = sawc_manifest_hash,
         mgsr_manifest_hash = mgsr_manifest_hash,
     )
-    versioned_key = versioned_blob_key(slug, chapter_id, manifest_hash)
-    latest_key    = latest_blob_key(slug, chapter_id)
+    versioned_key = keys.versioned_blob_key(slug, chapter_id, manifest_hash)
+    latest_key    = keys.latest_blob_key(slug, chapter_id)
 
     if await minio.exists(versioned_key) and await minio.exists(latest_key):
         try:
@@ -547,7 +445,7 @@ async def render_audit_write_run(state: SynthState) -> dict:
             if await _verify_cache_hit_artifacts(minio, slug, chapter_id, arts):
                 audit = cached.get("audit") or {}
                 elapsed = int((time.monotonic() - t0) * 1000)
-                readme_key = artifact_key(slug, chapter_id, "README.md")
+                readme_key = keys.artifact_key(slug, chapter_id, "README.md")
                 stats = {
                     "audit_passed":         audit.get("audit_passed", False),
                     "n_artifacts":          len(arts),
@@ -565,7 +463,7 @@ async def render_audit_write_run(state: SynthState) -> dict:
                     "cache_hit":            True,
                     "template_version":     cached.get("template_version"),
                 }
-                await emit_progress(
+                await domains.dd.synth.runtime.progress.service.emit_progress(
                     thread_id, "render_audit_write", "done",
                     audit_passed = stats["audit_passed"],
                     n_artifacts = stats["n_artifacts"],
@@ -596,7 +494,7 @@ async def render_audit_write_run(state: SynthState) -> dict:
                 f"recomputing"
             )
 
-    plan_key = planner_latest_key(slug)
+    plan_key = keys.planner_latest_key(slug)
     source_keys: list[str] = []
     if await minio.exists(plan_key):
         try:
@@ -619,7 +517,7 @@ async def render_audit_write_run(state: SynthState) -> dict:
     vault, normalized_hashes, n_norm, n_skip_norm = await _normalize_vault_codes(
         minio = minio, slug = slug, vault = vault,
     )
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "render_audit_write", "inputs_loaded",
         n_sources = len(source_keys),
         n_vault_files_loaded = n_loaded,
@@ -629,16 +527,16 @@ async def render_audit_write_run(state: SynthState) -> dict:
         n_codes_unchanged = n_skip_norm,
     )
 
-    resolution_log: list[CodeRefResolution] = []
+    resolution_log: list[schemas.CodeRefResolution] = []
     sections_ctx = [
-        build_section_context(
+        domain.build_section_context(
             s, vault = vault, resolution_log = resolution_log,
             normalized_hashes = normalized_hashes,
         )
         for s in sections
     ]
     # Cross-reference within-chapter recycled code blocks + omit misrouted ones (audit-safe: only rewrites code_block strings).
-    dedup_stats = dedupe_and_align_sections(
+    dedup_stats = domain.dedupe_and_align_sections(
         sections_ctx,
         drop_mismatch = os.environ.get(
             "KD_RENDER_DROP_MISMATCH", "true",
@@ -655,10 +553,10 @@ async def render_audit_write_run(state: SynthState) -> dict:
     n_subtopics_total = sum(len(s.get("subtopics") or []) for s in sections)
     n_citations_total = sum(len(s.get("citations") or []) for s in sections)
 
-    chapter_md = render_chapter_md(chapter_title, sections_ctx)
+    chapter_md = domain.render_chapter_md(chapter_title, sections_ctx)
 
     # Audit AFTER rendering — sentinels_in_output is measured on the rendered MD.
-    audit = compute_audit(
+    audit = domain.compute_audit(
         resolution_log = resolution_log,
         vault = vault,
         rendered_chapter_md = chapter_md,
@@ -677,7 +575,7 @@ async def render_audit_write_run(state: SynthState) -> dict:
             f"prose path should prevent this; investigate the section's sources."
         )
 
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "render_audit_write", "rendered",
         chapter_chars = len(chapter_md),
         n_sections_rendered = len(sections_ctx),
@@ -691,7 +589,7 @@ async def render_audit_write_run(state: SynthState) -> dict:
         n_code_mismatch_omitted = dedup_stats["n_mismatch"],
     )
 
-    readme_key = artifact_key(slug, chapter_id, "README.md")
+    readme_key = keys.artifact_key(slug, chapter_id, "README.md")
 
     await minio.write(
         readme_key, chapter_md,
@@ -699,15 +597,15 @@ async def render_audit_write_run(state: SynthState) -> dict:
     )
 
     artifacts = [
-        RenderedArtifact(
+        schemas.RenderedArtifact(
             name = "README.md",
             minio_key = readme_key,
             size_bytes = len(chapter_md.encode("utf-8")),
-            sha256 = sha256_bytes(chapter_md),
+            sha256 = domain.sha256_bytes(chapter_md),
         ),
     ]
 
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "render_audit_write", "artifacts_written",
         n_artifacts = len(artifacts),
         total_bytes = sum(a.size_bytes for a in artifacts),
@@ -715,7 +613,7 @@ async def render_audit_write_run(state: SynthState) -> dict:
     )
 
     elapsed = int((time.monotonic() - t0) * 1000)
-    result = RenderResult(
+    result = schemas.RenderResult(
         chapter_id = chapter_id,
         chapter_title = chapter_title,
         framework_slug = slug,
@@ -763,9 +661,9 @@ async def render_audit_write_run(state: SynthState) -> dict:
         "readme_path":           readme_key,
         "manifest_hash":         manifest_hash,
         "cache_hit":             False,
-        "template_version":      RENDER_TEMPLATE_VERSION,
+        "template_version":      versions.RENDER_TEMPLATE_VERSION,
     }
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "render_audit_write", "done",
         audit_passed = audit.audit_passed,
         n_artifacts = len(artifacts),

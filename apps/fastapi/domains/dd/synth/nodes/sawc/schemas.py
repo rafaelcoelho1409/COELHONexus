@@ -1,37 +1,13 @@
 """sawc — Pydantic schemas (v2 cookbook: Citation/Subtopic/Section + LLM
 section draft + persisted ChapterDraft)."""
 from __future__ import annotations
+from . import params, patterns, versions
 
 import re
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from .params import (
-    CITATION_CLAIM_CHARS_MAX,
-    CITATION_CLAIM_CHARS_MIN,
-    CITATIONS_MAX,
-    CITATIONS_MIN,
-    EXPLANATION_WORDS_MAX,
-    EXPLANATION_WORDS_MIN,
-    HEADING_MAX_WORDS,
-    HEADING_MIN_WORDS,
-    INTRO_CHARS_MAX,
-    INTRO_CHARS_MIN,
-    MEMORY_SUMMARY_CHARS_MAX,
-    MEMORY_SUMMARY_CHARS_MIN,
-    MEMORY_TERM_CHARS_MAX,
-    MEMORY_TERM_CHARS_MIN,
-    MEMORY_TERMS_MAX,
-    MEMORY_TERMS_MIN,
-    N_DRAFTS,
-    SUBHEADING_MAX_WORDS,
-    SUBHEADING_MIN_WORDS,
-    SUBTOPICS_MAX,
-    SUBTOPICS_MIN,
-)
-from .patterns import HASH_RE
-from .versions import SAWC_PROMPT_VERSION, SAWC_SCHEMA_VERSION
 
 
 class Citation(BaseModel):
@@ -53,11 +29,11 @@ class Citation(BaseModel):
     def _validate_claim(cls, v: str) -> str:
         s = " ".join(v.strip().split())
         if not (
-            CITATION_CLAIM_CHARS_MIN <= len(s) <= CITATION_CLAIM_CHARS_MAX
+            params.CITATION_CLAIM_CHARS_MIN <= len(s) <= params.CITATION_CLAIM_CHARS_MAX
         ):
             raise ValueError(
-                f"citation.claim must be {CITATION_CLAIM_CHARS_MIN}-"
-                f"{CITATION_CLAIM_CHARS_MAX} chars; got {len(s)}"
+                f"citation.claim must be {params.CITATION_CLAIM_CHARS_MIN}-"
+                f"{params.CITATION_CLAIM_CHARS_MAX} chars; got {len(s)}"
             )
         return s
 
@@ -75,13 +51,13 @@ class Subtopic(BaseModel):
     )
     subheading: str = Field(
         description = (
-            f"{SUBHEADING_MIN_WORDS}-{SUBHEADING_MAX_WORDS} words. H3 "
+            f"{params.SUBHEADING_MIN_WORDS}-{params.SUBHEADING_MAX_WORDS} words. H3 "
             f"naming what the chosen code block demonstrates."
         ),
     )
     explanation: str = Field(
         description = (
-            f"{EXPLANATION_WORDS_MIN}-{EXPLANATION_WORDS_MAX} words. The "
+            f"{params.EXPLANATION_WORDS_MIN}-{params.EXPLANATION_WORDS_MAX} words. The "
             f"concise explanation that appears BEFORE the code block. "
             f"MUST reference at least one identifier visible in the "
             f"chosen code body."
@@ -109,10 +85,10 @@ class Subtopic(BaseModel):
         if s.lstrip().startswith("#"):
             raise ValueError("subheading must NOT start with '#'")
         words = s.split()
-        if not (SUBHEADING_MIN_WORDS <= len(words) <= SUBHEADING_MAX_WORDS):
+        if not (params.SUBHEADING_MIN_WORDS <= len(words) <= params.SUBHEADING_MAX_WORDS):
             raise ValueError(
-                f"subheading must be {SUBHEADING_MIN_WORDS}-"
-                f"{SUBHEADING_MAX_WORDS} words; got {len(words)} ({s!r})"
+                f"subheading must be {params.SUBHEADING_MIN_WORDS}-"
+                f"{params.SUBHEADING_MAX_WORDS} words; got {len(words)} ({s!r})"
             )
         return s
 
@@ -122,11 +98,11 @@ class Subtopic(BaseModel):
         s = " ".join(v.strip().split())
         words = s.split()
         if not (
-            EXPLANATION_WORDS_MIN <= len(words) <= EXPLANATION_WORDS_MAX
+            params.EXPLANATION_WORDS_MIN <= len(words) <= params.EXPLANATION_WORDS_MAX
         ):
             raise ValueError(
-                f"explanation must be {EXPLANATION_WORDS_MIN}-"
-                f"{EXPLANATION_WORDS_MAX} words; got {len(words)}"
+                f"explanation must be {params.EXPLANATION_WORDS_MIN}-"
+                f"{params.EXPLANATION_WORDS_MAX} words; got {len(words)}"
             )
         if "```" in s or "<code-ref" in s or "<code id" in s:
             raise ValueError(
@@ -143,7 +119,7 @@ class Subtopic(BaseModel):
     @field_validator("code_ref_hash")
     @classmethod
     def _validate_hash(cls, v: str) -> str:
-        if v and not HASH_RE.match(v):
+        if v and not patterns.HASH_RE.match(v):
             raise ValueError(
                 f"code_ref_hash {v!r} must be 16 lowercase hex chars "
                 f"(or empty \"\" for a prose subtopic)"
@@ -184,25 +160,25 @@ class LLMSectionDraft(BaseModel):
     Subtopic triples."""
     heading: str = Field(
         description = (
-            f"{HEADING_MIN_WORDS}-{HEADING_MAX_WORDS} words. ECHO the "
+            f"{params.HEADING_MIN_WORDS}-{params.HEADING_MAX_WORDS} words. ECHO the "
             f"outline H2 heading verbatim."
         ),
     )
     intro: str = Field(
         description = (
-            f"{INTRO_CHARS_MIN}-{INTRO_CHARS_MAX} chars. 1-2 sentences "
+            f"{params.INTRO_CHARS_MIN}-{params.INTRO_CHARS_MAX} chars. 1-2 sentences "
             f"framing the H2 section."
         ),
     )
     subtopics: list[Subtopic] = Field(
         description = (
-            f"{SUBTOPICS_MIN}-{SUBTOPICS_MAX} Subtopic triples."
+            f"{params.SUBTOPICS_MIN}-{params.SUBTOPICS_MAX} Subtopic triples."
         ),
     )
     citations: list[Citation] = Field(
         default_factory = list,
         description = (
-            f"{CITATIONS_MIN}-{CITATIONS_MAX} citations."
+            f"{params.CITATIONS_MIN}-{params.CITATIONS_MAX} citations."
         ),
     )
 
@@ -210,9 +186,9 @@ class LLMSectionDraft(BaseModel):
     @classmethod
     def _validate_heading(cls, v: str) -> str:
         words = v.strip().split()
-        if not (HEADING_MIN_WORDS <= len(words) <= HEADING_MAX_WORDS):
+        if not (params.HEADING_MIN_WORDS <= len(words) <= params.HEADING_MAX_WORDS):
             raise ValueError(
-                f"heading must be {HEADING_MIN_WORDS}-{HEADING_MAX_WORDS} "
+                f"heading must be {params.HEADING_MIN_WORDS}-{params.HEADING_MAX_WORDS} "
                 f"words; got {len(words)} ({v!r})"
             )
         if v.lstrip().startswith("#"):
@@ -223,9 +199,9 @@ class LLMSectionDraft(BaseModel):
     @classmethod
     def _validate_intro(cls, v: str) -> str:
         s = " ".join(v.strip().split())
-        if not (INTRO_CHARS_MIN <= len(s) <= INTRO_CHARS_MAX):
+        if not (params.INTRO_CHARS_MIN <= len(s) <= params.INTRO_CHARS_MAX):
             raise ValueError(
-                f"intro must be {INTRO_CHARS_MIN}-{INTRO_CHARS_MAX} "
+                f"intro must be {params.INTRO_CHARS_MIN}-{params.INTRO_CHARS_MAX} "
                 f"chars; got {len(s)}"
             )
         if "```" in s or "<code-ref" in s or "<code id" in s:
@@ -237,9 +213,9 @@ class LLMSectionDraft(BaseModel):
     @field_validator("subtopics")
     @classmethod
     def _validate_subtopics(cls, v: list[Subtopic]) -> list[Subtopic]:
-        if not (SUBTOPICS_MIN <= len(v) <= SUBTOPICS_MAX):
+        if not (params.SUBTOPICS_MIN <= len(v) <= params.SUBTOPICS_MAX):
             raise ValueError(
-                f"subtopics count must be {SUBTOPICS_MIN}-{SUBTOPICS_MAX}; "
+                f"subtopics count must be {params.SUBTOPICS_MIN}-{params.SUBTOPICS_MAX}; "
                 f"got {len(v)}"
             )
         hashes = [s.code_ref_hash for s in v if s.code_ref_hash]
@@ -258,9 +234,9 @@ class LLMSectionDraft(BaseModel):
     @field_validator("citations")
     @classmethod
     def _validate_citations(cls, v: list[Citation]) -> list[Citation]:
-        if not (CITATIONS_MIN <= len(v) <= CITATIONS_MAX):
+        if not (params.CITATIONS_MIN <= len(v) <= params.CITATIONS_MAX):
             raise ValueError(
-                f"citations count must be {CITATIONS_MIN}-{CITATIONS_MAX}; "
+                f"citations count must be {params.CITATIONS_MIN}-{params.CITATIONS_MAX}; "
                 f"got {len(v)}"
             )
         return v
@@ -277,7 +253,7 @@ class Section(BaseModel):
     wall_ms:           Optional[int] = None
     deployment_writer: Optional[str] = None
     deployment_critic: Optional[str] = None
-    n_drafts_tried:    int = N_DRAFTS
+    n_drafts_tried:    int = params.N_DRAFTS
     n_repairs:         int = 0
     chosen_draft_idx:  Optional[int] = None
     structural_score:  Optional[float] = None
@@ -299,29 +275,29 @@ class MemoryEntry(BaseModel):
     def _validate_summary(cls, v: str) -> str:
         s = " ".join(v.strip().split())
         if not (
-            MEMORY_SUMMARY_CHARS_MIN <= len(s) <= MEMORY_SUMMARY_CHARS_MAX
+            params.MEMORY_SUMMARY_CHARS_MIN <= len(s) <= params.MEMORY_SUMMARY_CHARS_MAX
         ):
             raise ValueError(
-                f"memory summary must be {MEMORY_SUMMARY_CHARS_MIN}-"
-                f"{MEMORY_SUMMARY_CHARS_MAX} chars; got {len(s)}"
+                f"memory summary must be {params.MEMORY_SUMMARY_CHARS_MIN}-"
+                f"{params.MEMORY_SUMMARY_CHARS_MAX} chars; got {len(s)}"
             )
         return s
 
     @field_validator("key_terminology")
     @classmethod
     def _validate_terms(cls, v: list[str]) -> list[str]:
-        if not (MEMORY_TERMS_MIN <= len(v) <= MEMORY_TERMS_MAX):
+        if not (params.MEMORY_TERMS_MIN <= len(v) <= params.MEMORY_TERMS_MAX):
             raise ValueError(
-                f"key_terminology count must be {MEMORY_TERMS_MIN}-"
-                f"{MEMORY_TERMS_MAX}; got {len(v)}"
+                f"key_terminology count must be {params.MEMORY_TERMS_MIN}-"
+                f"{params.MEMORY_TERMS_MAX}; got {len(v)}"
             )
         cleaned: list[str] = []
         for t in v:
             s = " ".join(t.strip().split())
-            if not (MEMORY_TERM_CHARS_MIN <= len(s) <= MEMORY_TERM_CHARS_MAX):
+            if not (params.MEMORY_TERM_CHARS_MIN <= len(s) <= params.MEMORY_TERM_CHARS_MAX):
                 raise ValueError(
-                    f"term length must be {MEMORY_TERM_CHARS_MIN}-"
-                    f"{MEMORY_TERM_CHARS_MAX} chars; got {len(s)} ({t!r})"
+                    f"term length must be {params.MEMORY_TERM_CHARS_MIN}-"
+                    f"{params.MEMORY_TERM_CHARS_MAX} chars; got {len(s)} ({t!r})"
                 )
             cleaned.append(s)
         seen: set[str] = set()
@@ -355,8 +331,8 @@ class SAWCStats(BaseModel):
 class ChapterDraft(BaseModel):
     """Full chapter draft — what gets persisted to MinIO as
     sawc-latest.json."""
-    schema_version: str = SAWC_SCHEMA_VERSION
-    prompt_version: str = SAWC_PROMPT_VERSION
+    schema_version: str = versions.SAWC_SCHEMA_VERSION
+    prompt_version: str = versions.SAWC_PROMPT_VERSION
     chapter_id:     str
     chapter_title:  str
     framework_slug: str

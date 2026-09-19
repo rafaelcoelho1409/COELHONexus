@@ -8,6 +8,8 @@ SOTA Sept 2026 on coelho-llm-rotator pooled:
 - Prompt static prefix (chapters rubric) before dynamic doc → KV-cache reuse.
 """
 from __future__ import annotations
+import domains
+from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio
 import json
@@ -15,52 +17,28 @@ import logging
 import time
 from typing import Optional
 
-from pydantic import ValidationError as _PydanticValidationError
-
-from domains.llm.rotator.chain import chat_judge_bandit_async
-
-from ....ingestion.storage import get_storage
-from ..chapter_propose import load_proposals
-from ..doc_distill import load_distillates
-from ...runtime.progress import emit_progress
-from ...state import PlannerState
-
-from .domain import fallback_assign_scores, manifest_hash, parse
-from .keys import latest_key, versioned_key
-from .params import (
-    BODY_CHARS,
-    CONCURRENCY,
-    CONFIDENCE_THRESHOLD,
-    MAX_TOKENS,
-    RESCUE_FLOOR,
-    SETTLE_DELAY_S,
-    TEMPERATURE,
-    TIMEOUT_S,
-)
-from .prompts import build_prompt
-from .schemas import ASSIGN_RESPONSE_FORMAT, DocAssignment
-from .versions import PROMPT_VERSION
+from pydantic import ValidationError
 
 
 logger = logging.getLogger(__name__)
 
 
-async def _score_call(prompt: str) -> DocAssignment:
+async def _score_call(prompt: str) -> schemas.DocAssignment:
     """One LLM call + parse + validate. Raises ValueError (unparseable) or
     pydantic ValidationError (schema mismatch) for reask-eligible failures;
     anything else (timeout, provider outage) propagates as-is."""
-    raw, _ = await chat_judge_bandit_async(
+    raw, _ = await domains.llm.rotator.chain.chat_judge_bandit_async(
         prompt,
-        max_tokens = MAX_TOKENS,
-        temperature = TEMPERATURE,
-        timeout_s = TIMEOUT_S,
-        response_format = ASSIGN_RESPONSE_FORMAT,
+        max_tokens = params.MAX_TOKENS,
+        temperature = params.TEMPERATURE,
+        timeout_s = params.TIMEOUT_S,
+        response_format = schemas.ASSIGN_RESPONSE_FORMAT,
         dd_process = "dd-reduce-label",
     )
-    parsed = parse(raw)
+    parsed = domain.parse(raw)
     if not parsed:
         raise ValueError(f"unparseable LLM output: {str(raw)[:200]!r}")
-    return DocAssignment.model_validate(parsed)
+    return schemas.DocAssignment.model_validate(parsed)
 
 
 async def assign_one(
@@ -111,7 +89,7 @@ async def assign_one(
                 False,
             )
 
-        prompt = build_prompt(
+        prompt = prompts.build_prompt(
             framework = framework,
             source_key = source_key,
             doc_summary = doc_summary,
@@ -121,11 +99,11 @@ async def assign_one(
         )
 
         scores: Optional[list[dict]] = None
-        assignment: Optional[DocAssignment] = None
+        assignment: Optional[schemas.DocAssignment] = None
         try:
             # dd-reduce-label = non-reasoning pool; <think> blocks waste 10-25s on JSON scoring.
             assignment = await _score_call(prompt)
-        except (_PydanticValidationError, ValueError) as e:
+        except (ValidationError, ValueError) as e:
             # Reask once: the model responded but the output was malformed/invalid —
             # cheap self-repair by feeding the error back verbatim. Deliberately NOT
             # applied to the generic-Exception branch below (timeouts, provider
@@ -166,7 +144,7 @@ async def assign_one(
         # Successful but empty (LLM judged irrelevant) is left as-is.
         used_fallback = False
         if scores is None:
-            scores = fallback_assign_scores(
+            scores = domain.fallback_assign_scores(
                 doc_summary, doc_terms, proposals, source_key,
             )
             used_fallback = bool(scores)
@@ -186,14 +164,14 @@ async def assign_one(
 async def load_assignments(minio, slug: str) -> dict:
     """Returns {source_key: [{chapter_idx, confidence}, ...]}."""
     try:
-        text = await minio.read_text(latest_key(slug))
+        text = await minio.read_text(keys.latest_key(slug))
         data = json.loads(text)
         return data.get("assignments") or {}
     except Exception:
         return {}
 
 
-async def chapter_assign_run(state: PlannerState) -> dict:
+async def chapter_assign_run(state: domains.dd.planner.state.PlannerState) -> dict:
     """Load proposals + distillates → score every doc via the bandit →
     persist {source_key: [{chapter_idx, confidence}]} matrix."""
     slug = state.get("framework_slug")
@@ -210,23 +188,23 @@ async def chapter_assign_run(state: PlannerState) -> dict:
         }
 
     t0 = time.monotonic()
-    minio = get_storage()
-    proposals_obj = await load_proposals(minio, slug)
+    minio = domains.dd.ingestion.storage.service.get_storage()
+    proposals_obj = await domains.dd.planner.nodes.chapter_propose.service.load_proposals(minio, slug)
     if proposals_obj is None or not proposals_obj.proposals:
         return {
             "chapter_doc_assignments_ref": None,
             "assign_stats": {"skipped": "no_proposals_loaded"},
         }
     proposals_dicts = [p.model_dump() for p in proposals_obj.proposals]
-    distillates = await load_distillates(minio, slug)
+    distillates = await domains.dd.planner.nodes.doc_distill.service.load_distillates(minio, slug)
 
-    manifest = manifest_hash(
+    manifest = domain.manifest_hash(
         slug = slug,
         proposals_ref = proposals_ref,
         source_keys = relevant_files,
     )
-    vkey = versioned_key(slug, manifest)
-    lkey = latest_key(slug)
+    vkey = keys.versioned_key(slug, manifest)
+    lkey = keys.latest_key(slug)
     if await minio.exists(vkey) and await minio.exists(lkey):
         try:
             cached = json.loads(await minio.read_text(vkey))
@@ -238,7 +216,7 @@ async def chapter_assign_run(state: PlannerState) -> dict:
                 "wall_ms": wall_ms,
                 "manifest_hash": manifest,
             }
-            await emit_progress(
+            await domains.dd.planner.runtime.progress.service.emit_progress(
                 thread_id, "chapter_assign", "done",
                 cache_hit = True,
                 n_docs = stats["n_docs"],
@@ -251,7 +229,7 @@ async def chapter_assign_run(state: PlannerState) -> dict:
         except Exception:
             pass
 
-    await emit_progress(
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "chapter_assign", "start",
         n_docs = len(relevant_files),
         n_proposals = len(proposals_dicts),
@@ -259,11 +237,11 @@ async def chapter_assign_run(state: PlannerState) -> dict:
 
     # Settle window — see SETTLE_DELAY_S. Only reached past the cache-hit
     # check above, so a fully-cached re-plan never pays this cost.
-    if SETTLE_DELAY_S > 0:
-        await emit_progress(
-            thread_id, "chapter_assign", "settling", delay_s = SETTLE_DELAY_S,
+    if params.SETTLE_DELAY_S > 0:
+        await domains.dd.planner.runtime.progress.service.emit_progress(
+            thread_id, "chapter_assign", "settling", delay_s = params.SETTLE_DELAY_S,
         )
-        await asyncio.sleep(SETTLE_DELAY_S)
+        await asyncio.sleep(params.SETTLE_DELAY_S)
 
     # Bulk prefetch bodies only for docs lacking distillate summary (fallback path)
     # SOTA: single read_many chunked (shared S3 client, BoundedSemaphore per chunk)
@@ -277,20 +255,20 @@ async def chapter_assign_run(state: PlannerState) -> dict:
         try:
             bodies = await minio.read_many(need_body_keys)  # type: ignore[attr-defined]
             if bodies is not None and len(bodies) == len(need_body_keys):
-                body_map = {k: (b or "")[:BODY_CHARS] for k, b in zip(need_body_keys, bodies)}
+                body_map = {k: (b or "")[:params.BODY_CHARS] for k, b in zip(need_body_keys, bodies)}
             else:
                 raise RuntimeError("read_many length mismatch")
         except Exception as e:
             logger.warning(f"[chapter_assign] bulk read_many failed ({type(e).__name__}: {e}), fallback per-key")
             async def _read_one(k: str) -> tuple[str, str]:
                 try:
-                    return k, (await minio.read_text(k))[:BODY_CHARS]
+                    return k, (await minio.read_text(k))[:params.BODY_CHARS]
                 except Exception:
                     return k, ""
             results_one = await asyncio.gather(*[_read_one(k) for k in need_body_keys])
             body_map = dict(results_one)
 
-    sem = asyncio.Semaphore(CONCURRENCY)
+    sem = asyncio.Semaphore(params.CONCURRENCY)
     tasks = [
         assign_one(
             sem, slug, k,
@@ -313,32 +291,13 @@ async def chapter_assign_run(state: PlannerState) -> dict:
             fallbacks.append(k)
 
     # RESCUE PASS: docs in [RESCUE_FLOOR, CONFIDENCE_THRESHOLD) get their best score floored to threshold so they aren't silently dropped at chapter_select.
-    rescued: list[dict] = []
-    for k, scores in assignments.items():
-        if not scores:
-            continue
-        best_idx = 0
-        best_conf = float(scores[0].get("confidence") or 0.0)
-        for i, s in enumerate(scores[1:], 1):
-            c = float(s.get("confidence") or 0.0)
-            if c > best_conf:
-                best_conf = c
-                best_idx = i
-        if best_conf < CONFIDENCE_THRESHOLD and best_conf >= RESCUE_FLOOR:
-            original = best_conf
-            scores[best_idx]["confidence"] = CONFIDENCE_THRESHOLD
-            scores[best_idx]["rescued_from"] = original
-            rescued.append({
-                "key":           k,
-                "chapter_idx":   scores[best_idx]["chapter_idx"],
-                "original_conf": original,
-            })
+    rescued = domain.apply_rescue_pass(assignments)
 
     if rescued:
         logger.warning(
             f"[chapter_assign] {slug}: rescued {len(rescued)} doc(s) "
-            f"from the [{RESCUE_FLOOR}, {CONFIDENCE_THRESHOLD}) confidence "
-            f"band — floored best score to {CONFIDENCE_THRESHOLD} so they "
+            f"from the [{params.RESCUE_FLOOR}, {params.CONFIDENCE_THRESHOLD}) confidence "
+            f"band — floored best score to {params.CONFIDENCE_THRESHOLD} so they "
             f"reach a chapter instead of being silently dropped at "
             f"chapter_select. Sample: "
             f"{[(r['key'], r['original_conf']) for r in rescued[:10]]}"
@@ -347,7 +306,7 @@ async def chapter_assign_run(state: PlannerState) -> dict:
             from infra.langfuse.annotation import flag_for_review
             flag_for_review(
                 f"chapter_assign rescued {len(rescued)} doc(s) in confidence "
-                f"band [{RESCUE_FLOOR}, {CONFIDENCE_THRESHOLD})",
+                f"band [{params.RESCUE_FLOOR}, {params.CONFIDENCE_THRESHOLD})",
                 severity = "low",
             )
         except Exception:
@@ -355,15 +314,7 @@ async def chapter_assign_run(state: PlannerState) -> dict:
 
     # Rebuild coverage_count AFTER rescue so the post-rescue picture is
     # what flows into the stats payload.
-    coverage_count: dict[int, int] = {
-        i: 0 for i in range(len(proposals_dicts))
-    }
-    for k, scores in assignments.items():
-        for s in scores:
-            if s["confidence"] >= CONFIDENCE_THRESHOLD:
-                coverage_count[s["chapter_idx"]] = coverage_count.get(
-                    s["chapter_idx"], 0,
-                ) + 1
+    coverage_count = domain.compute_coverage_count(assignments, len(proposals_dicts))
 
     if fallbacks:
         logger.warning(
@@ -373,7 +324,7 @@ async def chapter_assign_run(state: PlannerState) -> dict:
         )
 
     payload = {
-        "prompt_version":     PROMPT_VERSION,
+        "prompt_version":     versions.PROMPT_VERSION,
         "framework_slug":     slug,
         "manifest_hash":      manifest,
         "assignments":        assignments,
@@ -386,8 +337,8 @@ async def chapter_assign_run(state: PlannerState) -> dict:
         "rescued":            rescued[:20],
         "n_proposals":        len(proposals_dicts),
         "coverage_count":     coverage_count,
-        "confidence_thresh":  CONFIDENCE_THRESHOLD,
-        "rescue_floor":       RESCUE_FLOOR,
+        "confidence_thresh":  params.CONFIDENCE_THRESHOLD,
+        "rescue_floor":       params.RESCUE_FLOOR,
     }
     blob = json.dumps(payload, indent = 2, ensure_ascii = False)
     await minio.write(vkey, blob, content_type = "application/json")
@@ -406,7 +357,7 @@ async def chapter_assign_run(state: PlannerState) -> dict:
         "wall_ms": wall_ms,
         "manifest_hash": manifest,
     }
-    await emit_progress(
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "chapter_assign", "done",
         cache_hit = False,
         n_assigned = len(assignments),

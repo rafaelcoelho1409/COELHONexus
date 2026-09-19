@@ -582,7 +582,7 @@ async def chat_judge_bandit_async(
 
 def _bump_dd_llm_counter(response, deployment: str | None = None) -> dict | None:
     try:
-        from domains.dd.runtime.llm_counter import bump_current_call
+        import domains
 
         # Adapt to bump_current_call expected shape
         fake_resp = {
@@ -590,7 +590,9 @@ def _bump_dd_llm_counter(response, deployment: str | None = None) -> dict | None
             "usage": getattr(response, "usage_metadata", None) or {},
             "choices": [{"message": {"content": getattr(response, "content", "")}}],
         }
-        return bump_current_call(response=fake_resp, deployment=deployment or COELHO_ROTATOR_MODEL)
+        return domains.dd.runtime.service.bump_current_call(
+            response=fake_resp, deployment=deployment or COELHO_ROTATOR_MODEL,
+        )
     except Exception as e:
         logger.debug(f"[rotator-adapter] bump failed: {e}")
         return None

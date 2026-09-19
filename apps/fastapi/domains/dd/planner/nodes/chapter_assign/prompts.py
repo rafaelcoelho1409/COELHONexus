@@ -1,7 +1,7 @@
 """Prompt builder: static rubric prefix before dynamic per-doc data for KV-cache reuse."""
 from __future__ import annotations
+from . import params
 
-from .params import BODY_CHARS
 
 
 def build_prompt(
@@ -25,7 +25,7 @@ def build_prompt(
             f"KEY_TERMS: {', '.join(doc_terms[:8])}"
         )
     else:
-        body_snip = (doc_body or "")[:BODY_CHARS]
+        body_snip = (doc_body or "")[:params.BODY_CHARS]
         doc_block = f"BODY (truncated):\n{body_snip}"
     # Static prefix: chapter list + rubric first (KV-cacheable across 135+ calls); per-doc info last.
     return (

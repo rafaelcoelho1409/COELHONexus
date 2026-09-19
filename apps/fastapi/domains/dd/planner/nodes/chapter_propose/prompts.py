@@ -1,16 +1,9 @@
 """Prompt builders: chapter proposer + USC vote picker + corpus block renderers."""
 from __future__ import annotations
+from . import params
 
 from typing import Optional
 
-from .params import (
-    CONCEPTS_MAX,
-    CONCEPTS_MIN,
-    PROPOSALS_MAX,
-    PROPOSALS_MIN,
-    TITLE_MAX_WORDS,
-    TITLE_MIN_WORDS,
-)
 
 
 def _render_distillates_block(
@@ -78,12 +71,12 @@ def build_propose_prompt(
                 "framework":        framework,
                 "target_chapters":  target_chapters,
                 "n_source_keys":    len(source_keys),
-                "proposals_min":    PROPOSALS_MIN,
-                "proposals_max":    PROPOSALS_MAX,
-                "title_min_words":  TITLE_MIN_WORDS,
-                "title_max_words":  TITLE_MAX_WORDS,
-                "concepts_min":     CONCEPTS_MIN,
-                "concepts_max":     CONCEPTS_MAX,
+                "proposals_min":    params.PROPOSALS_MIN,
+                "proposals_max":    params.PROPOSALS_MAX,
+                "title_min_words":  params.TITLE_MIN_WORDS,
+                "title_max_words":  params.TITLE_MAX_WORDS,
+                "concepts_min":     params.CONCEPTS_MIN,
+                "concepts_max":     params.CONCEPTS_MAX,
                 "headings_block":   headings_block,
                 "namespaces_block": namespaces_block,
                 "corpus_label":     corpus_label,
@@ -100,16 +93,16 @@ def build_propose_prompt(
         f"Your job: propose a balanced set of about {target_chapters} "
         f"chapters (TARGET={target_chapters}, sized to this corpus of "
         f"{len(source_keys)} docs; stay close to it, hard range "
-        f"{PROPOSALS_MIN}-{PROPOSALS_MAX}) that COVER THE FULL SURFACE AREA "
+        f"{params.PROPOSALS_MIN}-{params.PROPOSALS_MAX}) that COVER THE FULL SURFACE AREA "
         f"of this framework. Too FEW chapters forces unrelated topics to "
         f"share one over-broad chapter; aim for ~{target_chapters} so each "
         f"chapter is a cohesive, single-topic unit. Each chapter must:\n"
-        f"  - have a concrete, specific title ({TITLE_MIN_WORDS}-"
-        f"{TITLE_MAX_WORDS} words; no generic 'Introduction'/"
+        f"  - have a concrete, specific title ({params.TITLE_MIN_WORDS}-"
+        f"{params.TITLE_MAX_WORDS} words; no generic 'Introduction'/"
         f"'Overview'/'Conclusion')\n"
         f"  - cover a DISTINCT topic from every other chapter\n"
         f"  - be backed by ≥3 docs from the corpus\n"
-        f"  - list {CONCEPTS_MIN}-{CONCEPTS_MAX} specific concepts/"
+        f"  - list {params.CONCEPTS_MIN}-{params.CONCEPTS_MAX} specific concepts/"
         f"identifiers/commands that belong in it\n\n"
         f"== STRUCTURAL SIGNALS extracted from the corpus ==\n"
         f"Top recurring headings (appear in ≥2 docs):\n"
@@ -132,7 +125,7 @@ def build_propose_prompt(
         f'  ]\n'
         f"}}\n\n"
         f"HARD RULES:\n"
-        f"1. Between {PROPOSALS_MIN} and {PROPOSALS_MAX} chapters.\n"
+        f"1. Between {params.PROPOSALS_MIN} and {params.PROPOSALS_MAX} chapters.\n"
         f"2. Titles UNIQUE case-insensitively.\n"
         f"3. NEVER use generic content-type names ('Introduction', "
         f"'Conclusion', 'Overview', 'Getting Started', 'About', "
@@ -175,7 +168,7 @@ def build_usc_vote_prompt(
             f"CANDIDATE {i}: {n_chapters} chapters, max concepts in any "
             f"chapter = {max_concept_count}"
         )
-        lines.append("  Titles: " + ", ".join(titles[:PROPOSALS_MAX]))
+        lines.append("  Titles: " + ", ".join(titles[:params.PROPOSALS_MAX]))
     block = "\n".join(lines)
     return (
         f"You are the Universal Self-Consistency picker. Pick the BEST "
@@ -184,7 +177,7 @@ def build_usc_vote_prompt(
         f"== CANDIDATES ==\n{block}\n\n"
         f"Pick by:\n"
         f"  1. Balance (no single chapter dominates concepts)\n"
-        f"  2. Coverage (more chapters = more coverage, up to {PROPOSALS_MAX})\n"
+        f"  2. Coverage (more chapters = more coverage, up to {params.PROPOSALS_MAX})\n"
         f"  3. Specificity (concrete titles, not 'Overview'/'Introduction')\n\n"
         f"OUTPUT — STRICT JSON:\n"
         f'{{"chosen_index": <int>, "reason": "<short>"}}'

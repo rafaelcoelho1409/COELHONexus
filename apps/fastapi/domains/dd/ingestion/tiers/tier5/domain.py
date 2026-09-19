@@ -1,10 +1,9 @@
 """Tier 5 — pure helpers (URL parse + blob filter + path slug)."""
 from __future__ import annotations
+from . import params, patterns
 
 from urllib.parse import urlparse
 
-from .params import MD_EXTS, SKIP_PREFIXES, SKIP_SUBSTRINGS
-from .patterns import MD_EXT_RE, NON_ALNUM_RE, NON_EN_LOCALE_RE
 
 
 def parse_repo(url: str) -> tuple[str, str] | None:
@@ -23,18 +22,18 @@ def parse_repo(url: str) -> tuple[str, str] | None:
 
 
 def is_docs_blob(path: str) -> bool:
-    if not path.lower().endswith(MD_EXTS):
+    if not path.lower().endswith(params.MD_EXTS):
         return False
-    if any(path.startswith(p) for p in SKIP_PREFIXES):
+    if any(path.startswith(p) for p in params.SKIP_PREFIXES):
         return False
-    if any(s in path for s in SKIP_SUBSTRINGS):
+    if any(s in path for s in params.SKIP_SUBSTRINGS):
         return False
-    if NON_EN_LOCALE_RE.search(path):
+    if patterns.NON_EN_LOCALE_RE.search(path):
         return False
     return True
 
 
 def slug_from_path(path: str) -> str:
-    cleaned = MD_EXT_RE.sub("", path)
-    cleaned = NON_ALNUM_RE.sub("-", cleaned.lower()).strip("-")
+    cleaned = patterns.MD_EXT_RE.sub("", path)
+    cleaned = patterns.NON_ALNUM_RE.sub("-", cleaned.lower()).strip("-")
     return cleaned[:120] or "readme"

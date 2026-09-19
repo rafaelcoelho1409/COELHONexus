@@ -6,6 +6,8 @@ I/O (gather exists/read, concurrent 2-blob writes). Old built-in vs pooled
 rotator is no-op here (never called rotator); SOTA is just MinIO concurrency.
 """
 from __future__ import annotations
+import domains
+from . import domain, keys, versions
 
 import asyncio
 import json
@@ -15,59 +17,8 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from ....ingestion.storage import get_storage
-from ..order_chapters import load_chapter_order
-from ...runtime.progress import emit_progress
-from ...state import PlannerState
-
-from .domain import (
-    build_cluster_to_keys,
-    compute_manifest_hash,
-    load_outline,
-    sanitize_chapters,
-)
-from .keys import latest_blob_key, versioned_blob_key
-from .versions import PROMPT_VERSION, SCHEMA_VERSION
-
 
 logger = logging.getLogger(__name__)
-
-
-def _pipeline_health(state: PlannerState) -> dict:
-    """Roll the per-node fallback/degradation signals into the plan's stats so a
-    'done' plan that silently ran on deterministic fallbacks (generic chapter
-    titles, lopsided buckets) is distinguishable from a high-quality one without
-    MinIO archaeology. Observability only — no behaviour change."""
-    dd = state.get("doc_distill_stats") or {}
-    ot = state.get("off_topic_stats") or {}
-    pr = state.get("propose_stats") or {}
-    asg = state.get("assign_stats") or {}
-    ordc = state.get("order_chapters_stats") or {}
-
-    def _pct(num, den):
-        return round(100.0 * num / den, 1) if den else 0.0
-
-    dd_n = dd.get("n_distilled") or dd.get("n_files") or 0
-    asg_n = asg.get("n_assigned") or asg.get("n_docs") or 0
-    health = {
-        "off_topic_llm_errors":       ot.get("llm_errors", ot.get("llm_err", 0)),
-        "doc_distill_fallback_pct":   _pct(dd.get("n_fallback", 0), dd_n),
-        "doc_distill_failure_reasons": dd.get("failure_reasons") or {},
-        "chapter_propose_fallback_used": bool(pr.get("fallback_used", False)),
-        "chapter_propose_samples_valid": int(pr.get("n_samples_valid", 0)),
-        "chapter_propose_n_proposals": pr.get("n_proposals", 0),
-        "chapter_assign_fallback_pct": _pct(asg.get("n_fallback", 0), asg_n),
-        "chapter_assign_rescued":     asg.get("n_rescued", 0),
-        "order_chapters_valid_samples": ordc.get("n_samples", 0),
-    }
-    # Single headline flag: was any structural stage degraded to its
-    # deterministic fallback? (the thing that produces a throwaway plan)
-    health["degraded"] = bool(
-        pr.get("fallback_used", False)
-        or _pct(dd.get("n_fallback", 0), dd_n) >= 40.0
-        or _pct(asg.get("n_fallback", 0), asg_n) >= 50.0
-    )
-    return health
 
 
 async def persist_plan(
@@ -86,7 +37,7 @@ async def persist_plan(
     )
 
 
-async def plan_write_run(state: PlannerState) -> dict:
+async def plan_write_run(state: domains.dd.planner.state.PlannerState) -> dict:
     """Final-plan persist: load outline → optional pedagogical reorder →
     sanitize (no LLM) → inline provenance refs (Atlas/SLSA) → versioned + latest."""
     slug = state.get("framework_slug")
@@ -98,13 +49,13 @@ async def plan_write_run(state: PlannerState) -> dict:
 
     t0 = time.monotonic()
 
-    manifest_hash = compute_manifest_hash(chapter_plan_ref, SCHEMA_VERSION)
-    versioned_key = versioned_blob_key(slug, manifest_hash)
-    latest_key = latest_blob_key(slug)
-    minio = get_storage()
+    manifest_hash = domain.compute_manifest_hash(chapter_plan_ref, versions.SCHEMA_VERSION)
+    versioned_key = keys.versioned_blob_key(slug, manifest_hash)
+    latest_key = keys.latest_blob_key(slug)
+    minio = domains.dd.ingestion.storage.service.get_storage()
 
     # Unconditional `start` so the UI shows running even on cache hit.
-    await emit_progress(
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "plan_write", "start",
         manifest_hash = manifest_hash,
     )
@@ -139,7 +90,7 @@ async def plan_write_run(state: PlannerState) -> dict:
                     "cache_hit":      True,
                     "plan":           latest,
                 }
-                await emit_progress(
+                await domains.dd.planner.runtime.progress.service.emit_progress(
                     thread_id, "plan_write", "done",
                     n_chapters = len(chapters),
                     n_sources = n_sources,
@@ -163,7 +114,7 @@ async def plan_write_run(state: PlannerState) -> dict:
             )
 
     outline_text = await minio.read_text(chapter_plan_ref)
-    outline = load_outline(outline_text)
+    outline = domain.load_outline(outline_text)
 
     cluster_keys: list[str] = []
     refined_assignments_list: list[int] = []
@@ -178,7 +129,7 @@ async def plan_write_run(state: PlannerState) -> dict:
         refined_assignments_list, dtype = np.int64,
     )
 
-    await emit_progress(
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "plan_write", "loaded",
         n_chapters_in = len((outline or {}).get("chapters") or []),
         n_clusters = len({
@@ -193,7 +144,7 @@ async def plan_write_run(state: PlannerState) -> dict:
     if order_ref and raw_chapters:
         try:
             order_text = await minio.read_text(order_ref)
-            order = load_chapter_order(order_text)
+            order = domains.dd.planner.nodes.order_chapters.domain.load_chapter_order(order_text)
             if order is not None and len(order) == len(raw_chapters):
                 reordered = [raw_chapters[i] for i in order]
                 for new_pos, ch in enumerate(reordered):
@@ -201,7 +152,7 @@ async def plan_write_run(state: PlannerState) -> dict:
                         ch["order"] = new_pos + 1
                 raw_chapters = reordered
                 reorder_applied = True
-                await emit_progress(
+                await domains.dd.planner.runtime.progress.service.emit_progress(
                     thread_id, "plan_write", "reordered",
                     order = order,
                 )
@@ -223,17 +174,17 @@ async def plan_write_run(state: PlannerState) -> dict:
                 f"kept"
             )
 
-    cluster_to_keys = build_cluster_to_keys(
+    cluster_to_keys = domain.build_cluster_to_keys(
         refined_assignments, cluster_keys,
     )
-    chapters, n_dropped = sanitize_chapters(raw_chapters, cluster_to_keys)
+    chapters, n_dropped = domain.sanitize_chapters(raw_chapters, cluster_to_keys)
     n_sources_total = sum(len(c["sources"]) for c in chapters)
 
     unassigned_keys = sorted(set(cluster_keys) - {
         k for c in chapters for k in c["sources"]
     })
 
-    await emit_progress(
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "plan_write", "sanitized",
         n_chapters = len(chapters),
         n_dropped = n_dropped,
@@ -242,7 +193,7 @@ async def plan_write_run(state: PlannerState) -> dict:
     )
 
     plan = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": versions.SCHEMA_VERSION,
         "framework_slug": slug,
         "manifest_hash":  manifest_hash,
         "generated_at":   datetime.now(timezone.utc).strftime(
@@ -252,7 +203,7 @@ async def plan_write_run(state: PlannerState) -> dict:
         "unassigned":     unassigned_keys,
         "provenance": {
             "chapter_plan_ref":  chapter_plan_ref,
-            "prompt_versions":   {"plan_write": PROMPT_VERSION},
+            "prompt_versions":   {"plan_write": versions.PROMPT_VERSION},
             "corpus_doc_count":  len(cluster_keys),
             "chapter_count":     len({
                 int(c) for c in refined_assignments if int(c) >= 0
@@ -263,7 +214,7 @@ async def plan_write_run(state: PlannerState) -> dict:
             "n_sources":    n_sources_total,
             "n_unassigned": len(unassigned_keys),
             "n_dropped":    n_dropped,
-            "pipeline_health": _pipeline_health(state),
+            "pipeline_health": domain.pipeline_health(state),
         },
     }
 
@@ -288,7 +239,7 @@ async def plan_write_run(state: PlannerState) -> dict:
         "reorder_applied": reorder_applied,
         "plan":            plan,
     }
-    await emit_progress(
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "plan_write", "done",
         n_chapters = len(chapters), n_sources = n_sources_total,
         n_unassigned = len(unassigned_keys),

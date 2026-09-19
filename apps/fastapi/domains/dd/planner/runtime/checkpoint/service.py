@@ -1,5 +1,6 @@
 """AsyncPostgresSaver lifecycle; re-opens when the event loop changes because Celery prefork creates a new loop per task (stale saver → closed-pool OperationalError)."""
 from __future__ import annotations
+import domains
 
 import asyncio
 import logging
@@ -9,7 +10,6 @@ from urllib.parse import urlparse
 import psycopg
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-from ...keys import postgres_url
 
 
 logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ async def init_checkpointer() -> AsyncPostgresSaver:
         _saver_ctx = None
         _saver_loop = None
 
-    url = postgres_url()
+    url = domains.dd.planner.keys.postgres_url()
     logger.info(f"[checkpointer] connecting to {url.split('@')[-1]}")
 
     # Bootstrap missing DB on first connect; recovery path is no-op in steady state.

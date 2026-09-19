@@ -1,5 +1,7 @@
 """Ingestion entry point: resolver → tier dispatch → post-process → finalize."""
-from .service import run
+from __future__ import annotations
+
+from . import domain, params, service
 
 
-__all__ = ["run"]
+__all__ = ["domain", "params", "service"]

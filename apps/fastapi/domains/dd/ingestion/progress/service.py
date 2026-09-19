@@ -1,5 +1,6 @@
 """Per-run progress, per-framework single-flight lock, and cancel flag."""
 from __future__ import annotations
+from . import errors, keys, params
 
 import json
 import logging
@@ -8,21 +9,6 @@ from typing import Optional
 
 import redis.asyncio as redis_aio
 
-from .errors import IngestCancelled
-from .keys import (
-    cancel_key,
-    lock_key,
-    post_key,
-    progress_key,
-    redis_url,
-    url_records_key,
-)
-from .params import (
-    CANCEL_POLL_THROTTLE_S,
-    LOCK_TTL_S,
-    THROTTLE_S,
-    TTL_S,
-)
 
 
 logger = logging.getLogger(__name__)
@@ -41,11 +27,11 @@ async def acquire_lock(
     r: redis_aio.Redis,
     framework_slug: str,
     run_id: str,
-    ttl_s: int = LOCK_TTL_S,
+    ttl_s: int = params.LOCK_TTL_S,
 ) -> bool:
     """SETNX with TTL. True if this run_id now holds the lock."""
     try:
-        ok = await r.set(lock_key(framework_slug), run_id, nx=True, ex=ttl_s)
+        ok = await r.set(keys.lock_key(framework_slug), run_id, nx=True, ex=ttl_s)
     except Exception as e:
         logger.warning(f"[lock] acquire failed: {e}")
         return False
@@ -55,7 +41,7 @@ async def acquire_lock(
 async def read_lock(r: redis_aio.Redis, framework_slug: str) -> Optional[str]:
     """run_id holding the lock, or None."""
     try:
-        v = await r.get(lock_key(framework_slug))
+        v = await r.get(keys.lock_key(framework_slug))
     except Exception:
         return None
     if not v:
@@ -70,7 +56,7 @@ async def release_lock(
 ) -> bool:
     """Release iff this run_id is the holder."""
     try:
-        n = await r.eval(RELEASE_SCRIPT, 1, lock_key(framework_slug), run_id)
+        n = await r.eval(RELEASE_SCRIPT, 1, keys.lock_key(framework_slug), run_id)
     except Exception as e:
         logger.warning(f"[lock] release failed: {e}")
         return False
@@ -79,14 +65,14 @@ async def release_lock(
 
 async def request_cancel(r: redis_aio.Redis, run_id: str) -> None:
     try:
-        await r.set(cancel_key(run_id), "1", ex=TTL_S)
+        await r.set(keys.cancel_key(run_id), "1", ex=params.TTL_S)
     except Exception as e:
         logger.warning(f"[cancel] set failed: {e}")
 
 
 async def is_cancelled(r: redis_aio.Redis, run_id: str) -> bool:
     try:
-        v = await r.get(cancel_key(run_id))
+        v = await r.get(keys.cancel_key(run_id))
     except Exception:
         return False
     return bool(v)
@@ -94,7 +80,7 @@ async def is_cancelled(r: redis_aio.Redis, run_id: str) -> bool:
 
 async def clear_cancel(r: redis_aio.Redis, run_id: str) -> None:
     try:
-        await r.delete(cancel_key(run_id))
+        await r.delete(keys.cancel_key(run_id))
     except Exception:
         pass
 
@@ -119,7 +105,7 @@ class Progress:
         if self._r is None:
             try:
                 self._r = redis_aio.from_url(
-                    redis_url(),
+                    keys.redis_url(),
                     socket_connect_timeout = 3.0,
                     socket_timeout = 5.0,
                 )
@@ -130,7 +116,7 @@ class Progress:
 
     async def _flush(self, force: bool = False) -> None:
         now = time.time()
-        if not force and (now - self._last_flush) < THROTTLE_S:
+        if not force and (now - self._last_flush) < params.THROTTLE_S:
             return
         self._last_flush = now
         self._state["updated_at"] = now
@@ -139,9 +125,9 @@ class Progress:
             return
         try:
             await r.set(
-                progress_key(self.run_id), 
+                keys.progress_key(self.run_id), 
                 json.dumps(self._state), 
-                ex = TTL_S)
+                ex = params.TTL_S)
         except Exception as e:
             logger.info(f"[progress] write skipped: {e}")
 
@@ -169,7 +155,7 @@ class Progress:
     async def check_cancelled(self) -> bool:
         """≤1/s polling; tiers call between fetches → raise IngestCancelled."""
         now = time.time()
-        if (now - self._last_cancel_check) < CANCEL_POLL_THROTTLE_S:
+        if (now - self._last_cancel_check) < params.CANCEL_POLL_THROTTLE_S:
             return False
         self._last_cancel_check = now
         r = await self._client()
@@ -179,7 +165,7 @@ class Progress:
 
     async def raise_if_cancelled(self) -> None:
         if await self.check_cancelled():
-            raise IngestCancelled(self.run_id)
+            raise errors.IngestCancelled(self.run_id)
 
     async def record_url(
         self,
@@ -209,8 +195,8 @@ class Progress:
         }
         try:
             pipe = r.pipeline()
-            pipe.rpush(url_records_key(self.run_id), json.dumps(rec))
-            pipe.expire(url_records_key(self.run_id), TTL_S)
+            pipe.rpush(keys.url_records_key(self.run_id), json.dumps(rec))
+            pipe.expire(keys.url_records_key(self.run_id), params.TTL_S)
             await pipe.execute()
         except Exception as e:
             logger.info(f"[progress] record_url skipped: {e}")
@@ -247,7 +233,7 @@ class Progress:
             "recorded_at":        time.time(),
         }
         try:
-            await r.set(post_key(self.run_id), json.dumps(payload), ex=TTL_S)
+            await r.set(keys.post_key(self.run_id), json.dumps(payload), ex=params.TTL_S)
         except Exception as e:
             logger.info(f"[progress] record_post skipped: {e}")
 
@@ -267,7 +253,7 @@ class Progress:
 
 async def read_progress(r: redis_aio.Redis, run_id: str) -> Optional[dict]:
     try:
-        raw = await r.get(progress_key(run_id))
+        raw = await r.get(keys.progress_key(run_id))
     except Exception:
         return None
     if not raw:
@@ -282,7 +268,7 @@ async def read_progress(r: redis_aio.Redis, run_id: str) -> Optional[dict]:
 
 async def read_url_records(r: redis_aio.Redis, run_id: str) -> list[dict]:
     try:
-        raw_list = await r.lrange(url_records_key(run_id), 0, -1)
+        raw_list = await r.lrange(keys.url_records_key(run_id), 0, -1)
     except Exception:
         return []
     out: list[dict] = []
@@ -298,7 +284,7 @@ async def read_url_records(r: redis_aio.Redis, run_id: str) -> list[dict]:
 
 async def read_post(r: redis_aio.Redis, run_id: str) -> Optional[dict]:
     try:
-        raw = await r.get(post_key(run_id))
+        raw = await r.get(keys.post_key(run_id))
     except Exception:
         return None
     if not raw:

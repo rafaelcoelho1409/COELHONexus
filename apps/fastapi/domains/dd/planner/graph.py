@@ -1,20 +1,12 @@
 """LangGraph planner — strictly sequential; one AsyncPostgresSaver checkpoint + OTel span per node."""
 from __future__ import annotations
+import domains
+from . import state, nodes
 
 import logging
 
 from langgraph.graph import END, START, StateGraph
 
-from .nodes.chapter_assign.node import chapter_assign
-from .nodes.chapter_propose.node import chapter_propose
-from .nodes.chapter_select.node import chapter_select
-from .runtime.checkpoint import get_checkpointer
-from .nodes.corpus_load.node import corpus_load
-from .nodes.doc_distill.node import doc_distill
-from .nodes.off_topic.node import off_topic
-from .nodes.order_chapters.node import order_chapters
-from .nodes.plan_write.node import plan_write
-from .state import PlannerState
 
 
 logger = logging.getLogger(__name__)
@@ -37,14 +29,14 @@ NODE_ORDER = (
 )
 
 NODE_REGISTRY = {
-    "corpus_load":      corpus_load,
-    "off_topic":        off_topic,
-    "doc_distill":      doc_distill,
-    "chapter_propose":  chapter_propose,
-    "chapter_assign":   chapter_assign,
-    "chapter_select":   chapter_select,
-    "order_chapters":   order_chapters,
-    "plan_write":       plan_write,
+    "corpus_load":      nodes.corpus_load.node.corpus_load,
+    "off_topic":        nodes.off_topic.node.off_topic,
+    "doc_distill":      nodes.doc_distill.node.doc_distill,
+    "chapter_propose":  nodes.chapter_propose.node.chapter_propose,
+    "chapter_assign":   nodes.chapter_assign.node.chapter_assign,
+    "chapter_select":   nodes.chapter_select.node.chapter_select,
+    "order_chapters":   nodes.order_chapters.node.order_chapters,
+    "plan_write":       nodes.plan_write.node.plan_write,
 }
 
 # Primary output field per node. /resume's catch-up path uses this to
@@ -74,7 +66,7 @@ def build_graph():
             "before invoking the graph"
         )
 
-    g = StateGraph(PlannerState)
+    g = StateGraph(state.PlannerState)
     for name in active:
         g.add_node(name, NODE_REGISTRY[name])
 
@@ -87,4 +79,5 @@ def build_graph():
         f"[planner] graph compiled with {len(active)} active nodes: "
         f"{', '.join(active)}"
     )
-    return g.compile(checkpointer=get_checkpointer())
+    return g.compile(
+        checkpointer=domains.dd.planner.runtime.checkpoint.service.get_checkpointer())

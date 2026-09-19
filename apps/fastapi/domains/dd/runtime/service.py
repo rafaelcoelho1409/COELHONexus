@@ -5,13 +5,10 @@ import json
 import logging
 from contextvars import ContextVar
 from typing import Any
-from urllib.parse import quote
 
-from domains.dd.planner.keys import redis_url
-from domains.dd.planner.params import (
-    REDIS_CONNECT_TIMEOUT_S,
-    REDIS_OP_TIMEOUT_S,
-)
+import domains
+
+from . import domain, keys, params
 
 
 logger = logging.getLogger(__name__)
@@ -26,9 +23,6 @@ _thread_id_var: ContextVar[str | None] = ContextVar(
 _node_id_var: ContextVar[str | None] = ContextVar(
     "dd_llm_node_id", default=None,
 )
-
-_COUNTER_TTL_S = 24 * 60 * 60
-_SNAPSHOT_PREFIX = "observability/dd/llm-counters"
 
 
 def set_context(
@@ -51,82 +45,6 @@ def get_context() -> tuple[str | None, str | None, str | None]:
     return _stage_var.get(), _thread_id_var.get(), _node_id_var.get()
 
 
-def _counters_key(thread_id: str) -> str:
-    return f"dd:{thread_id}:llm:counters"
-
-
-def _models_key(thread_id: str, node_id: str) -> str:
-    return f"dd:{thread_id}:llm:models:{node_id}"
-
-
-def _snapshot_key(thread_id: str) -> str:
-    return f"{_SNAPSHOT_PREFIX}/{quote(thread_id, safe='')}.json"
-
-
-def _get(obj: Any, key: str, default: Any = None) -> Any:
-    if obj is None:
-        return default
-    if isinstance(obj, dict):
-        return obj.get(key, default)
-    return getattr(obj, key, default)
-
-
-def _coerce_usage(usage: Any) -> dict:
-    if usage is None:
-        return {}
-    if isinstance(usage, dict):
-        return usage
-    if hasattr(usage, "model_dump"):
-        try:
-            return usage.model_dump()
-        except Exception:
-            pass
-    return getattr(usage, "__dict__", {}) or {}
-
-
-def extract_usage(response: Any) -> tuple[int, int, int]:
-    """Return input/output/reasoning tokens from a LiteLLM response."""
-    usage = _coerce_usage(_get(response, "usage"))
-    tokens_in = int(
-        usage.get("prompt_tokens")
-        or usage.get("input_tokens")
-        or 0
-    )
-    tokens_out = int(
-        usage.get("completion_tokens")
-        or usage.get("output_tokens")
-        or 0
-    )
-    details = (
-        usage.get("completion_tokens_details")
-        or usage.get("output_tokens_details")
-        or {}
-    )
-    if not isinstance(details, dict):
-        details = _coerce_usage(details)
-    reasoning = int(
-        usage.get("reasoning_tokens")
-        or details.get("reasoning_tokens")
-        or 0
-    )
-    return max(0, tokens_in), max(0, tokens_out), max(0, reasoning)
-
-
-def _model_from_response(response: Any, fallback: str | None = None) -> str:
-    model = _get(response, "model")
-    if isinstance(fallback, str) and "/" in fallback:
-        return fallback
-    if isinstance(model, str) and model:
-        return model
-    hidden = _get(response, "_hidden_params")
-    if isinstance(hidden, dict):
-        for key in ("model_id", "model"):
-            val = hidden.get(key)
-            if isinstance(val, str) and val:
-                return val
-    return fallback or "unknown"
-
-
 def bump_current_call(
     *,
     response: Any,
@@ -136,8 +54,8 @@ def bump_current_call(
     stage, thread_id, node_id = get_context()
     if not stage or not thread_id or not node_id:
         return None
-    tokens_in, tokens_out, reasoning_tokens = extract_usage(response)
-    model = _model_from_response(response, deployment)
+    tokens_in, tokens_out, reasoning_tokens = domain.extract_usage(response)
+    model = domain._model_from_response(response, deployment)
     _bump_sync(
         stage=stage,
         thread_id=thread_id,
@@ -172,17 +90,17 @@ def _bump_sync(
 
     try:
         r = redis_sync.from_url(
-            redis_url(),
-            socket_connect_timeout=REDIS_CONNECT_TIMEOUT_S,
-            socket_timeout=REDIS_OP_TIMEOUT_S,
+            domains.dd.planner.keys.redis_url(),
+            socket_connect_timeout=domains.dd.planner.params.REDIS_CONNECT_TIMEOUT_S,
+            socket_timeout=domains.dd.planner.params.REDIS_OP_TIMEOUT_S,
         )
     except Exception as e:
         logger.warning(f"[dd-llm-counter] connect failed: {e}")
         return
 
     try:
-        counters_k = _counters_key(thread_id)
-        models_k = _models_key(thread_id, node_id)
+        counters_k = keys.counters_key(thread_id)
+        models_k = keys.models_key(thread_id, node_id)
         pp = f"node:{node_id}"
         pipe = r.pipeline(transaction=False)
 
@@ -212,8 +130,8 @@ def _bump_sync(
             f"{model}:reasoning_tokens",
             int(reasoning_tokens),
         )
-        pipe.expire(counters_k, _COUNTER_TTL_S)
-        pipe.expire(models_k, _COUNTER_TTL_S)
+        pipe.expire(counters_k, params.COUNTER_TTL_S)
+        pipe.expire(models_k, params.COUNTER_TTL_S)
         pipe.execute()
     except Exception as e:
         logger.warning(
@@ -246,16 +164,16 @@ async def read_counters(thread_id: str) -> dict[str, Any]:
 
     try:
         r = redis_aio.from_url(
-            redis_url(),
-            socket_connect_timeout=REDIS_CONNECT_TIMEOUT_S,
-            socket_timeout=REDIS_OP_TIMEOUT_S,
+            domains.dd.planner.keys.redis_url(),
+            socket_connect_timeout=domains.dd.planner.params.REDIS_CONNECT_TIMEOUT_S,
+            socket_timeout=domains.dd.planner.params.REDIS_OP_TIMEOUT_S,
         )
     except Exception as e:
         logger.warning(f"[dd-llm-counter] connect failed: {e}")
         return await _read_snapshot(thread_id) or empty
 
     try:
-        raw = await r.hgetall(_counters_key(thread_id))
+        raw = await r.hgetall(keys.counters_key(thread_id))
         if not raw:
             return await _read_snapshot(thread_id) or empty
         counters = {
@@ -309,7 +227,7 @@ async def read_counters(thread_id: str) -> dict[str, Any]:
 
 
 async def _read_models(r: Any, thread_id: str, node_id: str) -> dict:
-    raw = await r.hgetall(_models_key(thread_id, node_id))
+    raw = await r.hgetall(keys.models_key(thread_id, node_id))
     by_model: dict[str, dict[str, int]] = {}
     for k, v in (raw or {}).items():
         key = k.decode() if isinstance(k, bytes) else k
@@ -323,8 +241,9 @@ async def _read_models(r: Any, thread_id: str, node_id: str) -> dict:
 
 async def _read_snapshot(thread_id: str) -> dict[str, Any] | None:
     try:
-        from domains.dd.ingestion.storage import get_storage
-        raw = await get_storage().read_text(_snapshot_key(thread_id))
+        raw = await domains.dd.ingestion.storage.service.get_storage().read_text(
+            keys.snapshot_key(thread_id),
+        )
         data = json.loads(raw)
         if isinstance(data, dict):
             return data
@@ -351,9 +270,8 @@ async def snapshot(thread_id: str) -> bool:
         )
         return False
     try:
-        from domains.dd.ingestion.storage import get_storage
-        await get_storage().write(
-            _snapshot_key(thread_id),
+        await domains.dd.ingestion.storage.service.get_storage().write(
+            keys.snapshot_key(thread_id),
             json.dumps(payload, ensure_ascii=False, indent=2),
             content_type="application/json",
         )

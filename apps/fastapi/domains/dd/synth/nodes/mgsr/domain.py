@@ -1,5 +1,6 @@
 """mgsr — pure helpers: halt cascade, validators, JSON parse, manifest hash."""
 from __future__ import annotations
+from . import params, patterns, schemas, versions
 
 import json
 import re
@@ -8,17 +9,6 @@ from typing import Optional
 
 from pydantic import ValidationError
 
-from .params import (
-    CONFIDENCE_HIGH_THRESHOLD,
-)
-from .patterns import JSON_RE
-from .schemas import (
-    HaltReason,
-    LLMReplanPayload,
-    MGSRDecision,
-    ReplanAction,
-)
-from .versions import MGSR_PROMPT_VERSION, MGSR_SCHEMA_VERSION
 
 
 def is_trivial_pass(checklist: dict) -> bool:
@@ -31,9 +21,9 @@ def is_trivial_pass(checklist: dict) -> bool:
     return pass_rate >= 0.80
 
 
-def build_trivial_pass_decision(pass_rate: float) -> MGSRDecision:
+def build_trivial_pass_decision(pass_rate: float) -> schemas.MGSRDecision:
     """Construct the halt decision for the trivial-pass case."""
-    return MGSRDecision(
+    return schemas.MGSRDecision(
         halt = True,
         halt_reason = "chapter_passed",
         confidence = 1.0,
@@ -47,9 +37,9 @@ def build_trivial_pass_decision(pass_rate: float) -> MGSRDecision:
     )
 
 
-def fallback_decision(reason: str) -> MGSRDecision:
+def fallback_decision(reason: str) -> schemas.MGSRDecision:
     """Conservative halt when LLM call fails irrecoverably; renders chapter as-is."""
-    return MGSRDecision(
+    return schemas.MGSRDecision(
         halt = True,
         halt_reason = "confidence_high",  # conservative
         confidence = 0.5,
@@ -64,15 +54,15 @@ def fallback_decision(reason: str) -> MGSRDecision:
 
 
 def derive_halt_reason(
-    payload: LLMReplanPayload,
+    payload: schemas.LLMReplanPayload,
     *,
     iteration: int = 0,
     budget: int = 5,
-) -> tuple[bool, HaltReason]:
+) -> tuple[bool, schemas.HaltReason]:
     """Halt cascade: budget_exhausted → confidence_high → no_actions_needed → v1_no_loop."""
     if iteration >= budget:
         return True, "budget_exhausted"
-    if payload.confidence >= CONFIDENCE_HIGH_THRESHOLD:
+    if payload.confidence >= params.CONFIDENCE_HIGH_THRESHOLD:
         return True, "confidence_high"
     if payload.halt and not payload.actions:
         return True, "no_actions_needed"
@@ -84,7 +74,7 @@ def derive_halt_reason(
 
 
 def validate_actions_against_outline(
-    actions: list[ReplanAction],
+    actions: list[schemas.ReplanAction],
     *,
     valid_section_ids: set[str],
 ) -> list[str]:
@@ -140,7 +130,7 @@ def parse_json_response(text: str) -> Optional[dict]:
         return json.loads(cleaned)
     except Exception:
         pass
-    m = JSON_RE.search(text)
+    m = patterns.JSON_RE.search(text)
     if not m:
         return None
     try:
@@ -164,9 +154,9 @@ def _shorten_pydantic_error(e: ValidationError) -> str:
 
 def try_parse_payload(
     raw: dict,
-) -> tuple[Optional[LLMReplanPayload], Optional[str]]:
+) -> tuple[Optional[schemas.LLMReplanPayload], Optional[str]]:
     try:
-        return LLMReplanPayload.model_validate(raw), None
+        return schemas.LLMReplanPayload.model_validate(raw), None
     except ValidationError as e:
         return None, _shorten_pydantic_error(e)
     except Exception as e:
@@ -181,8 +171,8 @@ def compute_manifest_hash(
     payload = (
         f"checklist={checklist_manifest_hash}|"
         f"outline={outline_manifest_hash}|"
-        f"prompt={MGSR_PROMPT_VERSION}|"
-        f"schema={MGSR_SCHEMA_VERSION}"
+        f"prompt={versions.MGSR_PROMPT_VERSION}|"
+        f"schema={versions.MGSR_SCHEMA_VERSION}"
     )
     return sha256(payload.encode("utf-8")).hexdigest()[:16]
 

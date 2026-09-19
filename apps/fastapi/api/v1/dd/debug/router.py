@@ -7,18 +7,9 @@ from .params import KIND_BY_TIER, TIER_BY_KIND
 import time
 from typing import Optional
 
+import domains
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
-
-from domains.dd.ingestion import post
-from domains.dd.ingestion.storage import (
-    Store,
-    get_storage,
-    snapshot,
-)
-from domains.dd.ingestion.tiers import ManifestDetected, tier3, tier4
-from domains.dd.ingestion.progress import Progress
-from domains.dd.planner.keys import redis_url
 
 from ..dependencies import CatalogEntry
 
@@ -69,12 +60,12 @@ async def debug_ingest_one_tier(
         )
 
     debug_run_id = f"debug-tier{tier}-{slug}-{int(time.time())}"
-    progress = Progress(debug_run_id)
+    progress = domains.dd.ingestion.progress.service.Progress(debug_run_id)
     r = redis_aio.from_url(
-        redis_url(), socket_connect_timeout=3.0, socket_timeout=10.0,
+        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=10.0,
     )
-    minio = get_storage()
-    store = Store(debug_run_id, slug, r, minio)
+    minio = domains.dd.ingestion.storage.service.get_storage()
+    store = domains.dd.ingestion.storage.service.Store(debug_run_id, slug, r, minio)
 
     try:
         mod = TIER_BY_KIND[kind][1]
@@ -82,13 +73,13 @@ async def debug_ingest_one_tier(
             "url": url, "framework_slug": slug,
             "progress": progress, "store": store,
         }
-        if mod in (tier3, tier4):
+        if mod in (domains.dd.ingestion.tiers.tier3, domains.dd.ingestion.tiers.tier4):
             kwargs["framework_name"] = entry["name"]
-        if mod is tier4 and language is not None:
+        if mod is domains.dd.ingestion.tiers.tier4 and language is not None:
             kwargs["language"] = language
         try:
-            await mod.run(**kwargs)
-        except ManifestDetected as e:
+            await mod.service.run(**kwargs)
+        except domains.dd.ingestion.tiers.errors.ManifestDetected as e:
             return {
                 "status": "manifest_detected",
                 "slug": slug, "tier": kind,
@@ -120,14 +111,14 @@ async def debug_post(slug: str, entry: CatalogEntry) -> dict:
     """Re-runs post-process against current MinIO content (useful when
     tuning SPLIT_MIN_SECTION_BYTES without re-downloading)."""
     debug_run_id = f"debug-post-{slug}-{int(time.time())}"
-    progress = Progress(debug_run_id)
+    progress = domains.dd.ingestion.progress.service.Progress(debug_run_id)
     r = redis_aio.from_url(
-        redis_url(), socket_connect_timeout=3.0, socket_timeout=10.0,
+        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=10.0,
     )
-    minio = get_storage()
+    minio = domains.dd.ingestion.storage.service.get_storage()
 
     try:
-        store = await Store.from_existing(
+        store = await domains.dd.ingestion.storage.service.Store.from_existing(
             debug_run_id, slug, r, minio,
         )
         if not store.manifest:
@@ -136,7 +127,7 @@ async def debug_post(slug: str, entry: CatalogEntry) -> dict:
                 detail=f"no MinIO manifest for {slug!r} — run ingest first",
             )
         before = len(store.manifest)
-        summary = await post.apply_to_store(store)
+        summary = await domains.dd.ingestion.post.service.apply_to_store(store)
         await progress.record_post(
             input_files=summary["input_files"],
             input_bytes=summary["input_bytes"],
@@ -171,12 +162,12 @@ async def debug_finalize(slug: str, entry: CatalogEntry) -> dict:
     Useful when the manifest payload shape changes."""
     debug_run_id = f"debug-finalize-{slug}-{int(time.time())}"
     r = redis_aio.from_url(
-        redis_url(), socket_connect_timeout=3.0, socket_timeout=10.0,
+        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=10.0,
     )
-    minio = get_storage()
+    minio = domains.dd.ingestion.storage.service.get_storage()
 
     try:
-        store = await Store.from_existing(debug_run_id, slug, r, minio)
+        store = await domains.dd.ingestion.storage.service.Store.from_existing(debug_run_id, slug, r, minio)
         if not store.manifest:
             raise HTTPException(
                 status_code=404,
@@ -205,25 +196,25 @@ async def debug_take_snapshot(
     slug: str,
     entry: CatalogEntry, label: Optional[str] = None,
 ) -> dict:
-    return await snapshot.take(get_storage(), slug, label=label)
+    return await domains.dd.ingestion.storage.service.take_snapshot(domains.dd.ingestion.storage.service.get_storage(), slug, label=label)
 
 
 @router.get("/snapshots/{slug}")
 async def debug_list_snapshots(slug: str, entry: CatalogEntry) -> dict:
     return {
         "slug": slug,
-        "snapshots": await snapshot.list_snapshots(get_storage(), slug),
+        "snapshots": await domains.dd.ingestion.storage.service.list_snapshots(domains.dd.ingestion.storage.service.get_storage(), slug),
     }
 
 
 @router.post("/restore/{slug}")
 async def debug_restore_snapshot(slug: str, entry: CatalogEntry, ts: str) -> dict:
     try:
-        return await snapshot.restore(get_storage(), slug, ts)
+        return await domains.dd.ingestion.storage.service.restore_snapshot(domains.dd.ingestion.storage.service.get_storage(), slug, ts)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.delete("/snapshot/{slug}")
 async def debug_delete_snapshot(slug: str, entry: CatalogEntry, ts: str) -> dict:
-    return await snapshot.delete_snapshot(get_storage(), slug, ts)
+    return await domains.dd.ingestion.storage.service.delete_snapshot(domains.dd.ingestion.storage.service.get_storage(), slug, ts)

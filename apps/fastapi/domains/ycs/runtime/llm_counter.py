@@ -1,6 +1,6 @@
 """Per-extract-run LLM call/token counters for YCS's Neo4j entity
 extraction — Redis-backed, same contract/shape as DD's
-`domains.dd.runtime.llm_counter` (ported deliberately, not
+`domains.dd.runtime.service` (ported deliberately, not
 reinvented) so the FastHTML LLM-usage drawer (`static/js/dd/shared/
 llm_totals.js`) can render YCS's data with the same rendering code.
 

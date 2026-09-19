@@ -1,12 +1,11 @@
 """mgsr_replan — LangGraph node; all orchestration in service.mgsr_replan_run."""
 from __future__ import annotations
+import domains
+from domains.dd.synth.runtime.observability.service import traced
 
-from ...runtime.observability import traced
-from ...state import SynthState
-
-from .service import mgsr_replan_run
+from . import service
 
 
 @traced("mgsr_replan")
-async def mgsr_replan(state: SynthState) -> dict:
-    return await mgsr_replan_run(state)
+async def mgsr_replan(state: domains.dd.synth.state.SynthState) -> dict:
+    return await service.mgsr_replan_run(state)

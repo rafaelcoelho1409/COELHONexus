@@ -1,6 +1,7 @@
-"""Tier 4 docs crawler: httpx-first with Crawl4AI Playwright fallback. Entry: run(). Sphinx/Playwright submodules are tier4-internal."""
+"""Tier 4 docs crawler: httpx-first with Crawl4AI Playwright fallback. Entry: service.run(). Sphinx submodule is tier4-internal."""
 from __future__ import annotations
 
-from .run import run
+from . import domain, params, patterns, service, sphinx
 
-__all__ = ["run"]
+
+__all__ = ["domain", "params", "patterns", "service", "sphinx"]

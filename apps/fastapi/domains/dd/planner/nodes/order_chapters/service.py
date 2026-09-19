@@ -8,6 +8,8 @@ SOTA Sept 2026 on coelho-llm-rotator pooled:
 - Static prefix (pedagogical rubric) before dynamic chapter block → KV-cache.
 """
 from __future__ import annotations
+import domains
+from . import domain, keys, params, prompts, versions
 
 import asyncio
 import json
@@ -15,30 +17,6 @@ import logging
 import random
 import time
 from hashlib import sha256
-
-from domains.llm.rotator.chain import chat_judge_bandit_async
-
-from ....ingestion.storage import get_storage
-from ...runtime.progress import emit_progress
-from ...state import PlannerState
-
-from .domain import (
-    apply_foundational_prefix_rule,
-    borda_aggregate,
-    load_outline,
-    parse_order_response,
-)
-from .keys import blob_key
-from .params import (
-    MAX_TOKENS,
-    N_SAMPLES,
-    SAMPLE_CONCURRENCY,
-    SETTLE_DELAY_S,
-    TEMPERATURE,
-    TIMEOUT_S,
-)
-from .prompts import build_order_prompt
-from .versions import PROMPT_VERSION
 
 
 logger = logging.getLogger(__name__)
@@ -56,16 +34,16 @@ async def sample_one_ordering(
     doc_distill/chapter_propose/chapter_assign."""
     async with sem:
         try:
-            response, meta = await chat_judge_bandit_async(
+            response, meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
                 prompt,
-                max_tokens = MAX_TOKENS,
-                temperature = TEMPERATURE,
-                timeout_s = TIMEOUT_S,
+                max_tokens = params.MAX_TOKENS,
+                temperature = params.TEMPERATURE,
+                timeout_s = params.TIMEOUT_S,
                 response_format = {"type": "json_object"},
             )
         except Exception as e:
             return None, {"error": f"{type(e).__name__}: {str(e)[:120]}"}
-    order = parse_order_response(response, n_chapters)
+    order = domain.parse_order_response(response, n_chapters)
     if order is not None:
         return order, meta
 
@@ -77,16 +55,16 @@ async def sample_one_ordering(
     )
     async with sem:
         try:
-            response2, meta2 = await chat_judge_bandit_async(
+            response2, meta2 = await domains.llm.rotator.chain.chat_judge_bandit_async(
                 repair_prompt,
-                max_tokens = MAX_TOKENS,
+                max_tokens = params.MAX_TOKENS,
                 temperature = 0.0,
-                timeout_s = TIMEOUT_S,
+                timeout_s = params.TIMEOUT_S,
                 response_format = {"type": "json_object"},
             )
         except Exception as e:
             return None, {"error": f"reask {type(e).__name__}: {str(e)[:120]}"}
-    order2 = parse_order_response(response2, n_chapters)
+    order2 = domain.parse_order_response(response2, n_chapters)
     if order2 is not None:
         return order2, meta2
     return None, {
@@ -96,7 +74,7 @@ async def sample_one_ordering(
     }
 
 
-async def order_chapters_run(state: PlannerState) -> dict:
+async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> dict:
     """Sample N orderings (bandit) → Borda-aggregate → foundational-prefix → persist."""
     slug = state.get("framework_slug")
     thread_id = state.get("thread_id") or ""
@@ -112,10 +90,10 @@ async def order_chapters_run(state: PlannerState) -> dict:
     t0 = time.monotonic()
 
     mh = sha256(
-        f"reduce={reduce_ref}|n={N_SAMPLES}|v={PROMPT_VERSION}".encode("utf-8"),
+        f"reduce={reduce_ref}|n={params.N_SAMPLES}|v={versions.PROMPT_VERSION}".encode("utf-8"),
     ).hexdigest()[:16]
-    cache_key = blob_key(slug, mh)
-    minio = get_storage()
+    cache_key = keys.blob_key(slug, mh)
+    minio = domains.dd.ingestion.storage.service.get_storage()
 
     if await minio.exists(cache_key):
         try:
@@ -131,7 +109,7 @@ async def order_chapters_run(state: PlannerState) -> dict:
                 "cache_hit":      True,
                 "prompt_version": cached.get("prompt_version"),
             }
-            await emit_progress(
+            await domains.dd.planner.runtime.progress.service.emit_progress(
                 thread_id, "order_chapters", "done",
                 n_chapters = stats["n_chapters"],
                 wall_ms = elapsed,
@@ -152,11 +130,11 @@ async def order_chapters_run(state: PlannerState) -> dict:
                 f"unreadable ({type(e).__name__}: {e}); recomputing"
             )
 
-    await emit_progress(thread_id, "order_chapters", "start")
+    await domains.dd.planner.runtime.progress.service.emit_progress(thread_id, "order_chapters", "start")
 
     try:
         reduce_text = await minio.read_text(reduce_ref)
-        outline = load_outline(reduce_text)
+        outline = domain.load_outline(reduce_text)
     except Exception as e:
         elapsed = int((time.monotonic() - t0) * 1000)
         logger.warning(
@@ -185,7 +163,7 @@ async def order_chapters_run(state: PlannerState) -> dict:
             "samples":          [],
             "foundational_idx": [],
             "n_chapters":       n_chapters,
-            "prompt_version":   PROMPT_VERSION,
+            "prompt_version":   versions.PROMPT_VERSION,
             "deployment_usage": [],
             "skipped":          "trivial_n_chapters",
         }
@@ -193,7 +171,7 @@ async def order_chapters_run(state: PlannerState) -> dict:
             cache_key, json.dumps(payload),
             content_type = "application/json",
         )
-        await emit_progress(
+        await domains.dd.planner.runtime.progress.service.emit_progress(
             thread_id, "order_chapters", "done",
             n_chapters = n_chapters, wall_ms = elapsed,
             skipped = "trivial_n_chapters",
@@ -210,25 +188,25 @@ async def order_chapters_run(state: PlannerState) -> dict:
 
     # Settle window — see SETTLE_DELAY_S. Only reached past the cache-hit
     # and trivial-n_chapters checks above.
-    if SETTLE_DELAY_S > 0:
-        await emit_progress(
-            thread_id, "order_chapters", "settling", delay_s = SETTLE_DELAY_S,
+    if params.SETTLE_DELAY_S > 0:
+        await domains.dd.planner.runtime.progress.service.emit_progress(
+            thread_id, "order_chapters", "settling", delay_s = params.SETTLE_DELAY_S,
         )
-        await asyncio.sleep(SETTLE_DELAY_S)
+        await asyncio.sleep(params.SETTLE_DELAY_S)
 
-    prompt = build_order_prompt(chapters)
-    sem = asyncio.Semaphore(SAMPLE_CONCURRENCY)
+    prompt = prompts.build_order_prompt(chapters)
+    sem = asyncio.Semaphore(params.SAMPLE_CONCURRENCY)
     sample_results = await asyncio.gather(*[
         sample_one_ordering(sem, prompt, n_chapters)
-        for _ in range(N_SAMPLES)
+        for _ in range(params.N_SAMPLES)
     ])
     valid_orderings = [r[0] for r in sample_results if r[0] is not None]
     sample_metas = [r[1] for r in sample_results]
 
-    await emit_progress(
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "order_chapters", "samples_done",
-        n_samples = N_SAMPLES, n_valid = len(valid_orderings),
-        n_failed = N_SAMPLES - len(valid_orderings),
+        n_samples = params.N_SAMPLES, n_valid = len(valid_orderings),
+        n_failed = params.N_SAMPLES - len(valid_orderings),
     )
 
     if not valid_orderings:
@@ -240,21 +218,21 @@ async def order_chapters_run(state: PlannerState) -> dict:
         # Jitter (not a flat delay) avoids all N_SAMPLES calls re-hammering
         # the same still-recovering deployment in lockstep.
         logger.warning(
-            f"[order_chapters] {slug}: all {N_SAMPLES} samples failed "
+            f"[order_chapters] {slug}: all {params.N_SAMPLES} samples failed "
             f"({[(m or {}).get('error', 'unknown') for m in sample_metas]}) — "
             f"retrying once after backoff"
         )
         await asyncio.sleep(2.0 + random.random() * 2.0)
         retry_results = await asyncio.gather(*[
             sample_one_ordering(sem, prompt, n_chapters)
-            for _ in range(N_SAMPLES)
+            for _ in range(params.N_SAMPLES)
         ])
         valid_orderings = [r[0] for r in retry_results if r[0] is not None]
         sample_metas = [r[1] for r in retry_results]
         if valid_orderings:
             logger.info(
                 f"[order_chapters] {slug}: retry recovered "
-                f"{len(valid_orderings)}/{N_SAMPLES} samples"
+                f"{len(valid_orderings)}/{params.N_SAMPLES} samples"
             )
 
     if not valid_orderings:
@@ -273,7 +251,7 @@ async def order_chapters_run(state: PlannerState) -> dict:
             "samples":          [],
             "foundational_idx": [],
             "n_chapters":       n_chapters,
-            "prompt_version":   PROMPT_VERSION,
+            "prompt_version":   versions.PROMPT_VERSION,
             "deployment_usage": [],
             "error":            "all_samples_failed_after_retry",
             "sample_errors":    sample_errors,
@@ -283,10 +261,10 @@ async def order_chapters_run(state: PlannerState) -> dict:
             content_type = "application/json",
         )
         logger.warning(
-            f"[order_chapters] {slug}: all {N_SAMPLES} samples failed even "
+            f"[order_chapters] {slug}: all {params.N_SAMPLES} samples failed even "
             f"after retry ({sample_errors}); identity ordering applied"
         )
-        await emit_progress(
+        await domains.dd.planner.runtime.progress.service.emit_progress(
             thread_id, "order_chapters", "done",
             n_chapters = n_chapters, wall_ms = elapsed,
             error = "all_samples_failed_after_retry", sample_errors = sample_errors,
@@ -302,9 +280,9 @@ async def order_chapters_run(state: PlannerState) -> dict:
             },
         }
 
-    aggregated = borda_aggregate(valid_orderings, n_chapters)
+    aggregated = domain.borda_aggregate(valid_orderings, n_chapters)
 
-    final_order, foundational_idx = apply_foundational_prefix_rule(
+    final_order, foundational_idx = domain.apply_foundational_prefix_rule(
         aggregated, chapters,
     )
 
@@ -323,7 +301,7 @@ async def order_chapters_run(state: PlannerState) -> dict:
         "aggregated":       aggregated,
         "foundational_idx": foundational_idx,
         "n_chapters":       n_chapters,
-        "prompt_version":   PROMPT_VERSION,
+        "prompt_version":   versions.PROMPT_VERSION,
         "deployment_usage": deployment_summary,
         "chapter_titles":   [ch.get("title", "?") for ch in chapters],
     }
@@ -342,10 +320,10 @@ async def order_chapters_run(state: PlannerState) -> dict:
         "wall_ms":          elapsed,
         "store_path":       cache_key,
         "cache_hit":        False,
-        "prompt_version":   PROMPT_VERSION,
+        "prompt_version":   versions.PROMPT_VERSION,
         "deployment_usage": deployment_summary,
     }
-    await emit_progress(
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "order_chapters", "done",
         n_chapters = n_chapters, n_samples = len(valid_orderings),
         n_foundational = len(foundational_idx), wall_ms = elapsed,
@@ -353,7 +331,7 @@ async def order_chapters_run(state: PlannerState) -> dict:
     titles_ordered = [chapters[i].get("title", "?") for i in final_order]
     logger.info(
         f"[order_chapters] {slug}: {n_chapters} chapters ordered "
-        f"({len(valid_orderings)}/{N_SAMPLES} samples, "
+        f"({len(valid_orderings)}/{params.N_SAMPLES} samples, "
         f"{len(foundational_idx)} foundational-pinned); "
         f"order={final_order}; titles={titles_ordered}; {elapsed} ms"
     )

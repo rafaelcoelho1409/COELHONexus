@@ -1,20 +1,11 @@
 """Vault + corpus-normalize backfills for pages ingested before the add_page hooks ran."""
 from __future__ import annotations
+import domains
+from . import domain
 
 import asyncio
 import logging
-from typing import Optional
 
-from ....ingestion.storage import (
-    framework_prefix,
-    get_storage,
-    raw_page_key,
-    vault_manifest_key,
-    vault_sentinelized_key,
-)
-from ..corpus_normalize import normalize_doc
-from ...params import BACKFILL_CONCURRENCY
-from ..vault import build_manifest
 
 
 logger = logging.getLogger(__name__)
@@ -22,37 +13,24 @@ logger = logging.getLogger(__name__)
 
 async def _list_framework_slugs() -> list[str]:
     """Walk MinIO `ingestion/` and return every framework slug with ≥1 page."""
-    s = get_storage()
+    s = domains.dd.ingestion.storage.service.get_storage()
     folders = await s.list_subfolders("ingestion/")
     return sorted(f.rstrip("/").rsplit("/", 1)[-1] for f in folders)
 
 
 async def _list_page_keys(slug: str) -> list[str]:
-    s = get_storage()
+    s = domains.dd.ingestion.storage.service.get_storage()
     return sorted(
-        k for k in await s.list(f"{framework_prefix(slug)}pages/")
+        k for k in await s.list(f"{domains.dd.ingestion.storage.keys.framework_prefix(slug)}pages/")
         if k.endswith(".md")
     )
 
 
-def _parse_page_key(key: str) -> Optional[tuple[int, str]]:
-    """`ingestion/{slug}/pages/{idx:04d}-{page_slug}.md` → (idx, page_slug)."""
-    fname = key.rsplit("/", 1)[-1].removesuffix(".md")
-    if "-" not in fname:
-        return None
-    head, _, page_slug = fname.partition("-")
-    try:
-        idx = int(head)
-    except ValueError:
-        return None
-    return idx, page_slug
-
-
 async def _vault_exists(slug: str, idx: int, page_slug: str) -> bool:
     """True iff BOTH vault blobs are present. Partial state → missing."""
-    s = get_storage()
-    vk = vault_manifest_key(slug, idx, page_slug)
-    sk = vault_sentinelized_key(slug, idx, page_slug)
+    s = domains.dd.ingestion.storage.service.get_storage()
+    vk = domains.dd.ingestion.storage.keys.vault_manifest_key(slug, idx, page_slug)
+    sk = domains.dd.ingestion.storage.keys.vault_sentinelized_key(slug, idx, page_slug)
     a, b = await asyncio.gather(s.exists(vk), s.exists(sk))
     return bool(a and b)
 
@@ -63,20 +41,20 @@ async def _backfill_one(
     """Build + write vault for one page. Returns (page_slug, n_fences, status)
     where status ∈ {'built', 'skipped', 'error'}."""
     async with sem:
-        parsed = _parse_page_key(page_key)
+        parsed = domain.parse_page_key(page_key)
         if parsed is None:
             return (page_key, 0, "error")
         idx, page_slug = parsed
         try:
             if await _vault_exists(slug, idx, page_slug):
                 return (page_slug, 0, "skipped")
-            s = get_storage()
+            s = domains.dd.ingestion.storage.service.get_storage()
             body = await s.read_text(page_key)
-            sentinelized, manifest = build_manifest(
+            sentinelized, manifest = domains.dd.synth.nodes.vault.domain.build_manifest(
                 framework = slug, source_key = page_key, md_text = body,
             )
-            vk = vault_manifest_key(slug, idx, page_slug)
-            sk = vault_sentinelized_key(slug, idx, page_slug)
+            vk = domains.dd.ingestion.storage.keys.vault_manifest_key(slug, idx, page_slug)
+            sk = domains.dd.ingestion.storage.keys.vault_sentinelized_key(slug, idx, page_slug)
             await asyncio.gather(
                 s.write(vk, manifest.model_dump_json(),
                         content_type = "application/json"),
@@ -97,7 +75,7 @@ async def backfill_vaults_for_framework(slug: str) -> dict:
     if not page_keys:
         return {"slug": slug, "pages": 0, "built": 0,
                 "skipped": 0, "errors": 0, "total_fences": 0}
-    sem = asyncio.Semaphore(BACKFILL_CONCURRENCY)
+    sem = asyncio.Semaphore(domains.dd.synth.params.BACKFILL_CONCURRENCY)
     results = await asyncio.gather(*(
         _backfill_one(slug, k, sem) for k in page_keys
     ))
@@ -141,17 +119,17 @@ async def _normalize_one(
 ) -> tuple[str, str]:
     """Normalize one page in place; returns (page_slug, status ∈ {'normalized','unchanged','error'})."""
     async with sem:
-        parsed = _parse_page_key(page_key_str)
+        parsed = domain.parse_page_key(page_key_str)
         if parsed is None:
             return (page_key_str, "error")
         idx, page_slug = parsed
         try:
-            s = get_storage()
+            s = domains.dd.ingestion.storage.service.get_storage()
             body = await s.read_text(page_key_str)
-            normalized = normalize_doc(body).body
+            normalized = domains.dd.synth.nodes.corpus_normalize.domain.normalize_doc(body).body
             changed = normalized != body
             # Raw always preserved; cheap idempotent overwrite on subsequent runs.
-            raw_k = raw_page_key(slug, idx, page_slug)
+            raw_k = domains.dd.ingestion.storage.keys.raw_page_key(slug, idx, page_slug)
             await s.write(raw_k, body, content_type = "text/markdown")
             if changed:
                 await s.write(
@@ -159,11 +137,11 @@ async def _normalize_one(
                 )
             # Vault rebuild on normalized body — existing vault was hashed
             # against raw, so post-normalize it's stale.
-            sentinelized, manifest = build_manifest(
+            sentinelized, manifest = domains.dd.synth.nodes.vault.domain.build_manifest(
                 framework = slug, source_key = page_key_str, md_text = normalized,
             )
-            vk = vault_manifest_key(slug, idx, page_slug)
-            sk = vault_sentinelized_key(slug, idx, page_slug)
+            vk = domains.dd.ingestion.storage.keys.vault_manifest_key(slug, idx, page_slug)
+            sk = domains.dd.ingestion.storage.keys.vault_sentinelized_key(slug, idx, page_slug)
             await asyncio.gather(
                 s.write(
                     vk, manifest.model_dump_json(),
@@ -186,7 +164,7 @@ async def backfill_normalize_for_framework(slug: str) -> dict:
     if not page_keys:
         return {"slug": slug, "pages": 0, "normalized": 0,
                 "unchanged": 0, "errors": 0}
-    sem = asyncio.Semaphore(BACKFILL_CONCURRENCY)
+    sem = asyncio.Semaphore(domains.dd.synth.params.BACKFILL_CONCURRENCY)
     results = await asyncio.gather(*(
         _normalize_one(slug, k, sem) for k in page_keys
     ))

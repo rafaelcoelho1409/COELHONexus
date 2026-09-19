@@ -1,12 +1,7 @@
 """LLM judge prompts, head+tail truncation, and anchor descriptors. Pure module; no I/O."""
 from __future__ import annotations
+from . import params
 
-from .params import (
-    JUDGE_BODY_MIN_FOR_SPLIT,
-    JUDGE_HEAD_CHARS,
-    JUDGE_HEAD_TAIL_SEP,
-    JUDGE_TAIL_CHARS,
-)
 
 
 def build_positive_descriptor(entry: dict) -> str:
@@ -30,13 +25,13 @@ def head_tail_truncate(body: str) -> str:
     s = (body or "").strip()
     if not s:
         return "(empty page)"
-    if len(s) <= JUDGE_BODY_MIN_FOR_SPLIT:
+    if len(s) <= params.JUDGE_BODY_MIN_FOR_SPLIT:
         # Fits in combined window — send the WHOLE page, no fake gap.
         return s
     return (
-        s[:JUDGE_HEAD_CHARS]
-        + JUDGE_HEAD_TAIL_SEP
-        + s[-JUDGE_TAIL_CHARS:]
+        s[:params.JUDGE_HEAD_CHARS]
+        + params.JUDGE_HEAD_TAIL_SEP
+        + s[-params.JUDGE_TAIL_CHARS:]
     )
 
 

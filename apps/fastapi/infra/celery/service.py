@@ -92,8 +92,8 @@ def _worker_process_init(**_kwargs) -> None:
             f"Tempo data from this worker"
         )
     try:
-        from domains.dd.ingestion.storage import get_storage
-        asyncio.run(get_storage().ensure_bucket())
+        import domains
+        asyncio.run(domains.dd.ingestion.storage.service.get_storage().ensure_bucket())
     except Exception as e:
         logger.warning(
             f"[worker-init] MinIO ensure_bucket failed "

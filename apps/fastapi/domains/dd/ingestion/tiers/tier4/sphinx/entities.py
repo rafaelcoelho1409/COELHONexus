@@ -1,10 +1,10 @@
 """Value objects for the sphinx discovery + split pipeline. Inventory
 methods are read-only queries that travel with the parsed objects.inv."""
 from __future__ import annotations
+from . import params
 
 from typing import NamedTuple
 
-from .params import DOC_ROLES, SPLIT_MEMBER_ROLES, SPLIT_TOP_ROLES
 
 
 class InventoryEntity(NamedTuple):
@@ -27,7 +27,7 @@ class Inventory(NamedTuple):
         """Page URLs reachable from std:doc / std:label — canonical crawl set."""
         return {
             e.page_url for e in self.entities
-            if e.role in DOC_ROLES and e.page_url
+            if e.role in params.DOC_ROLES and e.page_url
         }
 
     def all_pages(self) -> set[str]:
@@ -45,9 +45,9 @@ class Inventory(NamedTuple):
         for e in self.entities:
             if e.page_url != norm or not e.anchor:
                 continue
-            if e.role in SPLIT_TOP_ROLES:
+            if e.role in params.SPLIT_TOP_ROLES:
                 top.append(e)
-            elif e.role in SPLIT_MEMBER_ROLES:
+            elif e.role in params.SPLIT_MEMBER_ROLES:
                 members.append(e)
         return top, members
 

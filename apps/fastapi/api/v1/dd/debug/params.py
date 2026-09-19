@@ -1,15 +1,15 @@
 """debug router — tunables + lookup tables."""
 from __future__ import annotations
 
-from domains.dd.ingestion.tiers import tier1, tier2, tier3, tier4, tier5
+import domains
 
 
 TIER_BY_KIND = {
-    "llms_full": (1, tier1),
-    "llms_txt":  (2, tier2),
-    "sitemap":   (3, tier3),
-    "docs":      (4, tier4),
-    "github":    (5, tier5),
+    "llms_full": (1, domains.dd.ingestion.tiers.tier1),
+    "llms_txt":  (2, domains.dd.ingestion.tiers.tier2),
+    "sitemap":   (3, domains.dd.ingestion.tiers.tier3),
+    "docs":      (4, domains.dd.ingestion.tiers.tier4),
+    "github":    (5, domains.dd.ingestion.tiers.tier5),
 }
 
 

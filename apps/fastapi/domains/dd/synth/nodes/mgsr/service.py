@@ -1,5 +1,7 @@
 """mgsr — service functions (prompts, validators, halt logic, orchestrator)."""
 from __future__ import annotations
+import domains
+from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio
 import json
@@ -8,43 +10,8 @@ import random
 import time
 from typing import Optional
 
-from domains.llm.rotator.chain import chat_judge_bandit_async
 
-from ....ingestion.storage import get_storage
-from ...runtime.progress import emit_progress
-from ...state import SynthState
 
-from .domain import (
-    build_trivial_pass_decision,
-    compute_manifest_hash,
-    fallback_decision,
-    is_trivial_pass,
-    parse_json_response,
-    try_parse_payload,
-    validate_actions_against_outline,
-)
-from .keys import (
-    checklist_latest_key,
-    latest_blob_key,
-    outline_latest_key,
-    versioned_blob_key,
-)
-from .params import (
-    MAX_REPAIR_ATTEMPTS,
-    MAX_TOKENS_REPAIR,
-    MAX_TOKENS_REPLAN,
-    TEMPERATURE_REPAIR,
-    TEMPERATURE_REPLAN,
-    TIMEOUT_S_REPAIR,
-    TIMEOUT_S_REPLAN,
-)
-from .prompts import build_repair_prompt, build_replan_prompt
-from .schemas import (
-    LLMReplanPayload,
-    MGSRReplan,
-    ReplanAction,
-)
-from .versions import MGSR_PROMPT_VERSION
 
 
 logger = logging.getLogger(__name__)
@@ -65,10 +32,10 @@ async def _run_llm_replan(
     failed_feedback: list[str],
     outline_sections: list[dict],
     valid_section_ids: set[str],
-) -> tuple[Optional[LLMReplanPayload], Optional[str], bool, int]:
+) -> tuple[Optional[schemas.LLMReplanPayload], Optional[str], bool, int]:
     """Fire replan LLM call → parse → Pydantic → cross-ref → repair if needed. Returns (payload, deployment, was_repaired, wall_ms); None payload → caller uses fallback_decision."""
     t0 = time.monotonic()
-    prompt = build_replan_prompt(
+    prompt = prompts.build_replan_prompt(
         framework=framework,
         chapter_id=chapter_id,
         chapter_title=chapter_title,
@@ -82,11 +49,11 @@ async def _run_llm_replan(
     last_error: Optional[Exception] = None
     for call_attempt in range(_MAX_CALL_ATTEMPTS):
         try:
-            response, meta = await chat_judge_bandit_async(
+            response, meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
                 prompt,
-                max_tokens=MAX_TOKENS_REPLAN,
-                temperature=TEMPERATURE_REPLAN,
-                timeout_s=TIMEOUT_S_REPLAN,
+                max_tokens=params.MAX_TOKENS_REPLAN,
+                temperature=params.TEMPERATURE_REPLAN,
+                timeout_s=params.TIMEOUT_S_REPLAN,
             )
             deployment = (meta or {}).get("deployment")
             last_error = None
@@ -110,21 +77,21 @@ async def _run_llm_replan(
         )
         return None, None, False, wall_ms
 
-    parsed = parse_json_response(response)
-    payload: Optional[LLMReplanPayload] = None
+    parsed = domain.parse_json_response(response)
+    payload: Optional[schemas.LLMReplanPayload] = None
     err: Optional[str] = None
     repaired = False
 
     if parsed is not None:
-        payload, err = try_parse_payload(parsed)
+        payload, err = domain.try_parse_payload(parsed)
 
     # First repair: if parse OR Pydantic failed
-    if payload is None and MAX_REPAIR_ATTEMPTS > 0:
+    if payload is None and params.MAX_REPAIR_ATTEMPTS > 0:
         repair_issues = [
             err if err else "previous response was not parseable JSON"
         ]
         current_json = json.dumps(parsed or {"_raw": (response or "")[:400]})
-        repair_prompt = build_repair_prompt(
+        repair_prompt = prompts.build_repair_prompt(
             framework=framework,
             chapter_id=chapter_id,
             chapter_title=chapter_title,
@@ -136,16 +103,16 @@ async def _run_llm_replan(
             issues=repair_issues,
         )
         try:
-            rr, rm = await chat_judge_bandit_async(
+            rr, rm = await domains.llm.rotator.chain.chat_judge_bandit_async(
                 repair_prompt,
-                max_tokens=MAX_TOKENS_REPAIR,
-                temperature=TEMPERATURE_REPAIR,
-                timeout_s=TIMEOUT_S_REPAIR,
+                max_tokens=params.MAX_TOKENS_REPAIR,
+                temperature=params.TEMPERATURE_REPAIR,
+                timeout_s=params.TIMEOUT_S_REPAIR,
             )
             deployment = (rm or {}).get("deployment") or deployment
-            rp = parse_json_response(rr)
+            rp = domain.parse_json_response(rr)
             if rp is not None:
-                payload, err = try_parse_payload(rp)
+                payload, err = domain.try_parse_payload(rp)
                 if payload is not None:
                     repaired = True
         except Exception as e:
@@ -159,11 +126,11 @@ async def _run_llm_replan(
         return None, deployment, False, wall_ms
 
     # Second-stage validation: cross-ref actions against outline
-    issues = validate_actions_against_outline(
+    issues = domain.validate_actions_against_outline(
         payload.actions, valid_section_ids=valid_section_ids,
     )
-    if issues and MAX_REPAIR_ATTEMPTS > 0:
-        repair_prompt = build_repair_prompt(
+    if issues and params.MAX_REPAIR_ATTEMPTS > 0:
+        repair_prompt = prompts.build_repair_prompt(
             framework=framework,
             chapter_id=chapter_id,
             chapter_title=chapter_title,
@@ -175,18 +142,18 @@ async def _run_llm_replan(
             issues=issues,
         )
         try:
-            rr, rm = await chat_judge_bandit_async(
+            rr, rm = await domains.llm.rotator.chain.chat_judge_bandit_async(
                 repair_prompt,
-                max_tokens=MAX_TOKENS_REPAIR,
-                temperature=TEMPERATURE_REPAIR,
-                timeout_s=TIMEOUT_S_REPAIR,
+                max_tokens=params.MAX_TOKENS_REPAIR,
+                temperature=params.TEMPERATURE_REPAIR,
+                timeout_s=params.TIMEOUT_S_REPAIR,
             )
             deployment = (rm or {}).get("deployment") or deployment
-            rp = parse_json_response(rr)
+            rp = domain.parse_json_response(rr)
             if rp is not None:
-                new_payload, new_err = try_parse_payload(rp)
+                new_payload, new_err = domain.try_parse_payload(rp)
                 if new_payload is not None:
-                    new_issues = validate_actions_against_outline(
+                    new_issues = domain.validate_actions_against_outline(
                         new_payload.actions,
                         valid_section_ids=valid_section_ids,
                     )
@@ -204,7 +171,7 @@ async def _run_llm_replan(
     # If issues STILL remain after repair, drop the offending actions
     # rather than ship invalid actions. Surface in rationale.
     if issues:
-        kept_actions: list[ReplanAction] = []
+        kept_actions: list[schemas.ReplanAction] = []
         available = set(valid_section_ids)
         for a in payload.actions:
             ok = True
@@ -229,7 +196,7 @@ async def _run_llm_replan(
                 f"[mgsr_replan] dropped {dropped} action(s) with "
                 f"unresolved cross-ref issues: {issues[:2]}"
             )
-        payload = LLMReplanPayload(
+        payload = schemas.LLMReplanPayload(
             actions=kept_actions,
             halt=payload.halt,
             confidence=payload.confidence,
@@ -244,7 +211,7 @@ async def _run_llm_replan(
     return payload, deployment, repaired, wall_ms
 
 
-async def mgsr_replan_run(state: SynthState) -> dict:
+async def mgsr_replan_run(state: domains.dd.synth.state.SynthState) -> dict:
     """Run the Memory-Guided Structure Replanner for one chapter."""
     slug = state.get("framework_slug")
     chapter_id = state.get("chapter_id")
@@ -261,11 +228,11 @@ async def mgsr_replan_run(state: SynthState) -> dict:
         }
 
     t0 = time.monotonic()
-    minio = get_storage()
+    minio = domains.dd.ingestion.storage.service.get_storage()
 
     # ── Load checklist + outline ───────────────────────────────────────
-    checklist_key = checklist_latest_key(slug, chapter_id)
-    outline_key = outline_latest_key(slug, chapter_id)
+    checklist_key = keys.checklist_latest_key(slug, chapter_id)
+    outline_key = keys.outline_latest_key(slug, chapter_id)
 
     if not await minio.exists(checklist_key):
         return {
@@ -333,7 +300,7 @@ async def mgsr_replan_run(state: SynthState) -> dict:
     )
     outline_manifest_hash = outline_payload.get("manifest_hash") or ""
 
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "mgsr_replan", "start",
         chapter_id=chapter_id,
         chapter_title=chapter_title,
@@ -343,12 +310,12 @@ async def mgsr_replan_run(state: SynthState) -> dict:
     )
 
     # ── Cache fast-path ────────────────────────────────────────────────
-    manifest_hash = compute_manifest_hash(
+    manifest_hash = domain.compute_manifest_hash(
         checklist_manifest_hash=checklist_manifest_hash,
         outline_manifest_hash=outline_manifest_hash,
     )
-    versioned_key = versioned_blob_key(slug, chapter_id, manifest_hash)
-    latest_key    = latest_blob_key(slug, chapter_id)
+    versioned_key = keys.versioned_blob_key(slug, chapter_id, manifest_hash)
+    latest_key    = keys.latest_blob_key(slug, chapter_id)
 
     if await minio.exists(versioned_key) and await minio.exists(latest_key):
         try:
@@ -370,7 +337,7 @@ async def mgsr_replan_run(state: SynthState) -> dict:
                 "cache_hit":         True,
                 "prompt_version":    cached.get("prompt_version"),
             }
-            await emit_progress(
+            await domains.dd.synth.runtime.progress.service.emit_progress(
                 thread_id, "mgsr_replan", "done",
                 halt=stats["halt"],
                 halt_reason=stats["halt_reason"],
@@ -393,13 +360,13 @@ async def mgsr_replan_run(state: SynthState) -> dict:
             )
 
     # ── Fast path: chapter already passed checklist (no LLM call) ──────
-    if is_trivial_pass(checklist):
-        decision = build_trivial_pass_decision(pass_rate)
-        await emit_progress(
+    if domain.is_trivial_pass(checklist):
+        decision = domain.build_trivial_pass_decision(pass_rate)
+        await domains.dd.synth.runtime.progress.service.emit_progress(
             thread_id, "mgsr_replan", "trivial_pass",
             pass_rate=pass_rate,
         )
-        replan = MGSRReplan(
+        replan = schemas.MGSRReplan(
             chapter_id=chapter_id,
             chapter_title=chapter_title,
             framework_slug=slug,
@@ -439,10 +406,10 @@ async def mgsr_replan_run(state: SynthState) -> dict:
             "versioned_path": versioned_key,
             "manifest_hash":  manifest_hash,
             "cache_hit":      False,
-            "prompt_version": MGSR_PROMPT_VERSION,
+            "prompt_version": versions.MGSR_PROMPT_VERSION,
             "trivial_pass":   True,
         }
-        await emit_progress(
+        await domains.dd.synth.runtime.progress.service.emit_progress(
             thread_id, "mgsr_replan", "done",
             halt=True,
             halt_reason="chapter_passed",
@@ -477,11 +444,11 @@ async def mgsr_replan_run(state: SynthState) -> dict:
     # — at that point the output would finally have a real consumer.
     deployment: Optional[str] = None
     repaired = False
-    decision = fallback_decision(
+    decision = domain.fallback_decision(
         "mgsr_replan LLM call skipped (issue #19) — its analysis has no "
         "consumer until the v2 targeted-retry loop is implemented"
     )
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "mgsr_replan", "llm_done",
         n_actions=0,
         halt=decision.halt,
@@ -495,7 +462,7 @@ async def mgsr_replan_run(state: SynthState) -> dict:
 
     # ── Persist ────────────────────────────────────────────────────────
     elapsed = int((time.monotonic() - t0) * 1000)
-    replan = MGSRReplan(
+    replan = schemas.MGSRReplan(
         chapter_id=chapter_id,
         chapter_title=chapter_title,
         framework_slug=slug,
@@ -534,7 +501,7 @@ async def mgsr_replan_run(state: SynthState) -> dict:
         "versioned_path":  versioned_key,
         "manifest_hash":   manifest_hash,
         "cache_hit":       False,
-        "prompt_version":  MGSR_PROMPT_VERSION,
+        "prompt_version":  versions.MGSR_PROMPT_VERSION,
         "deployment":      deployment,
         "repaired":        repaired,
         "trivial_pass":    False,
@@ -548,7 +515,7 @@ async def mgsr_replan_run(state: SynthState) -> dict:
         # halt/loop verdict.
         "skipped":         True,
     }
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "mgsr_replan", "done",
         halt=decision.halt,
         halt_reason=decision.halt_reason,

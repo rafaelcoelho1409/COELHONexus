@@ -2,72 +2,13 @@
 import asyncio
 import logging
 
-import redis as redis_sync
-
+import domains
 from infra.celery import app
 
-from ..planner.runtime.checkpoint import init_checkpointer
-from .runtime.dispatch import (
-    resume_synth_async,
-    run_single_chapter_async,
-    run_study_async,
-)
-from .keys import lock_key, redis_url
-from .params import (
-    REDIS_CONNECT_TIMEOUT_S,
-    REDIS_OP_TIMEOUT_S,
-    SINGLE_CHAPTER_HARD_TIME_LIMIT_S,
-    SINGLE_CHAPTER_SOFT_TIME_LIMIT_S,
-)
+from . import domain, params, service
 
 
 logger = logging.getLogger(__name__)
-
-
-# CAD-release: avoids a slow finally clearing a lock held by a racing later start.
-_CAD_RELEASE_LUA = (
-    "if redis.call('GET', KEYS[1]) == ARGV[1] then "
-    "return redis.call('DEL', KEYS[1]) end return 0"
-)
-
-
-def _slug_from_synth_thread_id(thread_id: str) -> str | None:
-    """Extract slug from thread_id (`docs-distiller/synth|study/{slug}/{uuid}`), or None."""
-    parts = (thread_id or "").split("/", 3)
-    if (
-        len(parts) >= 3
-        and parts[0] == "docs-distiller"
-        and parts[1] in ("synth", "study")
-    ):
-        return parts[2] or None
-    return None
-
-
-def _release_synth_lock(slug: str, thread_id: str) -> None:
-    """Best-effort sync CAD release of `dd:synth:lock:{slug}` from the task finally block."""
-    if not slug or not thread_id:
-        return
-    try:
-        r = redis_sync.from_url(
-            redis_url(),
-            socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,
-            socket_timeout = REDIS_OP_TIMEOUT_S,
-        )
-        try:
-            r.eval(_CAD_RELEASE_LUA, 1, lock_key(slug), thread_id)
-        finally:
-            r.close()
-    except Exception as e:
-        logger.warning(
-            f"[task] synth lock release failed for slug={slug!r}: "
-            f"{type(e).__name__}: {e}"
-        )
-
-
-async def _init_and_run(coro):
-    """Init checkpointer (idempotent) then run coro."""
-    await init_checkpointer()
-    return await coro
 
 
 @app.task(
@@ -82,8 +23,8 @@ async def _init_and_run(coro):
     # graph.py wall-clock RETHINK gate is the primary defense now; this is
     # the last-resort backstop). Values from params.py (single source of
     # truth — graph.py's gate reads the soft limit too).
-    soft_time_limit = SINGLE_CHAPTER_SOFT_TIME_LIMIT_S,
-    time_limit = SINGLE_CHAPTER_HARD_TIME_LIMIT_S,
+    soft_time_limit = params.SINGLE_CHAPTER_SOFT_TIME_LIMIT_S,
+    time_limit = params.SINGLE_CHAPTER_HARD_TIME_LIMIT_S,
 )
 def run_single_chapter(
     self,
@@ -100,8 +41,8 @@ def run_single_chapter(
     try:
         try:
             return asyncio.run(
-                _init_and_run(
-                    run_single_chapter_async(
+                service._init_and_run(
+                    domains.dd.synth.runtime.dispatch.service.run_single_chapter_async(
                         thread_id, slug, chapter_id, mode,
                     ),
                 )
@@ -117,7 +58,7 @@ def run_single_chapter(
                 "error":     f"{type(e).__name__}: {e}",
             }
     finally:
-        _release_synth_lock(slug, thread_id)
+        service._release_synth_lock(slug, thread_id)
 
 
 @app.task(
@@ -126,17 +67,19 @@ def run_single_chapter(
     acks_late = False,
     track_started = True,
     # Widened 2026-09-11 alongside run_single_chapter — see its comment.
-    soft_time_limit = SINGLE_CHAPTER_SOFT_TIME_LIMIT_S,
-    time_limit = SINGLE_CHAPTER_HARD_TIME_LIMIT_S,
+    soft_time_limit = params.SINGLE_CHAPTER_SOFT_TIME_LIMIT_S,
+    time_limit = params.SINGLE_CHAPTER_HARD_TIME_LIMIT_S,
 )
 def resume_synth(self, thread_id: str) -> dict:
     """Resume from last checkpoint; CAD-releases the lock so a racing fresh start is safe."""
     logger.info(f"[task] resume_synth thread_id={thread_id}")
-    slug = _slug_from_synth_thread_id(thread_id)
+    slug = domain._slug_from_synth_thread_id(thread_id)
     try:
         try:
             return asyncio.run(
-                _init_and_run(resume_synth_async(thread_id))
+                service._init_and_run(
+                    domains.dd.synth.runtime.dispatch.service.resume_synth_async(thread_id),
+                )
             )
         except Exception as e:
             logger.exception(f"[task] resume_synth failed: {e}")
@@ -147,7 +90,7 @@ def resume_synth(self, thread_id: str) -> dict:
             }
     finally:
         if slug:
-            _release_synth_lock(slug, thread_id)
+            service._release_synth_lock(slug, thread_id)
 
 
 @app.task(
@@ -176,8 +119,8 @@ def run_study(
     try:
         try:
             return asyncio.run(
-                _init_and_run(
-                    run_study_async(
+                service._init_and_run(
+                    domains.dd.synth.runtime.dispatch.service.run_study_async(
                         study_thread_id, slug, chapter_ids, mode,
                     ),
                 )
@@ -191,4 +134,4 @@ def run_study(
                 "error":        f"{type(e).__name__}: {e}",
             }
     finally:
-        _release_synth_lock(slug, study_thread_id)
+        service._release_synth_lock(slug, study_thread_id)

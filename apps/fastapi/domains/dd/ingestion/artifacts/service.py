@@ -1,5 +1,6 @@
 """Artifact materialization: fetch (or decode) → MinIO write → HTML/MD rewrite."""
 from __future__ import annotations
+from . import domain, entities, keys, params
 
 import asyncio
 import logging
@@ -8,25 +9,6 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from .domain import (
-    ARTIFACT_ATTRS,
-    build_md_replacement_map,
-    classify_url,
-    collect_md_payloads,
-    ext_from_url,
-    hash_name,
-    is_imageish_url,
-    parse_data_url,
-    pick_largest_srcset,
-)
-from .entities import Artifact
-from .keys import EXT_MIME, MIME_EXT, public_artifact_path
-from .params import (
-    CONCURRENCY,
-    MAX_ARTIFACT_BYTES,
-    MIN_ARTIFACT_BYTES,
-    TIMEOUT_S,
-)
 
 
 logger = logging.getLogger(__name__)
@@ -67,7 +49,7 @@ async def _sphinx_image_fallbacks(
     """Sphinx `_images/` fallback URLs for 404'd images. Tier-1 llms-full
     refs are page-relative; the real asset lives at
     `{versioned_docs_base}/_images/{basename}`."""
-    if not is_imageish_url(url):
+    if not domain.is_imageish_url(url):
         return []
     p = urlparse(url)
     basename = (p.path or "").rsplit("/", 1)[-1]
@@ -87,26 +69,26 @@ async def _sphinx_image_fallbacks(
 async def _fetch_remote_once(
     url:    str,
     client: httpx.AsyncClient,
-) -> Artifact | None:
+) -> entities.Artifact | None:
     try:
-        r = await client.get(url, timeout = TIMEOUT_S, follow_redirects = True)
+        r = await client.get(url, timeout = params.TIMEOUT_S, follow_redirects = True)
     except Exception:
         return None
     if r.status_code != 200:
         return None
     data = r.content
-    if not (MIN_ARTIFACT_BYTES <= len(data) <= MAX_ARTIFACT_BYTES):
+    if not (params.MIN_ARTIFACT_BYTES <= len(data) <= params.MAX_ARTIFACT_BYTES):
         return None
     ct = (r.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
     # Refuse HTML/text — common 404-page-served-with-200 pattern.
     if ct.startswith(("text/html", "text/plain", "application/json")):
         # 404-page-served-as-200 pattern.
         return None
-    ext = MIME_EXT.get(ct) or ext_from_url(url) or "bin"
+    ext = keys.MIME_EXT.get(ct) or domain.ext_from_url(url) or "bin"
     if not ct:
-        ct = EXT_MIME.get(ext, "application/octet-stream")
-    return Artifact(
-        name         = hash_name(data, ext),
+        ct = keys.EXT_MIME.get(ext, "application/octet-stream")
+    return entities.Artifact(
+        name         = domain.hash_name(data, ext),
         data         = data,
         content_type = ct,
         source_url   = url,
@@ -116,7 +98,7 @@ async def _fetch_remote_once(
 async def _fetch_remote(
     url:    str,
     client: httpx.AsyncClient,
-) -> Artifact | None:
+) -> entities.Artifact | None:
     """Remote fetch + Sphinx `_images/` fallback. Non-image and well-resolved
     refs pay nothing — fallback only fires on image-ish failure."""
     art = await _fetch_remote_once(url, client)
@@ -140,7 +122,7 @@ async def _save_one(
 ) -> str | None:
     """Materialize one artifact → public path, or None on rejection/failure."""
     if kind == "data":
-        art = parse_data_url(payload)
+        art = domain.parse_data_url(payload)
     else:
         art = await _fetch_remote(payload, client)
     if art is None:
@@ -158,7 +140,7 @@ async def _save_one(
             f"{(art.source_url or payload)[:80]}: {e}"
         )
         return None
-    return public_artifact_path(slug, art.name)
+    return keys.public_artifact_path(slug, art.name)
 
 
 async def _resolve_payloads(
@@ -172,7 +154,7 @@ async def _resolve_payloads(
     100× → 1 download + 1 MinIO write (input is a unique map)."""
     if not payloads:
         return {}
-    sem = asyncio.Semaphore(CONCURRENCY)
+    sem = asyncio.Semaphore(params.CONCURRENCY)
 
     async def _run(p: str, k: str) -> str | None:
         async with sem:
@@ -205,12 +187,12 @@ async def extract_and_save_artifacts(
 
     # srcset gets normalized to its highest-density candidate.
     work: list[tuple] = []
-    for tag_name, attr in ARTIFACT_ATTRS:
+    for tag_name, attr in keys.ARTIFACT_ATTRS:
         for el in soup.find_all(tag_name):
             val = (el.get(attr) or "").strip()
             if not val:
                 continue
-            cls = classify_url(val, source_url)
+            cls = domain.classify_url(val, source_url)
             if cls is None:
                 continue
             kind, payload = cls
@@ -219,7 +201,7 @@ async def extract_and_save_artifacts(
         srcset = (el.get("srcset") or "").strip()
         if not srcset:
             continue
-        full = pick_largest_srcset(srcset, source_url)
+        full = domain.pick_largest_srcset(srcset, source_url)
         if not full:
             continue
         if full.startswith("data:"):
@@ -268,7 +250,7 @@ async def extract_and_save_artifacts_from_md(
     For Tier 4 the HTML extractor runs first (richer: picture/srcset)."""
     if not md or not source_url:
         return md, 0
-    payloads = collect_md_payloads(md, source_url)
+    payloads = domain.collect_md_payloads(md, source_url)
     payloads = {
         p: k for p, k in payloads.items()
         if "/api/v1/docs-distiller/ingestion/" not in p
@@ -279,7 +261,7 @@ async def extract_and_save_artifacts_from_md(
     payload_to_public = await _resolve_payloads(
         payloads, slug = slug, store = store, client = client,
     )
-    rep = build_md_replacement_map(md, source_url, payload_to_public)
+    rep = domain.build_md_replacement_map(md, source_url, payload_to_public)
     if not rep:
         return md, 0
     # Sort by length DESC to avoid substring collisions (foo.com/img vs foo.com/img.png).

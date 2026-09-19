@@ -1,13 +1,11 @@
 """vault — byte-exact code preservation via hash-addressed sentinels (arXiv 2601.03640 / 2510.11394 / 2512.12117).
 Replaces fenced blocks with `<code-ref hash="..." lang="..."/>` before LLM; materializes back byte-exactly post-LLM via deterministic regex. Pure module; I/O in service.py."""
 from __future__ import annotations
+from . import params, patterns, schemas
 
 import hashlib
 import re
 
-from .params import PEDAGOGY_LANGS, VAULT_HASH_LEN
-from .patterns import SENTINEL_ANY_RE, SENTINEL_HASH_RE, SENTINEL_RE
-from .schemas import AuditReport, VaultEntry, VaultManifest
 
 
 def _hash_block(payload: str, salt: int = 0) -> str:
@@ -15,7 +13,7 @@ def _hash_block(payload: str, salt: int = 0) -> str:
     per-doc collision (two distinct fences whose hashes truncate to the
     same prefix)."""
     seed = payload if salt == 0 else f"{payload}|{salt}"
-    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:VAULT_HASH_LEN]
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:params.VAULT_HASH_LEN]
 
 
 def _make_sentinel(digest: str, lang: str = "") -> str:
@@ -37,9 +35,9 @@ def _parse_info_string(info: str) -> tuple[str, str]:
     return (parts[0] or "", info)
 
 
-def sentinelize_doc(md_text: str) -> tuple[str, dict[str, VaultEntry]]:
+def sentinelize_doc(md_text: str) -> tuple[str, dict[str, schemas.VaultEntry]]:
     """Replace every fenced block with a hash sentinel; return (sentinelized_text, vault). Backtick/tilde fences only (inline code and indented blocks are not vaulted). Raises ValueError if already sentinelized."""
-    if SENTINEL_RE.search(md_text):
+    if patterns.SENTINEL_RE.search(md_text):
         raise ValueError(
             "source already contains vault sentinels — cannot safely "
             "re-vault (double-vault bug or adversarial input)"
@@ -69,7 +67,7 @@ def sentinelize_doc(md_text: str) -> tuple[str, dict[str, VaultEntry]]:
         return md_text, {}
 
     fence_ranges.sort(key = lambda r: r[0])
-    vault: dict[str, VaultEntry] = {}
+    vault: dict[str, schemas.VaultEntry] = {}
     out_lines: list[str] = []
     i = 0
     fi = 0
@@ -88,7 +86,7 @@ def sentinelize_doc(md_text: str) -> tuple[str, dict[str, VaultEntry]]:
                 salt += 1
                 digest = _hash_block(fence_text, salt = salt)
             if digest not in vault:
-                vault[digest] = VaultEntry(
+                vault[digest] = schemas.VaultEntry(
                     hash = digest,
                     fence_text = fence_text,
                     info_string = full_info,
@@ -109,7 +107,7 @@ def sentinelize_doc(md_text: str) -> tuple[str, dict[str, VaultEntry]]:
 
 def materialize(
     text_with_sentinels: str,
-    vault: dict[str, VaultEntry],
+    vault: dict[str, schemas.VaultEntry],
 ) -> str:
     """Reverse sentinelize_doc: replace sentinels with fence_text. Unknown sentinels left in place (audit_roundtrip flags them as invented). Hash-only regex so extra LLM-added attrs don't break resolution."""
     def _replace(match: re.Match) -> str:
@@ -120,13 +118,13 @@ def materialize(
             return match.group(0)
         return entry.fence_text
 
-    return SENTINEL_ANY_RE.sub(_replace, text_with_sentinels)
+    return patterns.SENTINEL_ANY_RE.sub(_replace, text_with_sentinels)
 
 
 def audit_roundtrip(
-    vault: dict[str, VaultEntry],
+    vault: dict[str, schemas.VaultEntry],
     llm_output: str,
-) -> AuditReport:
+) -> schemas.AuditReport:
     """Four-dimension audit (missing/invented/duplicated/orphaned) before materialize. ok=True iff all lists empty."""
     # Defensive coerce — some LLM responses arrive as content-block
     # lists or other non-string structures.
@@ -137,7 +135,7 @@ def audit_roundtrip(
             llm_output = str(llm_output)
 
     vault_hashes = set(vault.keys())
-    found_hashes: list[str] = SENTINEL_HASH_RE.findall(llm_output)
+    found_hashes: list[str] = patterns.SENTINEL_HASH_RE.findall(llm_output)
     found_set = set(found_hashes)
 
     missing = sorted(vault_hashes - found_set)
@@ -148,7 +146,7 @@ def audit_roundtrip(
     duplicated = sorted(h for h, n in counts.items() if n > 1)
     orphaned = sorted(vault_hashes - found_set)
 
-    return AuditReport(
+    return schemas.AuditReport(
         missing = missing,
         invented = invented,
         duplicated = duplicated,
@@ -158,7 +156,7 @@ def audit_roundtrip(
 
 
 def format_entry_for_prompt(
-    entry: VaultEntry, *, max_chars: int | None = None,
+    entry: schemas.VaultEntry, *, max_chars: int | None = None,
 ) -> str:
     """Render one vault entry as a Visible Vault envelope (hash+lang+LOC+body) for the LLM. `max_chars=None` (default) means no per-entry cap — callers embedding many entries in one prompt should use `format_entries_for_prompt`'s `max_total_chars` instead of relying on this alone. Output is still byte-perfect — renderer materializes from vault[hash] regardless of what the LLM echoes."""
     body = entry.fence_text or ""
@@ -176,7 +174,7 @@ def format_entry_for_prompt(
 
 
 def format_entries_for_prompt(
-    entries: dict[str, VaultEntry], *, hashes: list[str] | None = None,
+    entries: dict[str, schemas.VaultEntry], *, hashes: list[str] | None = None,
     max_chars_per_entry: int | None = None,
     max_total_chars: int | None = None,
 ) -> str:
@@ -226,7 +224,7 @@ def format_entries_for_prompt(
     return "\n\n".join(out)
 
 
-def score_entry_pedagogy(entry: VaultEntry) -> float:
+def score_entry_pedagogy(entry: schemas.VaultEntry) -> float:
     """Pedagogical priority for a vault entry; higher = more canonical. Typically in [0.0, 3.0]."""
     if entry is None:
         return 0.0
@@ -259,13 +257,13 @@ def score_entry_pedagogy(entry: VaultEntry) -> float:
     )):
         score += 0.5
     # Mainstream language
-    if lang in PEDAGOGY_LANGS:
+    if lang in params.PEDAGOGY_LANGS:
         score += 0.2
     return round(score, 3)
 
 
 def rank_hashes_by_pedagogy(
-    hashes: list[str], vault: dict[str, VaultEntry],
+    hashes: list[str], vault: dict[str, schemas.VaultEntry],
 ) -> list[str]:
     """Reorder `hashes` by descending pedagogical score. Stable secondary
     sort by hash so re-ranks across identical inputs are deterministic."""
@@ -281,12 +279,12 @@ def build_manifest(
     framework: str,
     source_key: str,
     md_text: str,
-) -> tuple[str, VaultManifest]:
+) -> tuple[str, schemas.VaultManifest]:
     """Convenience wrapper for the ingestion-time builder: sentinelize
     the doc and wrap the vault dict in a VaultManifest ready for MinIO
     persistence. Returns `(sentinelized_text, manifest)`."""
     sentinelized, vault = sentinelize_doc(md_text)
-    manifest = VaultManifest(
+    manifest = schemas.VaultManifest(
         framework = framework,
         source_key = source_key,
         entries = vault,

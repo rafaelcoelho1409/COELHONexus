@@ -1,75 +1,30 @@
 """checklist_eval service — deterministic pre-gates, aggregation, rendering,
-prompt builders, and LLM verdict coercion."""
+prompt builders, LLM verdict coercion, CoCoA two-stage alignment check, and
+atomic-claim grounding."""
 from __future__ import annotations
-from .keys import (
-    digest_latest_key,
-    digest_latest_key as _digest_latest_key,
-    latest_blob_key,
-    latest_blob_key as _latest_blob_key,
-    sawc_latest_key,
-    sawc_latest_key as _sawc_latest_key,
-    versioned_blob_key,
-    versioned_blob_key as _versioned_blob_key,
-)
+import domains
+from . import domain, keys, params, prompts, schemas, versions
 # For best-seen promotion — needs sawc's OWN versioned-key convention,
 # not checklist's (each node's versioned_blob_key hardcodes its own path
 # segment). See the best-seen fix below for why this lives here.
-from ..sawc.keys import versioned_blob_key as _sawc_versioned_blob_key
-from .params import (
-    DENSITY_MAX_AVG_EXPLANATION_WORDS,
-    DENSITY_MAX_CHARS_PER_PARA,
-    DENSITY_MIN_AVG_EXPLANATION_WORDS,
-    DENSITY_MIN_CHARS_PER_PARA,
-    FEEDBACK_MAX_CHARS,
-    FEEDBACK_MIN_CHARS,
-    LLM_CRITERIA,
-    LLM_CRITERIA as _LLM_CRITERIA,
-    MAX_RENDERED_CHAPTER_CHARS,
-    MIN_AVG_CODE_REFS_PER_SECTION,
-    MIN_CITATIONS_PER_SECTION,
-    MIN_CODE_REF_COVERAGE_FRACTION,
-    PASS_THRESHOLD,
-    PICKER_FALLBACK_RATE_MAX,
-    REPAIR_RATE_MAX,
-)
-from .schemas import (
-    ChecklistEvaluation,
-    CriterionResult,
-    LLMJudgePayload,
-    LLMJudgePayload as _LLMJudgePayload,
-    LLMVerdict,
-)
-from .versions import CHECKLIST_PROMPT_VERSION, CHECKLIST_SCHEMA_VERSION
 
 import asyncio
-import hashlib
 import json
 import logging
 import random
 import re
 import time
-from collections import Counter
-from hashlib import sha256
 from typing import Optional
 
-from pydantic import ValidationError
 
-from domains.llm.rotator.chain import chat_judge_bandit_async
-
-from ....ingestion.storage import get_storage
-from ...runtime.observability import record_grader_dim_score
-from ...runtime.progress import emit_progress
-from ...state import SynthState
-from .cocoa import COCOA_ENABLED, cocoa_alignment_check
-from .faithfulness import atomic_claim_grounding
 
 
 logger = logging.getLogger(__name__)
 
 
-def _emit_criterion_scores(framework: str, criteria: list[dict | CriterionResult]) -> None:
+def _emit_criterion_scores(framework: str, criteria: list[dict | schemas.CriterionResult]) -> None:
     for criterion in criteria:
-        if isinstance(criterion, CriterionResult):
+        if isinstance(criterion, schemas.CriterionResult):
             name = criterion.name
             passed = criterion.passed
         else:
@@ -77,618 +32,12 @@ def _emit_criterion_scores(framework: str, criteria: list[dict | CriterionResult
             passed = bool((criterion or {}).get("passed", False))
         if not name:
             continue
-        record_grader_dim_score(
+        domains.dd.synth.runtime.observability.metrics.record_grader_dim_score(
             framework = framework,
             dim = name,
             score = 1.0 if passed else 0.0,
         )
 
-
-def check_all_sections_present(sawc: dict) -> CriterionResult:
-    cs = sawc.get("coverage_stats") or {}
-    n_done = int(cs.get("n_sections_completed", 0))
-    n_total = int(cs.get("n_sections", 0))
-    passed = (n_total > 0) and (n_done == n_total)
-    return CriterionResult(
-        name = "all_sections_present",
-        passed = passed,
-        kind = "deterministic",
-        feedback = (
-            ""
-            if passed
-            else f"only {n_done}/{n_total} sections completed (sawc reported "
-                 f"some sections failed to write). mgsr_replan should retry "
-                 f"the missing sections."
-        ),
-    )
-
-
-def check_no_placeholder_sections(sawc: dict) -> CriterionResult:
-    cs = sawc.get("coverage_stats") or {}
-    n_fb = int(cs.get("n_sections_fallback", 0))
-    passed = n_fb == 0
-    return CriterionResult(
-        name = "no_placeholder_sections",
-        passed = passed,
-        kind = "deterministic",
-        feedback = (
-            ""
-            if passed
-            else f"{n_fb} section(s) are placeholders (all 3 writer drafts "
-                 f"failed). mgsr_replan should target these specifically "
-                 f"with a fresh outline + retry."
-        ),
-    )
-
-
-def check_unique_headings(sawc: dict) -> CriterionResult:
-    sections = sawc.get("sections") or []
-    headings = [(s.get("heading") or "").strip().casefold() for s in sections]
-    n_total = len(headings)
-    n_unique = len(set(headings))
-    passed = n_total == n_unique
-    if passed:
-        feedback = ""
-    else:
-        seen: set[str] = set()
-        dupes: list[str] = []
-        for h in headings:
-            if h in seen and h not in dupes:
-                dupes.append(h)
-            seen.add(h)
-        feedback = (
-            f"duplicate section headings (case-insensitive): "
-            f"{sorted(set(dupes))[:3]}. mgsr_replan should rename or merge."
-        )
-    return CriterionResult(
-        name = "unique_headings",
-        passed = passed,
-        kind = "deterministic",
-        feedback = feedback,
-    )
-
-
-def check_all_sections_cite_at_least_1(sawc: dict) -> CriterionResult:
-    sections = sawc.get("sections") or []
-    thin: list[str] = []
-    for s in sections:
-        n_cites = len(s.get("citations") or [])
-        if n_cites < MIN_CITATIONS_PER_SECTION:
-            thin.append(s.get("section_id", "?"))
-    passed = not thin
-    return CriterionResult(
-        name = "all_sections_cite_at_least_1",
-        passed = passed,
-        kind = "deterministic",
-        feedback = (
-            ""
-            if passed
-            else f"sections with <{MIN_CITATIONS_PER_SECTION} citation(s): "
-                 f"{thin}. add a citation grounding each section's primary "
-                 f"claim."
-        ),
-    )
-
-
-def check_density_within_bounds(sawc: dict) -> CriterionResult:
-    """Chapter-wide average explanation words must land in [DENSITY_MIN, DENSITY_MAX]."""
-    cs = sawc.get("coverage_stats") or {}
-    avg = float(cs.get("avg_explanation_words", 0))
-    floor = DENSITY_MIN_AVG_EXPLANATION_WORDS
-    ceil = DENSITY_MAX_AVG_EXPLANATION_WORDS
-    passed = floor <= avg <= ceil
-    if passed:
-        feedback = ""
-    elif avg < floor:
-        feedback = (
-            f"explanations are too thin ({avg:.0f} avg words; floor "
-            f"{floor:.0f}). expand the 1-2 sentence lead-in BEFORE each "
-            f"code block with concrete API/parameter detail."
-        )
-    else:
-        feedback = (
-            f"explanations are too verbose ({avg:.0f} avg words; ceiling "
-            f"{ceil:.0f}). compress to 1-2 sentences — the code is the "
-            f"point, the prose just sets it up."
-        )
-    return CriterionResult(
-        name = "density_within_bounds",
-        passed = passed,
-        kind = "deterministic",
-        feedback = feedback,
-    )
-
-
-def check_repair_rate_low(sawc: dict) -> CriterionResult:
-    cs = sawc.get("coverage_stats") or {}
-    n_repairs = int(cs.get("n_repairs", 0))
-    n_drafts = int(cs.get("n_total_drafts_fired", 0))
-    rate = (n_repairs / n_drafts) if n_drafts else 0.0
-    passed = rate < REPAIR_RATE_MAX
-    return CriterionResult(
-        name = "repair_rate_low",
-        passed = passed,
-        kind = "deterministic",
-        feedback = (
-            ""
-            if passed
-            else f"high writer-repair rate ({n_repairs}/{n_drafts} = "
-                 f"{rate:.0%}; ceiling {REPAIR_RATE_MAX:.0%}). The writer "
-                 f"struggled with Pydantic+cross-ref compliance — consider "
-                 f"a clearer outline or tighter contributions."
-        ),
-    )
-
-
-def check_picker_fallback_rate_low(sawc: dict) -> CriterionResult:
-    cs = sawc.get("coverage_stats") or {}
-    n_fb = int(cs.get("n_picker_fallbacks", 0))
-    n_picks = int(cs.get("n_critic_picks", 0))
-    rate = (n_fb / n_picks) if n_picks else 0.0
-    passed = rate < PICKER_FALLBACK_RATE_MAX
-    return CriterionResult(
-        name = "picker_fallback_rate_low",
-        passed = passed,
-        kind = "deterministic",
-        feedback = (
-            ""
-            if passed
-            else f"high critic-picker fallback rate ({n_fb}/{n_picks} = "
-                 f"{rate:.0%}; ceiling {PICKER_FALLBACK_RATE_MAX:.0%}). "
-                 f"the critic LLM frequently returned malformed JSON; "
-                 f"the structural-score fallback handled it, but quality "
-                 f"signal is degraded."
-        ),
-    )
-
-
-def check_code_density_appropriate(sawc: dict) -> CriterionResult:
-    """Avg code subtopics/section ≥ floor AND ≥ MIN_CODE_REF_COVERAGE_FRACTION of hashes used."""
-    sections = sawc.get("sections") or []
-    if not sections:
-        return CriterionResult(
-            name = "code_density_appropriate",
-            passed = False,
-            kind = "deterministic",
-            feedback = "no sections — chapter is empty",
-        )
-
-    n_refs_per_section: list[tuple[str, int]] = []
-    thin_coverage: list[str] = []
-    n_total_refs = 0
-    for s in sections:
-        sid = s.get("section_id", "?")
-        subtopics = s.get("subtopics") or []
-        n_refs = sum(1 for st in subtopics if (st or {}).get("code_ref_hash"))
-        n_total_refs += n_refs
-        n_refs_per_section.append((sid, n_refs))
-        n_allowed = int(s.get("n_allowed_hashes") or 0)
-        if n_allowed >= 3:
-            coverage = n_refs / max(1, n_allowed)
-            if coverage < MIN_CODE_REF_COVERAGE_FRACTION:
-                thin_coverage.append(f"{sid}({n_refs}/{n_allowed})")
-    avg = n_total_refs / len(sections)
-    passed = (
-        avg >= MIN_AVG_CODE_REFS_PER_SECTION
-        and len(thin_coverage) <= len(sections) // 2   # tolerate 50% thin
-    )
-    if passed:
-        feedback = ""
-    else:
-        zeros = [sid for sid, n in n_refs_per_section if n == 0]
-        feedback = (
-            f"code density too low: avg {avg:.2f} subtopics/section "
-            f"(floor {MIN_AVG_CODE_REFS_PER_SECTION}); "
-            f"{len(zeros)} sections with 0 code subtopics"
-        )
-        if zeros[:5]:
-            feedback += f": {zeros[:5]}"
-        if thin_coverage[:5]:
-            feedback += (
-                f"; {len(thin_coverage)} sections under-using code bank: "
-                f"{thin_coverage[:5]}"
-            )
-        feedback += (
-            ". This is a CODE-FIRST learning resource — every section "
-            "must emit ≥3 (subheading, explanation, code block) subtopics."
-        )
-    return CriterionResult(
-        name = "code_density_appropriate",
-        passed = passed,
-        kind = "deterministic",
-        feedback = feedback,
-    )
-
-
-def check_code_uniqueness_ratio(sawc: dict) -> CriterionResult:
-    """Adaptive uniqueness floor (0.50/0.35/0.30 by bank size); excludes derived subtopics."""
-    sections = sawc.get("sections") or []
-    if not sections:
-        return CriterionResult(
-            name = "code_uniqueness_ratio",
-            passed = True,
-            kind = "deterministic",
-            feedback = "no sections — vacuously true",
-        )
-
-    hashes: list[str] = []
-    for s in sections:
-        for st in (s.get("subtopics") or []):
-            if not isinstance(st, dict):
-                continue
-            if (st.get("code_source") or "verbatim") == "derived":
-                continue
-            h = st.get("code_ref_hash")
-            if h:
-                hashes.append(h)
-
-    if not hashes:
-        return CriterionResult(
-            name = "code_uniqueness_ratio",
-            passed = True,
-            kind = "deterministic",
-            feedback = "no verbatim code blocks — vacuously true",
-        )
-
-    n_total = len(hashes)
-    n_unique = len(set(hashes))
-    ratio = n_unique / n_total
-
-    if n_unique >= 30:
-        adaptive_floor = 0.50
-    elif n_unique >= 15:
-        adaptive_floor = 0.35
-    else:
-        adaptive_floor = 0.30
-    passed = ratio >= adaptive_floor
-
-    if passed:
-        return CriterionResult(
-            name = "code_uniqueness_ratio",
-            passed = True,
-            kind = "deterministic",
-            feedback = "",
-        )
-
-    from collections import Counter
-    top = Counter(hashes).most_common(3)
-    sample = ", ".join(f"{h[:8]}…×{n}" for h, n in top if n > 1)
-    feedback = (
-        f"code uniqueness {ratio:.0%} ({n_unique} unique / {n_total} "
-        f"total verbatim blocks); adaptive floor {adaptive_floor:.0%} "
-        f"(scaled to bank diversity). Top duplicates: {sample}. "
-        f"Sections are recycling the same vault snippets across "
-        f"different subtopics — split overloaded sections or merge "
-        f"sections that share most of their code base."
-    )
-    return CriterionResult(
-        name = "code_uniqueness_ratio",
-        passed = False,
-        kind = "deterministic",
-        feedback = feedback,
-    )
-
-
-# Ordered list — stable iteration = stable pass-rate denominators.
-DETERMINISTIC_CHECKS = (
-    check_all_sections_present,
-    check_no_placeholder_sections,
-    check_unique_headings,
-    check_all_sections_cite_at_least_1,
-    check_density_within_bounds,
-    check_repair_rate_low,
-    check_picker_fallback_rate_low,
-    check_code_density_appropriate,
-    check_code_uniqueness_ratio,
-)
-
-
-def aggregate_pass_rate(
-    results: list[CriterionResult],
-) -> tuple[int, int, float, bool]:
-    """Compute (n_passed, n_total, pass_rate, chapter_passed) from
-    the full criterion list."""
-    n_total = len(results)
-    n_passed = sum(1 for r in results if r.passed)
-    pass_rate = (n_passed / n_total) if n_total else 0.0
-    chapter_passed = pass_rate >= PASS_THRESHOLD
-    return n_passed, n_total, pass_rate, chapter_passed
-
-
-def collect_failed_feedback(results: list[CriterionResult]) -> list[str]:
-    """Extract failed criteria feedback as `[criterion_name] text` for mgsr_replan."""
-    out: list[str] = []
-    for r in results:
-        if not r.passed and r.feedback:
-            out.append(f"[{r.name}] {r.feedback}")
-    return out
-
-
-def _water_fill_blocks(
-    blocks: list[str], *, char_cap: int,
-) -> tuple[str, bool]:
-    """Join `blocks` within `char_cap` total chars, water-filling fairly
-    across all of them instead of sequential-fill-then-stop. A naive cap
-    silently drops every block after whichever one blows the budget —
-    for a chapter render that means every section after some midpoint
-    (chapter_reads_coherently / terminology_consistent judge the WHOLE
-    chapter, so never seeing its ending biases both verdicts); for a
-    digest render it means later sections' grounding facts vanish
-    entirely from what claims_grounded_in_sources gets to check against.
-    Same algorithm as outline_sdp's source concatenation / sawc_write's
-    vault-bank fix — order preserved, no entry ever fully zeroed out."""
-    n = len(blocks)
-    if n == 0:
-        return "", False
-    alloc = [0] * n
-    pending = list(range(n))
-    remaining_budget = char_cap
-    while pending and remaining_budget > 0:
-        share = remaining_budget // len(pending)
-        if share <= 0:
-            break
-        still_pending: list[int] = []
-        for i in pending:
-            need = len(blocks[i]) - alloc[i]
-            take = min(need, share)
-            alloc[i] += take
-            remaining_budget -= take
-            if alloc[i] < len(blocks[i]):
-                still_pending.append(i)
-        pending = still_pending
-    truncated = any(alloc[i] < len(blocks[i]) for i in range(n))
-    parts = [blocks[i][: alloc[i]] for i in range(n) if alloc[i] > 0]
-    return "\n".join(parts), truncated
-
-
-def render_chapter_for_judge(
-    sawc: dict,
-    *,
-    char_cap: int = MAX_RENDERED_CHAPTER_CHARS,
-) -> tuple[str, bool]:
-    """Render v2 cookbook sections for the LLM-judge; returns (text, truncated_flag)."""
-    sections = sawc.get("sections") or []
-    blocks: list[str] = []
-    for s in sections:
-        sid = s.get("section_id", "?")
-        heading = s.get("heading", "?")
-        block_lines: list[str] = [f"## {sid}: {heading}"]
-        intro = (s.get("intro") or "").strip()
-        if intro:
-            block_lines.append("")
-            block_lines.append(intro)
-        subtopics = s.get("subtopics") or []
-        for st in subtopics:
-            st = st or {}
-            block_lines.append("")
-            block_lines.append(f"### {st.get('subheading', '?')}")
-            expl = (st.get("explanation") or "").strip()
-            if expl:
-                block_lines.append("")
-                block_lines.append(expl)
-            h = (st.get("code_ref_hash") or "")
-            if h:
-                block_lines.append("")
-                block_lines.append(f"[code-block: {h[:12]}…]")
-        # Compact metadata at section end
-        citations = s.get("citations") or []
-        if citations:
-            cite_summary = "; ".join(
-                f"{(c.get('source_key') or '').rsplit('/', 1)[-1]} ("
-                f"'{(c.get('claim') or '')[:80]}')"
-                for c in citations[:5]
-            )
-            block_lines.append("")
-            block_lines.append(f"[citations ({len(citations)}): {cite_summary}]")
-        block_lines.append("")
-        blocks.append("\n".join(block_lines))
-    return _water_fill_blocks(blocks, char_cap = char_cap)
-
-
-def render_digest_for_grounding(
-    digest: dict,
-    *,
-    char_cap: int = 20_000,
-) -> str:
-    """Render compressed per-section digest contributions for the grounding judge."""
-    per_section = digest.get("per_section") or {}
-    blocks: list[str] = []
-    for sid in sorted(per_section.keys()):
-        contribs = per_section[sid]
-        if not contribs:
-            continue
-        block_lines = [f"## {sid} grounding:"]
-        for c in contribs[:4]:
-            src = c.get("source_key", "?")
-            src_short = src.rsplit("/", 1)[-1] if src else "?"
-            relevance = c.get("relevance", "?")
-            summ = c.get("summary", "")
-            facts = c.get("key_facts") or []
-            block_lines.append(
-                f"  - {src_short} ({relevance}): {summ[:200]}"
-            )
-            for f in facts[:3]:
-                block_lines.append(f"    • {f[:200]}")
-        blocks.append("\n".join(block_lines))
-    text, _truncated = _water_fill_blocks(blocks, char_cap = char_cap)
-    return text
-
-
-_CRITERION_BLOCKS: dict[str, str] = {
-    "chapter_reads_coherently": (
-        "[c8] chapter_reads_coherently\n"
-        "  Reading sections in order, does the chapter flow as a single "
-        "document with smooth transitions, OR as disjoint reference "
-        "cards with abrupt scope shifts? PASS if it reads as one "
-        "document; FAIL if multiple sections feel like standalone "
-        "definitions with no connective tissue."
-    ),
-    "claims_grounded_in_sources": (
-        "[c9] claims_grounded_in_sources\n"
-        "  Spot-check 3-5 citations against the per-section grounding "
-        "above. Does each cited source actually back the specific claim "
-        "the section makes in prose nearby? PASS if claims align with "
-        "the digest's key_facts; FAIL if any cited source is being "
-        "stretched beyond what it supports."
-    ),
-    "terminology_consistent": (
-        "[c10] terminology_consistent\n"
-        "  Does the chapter use the SAME name for the SAME concept "
-        "across sections (e.g., not switching between 'field' and "
-        "'attribute' for the same Pydantic concept, or 'method' and "
-        "'function' interchangeably for the same API)? PASS if "
-        "terminology is stable; FAIL if you can point to ≥2 sections "
-        "using different names for the same thing."
-    ),
-    "prose_code_first_not_meta_framing": (
-        "[c11] prose_code_first_not_meta_framing\n"
-        "  Is each section's prose dense + production-focused (concrete "
-        "APIs, types, parameters, error modes), OR padded with meta-"
-        "framing ('In this chapter we will...', 'In summary...', 'It "
-        "is important to note that...')? PASS if prose is dense; FAIL "
-        "if meta-framing eats >20% of any section's `intro` or any "
-        "H3 subtopic's `explanation`."
-    ),
-    "code_refs_introduced_in_prose": (
-        "[c12] code_refs_introduced_in_prose\n"
-        "  In the v2 cookbook structure, each H3 subtopic emits "
-        "`{subheading} → {explanation} → [code-block]`. Does each "
-        "subtopic's explanation (1-2 sentences BEFORE the code) "
-        "actually introduce that specific code block — naming the "
-        "decorator/type/parameter the reader is about to see — OR is "
-        "it generic prose that could precede ANY code block? PASS if "
-        "explanations are tied to their specific code; FAIL if any "
-        "explanation reads as filler.\n"
-        "  NOTE: If a section has 0 subtopics (rare — usually a "
-        "placeholder), this criterion FAILS for that section. The "
-        "cookbook contract requires ≥3 subtopics per section."
-    ),
-}
-
-
-def _criterion_order_for(chapter_id: str) -> list[str]:
-    """Deterministic per-chapter shuffle; same chapter_id → same order (cache-safe) + bias averages out."""
-    seed_material = (
-        f"{chapter_id}|{CHECKLIST_PROMPT_VERSION}".encode("utf-8")
-    )
-    seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:8], "big")
-    rng = random.Random(seed)
-    order = list(LLM_CRITERIA)
-    rng.shuffle(order)
-    return order
-
-
-def build_judge_prompt(
-    *,
-    chapter_id: str,
-    chapter_title: str,
-    framework: str,
-    rendered_chapter: str,
-    rendered_digest: str,
-    truncated: bool,
-) -> str:
-    """Build the batched LLM-judge prompt with per-chapter criterion shuffle (position-bias mitigation)."""
-    trunc_note = (
-        "\n\nNOTE: The chapter text was truncated to fit the prompt — "
-        "do NOT penalize 'incomplete chapter' or 'missing sections' if "
-        "the visible content reads coherently up to the truncation point."
-        if truncated else ""
-    )
-    order = _criterion_order_for(chapter_id)
-    criteria_block = "\n\n".join(_CRITERION_BLOCKS[name] for name in order)
-    output_lines = ",\n".join(
-        f'  {name!r:<40}: {{"passed": ..., "feedback": "..."}}'
-        for name in order
-    )
-    return (
-        f"You are the Checklist Evaluator for chapter {chapter_id} "
-        f"({chapter_title!r}) of framework {framework}. Apply 5 BINARY "
-        f"criteria below. Each: PASS (true) or FAIL (false). If false, "
-        f"give a 1-sentence specific feedback so mgsr_replan can act "
-        f"surgically (which section + what's wrong). Be strict — don't "
-        f"grade-inflate; pass only what you'd defend to a peer reviewer.\n\n"
-
-        f"== CHAPTER (sections rendered top-to-bottom) =={trunc_note}\n"
-        f"{rendered_chapter}\n"
-        f"== END CHAPTER ==\n\n"
-
-        f"== PER-SECTION GROUNDING (digest summaries — what each section "
-        f"SHOULD cover, sourced from the digest_construct step) ==\n"
-        f"{rendered_digest}\n"
-        f"== END GROUNDING ==\n\n"
-
-        f"== CRITERIA — answer each with PASS or FAIL + 1-sentence "
-        f"specific feedback if FAIL ==\n\n"
-        f"{criteria_block}\n\n"
-
-        f"OUTPUT — strict JSON, exactly these 5 keys (each value: "
-        f'{{"passed": bool, "feedback": "1-sentence specific reason if '
-        f'false; empty string if true"}}):\n'
-        f"{{\n{output_lines}\n}}\n\n"
-
-        f"Respond ONLY with valid JSON. NO prose commentary, NO markdown "
-        f"wrapping. Feedback should name a specific section + symptom "
-        f"(e.g., 's4 opens with \"In this chapter we will explore...\"' "
-        f"or 's7 cites 0024-isbn.md but its claim isn't in the key_facts')."
-    )
-
-
-def build_repair_prompt(
-    *,
-    chapter_id: str,
-    chapter_title: str,
-    framework: str,
-    rendered_chapter: str,
-    rendered_digest: str,
-    truncated: bool,
-    current_json: str,
-    issues: list[str],
-) -> str:
-    """Repair prompt when the judge's first response was Pydantic-
-    invalid (missing keys / wrong shape)."""
-    issues_block = "\n".join(f"- {x}" for x in issues)
-    return (
-        f"Fix the JSON output. Keep the same 5-key shape; only correct "
-        f"the structural issues below.\n\n"
-        f"CHAPTER: {chapter_id} — {chapter_title}\n"
-        f"FRAMEWORK: {framework}\n\n"
-        f"CURRENT (broken) JSON:\n{current_json}\n\n"
-        f"ISSUES TO FIX:\n{issues_block}\n\n"
-        f"Required keys (each value = "
-        f'{{"passed": bool, "feedback": str}}):\n'
-        f"  - chapter_reads_coherently\n"
-        f"  - claims_grounded_in_sources\n"
-        f"  - terminology_consistent\n"
-        f"  - prose_code_first_not_meta_framing\n"
-        f"  - code_refs_introduced_in_prose\n\n"
-        f"Respond ONLY with valid JSON, no commentary."
-    )
-
-
-def llm_payload_to_criteria(
-    payload: LLMJudgePayload,
-) -> list[CriterionResult]:
-    """Map LLM judge payload → 5 CriterionResult entries in LLM_CRITERIA order."""
-    name_to_verdict = {
-        "chapter_reads_coherently":          payload.chapter_reads_coherently,
-        "claims_grounded_in_sources":        payload.claims_grounded_in_sources,
-        "terminology_consistent":            payload.terminology_consistent,
-        "prose_code_first_not_meta_framing": payload.prose_code_first_not_meta_framing,
-        "code_refs_introduced_in_prose":     payload.code_refs_introduced_in_prose,
-    }
-    return [
-        CriterionResult(
-            name = name,
-            passed = name_to_verdict[name].passed,
-            kind = "llm_judge",
-            feedback = (
-                name_to_verdict[name].feedback
-                if not name_to_verdict[name].passed
-                else ""
-            ),
-        )
-        for name in LLM_CRITERIA
-    ]
 
 
 
@@ -703,7 +52,7 @@ async def _run_llm_judge(
     rendered_chapter: str,
     rendered_digest: str,
     truncated: bool,
-) -> tuple[list[CriterionResult], Optional[str], bool, int]:
+) -> tuple[list[schemas.CriterionResult], Optional[str], bool, int]:
     """Fire batched judge → parse → repair if needed; hard failure → conservative FAILED fallback."""
     t0 = time.monotonic()
     cur_rendered_chapter = rendered_chapter
@@ -714,7 +63,7 @@ async def _run_llm_judge(
     response: Optional[str] = None
     last_error: Optional[Exception] = None
     for call_attempt in range(_MAX_CALL_ATTEMPTS):
-        prompt = build_judge_prompt(
+        prompt = domain.build_judge_prompt(
             chapter_id=chapter_id,
             chapter_title=chapter_title,
             framework=framework,
@@ -723,7 +72,7 @@ async def _run_llm_judge(
             truncated=cur_truncated,
         )
         try:
-            response, meta = await chat_judge_bandit_async(
+            response, meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
                 prompt,
                 max_tokens=_MAX_TOKENS_JUDGE,
                 temperature=_TEMPERATURE_JUDGE,
@@ -744,14 +93,14 @@ async def _run_llm_judge(
                 # the retry doesn't just reproduce the same failure —
                 # cheap insurance against triggering a full mgsr_replan
                 # cycle for what was really an infra hiccup.
-                if _is_context_overflow_error(e):
+                if domain.is_context_overflow_error(e):
                     cur_rendered_chapter, cur_truncated = (
-                        render_chapter_for_judge(
+                        domain.render_chapter_for_judge(
                             sawc,
-                            char_cap=MAX_RENDERED_CHAPTER_CHARS // 2,
+                            char_cap=params.MAX_RENDERED_CHAPTER_CHARS // 2,
                         )
                     )
-                    cur_rendered_digest = render_digest_for_grounding(
+                    cur_rendered_digest = domain.render_digest_for_grounding(
                         digest, char_cap=10_000,
                     )
                 await asyncio.sleep(1.0 + random.random())
@@ -763,17 +112,17 @@ async def _run_llm_judge(
             f"{type(last_error).__name__}: {last_error}"
         )
         return (
-            _fallback_llm_verdicts(f"{type(last_error).__name__}"),
+            domain.fallback_llm_verdicts(f"{type(last_error).__name__}"),
             None, False, wall_ms,
         )
 
-    parsed = _parse_json_response(response)
-    payload: Optional[_LLMJudgePayload] = None
+    parsed = domain.parse_json_response(response)
+    payload: Optional[schemas.LLMJudgePayload] = None
     err: Optional[str] = None
     repaired = False
 
     if parsed is not None:
-        payload, err = _try_parse_judge(parsed)
+        payload, err = domain.try_parse_judge(parsed)
 
     # One repair attempt if parse OR Pydantic failed
     if payload is None and _MAX_REPAIR_ATTEMPTS > 0:
@@ -781,7 +130,7 @@ async def _run_llm_judge(
             err if err else "previous response was not parseable JSON"
         ]
         current_json = json.dumps(parsed or {"_raw": (response or "")[:400]})
-        repair_prompt = build_repair_prompt(
+        repair_prompt = domain.build_repair_prompt(
             chapter_id=chapter_id,
             chapter_title=chapter_title,
             framework=framework,
@@ -792,7 +141,7 @@ async def _run_llm_judge(
             issues=repair_issues,
         )
         try:
-            rr, rm = await chat_judge_bandit_async(
+            rr, rm = await domains.llm.rotator.chain.chat_judge_bandit_async(
                 repair_prompt,
                 max_tokens=_MAX_TOKENS_REPAIR,
                 temperature=_TEMPERATURE_REPAIR,
@@ -800,9 +149,9 @@ async def _run_llm_judge(
                 timeout_s=_TIMEOUT_S_REPAIR,
             )
             deployment = (rm or {}).get("deployment") or deployment
-            rp = _parse_json_response(rr)
+            rp = domain.parse_json_response(rr)
             if rp is not None:
-                payload, err = _try_parse_judge(rp)
+                payload, err = domain.try_parse_judge(rp)
                 if payload is not None:
                     repaired = True
         except Exception as e:
@@ -832,25 +181,11 @@ async def _run_llm_judge(
             f"({err}); using fallback FAIL verdicts"
         )
         return (
-            _fallback_llm_verdicts(f"judge_parse_failed: {err}"),
+            domain.fallback_llm_verdicts(f"judge_parse_failed: {err}"),
             deployment, False, wall_ms,
         )
 
-    return llm_payload_to_criteria(payload), deployment, repaired, wall_ms
-
-def _compute_manifest_hash(
-    *,
-    sawc_manifest_hash: str,
-    digest_manifest_hash: str,
-) -> str:
-    payload = (
-        f"sawc={sawc_manifest_hash}|"
-        f"digest={digest_manifest_hash}|"
-        f"prompt={CHECKLIST_PROMPT_VERSION}|"
-        f"schema={CHECKLIST_SCHEMA_VERSION}"
-    )
-    return sha256(payload.encode("utf-8")).hexdigest()[:16]
-
+    return domain.llm_payload_to_criteria(payload), deployment, repaired, wall_ms
 
 _TEMPERATURE_JUDGE      = 0.0
 
@@ -883,91 +218,615 @@ _TIMEOUT_S_PERSIST_WRITE = 60.0
 # outline_sdp/digest_construct/sawc_write's context-overflow retry.
 _MAX_CALL_ATTEMPTS = 2
 
-_CONTEXT_OVERFLOW_MARKERS = (
-    "context_length", "context window", "maximum context length",
-    "context_window_exceeded", "reduce the length", "too many tokens",
-    "context length exceeded", "prompt is too long",
-)
-
-
-def _is_context_overflow_error(e: Exception) -> bool:
-    """Heuristic substring match — same classifier idiom used across the
-    synth pipeline. The Rotator is a universal gateway with no context
-    -length-aware arm filtering, so the rendered chapter (up to
-    MAX_RENDERED_CHAPTER_CHARS) can still exceed a small-context arm."""
-    msg = str(e).lower()
-    return any(marker in msg for marker in _CONTEXT_OVERFLOW_MARKERS)
-
-
 _JUDGE_RESPONSE_FORMAT = {
     "type": "json_schema",
     "json_schema": {
         "name":   "checklist_judge",
-        "schema": _LLMJudgePayload.model_json_schema(),
+        "schema": schemas.LLMJudgePayload.model_json_schema(),
         "strict": False,
     },
 }
 
-def _parse_json_response(text: str) -> Optional[dict]:
-    if not text:
-        return None
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
+
+# ---------------------------------------------------------------------------
+# CoCoA two-stage alignment check (arXiv 2410.03131) — overrides c11+c12 on drift.
+# ---------------------------------------------------------------------------
+
+async def _cocoa_read_cached_abstraction(minio, h: str) -> str | None:
+    """Return cached spec for hash `h`, or None on miss/error."""
+    key = keys.cocoa_abstraction_key(h)
     try:
-        return json.loads(cleaned)
-    except Exception:
-        pass
-    m = _JSON_RE.search(text)
-    if not m:
-        return None
-    try:
-        return json.loads(m.group(0))
+        if not await minio.exists(key):
+            return None
+        raw = await minio.read_text(key)
+        obj = json.loads(raw)
+        spec = (obj.get("spec") or "").strip()
+        return spec or None
     except Exception:
         return None
 
-def _try_parse_judge(
-    raw: dict,
-) -> tuple[Optional[_LLMJudgePayload], Optional[str]]:
+
+async def _cocoa_write_cached_abstraction(minio, h: str, spec: str) -> None:
+    """Best-effort cache write. Failures are silent — the abstraction
+    still works for this run, we just miss the cache for future ones."""
+    if not h or not spec:
+        return
+    key = keys.cocoa_abstraction_key(h)
     try:
-        return _LLMJudgePayload.model_validate(raw), None
-    except ValidationError as e:
-        return None, _shorten_pydantic_error(e)
+        await minio.write(
+            key,
+            json.dumps({"spec": spec}),
+            content_type = "application/json",
+        )
     except Exception as e:
-        return None, f"{type(e).__name__}: {str(e)[:200]}"
+        logger.debug(
+            f"[cocoa] cache write failed for {h[:8]}…: "
+            f"{type(e).__name__}: {e}"
+        )
 
-def _fallback_llm_verdicts(reason: str) -> list[CriterionResult]:
-    """Conservatively fail all 5 LLM criteria when judge is unavailable (triggers mgsr_replan)."""
-    out: list[CriterionResult] = []
-    for name in _LLM_CRITERIA:
-        out.append(CriterionResult(
-            name=name,
-            passed=False,
-            kind="llm_judge",
-            feedback=(
-                f"judge_unavailable: {reason}. Conservatively marked "
-                f"FAIL so mgsr_replan re-evaluates next iteration."
-            ),
-        ))
+
+async def _cocoa_explain_blocks(blocks: list[dict]) -> dict[str, str]:
+    """Run the explainer on a batch of code blocks; derived blocks skip cache (body varies per run)."""
+    if not blocks:
+        return {}
+
+    minio = domains.dd.ingestion.storage.service.get_storage()
+
+    # derived blocks (code_source='derived') always go to the LLM; verbatim blocks cache by hash.
+    cached: dict[str, str] = {}
+    misses: list[dict] = []
+    for b in blocks:
+        h = (b.get("hash") or "").strip()
+        is_derived = (b.get("code_source") or "verbatim") == "derived"
+        if h and not is_derived:
+            spec = await _cocoa_read_cached_abstraction(minio, h)
+            if spec:
+                cached[b["id"]] = spec
+                continue
+        misses.append(b)
+
+    if cached:
+        logger.info(
+            f"[cocoa] explainer cache: {len(cached)}/{len(blocks)} "
+            f"hits ({len(misses)} miss); LLM call will cover misses"
+        )
+
+    # If everything was cached, skip the LLM call entirely.
+    if not misses:
+        return cached
+
+    prompt = prompts.COCOA_EXPLAINER_PROMPT.format(
+        blocks_block = domain.render_blocks_for_explainer(misses),
+    )
+    try:
+        response, _ = await domains.llm.rotator.chain.chat_judge_bandit_async(
+            prompt,
+            max_tokens = params.COCOA_EXPLAINER_MAX_TOKENS,
+            temperature = params.COCOA_EXPLAINER_TEMPERATURE,
+            response_format = {"type": "json_object"},
+            timeout_s = params.COCOA_EXPLAINER_TIMEOUT_S,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[cocoa] explainer call failed: {type(e).__name__}: {e}"
+        )
+        return cached    # ship whatever we had cached; bundled judge stands
+    parsed = domain.parse_json(response or "")
+    if not parsed:
+        return cached
+    fresh: dict[str, str] = {}
+    for row in (parsed.get("abstractions") or []):
+        if not isinstance(row, dict):
+            continue
+        rid = str(row.get("id") or "").strip()
+        spec = str(row.get("spec") or "").strip()
+        if rid and spec:
+            fresh[rid] = spec
+
+    # Derived blocks are unsafe to cache by hash (body varies).
+    miss_by_id = {b["id"]: b for b in misses}
+    for rid, spec in fresh.items():
+        b = miss_by_id.get(rid)
+        if not b:
+            continue
+        h = (b.get("hash") or "").strip()
+        is_derived = (b.get("code_source") or "verbatim") == "derived"
+        if h and not is_derived:
+            await _cocoa_write_cached_abstraction(minio, h, spec)
+
+    return {**cached, **fresh}
+
+
+async def _cocoa_judge_pairs(pairs: list[dict]) -> dict[str, dict]:
+    """Returns {id_str: {"aligned": bool, "reason": str}}. Failures fall
+    through to {} — missing ids are excluded from both the numerator and
+    denominator by the caller (n_judged = len(verdicts)), not defaulted to
+    either aligned or misaligned."""
+    if not pairs:
+        return {}
+    prompt = prompts.COCOA_JUDGE_PROMPT.format(
+        pairs_block = domain.render_pairs_for_judge(pairs),
+    )
+    try:
+        response, _ = await domains.llm.rotator.chain.chat_judge_bandit_async(
+            prompt,
+            max_tokens = params.COCOA_JUDGE_MAX_TOKENS,
+            temperature = params.COCOA_JUDGE_TEMPERATURE,
+            response_format = {"type": "json_object"},
+            timeout_s = params.COCOA_JUDGE_TIMEOUT_S,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[cocoa] judge call failed: {type(e).__name__}: {e}"
+        )
+        return {}
+    parsed = domain.parse_json(response or "")
+    if not parsed:
+        return {}
+    out: dict[str, dict] = {}
+    for row in (parsed.get("verdicts") or []):
+        if not isinstance(row, dict):
+            continue
+        rid = str(row.get("id") or "").strip()
+        if not rid:
+            continue
+        out[rid] = {
+            "aligned": bool(row.get("aligned")),
+            "reason": str(row.get("reason") or "").strip(),
+        }
     return out
 
 
-_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+async def cocoa_alignment_check(
+    *,
+    sawc_payload: dict,
+    vault: dict[str, str],
+) -> dict:
+    """Run CoCoA two-stage alignment over every (subtopic, code) pair; fail-soft → passes."""
+    if not params.COCOA_ENABLED:
+        return {
+            "passed":         True,
+            "resolved":       True,  # deliberate skip, not an infra failure
+            "method":         "cocoa_disabled",
+            "n_pairs":        0,
+            "n_aligned":      0,
+            "n_misaligned":   0,
+            "alignment_rate": 1.0,
+            "misaligned":     [],
+            "feedback":       "cocoa temporarily disabled (issue #20) — see params.COCOA_ENABLED",
+        }
+    sections = sawc_payload.get("sections") or []
 
-def _shorten_pydantic_error(e: ValidationError) -> str:
-    errs = e.errors()
-    if not errs:
-        return "Pydantic validation failed (no detail)"
-    lines = []
-    for err in errs[:6]:
-        loc = ".".join(str(x) for x in err.get("loc", []))
-        msg = err.get("msg", "")
-        lines.append(f"{loc}: {msg}")
-    suffix = f" (+{len(errs) - 6} more)" if len(errs) > 6 else ""
-    return "; ".join(lines) + suffix
+    # Stable integer id so JSON round-trips are robust.
+    pairs: list[dict] = []   # input rows the LLM stages consume
+    for s in sections:
+        sub_list = s.get("subtopics") or []
+        for st in sub_list:
+            if not isinstance(st, dict):
+                continue
+            subheading = (st.get("subheading") or "").strip()
+            explanation = (st.get("explanation") or "").strip()
+            h = (st.get("code_ref_hash") or "").strip()
+            code_source = st.get("code_source") or "verbatim"
+            derived = (st.get("derived_code") or "").strip()
+            if code_source == "derived" and derived:
+                body = derived
+                lang = "python"
+            else:
+                body = vault.get(h, "") or ""
+                # vault entries include fences — strip them for the
+                # explainer prompt (cleaner abstraction).
+                body = domain.strip_fences(body)
+                lang = domain.detect_lang(vault.get(h, ""))
+            if not (subheading and explanation and body):
+                continue
+            pairs.append({
+                "id":          str(len(pairs)),
+                "hash":        h,            # for stage-1 per-hash cache
+                "code_source": code_source,  # derived blocks skip cache
+                "subheading":  subheading,
+                "explanation": explanation,
+                "lang":        lang,
+                "body":        body,
+                "section_id":  s.get("section_id", "?"),
+            })
 
-async def checklist_eval_run(state: SynthState) -> dict:
+    n_pairs = len(pairs)
+    if n_pairs == 0:
+        return {
+            "passed":         True,
+            "resolved":       True,   # genuinely nothing to check, not an outage
+            "method":         "cocoa_skipped",
+            "n_pairs":        0,
+            "n_aligned":      0,
+            "n_misaligned":   0,
+            "alignment_rate": 1.0,
+            "misaligned":     [],
+            "feedback":       "no subtopics with both code body + prose",
+        }
+
+    # Zero-identifier overlap → auto-flagged misaligned (CC ch-01: 6 cases caught without LLM calls).
+    structural_misaligned: list[dict] = []
+    pairs_for_llm: list[dict] = []
+    for p in pairs:
+        if domain.has_keyword_overlap(
+            code_body = p.get("body", ""),
+            explanation = p.get("explanation", ""),
+        ):
+            pairs_for_llm.append(p)
+        else:
+            structural_misaligned.append({
+                "section_id": p.get("section_id"),
+                "subheading": p["subheading"],
+                "reason": (
+                    "explanation shares zero informative identifiers "
+                    "with the cited code body (structural pre-check); "
+                    "prose is talking about a different API"
+                ),
+            })
+    if structural_misaligned:
+        logger.info(
+            f"[cocoa] keyword-overlap pre-check flagged "
+            f"{len(structural_misaligned)}/{n_pairs} pairs as structurally "
+            f"misaligned; LLM judge will only see "
+            f"{len(pairs_for_llm)} pairs"
+        )
+    pairs = pairs_for_llm
+
+    # Slice by COCOA_MAX_SUBTOPICS_PER_BATCH so prompts don't balloon.
+    batches: list[list[dict]] = [
+        pairs[i:i + params.COCOA_MAX_SUBTOPICS_PER_BATCH]
+        for i in range(0, n_pairs, params.COCOA_MAX_SUBTOPICS_PER_BATCH)
+    ]
+
+    specs: dict[str, str] = {}
+    for batch in batches:
+        blocks = [
+            {
+                "id":          p["id"],
+                "hash":        p.get("hash") or "",
+                "code_source": p.get("code_source") or "verbatim",
+                "lang":        p["lang"],
+                "body":        p["body"],
+            }
+            for p in batch
+        ]
+        partial = await _cocoa_explain_blocks(blocks)
+        specs.update(partial)
+
+    if not specs:
+        return {
+            "passed":         True,    # fail-soft — don't override bundled
+            "resolved":       False,
+            "method":         "cocoa_skipped",
+            "n_pairs":        n_pairs,
+            "n_aligned":      n_pairs,
+            "n_misaligned":   0,
+            "alignment_rate": 1.0,
+            "misaligned":     [],
+            "feedback":       "cocoa explainer failed; bundled judge stands",
+        }
+
+    # Judge across all pairs that received an abstraction.
+    judge_input: list[dict] = []
+    for p in pairs:
+        spec = specs.get(p["id"])
+        if not spec:
+            continue
+        judge_input.append({
+            "id":          p["id"],
+            "spec":        spec,
+            "subheading":  p["subheading"],
+            "explanation": p["explanation"],
+        })
+
+    verdicts: dict[str, dict] = {}
+    for i in range(0, len(judge_input), params.COCOA_MAX_SUBTOPICS_PER_BATCH):
+        batch = judge_input[i:i + params.COCOA_MAX_SUBTOPICS_PER_BATCH]
+        partial = await _cocoa_judge_pairs(batch)
+        verdicts.update(partial)
+
+    # Evaluated-fraction floor over the LLM stage specifically — pairs that
+    # never got a spec (explainer failure) or never got a verdict (judge
+    # failure) must not silently count toward "misaligned" just by being
+    # absent from `verdicts`. n_pairs here is len(pairs_for_llm) (post
+    # structural pre-check), i.e. exactly what SHOULD have reached the judge.
+    n_llm_total = len(pairs)
+    n_llm_judged = len(verdicts)
+    llm_evaluated_fraction = (
+        n_llm_judged / n_llm_total if n_llm_total else 1.0
+    )
+    if (
+        llm_evaluated_fraction < params.COCOA_MIN_EVALUATED_FRACTION
+        and (n_llm_total - n_llm_judged) >= params.COCOA_MIN_ABSOLUTE_GAP_FOR_UNRESOLVED
+    ):
+        logger.warning(
+            f"[cocoa] only {n_llm_judged}/{n_llm_total} LLM-stage pairs "
+            f"({llm_evaluated_fraction:.0%}) got a real verdict — below "
+            f"the {params.COCOA_MIN_EVALUATED_FRACTION:.0%} floor, treating as "
+            f"unresolved rather than computing a rate over missing evidence"
+        )
+        return {
+            "passed":         True,
+            "resolved":       False,
+            "method":         "cocoa_skipped",
+            "n_pairs":        n_pairs,
+            "n_aligned":      n_pairs,
+            "n_misaligned":   0,
+            "alignment_rate": 1.0,
+            "misaligned":     [],
+            "feedback":       "cocoa judge under-evaluated; bundled judge stands",
+        }
+
+    n_aligned = 0
+    misaligned: list[dict] = list(structural_misaligned)   # U5 merge
+    by_id = {p["id"]: p for p in pairs}
+    for pid, v in verdicts.items():
+        p = by_id.get(pid)
+        if p is None:
+            continue
+        if v.get("aligned", True):
+            n_aligned += 1
+        else:
+            misaligned.append({
+                "section_id": p.get("section_id"),
+                "subheading": p["subheading"],
+                "reason": v.get("reason") or "explanation does not ground to the cited code",
+            })
+
+    # Denominator is structural pre-check pairs + pairs that ACTUALLY got a
+    # judge verdict — not n_pairs, which would let un-judged pairs (explainer
+    # or judge call failures) silently drag the rate down as if misaligned.
+    n_judged = len(structural_misaligned) + n_llm_judged
+    rate = (n_aligned / n_judged) if n_judged else 1.0
+    passed = rate >= params.COCOA_ALIGN_PASS_FRACTION
+
+    feedback = ""
+    if not passed:
+        sample = [
+            f"{m['subheading']!r} ({m['reason'][:80]})"
+            for m in misaligned[:3]
+        ]
+        feedback = (
+            f"CoCoA: {n_aligned}/{n_judged} subtopics aligned "
+            f"({rate:.0%}; floor {params.COCOA_ALIGN_PASS_FRACTION:.0%}). "
+            f"Sample drift: {sample}. mgsr_replan should re-roll those "
+            f"sections with stronger code-grounded prose."
+        )
+
+    return {
+        "passed":         passed,
+        "resolved":       True,
+        "method":         "cocoa_v1",
+        "n_pairs":        n_pairs,
+        "n_judged":       n_judged,
+        "n_aligned":      n_aligned,
+        "n_misaligned":   len(misaligned),
+        "alignment_rate": rate,
+        "misaligned":     misaligned[:50],   # cap for blob size
+        "feedback":       feedback,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Atomic-claim grounding — augments bundled LLM-judge's `claims_grounded_in_sources` via conservative-bias merge.
+# ---------------------------------------------------------------------------
+
+_ATOMIC_CLAIM_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+async def atomic_claim_grounding(
+    *,
+    chapter_prose: str,
+    grounding_blob: str,
+) -> dict:
+    """Run atomic-claim grounding. Three outcomes, not two: passed=True
+    (genuinely verified), passed=False (genuinely unsupported), or
+    resolved=False (not enough real judge signal to say either —
+    extraction crashed, or too many judge calls failed). Callers must
+    treat resolved=False like a crash (defer to the bundled judge),
+    never like a pass — collapsing "couldn't check" into "passed" is
+    exactly what let a Rotator outage read as a clean grounding check."""
+    if not params.ATOMIC_CLAIM_ENABLED:
+        return {
+            "passed": True, "resolved": True, "n_claims": 0,
+            "n_evaluated": 0, "n_unsupported": 0, "unsupported_claims": [],
+            "feedback": "", "method": "atomic_claim_disabled",
+            "skip_reason": "disabled (issue #20) — see params.ATOMIC_CLAIM_ENABLED",
+        }
+    claims, extraction_ok = await _atomic_claim_extract_claims(
+        chapter_prose[:params.ATOMIC_CLAIM_PROSE_CHARS],
+    )
+    if not extraction_ok:
+        return {
+            "passed": True, "resolved": False, "n_claims": 0,
+            "n_evaluated": 0, "n_unsupported": 0, "unsupported_claims": [],
+            "feedback": "", "method": "atomic_claim_v4",
+            "skip_reason": "extraction_failed",
+        }
+    if len(claims) < params.ATOMIC_CLAIM_MIN_CLAIMS_FOR_RUN:
+        # Genuinely nothing to verify — a real pass, not an outage artifact.
+        return {
+            "passed": True, "resolved": True, "n_claims": 0,
+            "n_evaluated": 0, "n_unsupported": 0, "unsupported_claims": [],
+            "feedback": "", "method": "atomic_claim_v4",
+        }
+
+    src = grounding_blob[:params.ATOMIC_CLAIM_SOURCE_CHARS]
+    sem = asyncio.Semaphore(params.ATOMIC_CLAIM_CONCURRENCY)
+    verdicts = await asyncio.gather(*[
+        _atomic_claim_judge_claim(sem, claim, src) for claim in claims
+    ])
+
+    n_claims = len(claims)
+    n_call_failures = sum(1 for v in verdicts if v.get("_call_failed"))
+    n_evaluated = n_claims - n_call_failures
+    evaluated_fraction = n_evaluated / n_claims if n_claims else 0.0
+    if n_call_failures:
+        logger.warning(
+            f"[atomic-claim-grounding] {n_call_failures}/{len(verdicts)} "
+            f"judge calls failed — excluded from the verdict, not "
+            f"defaulted to supported=True"
+        )
+    if (
+        evaluated_fraction < params.ATOMIC_CLAIM_MIN_EVALUATED_FRACTION
+        and n_call_failures >= params.ATOMIC_CLAIM_MIN_ABSOLUTE_FAILURES_FOR_UNRESOLVED
+    ):
+        logger.warning(
+            f"[atomic-claim-grounding] only {n_evaluated}/{n_claims} claims "
+            f"({evaluated_fraction:.0%}) got a real verdict — below the "
+            f"{params.ATOMIC_CLAIM_MIN_EVALUATED_FRACTION:.0%} floor, treating as unresolved "
+            f"rather than a genuine pass"
+        )
+        return {
+            "passed": True, "resolved": False, "n_claims": n_claims,
+            "n_evaluated": n_evaluated, "n_unsupported": 0,
+            "unsupported_claims": [], "n_judge_call_failures": n_call_failures,
+            "feedback": "", "method": "atomic_claim_v4",
+            "skip_reason": "insufficient_evaluated_fraction",
+        }
+
+    # Denominator is EVALUATED claims only — a call failure must not be
+    # able to dilute the ratio by masquerading as a "supported" claim.
+    evaluated_pairs = [
+        (claim, v) for claim, v in zip(claims, verdicts)
+        if not v.get("_call_failed")
+    ]
+    unsupported = [
+        {"claim": claim, "evidence": v.get("evidence", "")}
+        for claim, v in evaluated_pairs
+        if not v.get("supported", True)
+    ]
+    n_unsupported = len(unsupported)
+    unsupported_ratio = n_unsupported / n_evaluated if n_evaluated else 0.0
+    passed = unsupported_ratio <= params.ATOMIC_CLAIM_MAX_UNSUPPORTED_RATIO
+    feedback = ""
+    if not passed:
+        sample = unsupported[0]["claim"][:160]
+        feedback = (
+            f"atomic-claim grounding: {n_unsupported}/{n_evaluated} claims "
+            f"({unsupported_ratio:.0%}) not supported by source digest "
+            f"(ceiling {params.ATOMIC_CLAIM_MAX_UNSUPPORTED_RATIO:.0%}); e.g. {sample!r}"
+        )
+
+    return {
+        "passed": passed,
+        "resolved": True,
+        "n_claims": n_claims,
+        "n_evaluated": n_evaluated,
+        "n_unsupported": n_unsupported,
+        "unsupported_ratio": round(unsupported_ratio, 3),
+        "unsupported_claims": unsupported,
+        "n_judge_call_failures": n_call_failures,
+        "feedback": feedback,
+        "method": "atomic_claim_v4",
+    }
+
+
+async def _atomic_claim_extract_claims(prose: str) -> tuple[list[str], bool]:
+    """Returns (claims, extraction_ok). extraction_ok=False means the LLM
+    call/parse itself broke — distinct from a genuine "prose has 0 claims"
+    result, since callers must not treat an outage as a trivial pass."""
+    minio = domains.dd.ingestion.storage.service.get_storage()
+    cache_key = keys.atomic_claim_key(domain.prose_cache_key(prose))
+    try:
+        if await minio.exists(cache_key):
+            raw_text = await minio.read_text(cache_key)
+            data = json.loads(raw_text or "{}")
+            cached_claims = data.get("claims") or []
+            if isinstance(cached_claims, list) and cached_claims:
+                logger.info(
+                    f"[atomic-claim-grounding] cache HIT — {len(cached_claims)} "
+                    f"claims for prose key {cache_key.rsplit('/', 1)[-1]}"
+                )
+                return [
+                    str(c).strip() for c in cached_claims
+                    if isinstance(c, str) and c.strip()
+                ][:params.ATOMIC_CLAIM_MAX_CLAIMS], True
+    except Exception as e:
+        logger.debug(
+            f"[atomic-claim-grounding] cache read failed: "
+            f"{type(e).__name__}: {e}"
+        )
+
+    try:
+        prompt = prompts.ATOMIC_CLAIM_EXTRACT_PROMPT.format(
+            max_claims = params.ATOMIC_CLAIM_MAX_CLAIMS, prose_chars = len(prose), prose = prose,
+        )
+        raw, _ = await domains.llm.rotator.chain.chat_judge_bandit_async(
+            prompt, max_tokens = params.ATOMIC_CLAIM_EXTRACT_MAX_TOKENS, temperature = 0.0,
+            response_format = {"type": "json_object"},
+            timeout_s = params.ATOMIC_CLAIM_EXTRACT_TIMEOUT_S,
+        )
+        m = _ATOMIC_CLAIM_JSON_RE.search(raw or "")
+        if not m:
+            logger.warning(
+                "[atomic-claim-grounding] extraction failed: "
+                "no JSON object in response"
+            )
+            return [], False
+        data = json.loads(m.group(0))
+        claims = data.get("claims") or []
+        # Sanitize: strings only, non-empty, capped
+        out = [
+            str(c).strip() for c in claims
+            if isinstance(c, str) and c.strip()
+        ][:params.ATOMIC_CLAIM_MAX_CLAIMS]
+    except Exception as e:
+        logger.warning(
+            f"[atomic-claim-grounding] extraction failed: "
+            f"{type(e).__name__}: {e}"
+        )
+        return [], False
+
+    # Best-effort cache write.
+    try:
+        await minio.write(
+            cache_key,
+            json.dumps({"claims": out}, ensure_ascii = False),
+            content_type = "application/json",
+        )
+    except Exception as e:
+        logger.debug(
+            f"[atomic-claim-grounding] cache write failed: "
+            f"{type(e).__name__}: {e}"
+        )
+    return out, True
+
+
+async def _atomic_claim_judge_claim(
+    sem: asyncio.Semaphore, claim: str, source: str,
+) -> dict:
+    """Verify ONE atomic claim against the source. Fail-soft: any failure
+    returns supported = True so we don't override the bundled judge on
+    infra hiccups — tagged _call_failed so the caller can tell a genuine
+    pass apart from a silent default (this criterion's whole purpose is
+    anti-hallucination, so rubber-stamping without a trace defeats it)."""
+    async with sem:
+        try:
+            prompt = prompts.ATOMIC_CLAIM_JUDGE_PROMPT.format(claim = claim, source = source)
+            raw, _ = await domains.llm.rotator.chain.chat_judge_bandit_async(
+                prompt, max_tokens = params.ATOMIC_CLAIM_JUDGE_MAX_TOKENS, temperature = 0.0,
+                response_format = {"type": "json_object"},
+                timeout_s = params.ATOMIC_CLAIM_JUDGE_TIMEOUT_S,
+            )
+            m = _ATOMIC_CLAIM_JSON_RE.search(raw or "")
+            if not m:
+                logger.debug(
+                    "[atomic-claim-grounding] judge response unparseable "
+                    "— defaulting to supported=True"
+                )
+                return {"supported": True, "_call_failed": True}
+            return json.loads(m.group(0))
+        except Exception as e:
+            logger.debug(
+                f"[atomic-claim-grounding] judge call failed: "
+                f"{type(e).__name__}: {e} — defaulting to supported=True"
+            )
+            return {"supported": True, "_call_failed": True}
+
+
+async def checklist_eval_run(state: domains.dd.synth.state.SynthState) -> dict:
     """Run the binary checklist evaluator for one chapter."""
     slug = state.get("framework_slug")
     chapter_id = state.get("chapter_id")
@@ -984,10 +843,10 @@ async def checklist_eval_run(state: SynthState) -> dict:
         }
 
     t0 = time.monotonic()
-    minio = get_storage()
+    minio = domains.dd.ingestion.storage.service.get_storage()
 
-    sawc_key = _sawc_latest_key(slug, chapter_id)
-    digest_key = _digest_latest_key(slug, chapter_id)
+    sawc_key = keys.sawc_latest_key(slug, chapter_id)
+    digest_key = keys.digest_latest_key(slug, chapter_id)
 
     if not await minio.exists(sawc_key):
         return {
@@ -1032,20 +891,20 @@ async def checklist_eval_run(state: SynthState) -> dict:
     sawc_manifest_hash = sawc.get("sawc_manifest_hash") or ""
     digest_manifest_hash = digest.get("digest_manifest_hash") or ""
 
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "checklist_eval", "start",
         chapter_id = chapter_id,
         chapter_title = chapter_title,
-        n_total_criteria = len(DETERMINISTIC_CHECKS) + len(LLM_CRITERIA),
+        n_total_criteria = len(domain.DETERMINISTIC_CHECKS) + len(params.LLM_CRITERIA),
         pass_threshold = 0.80,
     )
 
-    manifest_hash = _compute_manifest_hash(
+    manifest_hash = domain.compute_manifest_hash(
         sawc_manifest_hash = sawc_manifest_hash,
         digest_manifest_hash = digest_manifest_hash,
     )
-    versioned_key = _versioned_blob_key(slug, chapter_id, manifest_hash)
-    latest_key    = _latest_blob_key(slug, chapter_id)
+    versioned_key = keys.versioned_blob_key(slug, chapter_id, manifest_hash)
+    latest_key    = keys.latest_blob_key(slug, chapter_id)
 
     if await minio.exists(versioned_key) and await minio.exists(latest_key):
         try:
@@ -1067,7 +926,7 @@ async def checklist_eval_run(state: SynthState) -> dict:
                 "prompt_version":  cached.get("prompt_version"),
                 "infra_degraded":  False,   # a cached result is a completed prior run
             }
-            await emit_progress(
+            await domains.dd.synth.runtime.progress.service.emit_progress(
                 thread_id, "checklist_eval", "done",
                 n_total = stats["n_total"],
                 n_passed = stats["n_passed"],
@@ -1106,7 +965,7 @@ async def checklist_eval_run(state: SynthState) -> dict:
             if _is_better:
                 _best_seen_score = stats["pass_rate"]
                 _best_seen_pregate = _n_pregate_passed
-                _best_seen_sawc_path = _sawc_versioned_blob_key(
+                _best_seen_sawc_path = domains.dd.synth.nodes.sawc.keys.versioned_blob_key(
                     slug, chapter_id, sawc_manifest_hash,
                 )
             return {
@@ -1125,8 +984,8 @@ async def checklist_eval_run(state: SynthState) -> dict:
                 f"recomputing"
             )
 
-    pre_results: list[CriterionResult] = []
-    for fn in DETERMINISTIC_CHECKS:
+    pre_results: list[schemas.CriterionResult] = []
+    for fn in domain.DETERMINISTIC_CHECKS:
         try:
             pre_results.append(fn(sawc))
         except Exception as e:
@@ -1134,7 +993,7 @@ async def checklist_eval_run(state: SynthState) -> dict:
                 f"[checklist_eval] pre-gate {fn.__name__} crashed: "
                 f"{type(e).__name__}: {e}"
             )
-            pre_results.append(CriterionResult(
+            pre_results.append(schemas.CriterionResult(
                 name = fn.__name__.replace("check_", ""),
                 passed = False,
                 kind = "deterministic",
@@ -1143,17 +1002,17 @@ async def checklist_eval_run(state: SynthState) -> dict:
 
     pre_failed = [r.name for r in pre_results if not r.passed]
     n_pre_passed = sum(1 for r in pre_results if r.passed)
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "checklist_eval", "pregates_done",
         n_pregate = len(pre_results),
         n_passed = n_pre_passed,
         names_failed = pre_failed,
     )
 
-    rendered_chapter, truncated = render_chapter_for_judge(sawc)
-    rendered_digest = render_digest_for_grounding(digest)
+    rendered_chapter, truncated = domain.render_chapter_for_judge(sawc)
+    rendered_digest = domain.render_digest_for_grounding(digest)
 
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "checklist_eval", "judge_request",
         chapter_chars = len(rendered_chapter),
         digest_chars = len(rendered_digest),
@@ -1174,7 +1033,7 @@ async def checklist_eval_run(state: SynthState) -> dict:
 
     llm_failed = [r.name for r in llm_results if not r.passed]
     n_llm_passed = sum(1 for r in llm_results if r.passed)
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "checklist_eval", "judge_done",
         n_llm = len(llm_results),
         n_passed = n_llm_passed,
@@ -1202,7 +1061,7 @@ async def checklist_eval_run(state: SynthState) -> dict:
 
     async def _run_cocoa():
         t0 = time.monotonic()
-        if not COCOA_ENABLED:
+        if not params.COCOA_ENABLED:
             # Issue #20 follow-up (2026-09-08): the disable flag lives
             # inside cocoa_alignment_check, but this caller was still
             # doing the full MinIO vault-load BEFORE ever reaching that
@@ -1212,13 +1071,14 @@ async def checklist_eval_run(state: SynthState) -> dict:
             # disabled.
             return None, int((time.monotonic() - t0) * 1000)
         try:
-            from ..render.service import _load_per_source_vaults as _load_vault
             per_source = digest.get("per_source") or []
             source_keys = sorted({
                 s.get("source_key", "") for s in per_source
                 if s.get("source_key")
             })
-            merged_vault, _, _ = await _load_vault(minio, slug, source_keys)
+            merged_vault, _, _ = await domains.dd.synth.nodes.render.service._load_per_source_vaults(
+                minio, slug, source_keys,
+            )
             r = await cocoa_alignment_check(
                 sawc_payload = sawc,
                 vault = merged_vault,
@@ -1238,7 +1098,7 @@ async def checklist_eval_run(state: SynthState) -> dict:
     if atomic_result is not None and not atomic_result["passed"]:
         for i, r in enumerate(llm_results):
             if r.name == "claims_grounded_in_sources":
-                llm_results[i] = CriterionResult(
+                llm_results[i] = schemas.CriterionResult(
                     name = r.name,
                     passed = False,
                     kind = r.kind,
@@ -1249,7 +1109,7 @@ async def checklist_eval_run(state: SynthState) -> dict:
         llm_failed = [r.name for r in llm_results if not r.passed]
         n_llm_passed = sum(1 for r in llm_results if r.passed)
 
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "checklist_eval", "faithfulness_done",
         method = (atomic_result or {}).get("method", "skipped"),
         resolved = (atomic_result or {}).get("resolved", False),
@@ -1272,7 +1132,7 @@ async def checklist_eval_run(state: SynthState) -> dict:
                 "prose_code_first_not_meta_framing",
                 "code_refs_introduced_in_prose",
             ):
-                llm_results[i] = CriterionResult(
+                llm_results[i] = schemas.CriterionResult(
                     name = r.name,
                     passed = False,
                     kind = r.kind,
@@ -1286,7 +1146,7 @@ async def checklist_eval_run(state: SynthState) -> dict:
         llm_failed = [r.name for r in llm_results if not r.passed]
         n_llm_passed = sum(1 for r in llm_results if r.passed)
 
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "checklist_eval", "cocoa_done",
         method = (cocoa_result or {}).get("method", "skipped"),
         resolved = (cocoa_result or {}).get("resolved", False),
@@ -1301,10 +1161,10 @@ async def checklist_eval_run(state: SynthState) -> dict:
     )
 
     all_results = list(pre_results) + list(llm_results)
-    n_passed, n_total, pass_rate, chapter_passed = aggregate_pass_rate(
+    n_passed, n_total, pass_rate, chapter_passed = domain.aggregate_pass_rate(
         all_results
     )
-    failed_feedback = collect_failed_feedback(all_results)
+    failed_feedback = domain.collect_failed_feedback(all_results)
 
     # Best-seen promotion happens HERE, immediately, not one iteration
     # later in sawc_write's own (redundant, one-step-behind) copy of this
@@ -1343,11 +1203,11 @@ async def checklist_eval_run(state: SynthState) -> dict:
     if is_better:
         best_seen_score = pass_rate
         best_seen_pregate = n_pre_passed
-        best_seen_sawc_path = _sawc_versioned_blob_key(
+        best_seen_sawc_path = domains.dd.synth.nodes.sawc.keys.versioned_blob_key(
             slug, chapter_id, sawc_manifest_hash,
         )
 
-    evaluation = ChecklistEvaluation(
+    evaluation = schemas.ChecklistEvaluation(
         chapter_id = chapter_id,
         chapter_title = chapter_title,
         framework_slug = slug,
@@ -1463,10 +1323,10 @@ async def checklist_eval_run(state: SynthState) -> dict:
         "versioned_path":     versioned_key,
         "manifest_hash":      manifest_hash,
         "cache_hit":          False,
-        "prompt_version":     CHECKLIST_PROMPT_VERSION,
+        "prompt_version":     versions.CHECKLIST_PROMPT_VERSION,
         "deployment_judge":   deployment,
     }
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "checklist_eval", "done",
         n_total = n_total,
         n_passed = n_passed,
@@ -1494,8 +1354,3 @@ async def checklist_eval_run(state: SynthState) -> dict:
         "best_seen_pregate": best_seen_pregate,
         "best_seen_sawc_path": best_seen_sawc_path,
     }
-
-
-def load_checklist_payload(text: str) -> dict:
-    """Parse the persisted checklist blob."""
-    return json.loads(text)

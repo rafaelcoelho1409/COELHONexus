@@ -1,14 +1,11 @@
 """sawc_derive — Pydantic schemas (DeriveAttempt + DeriveStats)."""
 from __future__ import annotations
+from . import versions
 
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from .versions import (
-    SAWC_DERIVE_PROMPT_VERSION,
-    SAWC_DERIVE_SCHEMA_VERSION,
-)
 
 
 class DeriveAttempt(BaseModel):
@@ -34,8 +31,8 @@ class DeriveAttempt(BaseModel):
 class DeriveStats(BaseModel):
     """Per-chapter aggregate stats. Persisted to sawc_derive-latest.json
     and surfaced in the synth UI as KPIs."""
-    schema_version:      str = SAWC_DERIVE_SCHEMA_VERSION
-    prompt_version:      str = SAWC_DERIVE_PROMPT_VERSION
+    schema_version:      str = versions.SAWC_DERIVE_SCHEMA_VERSION
+    prompt_version:      str = versions.SAWC_DERIVE_PROMPT_VERSION
     chapter_id:          str
     framework_slug:      str
     enabled:             bool

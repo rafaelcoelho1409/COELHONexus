@@ -1,4 +1,7 @@
 """Fetch llms.txt index (AnswerDotAI spec), then all linked pages concurrently. Markdown responses pass through; HTML goes through the extractor. Progress becomes determinate after index parse."""
+from __future__ import annotations
+import domains
+from . import domain, params
 import asyncio
 import logging
 import time
@@ -12,13 +15,6 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-from ...artifacts import extract_and_save_artifacts
-from ...progress import Progress
-from ...storage import Store
-from ..errors import EmptyLinksDetected
-from ..extract import extract_title, html_to_markdown
-from .domain import is_markdown_response, parse_index, slugify
-from .params import CONCURRENCY, MIN_OK_BYTES, TIMEOUT_S, USER_AGENT
 
 
 logger = logging.getLogger(__name__)
@@ -31,7 +27,7 @@ logger = logging.getLogger(__name__)
     wait = wait_exponential_jitter(initial = 1, max = 8),
 )
 async def _get(client: httpx.AsyncClient, url: str) -> httpx.Response:
-    return await client.get(url, headers = {"User-Agent": USER_AGENT})
+    return await client.get(url, headers = {"User-Agent": params.USER_AGENT})
 
 
 async def _fetch_one(
@@ -39,10 +35,10 @@ async def _fetch_one(
     title: str,
     url: str,
     *,
-    progress: Progress,
+    progress: domains.dd.ingestion.progress.service.Progress,
     tier_name: str,
     framework_slug: str | None = None,
-    store: Store | None = None,
+    store: domains.dd.ingestion.storage.service.Store | None = None,
 ) -> tuple[str, str, str, str] | None:
     """Returns (slug, url, body_markdown, title) on success, None on failure.
     Records progress + URL log internally."""
@@ -71,12 +67,12 @@ async def _fetch_one(
         )
         return None
     raw = resp.text or ""
-    if is_markdown_response(resp):
+    if domain.is_markdown_response(resp):
         body_md = raw
     else:
         if framework_slug and store is not None:
             try:
-                raw, n_art = await extract_and_save_artifacts(
+                raw, n_art = await domains.dd.ingestion.artifacts.service.extract_and_save_artifacts(
                     raw,
                     url,
                     slug = framework_slug,
@@ -93,10 +89,10 @@ async def _fetch_one(
                     f"[tier-2] artifact extraction failed for {url}: "
                     f"{type(e).__name__}: {e}"
                 )
-        body_md = html_to_markdown(raw, source_url = url)
+        body_md = domains.dd.ingestion.tiers.extract.domain.html_to_markdown(raw, source_url = url)
         if not title:
-            title = extract_title(raw) or title
-    if len(body_md.encode("utf-8")) < MIN_OK_BYTES:
+            title = domains.dd.ingestion.tiers.extract.domain.extract_title(raw) or title
+    if len(body_md.encode("utf-8")) < params.MIN_OK_BYTES:
         await progress.record_url(
             url,
             status = "extract_empty",
@@ -117,7 +113,7 @@ async def _fetch_one(
         bytes_fetched = len(raw),
         extracted_chars = len(body_md),
     )
-    slug = slugify(title or urlparse(url).path)
+    slug = domain.slugify(title or urlparse(url).path)
     return (slug, url, body_md, title or slug)
 
 
@@ -125,8 +121,8 @@ async def run(
     *,
     url: str,
     framework_slug: str,
-    progress: Progress,
-    store: Store,
+    progress: domains.dd.ingestion.progress.service.Progress,
+    store: domains.dd.ingestion.storage.service.Store,
 ) -> int:
     """Fetch index, fan out to N concurrent page fetches, write each to
     store. Returns the number of pages written. Raises RuntimeError if the
@@ -134,7 +130,7 @@ async def run(
     logger.info(f"[tier-2] framework={framework_slug} index={url}")
     await progress.start(tier = "llms_txt", total = 0)
     async with httpx.AsyncClient(
-        timeout = httpx.Timeout(TIMEOUT_S, connect = 10.0),
+        timeout = httpx.Timeout(params.TIMEOUT_S, connect = 10.0),
         follow_redirects = True,
     ) as client:
         t0 = time.monotonic()
@@ -171,16 +167,16 @@ async def run(
             bytes_fetched = len(resp.text or ""),
             extracted_chars = len(resp.text or ""),
         )
-        links = parse_index(resp.text or "", base_url = url)
+        links = domain.parse_index(resp.text or "", base_url = url)
         if not links:
             logger.info(
                 f"[tier-2] {url} parsed zero links — likely a long-form "
                 f"prose llms.txt; signalling fallback"
             )
-            raise EmptyLinksDetected(url)
+            raise domains.dd.ingestion.tiers.errors.EmptyLinksDetected(url)
         logger.info(f"[tier-2] parsed {len(links)} URLs from {url}")
         await progress.update_total(len(links))
-        sem = asyncio.Semaphore(CONCURRENCY)
+        sem = asyncio.Semaphore(params.CONCURRENCY)
         written = 0
 
         async def _bound(title: str, link: str):

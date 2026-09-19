@@ -1,25 +1,11 @@
 """mgsr — Pydantic schemas (LLM output + persisted decision/replan blob)."""
 from __future__ import annotations
+from . import params, patterns, versions
 
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from .params import (
-    DESCRIPTION_MAX_CHARS,
-    DESCRIPTION_MIN_CHARS,
-    HEADING_MAX_WORDS,
-    HEADING_MIN_WORDS,
-    MAX_ACTIONS_PER_REPLAN,
-    MAX_TARGETS_PER_ACTION,
-    MIN_TARGETS,
-    RATIONALE_MAX_CHARS,
-    RATIONALE_MIN_CHARS,
-    RATIONALE_OVERALL_MAX_CHARS,
-    RATIONALE_OVERALL_MIN_CHARS,
-)
-from .patterns import SECTION_ID_RE
-from .versions import MGSR_PROMPT_VERSION, MGSR_SCHEMA_VERSION
 
 
 ReplanActionType = Literal["merge", "delete", "rename", "reorder", "add"]
@@ -46,7 +32,7 @@ class ReplanAction(BaseModel):
     )
     rationale: str = Field(
         description = (
-            f"{RATIONALE_MIN_CHARS}-{RATIONALE_MAX_CHARS} chars. Why "
+            f"{params.RATIONALE_MIN_CHARS}-{params.RATIONALE_MAX_CHARS} chars. Why "
             f"THIS specific action — which failed criterion does it "
             f"address."
         ),
@@ -93,7 +79,7 @@ class ReplanAction(BaseModel):
     @classmethod
     def _validate_targets_format(cls, v: list[str]) -> list[str]:
         for t in v:
-            if not SECTION_ID_RE.match(t):
+            if not patterns.SECTION_ID_RE.match(t):
                 raise ValueError(
                     f"target {t!r} must match section_id format /^s\\d+$/"
                 )
@@ -105,10 +91,10 @@ class ReplanAction(BaseModel):
     @classmethod
     def _validate_rationale(cls, v: str) -> str:
         s = " ".join(v.strip().split())
-        if not (RATIONALE_MIN_CHARS <= len(s) <= RATIONALE_MAX_CHARS):
+        if not (params.RATIONALE_MIN_CHARS <= len(s) <= params.RATIONALE_MAX_CHARS):
             raise ValueError(
-                f"rationale must be {RATIONALE_MIN_CHARS}-"
-                f"{RATIONALE_MAX_CHARS} chars; got {len(s)}"
+                f"rationale must be {params.RATIONALE_MIN_CHARS}-"
+                f"{params.RATIONALE_MAX_CHARS} chars; got {len(s)}"
             )
         return s
 
@@ -119,10 +105,10 @@ class ReplanAction(BaseModel):
             return None
         s = v.strip()
         words = s.split()
-        if not (HEADING_MIN_WORDS <= len(words) <= HEADING_MAX_WORDS):
+        if not (params.HEADING_MIN_WORDS <= len(words) <= params.HEADING_MAX_WORDS):
             raise ValueError(
-                f"new_heading must be {HEADING_MIN_WORDS}-"
-                f"{HEADING_MAX_WORDS} words; got {len(words)} ({s!r})"
+                f"new_heading must be {params.HEADING_MIN_WORDS}-"
+                f"{params.HEADING_MAX_WORDS} words; got {len(words)} ({s!r})"
             )
         if s.startswith("#"):
             raise ValueError("new_heading must NOT start with '#'")
@@ -134,10 +120,10 @@ class ReplanAction(BaseModel):
         if v is None:
             return None
         s = " ".join(v.strip().split())
-        if not (DESCRIPTION_MIN_CHARS <= len(s) <= DESCRIPTION_MAX_CHARS):
+        if not (params.DESCRIPTION_MIN_CHARS <= len(s) <= params.DESCRIPTION_MAX_CHARS):
             raise ValueError(
-                f"new_description must be {DESCRIPTION_MIN_CHARS}-"
-                f"{DESCRIPTION_MAX_CHARS} chars; got {len(s)}"
+                f"new_description must be {params.DESCRIPTION_MIN_CHARS}-"
+                f"{params.DESCRIPTION_MAX_CHARS} chars; got {len(s)}"
             )
         return s
 
@@ -149,7 +135,7 @@ class ReplanAction(BaseModel):
         if v is None:
             return None
         for p in v:
-            if not SECTION_ID_RE.match(p):
+            if not patterns.SECTION_ID_RE.match(p):
                 raise ValueError(
                     f"new_prerequisites entry {p!r} must match section_id format"
                 )
@@ -160,16 +146,16 @@ class ReplanAction(BaseModel):
     @model_validator(mode = "after")
     def _validate_action_fields(self) -> "ReplanAction":
         """Enforce action-specific required-field combinations."""
-        min_targets = MIN_TARGETS[self.action]
+        min_targets = params.MIN_TARGETS[self.action]
         if len(self.targets) < min_targets:
             raise ValueError(
                 f"action {self.action!r} requires ≥{min_targets} "
                 f"targets; got {len(self.targets)}"
             )
-        if len(self.targets) > MAX_TARGETS_PER_ACTION:
+        if len(self.targets) > params.MAX_TARGETS_PER_ACTION:
             raise ValueError(
                 f"action {self.action!r} has {len(self.targets)} "
-                f"targets; max {MAX_TARGETS_PER_ACTION}"
+                f"targets; max {params.MAX_TARGETS_PER_ACTION}"
             )
 
         if self.action == "merge":
@@ -221,7 +207,7 @@ class LLMReplanPayload(BaseModel):
     actions: list[ReplanAction] = Field(
         default_factory = list,
         description = (
-            f"0-{MAX_ACTIONS_PER_REPLAN} replan actions. Surgical > "
+            f"0-{params.MAX_ACTIONS_PER_REPLAN} replan actions. Surgical > "
             f"broad — emit only the minimum set that addresses the "
             f"failed criteria. Empty list with halt=true is the correct "
             f"response when the chapter is structurally fine and the "
@@ -246,7 +232,7 @@ class LLMReplanPayload(BaseModel):
     )
     rationale_overall: str = Field(
         description = (
-            f"{RATIONALE_OVERALL_MIN_CHARS}-{RATIONALE_OVERALL_MAX_CHARS} "
+            f"{params.RATIONALE_OVERALL_MIN_CHARS}-{params.RATIONALE_OVERALL_MAX_CHARS} "
             f"chars. 1-paragraph summary of the replan strategy."
         ),
     )
@@ -256,10 +242,10 @@ class LLMReplanPayload(BaseModel):
     def _validate_action_count(
         cls, v: list[ReplanAction],
     ) -> list[ReplanAction]:
-        if len(v) > MAX_ACTIONS_PER_REPLAN:
+        if len(v) > params.MAX_ACTIONS_PER_REPLAN:
             raise ValueError(
                 f"actions count {len(v)} exceeds max "
-                f"{MAX_ACTIONS_PER_REPLAN}"
+                f"{params.MAX_ACTIONS_PER_REPLAN}"
             )
         return v
 
@@ -268,11 +254,11 @@ class LLMReplanPayload(BaseModel):
     def _validate_overall(cls, v: str) -> str:
         s = " ".join(v.strip().split())
         if not (
-            RATIONALE_OVERALL_MIN_CHARS <= len(s) <= RATIONALE_OVERALL_MAX_CHARS
+            params.RATIONALE_OVERALL_MIN_CHARS <= len(s) <= params.RATIONALE_OVERALL_MAX_CHARS
         ):
             raise ValueError(
-                f"rationale_overall must be {RATIONALE_OVERALL_MIN_CHARS}"
-                f"-{RATIONALE_OVERALL_MAX_CHARS} chars; got {len(s)}"
+                f"rationale_overall must be {params.RATIONALE_OVERALL_MIN_CHARS}"
+                f"-{params.RATIONALE_OVERALL_MAX_CHARS} chars; got {len(s)}"
             )
         return s
 
@@ -289,8 +275,8 @@ class MGSRDecision(BaseModel):
 
 class MGSRReplan(BaseModel):
     """Full replan blob persisted to MinIO."""
-    schema_version:           str = MGSR_SCHEMA_VERSION
-    prompt_version:           str = MGSR_PROMPT_VERSION
+    schema_version:           str = versions.MGSR_SCHEMA_VERSION
+    prompt_version:           str = versions.MGSR_PROMPT_VERSION
     chapter_id:               str
     chapter_title:            str
     framework_slug:           str

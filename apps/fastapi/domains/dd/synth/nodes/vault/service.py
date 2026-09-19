@@ -1,10 +1,9 @@
 """Async MinIO read path for vault sentinelization; falls back to runtime sentinelization when per-page vaults are missing from ingestion artifacts."""
 from __future__ import annotations
+from . import domain, schemas
 
 import json as _json
 
-from .domain import sentinelize_doc
-from .schemas import VaultEntry
 
 
 # CRITICAL: ingestion vault builder only ran on consolidated llms-full.txt (not per-page), so individual pages had no sentinels → digest emits empty code_refs → zero code blocks. Fix: lazy sentinelization at read time.
@@ -12,7 +11,7 @@ from .schemas import VaultEntry
 
 async def get_or_build_source_vault(
     minio, slug: str, source_key: str,
-) -> tuple[str, dict[str, "VaultEntry"]]:
+) -> tuple[str, dict[str, "schemas.VaultEntry"]]:
     """Return (sentinelized_text, vault_entries): tries pre-built per-source artifacts first, falls back to runtime sentinelize_doc when per-page artifacts are missing."""
     # (we can't import render here without creating a circular dep).
     basename = source_key.rstrip("/").rsplit("/", 1)[-1]
@@ -26,16 +25,16 @@ async def get_or_build_source_vault(
         try:
             manifest = _json.loads(await minio.read_text(vault_key))
             sentinelized = await minio.read_text(sentinel_key)
-            entries: dict[str, VaultEntry] = {}
+            entries: dict[str, schemas.VaultEntry] = {}
             for h, d in (manifest.get("entries") or {}).items():
                 if isinstance(d, dict):
                     try:
-                        entries[h] = VaultEntry(**d)
+                        entries[h] = schemas.VaultEntry(**d)
                     except Exception:
                         # Tolerate schema drift — fall back to a minimal
                         # entry so downstream gets the body at least.
                         if d.get("fence_text"):
-                            entries[h] = VaultEntry(
+                            entries[h] = schemas.VaultEntry(
                                 hash = h,
                                 fence_text = d.get("fence_text", ""),
                                 info_string = d.get("info_string", ""),
@@ -62,6 +61,6 @@ async def get_or_build_source_vault(
         # ingestion pages, but defensive).
         return raw, {}
     try:
-        return sentinelize_doc(raw)
+        return domain.sentinelize_doc(raw)
     except Exception:
         return raw, {}

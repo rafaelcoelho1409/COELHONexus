@@ -1,10 +1,15 @@
 from __future__ import annotations
+# Module-level constant below needs the parent tier4 params RESOLVED at
+# this file's own import time — the global `domains.dd...` chase can't
+# be used here (docs/CODE-CONVENTIONS.md §8 Exception 2). A sibling-
+# rooted `from .. import params` is always safe at module level since
+# that import already blocked until tier4/params.py was fully ready.
+from .. import params as _tier4_params
 
-from ..params import USER_AGENT
 
 
 TIMEOUT_S    = 30.0
-SPHINX_USER_AGENT = USER_AGENT
+SPHINX_USER_AGENT = _tier4_params.USER_AGENT
 
 
 # `std:doc` = toctree-reachable document; `std:label` = section-anchor cross-reference

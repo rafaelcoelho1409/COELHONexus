@@ -1,27 +1,31 @@
 """render — MinIO key builders."""
 from __future__ import annotations
+from . import params, versions
 
-from .params import BLOB_PREFIX
+
+
+def normalize_cache_key(slug: str, vault_hash: str) -> str:
+    return f"synth-vault/{slug}/normalized/{versions.NORMALIZE_PROMPT_VERSION}/{vault_hash}.txt"
 
 
 def versioned_blob_key(slug: str, chapter_id: str, manifest_hash: str) -> str:
-    return f"{BLOB_PREFIX}/{slug}/{chapter_id}/render/{manifest_hash}.json"
+    return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/render/{manifest_hash}.json"
 
 
 def latest_blob_key(slug: str, chapter_id: str) -> str:
-    return f"{BLOB_PREFIX}/{slug}/{chapter_id}/render-latest.json"
+    return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/render-latest.json"
 
 
 def artifact_key(slug: str, chapter_id: str, artifact_name: str) -> str:
-    return f"{BLOB_PREFIX}/{slug}/{chapter_id}/{artifact_name}"
+    return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/{artifact_name}"
 
 
 def sawc_latest_key(slug: str, chapter_id: str) -> str:
-    return f"{BLOB_PREFIX}/{slug}/{chapter_id}/sawc-latest.json"
+    return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/sawc-latest.json"
 
 
 def mgsr_latest_key(slug: str, chapter_id: str) -> str:
-    return f"{BLOB_PREFIX}/{slug}/{chapter_id}/mgsr-latest.json"
+    return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/mgsr-latest.json"
 
 
 def planner_latest_key(slug: str) -> str:

@@ -1,5 +1,7 @@
 """sawc_derive service — Analogical Prompting (arXiv:2310.01714) + MPSC derived-code enrichment for thin vault blocks. Deterministic helpers live in domain.py/prompts.py (this module's own architecture note); this module is I/O (bandit, MinIO, Redis) only — previously duplicated the domain.py/prompts.py helpers locally, which is what let Optimal-Stopping's gate (body_passes_derive_gate) go unwired without anyone noticing."""
 from __future__ import annotations
+import domains
+from . import domain, keys, params, prompts, schemas
 
 import asyncio
 import json
@@ -8,34 +10,8 @@ import os
 import time
 from typing import Optional
 
-from domains.llm.rotator.chain import chat_judge_bandit_async
 
-from ....ingestion.storage import get_storage
-from ...runtime.progress import emit_progress
-from ...state import SynthState
-from ..vault.domain import sentinelize_doc
-from ..vault.schemas import VaultEntry
 
-from .domain import (
-    body_passes_derive_gate,
-    is_thin_block,
-    parse_code_block,
-    python_ast_valid,
-    rank_mpsc_samples,
-)
-from .keys import derive_latest_key, sawc_latest_key
-from .params import (
-    CONCURRENCY,
-    DERIVE_OPTIMAL_STOPPING_ENABLED,
-    ENV_ENABLED,
-    MAX_DERIVES_PER_CHAPTER,
-    MAX_OUTPUT_TOKENS,
-    N_MPSC_SAMPLES,
-    REEXPLAIN_MAX_TOKENS,
-    REQUEST_TIMEOUT_S,
-)
-from .prompts import build_analogical_prompt, build_reexplain_prompt
-from .schemas import DeriveAttempt, DeriveStats
 
 
 logger = logging.getLogger(__name__)
@@ -43,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 def _env_enabled() -> bool:
     """Default ON; explicit 'false'/'0'/'no'/'off' disables via ENV_ENABLED env var."""
-    raw = (os.environ.get(ENV_ENABLED) or "").strip().lower()
+    raw = (os.environ.get(params.ENV_ENABLED) or "").strip().lower()
     if raw in ("", "1", "true", "yes", "on"):
         return True
     return False
@@ -54,9 +30,9 @@ async def _load_referenced_vault_entries(
     slug: str,
     needed_hashes: set[str],
     source_keys: list[str],
-) -> dict[str, VaultEntry]:
+) -> dict[str, domains.dd.synth.nodes.vault.schemas.VaultEntry]:
     """Walk source docs, sentinelize, and return entries matching needed_hashes. Mirrors sawc_write's runtime fallback but trims to just derive-needed hashes."""
-    found: dict[str, VaultEntry] = {}
+    found: dict[str, domains.dd.synth.nodes.vault.schemas.VaultEntry] = {}
     if not needed_hashes:
         return found
     for source_key in source_keys:
@@ -66,7 +42,7 @@ async def _load_referenced_vault_entries(
             raw = await minio.read_text(source_key)
             if not raw or "<code-ref hash=" in raw:
                 continue
-            _, entries = sentinelize_doc(raw)
+            _, entries = domains.dd.synth.nodes.vault.domain.sentinelize_doc(raw)
             for h, entry in (entries or {}).items():
                 if h in needed_hashes and h not in found:
                     found[h] = entry
@@ -92,7 +68,7 @@ async def _reexplain_one(
     """One bandit-routed call to regenerate explanation for the newly-promoted derived code. Returns new explanation string or None (caller keeps old)."""
     import json as _json
 
-    prompt = build_reexplain_prompt(
+    prompt = prompts.build_reexplain_prompt(
         framework=framework,
         section_heading=section_heading,
         subheading=subheading,
@@ -104,12 +80,12 @@ async def _reexplain_one(
         # NIM/Mistral honor response_format=json_schema/json_object
         # server-side (same pattern as sawc_write/digest_construct); a
         # bare-text ask relied on prompt instructions alone.
-        response, _meta = await chat_judge_bandit_async(
+        response, _meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
             prompt,
-            max_tokens=REEXPLAIN_MAX_TOKENS,
+            max_tokens=params.REEXPLAIN_MAX_TOKENS,
             temperature=0.4,
             response_format={"type": "json_object"},
-            timeout_s=REQUEST_TIMEOUT_S,
+            timeout_s=params.REQUEST_TIMEOUT_S,
         )
     except Exception as e:
         logger.debug(
@@ -144,14 +120,14 @@ async def _sample_one(prompt: str) -> tuple[str, Optional[str], int]:
     Body is empty on failure; caller decides how to count it."""
     t0 = time.monotonic()
     try:
-        response, meta = await chat_judge_bandit_async(
+        response, meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
             prompt,
-            max_tokens=MAX_OUTPUT_TOKENS,
+            max_tokens=params.MAX_OUTPUT_TOKENS,
             temperature=0.7,
-            timeout_s=REQUEST_TIMEOUT_S,
+            timeout_s=params.REQUEST_TIMEOUT_S,
         )
         deployment = (meta or {}).get("deployment")
-        body = parse_code_block(response or "")
+        body = domain.parse_code_block(response or "")
         return body, deployment, int((time.monotonic() - t0) * 1000)
     except Exception as e:
         logger.debug(
@@ -169,7 +145,7 @@ async def _derive_one_subtopic(
     chapter_title: str,
     section_heading: str,
     sem: asyncio.Semaphore,
-) -> DeriveAttempt:
+) -> schemas.DeriveAttempt:
     """Run MPSC for one subtopic. Mutates `subtopic` IN PLACE on success.
     Returns the attempt record either way. Optimal-Stopping (same pattern
     as outline_sdp/sawc_write, arXiv 2510.01394): ship sample 0 directly
@@ -189,7 +165,7 @@ async def _derive_one_subtopic(
             original_lines=original_lines,
         )
         t0 = time.monotonic()
-        prompt = build_analogical_prompt(
+        prompt = prompts.build_analogical_prompt(
             framework=framework,
             chapter_title=chapter_title,
             section_heading=section_heading,
@@ -197,37 +173,37 @@ async def _derive_one_subtopic(
             explanation=str(subtopic.get("explanation") or ""),
             original_body=original_body,
         )
-        if DERIVE_OPTIMAL_STOPPING_ENABLED and N_MPSC_SAMPLES >= 2:
+        if params.DERIVE_OPTIMAL_STOPPING_ENABLED and params.N_MPSC_SAMPLES >= 2:
             r0 = await _sample_one(prompt)
             results = [r0]
-            if body_passes_derive_gate(r0[0]):
+            if domain.body_passes_derive_gate(r0[0]):
                 logger.info(
                     f"[sawc_derive] {section_id}/"
                     f"{sub_meta['subheading']!r}: Optimal-Stopping fired — "
                     f"sample 0 clean; skipping remaining "
-                    f"{N_MPSC_SAMPLES - 1} sample(s)"
+                    f"{params.N_MPSC_SAMPLES - 1} sample(s)"
                 )
             else:
                 remaining = await asyncio.gather(
-                    *[_sample_one(prompt) for _ in range(N_MPSC_SAMPLES - 1)],
+                    *[_sample_one(prompt) for _ in range(params.N_MPSC_SAMPLES - 1)],
                     return_exceptions=False,
                 )
                 results.extend(remaining)
         else:
             results = await asyncio.gather(
-                *[_sample_one(prompt) for _ in range(N_MPSC_SAMPLES)],
+                *[_sample_one(prompt) for _ in range(params.N_MPSC_SAMPLES)],
                 return_exceptions=False,
             )
         bodies = [r[0] for r in results]
         deployment = next((r[1] for r in results if r[1]), None)
-        n_valid = sum(1 for b in bodies if b and python_ast_valid(b))
-        chosen_idx, _scores = rank_mpsc_samples(bodies)
+        n_valid = sum(1 for b in bodies if b and domain.python_ast_valid(b))
+        chosen_idx, _scores = domain.rank_mpsc_samples(bodies)
         wall_ms = int((time.monotonic() - t0) * 1000)
         if chosen_idx is None:
             decision = "rejected_ast" if n_valid == 0 else "rejected_len"
             if not any(bodies):
                 decision = "rotator_fail"
-            return DeriveAttempt(
+            return schemas.DeriveAttempt(
                 decision=decision,
                 n_samples_tried=len(results),
                 n_samples_valid=n_valid,
@@ -250,7 +226,7 @@ async def _derive_one_subtopic(
         if new_expl:
             subtopic["explanation"] = new_expl
 
-        return DeriveAttempt(
+        return schemas.DeriveAttempt(
             decision="promoted",
             derived_chars=len(winner),
             derived_lines=sum(1 for ln in winner.splitlines() if ln.strip()),
@@ -263,7 +239,7 @@ async def _derive_one_subtopic(
         )
 
 
-async def sawc_derive_run(state: SynthState) -> dict:
+async def sawc_derive_run(state: domains.dd.synth.state.SynthState) -> dict:
     """Enrich thin subtopics with AI-derived runnable examples."""
     slug = state.get("framework_slug")
     chapter_id = state.get("chapter_id")
@@ -278,12 +254,12 @@ async def sawc_derive_run(state: SynthState) -> dict:
         }
 
     t0 = time.monotonic()
-    minio = get_storage()
-    sawc_key = sawc_latest_key(slug, chapter_id)
+    minio = domains.dd.ingestion.storage.service.get_storage()
+    sawc_key = keys.sawc_latest_key(slug, chapter_id)
 
     if not await minio.exists(sawc_key):
         # sawc_write failed or hasn't run — nothing to do.
-        await emit_progress(
+        await domains.dd.synth.runtime.progress.service.emit_progress(
             thread_id, "sawc_derive", "skipped",
             chapter_id=chapter_id, reason="sawc_latest_missing",
         )
@@ -300,7 +276,7 @@ async def sawc_derive_run(state: SynthState) -> dict:
         logger.warning(
             f"[sawc_derive] sawc-latest unreadable: {type(e).__name__}: {e}"
         )
-        await emit_progress(
+        await domains.dd.synth.runtime.progress.service.emit_progress(
             thread_id, "sawc_derive", "skipped",
             chapter_id=chapter_id, reason="sawc_unreadable",
         )
@@ -325,7 +301,7 @@ async def sawc_derive_run(state: SynthState) -> dict:
         n_subtopics_total += len(s.get("subtopics") or [])
 
     enabled = _env_enabled()
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "sawc_derive", "start",
         chapter_id=chapter_id, enabled=enabled,
         n_subtopics_total=n_subtopics_total,
@@ -333,7 +309,7 @@ async def sawc_derive_run(state: SynthState) -> dict:
 
     if not enabled:
         attempts = [
-            DeriveAttempt(
+            schemas.DeriveAttempt(
                 section_id=str(s.get("section_id") or ""),
                 subheading=str(st.get("subheading") or ""),
                 code_ref_hash=str(st.get("code_ref_hash") or ""),
@@ -343,7 +319,7 @@ async def sawc_derive_run(state: SynthState) -> dict:
             )
             for s in sections for st in (s.get("subtopics") or [])
         ]
-        stats = DeriveStats(
+        stats = schemas.DeriveStats(
             chapter_id=chapter_id,
             framework_slug=framework,
             enabled=False,
@@ -357,11 +333,11 @@ async def sawc_derive_run(state: SynthState) -> dict:
             attempts=attempts,
         )
         await minio.write(
-            derive_latest_key(slug, chapter_id),
+            keys.derive_latest_key(slug, chapter_id),
             json.dumps(stats.model_dump(), indent=2),
             content_type="application/json",
         )
-        await emit_progress(
+        await domains.dd.synth.runtime.progress.service.emit_progress(
             thread_id, "sawc_derive", "done",
             chapter_id=chapter_id, **{
                 k: v for k, v in stats.model_dump(exclude={"attempts"}).items()
@@ -408,14 +384,14 @@ async def sawc_derive_run(state: SynthState) -> dict:
         body = ""
         if entry is not None:
             body = entry.fence_text or ""
-        if body and is_thin_block(body):
+        if body and domain.is_thin_block(body):
             thin_candidates.append((sec, st, h, body))
     # Cap by burst protection.
-    if len(thin_candidates) > MAX_DERIVES_PER_CHAPTER:
-        thin_candidates = thin_candidates[:MAX_DERIVES_PER_CHAPTER]
+    if len(thin_candidates) > params.MAX_DERIVES_PER_CHAPTER:
+        thin_candidates = thin_candidates[:params.MAX_DERIVES_PER_CHAPTER]
 
     n_candidates_thin = len(thin_candidates)
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "sawc_derive", "candidates_identified",
         n_candidates_thin=n_candidates_thin,
         n_subtopics_total=n_subtopics_total,
@@ -423,7 +399,7 @@ async def sawc_derive_run(state: SynthState) -> dict:
     )
 
     # ── Fan out MPSC sampling ─────────────────────────────────────────
-    sem = asyncio.Semaphore(CONCURRENCY)
+    sem = asyncio.Semaphore(params.CONCURRENCY)
     derive_tasks = [
         _derive_one_subtopic(
             section_id=str(sec.get("section_id") or ""),
@@ -437,13 +413,13 @@ async def sawc_derive_run(state: SynthState) -> dict:
         for (sec, st, h, body) in thin_candidates
     ]
     if derive_tasks:
-        results: list[DeriveAttempt] = await asyncio.gather(*derive_tasks)
+        results: list[schemas.DeriveAttempt] = await asyncio.gather(*derive_tasks)
     else:
         results = []
 
     # Account for non-thin subtopics so the attempts log is complete.
     thin_set = {id(st) for _, st, _, _ in thin_candidates}
-    skipped_attempts: list[DeriveAttempt] = []
+    skipped_attempts: list[schemas.DeriveAttempt] = []
     for sec, st, h in candidates:
         if id(st) in thin_set:
             continue
@@ -451,7 +427,7 @@ async def sawc_derive_run(state: SynthState) -> dict:
         entry = vault.get(h)
         if entry is not None:
             body = entry.fence_text or ""
-        skipped_attempts.append(DeriveAttempt(
+        skipped_attempts.append(schemas.DeriveAttempt(
             section_id=str(sec.get("section_id") or ""),
             subheading=str(st.get("subheading") or ""),
             code_ref_hash=h,
@@ -481,7 +457,7 @@ async def sawc_derive_run(state: SynthState) -> dict:
                 f"{type(e).__name__}: {e}"
             )
 
-    stats = DeriveStats(
+    stats = schemas.DeriveStats(
         chapter_id=chapter_id,
         framework_slug=framework,
         enabled=True,
@@ -497,7 +473,7 @@ async def sawc_derive_run(state: SynthState) -> dict:
 
     try:
         await minio.write(
-            derive_latest_key(slug, chapter_id),
+            keys.derive_latest_key(slug, chapter_id),
             json.dumps(stats.model_dump(), indent=2),
             content_type="application/json",
         )
@@ -507,7 +483,7 @@ async def sawc_derive_run(state: SynthState) -> dict:
             f"{type(e).__name__}: {e}"
         )
 
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "sawc_derive", "done",
         chapter_id=chapter_id,
         n_subtopics_total=n_subtopics_total,

@@ -5,20 +5,10 @@ from .params import ARTIFACT_MIME
 
 import logging
 
+import domains
 import redis.asyncio as redis_aio
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, HTTPException, Response
-
-from domains.dd.ingestion.progress import release_lock, read_lock
-from domains.dd.ingestion.storage import (
-    artifact_key,
-    framework_prefix,
-    get_storage,
-    read_framework_manifest,
-    read_framework_page,
-)
-from domains.dd.resolver import index_by_slug
-from domains.dd.planner.keys import redis_url
 
 
 logger = logging.getLogger(__name__)
@@ -29,14 +19,14 @@ router = APIRouter()
 async def list_library() -> list[dict]:
     """Sidebar data source; joins MinIO manifests with resolver catalog
     so each row carries logo URL + framework metadata."""
-    minio = get_storage()
-    catalog = index_by_slug()
+    minio = domains.dd.ingestion.storage.service.get_storage()
+    catalog = domains.dd.resolver.service.index_by_slug()
     slugs = await minio.list_subfolders("ingestion/")
     if not slugs:
         return []
     out: list[dict] = []
     for slug in slugs:
-        m = await read_framework_manifest(minio, slug)
+        m = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)
         if not m:
             continue
         cat = catalog.get(slug, {})
@@ -58,7 +48,7 @@ async def list_library() -> list[dict]:
 
 @router.get("/{slug}/manifest")
 async def get_manifest(slug: str) -> dict:
-    m = await read_framework_manifest(get_storage(), slug)
+    m = await domains.dd.ingestion.storage.service.read_framework_manifest(domains.dd.ingestion.storage.service.get_storage(), slug)
     if not m:
         raise HTTPException(
             status_code=404,
@@ -69,7 +59,7 @@ async def get_manifest(slug: str) -> dict:
 
 @router.get("/{slug}/pages/{idx}")
 async def get_page(slug: str, idx: int) -> dict:
-    body = await read_framework_page(get_storage(), slug, idx)
+    body = await domains.dd.ingestion.storage.service.read_framework_page(domains.dd.ingestion.storage.service.get_storage(), slug, idx)
     if body is None:
         raise HTTPException(
             status_code=404,
@@ -86,8 +76,8 @@ async def get_artifact(slug: str, name: str) -> Response:
     safe_name = (name or "").strip().strip("/").replace("..", "")
     if not safe_name or "/" in safe_name:
         raise HTTPException(status_code=400, detail="invalid artifact name")
-    key = artifact_key(slug, safe_name)
-    minio = get_storage()
+    key = domains.dd.ingestion.storage.keys.artifact_key(slug, safe_name)
+    minio = domains.dd.ingestion.storage.service.get_storage()
     try:
         data = await minio.read_bytes(key)
     except ClientError as e:
@@ -113,9 +103,9 @@ async def get_artifact(slug: str, name: str) -> Response:
 async def delete_framework(slug: str) -> dict:
     """Full-wipe every MinIO prefix keyed by this slug + the Redis
     single-flight lock if leaked by a crashed ingestion."""
-    minio = get_storage()
+    minio = domains.dd.ingestion.storage.service.get_storage()
     prefixes = (
-        framework_prefix(slug),
+        domains.dd.ingestion.storage.keys.framework_prefix(slug),
         f"ingestion-raw/{slug}/",
         f"synth-vault/{slug}/",
         f"planner/{slug}/",
@@ -134,13 +124,13 @@ async def delete_framework(slug: str) -> dict:
             failed.append(prefix)
 
     r = redis_aio.from_url(
-        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     lock_released = False
     try:
-        held_run_id = await read_lock(r, slug)
+        held_run_id = await domains.dd.ingestion.progress.service.read_lock(r, slug)
         if held_run_id:
-            lock_released = await release_lock(r, slug, held_run_id)
+            lock_released = await domains.dd.ingestion.progress.service.release_lock(r, slug, held_run_id)
     except Exception as e:
         logger.warning(
             f"[delete] Redis lock cleanup failed for {slug!r}: "

@@ -1,4 +1,7 @@
 """GitHub README crawler: resolve default branch, list tree recursively, filter to .md/.mdx docs blobs, parallel-fetch from raw.githubusercontent.com. GITHUB_TOKEN lifts API limit from 60/h to 5000/h (raw CDN is unmetered)."""
+from __future__ import annotations
+import domains
+from . import domain, params
 import asyncio
 import logging
 import os
@@ -13,24 +16,13 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-from ...progress import Progress
-from ...storage import Store
-from .domain import is_docs_blob, parse_repo, slug_from_path
-from .params import (
-    API_BASE,
-    CONCURRENCY,
-    MIN_OK_BYTES,
-    RAW_BASE,
-    TIMEOUT_S,
-    USER_AGENT,
-)
 
 
 logger = logging.getLogger(__name__)
 
 
 def _auth_headers() -> dict[str, str]:
-    h = {"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"}
+    h = {"User-Agent": params.USER_AGENT, "Accept": "application/vnd.github+json"}
     tok = os.environ.get("GITHUB_TOKEN", "").strip()
     if tok:
         h["Authorization"] = f"Bearer {tok}"
@@ -53,7 +45,7 @@ async def _get_json(client: httpx.AsyncClient, url: str) -> dict:
 async def _default_branch(
     client: httpx.AsyncClient, org: str, repo: str,
 ) -> str:
-    data = await _get_json(client, f"{API_BASE}/repos/{org}/{repo}")
+    data = await _get_json(client, f"{params.API_BASE}/repos/{org}/{repo}")
     return data.get("default_branch") or "main"
 
 
@@ -63,7 +55,7 @@ async def _list_blobs(
     """Return [(path, size_bytes?), ...] for every blob in the repo tree."""
     data = await _get_json(
         client,
-        f"{API_BASE}/repos/{org}/{repo}/git/trees/{branch}?recursive=1",
+        f"{params.API_BASE}/repos/{org}/{repo}/git/trees/{branch}?recursive=1",
     )
     tree = data.get("tree") or []
     out: list[tuple[str, Optional[int]]] = []
@@ -91,8 +83,8 @@ async def _list_blobs(
 async def _fetch_blob(
     client: httpx.AsyncClient, org: str, repo: str, branch: str, path: str,
 ) -> httpx.Response:
-    url = f"{RAW_BASE}/{org}/{repo}/{branch}/{path}"
-    return await client.get(url, headers = {"User-Agent": USER_AGENT})
+    url = f"{params.RAW_BASE}/{org}/{repo}/{branch}/{path}"
+    return await client.get(url, headers = {"User-Agent": params.USER_AGENT})
 
 
 async def _fetch_one(
@@ -100,9 +92,9 @@ async def _fetch_one(
     org: str, repo: str, branch: str,
     path: str,
     *,
-    progress: Progress,
+    progress: domains.dd.ingestion.progress.service.Progress,
 ) -> tuple[str, str, str, str] | None:
-    raw_url = f"{RAW_BASE}/{org}/{repo}/{branch}/{path}"
+    raw_url = f"{params.RAW_BASE}/{org}/{repo}/{branch}/{path}"
     t0 = time.monotonic()
     try:
         resp = await _fetch_blob(client, org, repo, branch, path)
@@ -127,7 +119,7 @@ async def _fetch_one(
         )
         return None
     body = resp.text or ""
-    if len(body.encode("utf-8")) < MIN_OK_BYTES:
+    if len(body.encode("utf-8")) < params.MIN_OK_BYTES:
         await progress.record_url(
             raw_url,
             status = "extract_empty",
@@ -148,7 +140,7 @@ async def _fetch_one(
         bytes_fetched = len(body),
         extracted_chars = len(body),
     )
-    slug = slug_from_path(path)
+    slug = domain.slug_from_path(path)
     title = path
     return (slug, raw_url, body, title)
 
@@ -157,17 +149,17 @@ async def run(
     *,
     url: str,
     framework_slug: str,
-    progress: Progress,
-    store: Store,
+    progress: domains.dd.ingestion.progress.service.Progress,
+    store: domains.dd.ingestion.storage.service.Store,
 ) -> int:
-    parsed = parse_repo(url)
+    parsed = domain.parse_repo(url)
     if not parsed:
         raise RuntimeError(f"Tier 5: not a github.com repo URL: {url!r}")
     org, repo = parsed
     logger.info(f"[tier-5] framework={framework_slug} repo={org}/{repo}")
     await progress.start(tier = "github", total = 0)
     async with httpx.AsyncClient(
-        timeout = httpx.Timeout(TIMEOUT_S, connect = 10.0),
+        timeout = httpx.Timeout(params.TIMEOUT_S, connect = 10.0),
         follow_redirects = True,
     ) as client:
         t0 = time.monotonic()
@@ -176,7 +168,7 @@ async def run(
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
             await progress.record_url(
-                f"{API_BASE}/repos/{org}/{repo}",
+                f"{params.API_BASE}/repos/{org}/{repo}",
                 status = "fetch_error",
                 tier = "github",
                 fetch_ms = int((time.monotonic() - t0) * 1000),
@@ -185,7 +177,7 @@ async def run(
             await progress.finish(status = "failed")
             raise RuntimeError(f"Tier 5: repo lookup failed: {err}")
         await progress.record_url(
-            f"{API_BASE}/repos/{org}/{repo}",
+            f"{params.API_BASE}/repos/{org}/{repo}",
             status = "success",
             tier = "github",
             fetch_ms = int((time.monotonic() - t0) * 1000),
@@ -197,7 +189,7 @@ async def run(
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
             await progress.record_url(
-                f"{API_BASE}/repos/{org}/{repo}/git/trees/{branch}",
+                f"{params.API_BASE}/repos/{org}/{repo}/git/trees/{branch}",
                 status = "fetch_error",
                 tier = "github",
                 fetch_ms = int((time.monotonic() - t0) * 1000),
@@ -206,13 +198,13 @@ async def run(
             await progress.finish(status = "failed")
             raise RuntimeError(f"Tier 5: tree fetch failed: {err}")
         await progress.record_url(
-            f"{API_BASE}/repos/{org}/{repo}/git/trees/{branch}",
+            f"{params.API_BASE}/repos/{org}/{repo}/git/trees/{branch}",
             status = "success",
             tier = "github",
             fetch_ms = int((time.monotonic() - t0) * 1000),
         )
         keep: list[str] = [
-            path for path, _size in blobs if is_docs_blob(path)
+            path for path, _size in blobs if domain.is_docs_blob(path)
         ]
         if not keep:
             await progress.finish(status = "failed")
@@ -225,7 +217,7 @@ async def run(
             f"(branch={branch})"
         )
         await progress.update_total(len(keep))
-        sem = asyncio.Semaphore(CONCURRENCY)
+        sem = asyncio.Semaphore(params.CONCURRENCY)
         written = 0
 
         async def _bound(p: str):

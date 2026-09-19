@@ -1,30 +1,12 @@
 """Synth LangGraph — per-chapter sequential nodes; shares AsyncPostgresSaver with planner (same tables, namespaced by thread_id prefix)."""
 from __future__ import annotations
+import domains
+from . import nodes, params, state
 
 import logging
 import time
 
 from langgraph.graph import END, START, StateGraph
-
-from ..planner.runtime.checkpoint import get_checkpointer
-from .nodes.checklist.node import checklist_eval
-from .nodes.digest.node import digest_construct
-from .nodes.mgsr.node import mgsr_replan
-from .nodes.outline.node import outline_sdp
-from .params import (
-    CHECKLIST_THRESHOLD,
-    FALLBACK_SAWC_WRITE_COST_S,
-    MAX_REFINE_ITER,
-    NO_RECOVERY_FLOOR,
-    PLATEAU_DELTA,
-    SINGLE_CHAPTER_SOFT_TIME_LIMIT_S,
-    SUSTAINED_INFRA_OUTAGE_LIMIT,
-    WALL_CLOCK_SAFETY_MARGIN,
-)
-from .nodes.render.node import render_audit_write
-from .nodes.sawc.node import sawc_write
-from .nodes.sawc_derive.node import sawc_derive
-from .state import SynthState
 
 
 logger = logging.getLogger(__name__)
@@ -42,13 +24,13 @@ NODE_ORDER = (
 )
 
 NODE_REGISTRY = {
-    "outline_sdp":        outline_sdp,
-    "digest_construct":   digest_construct,
-    "sawc_write":         sawc_write,
-    "sawc_derive":        sawc_derive,
-    "checklist_eval":     checklist_eval,
-    "mgsr_replan":        mgsr_replan,
-    "render_audit_write": render_audit_write,
+    "outline_sdp":        nodes.outline.node.outline_sdp,
+    "digest_construct":   nodes.digest.node.digest_construct,
+    "sawc_write":         nodes.sawc.node.sawc_write,
+    "sawc_derive":        nodes.sawc_derive.node.sawc_derive,
+    "checklist_eval":     nodes.checklist.node.checklist_eval,
+    "mgsr_replan":        nodes.mgsr.node.mgsr_replan,
+    "render_audit_write": nodes.render.node.render_audit_write,
 }
 
 # Primary state field each node writes — used by /resume's catch-up detector.
@@ -74,7 +56,7 @@ IMPLEMENTED = (
 )
 
 
-def _route_after_mgsr(state: SynthState) -> str:
+def _route_after_mgsr(state: state.SynthState) -> str:
     """CoRefine halting: success / budget / plateau / no-recovery → render; else loop."""
     stats = state.get("checklist_stats") or {}
     score = float(stats.get("pass_rate", 0.0) or 0.0)
@@ -82,11 +64,11 @@ def _route_after_mgsr(state: SynthState) -> str:
     prev = state.get("prev_checklist_score")
     prev_score = float(prev) if isinstance(prev, (int, float)) else -1.0
 
-    if score >= CHECKLIST_THRESHOLD:
+    if score >= params.CHECKLIST_THRESHOLD:
         logger.info(
             f"[synth-graph] {state.get('framework_slug')}/"
             f"{state.get('chapter_id')}: HALT success "
-            f"(pass_rate={score:.2f} >= {CHECKLIST_THRESHOLD})"
+            f"(pass_rate={score:.2f} >= {params.CHECKLIST_THRESHOLD})"
         )
         return "render_audit_write"
 
@@ -97,18 +79,18 @@ def _route_after_mgsr(state: SynthState) -> str:
     # "rarely recovers above 0.80" prior behind this floor was measured
     # against genuine low-quality drafts, not judge-call failures.
     if (
-        refine_iter <= 1 and score < NO_RECOVERY_FLOOR
+        refine_iter <= 1 and score < params.NO_RECOVERY_FLOOR
         and not bool(stats.get("infra_degraded", False))
     ):
         logger.info(
             f"[synth-graph] {state.get('framework_slug')}/"
             f"{state.get('chapter_id')}: HALT no-recovery "
-            f"(iter={refine_iter}, score={score:.2f} < {NO_RECOVERY_FLOOR}); "
+            f"(iter={refine_iter}, score={score:.2f} < {params.NO_RECOVERY_FLOOR}); "
             f"best-seen-rescue applies"
         )
         return "render_audit_write"
 
-    if refine_iter <= 1 and score < NO_RECOVERY_FLOOR:
+    if refine_iter <= 1 and score < params.NO_RECOVERY_FLOOR:
         logger.info(
             f"[synth-graph] {state.get('framework_slug')}/"
             f"{state.get('chapter_id')}: no-recovery floor tripped "
@@ -122,26 +104,26 @@ def _route_after_mgsr(state: SynthState) -> str:
     # against an outage that isn't clearing. Halt before MAX_REFINE_ITER
     # instead of burning the rest of the budget on the same wall.
     consecutive_infra_degraded = int(state.get("consecutive_infra_degraded", 0) or 0)
-    if consecutive_infra_degraded >= SUSTAINED_INFRA_OUTAGE_LIMIT:
+    if consecutive_infra_degraded >= params.SUSTAINED_INFRA_OUTAGE_LIMIT:
         logger.info(
             f"[synth-graph] {state.get('framework_slug')}/"
             f"{state.get('chapter_id')}: HALT sustained-outage "
             f"({consecutive_infra_degraded} consecutive infra-degraded "
-            f"iterations >= {SUSTAINED_INFRA_OUTAGE_LIMIT}); "
+            f"iterations >= {params.SUSTAINED_INFRA_OUTAGE_LIMIT}); "
             f"best-seen-rescue applies"
         )
         return "render_audit_write"
 
-    if refine_iter >= MAX_REFINE_ITER:
+    if refine_iter >= params.MAX_REFINE_ITER:
         logger.info(
             f"[synth-graph] {state.get('framework_slug')}/"
             f"{state.get('chapter_id')}: HALT budget "
-            f"(refine_iter={refine_iter} >= {MAX_REFINE_ITER}); "
+            f"(refine_iter={refine_iter} >= {params.MAX_REFINE_ITER}); "
             f"best-seen-rescue applies"
         )
         return "render_audit_write"
 
-    if refine_iter >= 2 and abs(score - prev_score) < PLATEAU_DELTA:
+    if refine_iter >= 2 and abs(score - prev_score) < params.PLATEAU_DELTA:
         logger.info(
             f"[synth-graph] {state.get('framework_slug')}/"
             f"{state.get('chapter_id')}: HALT plateau "
@@ -162,12 +144,12 @@ def _route_after_mgsr(state: SynthState) -> str:
     run_started_at = state.get("run_started_at")
     if isinstance(run_started_at, (int, float)) and run_started_at > 0:
         elapsed = time.time() - run_started_at
-        remaining = SINGLE_CHAPTER_SOFT_TIME_LIMIT_S - elapsed
+        remaining = params.SINGLE_CHAPTER_SOFT_TIME_LIMIT_S - elapsed
         sawc_stats = state.get("sawc_stats") or {}
         last_cost_ms = sawc_stats.get("wall_ms")
         estimated_cost = (
-            (float(last_cost_ms) / 1000.0) if last_cost_ms else FALLBACK_SAWC_WRITE_COST_S
-        ) * WALL_CLOCK_SAFETY_MARGIN
+            (float(last_cost_ms) / 1000.0) if last_cost_ms else params.FALLBACK_SAWC_WRITE_COST_S
+        ) * params.WALL_CLOCK_SAFETY_MARGIN
         if remaining < estimated_cost:
             logger.info(
                 f"[synth-graph] {state.get('framework_slug')}/"
@@ -183,7 +165,7 @@ def _route_after_mgsr(state: SynthState) -> str:
         f"[synth-graph] {state.get('framework_slug')}/"
         f"{state.get('chapter_id')}: RETHINK "
         f"(iter={refine_iter}, score={score:.2f}, "
-        f"threshold={CHECKLIST_THRESHOLD}) → loop back to sawc_write"
+        f"threshold={params.CHECKLIST_THRESHOLD}) → loop back to sawc_write"
     )
     return "sawc_write"
 
@@ -197,7 +179,7 @@ def build_graph():
             "before invoking the graph"
         )
 
-    g = StateGraph(SynthState)
+    g = StateGraph(state.SynthState)
     for name in active:
         g.add_node(name, NODE_REGISTRY[name])
 
@@ -234,4 +216,4 @@ def build_graph():
         f"{', '.join(active)}"
         f"{' (CoRefine loop wired)' if loop_active else ''}"
     )
-    return g.compile(checkpointer = get_checkpointer())
+    return g.compile(checkpointer = domains.dd.planner.runtime.checkpoint.service.get_checkpointer())

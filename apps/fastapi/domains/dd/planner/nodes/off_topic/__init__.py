@@ -1,5 +1,5 @@
 """off_topic — planner substep 3."""
-from .node import off_topic
+from . import node
 
 
-__all__ = ["off_topic"]
+__all__ = ["node"]

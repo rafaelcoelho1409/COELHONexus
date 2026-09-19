@@ -2,20 +2,18 @@
 manifest hash). Prompt builder lives in prompts.py; Pydantic schemas in
 schemas.py."""
 from __future__ import annotations
+from . import params, patterns, versions
 
 import json
 from hashlib import sha256
 from typing import Optional
 
-from .params import CONFIDENCE_THRESHOLD, FB_STOP
-from .patterns import FB_WORD_RE, JSON_RE
-from .versions import PROMPT_VERSION
 
 
 def parse(raw: str) -> Optional[dict]:
     if not raw:
         return None
-    m = JSON_RE.search(raw)
+    m = patterns.JSON_RE.search(raw)
     if not m:
         return None
     try:
@@ -45,10 +43,10 @@ def fallback_assign_scores(
     if not proposals:
         return []
     dw = {
-        w for w in FB_WORD_RE.findall(
+        w for w in patterns.FB_WORD_RE.findall(
             (doc_summary + " " + " ".join(doc_terms)).lower()
         )
-        if w not in FB_STOP
+        if w not in params.FB_STOP
     }
     overlaps = []
     for p in proposals:
@@ -57,8 +55,8 @@ def fallback_assign_scores(
             + " " + " ".join(p.get("key_concepts") or [])
         )
         pw = {
-            w for w in FB_WORD_RE.findall(text.lower())
-            if w not in FB_STOP
+            w for w in patterns.FB_WORD_RE.findall(text.lower())
+            if w not in params.FB_STOP
         }
         overlaps.append(len(dw & pw))
     best_ov = max(overlaps)
@@ -70,8 +68,51 @@ def fallback_assign_scores(
         best_i = tied[h % len(tied)]
     return [{
         "chapter_idx": best_i,
-        "confidence":  CONFIDENCE_THRESHOLD,
+        "confidence":  params.CONFIDENCE_THRESHOLD,
     }]
+
+
+def apply_rescue_pass(
+    assignments: dict[str, list[dict]],
+) -> list[dict]:
+    """Docs in [RESCUE_FLOOR, CONFIDENCE_THRESHOLD) get their best score
+    floored to threshold so they aren't silently dropped at chapter_select.
+    Mutates each doc's `scores` list in place; returns the rescued-doc log."""
+    rescued: list[dict] = []
+    for k, scores in assignments.items():
+        if not scores:
+            continue
+        best_idx = 0
+        best_conf = float(scores[0].get("confidence") or 0.0)
+        for i, s in enumerate(scores[1:], 1):
+            c = float(s.get("confidence") or 0.0)
+            if c > best_conf:
+                best_conf = c
+                best_idx = i
+        if best_conf < params.CONFIDENCE_THRESHOLD and best_conf >= params.RESCUE_FLOOR:
+            original = best_conf
+            scores[best_idx]["confidence"] = params.CONFIDENCE_THRESHOLD
+            scores[best_idx]["rescued_from"] = original
+            rescued.append({
+                "key":           k,
+                "chapter_idx":   scores[best_idx]["chapter_idx"],
+                "original_conf": original,
+            })
+    return rescued
+
+
+def compute_coverage_count(
+    assignments: dict[str, list[dict]], n_proposals: int,
+) -> dict[int, int]:
+    """Per-chapter count of docs assigned at/above CONFIDENCE_THRESHOLD."""
+    coverage_count: dict[int, int] = {i: 0 for i in range(n_proposals)}
+    for scores in assignments.values():
+        for s in scores:
+            if s["confidence"] >= params.CONFIDENCE_THRESHOLD:
+                coverage_count[s["chapter_idx"]] = coverage_count.get(
+                    s["chapter_idx"], 0,
+                ) + 1
+    return coverage_count
 
 
 def manifest_hash(
@@ -81,7 +122,7 @@ def manifest_hash(
     source_keys: list[str],
 ) -> str:
     h = sha256()
-    h.update(PROMPT_VERSION.encode())
+    h.update(versions.PROMPT_VERSION.encode())
     h.update(slug.encode())
     h.update(b"|")
     h.update(proposals_ref.encode())

@@ -1,26 +1,17 @@
 """corpus_load I/O shell — orchestrates the manifest read, stats build,
 and SSE/OTel surface."""
 from __future__ import annotations
+import domains
+from . import domain
 
 import logging
 import time
-
-from ....ingestion.storage import (
-    get_storage,
-    page_key,
-    read_framework_manifest,
-)
-from ...runtime.observability import attach_span_attrs
-from ...runtime.progress import emit_progress
-from ...state import PlannerState
-
-from .domain import build_corpus_stats
 
 
 logger = logging.getLogger(__name__)
 
 
-async def corpus_load_run(state: PlannerState) -> dict:
+async def corpus_load_run(state: domains.dd.planner.state.PlannerState) -> dict:
     """Inventory the framework's ingested corpus. Reads the canonical
     MinIO manifest, builds per-page key list + size stats, emits the
     LangGraph state patch + OTel attrs + SSE events."""
@@ -30,9 +21,9 @@ async def corpus_load_run(state: PlannerState) -> dict:
         raise ValueError("planner state missing framework_slug")
 
     t0 = time.monotonic()
-    await emit_progress(thread_id, "corpus_load", "start", slug = slug)
-    minio = get_storage()
-    manifest = await read_framework_manifest(minio, slug)
+    await domains.dd.planner.runtime.progress.service.emit_progress(thread_id, "corpus_load", "start", slug = slug)
+    minio = domains.dd.ingestion.storage.service.get_storage()
+    manifest = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)
     if not manifest:
         raise RuntimeError(
             f"no finalized ingestion for {slug!r} — run ingestion first"
@@ -45,14 +36,14 @@ async def corpus_load_run(state: PlannerState) -> dict:
         # Manifest entries written by ingestion's finalize step carry
         # explicit MinIO keys; fall back to the derived key shape for
         # older manifests that predate that field.
-        k = entry.get("key") or page_key(slug, idx, entry.get("slug") or "")
+        k = entry.get("key") or domains.dd.ingestion.storage.keys.page_key(slug, idx, entry.get("slug") or "")
         keys.append(k)
         byte_sizes.append(int(entry.get("bytes") or 0))
 
     load_ms = int((time.monotonic() - t0) * 1000)
-    stats = build_corpus_stats(byte_sizes, manifest, load_ms)
+    stats = domain.build_corpus_stats(byte_sizes, manifest, load_ms)
 
-    attach_span_attrs("corpus", stats)
+    domains.dd.planner.runtime.observability.service.attach_span_attrs("corpus", stats)
 
     n = stats["total_files"]
     logger.info(
@@ -61,7 +52,7 @@ async def corpus_load_run(state: PlannerState) -> dict:
         f"p10/p50/p90 = {stats['p10_bytes']}/{stats['median_bytes']}/"
         f"{stats['p90_bytes']} B, load={load_ms}ms"
     )
-    await emit_progress(
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "corpus_load", "done",
         files = n,
         total_bytes = stats["total_bytes"],

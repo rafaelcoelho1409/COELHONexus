@@ -10,6 +10,8 @@ SOTA Sept 2026 — fully on coelho-llm-rotator pooled client:
 - Jittered backoff on transient retries to avoid thundering-herd on shared arms.
 """
 from __future__ import annotations
+import domains
+from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio
 import json
@@ -17,35 +19,6 @@ import logging
 import random
 import time
 from typing import Optional
-
-from domains.llm.rotator.chain import chat_judge_bandit_async
-
-from ....ingestion.storage import get_storage
-from ...runtime.progress import emit_progress
-from ...state import PlannerState
-
-from .domain import (
-    build_fallback_distillate,
-    classify_error,
-    manifest_hash,
-    parse,
-    try_validate,
-)
-from .keys import latest_key, versioned_key
-from .params import (
-    CONCURRENCY,
-    MAX_REPAIR_ATTEMPTS,
-    MAX_TOKENS,
-    MAX_TRANSIENT_RETRIES,
-    PASS_THROUGH_THRESHOLD,
-    RETRY_BACKOFF_S,
-    SETTLE_DELAY_S,
-    TEMPERATURE,
-    TIMEOUT_S,
-)
-from .prompts import build_prompt
-from .schemas import DISTILL_RESPONSE_FORMAT, DocDistillate
-from .versions import PROMPT_VERSION
 
 
 logger = logging.getLogger(__name__)
@@ -71,7 +44,7 @@ async def distill_one(
     framework: str,
     source_key: str,
     body: str | None,
-) -> tuple[str, Optional[DocDistillate], int, bool, Optional[str]]:
+) -> tuple[str, Optional[schemas.DocDistillate], int, bool, Optional[str]]:
     """Returns (key, distillate, wall_ms, used_fallback, failure_reason).
 
     `body` is pre-fetched outside the semaphore; None means read_fail.
@@ -92,27 +65,27 @@ async def distill_one(
                 False, "empty_body",
             )
 
-        prompt = build_prompt(framework, source_key, body)
-        distillate: Optional[DocDistillate] = None
+        prompt = prompts.build_prompt(framework, source_key, body)
+        distillate: Optional[schemas.DocDistillate] = None
         failure_reason: Optional[str] = None
         last_raw = ""
         last_deployment = "?"
         meta: dict | None = None
 
         # Retry only transient errors — pooled rotator rotates arm, jitter avoids herd.
-        for attempt in range(MAX_TRANSIENT_RETRIES + 1):
+        for attempt in range(params.MAX_TRANSIENT_RETRIES + 1):
             try:
-                raw, meta = await chat_judge_bandit_async(
+                raw, meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
                     prompt,
-                    max_tokens = MAX_TOKENS,
-                    temperature = TEMPERATURE,
-                    timeout_s = TIMEOUT_S,
-                    response_format = DISTILL_RESPONSE_FORMAT,
+                    max_tokens = params.MAX_TOKENS,
+                    temperature = params.TEMPERATURE,
+                    timeout_s = params.TIMEOUT_S,
+                    response_format = schemas.DISTILL_RESPONSE_FORMAT,
                     dd_process = "dd-reduce-label",
                 )
                 last_raw = raw or ""
                 last_deployment = (meta or {}).get("deployment") or "?"
-                parsed = parse(raw)
+                parsed = domain.parse(raw)
                 if not parsed:
                     # Empty/unparseable raw — often a reasoning model that spent
                     # its whole token budget on a <think> block and never reached
@@ -123,43 +96,43 @@ async def distill_one(
                     err = f"unparseable JSON (raw={raw[:200]!r})"
                     failure_reason = "parse_fail"
                 else:
-                    distillate, err = try_validate(parsed)
+                    distillate, err = domain.try_validate(parsed)
                     if distillate is None:
                         failure_reason = "validate_fail"
-                if distillate is None and MAX_REPAIR_ATTEMPTS > 0:
+                if distillate is None and params.MAX_REPAIR_ATTEMPTS > 0:
                     repair_prompt = (
                         prompt
                         + f"\n\nPRIOR OUTPUT was REJECTED: {err}\n"
                         + f"Emit valid JSON exactly per the schema above."
                     )
-                    raw2, meta2 = await chat_judge_bandit_async(
+                    raw2, meta2 = await domains.llm.rotator.chain.chat_judge_bandit_async(
                         repair_prompt,
-                        max_tokens = MAX_TOKENS,
+                        max_tokens = params.MAX_TOKENS,
                         temperature = 0.0,
-                        timeout_s = TIMEOUT_S,
-                        response_format = DISTILL_RESPONSE_FORMAT,
+                        timeout_s = params.TIMEOUT_S,
+                        response_format = schemas.DISTILL_RESPONSE_FORMAT,
                         dd_process = "dd-reduce-label",
                     )
                     last_raw = raw2 or ""
                     last_deployment = (meta2 or {}).get("deployment") or last_deployment
-                    parsed2 = parse(raw2)
+                    parsed2 = domain.parse(raw2)
                     if parsed2:
-                        distillate, _ = try_validate(parsed2)
+                        distillate, _ = domain.try_validate(parsed2)
                 if distillate is not None:
                     failure_reason = None
                     break   # success
                 break       # parse_fail/validate_fail keep their reason; no further retry
             except Exception as e:
-                failure_reason = classify_error(e)
+                failure_reason = domain.classify_error(e)
                 is_transient = failure_reason in _TRANSIENT_REASONS
-                can_retry = attempt < MAX_TRANSIENT_RETRIES
+                can_retry = attempt < params.MAX_TRANSIENT_RETRIES
                 logger.warning(
                     f"[doc_distill] {source_key} attempt {attempt + 1}: "
                     f"{failure_reason} ({type(e).__name__}: {e})"
                 )
                 if is_transient and can_retry:
-                    backoff = RETRY_BACKOFF_S[
-                        min(attempt, len(RETRY_BACKOFF_S) - 1)
+                    backoff = params.RETRY_BACKOFF_S[
+                        min(attempt, len(params.RETRY_BACKOFF_S) - 1)
                     ]
                     # Jitter 0-20% to avoid synchronized retry storm on shared rotator arms
                     jitter = 1.0 + random.random() * 0.2
@@ -170,7 +143,7 @@ async def distill_one(
         # Failed LLM (with content) → deterministic fallback so doc still flows downstream.
         used_fallback = False
         if distillate is None:
-            distillate = build_fallback_distillate(source_key, body)
+            distillate = domain.build_fallback_distillate(source_key, body)
             used_fallback = True
             logger.info(
                 f"[doc_distill] {source_key}: distill failed "
@@ -195,14 +168,14 @@ async def load_distillates(minio, slug: str) -> dict:
     """Reads the latest doc_distill blob. Used by chapter_propose and
     chapter_assign. Returns {} on miss."""
     try:
-        text = await minio.read_text(latest_key(slug))
+        text = await minio.read_text(keys.latest_key(slug))
         data = json.loads(text)
         return data.get("distillates") or {}
     except Exception:
         return {}
 
 
-async def doc_distill_run(state: PlannerState) -> dict:
+async def doc_distill_run(state: domains.dd.planner.state.PlannerState) -> dict:
     """Pass-through small-N corpora; otherwise fan out parallel
     distillation, persist as MinIO JSON, write the latest pointer.
 
@@ -227,15 +200,15 @@ async def doc_distill_run(state: PlannerState) -> dict:
 
     n = len(relevant_files)
     t0 = time.monotonic()
-    await emit_progress(
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "doc_distill", "start",
         n_files = n,
-        pass_through_threshold = PASS_THROUGH_THRESHOLD,
+        pass_through_threshold = params.PASS_THROUGH_THRESHOLD,
     )
 
-    if n <= PASS_THROUGH_THRESHOLD:   # small-N pass-through; downstream uses raw bodies
+    if n <= params.PASS_THROUGH_THRESHOLD:   # small-N pass-through; downstream uses raw bodies
         wall_ms = int((time.monotonic() - t0) * 1000)
-        await emit_progress(
+        await domains.dd.planner.runtime.progress.service.emit_progress(
             thread_id, "doc_distill", "done",
             skipped = "pass_through_small_n",
             n_files = n, wall_ms = wall_ms,
@@ -249,10 +222,10 @@ async def doc_distill_run(state: PlannerState) -> dict:
             },
         }
 
-    minio = get_storage()
-    manifest = manifest_hash(slug = slug, relevant_files = relevant_files)
-    vkey = versioned_key(slug, manifest)
-    lkey = latest_key(slug)
+    minio = domains.dd.ingestion.storage.service.get_storage()
+    manifest = domain.manifest_hash(slug = slug, relevant_files = relevant_files)
+    vkey = keys.versioned_key(slug, manifest)
+    lkey = keys.latest_key(slug)
     if await minio.exists(vkey) and await minio.exists(lkey):
         try:
             cached_text = await minio.read_text(vkey)
@@ -267,7 +240,7 @@ async def doc_distill_run(state: PlannerState) -> dict:
                 "cache_hit": True,
                 "wall_ms": wall_ms,
             }
-            await emit_progress(
+            await domains.dd.planner.runtime.progress.service.emit_progress(
                 thread_id, "doc_distill", "done",
                 cache_hit = True,
                 n_distilled = stats["n_distilled"],
@@ -279,14 +252,14 @@ async def doc_distill_run(state: PlannerState) -> dict:
 
     # Settle window — see SETTLE_DELAY_S. Only reached past the cache-hit
     # check above, so a fully-cached re-plan never pays this cost.
-    if SETTLE_DELAY_S > 0:
-        await emit_progress(
-            thread_id, "doc_distill", "settling", delay_s = SETTLE_DELAY_S,
+    if params.SETTLE_DELAY_S > 0:
+        await domains.dd.planner.runtime.progress.service.emit_progress(
+            thread_id, "doc_distill", "settling", delay_s = params.SETTLE_DELAY_S,
         )
-        await asyncio.sleep(SETTLE_DELAY_S)
+        await asyncio.sleep(params.SETTLE_DELAY_S)
 
     # Bulk MinIO read BEFORE semaphore — keep LLM concurrency pure.
-    await emit_progress(thread_id, "doc_distill", "loading_bodies", n_files = n)
+    await domains.dd.planner.runtime.progress.service.emit_progress(thread_id, "doc_distill", "loading_bodies", n_files = n)
     t_read = time.monotonic()
     try:
         bodies = await minio.read_many(relevant_files)  # type: ignore[attr-defined]
@@ -310,12 +283,12 @@ async def doc_distill_run(state: PlannerState) -> dict:
     read_ms = int((time.monotonic() - t_read) * 1000)
     n_empty = sum(1 for k in relevant_files if not (body_map.get(k) or "").strip())
     n_read_fail = sum(1 for k in relevant_files if body_map.get(k) is None)
-    await emit_progress(
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "doc_distill", "bodies_loaded",
         read_ms = read_ms, n_read_fail = n_read_fail, n_empty = n_empty,
     )
 
-    sem = asyncio.Semaphore(CONCURRENCY)
+    sem = asyncio.Semaphore(params.CONCURRENCY)
     # Progress emitter for LLM phase — every ~10% or 20 docs
     llm_done = {"n": 0}
     emit_every = max(1, n // 10)
@@ -329,7 +302,7 @@ async def doc_distill_run(state: PlannerState) -> dict:
             llm_done["n"] += 1
             if llm_done["n"] % emit_every == 0 or llm_done["n"] == n:
                 try:
-                    await emit_progress(
+                    await domains.dd.planner.runtime.progress.service.emit_progress(
                         thread_id, "doc_distill", "llm_progress",
                         distilled = llm_done["n"], total = n,
                     )
@@ -362,14 +335,14 @@ async def doc_distill_run(state: PlannerState) -> dict:
         by_reason: dict[str, list[str]] = {}
         for fb in fallbacks:
             by_reason.setdefault(fb["reason"], []).append(fb["key"])
-        for r, keys in by_reason.items():
+        for r, fallback_keys in by_reason.items():
             logger.warning(
-                f"[doc_distill] {slug}: {len(keys)} doc(s) fell back due "
-                f"to {r}: {keys[:10]}"
+                f"[doc_distill] {slug}: {len(fallback_keys)} doc(s) fell back due "
+                f"to {r}: {fallback_keys[:10]}"
             )
 
     payload = {
-        "prompt_version": PROMPT_VERSION,
+        "prompt_version": versions.PROMPT_VERSION,
         "manifest_hash":  manifest,
         "framework_slug": slug,
         "distillates":    distillates,
@@ -397,7 +370,7 @@ async def doc_distill_run(state: PlannerState) -> dict:
         "wall_ms": wall_ms,
         "read_ms": read_ms,
     }
-    await emit_progress(
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "doc_distill", "done",
         cache_hit = False,
         n_distilled = len(distillates),

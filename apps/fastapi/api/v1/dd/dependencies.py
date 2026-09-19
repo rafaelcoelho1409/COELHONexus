@@ -6,15 +6,14 @@ from __future__ import annotations
 import json
 from typing import Annotated
 
+import domains
 from fastapi import Depends, HTTPException
 
-from domains.dd.ingestion.storage import get_storage
 from domains.dd.planner.keys import plan_latest_key
-from domains.dd.resolver import index_by_slug
 
 
 async def get_catalog_entry(slug: str) -> dict:
-    entry = index_by_slug().get(slug)
+    entry = domains.dd.resolver.service.index_by_slug().get(slug)
     if entry is None:
         raise HTTPException(
             status_code = 404,
@@ -27,7 +26,7 @@ CatalogEntry = Annotated[dict, Depends(get_catalog_entry)]
 
 
 async def get_plan(slug: str) -> dict:
-    minio = get_storage()
+    minio = domains.dd.ingestion.storage.service.get_storage()
     key = plan_latest_key(slug)
     if not await minio.exists(key):
         raise HTTPException(

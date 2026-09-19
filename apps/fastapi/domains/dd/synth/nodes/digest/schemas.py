@@ -1,25 +1,11 @@
 """digest_construct — Pydantic schemas (LLM output + persisted blob)."""
 from __future__ import annotations
+from . import params, patterns, versions
 
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from .params import (
-    KEY_FACT_MAX_CHARS,
-    KEY_FACT_MIN_CHARS,
-    MAX_CONTRIBS_PER_SOURCE,
-    MAX_KEY_FACTS_PER_CONTRIB,
-    MIN_KEY_FACTS_PER_CONTRIB,
-    OVERALL_SUMMARY_MAX_CHARS,
-    OVERALL_SUMMARY_MIN_CHARS,
-    SOURCE_TITLE_MAX_CHARS,
-    SOURCE_TITLE_MIN_CHARS,
-    SUMMARY_MAX_CHARS,
-    SUMMARY_MIN_CHARS,
-)
-from .patterns import HASH_RE, SECTION_ID_RE
-from .versions import DIGEST_PROMPT_VERSION, DIGEST_SCHEMA_VERSION
 
 
 Relevance = Literal["primary", "supporting", "tangential"]
@@ -77,7 +63,7 @@ class SectionContribution(BaseModel):
     @field_validator("section_id")
     @classmethod
     def _validate_id(cls, v: str) -> str:
-        if not SECTION_ID_RE.match(v):
+        if not patterns.SECTION_ID_RE.match(v):
             raise ValueError(
                 f"section_id {v!r} must match /^s\\d+$/ (e.g. 's1')"
             )
@@ -87,9 +73,9 @@ class SectionContribution(BaseModel):
     @classmethod
     def _validate_summary(cls, v: str) -> str:
         s = " ".join(v.strip().split())
-        if not (SUMMARY_MIN_CHARS <= len(s) <= SUMMARY_MAX_CHARS):
+        if not (params.SUMMARY_MIN_CHARS <= len(s) <= params.SUMMARY_MAX_CHARS):
             raise ValueError(
-                f"summary must be {SUMMARY_MIN_CHARS}-{SUMMARY_MAX_CHARS} "
+                f"summary must be {params.SUMMARY_MIN_CHARS}-{params.SUMMARY_MAX_CHARS} "
                 f"chars; got {len(s)}"
             )
         return s
@@ -98,19 +84,19 @@ class SectionContribution(BaseModel):
     @classmethod
     def _validate_facts(cls, v: list[str]) -> list[str]:
         if not (
-            MIN_KEY_FACTS_PER_CONTRIB <= len(v) <= MAX_KEY_FACTS_PER_CONTRIB
+            params.MIN_KEY_FACTS_PER_CONTRIB <= len(v) <= params.MAX_KEY_FACTS_PER_CONTRIB
         ):
             raise ValueError(
-                f"key_facts count must be {MIN_KEY_FACTS_PER_CONTRIB}-"
-                f"{MAX_KEY_FACTS_PER_CONTRIB}; got {len(v)}"
+                f"key_facts count must be {params.MIN_KEY_FACTS_PER_CONTRIB}-"
+                f"{params.MAX_KEY_FACTS_PER_CONTRIB}; got {len(v)}"
             )
         cleaned: list[str] = []
         for f in v:
             s = " ".join(f.strip().split())
-            if not (KEY_FACT_MIN_CHARS <= len(s) <= KEY_FACT_MAX_CHARS):
+            if not (params.KEY_FACT_MIN_CHARS <= len(s) <= params.KEY_FACT_MAX_CHARS):
                 raise ValueError(
-                    f"key_fact length must be {KEY_FACT_MIN_CHARS}-"
-                    f"{KEY_FACT_MAX_CHARS} chars; got {len(s)} for {f!r}"
+                    f"key_fact length must be {params.KEY_FACT_MIN_CHARS}-"
+                    f"{params.KEY_FACT_MAX_CHARS} chars; got {len(s)} for {f!r}"
                 )
             cleaned.append(s)
         return cleaned
@@ -119,7 +105,7 @@ class SectionContribution(BaseModel):
     @classmethod
     def _validate_refs(cls, v: list[str]) -> list[str]:
         for h in v:
-            if not HASH_RE.match(h):
+            if not patterns.HASH_RE.match(h):
                 raise ValueError(
                     f"code_ref {h!r} must be 16 lowercase hex chars"
                 )
@@ -164,11 +150,11 @@ class LLMDigestPayload(BaseModel):
     def _validate_title(cls, v: str) -> str:
         s = " ".join(v.strip().split())
         if not (
-            SOURCE_TITLE_MIN_CHARS <= len(s) <= SOURCE_TITLE_MAX_CHARS
+            params.SOURCE_TITLE_MIN_CHARS <= len(s) <= params.SOURCE_TITLE_MAX_CHARS
         ):
             raise ValueError(
-                f"source_title length must be {SOURCE_TITLE_MIN_CHARS}-"
-                f"{SOURCE_TITLE_MAX_CHARS} chars; got {len(s)}"
+                f"source_title length must be {params.SOURCE_TITLE_MIN_CHARS}-"
+                f"{params.SOURCE_TITLE_MAX_CHARS} chars; got {len(s)}"
             )
         return s
 
@@ -177,11 +163,11 @@ class LLMDigestPayload(BaseModel):
     def _validate_overall(cls, v: str) -> str:
         s = " ".join(v.strip().split())
         if not (
-            OVERALL_SUMMARY_MIN_CHARS <= len(s) <= OVERALL_SUMMARY_MAX_CHARS
+            params.OVERALL_SUMMARY_MIN_CHARS <= len(s) <= params.OVERALL_SUMMARY_MAX_CHARS
         ):
             raise ValueError(
                 f"overall_summary length must be "
-                f"{OVERALL_SUMMARY_MIN_CHARS}-{OVERALL_SUMMARY_MAX_CHARS} "
+                f"{params.OVERALL_SUMMARY_MIN_CHARS}-{params.OVERALL_SUMMARY_MAX_CHARS} "
                 f"chars; got {len(s)}"
             )
         return s
@@ -191,10 +177,10 @@ class LLMDigestPayload(BaseModel):
     def _validate_contribs(
         cls, v: list[SectionContribution],
     ) -> list[SectionContribution]:
-        if len(v) > MAX_CONTRIBS_PER_SOURCE:
+        if len(v) > params.MAX_CONTRIBS_PER_SOURCE:
             raise ValueError(
                 f"contributes_to has {len(v)} entries; max "
-                f"{MAX_CONTRIBS_PER_SOURCE}"
+                f"{params.MAX_CONTRIBS_PER_SOURCE}"
             )
         ids = [c.section_id for c in v]
         if len(set(ids)) != len(ids):
@@ -207,7 +193,7 @@ class LLMDigestPayload(BaseModel):
     @classmethod
     def _validate_unassigned(cls, v: list[str]) -> list[str]:
         for h in v:
-            if not HASH_RE.match(h):
+            if not patterns.HASH_RE.match(h):
                 raise ValueError(
                     f"unassigned code_ref {h!r} must be 16 hex chars"
                 )
@@ -241,8 +227,8 @@ class CoverageStats(BaseModel):
 
 class ChapterDigest(BaseModel):
     """Full chapter digest — what gets persisted to MinIO."""
-    schema_version: str = DIGEST_SCHEMA_VERSION
-    prompt_version: str = DIGEST_PROMPT_VERSION
+    schema_version: str = versions.DIGEST_SCHEMA_VERSION
+    prompt_version: str = versions.DIGEST_PROMPT_VERSION
     chapter_id:     str
     chapter_title:  str
     framework_slug: str

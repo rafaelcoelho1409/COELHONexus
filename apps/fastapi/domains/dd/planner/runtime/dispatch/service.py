@@ -1,5 +1,7 @@
 """Async planner orchestration (kickoff, resume, catch-up) shared by FastAPI and Celery — same logic, different runtime location."""
 from __future__ import annotations
+import domains
+from . import domain
 
 import asyncio
 import json
@@ -16,15 +18,6 @@ from infra.langfuse import (
     set_current_span_langfuse_trace_metadata,
 )
 from infra.otel import get_tracer
-
-from ....ingestion.storage import get_storage
-from ..cancel import clear_cancel, watcher as cancel_watcher
-from ...graph import NODE_REGISTRY, build_graph
-from ...keys import active_run_key, planner_timing_key, redis_url
-from ...params import REDIS_CONNECT_TIMEOUT_S, REDIS_OP_TIMEOUT_S
-from ..observability import record_planner_run
-from ..progress import emit_progress
-from .domain import missing_implemented_nodes
 
 
 logger = logging.getLogger(__name__)
@@ -45,8 +38,8 @@ def make_thread_id(slug: str) -> str:
 async def _persist_planner_timing(slug: str, total_wall_ms: int) -> None:
     """Best-effort write of the planner timing blob."""
     try:
-        await get_storage().write(
-            planner_timing_key(slug),
+        await domains.dd.ingestion.storage.service.get_storage().write(
+            domains.dd.planner.keys.planner_timing_key(slug),
             json.dumps({
                 "slug": slug,
                 "total_wall_ms": int(total_wall_ms),
@@ -65,12 +58,12 @@ async def _clear_active_run(slug: str) -> None:
     """Best-effort delete of the planner live-run registry key."""
     try:
         r = redis_aio.from_url(
-            redis_url(),
-            socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,
-            socket_timeout = REDIS_OP_TIMEOUT_S,
+            domains.dd.planner.keys.redis_url(),
+            socket_connect_timeout = domains.dd.planner.params.REDIS_CONNECT_TIMEOUT_S,
+            socket_timeout = domains.dd.planner.params.REDIS_OP_TIMEOUT_S,
         )
         try:
-            await r.delete(active_run_key(slug))
+            await r.delete(domains.dd.planner.keys.active_run_key(slug))
         finally:
             await r.aclose()
     except Exception as e:
@@ -100,7 +93,7 @@ async def _record_terminal_metrics(
             plan_write_stats.get("n_chapters")
             or select_stats.get("n_chapters_out")
         )
-        record_planner_run(
+        domains.dd.planner.runtime.observability.metrics.record_planner_run(
             framework = framework,
             mode = mode,
             outcome = status,
@@ -136,29 +129,11 @@ async def _build_langfuse_output(
     try:
         snap = await graph.aget_state(config)
         state = dict(snap.values or {})
-        output["framework_slug"] = str(
-            state.get("framework_slug") or fallback_slug or "unknown",
+        output = domain.derive_langfuse_output(
+            state,
+            fallback_slug = fallback_slug, fallback_mode = fallback_mode,
+            status = status, error = error,
         )
-        output["mode"] = str(
-            state.get("planner_mode") or fallback_mode or "unknown",
-        )
-        select_stats = state.get("select_stats") or {}
-        plan_write_stats = state.get("plan_write_stats") or {}
-        order_stats = state.get("order_chapters_stats") or {}
-        chapter_titles = (
-            plan_write_stats.get("chapter_titles")
-            or select_stats.get("chapter_titles")
-            or order_stats.get("chapter_titles")
-            or []
-        )
-        output["chapter_count"] = (
-            plan_write_stats.get("n_chapters")
-            or select_stats.get("n_chapters_out")
-            or order_stats.get("n_chapters")
-            or 0
-        )
-        if chapter_titles:
-            output["chapter_titles"] = list(chapter_titles)[:12]
     except Exception as e:
         logger.warning(
             f"[planner] langfuse output summary failed: {type(e).__name__}: {e}"
@@ -207,8 +182,7 @@ async def _await_with_watcher(
         )
 
     try:
-        from domains.dd.runtime.llm_counter import snapshot as _snapshot_llm
-        await _snapshot_llm(thread_id)
+        await domains.dd.runtime.service.snapshot(thread_id)
     except Exception as e:
         logger.warning(
             f"[planner] {thread_id}: llm-counter snapshot failed "
@@ -240,7 +214,7 @@ async def _await_with_watcher(
     if reg_slug:
         await _clear_active_run(reg_slug)
 
-    await emit_progress(
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "planner", "terminal",
         status = terminal_patch.get("status", "unknown"),
         error = terminal_patch.get("error"),
@@ -326,16 +300,16 @@ async def _run_planner_async_inner(
     slug: str,
     mode: str = "llm",
 ) -> dict:
-    graph = build_graph()
+    graph = domains.dd.planner.graph.build_graph()
     config = {"configurable": {"thread_id": thread_id}}
 
     r = redis_aio.from_url(
-        redis_url(),
-        socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout = REDIS_OP_TIMEOUT_S,
+        domains.dd.planner.keys.redis_url(),
+        socket_connect_timeout = domains.dd.planner.params.REDIS_CONNECT_TIMEOUT_S,
+        socket_timeout = domains.dd.planner.params.REDIS_OP_TIMEOUT_S,
     )
     try:
-        await clear_cancel(r, thread_id)
+        await domains.dd.planner.runtime.cancel.service.clear_cancel(r, thread_id)
     finally:
         await r.aclose()
 
@@ -349,7 +323,7 @@ async def _run_planner_async_inner(
     # Total wall-clock (span, not sum — nodes can fan out in parallel).
     t0 = time.monotonic()
     main_task = asyncio.create_task(graph.ainvoke(initial_state, config))
-    watcher_task = asyncio.create_task(cancel_watcher(thread_id, main_task))
+    watcher_task = asyncio.create_task(domains.dd.planner.runtime.cancel.service.watcher(thread_id, main_task))
     return await _await_with_watcher(
         graph, config, main_task, watcher_task, thread_id,
         t0 = t0, slug = slug, mode = mode,
@@ -361,13 +335,13 @@ async def run_missing_nodes_async(
     missing: list[str],
 ) -> dict:
     """Catch-up worker for threads that reached END before a new IMPLEMENTED node was added (ainvoke(None) would short-circuit at the consumed END marker)."""
-    graph = build_graph()
+    graph = domains.dd.planner.graph.build_graph()
     config = {"configurable": {"thread_id": thread_id}}
 
     terminal_patch: dict = {"status": "done"}
     try:
         for name in missing:
-            node_fn = NODE_REGISTRY.get(name)
+            node_fn = domains.dd.planner.graph.NODE_REGISTRY.get(name)
             if node_fn is None:
                 continue
             snap = await graph.aget_state(config)
@@ -400,15 +374,14 @@ async def run_missing_nodes_async(
         )
 
     try:
-        from domains.dd.runtime.llm_counter import snapshot as _snapshot_llm
-        await _snapshot_llm(thread_id)
+        await domains.dd.runtime.service.snapshot(thread_id)
     except Exception as e:
         logger.warning(
             f"[planner] {thread_id}: catch-up llm-counter snapshot failed "
             f"({type(e).__name__}: {e})"
         )
 
-    await emit_progress(
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "planner", "terminal",
         status = terminal_patch.get("status", "unknown"),
         error = terminal_patch.get("error"),
@@ -423,7 +396,7 @@ async def run_missing_nodes_async(
 
 async def resume_planner_async(thread_id: str) -> dict:
     """Resume from last checkpoint. Three sub-paths handled inline."""
-    graph = build_graph()
+    graph = domains.dd.planner.graph.build_graph()
     config = {"configurable": {"thread_id": thread_id}}
 
     snap = await graph.aget_state(config)
@@ -438,20 +411,20 @@ async def resume_planner_async(thread_id: str) -> dict:
         }
 
     r = redis_aio.from_url(
-        redis_url(),
-        socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout = REDIS_OP_TIMEOUT_S,
+        domains.dd.planner.keys.redis_url(),
+        socket_connect_timeout = domains.dd.planner.params.REDIS_CONNECT_TIMEOUT_S,
+        socket_timeout = domains.dd.planner.params.REDIS_OP_TIMEOUT_S,
     )
     try:
-        await clear_cancel(r, thread_id)
+        await domains.dd.planner.runtime.cancel.service.clear_cancel(r, thread_id)
     finally:
         await r.aclose()
 
     state = dict(snap.values or {})
     if state.get("status") == "done":
-        missing = missing_implemented_nodes(state)
+        missing = domain.missing_implemented_nodes(state)
         if missing:
-            await emit_progress(
+            await domains.dd.planner.runtime.progress.service.emit_progress(
                 thread_id, "planner", "catch_up",
                 missing = missing,
             )
@@ -463,7 +436,7 @@ async def resume_planner_async(thread_id: str) -> dict:
                     f"failed: {type(e).__name__}: {e}"
                 )
             return await run_missing_nodes_async(thread_id, missing)
-        await emit_progress(
+        await domains.dd.planner.runtime.progress.service.emit_progress(
             thread_id, "planner", "terminal",
             status = "done", error = None,
         )
@@ -473,12 +446,12 @@ async def resume_planner_async(thread_id: str) -> dict:
             "error": None,
         }
 
-    await emit_progress(
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "planner", "resumed",
         next_nodes = list(snap.next or []),
     )
     main_task = asyncio.create_task(graph.ainvoke(None, config))
-    watcher_task = asyncio.create_task(cancel_watcher(thread_id, main_task))
+    watcher_task = asyncio.create_task(domains.dd.planner.runtime.cancel.service.watcher(thread_id, main_task))
     return await _await_with_watcher(
         graph, config, main_task, watcher_task, thread_id,
     )

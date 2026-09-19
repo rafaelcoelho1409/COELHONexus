@@ -2,15 +2,24 @@
 IMPLEMENTED nodes whose primary output field is empty for the thread.
 """
 from __future__ import annotations
+import domains
 
-from ...graph import IMPLEMENTED, NODE_TO_FIELD
+import re
+
+
+_CHAPTER_ID_RE = re.compile(r"^ch-(\d+)")
+
+
+def chapter_number_from_id(chapter_id: str) -> int:
+    m = _CHAPTER_ID_RE.match(chapter_id or "")
+    return int(m.group(1)) if m else 0
 
 
 def missing_implemented_nodes(state: dict) -> list[str]:
     """IMPLEMENTED node names whose primary output field is missing/empty."""
     missing: list[str] = []
-    for name in IMPLEMENTED:
-        field = NODE_TO_FIELD.get(name)
+    for name in domains.dd.synth.graph.IMPLEMENTED:
+        field = domains.dd.synth.graph.NODE_TO_FIELD.get(name)
         if not field:
             continue
         val = state.get(field)

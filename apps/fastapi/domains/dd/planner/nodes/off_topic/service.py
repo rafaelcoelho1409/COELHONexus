@@ -10,32 +10,13 @@ SOTA Sept 2026 on coelho-llm-rotator pooled client:
 - Embed corpus fully removed: margins/coherence now 0/null (LLM authoritative).
 """
 from __future__ import annotations
+import domains
+from . import domain, params, prompts
 
 import asyncio
 import logging
 import random
 import time
-
-import numpy as np
-
-from domains.llm.rotator.chain import chat_judge_bandit_async
-
-from ....ingestion.storage import get_storage
-from ....resolver import index_by_slug
-from ...runtime.observability import attach_span_attrs
-from ...runtime.progress import emit_progress
-from ...state import PlannerState
-
-from .domain import parse_verdict
-from .params import (
-    JUDGE_BACKOFF_BASE,
-    JUDGE_CONCURRENCY,
-    JUDGE_MAX_ATTEMPTS,
-    JUDGE_MAX_TOKENS,
-    JUDGE_TIMEOUT_S,
-    NEGATIVE_DESCRIPTOR,
-)
-from .prompts import build_judge_prompt, build_positive_descriptor
 
 
 logger = logging.getLogger(__name__)
@@ -51,11 +32,11 @@ async def judge_one(
     """ONE bandit-routed LLM-judge call. Returns (keep, raw, error, meta).
     Defaults to KEEP on any failure (quality-over-speed rule).
     `on_complete` (optional) is invoked per judgment for live progress."""
-    prompt = build_judge_prompt(framework_name, framework_category, body)
+    prompt = prompts.build_judge_prompt(framework_name, framework_category, body)
     last_error: str | None = None
     last_response: str = ""
     last_meta: dict = {}
-    for attempt in range(JUDGE_MAX_ATTEMPTS):
+    for attempt in range(params.JUDGE_MAX_ATTEMPTS):
         # A prior unparseable_verdict means that attempt's model likely burned
         # its whole token budget on an unfinished <think> block. temperature=0.0
         # is deterministic per-model, and when the rotator's alive pool has
@@ -66,16 +47,16 @@ async def judge_one(
         retrying_unparseable = last_error == "unparseable_verdict"
         try:
             async with sem:
-                response, meta = await chat_judge_bandit_async(
+                response, meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
                     prompt,
-                    max_tokens = JUDGE_MAX_TOKENS + (200 if retrying_unparseable else 0),
+                    max_tokens = params.JUDGE_MAX_TOKENS + (200 if retrying_unparseable else 0),
                     temperature = 0.4 if retrying_unparseable else 0.0,
-                    timeout_s = JUDGE_TIMEOUT_S,
+                    timeout_s = params.JUDGE_TIMEOUT_S,
                     expected_pattern = r"^(KEEP|DROP)$",
                 )
             last_response = response
             last_meta = meta
-            verdict = parse_verdict(response)
+            verdict = domain.parse_verdict(response)
             if verdict is not None:
                 if on_complete is not None:
                     try:
@@ -86,9 +67,9 @@ async def judge_one(
             last_error = "unparseable_verdict"
         except Exception as e:
             last_error = f"{type(e).__name__}: {str(e)[:160]}"
-        if attempt < JUDGE_MAX_ATTEMPTS - 1:
+        if attempt < params.JUDGE_MAX_ATTEMPTS - 1:
             # Jittered backoff — avoids synchronized retry storm on shared rotator arms
-            base = JUDGE_BACKOFF_BASE ** (attempt + 1)
+            base = params.JUDGE_BACKOFF_BASE ** (attempt + 1)
             jitter = 1.0 + random.random() * 0.3
             await asyncio.sleep(base * jitter)
     if on_complete is not None:
@@ -99,7 +80,7 @@ async def judge_one(
     return True, last_response, last_error, last_meta
 
 
-async def off_topic_run(state: PlannerState) -> dict:
+async def off_topic_run(state: domains.dd.planner.state.PlannerState) -> dict:
     """LLM-judge every doc (sem-bounded) → aggregate KEEP set. No embeddings."""
     slug = state.get("framework_slug")
     thread_id = state.get("thread_id") or ""
@@ -113,33 +94,28 @@ async def off_topic_run(state: PlannerState) -> dict:
             },
         }
 
-    entry = index_by_slug().get(slug, {})
+    entry = domains.dd.resolver.service.index_by_slug().get(slug, {})
     framework_name = entry.get("name") or entry.get("slug") or slug
     framework_category = entry.get("category") or ""
 
     t0 = time.monotonic()
-    minio = get_storage()
-    await emit_progress(
+    minio = domains.dd.ingestion.storage.service.get_storage()
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "off_topic", "start",
         files = len(raw_files),
     )
 
     n = len(raw_files)
-    keep_mask = np.zeros(n, dtype = bool)
-
-    judge_decisions: list[dict] = []
-    judge_errors: list[str] = []
     bodies = await minio.read_many(raw_files)
-    sem = asyncio.Semaphore(JUDGE_CONCURRENCY)
+    sem = asyncio.Semaphore(params.JUDGE_CONCURRENCY)
 
     # Dedupe identical judge inputs before spending LLM calls — the judge prompt
     # is a pure function of head_tail_truncate(body), so pages that collapse to the
     # same prompt (empty pages, stub redirects, scaffold duplicates, mirrored dumps)
     # share one verdict. Group first, judge unique prompts concurrently, fan out.
-    from .prompts import head_tail_truncate
     groups: dict[str, list[int]] = {}
     for i, body in enumerate(bodies):
-        groups.setdefault(head_tail_truncate(body or ""), []).append(i)
+        groups.setdefault(prompts.head_tail_truncate(body or ""), []).append(i)
     unique_keys = list(groups.keys())
     n_deduped = n - len(unique_keys)
 
@@ -156,7 +132,7 @@ async def off_topic_run(state: PlannerState) -> dict:
         else:
             judged_done["drop"] += 1
         if judged_done["n"] % emit_every == 0 or judged_done["n"] == n_to_judge:
-            await emit_progress(
+            await domains.dd.planner.runtime.progress.service.emit_progress(
                 thread_id, "off_topic", "llm_progress",
                 judged = judged_done["n"], total = n_to_judge,
                 deduped = n_deduped,
@@ -181,67 +157,22 @@ async def off_topic_run(state: PlannerState) -> dict:
         for doc_idx in groups[key]:
             verdicts[doc_idx] = res
 
-    deployment_usage: dict[str, int] = {}
-    for doc_idx, (keep, raw_resp, err, meta) in enumerate(verdicts):
-        keep_mask[doc_idx] = keep
-        dep = (meta or {}).get("deployment") or "?"
-        deployment_usage[dep] = deployment_usage.get(dep, 0) + 1
-        judge_decisions.append({
-            "key":        raw_files[doc_idx],
-            "margin":     0.0,
-            "verdict":    "KEEP" if keep else "DROP",
-            "raw":        raw_resp[:60],   # cap for state payload size
-            "error":      err,
-            "deployment": dep,
-            "latency_s":  (meta or {}).get("latency_s"),
-            "reward":     (meta or {}).get("reward"),
-            "attempts":   (meta or {}).get("attempts"),
-        })
-        if err:
-            judge_errors.append(err)
-
-    relevant: list[str] = []
-    per_file: list[tuple[str, float, str, bool]] = []
-    for i, key in enumerate(raw_files):
-        keep = bool(keep_mask[i])
-        leaf = key.rsplit("/", 1)[-1]
-        per_file.append((leaf, 0.0, "llm", keep))
-        if keep:
-            relevant.append(key)
+    agg = domain.aggregate_verdicts(verdicts = verdicts, raw_files = raw_files)
+    relevant = agg["relevant"]
+    per_file = agg["per_file"]
+    judge_decisions = agg["judge_decisions"]
+    judge_errors = agg["judge_errors"]
+    llm_kept = agg["llm_kept"]
+    llm_dropped = agg["llm_dropped"]
+    deployment_summary = agg["deployment_summary"]
+    error_breakdown = agg["error_breakdown"]
 
     domain_coherence = 0.0
     elapsed_ms = int((time.monotonic() - t0) * 1000)
-    llm_kept = sum(1 for d in judge_decisions if d["verdict"] == "KEEP")
-    llm_dropped = sum(1 for d in judge_decisions if d["verdict"] == "DROP")
-
-    rewards_by_dep: dict[str, list[float]] = {}
-    for d in judge_decisions:
-        r = d.get("reward")
-        if r is None:
-            continue
-        rewards_by_dep.setdefault(
-            d.get("deployment") or "?", [],
-        ).append(float(r))
-    deployment_summary = [
-        {
-            "deployment": dep,
-            "calls":      deployment_usage.get(dep, 0),
-            "reward_avg": (sum(rewards) / len(rewards)) if rewards else 0.0,
-        }
-        for dep, rewards in sorted(
-            rewards_by_dep.items(),
-            key = lambda kv: -deployment_usage.get(kv[0], 0),
-        )
-    ]
-
-    error_breakdown: dict[str, int] = {}
-    for err in judge_errors:
-        kind = err.split(":", 1)[0].strip() or "unknown"
-        error_breakdown[kind] = error_breakdown.get(kind, 0) + 1
 
     # Retrieve descriptors for stats (no embedding)
-    positive_descriptor = build_positive_descriptor(entry)
-    negative_descriptor = NEGATIVE_DESCRIPTOR
+    positive_descriptor = prompts.build_positive_descriptor(entry)
+    negative_descriptor = params.NEGATIVE_DESCRIPTOR
 
     stats = {
         "kept":                len(relevant),
@@ -260,11 +191,11 @@ async def off_topic_run(state: PlannerState) -> dict:
         "elapsed_ms":          elapsed_ms,
         "anchor_positive":     positive_descriptor,
         "anchor_negative":     negative_descriptor,
-        "judge_concurrency":   JUDGE_CONCURRENCY,
+        "judge_concurrency":   params.JUDGE_CONCURRENCY,
         "judge_router":        "coelho-llm-rotator",
     }
 
-    attach_span_attrs("off_topic", {
+    domains.dd.planner.runtime.observability.service.attach_span_attrs("off_topic", {
         "kept":             stats["kept"],
         "dropped":          stats["dropped"],
         "llm_judged":       n_to_judge,
@@ -288,7 +219,7 @@ async def off_topic_run(state: PlannerState) -> dict:
         f"top deployments [{top_dep_summary}]; "
         f"elapsed={elapsed_ms}ms (LLM-only, no embed)"
     )
-    await emit_progress(
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "off_topic", "done",
         kept = len(relevant), dropped = n - len(relevant), total = n,
         llm_judged = n_to_judge, llm_deduped = n_deduped,

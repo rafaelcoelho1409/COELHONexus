@@ -1,23 +1,10 @@
 """sawc_derive — pure helpers (thin-block detection, fence parsing, AST
 validation, structural scoring, MPSC ranker, derive-gate predicate)."""
 from __future__ import annotations
+from . import params, patterns
 
 import ast
 
-from .params import (
-    DERIVED_MAX_CHARS,
-    DERIVED_MAX_LINES,
-    DERIVED_MIN_CHARS,
-    DERIVED_MIN_LINES,
-    THIN_MAX_CHARS,
-    THIN_MAX_NEWLINES,
-)
-from .patterns import (
-    FENCE_RE,
-    IMPORT_RE,
-    LONE_ELLIPSIS_RE,
-    SIGNATURE_ONLY_RE,
-)
 
 
 def is_thin_block(body: str) -> bool:
@@ -28,20 +15,20 @@ def is_thin_block(body: str) -> bool:
     if not stripped:
         return False
     n_newlines = stripped.count("\n")
-    if len(stripped) > THIN_MAX_CHARS:
+    if len(stripped) > params.THIN_MAX_CHARS:
         return False
-    if n_newlines > THIN_MAX_NEWLINES:
+    if n_newlines > params.THIN_MAX_NEWLINES:
         return False
     # Single non-empty line that looks like a signature → thin.
-    if n_newlines == 0 and SIGNATURE_ONLY_RE.match(stripped):
+    if n_newlines == 0 and patterns.SIGNATURE_ONLY_RE.match(stripped):
         return True
     # 1-2 newlines but content fits the signature shape line-wise — also thin.
-    if n_newlines <= THIN_MAX_NEWLINES:
+    if n_newlines <= params.THIN_MAX_NEWLINES:
         non_empty_lines = [
             ln for ln in stripped.splitlines() if ln.strip()
         ]
         if len(non_empty_lines) <= 2 and all(
-            SIGNATURE_ONLY_RE.match(ln.strip()) for ln in non_empty_lines
+            patterns.SIGNATURE_ONLY_RE.match(ln.strip()) for ln in non_empty_lines
         ):
             return True
     # Otherwise, fall through — short but isn't a pure signature.
@@ -54,7 +41,7 @@ def parse_code_block(raw: str) -> str:
     present — the caller treats that as a failed sample."""
     if not raw:
         return ""
-    m = FENCE_RE.search(raw)
+    m = patterns.FENCE_RE.search(raw)
     if not m:
         # Last-resort fallback: if the whole response is plausibly bare
         # code (no fences at all), return it. AST parse downstream is
@@ -90,9 +77,9 @@ def score_derived_candidate(body: str) -> float:
         score += 4.0
     lines = [ln for ln in body.splitlines() if ln.strip()]
     n_lines = len(lines)
-    if DERIVED_MIN_LINES <= n_lines <= DERIVED_MAX_LINES:
+    if params.DERIVED_MIN_LINES <= n_lines <= params.DERIVED_MAX_LINES:
         score += 2.0
-    n_imports = sum(1 for ln in lines if IMPORT_RE.match(ln))
+    n_imports = sum(1 for ln in lines if patterns.IMPORT_RE.match(ln))
     if n_imports >= 1:
         score += 1.5
     if n_lines >= 3:
@@ -107,7 +94,7 @@ def score_derived_candidate(body: str) -> float:
         if p in body:
             score -= 3.0
             break
-    if LONE_ELLIPSIS_RE.search(body):
+    if patterns.LONE_ELLIPSIS_RE.search(body):
         score -= 3.0
     return round(score, 3)
 
@@ -130,8 +117,8 @@ def rank_mpsc_samples(
         n_lines = sum(1 for ln in body.splitlines() if ln.strip())
         n_chars = len(body)
         if (
-            DERIVED_MIN_LINES <= n_lines <= DERIVED_MAX_LINES
-            and DERIVED_MIN_CHARS <= n_chars <= DERIVED_MAX_CHARS
+            params.DERIVED_MIN_LINES <= n_lines <= params.DERIVED_MAX_LINES
+            and params.DERIVED_MIN_CHARS <= n_chars <= params.DERIVED_MAX_CHARS
         ):
             in_band.append(i)
     if not in_band:
@@ -149,9 +136,9 @@ def body_passes_derive_gate(body: str) -> bool:
     if not python_ast_valid(body):
         return False
     n_chars = len(body)
-    if not (DERIVED_MIN_CHARS <= n_chars <= DERIVED_MAX_CHARS):
+    if not (params.DERIVED_MIN_CHARS <= n_chars <= params.DERIVED_MAX_CHARS):
         return False
     n_lines = sum(1 for ln in body.splitlines() if ln.strip())
-    if not (DERIVED_MIN_LINES <= n_lines <= DERIVED_MAX_LINES):
+    if not (params.DERIVED_MIN_LINES <= n_lines <= params.DERIVED_MAX_LINES):
         return False
     return True

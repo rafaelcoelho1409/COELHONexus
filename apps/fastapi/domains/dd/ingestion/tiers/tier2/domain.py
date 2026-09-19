@@ -1,12 +1,12 @@
 """Tier 2 — pure helpers (index parse + slug + markdown-response detect)."""
 from __future__ import annotations
+from . import patterns
 
 import re
 from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from .patterns import LINK_BARE_RE, LINK_MD_RE
 
 
 def parse_index(body: str, base_url: str) -> list[tuple[str, str]]:
@@ -25,9 +25,9 @@ def parse_index(body: str, base_url: str) -> list[tuple[str, str]]:
         seen.add(url)
         out.append((title.strip(), url))
 
-    for m in LINK_MD_RE.finditer(body):
+    for m in patterns.LINK_MD_RE.finditer(body):
         _add(m.group(1), m.group(2))
-    for m in LINK_BARE_RE.finditer(body):
+    for m in patterns.LINK_BARE_RE.finditer(body):
         _add(m.group(1), m.group(2))
     return out
 

@@ -5,26 +5,9 @@ from .schemas import StartRunBody
 
 import uuid
 
+import domains
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
-
-from domains.dd.ingestion.progress import (
-    acquire_lock,
-    clear_cancel,
-    read_lock,
-    read_post,
-    read_progress,
-    read_url_records,
-    release_lock,
-    request_cancel,
-)
-from domains.dd.ingestion.storage import (
-    framework_prefix,
-    get_storage,
-    read_framework_manifest,
-    read_live_manifest,
-)
-from domains.dd.planner.keys import redis_url
 
 from ..dependencies import get_catalog_entry
 
@@ -40,7 +23,7 @@ async def start_run(body: StartRunBody) -> dict:
     entry = await get_catalog_entry(body.slug)
 
     r = redis_aio.from_url(
-        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
         cursor = 0
@@ -72,7 +55,7 @@ async def start_run(body: StartRunBody) -> dict:
                     f"cancel it before starting {body.slug!r}."
                 ),
             }
-        active = await read_lock(r, body.slug)
+        active = await domains.dd.ingestion.progress.service.read_lock(r, body.slug)
         if active:
             return {
                 "status": "locked",
@@ -85,9 +68,9 @@ async def start_run(body: StartRunBody) -> dict:
                 ),
             }
 
-        minio = get_storage()
+        minio = domains.dd.ingestion.storage.service.get_storage()
         if not body.refresh:
-            cached = await read_framework_manifest(minio, body.slug)
+            cached = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, body.slug)
             if cached:
                 return {
                     "status": "cached",
@@ -99,7 +82,7 @@ async def start_run(body: StartRunBody) -> dict:
             import logging
             _log = logging.getLogger(__name__)
             for prefix in (
-                framework_prefix(body.slug),
+                domains.dd.ingestion.storage.keys.framework_prefix(body.slug),
                 f"ingestion-raw/{body.slug}/",
                 f"synth-vault/{body.slug}/",
             ):
@@ -116,8 +99,8 @@ async def start_run(body: StartRunBody) -> dict:
                     )
 
         run_id = uuid.uuid4().hex
-        if not await acquire_lock(r, body.slug, run_id):
-            active = await read_lock(r, body.slug)
+        if not await domains.dd.ingestion.progress.service.acquire_lock(r, body.slug, run_id):
+            active = await domains.dd.ingestion.progress.service.read_lock(r, body.slug)
             return {
                 "status": "locked",
                 "slug": body.slug,
@@ -125,14 +108,14 @@ async def start_run(body: StartRunBody) -> dict:
                 "message": "Concurrent acquire race; try again.",
             }
 
-        await clear_cancel(r, run_id)
+        await domains.dd.ingestion.progress.service.clear_cancel(r, run_id)
 
         try:
             from domains.dd.ingestion.task import run_ingestion
             run_ingestion.delay(run_id, body.slug)
         except Exception:
             try:
-                await release_lock(r, body.slug, run_id)
+                await domains.dd.ingestion.progress.service.release_lock(r, body.slug, run_id)
             except Exception:
                 pass
             raise
@@ -151,7 +134,7 @@ async def list_active_runs() -> dict:
     """Lock-held runs with progress; cross-checked so locks without a
     written progress record (rare race) aren't surfaced."""
     r = redis_aio.from_url(
-        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     active: list[dict] = []
     try:
@@ -168,7 +151,7 @@ async def list_active_runs() -> dict:
                     run_id_raw.decode()
                     if isinstance(run_id_raw, bytes) else run_id_raw
                 )
-                progress = await read_progress(r, run_id)
+                progress = await domains.dd.ingestion.progress.service.read_progress(r, run_id)
                 if progress and progress.get("status") in ("running", "idle"):
                     active.append({
                         "slug": slug,
@@ -185,10 +168,10 @@ async def list_active_runs() -> dict:
 @router.post("/{run_id}/cancel")
 async def cancel_run(run_id: str) -> dict:
     r = redis_aio.from_url(
-        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
-        await request_cancel(r, run_id)
+        await domains.dd.ingestion.progress.service.request_cancel(r, run_id)
     finally:
         await r.aclose()
     return {"run_id": run_id, "status": "cancel_requested"}
@@ -199,12 +182,12 @@ async def get_run(run_id: str) -> dict:
     """In-flight snapshot from Redis (canonical post-finalize manifest
     lives in MinIO under /ingestion/{slug})."""
     r = redis_aio.from_url(
-        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
-        progress = await read_progress(r, run_id)
-        manifest = await read_live_manifest(r, run_id)
-        post = await read_post(r, run_id)
+        progress = await domains.dd.ingestion.progress.service.read_progress(r, run_id)
+        manifest = await domains.dd.ingestion.storage.service.read_live_manifest(r, run_id)
+        post = await domains.dd.ingestion.progress.service.read_post(r, run_id)
     finally:
         await r.aclose()
 
@@ -222,10 +205,10 @@ async def get_run(run_id: str) -> dict:
 @router.get("/{run_id}/url-records")
 async def get_url_records(run_id: str) -> list[dict]:
     r = redis_aio.from_url(
-        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
-        return await read_url_records(r, run_id)
+        return await domains.dd.ingestion.progress.service.read_url_records(r, run_id)
     finally:
         await r.aclose()
 
@@ -233,10 +216,10 @@ async def get_url_records(run_id: str) -> list[dict]:
 @router.get("/{run_id}/pages/{idx}")
 async def get_page(run_id: str, idx: int) -> dict:
     r = redis_aio.from_url(
-        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
-        manifest = await read_live_manifest(r, run_id)
+        manifest = await domains.dd.ingestion.storage.service.read_live_manifest(r, run_id)
     finally:
         await r.aclose()
     if not manifest or idx < 0 or idx >= len(manifest):
@@ -252,7 +235,7 @@ async def get_page(run_id: str, idx: int) -> dict:
             detail=f"manifest entry has no MinIO key (idx={idx})",
         )
     try:
-        body = await get_storage().read_text(key)
+        body = await domains.dd.ingestion.storage.service.get_storage().read_text(key)
     except Exception as e:
         raise HTTPException(
             status_code=404,

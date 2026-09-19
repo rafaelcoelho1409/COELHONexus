@@ -4,13 +4,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import time
 import uuid
 from typing import Optional
 
 import redis.asyncio as redis_aio
 
+import domains
 from infra.langfuse import (
     set_current_span_langfuse_io,
     set_current_span_langfuse_observation_metadata,
@@ -18,45 +18,9 @@ from infra.langfuse import (
 )
 from infra.otel import get_tracer
 
-from ....ingestion.storage import get_storage
-from ....resolver import index_by_slug
-from ...nodes.book_harmonize import (
-    compute_harmonize_manifest_hash,
-    harmonize_book,
-)
-from ..cancel import clear_cancel, is_cancelled, watcher as cancel_watcher
-from ...graph import NODE_REGISTRY, build_graph
-from ...keys import (
-    active_study_key,
-    book_harmonize_latest_key,
-    book_harmonize_versioned_key,
-    chapter_readme_key,
-    chapter_render_latest_key,
-    redis_url,
-    study_timing_key,
-)
-from ...params import REDIS_CONNECT_TIMEOUT_S, REDIS_OP_TIMEOUT_S, STUDY_SEM
-from ..observability import (
-    record_audit_missing,
-    record_chapter_outcome,
-    record_study_completion,
-)
-from ..progress import emit_progress
-from .domain import missing_implemented_nodes
-from .params import (
-    BOOK_HARMONIZE_MIN_CHAPTERS,
-    CHAPTER_THREAD_PREFIX,
-    STUDY_THREAD_PREFIX,
-)
-
+from . import domain, params
 
 logger = logging.getLogger(__name__)
-_CHAPTER_ID_RE = re.compile(r"^ch-(\d+)")
-
-
-def _chapter_number_from_id(chapter_id: str) -> int:
-    m = _CHAPTER_ID_RE.match(chapter_id or "")
-    return int(m.group(1)) if m else 0
 
 
 async def _record_terminal_metrics(graph, config: dict, status: str) -> None:
@@ -67,7 +31,7 @@ async def _record_terminal_metrics(graph, config: dict, status: str) -> None:
         state = dict(snap.values or {})
         slug = str(state.get("framework_slug") or "")
         chapter_id = str(state.get("chapter_id") or "")
-        chapter_num = _chapter_number_from_id(chapter_id)
+        chapter_num = domain.chapter_number_from_id(chapter_id)
         chapter_stats = state.get("chapter_stats") or {}
         mgsr_stats = state.get("mgsr_stats") or {}
         if not slug or not chapter_id or chapter_num <= 0 or not chapter_stats:
@@ -77,7 +41,7 @@ async def _record_terminal_metrics(graph, config: dict, status: str) -> None:
         halt_reason = str(mgsr_stats.get("halt_reason") or "")
         audit_passed = bool(chapter_stats.get("audit_passed", False))
         outcome = "accept" if halt_reason == "chapter_passed" else "debt_below"
-        record_chapter_outcome(
+        domains.dd.synth.runtime.observability.metrics.record_chapter_outcome(
             outcome = outcome,
             framework = slug,
             chapter_number = chapter_num,
@@ -91,7 +55,7 @@ async def _record_terminal_metrics(graph, config: dict, status: str) -> None:
             if n_code_refs > 0 else
             (1.0 if not audit_passed else 0.0)
         )
-        record_audit_missing(
+        domains.dd.synth.runtime.observability.metrics.record_audit_missing(
             framework = slug,
             chapter_number = chapter_num,
             iteration = max(refine_iter, 0),
@@ -146,15 +110,14 @@ async def _await_with_watcher(
     )
 
     try:
-        from domains.dd.runtime.llm_counter import snapshot as _snapshot_llm
-        await _snapshot_llm(thread_id)
+        await domains.dd.runtime.service.snapshot(thread_id)
     except Exception as e:
         logger.warning(
             f"[synth] {thread_id}: llm-counter snapshot failed "
             f"({type(e).__name__}: {e})"
         )
 
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "synth", "terminal",
         status = terminal_patch.get("status", "unknown"),
         error = terminal_patch.get("error"),
@@ -217,16 +180,16 @@ async def run_single_chapter_async(
                 "chapter_id": chapter_id,
                 "mode": mode,
             })
-            graph = build_graph()
+            graph = domains.dd.synth.graph.build_graph()
             config = {"configurable": {"thread_id": thread_id}}
 
             r = redis_aio.from_url(
-                redis_url(),
-                socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,
-                socket_timeout = REDIS_OP_TIMEOUT_S,
+                domains.dd.synth.keys.redis_url(),
+                socket_connect_timeout = domains.dd.synth.params.REDIS_CONNECT_TIMEOUT_S,
+                socket_timeout = domains.dd.synth.params.REDIS_OP_TIMEOUT_S,
             )
             try:
-                await clear_cancel(r, thread_id)
+                await domains.dd.synth.runtime.cancel.service.clear_cancel(r, thread_id)
             finally:
                 await r.aclose()
 
@@ -242,7 +205,7 @@ async def run_single_chapter_async(
             }
 
             main_task = asyncio.create_task(graph.ainvoke(initial_state, config))
-            watcher_task = asyncio.create_task(cancel_watcher(thread_id, main_task))
+            watcher_task = asyncio.create_task(domains.dd.synth.runtime.cancel.service.watcher(thread_id, main_task))
             result = await _await_with_watcher(
                 graph, config, main_task, watcher_task, thread_id,
             )
@@ -263,13 +226,13 @@ async def run_missing_nodes_async(
     """Catch-up — invoke missing IMPLEMENTED nodes via NODE_REGISTRY directly.
     Needed when a thread reached END BEFORE a new IMPLEMENTED node was added
     (ainvoke(None) would short-circuit the consumed END marker)."""
-    graph = build_graph()
+    graph = domains.dd.synth.graph.build_graph()
     config = {"configurable": {"thread_id": thread_id}}
 
     terminal_patch: dict = {"status": "done"}
     try:
         for name in missing:
-            node_fn = NODE_REGISTRY.get(name)
+            node_fn = domains.dd.synth.graph.NODE_REGISTRY.get(name)
             if node_fn is None:
                 continue
             snap = await graph.aget_state(config)
@@ -299,15 +262,14 @@ async def run_missing_nodes_async(
         )
 
     try:
-        from domains.dd.runtime.llm_counter import snapshot as _snapshot_llm
-        await _snapshot_llm(thread_id)
+        await domains.dd.runtime.service.snapshot(thread_id)
     except Exception as e:
         logger.warning(
             f"[synth] {thread_id}: catch-up llm-counter snapshot failed "
             f"({type(e).__name__}: {e})"
         )
 
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "synth", "terminal",
         status = terminal_patch.get("status", "unknown"),
         error = terminal_patch.get("error"),
@@ -322,7 +284,7 @@ async def run_missing_nodes_async(
 
 async def resume_synth_async(thread_id: str) -> dict:
     """Resume from last checkpoint. Three sub-paths handled inline."""
-    graph = build_graph()
+    graph = domains.dd.synth.graph.build_graph()
     config = {"configurable": {"thread_id": thread_id}}
 
     snap = await graph.aget_state(config)
@@ -337,20 +299,20 @@ async def resume_synth_async(thread_id: str) -> dict:
         }
 
     r = redis_aio.from_url(
-        redis_url(),
-        socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout = REDIS_OP_TIMEOUT_S,
+        domains.dd.synth.keys.redis_url(),
+        socket_connect_timeout = domains.dd.synth.params.REDIS_CONNECT_TIMEOUT_S,
+        socket_timeout = domains.dd.synth.params.REDIS_OP_TIMEOUT_S,
     )
     try:
-        await clear_cancel(r, thread_id)
+        await domains.dd.synth.runtime.cancel.service.clear_cancel(r, thread_id)
     finally:
         await r.aclose()
 
     state = dict(snap.values or {})
     if state.get("status") == "done":
-        missing = missing_implemented_nodes(state)
+        missing = domain.missing_implemented_nodes(state)
         if missing:
-            await emit_progress(
+            await domains.dd.synth.runtime.progress.service.emit_progress(
                 thread_id, "synth", "catch_up",
                 missing = missing,
             )
@@ -362,7 +324,7 @@ async def resume_synth_async(thread_id: str) -> dict:
                     f"failed: {type(e).__name__}: {e}"
                 )
             return await run_missing_nodes_async(thread_id, missing)
-        await emit_progress(
+        await domains.dd.synth.runtime.progress.service.emit_progress(
             thread_id, "synth", "terminal",
             status = "done", error = None,
         )
@@ -372,7 +334,7 @@ async def resume_synth_async(thread_id: str) -> dict:
             "error": None,
         }
 
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "synth", "resumed",
         next_nodes = list(snap.next or []),
     )
@@ -389,7 +351,7 @@ async def resume_synth_async(thread_id: str) -> dict:
             f"{type(e).__name__}: {e}"
         )
     main_task = asyncio.create_task(graph.ainvoke(None, config))
-    watcher_task = asyncio.create_task(cancel_watcher(thread_id, main_task))
+    watcher_task = asyncio.create_task(domains.dd.synth.runtime.cancel.service.watcher(thread_id, main_task))
     return await _await_with_watcher(
         graph, config, main_task, watcher_task, thread_id,
     )
@@ -433,8 +395,8 @@ async def _run_book_harmonize_impl(
     chapter_ids: list[str],
 ) -> dict:
     """Wrapped by _run_book_harmonize to keep the OTel span open across all return paths."""
-    minio = get_storage()
-    entry = index_by_slug().get(slug, {})
+    minio = domains.dd.ingestion.storage.service.get_storage()
+    entry = domains.dd.resolver.service.index_by_slug().get(slug, {})
     framework_name = entry.get("name") or entry.get("slug") or slug
 
     chapters: list[dict] = []
@@ -447,14 +409,14 @@ async def _run_book_harmonize_impl(
         # sibling when extracting claims / patching other chapters.
         try:
             render_blob = json.loads(
-                await minio.read_text(chapter_render_latest_key(slug, cid))
+                await minio.read_text(domains.dd.synth.keys.chapter_render_latest_key(slug, cid))
             )
             if not (render_blob.get("audit") or {}).get("audit_passed", True):
                 skipped_audit_failed.append(cid)
                 continue
         except Exception:
             pass   # no render stats yet — fall through to the README check below
-        key = chapter_readme_key(slug, cid)
+        key = domains.dd.synth.keys.chapter_readme_key(slug, cid)
         try:
             blob = await minio.read_bytes(key)
         except Exception:
@@ -466,8 +428,8 @@ async def _run_book_harmonize_impl(
             "prose":      blob.decode("utf-8", errors = "replace"),
         })
 
-    if len(chapters) < BOOK_HARMONIZE_MIN_CHAPTERS:
-        await emit_progress(
+    if len(chapters) < params.BOOK_HARMONIZE_MIN_CHAPTERS:
+        await domains.dd.synth.runtime.progress.service.emit_progress(
             study_thread_id, "study", "book_harmonize_skipped",
             reason = "fewer_than_2_rendered_chapters",
             n_rendered = len(chapters),
@@ -479,16 +441,16 @@ async def _run_book_harmonize_impl(
             "audit_failed_chapters": skipped_audit_failed,
         }
 
-    manifest_hash = compute_harmonize_manifest_hash(chapters)
-    cache_key = book_harmonize_versioned_key(slug, manifest_hash)
-    latest_key = book_harmonize_latest_key(slug)
+    manifest_hash = domains.dd.synth.nodes.book_harmonize.domain.compute_harmonize_manifest_hash(chapters)
+    cache_key = domains.dd.synth.keys.book_harmonize_versioned_key(slug, manifest_hash)
+    latest_key = domains.dd.synth.keys.book_harmonize_latest_key(slug)
     if await minio.exists(cache_key):
         try:
             cached_blob = await minio.read_bytes(cache_key)
             cached = json.loads(cached_blob.decode("utf-8"))
             cached["cache_hit"] = True
             cached["manifest_hash"] = manifest_hash
-            await emit_progress(
+            await domains.dd.synth.runtime.progress.service.emit_progress(
                 study_thread_id, "study", "book_harmonize_done",
                 n_chapters = cached.get("n_chapters", 0),
                 n_atomic_claims = cached.get("n_atomic_claims", 0),
@@ -514,7 +476,7 @@ async def _run_book_harmonize_impl(
                 f"{type(e).__name__}: {e} — recomputing"
             )
 
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         study_thread_id, "study", "book_harmonize_start",
         n_chapters = len(chapters),
     )
@@ -522,7 +484,7 @@ async def _run_book_harmonize_impl(
     try:
         # harmonize_book requires framework_slug (canonical-terms blob paths);
         # earlier BU/CC studies crashed when this was omitted.
-        result = await harmonize_book(
+        result = await domains.dd.synth.nodes.book_harmonize.service.harmonize_book(
             framework_slug = slug,
             framework_name = framework_name,
             chapters = chapters,
@@ -548,7 +510,7 @@ async def _run_book_harmonize_impl(
             continue
         try:
             await minio.write(
-                chapter_readme_key(slug, cid),
+                domains.dd.synth.keys.chapter_readme_key(slug, cid),
                 new_prose,
                 content_type = "text/markdown",
             )
@@ -575,7 +537,7 @@ async def _run_book_harmonize_impl(
             f"({type(e).__name__}: {e})"
         )
 
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         study_thread_id, "study", "book_harmonize_done",
         n_chapters = payload.get("n_chapters", 0),
         n_atomic_claims = payload.get("n_atomic_claims", 0),
@@ -591,23 +553,23 @@ async def _run_book_harmonize_impl(
 
 def make_thread_id(slug: str) -> str:
     """Per-chapter thread_id; JS-side pre-generation uses the same format."""
-    return f"{CHAPTER_THREAD_PREFIX}/{slug}/{uuid.uuid4()}"
+    return f"{params.CHAPTER_THREAD_PREFIX}/{slug}/{uuid.uuid4()}"
 
 
 def make_study_thread_id(slug: str) -> str:
     """Per-study thread_id with distinct prefix from per-chapter for Redis/SQL pattern matching."""
-    return f"{STUDY_THREAD_PREFIX}/{slug}/{uuid.uuid4()}"
+    return f"{params.STUDY_THREAD_PREFIX}/{slug}/{uuid.uuid4()}"
 
 
 async def _study_cancelled(study_thread_id: str) -> bool:
     """Per-study cancel flag set via `/synth/{study_thread_id}/cancel`."""
     r = redis_aio.from_url(
-        redis_url(),
-        socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout = REDIS_OP_TIMEOUT_S,
+        domains.dd.synth.keys.redis_url(),
+        socket_connect_timeout = domains.dd.synth.params.REDIS_CONNECT_TIMEOUT_S,
+        socket_timeout = domains.dd.synth.params.REDIS_OP_TIMEOUT_S,
     )
     try:
-        return await is_cancelled(r, study_thread_id)
+        return await domains.dd.synth.runtime.cancel.service.is_cancelled(r, study_thread_id)
     except Exception:
         return False
     finally:
@@ -634,8 +596,8 @@ async def _persist_study_timing(
         "finished_ts":     finished_ts,
     }
     try:
-        await get_storage().write(
-            study_timing_key(slug),
+        await domains.dd.ingestion.storage.service.get_storage().write(
+            domains.dd.synth.keys.study_timing_key(slug),
             json.dumps(payload, indent = 2),
             content_type = "application/json",
         )
@@ -727,24 +689,24 @@ async def _run_study_async_inner(
     # Seed from prior blob so skipped-on-resume chapters keep their measured time.
     chapter_ms: dict[str, int] = {}
     try:
-        _prior = json.loads(await get_storage().read_text(study_timing_key(slug)))
+        _prior = json.loads(await domains.dd.ingestion.storage.service.get_storage().read_text(domains.dd.synth.keys.study_timing_key(slug)))
         chapter_ms.update(
             {str(k): int(v)
              for k, v in (_prior.get("per_chapter_ms") or {}).items()}
         )
     except Exception:
         pass
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         study_thread_id, "study", "study_start",
         slug = slug,
         n_chapters = n_total,
         chapter_ids = chapter_ids,
         mode = mode,
-        concurrency = STUDY_SEM,
+        concurrency = domains.dd.synth.params.study_sem(),
     )
 
     counters = {"completed": 0, "needs_review": 0, "failed": 0, "cancelled": False}
-    sem = asyncio.Semaphore(STUDY_SEM)
+    sem = asyncio.Semaphore(domains.dd.synth.params.study_sem())
 
     async def _run_one(position: int, chapter_id: str) -> None:
         if await _study_cancelled(study_thread_id):
@@ -752,8 +714,8 @@ async def _run_study_async_inner(
             return
 
         try:
-            _minio = get_storage()
-            _render_key = chapter_render_latest_key(slug, chapter_id)
+            _minio = domains.dd.ingestion.storage.service.get_storage()
+            _render_key = domains.dd.synth.keys.chapter_render_latest_key(slug, chapter_id)
             if await _minio.exists(_render_key):
                 _prior_audit_passed = True
                 try:
@@ -778,16 +740,16 @@ async def _run_study_async_inner(
                     )
                 else:
                     counters["completed"] += 1
-                    await emit_progress(
+                    await domains.dd.synth.runtime.progress.service.emit_progress(
                         study_thread_id, "study", "chapter_done",
                         chapter_id = chapter_id, position = position, n_total = n_total,
                         status = "done", skipped = True,
                         wall_ms = chapter_ms.get(chapter_id, 0),
                     )
-                    await emit_progress(
+                    await domains.dd.synth.runtime.progress.service.emit_progress(
                         study_thread_id, "study", "chapter_ready",
                         chapter_id = chapter_id, position = position, n_total = n_total,
-                        render_path = chapter_readme_key(slug, chapter_id),
+                        render_path = domains.dd.synth.keys.chapter_readme_key(slug, chapter_id),
                     )
                     logger.info(
                         f"[study-orchestrator] {slug}/{chapter_id}: "
@@ -807,7 +769,7 @@ async def _run_study_async_inner(
 
             chapter_thread_id = make_thread_id(slug)
             ch_t0 = time.monotonic()
-            await emit_progress(
+            await domains.dd.synth.runtime.progress.service.emit_progress(
                 study_thread_id, "study", "chapter_running",
                 chapter_id = chapter_id,
                 chapter_thread_id = chapter_thread_id,
@@ -816,10 +778,10 @@ async def _run_study_async_inner(
             )
 
             try:
-                graph = build_graph()
+                graph = domains.dd.synth.graph.build_graph()
             except RuntimeError as e:
                 counters["failed"] += 1
-                await emit_progress(
+                await domains.dd.synth.runtime.progress.service.emit_progress(
                     study_thread_id, "study", "chapter_done",
                     chapter_id = chapter_id,
                     position = position, n_total = n_total,
@@ -828,12 +790,12 @@ async def _run_study_async_inner(
                 return
 
             r = redis_aio.from_url(
-                redis_url(),
-                socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,
-                socket_timeout = REDIS_OP_TIMEOUT_S,
+                domains.dd.synth.keys.redis_url(),
+                socket_connect_timeout = domains.dd.synth.params.REDIS_CONNECT_TIMEOUT_S,
+                socket_timeout = domains.dd.synth.params.REDIS_OP_TIMEOUT_S,
             )
             try:
-                await clear_cancel(r, chapter_thread_id)
+                await domains.dd.synth.runtime.cancel.service.clear_cancel(r, chapter_thread_id)
                 try:
                     await r.sadd(
                         f"dd:study:{study_thread_id}:active_chapters",
@@ -864,7 +826,7 @@ async def _run_study_async_inner(
                 graph.ainvoke(initial_state, config),
             )
             watcher_task = asyncio.create_task(
-                cancel_watcher(chapter_thread_id, main_task),
+                domains.dd.synth.runtime.cancel.service.watcher(chapter_thread_id, main_task),
             )
 
             chapter_status = "done"
@@ -898,9 +860,9 @@ async def _run_study_async_inner(
                 except (asyncio.CancelledError, Exception):
                     pass
                 _rc = redis_aio.from_url(
-                    redis_url(),
-                    socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,
-                    socket_timeout = REDIS_OP_TIMEOUT_S,
+                    domains.dd.synth.keys.redis_url(),
+                    socket_connect_timeout = domains.dd.synth.params.REDIS_CONNECT_TIMEOUT_S,
+                    socket_timeout = domains.dd.synth.params.REDIS_OP_TIMEOUT_S,
                 )
                 try:
                     await _rc.srem(
@@ -925,15 +887,14 @@ async def _run_study_async_inner(
                 )
 
             try:
-                from domains.dd.runtime.llm_counter import snapshot as _snapshot_llm
-                await _snapshot_llm(chapter_thread_id)
+                await domains.dd.runtime.service.snapshot(chapter_thread_id)
             except Exception as e:
                 logger.warning(
                     f"[study-orchestrator] {slug}/{chapter_id}: "
                     f"llm-counter snapshot failed: {type(e).__name__}: {e}"
                 )
 
-            await emit_progress(
+            await domains.dd.synth.runtime.progress.service.emit_progress(
                 chapter_thread_id, "synth", "terminal",
                 status = chapter_status, error = chapter_error,
             )
@@ -946,7 +907,7 @@ async def _run_study_async_inner(
                 counters["needs_review"] += 1
             else:
                 counters["failed"] += 1
-            await emit_progress(
+            await domains.dd.synth.runtime.progress.service.emit_progress(
                 study_thread_id, "study", "chapter_done",
                 chapter_id = chapter_id,
                 chapter_thread_id = chapter_thread_id,
@@ -957,14 +918,14 @@ async def _run_study_async_inner(
                 wall_ms = ch_wall_ms,
             )
             if chapter_status == "done":
-                await emit_progress(
+                await domains.dd.synth.runtime.progress.service.emit_progress(
                     study_thread_id, "study", "chapter_ready",
                     chapter_id = chapter_id,
                     chapter_thread_id = chapter_thread_id,
                     position = position,
                     n_total = n_total,
                     wall_ms = ch_wall_ms,
-                    render_path = chapter_readme_key(slug, chapter_id),
+                    render_path = domains.dd.synth.keys.chapter_readme_key(slug, chapter_id),
                 )
             logger.info(
                 f"[study-orchestrator] {slug}/{chapter_id}: "
@@ -1001,7 +962,7 @@ async def _run_study_async_inner(
     harmonize_stats: dict | None = None
     if (
         not cancelled
-        and n_completed >= BOOK_HARMONIZE_MIN_CHAPTERS
+        and n_completed >= params.BOOK_HARMONIZE_MIN_CHAPTERS
         and final_status != "failed"
     ):
         try:
@@ -1028,7 +989,7 @@ async def _run_study_async_inner(
         finished_ts = time.time(),
     )
 
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         study_thread_id, "study", "study_done",
         n_completed = n_completed,
         n_needs_review = n_needs_review,
@@ -1042,7 +1003,7 @@ async def _run_study_async_inner(
         per_chapter_ms = chapter_ms,
     )
     # Mirror to `synth` terminal so EventSource handlers close cleanly.
-    await emit_progress(
+    await domains.dd.synth.runtime.progress.service.emit_progress(
         study_thread_id, "synth", "terminal",
         status = final_status,
         error = None,
@@ -1053,12 +1014,12 @@ async def _run_study_async_inner(
     )
     try:
         _rc = redis_aio.from_url(
-            redis_url(),
-            socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,
-            socket_timeout = REDIS_OP_TIMEOUT_S,
+            domains.dd.synth.keys.redis_url(),
+            socket_connect_timeout = domains.dd.synth.params.REDIS_CONNECT_TIMEOUT_S,
+            socket_timeout = domains.dd.synth.params.REDIS_OP_TIMEOUT_S,
         )
         try:
-            await _rc.delete(active_study_key(slug))
+            await _rc.delete(domains.dd.synth.keys.active_study_key(slug))
         finally:
             await _rc.aclose()
     except Exception as e:
@@ -1072,7 +1033,7 @@ async def _run_study_async_inner(
         f"final_status = {final_status}"
     )
     try:
-        record_study_completion(
+        domains.dd.synth.runtime.observability.metrics.record_study_completion(
             framework = slug,
             duration_s = max(total_wall_ms / 1000.0, 0.0),
             n_accepted = n_completed,

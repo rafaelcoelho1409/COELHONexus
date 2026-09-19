@@ -10,23 +10,11 @@ import json
 import logging
 import time
 
+import domains
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException, Query, Response
 from starlette.responses import StreamingResponse
 
-from domains.dd.ingestion.storage import get_storage
-from domains.dd.synth.runtime.cancel import clear_cancel, request_cancel
-from domains.dd.synth.graph import IMPLEMENTED, NODE_ORDER, build_graph
-from domains.dd.synth.keys import (
-    active_study_key,
-    lock_key,
-    redis_url,
-    study_timing_key,
-)
-from domains.dd.synth.params import STUDY_SEM
-from domains.dd.synth.runtime.progress import emit_progress, subscribe_progress
-from domains.dd.planner.keys import postgres_url
-from domains.dd.synth.runtime.dispatch import make_study_thread_id, make_thread_id
 from domains.dd.synth.task import (
     resume_synth as resume_synth_task,
     run_single_chapter as run_single_chapter_task,
@@ -45,13 +33,13 @@ router = APIRouter()
 @router.get("/info")
 async def synth_info() -> dict:
     return {
-        "node_order":  list(NODE_ORDER),
-        "implemented": list(IMPLEMENTED),
+        "node_order":  list(domains.dd.synth.graph.NODE_ORDER),
+        "implemented": list(domains.dd.synth.graph.IMPLEMENTED),
         "modes": [
             {"key": "quality", "label": "Quality (default)", "enabled": True},
             {"key": "fast",    "label": "Fast (3 iters)",    "enabled": False},
         ],
-        "status": "live" if IMPLEMENTED else "scaffolding",
+        "status": "live" if domains.dd.synth.graph.IMPLEMENTED else "scaffolding",
     }
 
 
@@ -65,7 +53,7 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
     if not chapters_in:
         return {"framework_slug": slug, "chapters": []}
 
-    minio = get_storage()
+    minio = domains.dd.ingestion.storage.service.get_storage()
 
     # Persisted timing roll-up (per-chapter wall + study total) so the
     # sidebar + navbar show times after a refresh / for cached studies.
@@ -73,7 +61,7 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
     study_total_wall_ms = 0
     try:
         _t = json.loads(
-            await minio.read_text(study_timing_key(slug))
+            await minio.read_text(domains.dd.synth.keys.study_timing_key(slug))
         )
         per_chapter_ms = _t.get("per_chapter_ms") or {}
         study_total_wall_ms = int(_t.get("total_wall_ms") or 0)
@@ -126,10 +114,10 @@ async def synth_active(slug: str, response: Response) -> dict:
     response.headers["Cache-Control"] = "no-store"
     try:
         r = redis_aio.from_url(
-            redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+            domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
         )
         try:
-            sid = await r.get(active_study_key(slug))
+            sid = await r.get(domains.dd.synth.keys.active_study_key(slug))
         finally:
             await r.aclose()
     except Exception:
@@ -163,7 +151,7 @@ async def get_study_artifact(
             ),
         )
     key = f"synth/{slug}/{chapter_id}/{artifact_name}"
-    minio = get_storage()
+    minio = domains.dd.ingestion.storage.service.get_storage()
     if not await minio.exists(key):
         raise HTTPException(
             status_code=404,
@@ -198,7 +186,7 @@ async def list_recent_synth() -> dict:
     """Most-recent thread per slug for page-refresh recovery."""
     import psycopg
 
-    dsn = postgres_url()
+    dsn = domains.dd.planner.keys.postgres_url()
 
     out: list[dict] = []
     try:
@@ -259,10 +247,10 @@ async def start_synth(
         )
 
     if chapter_id is None:
-        study_thread_id = thread_id or make_study_thread_id(slug)
+        study_thread_id = thread_id or domains.dd.synth.runtime.dispatch.service.make_study_thread_id(slug)
 
         r = redis_aio.from_url(
-            redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+            domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
         )
         try:
             cursor = 0
@@ -327,11 +315,11 @@ async def start_synth(
                     break
 
             acquired = await r.set(
-                lock_key(slug), study_thread_id,
+                domains.dd.synth.keys.lock_key(slug), study_thread_id,
                 nx=True, ex=SYNTH_LOCK_TTL_S,
             )
             if not acquired:
-                existing = await r.get(lock_key(slug))
+                existing = await r.get(domains.dd.synth.keys.lock_key(slug))
                 existing_tid = (
                     existing.decode() if isinstance(existing, bytes)
                     else existing
@@ -348,7 +336,7 @@ async def start_synth(
                     ),
                 }
 
-            await clear_cancel(r, study_thread_id)
+            await domains.dd.synth.runtime.cancel.service.clear_cancel(r, study_thread_id)
 
             try:
                 async_result = run_study_task.delay(
@@ -356,7 +344,7 @@ async def start_synth(
                 )
             except Exception as e:
                 try:
-                    await r.delete(lock_key(slug))
+                    await r.delete(domains.dd.synth.keys.lock_key(slug))
                 except Exception:
                     pass
                 logger.exception(
@@ -375,11 +363,11 @@ async def start_synth(
 
         try:
             r2 = redis_aio.from_url(
-                redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+                domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
             )
             try:
                 await r2.set(
-                    active_study_key(slug),
+                    domains.dd.synth.keys.active_study_key(slug),
                     json.dumps({
                         "study_thread_id": study_thread_id,
                         "started_ts": time.time(),
@@ -400,7 +388,7 @@ async def start_synth(
             "n_chapters":      len(plan_chapter_ids),
             "chapter_ids":     plan_chapter_ids,
             "mode":            mode,
-            "concurrency":     STUDY_SEM,
+            "concurrency":     domains.dd.synth.params.study_sem(),
             "status":          "queued",
             "celery_task_id":  async_result.id,
             "latency_ms":      0,
@@ -416,10 +404,10 @@ async def start_synth(
         )
 
     if not thread_id:
-        thread_id = make_thread_id(slug)
+        thread_id = domains.dd.synth.runtime.dispatch.service.make_thread_id(slug)
 
     r = redis_aio.from_url(
-        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
         cursor = 0
@@ -484,11 +472,11 @@ async def start_synth(
                 break
 
         acquired = await r.set(
-            lock_key(slug), thread_id,
+            domains.dd.synth.keys.lock_key(slug), thread_id,
             nx=True, ex=SYNTH_LOCK_TTL_S,
         )
         if not acquired:
-            existing = await r.get(lock_key(slug))
+            existing = await r.get(domains.dd.synth.keys.lock_key(slug))
             existing_tid = (
                 existing.decode() if isinstance(existing, bytes)
                 else existing
@@ -505,7 +493,7 @@ async def start_synth(
                 ),
             }
 
-        await clear_cancel(r, thread_id)
+        await domains.dd.synth.runtime.cancel.service.clear_cancel(r, thread_id)
 
         try:
             async_result = run_single_chapter_task.delay(
@@ -513,7 +501,7 @@ async def start_synth(
             )
         except Exception as e:
             try:
-                await r.delete(lock_key(slug))
+                await r.delete(domains.dd.synth.keys.lock_key(slug))
             except Exception:
                 pass
             logger.exception(
@@ -541,10 +529,10 @@ async def start_synth(
 @router.post("/{thread_id:path}/resume")
 async def resume_synth(thread_id: str) -> dict:
     r = redis_aio.from_url(
-        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
-        await clear_cancel(r, thread_id)
+        await domains.dd.synth.runtime.cancel.service.clear_cancel(r, thread_id)
     finally:
         await r.aclose()
 
@@ -574,11 +562,11 @@ async def cancel_synth(thread_id: str) -> dict:
     Without propagation only the NEXT chapter is blocked; the in-flight
     one keeps firing LLM calls."""
     r = redis_aio.from_url(
-        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     propagated_to: list[str] = []
     try:
-        await request_cancel(r, thread_id)
+        await domains.dd.synth.runtime.cancel.service.request_cancel(r, thread_id)
         parts = thread_id.split("/")
         if len(parts) >= 4 and parts[1] == "study":
             slug = parts[2]
@@ -591,7 +579,7 @@ async def cancel_synth(thread_id: str) -> dict:
                 for raw in members or []:
                     ch_tid = raw.decode() if isinstance(raw, bytes) else raw
                     if ch_tid and ch_tid not in seen:
-                        await request_cancel(r, ch_tid)
+                        await domains.dd.synth.runtime.cancel.service.request_cancel(r, ch_tid)
                         propagated_to.append(ch_tid)
                         seen.add(ch_tid)
             except Exception as e:
@@ -614,7 +602,7 @@ async def cancel_synth(thread_id: str) -> dict:
                     ch_tid = key[len("dd:synth:"):-len(":events:snapshot")]
                     if ch_tid in seen:
                         continue
-                    await request_cancel(r, ch_tid)
+                    await domains.dd.synth.runtime.cancel.service.request_cancel(r, ch_tid)
                     propagated_to.append(ch_tid)
                     seen.add(ch_tid)
             except Exception as e:
@@ -625,10 +613,10 @@ async def cancel_synth(thread_id: str) -> dict:
     finally:
         await r.aclose()
 
-    await emit_progress(thread_id, "synth", "cancel_requested")
+    await domains.dd.synth.runtime.progress.service.emit_progress(thread_id, "synth", "cancel_requested")
     for ch_tid in propagated_to:
         try:
-            await emit_progress(ch_tid, "synth", "cancel_requested")
+            await domains.dd.synth.runtime.progress.service.emit_progress(ch_tid, "synth", "cancel_requested")
         except Exception:
             pass
     logger.info(
@@ -657,7 +645,7 @@ async def synth_events(thread_id: str) -> StreamingResponse:
 
         async def _pump():
             try:
-                async for event in subscribe_progress(thread_id):
+                async for event in domains.dd.synth.runtime.progress.service.subscribe_progress(thread_id):
                     await queue.put(event)
             except asyncio.CancelledError:
                 pass
@@ -709,7 +697,7 @@ async def synth_events(thread_id: str) -> StreamingResponse:
 @router.get("/debug/graph/{thread_id:path}/state")
 async def synth_state(thread_id: str) -> dict:
     try:
-        graph = build_graph()
+        graph = domains.dd.synth.graph.build_graph()
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     config = {"configurable": {"thread_id": thread_id}}
@@ -731,14 +719,13 @@ async def synth_state(thread_id: str) -> dict:
 
 @router.get("/debug/graph/{thread_id:path}/llm-counters")
 async def synth_llm_counters(thread_id: str) -> dict:
-    from domains.dd.runtime.llm_counter import read_counters
-    return await read_counters(thread_id)
+    return await domains.dd.runtime.service.read_counters(thread_id)
 
 
 @router.get("/debug/graph/{thread_id:path}/history")
 async def synth_history(thread_id: str) -> dict:
     try:
-        graph = build_graph()
+        graph = domains.dd.synth.graph.build_graph()
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     config = {"configurable": {"thread_id": thread_id}}
@@ -769,14 +756,14 @@ async def wipe_synth(slug: str) -> dict:
             detail=f"invalid slug {slug!r}; slashes not allowed",
         )
 
-    minio = get_storage()
+    minio = domains.dd.ingestion.storage.service.get_storage()
     try:
         n_minio = await minio.delete_prefix(f"synth/{slug}/")
     except Exception as e:
         logger.warning(f"[synth-wipe] MinIO delete failed for {slug!r}: {e}")
         n_minio = -1
 
-    dsn = postgres_url()
+    dsn = domains.dd.planner.keys.postgres_url()
 
     patterns = [
         f"docs-distiller/synth/{slug}/%",
@@ -807,7 +794,7 @@ async def wipe_synth(slug: str) -> dict:
     n_redis = 0
     try:
         r = redis_aio.from_url(
-            redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+            domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
         )
         try:
             for kind in ("synth", "study"):
@@ -821,8 +808,8 @@ async def wipe_synth(slug: str) -> dict:
                 if batch:
                     n_redis += await r.delete(*batch)
             n_redis += await r.delete(
-                active_study_key(slug),
-                lock_key(slug),
+                domains.dd.synth.keys.active_study_key(slug),
+                domains.dd.synth.keys.lock_key(slug),
             )
         finally:
             await r.aclose()

@@ -1,13 +1,13 @@
 """corpus_normalize — pre-compiled regex (MDX tags, boundaries,
 frontmatter, admonitions, GitBook hint/tabs, zero-width)."""
 from __future__ import annotations
+from . import params
 
 import re
 
-from .params import ADMON_KINDS, FENCE_META_ATTRS, MDX_WRAPPER_TAGS
 
 
-_MDX_TAGS_PATTERN = "|".join(re.escape(t) for t in MDX_WRAPPER_TAGS)
+_MDX_TAGS_PATTERN = "|".join(re.escape(t) for t in params.MDX_WRAPPER_TAGS)
 
 # Whitespace-tolerant. Inner-text preserving (we match only the tag
 # markup, not its body).
@@ -19,7 +19,7 @@ MDX_CLOSE_TAG_RE = re.compile(
 )
 
 FENCE_META_HINT_RE = re.compile(
-    rf"\b(?:{'|'.join(FENCE_META_ATTRS)})(?:\s*[=]|\s|$)",
+    rf"\b(?:{'|'.join(params.FENCE_META_ATTRS)})(?:\s*[=]|\s|$)",
 )
 
 
@@ -37,7 +37,7 @@ FRONTMATTER_RE = re.compile(
 
 # Container admonitions (Docusaurus / VitePress / MkDocs Material subset).
 ADMON_OPEN_RE = re.compile(
-    rf"^\s*:::\s*(?:{'|'.join(ADMON_KINDS)})(?:\s+.*)?\s*$",
+    rf"^\s*:::\s*(?:{'|'.join(params.ADMON_KINDS)})(?:\s+.*)?\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 ADMON_CLOSE_RE = re.compile(

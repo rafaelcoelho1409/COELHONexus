@@ -1,34 +1,19 @@
 """corpus_normalize — 8-pass markdown cleanup pipeline; pure + idempotent."""
 from __future__ import annotations
+from . import params, patterns, schemas, versions
 
 import unicodedata
 from typing import Optional
 
-from .params import ENTITY_DECODES
-from .patterns import (
-    ADMON_CLOSE_RE,
-    ADMON_OPEN_RE,
-    BOUNDARY_RE,
-    FRONTMATTER_RE,
-    GITBOOK_HINT_CLOSE_RE,
-    GITBOOK_HINT_OPEN_RE,
-    GITBOOK_TABS_CLOSE_RE,
-    GITBOOK_TABS_OPEN_RE,
-    MDX_CLOSE_TAG_RE,
-    MDX_OPEN_TAG_RE,
-    ZERO_WIDTH_RE,
-)
-from .schemas import NormalizedDoc, NormalizeStats
-from .versions import NORMALIZER_VERSION
 
 
 def normalize_doc(
     md_text: str,
     *,
     source_url: Optional[str] = None,
-) -> NormalizedDoc:
+) -> schemas.NormalizedDoc:
     """Pure normalization pipeline. Idempotent. No I/O."""
-    stats = NormalizeStats(input_bytes = len(md_text.encode("utf-8")))
+    stats = schemas.NormalizeStats(input_bytes = len(md_text.encode("utf-8")))
     text = md_text
 
     text, n_zw = _unicode_pass(text)
@@ -52,9 +37,9 @@ def normalize_doc(
 
     stats.output_bytes = len(text.encode("utf-8"))
 
-    return NormalizedDoc(
+    return schemas.NormalizedDoc(
         body = text, frontmatter = frontmatter,
-        stats = stats, version = NORMALIZER_VERSION,
+        stats = stats, version = versions.NORMALIZER_VERSION,
     )
 
 
@@ -64,16 +49,16 @@ def _unicode_pass(text: str) -> tuple[str, int]:
     if text.startswith("﻿"):
         text = text[1:]
     text = text.replace(" ", " ")
-    n = len(ZERO_WIDTH_RE.findall(text))
+    n = len(patterns.ZERO_WIDTH_RE.findall(text))
     if n:
-        text = ZERO_WIDTH_RE.sub("", text)
+        text = patterns.ZERO_WIDTH_RE.sub("", text)
     text = unicodedata.normalize("NFC", text)
     return text, n
 
 
 def _frontmatter_pass(text: str) -> tuple[str, dict]:
     """Extract YAML frontmatter → (body, dict); naive key:val parse to avoid yaml dep."""
-    m = FRONTMATTER_RE.match(text)
+    m = patterns.FRONTMATTER_RE.match(text)
     if not m:
         return text, {}
     raw = m.group("body")
@@ -96,10 +81,10 @@ def _frontmatter_pass(text: str) -> tuple[str, dict]:
 
 
 def _boundary_pass(text: str) -> tuple[str, int]:
-    matches = BOUNDARY_RE.findall(text)
+    matches = patterns.BOUNDARY_RE.findall(text)
     if not matches:
         return text, 0
-    return BOUNDARY_RE.sub("", text), len(matches)
+    return patterns.BOUNDARY_RE.sub("", text), len(matches)
 
 
 def _identify_fence_ranges(text: str) -> list[tuple[int, int, int]]:
@@ -195,9 +180,9 @@ def _rewrite_fence_opener(line: str, kind: int) -> tuple[str, bool]:
 def _strip_admonition_markers(line: str) -> tuple[str, bool]:
     """Strip :::admonition and GitBook {% hint %} delimiter lines; inner text preserved."""
     for pattern in (
-        ADMON_OPEN_RE, ADMON_CLOSE_RE,
-        GITBOOK_HINT_OPEN_RE, GITBOOK_HINT_CLOSE_RE,
-        GITBOOK_TABS_OPEN_RE, GITBOOK_TABS_CLOSE_RE,
+        patterns.ADMON_OPEN_RE, patterns.ADMON_CLOSE_RE,
+        patterns.GITBOOK_HINT_OPEN_RE, patterns.GITBOOK_HINT_CLOSE_RE,
+        patterns.GITBOOK_TABS_OPEN_RE, patterns.GITBOOK_TABS_CLOSE_RE,
     ):
         if pattern.fullmatch(line):
             return "", True
@@ -208,8 +193,8 @@ def _strip_mdx_wrapper_tags(line: str) -> tuple[str, int]:
     """Strip MDX/JSX wrapper tags from a prose line; preserves inline-code spans."""
     if "`" not in line:
         # Fast path — no inline code possible, apply regex directly.
-        new_line, n_o = MDX_OPEN_TAG_RE.subn("", line)
-        new_line, n_c = MDX_CLOSE_TAG_RE.subn("", new_line)
+        new_line, n_o = patterns.MDX_OPEN_TAG_RE.subn("", line)
+        new_line, n_c = patterns.MDX_CLOSE_TAG_RE.subn("", new_line)
         return new_line, n_o + n_c
 
     parts: list[tuple[str, bool]] = []   # (segment, is_code)
@@ -241,8 +226,8 @@ def _strip_mdx_wrapper_tags(line: str) -> tuple[str, int]:
         if is_code:
             rebuilt.append(seg)
             continue
-        seg, n_o = MDX_OPEN_TAG_RE.subn("", seg)
-        seg, n_c = MDX_CLOSE_TAG_RE.subn("", seg)
+        seg, n_o = patterns.MDX_OPEN_TAG_RE.subn("", seg)
+        seg, n_c = patterns.MDX_CLOSE_TAG_RE.subn("", seg)
         n_total += n_o + n_c
         rebuilt.append(seg)
     return "".join(rebuilt), n_total
@@ -253,7 +238,7 @@ def _whitespace_entity_pass(text: str) -> tuple[str, int, int, int]:
     runs of ≥3 blank lines to a single blank, strip per-line trailing
     whitespace."""
     n_ent = 0
-    for src, dst in ENTITY_DECODES:
+    for src, dst in params.ENTITY_DECODES:
         c = text.count(src)
         if c:
             text = text.replace(src, dst)

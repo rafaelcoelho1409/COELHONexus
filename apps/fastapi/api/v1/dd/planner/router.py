@@ -10,22 +10,11 @@ import json
 import logging
 import time
 
+import domains
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException, Response
 from starlette.responses import StreamingResponse
 
-from domains.dd.ingestion.storage import get_storage, read_framework_manifest
-from domains.dd.planner.runtime.cancel import clear_cancel, request_cancel
-from domains.dd.planner.graph import IMPLEMENTED, NODE_ORDER, build_graph
-from domains.dd.planner.keys import (
-    active_run_key,
-    lock_key,
-    planner_timing_key,
-    postgres_url,
-    redis_url,
-)
-from domains.dd.planner.runtime.dispatch import make_thread_id
-from domains.dd.planner.runtime.progress import subscribe_progress
 from domains.dd.planner.task import (
     resume_planner as resume_planner_task,
     run_planner as run_planner_task,
@@ -41,8 +30,8 @@ router = APIRouter()
 @router.get("/info")
 async def planner_info() -> dict:
     return {
-        "node_order": list(NODE_ORDER),
-        "implemented": list(IMPLEMENTED),
+        "node_order": list(domains.dd.planner.graph.NODE_ORDER),
+        "implemented": list(domains.dd.planner.graph.IMPLEMENTED),
         "modes": [
             {"key": "llm",       "label": "LLM-only",        "enabled": True},
             {"key": "classical", "label": "Classical + LLM", "enabled": False},
@@ -57,7 +46,7 @@ async def planner_health(slug: str, response: Response) -> dict:
     response.headers["Cache-Control"] = "no-store"
     try:
         from domains.dd.planner.nodes.plan_write.keys import latest_blob_key
-        raw = await get_storage().read_text(latest_blob_key(slug))
+        raw = await domains.dd.ingestion.storage.service.get_storage().read_text(latest_blob_key(slug))
         plan = json.loads(raw)
         stats = plan.get("stats") or {}
         ph = stats.get("pipeline_health") or {}
@@ -77,7 +66,7 @@ async def planner_health(slug: str, response: Response) -> dict:
 async def planner_timing(slug: str, response: Response) -> dict:
     response.headers["Cache-Control"] = "no-store"
     try:
-        raw = await get_storage().read_text(planner_timing_key(slug))
+        raw = await domains.dd.ingestion.storage.service.get_storage().read_text(domains.dd.planner.keys.planner_timing_key(slug))
         data = json.loads(raw)
         return {
             "total_wall_ms": int(data.get("total_wall_ms") or 0),
@@ -142,7 +131,7 @@ async def start_planner(
             detail=f"invalid mode {mode!r}; expected one of {sorted(VALID_MODES)}",
         )
 
-    _manifest = await read_framework_manifest(get_storage(), slug)
+    _manifest = await domains.dd.ingestion.storage.service.read_framework_manifest(domains.dd.ingestion.storage.service.get_storage(), slug)
     if not _manifest:
         raise HTTPException(
             status_code=404,
@@ -152,10 +141,10 @@ async def start_planner(
     await _budget_gate(slug, _manifest)  # Wave H4 — no-op unless KD_PLANNER_BUDGET_GATE
 
     if not thread_id:
-        thread_id = make_thread_id(slug)
+        thread_id = domains.dd.planner.runtime.dispatch.service.make_thread_id(slug)
 
     r = redis_aio.from_url(
-        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
         cursor = 0
@@ -220,11 +209,11 @@ async def start_planner(
                 break
 
         acquired = await r.set(
-            lock_key(slug), thread_id,
+            domains.dd.planner.keys.lock_key(slug), thread_id,
             nx=True, ex=PLANNER_LOCK_TTL_S,
         )
         if not acquired:
-            existing = await r.get(lock_key(slug))
+            existing = await r.get(domains.dd.planner.keys.lock_key(slug))
             existing_tid = (
                 existing.decode() if isinstance(existing, bytes)
                 else existing
@@ -241,13 +230,13 @@ async def start_planner(
                 ),
             }
 
-        await clear_cancel(r, thread_id)
+        await domains.dd.planner.runtime.cancel.service.clear_cancel(r, thread_id)
 
         try:
             async_result = run_planner_task.delay(thread_id, slug, mode)
         except Exception as e:
             try:
-                await r.delete(lock_key(slug))
+                await r.delete(domains.dd.planner.keys.lock_key(slug))
             except Exception:
                 pass
             logger.exception(
@@ -263,11 +252,11 @@ async def start_planner(
 
     try:
         r2 = redis_aio.from_url(
-            redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+            domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
         )
         try:
             await r2.set(
-                active_run_key(slug),
+                domains.dd.planner.keys.active_run_key(slug),
                 json.dumps({"thread_id": thread_id, "started_ts": time.time()}),
                 ex=3600,
             )
@@ -295,10 +284,10 @@ async def planner_active(slug: str, response: Response) -> dict:
     response.headers["Cache-Control"] = "no-store"
     try:
         r = redis_aio.from_url(
-            redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+            domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
         )
         try:
-            raw = await r.get(active_run_key(slug))
+            raw = await r.get(domains.dd.planner.keys.active_run_key(slug))
         finally:
             await r.aclose()
     except Exception:
@@ -321,10 +310,10 @@ async def planner_active(slug: str, response: Response) -> dict:
 @router.post("/{thread_id:path}/resume")
 async def resume_planner(thread_id: str) -> dict:
     r = redis_aio.from_url(
-        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
-        await clear_cancel(r, thread_id)
+        await domains.dd.planner.runtime.cancel.service.clear_cancel(r, thread_id)
     finally:
         await r.aclose()
 
@@ -354,7 +343,7 @@ async def list_recent_planners() -> dict:
     that died early over later threads that completed all nodes."""
     import psycopg
 
-    dsn = postgres_url()
+    dsn = domains.dd.planner.keys.postgres_url()
 
     out: list[dict] = []
     try:
@@ -401,14 +390,14 @@ async def wipe_planner(slug: str) -> dict:
             detail=f"invalid slug {slug!r}; slashes not allowed",
         )
 
-    minio = get_storage()
+    minio = domains.dd.ingestion.storage.service.get_storage()
     try:
         n_minio = await minio.delete_prefix(f"planner/{slug}/")
     except Exception as e:
         logger.warning(f"[planner-wipe] MinIO delete failed for {slug!r}: {e}")
         n_minio = -1
 
-    dsn = postgres_url()
+    dsn = domains.dd.planner.keys.postgres_url()
 
     counts: dict = {}
     pattern = f"docs-distiller/{slug}/%"
@@ -433,12 +422,12 @@ async def wipe_planner(slug: str) -> dict:
     n_redis = 0
     try:
         rc = redis_aio.from_url(
-            redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+            domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
         )
         try:
             n_redis = await rc.delete(
-                active_run_key(slug),
-                lock_key(slug),
+                domains.dd.planner.keys.active_run_key(slug),
+                domains.dd.planner.keys.lock_key(slug),
             )
         finally:
             await rc.aclose()
@@ -471,7 +460,7 @@ async def planner_events(thread_id: str) -> StreamingResponse:
 
         async def _pump():
             try:
-                async for event in subscribe_progress(thread_id):
+                async for event in domains.dd.planner.runtime.progress.service.subscribe_progress(thread_id):
                     await queue.put(event)
             except asyncio.CancelledError:
                 pass
@@ -523,12 +512,12 @@ async def planner_events(thread_id: str) -> StreamingResponse:
 @router.post("/{thread_id:path}/cancel")
 async def cancel_planner(thread_id: str) -> dict:
     r = redis_aio.from_url(
-        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
-        await request_cancel(r, thread_id)
+        await domains.dd.planner.runtime.cancel.service.request_cancel(r, thread_id)
         if thread_id.count("/") >= 2:
-            await r.delete(active_run_key(thread_id.split('/')[1]))
+            await r.delete(domains.dd.planner.keys.active_run_key(thread_id.split('/')[1]))
     finally:
         await r.aclose()
     return {"thread_id": thread_id, "status": "cancel_requested"}
@@ -537,7 +526,7 @@ async def cancel_planner(thread_id: str) -> dict:
 @router.get("/debug/graph/{thread_id:path}/state")
 async def get_graph_state(thread_id: str) -> dict:
     try:
-        graph = build_graph()
+        graph = domains.dd.planner.graph.build_graph()
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
@@ -559,14 +548,13 @@ async def get_graph_state(thread_id: str) -> dict:
 
 @router.get("/debug/graph/{thread_id:path}/llm-counters")
 async def get_graph_llm_counters(thread_id: str) -> dict:
-    from domains.dd.runtime.llm_counter import read_counters
-    return await read_counters(thread_id)
+    return await domains.dd.runtime.service.read_counters(thread_id)
 
 
 @router.get("/debug/graph/{thread_id:path}/history")
 async def get_graph_history(thread_id: str) -> dict:
     try:
-        graph = build_graph()
+        graph = domains.dd.planner.graph.build_graph()
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
 

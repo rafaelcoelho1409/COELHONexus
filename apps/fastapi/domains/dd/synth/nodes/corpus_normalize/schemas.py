@@ -1,9 +1,9 @@
 """corpus_normalize — Pydantic schemas (LLM/storage boundary validation)."""
 from __future__ import annotations
+from . import versions
 
 from pydantic import BaseModel, Field
 
-from .versions import NORMALIZER_VERSION
 
 
 class NormalizeStats(BaseModel):
@@ -30,4 +30,4 @@ class NormalizedDoc(BaseModel):
     body:        str
     frontmatter: dict           = Field(default_factory = dict)
     stats:       NormalizeStats
-    version:     int            = NORMALIZER_VERSION
+    version:     int            = versions.NORMALIZER_VERSION

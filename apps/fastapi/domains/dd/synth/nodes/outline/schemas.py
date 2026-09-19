@@ -1,18 +1,9 @@
 """outline_sdp — Pydantic schemas (ChapterOutline + OutlineDAG)."""
 from __future__ import annotations
+from . import params, patterns
 
 from pydantic import BaseModel, Field, field_validator
 
-from .params import (
-    DESCRIPTION_MAX_CHARS,
-    DESCRIPTION_MIN_CHARS,
-    HEADING_MAX_WORDS,
-    HEADING_MIN_WORDS,
-    MAX_PREREQS_PER_NODE,
-    SECTIONS_MAX,
-    SECTIONS_MIN,
-)
-from .patterns import SECTION_ID_RE
 
 
 class OutlineSection(BaseModel):
@@ -52,7 +43,7 @@ class OutlineSection(BaseModel):
     @field_validator("section_id")
     @classmethod
     def _validate_id(cls, v: str) -> str:
-        if not SECTION_ID_RE.match(v):
+        if not patterns.SECTION_ID_RE.match(v):
             raise ValueError(
                 f"section_id {v!r} must match /^s\\d+$/ "
                 f"(e.g. 's1', 's12')"
@@ -63,9 +54,9 @@ class OutlineSection(BaseModel):
     @classmethod
     def _validate_heading(cls, v: str) -> str:
         words = v.strip().split()
-        if not (HEADING_MIN_WORDS <= len(words) <= HEADING_MAX_WORDS):
+        if not (params.HEADING_MIN_WORDS <= len(words) <= params.HEADING_MAX_WORDS):
             raise ValueError(
-                f"heading must be {HEADING_MIN_WORDS}-{HEADING_MAX_WORDS} "
+                f"heading must be {params.HEADING_MIN_WORDS}-{params.HEADING_MAX_WORDS} "
                 f"words; got {len(words)} ({v!r})"
             )
         if v.lstrip().startswith("#"):
@@ -76,23 +67,23 @@ class OutlineSection(BaseModel):
     @classmethod
     def _validate_description(cls, v: str) -> str:
         s = " ".join(v.strip().split())
-        if not (DESCRIPTION_MIN_CHARS <= len(s) <= DESCRIPTION_MAX_CHARS):
+        if not (params.DESCRIPTION_MIN_CHARS <= len(s) <= params.DESCRIPTION_MAX_CHARS):
             raise ValueError(
-                f"description must be {DESCRIPTION_MIN_CHARS}-"
-                f"{DESCRIPTION_MAX_CHARS} chars; got {len(s)}"
+                f"description must be {params.DESCRIPTION_MIN_CHARS}-"
+                f"{params.DESCRIPTION_MAX_CHARS} chars; got {len(s)}"
             )
         return s
 
     @field_validator("prerequisites")
     @classmethod
     def _validate_prereqs(cls, v: list[str]) -> list[str]:
-        if len(v) > MAX_PREREQS_PER_NODE:
+        if len(v) > params.MAX_PREREQS_PER_NODE:
             raise ValueError(
-                f"max {MAX_PREREQS_PER_NODE} prerequisites per section; "
+                f"max {params.MAX_PREREQS_PER_NODE} prerequisites per section; "
                 f"got {len(v)}"
             )
         for prereq in v:
-            if not SECTION_ID_RE.match(prereq):
+            if not patterns.SECTION_ID_RE.match(prereq):
                 raise ValueError(
                     f"prerequisite {prereq!r} must match section_id format"
                 )
@@ -104,8 +95,8 @@ class OutlineSection(BaseModel):
 class ChapterOutline(BaseModel):
     """Phase output of `outline_sdp` for one chapter."""
     sections: list[OutlineSection] = Field(
-        min_length = SECTIONS_MIN,
-        max_length = SECTIONS_MAX,
+        min_length = params.SECTIONS_MIN,
+        max_length = params.SECTIONS_MAX,
     )
 
 

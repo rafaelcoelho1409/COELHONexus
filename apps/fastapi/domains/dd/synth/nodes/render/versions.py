@@ -13,3 +13,5 @@ RENDER_TEMPLATE_VERSION = "v5-fence-info-sanitize-2026-09-06"
 # Same algorithm as `synth/vault.py:_hash_block` — 16-hex SHA-256 prefix.
 # MUST match or the audit will false-fail.
 HASH_ALGO = "sha256"
+
+NORMALIZE_PROMPT_VERSION = "v3-2026-06-08"

@@ -1,20 +1,12 @@
 """Pure artifact-extraction transforms (no I/O). Fetch + write live in service.py."""
 from __future__ import annotations
+from . import entities, keys, params, patterns
 
 import base64
 import hashlib
 import re
 from urllib.parse import urljoin, urlparse
 
-from .entities import Artifact
-from .keys import ARTIFACT_ATTRS, EXT_MIME, IMAGE_EXTS, MIME_EXT
-from .params import MAX_ARTIFACT_BYTES, MIN_ARTIFACT_BYTES
-from .patterns import (
-    DATA_URL_RE,
-    HTML_ATTR_RE,
-    MD_HTML_TAG_RE,
-    MD_IMG_RE,
-)
 
 
 def hash_name(data: bytes, ext: str) -> str:
@@ -26,18 +18,18 @@ def ext_from_url(url: str) -> str:
     if len(path) != 2:
         return ""
     ext = path[1].lower().split("?", 1)[0].split("#", 1)[0]
-    return ext if ext in EXT_MIME else ""
+    return ext if ext in keys.EXT_MIME else ""
 
 
 def is_imageish_url(url: str) -> bool:
     parts = (urlparse(url).path or "").rsplit(".", 1)
     if len(parts) != 2:
         return False
-    return parts[1].split("?", 1)[0].split("#", 1)[0].lower() in IMAGE_EXTS
+    return parts[1].split("?", 1)[0].split("#", 1)[0].lower() in keys.IMAGE_EXTS
 
 
-def parse_data_url(src: str) -> Artifact | None:
-    m = DATA_URL_RE.match(src)
+def parse_data_url(src: str) -> entities.Artifact | None:
+    m = patterns.DATA_URL_RE.match(src)
     if not m:
         return None
     mime = (m.group("mime") or "").lower()
@@ -50,10 +42,10 @@ def parse_data_url(src: str) -> Artifact | None:
             data = data_str.encode("utf-8")
     except Exception:
         return None
-    if not (MIN_ARTIFACT_BYTES <= len(data) <= MAX_ARTIFACT_BYTES):
+    if not (params.MIN_ARTIFACT_BYTES <= len(data) <= params.MAX_ARTIFACT_BYTES):
         return None
-    ext = MIME_EXT.get(mime, "bin")
-    return Artifact(
+    ext = keys.MIME_EXT.get(mime, "bin")
+    return entities.Artifact(
         name         = hash_name(data, ext),
         data         = data,
         content_type = mime or "application/octet-stream",
@@ -116,13 +108,13 @@ def collect_md_payloads(md: str, source_url: str) -> dict[str, str]:
     """Scan `md` for image refs → `{payload: kind}`. Two passes: markdown
     `![alt](url)`, then raw HTML media tags embedded in the markdown."""
     payloads: dict[str, str] = {}
-    for m in MD_IMG_RE.finditer(md):
+    for m in patterns.MD_IMG_RE.finditer(md):
         cls = classify_url(m.group("url"), source_url)
         if cls is not None:
             payloads.setdefault(cls[1], cls[0])
-    for tagm in MD_HTML_TAG_RE.finditer(md):
+    for tagm in patterns.MD_HTML_TAG_RE.finditer(md):
         attrs = tagm.group("attrs") or ""
-        for am in HTML_ATTR_RE.finditer(attrs):
+        for am in patterns.HTML_ATTR_RE.finditer(attrs):
             attr = am.group("attr").lower()
             value = am.group("value").strip()
             if not value:
@@ -148,7 +140,7 @@ def build_md_replacement_map(
     """`{original_url_text: public_path}` — keyed on the EXACT URL substring
     so callers can str.replace safely (URLs are unique enough)."""
     rep: dict[str, str] = {}
-    for m in MD_IMG_RE.finditer(md):
+    for m in patterns.MD_IMG_RE.finditer(md):
         raw = m.group("url")
         cls = classify_url(raw, source_url)
         if cls is None:
@@ -156,9 +148,9 @@ def build_md_replacement_map(
         public = payload_to_public.get(cls[1])
         if public:
             rep[raw] = public
-    for tagm in MD_HTML_TAG_RE.finditer(md):
+    for tagm in patterns.MD_HTML_TAG_RE.finditer(md):
         attrs = tagm.group("attrs") or ""
-        for am in HTML_ATTR_RE.finditer(attrs):
+        for am in patterns.HTML_ATTR_RE.finditer(attrs):
             attr = am.group("attr").lower()
             raw = am.group("value").strip()
             if not raw:
@@ -176,16 +168,3 @@ def build_md_replacement_map(
                 if public:
                     rep[raw] = public
     return rep
-
-
-__all__ = [
-    "ARTIFACT_ATTRS",
-    "build_md_replacement_map",
-    "classify_url",
-    "collect_md_payloads",
-    "ext_from_url",
-    "hash_name",
-    "is_imageish_url",
-    "parse_data_url",
-    "pick_largest_srcset",
-]

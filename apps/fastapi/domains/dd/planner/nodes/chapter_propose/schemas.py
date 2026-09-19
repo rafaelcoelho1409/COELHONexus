@@ -1,20 +1,9 @@
 """chapter_propose — Pydantic value objects + LLM response_format specs."""
 from __future__ import annotations
+from . import params
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .params import (
-    CONCEPT_CHARS_MAX,
-    CONCEPT_CHARS_MIN,
-    CONCEPTS_MAX,
-    CONCEPTS_MIN,
-    DESCRIPTION_CHARS_MAX,
-    DESCRIPTION_CHARS_MIN,
-    PROPOSALS_MAX,
-    PROPOSALS_MIN,
-    TITLE_MAX_WORDS,
-    TITLE_MIN_WORDS,
-)
 
 
 class ChapterProposal(BaseModel):
@@ -25,20 +14,20 @@ class ChapterProposal(BaseModel):
 
     title: str = Field(
         description = (
-            f"{TITLE_MIN_WORDS}-{TITLE_MAX_WORDS} words. Concrete noun "
+            f"{params.TITLE_MIN_WORDS}-{params.TITLE_MAX_WORDS} words. Concrete noun "
             f"phrase. Avoid generic 'Introduction', 'Overview', "
             f"'Conclusion' — name the specific topic."
         ),
     )
     description: str = Field(
         description = (
-            f"{DESCRIPTION_CHARS_MIN}-{DESCRIPTION_CHARS_MAX} chars. One "
+            f"{params.DESCRIPTION_CHARS_MIN}-{params.DESCRIPTION_CHARS_MAX} chars. One "
             f"sentence describing what readers learn in this chapter."
         ),
     )
     key_concepts: list[str] = Field(
         description = (
-            f"{CONCEPTS_MIN}-{CONCEPTS_MAX} technical concepts/identifiers/"
+            f"{params.CONCEPTS_MIN}-{params.CONCEPTS_MAX} technical concepts/identifiers/"
             f"commands that belong in this chapter. Specific names, not "
             f"abstract topics."
         ),
@@ -49,9 +38,9 @@ class ChapterProposal(BaseModel):
     def _validate_title(cls, v: str) -> str:
         s = " ".join(v.strip().split())
         n = len(s.split())
-        if not (TITLE_MIN_WORDS <= n <= TITLE_MAX_WORDS):
+        if not (params.TITLE_MIN_WORDS <= n <= params.TITLE_MAX_WORDS):
             raise ValueError(
-                f"title must be {TITLE_MIN_WORDS}-{TITLE_MAX_WORDS} "
+                f"title must be {params.TITLE_MIN_WORDS}-{params.TITLE_MAX_WORDS} "
                 f"words; got {n}"
             )
         return s
@@ -60,39 +49,39 @@ class ChapterProposal(BaseModel):
     @classmethod
     def _validate_description(cls, v: str) -> str:
         s = " ".join(v.strip().split())
-        if not (DESCRIPTION_CHARS_MIN <= len(s) <= DESCRIPTION_CHARS_MAX):
+        if not (params.DESCRIPTION_CHARS_MIN <= len(s) <= params.DESCRIPTION_CHARS_MAX):
             raise ValueError(
-                f"description must be {DESCRIPTION_CHARS_MIN}-"
-                f"{DESCRIPTION_CHARS_MAX} chars; got {len(s)}"
+                f"description must be {params.DESCRIPTION_CHARS_MIN}-"
+                f"{params.DESCRIPTION_CHARS_MAX} chars; got {len(s)}"
             )
         return s
 
     @field_validator("key_concepts")
     @classmethod
     def _validate_concepts(cls, v: list[str]) -> list[str]:
-        if not (CONCEPTS_MIN <= len(v) <= CONCEPTS_MAX):
+        if not (params.CONCEPTS_MIN <= len(v) <= params.CONCEPTS_MAX):
             raise ValueError(
-                f"key_concepts count must be {CONCEPTS_MIN}-"
-                f"{CONCEPTS_MAX}; got {len(v)}"
+                f"key_concepts count must be {params.CONCEPTS_MIN}-"
+                f"{params.CONCEPTS_MAX}; got {len(v)}"
             )
         out: list[str] = []
         seen: set[str] = set()
         for c in v:
             s = " ".join(c.strip().split())
-            if not (CONCEPT_CHARS_MIN <= len(s) <= CONCEPT_CHARS_MAX):
+            if not (params.CONCEPT_CHARS_MIN <= len(s) <= params.CONCEPT_CHARS_MAX):
                 raise ValueError(
-                    f"concept length must be {CONCEPT_CHARS_MIN}-"
-                    f"{CONCEPT_CHARS_MAX}; got {len(s)}"
+                    f"concept length must be {params.CONCEPT_CHARS_MIN}-"
+                    f"{params.CONCEPT_CHARS_MAX}; got {len(s)}"
                 )
             k = s.casefold()
             if k in seen:
                 continue
             seen.add(k)
             out.append(s)
-        if len(out) < CONCEPTS_MIN:
+        if len(out) < params.CONCEPTS_MIN:
             raise ValueError(
                 f"after dedup only {len(out)} key_concepts "
-                f"(minimum {CONCEPTS_MIN})"
+                f"(minimum {params.CONCEPTS_MIN})"
             )
         return out
 
@@ -103,7 +92,7 @@ class ChapterProposalList(BaseModel):
 
     proposals: list[ChapterProposal] = Field(
         description = (
-            f"{PROPOSALS_MIN}-{PROPOSALS_MAX} chapter proposals covering "
+            f"{params.PROPOSALS_MIN}-{params.PROPOSALS_MAX} chapter proposals covering "
             f"the full corpus surface area. Each chapter is a distinct "
             f"topic. Aim for balance — every chapter should be backed by "
             f"≥3 source docs."
@@ -115,9 +104,9 @@ class ChapterProposalList(BaseModel):
     def _validate_count(
         cls, v: list[ChapterProposal],
     ) -> list[ChapterProposal]:
-        if not (PROPOSALS_MIN <= len(v) <= PROPOSALS_MAX):
+        if not (params.PROPOSALS_MIN <= len(v) <= params.PROPOSALS_MAX):
             raise ValueError(
-                f"proposals count must be {PROPOSALS_MIN}-{PROPOSALS_MAX}; "
+                f"proposals count must be {params.PROPOSALS_MIN}-{params.PROPOSALS_MAX}; "
                 f"got {len(v)}"
             )
         seen: set[str] = set()

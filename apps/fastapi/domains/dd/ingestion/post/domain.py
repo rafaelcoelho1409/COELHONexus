@@ -1,5 +1,6 @@
 """Monolith splitter: Source-marker → H1 → H2/H3 precedence (Docusaurus: single H1 wraps the whole bundle). markdown-it tokens keep code fences/tables/HTML atomic."""
 from __future__ import annotations
+from . import params, patterns
 
 import hashlib
 import logging
@@ -10,13 +11,6 @@ from mdit_py_plugins.deflist import deflist_plugin
 from mdit_py_plugins.footnote import footnote_plugin
 from mdit_py_plugins.front_matter import front_matter_plugin
 
-from .params import (
-    MONOLITH_SPLIT_THRESHOLD_BYTES,
-    SOURCE_MIN_MARKERS,
-    SPLIT_MAX_SECTION_BYTES,
-    SPLIT_MIN_SECTION_BYTES,
-)
-from .patterns import H1_PREFIX_RE, SOURCE_LINE_RE
 
 
 logger = logging.getLogger(__name__)
@@ -78,8 +72,8 @@ def slugify_heading(s: str, fallback: str) -> str:
 def split_by_source_markers(text: str) -> list[tuple[str, str, str]] | None:
     """Boundary strategy A: walk back from each `Source: <url>` to the nearest
     H1 — that's the section start. None if < SOURCE_MIN_MARKERS markers."""
-    matches = list(SOURCE_LINE_RE.finditer(text))
-    if len(matches) < SOURCE_MIN_MARKERS:
+    matches = list(patterns.SOURCE_LINE_RE.finditer(text))
+    if len(matches) < params.SOURCE_MIN_MARKERS:
         return None
     lines = text.splitlines(keepends = True)
     line_offsets = [0]
@@ -130,7 +124,7 @@ def split_monolith(
 ) -> tuple[list[tuple[str, str]], int, int]:
     """→ (writes, stubs_dropped, dupes_dropped). Pure — caller persists.
     Below MONOLITH_SPLIT_THRESHOLD_BYTES returns body unchanged."""
-    if len(body.encode("utf-8")) < MONOLITH_SPLIT_THRESHOLD_BYTES:
+    if len(body.encode("utf-8")) < params.MONOLITH_SPLIT_THRESHOLD_BYTES:
         return [(parent_slug, body)], 0, 0
     sections = split_by_source_markers(body)
     strategy = "source-markers"
@@ -179,7 +173,7 @@ def split_monolith(
     pre = len(writes)
     writes = [
         (s, b) for s, b in writes
-        if len(b.encode("utf-8")) >= SPLIT_MIN_SECTION_BYTES
+        if len(b.encode("utf-8")) >= params.SPLIT_MIN_SECTION_BYTES
     ]
     stubs_dropped = pre - len(writes)
     seen: set[str] = set()
@@ -213,7 +207,7 @@ def _h2_subsplit_oversized(
     n_expanded = 0
     n_added_subsections = 0
     for s, b in writes:
-        h1_match = H1_PREFIX_RE.match(b)
+        h1_match = patterns.H1_PREFIX_RE.match(b)
         h1_prefix = (h1_match.group(1) + "\n\n") if h1_match else ""
         sub_pages = _size_aware_recursive_split(
             s, b, h1_prefix = h1_prefix, levels = (2, 3),
@@ -228,7 +222,7 @@ def _h2_subsplit_oversized(
         delta = n_added_subsections - n_expanded
         logger.info(
             f"[post] h2-subsplit: {n_expanded} oversized section(s) "
-            f"(> {SPLIT_MAX_SECTION_BYTES // 1024} KB) expanded into "
+            f"(> {params.SPLIT_MAX_SECTION_BYTES // 1024} KB) expanded into "
             f"{n_added_subsections} sub-pages (+{delta} net entries)"
         )
     return expanded
@@ -242,7 +236,7 @@ def _size_aware_recursive_split(
 ) -> list[tuple[str, str]]:
     """Sub-split only over the size cap; falls through on ORIGINAL body
     (not on stub-dropped fragments)."""
-    if len(body.encode("utf-8")) <= SPLIT_MAX_SECTION_BYTES:
+    if len(body.encode("utf-8")) <= params.SPLIT_MAX_SECTION_BYTES:
         return [(slug, body)]
     if not levels:
         return [(slug, body)]
@@ -265,7 +259,7 @@ def _size_aware_recursive_split(
         sub_writes.append((new_slug, body_with_context))
     sub_writes = [
         (ss, sb) for ss, sb in sub_writes
-        if len(sb.encode("utf-8")) >= SPLIT_MIN_SECTION_BYTES
+        if len(sb.encode("utf-8")) >= params.SPLIT_MIN_SECTION_BYTES
     ]
     if len(sub_writes) < 2:
         return _size_aware_recursive_split(slug, body, h1_prefix, rest_levels)
@@ -283,7 +277,7 @@ def dedup_pages(
     pre = len(pages)
     kept = [
         (s, u, b) for s, u, b in pages
-        if len(b.encode("utf-8")) >= SPLIT_MIN_SECTION_BYTES
+        if len(b.encode("utf-8")) >= params.SPLIT_MIN_SECTION_BYTES
     ]
     stubs_dropped = pre - len(kept)
     seen: set[str] = set()

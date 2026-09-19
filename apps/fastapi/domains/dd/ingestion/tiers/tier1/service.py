@@ -1,4 +1,7 @@
 """Fetch a single llms-full.txt bundle. Raises ManifestDetected when the body is a link index (few fences + many URL: pointers) so dispatcher falls through to Tier 2."""
+from __future__ import annotations
+import domains
+from . import domain, params
 import logging
 import time
 from urllib.parse import urlparse
@@ -11,11 +14,6 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-from ...progress import Progress
-from ...storage import Store
-from ..errors import ManifestDetected
-from .domain import host_slug, looks_like_manifest
-from .params import MIN_OK_BYTES, TIMEOUT_S, USER_AGENT
 
 
 logger = logging.getLogger(__name__)
@@ -28,15 +26,15 @@ logger = logging.getLogger(__name__)
     wait = wait_exponential_jitter(initial = 1, max = 15),
 )
 async def _fetch(client: httpx.AsyncClient, url: str) -> httpx.Response:
-    return await client.get(url, headers = {"User-Agent": USER_AGENT})
+    return await client.get(url, headers = {"User-Agent": params.USER_AGENT})
 
 
 async def run(
     *,
     url: str,
     framework_slug: str,
-    progress: Progress,
-    store: Store,
+    progress: domains.dd.ingestion.progress.service.Progress,
+    store: domains.dd.ingestion.storage.service.Store,
 ) -> int:
     """Fetch bundle, write one page, return 1. Raises ManifestDetected if body is a link index, RuntimeError on fetch failure or HTTP non-200."""
     host = (urlparse(url).netloc or "").lower()
@@ -46,7 +44,7 @@ async def run(
     await progress.start(tier = "llms_full", total = 1)
     await progress.raise_if_cancelled()
     async with httpx.AsyncClient(
-        timeout = httpx.Timeout(TIMEOUT_S, connect = 10.0),
+        timeout = httpx.Timeout(params.TIMEOUT_S, connect = 10.0),
         follow_redirects = True,
     ) as client:
         t0 = time.monotonic()
@@ -77,7 +75,7 @@ async def run(
             )
             await progress.finish(status = "failed")
             raise RuntimeError(f"Tier 1: {url} → HTTP {resp.status_code}")
-        if len(body) < MIN_OK_BYTES:
+        if len(body) < params.MIN_OK_BYTES:
             await progress.record_url(
                 url,
                 status = "extract_empty",
@@ -91,7 +89,7 @@ async def run(
             await progress.finish(status = "failed")
             raise RuntimeError(f"Tier 1: {url} body too short ({len(body)}B)")
 
-        is_manifest, stats = looks_like_manifest(body)
+        is_manifest, stats = domain.looks_like_manifest(body)
         if is_manifest:
             logger.warning(
                 f"[tier-1] {url} looks like a manifest "
@@ -108,8 +106,8 @@ async def run(
                 error_msg = "manifest detected; falling to tier 2",
             )
             await progress.finish(status = "downgrade")
-            raise ManifestDetected(f"{url}: {stats}")
-        slug = host_slug(host)
+            raise domains.dd.ingestion.tiers.errors.ManifestDetected(f"{url}: {stats}")
+        slug = domain.host_slug(host)
         await store.add_page(
             slug = slug,
             url = url,

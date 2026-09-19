@@ -1,23 +1,13 @@
 """Pure render helpers: section context build, dedup/align, chapter template rendering, vault merge, audit, and SHA hashing."""
 from __future__ import annotations
+import domains
+from . import params, patterns, prompts, schemas, versions
 
+import ast
 import hashlib
 import json
 import re
 
-from .params import (
-    DEDUP_MIN_CHARS,
-    DEDUP_MIN_LINES,
-    MISMATCH_MIN_CODE_IDENTS,
-    NOISE_IDENTS,
-    VAULT_HASH_LEN,
-)
-from .patterns import IDENT_RE, SENTINEL_RE
-from .prompts import (
-    CHAPTER_MD_TEMPLATE,
-    JINJA_ENV,
-)
-from .schemas import AuditResult, CodeRefResolution
 
 
 def _basename(key: str) -> str:
@@ -37,13 +27,10 @@ def build_section_context(
     section: dict,
     *,
     vault: dict[str, str],
-    resolution_log: list[CodeRefResolution],
+    resolution_log: list[schemas.CodeRefResolution],
     normalized_hashes: set[str] | None = None,
 ) -> dict:
     """Build section template context from sawc Section. Appends CodeRefResolution per subtopic to resolution_log. normalized_hashes=hashes rewritten by LLM normalizer — treated as verbatim to suppress byte-drift false-positives."""
-    # Lazy import to avoid a render→sawc_derive cycle.
-    from ..sawc_derive.domain import python_ast_valid as _ast_valid
-
     section_id = section.get("section_id", "?")
     heading = section.get("heading", "?")
     intro = (section.get("intro") or "").strip()
@@ -62,7 +49,7 @@ def build_section_context(
         derived_caption = ""
 
         if code_source == "derived" and derived_code:
-            ast_ok = _ast_valid(derived_code)
+            ast_ok = domains.dd.synth.nodes.sawc_derive.domain.python_ast_valid(derived_code)
             body = derived_code.rstrip()
             code_block = f"```python\n{body}\n```"
             short_hash = (h or "")[:8] if h else ""
@@ -76,7 +63,7 @@ def build_section_context(
                 f"as hallucinated in audit)._\n"
             )
             tier = "derived" if ast_ok else "hallucinated"
-            resolution_log.append(CodeRefResolution(
+            resolution_log.append(schemas.CodeRefResolution(
                 hash = h or "",
                 found_in_vault = False,
                 byte_drift = False,
@@ -96,7 +83,7 @@ def build_section_context(
                     rehashed = hash_block(fence_text)
                     byte_drift = (rehashed != h)
                     tier = "hallucinated" if byte_drift else "verbatim"
-                resolution_log.append(CodeRefResolution(
+                resolution_log.append(schemas.CodeRefResolution(
                     hash = h,
                     found_in_vault = True,
                     byte_drift = byte_drift,
@@ -105,7 +92,7 @@ def build_section_context(
                     tier = tier,
                 ))
             else:
-                resolution_log.append(CodeRefResolution(
+                resolution_log.append(schemas.CodeRefResolution(
                     hash = h,
                     found_in_vault = False,
                     byte_drift = False,
@@ -163,7 +150,7 @@ def _norm_body(inner: str) -> str:
 
 
 def _idents(text: str) -> set[str]:
-    return {w.lower() for w in IDENT_RE.findall(text or "")} - NOISE_IDENTS
+    return {w.lower() for w in patterns.IDENT_RE.findall(text or "")} - params.NOISE_IDENTS
 
 
 # Fixed 2026-09-05 — a "/ plugin marketplace add ..." shipped with a
@@ -246,8 +233,8 @@ def dedupe_and_align_sections(
                 continue
             subheading = sub.get("subheading") or "?"
             nontrivial = (
-                inner.count("\n") + 1 >= DEDUP_MIN_LINES
-                or len(inner) >= DEDUP_MIN_CHARS
+                inner.count("\n") + 1 >= params.DEDUP_MIN_LINES
+                or len(inner) >= params.DEDUP_MIN_CHARS
             )
 
             if nontrivial:
@@ -269,7 +256,7 @@ def dedupe_and_align_sections(
 
             if drop_mismatch:
                 ci = _idents(inner)
-                if len(ci) >= MISMATCH_MIN_CODE_IDENTS:
+                if len(ci) >= params.MISMATCH_MIN_CODE_IDENTS:
                     ti = _idents(
                         subheading + " " + (sub.get("explanation") or ""),
                     )
@@ -312,7 +299,7 @@ def render_chapter_md(
 ) -> str:
     """Render full cookbook chapter markdown. Deterministic given identical inputs."""
     toc = _build_toc(sections_ctx) if len(sections_ctx) >= 2 else []
-    tpl = JINJA_ENV.from_string(CHAPTER_MD_TEMPLATE)
+    tpl = prompts.JINJA_ENV.from_string(prompts.CHAPTER_MD_TEMPLATE)
     md = tpl.render(
         chapter_title = chapter_title,
         sections = sections_ctx,
@@ -342,15 +329,15 @@ def hash_block(payload: str, salt: int = 0) -> str:
     """16-hex SHA-256 prefix. MUST match `synth/vault.py:_hash_block`
     or the audit will spuriously fail."""
     seed = payload if salt == 0 else f"{payload}|{salt}"
-    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:VAULT_HASH_LEN]
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:params.VAULT_HASH_LEN]
 
 
 def compute_audit(
     *,
-    resolution_log: list[CodeRefResolution],
+    resolution_log: list[schemas.CodeRefResolution],
     vault: dict[str, str],
     rendered_chapter_md: str,
-) -> AuditResult:
+) -> schemas.AuditResult:
     """Aggregate per-ref resolution log into an AuditResult."""
     referenced_hashes: set[str] = {
         r.hash for r in resolution_log if r.hash
@@ -366,7 +353,7 @@ def compute_audit(
         if r.byte_drift and r.hash
     })
     n_orphan = sorted(set(vault.keys()) - referenced_hashes)
-    sentinels_left = len(SENTINEL_RE.findall(rendered_chapter_md or ""))
+    sentinels_left = len(patterns.SENTINEL_RE.findall(rendered_chapter_md or ""))
 
     n_verbatim = sum(1 for r in resolution_log if r.tier == "verbatim")
     n_derived = sum(1 for r in resolution_log if r.tier == "derived")
@@ -383,7 +370,7 @@ def compute_audit(
 
     capped_details = resolution_log[:100]
 
-    return AuditResult(
+    return schemas.AuditResult(
         n_code_refs_referenced = n_total,
         n_resolved = n_resolved,
         n_missing = n_missing,
@@ -408,12 +395,11 @@ def compute_manifest_hash(
     sawc_manifest_hash: str,
     mgsr_manifest_hash: str,
 ) -> str:
-    from .versions import RENDER_SCHEMA_VERSION, RENDER_TEMPLATE_VERSION
     payload = (
         f"sawc={sawc_manifest_hash}|"
         f"mgsr={mgsr_manifest_hash}|"
-        f"template={RENDER_TEMPLATE_VERSION}|"
-        f"schema={RENDER_SCHEMA_VERSION}"
+        f"template={versions.RENDER_TEMPLATE_VERSION}|"
+        f"schema={versions.RENDER_SCHEMA_VERSION}"
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
@@ -421,3 +407,55 @@ def compute_manifest_hash(
 def load_render_payload(text: str) -> dict:
     """Parse the persisted render-latest.json blob."""
     return json.loads(text)
+
+
+def strip_code_fences(s: str) -> str:
+    """Peel leading and trailing fence lines independently — earlier version only stripped trailing when leading existed, causing stray empty code blocks (ch-02 browser-use bug)."""
+    s = (s or "").strip("\n")
+    if not s:
+        return s
+    lines = s.split("\n")
+    if lines and lines[0].lstrip().startswith(("```", "~~~")):
+        lines = lines[1:]
+    if lines and lines[-1].lstrip().startswith(("```", "~~~")):
+        lines = lines[:-1]
+    return "\n".join(lines)
+
+
+def extract_largest_fenced_body(s: str) -> str | None:
+    """Return body of the longest fenced block; recovery when strip_code_fences leaves residual markers (LLM returned commentary + nested fence)."""
+    candidates = [m.group("body") for m in patterns.INNER_FENCE_RE.finditer(s)]
+    if not candidates:
+        return None
+    return max(candidates, key = len)
+
+
+def split_fence(fence_text: str):
+    """Return (open_marker, info_string, body, close_marker) or None when
+    the value doesn't look like a fenced block (defensive — handles
+    runtime-sentinelized entries that might be raw bodies)."""
+    if not fence_text:
+        return None
+    m = patterns.FENCE_RE.match(fence_text.strip("\n"))
+    if not m:
+        return None
+    return (m.group("open"), m.group("info"),
+            m.group("body"), m.group("close"))
+
+
+def lang_from_info(info_string: str) -> str:
+    """First whitespace-separated token of the info-string is the lang
+    hint (e.g. `python theme={...}` → "python")."""
+    info = (info_string or "").strip()
+    return info.split()[0].lower() if info else ""
+
+
+def python_ast_valid(body: str) -> tuple[bool, str]:
+    """Return (ok, error): stdlib ast (no dep); truth source for python/py blocks because biggest failure mode is unindented function/class bodies."""
+    try:
+        ast.parse(body)
+        return True, ""
+    except SyntaxError as e:
+        return False, f"line {e.lineno}: {e.msg}"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"

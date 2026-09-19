@@ -39,6 +39,7 @@ logging.basicConfig(
     format=_LOG_FORMAT,
 )
 
+import domains
 import redis.asyncio as redis_aio_module
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,11 +48,6 @@ from api.v1.router import api_v1
 from api.v1.ycs.agents.llm_chain import (
     build_deprecated_llm_chain,
     build_fast_llm_chain,
-)
-from domains.dd.ingestion.storage import get_storage
-from domains.dd.planner.runtime.checkpoint import (
-    close_checkpointer,
-    init_checkpointer,
 )
 from domains.llm.credentials import warm as warm_credentials
 from domains.llm.rotator.chain import build_reduce_label_chain
@@ -124,7 +120,7 @@ async def lifespan(app: FastAPI):
     # "offline" event (see COELHOCloud minio module fix, same date) froze
     # this exact call and left the pod stuck at 1/2 Ready until killed.
     try:
-        await asyncio.wait_for(get_storage().ensure_bucket(), timeout=30.0)
+        await asyncio.wait_for(domains.dd.ingestion.storage.service.get_storage().ensure_bucket(), timeout=30.0)
     except asyncio.TimeoutError:
         logger.warning(
             "[lifespan] MinIO ensure_bucket timed out after 30s — "
@@ -147,7 +143,7 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        await init_checkpointer()
+        await domains.dd.planner.runtime.checkpoint.service.init_checkpointer()
     except Exception as e:
         logger.warning(
             f"[lifespan] AsyncPostgresSaver init failed: "
@@ -298,7 +294,7 @@ async def lifespan(app: FastAPI):
     yield
 
     try:
-        await close_checkpointer()
+        await domains.dd.planner.runtime.checkpoint.service.close_checkpointer()
     except Exception as e:
         logger.warning(f"[lifespan] checkpointer close failed: {e}")
 

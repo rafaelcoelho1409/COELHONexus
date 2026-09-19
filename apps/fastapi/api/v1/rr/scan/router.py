@@ -7,11 +7,11 @@ from datetime import datetime, timezone
 from typing import AsyncIterator
 from uuid import UUID, uuid4
 
+import domains
 import psycopg
 from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import StreamingResponse
 
-from domains.dd.planner.keys import postgres_url
 from domains.rr.keys import (
     PG_TABLE_FINDINGS,
     PG_TABLE_SCANS,
@@ -36,7 +36,7 @@ router = APIRouter()
 async def list_recent_scans(profile_id: str = "default", limit: int = 20) -> dict:
     """Most-recent scans for a profile. LEFT JOIN rank-1 finding for a 1-3 theme preview."""
     limit = max(1, min(int(limit), 100))
-    async with await psycopg.AsyncConnection.connect(postgres_url()) as conn:
+    async with await psycopg.AsyncConnection.connect(domains.dd.planner.keys.postgres_url()) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 f"""
@@ -123,7 +123,7 @@ async def cancel_scan_endpoint(scan_id: UUID) -> dict:
 @router.get("/scan/{scan_id}", response_model=ScanResult)
 async def get_scan(scan_id: UUID) -> ScanResult:
     """Scan lifecycle snapshot + digest findings when done. Findings is empty until status='done'."""
-    async with await psycopg.AsyncConnection.connect(postgres_url()) as conn:
+    async with await psycopg.AsyncConnection.connect(domains.dd.planner.keys.postgres_url()) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 f"SELECT id, profile_id, status, started_at, finished_at, "
@@ -234,7 +234,7 @@ async def scan_finding_code(
             detail = "no cached code for this finding yet — click Generate to synthesize",
         )
 
-    async with await psycopg.AsyncConnection.connect(postgres_url()) as conn:
+    async with await psycopg.AsyncConnection.connect(domains.dd.planner.keys.postgres_url()) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 f"SELECT digest_json FROM {PG_TABLE_FINDINGS} "

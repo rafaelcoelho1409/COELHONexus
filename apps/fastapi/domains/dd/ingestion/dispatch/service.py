@@ -1,5 +1,16 @@
 """Cancel is cooperative (progress.raise_if_cancelled + watcher pre-empts blocking awaits). Lock TTL (35 min) outlasts Celery soft_time_limit (30 min) so crashed tasks self-release."""
 from __future__ import annotations
+import domains
+from . import domain, params
+# Module-level dict below needs the tier submodules RESOLVED at
+# dispatch/service.py's own import time — the global `domains.dd...`
+# chase can't be used here (docs/CODE-CONVENTIONS.md §8 Exception 2:
+# `domains.dd` isn't set until `dd/__init__.py` fully finishes, and
+# `dispatch` imports before `tiers` in ingestion/__init__.py's eager
+# chain). A sibling-rooted `from .. import tiers` is always safe at
+# module level since that import already blocked until `tiers` was
+# fully ready.
+from .. import tiers
 
 import asyncio
 import logging
@@ -9,44 +20,17 @@ import redis.asyncio as redis_aio
 
 from infra.otel import get_tracer
 
-from ...resolver import index_by_slug
-from .. import post
-from ..observability import record_ingestion_run
-from ..progress import (
-    IngestCancelled,
-    Progress,
-    is_cancelled,
-    redis_url,
-    release_lock,
-)
-from ..storage import framework_prefix, get_storage, Store
-from ..tiers import (
-    EmptyLinksDetected,
-    ManifestDetected,
-    tier1,
-    tier2,
-    tier3,
-    tier4,
-    tier5,
-)
-from .domain import pick_best
-from .params import (
-    CANCEL_POLL_S,
-    CLEANUP_SETTLE_S,
-    REDIS_CONNECT_TIMEOUT_S,
-    REDIS_OP_TIMEOUT_S,
-)
 
 
 logger = logging.getLogger(__name__)
 
 
 _TIER_MODULES = {
-    "llms_full": tier1,
-    "llms_txt":  tier2,
-    "sitemap":   tier3,
-    "docs":      tier4,
-    "github":    tier5,
+    "llms_full": tiers.tier1,
+    "llms_txt":  tiers.tier2,
+    "sitemap":   tiers.tier3,
+    "docs":      tiers.tier4,
+    "github":    tiers.tier5,
 }
 
 
@@ -54,13 +38,13 @@ async def _cancel_watcher(
     redis_client: "redis_aio.Redis",
     run_id: str,
     main_task: asyncio.Task,
-    poll_interval_s: float = CANCEL_POLL_S,
+    poll_interval_s: float = params.CANCEL_POLL_S,
 ) -> None:
     """Bypasses Progress throttle (calls is_cancelled() directly; sleep is the rate limit). Crawl4AI arun_many can block 30-60 s."""
     try:
         while not main_task.done():
             try:
-                if await is_cancelled(redis_client, run_id):
+                if await domains.dd.ingestion.progress.service.is_cancelled(redis_client, run_id):
                     logger.info(
                         f"[dispatch] {run_id}: cancel flag detected by "
                         f"watcher → cancelling main task"
@@ -77,7 +61,7 @@ async def _cancel_watcher(
 async def _cleanup_framework(minio, framework_slug: str) -> int:
     """Wipe `ingestion/{slug}/` so partial corpora aren't reused."""
     try:
-        n = await minio.delete_prefix(framework_prefix(framework_slug))
+        n = await minio.delete_prefix(domains.dd.ingestion.storage.keys.framework_prefix(framework_slug))
         logger.info(
             f"[dispatch] cleanup {framework_slug}: deleted {n} MinIO objects"
         )
@@ -101,7 +85,7 @@ async def run(run_id: str, slug: str) -> dict:
     ):
         result = await _run_inner(run_id, slug)
     post_summary = result.get("post") or {}
-    record_ingestion_run(
+    domains.dd.ingestion.observability.record_ingestion_run(
         framework = slug,
         tier_kind = str(result.get("tier_kind") or "unknown"),
         outcome = str(result.get("status") or "unknown"),
@@ -114,7 +98,7 @@ async def run(run_id: str, slug: str) -> dict:
 
 async def _run_inner(run_id: str, slug: str) -> dict:
     """Framework lock held by run_id on entry (acquired in POST /runs); released in finally."""
-    catalog = index_by_slug()
+    catalog = domains.dd.resolver.service.index_by_slug()
     entry = catalog.get(slug)
     if entry is None:
         return {
@@ -122,7 +106,7 @@ async def _run_inner(run_id: str, slug: str) -> dict:
             "error": f"unknown framework slug: {slug!r}",
         }
 
-    best = pick_best(entry)
+    best = domain.pick_best(entry)
     if best is None:
         return {
             "run_id": run_id, "slug": slug,
@@ -131,14 +115,14 @@ async def _run_inner(run_id: str, slug: str) -> dict:
             "error": "no source URLs in catalog entry",
         }
 
-    progress = Progress(run_id)
+    progress = domains.dd.ingestion.progress.service.Progress(run_id)
     r = redis_aio.from_url(
-        redis_url(),
-        socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout = REDIS_OP_TIMEOUT_S,
+        domains.dd.ingestion.progress.keys.redis_url(),
+        socket_connect_timeout = params.REDIS_CONNECT_TIMEOUT_S,
+        socket_timeout = params.REDIS_OP_TIMEOUT_S,
     )
-    minio = get_storage()
-    store = Store(run_id, slug, r, minio)
+    minio = domains.dd.ingestion.storage.service.get_storage()
+    store = domains.dd.ingestion.storage.service.Store(run_id, slug, r, minio)
 
     base_result = {
         "run_id": run_id,
@@ -164,11 +148,11 @@ async def _run_inner(run_id: str, slug: str) -> dict:
                 "url": url, "framework_slug": slug,
                 "progress": progress, "store": store,
             }
-            if mod in (tier3, tier4):
+            if mod in (domains.dd.ingestion.tiers.tier3, domains.dd.ingestion.tiers.tier4):
                 kwargs["framework_name"] = entry["name"]
                 kwargs["path_filter"] = entry.get("path_filter")
-            await mod.run(**kwargs)
-        except ManifestDetected:
+            await mod.service.run(**kwargs)
+        except domains.dd.ingestion.tiers.errors.ManifestDetected:
             if entry.get("llms_txt"):
                 logger.info(
                     f"[dispatch] {slug}: Tier 1 manifest detected, "
@@ -177,8 +161,8 @@ async def _run_inner(run_id: str, slug: str) -> dict:
                 base_result["tier_kind"] = "llms_txt"
                 base_result["tier_url"] = entry["llms_txt"]
                 await progress.close()
-                progress = Progress(run_id)
-                await tier2.run(
+                progress = domains.dd.ingestion.progress.service.Progress(run_id)
+                await domains.dd.ingestion.tiers.tier2.service.run(
                     url = entry["llms_txt"], framework_slug = slug,
                     progress = progress, store = store,
                 )
@@ -187,12 +171,12 @@ async def _run_inner(run_id: str, slug: str) -> dict:
                     f"Tier 1 manifest at {url} but no llms_txt URL "
                     f"available to fall back to"
                 )
-        except EmptyLinksDetected:
+        except domains.dd.ingestion.tiers.errors.EmptyLinksDetected:
             # llms.txt long-form prose with no per-page links — fall through.
             fallback_chain = [
-                ("sitemap", entry.get("sitemap"), tier3),
-                ("docs",    entry.get("docs"),    tier4),
-                ("github",  entry.get("github"),  tier5),
+                ("sitemap", entry.get("sitemap"), domains.dd.ingestion.tiers.tier3),
+                ("docs",    entry.get("docs"),    domains.dd.ingestion.tiers.tier4),
+                ("github",  entry.get("github"),  domains.dd.ingestion.tiers.tier5),
             ]
             picked = next(((k, u, m) for k, u, m in fallback_chain if u), None)
             if picked is None:
@@ -208,21 +192,21 @@ async def _run_inner(run_id: str, slug: str) -> dict:
             base_result["tier_kind"] = fb_kind
             base_result["tier_url"] = fb_url
             await progress.close()
-            progress = Progress(run_id)
+            progress = domains.dd.ingestion.progress.service.Progress(run_id)
             fb_kwargs = {
                 "url": fb_url, "framework_slug": slug,
                 "progress": progress, "store": store,
             }
-            if fb_mod in (tier3, tier4):
+            if fb_mod in (domains.dd.ingestion.tiers.tier3, domains.dd.ingestion.tiers.tier4):
                 fb_kwargs["framework_name"] = entry["name"]
                 fb_kwargs["path_filter"] = entry.get("path_filter")
-            await fb_mod.run(**fb_kwargs)
+            await fb_mod.service.run(**fb_kwargs)
 
         await progress.raise_if_cancelled()
 
         await progress.start(tier = "post", total = 0)
 
-        post_summary = await post.apply_to_store(store)
+        post_summary = await domains.dd.ingestion.post.service.apply_to_store(store)
         await progress.record_post(
             tier = base_result["tier_kind"],
             input_files = post_summary["input_files"],
@@ -255,7 +239,7 @@ async def _run_inner(run_id: str, slug: str) -> dict:
             "manifest": [asdict(e) for e in store.manifest],
         }
 
-    except (IngestCancelled, asyncio.CancelledError):
+    except (domains.dd.ingestion.progress.errors.IngestCancelled, asyncio.CancelledError):
         logger.info(f"[dispatch] {slug}: cancelled by user (run_id={run_id})")
         # CRITICAL: stop watcher BEFORE cleanup — poll loop fires a second main_task.cancel() mid-cleanup, raising CancelledError inside delete_prefix and leaving MinIO stragglers (observed: 428).
         watcher_task.cancel()
@@ -265,7 +249,7 @@ async def _run_inner(run_id: str, slug: str) -> dict:
             pass
         # Two-pass cleanup: in-flight MinIO writes complete after cancel but before gather unwinds; settle gap lets them finish, second sweep catches stragglers.
         n1 = await _cleanup_framework(minio, slug)
-        await asyncio.sleep(CLEANUP_SETTLE_S)
+        await asyncio.sleep(params.CLEANUP_SETTLE_S)
         n2 = await _cleanup_framework(minio, slug)
         if n2 > 0:
             logger.info(
@@ -294,7 +278,7 @@ async def _run_inner(run_id: str, slug: str) -> dict:
         except (asyncio.CancelledError, Exception):
             pass
         try:
-            await release_lock(r, slug, run_id)
+            await domains.dd.ingestion.progress.service.release_lock(r, slug, run_id)
         except Exception:
             pass
         try:

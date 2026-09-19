@@ -1,7 +1,7 @@
 """Key builders: ingestion/ (normalized), ingestion-raw/ (reversibility across normalizer bumps), synth-vault/ (wipeable without affecting ingestion)."""
 from __future__ import annotations
+from . import params
 
-from .params import SNAPSHOTS_SUBDIR
 
 
 def framework_prefix(framework_slug: str) -> str:
@@ -53,4 +53,4 @@ def artifact_key(framework_slug: str, name: str) -> str:
 
 
 def snapshot_prefix(framework_slug: str, ts: str) -> str:
-    return f"{framework_prefix(framework_slug)}{SNAPSHOTS_SUBDIR}{ts}/"
+    return f"{framework_prefix(framework_slug)}{params.SNAPSHOTS_SUBDIR}{ts}/"

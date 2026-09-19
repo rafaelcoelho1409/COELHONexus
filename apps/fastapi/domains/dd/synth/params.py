@@ -51,8 +51,13 @@ WALL_CLOCK_SAFETY_MARGIN = 1.15
 FALLBACK_SAWC_WRITE_COST_S = 1700.0
 
 
-# API-bound on K8s; SEM=2 doubles throughput without contention (book_harmonize post-serializes). KD_STUDY_SEM rolls back to 1.
-STUDY_SEM = int(os.environ["KD_STUDY_SEM"])
+def study_sem() -> int:
+    """API-bound on K8s; SEM=2 doubles throughput without contention (book_harmonize post-serializes). KD_STUDY_SEM rolls back to 1.
+
+    A function, not a module-level constant, so this file has zero import-time
+    env dependency — keeps it safe for the eager `synth/__init__.py` chain
+    (docs/CODE-CONVENTIONS.md §8 Exception 1)."""
+    return int(os.environ["KD_STUDY_SEM"])
 
 
 # ~8 keeps MinIO+local-CPU saturated without flooding (parse+hash bound, not I/O)

@@ -1,14 +1,14 @@
 """Pedagogical-ordering prompt; domain-agnostic rubric to avoid baking in framework-specific biases."""
 from __future__ import annotations
+from . import params
 
-from .params import DESCRIPTION_CHARS
 
 
 def _normalize_description(desc: str) -> str:
     """Trim + clamp for prompt compactness; the LLM needs only a hint of each chapter."""
     s = (desc or "").strip().replace("\n", " ")
-    if len(s) > DESCRIPTION_CHARS:
-        return s[:DESCRIPTION_CHARS].rstrip() + "..."
+    if len(s) > params.DESCRIPTION_CHARS:
+        return s[:params.DESCRIPTION_CHARS].rstrip() + "..."
     return s
 
 

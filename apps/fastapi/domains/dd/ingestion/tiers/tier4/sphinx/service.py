@@ -1,22 +1,15 @@
-"""Sphinx/RTD discovery: unions sidebar + body because RTD sitemaps are per-version only and collapse_navigation hides nested links. Returns [] for non-Sphinx pages."""
+"""Sphinx discovery — I/O shell: objects.inv probing/fetch + DOM toctree
+BFS discovery. Parsing/classification lives in domain.py."""
+from __future__ import annotations
+from . import domain, entities, params
+
 import asyncio
 import logging
-import re
+from typing import Optional
 from urllib.parse import urljoin, urlparse
 
 import httpx
-from bs4 import BeautifulSoup
 
-from .params import (
-    ARTICLE_ROOTS,
-    BODY_SELECTORS,
-    NAV_CONCURRENCY,
-    SIDEBAR_SELECTORS,
-    SKIP_HREF_PREFIXES,
-    SPHINX_USER_AGENT,
-    TIMEOUT_S,
-)
-from .patterns import EXCLUDE_EXT_RE, EXCLUDE_PATH_RE
 
 
 logger = logging.getLogger(__name__)
@@ -25,72 +18,51 @@ logger = logging.getLogger(__name__)
 _FULL_TREE_HINT = 25
 
 
-def _normalize_href(href: str, base_url: str) -> str | None:
-    href = (href or "").strip()
-    if not href or href.startswith(SKIP_HREF_PREFIXES):
-        return None
-    full = urljoin(base_url, href).split("#", 1)[0]
-    if not full.startswith(("http://", "https://")):
-        return None
-    path = urlparse(full).path or ""
-    if EXCLUDE_PATH_RE.search(path) or EXCLUDE_EXT_RE.search(path):
-        return None
-    return full
-
-
-def _sidebar_links(soup: BeautifulSoup, base_url: str) -> list[str]:
-    out: list[str] = []
-    seen: set[str] = set()
-    for sel in SIDEBAR_SELECTORS:
-        anchors = soup.select(sel)
-        if not anchors:
-            continue
-        for a in anchors:
-            full = _normalize_href(a.get("href"), base_url)
-            if full and full not in seen:
-                seen.add(full)
-                out.append(full)
-        break  # first-matching theme wins
-    return out
-
-
-def _body_links(soup: BeautifulSoup, base_url: str) -> list[str]:
-    root = None
-    for sel in ARTICLE_ROOTS:
-        node = soup.select_one(sel)
-        if node:
-            root = node
-            break
-    if root is None:
-        root = soup.body or soup
-    out: list[str] = []
-    seen: set[str] = set()
-    for sel in BODY_SELECTORS:
-        for a in root.select(sel):
-            full = _normalize_href(a.get("href"), base_url)
-            if full and full not in seen:
-                seen.add(full)
-                out.append(full)
-    return out
-
-
-def extract_internal_pages(html: str, base_url: str) -> dict[str, list[str]]:
-    """Sphinx/MkDocs surfaces → {sidebar, body}. Both empty ⇒ not Sphinx/MkDocs."""
-    if not html:
-        return {"sidebar": [], "body": []}
+async def _probe_one(
+    inv_url: str, client: httpx.AsyncClient,
+) -> Optional[bytes]:
     try:
-        soup = BeautifulSoup(html, "lxml")
+        r = await client.get(
+            inv_url, timeout=params.TIMEOUT_S, follow_redirects=True,
+            headers={"User-Agent": params.SPHINX_USER_AGENT},
+        )
     except Exception:
-        soup = BeautifulSoup(html, "html.parser")
-    return {
-        "sidebar": _sidebar_links(soup, base_url),
-        "body": _body_links(soup, base_url),
-    }
+        return None
+    if r.status_code != 200:
+        return None
+    if not r.content.startswith(params.V2_HEADER):
+        return None
+    return r.content
 
 
-def extract_sidebar_links(html: str, base_url: str) -> list[str]:
-    """Sidebar-only accessor (kept for fixture tests)."""
-    return extract_internal_pages(html, base_url)["sidebar"]
+async def fetch_inventory(
+    docs_root: str, *, client: httpx.AsyncClient,
+) -> Optional[entities.Inventory]:
+    """Fetch+parse docs_root/objects.inv. For unversioned paths probes stable/latest/main siblings; returns None on 404/non-Sphinx/parse error."""
+    if not docs_root.endswith("/"):
+        docs_root = docs_root + "/"
+    parsed = urlparse(docs_root)
+    candidates: list[str] = [docs_root]
+    if not domain.has_version_segment(parsed.path):
+        for sib in ("stable/", "latest/", "main/"):
+            candidates.append(urljoin(docs_root, sib))
+
+    for base in candidates:
+        inv_url = urljoin(base, "objects.inv")
+        raw = await _probe_one(inv_url, client)
+        if raw is None:
+            continue
+        inv = domain.parse_inventory_v2(raw, base)
+        if inv is None:
+            continue
+        logger.info(
+            f"[objects.inv] {inv_url}: {inv.project} v{inv.version} — "
+            f"{len(inv.entities)} entities, "
+            f"{len(inv.doc_pages())} doc pages, "
+            f"{len(inv.all_pages())} pages total"
+        )
+        return inv
+    return None
 
 
 async def discover_via_toctree(
@@ -112,14 +84,14 @@ async def discover_via_toctree(
             return False
         return True
 
-    sem = asyncio.Semaphore(NAV_CONCURRENCY)
+    sem = asyncio.Semaphore(params.NAV_CONCURRENCY)
 
     async def _read(u: str) -> dict[str, list[str]]:
         async with sem:
             try:
                 r = await client.get(
-                    u, timeout=TIMEOUT_S, follow_redirects=True,
-                    headers={"User-Agent": SPHINX_USER_AGENT},
+                    u, timeout=params.TIMEOUT_S, follow_redirects=True,
+                    headers={"User-Agent": params.SPHINX_USER_AGENT},
                 )
             except Exception:
                 return {"sidebar": [], "body": []}
@@ -127,7 +99,7 @@ async def discover_via_toctree(
             return {"sidebar": [], "body": []}
         if "html" not in (r.headers.get("content-type") or "").lower():
             return {"sidebar": [], "body": []}
-        return extract_internal_pages(r.text or "", str(r.url))
+        return domain.extract_internal_pages(r.text or "", str(r.url))
 
     landing = await _read(landing_url)
     sidebar0 = landing["sidebar"]

@@ -4,6 +4,8 @@
 best-practices, Cosmic Python, Pydantic docs, and an audit of the current
 `apps/fastapi/domains/` tree. This is the rulebook for future modules and
 the migration target for existing ones.
+**Updated 2026-09-18:** added §8, the cross-module reference convention
+(dotted `domains.*` path, no wrapper/namespace classes).
 
 **Why this exists:** the project is a knowledge-demonstration codebase.
 Every file name, every module split, every choice between "dataclass vs
@@ -28,6 +30,9 @@ model without opening every file.
   single call into `service.py`.
 - **Pydantic for boundary validation only** (LLM responses, HTTP bodies).
   Dataclasses for everything internal.
+- **Cross-module references use a dotted `domains.*` path, unaliased**
+  (`domains.dd.ingestion.artifacts.params.MAX_ARTIFACT_BYTES`), not a bare
+  `from .module import name` and not a wrapper/namespace class. See §8.
 
 ---
 
@@ -411,10 +416,250 @@ the shape.
 - **Don't preserve dead modules in a `deprecated/` folder.** Git history
   IS the deprecation archive — see `docs/archive/PLANNER-CLASSICAL-REFERENCE.md`
   for the pattern (condensed design doc, code recovered via `git log`).
+- **Don't wrap pure functions in a class to get import-path clarity**
+  (`DDIngestionArtifactsDomain.func(...)`, or a nested `DD.Ingestion.
+  Artifacts.Domain.func(...)` tree). Every function needs a manually
+  maintained `@staticmethod` mirror inside the class — permanent drift
+  risk against the real module, for a problem §8's dotted `domains.*`
+  path already solves for free.
 
 ---
 
-## 8. The whole-project structure (target)
+## 8. Cross-module reference convention — dotted path, no wrapper classes
+
+**Status:** DECIDED 2026-09-18, revised same day. **Scope:** every reference
+outside the function/class doing the referencing — including same-directory
+sibling files (`domain.py` calling into `keys.py`), not just cross-package
+ones. The original scope note here carved out sibling imports as unchanged
+from §2; that carve-out was inherited from the pre-existing convention, not
+independently justified — a bare `_coerce_usage(...)` three lines into
+`service.py` costs the same "which file is this from?" lookup as a bare
+cross-domain import did. There's no principled reason "3 lines away in the
+same folder" is different from "3 lines away in another domain" for this
+goal, so the rule is uniform: no bare `from .module import name`, anywhere,
+full stop.
+
+### The rule
+
+Reference everything outside your own leaf directory — functions,
+module-level constants, and classes alike — through one fully dotted path
+rooted at the top-level `domains` package, imported unaliased:
+
+```python
+import domains
+
+domains.dd.ingestion.artifacts.params.MAX_ARTIFACT_BYTES          # constant
+domains.dd.ingestion.artifacts.domain.compute_manifest_hash(...)  # function
+domains.dd.planner.entities.Chapter(title="...", sources=[...])   # class
+```
+
+Never `from domains.dd.ingestion.artifacts import domain` and never
+`from domains.dd.planner.entities import Chapter`. A bare imported name
+loses its path the moment it's read three lines below the import block.
+The dotted chain carries its own provenance everywhere it appears — import
+line, call site, grep result, stack trace — with no need to scroll up.
+
+**Same-directory siblings follow the same rule, just without the
+`domains.*` prefix** (no cross-package boundary to cross, so no need to
+route through the global root) — import the sibling *module*, not names
+out of it:
+
+```python
+# domains/dd/runtime/service.py
+from . import domain, keys, params
+
+domain.extract_usage(response)
+keys.counters_key(thread_id)
+params.COUNTER_TTL_S
+```
+
+Never `from .domain import extract_usage` — same reasoning as the
+cross-package case, just one folder over instead of several.
+
+### Why this over the alternatives considered
+
+| Alternative | Rejected because |
+|---|---|
+| Bare `from .module import name` (pre-2026-09-18 style) | Call site (`compute_manifest_hash(...)`) tells you nothing without checking the import block |
+| Wrapper class per module (`DDIngestionArtifactsDomain.func(...)`) | Every function needs a manually maintained `@staticmethod` mirror inside the class — permanent drift risk vs. the real module. Google Python Style Guide: "Never use `staticmethod`... write a module-level function instead." |
+| Nested class tree (`DD.Ingestion.Artifacts.Domain.func(...)`) | Same staticmethod-wrapping cost at every tree level, plus short segment names (`Domain`, `Artifacts`) are ambiguous away from the import line unless always spelled from the root — which then requires the full wrapper tree just to reproduce what plain packages already give for free |
+| Mega flat name (`DomainsDDIngestionArtifactsDomain.func(...)`) | Same wrapping cost; a 30+ character unbroken PascalCase run has no visual parse boundary — harder to read at depth than the dotted form it replaces |
+
+This converges on the same pattern large, well-known libraries already
+use for exactly this reason — `tf.keras.layers.Conv3D(...)`,
+`tf.nn.relu(...)`, `np.linalg.norm(...)`. Packages and modules are
+Python's native namespace mechanism; no wrapper class is needed to get a
+dotted, self-describing call site — that's what `import` + attribute
+access already does.
+
+### Mechanics — `__init__.py` re-exports required at every level
+
+Python does not expose a subpackage as an attribute of its parent just
+because the parent was imported. Every intermediate `__init__.py` in the
+chain needs one `from . import <child>` line per direct child, added once
+when that child module is created and never touched again as the child's
+internals change:
+
+```python
+# domains/__init__.py
+from . import dd, llm, rr, ycs
+
+# domains/dd/__init__.py
+from . import ingestion, planner, synth, resolver, runtime
+
+# domains/dd/ingestion/__init__.py
+from . import artifacts, dispatch, filters, post, progress, storage, tiers
+
+# domains/dd/ingestion/artifacts/__init__.py
+from . import domain, entities, keys, params, patterns, service
+```
+
+Without these, `import domains` leaves `domains.dd` (and everything below
+it) undefined — `AttributeError` at the first dotted access, not at
+import time.
+
+### No alias
+
+`import domains` — never `import domains as X`.
+1. `domains` is referenced from `api/` as much as from inside `domains/`
+   itself, so there's no single "internal-only" context to shorten it for.
+2. Any short alias risks colliding with an unrelated local variable
+   somewhere in a codebase this size. `cn` was considered and rejected —
+   it's a common ad-hoc name for a database/network connection object,
+   which this project creates constantly (Postgres, Redis, MinIO, Neo4j,
+   Qdrant, ES). Not aliasing has zero such risk by construction, and
+   matches how the project already imports most real dependencies
+   (`fastapi`, `celery`, `redis`, `minio`, `neo4j`, `qdrant_client` — all
+   unaliased). Only a handful of extremely high-repetition data-science
+   libraries (numpy, pandas, tensorflow) earned a community-standard
+   short alias; `domains` doesn't need that treatment to save a few
+   characters.
+
+### Local shorthand — allowed, but must keep the identifying prefix
+
+If one file calls the same leaf module many times, a local alias is fine
+as long as it keeps enough of the path to stay self-describing without
+the import line:
+
+```python
+from domains.dd.ingestion.artifacts import domain as ingestion_artifacts_domain
+ingestion_artifacts_domain.compute_manifest_hash(...)
+```
+
+Never shorten to something generic (`domain`, `d`, `art`) — that
+reintroduces the exact ambiguity this convention exists to remove.
+
+### Exception 1 — heavy/env-dependent modules stay out of the eager `__init__.py` chain
+
+A module whose import triggers a *hard* external dependency (reads a
+required env var at module level, opens a real connection at import time)
+must **not** be added to its parent's `__init__.py` re-export list, even
+though it's a legitimate part of that package. Adding it would mean a bare
+`import domains` anywhere in the app — including a standalone script, a
+test, or a REPL — suddenly requires production secrets to succeed.
+
+Known instances: `dd/planner/task.py` and `dd/synth/task.py` do
+`from infra.celery import app`, which transitively requires
+`REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD`/`ENVIRONMENT` (never re-exported
+from `planner/__init__.py`/`synth/__init__.py` — callers reach it with a
+direct `from domains.dd.planner.task import X`, same shape as any normal
+Python import, and the same class of exception as the LLM rotator's
+reverse-edge import above).
+
+`dd/synth`'s `params.py` originally did `STUDY_SEM = int(os.environ["KD_STUDY_SEM"])`
+at module scope — a hard eager read that would have forced this same exception
+onto `params`, `graph`, and most of `runtime` (all pull constants from
+`params.py`, and Python re-executes a whole module on any import of it, not
+just the names actually used). Fixed at the root instead of propagating the
+exception: turned it into `study_sem() -> int: return
+int(os.environ["KD_STUDY_SEM"])` — a function, read lazily inside whichever
+function body needs it, same as any other deferred `domains.*` reference.
+Zero behavior change (still one `os.environ` read per call site, just later),
+and it let `dd/synth` join the eager `dd/__init__.py` chain outright instead
+of carrying its own exception. Prefer this fix — de-lazy the read — over a
+wider `__init__.py` exclusion whenever the env-dependent value doesn't
+actually need to be read at import time.
+
+### Exception 2 — module-level code needs a plain import, not the dotted chase
+
+`import domains` + `domains.dd.x.y.z` only works for references **deferred
+inside a function body** — resolved long after the app has fully booted.
+A reference evaluated at *module or class definition time* (a decorator, a
+module-level dict/list/tuple literal, a class body attribute, a default
+argument value) breaks this, because Python does not set `domains.dd` as
+an attribute of the `domains` module until `dd/__init__.py` finishes
+running *completely* — and a file that gets loaded transitively as part of
+that very `__init__.py` chain (e.g. every node's `node.py`, pulled in via
+`nodes/__init__.py` pulled in via `planner/__init__.py`) executes its
+module-level code *during* that unfinished bootstrap, not after.
+
+Concretely, this failed with `AttributeError: module 'domains' has no
+attribute 'dd'`:
+
+```python
+# BROKEN — decorator runs at import time, mid-bootstrap
+import domains
+
+@domains.dd.planner.runtime.observability.traced("corpus_load")
+async def corpus_load(state) -> dict: ...
+```
+
+Fixed by using a plain import for the decorator specifically (the type
+annotation on `state` stays dotted-style and is unaffected — `from
+__future__ import annotations`, present everywhere in this codebase,
+stores annotations as unevaluated strings, so they never actually chase
+the attribute chain at runtime):
+
+```python
+import domains
+from domains.dd.planner.runtime.observability.service import traced
+
+@traced("corpus_load")
+async def corpus_load(state: domains.dd.planner.state.PlannerState) -> dict: ...
+```
+
+Same reasoning applies to `graph.py`'s `NODE_REGISTRY` dict — its values
+are real function objects needed at module-exec time. The fix there is one
+step cleaner: import the sibling `nodes` package itself, then chase
+attributes off *that* name instead of off `domains`:
+
+```python
+from . import nodes
+
+NODE_REGISTRY = {
+    "corpus_load": nodes.corpus_load.node.corpus_load,
+    ...
+}
+```
+
+This is safe for a subtler reason than "it's a plain import" — `from .
+import nodes` is a normal relative import statement, resolved through
+Python's import machinery, not an attribute-chase on an already-existing
+binding. It only returns once `nodes/__init__.py` (and everything *it*
+re-exports) has fully finished running, so `nodes.corpus_load.node...` is
+guaranteed valid the instant the import statement completes — unlike
+`domains.dd...`, which depends on a DIFFERENT, still-unfinished frame
+higher up the call stack (`dd/__init__.py`) to ever set that attribute.
+Prefer this shape over 8 separate `from .nodes.x.node import y` lines
+whenever the target is a sibling *package* one level down, not the global
+`domains` root.
+
+**Rule of thumb:** a dotted chain is only unsafe at module-exec time when
+it's rooted at the global `domains` name specifically. Rooted at a name
+your own `from . import x` (or `from .. import x`) just bound, it's always
+safe — that import already blocked until `x` was fully ready.
+
+### What still uses real classes
+
+Nothing here changes §2–§5: `entities.py` domain objects, stateful
+clients, anything with real invariants or state stays a real class,
+instantiated normally — just referenced through the same dotted path as
+everything else (`domains.dd.planner.entities.Chapter(...)`), never
+through a bare import.
+
+---
+
+## 9. The whole-project structure (target)
 
 ```
 apps/fastapi/

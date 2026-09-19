@@ -1,12 +1,11 @@
 """checklist_eval — Pydantic schemas (LLM-judge output + persisted blob)."""
 from __future__ import annotations
+from . import params, versions
 
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from .params import FEEDBACK_MAX_CHARS, FEEDBACK_MIN_CHARS
-from .versions import CHECKLIST_PROMPT_VERSION, CHECKLIST_SCHEMA_VERSION
 
 
 class CriterionResult(BaseModel):
@@ -22,15 +21,15 @@ class CriterionResult(BaseModel):
         s = " ".join((v or "").strip().split())
         if s == "":
             return s
-        if not (FEEDBACK_MIN_CHARS <= len(s) <= FEEDBACK_MAX_CHARS):
-            return s[: FEEDBACK_MAX_CHARS - 1].rsplit(" ", 1)[0] + "…"
+        if not (params.FEEDBACK_MIN_CHARS <= len(s) <= params.FEEDBACK_MAX_CHARS):
+            return s[: params.FEEDBACK_MAX_CHARS - 1].rsplit(" ", 1)[0] + "…"
         return s
 
 
 class ChecklistEvaluation(BaseModel):
     """Full per-chapter checklist evaluation — persisted to MinIO."""
-    schema_version: str = CHECKLIST_SCHEMA_VERSION
-    prompt_version: str = CHECKLIST_PROMPT_VERSION
+    schema_version: str = versions.CHECKLIST_SCHEMA_VERSION
+    prompt_version: str = versions.CHECKLIST_PROMPT_VERSION
     chapter_id:     str
     chapter_title:  str
     framework_slug: str
@@ -56,8 +55,8 @@ class LLMVerdict(BaseModel):
         s = " ".join((v or "").strip().split())
         if s == "":
             return s
-        if not (FEEDBACK_MIN_CHARS <= len(s) <= FEEDBACK_MAX_CHARS):
-            return s[: FEEDBACK_MAX_CHARS - 1].rsplit(" ", 1)[0] + "…"
+        if not (params.FEEDBACK_MIN_CHARS <= len(s) <= params.FEEDBACK_MAX_CHARS):
+            return s[: params.FEEDBACK_MAX_CHARS - 1].rsplit(" ", 1)[0] + "…"
         return s
 
 

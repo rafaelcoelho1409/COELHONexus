@@ -1,21 +1,51 @@
 """plan_write — pure helpers (title-case, slugify, trim, hydrate +
-sanitize chapters, manifest hash, outline loader)."""
+sanitize chapters, manifest hash, outline loader, pipeline-health rollup)."""
 from __future__ import annotations
+import domains
+from . import params, patterns, versions
 
 import json
 from hashlib import sha256
 
 import numpy as np
 
-from .params import (
-    DESCRIPTION_MAX_CHARS,
-    SLUG_MAX_WORDS,
-    TITLE_LOWERCASE,
-    TITLE_MAX_WORDS,
-    TITLE_UPPERCASE,
-)
-from .patterns import SLUG_RE
-from .versions import PROMPT_VERSION
+
+
+def pipeline_health(state: domains.dd.planner.state.PlannerState) -> dict:
+    """Roll the per-node fallback/degradation signals into the plan's stats so a
+    'done' plan that silently ran on deterministic fallbacks (generic chapter
+    titles, lopsided buckets) is distinguishable from a high-quality one without
+    MinIO archaeology. Observability only — no behaviour change."""
+    dd = state.get("doc_distill_stats") or {}
+    ot = state.get("off_topic_stats") or {}
+    pr = state.get("propose_stats") or {}
+    asg = state.get("assign_stats") or {}
+    ordc = state.get("order_chapters_stats") or {}
+
+    def _pct(num, den):
+        return round(100.0 * num / den, 1) if den else 0.0
+
+    dd_n = dd.get("n_distilled") or dd.get("n_files") or 0
+    asg_n = asg.get("n_assigned") or asg.get("n_docs") or 0
+    health = {
+        "off_topic_llm_errors":       ot.get("llm_errors", ot.get("llm_err", 0)),
+        "doc_distill_fallback_pct":   _pct(dd.get("n_fallback", 0), dd_n),
+        "doc_distill_failure_reasons": dd.get("failure_reasons") or {},
+        "chapter_propose_fallback_used": bool(pr.get("fallback_used", False)),
+        "chapter_propose_samples_valid": int(pr.get("n_samples_valid", 0)),
+        "chapter_propose_n_proposals": pr.get("n_proposals", 0),
+        "chapter_assign_fallback_pct": _pct(asg.get("n_fallback", 0), asg_n),
+        "chapter_assign_rescued":     asg.get("n_rescued", 0),
+        "order_chapters_valid_samples": ordc.get("n_samples", 0),
+    }
+    # Single headline flag: was any structural stage degraded to its
+    # deterministic fallback? (the thing that produces a throwaway plan)
+    health["degraded"] = bool(
+        pr.get("fallback_used", False)
+        or _pct(dd.get("n_fallback", 0), dd_n) >= 40.0
+        or _pct(asg.get("n_fallback", 0), asg_n) >= 50.0
+    )
+    return health
 
 
 def load_outline(text: str) -> dict:
@@ -44,10 +74,10 @@ def smart_title_case(s: str) -> str:
     out: list[str] = []
     for i, w in enumerate(words):
         low = w.lower()
-        if low in TITLE_UPPERCASE:
+        if low in params.TITLE_UPPERCASE:
             out.append(low.upper())
             continue
-        if low in TITLE_LOWERCASE and 0 < i < len(words) - 1:
+        if low in params.TITLE_LOWERCASE and 0 < i < len(words) - 1:
             out.append(low)
             continue
         # Preserve internal-cap words (e.g. "LangGraph", "ZeroMQ") if the
@@ -64,15 +94,15 @@ def slugify(s: str) -> str:
     low = (s or "").strip().lower()
     if not low:
         return "chapter"
-    parts = [p for p in SLUG_RE.sub("-", low).split("-") if p]
-    return "-".join(parts[:SLUG_MAX_WORDS]) or "chapter"
+    parts = [p for p in patterns.SLUG_RE.sub("-", low).split("-") if p]
+    return "-".join(parts[:params.SLUG_MAX_WORDS]) or "chapter"
 
 
 def trim_description(desc: str) -> str:
     cleaned = " ".join((desc or "").strip().split())
-    if len(cleaned) <= DESCRIPTION_MAX_CHARS:
+    if len(cleaned) <= params.DESCRIPTION_MAX_CHARS:
         return cleaned
-    cut = cleaned[: DESCRIPTION_MAX_CHARS - 1].rsplit(" ", 1)[0]
+    cut = cleaned[: params.DESCRIPTION_MAX_CHARS - 1].rsplit(" ", 1)[0]
     return cut.rstrip(",.;:") + "…"
 
 
@@ -131,8 +161,8 @@ def sanitize_chapters(
 
         title = smart_title_case(ch.get("title") or "Untitled Chapter")
         words = title.split()
-        if len(words) > TITLE_MAX_WORDS:
-            title = " ".join(words[:TITLE_MAX_WORDS])
+        if len(words) > params.TITLE_MAX_WORDS:
+            title = " ".join(words[:params.TITLE_MAX_WORDS])
 
         sanitized.append({
             "title":              title,
@@ -159,7 +189,7 @@ def compute_manifest_hash(
     prompt update invalidates cache without an outline change."""
     payload = (
         f"chapter_plan={chapter_plan_ref}|"
-        f"schema={schema_version}|prompt={PROMPT_VERSION}"
+        f"schema={schema_version}|prompt={versions.PROMPT_VERSION}"
     )
     return sha256(payload.encode("utf-8")).hexdigest()[:16]
 

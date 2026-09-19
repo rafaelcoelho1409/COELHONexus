@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from .params import TIER_ORDER
+from . import params
 
 
 def slugify(name: str) -> str:
@@ -20,7 +20,7 @@ def slugify(name: str) -> str:
 def pick_best_source(entry: dict) -> dict | None:
     """{tier, kind, url} for the highest-priority source present.
     None when no source URL fields are set (defensive — shouldn't happen)."""
-    for i, kind in enumerate(TIER_ORDER, start = 1):
+    for i, kind in enumerate(params.TIER_ORDER, start = 1):
         url = entry.get(kind)
         if url:
             return {"tier": i, "kind": kind, "url": url}

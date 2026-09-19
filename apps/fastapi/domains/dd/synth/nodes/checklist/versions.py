@@ -27,3 +27,9 @@ CHECKLIST_SCHEMA_VERSION = "1.0"
 # content judgment. Now reset to None in that except block, matching the
 # main-call-failure path a few lines above it.
 CHECKLIST_PROMPT_VERSION = "v8-repair-timeout-deployment-reset-2026-09-08"
+
+# CoCoA two-stage alignment check + atomic-claim grounding — independently
+# versioned from CHECKLIST_PROMPT_VERSION (own MinIO cache keys, see keys.py).
+COCOA_PROMPT_VERSION = "v1-cocoa-2026-05-25"
+# Per-prose-hash cache: same prose + fixed prompt → same claims; re-runs hit MinIO instead of LLM.
+ATOMIC_CLAIM_PROMPT_VERSION = "v3-cache-2026-05-28"

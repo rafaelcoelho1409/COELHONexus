@@ -2,11 +2,10 @@
 global Planner/Synth lock status."""
 import logging
 
+import domains
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
 
-from domains.dd.ingestion.storage import get_storage
-from domains.dd.planner.keys import redis_url
 
 
 logger = logging.getLogger(__name__)
@@ -18,7 +17,7 @@ async def pipeline_active() -> dict:
     """Drives the cross-stage proactive gate. Ingestion omitted — it's
     orthogonal to the Planner/Synth lock block."""
     r = redis_aio.from_url(
-        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
 
     async def _first_lock(prefix: str) -> dict | None:
@@ -60,7 +59,7 @@ async def pipeline_state(slug: str) -> dict:
             detail=f"invalid slug {slug!r}; slashes not allowed",
         )
 
-    minio = get_storage()
+    minio = domains.dd.ingestion.storage.service.get_storage()
 
     async def _exists(key: str) -> bool:
         try:

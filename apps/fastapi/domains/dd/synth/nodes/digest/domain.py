@@ -1,31 +1,16 @@
-"""digest_construct service — all functions."""
+"""digest_construct — pure domain logic (no I/O, no LLM, no async)."""
 from __future__ import annotations
+from . import params, patterns, schemas, versions
 
+import json
 import re
+from hashlib import sha256
+from typing import Optional
+
+from pydantic import ValidationError
 
 from collections import defaultdict
 
-from .keys import latest_blob_key, outline_latest_key, versioned_blob_key
-from .params import (
-    MAX_CONTRIBS_PER_SOURCE,
-    MAX_KEY_FACTS_PER_CONTRIB,
-    MERGE_CONTAINMENT,
-    MERGE_JACCARD,
-    MERGE_MIN_PRIMARY_TO_DEFEND,
-    MIN_KEY_FACTS_PER_CONTRIB,
-    OVER_SPREAD_THRESHOLD,
-)
-from .patterns import HASH_RE, SECTION_ID_RE, VAULT_HASH_IN_TEXT_RE
-from .schemas import (
-    ChapterDigest,
-    CoverageStats,
-    LLMDigestPayload,
-    Relevance,
-    SectionContribution,
-    SourceDigest,
-)
-from .prompts import build_digest_prompt, build_repair_prompt
-from .versions import DIGEST_PROMPT_VERSION, DIGEST_SCHEMA_VERSION
 
 
 _RELEVANCE_RANK = {"primary": 0, "supporting": 1, "tangential": 2}
@@ -37,13 +22,13 @@ def _best_relevance(a: str, b: str) -> str:
 
 
 def build_per_section_index(
-    per_source: list[SourceDigest],
+    per_source: list[schemas.SourceDigest],
     section_ids: list[str],
-) -> dict[str, list[SectionContribution]]:
+) -> dict[str, list[schemas.SectionContribution]]:
     """Invert per-source contributions → per-section list; zero-contribution sections kept as empty lists."""
     _RELEVANCE_ORDER = {"primary": 0, "supporting": 1, "tangential": 2}
 
-    per_section: dict[str, list[SectionContribution]] = {
+    per_section: dict[str, list[schemas.SectionContribution]] = {
         sid: [] for sid in section_ids
     }
     for src in per_source:
@@ -70,13 +55,13 @@ def _resolve_merge(merged: dict[str, str], sid: str) -> str:
 
 
 def merge_overlapping_sections(
-    per_source: list[SourceDigest],
+    per_source: list[schemas.SourceDigest],
     outline_sections: list[dict],
     *,
-    jaccard: float = MERGE_JACCARD,
-    containment: float = MERGE_CONTAINMENT,
-    min_primary_to_defend: int = MERGE_MIN_PRIMARY_TO_DEFEND,
-) -> tuple[list[SourceDigest], dict[str, str]]:
+    jaccard: float = params.MERGE_JACCARD,
+    containment: float = params.MERGE_CONTAINMENT,
+    min_primary_to_defend: int = params.MERGE_MIN_PRIMARY_TO_DEFEND,
+) -> tuple[list[schemas.SourceDigest], dict[str, str]]:
     """Fold sections whose PRIMARY source pools overlap by Jaccard/containment; conservative — render dedup is the safety net."""
     order = {
         s.get("section_id"): i for i, s in enumerate(outline_sections)
@@ -143,9 +128,9 @@ def merge_overlapping_sections(
     if not merged_map:
         return per_source, {}
 
-    retagged: list[SourceDigest] = []
+    retagged: list[schemas.SourceDigest] = []
     for src in per_source:
-        by_sid: dict[str, SectionContribution] = {}
+        by_sid: dict[str, schemas.SectionContribution] = {}
         for c in src.contributes_to:
             tgt = _resolve_merge(merged_map, c.section_id)
             if tgt == c.section_id and tgt not in merged_map.values():
@@ -168,7 +153,7 @@ def merge_overlapping_sections(
                     )),
                     "key_facts": list(dict.fromkeys(
                         existing.key_facts + c.key_facts
-                    ))[:MAX_KEY_FACTS_PER_CONTRIB],
+                    ))[:params.MAX_KEY_FACTS_PER_CONTRIB],
                     "summary": existing.summary,
                 })
         retagged.append(
@@ -178,11 +163,11 @@ def merge_overlapping_sections(
 
 
 def compute_coverage_stats(
-    per_source: list[SourceDigest],
-    per_section: dict[str, list[SectionContribution]],
+    per_source: list[schemas.SourceDigest],
+    per_section: dict[str, list[schemas.SectionContribution]],
     section_ids: list[str],
     all_vault_hashes: list[str],
-) -> CoverageStats:
+) -> schemas.CoverageStats:
     """Compute coverage metrics; all_vault_hashes identifies orphaned hashes."""
     n_sources = len(per_source)
     n_sections = len(section_ids)
@@ -202,7 +187,7 @@ def compute_coverage_stats(
         n_primary = sum(
             1 for c in src.contributes_to if c.relevance == "primary"
         )
-        if n_primary > OVER_SPREAD_THRESHOLD:
+        if n_primary > params.OVER_SPREAD_THRESHOLD:
             over_spread_sources.append(src.source_key)
 
     claimed_hashes: set[str] = set()
@@ -221,7 +206,7 @@ def compute_coverage_stats(
         total_contribs / n_sources if n_sources else 0.0
     )
 
-    return CoverageStats(
+    return schemas.CoverageStats(
         n_sources = n_sources,
         n_sections = n_sections,
         sections_with_primary = sections_with_primary,
@@ -234,7 +219,7 @@ def compute_coverage_stats(
 
 
 def validate_source_digest(
-    payload: LLMDigestPayload,
+    payload: schemas.LLMDigestPayload,
     *,
     valid_section_ids: set[str],
     valid_vault_hashes: set[str],
@@ -302,7 +287,7 @@ def extract_vault_hashes(md_text: str) -> list[str]:
     """Return unique 16-hex vault sentinel hashes in order of first occurrence."""
     seen: set[str] = set()
     out: list[str] = []
-    for m in VAULT_HASH_IN_TEXT_RE.finditer(md_text or ""):
+    for m in patterns.VAULT_HASH_IN_TEXT_RE.finditer(md_text or ""):
         h = m.group(1)
         if h not in seen:
             seen.add(h)
@@ -323,3 +308,90 @@ def derive_source_title_fallback(md_text: str, source_key: str) -> str:
     base = re.sub(r"^\d+-", "", base)
     title = " ".join(p.capitalize() for p in base.split("-")[:8])
     return title or source_key
+
+
+_CONTEXT_OVERFLOW_MARKERS = (
+    "context_length", "context window", "maximum context length",
+    "context_window_exceeded", "reduce the length", "too many tokens",
+    "context length exceeded", "prompt is too long",
+)
+
+
+def is_context_overflow_error(e: Exception) -> bool:
+    """Heuristic substring match — same idiom as outline_sdp's classifier.
+    The Rotator is a universal gateway with no context-length-aware arm
+    filtering, so even a single 100K-char source can exceed a small
+    -context arm from a heterogeneous multi-provider pool."""
+    msg = str(e).lower()
+    return any(marker in msg for marker in _CONTEXT_OVERFLOW_MARKERS)
+
+
+_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def parse_json_response(text: str) -> Optional[dict]:
+    """Best-effort JSON extraction. Tolerates ```json fences + leading
+    prose. Same approach as outline_sdp / planner.chapter_select."""
+    if not text:
+        return None
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+    m = _JSON_RE.search(text)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(0))
+    except Exception:
+        return None
+
+
+def shorten_pydantic_error(e: ValidationError) -> str:
+    errs = e.errors()
+    if not errs:
+        return "Pydantic validation failed (no detail)"
+    lines = []
+    for err in errs[:4]:
+        loc = ".".join(str(x) for x in err.get("loc", []))
+        msg = err.get("msg", "")
+        lines.append(f"{loc}: {msg}")
+    suffix = f" (+{len(errs) - 4} more)" if len(errs) > 4 else ""
+    return "; ".join(lines) + suffix
+
+
+def try_parse_payload(
+    raw: dict,
+) -> tuple[Optional[schemas.LLMDigestPayload], Optional[str]]:
+    try:
+        return schemas.LLMDigestPayload.model_validate(raw), None
+    except ValidationError as e:
+        return None, shorten_pydantic_error(e)
+    except Exception as e:
+        return None, f"{type(e).__name__}: {str(e)[:200]}"
+
+
+def compute_manifest_hash(
+    *,
+    outline_manifest_hash: str,
+    source_keys: list[str],
+    sources_bytes: int,
+) -> str:
+    payload = (
+        f"outline = {outline_manifest_hash}|"
+        f"sources = {','.join(sorted(source_keys))}|"
+        f"n = {len(source_keys)}|"
+        f"bytes = {sources_bytes}|"
+        f"prompt = {versions.DIGEST_PROMPT_VERSION}|"
+        f"schema = {versions.DIGEST_SCHEMA_VERSION}"
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def load_digest_payload(text: str) -> dict:
+    """Parse the persisted digest blob."""
+    return json.loads(text)

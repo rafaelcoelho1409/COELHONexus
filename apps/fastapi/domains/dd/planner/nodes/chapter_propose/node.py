@@ -1,12 +1,11 @@
 """chapter_propose node shell — corpus-adaptive chapter count proposal."""
 from __future__ import annotations
+import domains
+from domains.dd.planner.runtime.observability.service import traced
 
-from ...runtime.observability import traced
-from ...state import PlannerState
-
-from .service import chapter_propose_run
+from . import service
 
 
 @traced("chapter_propose")
-async def chapter_propose(state: PlannerState) -> dict:
-    return await chapter_propose_run(state)
+async def chapter_propose(state: domains.dd.planner.state.PlannerState) -> dict:
+    return await service.chapter_propose_run(state)

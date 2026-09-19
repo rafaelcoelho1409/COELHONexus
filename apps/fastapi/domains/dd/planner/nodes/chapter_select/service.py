@@ -8,31 +8,13 @@ vectorized greedy. No coelho-llm-rotator call here, so old built-in vs
 pooled is no-op; old rotator never touched this node.
 """
 from __future__ import annotations
+import domains
+from . import domain, keys, versions
 
 import asyncio
 import json
 import logging
 import time
-
-from ....ingestion.storage import get_storage
-from ..chapter_assign import load_assignments
-from ..chapter_propose import load_proposals
-from ...runtime.progress import emit_progress
-from ...state import PlannerState
-
-from .domain import detect_pinned_indices, greedy_select, manifest_hash
-from .keys import (
-    chapter_plan_latest_key,
-    chapter_plan_versioned_key,
-    select_latest_key,
-    select_versioned_key,
-)
-from .params import (
-    CONFIDENCE_THRESHOLD,
-    MIN_DOCS_PER_CHAPTER,
-    MIN_KEPT_CHAPTERS,
-)
-from .versions import PROMPT_VERSION
 
 
 logger = logging.getLogger(__name__)
@@ -54,10 +36,10 @@ async def persist_select_outputs(
     )
     plan_blob = json.dumps(plan_payload, indent = 2, ensure_ascii = False)
 
-    vkey_select = select_versioned_key(slug, manifest)
-    lkey_select = select_latest_key(slug)
-    plan_vkey = chapter_plan_versioned_key(slug, manifest)
-    plan_lkey = chapter_plan_latest_key(slug)
+    vkey_select = keys.select_versioned_key(slug, manifest)
+    lkey_select = keys.select_latest_key(slug)
+    plan_vkey = keys.chapter_plan_versioned_key(slug, manifest)
+    plan_lkey = keys.chapter_plan_latest_key(slug)
 
     # Concurrent writes — shared client per chunk in storage.service handles
     # pooling; gather here removes sequential 4× RTT.
@@ -71,7 +53,7 @@ async def persist_select_outputs(
     return plan_lkey, plan_vkey
 
 
-async def chapter_select_run(state: PlannerState) -> dict:
+async def chapter_select_run(state: domains.dd.planner.state.PlannerState) -> dict:
     """Pure-algorithm node: load → greedy-coverage (with pin override) →
     prune (<MIN_DOCS unless pinned) → re-assign survivors → persist."""
     slug = state.get("framework_slug")
@@ -86,9 +68,9 @@ async def chapter_select_run(state: PlannerState) -> dict:
         }
 
     t0 = time.monotonic()
-    minio = get_storage()
+    minio = domains.dd.ingestion.storage.service.get_storage()
 
-    manifest = manifest_hash(
+    manifest = domain.manifest_hash(
         slug = slug,
         proposals_ref = proposals_ref,
         assignments_ref = assignments_ref,
@@ -105,8 +87,8 @@ async def chapter_select_run(state: PlannerState) -> dict:
             return {}
 
     proposals_obj, assignments, seeds = await asyncio.gather(
-        load_proposals(minio, slug),
-        load_assignments(minio, slug),
+        domains.dd.planner.nodes.chapter_propose.service.load_proposals(minio, slug),
+        domains.dd.planner.nodes.chapter_assign.service.load_assignments(minio, slug),
         _load_seeds(),
     )
     if proposals_obj is None or not proposals_obj.proposals:
@@ -121,114 +103,38 @@ async def chapter_select_run(state: PlannerState) -> dict:
             "select_stats": {"skipped": "no_assignments"},
         }
 
-    pinned = detect_pinned_indices(proposals, seeds)
+    pinned = domain.detect_pinned_indices(proposals, seeds)
 
-    await emit_progress(
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "chapter_select", "start",
         n_proposals = len(proposals),
         n_docs = len(assignments),
         n_pinned = len(pinned),
     )
 
-    selected, doc_to_chapter = greedy_select(
+    selected, doc_to_chapter = domain.greedy_select(
         proposals = proposals, assignments = assignments,
         pinned_indices = pinned,
     )
 
-    docs_per_chapter: dict[int, list[str]] = {ci: [] for ci in selected}
-    for k, ci in doc_to_chapter.items():
-        if ci in docs_per_chapter:
-            docs_per_chapter[ci].append(k)
-
-    # Orphan-protection: only prune a small chapter if every member has ≥1 alternative above-threshold chapter (prevents "Skills and Custom Commands" type orphans).
-    above_threshold_chapters: dict[str, set[int]] = {}
-    for k, scores in assignments.items():
-        above_threshold_chapters[k] = {
-            int(s["chapter_idx"])
-            for s in scores
-            if float(s.get("confidence") or 0.0) >= CONFIDENCE_THRESHOLD
-            and int(s["chapter_idx"]) in set(selected)
-        }
-
-    pruned: list[int] = []
-    kept: list[int] = []
-    orphan_protected: list[int] = []
-    for ci in selected:
-        members = docs_per_chapter.get(ci, [])
-        below_min = len(members) < MIN_DOCS_PER_CHAPTER
-        if not below_min:
-            kept.append(ci)
-            continue
-        if ci in pinned:
-            kept.append(ci)
-            continue
-        # Below-min, unpinned: check for orphan risk. A member doc is at
-        # risk if removing `ci` leaves it with no above-threshold chapter.
-        creates_orphan = False
-        for k in members:
-            alternatives = above_threshold_chapters.get(k, set()) - {ci}
-            if not alternatives:
-                creates_orphan = True
-                break
-        if creates_orphan:
-            kept.append(ci)
-            orphan_protected.append(ci)
-        else:
-            pruned.append(ci)
-
-    # Restore lowest-pruned (by doc count) if too few chapters kept.
-    if len(kept) < MIN_KEPT_CHAPTERS and pruned:
-        pruned_sorted = sorted(
-            pruned,
-            key = lambda ci: len(docs_per_chapter.get(ci, [])),
-            reverse = True,
-        )
-        while len(kept) < MIN_KEPT_CHAPTERS and pruned_sorted:
-            ci = pruned_sorted.pop(0)
-            kept.append(ci)
-            pruned.remove(ci)
-
-    # Reassign docs from pruned → next-best selected chapter.
-    if pruned:
-        kept_set = set(kept)
-        for k, ci in list(doc_to_chapter.items()):
-            if ci not in kept_set:
-                scores = assignments.get(k) or []
-                best_ci = None
-                best_c = -1.0
-                for s in scores:
-                    si = s.get("chapter_idx")
-                    sc = float(s.get("confidence") or 0.0)
-                    if si in kept_set and sc > best_c:
-                        best_c = sc
-                        best_ci = si
-                if best_ci is not None:
-                    doc_to_chapter[k] = best_ci
-                else:
-                    del doc_to_chapter[k]
-        docs_per_chapter = {ci: [] for ci in kept}
-        for k, ci in doc_to_chapter.items():
-            docs_per_chapter[ci].append(k)
-
-    out_chapters: list[dict] = []   # reduce_node-compatible schema
-    for order_idx, ci in enumerate(kept, 1):
-        p = proposals[ci]
-        out_chapters.append({
-            "title":              p.get("title"),
-            "description":        p.get("description"),
-            "key_concepts":       p.get("key_concepts") or [],
-            "member_doc_keys":    sorted(docs_per_chapter.get(ci, [])),
-            "n_member_docs":      len(docs_per_chapter.get(ci, [])),
-            "order":              order_idx,
-            "source_proposal_idx": ci,
-            "pinned":             ci in pinned,
-        })
+    final = domain.prune_and_finalize_selection(
+        selected = selected,
+        doc_to_chapter = doc_to_chapter,
+        assignments = assignments,
+        pinned = pinned,
+        proposals = proposals,
+    )
+    kept = final["kept"]
+    pruned = final["pruned"]
+    orphan_protected = final["orphan_protected"]
+    doc_to_chapter = final["doc_to_chapter"]
+    out_chapters = final["out_chapters"]
 
     n_assigned_docs = len(doc_to_chapter)
     n_total_docs = len(assignments)
 
     select_payload = {
-        "prompt_version":        PROMPT_VERSION,
+        "prompt_version":        versions.PROMPT_VERSION,
         "framework_slug":        slug,
         "manifest_hash":         manifest,
         "selected_indices":      kept,
@@ -246,7 +152,7 @@ async def chapter_select_run(state: PlannerState) -> dict:
         "chapters":              out_chapters,
     }
     plan_payload = {
-        "prompt_version":  PROMPT_VERSION,
+        "prompt_version":  versions.PROMPT_VERSION,
         "framework_slug":  slug,
         "manifest_hash":   manifest,
         "outline": {
@@ -298,7 +204,7 @@ async def chapter_select_run(state: PlannerState) -> dict:
             f"{len(orphan_protected)} small chapter(s) whose members had "
             f"no alternative above-threshold chapter: {orphan_protected}"
         )
-    await emit_progress(
+    await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "chapter_select", "done",
         n_chapters = len(kept),
         n_pruned = len(pruned),

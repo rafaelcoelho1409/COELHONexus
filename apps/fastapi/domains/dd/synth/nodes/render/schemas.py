@@ -1,11 +1,11 @@
 """render — Pydantic schemas (LLM/storage boundary validation)."""
 from __future__ import annotations
+from . import versions
 
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from .versions import RENDER_SCHEMA_VERSION, RENDER_TEMPLATE_VERSION
 
 
 ArtifactName = Literal["README.md"]
@@ -55,8 +55,8 @@ class AuditResult(BaseModel):
 
 class RenderResult(BaseModel):
     """Full render result — persisted as render-latest.json."""
-    schema_version:        str = RENDER_SCHEMA_VERSION
-    template_version:      str = RENDER_TEMPLATE_VERSION
+    schema_version:        str = versions.RENDER_SCHEMA_VERSION
+    template_version:      str = versions.RENDER_TEMPLATE_VERSION
     chapter_id:            str
     chapter_title:         str
     framework_slug:        str
