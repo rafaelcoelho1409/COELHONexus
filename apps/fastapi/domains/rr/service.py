@@ -13,12 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from .entities import Finding, NormalizedPaper
-from .keys import SCAN_STATUS_CANCELLED, SCAN_STATUS_ERROR
-from .stores import minio as minio_store
-from .stores import neo4j as neo4j_store
-from .stores import postgres as postgres_store
-from .stores import qdrant as qdrant_store
+from . import entities, keys, runtime, stores
 
 
 logger = logging.getLogger(__name__)
@@ -27,16 +22,16 @@ logger = logging.getLogger(__name__)
 async def bootstrap_stores() -> None:
     """Initialize all 4 RR stores. Idempotent + safe to re-run."""
     results = await asyncio.gather(
-        postgres_store.bootstrap_postgres(),
-        neo4j_store.bootstrap_neo4j(),
-        qdrant_store.bootstrap_qdrant(),
-        minio_store.bootstrap_minio(),
+        stores.service.bootstrap_postgres(),
+        stores.service.bootstrap_neo4j(),
+        stores.service.bootstrap_qdrant(),
+        stores.service.bootstrap_minio(),
     )
     logger.info(f"[rr-service] bootstrap_stores: 4/4 complete ({len(results)})")
 
 
 async def persist_paper(
-    paper: NormalizedPaper,
+    paper: entities.NormalizedPaper,
     *,
     embedding: list[float] | tuple[float, ...] | None,
     signal: float | None = None,
@@ -48,10 +43,10 @@ async def persist_paper(
             f"(title={paper.title[:40]!r})"
         )
         return
-    coros: list[Any] = [neo4j_store.upsert_paper(paper, signal=signal)]
+    coros: list[Any] = [stores.service.upsert_paper(paper, signal=signal)]
     if embedding is not None:
         coros.append(
-            qdrant_store.upsert_paper_vector(paper, embedding=embedding, signal=signal)
+            stores.service.upsert_paper_vector(paper, embedding=embedding, signal=signal)
         )
     await asyncio.gather(*coros)
 
@@ -65,13 +60,13 @@ async def begin_scan(
     top_n:      int | None       = None,
 ) -> None:
     """Create the radar_scans row (status=pending) then immediately flip to running."""
-    await postgres_store.create_scan(
+    await stores.service.create_scan(
         scan_id, profile_id,
         topic     = topic,
         verticals = verticals,
         top_n     = top_n,
     )
-    await postgres_store.mark_scan_running(scan_id)
+    await stores.service.mark_scan_running(scan_id)
 
 
 async def complete_scan(
@@ -80,7 +75,7 @@ async def complete_scan(
     total_candidates: int,
     total_in_digest: int,
 ) -> None:
-    await postgres_store.mark_scan_done(
+    await stores.service.mark_scan_done(
         scan_id,
         total_candidates = total_candidates,
         total_in_digest  = total_in_digest,
@@ -88,8 +83,8 @@ async def complete_scan(
 
 
 async def fail_scan(scan_id: UUID, error: str, *, cancelled: bool = False) -> None:
-    status = SCAN_STATUS_CANCELLED if cancelled else SCAN_STATUS_ERROR
-    await postgres_store.mark_scan_error(scan_id, status=status, error=error)
+    status = keys.SCAN_STATUS_CANCELLED if cancelled else keys.SCAN_STATUS_ERROR
+    await stores.service.mark_scan_error(scan_id, status=status, error=error)
 
 
 async def delete_scan(scan_id: UUID) -> dict:
@@ -97,21 +92,19 @@ async def delete_scan(scan_id: UUID) -> dict:
 
     Intentionally preserves accumulated knowledge: Neo4j graph, Qdrant embeddings, radar_seen markers.
     """
-    from .stores import minio as minio_store
-
     pg_deleted    = False
     minio_deleted = False
     code_deleted  = 0
     try:
-        pg_deleted = await postgres_store.delete_scan_record(scan_id)
+        pg_deleted = await stores.service.delete_scan_record(scan_id)
     except Exception as e:
         logger.warning(f"[rr-service] delete_scan {scan_id} pg failed: {e}")
     try:
-        minio_deleted = await minio_store.delete_digest_json(str(scan_id))
+        minio_deleted = await stores.service.delete_digest_json(str(scan_id))
     except Exception as e:
         logger.warning(f"[rr-service] delete_scan {scan_id} minio failed: {e}")
     try:
-        code_deleted = await minio_store.delete_code_dir(str(scan_id))
+        code_deleted = await stores.service.delete_code_dir(str(scan_id))
     except Exception as e:
         logger.warning(f"[rr-service] delete_scan {scan_id} code failed: {e}")
     logger.info(
@@ -134,9 +127,8 @@ async def cancel_scan(scan_id: UUID, *, reason: str = "cancelled by user") -> bo
     A failure in step 2/3/4 doesn't roll back step 1; the worker is already dead.
     """
     from infra.celery.service import app as celery_app
-    from .runtime.events import clear_task_id, emit_event, get_task_id
 
-    task_id = await get_task_id(str(scan_id))
+    task_id = await runtime.service.get_task_id(str(scan_id))
     if not task_id:
         logger.info(f"[rr-service] cancel_scan {scan_id}: no task_id found")
         return False
@@ -156,12 +148,12 @@ async def cancel_scan(scan_id: UUID, *, reason: str = "cancelled by user") -> bo
         logger.warning(f"[rr-service] cancel_scan {scan_id} fail_scan failed: {e}")
 
     try:
-        await emit_event(str(scan_id), "cancelled", message=reason)
+        await runtime.service.emit_event(str(scan_id), "cancelled", message=reason)
     except Exception as e:
         logger.warning(f"[rr-service] cancel_scan {scan_id} emit_event failed: {e}")
 
     try:
-        await clear_task_id(str(scan_id))
+        await runtime.service.clear_task_id(str(scan_id))
     except Exception:
         pass
 
@@ -172,14 +164,14 @@ async def persist_scan_result(
     scan_id: UUID,
     profile_id: str,
     *,
-    findings: list[Finding],
+    findings: list[entities.Finding],
     digest_payload: dict[str, Any],
 ) -> dict[str, Any]:
     """Persist ranked digest: findings → Postgres, digest.json → MinIO, arxiv_ids → radar_seen."""
-    n_findings = await postgres_store.record_findings(scan_id, findings)
-    digest_key = await minio_store.put_digest_json(str(scan_id), digest_payload)
+    n_findings = await stores.service.record_findings(scan_id, findings)
+    digest_key = await stores.service.put_digest_json(str(scan_id), digest_payload)
     try:
-        await postgres_store.write_synthesis_meta(
+        await stores.service.write_synthesis_meta(
             scan_id,
             themes  = list(digest_payload.get("themes") or []),
             summary = digest_payload.get("summary"),
@@ -190,7 +182,7 @@ async def persist_scan_result(
             f"{type(e).__name__}: {e}"
         )
     arxiv_ids = [f.arxiv_id for f in findings if f.arxiv_id]
-    n_seen = await postgres_store.mark_seen_batch(profile_id, arxiv_ids)
+    n_seen = await stores.service.mark_seen_batch(profile_id, arxiv_ids)
     summary = {
         "scan_id":           str(scan_id),
         "profile_id":        profile_id,
@@ -207,16 +199,16 @@ async def persist_scan_result(
 
 
 async def get_seen_ids(profile_id: str) -> frozenset[str]:
-    return await postgres_store.get_seen_ids(profile_id)
+    return await stores.service.get_seen_ids(profile_id)
 
 
 async def get_profile(profile_id: str) -> dict[str, Any] | None:
-    return await postgres_store.get_profile(profile_id)
+    return await stores.service.get_profile(profile_id)
 
 
 async def upsert_profile(
     profile_id: str, *, interests: dict[str, Any], weights: dict[str, Any],
 ) -> None:
-    await postgres_store.upsert_profile(
+    await stores.service.upsert_profile(
         profile_id, interests=interests, weights=weights,
     )

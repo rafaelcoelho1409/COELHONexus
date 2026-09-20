@@ -25,5 +25,11 @@ class AgentParams:
     orchestrator_temperature: float = 0.0
     subagent_temperature: float = 0.0
 
+    # PhaseEnforcerMiddleware — 20 nudges: enough headroom for every phase
+    # to recover without being a runaway. The safety net is
+    # _build_digest_from_fs + task.py's inline backfill for any remaining
+    # missing extractions after the agent exits.
+    max_phase_corrections: int = 20
+
 
 PARAMS = AgentParams()

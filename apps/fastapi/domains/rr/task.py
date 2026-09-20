@@ -6,7 +6,7 @@ Redis pub/sub for the SSE endpoint.
 
 Same shape as `domains/dd/planner/task.py`: asyncio.run bridge + dict
 return + try/except → status='failed' envelope. Phase events emitted
-SYNCHRONOUSLY via `emit_event_sync` so they survive even when the
+SYNCHRONOUSLY via `runtime.service.emit_event_sync` so they survive even when the
 agent run is cancelled mid-await.
 """
 from __future__ import annotations
@@ -26,23 +26,7 @@ from infra.langfuse import (
 from infra.otel import get_tracer
 
 from .agent.graph import build_radar_agent
-from .agent.tools.state import clear_scan_fs, fs_list, fs_read, init_scan_fs
-from .agent.keys import (
-    FS_FILE_DIGEST,
-    FS_FILE_SYNTHESIS_REPORT,
-    FS_FILE_TRIAGE_TOPN,
-    fs_extraction_path,
-)
-from .entities import Extraction, Finding
-from .runtime.events import emit_event_sync
-from .runtime.observability import record_scan_run
-from .service import (
-    begin_scan,
-    complete_scan,
-    fail_scan,
-    get_seen_ids,
-    persist_scan_result,
-)
+from . import agent, entities, runtime, service, stores
 
 
 logger = logging.getLogger(__name__)
@@ -107,11 +91,11 @@ def run_radar_scan(
     except Exception as e:
         err = f"{type(e).__name__}: {e}"
         logger.exception(f"[rr-task] run_radar_scan failed at outer scope: {e}")
-        emit_event_sync(
+        runtime.service.emit_event_sync(
             scan_id, "error",
             message = f"task-outer: {err}",
         )
-        # 2026-09-17: this outer handler was missing the `fail_scan`
+        # 2026-09-17: this outer handler was missing the `service.fail_scan`
         # call the INNER handler (`_run_radar_scan_async`'s own
         # try/except, above) already has — confirmed live: scan
         # c01bf761 hit SoftTimeLimitExceeded here specifically (the
@@ -125,9 +109,9 @@ def run_radar_scan(
         # the time it was found, not a real 4-hour scan).
         try:
             from uuid import UUID
-            asyncio.run(fail_scan(UUID(scan_id), err))
+            asyncio.run(service.fail_scan(UUID(scan_id), err))
         except Exception as fe:
-            logger.warning(f"[rr-task] outer-scope fail_scan also failed: {fe}")
+            logger.warning(f"[rr-task] outer-scope service.fail_scan also failed: {fe}")
         return {
             "scan_id":    scan_id,
             "profile_id": profile_id,
@@ -213,7 +197,7 @@ async def _run_radar_scan_async(
                 "degradation_reasons": list(result.get("degradation_reasons") or [])[:10],
                 "error": result.get("error"),
             })
-    record_scan_run(
+    runtime.metrics.record_scan_run(
         degraded = bool(result.get("degraded", result.get("status") != "done")),
         outcome = str(result.get("status") or "unknown"),
         duration_s = max(asyncio.get_running_loop().time() - t0, 0.0),
@@ -234,16 +218,15 @@ async def _run_radar_scan_async_inner(
     """End-to-end async pipeline. Emits phase events as it goes."""
     scan_uuid = UUID(scan_id)
 
-    await begin_scan(
+    await service.begin_scan(
         scan_uuid, profile_id,
         topic     = topic,
         verticals = verticals,
         top_n     = top_n,
     )
-    init_scan_fs(scan_id)
-    from .runtime.llm_counter import set_scan as _set_llm_counter_scan
-    _set_llm_counter_scan(scan_id)
-    emit_event_sync(
+    agent.tools.state.init_scan_fs(scan_id)
+    runtime.llm_counter.service.set_scan(scan_id)
+    runtime.service.emit_event_sync(
         scan_id, "running",
         message = f"agent starting (topic={topic!r}, top_n={top_n})",
     )
@@ -256,30 +239,30 @@ async def _run_radar_scan_async_inner(
             f"topic='{topic}' "
             f"top_n={top_n}"
         )
-        agent = await build_radar_agent()
-        _llm_cb = getattr(agent, "_rr_llm_counter_cb", None)
+        radar_agent = await build_radar_agent()
+        _llm_cb = getattr(radar_agent, "_rr_llm_counter_cb", None)
         callbacks = [c for c in (_llm_cb,) if c is not None]
-        await agent.ainvoke(
+        await radar_agent.ainvoke(
             {"messages": [{"role": "user", "content": user_message}]},
             config = {
                 "configurable": {"thread_id": scan_id},
                 "callbacks":     callbacks,
             },
         )
-        if _mw := getattr(agent, "_rr_phase_middleware", None):
+        if _mw := getattr(radar_agent, "_rr_phase_middleware", None):
             _mw.finalize_scan(scan_id)
 
         # Auto-triage fallback: if the orchestrator skipped triage but discovery wrote, run triage from Python.
-        if not fs_read(scan_id, FS_FILE_TRIAGE_TOPN):
-            discovery_keys = fs_list(scan_id, prefix="discovery/")
+        if not agent.tools.state.fs_read(scan_id, agent.keys.FS_FILE_TRIAGE_TOPN):
+            discovery_keys = agent.tools.state.fs_list(scan_id, prefix="discovery/")
             if discovery_keys:
                 logger.warning(
                     f"[rr-task] orchestrator skipped triage_candidates; "
                     f"auto-running over {len(discovery_keys)} discovery file(s)"
                 )
-                from .agent.tools.triage import triage_candidates
-                triage_candidates.invoke({
+                await agent.tools.triage.service.triage_candidates.ainvoke({
                     "scan_id": scan_id,
+                    "topic": topic,
                     "profile_verticals": list(verticals),
                     "top_n": top_n,
                 })
@@ -303,27 +286,29 @@ async def _run_radar_scan_async_inner(
             digest = _build_digest_from_fs(scan_id)
             if not digest:
                 raise RuntimeError(
-                    f"agent finished AND triage never wrote "
-                    f"{FS_FILE_TRIAGE_TOPN} AND no discovery tool stashed "
-                    f"anything. Pipeline collapsed at phase 1. Check "
-                    f"[fs-tool] discover_* INFO lines + LangFuse trace."
+                    f"agent finished but {agent.keys.FS_FILE_TRIAGE_TOPN} was "
+                    f"never written — no discovery tool stashed ANYTHING for "
+                    f"this scan (a zero-candidate run still writes an empty "
+                    f"top_n.json, so this means discovery itself never ran). "
+                    f"Pipeline collapsed at phase 1. Check [fs-tool] discover_* "
+                    f"INFO lines + LangFuse trace."
                 )
 
-            emit_event_sync(scan_id, "persisting", message="writing findings + digest")
+            runtime.service.emit_event_sync(scan_id, "persisting", message="writing findings + digest")
 
-            seen_ids = await get_seen_ids(profile_id)
+            seen_ids = await service.get_seen_ids(profile_id)
             items = digest.get("items") or []
             for item in items:
                 aid = item.get("arxiv_id")
                 item["is_new"] = bool(aid) and aid not in seen_ids
 
             findings = [_item_to_finding(it) for it in items]
-            await persist_scan_result(
+            await service.persist_scan_result(
                 scan_uuid, profile_id,
                 findings       = findings,
                 digest_payload = digest,
             )
-            await complete_scan(
+            await service.complete_scan(
                 scan_uuid,
                 total_candidates = int(digest.get("total_candidates", len(items))),
                 total_in_digest  = len(items),
@@ -335,7 +320,7 @@ async def _run_radar_scan_async_inner(
             "degraded":            bool(digest.get("degraded")),
             "degradation_reasons": digest.get("degradation_reasons", []),
         }
-        emit_event_sync(scan_id, "done", summary=summary)
+        runtime.service.emit_event_sync(scan_id, "done", summary=summary)
         logger.info(
             f"[rr-task] run_radar_scan scan_id={scan_id} DONE "
             f"n_findings={len(findings)} degraded={summary['degraded']}"
@@ -351,11 +336,11 @@ async def _run_radar_scan_async_inner(
     except Exception as e:
         err = f"{type(e).__name__}: {e}"
         logger.exception(f"[rr-task] run_radar_scan failed: {err}")
-        emit_event_sync(scan_id, "error", message=err)
+        runtime.service.emit_event_sync(scan_id, "error", message=err)
         try:
-            await fail_scan(scan_uuid, err)
+            await service.fail_scan(scan_uuid, err)
         except Exception as fe:
-            logger.warning(f"[rr-task] fail_scan post-error also failed: {fe}")
+            logger.warning(f"[rr-task] service.fail_scan post-error also failed: {fe}")
         return {
             "scan_id":    scan_id,
             "profile_id": profile_id,
@@ -365,18 +350,17 @@ async def _run_radar_scan_async_inner(
     finally:
         # Snapshot counters to Postgres so they survive Redis TTL expiry.
         try:
-            from .runtime.llm_counter import snapshot_to_postgres
-            await snapshot_to_postgres(scan_id)
+            await runtime.llm_counter.service.snapshot_to_postgres(scan_id)
         except Exception as e:
             logger.warning(
                 f"[rr-task] llm-counter snapshot failed scan_id={scan_id}: "
                 f"{type(e).__name__}: {e}"
             )
         try:
-            _set_llm_counter_scan(None)
+            runtime.llm_counter.service.set_scan(None)
         except Exception:
             pass
-        clear_scan_fs(scan_id)
+        agent.tools.state.clear_scan_fs(scan_id)
         # Explicit close: asyncio.run() tears the loop down before __del__ runs, leaking sockets otherwise.
         from infra.neo4j   import close_neo4j
         from infra.qdrant  import close_qdrant
@@ -390,11 +374,11 @@ async def _run_radar_scan_async_inner(
             logger.warning(f"[rr-task] close_qdrant failed: {e}")
 
 
-def _item_to_finding(item: dict[str, Any]) -> Finding:
-    """Convert one digest item to a Finding dataclass for service.persist_*"""
+def _item_to_finding(item: dict[str, Any]) -> entities.Finding:
+    """Convert one digest item to a entities.Finding dataclass for service.persist_*"""
     ex_dict = item.get("extraction")
     extraction = _extraction_from_dict(ex_dict) if isinstance(ex_dict, dict) else None
-    return Finding(
+    return entities.Finding(
         arxiv_id   = str(item.get("arxiv_id") or ""),
         rank       = int(item.get("rank") or 0),
         signal     = float(item.get("signal") or 0.0),
@@ -408,8 +392,8 @@ def _item_to_finding(item: dict[str, Any]) -> Finding:
     )
 
 
-def _extraction_from_dict(d: dict[str, Any]) -> Extraction:
-    return Extraction(
+def _extraction_from_dict(d: dict[str, Any]) -> entities.Extraction:
+    return entities.Extraction(
         arxiv_id     = str(d.get("arxiv_id") or ""),
         problem      = str(d.get("problem") or ""),
         method       = str(d.get("method") or ""),
@@ -421,16 +405,22 @@ def _extraction_from_dict(d: dict[str, Any]) -> Extraction:
 
 
 def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
-    """Assemble the digest from fs artifacts. Returns None only on phase-1 collapse (no top_n.json).
+    """Assemble the digest from fs artifacts. Returns None ONLY on a true
+    phase-1 collapse — `top_n.json` was never written at all. An empty
+    `top_n.json` (`[]`) is a legitimate "0 candidates this scan" result
+    (triage always writes it, even on a zero-candidate run — see
+    triage/service.py) and produces a valid, non-degraded, 0-item digest
+    below rather than being treated the same as a collapse.
+
     Always rebuilds from triage+extractions+synthesis — never trusts the LLM-written digest.json."""
-    top_n = fs_read(scan_id, FS_FILE_TRIAGE_TOPN)
-    if not isinstance(top_n, list) or not top_n:
+    top_n = agent.tools.state.fs_read(scan_id, agent.keys.FS_FILE_TRIAGE_TOPN)
+    if top_n is None or not isinstance(top_n, list):
         return None
-    synth = fs_read(scan_id, FS_FILE_SYNTHESIS_REPORT) or {}
-    extraction_paths = fs_list(scan_id, prefix="extractions/")
+    synth = agent.tools.state.fs_read(scan_id, agent.keys.FS_FILE_SYNTHESIS_REPORT) or {}
+    extraction_paths = agent.tools.state.fs_list(scan_id, prefix="extractions/")
     extractions_by_id: dict[str, Any] = {}
     for p in extraction_paths:
-        ex = fs_read(scan_id, p)
+        ex = agent.tools.state.fs_read(scan_id, p)
         if isinstance(ex, dict) and ex.get("arxiv_id"):
             extractions_by_id[ex["arxiv_id"]] = ex
 
@@ -441,7 +431,7 @@ def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
     if not isinstance(synth_ppt, dict):
         synth_ppt = {}
 
-    llm_digest = fs_read(scan_id, FS_FILE_DIGEST) or {}
+    llm_digest = agent.tools.state.fs_read(scan_id, agent.keys.FS_FILE_DIGEST) or {}
     llm_items_by_id: dict[str, dict[str, Any]] = {}
     if isinstance(llm_digest, dict):
         for it in (llm_digest.get("items") or []):
@@ -493,15 +483,15 @@ def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
         })
 
     degradation_reasons: list[str] = []
-    if not synth:
+    if items and not synth:
         degradation_reasons.append("synthesis_missing")
-    if not extractions_by_id:
+    if items and not extractions_by_id:
         degradation_reasons.append("no_extractions")
     elif len(extractions_by_id) < len(items):
         degradation_reasons.append(
             f"partial_extractions_{len(extractions_by_id)}_of_{len(items)}"
         )
-    if not synth_ppt and not llm_items_by_id and top_themes:
+    if items and not synth_ppt and not llm_items_by_id and top_themes:
         degradation_reasons.append("no_llm_per_item_themes")
 
     items_with_themes = sum(1 for it in items if it.get("themes"))
@@ -528,8 +518,12 @@ def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
     )
     return {
         "scan_id":             scan_id,
-        "summary":             synth.get("summary")
-                               or f"Top {len(items)} papers from this radar scan",
+        "summary":             synth.get("summary") or (
+                                   "No new papers matched this scan's topic/verticals "
+                                   "across any source — try again later or broaden the "
+                                   "search." if not items
+                                   else f"Top {len(items)} papers from this radar scan"
+                               ),
         "themes":              synth.get("themes") or [],
         "items":               items,
         "total_candidates":    len(items),
@@ -551,7 +545,7 @@ _BACKFILL_CALL_TIMEOUT_S = 90.0
 
 async def _backfill_missing_extractions(scan_id: str) -> None:
     """Recover extractions missing from fs up to BACKFILL_MAX. No-op when complete or gap > cap."""
-    top_n_raw = fs_read(scan_id, FS_FILE_TRIAGE_TOPN)
+    top_n_raw = agent.tools.state.fs_read(scan_id, agent.keys.FS_FILE_TRIAGE_TOPN)
     if not isinstance(top_n_raw, list) or not top_n_raw:
         return
     expected_ids = {
@@ -562,10 +556,10 @@ async def _backfill_missing_extractions(scan_id: str) -> None:
     if not expected_ids:
         return
     # What's already on disk.
-    extracted_paths = fs_list(scan_id, prefix="extractions/")
+    extracted_paths = agent.tools.state.fs_list(scan_id, prefix="extractions/")
     extracted_ids: set[str] = set()
     for p in extracted_paths:
-        rec = fs_read(scan_id, p)
+        rec = agent.tools.state.fs_read(scan_id, p)
         if isinstance(rec, dict) and rec.get("arxiv_id"):
             extracted_ids.add(rec["arxiv_id"])
     missing_ids = expected_ids - extracted_ids
@@ -588,10 +582,9 @@ async def _backfill_missing_extractions(scan_id: str) -> None:
         if isinstance(p, dict) and p.get("arxiv_id")
     }
     from domains.llm.rotator.chain.service import build_rr_strong_chain
-    from .runtime.llm_counter import set_phase as _set_llm_phase
 
     chain = build_rr_strong_chain(rotator_task = "rr-backfill")
-    try: _set_llm_phase("deep_read")  # bucket backfill calls under deep_read in drawer KPIs
+    try: runtime.llm_counter.service.set_phase("deep_read")  # bucket backfill calls under deep_read in drawer KPIs
     except Exception: pass
 
     # 2026-09-17: was a sequential `for` loop — the one place in RR that
@@ -635,8 +628,6 @@ async def _backfill_one(
 ) -> None:
     """Run one inline deep_read extraction via the bandit chain. Raises on failure."""
     from langchain_core.messages import HumanMessage, SystemMessage
-    from .agent.skills import SKILL_PAPER_EXTRACTION
-    from .agent.tools.fs_tools import write_extraction
 
     title    = (paper.get("title")    or "").strip()
     abstract = (paper.get("abstract") or "").strip()
@@ -645,7 +636,7 @@ async def _backfill_one(
 
     system_prompt = (
         "=== SKILL: paper_extraction ===\n\n"
-        f"{SKILL_PAPER_EXTRACTION}\n\n"
+        f"{agent.skills.service.SKILL_PAPER_EXTRACTION}\n\n"
         "=== ROLE ===\n\n"
         "You are extracting structured fields from ONE paper. Return your "
         "answer as a SINGLE JSON object with exactly these keys: "
@@ -659,9 +650,7 @@ async def _backfill_one(
         f"title: {title}\n\n"
         f"abstract:\n{abstract}\n"
     )
-    from .runtime.llm_call import resilient_ainvoke
-
-    response = await resilient_ainvoke(
+    response = await runtime.service.resilient_ainvoke(
         chain,
         [
             SystemMessage(content=system_prompt),
@@ -699,8 +688,72 @@ async def _backfill_one(
         "money_angle":  str(data.get("money_angle")  or "").strip(),
         "confidence":   float(data.get("confidence") or 0.5),
     }
-    write_extraction.invoke(payload)
+    agent.tools.fs.service.write_extraction.invoke(payload)
     logger.info(
         f"[rr-task] backfill wrote extraction arxiv_id={arxiv_id} "
         f"confidence={payload['confidence']:.2f}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Build-tab code synthesis — dispatched by
+# `POST /scan/{scan_id}/finding/{arxiv_id}/code/generate` so the HTTP layer
+# never blocks on (or gateway-times-out on) the 1-5+ min generate→critique→
+# revise loop. `GET /scan/{scan_id}/finding/{arxiv_id}/code` polls
+# `runtime.service.get_code_synth_status` — set here to "running" on start
+# and cleared on success (the MinIO cache written just before is then the
+# source of truth), or set to "error" on failure so the operator sees a
+# Retry button instead of a spinner stuck forever.
+# ---------------------------------------------------------------------------
+
+@app.task(
+    name          = "domains.rr.task.run_code_synth",
+    bind          = True,
+    acks_late     = False,
+    track_started = True,
+)
+def run_code_synth(self, scan_id: str, arxiv_id: str, prompt_version: str) -> dict:
+    logger.info(
+        f"[rr-task] run_code_synth scan_id={scan_id} arxiv_id={arxiv_id} "
+        f"prompt_version={prompt_version}"
+    )
+    try:
+        asyncio.run(_run_code_synth_async(scan_id, arxiv_id, prompt_version))
+        return {"scan_id": scan_id, "arxiv_id": arxiv_id, "status": "done"}
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"
+        logger.exception(
+            f"[rr-task] run_code_synth failed scan_id={scan_id} "
+            f"arxiv_id={arxiv_id}: {e}"
+        )
+        try:
+            asyncio.run(
+                runtime.service.set_code_synth_error(scan_id, arxiv_id, prompt_version, err)
+            )
+        except Exception as fe:
+            logger.warning(f"[rr-task] run_code_synth set_code_synth_error also failed: {fe}")
+        return {"scan_id": scan_id, "arxiv_id": arxiv_id, "status": "failed", "error": err}
+
+
+async def _run_code_synth_async(scan_id: str, arxiv_id: str, prompt_version: str) -> None:
+    """Fetch the finding row, synthesize, cache to MinIO. Raises on any
+    failure — the Celery task's except-block turns that into the Redis
+    error status the poll endpoint surfaces."""
+    finding = await stores.service.get_finding_digest_json(UUID(scan_id), arxiv_id)
+    if finding is None:
+        raise ValueError(f"finding {arxiv_id!r} not found for scan_id {scan_id}")
+
+    # Best-effort — attributes this task's rotator calls to the right
+    # scan/phase in the per-scan LLM counters, same as the old inline
+    # endpoint did (this runs outside the scan's own agent.ainvoke()
+    # context, so the contextvars RRLlmCounterCallback reads wouldn't
+    # otherwise be set).
+    try:
+        runtime.llm_counter.service.set_scan(scan_id)
+        runtime.llm_counter.service.set_phase("build")
+    except Exception:
+        pass
+
+    result = await agent.tools.code_synth.service.synth_code(finding)
+    await stores.service.put_code_py(scan_id, arxiv_id, prompt_version, result["code"])
+    await runtime.service.clear_code_synth_status(scan_id, arxiv_id, prompt_version)

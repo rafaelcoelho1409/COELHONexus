@@ -16,7 +16,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
-from .taxonomy import is_valid_vertical
+from . import domain
 
 
 # POST /scan — the trigger
@@ -52,7 +52,7 @@ class ScanRequest(BaseModel):
             "quant finance. Empty = no vertical filter. Every entry must be "
             "a valid arXiv subject code; the picker UI's client-side check "
             "and this server-side validator share the same taxonomy "
-            "(domains/rr/taxonomy.py)."
+            "(domains/rr/domain.py)."
         ),
     )
 
@@ -63,7 +63,7 @@ class ScanRequest(BaseModel):
         against a stale/forged client payload reaching the agent with junk
         categories that would silently zero `vertical_fit` for every paper."""
         cleaned = [s.strip() for s in v if s and s.strip()]
-        bad = [c for c in cleaned if not is_valid_vertical(c)]
+        bad = [c for c in cleaned if not domain.is_valid_vertical(c)]
         if bad:
             raise ValueError(
                 f"Invalid arXiv subject codes: {bad!r}. "

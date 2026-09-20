@@ -35,6 +35,7 @@ const _PHASE_PLAN = [
   { phase: 'discovery',   active: [
       'discovery_arxiv', 'discovery_semantic_scholar',
       'discovery_huggingface_daily_papers', 'discovery_hn',
+      'discovery_openalex',
     ],
     _kpiNode: 'orchestrator' },
   { phase: 'triage',      active: ['triage'],

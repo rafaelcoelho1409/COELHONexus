@@ -7,12 +7,12 @@ key on the version.
 
 The orchestrator's prompt comes in TWO flavors driven by `RR_DISCOVERY_MODE`:
 
-  "tools"     — discovery is 4 Python @tools (fast, deterministic);
-                orchestrator emits 4 tool_calls in one message.
+  "tools"     — discovery is 5 Python @tools (fast, deterministic);
+                orchestrator emits 5 tool_calls in one message.
 
-  "subagents" — discovery is 4 DeepAgents LLM subagents (the learning
+  "subagents" — discovery is 5 DeepAgents LLM subagents (the learning
                 path, slower but exercises full DeepAgents pattern);
-                orchestrator emits 4 task() calls in one message.
+                orchestrator emits 5 task() calls in one message.
 
 Subagent prompts (deep_read, synthesis, report, discovery_*) are augmented
 at agent-build time with the relevant `.md` skill content from
@@ -26,11 +26,11 @@ ranking + theme-deduplication decisions reflect operator history.
 from __future__ import annotations
 
 
-PROMPT_VERSION_ORCHESTRATOR = "v4"   # step-7 refactor: write_todos + skills + memory
+PROMPT_VERSION_ORCHESTRATOR = "v7"   # 5th discovery source: openalex
 PROMPT_VERSION_DEEP_READ    = "v2"   # uses paper_extraction skill
-PROMPT_VERSION_SYNTHESIS    = "v2"   # uses cross_paper_synthesis skill
+PROMPT_VERSION_SYNTHESIS    = "v3"   # empty top_n → write an empty report immediately, don't hallucinate themes
 PROMPT_VERSION_REPORT       = "v2"   # uses digest_rendering skill
-PROMPT_VERSION_DISCOVERY    = "v3"   # InjectedState stash, no JSON copying
+PROMPT_VERSION_DISCOVERY    = "v4"   # added discovery_openalex
 
 
 # Orchestrator — TOOLS MODE (Python discovery tools)
@@ -43,7 +43,7 @@ You receive a user message containing:
 
 THE FIRST THING YOU MUST DO: call `write_todos` with these 5 todos so you
 can't lose track of the phase sequence:
-    1. discovery (4 tools in parallel)
+    1. discovery (5 tools in parallel)
     2. triage_candidates
     3. deep_read fan-out
     4. graph_build_papers
@@ -54,11 +54,17 @@ has returned successfully.
 
 Execute the 5 phases in strict order. THREAD `scan_id` to every call.
 
-Phase 1 — DISCOVERY (parallel, 4 Python tools in ONE message)
+Phase 1 — DISCOVERY (parallel, 5 Python tools in ONE message)
     discover_arxiv(scan_id=<id>, query='<topic>', n_max=30)
     discover_semantic_scholar(scan_id=<id>, query='<topic>', n_max=30)
     discover_huggingface_daily_papers(scan_id=<id>, n_max=20)
     discover_hn(scan_id=<id>, query='<topic>', n_max=50, min_points=50)
+    discover_openalex(scan_id=<id>, query='<topic>', n_max=30)
+
+    Each discover_* call runs ONCE per scan_id, even if it returns 0
+    results — that is a legitimate, final signal. Do NOT call the same
+    discover_* tool again for this scan hoping for more; it wastes a
+    turn and the result won't change.
 
 Phase 2 — TRIAGE (MANDATORY)
     triage_candidates(scan_id=<id>, topic='<topic>', profile_verticals=<verticals list>, top_n=<N>)
@@ -70,6 +76,12 @@ Phase 2 — TRIAGE (MANDATORY)
     The return string contains `top_arxiv_ids=[...]` — use those for Phase 3.
 
     YOU MUST CALL TRIAGE EVEN IF SOME DISCOVERIES RETURNED 0 PAPERS.
+
+    IF TRIAGE RETURNS "no candidates from any source" OR "no arxiv-linked candidates" (0 total across ALL sources): SKIP
+    Phases 3-5 entirely (no deep_read, no graph_build, no synthesis —
+    there is nothing to read or cluster) and go STRAIGHT to your final
+    ScanComplete response with n_findings=0 and an empty phases/themes
+    list where applicable. This is a legitimate, non-error outcome.
 
 Phase 3 — DEEP_READ (parallel subagent fan-out, CACHE-AWARE)
     Triage's return string ALSO includes `cached_arxiv_ids=[...]` when
@@ -124,7 +136,7 @@ You receive a user message containing:
     scan_id=<uuid> profile_id=<id> verticals=[...] topic='...' top_n=N
 
 THE FIRST THING YOU MUST DO: call `write_todos` with these 6 todos:
-    1. discovery (4 subagents in parallel via task())
+    1. discovery (5 subagents in parallel via task())
     2. triage_candidates
     3. deep_read fan-out
     4. graph_build_papers
@@ -136,7 +148,7 @@ returned successfully.
 
 Execute the 6 phases in strict order. THREAD `scan_id` to every call.
 
-Phase 1 — DISCOVERY (parallel, 4 LLM subagents in ONE message)
+Phase 1 — DISCOVERY (parallel, 5 LLM subagents in ONE message)
     task(subagent_type="discovery_arxiv",
          description="scan_id=<id> topic='<topic>' verticals=<list>")
     task(subagent_type="discovery_semantic_scholar",
@@ -145,6 +157,15 @@ Phase 1 — DISCOVERY (parallel, 4 LLM subagents in ONE message)
          description="scan_id=<id>")
     task(subagent_type="discovery_hn",
          description="scan_id=<id> topic='<topic>'")
+    task(subagent_type="discovery_openalex",
+         description="scan_id=<id> topic='<topic>'")
+
+    Each discovery subagent runs ONCE per scan_id, even if it stashes 0
+    results — that is a legitimate, final signal, and stash_discovery_result
+    will refuse a repeat call for a source that's already done anyway. Do
+    NOT dispatch task(subagent_type="discovery_*") a second time for a
+    source you've already gotten a result from in this scan; it only
+    wastes a turn and the outcome won't change.
 
 Phase 2 — TRIAGE (MANDATORY)
     triage_candidates(scan_id=<id>, topic='<topic>', profile_verticals=<verticals list>, top_n=<N>)
@@ -156,6 +177,12 @@ Phase 2 — TRIAGE (MANDATORY)
     The return string contains `top_arxiv_ids=[...]` — use those for Phase 3.
 
     YOU MUST CALL TRIAGE EVEN IF SOME DISCOVERIES RETURNED 0 PAPERS.
+
+    IF TRIAGE RETURNS "no candidates from any source" OR "no arxiv-linked candidates" (0 total across ALL sources): SKIP
+    Phases 3-5 entirely (no deep_read, no graph_build, no synthesis —
+    there is nothing to read or cluster) and go STRAIGHT to your final
+    ScanComplete response with n_findings=0 and an empty phases/themes
+    list where applicable. This is a legitimate, non-error outcome.
 
 Phase 3 — DEEP_READ (parallel subagent fan-out, CACHE-AWARE)
     Triage's return string ALSO includes `cached_arxiv_ids=[...]` when
@@ -344,6 +371,26 @@ After hn_search returns, immediately call:
 """ + _DISCOVERY_TAIL
 
 
+DISCOVERY_OPENALEX_SYSTEM_PROMPT = """\
+You are the OpenAlex discovery subagent.
+
+Arguments to pass to `openalex_search`:
+  - query:            2-5 word topical phrase from your task description
+  - n_max:            30
+  - year_min:         current_year - 2 (recent focus) if the user mentions
+                       "recent"/"new"; otherwise omit
+  - open_access_only: omit (leave False) unless the user explicitly asks
+                       for freely-readable works only
+
+OpenAlex matches title/abstract/fulltext (broader than arxiv's title/
+abstract-only search) — expect some off-topic results; that's normal,
+downstream triage filters quality.
+
+After openalex_search returns, immediately call:
+    stash_discovery_result(scan_id=<id>, source='openalex')
+""" + _DISCOVERY_TAIL
+
+
 # Deep_read subagent — extracts 5 fields per paper
 # Skill: paper_extraction.md gets prepended at agent-build time
 DEEP_READ_SYSTEM_PROMPT = """\
@@ -378,6 +425,12 @@ Your task description carries: scan_id.
 PROCESS:
 
 1. Call read_top_n_papers(scan_id=<id>) to see the ranked paper list.
+   IF THIS RETURNS AN EMPTY LIST: there is nothing to synthesize.
+   Immediately call write_synthesis_report(scan_id=<id>, themes=[],
+   cross_paper_convergence='', summary='No candidates matched this
+   scan's topic/verticals.', per_paper_themes={}) and return ONE
+   sentence saying so. Do NOT invent themes from the topic string
+   alone — themes must come from actual paper extractions.
 2. Call list_extractions(scan_id=<id>) to see which extraction files exist.
 3. For each path, call read_extraction(scan_id=<id>, arxiv_id=<id>) to
    get the 5-field structured extraction.
@@ -417,3 +470,67 @@ PROCESS:
 Return ONE sentence summarizing the digest (count of items, count of
 themes).
 """
+
+
+# Phase-enforcer nudges — injected as a before_model SystemMessage by
+# PhaseEnforcerMiddleware (agent/middleware/service.py) when a phase is
+# incomplete. `{calls}` is a caller-assembled newline-joined block of
+# task()/tool call strings, one per missing item.
+PHASE_ENFORCER_DISCOVERY_NUDGE = """\
+Discovery is INCOMPLETE — the following source files are still missing \
+from fs: {missing_sources!r}. The orchestrator MUST dispatch all 5 \
+discovery subagents (or all 5 discover_* tools in tools mode), not just \
+one. Each subagent's stash_discovery_result creates discovery/<source>.json \
+— an empty list is the correct empty-result signal but the file MUST \
+exist. Dispatch the missing subagents now, IN ONE MESSAGE for parallel \
+execution:
+{calls}"""
+
+PHASE_ENFORCER_DEEP_READ_NUDGE = """\
+Deep_read is INCOMPLETE — the following arxiv_ids from fs/triage/top_n.json \
+still lack an extraction file: {missing_ids!r}. Dispatch one deep_read task \
+PER missing arxiv_id, ALL IN ONE MESSAGE for parallel execution. DO NOT \
+skip to synthesis until every top_n paper has an extraction on disk (the \
+ScanComplete validator will reject a terminal output with missing \
+extractions).
+{calls}"""
+
+PHASE_ENFORCER_TRIAGE_NUDGE = (
+    "Discovery is done but you have not called triage_candidates("
+    "scan_id='{scan_id}', topic='<topic>', profile_verticals=[...], "
+    "top_n=N). Call it NOW — it is unconditional even if some "
+    "discoveries returned 0."
+)
+
+PHASE_ENFORCER_SYNTHESIS_NUDGE = (
+    "Deep_read is done. Dispatch task(subagent_type='synthesis', "
+    "description='scan_id={scan_id}') NOW. After synthesis writes "
+    "fs/synthesis/report.json you MUST immediately emit respond_in_format "
+    "with a valid ScanComplete — there is NO report subagent. The digest "
+    "is assembled in Python after your ScanComplete response."
+)
+
+# Triage confirmed 0 candidates (fs/triage/top_n.json = []) — a final,
+# legitimate result, not a phase to retry out of. Unlike the other nudges,
+# this fires every turn until the orchestrator stops (there is no "next
+# step" to point at — the only correct action is to terminate).
+PHASE_ENFORCER_FINALIZE_EMPTY_NUDGE = (
+    "Triage found 0 candidates across every source for this scan — this "
+    "is a final, legitimate result, not a signal to retry anything. Do "
+    "NOT call graph_build_papers (there is nothing to persist). Do NOT "
+    "dispatch synthesis (there is nothing to cluster into themes). Do "
+    "NOT re-run triage_candidates or any discovery subagent. Your ONLY "
+    "valid next action is to immediately emit respond_in_format with a "
+    "valid ScanComplete: n_findings=0, empty themes, and a summary "
+    "noting no papers matched this topic/verticals combination."
+)
+
+# Prepended to any of the above once the SAME phase has been nudged 3+
+# times in a row without progress — the orchestrator is ignoring plain
+# instructions, so make the ask blunt and singular rather than repeating
+# the same phrasing it already skipped past twice.
+PHASE_ENFORCER_ESCALATION_PREFIX = (
+    "YOU HAVE IGNORED THIS INSTRUCTION {streak} TIMES IN A ROW. Your ONLY "
+    "valid next action is the call described below — no other tool call, "
+    "no commentary, no re-checking earlier phases.\n\n"
+)

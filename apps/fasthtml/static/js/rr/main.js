@@ -958,6 +958,10 @@ function _renderFindingCards(findings) {
 
 function _openFindingDrawer(f) {
   if (!_findingDrawer || !_findingDrawerBody) return;
+  // Switching findings while the drawer is already open — stop any poll
+  // left over from the previous finding before the panel it targets is
+  // torn down by the innerHTML rewrite below.
+  _stopBuildPoll();
   const ex = f.extraction || {};
   _findingDrawerRank.textContent  = `#${f.rank ?? '?'} · signal ${Number(f.signal ?? 0).toFixed(3)}`;
   _findingDrawerArxiv.textContent = f.arxiv_id || '';
@@ -1079,16 +1083,35 @@ function _closeFindingDrawer() {
   if (!_findingDrawer) return;
   _findingDrawer.classList.remove('is-open');
   _currentFinding = null;
+  // The job keeps running server-side regardless — this only stops the
+  // client from polling a panel that's about to be hidden. Reopening the
+  // same finding re-probes and resumes polling if it's still in flight.
+  _stopBuildPoll();
   // Hide after transition so the panel doesn't snap on next open.
   setTimeout(() => { if (_findingDrawer) _findingDrawer.hidden = true; }, 250);
 }
 
 // --------------------------------------------------------------------------- //
-// Build tab — lazy fetch of synthesized Python on first activation.
-// Server endpoint GET /v1/rr/scan/{id}/finding/{arxiv_id}/code returns
-// {code, cached, model_id, prompt_version}. Cache-first on the server
-// (MinIO) + cache on the finding object (`_codeCache`) so the second
-// click on the Build tab for the same paper is instant.
+// Build tab — async code synthesis via a Celery job, not an inline HTTP call.
+//
+// Generation takes 1-5+ min — too long to hold an HTTP request open without
+// risking a gateway timeout. The server dispatches it to Celery and tracks
+// "running"/"error" in Redis (MinIO holds the finished code once done):
+//
+//   POST /v1/rr/scan/{id}/finding/{arxiv_id}/code/generate
+//     Kicks off (or resumes) generation. Returns {status:"ready", code, ...}
+//     on a cache hit, else {status:"pending"} (202) — idempotent, safe to
+//     call again while already running (no duplicate dispatch).
+//
+//   GET /v1/rr/scan/{id}/finding/{arxiv_id}/code
+//     Poll-only — NEVER triggers work. Returns {status:"ready"|"pending"|
+//     "error", ...} or 404 (never started).
+//
+// Because the in-flight state lives server-side (Redis), a page refresh or
+// switching to another finding and back re-probes into "pending" and
+// resumes polling instead of losing track of an already-running job — this
+// is the whole point: the operator never needs to babysit the tab, and a
+// slow generation can't come back as a bare HTTP 500.
 // --------------------------------------------------------------------------- //
 // Render helpers for the four Build-tab states. Each takes the panel
 // and rewrites its innerHTML — they DON'T mutate state attributes, the
@@ -1137,55 +1160,137 @@ function _buildPanelReady(panel, code) {
   `;
 }
 
-// Cache PROBE — called on every Build-tab activation. Hits the same
-// endpoint with `check_only=1` so the server returns cached code if it
-// exists OR 404 without burning rotator tokens. Lets a post-refresh
-// visit auto-render previously-generated code (the in-memory client
-// cache resets on refresh; this restores it from MinIO).
-//
-// Semantics:
-//   hit  (200)         → swap the panel into ready state, cache on
-//                        finding so re-clicks are instant.
-//   miss (404)         → leave the panel as-is (idle button stays).
-//                        The operator must explicitly click Generate.
-//   other error / net  → silent (log to console) and leave idle. We
-//                        don't want a transient cache-probe error to
-//                        block the operator from clicking Generate.
+// Single in-flight poll timer — the drawer shows one finding's Build tab
+// at a time, so one module-scoped handle is enough. Always cleared before
+// starting a new one (new finding opened, drawer closed, or a fresh
+// generate/probe call for the same finding) so we never have two loops
+// writing into two different panels.
+let _buildPollTimer  = null;
+const BUILD_POLL_INTERVAL_MS   = 5000;
+const BUILD_POLL_MAX_FAILURES  = 5;   // consecutive network/HTTP failures before giving up
+
+function _stopBuildPoll() {
+  if (_buildPollTimer) {
+    clearInterval(_buildPollTimer);
+    _buildPollTimer = null;
+  }
+}
+
+// One GET poll. Returns the parsed {status, ...} body, or null on a 404
+// (never started / lost), or throws on network error / non-404 HTTP error
+// so the caller can distinguish "nothing there" from "something's wrong".
+async function _pollOnce(arxivId) {
+  const resp = await fetch(
+    `/api/v1/rr/scan/${encodeURIComponent(activeScanId)}` +
+    `/finding/${encodeURIComponent(arxivId)}/code`,
+  );
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+// Renders the resolved state ("ready" or "error") into the panel + finding
+// cache. Shared by the probe, the generate kickoff, and the poll loop so
+// the three call sites can't drift out of sync on what "done" looks like.
+function _applyBuildResult(finding, panel, data) {
+  if (data.status === 'ready') {
+    const code = (data.code || '').trim();
+    if (!code) {
+      panel.setAttribute('data-codegen-state', 'error');
+      _buildPanelError(panel, 'Generation returned empty code.');
+      return;
+    }
+    finding._codeCache = code;
+    panel.setAttribute('data-codegen-state', 'ready');
+    _buildPanelReady(panel, code);
+    _enhanceMarkdownIn(panel, (key) => {
+      if (key === 'code') return '```python\n' + code + '\n```';
+      return finding.extraction?.[key] || '';
+    });
+    return;
+  }
+  if (data.status === 'error') {
+    panel.setAttribute('data-codegen-state', 'error');
+    _buildPanelError(panel, data.message || 'Generation failed.');
+    return;
+  }
+  // status === 'pending'
+  panel.setAttribute('data-codegen-state', 'pending');
+  _buildPanelPending(panel);
+}
+
+// Poll loop — started whenever a panel enters `pending` (either the probe
+// found a job already running, or a fresh generate call just dispatched
+// one). Stops itself on `ready`/`error`; a 404 mid-poll means the Redis
+// marker expired without resolving (worker crash/restart) — surfaced as
+// an error with a Retry button rather than spinning forever.
+function _pollBuildCode(finding, panel) {
+  _stopBuildPoll();
+  const arxivId = finding.arxiv_id;
+  let failures = 0;
+  _buildPollTimer = setInterval(async () => {
+    // The drawer may have moved on to a different finding since this
+    // interval was scheduled; stop rather than write into a stale panel.
+    if (_currentFinding !== finding || !panel.isConnected) {
+      _stopBuildPoll();
+      return;
+    }
+    let data;
+    try {
+      data = await _pollOnce(arxivId);
+    } catch (err) {
+      failures += 1;
+      console.warn(`[rr-build] poll error (${failures}/${BUILD_POLL_MAX_FAILURES}):`, err);
+      if (failures >= BUILD_POLL_MAX_FAILURES) {
+        _stopBuildPoll();
+        panel.setAttribute('data-codegen-state', 'error');
+        _buildPanelError(panel, 'Lost connection while waiting for generation. Please retry.');
+      }
+      return;
+    }
+    failures = 0;
+    if (data === null) {
+      // 404 — the in-flight marker is gone and there's still no cached
+      // code. Treat as a lost job rather than reverting silently to idle.
+      _stopBuildPoll();
+      panel.setAttribute('data-codegen-state', 'error');
+      _buildPanelError(panel, 'Generation was lost (worker restart?). Please retry.');
+      return;
+    }
+    if (data.status === 'pending') return;  // keep polling
+    _stopBuildPoll();
+    _applyBuildResult(finding, panel, data);
+  }, BUILD_POLL_INTERVAL_MS);
+}
+
+// Probe — called on every Build-tab activation (including right after a
+// page refresh, when the in-memory `_codeCache` is gone). Never triggers
+// generation itself: a `ready`/`error` result renders immediately, a
+// `pending` result resumes polling so an in-flight job picked up before
+// the refresh keeps showing as loading instead of falsely reverting to
+// the idle "Generate" button.
 async function _probeBuildCode(finding, panel) {
   if (!finding || !panel) return;
   if (!activeScanId) return;
   const arxivId = finding.arxiv_id;
   if (!arxivId) return;
-  let resp;
-  try {
-    resp = await fetch(
-      `/api/v1/rr/scan/${encodeURIComponent(activeScanId)}` +
-      `/finding/${encodeURIComponent(arxivId)}/code?check_only=1`,
-    );
-  } catch (err) {
-    console.warn('[rr-build] cache probe network error:', err);
-    return;
-  }
-  if (resp.status === 404) return;  // expected miss path
-  if (!resp.ok) {
-    console.warn(`[rr-build] cache probe returned ${resp.status}`);
-    return;
-  }
   let data;
-  try { data = await resp.json(); }
-  catch { return; }
-  const code = (data?.code || '').trim();
-  if (!code) return;
-  finding._codeCache = code;
-  panel.setAttribute('data-codegen-state', 'ready');
-  _buildPanelReady(panel, code);
-  _enhanceMarkdownIn(panel, (key) => {
-    if (key === 'code') return '```python\n' + code + '\n```';
-    return finding.extraction?.[key] || '';
-  });
+  try {
+    data = await _pollOnce(arxivId);
+  } catch (err) {
+    console.warn('[rr-build] probe network error:', err);
+    return;
+  }
+  if (data === null) return;  // expected miss path — leave idle
+  if (data.status === 'pending') {
+    _pollBuildCode(finding, panel);
+    return;
+  }
+  _applyBuildResult(finding, panel, data);
 }
 
-
+// Generate / Retry button — kicks off (or resumes) generation via POST,
+// then either renders immediately (cache hit) or starts polling.
 async function _fetchBuildCode(finding, panel) {
   if (!finding || !panel) return;
   if (!activeScanId) {
@@ -1205,7 +1310,8 @@ async function _fetchBuildCode(finding, panel) {
   try {
     resp = await fetch(
       `/api/v1/rr/scan/${encodeURIComponent(activeScanId)}` +
-      `/finding/${encodeURIComponent(arxivId)}/code`,
+      `/finding/${encodeURIComponent(arxivId)}/code/generate`,
+      { method: 'POST' },
     );
   } catch (err) {
     panel.setAttribute('data-codegen-state', 'error');
@@ -1229,25 +1335,13 @@ async function _fetchBuildCode(finding, panel) {
     _buildPanelError(panel, 'Generation failed: malformed server response.');
     return;
   }
-  const code = (data?.code || '').trim();
-  if (!code) {
-    panel.setAttribute('data-codegen-state', 'error');
-    _buildPanelError(panel, 'Generation returned empty code.');
+  if (data.status === 'ready') {
+    _applyBuildResult(finding, panel, data);
     return;
   }
-  // Persist on the finding so closing + reopening the drawer reuses
-  // the synthesized output without re-hitting the rotator.
-  finding._codeCache = code;
-  panel.setAttribute('data-codegen-state', 'ready');
-  _buildPanelReady(panel, code);
-  // Run the markdown enhancer scoped to just this panel so marked +
-  // hljs highlight the python block. The lookup returns the fresh
-  // code for the `code` field; other fields are unreachable here
-  // (the enhancer only walks this panel's .rr-md children).
-  _enhanceMarkdownIn(panel, (key) => {
-    if (key === 'code') return '```python\n' + code + '\n```';
-    return finding.extraction?.[key] || '';
-  });
+  // status === 'pending' (202) — dispatched (or already running); poll
+  // until the Celery task resolves it.
+  _pollBuildCode(finding, panel);
 }
 
 if (_findingDrawerCloseBtn) {

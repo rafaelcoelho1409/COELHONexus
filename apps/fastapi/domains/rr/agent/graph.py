@@ -40,38 +40,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from domains.llm.rotator.chain.service import build_rr_strong_chain
 
-from .keys import (
-    DISCOVERY_MODE_AGENTS,
-    DISCOVERY_MODE_DEFAULT,
-    DISCOVERY_MODE_ENV,
-    DISCOVERY_MODE_TOOLS,
-)
-from .memory import MEMORY_OPERATOR_PROFILE, MEMORY_THEMES_SEEN
-from .middleware import PhaseEnforcerMiddleware, PhaseEventsMiddleware
-from .params import PARAMS
-from .prompts import (
-    ORCHESTRATOR_MEMORY_TEMPLATE,
-    ORCHESTRATOR_SYSTEM_PROMPT_SUBAGENTS,
-    ORCHESTRATOR_SYSTEM_PROMPT_TOOLS,
-)
-from .schemas import ScanComplete
-from .subagents import (
-    build_deep_read,
-    build_discovery_arxiv,
-    build_discovery_hn,
-    build_discovery_huggingface_daily_papers,
-    build_discovery_semantic_scholar,
-    build_synthesis,
-)
-from ..runtime.llm_counter import RRLlmCounterCallback
-from .tools.discovery import (
-    discover_arxiv,
-    discover_hn,
-    discover_huggingface_daily_papers,
-    discover_semantic_scholar,
-)
-from .tools.graph_build import graph_build_papers
-from .tools.triage import triage_candidates
+from . import keys, memory, middleware, params, prompts, schemas, subagents, tools
+from ..runtime import llm_counter
 
 
 logger = logging.getLogger(__name__)
@@ -91,7 +61,7 @@ logger = logging.getLogger(__name__)
 # `agent.ainvoke(config={"callbacks":[...]})` in task.py so we don't
 # need to mutate the model (model wrapping breaks DeepAgents'
 # `isinstance(model, BaseChatModel)` check — see service.py comments).
-_LLM_COUNTER_CB = RRLlmCounterCallback()
+_LLM_COUNTER_CB = llm_counter.service.RRLlmCounterCallback()
 
 
 def _orchestrator_model() -> BaseChatModel:
@@ -110,7 +80,7 @@ def _orchestrator_model() -> BaseChatModel:
     a bare `BaseChatModel`."""
     return build_rr_strong_chain(
         rotator_task = "rr-orchestrator",
-        temperature  = PARAMS.orchestrator_temperature,
+        temperature  = params.PARAMS.orchestrator_temperature,
         max_retries  = 1,
     )
 
@@ -139,7 +109,7 @@ def _subagent_model() -> BaseChatModel:
     written extractions and the whole discovery phase along with it."""
     return build_rr_strong_chain(
         rotator_task = "rr-subagent",
-        temperature  = PARAMS.subagent_temperature,
+        temperature  = params.PARAMS.subagent_temperature,
         max_retries  = 1,
     )
 
@@ -152,13 +122,13 @@ def _ensure_checkpointer() -> Any:
 
 def _discovery_mode() -> str:
     """Read RR_DISCOVERY_MODE env. Default = subagents (learning path)."""
-    val = os.environ.get(DISCOVERY_MODE_ENV, DISCOVERY_MODE_DEFAULT).strip().lower()
-    if val not in (DISCOVERY_MODE_TOOLS, DISCOVERY_MODE_AGENTS):
+    val = os.environ.get(keys.DISCOVERY_MODE_ENV, keys.DISCOVERY_MODE_DEFAULT).strip().lower()
+    if val not in (keys.DISCOVERY_MODE_TOOLS, keys.DISCOVERY_MODE_AGENTS):
         logger.warning(
-            f"[rr-agent] {DISCOVERY_MODE_ENV}={val!r} not recognized; "
-            f"falling back to default {DISCOVERY_MODE_DEFAULT!r}"
+            f"[rr-agent] {keys.DISCOVERY_MODE_ENV}={val!r} not recognized; "
+            f"falling back to default {keys.DISCOVERY_MODE_DEFAULT!r}"
         )
-        return DISCOVERY_MODE_DEFAULT
+        return keys.DISCOVERY_MODE_DEFAULT
     return val
 
 
@@ -169,15 +139,15 @@ def _build_orchestrator_prompt(mode: str) -> str:
     available; otherwise from the local constant. Memory block is
     always appended locally — it's per-build dynamic content."""
     local_base = (
-        ORCHESTRATOR_SYSTEM_PROMPT_SUBAGENTS
-        if mode == DISCOVERY_MODE_AGENTS
-        else ORCHESTRATOR_SYSTEM_PROMPT_TOOLS
+        prompts.ORCHESTRATOR_SYSTEM_PROMPT_SUBAGENTS
+        if mode == keys.DISCOVERY_MODE_AGENTS
+        else prompts.ORCHESTRATOR_SYSTEM_PROMPT_TOOLS
     )
     try:
         from infra.langfuse.prompts import get_prompt as _lf_get_prompt
         prompt_name = (
             "rr.agent.orchestrator_subagents"
-            if mode == DISCOVERY_MODE_AGENTS
+            if mode == keys.DISCOVERY_MODE_AGENTS
             else "rr.agent.orchestrator_tools"
         )
         base = _lf_get_prompt(
@@ -186,9 +156,9 @@ def _build_orchestrator_prompt(mode: str) -> str:
     except Exception:
         base = local_base
 
-    memory_block = ORCHESTRATOR_MEMORY_TEMPLATE.format(
-        operator_profile = MEMORY_OPERATOR_PROFILE or "(no operator profile yet)",
-        themes_seen      = MEMORY_THEMES_SEEN      or "(no themes seen yet)",
+    memory_block = prompts.ORCHESTRATOR_MEMORY_TEMPLATE.format(
+        operator_profile = memory.service.MEMORY_OPERATOR_PROFILE or "(no operator profile yet)",
+        themes_seen      = memory.service.MEMORY_THEMES_SEEN      or "(no themes seen yet)",
     )
     return base + memory_block
 
@@ -204,10 +174,10 @@ async def build_radar_agent() -> Any:
       - Tools: triage_candidates + graph_build_papers (both modes)
 
     Mode-specific:
-      "subagents": + 4 discovery subagents (report subagent retired
+      "subagents": + 5 discovery subagents (report subagent retired
                      synthesis now owns per-paper themes;
                      digest assembly is Python in task.py for both modes)
-      "tools":     + 4 discover_* tools (replaces discovery subagents)
+      "tools":     + 5 discover_* tools (replaces discovery subagents)
 
     Report subagent removed from both modes.
     It emitted `{` six times for write_digest across an 8-min window.
@@ -222,65 +192,67 @@ async def build_radar_agent() -> Any:
 
     # Subagents always include deep_read + synthesis. Mode adds discoveries
     # when in "subagents" mode.
-    subagents: list[dict[str, Any]] = [
-        build_deep_read(subagent_model),
-        build_synthesis(subagent_model),
+    subagent_list: list[dict[str, Any]] = [
+        subagents.service.build_deep_read(subagent_model),
+        subagents.service.build_synthesis(subagent_model),
     ]
-    tools: list[Any] = [
-        triage_candidates,
-        graph_build_papers,
+    tool_list: list[Any] = [
+        tools.triage.service.triage_candidates,
+        tools.graph_build.service.graph_build_papers,
     ]
 
-    if mode == DISCOVERY_MODE_AGENTS:
-        subagents = [
-            await build_discovery_arxiv(subagent_model),
-            await build_discovery_semantic_scholar(subagent_model),
-            await build_discovery_huggingface_daily_papers(subagent_model),
-            await build_discovery_hn(subagent_model),
-        ] + subagents
+    if mode == keys.DISCOVERY_MODE_AGENTS:
+        subagent_list = [
+            await subagents.service.build_discovery_arxiv(subagent_model),
+            await subagents.service.build_discovery_semantic_scholar(subagent_model),
+            await subagents.service.build_discovery_huggingface_daily_papers(subagent_model),
+            await subagents.service.build_discovery_hn(subagent_model),
+            await subagents.service.build_discovery_openalex(subagent_model),
+        ] + subagent_list
     else:  # DISCOVERY_MODE_TOOLS
-        tools = [
-            discover_arxiv,
-            discover_semantic_scholar,
-            discover_huggingface_daily_papers,
-            discover_hn,
-        ] + tools
+        tool_list = [
+            tools.discovery.service.discover_arxiv,
+            tools.discovery.service.discover_semantic_scholar,
+            tools.discovery.service.discover_huggingface_daily_papers,
+            tools.discovery.service.discover_hn,
+            tools.discovery.service.discover_openalex,
+        ] + tool_list
 
-    _phase_events_mw = PhaseEventsMiddleware()
-    middleware = [
-        PhaseEnforcerMiddleware(),
+    _phase_events_mw = middleware.service.PhaseEventsMiddleware()
+    middleware_list = [
+        middleware.service.PhaseEnforcerMiddleware(),
         _phase_events_mw,
     ]
 
     system_prompt = _build_orchestrator_prompt(mode)
     checkpointer  = _ensure_checkpointer()
 
-    agent = create_deep_agent(
+    radar_agent = create_deep_agent(
         model         = orchestrator_model,
-        tools         = tools,
+        tools         = tool_list,
         system_prompt = system_prompt,
-        subagents     = subagents,
-        middleware    = middleware,
-        response_format = ScanComplete,
+        subagents     = subagent_list,
+        middleware    = middleware_list,
+        response_format = schemas.ScanComplete,
         checkpointer  = checkpointer,
     )
     # Expose the LLM-counter callback + phase-events middleware on the agent
     # so task.py can attach both without needing to re-instantiate them.
-    agent._rr_llm_counter_cb  = _LLM_COUNTER_CB  # type: ignore[attr-defined]
-    agent._rr_phase_middleware = _phase_events_mw  # type: ignore[attr-defined]
+    radar_agent._rr_llm_counter_cb  = _LLM_COUNTER_CB  # type: ignore[attr-defined]
+    radar_agent._rr_phase_middleware = _phase_events_mw  # type: ignore[attr-defined]
 
     logger.info(
         f"[rr-agent] built mode={mode!r} "
-        f"tools={len(tools)} subagents={len(subagents)} "
+        f"tools={len(tool_list)} subagents={len(subagent_list)} "
         f"middleware=[PhaseEnforcer, PhaseEvents] "
         f"response_format=ScanComplete "
         f"skills=5 memory=2"
     )
     logger.info(
-        f"[rr-agent] subagent_names={[s['name'] for s in subagents]} "
-        f"tool_names={[t.name for t in tools]}"
+        f"[rr-agent] subagent_names={[s['name'] for s in subagent_list]} "
+        f"tool_names={[t.name for t in tool_list]}"
     )
-    return agent
+    return radar_agent
 
 
 # Subagent parallelism model — Wave 1.4 findings

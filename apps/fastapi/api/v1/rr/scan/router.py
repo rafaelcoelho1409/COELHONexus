@@ -16,14 +16,18 @@ from domains.rr.keys import (
     PG_TABLE_FINDINGS,
     PG_TABLE_SCANS,
 )
-from domains.rr.runtime.events import store_task_id, subscribe_events
-from domains.rr.runtime.fs_mirror import mirror_index, mirror_read
-from domains.rr.runtime.llm_counter import read_counters as read_llm_counters
-from domains.rr.runtime.llm_counter import set_phase as _set_llm_phase
-from domains.rr.runtime.llm_counter import set_scan as _set_llm_scan
+from domains.rr.runtime.service import (
+    get_code_synth_status,
+    mirror_index,
+    mirror_read,
+    set_code_synth_running,
+    store_task_id,
+    subscribe_events,
+)
+from domains.rr.runtime.llm_counter.service import read_counters as read_llm_counters
 from domains.rr.schemas import ScanCreated, ScanRequest, ScanResult
 from domains.rr.service import cancel_scan, delete_scan
-from domains.rr.task import run_radar_scan
+from domains.rr.task import run_code_synth, run_radar_scan
 
 
 logger = logging.getLogger(__name__)
@@ -203,23 +207,27 @@ async def scan_llm_counters(scan_id: UUID) -> dict:
 
 
 @router.get("/scan/{scan_id}/finding/{arxiv_id}/code")
-async def scan_finding_code(
-    scan_id:    UUID,
-    arxiv_id:   str,
-    check_only: bool = False,
-) -> dict:
-    """Synthesize a Python file from a finding's extraction fields. Cache-first (MinIO).
-    Lazy: most Build tabs are never opened; pre-computing would 2-3× rotator budget."""
-    from domains.rr.agent.tools.code_synth import (
-        CODE_SYNTH_PROMPT_VERSION, synth_code,
-    )
-    from domains.rr.stores import minio as minio_store
+async def get_finding_code(scan_id: UUID, arxiv_id: str) -> dict:
+    """Poll for Build-tab synthesis. NEVER triggers work — see
+    `POST .../code/generate` to kick one off. Cache-first (MinIO), then
+    the Redis in-flight/error marker set by that Celery task.
 
-    cached = await minio_store.get_code_py(
+    Returns one of:
+      {"status": "ready",   "code", "cached", "model_id", "prompt_version"}
+      {"status": "pending"}                       — generation running
+      {"status": "error",   "message"}            — last attempt failed
+    404 when none of the above — never started; the frontend shows the
+    idle "Generate" button.
+    """
+    from domains.rr.agent.tools.code_synth.params import CODE_SYNTH_PROMPT_VERSION
+    from domains.rr.stores import service as stores_service
+
+    cached = await stores_service.get_code_py(
         str(scan_id), arxiv_id, CODE_SYNTH_PROMPT_VERSION,
     )
     if cached is not None:
         return {
+            "status":         "ready",
             "scan_id":        str(scan_id),
             "arxiv_id":       arxiv_id,
             "code":           cached,
@@ -228,68 +236,91 @@ async def scan_finding_code(
             "model_id":       None,
         }
 
-    if check_only:
-        raise HTTPException(
-            status_code = 404,
-            detail = "no cached code for this finding yet — click Generate to synthesize",
-        )
+    status = await get_code_synth_status(str(scan_id), arxiv_id, CODE_SYNTH_PROMPT_VERSION)
+    if status:
+        if status.get("status") == "running":
+            return {"status": "pending", "scan_id": str(scan_id), "arxiv_id": arxiv_id}
+        if status.get("status") == "error":
+            return {
+                "status":   "error",
+                "scan_id":  str(scan_id),
+                "arxiv_id": arxiv_id,
+                "message":  status.get("message") or "generation failed",
+            }
 
+    raise HTTPException(
+        status_code = 404,
+        detail = "no cached code and no generation in progress — "
+                 "POST .../code/generate to start one",
+    )
+
+
+@router.post("/scan/{scan_id}/finding/{arxiv_id}/code/generate", status_code=202)
+async def generate_finding_code(scan_id: UUID, arxiv_id: str) -> dict:
+    """Kick off (or resume) Build-tab synthesis via
+    `domains.rr.task.run_code_synth` — dispatched to Celery so the HTTP
+    layer returns immediately instead of blocking on (and gateway-
+    timing-out on) the 1-5+ min generate→critique→revise loop.
+
+    Idempotent: a cache hit returns the code right away (200, `ready`);
+    an already-running generation returns `pending` WITHOUT
+    re-dispatching (avoids two workers racing on the same MinIO key);
+    otherwise dispatches a fresh task and returns `pending` (202). The
+    frontend polls `GET .../code` — server-side state (Redis + MinIO)
+    means that poll shows the right status even after a page refresh.
+    """
+    from domains.rr.agent.tools.code_synth.params import CODE_SYNTH_PROMPT_VERSION
+    from domains.rr.stores import service as stores_service
+
+    cached = await stores_service.get_code_py(
+        str(scan_id), arxiv_id, CODE_SYNTH_PROMPT_VERSION,
+    )
+    if cached is not None:
+        return {
+            "status":         "ready",
+            "scan_id":        str(scan_id),
+            "arxiv_id":       arxiv_id,
+            "code":           cached,
+            "prompt_version": CODE_SYNTH_PROMPT_VERSION,
+            "cached":         True,
+            "model_id":       None,
+        }
+
+    status = await get_code_synth_status(str(scan_id), arxiv_id, CODE_SYNTH_PROMPT_VERSION)
+    if status and status.get("status") == "running":
+        return {"status": "pending", "scan_id": str(scan_id), "arxiv_id": arxiv_id}
+
+    # Verify the finding actually exists before dispatching — a bad
+    # arxiv_id would otherwise burn a Celery round-trip just to error.
     async with await psycopg.AsyncConnection.connect(domains.dd.planner.keys.postgres_url()) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                f"SELECT digest_json FROM {PG_TABLE_FINDINGS} "
-                f"WHERE scan_id = %s AND arxiv_id = %s",
+                f"SELECT 1 FROM {PG_TABLE_FINDINGS} WHERE scan_id = %s AND arxiv_id = %s",
                 (str(scan_id), arxiv_id),
             )
-            row = await cur.fetchone()
-            if row is None:
-                raise HTTPException(
-                    status_code = 404,
-                    detail = (
-                        f"finding {arxiv_id!r} not found for scan "
-                        f"{scan_id} (scan still running or paper not in digest)"
-                    ),
-                )
-            finding = row[0] or {}
-
-    # 2026-09-17: this endpoint runs outside the scan's own agent.ainvoke()
-    # context, so the per-scan LLM counters were never attributed to code
-    # synthesis calls until now — set the contextvars synth_code's
-    # resilient_ainvoke reads (task-scoped: safe under concurrent requests).
-    try:
-        _set_llm_scan(str(scan_id))
-        _set_llm_phase("build")
-    except Exception:
-        pass
-
-    try:
-        result = await synth_code(finding)
-    except Exception as e:
-        logger.exception(
-            f"[rr-api] code_synth failed scan_id={scan_id} arxiv_id={arxiv_id}"
-        )
+            exists = await cur.fetchone()
+    if exists is None:
         raise HTTPException(
-            status_code = 502,
-            detail = f"code_synth failed: {type(e).__name__}: {e}",
+            status_code = 404,
+            detail = (
+                f"finding {arxiv_id!r} not found for scan "
+                f"{scan_id} (scan still running or paper not in digest)"
+            ),
         )
 
-    try:
-        await minio_store.put_code_py(
-            str(scan_id), arxiv_id,
-            CODE_SYNTH_PROMPT_VERSION, result["code"],
-        )
-    except Exception as e:
-        logger.warning(
-            f"[rr-api] code_synth cache write failed for {arxiv_id}: {e}"
-        )
-
+    task = run_code_synth.delay(str(scan_id), arxiv_id, CODE_SYNTH_PROMPT_VERSION)
+    await set_code_synth_running(
+        str(scan_id), arxiv_id, CODE_SYNTH_PROMPT_VERSION, task_id=task.id,
+    )
+    logger.info(
+        f"[rr-api] POST .../code/generate dispatched scan_id={scan_id} "
+        f"arxiv_id={arxiv_id} task_id={task.id}"
+    )
     return {
-        "scan_id":        str(scan_id),
-        "arxiv_id":       arxiv_id,
-        "code":           result["code"],
-        "prompt_version": CODE_SYNTH_PROMPT_VERSION,
-        "cached":         False,
-        "model_id":       result.get("model_id"),
+        "status":   "pending",
+        "scan_id":  str(scan_id),
+        "arxiv_id": arxiv_id,
+        "task_id":  task.id,
     }
 
 

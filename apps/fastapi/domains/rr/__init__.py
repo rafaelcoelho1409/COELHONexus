@@ -3,7 +3,10 @@
 3rd COELHO Nexus feature alongside Docs Distiller (dd/) and YouTube Content
 Search (ycs/). Architecture: docs/RESEARCH-RADAR-AGENT-ARCHITECTURE-2026-06-11.md.
 
-Subpackages:
-  agent/                 DeepAgents orchestrator + 4 discovery subagents
-  (later: domain.py, service.py, task.py, schemas.py, api/v1/rr/scan/)
+`task.py` is excluded from this eager chain (§8 Exception 1 —
+`from infra.celery import app` at module level); reach it via a direct
+`from domains.rr.task import run_radar_scan`.
 """
+from __future__ import annotations
+
+from . import agent, domain, entities, keys, params, patterns, runtime, schemas, service, stores

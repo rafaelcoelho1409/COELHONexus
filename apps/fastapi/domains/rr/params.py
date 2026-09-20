@@ -70,7 +70,7 @@ class StoresParams:
     # Qdrant — must match the embedding model's output dim. Embeddings
     # come from the Settings-page-configured embedding endpoint
     # (`domains.llm.embeddings.embed_texts_async`, called from
-    # `agent/tools/graph_build.py`) — currently resolves to NIM
+    # `agent/tools/graph_build/service.py`) — currently resolves to NIM
     # `nim/nvidia/nemotron-3-embed-1b` (2048d), confirmed live
     # 2026-09-17. If the Settings-page embedding pin ever changes to a
     # model with a different output size, this must be updated to

@@ -1,16 +1,12 @@
-"""Runtime concerns for the RR domain — Redis pub/sub for SSE events.
+"""Runtime concerns for the RR domain — Redis pub/sub for SSE events,
+the extraction cache, the fs mirror, the resilient-call helper, and the
+per-scan LLM counter.
 
 Mirrors `apps/fastapi/domains/dd/planner/runtime/` shape: `runtime/`
 holds the deployment-time concerns (Redis transport, env-builders,
-ephemeral coordination) that domain logic (`domain.py`, `service.py`)
+ephemeral coordination) that domain logic (`../domain.py`, `../service.py`)
 doesn't own.
-
-  events.py    publish + subscribe phase events for SSE
-  keys.py      redis_url + Redis channel/key builders
-  params.py    Redis timeouts + snapshot retention
 """
+from __future__ import annotations
 
-from .observability import record_phase_event, record_scan_run
-
-
-__all__ = ["record_phase_event", "record_scan_run"]
+from . import domain, keys, llm_counter, metrics, params, service

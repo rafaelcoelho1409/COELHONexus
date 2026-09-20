@@ -6,7 +6,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from domains.rr.stores.postgres import reset_seen
+from domains.rr.stores.service import reset_seen
 
 
 logger = logging.getLogger(__name__)

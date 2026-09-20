@@ -51,7 +51,6 @@ from api.v1.ycs.agents.llm_chain import (
 )
 from domains.llm.credentials import warm as warm_credentials
 from domains.llm.rotator.chain import build_reduce_label_chain
-from domains.rr.service import bootstrap_stores as bootstrap_rr_stores
 from infra.elasticsearch import (
     close_es,
     ensure_indexes as ensure_es_indexes,
@@ -140,7 +139,7 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        await bootstrap_rr_stores()
+        await domains.rr.service.bootstrap_stores()
     except Exception as e:
         logger.warning(
             f"[lifespan] RR bootstrap_stores failed: "

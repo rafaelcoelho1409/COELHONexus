@@ -31,5 +31,20 @@ class ArxivConfig:
     # runaway agent can't blow the budget.
     max_results_per_call: int = 100
 
+    # arXiv answers overload with a bare 406 (not 429) — confirmed via
+    # multiple 2026 community reports (e.g. sdewell/code-quorum#2,
+    # pkuppens/production-agentic-rag-course#40) — and it does NOT clear
+    # on an immediate retry, so back off first. 2 attempts, backoff
+    # multiplies by attempt number (5s, then 10s).
+    retry_max_attempts: int = 2
+    retry_backoff_base_s: float = 5.0
+
+    # Circuit breaker cooldown once retries are exhausted — short enough
+    # that a genuinely-recovered arXiv is usable again within the same
+    # scan, long enough that the REST of this scan's discovery subagents
+    # (and a re-triggered scan) don't each independently re-discover the
+    # same overload with a live request.
+    circuit_breaker_cooldown_s: float = 120.0
+
 
 ARXIV = ArxivConfig()

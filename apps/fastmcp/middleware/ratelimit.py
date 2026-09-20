@@ -9,14 +9,25 @@ Process-local — one gate per (process, tool_name). When the project scales
 horizontally beyond one fastmcp replica, swap the per-tool dicts here for
 Redis-backed leaky-bucket counters (Sentinel-substrate v2).
 
+Also provides a per-tool circuit breaker (`trip_breaker` / `breaker_tripped`)
+for upstream APIs that load-shed with a non-retryable-immediately signal
+(e.g. arXiv's bare 406 on overload — doesn't clear on instant retry). A
+tool calls `trip_breaker(name, cooldown_s)` itself once it's exhausted its
+own retry budget; future calls to that tool check `breaker_tripped(name)`
+and fail fast instead of spending a live request re-discovering the same
+overload. Opt-in per tool — nothing here calls these automatically.
+
 API:
   ratelimit.register("arxiv_search", 3.0)   # called by each tool at register
+  ratelimit.trip_breaker("arxiv_search", 120.0)   # called by the tool on exhausted retries
+  ratelimit.breaker_tripped("arxiv_search")       # -> seconds remaining, or None
   RateLimitMiddleware()                     # installed once in server.py
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 from fastmcp.server.middleware import Middleware, MiddlewareContext
@@ -30,6 +41,11 @@ logger = logging.getLogger(__name__)
 _intervals: dict[str, float] = {}
 _last_t: dict[str, float] = {}
 _lock = asyncio.Lock()
+
+# Per-tool circuit breaker — tool_name -> monotonic timestamp the breaker
+# clears at. Plain `time.monotonic()` (not tied to a running event loop)
+# since trip/check can happen from different call sites.
+_breaker_until: dict[str, float] = {}
 
 
 def register(tool_name: str, min_interval_s: float) -> None:
@@ -55,6 +71,27 @@ async def _wait_for_slot(tool_name: str) -> None:
         if elapsed < interval_s:
             await asyncio.sleep(interval_s - elapsed)
         _last_t[tool_name] = loop.time()
+
+
+def trip_breaker(tool_name: str, cooldown_s: float) -> None:
+    """Record that `tool_name`'s upstream just load-shed us. Calls to
+    `breaker_tripped(tool_name)` return the remaining cooldown until this
+    clears."""
+    _breaker_until[tool_name] = time.monotonic() + cooldown_s
+    logger.warning(f"[ratelimit] {tool_name!r} circuit breaker tripped for {cooldown_s:.0f}s")
+
+
+def breaker_tripped(tool_name: str) -> float | None:
+    """Seconds remaining until `tool_name`'s breaker clears, or None if
+    it isn't tripped (never tripped, or the cooldown already elapsed)."""
+    until = _breaker_until.get(tool_name)
+    if until is None:
+        return None
+    remaining = until - time.monotonic()
+    if remaining <= 0:
+        del _breaker_until[tool_name]
+        return None
+    return remaining
 
 
 class RateLimitMiddleware(Middleware):

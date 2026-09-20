@@ -23,6 +23,7 @@ from fastmcp.exceptions import ToolError
 from middleware import ratelimit
 
 from .config import ARXIV
+from .keys import TOOL_NAME
 from .schemas import Paper, SearchInput, SortBy
 from .service import search_arxiv
 
@@ -36,9 +37,9 @@ def register(mcp: FastMCP) -> None:
 
     # Cross-cutting rate limit: the middleware reads from this registry per
     # call (arxiv ToS: 1 request per 3 seconds, per IP).
-    ratelimit.register("arxiv_search", ARXIV.min_request_interval_s)
+    ratelimit.register(TOOL_NAME, ARXIV.min_request_interval_s)
 
-    @mcp.tool(name="arxiv_search")
+    @mcp.tool(name=TOOL_NAME)
     async def arxiv_search(
         ctx:        Context,
         query:      str,

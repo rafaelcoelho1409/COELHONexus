@@ -9,6 +9,11 @@ as e.g. `DD_PROCESSES` / `CONTEXT_PROVIDERS` in llm/rotator/bandit/keys.py.
 from __future__ import annotations
 
 
+# MCP tool name — shared by tool.py's registration calls (rate limiter,
+# @mcp.tool) and service.py's circuit-breaker calls, so the two can't drift.
+TOOL_NAME: str = "arxiv_search"
+
+
 # Namespaces emitted by the arXiv Atom feed. Used by ElementTree's
 # namespace-aware element matching in domain.parse_atom_feed (e.g.
 # `.find("atom:title", ATOM_NAMESPACES)`). These URIs are stable per the

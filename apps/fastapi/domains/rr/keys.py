@@ -13,12 +13,13 @@ from __future__ import annotations
 # Match `Paper.source` / `Hit.source` of each MCP tool's boundary schema in
 # apps/fastmcp/domains/rr/tools/<source>/schemas.py EXACTLY (typos here =
 # silent dedup fails).
-SOURCE_ARXIV: str = "arxiv"
-SOURCE_S2:    str = "semantic_scholar"
-SOURCE_HF:    str = "huggingface_daily_papers"
-SOURCE_HN:    str = "hn"
+SOURCE_ARXIV:    str = "arxiv"
+SOURCE_S2:       str = "semantic_scholar"
+SOURCE_HF:       str = "huggingface_daily_papers"
+SOURCE_HN:       str = "hn"
+SOURCE_OPENALEX: str = "openalex"
 
-SOURCES_ALL: tuple[str, ...] = (SOURCE_ARXIV, SOURCE_S2, SOURCE_HF, SOURCE_HN)
+SOURCES_ALL: tuple[str, ...] = (SOURCE_ARXIV, SOURCE_S2, SOURCE_HF, SOURCE_HN, SOURCE_OPENALEX)
 
 
 # S2's external_ids dict carries cross-source IDs. The arxiv key is "ArXiv"
