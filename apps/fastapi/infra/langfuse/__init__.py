@@ -3,10 +3,12 @@
 Trace ingestion flows through `infra.otel.exporters.add_langfuse_exporter`
 (OTLP/HTTP). This package owns the SDK-only features:
 
-  client.py     — lazy `Langfuse` singleton (env-driven)
+  service.py    — lazy `Langfuse` singleton (env-driven)
   sessions.py   — context manager: session_id + user_id (+ baggage)
   scores.py     — record_score(trace_id, name, value, comment)
   prompts.py    — get_prompt(name, label, vars) cached + bulletproof fallback
+  spans.py      — current-span LangFuse attribute setters
+  domain.py     — pure span-attribute encoders
   datasets/     — uploader + runner for gold corpora
   evals/judges/ — one file per judge (all route through the chat endpoint)
 
@@ -16,18 +18,20 @@ never an exception. The pipeline must never break because LangFuse is down.
 """
 from __future__ import annotations
 
-from .client import get_client, is_available
-from .otel import (
-    set_current_span_langfuse_io,
-    set_current_span_langfuse_observation_metadata,
-    set_current_span_langfuse_trace_metadata,
-)
+from . import annotation, callbacks, datasets, domain, evals, params, patterns, prompts, scores, service, sessions, spans
 
 
 __all__ = [
-    "get_client",
-    "is_available",
-    "set_current_span_langfuse_io",
-    "set_current_span_langfuse_trace_metadata",
-    "set_current_span_langfuse_observation_metadata",
+    "annotation",
+    "callbacks",
+    "datasets",
+    "domain",
+    "evals",
+    "params",
+    "patterns",
+    "prompts",
+    "scores",
+    "service",
+    "sessions",
+    "spans",
 ]

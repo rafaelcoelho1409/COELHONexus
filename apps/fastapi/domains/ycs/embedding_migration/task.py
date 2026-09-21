@@ -26,13 +26,13 @@ import os
 from celery.utils.log import get_task_logger
 from qdrant_client import AsyncQdrantClient
 
-from infra.celery import app
+import infra.celery.service
 
 
 logger = get_task_logger(__name__)
 
 
-@app.task(
+@infra.celery.service.app.task(
     bind = True,
     name = "domains.ycs.embedding_migration.task.finalize_embedding_migration",
 )

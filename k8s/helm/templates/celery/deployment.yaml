@@ -40,7 +40,7 @@ spec:
           command:
             - celery
             - -A
-            - infra.celery
+            - infra.celery.service:app
             - worker
             # Suffixed queue names (e.g. "llm-local") prevent dev/prod cross-steal on shared Redis.
             - -Q

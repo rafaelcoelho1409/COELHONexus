@@ -12,13 +12,13 @@ from celery.utils.log import get_task_logger
 from elasticsearch import AsyncElasticsearch
 from qdrant_client import AsyncQdrantClient
 
-from infra.celery import app
+import infra.celery.service
 
 
 logger = get_task_logger(__name__)
 
 
-@app.task(
+@infra.celery.service.app.task(
     bind = True,
     name = "domains.ycs.qdrant_task.task.ingest_to_qdrant",
 )
@@ -47,18 +47,12 @@ def ingest_to_qdrant(
         self.update_state(state = "PROGRESS", meta = payload)
 
     async def _run() -> dict[str, Any]:
-        from infra.langfuse import (
-            set_current_span_langfuse_io,
-            set_current_span_langfuse_observation_metadata,
-            set_current_span_langfuse_trace_metadata,
-        )
-        from infra.langfuse.sessions import session as _lf_session
-        from infra.otel import get_tracer
-        with _lf_session(
+        import domains, infra
+        with infra.langfuse.sessions.session(
             "ycs-ingest-qdrant",
             session_id = self.request.id or "(no-request-id)",
         ):
-            with get_tracer().start_as_current_span(
+            with infra.otel.service.get_tracer().start_as_current_span(
                 "ycs.ingest.qdrant.run",
                 attributes = {
                     "coelho.langfuse.keep": True,
@@ -71,7 +65,7 @@ def ingest_to_qdrant(
                     "ycs.video_count": len(video_ids or []),
                 },
             ):
-                set_current_span_langfuse_io(input_data = {
+                infra.langfuse.spans.set_current_span_langfuse_io(input_data = {
                     "kind": "qdrant",
                     "video_ids_preview": list(video_ids or [])[:10],
                     "video_count": len(video_ids or []),
@@ -79,13 +73,13 @@ def ingest_to_qdrant(
                     "chunk_overlap": chunk_overlap,
                     "task_id": self.request.id or "",
                 })
-                set_current_span_langfuse_trace_metadata({
+                infra.langfuse.spans.set_current_span_langfuse_trace_metadata({
                     "pipeline": "ycs_ingest",
                     "kind": "qdrant",
                     "task_id": self.request.id or "",
                     "video_count": len(video_ids or []),
                 })
-                set_current_span_langfuse_observation_metadata({
+                infra.langfuse.spans.set_current_span_langfuse_observation_metadata({
                     "kind": "qdrant",
                     "video_count": len(video_ids or []),
                 })
@@ -119,14 +113,14 @@ def ingest_to_qdrant(
                             _kwargs["collection_name"] = collection_name
                         result = await domains.ycs.ingestion.service.ingest_to_qdrant(**_kwargs)
                     except Exception as e:
-                        set_current_span_langfuse_io(output_data = {
+                        infra.langfuse.spans.set_current_span_langfuse_io(output_data = {
                             "status": "failed",
                             "kind": "qdrant",
                             "task_id": self.request.id or "",
                             "error": f"{type(e).__name__}: {e}",
                         })
                         raise
-                    set_current_span_langfuse_io(output_data = {
+                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = {
                         "status": "done",
                         "kind": "qdrant",
                         "task_id": self.request.id or "",
@@ -142,7 +136,7 @@ def ingest_to_qdrant(
     return result
 
 
-@app.task(
+@infra.celery.service.app.task(
     bind = True,
     name = "domains.ycs.qdrant_task.task.stream_video_to_qdrant",
 )
@@ -347,7 +341,7 @@ def stream_video_to_qdrant(
     return result
 
 
-@app.task(
+@infra.celery.service.app.task(
     bind = True,
     name = "domains.ycs.qdrant_task.task.invalidate_cache",
 )

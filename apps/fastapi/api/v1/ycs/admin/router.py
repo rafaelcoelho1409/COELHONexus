@@ -10,19 +10,14 @@ from pydantic import BaseModel
 
 from domains.ycs.content.domain import _absolutize_thumbnail_url
 from domains.ycs.graph_builder.params import SOURCE_LABEL
-from infra.celery import app as celery_app
-from infra.elasticsearch import (
-    INDEX_METADATA,
-    INDEX_TRANSCRIPTIONS,
-    get_es,
-)
+import infra.celery.service
 
 
 router = APIRouter()
 
 
 def _es() -> AsyncElasticsearch:
-    return get_es()
+    return infra.elasticsearch.service.get_es()
 
 
 def _absolutize_thumb(url: str | None) -> str:
@@ -53,7 +48,7 @@ async def _terms_facet(
     }
     try:
         response = await es.search(
-            index = INDEX_METADATA,
+            index = infra.elasticsearch.keys.INDEX_METADATA,
             size  = 0,
             aggs  = aggs,
         )
@@ -125,7 +120,7 @@ async def task_status(task_id: str) -> dict:
     if not task_id:
         raise HTTPException(status_code = 400, detail = "task_id required")
     try:
-        async_result = AsyncResult(task_id, app = celery_app)
+        async_result = AsyncResult(task_id, app = infra.celery.service.app)
         state = async_result.state
         info: Any = async_result.info
     except Exception as e:
@@ -217,7 +212,7 @@ async def _compute_video_statuses(
     transcript_meta: dict[str, dict[str, Any]] = {}
     try:
         t_response = await es.search(
-            index = INDEX_TRANSCRIPTIONS,
+            index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
             size  = min(10000, max(200, len(video_ids) * 10)),
             query = {"bool": {"should": [
                 {"terms": {"video_id": video_ids}},
@@ -320,7 +315,7 @@ async def list_videos(
     query: dict[str, Any] = {"bool": {"must": must}} if must else {"match_all": {}}
     try:
         response = await es.search(
-            index = INDEX_METADATA,
+            index = infra.elasticsearch.keys.INDEX_METADATA,
             query = query,
             size  = max(1, min(int(limit), 500)),
             from_ = max(0, int(offset)),
@@ -428,7 +423,7 @@ async def videos_facets(request: Request) -> dict:
 
     try:
         c_resp = await es.search(
-            index = INDEX_METADATA,
+            index = infra.elasticsearch.keys.INDEX_METADATA,
             size  = 0,
             aggs  = {
                 "by_channel": {
@@ -469,7 +464,7 @@ async def videos_facets(request: Request) -> dict:
 
     try:
         t_resp = await es.search(
-            index = INDEX_TRANSCRIPTIONS,
+            index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
             size  = 0,
             aggs  = {
                 "by_lang": {"terms": {"field": "lang", "size": 50}},
@@ -489,7 +484,7 @@ async def videos_facets(request: Request) -> dict:
         # this scale (10k id cap); a corpus past that needs a real
         # scroll, not a bigger constant.
         id_resp = await es.search(
-            index = INDEX_METADATA, size = 10000, _source = False,
+            index = infra.elasticsearch.keys.INDEX_METADATA, size = 10000, _source = False,
         )
         all_ids = [h["_id"] for h in id_resp.get("hits", {}).get("hits", [])]
         video_meta = await _compute_video_statuses(

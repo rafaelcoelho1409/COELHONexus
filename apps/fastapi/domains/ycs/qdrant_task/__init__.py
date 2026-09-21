@@ -5,6 +5,6 @@ Named `qdrant_task/` (not `qdrant/`) to avoid colliding with the
 would otherwise shadow `from qdrant_client import ...`.
 
 `task.py` is excluded from this eager chain (§8 Exception 1 —
-`from infra.celery import app` at module level); reach it via a direct
+`import infra.celery.service` (use `infra.celery.service.app`) at module level); reach it via a direct
 `from domains.ycs.qdrant_task.task import ingest_to_qdrant`."""
 from __future__ import annotations

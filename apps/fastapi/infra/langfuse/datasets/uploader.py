@@ -24,7 +24,7 @@ import logging
 import sys
 from pathlib import Path
 
-from ..client import get_client
+import infra.langfuse
 
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ def upload_dataset_from_fixtures(
     description:  str = "",
 ) -> int:
     """Push `inputs.json` from `fixture_dir` into LangFuse. Returns count."""
-    client = get_client()
+    client = infra.langfuse.service.get_client()
     if client is None:
         logger.warning("[langfuse-datasets] client unavailable — upload skipped")
         return 0

@@ -18,13 +18,7 @@ import weakref
 
 from qdrant_client import AsyncQdrantClient
 
-from .params import (
-    QDRANT_API_KEY,
-    QDRANT_HOST,
-    QDRANT_HTTPS,
-    QDRANT_PORT,
-    TIMEOUT_S,
-)
+from . import params
 
 
 logger = logging.getLogger(__name__)
@@ -36,11 +30,11 @@ _clients: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, AsyncQdrantClien
 
 def _make_client() -> AsyncQdrantClient:
     return AsyncQdrantClient(
-        host    = QDRANT_HOST,
-        port    = QDRANT_PORT,
-        api_key = QDRANT_API_KEY,
-        https   = QDRANT_HTTPS,
-        timeout = TIMEOUT_S,
+        host    = params.QDRANT_HOST,
+        port    = params.QDRANT_PORT,
+        api_key = params.QDRANT_API_KEY,
+        https   = params.QDRANT_HTTPS,
+        timeout = params.TIMEOUT_S,
     )
 
 
@@ -63,8 +57,8 @@ def get_qdrant() -> AsyncQdrantClient:
         client = _make_client()
         _clients[loop] = client
         logger.info(
-            f"[qdrant] client init {QDRANT_HOST}:{QDRANT_PORT} "
-            f"https={QDRANT_HTTPS} (loop={id(loop):x})"
+            f"[qdrant] client init {params.QDRANT_HOST}:{params.QDRANT_PORT} "
+            f"https={params.QDRANT_HTTPS} (loop={id(loop):x})"
         )
     return client
 

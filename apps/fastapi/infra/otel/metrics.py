@@ -1,5 +1,5 @@
 """Lazy instrument factory — one OTel instrument per MetricSpec in
-metrics_registry.INSTRUMENTS. Idempotent: instruments are created on the
+entities.INSTRUMENTS. Idempotent: instruments are created on the
 first `get_instrument(key)` call after `init_otel()` has run.
 
 Domain `record_*` functions call `get_instrument(key)` and dispatch on
@@ -11,8 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from .metrics_registry import INSTRUMENTS
-from .service import get_meter
+from . import entities, service
 
 
 logger = logging.getLogger(__name__)
@@ -25,8 +24,8 @@ def _ensure_instruments() -> dict:
     if _instruments:
         return _instruments
     try:
-        meter = get_meter()
-        for spec in INSTRUMENTS:
+        meter = service.get_meter()
+        for spec in entities.INSTRUMENTS:
             kwargs = {"name": spec.name, "description": spec.description}
             if spec.unit:
                 kwargs["unit"] = spec.unit

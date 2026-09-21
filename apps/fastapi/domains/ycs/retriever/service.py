@@ -34,8 +34,7 @@ from qdrant_client.http.models import (
     SparseVector,
 )
 
-import domains
-from infra.elasticsearch import INDEX_METADATA, INDEX_TRANSCRIPTIONS
+import domains, infra
 
 from . import domain, params, prompts, schemas
 
@@ -86,12 +85,12 @@ class ElasticsearchRetriever:
             }
 
         with domains.ycs.runtime.observability.spans.es_search_span(
-            index                = INDEX_TRANSCRIPTIONS,
+            index                = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
             top_k                = self.top_k,
             channel_filter_count = len(channel_ids) if channel_ids else 0,
         ):
             results = await self.es.search(
-                index = INDEX_TRANSCRIPTIONS,
+                index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
                 query = es_query,
                 size = self.top_k,
                 _source = ["video_id", "lang", "content", "channel_id"],
@@ -144,7 +143,7 @@ class ElasticsearchRetriever:
         if not video_ids:
             return {}
         with domains.ycs.runtime.observability.spans.es_search_span(
-            index                = INDEX_METADATA,
+            index                = infra.elasticsearch.keys.INDEX_METADATA,
             top_k                = len(video_ids),
             operation            = "metadata_lookup",
         ):

@@ -38,7 +38,7 @@ logging.basicConfig(
     format=_LOG_FORMAT,
 )
 
-import domains
+import domains, infra
 import redis.asyncio as redis_aio_module
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -48,18 +48,6 @@ from api.v1.ycs.agents.llm_chain import (
     build_deprecated_llm_chain,
     build_fast_llm_chain,
 )
-from infra.elasticsearch import (
-    close_es,
-    ensure_indexes as ensure_es_indexes,
-    get_es,
-)
-from infra.neo4j import (
-    close_neo4j,
-    get_graph as get_neo4j_graph,
-    verify_connectivity as verify_neo4j_connectivity,
-)
-from infra.otel import init_otel
-from infra.qdrant import get_qdrant
 
 
 logger = logging.getLogger(__name__)
@@ -90,7 +78,7 @@ def _postgres_url_from_env() -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
-        init_otel(also_instrument_fastapi_app=app)
+        infra.otel.service.init_otel(also_instrument_fastapi_app=app)
     except Exception as e:
         logger.warning(
             f"[lifespan] OTel setup failed: {type(e).__name__}: {e}. "
@@ -145,7 +133,7 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        await ensure_es_indexes()
+        await infra.elasticsearch.service.ensure_indexes()
     except Exception as e:
         logger.warning(
             f"[lifespan] Elasticsearch ensure_indexes failed: "
@@ -154,8 +142,8 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        get_neo4j_graph()
-        await verify_neo4j_connectivity()
+        infra.neo4j.service.get_graph()
+        await infra.neo4j.service.verify_connectivity()
     except Exception as e:
         logger.warning(
             f"[lifespan] Neo4j connectivity failed: {type(e).__name__}: {e}. "
@@ -184,7 +172,7 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        app.state.neo4j_graph = get_neo4j_graph()
+        app.state.neo4j_graph = infra.neo4j.service.get_graph()
     except Exception as e:
         app.state.neo4j_graph = None
         logger.warning(
@@ -234,8 +222,8 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        es = get_es()
-        qdrant = get_qdrant()
+        es = infra.elasticsearch.service.get_es()
+        qdrant = infra.qdrant.service.get_qdrant()
         es_retriever = domains.ycs.retriever.service.ElasticsearchRetriever(es)
         qdrant_retriever = domains.ycs.retriever.service.QdrantHybridRetriever(
             qdrant            = qdrant,
@@ -283,12 +271,12 @@ async def lifespan(app: FastAPI):
         logger.warning(f"[lifespan] checkpointer close failed: {e}")
 
     try:
-        await close_es()
+        await infra.elasticsearch.service.close_es()
     except Exception as e:
         logger.warning(f"[lifespan] elasticsearch close failed: {e}")
 
     try:
-        await close_neo4j()
+        await infra.neo4j.service.close_neo4j()
     except Exception as e:
         logger.warning(f"[lifespan] neo4j close failed: {e}")
 

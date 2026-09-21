@@ -10,8 +10,7 @@ import logging
 from typing import Awaitable, Callable
 
 from opentelemetry import trace as _otel_trace
-
-from infra.otel import get_tracer
+import infra
 
 
 logger = logging.getLogger(__name__)
@@ -22,7 +21,7 @@ def traced(name: str) -> Callable:
     def decorator(fn: Callable[..., Awaitable[dict]]):
         @functools.wraps(fn)
         async def wrapper(state: dict, *args, **kwargs) -> dict:
-            tracer = get_tracer()
+            tracer = infra.otel.service.get_tracer()
             if tracer is None:
                 return await fn(state, *args, **kwargs)
             attrs = {

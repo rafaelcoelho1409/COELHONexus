@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Sequence
 
-from .client import is_available
+import infra.langfuse
 
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ def build_langchain_callback(
 ):
     """Build a LangChain CallbackHandler that emits to LangFuse, or None
     when the SDK / credentials aren't available."""
-    if not is_available():
+    if not infra.langfuse.service.is_available():
         return None
     try:
         from langfuse.langchain import CallbackHandler

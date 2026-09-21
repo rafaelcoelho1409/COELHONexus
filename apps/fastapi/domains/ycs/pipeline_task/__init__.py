@@ -5,7 +5,7 @@ streaming-coordination live together there — see `docs/CODE-CONVENTIONS.md`
 §8 strict-merge: both are I/O orchestration, one role, one file).
 
 `task.py` is excluded from this eager chain (§8 Exception 1 —
-`from infra.celery import app` at module level); reach it via a direct
+`import infra.celery.service` (use `infra.celery.service.app`) at module level); reach it via a direct
 `from domains.ycs.pipeline_task.task import full_channel_pipeline`."""
 from __future__ import annotations
 

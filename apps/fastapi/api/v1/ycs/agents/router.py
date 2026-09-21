@@ -11,12 +11,6 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from domains.ycs.runtime.observability.metrics import record_ask_run
-from infra.langfuse import (
-    set_current_span_langfuse_io,
-    set_current_span_langfuse_observation_metadata,
-    set_current_span_langfuse_trace_metadata,
-)
-from infra.otel import get_tracer
 
 from domains.ycs.cache.service import cache_response, get_cached_response
 from domains.ycs.conversation.params import DEFAULT_THREAD_ID
@@ -365,7 +359,7 @@ async def rag_search(
         "recursion_limit": 100,
     }
     try:
-        from infra.langfuse.sessions import session as _lf_session
+        import infra
         _sess_id  = payload.thread_id or "default"
         # 2026-09-15: every graph call runs under this thread key so the
         # per-conversation LLM-usage counter accumulates across nodes.
@@ -382,13 +376,13 @@ async def rag_search(
             _usage_before = None
         _user_id  = (payload.channel_ids or ["default"])[0]
         t0 = time.monotonic()
-        with _lf_session(
+        with infra.langfuse.sessions.session(
             "ycs",
             session_id = _sess_id,
             user_id    = _user_id,
             channel_id = _user_id,
         ):
-            with get_tracer().start_as_current_span(
+            with infra.otel.service.get_tracer().start_as_current_span(
                 "ycs.ask.run",
                 attributes = {
                     "coelho.langfuse.keep": True,
@@ -402,21 +396,21 @@ async def rag_search(
                     "langfuse.observation.metadata.workflow": "ycs_ask",
                 },
             ):
-                set_current_span_langfuse_io(input_data = _langfuse_ycs_input(
+                infra.langfuse.spans.set_current_span_langfuse_io(input_data = _langfuse_ycs_input(
                     question = payload.question,
                     route = "search",
                     force_mode = payload.force_mode or "",
                     channel_ids = list(payload.channel_ids or []),
                     thread_id = _sess_id,
                 ))
-                set_current_span_langfuse_trace_metadata({
+                infra.langfuse.spans.set_current_span_langfuse_trace_metadata({
                     "pipeline": "ycs_ask",
                     "route": "search",
                     "thread_id": _sess_id,
                     "channel_id": _user_id,
                     "force_mode": payload.force_mode or "",
                 })
-                set_current_span_langfuse_observation_metadata({
+                infra.langfuse.spans.set_current_span_langfuse_observation_metadata({
                     "route": "search",
                     "channel_count": len(payload.channel_ids or []),
                 })
@@ -456,7 +450,7 @@ async def rag_search(
                             "_deadline_hit":     True,
                         }
                 except Exception as e:
-                    set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
                         status = "error",
                         answer = "",
                         mode = payload.force_mode or "unknown",
@@ -465,7 +459,7 @@ async def rag_search(
                         error = str(e),
                     ))
                     raise
-                set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                infra.langfuse.spans.set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
                     status = "done",
                     answer = str(result.get("generation") or ""),
                     mode = str(result.get("mode") or payload.force_mode or "standard"),
@@ -810,7 +804,7 @@ async def rag_search_stream(
             )
 
     async def event_generator():
-        from infra.langfuse.sessions import session as _lf_session
+        import infra
         _sess_id = payload.thread_id or DEFAULT_THREAD_ID
         _user_id = (effective_channel_ids or ["default"])[0]
         # 2026-09-15: same thread-tagging as sync `/search` so the
@@ -825,14 +819,14 @@ async def rag_search_stream(
             _usage_before = await _llm_read_counters(_sess_id)
         except Exception:
             _usage_before = None
-        _session_cm = _lf_session(
+        _session_cm = infra.langfuse.sessions.session(
             "ycs",
             session_id = _sess_id,
             user_id    = _user_id,
             channel_id = _user_id,
         )
         _session_cm.__enter__()
-        _span_cm = get_tracer().start_as_current_span(
+        _span_cm = infra.otel.service.get_tracer().start_as_current_span(
             "ycs.ask.stream.run",
             attributes = {
                 "coelho.langfuse.keep": True,
@@ -847,21 +841,21 @@ async def rag_search_stream(
             },
         )
         _span_cm.__enter__()
-        set_current_span_langfuse_io(input_data = _langfuse_ycs_input(
+        infra.langfuse.spans.set_current_span_langfuse_io(input_data = _langfuse_ycs_input(
             question = payload.question,
             route = "search_stream",
             force_mode = payload.force_mode or "",
             channel_ids = list(effective_channel_ids or []),
             thread_id = _sess_id,
         ))
-        set_current_span_langfuse_trace_metadata({
+        infra.langfuse.spans.set_current_span_langfuse_trace_metadata({
             "pipeline": "ycs_ask",
             "route": "search_stream",
             "thread_id": _sess_id,
             "channel_id": _user_id,
             "force_mode": payload.force_mode or "",
         })
-        set_current_span_langfuse_observation_metadata({
+        infra.langfuse.spans.set_current_span_langfuse_observation_metadata({
             "route": "search_stream",
             "channel_count": len(effective_channel_ids or []),
         })
@@ -923,7 +917,7 @@ async def rag_search_stream(
 
             async def _producer_stream():
                 try:
-                    with _lf_session(
+                    with infra.langfuse.sessions.session(
                         "ycs",
                         session_id = _sess_id,
                         user_id    = _user_id,
@@ -964,7 +958,7 @@ async def rag_search_stream(
 
             async def _producer_invoke_fallback():
                 try:
-                    with _lf_session(
+                    with infra.langfuse.sessions.session(
                         "ycs",
                         session_id = _sess_id,
                         user_id    = _user_id,
@@ -1157,7 +1151,7 @@ async def rag_search_stream(
                         duration_s = max(time.monotonic() - t_run_start, 0.0),
                         citation_count = len(last_citations),
                     )
-                    set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
                         status = "cancelled",
                         answer = last_generation,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1246,7 +1240,7 @@ async def rag_search_stream(
                         duration_s = max(time.monotonic() - t_run_start, 0.0),
                         citation_count = len(last_citations),
                     )
-                    set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
                         status = "done",
                         answer = last_generation,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1310,7 +1304,7 @@ async def rag_search_stream(
                         duration_s = max(time.monotonic() - t_run_start, 0.0),
                         citation_count = len(last_citations),
                     )
-                    set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
                         status = "stalled",
                         answer = sentinel,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1407,7 +1401,7 @@ async def rag_search_stream(
                         if last_generation else
                         "(no response — see Thinking for pipeline status)"
                     )
-                    set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
                         status = "done",
                         answer = final_answer,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1456,7 +1450,7 @@ async def rag_search_stream(
                 duration_s = max(time.monotonic() - t_run_start, 0.0),
                 citation_count = len(last_citations),
             )
-            set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+            infra.langfuse.spans.set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
                 status = "client_disconnect",
                 answer = last_generation,
                 mode = last_mode or payload.force_mode or "unknown",
@@ -1531,7 +1525,7 @@ async def rag_search_stream(
                 duration_s = max(time.monotonic() - t_run_start, 0.0),
                 citation_count = len(last_citations),
             )
-            set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+            infra.langfuse.spans.set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
                 status = "error",
                 answer = last_generation,
                 mode = last_mode or payload.force_mode or "unknown",

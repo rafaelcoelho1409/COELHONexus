@@ -27,19 +27,7 @@ from opentelemetry.sdk.trace.export import (
     SpanExportResult,
 )
 
-from .params import (
-    BSP_EXPORT_TIMEOUT_MS_DEFAULT,
-    BSP_MAX_EXPORT_BATCH_SIZE_DEFAULT,
-    BSP_MAX_QUEUE_SIZE_DEFAULT,
-    BSP_SCHEDULE_DELAY_MS_DEFAULT,
-    DEPLOYMENT_ENVIRONMENT_DEFAULT,
-    LANGFUSE_OTLP_TIMEOUT_DEFAULT_S,
-    METRIC_EXPORT_INTERVAL_MS,
-    OTLP_TIMEOUT_DEFAULT_S,
-    SERVICE_NAME_DEFAULT,
-    SERVICE_NAMESPACE,
-    SERVICE_VERSION_DEFAULT,
-)
+from . import params
 
 
 logger = logging.getLogger(__name__)
@@ -158,15 +146,15 @@ class LangFuseFilterExporter(SpanExporter):
 def build_resource() -> Resource:
     attrs: dict = {
         "service.name": os.environ.get(
-            "OTEL_SERVICE_NAME", SERVICE_NAME_DEFAULT,
+            "OTEL_SERVICE_NAME", params.SERVICE_NAME_DEFAULT,
         ),
         "service.version": os.environ.get(
-            "OTEL_SERVICE_VERSION", SERVICE_VERSION_DEFAULT,
+            "OTEL_SERVICE_VERSION", params.SERVICE_VERSION_DEFAULT,
         ),
         "deployment.environment": os.environ.get(
-            "DEPLOYMENT_ENVIRONMENT", DEPLOYMENT_ENVIRONMENT_DEFAULT,
+            "DEPLOYMENT_ENVIRONMENT", params.DEPLOYMENT_ENVIRONMENT_DEFAULT,
         ),
-        "service.namespace": SERVICE_NAMESPACE,
+        "service.namespace": params.SERVICE_NAMESPACE,
     }
     git_sha = os.environ.get("GIT_SHA") or os.environ.get("OTEL_GIT_SHA")
     if git_sha:
@@ -191,23 +179,23 @@ def _bsp_kwargs() -> dict:
     return {
         "max_queue_size": int(
             os.environ.get(
-                "OTEL_BSP_MAX_QUEUE_SIZE", str(BSP_MAX_QUEUE_SIZE_DEFAULT),
+                "OTEL_BSP_MAX_QUEUE_SIZE", str(params.BSP_MAX_QUEUE_SIZE_DEFAULT),
             )
         ),
         "max_export_batch_size": int(
             os.environ.get(
                 "OTEL_BSP_MAX_EXPORT_BATCH_SIZE",
-                str(BSP_MAX_EXPORT_BATCH_SIZE_DEFAULT),
+                str(params.BSP_MAX_EXPORT_BATCH_SIZE_DEFAULT),
             )
         ),
         "schedule_delay_millis": int(
             os.environ.get(
-                "OTEL_BSP_SCHEDULE_DELAY", str(BSP_SCHEDULE_DELAY_MS_DEFAULT),
+                "OTEL_BSP_SCHEDULE_DELAY", str(params.BSP_SCHEDULE_DELAY_MS_DEFAULT),
             )
         ),
         "export_timeout_millis": int(
             os.environ.get(
-                "OTEL_BSP_EXPORT_TIMEOUT", str(BSP_EXPORT_TIMEOUT_MS_DEFAULT),
+                "OTEL_BSP_EXPORT_TIMEOUT", str(params.BSP_EXPORT_TIMEOUT_MS_DEFAULT),
             )
         ),
     }
@@ -226,7 +214,7 @@ def add_alloy_exporter(tracer_provider) -> bool:
             endpoint=endpoint,
             insecure=endpoint.startswith("http://"),
             timeout=int(os.environ.get(
-                "OTEL_EXPORTER_OTLP_TIMEOUT", str(OTLP_TIMEOUT_DEFAULT_S),
+                "OTEL_EXPORTER_OTLP_TIMEOUT", str(params.OTLP_TIMEOUT_DEFAULT_S),
             )),
         )
         tracer_provider.add_span_processor(
@@ -270,7 +258,7 @@ def add_langfuse_exporter(tracer_provider) -> bool:
             headers={"Authorization": f"Basic {basic}"},
             # 10s default timed out under heavy LLM volume; rich batches are slow to ingest.
             timeout=int(os.environ.get(
-                "LANGFUSE_OTLP_TIMEOUT", str(LANGFUSE_OTLP_TIMEOUT_DEFAULT_S),
+                "LANGFUSE_OTLP_TIMEOUT", str(params.LANGFUSE_OTLP_TIMEOUT_DEFAULT_S),
             )),
         )
         tracer_provider.add_span_processor(
@@ -304,7 +292,7 @@ def add_metric_exporter() -> None:
                 endpoint=endpoint,
                 insecure=endpoint.startswith("http://"),
             ),
-            export_interval_millis=METRIC_EXPORT_INTERVAL_MS,
+            export_interval_millis=params.METRIC_EXPORT_INTERVAL_MS,
         )
         provider = MeterProvider(
             resource=build_resource(),

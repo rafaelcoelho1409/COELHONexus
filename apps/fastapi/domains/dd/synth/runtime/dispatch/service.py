@@ -8,13 +8,7 @@ import time
 
 import redis.asyncio as redis_aio
 
-import domains
-from infra.langfuse import (
-    set_current_span_langfuse_io,
-    set_current_span_langfuse_observation_metadata,
-    set_current_span_langfuse_trace_metadata,
-)
-from infra.otel import get_tracer
+import domains, infra
 
 from . import domain, keys, params
 
@@ -136,15 +130,15 @@ async def run_single_chapter_async(
 ) -> dict:
     """Fresh per-chapter run. Builds initial state + graph, spawns cancel
     watcher, awaits terminal."""
-    from infra.langfuse.sessions import session as _lf_session
-    with _lf_session(
+    import infra
+    with infra.langfuse.sessions.session(
         "dd-synth",
         session_id = thread_id,
         user_id    = slug,
         chapter_id = chapter_id,
         framework  = slug,
     ):
-        with get_tracer().start_as_current_span(
+        with infra.otel.service.get_tracer().start_as_current_span(
             "dd.synth.chapter.run",
             attributes = {
                 "coelho.langfuse.keep":  True,
@@ -159,13 +153,13 @@ async def run_single_chapter_async(
                 "langfuse.observation.metadata.workflow": "dd_synth",
             },
         ):
-            set_current_span_langfuse_io(input_data = {
+            infra.langfuse.spans.set_current_span_langfuse_io(input_data = {
                 "framework_slug": slug,
                 "chapter_id": chapter_id,
                 "mode": mode,
                 "thread_id": thread_id,
             })
-            set_current_span_langfuse_trace_metadata({
+            infra.langfuse.spans.set_current_span_langfuse_trace_metadata({
                 "pipeline": "dd_synth",
                 "run_kind": "chapter",
                 "framework_slug": slug,
@@ -173,7 +167,7 @@ async def run_single_chapter_async(
                 "mode": mode,
                 "thread_id": thread_id,
             })
-            set_current_span_langfuse_observation_metadata({
+            infra.langfuse.spans.set_current_span_langfuse_observation_metadata({
                 "framework_slug": slug,
                 "chapter_id": chapter_id,
                 "mode": mode,
@@ -207,7 +201,7 @@ async def run_single_chapter_async(
             result = await _await_with_watcher(
                 graph, config, main_task, watcher_task, thread_id,
             )
-            set_current_span_langfuse_io(output_data = {
+            infra.langfuse.spans.set_current_span_langfuse_io(output_data = {
                 "status": result.get("status", "unknown"),
                 "error": result.get("error"),
                 "framework_slug": slug,
@@ -364,7 +358,7 @@ async def _run_book_harmonize(
     """Post-study cross-chapter coherence pass. Loads each README.md,
     runs harmonize_book(), overwrites validated patches. Content-addressed
     cache skips work on identical inputs. Returns telemetry dict."""
-    tracer = get_tracer()
+    tracer = infra.otel.service.get_tracer()
     span_attrs = {
         "coelho.langfuse.keep": True,
         "coelho.langfuse.kind": "workflow_node",
@@ -602,16 +596,16 @@ async def run_study_async(
     chapter_ids: list[str],
     mode: str = "quality",
 ) -> dict:
-    """Strict-order study orchestrator; emits chapter_ready per render so UI shows each chapter as it completes (TTFR ~10-15 min vs ~2h batch). Runs book_harmonize post-loop if ≥2 done."""
-    from infra.langfuse.sessions import session as _lf_session
-    with _lf_session(
+    """Strict-order study orchestrator; emits chapter_ready per render so UI shows each chapter as it completes (TTFR ~10-15 min vs ~2h batch).     Runs book_harmonize post-loop if ≥2 done."""
+    import infra
+    with infra.langfuse.sessions.session(
         "dd",
         session_id = study_thread_id,
         user_id    = slug,
         study_id   = study_thread_id,
         framework  = slug,
     ):
-        with get_tracer().start_as_current_span(
+        with infra.otel.service.get_tracer().start_as_current_span(
             "dd.synth.study.run",
             attributes = {
                 "coelho.langfuse.keep":  True,
@@ -626,14 +620,14 @@ async def run_study_async(
                 "langfuse.observation.metadata.workflow": "dd_synth",
             },
         ):
-            set_current_span_langfuse_io(input_data = {
+            infra.langfuse.spans.set_current_span_langfuse_io(input_data = {
                 "framework_slug": slug,
                 "mode": mode,
                 "requested_chapter_count": len(chapter_ids),
                 "chapter_ids_preview": chapter_ids[:5],
                 "thread_id": study_thread_id,
             })
-            set_current_span_langfuse_trace_metadata({
+            infra.langfuse.spans.set_current_span_langfuse_trace_metadata({
                 "pipeline": "dd_synth",
                 "run_kind": "study",
                 "framework_slug": slug,
@@ -641,7 +635,7 @@ async def run_study_async(
                 "thread_id": study_thread_id,
                 "requested_chapter_count": len(chapter_ids),
             })
-            set_current_span_langfuse_observation_metadata({
+            infra.langfuse.spans.set_current_span_langfuse_observation_metadata({
                 "framework_slug": slug,
                 "mode": mode,
                 "requested_chapter_count": len(chapter_ids),
@@ -649,7 +643,7 @@ async def run_study_async(
             result = await _run_study_async_inner(
                 study_thread_id, slug, chapter_ids, mode,
             )
-            set_current_span_langfuse_io(output_data = {
+            infra.langfuse.spans.set_current_span_langfuse_io(output_data = {
                 "status": result.get("final_status", "unknown"),
                 "framework_slug": slug,
                 "mode": mode,

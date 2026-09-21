@@ -35,15 +35,7 @@ from typing import Any, Optional
 from langchain_neo4j import Neo4jGraph
 from neo4j import AsyncDriver, AsyncGraphDatabase
 
-from .params import (
-    CONNECTION_TIMEOUT_S,
-    MAX_CONNECTION_LIFETIME_S,
-    MAX_CONNECTION_POOL_SIZE,
-    NEO4J_DATABASE,
-    NEO4J_PASSWORD,
-    NEO4J_URI,
-    NEO4J_USERNAME,
-)
+from . import domain, params
 
 
 logger = logging.getLogger(__name__)
@@ -58,13 +50,12 @@ _graph: Optional[Any] = None  # Neo4jGraph wraps the SYNC driver; no loop issue.
 
 
 def _make_driver() -> AsyncDriver:
-    auth = (NEO4J_USERNAME, NEO4J_PASSWORD) if NEO4J_PASSWORD else None
     return AsyncGraphDatabase.driver(
-        NEO4J_URI,
-        auth                     = auth,
-        max_connection_lifetime  = MAX_CONNECTION_LIFETIME_S,
-        max_connection_pool_size = MAX_CONNECTION_POOL_SIZE,
-        connection_timeout       = CONNECTION_TIMEOUT_S,
+        params.NEO4J_URI,
+        auth                     = domain.auth_pair(params.NEO4J_USERNAME, params.NEO4J_PASSWORD),
+        max_connection_lifetime  = params.MAX_CONNECTION_LIFETIME_S,
+        max_connection_pool_size = params.MAX_CONNECTION_POOL_SIZE,
+        connection_timeout       = params.CONNECTION_TIMEOUT_S,
     )
 
 
@@ -88,7 +79,7 @@ def get_driver() -> AsyncDriver:
     if driver is None:
         driver = _make_driver()
         _drivers[loop] = driver
-        logger.info(f"[neo4j] async driver init {NEO4J_URI} (loop={id(loop):x})")
+        logger.info(f"[neo4j] async driver init {params.NEO4J_URI} (loop={id(loop):x})")
     return driver
 
 
@@ -100,13 +91,13 @@ def get_graph() -> Neo4jGraph:
     global _graph
     if _graph is None:
         _graph = Neo4jGraph(
-            url            = NEO4J_URI,
-            username       = NEO4J_USERNAME or "neo4j",
-            password       = NEO4J_PASSWORD or "",
-            database       = NEO4J_DATABASE,
+            url            = params.NEO4J_URI,
+            username       = params.NEO4J_USERNAME or "neo4j",
+            password       = params.NEO4J_PASSWORD or "",
+            database       = params.NEO4J_DATABASE,
             refresh_schema = False,
         )
-        logger.info(f"[neo4j] Neo4jGraph init {NEO4J_URI} db={NEO4J_DATABASE}")
+        logger.info(f"[neo4j] Neo4jGraph init {params.NEO4J_URI} db={params.NEO4J_DATABASE}")
     return _graph
 
 

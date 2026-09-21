@@ -5,14 +5,14 @@ from . import dispatch
 import asyncio
 import logging
 
-from infra.celery import app
+import infra.celery.service
 
 
 
 logger = logging.getLogger(__name__)
 
 
-@app.task(
+@infra.celery.service.app.task(
     name="domains.dd.ingestion.task.run_ingestion",
     bind=True,
     acks_late=False,

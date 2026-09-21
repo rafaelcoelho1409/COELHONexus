@@ -6,14 +6,14 @@ from __future__ import annotations
 import logging
 import time
 
-from .params import DEDUPE_LOG_INTERVAL_S, OTEL_NOISY_LOGGERS
+from . import params
 
 
 class _DedupeRateLimitFilter(logging.Filter):
     """Keys on msg-prefix so variants only differing in trailing
     'retrying in N.NNs' still collapse to one log per window."""
 
-    def __init__(self, interval_s: float = DEDUPE_LOG_INTERVAL_S):
+    def __init__(self, interval_s: float = params.DEDUPE_LOG_INTERVAL_S):
         super().__init__()
         self._interval = interval_s
         self._last: dict = {}
@@ -34,7 +34,7 @@ _otel_log_filter = _DedupeRateLimitFilter()
 def quiet_otel_export_logs() -> None:
     """Idempotent — same filter instance reused so Celery-fork re-init
     never double-adds."""
-    for name in OTEL_NOISY_LOGGERS:
+    for name in params.OTEL_NOISY_LOGGERS:
         lg = logging.getLogger(name)
         if _otel_log_filter not in lg.filters:
             lg.addFilter(_otel_log_filter)

@@ -6,13 +6,7 @@ from __future__ import annotations
 
 import logging
 
-from .exporters import (
-    add_alloy_exporter,
-    add_langfuse_exporter,
-    add_metric_exporter,
-    build_resource,
-)
-from .filters import quiet_otel_export_logs
+import infra.otel
 
 
 logger = logging.getLogger(__name__)
@@ -65,9 +59,9 @@ def init_otel(also_instrument_fastapi_app=None) -> bool:
         from opentelemetry import trace
         from opentelemetry.sdk.trace import TracerProvider
 
-        quiet_otel_export_logs()
+        infra.otel.filters.quiet_otel_export_logs()
 
-        resource = build_resource()
+        resource = infra.otel.exporters.build_resource()
         tracer_provider = TracerProvider(resource=resource)
 
         from .baggage import get_baggage_processor
@@ -75,13 +69,13 @@ def init_otel(also_instrument_fastapi_app=None) -> bool:
             tracer_provider.add_span_processor(bsp)
             logger.info("[otel] BaggageSpanProcessor attached")
 
-        alloy_ok = add_alloy_exporter(tracer_provider)
-        langfuse_ok = add_langfuse_exporter(tracer_provider)
+        alloy_ok = infra.otel.exporters.add_alloy_exporter(tracer_provider)
+        langfuse_ok = infra.otel.exporters.add_langfuse_exporter(tracer_provider)
 
         trace.set_tracer_provider(tracer_provider)
         _tracer = trace.get_tracer("coelhonexus.fastapi", "1.0.0")
 
-        add_metric_exporter()
+        infra.otel.exporters.add_metric_exporter()
         from opentelemetry import metrics as otel_metrics
         _meter = otel_metrics.get_meter("coelhonexus.fastapi", "1.0.0")
 

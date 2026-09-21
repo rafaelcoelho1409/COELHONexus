@@ -21,7 +21,7 @@ from __future__ import annotations
 import contextlib
 from typing import Iterator
 
-from infra.otel.baggage import bag_context
+import infra.otel
 
 
 @contextlib.contextmanager
@@ -56,5 +56,5 @@ def session(
         lf_kwargs["langfuse.user.id"] = user_id
     base_kwargs.update(extra)
     base_kwargs.update(lf_kwargs)
-    with bag_context(**base_kwargs):
+    with infra.otel.baggage.bag_context(**base_kwargs):
         yield

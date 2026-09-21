@@ -12,16 +12,8 @@ from typing import Optional
 
 import redis.asyncio as redis_aio
 
-from infra.langfuse import (
-    set_current_span_langfuse_io,
-    set_current_span_langfuse_observation_metadata,
-    set_current_span_langfuse_trace_metadata,
-)
-from infra.otel import get_tracer
-
 
 logger = logging.getLogger(__name__)
-
 
 
 PLANNER_THREAD_PREFIX = "docs-distiller"
@@ -32,7 +24,6 @@ def make_thread_id(slug: str) -> str:
     Matches the JS-pre-generated id format so the Cancel button has a real
     thread_id from click 1 (no 'pending' dead-zone)."""
     return f"{PLANNER_THREAD_PREFIX}/{slug}/{uuid.uuid4()}"
-
 
 
 async def _persist_planner_timing(slug: str, total_wall_ms: int) -> None:
@@ -245,15 +236,15 @@ async def run_planner_async(
 ) -> dict:
     """Fresh planner kickoff. Builds graph + initial state, spawns the
     LangGraph task + cancel watcher, awaits terminal."""
-    from infra.langfuse.sessions import session as _lf_session
-    with _lf_session(
+    import infra
+    with infra.langfuse.sessions.session(
         "dd-planner",
         session_id = thread_id,
         user_id    = slug,
         study_id   = thread_id,
         framework  = slug,
     ):
-        with get_tracer().start_as_current_span(
+        with infra.otel.service.get_tracer().start_as_current_span(
             "dd.planner.run",
             attributes = {
                 "coelho.langfuse.keep":  True,
@@ -267,24 +258,24 @@ async def run_planner_async(
                 "langfuse.observation.metadata.workflow": "dd_planner",
             },
         ):
-            set_current_span_langfuse_io(input_data = {
+            infra.langfuse.spans.set_current_span_langfuse_io(input_data = {
                 "framework_slug": slug,
                 "mode": mode,
                 "thread_id": thread_id,
             })
-            set_current_span_langfuse_trace_metadata({
+            infra.langfuse.spans.set_current_span_langfuse_trace_metadata({
                 "pipeline": "dd_planner",
                 "run_kind": "planner",
                 "framework_slug": slug,
                 "mode": mode,
                 "thread_id": thread_id,
             })
-            set_current_span_langfuse_observation_metadata({
+            infra.langfuse.spans.set_current_span_langfuse_observation_metadata({
                 "framework_slug": slug,
                 "mode": mode,
             })
             result = await _run_planner_async_inner(thread_id, slug, mode)
-            set_current_span_langfuse_io(
+            infra.langfuse.spans.set_current_span_langfuse_io(
                 output_data = result.get("langfuse_output") or {
                     "status": result.get("status", "unknown"),
                     "error": result.get("error"),

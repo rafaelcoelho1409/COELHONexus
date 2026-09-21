@@ -11,7 +11,7 @@ shell around `asyncio.create_subprocess_exec(...)`. Persistence is NOT
 done here — Wave 4 Celery tasks wrap these calls + write Elasticsearch.
 
 `task.py` is excluded from this eager chain (§8 Exception 1 —
-`from infra.celery import app` at module level); reach it via a direct
+`import infra.celery.service` (use `infra.celery.service.app`) at module level); reach it via a direct
 `from domains.ycs.extract.task import extract_videos`."""
 from __future__ import annotations
 

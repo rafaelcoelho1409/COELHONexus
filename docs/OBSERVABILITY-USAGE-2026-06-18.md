@@ -23,7 +23,7 @@ apps/fastapi/domains/foo/runtime/observability/
 
 Plus, the two cross-cutting locations:
 
-- `apps/fastapi/infra/otel/metrics_registry.py` — append a `MetricSpec` for each new instrument.
+- `apps/fastapi/infra/otel/entities.py` — append a `MetricSpec` for each new instrument.
 - `apps/fastapi/infra/otel/baggage.py` — add `foo_id` to `ALLOWED_BAGGAGE_KEYS` if needed.
 
 ---
@@ -126,7 +126,7 @@ This renders as a `db.foo.bulk_write` span in Tempo, with attributes `db.system=
 ### 3a. Define it once in the central registry
 
 ```python
-# apps/fastapi/infra/otel/metrics_registry.py
+# apps/fastapi/infra/otel/entities.py
 INSTRUMENTS: tuple[MetricSpec, ...] = (
     ...,  # existing
     MetricSpec(
@@ -322,7 +322,7 @@ Shipped in `domains/rr/task.py`. Returns `None` when LangFuse is unavailable —
 
 ## What you should NOT do
 
-- **Don't** import the LangFuse SDK at module load. Use `infra.langfuse.client.get_client()`; it's lazy + fail-soft.
+- **Don't** import the LangFuse SDK at module load. Use `infra.langfuse.service.get_client()`; it's lazy + fail-soft.
 - **Don't** put domain concepts in `infra/otel/` or `infra/langfuse/`. Those are vendor folders; domain enrichment goes under `domains/<feature>/runtime/observability/`.
 - **Don't** create a new TracerProvider. `infra/otel/service.py:init_otel()` owns it; calling it again is idempotent.
 - **Don't** emit span events with unbounded data (prompts, full responses) without the env-controlled `RECORD_CONTENT` gate (TODO — captured in §9 of the SOTA doc).
@@ -337,9 +337,9 @@ Shipped in `domains/rr/task.py`. Returns `None` when LangFuse is unavailable —
 | `infra/otel/service.py` | SDK init, library auto-instrumentation, LiteLLM callback wiring |
 | `infra/otel/exporters.py` | Alloy + LangFuse OTLP + Mimir exporter builders |
 | `infra/otel/baggage.py` | `BaggageSpanProcessor` + `bag_context()` |
-| `infra/otel/metrics_registry.py` | Central `INSTRUMENTS` list |
+| `infra/otel/entities.py` | Central `INSTRUMENTS` list |
 | `infra/otel/metrics.py` | `get_instrument(key)` factory |
-| `infra/langfuse/client.py` | Lazy SDK singleton |
+| `infra/langfuse/service.py` | Lazy SDK singleton |
 | `infra/langfuse/sessions.py` | `session(...)` context manager |
 | `infra/langfuse/scores.py` | `record_score(...)` |
 | `infra/langfuse/prompts.py` | `get_prompt(...)` with cache + fallback |

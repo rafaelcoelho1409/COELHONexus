@@ -17,8 +17,8 @@ import time
 from typing import Any
 
 from elasticsearch import AsyncElasticsearch
+import infra
 
-from infra.elasticsearch import INDEX_METADATA, INDEX_TRANSCRIPTIONS
 
 from . import params
 
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 async def index_videos_to_elasticsearch(
     es_client: AsyncElasticsearch,
     videos: list[dict[str, Any]],
-    index: str = INDEX_METADATA,
+    index: str = infra.elasticsearch.keys.INDEX_METADATA,
 ) -> dict[str, Any]:
     """Bulk-index video metadata. Each video's `id` field becomes the ES `_id`.
 
@@ -86,7 +86,7 @@ async def index_videos_to_elasticsearch(
 async def index_transcriptions_to_elasticsearch(
     es_client: AsyncElasticsearch,
     transcriptions: list[dict[str, Any]],
-    index: str = INDEX_TRANSCRIPTIONS,
+    index: str = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
 ) -> dict[str, Any]:
     """Bulk-index transcriptions. Each transcript's composite `id`
     (`{video_id}_{lang}`) becomes the ES `_id`.
@@ -180,8 +180,8 @@ async def delete_videos_from_es(
         return {"metadata_deleted": 0, "transcripts_deleted": 0}
     out: dict[str, Any] = {}
     queries: tuple[tuple[str, str, dict], ...] = (
-        ("metadata",    INDEX_METADATA,        {"ids": {"values": list(video_ids)}}),
-        ("transcripts", INDEX_TRANSCRIPTIONS,  {"bool": {"should": [
+        ("metadata",    infra.elasticsearch.keys.INDEX_METADATA,        {"ids": {"values": list(video_ids)}}),
+        ("transcripts", infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,  {"bool": {"should": [
             {"terms": {"video_id":                 list(video_ids)}},
             # `.keyword`, not the bare field — see
             # `ingestion.service.expand_with_partition_ids`'s comment;

@@ -1,12 +1,12 @@
-"""infra/elasticsearch — env reads + index name constants + connection tunables.
+"""infra/elasticsearch — env reads + connection tunables.
 
 Env vars are injected from the Helm chart's `commonEnvVars` template
 (`k8s/helm/templates/_helpers.tpl`) — `ELASTICSEARCH_HOST` is the full
 URL (scheme + host + port), `ELASTICSEARCH_USERNAME` defaults to
 `elastic`, `ELASTICSEARCH_PASSWORD` is loaded from `coelhonexus-secret`.
 
-The deprecated index names are kept verbatim so re-ingesting from an
-existing cluster is a no-op."""
+Index names live in `keys.py` (shared across modules per the §2 trigger),
+not here."""
 from __future__ import annotations
 
 import os
@@ -25,8 +25,3 @@ ES_VERIFY_CERTS = os.environ.get("ELASTICSEARCH_VERIFY_CERTS", "false").lower() 
 
 # Async client request timeout.
 TIMEOUT_S = 30.0
-
-
-# Deprecated index names — kept verbatim (`helpers.py:L1958, L1977`).
-INDEX_METADATA = "coelhonexus-youtube-metadata"
-INDEX_TRANSCRIPTIONS = "coelhonexus-youtube-transcriptions"

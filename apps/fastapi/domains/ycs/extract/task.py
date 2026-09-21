@@ -22,7 +22,7 @@ import domains
 from celery.utils.log import get_task_logger
 from elasticsearch import AsyncElasticsearch
 
-from infra.celery import app
+import infra.celery.service
 
 from . import service
 
@@ -731,7 +731,7 @@ async def _extract_playlist_async(
 
 
 # Celery tasks (sync wrappers — Celery is sync by default)
-@app.task(
+@infra.celery.service.app.task(
     bind = True,
     name = "domains.ycs.extract.task.extract_videos",
 )
@@ -762,7 +762,7 @@ def extract_videos(
     return result
 
 
-@app.task(
+@infra.celery.service.app.task(
     bind = True,
     name = "domains.ycs.extract.task.extract_channel",
 )
@@ -792,7 +792,7 @@ def extract_channel(
     return result
 
 
-@app.task(
+@infra.celery.service.app.task(
     bind = True,
     name = "domains.ycs.extract.task.extract_playlist",
 )

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 
-from .client import get_client
+import infra.langfuse
 
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ def record_score(
     observation_id: str | None = None,
 ) -> None:
     """Attach a score to the active trace (or to `trace_id` if provided)."""
-    client = get_client()
+    client = infra.langfuse.service.get_client()
     if client is None:
         return
     try:

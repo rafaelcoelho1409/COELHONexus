@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 from typing import Awaitable, Callable
 
-from ..client import get_client
+import infra.langfuse
 
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ async def run_dataset_eval(
     judge:    Callable[[dict, dict, dict], Awaitable[float]],
 ) -> int:
     """Score every dataset item with the given judge under `run_name`."""
-    client = get_client()
+    client = infra.langfuse.service.get_client()
     if client is None:
         logger.warning("[langfuse-datasets] client unavailable — run skipped")
         return 0

@@ -4,7 +4,7 @@ import logging
 
 import domains
 
-from infra.celery import app
+import infra.celery.service
 
 from . import domain, service
 
@@ -12,7 +12,7 @@ from . import domain, service
 logger = logging.getLogger(__name__)
 
 
-@app.task(
+@infra.celery.service.app.task(
     name = "domains.dd.planner.task.run_planner",
     bind = True,
     acks_late = False,
@@ -53,7 +53,7 @@ def run_planner(self, thread_id: str, slug: str, mode: str = "llm") -> dict:
         service._release_planner_lock(slug, thread_id)
 
 
-@app.task(
+@infra.celery.service.app.task(
     name = "domains.dd.planner.task.resume_planner",
     bind = True,
     acks_late = False,

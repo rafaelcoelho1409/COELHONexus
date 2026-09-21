@@ -46,7 +46,7 @@ from celery.utils.log import get_task_logger
 from elasticsearch import AsyncElasticsearch
 from langchain_neo4j import Neo4jGraph
 
-from infra.celery import app
+import infra.celery.service
 
 
 logger = get_task_logger(__name__)
@@ -58,7 +58,7 @@ logger = get_task_logger(__name__)
 MAX_RETRY_PASSES = 3
 
 
-@app.task(
+@infra.celery.service.app.task(
     bind = True,
     name = "domains.ycs.neo4j_task.task.ingest_to_neo4j",
 )
@@ -96,18 +96,12 @@ def ingest_to_neo4j(
         self.update_state(state = "PROGRESS", meta = payload)
 
     async def _run() -> dict[str, Any]:
-        from infra.langfuse import (
-            set_current_span_langfuse_io,
-            set_current_span_langfuse_observation_metadata,
-            set_current_span_langfuse_trace_metadata,
-        )
-        from infra.langfuse.sessions import session as _lf_session
-        from infra.otel import get_tracer
-        with _lf_session(
+        import infra
+        with infra.langfuse.sessions.session(
             "ycs-ingest-neo4j",
             session_id = self.request.id or "(no-request-id)",
         ):
-            with get_tracer().start_as_current_span(
+            with infra.otel.service.get_tracer().start_as_current_span(
                 "ycs.ingest.neo4j.run",
                 attributes = {
                     "coelho.langfuse.keep": True,
@@ -119,35 +113,35 @@ def ingest_to_neo4j(
                     "ycs.video_count": len(video_ids or []),
                 },
             ):
-                set_current_span_langfuse_io(input_data = {
+                infra.langfuse.spans.set_current_span_langfuse_io(input_data = {
                     "kind": "neo4j",
                     "video_ids_preview": list(video_ids or [])[:10],
                     "video_count": len(video_ids or []),
                     "batch_size": batch_size,
                     "task_id": self.request.id or "",
                 })
-                set_current_span_langfuse_trace_metadata({
+                infra.langfuse.spans.set_current_span_langfuse_trace_metadata({
                     "pipeline": "ycs_ingest",
                     "kind": "neo4j",
                     "task_id": self.request.id or "",
                     "video_count": len(video_ids or []),
                     "batch_size": batch_size,
                 })
-                set_current_span_langfuse_observation_metadata({
+                infra.langfuse.spans.set_current_span_langfuse_observation_metadata({
                     "kind": "neo4j",
                     "video_count": len(video_ids or []),
                 })
                 try:
                     result = await _run_inner()
                 except Exception as e:
-                    set_current_span_langfuse_io(output_data = {
+                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = {
                         "status": "failed",
                         "kind": "neo4j",
                         "task_id": self.request.id or "",
                         "error": f"{type(e).__name__}: {e}",
                     })
                     raise
-                set_current_span_langfuse_io(output_data = {
+                infra.langfuse.spans.set_current_span_langfuse_io(output_data = {
                     "status": "done" if not result.get("error") else "failed",
                     "kind": "neo4j",
                     "task_id": self.request.id or "",

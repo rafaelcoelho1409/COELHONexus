@@ -21,8 +21,7 @@ import contextlib
 from typing import Iterator
 
 from opentelemetry import trace as _otel_trace
-
-from infra.otel import get_tracer
+import infra
 
 
 @contextlib.contextmanager
@@ -32,7 +31,7 @@ def _db_span(
     **attrs,
 ) -> Iterator[object | None]:
     """Common shell — gen_ai- and db.* spans share this skeleton."""
-    tracer = get_tracer()
+    tracer = infra.otel.service.get_tracer()
     if tracer is None:
         yield None
         return
@@ -117,7 +116,7 @@ def neo4j_query_span(
 def ycs_retriever_fanout_span(*, top_k: int) -> Iterator[object | None]:
     """Parent span over the multi-retriever fan-out — qdrant + neo4j + es +
     reranker all become child spans under this one in Tempo / LangFuse."""
-    tracer = get_tracer()
+    tracer = infra.otel.service.get_tracer()
     if tracer is None:
         yield None
         return
@@ -142,7 +141,7 @@ def reranker_span(
     top_k:     int,
 ) -> Iterator[object | None]:
     """Cross-encoder rerank — gen_ai.* semconv since this is an LM workload."""
-    tracer = get_tracer()
+    tracer = infra.otel.service.get_tracer()
     if tracer is None:
         yield None
         return

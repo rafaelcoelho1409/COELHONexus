@@ -134,13 +134,13 @@ def _build_orchestrator_prompt(mode: str) -> str:
         else prompts.ORCHESTRATOR_SYSTEM_PROMPT_TOOLS
     )
     try:
-        from infra.langfuse.prompts import get_prompt as _lf_get_prompt
+        import infra
         prompt_name = (
             "rr.agent.orchestrator_subagents"
             if mode == keys.DISCOVERY_MODE_AGENTS
             else "rr.agent.orchestrator_tools"
         )
-        base = _lf_get_prompt(
+        base = infra.langfuse.prompts.get_prompt(
             prompt_name, label = "production", fallback = local_base,
         ) or local_base
     except Exception:

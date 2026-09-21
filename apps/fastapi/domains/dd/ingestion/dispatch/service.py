@@ -1,6 +1,6 @@
 """Cancel is cooperative (progress.raise_if_cancelled + watcher pre-empts blocking awaits). Lock TTL (35 min) outlasts Celery soft_time_limit (30 min) so crashed tasks self-release."""
 from __future__ import annotations
-import domains
+import domains, infra
 
 from . import domain, params
 from .. import tiers
@@ -10,9 +10,6 @@ import logging
 from dataclasses import asdict
 
 import redis.asyncio as redis_aio
-
-from infra.otel import get_tracer
-
 
 
 logger = logging.getLogger(__name__)
@@ -67,7 +64,7 @@ async def _cleanup_framework(minio, framework_slug: str) -> int:
 async def run(run_id: str, slug: str) -> dict:
     """Span + metrics wrapper around the ingestion dispatcher."""
     t0 = asyncio.get_running_loop().time()
-    with get_tracer().start_as_current_span(
+    with infra.otel.service.get_tracer().start_as_current_span(
         "dd.ingestion.run",
         attributes = {
             "dd.domain":                "ingestion",

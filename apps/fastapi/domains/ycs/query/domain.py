@@ -160,7 +160,7 @@ def project_neo4j_row(row: dict[str, Any], app: str) -> dict[str, Any]:
 # Sources of truth (so the declared schema stays in sync with what
 # gets WRITTEN to each store):
 #
-#   ES     → infra/elasticsearch/mappings.py  (METADATA_MAPPING,
+#   ES     → infra/elasticsearch/schemas.py  (METADATA_MAPPING,
 #                                               TRANSCRIPTIONS_MAPPING)
 #   Qdrant → domains.ycs.ingestion.domain     (build_payload — the
 #                                               writer's payload shape)
@@ -173,26 +173,19 @@ def project_neo4j_row(row: dict[str, Any], app: str) -> dict[str, Any]:
 
 
 def declared_es_schema() -> dict[str, Any]:
-    """Pull the canonical mappings out of `infra/elasticsearch/mappings.py`
+    """Pull the canonical mappings out of `infra/elasticsearch/schemas.py`
     so we never drift from what `ensure_indexes()` actually creates."""
-    from infra.elasticsearch.mappings import (
-        METADATA_MAPPING,
-        TRANSCRIPTIONS_MAPPING,
-    )
-    from infra.elasticsearch.params import (
-        INDEX_METADATA,
-        INDEX_TRANSCRIPTIONS,
-    )
+    import infra
     return {
         "indices": {
-            INDEX_METADATA: {
-                "mappings":     METADATA_MAPPING["mappings"],
+            infra.elasticsearch.keys.INDEX_METADATA: {
+                "mappings":     infra.elasticsearch.schemas.METADATA_MAPPING["mappings"],
                 "doc_count":    0,
                 "samples":      [],
                 "field_values": {},
             },
-            INDEX_TRANSCRIPTIONS: {
-                "mappings":     TRANSCRIPTIONS_MAPPING["mappings"],
+            infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS: {
+                "mappings":     infra.elasticsearch.schemas.TRANSCRIPTIONS_MAPPING["mappings"],
                 "doc_count":    0,
                 "samples":      [],
                 "field_values": {},

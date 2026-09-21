@@ -233,7 +233,7 @@ def revoke_pipeline_phases(
     Returns `{task_id: outcome}` for log/UI surfacing. `outcome` is
     `"revoked"` on success or `"error: …"` on failure (one bad ID
     doesn't sink the rest of the sweep)."""
-    from infra.celery import app
+    import infra.celery.service
 
     outcomes: dict[str, str] = {}
     for tid in phase_ids:
@@ -243,7 +243,7 @@ def revoke_pipeline_phases(
             kwargs: dict[str, Any] = {"terminate": terminate}
             if terminate:
                 kwargs["signal"] = "SIGTERM"
-            app.control.revoke(tid, **kwargs)
+            infra.celery.service.app.control.revoke(tid, **kwargs)
             outcomes[tid] = "revoked"
         except Exception as e:
             outcomes[tid] = f"error: {type(e).__name__}: {e}"

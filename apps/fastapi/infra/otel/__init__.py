@@ -14,17 +14,15 @@ Env vars (init no-ops when OTEL_EXPORTER_OTLP_ENDPOINT is unset):
   LANGFUSE_PUBLIC_KEY           → HTTP Basic
   LANGFUSE_SECRET_KEY
 """
-from .service import (
-    get_meter,
-    get_tracer,
-    init_otel,
-    init_otel_for_celery_worker,
-)
+from . import baggage, entities, exporters, filters, metrics, params, service
 
 
 __all__ = [
-    "get_meter",
-    "get_tracer",
-    "init_otel",
-    "init_otel_for_celery_worker",
+    "baggage",
+    "exporters",
+    "filters",
+    "metrics",
+    "entities",
+    "params",
+    "service",
 ]

@@ -1,10 +1,13 @@
 """Celery app instance + worker_process_init signal handler.
 
-Per-worker init provisions MinIO bucket + warms the BYOK credential
-store + builds the dynamic LLM catalog so the first task doesn't pay a
-cold-start cost. All three steps are best-effort — failures degrade
-gracefully (env-key fallback / static catalog / first-task bucket 404)
-without blocking worker boot.
+Per-worker init provisions the MinIO bucket + warms the endpoint
+credential store. Both steps are best-effort — failures degrade
+gracefully (env-key fallback / first-task bucket 404) without blocking
+worker boot.
+
+The log-record bootstrap below mirrors `app.py`'s on purpose instead
+of importing it: the worker cannot import the FastAPI app (it would
+pull the whole web lifespan into every fork).
 """
 from __future__ import annotations
 
@@ -44,12 +47,7 @@ logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
 from celery import Celery
 from celery.signals import worker_process_init
 
-from .params import (
-    REDIS_URL,
-    Q_DEFAULT,
-    TASK_INCLUDE,
-    TASK_ROUTES,
-)
+from . import keys, params
 
 
 logger = logging.getLogger(__name__)
@@ -58,33 +56,33 @@ logger = logging.getLogger(__name__)
 app = Celery("coelhonexus")
 
 app.config_from_object({
-    "broker_url": REDIS_URL,
-    "result_backend": REDIS_URL,
+    "broker_url": params.REDIS_URL,
+    "result_backend": params.REDIS_URL,
     "task_serializer": "json",
     "result_serializer": "json",
     "accept_content": ["json"],
-    "result_expires": 86400,
+    "result_expires": params.RESULT_EXPIRES_S,
     "task_track_started": True,
-    "task_default_queue": Q_DEFAULT,
-    "task_routes": TASK_ROUTES,
-    "worker_prefetch_multiplier": 1,
+    "task_default_queue": keys.Q_DEFAULT,
+    "task_routes": keys.TASK_ROUTES,
+    "worker_prefetch_multiplier": params.WORKER_PREFETCH_MULTIPLIER,
     "broker_connection_retry_on_startup": True,
     # Flower events — required or Flower's task list stays empty.
     "worker_send_task_events": True,
     "task_send_sent_event": True,
-    "event_queue_expires": 60.0,
+    "event_queue_expires": params.EVENT_QUEUE_EXPIRES_S,
     "timezone": "UTC",
 })
 
-app.conf.include = TASK_INCLUDE
+app.conf.include = keys.TASK_INCLUDE
 
 
 @worker_process_init.connect(weak=False)
 def _worker_process_init(**_kwargs) -> None:
     # OTel MUST run first: each fork needs its own provider (parent SDK state doesn't survive fork()).
     try:
-        from infra.otel import init_otel_for_celery_worker
-        init_otel_for_celery_worker()
+        import infra.otel
+        infra.otel.service.init_otel_for_celery_worker()
     except Exception as e:
         logger.warning(
             f"[worker-init] OTel init failed "

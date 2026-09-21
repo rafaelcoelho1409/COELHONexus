@@ -3,7 +3,7 @@ import asyncio
 import logging
 
 import domains
-from infra.celery import app
+import infra.celery.service
 
 from . import domain, params, service
 
@@ -11,7 +11,7 @@ from . import domain, params, service
 logger = logging.getLogger(__name__)
 
 
-@app.task(
+@infra.celery.service.app.task(
     name = "domains.dd.synth.task.run_single_chapter",
     bind = True,
     acks_late = False,
@@ -61,7 +61,7 @@ def run_single_chapter(
         service._release_synth_lock(slug, thread_id)
 
 
-@app.task(
+@infra.celery.service.app.task(
     name = "domains.dd.synth.task.resume_synth",
     bind = True,
     acks_late = False,
@@ -93,7 +93,7 @@ def resume_synth(self, thread_id: str) -> dict:
             service._release_synth_lock(slug, thread_id)
 
 
-@app.task(
+@infra.celery.service.app.task(
     name = "domains.dd.synth.task.run_study",
     bind = True,
     acks_late = False,

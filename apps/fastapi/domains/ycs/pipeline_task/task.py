@@ -24,13 +24,13 @@ from domains.ycs.qdrant_task.task import (
     ingest_to_qdrant,
     invalidate_cache,
 )
-from infra.celery import app
+import infra.celery.service
 
 
 logger = get_task_logger(__name__)
 
 
-@app.task(
+@infra.celery.service.app.task(
     bind = True,
     name = "domains.ycs.pipeline_task.task.full_channel_pipeline",
 )

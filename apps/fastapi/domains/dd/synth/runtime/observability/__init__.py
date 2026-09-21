@@ -1,4 +1,4 @@
-"""Synth observability — OTel span helpers (service.py) + pipeline metrics (metrics.py); instruments in infra.otel.metrics_registry."""
+"""Synth observability — OTel span helpers (service.py) + pipeline metrics (metrics.py); instruments in infra.otel.entities."""
 from __future__ import annotations
 from . import metrics, service
 

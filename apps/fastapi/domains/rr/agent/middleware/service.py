@@ -32,8 +32,8 @@ except ImportError:                                                       # prag
     from langchain.agents.middleware.types import AgentMiddleware         # type: ignore
 
 from langchain_core.messages import SystemMessage, ToolMessage
+import infra
 
-from infra.otel import get_tracer
 
 from .. import keys, params, patterns, prompts
 from ..tools import state as tools_state
@@ -419,7 +419,7 @@ class PhaseEventsMiddleware(AgentMiddleware):
         scan_id: str, phase: str, start_ns: int, end_ns: int, ctx: Any
     ) -> None:
         try:
-            span = get_tracer().start_span(
+            span = infra.otel.service.get_tracer().start_span(
                 f"rr.node.{phase}",
                 context=ctx,
                 start_time=start_ns,

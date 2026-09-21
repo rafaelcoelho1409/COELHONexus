@@ -20,19 +20,11 @@ import logging
 import time
 from typing import Any
 
-import domains
+import domains, infra
 import psycopg
 from elasticsearch import AsyncElasticsearch
 from fastapi import Request
 
-from infra.elasticsearch import (
-    INDEX_METADATA,
-    INDEX_TRANSCRIPTIONS,
-    get_es,
-)
-from infra.neo4j import get_driver
-from infra.neo4j.params import NEO4J_DATABASE
-from infra.qdrant import get_qdrant
 
 from . import domain, errors, params, prompts, schemas
 
@@ -79,8 +71,8 @@ async def query_es(
     if not params.is_supported(app, params.BACKEND_ES):
         return _unsupported(params.BACKEND_ES, app, q)
 
-    es: AsyncElasticsearch = get_es()
-    indexes = f"{INDEX_METADATA},{INDEX_TRANSCRIPTIONS}"
+    es: AsyncElasticsearch = infra.elasticsearch.service.get_es()
+    indexes = f"{infra.elasticsearch.keys.INDEX_METADATA},{infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS}"
     if q.strip():
         query: dict[str, Any] = {
             "multi_match": {
@@ -140,7 +132,7 @@ async def query_qdrant(
 
     collection = params.APP_BACKENDS[app][params.BACKEND_QDRANT].target
 
-    client = get_qdrant()
+    client = infra.qdrant.service.get_qdrant()
     t0 = time.monotonic()
     raw_q = q.strip()
 
@@ -310,8 +302,8 @@ async def query_neo4j(
 
     t0 = time.monotonic()
     try:
-        driver = get_driver()
-        async with driver.session(database = NEO4J_DATABASE) as session:
+        driver = infra.neo4j.service.get_driver()
+        async with driver.session(database = infra.neo4j.params.NEO4J_DATABASE) as session:
             result = await session.run(cypher, cypher_params)
             records = [dict(record) async for record in result]
     except Exception as e:
@@ -371,8 +363,8 @@ async def raw_es(
     except errors.QueryNotAllowed as e:
         return _raw_disallowed(params.BACKEND_ES, app, str(e))
 
-    es: AsyncElasticsearch = get_es()
-    indexes = f"{INDEX_METADATA},{INDEX_TRANSCRIPTIONS}"
+    es: AsyncElasticsearch = infra.elasticsearch.service.get_es()
+    indexes = f"{infra.elasticsearch.keys.INDEX_METADATA},{infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS}"
     t0 = time.monotonic()
     notes: list[str] = []
     if parsed.synth_size:
@@ -433,7 +425,7 @@ async def raw_qdrant(
 
     collection = params.APP_BACKENDS[app][params.BACKEND_QDRANT].target
 
-    client = get_qdrant()
+    client = infra.qdrant.service.get_qdrant()
     t0 = time.monotonic()
     notes: list[str] = []
     op   = parsed.op
@@ -537,9 +529,9 @@ async def raw_neo4j(
 
     t0 = time.monotonic()
     try:
-        driver = get_driver()
+        driver = infra.neo4j.service.get_driver()
         async with driver.session(
-            database = NEO4J_DATABASE, default_access_mode = "READ",
+            database = infra.neo4j.params.NEO4J_DATABASE, default_access_mode = "READ",
         ) as session:
             result = await session.run(body_text)
             records = [dict(r) async for r in result]
@@ -881,8 +873,8 @@ async def _build_es_schema_live() -> dict[str, Any]:
     All fields degrade to empty when the index is empty / unreachable;
     `_build_es_schema` merges this on top of the declared floor so the
     AI prompt always sees the full structural shape."""
-    es = get_es()
-    indices = [INDEX_METADATA, INDEX_TRANSCRIPTIONS]
+    es = infra.elasticsearch.service.get_es()
+    indices = [infra.elasticsearch.keys.INDEX_METADATA, infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS]
     out: dict[str, Any] = {"indices": {}}
     for idx in indices:
         try:
@@ -951,7 +943,7 @@ async def _build_es_schema() -> dict[str, Any]:
     """Two-layer ES schema: declared floor + live overlay.
 
     Declared floor (`domain.declared_es_schema`) is sourced from
-    `infra/elasticsearch/mappings.py` so an empty cluster / outage
+    `infra/elasticsearch/schemas.py` so an empty cluster / outage
     still surfaces the full mapping. Live overlay merges per-index
     samples + field_values + observed mappings (in case ES has drifted
     from what we declared) + doc_count."""
@@ -979,7 +971,7 @@ async def _build_qdrant_schema_live() -> dict[str, Any]:
     3 sample payloads. Degrades to empty when the collection is empty;
     `_build_qdrant_schema` merges this on top of the declared floor."""
     collection = params.APP_BACKENDS[params.APP_YCS][params.BACKEND_QDRANT].target
-    client = get_qdrant()
+    client = infra.qdrant.service.get_qdrant()
     try:
         info = await client.get_collection(collection_name = collection)
     except Exception as e:
@@ -1103,7 +1095,7 @@ async def _build_neo4j_schema_live() -> dict[str, Any]:
     are data-derived), which is exactly the case the declared floor
     is there to cover. Read-only — uses `default_access_mode="READ"`
     defense in depth."""
-    driver = get_driver()
+    driver = infra.neo4j.service.get_driver()
     out: dict[str, Any] = {
         "labels": [],
         "relationship_types": [],
@@ -1113,7 +1105,7 @@ async def _build_neo4j_schema_live() -> dict[str, Any]:
     }
     try:
         async with driver.session(
-            database = NEO4J_DATABASE, default_access_mode = "READ",
+            database = infra.neo4j.params.NEO4J_DATABASE, default_access_mode = "READ",
         ) as session:
             r = await session.run(_SCHEMA_CYPHER_LABELS)
             row = await r.single()

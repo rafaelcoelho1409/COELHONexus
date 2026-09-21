@@ -44,8 +44,7 @@ import httpx
 from elasticsearch import AsyncElasticsearch
 from playwright.async_api import async_playwright
 
-import domains
-from infra.elasticsearch import INDEX_TRANSCRIPTIONS
+import domains, infra
 
 from . import domain, params
 
@@ -1454,7 +1453,7 @@ async def _check_existing_transcriptions(
         return {}
     try:
         result = await es_client.search(
-            index   = INDEX_TRANSCRIPTIONS,
+            index   = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
             query   = {"terms": {"video_id": video_ids}},
             _source = ["video_id", "lang"],
             size    = len(video_ids) * 10,  # up to 10 langs per video

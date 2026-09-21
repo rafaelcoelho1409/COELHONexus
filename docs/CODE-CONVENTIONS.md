@@ -58,19 +58,29 @@ opposite of what we want.
 
 ## 2. New naming convention (split by responsibility)
 
+**Status:** ENFORCED 2026-09-21 — the split below is a review rule, not a
+suggestion. Every leaf module ships the **required core**
+(`__init__.py` with module-only re-exports + `__all__`, `params.py`,
+`service.py`) plus **exactly the conditional files whose trigger
+holds** — `domain.py` included. A pure-client factory with no branches
+(`infra/qdrant/service.py: get_qdrant` passes params straight through)
+correctly has no `domain.py`: the trigger is "the module contains pure
+logic", not "every module must have one". A file with no trigger MUST
+NOT exist — an empty `errors.py` "for uniformity" is ceremony: it
+costs every reader a hop and rots the moment someone defines an
+exception in `service.py` because the empty file "looked unused".
+Uniformity is enforced by the triggers, not by placeholder files.
+
 ### Replacement for `constants.py`
 
-Pick whichever fit the module's actual content. A module can have several
-of these, or none.
-
-| New name | What goes in it | Modules where it fits |
+| New name | Trigger (create the file iff) | What goes in it |
 |---|---|---|
-| `keys.py` | Storage key builders + path helpers (functions like `framework_prefix(slug)`) | `ingestion/storage/`, anywhere a `*_key()` function exists today |
-| `params.py` | Loose numeric tunables (thresholds, concurrency, timeouts) that don't fit a dataclass group | most synth/planner nodes |
-| `prompts.py` | LLM prompt strings + their version markers | every node that calls an LLM |
-| `patterns.py` | Pre-compiled regexes (anything that survives `re.compile(...)` at module scope) | `corpus_normalize/`, `post/`, `ingestion/filters/` |
-| `versions.py` | Schema/prompt version strings (cache-invalidation knobs) | sawc, outline, digest |
-| `config.py` | Frozen-dataclass GROUPS of related tunables (see §3) | rotator, ingestion tiers |
+| `keys.py` | the module builds ≥1 key/path/routing name consumed outside `service.py` | Key builders + path helpers (`framework_prefix(slug)`), queue names, task-path tables |
+| `params.py` | REQUIRED CORE — every module has tunables or env reads | Loose numeric tunables (thresholds, concurrency, timeouts) that don't fit a dataclass group |
+| `prompts.py` | the module sends ≥1 LLM prompt | LLM prompt strings + their version markers |
+| `patterns.py` | the module holds ≥1 `re.compile(...)` at module scope | Pre-compiled regexes |
+| `versions.py` | the module versions a schema or prompt for cache invalidation | Schema/prompt version strings (cache-invalidation knobs) |
+| `config.py` | ≥3 tunables describe one concept and change together (§3) | Frozen-dataclass GROUPS of related tunables |
 
 Reserve plain `constants.py` ONLY for a module that legitimately has 1–2
 unrelated scalars and nothing else (rare). If you find yourself adding
@@ -79,13 +89,13 @@ split into one of the above files OR a dataclass.
 
 ### Replacement for `types.py`
 
-| New name | What goes in it |
-|---|---|
-| `schemas.py` | Pydantic `BaseModel` classes — LLM input/output validation, HTTP body validation |
-| `entities.py` | Plain `@dataclass` value objects — the "things" the domain manipulates (`ManifestEntry`, `Section`, `MemoryEntry`) |
-| `state.py` | LangGraph `TypedDict`s (planner uses this name already; standardize) |
-| `errors.py` | Exception classes (`IngestCancelled`, etc.) |
-| inline (no file) | One-off `TypeAlias` / `Literal` types — put them in the module that uses them, no separate file needed |
+| New name | Trigger (create the file iff) | What goes in it |
+|---|---|---|
+| `schemas.py` | the module defines ≥1 boundary shape | Shapes at system boundaries — Pydantic `BaseModel` classes for validated boundaries (LLM I/O, HTTP bodies) AND external-service schema definitions (ES index mappings, Qdrant payload shapes). If it describes what a datastore or wire format accepts, it lives here, not in `service.py` |
+| `entities.py` | the module manipulates ≥1 value object, or ≥2 scalars form a frozen group | Plain `@dataclass` value objects — the "things" the domain manipulates (`ManifestEntry`, `Section`, `MemoryEntry`) |
+| `state.py` | the module owns LangGraph state | LangGraph `TypedDict`s (planner uses this name already; standardize) |
+| `errors.py` | the module defines ≥1 exception class | Exception classes (`IngestCancelled`, etc.) |
+| inline (no file) | one-off `TypeAlias` / `Literal` | Put them in the module that uses them, no separate file needed |
 
 Why not `models.py`? It collides semantically with SQLAlchemy/ORM
 "models" — `schemas.py` (validation) + `entities.py` (domain objects)

@@ -4,7 +4,7 @@
 Search (ycs/). Architecture: docs/RESEARCH-RADAR-AGENT-ARCHITECTURE-2026-06-11.md.
 
 `task.py` is excluded from this eager chain (§8 Exception 1 —
-`from infra.celery import app` at module level); reach it via a direct
+`import infra.celery.service` (use `infra.celery.service.app`) at module level); reach it via a direct
 `from domains.rr.task import run_radar_scan`.
 """
 from __future__ import annotations

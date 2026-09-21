@@ -2,9 +2,9 @@
 in-process caching and a bulletproof local fallback.
 
 Pattern (in a planner / synth / agent node):
-    from infra.langfuse.prompts import get_prompt
+    import infra.langfuse
 
-    rendered = get_prompt(
+    rendered = infra.langfuse.prompts.get_prompt(
         "dd.planner.chapter_propose",
         label     = "production",
         variables = {"framework": "...", "target_chapters": 7, ...},
@@ -26,17 +26,18 @@ happens per call (variables can change per invocation).
 """
 from __future__ import annotations
 
+import infra.langfuse
+
+from . import params
+
 import logging
 import time
 from threading import Lock
-
-from .client import get_client
 
 
 logger = logging.getLogger(__name__)
 
 
-_DEFAULT_TTL_S = 60
 _cache: dict[str, tuple[float, object]] = {}
 _cache_lock = Lock()
 
@@ -51,13 +52,13 @@ def get_prompt(
     label:     str = "production",
     variables: dict | None = None,
     fallback:  str | None = None,
-    ttl_s:     int = _DEFAULT_TTL_S,
+    ttl_s:     int = params.PROMPT_CACHE_TTL_S,
 ) -> str | None:
     """Fetch a label-deployed prompt template from LangFuse, compile with
     variables, return the rendered string. Returns `fallback` on any
     failure — caller may pass None to indicate it has its own local
     rendering path."""
-    client = get_client()
+    client = infra.langfuse.service.get_client()
     if client is None:
         return fallback
 

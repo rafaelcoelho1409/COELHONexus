@@ -29,14 +29,12 @@ from qdrant_client.http.models import (
 )
 from redis.asyncio import Redis
 
-import domains
-from infra.elasticsearch import INDEX_METADATA, INDEX_TRANSCRIPTIONS
+import domains, infra
 
 from . import domain, keys, params
 
 
 logger = logging.getLogger(__name__)
-
 
 
 async def ensure_collection(
@@ -202,7 +200,6 @@ async def ensure_collection(
     return created
 
 
-
 async def _scroll_transcripts(
     es: AsyncElasticsearch,
     video_ids: list[str] | None = None,
@@ -216,7 +213,7 @@ async def _scroll_transcripts(
         else {"match_all": {}}
     )
     response = await es.search(
-        index = INDEX_TRANSCRIPTIONS,
+        index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
         query = query,
         size = batch_size,
         scroll = params.SCROLL_KEEPALIVE,
@@ -266,7 +263,7 @@ async def fetch_metadata_from_es(
         return {}
     lookup_ids = {vid: domain.parent_video_id(vid) for vid in video_ids}
     response = await es.search(
-        index = INDEX_METADATA,
+        index = infra.elasticsearch.keys.INDEX_METADATA,
         query = {"ids": {"values": list(set(lookup_ids.values()))}},
         size = len(set(lookup_ids.values())),
         _source = [
@@ -292,7 +289,6 @@ async def fetch_transcripts_from_es(
     async for transcript in _scroll_transcripts(es, video_ids, batch_size):
         out.append(transcript)
     return out
-
 
 
 async def ingest_to_qdrant(
@@ -565,7 +561,7 @@ async def expand_with_partition_ids(
         return []
     try:
         resp = await es.search(
-            index = INDEX_TRANSCRIPTIONS,
+            index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
             size  = min(10000, max(200, len(video_ids) * 10)),
             # `.keyword`, not the bare field — `parent_video_id` is
             # mapped `text` (analyzed) with a `.keyword` sub-field for

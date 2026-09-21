@@ -1,7 +1,6 @@
 """DD ingestion metric recorders."""
 from __future__ import annotations
-
-from infra.otel.metrics import get_instrument
+import infra
 
 
 def record_ingestion_run(
@@ -19,18 +18,18 @@ def record_ingestion_run(
         "outcome":   outcome or "unknown",
     }
     try:
-        if (inst := get_instrument("ingestion_run_total")) is not None:
+        if (inst := infra.otel.metrics.get_instrument("ingestion_run_total")) is not None:
             inst.add(1, attributes = attrs)
         if duration_s is not None and (
-            inst := get_instrument("ingestion_run_duration")
+            inst := infra.otel.metrics.get_instrument("ingestion_run_duration")
         ) is not None:
             inst.record(max(duration_s, 0.0), attributes = attrs)
         if output_files is not None and (
-            inst := get_instrument("ingestion_output_files")
+            inst := infra.otel.metrics.get_instrument("ingestion_output_files")
         ) is not None:
             inst.record(max(output_files, 0), attributes = attrs)
         if output_bytes is not None and (
-            inst := get_instrument("ingestion_output_bytes")
+            inst := infra.otel.metrics.get_instrument("ingestion_output_bytes")
         ) is not None:
             inst.record(max(output_bytes, 0), attributes = attrs)
     except Exception:

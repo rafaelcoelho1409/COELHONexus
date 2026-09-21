@@ -16,13 +16,8 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from infra.celery import app
-from infra.langfuse import (
-    set_current_span_langfuse_io,
-    set_current_span_langfuse_observation_metadata,
-    set_current_span_langfuse_trace_metadata,
-)
-from infra.otel import get_tracer
+import infra.celery.service
+import infra
 
 from .agent.graph import build_radar_agent
 from . import agent, entities, runtime, service, stores
@@ -31,7 +26,7 @@ from . import agent, entities, runtime, service, stores
 logger = logging.getLogger(__name__)
 
 
-@app.task(
+@infra.celery.service.app.task(
     name           = "domains.rr.task.run_radar_scan",
     bind           = True,
     acks_late      = False,
@@ -127,15 +122,15 @@ async def _run_radar_scan_async(
     top_n: int,
 ) -> dict:
     """Span + metrics wrapper around the RR scan orchestration."""
-    from infra.langfuse.sessions import session as _lf_session
+    import infra
     t0 = asyncio.get_running_loop().time()
-    with _lf_session(
+    with infra.langfuse.sessions.session(
         "rr",
         session_id = scan_id,
         user_id    = profile_id,
         digest_id  = scan_id,
     ):
-        with get_tracer().start_as_current_span(
+        with infra.otel.service.get_tracer().start_as_current_span(
             "rr.scan.run",
             attributes = {
                 "coelho.langfuse.keep": True,
@@ -149,21 +144,21 @@ async def _run_radar_scan_async(
                 "langfuse.observation.metadata.workflow": "rr_scan",
             },
         ):
-            set_current_span_langfuse_io(input_data = {
+            infra.langfuse.spans.set_current_span_langfuse_io(input_data = {
                 "topic": topic,
                 "verticals": list(verticals or []),
                 "top_n": top_n,
                 "scan_id": scan_id,
                 "profile_id": profile_id,
             })
-            set_current_span_langfuse_trace_metadata({
+            infra.langfuse.spans.set_current_span_langfuse_trace_metadata({
                 "pipeline": "rr_scan",
                 "scan_id": scan_id,
                 "profile_id": profile_id,
                 "vertical_count": len(verticals),
                 "top_n": top_n,
             })
-            set_current_span_langfuse_observation_metadata({
+            infra.langfuse.spans.set_current_span_langfuse_observation_metadata({
                 "topic": topic[:200],
                 "vertical_count": len(verticals),
             })
@@ -176,7 +171,7 @@ async def _run_radar_scan_async(
                     top_n = top_n,
                 )
             except Exception as e:
-                set_current_span_langfuse_io(output_data = {
+                infra.langfuse.spans.set_current_span_langfuse_io(output_data = {
                     "status": "failed",
                     "error": f"{type(e).__name__}: {e}",
                     "n_findings": 0,
@@ -185,7 +180,7 @@ async def _run_radar_scan_async(
                     "degraded": True,
                 })
                 raise
-            set_current_span_langfuse_io(output_data = {
+            infra.langfuse.spans.set_current_span_langfuse_io(output_data = {
                 "status": result.get("status", "unknown"),
                 "n_findings": int(result.get("n_findings", 0) or 0),
                 "total_candidates": int(
@@ -266,7 +261,7 @@ async def _run_radar_scan_async_inner(
                     "top_n": top_n,
                 })
 
-        with get_tracer().start_as_current_span(
+        with infra.otel.service.get_tracer().start_as_current_span(
             "rr.node.backfill",
             attributes={"coelho.langfuse.keep": True, "rr.scan_id": scan_id},
         ):
@@ -278,7 +273,7 @@ async def _run_radar_scan_async_inner(
                     f"{type(e).__name__}: {e}"
                 )
 
-        with get_tracer().start_as_current_span(
+        with infra.otel.service.get_tracer().start_as_current_span(
             "rr.node.digest_assemble",
             attributes={"coelho.langfuse.keep": True, "rr.scan_id": scan_id},
         ):
@@ -361,16 +356,15 @@ async def _run_radar_scan_async_inner(
             pass
         agent.tools.state.clear_scan_fs(scan_id)
         # Explicit close: asyncio.run() tears the loop down before __del__ runs, leaking sockets otherwise.
-        from infra.neo4j   import close_neo4j
-        from infra.qdrant  import close_qdrant
+        import infra
         try:
-            await close_neo4j()
+            await infra.neo4j.service.close_neo4j()
         except Exception as e:
-            logger.warning(f"[rr-task] close_neo4j failed: {e}")
+            logger.warning(f"[rr-task] infra.neo4j.service.close_neo4j failed: {e}")
         try:
-            await close_qdrant()
+            await infra.qdrant.service.close_qdrant()
         except Exception as e:
-            logger.warning(f"[rr-task] close_qdrant failed: {e}")
+            logger.warning(f"[rr-task] infra.qdrant.service.close_qdrant failed: {e}")
 
 
 def _item_to_finding(item: dict[str, Any]) -> entities.Finding:
@@ -705,7 +699,7 @@ async def _backfill_one(
 # Retry button instead of a spinner stuck forever.
 # ---------------------------------------------------------------------------
 
-@app.task(
+@infra.celery.service.app.task(
     name          = "domains.rr.task.run_code_synth",
     bind          = True,
     acks_late     = False,

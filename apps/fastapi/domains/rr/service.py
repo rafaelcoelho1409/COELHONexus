@@ -126,7 +126,7 @@ async def cancel_scan(scan_id: UUID, *, reason: str = "cancelled by user") -> bo
     Order: revoke → mark Postgres → emit SSE → drop task_id key.
     A failure in step 2/3/4 doesn't roll back step 1; the worker is already dead.
     """
-    from infra.celery.service import app as celery_app
+    import infra.celery.service
 
     task_id = await runtime.service.get_task_id(str(scan_id))
     if not task_id:
@@ -134,7 +134,7 @@ async def cancel_scan(scan_id: UUID, *, reason: str = "cancelled by user") -> bo
         return False
 
     try:
-        celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+        infra.celery.service.app.control.revoke(task_id, terminate=True, signal="SIGTERM")
         logger.info(f"[rr-service] cancel_scan {scan_id} revoked task_id={task_id}")
     except Exception as e:
         logger.warning(

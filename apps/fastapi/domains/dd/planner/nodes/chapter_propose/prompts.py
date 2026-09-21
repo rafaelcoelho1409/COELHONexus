@@ -5,7 +5,6 @@ from . import params
 from typing import Optional
 
 
-
 def _render_distillates_block(
     distillates: dict[str, dict], source_keys: list[str],
 ) -> str:
@@ -63,8 +62,8 @@ def build_propose_prompt(
     namespaces_block = ", ".join(seeds.get("namespaces") or []) or "(none)"
 
     try:
-        from infra.langfuse.prompts import get_prompt as _lf_get_prompt
-        _rendered = _lf_get_prompt(
+        import infra
+        _rendered = infra.langfuse.prompts.get_prompt(
             "dd.planner.chapter_propose",
             label     = "production",
             variables = {

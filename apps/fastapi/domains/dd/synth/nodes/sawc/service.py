@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 
 
 try:
-    from infra.langfuse.prompts import with_langfuse_override as _lf_override
+    import infra
 except Exception:
-    _lf_override = lambda *a, **kw: (lambda fn: fn)  # noqa: E731
+    infra.langfuse.prompts.with_langfuse_override = lambda *a, **kw: (lambda fn: fn)  # noqa: E731
 
 
 # Draft-call attempts before permanently losing this draft slot (best-of-N
@@ -29,7 +29,7 @@ except Exception:
 _MAX_CALL_ATTEMPTS = 2
 
 
-@_lf_override("dd.synth.sawc.repair")
+@infra.langfuse.prompts.with_langfuse_override("dd.synth.sawc.repair")
 def build_repair_prompt(
     *,
     framework: str,

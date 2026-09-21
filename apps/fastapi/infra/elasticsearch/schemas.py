@@ -1,7 +1,9 @@
-"""infra/elasticsearch — index mappings for the two deprecated indexes.
+"""infra/elasticsearch — index schemas for the two deprecated indexes.
 
 Module-level dict literals (pure data, no I/O) — `service.py:ensure_indexes`
-reads them at startup and creates the indexes if missing.
+reads them at startup and creates the indexes if missing. They live here
+(per the §2 schemas.py trigger) because they ARE the ES boundary shapes:
+they define what the datastore accepts, not how we call it.
 
 DO NOT add fields without bumping a schema version and writing a reindex job — ES doesn't allow mapping changes on existing fields."""
 from __future__ import annotations

@@ -7,8 +7,7 @@ from typing import Awaitable, Callable
 
 from opentelemetry import trace
 
-import domains
-from infra.otel import get_tracer
+import domains, infra
 
 
 logger = logging.getLogger(__name__)
@@ -19,7 +18,7 @@ def traced(name: str) -> Callable:
     def decorator(fn: Callable[..., Awaitable[dict]]):
         @functools.wraps(fn)
         async def wrapper(state: dict, *args, **kwargs) -> dict:
-            tracer = get_tracer()
+            tracer = infra.otel.service.get_tracer()
             prev_stage, prev_thread_id, prev_node_id = domains.dd.runtime.service.get_context()
             domains.dd.runtime.service.set_context(
                 stage="synth",

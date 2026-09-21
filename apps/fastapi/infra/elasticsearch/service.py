@@ -13,16 +13,7 @@ from typing import Optional
 
 from elasticsearch import AsyncElasticsearch
 
-from .mappings import METADATA_MAPPING, TRANSCRIPTIONS_MAPPING
-from .params import (
-    ES_HOST,
-    ES_PASSWORD,
-    ES_USERNAME,
-    ES_VERIFY_CERTS,
-    INDEX_METADATA,
-    INDEX_TRANSCRIPTIONS,
-    TIMEOUT_S,
-)
+from . import domain, params
 
 
 logger = logging.getLogger(__name__)
@@ -36,12 +27,12 @@ def get_es() -> AsyncElasticsearch:
     global _client
     if _client is None:
         _client = AsyncElasticsearch(
-            hosts = [ES_HOST],
-            basic_auth = (ES_USERNAME, ES_PASSWORD) if ES_PASSWORD else None,
-            verify_certs = ES_VERIFY_CERTS,
-            request_timeout = TIMEOUT_S,
+            hosts = [params.ES_HOST],
+            basic_auth = domain.basic_auth(params.ES_USERNAME, params.ES_PASSWORD),
+            verify_certs = params.ES_VERIFY_CERTS,
+            request_timeout = params.TIMEOUT_S,
         )
-        logger.info(f"[elasticsearch] client init {ES_HOST}")
+        logger.info(f"[elasticsearch] client init {params.ES_HOST}")
     return _client
 
 
@@ -65,10 +56,7 @@ async def ensure_indexes() -> dict:
     error reporting so the rest of the lifespan keeps going."""
     es = get_es()
     results: dict[str, dict] = {}
-    for index, mapping in (
-        (INDEX_METADATA, METADATA_MAPPING),
-        (INDEX_TRANSCRIPTIONS, TRANSCRIPTIONS_MAPPING),
-    ):
+    for index, mapping in domain.index_pairs():
         try:
             exists = await es.indices.exists(index = index)
             if not exists:

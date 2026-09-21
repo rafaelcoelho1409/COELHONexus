@@ -22,7 +22,7 @@ from typing import Any, Optional
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 import aioboto3
-import domains
+import domains, infra
 import psycopg
 from botocore.config import Config
 from botocore.exceptions import ClientError
@@ -39,9 +39,6 @@ from qdrant_client.http.models import (
     VectorParams,
 )
 
-from infra.neo4j import get_driver
-from infra.neo4j.params import NEO4J_DATABASE
-from infra.qdrant.service import get_qdrant
 
 from .. import entities, keys, params
 
@@ -287,13 +284,13 @@ _NEO4J_BOOTSTRAP_STMTS: tuple[str, ...] = (
 
 async def bootstrap_neo4j() -> None:
     """Create constraints + indexes if missing. Idempotent."""
-    driver: AsyncDriver = get_driver()
-    async with driver.session(database=NEO4J_DATABASE) as session:
+    driver: AsyncDriver = infra.neo4j.service.get_driver()
+    async with driver.session(database=infra.neo4j.params.NEO4J_DATABASE) as session:
         for stmt in _NEO4J_BOOTSTRAP_STMTS:
             await session.run(stmt)
     logger.info(
         f"[rr-neo4j] bootstrap complete "
-        f"({len(_NEO4J_BOOTSTRAP_STMTS)} statements, db={NEO4J_DATABASE!r})"
+        f"({len(_NEO4J_BOOTSTRAP_STMTS)} statements, db={infra.neo4j.params.NEO4J_DATABASE!r})"
     )
 
 
@@ -367,8 +364,8 @@ async def upsert_paper(
         "authors":               [a for a in paper.authors if a],
         "categories":            [c for c in paper.categories if c],
     }
-    driver: AsyncDriver = get_driver()
-    async with driver.session(database=NEO4J_DATABASE) as session:
+    driver: AsyncDriver = infra.neo4j.service.get_driver()
+    async with driver.session(database=infra.neo4j.params.NEO4J_DATABASE) as session:
         result = await session.run(_UPSERT_PAPER_CYPHER, cypher_params)
         record = await result.single()
     return record["paper_id"] if record else paper.arxiv_id
@@ -378,8 +375,8 @@ async def upsert_paper(
 # Kept minimal in step 3; expand as the synthesis subagent's needs solidify.
 async def get_paper_count() -> int:
     """Total :Paper nodes. Cheap sanity check for the bootstrap smoke test."""
-    driver: AsyncDriver = get_driver()
-    async with driver.session(database=NEO4J_DATABASE) as session:
+    driver: AsyncDriver = infra.neo4j.service.get_driver()
+    async with driver.session(database=infra.neo4j.params.NEO4J_DATABASE) as session:
         result = await session.run(f"MATCH (p:{keys.NEO4J_LABEL_PAPER}) RETURN count(p) AS n")
         record = await result.single()
     return int(record["n"]) if record else 0
@@ -845,7 +842,7 @@ async def upsert_profile(
 async def bootstrap_qdrant() -> None:
     """Ensure `radar_papers` collection exists with the right vector config
     + payload indexes. Safe to re-run."""
-    client = get_qdrant()
+    client = infra.qdrant.service.get_qdrant()
     exists = await client.collection_exists(collection_name=keys.QDRANT_COLLECTION)
     if exists:
         logger.info(f"[rr-qdrant] collection {keys.QDRANT_COLLECTION!r} already exists")
@@ -924,7 +921,7 @@ async def upsert_paper_vector(
             "hf_upvotes":                  int(paper.hf_upvotes),
         },
     )
-    client = get_qdrant()
+    client = infra.qdrant.service.get_qdrant()
     await client.upsert(collection_name=keys.QDRANT_COLLECTION, points=[point])
     return point.id
 
@@ -954,7 +951,7 @@ async def search_by_embedding(
                 for aid in arxiv_ids
             ]
         )
-    client = get_qdrant()
+    client = infra.qdrant.service.get_qdrant()
     response = await client.query_points(
         collection_name = keys.QDRANT_COLLECTION,
         query           = list(query_vector),
@@ -974,6 +971,6 @@ async def search_by_embedding(
 
 async def count_points() -> int:
     """Total points in `radar_papers`. Cheap sanity check for bootstrap."""
-    client = get_qdrant()
+    client = infra.qdrant.service.get_qdrant()
     info = await client.get_collection(collection_name=keys.QDRANT_COLLECTION)
     return int(getattr(info, "points_count", 0) or 0)
