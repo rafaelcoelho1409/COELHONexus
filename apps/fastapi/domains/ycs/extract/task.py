@@ -15,7 +15,6 @@ for progress reporting, which Flower and `GET /tasks/{id}` consume.
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 from typing import Any, Callable
 

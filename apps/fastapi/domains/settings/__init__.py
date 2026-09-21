@@ -10,3 +10,6 @@ external LLMs / embedding models. No bundled gateway, no provider fan-out.
 from __future__ import annotations
 
 from . import chat, credentials, embeddings
+
+
+__all__ = ["chat", "credentials", "embeddings"]

@@ -107,3 +107,15 @@ class OutlineDAG(BaseModel):
     stages: dict[int, list[str]]
     max_stage: int
     removed_edges: list[tuple[str, str]] = Field(default_factory = list)
+
+
+OUTLINE_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name":   "chapter_outline",
+        "schema": ChapterOutline.model_json_schema(),
+        "strict": False,
+    },
+}
+
+USC_VOTE_RESPONSE_FORMAT = {"type": "json_object"}

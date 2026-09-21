@@ -1,5 +1,5 @@
 """Synth dispatch — async runners shared by HTTP in-process + Celery worker."""
-from . import service
+from . import domain, keys, params, patterns, service
 
 
-__all__ = ["service"]
+__all__ = ["domain", "keys", "params", "patterns", "service"]

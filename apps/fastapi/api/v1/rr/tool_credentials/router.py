@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import asdict
 
 import httpx
@@ -10,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from domains.settings.credentials import errors as credentials_errors, service as credentials_service
+import domains
 
 from .params import TOOL_KEYS, ToolKeyDef, get_tool_key_def
 from .schemas import SetToolKeyBody
@@ -22,7 +21,7 @@ router = APIRouter()
 
 def _view(d: ToolKeyDef) -> dict:
     """`provider` (catalog) kept distinct from `KeyStatus.source` — same word would collide when flattened."""
-    status = credentials_service.get_store().key_status(d.key_env)
+    status = domains.settings.credentials.service.get_store().key_status(d.key_env)
     return {
         "key_env":      d.key_env,
         "display_name": d.display_name,
@@ -68,8 +67,8 @@ async def set_tool_key(key_env: str, body: SetToolKeyBody) -> JSONResponse:
             )
 
     try:
-        status = await run_in_threadpool(credentials_service.get_store().set_key, d.key_env, api_key)
-    except credentials_errors.UnmanagedKeyEnv as e:
+        status = await run_in_threadpool(domains.settings.credentials.service.get_store().set_key, d.key_env, api_key)
+    except domains.settings.credentials.errors.UnmanagedKeyEnv as e:
         raise HTTPException(400, str(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -81,8 +80,8 @@ async def set_tool_key(key_env: str, body: SetToolKeyBody) -> JSONResponse:
 async def delete_tool_key(key_env: str) -> JSONResponse:
     d = _require_def(key_env)
     try:
-        status = await run_in_threadpool(credentials_service.get_store().delete_key, d.key_env)
-    except credentials_errors.UnmanagedKeyEnv as e:
+        status = await run_in_threadpool(domains.settings.credentials.service.get_store().delete_key, d.key_env)
+    except domains.settings.credentials.errors.UnmanagedKeyEnv as e:
         raise HTTPException(400, str(e))
     return JSONResponse({"deleted": True, "status": asdict(status)})
 
@@ -91,7 +90,7 @@ async def delete_tool_key(key_env: str) -> JSONResponse:
 async def test_tool_key(key_env: str) -> JSONResponse:
     """Test the CURRENTLY-STORED key (env or user-saved) against the source's API."""
     d = _require_def(key_env)
-    api_key = await run_in_threadpool(credentials_service.get_store().resolve_key, d.key_env)
+    api_key = await run_in_threadpool(domains.settings.credentials.service.get_store().resolve_key, d.key_env)
     if not api_key:
         return JSONResponse(
             {"ok": False, "reason": "no key stored — paste one above first"}

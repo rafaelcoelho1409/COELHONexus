@@ -1,6 +1,8 @@
 """outline_sdp — tunable section-count bounds, adaptive H2 cap, banned
-headings, USC vote tuning."""
+headings, USC vote tuning, LLM call budgets."""
 from __future__ import annotations
+
+import os as _os
 
 
 # see versions.py rationale.
@@ -50,3 +52,34 @@ def max_h2_for_n_sources(n_sources: int) -> int:
 
 
 BLOB_PREFIX = "synth"
+
+# Draft/vote/repair fan-out + LLM call budgets (moved from service.py —
+# tunables live here, not beside the orchestration).
+N_SAMPLES          = 3
+TEMPERATURE_DRAFT  = 0.4
+TEMPERATURE_VOTE   = 0.0
+TEMPERATURE_REPAIR = 0.2
+MAX_REPAIR_RETRIES = 2
+MAX_TOKENS_DRAFT   = 8000
+MAX_TOKENS_VOTE    = 200
+MAX_TOKENS_REPAIR  = 8000
+
+# chat_text_async's own default (30s) was undersized for these calls —
+# confirmed live: outline_sdp's repair loop timed out on nearly every
+# chapter across 5 study runs (2026-09-05/07), routinely trimming
+# outlines down as a fallback rather than actually repairing them.
+# Scaled to each call's max_tokens, same idiom as render's existing
+# timeout_s=60.0 override.
+TIMEOUT_S_DRAFT  = 120.0
+TIMEOUT_S_VOTE   = 45.0
+TIMEOUT_S_REPAIR = 120.0
+
+OPTIMAL_STOPPING_ENABLED = _os.environ.get(
+    "KD_OUTLINE_OPTIMAL_STOPPING", "true",
+).lower() in ("true", "1", "yes", "on")
+
+SCOPE_LEXICAL_JACCARD = 0.40
+
+# Threshold for service._detect_semantic_h2_duplicates (used as a default
+# arg there, evaluated at def time — importing params first is enough).
+SEMANTIC_H2_DEDUP_THRESHOLD = 0.74

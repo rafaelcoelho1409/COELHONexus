@@ -78,8 +78,7 @@ async def check_migration_needed_now() -> dict[str, str] | None:
     Qdrant needs to share this ONE check, not re-derive it per router."""
     qdrant = _build_qdrant()
     try:
-        from domains.settings.embeddings import service as embeddings_service
-        return await check_migration_needed(qdrant, embeddings_service.get_configured_model())
+        return await check_migration_needed(qdrant, domains.settings.embeddings.service.get_configured_model())
     finally:
         await qdrant.close()
 

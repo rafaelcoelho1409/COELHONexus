@@ -14,9 +14,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from domains.settings.chat import service as chat_service
-from domains.settings.credentials import errors as credentials_errors, service as credentials_service
-from domains.settings.embeddings import service as embeddings_service
+import domains
 
 
 logger = logging.getLogger(__name__)
@@ -35,9 +33,9 @@ _ENDPOINT_KEY_ENV = "COELHO_LLM_API_KEY"
 
 
 def _endpoint_view() -> dict:
-    s =credentials_service.get_store().read_settings() or {}
+    s =domains.settings.credentials.service.get_store().read_settings() or {}
     ep = s.get("llm_endpoint") or {}
-    st =credentials_service.get_store().key_status(_ENDPOINT_KEY_ENV)
+    st =domains.settings.credentials.service.get_store().key_status(_ENDPOINT_KEY_ENV)
     return {
         "url": ep.get("url") or "",
         "model": ep.get("model") or "auto",
@@ -46,7 +44,7 @@ def _endpoint_view() -> dict:
 
 
 def _write_endpoint(body: EndpointBody) -> None:
-    store =credentials_service.get_store()
+    store =domains.settings.credentials.service.get_store()
     s = store.read_settings() or {}
     s["llm_endpoint"] = {
         "url": body.url.strip(),
@@ -61,7 +59,7 @@ def _write_endpoint(body: EndpointBody) -> None:
                 store.delete_key(_ENDPOINT_KEY_ENV)
             except Exception:
                 pass
-    chat_service.reset_chat_client()
+    domains.settings.chat.service.reset_chat_client()
 
 
 @router.get("/endpoint")
@@ -73,7 +71,7 @@ async def get_endpoint() -> JSONResponse:
 async def put_endpoint(body: EndpointBody) -> JSONResponse:
     try:
         await run_in_threadpool(_write_endpoint, body)
-    except credentials_errors.UnmanagedKeyEnv as e:
+    except domains.settings.credentials.errors.UnmanagedKeyEnv as e:
         raise HTTPException(status_code=400, detail=str(e))
     return JSONResponse(content=await run_in_threadpool(_endpoint_view))
 
@@ -85,7 +83,7 @@ async def test_endpoint() -> JSONResponse:
 
     t0 = _time.monotonic()
     try:
-        text, meta = await chat_service.chat_text_async(
+        text, meta = await domains.settings.chat.service.chat_text_async(
             "Reply with exactly: OK", max_tokens=5, timeout_s=20.0,
         )
         return JSONResponse(content={
@@ -111,9 +109,9 @@ _EMBEDDING_KEY_ENV = "COELHO_EMBEDDING_API_KEY"
 
 
 def _embedding_view() -> dict:
-    s =credentials_service.get_store().read_settings() or {}
+    s =domains.settings.credentials.service.get_store().read_settings() or {}
     ep = s.get("embedding_endpoint") or {}
-    st =credentials_service.get_store().key_status(_EMBEDDING_KEY_ENV)
+    st =domains.settings.credentials.service.get_store().key_status(_EMBEDDING_KEY_ENV)
     return {
         "url": ep.get("url") or "",
         "model": ep.get("model") or "auto",
@@ -122,7 +120,7 @@ def _embedding_view() -> dict:
 
 
 def _write_embedding(body: EmbeddingBody) -> None:
-    store =credentials_service.get_store()
+    store =domains.settings.credentials.service.get_store()
     s = store.read_settings() or {}
     s["embedding_endpoint"] = {
         "url": body.url.strip(),
@@ -137,7 +135,7 @@ def _write_embedding(body: EmbeddingBody) -> None:
                 store.delete_key(_EMBEDDING_KEY_ENV)
             except Exception:
                 pass
-    embeddings_service.reset_embedding_client()
+    domains.settings.embeddings.service.reset_embedding_client()
 
 
 @router.get("/embedding")
@@ -149,7 +147,7 @@ async def get_embedding() -> JSONResponse:
 async def put_embedding(body: EmbeddingBody) -> JSONResponse:
     try:
         await run_in_threadpool(_write_embedding, body)
-    except credentials_errors.UnmanagedKeyEnv as e:
+    except domains.settings.credentials.errors.UnmanagedKeyEnv as e:
         raise HTTPException(status_code=400, detail=str(e))
     return JSONResponse(content=await run_in_threadpool(_embedding_view))
 
@@ -162,7 +160,7 @@ async def test_embedding() -> JSONResponse:
 
     t0 = _time.monotonic()
     try:
-        vector, meta = await embeddings_service.embed_probe_async()
+        vector, meta = await domains.settings.embeddings.service.embed_probe_async()
         return JSONResponse(content={
             "ok": True,
             "dimensions": len(vector),

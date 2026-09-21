@@ -3,15 +3,11 @@ IMPLEMENTED nodes whose primary output field is empty for the thread.
 """
 from __future__ import annotations
 import domains
-
-import re
-
-
-_CHAPTER_ID_RE = re.compile(r"^ch-(\d+)")
+from . import patterns
 
 
 def chapter_number_from_id(chapter_id: str) -> int:
-    m = _CHAPTER_ID_RE.match(chapter_id or "")
+    m = patterns.CHAPTER_ID_RE.match(chapter_id or "")
     return int(m.group(1)) if m else 0
 
 

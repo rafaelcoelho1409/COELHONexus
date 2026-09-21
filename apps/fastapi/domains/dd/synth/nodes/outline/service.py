@@ -5,75 +5,16 @@ from . import domain, keys, params, schemas, versions
 import asyncio
 import json
 import logging
-import os
 import time
 from typing import Optional
-
-from domains.settings.embeddings import service as embeddings_service
 
 
 logger = logging.getLogger(__name__)
 
-
-# DAG primitives (pure)
-
-
-_N_SAMPLES               = 3
-
-_TEMPERATURE_DRAFT       = 0.4
-
-_TEMPERATURE_VOTE        = 0.0
-
-_TEMPERATURE_REPAIR      = 0.2
-
-_MAX_REPAIR_RETRIES      = 2
-
-_MAX_TOKENS_DRAFT        = 8000
-
-_MAX_TOKENS_VOTE         = 200
-
-_MAX_TOKENS_REPAIR       = 8000
-
-# chat_text_async's own default (30s) was undersized for these
-# calls — confirmed live: outline_sdp's repair loop timed out on nearly
-# every chapter across 5 study runs (2026-09-05/07), routinely trimming
-# outlines down as a fallback rather than actually repairing them.
-# Several Rotator-pool models are individually configured with 90-120s
-# provider-level timeouts elsewhere in the Rotator itself, so 30s here
-# was cutting off completions that would likely have succeeded. Scaled
-# to each call's max_tokens, same idiom as render/service.py's existing
-# timeout_s=60.0 override.
-_TIMEOUT_S_DRAFT         = 120.0
-_TIMEOUT_S_VOTE          = 45.0
-_TIMEOUT_S_REPAIR        = 120.0
-
-_OUTLINE_RESPONSE_FORMAT = {
-    "type": "json_schema",
-    "json_schema": {
-        "name":   "chapter_outline",
-        "schema": schemas.ChapterOutline.model_json_schema(),
-        "strict": False,
-    },
-}
-
-_USC_VOTE_RESPONSE_FORMAT = {"type": "json_object"}
-
-_OUTLINE_OPTIMAL_STOPPING_ENABLED = os.environ.get(
-    "KD_OUTLINE_OPTIMAL_STOPPING", "true",
-).lower() in ("true", "1", "yes", "on")
-
-
-_SCOPE_LEXICAL_JACCARD = 0.40
-
-# Threshold for _detect_semantic_h2_duplicates — must be defined BEFORE
-# that function (used as a default arg, evaluated at module-init).
-_SEMANTIC_H2_DEDUP_THRESHOLD = 0.74
-
-
 async def _detect_semantic_h2_duplicates(
     outline: schemas.ChapterOutline,
     *,
-    threshold: float = _SEMANTIC_H2_DEDUP_THRESHOLD,
+    threshold: float = params.SEMANTIC_H2_DEDUP_THRESHOLD,
 ) -> list[str]:
     """Return issues for scope-duplicate H2 pairs (embedding cosine OR lexical overlap). Fail-soft: lexical pass still runs when embedder is unavailable."""
     sections = outline.sections
@@ -94,7 +35,7 @@ async def _detect_semantic_h2_duplicates(
     # below, unchanged.
     sim = None
     try:
-        embeddings, _model = await embeddings_service.embed_texts_async(
+        embeddings, _model = await domains.settings.embeddings.service.embed_texts_async(
             [f"{s.heading}\n{s.description}" for s in sections],
         )
         import numpy as np
@@ -116,7 +57,7 @@ async def _detect_semantic_h2_duplicates(
             cos = float(sim[i, j]) if sim is not None else 0.0
             wi, wj = words[i], words[j]
             jac = (len(wi & wj) / len(wi | wj)) if (wi or wj) else 0.0
-            if cos >= threshold or jac >= _SCOPE_LEXICAL_JACCARD:
+            if cos >= threshold or jac >= params.SCOPE_LEXICAL_JACCARD:
                 flagged.append((
                     sections[i].heading, sections[j].heading,
                     max(cos, jac),
@@ -133,7 +74,7 @@ async def _detect_semantic_h2_duplicates(
     return [
         f"Scope-duplicate H2 section pairs detected ({len(flagged)} "
         f"pair(s); embedding cosine ≥ {threshold:.0%} OR content-word "
-        f"overlap ≥ {_SCOPE_LEXICAL_JACCARD:.0%}): "
+        f"overlap ≥ {params.SCOPE_LEXICAL_JACCARD:.0%}): "
         f"{', '.join(pair_strs)}{suffix}. These sections cover the SAME "
         f"scope (same APIs / examples) with different wording — MERGE each "
         f"pair into ONE section under a unified heading, OR re-scope one to "
@@ -149,7 +90,7 @@ async def _generate_samples(
     n_sources: int | None = None,
 ) -> list[tuple[dict, dict]]:
     """Fire N drafts with Optimal-Stopping (arXiv 2510.01394): sample 1 checked first; if clean + valid + ≥ min sections, skip remaining N-1. Else fan out concurrently, then USC vote. Disabled via KD_OUTLINE_OPTIMAL_STOPPING=false."""
-    if _OUTLINE_OPTIMAL_STOPPING_ENABLED and n >= 2:
+    if params.OPTIMAL_STOPPING_ENABLED and n >= 2:
         r0 = await _draft_one_outline(
             prompt, sample_idx=0, n_total=n, thread_id=thread_id,
         )
@@ -222,10 +163,10 @@ async def _usc_pick(
     try:
         response, _ = await domains.settings.chat.service.chat_text_async(
             prompt,
-            max_tokens=_MAX_TOKENS_VOTE,
-            temperature=_TEMPERATURE_VOTE,
-            response_format=_USC_VOTE_RESPONSE_FORMAT,
-            timeout_s=_TIMEOUT_S_VOTE,
+            max_tokens=params.MAX_TOKENS_VOTE,
+            temperature=params.TEMPERATURE_VOTE,
+            response_format=schemas.USC_VOTE_RESPONSE_FORMAT,
+            timeout_s=params.TIMEOUT_S_VOTE,
         )
         parsed = domain.parse_json_response(response)
         if parsed and "chosen_index" in parsed:
@@ -252,10 +193,10 @@ async def _draft_one_outline(
     try:
         response, meta = await domains.settings.chat.service.chat_text_async(
             prompt,
-            max_tokens=_MAX_TOKENS_DRAFT,
-            temperature=_TEMPERATURE_DRAFT,
-            response_format=_OUTLINE_RESPONSE_FORMAT,
-            timeout_s=_TIMEOUT_S_DRAFT,
+            max_tokens=params.MAX_TOKENS_DRAFT,
+            temperature=params.TEMPERATURE_DRAFT,
+            response_format=schemas.OUTLINE_RESPONSE_FORMAT,
+            timeout_s=params.TIMEOUT_S_DRAFT,
         )
     except Exception as e:
         error_tag = (
@@ -459,12 +400,12 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
         target_sections_hint = adaptive_target,
     )
     raw_samples = await _generate_samples(
-        prompt, _N_SAMPLES, thread_id, n_sources = len(sources),
+        prompt, params.N_SAMPLES, thread_id, n_sources = len(sources),
     )
 
     await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "outline_sdp", "samples_drafted",
-        n_samples = len(raw_samples), n_requested = _N_SAMPLES,
+        n_samples = len(raw_samples), n_requested = params.N_SAMPLES,
     )
 
     candidates: list[tuple[schemas.ChapterOutline, schemas.OutlineDAG, list[str]]] = []
@@ -521,7 +462,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
                 target_sections_hint = adaptive_target,
             )
             raw_samples = await _generate_samples(
-                retry_prompt, _N_SAMPLES, thread_id, n_sources = len(sources),
+                retry_prompt, params.N_SAMPLES, thread_id, n_sources = len(sources),
             )
             for parsed_dict, meta in raw_samples:
                 outline, err = domain.try_parse_outline(parsed_dict)
@@ -535,7 +476,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
 
     if not candidates:
         logger.warning(
-            f"[outline_sdp] {slug}/{chapter_id}: ALL {_N_SAMPLES} samples "
+            f"[outline_sdp] {slug}/{chapter_id}: ALL {params.N_SAMPLES} samples "
             f"failed to parse; emitting heuristic fallback outline"
         )
         outline = domain.heuristic_fallback_outline(sources_concat_md)
@@ -563,7 +504,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
     )
 
     n_repairs = 0
-    for attempt in range(_MAX_REPAIR_RETRIES):
+    for attempt in range(params.MAX_REPAIR_RETRIES):
         if not issues:
             break
         n_repairs += 1
@@ -584,10 +525,10 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
         try:
             repair_response, _ = await domains.settings.chat.service.chat_text_async(
                 repair_prompt,
-                max_tokens = _MAX_TOKENS_REPAIR,
-                temperature = _TEMPERATURE_REPAIR,
-                response_format = _OUTLINE_RESPONSE_FORMAT,
-                timeout_s = _TIMEOUT_S_REPAIR,
+                max_tokens = params.MAX_TOKENS_REPAIR,
+                temperature = params.TEMPERATURE_REPAIR,
+                response_format = schemas.OUTLINE_RESPONSE_FORMAT,
+                timeout_s = params.TIMEOUT_S_REPAIR,
             )
             parsed = domain.parse_json_response(repair_response)
             if not parsed:

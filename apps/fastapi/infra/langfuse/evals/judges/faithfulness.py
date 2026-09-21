@@ -46,14 +46,14 @@ Respond with ONLY a single integer 1-5. No prose."""
 
 async def faithfulness(input_: dict, expected: dict, actual: dict) -> float:
     """Single-shot LLM-as-judge over the chapter-outline rubric."""
-    from domains.settings.chat import service as chat_service
+    import domains
     prompt = _PROMPT_TEMPLATE.format(
         input_json    = json.dumps(input_,    ensure_ascii = False)[:2000],
         expected_json = json.dumps(expected, ensure_ascii = False)[:2000],
         actual_json   = json.dumps(actual,   ensure_ascii = False)[:4000],
     )
     try:
-        raw = await chat_service.chat_judge_async(prompt, max_tokens = 8, temperature = 0.0)
+        raw = await domains.settings.chat.service.chat_judge_async(prompt, max_tokens = 8, temperature = 0.0)
     except Exception as e:
         logger.warning(
             f"[faithfulness] judge call failed: {type(e).__name__}: {e}"

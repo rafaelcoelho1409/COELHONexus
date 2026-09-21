@@ -38,7 +38,7 @@ from deepagents import create_deep_agent
 from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.memory import InMemorySaver
 
-from domains.settings.chat import service as chat_service
+import domains
 
 from . import keys, memory, middleware, params, prompts, schemas, subagents, tools
 from ..runtime import llm_counter
@@ -73,7 +73,7 @@ def _orchestrator_model() -> BaseChatModel:
     entire scan 90% through, discarding 7/8 already-written
     extractions. This is the only retry lever compatible with staying
     a bare `BaseChatModel`."""
-    return chat_service.build_chat_model(
+    return domains.settings.chat.service.build_chat_model(
         temperature  = params.PARAMS.orchestrator_temperature,
         max_retries  = 1,
     )
@@ -98,7 +98,7 @@ def _subagent_model() -> BaseChatModel:
     the deep_read subagent's 8th extraction call hit an endpoint 504
     with zero retry, discarding 7 already-
     written extractions and the whole discovery phase along with it."""
-    return chat_service.build_chat_model(
+    return domains.settings.chat.service.build_chat_model(
         temperature  = params.PARAMS.subagent_temperature,
         max_retries  = 1,
     )

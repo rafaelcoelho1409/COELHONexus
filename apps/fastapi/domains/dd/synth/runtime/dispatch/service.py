@@ -5,8 +5,6 @@ import asyncio
 import json
 import logging
 import time
-import uuid
-from typing import Optional
 
 import redis.asyncio as redis_aio
 
@@ -18,7 +16,7 @@ from infra.langfuse import (
 )
 from infra.otel import get_tracer
 
-from . import domain, params
+from . import domain, keys, params
 
 logger = logging.getLogger(__name__)
 
@@ -551,16 +549,6 @@ async def _run_book_harmonize_impl(
     return payload
 
 
-def make_thread_id(slug: str) -> str:
-    """Per-chapter thread_id; JS-side pre-generation uses the same format."""
-    return f"{params.CHAPTER_THREAD_PREFIX}/{slug}/{uuid.uuid4()}"
-
-
-def make_study_thread_id(slug: str) -> str:
-    """Per-study thread_id with distinct prefix from per-chapter for Redis/SQL pattern matching."""
-    return f"{params.STUDY_THREAD_PREFIX}/{slug}/{uuid.uuid4()}"
-
-
 async def _study_cancelled(study_thread_id: str) -> bool:
     """Per-study cancel flag set via `/synth/{study_thread_id}/cancel`."""
     r = redis_aio.from_url(
@@ -767,7 +755,7 @@ async def _run_study_async_inner(
                 counters["cancelled"] = True
                 return
 
-            chapter_thread_id = make_thread_id(slug)
+            chapter_thread_id = keys.make_thread_id(slug)
             ch_t0 = time.monotonic()
             await domains.dd.synth.runtime.progress.service.emit_progress(
                 study_thread_id, "study", "chapter_running",

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date
 from typing import Any
 from uuid import UUID
 
@@ -581,9 +580,9 @@ async def _backfill_missing_extractions(scan_id: str) -> None:
         for p in top_n_raw
         if isinstance(p, dict) and p.get("arxiv_id")
     }
-    from domains.settings.chat import service as chat_service
+    import domains
 
-    chain = chat_service.build_chat_model()
+    chain = domains.settings.chat.service.build_chat_model()
     try: runtime.llm_counter.service.set_phase("deep_read")  # bucket backfill calls under deep_read in drawer KPIs
     except Exception: pass
 

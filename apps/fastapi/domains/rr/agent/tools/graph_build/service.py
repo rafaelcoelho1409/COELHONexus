@@ -30,7 +30,6 @@ from typing import Any
 from langchain_core.tools import tool
 
 import domains
-from domains.settings.embeddings import service as embeddings_service
 
 from . import domain
 from .. import state as tools_state
@@ -147,7 +146,7 @@ async def _persist_one(
     async with sem:
         try:
             if abstract:
-                vecs, _model = await embeddings_service.embed_texts_async([abstract])
+                vecs, _model = await domains.settings.embeddings.service.embed_texts_async([abstract])
                 embedding = vecs[0] if vecs else None
             await rr_service.persist_paper(paper, embedding=embedding, signal=item.get("signal"))
             return "ok"

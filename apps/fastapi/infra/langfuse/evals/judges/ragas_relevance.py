@@ -10,7 +10,6 @@ Inputs:
 """
 from __future__ import annotations
 
-import json
 import logging
 import re
 
@@ -47,14 +46,14 @@ Respond with ONLY a single integer 1-5. No prose."""
 
 async def ragas_relevance(input_: dict, expected: dict, actual: dict) -> float:
     """LLM-judged answer relevance for YCS Ask outputs."""
-    from domains.settings.chat import service as chat_service
+    import domains
     prompt = _PROMPT_TEMPLATE.format(
         question        = (input_.get("question") or "")[:1500],
         expected_answer = (expected.get("answer") or expected.get("ground_truth") or "(none)")[:2000],
         actual_answer   = (actual.get("answer")   or "")[:3000],
     )
     try:
-        raw = await chat_service.chat_judge_async(prompt, max_tokens = 8, temperature = 0.0)
+        raw = await domains.settings.chat.service.chat_judge_async(prompt, max_tokens = 8, temperature = 0.0)
     except Exception as e:
         logger.warning(
             f"[ragas_relevance] judge call failed: {type(e).__name__}: {e}"

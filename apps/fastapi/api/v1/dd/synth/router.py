@@ -247,7 +247,7 @@ async def start_synth(
         )
 
     if chapter_id is None:
-        study_thread_id = thread_id or domains.dd.synth.runtime.dispatch.service.make_study_thread_id(slug)
+        study_thread_id = thread_id or domains.dd.synth.runtime.dispatch.keys.make_study_thread_id(slug)
 
         r = redis_aio.from_url(
             domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
@@ -404,7 +404,7 @@ async def start_synth(
         )
 
     if not thread_id:
-        thread_id = domains.dd.synth.runtime.dispatch.service.make_thread_id(slug)
+        thread_id = domains.dd.synth.runtime.dispatch.keys.make_thread_id(slug)
 
     r = redis_aio.from_url(
         domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,

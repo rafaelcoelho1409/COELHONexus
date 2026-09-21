@@ -1,15 +1,8 @@
 """Cancel is cooperative (progress.raise_if_cancelled + watcher pre-empts blocking awaits). Lock TTL (35 min) outlasts Celery soft_time_limit (30 min) so crashed tasks self-release."""
 from __future__ import annotations
 import domains
+
 from . import domain, params
-# Module-level dict below needs the tier submodules RESOLVED at
-# dispatch/service.py's own import time — the global `domains.dd...`
-# chase can't be used here (docs/CODE-CONVENTIONS.md §8 Exception 2:
-# `domains.dd` isn't set until `dd/__init__.py` fully finishes, and
-# `dispatch` imports before `tiers` in ingestion/__init__.py's eager
-# chain). A sibling-rooted `from .. import tiers` is always safe at
-# module level since that import already blocked until `tiers` was
-# fully ready.
 from .. import tiers
 
 import asyncio

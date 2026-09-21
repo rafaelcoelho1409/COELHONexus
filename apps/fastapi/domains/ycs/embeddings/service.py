@@ -26,7 +26,7 @@ from typing import Optional
 from langchain_core.embeddings import Embeddings
 from langchain_qdrant import FastEmbedSparse
 
-from domains.settings.embeddings import service as embeddings_service
+import domains
 
 from . import domain, errors, params
 
@@ -85,7 +85,7 @@ class ExternalEmbeddings(Embeddings):
         last_err: Exception | None = None
         for attempt in range(params.PROBE_RETRY_ATTEMPTS):
             try:
-                vector, meta = await embeddings_service.embed_probe_async()
+                vector, meta = await domains.settings.embeddings.service.embed_probe_async()
                 self._record([vector] if vector else [], meta.get("deployment"))
                 return self.dimensions or 0, self.last_model or ""
             except Exception as e:
@@ -113,7 +113,7 @@ class ExternalEmbeddings(Embeddings):
         for i in range(0, len(texts), params.BATCH_SIZE):
             batch = texts[i : i + params.BATCH_SIZE]
             try:
-                vectors, model = await embeddings_service.embed_texts_async(batch)
+                vectors, model = await domains.settings.embeddings.service.embed_texts_async(batch)
             except Exception as e:
                 raise errors.EmbeddingAPIError(0, f"{type(e).__name__}: {e}") from e
             self._record(vectors, model)

@@ -43,11 +43,11 @@ async def synth_code(finding: dict[str, Any]) -> dict[str, str]:
     # client into smoke tests that import this module.
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-    from domains.settings.chat import service as chat_service
+    import domains
 
     extraction = finding.get("extraction") or {}
     user_msg   = domain.build_user_message(finding, extraction)
-    chain      = chat_service.build_chat_model()
+    chain      = domains.settings.chat.service.build_chat_model()
 
     async def _call(messages: list) -> Any:
         return await runtime.service.resilient_ainvoke(

@@ -101,8 +101,8 @@ def _worker_process_init(**_kwargs) -> None:
             f"MinIO is reachable + creds are correct"
         )
     try:
-        from domains.settings.credentials import service as credentials_service
-        credentials_service.warm()
+        import domains
+        domains.settings.credentials.service.warm()
     except Exception as e:
         logger.warning(
             f"[worker-init] LLM credential store warm failed "
