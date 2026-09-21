@@ -101,10 +101,10 @@ def _worker_process_init(**_kwargs) -> None:
             f"MinIO is reachable + creds are correct"
         )
     try:
-        from domains.llm.credentials import warm as warm_credentials
-        warm_credentials()
+        from domains.settings.credentials import service as credentials_service
+        credentials_service.warm()
     except Exception as e:
         logger.warning(
             f"[worker-init] LLM credential store warm failed "
-            f"({type(e).__name__}: {e}); rotator will use env keys only"
+            f"({type(e).__name__}: {e}); endpoint clients will use env keys only"
         )

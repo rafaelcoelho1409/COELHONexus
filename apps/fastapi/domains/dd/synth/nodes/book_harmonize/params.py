@@ -18,7 +18,7 @@ EXTRACT_MAX_TOKENS = 2000
 CANONICALIZE_MAX_TOKENS = 1500
 PER_CHAPTER_CONCURRENCY = 4
 
-# chat_judge_bandit_async's own default (30s) was undersized — same fix
+# chat_text_async's own default (30s) was undersized — same fix
 # applied across the rest of Synth (2026-09-06/07). book_harmonize's
 # _call_with_retry already retries twice against a transient timeout,
 # but that only helps if 30s wasn't just structurally too short for the

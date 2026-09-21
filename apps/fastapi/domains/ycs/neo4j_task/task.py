@@ -23,15 +23,11 @@ Internally:
   1. Fresh AsyncElasticsearch (worker process)
   2. Fresh `Neo4jGraph` — deprecated did NOT pass `refresh_schema=False`
      here (only in app.py). Preserve that omission per port-fidelity.
-  3. Build the chat chain via `domains.llm.rotator.chain.build_ycs_neo4j_pinned_chain()` — talks
-     to COELHO LLM Rotator with `model="auto"`; the rotator's own
-     server-side FGTS-VA bandit does the real arm/deployment selection.
+  3. Build the chat model via `domains.settings.chat.service.build_chat_model()`
+     — talks to the Settings-page-configured external endpoint.
      2026-09-13: removed the local `pick_ycs_neo4j_deployment_bandit`/
      `record_ycs_neo4j_reward`/`release_ycs_provider_slot` calls — all
-     three were confirmed no-ops (the bandit pick always returned the
-     same constant regardless of its `exclude` set, reward/slot-release
-     did nothing). There was no local bandit left to feed; only the
-     shell of one remained.
+     three were confirmed no-ops. There is no local pool left to feed.
   4. Fetch transcripts + metadata from ES.
   5. `domains.ycs.graph_builder.service.build_video_metadata_graph` — Video/Channel nodes (no LLM cost).
   6. `domains.ycs.graph_builder.service.extract_and_store_graph` — LLM entity extraction, one real attempt
@@ -55,14 +51,10 @@ from infra.celery import app
 
 logger = get_task_logger(__name__)
 
-# 2026-09-13: replaces the old MAX_ARM_SWAPS. There is no longer a real
-# "arm" to swap to — pick_ycs_neo4j_deployment_bandit and
-# domains.llm.rotator.chain.build_ycs_neo4j_pinned_chain were confirmed to always resolve to the
-# same generic "auto" target server-side, regardless of any client-side
-# exclusion tracking (the rotator does the real arm selection now). What
-# this loop actually does is retry videos that failed on the previous
-# pass — same connection, same model, just giving transient failures
-# (504s, timeouts) another chance. 3 retries = 4 total attempts per video.
+# 2026-09-13: replaces the old MAX_ARM_SWAPS. There is no pool to swap
+# across — retries just re-run failed videos on the same connection,
+# same model, giving transient failures (504s, timeouts) another
+# chance. 3 retries = 4 total attempts per video.
 MAX_RETRY_PASSES = 3
 
 
@@ -77,7 +69,7 @@ def ingest_to_neo4j(
     skip_resolution: bool             = False,
     extract_id:      str | None       = None,
 ) -> dict[str, Any]:
-    """Extract entities from FULL transcripts via the rotator-bandit-pinned
+    """Extract entities from FULL transcripts via the chat endpoint
     LLM → Neo4j. With `batch_size=1` (the per-video streaming caller's
     default) each call is one video, so per-video progress matches
     Phase 1 / Phase 2 granularity.
@@ -187,7 +179,7 @@ def ingest_to_neo4j(
         # keys must be set" gate — it checked credentials from the bundled-
         # litellm-router era that no longer determine chat readiness. Chat
         # (entity extraction) always goes through the LLM Endpoint
-        # (`chain/service.py::build_reduce_label_chain`), which resolves to
+        # (`domains.settings.chat.service.build_chat_model`), which resolves to
         # a working default even with zero explicit Settings-page config —
         # there's no meaningful "unconfigured" state left to gate on. A
         # genuinely unreachable endpoint now surfaces as a real error from
@@ -353,7 +345,7 @@ def ingest_to_neo4j(
                     _progress(meta)
                     return
                 _progress(payload)
-            llm = domains.llm.rotator.chain.build_ycs_neo4j_pinned_chain()
+            llm = domains.settings.chat.service.build_chat_model(timeout_s = 650.0)
             logger.info(
                 f"[ingest_to_neo4j] videos={len(all_video_ids)}, "
                 f"max_retry_passes={MAX_RETRY_PASSES}",

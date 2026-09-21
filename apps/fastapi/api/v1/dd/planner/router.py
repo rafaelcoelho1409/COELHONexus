@@ -83,42 +83,10 @@ _BUDGET_GATE_MIN_DOCS = 120
 
 
 async def _budget_gate(slug: str, manifest: dict) -> None:
-    """Wave H4 (opt-in KD_PLANNER_BUDGET_GATE): refuse a large run when the
-    rotator's routing health shows the free-tier daily quotas are already
-    thinning the pool — a doomed run wastes ~45 min. Best-effort; never blocks
-    on the rotator being unreachable."""
-    import os
-    if os.environ.get("KD_PLANNER_BUDGET_GATE", "").strip().lower() not in ("1", "true", "yes", "on"):
-        return
-    try:
-        pages = manifest.get("pages") or manifest.get("files") or manifest.get("urls") or []
-        n_docs = len(pages) if isinstance(pages, list) else int(manifest.get("page_count") or 0)
-    except Exception:
-        n_docs = 0
-    if n_docs < _BUDGET_GATE_MIN_DOCS:
-        return
-    try:
-        import httpx
-        from domains.llm.rotator.chain.service import COELHO_ROTATOR_URL
-        base = COELHO_ROTATOR_URL.rsplit("/openai/v1", 1)[0]
-        async with httpx.AsyncClient(timeout=3.0) as c:
-            h = (await c.get(f"{base}/routing/health")).json()
-        capped = [x for x in (h.get("cooldowns") or []) if (x.get("cooldown_s") or 0) > 1800]
-        pool = h.get("pool_size") or 0
-        if len(capped) >= 3 or (pool and len(capped) / max(pool, 1) > 0.15):
-            raise HTTPException(
-                status_code=429,
-                detail=(
-                    f"{n_docs}-doc run needs ~{n_docs * 3} LLM calls; the rotator "
-                    f"has {len(capped)} model(s) in multi-hour daily-cap cooldown "
-                    f"(pool {pool}). This run will likely degrade — retry after "
-                    f"00:00 UTC or run a smaller corpus. Unset KD_PLANNER_BUDGET_GATE to override."
-                ),
-            )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.debug(f"[budget-gate] skipped ({type(e).__name__}: {e})")
+    """Wave H4 (opt-in KD_PLANNER_BUDGET_GATE): retired with the gateway —
+    there is no pool/cooldown surface to query anymore (single external
+    endpoint), so the gate is a no-op kept for call-site compat."""
+    return
 
 
 @router.post("/{slug}")

@@ -2,14 +2,13 @@
 Imperative Shell.
 
 Reads the 5 structured fields a deep_read produced (money_angle, problem,
-method, how_to_build, math) and asks the rotator's `rr-strong` pool to
+method, how_to_build, math) and asks the configured external endpoint to
 write COMPLETE, runnable Python that the operator reads to spark ideas.
 
-  - build_rr_strong_chain(rotator_task="rr-code-synth") — same external-
-    rotator FGTS-VA brain Planner/Synth use, server-side. Own bandit
-    cell so the rotator's per-call-shape stats for this 150-400-line
-    code-gen workload don't blend with RR's other (much shorter)
-    extraction calls.
+  - build_chat_model() — same external endpoint Planner/Synth use.
+    Code-gen calls (150-400-line completions) share the endpoint with
+    RR's other (much shorter) extraction calls; per-call timeouts in
+    `resilient_ainvoke` bound each round.
 
 Cache-invalidation contract: bump `params.CODE_SYNTH_PROMPT_VERSION`
 whenever the system prompt or refine-loop logic changes. MinIO keys
@@ -40,15 +39,15 @@ async def synth_code(finding: dict[str, Any]) -> dict[str, str]:
         Raises RuntimeError on empty output or fenced-block extraction
         failure — caller should NOT cache failures.
     """
-    # Lazy imports — keep cold-start light and avoid pulling the rotator
-    # into smoke tests that import this module.
+    # Lazy imports — keep cold-start light and avoid pulling the chat
+    # client into smoke tests that import this module.
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-    from domains.llm.rotator.chain.service import build_rr_strong_chain
+    from domains.settings.chat import service as chat_service
 
     extraction = finding.get("extraction") or {}
     user_msg   = domain.build_user_message(finding, extraction)
-    chain      = build_rr_strong_chain(rotator_task = "rr-code-synth")
+    chain      = chat_service.build_chat_model()
 
     async def _call(messages: list) -> Any:
         return await runtime.service.resilient_ainvoke(

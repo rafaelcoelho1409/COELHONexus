@@ -34,7 +34,7 @@ async def sample_one_ordering(
     doc_distill/chapter_propose/chapter_assign."""
     async with sem:
         try:
-            response, meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
+            response, meta = await domains.settings.chat.service.chat_text_async(
                 prompt,
                 max_tokens = params.MAX_TOKENS,
                 temperature = params.TEMPERATURE,
@@ -55,7 +55,7 @@ async def sample_one_ordering(
     )
     async with sem:
         try:
-            response2, meta2 = await domains.llm.rotator.chain.chat_judge_bandit_async(
+            response2, meta2 = await domains.settings.chat.service.chat_text_async(
                 repair_prompt,
                 max_tokens = params.MAX_TOKENS,
                 temperature = 0.0,

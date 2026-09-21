@@ -58,8 +58,8 @@ _STREAM_PERSIST_INTERVAL_S = 2.5
 
 # If no astream() event arrives within this window at bootstrap, fall back to ainvoke()
 # (local k3d hangs before the first stream event while ainvoke completes normally).
-# 2026-09-16: 15s → 60s. 15s assumed a healthy rotator (prepare = 2 fast LLM
-# calls, first event in seconds). Observed live on a degraded rotator: prepare
+# 2026-09-16: 15s → 60s. 15s assumed a healthy endpoint (prepare = 2 fast LLM
+# calls, first event in seconds). Observed live on a degraded endpoint: prepare
 # alone exceeds 15s while the graph is healthy-but-slow, so the fallback fired
 # spuriously and switched a good stream to blind ainvoke — plan cards never
 # painted, only the spinner, until the whole DEEP run landed at once. 60s keeps
@@ -205,15 +205,15 @@ async def get_thread_usage(thread_id: str) -> dict:
     return await _llm_read_counters(thread_id)
 
 
-@router.post("/rotator/ping")
-async def rotator_ping(request: Request) -> dict:
-    """Connectivity check against the live rotator chain."""
+@router.post("/endpoint/ping")
+async def endpoint_ping(request: Request) -> dict:
+    """Connectivity check against the live chat model."""
     import time
     llm = getattr(request.app.state, "llm", None)
     if llm is None:
         return {
             "status": "error",
-            "error":  "rotator chain not initialized",
+            "error":  "chat model not initialized",
         }
     start = time.monotonic()
     try:
@@ -230,9 +230,9 @@ async def rotator_ping(request: Request) -> dict:
             block.get("text", "") if isinstance(block, dict) else str(block)
             for block in reply
         )
-    # 2026-09-18: was a hardcoded "rotator (FGTS-VA across 7 providers)"
-    # string — a stale, client-side guess at the external rotator's own
-    # arm count, which lives entirely in that separate repo now and can
+    # 2026-09-18: was a hardcoded provider-guess
+    # string — a stale, client-side guess at the external endpoint's own
+    # deployment count, which lives entirely outside this repo now and can
     # change without this client knowing. Report the REAL resolved
     # deployment from response_metadata instead, same as every other
     # model-name read this session (capture_llm_usage, code_synth's

@@ -80,7 +80,7 @@ async def _reexplain_one(
         # NIM/Mistral honor response_format=json_schema/json_object
         # server-side (same pattern as sawc_write/digest_construct); a
         # bare-text ask relied on prompt instructions alone.
-        response, _meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
+        response, _meta = await domains.settings.chat.service.chat_text_async(
             prompt,
             max_tokens=params.REEXPLAIN_MAX_TOKENS,
             temperature=0.4,
@@ -120,7 +120,7 @@ async def _sample_one(prompt: str) -> tuple[str, Optional[str], int]:
     Body is empty on failure; caller decides how to count it."""
     t0 = time.monotonic()
     try:
-        response, meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
+        response, meta = await domains.settings.chat.service.chat_text_async(
             prompt,
             max_tokens=params.MAX_OUTPUT_TOKENS,
             temperature=0.7,

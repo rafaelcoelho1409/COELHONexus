@@ -581,9 +581,9 @@ async def _backfill_missing_extractions(scan_id: str) -> None:
         for p in top_n_raw
         if isinstance(p, dict) and p.get("arxiv_id")
     }
-    from domains.llm.rotator.chain.service import build_rr_strong_chain
+    from domains.settings.chat import service as chat_service
 
-    chain = build_rr_strong_chain(rotator_task = "rr-backfill")
+    chain = chat_service.build_chat_model()
     try: runtime.llm_counter.service.set_phase("deep_read")  # bucket backfill calls under deep_read in drawer KPIs
     except Exception: pass
 
@@ -662,7 +662,7 @@ async def _backfill_one(
     )
     raw = (getattr(response, "content", None) or "").strip()
     if not raw:
-        raise RuntimeError("empty content from rotator")
+        raise RuntimeError("empty content from endpoint")
     if raw.startswith("```"):  # some arms wrap JSON in ```json fences
         lines = raw.splitlines()
         # Drop the opening fence (and optional language tag) + the closing fence
@@ -743,7 +743,7 @@ async def _run_code_synth_async(scan_id: str, arxiv_id: str, prompt_version: str
     if finding is None:
         raise ValueError(f"finding {arxiv_id!r} not found for scan_id {scan_id}")
 
-    # Best-effort — attributes this task's rotator calls to the right
+    # Best-effort — attributes this task's endpoint calls to the right
     # scan/phase in the per-scan LLM counters, same as the old inline
     # endpoint did (this runs outside the scan's own agent.ainvoke()
     # context, so the contextvars RRLlmCounterCallback reads wouldn't

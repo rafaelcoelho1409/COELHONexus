@@ -5,8 +5,8 @@ output chain, BUT throttled by an `asyncio.Semaphore` to
 keep the burst pattern compatible with free-tier per-minute rate
 windows. See `params.py::GRADER_CONCURRENCY` for the rationale.
 
-The LLM (`llm` arg) is the rotator's `with_fallbacks` chain — a 429 on
-deployment #1 transparently rotates to #2. The fallback chain is the
+The LLM (`llm` arg) is a plain chat model — a 429 or 5xx propagates to
+`resilient_ainvoke`, which owns the retry policy. Retry policy is the
 caller's concern, not this module's.
 """
 from __future__ import annotations

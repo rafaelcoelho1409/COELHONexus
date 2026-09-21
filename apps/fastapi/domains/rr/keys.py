@@ -87,7 +87,7 @@ def code_minio_key(scan_id: str, arxiv_id: str, prompt_version: str) -> str:
     """Build-tab synthesized Python — one file per (scan, arxiv_id, prompt
     version). Written lazily on first GET /code request, never during the
     deep_read phase (most papers never have their Build tab opened —
-    pre-computing would waste rotator budget).
+    pre-computing would waste endpoint budget).
 
     Versioning: the prompt_version segment lets multiple prompt revisions
     coexist for the same paper; the operator can wipe the whole `code/`

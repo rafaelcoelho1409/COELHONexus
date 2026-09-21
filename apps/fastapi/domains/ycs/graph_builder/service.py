@@ -206,11 +206,9 @@ async def extract_and_store_graph(
 
     2026-09-13: dropped the `abort_after_consecutive` circuit breaker.
     It existed so the caller could "swap to a different arm" after 3
-    consecutive failures — but `pick_ycs_neo4j_deployment_bandit`/
-    `build_ycs_neo4j_pinned_chain` were confirmed to always resolve to
-    the same generic "auto" target regardless of any client-side
-    exclusion set (the rotator's own server-side bandit does the real
-    arm selection). "Swapping arms" therefore replayed the identical
+    consecutive failures — but every swap was confirmed to resolve to
+    the same target regardless of any client-side exclusion set.
+    "Swapping arms" therefore replayed the identical
     call — the abort bought nothing but abandoning whatever else was
     still in-flight in the pool. Now every document in `documents` gets
     a real attempt; the caller (`neo4j_task`) retries only the videos

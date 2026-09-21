@@ -9,14 +9,13 @@ as before, just backed by a flexible endpoint instead of a hardcoded NIM
 call.
 
 2026-09-13: replaced the direct-to-NIM HTTP client with calls to
-`domains.llm.embeddings` (the Settings-page "Embedding" card — COELHO LLM
-Rotator by default, any OpenAI-compatible embedding service if pointed
-elsewhere). This removes YCS's single hardcoded-provider dependency — the
+`domains.settings.embeddings` (the Settings-page "Embedding" card —
+any OpenAI-compatible embedding service). This removes YCS's single
+hardcoded-provider dependency — the
 exact failure mode that silently broke every Qdrant ingestion run for
 weeks after NIM retired the previously-hardcoded model on 2026-08-25.
 Dimension is learned from the real endpoint response, never hardcoded —
-no provider publishes it in a models listing (same finding that shaped
-the rotator's own Embedding Curator this session)."""
+no provider publishes it in a models listing."""
 from __future__ import annotations
 
 import asyncio
@@ -27,7 +26,7 @@ from typing import Optional
 from langchain_core.embeddings import Embeddings
 from langchain_qdrant import FastEmbedSparse
 
-from domains.llm.embeddings import embed_probe_async, embed_texts_async
+from domains.settings.embeddings import service as embeddings_service
 
 from . import domain, errors, params
 
@@ -86,7 +85,7 @@ class ExternalEmbeddings(Embeddings):
         last_err: Exception | None = None
         for attempt in range(params.PROBE_RETRY_ATTEMPTS):
             try:
-                vector, meta = await embed_probe_async()
+                vector, meta = await embeddings_service.embed_probe_async()
                 self._record([vector] if vector else [], meta.get("deployment"))
                 return self.dimensions or 0, self.last_model or ""
             except Exception as e:
@@ -114,7 +113,7 @@ class ExternalEmbeddings(Embeddings):
         for i in range(0, len(texts), params.BATCH_SIZE):
             batch = texts[i : i + params.BATCH_SIZE]
             try:
-                vectors, model = await embed_texts_async(batch)
+                vectors, model = await embeddings_service.embed_texts_async(batch)
             except Exception as e:
                 raise errors.EmbeddingAPIError(0, f"{type(e).__name__}: {e}") from e
             self._record(vectors, model)

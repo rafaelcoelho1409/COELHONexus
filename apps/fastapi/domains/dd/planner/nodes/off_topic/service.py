@@ -47,7 +47,7 @@ async def judge_one(
         retrying_unparseable = last_error == "unparseable_verdict"
         try:
             async with sem:
-                response, meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
+                response, meta = await domains.settings.chat.service.chat_text_async(
                     prompt,
                     max_tokens = params.JUDGE_MAX_TOKENS + (200 if retrying_unparseable else 0),
                     temperature = 0.4 if retrying_unparseable else 0.0,

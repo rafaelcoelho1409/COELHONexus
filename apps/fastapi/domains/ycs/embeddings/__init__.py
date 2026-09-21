@@ -2,7 +2,7 @@
 Qdrant hybrid.
 
 2026-09-13: dense embeddings now route through the Settings-page-
-configured endpoint (`domains/llm/embeddings`) instead of hardcoding NIM
+configured endpoint (`domains/settings/embeddings`) instead of hardcoding NIM
 directly — see `service.py`'s module docstring for why.
 
 Public surface mirrors the old factory names so consumers don't need

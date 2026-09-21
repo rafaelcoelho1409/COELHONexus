@@ -634,7 +634,7 @@ async def ai_generate_stream(
     if llm is None:
         yield {"data": _json.dumps({
             "event": "error",
-            "error": "LLM rotator not initialized (YCS lifespan failed).",
+            "error": "LLM endpoint not initialized (YCS lifespan failed).",
         })}
         return
 

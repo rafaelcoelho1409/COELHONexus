@@ -1,7 +1,7 @@
 """RAGAS-style answer relevance judge — given (question, answer), score
 1-5 for how well the answer addresses the question.
 
-Used for YCS Ask outputs. Free-tier: LLM judge via rotator.
+Used for YCS Ask outputs. LLM judge via the chat endpoint.
 
 Inputs:
   input_   {"question": "..."}
@@ -47,14 +47,14 @@ Respond with ONLY a single integer 1-5. No prose."""
 
 async def ragas_relevance(input_: dict, expected: dict, actual: dict) -> float:
     """LLM-judged answer relevance for YCS Ask outputs."""
-    from domains.llm.rotator.chain import chat_judge_async
+    from domains.settings.chat import service as chat_service
     prompt = _PROMPT_TEMPLATE.format(
         question        = (input_.get("question") or "")[:1500],
         expected_answer = (expected.get("answer") or expected.get("ground_truth") or "(none)")[:2000],
         actual_answer   = (actual.get("answer")   or "")[:3000],
     )
     try:
-        raw = await chat_judge_async(prompt, max_tokens = 8, temperature = 0.0)
+        raw = await chat_service.chat_judge_async(prompt, max_tokens = 8, temperature = 0.0)
     except Exception as e:
         logger.warning(
             f"[ragas_relevance] judge call failed: {type(e).__name__}: {e}"

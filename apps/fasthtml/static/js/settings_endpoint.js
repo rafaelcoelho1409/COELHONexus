@@ -2,7 +2,7 @@
 // Talks to FastAPI through the /api reverse proxy. The API key is write-only:
 // it leaves the browser on Save and never comes back (GET returns masked status).
 
-const API = "/api/v1/llm/settings";
+const API = "/api/v1/settings";
 
 const $ = (id) => document.getElementById(id);
 
@@ -106,7 +106,7 @@ async function test() {
     if (r.ok) {
       setStatus(
         `OK — ${r.latency_ms} ms` +
-          (r.deployment ? ` · ${r.deployment}` : ""),
+          ((r.model || r.deployment) ? ` · ${r.model || r.deployment}` : ""),
         "ok",
       );
     } else {

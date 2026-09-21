@@ -3,7 +3,7 @@ keyless MCP web-search fallback, shared by both the standard and
 adaptive graphs.
 
 `resilient_ainvoke`/`hedged_ainvoke` mirror the Docs Distiller Planner
-engine (`doc_distill` + `chat_judge_bandit_async`): retry only
+engine (`doc_distill` + `chat_text_async`): retry only
 genuinely transient errors (timeout/connection — never rate_limit,
 which means the provider side is benched and a retry just burns
 budget), with jittered backoff so concurrent retries don't herd onto
@@ -59,9 +59,9 @@ async def capture_llm_usage(response: object) -> None:
     `/agents/usage/{thread_id}` silently stayed empty for the whole
     Ask graph (only Neo4j extraction's separate `LLMGraphTransformer`
     callback path worked). `app.state.llm`/`llm_fast` are plain
-    `ChatOpenAI` (`domains/llm/rotator/chain/service.py`) — LangChain
+    `ChatOpenAI` (`domains/settings/chat/service.py`) — LangChain
     populates `AIMessage.usage_metadata` from any OpenAI-compatible
-    `usage` response field automatically, no rotator-specific parsing
+    `usage` response field automatically, no endpoint-specific parsing
     needed. Best-effort: a malformed/missing usage block must never
     fail the caller's real answer."""
     try:

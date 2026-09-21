@@ -89,7 +89,7 @@ async def _llm_normalize_body(
     response: str | None = None
     for call_attempt in range(_NORMALIZE_MAX_CALL_ATTEMPTS):
         try:
-            response, _meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
+            response, _meta = await domains.settings.chat.service.chat_text_async(
                 prompt,
                 max_tokens = min(8000, max(512, 2 * len(body))),
                 temperature = 0.0,

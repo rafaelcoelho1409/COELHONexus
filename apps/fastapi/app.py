@@ -31,8 +31,7 @@ def _install_log_record_defaults() -> None:
 
 
 # basicConfig BEFORE first-party imports so module-load log calls
-# (e.g. domains.llm.rotator.chain registers LiteLLM's OTel callback at
-# import time and logs about it) use our format, not stderr default.
+# use our format, not stderr default.
 _install_log_record_defaults()
 logging.basicConfig(
     level=logging.INFO,
@@ -49,8 +48,6 @@ from api.v1.ycs.agents.llm_chain import (
     build_deprecated_llm_chain,
     build_fast_llm_chain,
 )
-from domains.llm.credentials import warm as warm_credentials
-from domains.llm.rotator.chain import build_reduce_label_chain
 from infra.elasticsearch import (
     close_es,
     ensure_indexes as ensure_es_indexes,
@@ -122,7 +119,7 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        warm_credentials()
+        domains.settings.credentials.service.warm()
     except Exception as e:
         logger.warning(
             f"[lifespan] LLM credential store warm failed: "
@@ -219,15 +216,14 @@ async def lifespan(app: FastAPI):
     # (tiny deterministic output — 60s ceiling is plenty); falls back
     # to app.state.llm at request time.
     # 2026-09-17: 120s → 60s. `ai_generate_stream`'s `_stream_with_retry`
-    # now retries once on a dead FGTS-VA bandit pick (live-observed:
-    # NVIDIA NIM hanging the full budget with zero tokens back) — at
+    # now retries once on a dead endpoint pick (live-observed: the
+    # endpoint hanging the full budget with zero tokens back) — at
     # 120s/attempt that made the worst case ~240s before the user saw
     # anything. 60s keeps 2 attempts inside the old single-attempt
     # ceiling; a healthy arm's NL→DSL output is well under 10s anyway.
     try:
-        app.state.query_ai_llm = build_reduce_label_chain(
+        app.state.query_ai_llm = domains.settings.chat.service.build_chat_model(
             timeout_s    = 60.0,
-            rotator_task = "ycs-query",
         )
     except Exception as e:
         app.state.query_ai_llm = None

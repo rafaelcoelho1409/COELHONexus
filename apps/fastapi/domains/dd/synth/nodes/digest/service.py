@@ -32,7 +32,7 @@ _TEMPERATURE_DRAFT  = 0.1   # routing decisions should be ~deterministic
 _TEMPERATURE_REPAIR = 0.0
 _MAX_TOKENS_DRAFT   = 6000
 _MAX_TOKENS_REPAIR  = 6000
-# chat_judge_bandit_async's own default (30s) was undersized — confirmed
+# chat_text_async's own default (30s) was undersized — confirmed
 # live across 5 study runs (2026-09-05/07): digest_construct's per-source
 # digestion routinely lost 40-60% of sources to APITimeoutError, driving
 # a mandatory second wave nearly every chapter. Same fix as outline/sawc.
@@ -107,7 +107,7 @@ async def _digest_one_source(
         last_error: Optional[Exception] = None
         for call_attempt in range(_MAX_CALL_ATTEMPTS):
             try:
-                response, meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
+                response, meta = await domains.settings.chat.service.chat_text_async(
                     prompt,
                     max_tokens = _MAX_TOKENS_DRAFT,
                     temperature = _TEMPERATURE_DRAFT,
@@ -182,7 +182,7 @@ async def _digest_one_source(
                     issues = issues,
                 )
                 try:
-                    rr, rm = await domains.llm.rotator.chain.chat_judge_bandit_async(
+                    rr, rm = await domains.settings.chat.service.chat_text_async(
                         repair_prompt,
                         max_tokens = _MAX_TOKENS_REPAIR,
                         temperature = _TEMPERATURE_REPAIR,
@@ -240,7 +240,7 @@ async def _digest_one_source(
                     issues = issues,
                 )
                 try:
-                    rr, rm = await domains.llm.rotator.chain.chat_judge_bandit_async(
+                    rr, rm = await domains.settings.chat.service.chat_text_async(
                         repair_prompt,
                         max_tokens = _MAX_TOKENS_REPAIR,
                         temperature = _TEMPERATURE_REPAIR,

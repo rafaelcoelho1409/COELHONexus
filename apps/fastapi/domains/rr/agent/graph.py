@@ -38,7 +38,7 @@ from deepagents import create_deep_agent
 from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.memory import InMemorySaver
 
-from domains.llm.rotator.chain.service import build_rr_strong_chain
+from domains.settings.chat import service as chat_service
 
 from . import keys, memory, middleware, params, prompts, schemas, subagents, tools
 from ..runtime import llm_counter
@@ -48,16 +48,13 @@ logger = logging.getLogger(__name__)
 
 
 # Model factories — orchestrator + subagents both build through
-# `build_rr_strong_chain`, a `ChatOpenAI` pointed at the Settings-page-
-# configured external COELHO LLM Rotator (model="auto"); the rotator's
-# own server-side FGTS-VA bandit does the real per-call arm/deployment
-# pick, same mechanism DD's Planner/Synth and YCS's Ingestion/Ask/Query
-# use. `rotator_task` tags each factory's calls into their own bandit
-# cell (see `build_rr_strong_chain`'s docstring). Module-level callback
+# `build_chat_model`, a `ChatOpenAI` pointed at the Settings-page-
+# configured external endpoint (same endpoint DD's Planner/Synth and
+# YCS's Ingestion/Ask/Query use). Module-level callback
 # instance — one handler reused across all model bindings. Path-A LLM-
 # counter: every chat completion bumps the per-scan Redis counters.
 # Skips silently when no scan_id is in the contextvar (non-RR callers
-# reuse the same rotator chain). Attached globally via
+# reuse the same chat model). Attached globally via
 # `agent.ainvoke(config={"callbacks":[...]})` in task.py so we don't
 # need to mutate the model (model wrapping breaks DeepAgents'
 # `isinstance(model, BaseChatModel)` check — see service.py comments).
@@ -66,30 +63,26 @@ _LLM_COUNTER_CB = llm_counter.service.RRLlmCounterCallback()
 
 def _orchestrator_model() -> BaseChatModel:
     """Strong-tier model for the orchestrator. Deterministic (temperature
-    from `AgentParams.orchestrator_temperature`); own bandit cell
-    (`rotator_task="rr-orchestrator"`) so the server-side bandit doesn't
-    blend its stats with the subagents' distinctly-shaped calls.
+    from `AgentParams.orchestrator_temperature`).
 
     2026-09-18: `max_retries=1` — this model is passed to DeepAgents as
     the bare model object, so it can't be wrapped in `resilient_ainvoke`
     the way YCS Ask or RR's own backfill/code_synth are (breaks
     DeepAgents' `isinstance(model, BaseChatModel)` check). Confirmed
-    live: one transient rotator 504 with zero retry anywhere crashed an
+    live: one transient endpoint 504 with zero retry anywhere crashed an
     entire scan 90% through, discarding 7/8 already-written
     extractions. This is the only retry lever compatible with staying
     a bare `BaseChatModel`."""
-    return build_rr_strong_chain(
-        rotator_task = "rr-orchestrator",
+    return chat_service.build_chat_model(
         temperature  = params.PARAMS.orchestrator_temperature,
         max_retries  = 1,
     )
 
 
 def _subagent_model() -> BaseChatModel:
-    """Strong-tier model for the LLM subagents. Own bandit cell
-    (`rotator_task="rr-subagent"`) — phase attribution for usage/counter
-    purposes happens separately, in the counter callback, by reading the
-    `_phase_var` contextvar that each fs-tool write updates
+    """Strong-tier model for the LLM subagents. Phase attribution for
+    usage/counter purposes happens in the counter callback, by reading
+    the `_phase_var` contextvar that each fs-tool write updates
     (`stash_discovery_result` → discovery, `write_extraction` → deep_read,
     etc.). The first LLM call by a subagent before its first fs-write
     attributes to the PRIOR phase; subsequent calls are correct.
@@ -97,18 +90,15 @@ def _subagent_model() -> BaseChatModel:
     Parallel-fan-out behavior (Wave 1 — deep_read): the orchestrator emits
     multiple `task(subagent_type="deep_read", arxiv_id=…)` tool_calls in
     ONE message. LangGraph 1.x's async ToolNode dispatches them via
-    `asyncio.gather`, so each subagent's `ainvoke` runs concurrently. Each
-    concurrent call hits the SAME external rotator endpoint, which picks
-    its own top-K arm per request server-side — the rotator's own bandit
-    spreads the concurrent load, not anything client-side here.
+    `asyncio.gather`, so each subagent's `ainvoke` runs concurrently
+    against the SAME external endpoint.
 
     2026-09-18: `max_retries=1` — same reasoning as `_orchestrator_model`
     above. This is in fact the exact model that crashed a live scan:
-    the deep_read subagent's 8th extraction call hit a rotator 504
-    (600s max_wall_s ceiling) with zero retry, discarding 7 already-
+    the deep_read subagent's 8th extraction call hit an endpoint 504
+    with zero retry, discarding 7 already-
     written extractions and the whole discovery phase along with it."""
-    return build_rr_strong_chain(
-        rotator_task = "rr-subagent",
+    return chat_service.build_chat_model(
         temperature  = params.PARAMS.subagent_temperature,
         max_retries  = 1,
     )

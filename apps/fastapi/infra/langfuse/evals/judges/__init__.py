@@ -1,4 +1,4 @@
-"""Judges — one file per judge; all route through the rotator (free-tier).
+"""Judges — one file per judge; all route through the chat endpoint.
 
 Each judge has the signature:
     async def judge(input_: dict, expected: dict, actual: dict) -> float

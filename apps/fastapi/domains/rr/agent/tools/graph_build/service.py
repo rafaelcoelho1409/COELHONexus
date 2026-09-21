@@ -9,17 +9,15 @@ No chat LLM here — embeddings are a separate, independently-configured
 connection. Wired into create_deep_agent's `tools=` list so the
 orchestrator can invoke it after deep_read finishes.
 
-2026-09-17: was calling `domains.llm.rotator.chain.service.
-embed_via_router_async` — that function is NOT the Settings-page-
-configured embedding endpoint despite the name; it's local in-process
-FastEmbed ONNX (384d), with a direct-to-NVIDIA-API fallback as a last
-resort, bypassing the Settings page entirely. `radar_papers`'
+2026-09-17: was calling a local in-process FastEmbed ONNX (384d) helper
+with a direct-to-NVIDIA-API fallback as a last resort, bypassing the
+Settings page entirely. `radar_papers`'
 collection has always been sized for 2048d (matching NIM's real
 embedding model), so every upsert since that local-FastEmbed fallback
 became the effective path was silently rejected by Qdrant with a 400 —
 100% failure, confirmed live (persisted=0/8 on the last real scan).
-`domains.llm.embeddings.embed_texts_async` is the genuine Settings-
-page-configured path (`api/v1/llm/settings/router.py`'s `/embedding`
+`domains.settings.embeddings.service.embed_texts_async` is the genuine Settings-
+page-configured path (`api/v1/settings/router.py`'s `/embedding`
 routes) — confirmed live to resolve to `nim/nvidia/nemotron-3-embed-1b`
 at 2048d, exactly matching the collection, so no resize/migration is
 needed, just this call-site fix."""
@@ -32,7 +30,7 @@ from typing import Any
 from langchain_core.tools import tool
 
 import domains
-from domains.llm.embeddings.service import embed_texts_async
+from domains.settings.embeddings import service as embeddings_service
 
 from . import domain
 from .. import state as tools_state
@@ -149,7 +147,7 @@ async def _persist_one(
     async with sem:
         try:
             if abstract:
-                vecs, _model = await embed_texts_async([abstract])
+                vecs, _model = await embeddings_service.embed_texts_async([abstract])
                 embedding = vecs[0] if vecs else None
             await rr_service.persist_paper(paper, embedding=embedding, signal=item.get("signal"))
             return "ok"

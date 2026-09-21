@@ -9,9 +9,9 @@ from domains.ycs.rag.adaptive.graph import build_adaptive_rag_graph
 
 
 async def build_graph_from_request(request: Request):
-    """Build the adaptive RAG graph wired to `app.state.llm` (rotator chain, not BYOK override).
-    BYOK exclusive-override was dropped — routing one user key through the rotator's fallback
-    defeats explicit provider choice; same workload as Planner/Synth so same rotator path."""
+    """Build the adaptive RAG graph wired to `app.state.llm` (chat model, not BYOK override).
+    BYOK exclusive-override was dropped — routing one user key through a shared
+    fallback defeats explicit provider choice; same workload as Planner/Synth so same endpoint path."""
     app = request.app
     return build_adaptive_rag_graph(
         retriever    = app.state.smart_retriever,

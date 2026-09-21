@@ -2,7 +2,7 @@
 
 2026-09-13: NIM-specific constants (NIM_URL, NIM_KEY_ENV, EMBEDDING_MODEL,
 MODEL_DIMENSIONS) removed — embeddings now call the Settings-page-
-configured endpoint (`domains/llm/embeddings`), which owns its own
+configured endpoint (`domains/settings/embeddings`), which owns its own
 connection details and resolves its own model/dimension live. Keeping a
 hardcoded model→dimension table here made no sense once the model is
 chosen dynamically by whatever endpoint is configured."""

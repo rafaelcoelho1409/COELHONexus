@@ -154,7 +154,7 @@ class ElasticsearchRetriever:
 # Qdrant — dense + sparse RRF hybrid retriever (Phase 2)
 class QdrantHybridRetriever:
     """Dense (the Settings-page-configured embedding endpoint — see
-    `domains/llm/embeddings`) + Sparse (`FastEmbedSparse("Qdrant/bm25")`)
+    `domains/settings/embeddings`) + Sparse (`FastEmbedSparse("Qdrant/bm25")`)
     fused in one query. Replaces ES full-text on the hot path — dense
     catches semantic matches, sparse catches keyword matches, RRF blends
     the two ranked lists.

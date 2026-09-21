@@ -4,7 +4,7 @@
 // write-only: it leaves the browser on Save and never comes back (GET
 // returns masked status).
 
-const API = "/api/v1/llm/settings";
+const API = "/api/v1/settings";
 // Migration status/trigger + task polling live under the YCS content
 // router (`domains.ycs.embedding_migration`), not the settings router —
 // reused as-is rather than duplicated, since it's also what the
@@ -114,7 +114,7 @@ async function test() {
     if (r.ok) {
       setStatus(
         `OK — ${r.latency_ms} ms · ${r.dimensions}d` +
-          (r.deployment ? ` · ${r.deployment}` : ""),
+          ((r.model || r.deployment) ? ` · ${r.model || r.deployment}` : ""),
         "ok",
       );
     } else {
@@ -127,13 +127,12 @@ async function test() {
   }
 }
 
-// ---- Browse available embedding models (COELHO LLM Rotator only) ---------
-// Live discovery (`/embedding/candidates`) + benchmark ranking + current
-// pick (`/embedding/recommend`), both proxied through Nexus so the browser
-// never talks to the rotator directly. Either can come back `null` if the
-// configured endpoint isn't the rotator — rendered as a quiet explanatory
-// message, not an error (any OpenAI-compatible embedding service is a
-// valid Settings target; it just doesn't have this advisory surface).
+// ---- Browse available embedding models — RETIRED --------------------------
+// Live discovery used to live behind `/embedding/candidates` +
+// `/embedding/recommend` (a gateway-specific advisory surface, removed with
+// it). The Model field is now a plain text input: paste any model id the
+// configured endpoint serves. The popover + button below are hidden;
+// kept (not deleted) so the server-rendered skeleton has no dangling ids.
 function htmlEscape(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
@@ -143,44 +142,9 @@ function htmlEscape(s) {
 async function loadBrowseModels() {
   const list = $("set-emb-browse-list");
   if (!list) return;
-  list.innerHTML = "Loading…";
-  let candidates = null;
-  let recommendation = null;
-  try {
-    [candidates, recommendation] = await Promise.all([
-      api("GET", "/embedding/candidates").then((r) => r.candidates),
-      api("GET", "/embedding/recommend").then((r) => r.recommendation),
-    ]);
-  } catch (e) {
-    list.innerHTML = `<div class="set-emb-browse-empty">Couldn't load: ${htmlEscape(e.message)}</div>`;
-    return;
-  }
-  if (!candidates || !candidates.length) {
-    list.innerHTML =
-      '<div class="set-emb-browse-empty">No live catalog available — this only works when the ' +
-      "Base URL above points at COELHO LLM Rotator (any other OpenAI-compatible embedding " +
-      "service doesn't expose this).</div>";
-    return;
-  }
-  const currentPinId = (recommendation && recommendation.current_pick && recommendation.current_pick.pinned_id) || "";
-  // Rank/score/liveness come from `recommend`'s `ranked` list when present
-  // (richer — benchmark score + alive/dead) — fall back to bare discovery
-  // order from `candidates` if recommend itself came back null.
-  const ranked = (recommendation && recommendation.ranked) || null;
-  const rows = ranked || candidates;
-  const frag = rows.map((c) => {
-    const pinnedId = c.pinned_id;
-    const isCurrent = pinnedId === currentPinId;
-    const scoreText = typeof c.score === "number" ? c.score.toFixed(3) : "—";
-    const aliveText = c.alive === false ? " · dead" : c.alive === true ? " · alive" : "";
-    return `
-      <button type="button" class="set-emb-browse-row${isCurrent ? " set-emb-browse-row-current" : ""}"
-              data-pinned-id="${htmlEscape(pinnedId)}">
-        <span class="set-emb-browse-row-id">${htmlEscape(pinnedId)}</span>
-        <span class="set-emb-browse-row-meta">${scoreText}${aliveText}${isCurrent ? " · current pick" : ""}</span>
-      </button>`;
-  }).join("");
-  list.innerHTML = frag;
+  list.innerHTML =
+    '<div class="set-emb-browse-empty">Model catalog browsing was retired ' +
+    "with the gateway — type the model id directly.</div>";
 }
 
 function openBrowseModels() {
@@ -193,7 +157,9 @@ function closeBrowseModels() {
 }
 
 function bindBrowseModels() {
-  $("set-emb-browse")?.addEventListener("click", openBrowseModels);
+  // Hide the Browse button — no catalog backend exists anymore.
+  const btn = $("set-emb-browse");
+  if (btn) btn.style.display = "none";
   $("set-emb-browse-close")?.addEventListener("click", closeBrowseModels);
   $("set-emb-browse-list")?.addEventListener("click", (ev) => {
     const row = ev.target.closest?.(".set-emb-browse-row");

@@ -456,7 +456,7 @@ async def _draft_one_section(
     for call_attempt in range(_MAX_CALL_ATTEMPTS):
         try:
             # NIM/Mistral accept response_format=json_schema server-side; Gemini handled by repair loop.
-            response, meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
+            response, meta = await domains.settings.chat.service.chat_text_async(
                 prompt,
                 max_tokens=_MAX_TOKENS_DRAFT,
                 temperature=_TEMPERATURE_DRAFT,
@@ -536,7 +536,7 @@ async def _draft_one_section(
             prose_mode=prose_mode,
         )
         try:
-            rr, rm = await domains.llm.rotator.chain.chat_judge_bandit_async(
+            rr, rm = await domains.settings.chat.service.chat_text_async(
                 repair_prompt,
                 max_tokens=_MAX_TOKENS_REPAIR,
                 temperature=_TEMPERATURE_REPAIR,
@@ -596,7 +596,7 @@ async def _draft_one_section(
             prose_mode=prose_mode,
         )
         try:
-            rr, rm = await domains.llm.rotator.chain.chat_judge_bandit_async(
+            rr, rm = await domains.settings.chat.service.chat_text_async(
                 repair_prompt,
                 max_tokens=_MAX_TOKENS_REPAIR,
                 temperature=_TEMPERATURE_REPAIR,
@@ -718,7 +718,7 @@ _MAX_TOKENS_DRAFT      = 8000
 
 _MAX_TOKENS_REPAIR     = 8000
 
-# chat_judge_bandit_async's own default (30s) was undersized — confirmed
+# chat_text_async's own default (30s) was undersized — confirmed
 # live across 5 study runs (2026-09-05/07): sawc_write's per-section
 # drafting is the single heaviest generation task in the whole pipeline
 # and was by far the worst-hit, routinely losing entire sections to
@@ -779,7 +779,7 @@ async def _pairwise_judge_match(
 
     try:
         # json_object forces {"winner":"A"|"B"} without prose preamble — eliminates most parse-failed tiebreaks.
-        response, meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
+        response, meta = await domains.settings.chat.service.chat_text_async(
             prompt,
             max_tokens=_MAX_TOKENS_CRITIC,
             temperature=_TEMPERATURE_CRITIC,

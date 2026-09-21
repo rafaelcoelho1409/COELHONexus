@@ -72,7 +72,7 @@ async def _run_llm_judge(
             truncated=cur_truncated,
         )
         try:
-            response, meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
+            response, meta = await domains.settings.chat.service.chat_text_async(
                 prompt,
                 max_tokens=_MAX_TOKENS_JUDGE,
                 temperature=_TEMPERATURE_JUDGE,
@@ -141,7 +141,7 @@ async def _run_llm_judge(
             issues=repair_issues,
         )
         try:
-            rr, rm = await domains.llm.rotator.chain.chat_judge_bandit_async(
+            rr, rm = await domains.settings.chat.service.chat_text_async(
                 repair_prompt,
                 max_tokens=_MAX_TOKENS_REPAIR,
                 temperature=_TEMPERATURE_REPAIR,
@@ -195,7 +195,7 @@ _MAX_TOKENS_JUDGE       = 3000
 
 _MAX_TOKENS_REPAIR      = 3000
 
-# chat_judge_bandit_async's own default (30s) was undersized — same fix
+# chat_text_async's own default (30s) was undersized — same fix
 # as outline/digest/sawc (2026-09-06/07). A failed bundled-judge call
 # here directly feeds `infra_degraded` (issues #10/#14), so a timeout
 # that would have succeeded with more headroom was actively corrupting
@@ -299,7 +299,7 @@ async def _cocoa_explain_blocks(blocks: list[dict]) -> dict[str, str]:
         blocks_block = domain.render_blocks_for_explainer(misses),
     )
     try:
-        response, _ = await domains.llm.rotator.chain.chat_judge_bandit_async(
+        response, _ = await domains.settings.chat.service.chat_text_async(
             prompt,
             max_tokens = params.COCOA_EXPLAINER_MAX_TOKENS,
             temperature = params.COCOA_EXPLAINER_TEMPERATURE,
@@ -348,7 +348,7 @@ async def _cocoa_judge_pairs(pairs: list[dict]) -> dict[str, dict]:
         pairs_block = domain.render_pairs_for_judge(pairs),
     )
     try:
-        response, _ = await domains.llm.rotator.chain.chat_judge_bandit_async(
+        response, _ = await domains.settings.chat.service.chat_text_async(
             prompt,
             max_tokens = params.COCOA_JUDGE_MAX_TOKENS,
             temperature = params.COCOA_JUDGE_TEMPERATURE,
@@ -753,7 +753,7 @@ async def _atomic_claim_extract_claims(prose: str) -> tuple[list[str], bool]:
         prompt = prompts.ATOMIC_CLAIM_EXTRACT_PROMPT.format(
             max_claims = params.ATOMIC_CLAIM_MAX_CLAIMS, prose_chars = len(prose), prose = prose,
         )
-        raw, _ = await domains.llm.rotator.chain.chat_judge_bandit_async(
+        raw, _ = await domains.settings.chat.service.chat_text_async(
             prompt, max_tokens = params.ATOMIC_CLAIM_EXTRACT_MAX_TOKENS, temperature = 0.0,
             response_format = {"type": "json_object"},
             timeout_s = params.ATOMIC_CLAIM_EXTRACT_TIMEOUT_S,
@@ -805,7 +805,7 @@ async def _atomic_claim_judge_claim(
     async with sem:
         try:
             prompt = prompts.ATOMIC_CLAIM_JUDGE_PROMPT.format(claim = claim, source = source)
-            raw, _ = await domains.llm.rotator.chain.chat_judge_bandit_async(
+            raw, _ = await domains.settings.chat.service.chat_text_async(
                 prompt, max_tokens = params.ATOMIC_CLAIM_JUDGE_MAX_TOKENS, temperature = 0.0,
                 response_format = {"type": "json_object"},
                 timeout_s = params.ATOMIC_CLAIM_JUDGE_TIMEOUT_S,

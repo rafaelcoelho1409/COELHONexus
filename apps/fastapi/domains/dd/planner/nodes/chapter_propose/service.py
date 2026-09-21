@@ -73,7 +73,7 @@ async def draft_one(
     prompt: str, sample_idx: int,
 ) -> Optional[schemas.ChapterProposalList]:
     try:
-        raw, _meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
+        raw, _meta = await domains.settings.chat.service.chat_text_async(
             prompt,
             max_tokens = params.MAX_TOKENS_PROPOSE,
             temperature = params.TEMPERATURE_PROPOSE,
@@ -102,7 +102,7 @@ async def draft_one(
             + f"\n\nPRIOR OUTPUT REJECTED: {err}\nEmit valid JSON per the schema."
         )
         try:
-            raw2, _ = await domains.llm.rotator.chain.chat_judge_bandit_async(
+            raw2, _ = await domains.settings.chat.service.chat_text_async(
                 repair_prompt,
                 max_tokens = params.MAX_TOKENS_PROPOSE,
                 temperature = 0.0,
@@ -127,7 +127,7 @@ async def usc_pick(
         framework = framework, candidates_summary = summaries,
     )
     try:
-        raw, _ = await domains.llm.rotator.chain.chat_judge_bandit_async(
+        raw, _ = await domains.settings.chat.service.chat_text_async(
             prompt,
             max_tokens = params.MAX_TOKENS_VOTE,
             temperature = params.TEMPERATURE_VOTE,

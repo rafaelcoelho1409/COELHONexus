@@ -6,6 +6,8 @@ best-practices, Cosmic Python, Pydantic docs, and an audit of the current
 the migration target for existing ones.
 **Updated 2026-09-18:** added §8, the cross-module reference convention
 (dotted `domains.*` path, no wrapper/namespace classes).
+**Updated 2026-09-21:** `domains/llm/` (gateway + provider registry) retired;
+external chat/embeddings live in `domains/settings/` (§9 tree).
 
 **Why this exists:** the project is a knowledge-demonstration codebase.
 Every file name, every module split, every choice between "dataclass vs
@@ -382,7 +384,7 @@ Phase this. Don't do it all at once.
 | 5 | Shrink `node.py` to a thin LangGraph shell | trivial after phase 4 | LOW |
 
 Each phase is **one PR per module**. The sweep across `domains/dd/` +
-`domains/llm/` is roughly 3–5 days of focused work for the whole tree.
+`domains/settings/` is roughly 3–5 days of focused work for the whole tree.
 
 **Recommended pilot:** apply all 5 phases to `synth/sawc/` first. It
 becomes the reference template. Other modules then migrate by copying
@@ -502,7 +504,7 @@ internals change:
 
 ```python
 # domains/__init__.py
-from . import dd, llm, rr, ycs
+from . import dd, rr, settings, ycs
 
 # domains/dd/__init__.py
 from . import ingestion, planner, synth, resolver, runtime
@@ -691,9 +693,10 @@ apps/fastapi/
 │   │   │   ├── task.py      # Celery wrappers
 │   │   │   └── ...
 │   │   └── synth/           # LangGraph synth — same shape as planner
-│   └── llm/                 # LLM rotator bounded context
-│       ├── rotator/{bandit,chain,benchmarks,discovery,otel_metrics}/
-│       └── credentials/
+│   └── settings/            # external endpoints + credential store
+│       ├── chat/{domain,service,params}.py        # chat endpoint adapter
+│       ├── embeddings/{domain,service,params}.py  # embedding endpoint adapter
+│       └── credentials/     # MinIO Fernet store + endpoint settings blobs
 ├── app.py                   # FastAPI bootstrap
 ├── celery_app.py            # Celery bootstrap
 ├── pyproject.toml

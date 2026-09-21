@@ -26,14 +26,14 @@ _MAX_CALL_ATTEMPTS = 2
 async def _call_with_retry(
     prompt: str, **kwargs,
 ) -> tuple[Optional[str], Optional[Exception]]:
-    """chat_judge_bandit_async wrapper with a plain retry-with-backoff.
+    """chat_text_async wrapper with a plain retry-with-backoff.
     Returns (raw_text, None) on success or (None, last_error) once
     _MAX_CALL_ATTEMPTS is exhausted — caller logs + applies its own
     fail-soft fallback, unchanged from before this wrapper existed."""
     last_error: Optional[Exception] = None
     for attempt in range(_MAX_CALL_ATTEMPTS):
         try:
-            raw, _meta = await domains.llm.rotator.chain.chat_judge_bandit_async(prompt, **kwargs)
+            raw, _meta = await domains.settings.chat.service.chat_text_async(prompt, **kwargs)
             return raw, None
         except Exception as e:
             last_error = e

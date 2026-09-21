@@ -7,8 +7,8 @@ no logging.
 manual HTTP retry loop they served — that loop existed because the OLD
 design had no server-side failover (hardcoded to one NIM model, so a
 retry was the only way to ride out a transient blip). The embedding
-endpoint (COELHO LLM Rotator, or whatever's configured) now owns
-provider failover itself via its Embedding Curator; a client-side retry
+endpoint (whatever's configured) now owns
+provider failover itself; a client-side retry
 loop on top would just duplicate that policy."""
 from __future__ import annotations
 

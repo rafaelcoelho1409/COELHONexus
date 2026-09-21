@@ -27,13 +27,12 @@ async def _score_call(prompt: str) -> schemas.DocAssignment:
     """One LLM call + parse + validate. Raises ValueError (unparseable) or
     pydantic ValidationError (schema mismatch) for reask-eligible failures;
     anything else (timeout, provider outage) propagates as-is."""
-    raw, _ = await domains.llm.rotator.chain.chat_judge_bandit_async(
+    raw, _ = await domains.settings.chat.service.chat_text_async(
         prompt,
         max_tokens = params.MAX_TOKENS,
         temperature = params.TEMPERATURE,
         timeout_s = params.TIMEOUT_S,
         response_format = schemas.ASSIGN_RESPONSE_FORMAT,
-        dd_process = "dd-reduce-label",
     )
     parsed = domain.parse(raw)
     if not parsed:

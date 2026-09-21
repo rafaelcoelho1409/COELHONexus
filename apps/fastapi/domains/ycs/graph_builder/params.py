@@ -12,7 +12,7 @@ DEFAULT_BATCH_SIZE = 3
 # suspected cause — but the SAME failure (every first-batch call timing
 # out simultaneously at exactly 120s, 0 successes) reproduced identically
 # at concurrency=3, proving concurrency was never the real driver. Actual
-# cause: chain/service.py's build_ycs_neo4j_pinned_chain() had an explicit
+# cause: the chat builder had an explicit
 # 120.0s timeout that was too tight for this call shape (large transcripts
 # → large completions) — fixed there (raised to 400.0s). Back to 5 now
 # that the real cause is fixed. The old circuit-breaker abandonment bug
@@ -29,8 +29,8 @@ DEFAULT_BATCH_SIZE = 3
 # NEO4J_EXTRACT_SEM_KEY below) now makes this a REAL global cap, not
 # just an in-process one — earlier "concurrency was never the driver"
 # findings predate that fix, when concurrency=N never actually reached
-# N real simultaneous rotator calls. Raised alongside GRAPH_BATCH_
-# TIMEOUT_S/the rotator's max_wall_s (600s) rather than in isolation —
+# N real simultaneous endpoint calls. Raised alongside GRAPH_BATCH_
+# TIMEOUT_S/the endpoint-side 600s ceiling rather than in isolation —
 # per-request budget is now generous enough that queuing behind 2
 # siblings (tightest provider caps) shouldn't by itself exhaust it the
 # way the old 180s ceiling did.
@@ -39,9 +39,9 @@ DEFAULT_BATCH_SIZE = 3
 # bug (was silently capping at whatever the smallest concurrent chunk
 # happened to be, not this value) and the wall-clock ceiling are fixed
 # and confirmed live (3 genuinely concurrent holders observed). 5 still
-# exceeds every single free-tier provider's own in-flight cap in the
-# rotator (nvidia_nim=4 is the highest; most are 2) — some queuing
-# inside the rotator's own cascade is expected and is the thing this
+# exceeds every single free-tier provider's own in-flight cap
+# (nvidia_nim=4 is the highest; most are 2) — some queuing
+# endpoint-side is expected and is the thing this
 # test is actually checking, now that queued time has real room (600s)
 # to resolve in instead of blowing the old 180s ceiling.
 # 2026-09-15: 5 -> 3. Live-observed on a real chunk: 5 concurrent
@@ -58,11 +58,10 @@ EXTRACT_CONCURRENCY = max(
     1, int(_os.environ.get("YCS_NEO4J_CONCURRENCY", "3") or "3"),
 )
 
-# 2026-09-14: 600 -> 700. Must exceed the rotator's own max_wall_s
-# (600s, see build_ycs_neo4j_pinned_chain) AND this client's own
-# ChatOpenAI timeout (650s) — otherwise THIS watchdog fires first and
-# cancels a call that the rotator was still legitimately working on,
-# making the larger rotator/client budgets pointless. NEO4J_EXTRACT_
+# 2026-09-14: 600 -> 700. Must exceed this client's own ChatOpenAI
+# timeout (650s, see neo4j_task) — otherwise THIS watchdog fires first
+# and cancels a call the endpoint was still legitimately working on,
+# making the larger client budget pointless. NEO4J_EXTRACT_
 # SEM_LEASE_S below derives from this, so it scales automatically.
 GRAPH_BATCH_TIMEOUT_S = max(
     300.0, float(_os.environ.get("YCS_NEO4J_BATCH_WATCHDOG_S", "700") or "700"),
@@ -72,10 +71,10 @@ GRAPH_BATCH_TIMEOUT_S = max(
 # asyncio.Semaphore — invisible across separate Celery worker
 # processes. Since neo4j_task dispatches ONE Celery task PER VIDEO,
 # multiple such tasks run concurrently across the worker pool
-# (confirmed live: 2 simultaneous rotator LLM calls at
+# (confirmed live: 2 simultaneous endpoint LLM calls at
 # EXTRACT_CONCURRENCY=1 with the worker pool's max-concurrency=2),
 # defeating the whole point of testing concurrency=1 against the
-# rotator's per-provider caps. This Redis sorted-set key backs a real
+# endpoint's per-provider caps. This Redis sorted-set key backs a real
 # distributed semaphore (Redis in Action fair-semaphore pattern,
 # self-healing via score-based eviction) shared by every worker/pod —
 # EXTRACT_CONCURRENCY now caps the TRUE global in-flight call count,

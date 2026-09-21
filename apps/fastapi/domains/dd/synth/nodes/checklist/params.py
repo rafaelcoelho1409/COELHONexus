@@ -56,7 +56,7 @@ COCOA_EXPLAINER_MAX_TOKENS = 8000
 COCOA_JUDGE_MAX_TOKENS     = 4000
 COCOA_EXPLAINER_TEMPERATURE = 0.0
 COCOA_JUDGE_TEMPERATURE     = 0.0
-# chat_judge_bandit_async's own default (30s) was undersized — same fix
+# chat_text_async's own default (30s) was undersized — same fix
 # as elsewhere in Synth (2026-09-06/07). A failed CoCoA call here feeds
 # `infra_degraded` (issues #10/#14) the same way the bundled judge does.
 COCOA_EXPLAINER_TIMEOUT_S  = 120.0
@@ -94,7 +94,7 @@ ATOMIC_CLAIM_PROSE_CHARS = 12000
 ATOMIC_CLAIM_SOURCE_CHARS = 12000
 ATOMIC_CLAIM_EXTRACT_MAX_TOKENS = 1500
 ATOMIC_CLAIM_JUDGE_MAX_TOKENS = 200
-# chat_judge_bandit_async's own default (30s) was undersized — same fix
+# chat_text_async's own default (30s) was undersized — same fix
 # as elsewhere in Synth (2026-09-06/07). Also directly relevant to issue
 # #14: a call timeout here is a genuine judge-call failure and correctly
 # feeds infra_degraded — but a timeout that would've succeeded with more

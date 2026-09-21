@@ -9,7 +9,7 @@ import os
 import time
 from typing import Optional
 
-from domains.llm.embeddings import embed_texts_async
+from domains.settings.embeddings import service as embeddings_service
 
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ _MAX_TOKENS_VOTE         = 200
 
 _MAX_TOKENS_REPAIR       = 8000
 
-# chat_judge_bandit_async's own default (30s) was undersized for these
+# chat_text_async's own default (30s) was undersized for these
 # calls — confirmed live: outline_sdp's repair loop timed out on nearly
 # every chapter across 5 study runs (2026-09-05/07), routinely trimming
 # outlines down as a fallback rather than actually repairing them.
@@ -83,21 +83,18 @@ async def _detect_semantic_h2_duplicates(
     words = [domain.scope_words(f"{s.heading} {s.description}") for s in sections]
 
     # Embedding cosine (semantic signal) — best-effort.
-    # 2026-09-18: was `embed_via_router_async` (domains.llm.rotator.chain)
-    # — despite the name, that function is NOT the Settings-page-
-    # configured embedding endpoint; it's local in-process FastEmbed
-    # ONNX by default (a 2026-08-25-era workaround for a since-retired
-    # NIM embedding model going EOL), only reaching an external provider
-    # as a last-resort fallback. Switched to `domains.llm.embeddings.
-    # embed_texts_async`, the genuine external-provider path YCS's own
-    # embedding pipeline already migrated to on 2026-09-13 for the same
-    # reason. Safe here specifically because this whole block is
+    # 2026-09-18: was a local in-process FastEmbed helper (a 2026-08-25-era
+    # workaround for a since-retired NIM embedding model going EOL), only
+    # reaching an external provider as a last-resort fallback. Switched to
+    # `domains.settings.embeddings.service.embed_texts_async`, the genuine
+    # external-provider path YCS's own embedding pipeline already migrated
+    # to on 2026-09-13 for the same reason. Safe here specifically because this whole block is
     # explicitly fail-soft (see docstring) — any embedding failure,
     # slow or fast, already falls back to the lexical-only comparison
     # below, unchanged.
     sim = None
     try:
-        embeddings, _model = await embed_texts_async(
+        embeddings, _model = await embeddings_service.embed_texts_async(
             [f"{s.heading}\n{s.description}" for s in sections],
         )
         import numpy as np
@@ -223,7 +220,7 @@ async def _usc_pick(
         adaptive_cap=adaptive_cap,
     )
     try:
-        response, _ = await domains.llm.rotator.chain.chat_judge_bandit_async(
+        response, _ = await domains.settings.chat.service.chat_text_async(
             prompt,
             max_tokens=_MAX_TOKENS_VOTE,
             temperature=_TEMPERATURE_VOTE,
@@ -253,7 +250,7 @@ async def _draft_one_outline(
     """One LLM call for outline draft. Emits `sample_done` SSE per sample so UI shows per-sample progress during asyncio.gather (otherwise silent for ~30s)."""
     t0 = time.monotonic()
     try:
-        response, meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
+        response, meta = await domains.settings.chat.service.chat_text_async(
             prompt,
             max_tokens=_MAX_TOKENS_DRAFT,
             temperature=_TEMPERATURE_DRAFT,
@@ -585,7 +582,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
             sources_concat_md = sources_concat_md,
         )
         try:
-            repair_response, _ = await domains.llm.rotator.chain.chat_judge_bandit_async(
+            repair_response, _ = await domains.settings.chat.service.chat_text_async(
                 repair_prompt,
                 max_tokens = _MAX_TOKENS_REPAIR,
                 temperature = _TEMPERATURE_REPAIR,

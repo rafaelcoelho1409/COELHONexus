@@ -49,7 +49,7 @@ async def _run_llm_replan(
     last_error: Optional[Exception] = None
     for call_attempt in range(_MAX_CALL_ATTEMPTS):
         try:
-            response, meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
+            response, meta = await domains.settings.chat.service.chat_text_async(
                 prompt,
                 max_tokens=params.MAX_TOKENS_REPLAN,
                 temperature=params.TEMPERATURE_REPLAN,
@@ -103,7 +103,7 @@ async def _run_llm_replan(
             issues=repair_issues,
         )
         try:
-            rr, rm = await domains.llm.rotator.chain.chat_judge_bandit_async(
+            rr, rm = await domains.settings.chat.service.chat_text_async(
                 repair_prompt,
                 max_tokens=params.MAX_TOKENS_REPAIR,
                 temperature=params.TEMPERATURE_REPAIR,
@@ -142,7 +142,7 @@ async def _run_llm_replan(
             issues=issues,
         )
         try:
-            rr, rm = await domains.llm.rotator.chain.chat_judge_bandit_async(
+            rr, rm = await domains.settings.chat.service.chat_text_async(
                 repair_prompt,
                 max_tokens=params.MAX_TOKENS_REPAIR,
                 temperature=params.TEMPERATURE_REPAIR,

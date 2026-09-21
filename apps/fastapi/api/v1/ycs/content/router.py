@@ -555,7 +555,7 @@ async def embedding_migration_status(request: Request) -> dict:
     `_raise_if_embedding_migration_needed` uses, exposed read-only for the
     Settings/Ingestion page to show a banner before the user even tries
     to dispatch anything."""
-    from domains.llm.embeddings import get_configured_model
+    from domains.settings.embeddings import service as embeddings_service
     from domains.ycs.embedding_migration.service import (
         check_migration_needed,
         get_active_collection_name,
@@ -564,7 +564,7 @@ async def embedding_migration_status(request: Request) -> dict:
 
     qdrant = _build_qdrant()
     try:
-        mismatch = await check_migration_needed(qdrant, get_configured_model())
+        mismatch = await check_migration_needed(qdrant, embeddings_service.get_configured_model())
         active_collection = await get_active_collection_name(qdrant)
     finally:
         await qdrant.close()
@@ -583,7 +583,7 @@ async def embedding_migration_start(request: Request) -> dict:
     """Dispatch the re-embed job. 404 if nothing actually needs
     migrating (avoids a spurious re-embed if the user double-clicks
     after the gate already cleared)."""
-    from domains.llm.embeddings import get_configured_model
+    from domains.settings.embeddings import service as embeddings_service
     from domains.ycs.embedding_migration.service import check_migration_needed, dispatch_migration
     from domains.ycs.embeddings.service import get_embedding_info
 
@@ -592,7 +592,7 @@ async def embedding_migration_start(request: Request) -> dict:
         raise HTTPException(status_code = 503, detail = "Redis unavailable")
     qdrant = _build_qdrant()
     try:
-        to_model = get_configured_model()
+        to_model = embeddings_service.get_configured_model()
         mismatch = await check_migration_needed(qdrant, to_model)
         if mismatch is None:
             raise HTTPException(

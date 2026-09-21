@@ -10,8 +10,8 @@ def pick_first_real_model(*candidates: Any) -> str | None:
     2026-09-17: dropped the old `_ROTATOR_GROUP_NAMES` filter (rr-strong,
     dd-all, dd-synth, dd-reduce-label, dd-keylm, dd-embed) — those were
     LiteLLM Router group-alias names from the superseded in-process
-    multi-provider rotator. The external COELHO LLM Rotator always
-    resolves `model="auto"` to a real per-deployment string server-side
+    multi-provider endpoint. The external endpoint always
+    resolves the configured model to a real per-deployment string server-side
     (e.g. "NVIDIA/nvidia/nemotron-..."), so none of these candidates can
     ever equal one of those names anymore — the filter was pure dead
     weight."""

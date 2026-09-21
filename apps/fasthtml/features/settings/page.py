@@ -2,8 +2,8 @@
 source tool keys.
 
 Server renders only the skeletons; the JS modules populate them:
-  - settings_endpoint.js  ← /api/v1/llm/settings/endpoint    (LLM Endpoint)
-  - settings_embedding.js ← /api/v1/llm/settings/embedding*  (Embedding)
+  - settings_endpoint.js  ← /api/v1/settings/endpoint    (LLM Endpoint)
+  - settings_embedding.js ← /api/v1/settings/embedding*  (Embedding)
   - settings_tool_keys.js ← /api/v1/rr/tool-credentials/*
                             (optional API keys for Research Radar source tools,
                              e.g. Semantic Scholar — unlocks higher rate limits)
@@ -16,16 +16,11 @@ configured via the single LLM Endpoint field below.
 2026-09-12: the standalone "NVIDIA API Key" card (added when YCS embeddings/
 reranking read NIM directly) is removed too — replaced by the Embedding
 card below, an independent OpenAI-compatible endpoint (own URL/key/model,
-same shape as LLM Endpoint) that can point at COELHO LLM Rotator or any
-other embedding service, not tied to chat's connection. No language-
+same shape as LLM Endpoint) that can point at any embedding service,
+not tied to chat's connection. No language-
 preference field — YCS ingests videos in whatever language they're
 actually in, per-run, so a single Settings-page language wouldn't make
-sense; a language hint stays available to internal callers programmatically
-(see `domains/llm/embeddings/service.py::embed_probe_async`) if ever
-needed. NVIDIA NIM's key remains settable via the generic
-`/providers/nim/key` endpoint (unchanged, just no longer surfaced as its
-own card here) for the rare caller that still wants it directly (DD's
-local-embedding fallback chain).
+sense.
 
 Raw keys go browser → FastAPI on save and are NEVER returned. Responses
 carry masked status only (has_key + source + last4)."""
@@ -33,10 +28,9 @@ from fasthtml.common import Button, Div, H3, Input, Label, P, Script, Span
 
 
 def LLMEndpointCard():
-    """The OpenAI-compatible endpoint the Docs Distiller / YCS apps call.
-    COELHO LLM Rotator is always a separately-deployed service — Nexus never
-    bundles one. Default = that rotator's dev-workflow address; point it at
-    OpenAI, Anthropic, or a different rotator instance here. This field is
+    """The OpenAI-compatible endpoint the Docs Distiller / YCS / RR apps call.
+    Default comes from the chart; point it at any OpenAI-compatible chat
+    endpoint here. This field is
     the single source of truth for the endpoint at runtime — it always wins
     over the chart default. Populated + wired by settings_endpoint.js."""
     return Div(
@@ -83,10 +77,8 @@ def LLMEndpointCard():
 
 def EmbeddingCard():
     """The OpenAI-compatible embedding endpoint YCS calls — independent
-    connection from the LLM Endpoint above, same shape and same flexibility:
-    point it at COELHO LLM Rotator (its Embedding Curator resolves the
-    actual model) or any other OpenAI-compatible embedding service. Test
-    fires one real embeddings call and reports back the resolved model +
+    connection from the LLM Endpoint above, same shape and same flexibility.
+    Test fires one real embeddings call and reports back the resolved model +
     dimension + latency — the only way to actually confirm the endpoint's
     /v1/embeddings surface works. Populated + wired by
     settings_embedding.js."""
@@ -112,7 +104,7 @@ def EmbeddingCard():
                 Input(
                     type = "text", id = "set-emb-model", cls = "set-ep-input",
                     autocomplete = "off", spellcheck = "false",
-                    placeholder = "auto, or provider/model — e.g. nim/nvidia/llama-embed-nemotron-8b",
+                    placeholder = "model id served by the endpoint",
                 ),
                 Button("Browse models", id = "set-emb-browse", type = "button",
                        cls = "set-btn set-btn-ghost"),
@@ -129,16 +121,9 @@ def EmbeddingCard():
             cls = "set-ep-fields",
             id = "settings-embedding",
         ),
-        # 2026-09-15: "Browse models" popover — live discovery + ranking
-        # from COELHO LLM Rotator's Embedding Curator (`GET .../embedding
-        # /candidates` + `/recommend`, proxied so the browser never talks
-        # to the rotator directly). Picking a row fills the Model field
-        # with its `pinned_id` — an explicit pin, not auto-follow (see
-        # that endpoint's docstring on the rotator side for why auto-
-        # follow was removed as the default for a consumer like YCS that
-        # persists vectors across calls). Empty/hidden until populated —
-        # `settings_embedding.js` no-ops gracefully if the configured
-        # endpoint isn't the rotator (candidates/recommend come back null).
+        # Retired 2026-09-21: "Browse models" catalog popover (gateway
+        # advisory surface, removed with it). Skeleton kept so no ids
+        # dangle; `settings_embedding.js` hides the button outright.
         Div(
             Div(
                 Span("Available embedding models", cls = "set-emb-browse-title"),

@@ -75,13 +75,12 @@ async def distill_one(
         # Retry only transient errors — pooled rotator rotates arm, jitter avoids herd.
         for attempt in range(params.MAX_TRANSIENT_RETRIES + 1):
             try:
-                raw, meta = await domains.llm.rotator.chain.chat_judge_bandit_async(
+                raw, meta = await domains.settings.chat.service.chat_text_async(
                     prompt,
                     max_tokens = params.MAX_TOKENS,
                     temperature = params.TEMPERATURE,
                     timeout_s = params.TIMEOUT_S,
                     response_format = schemas.DISTILL_RESPONSE_FORMAT,
-                    dd_process = "dd-reduce-label",
                 )
                 last_raw = raw or ""
                 last_deployment = (meta or {}).get("deployment") or "?"
@@ -105,13 +104,12 @@ async def distill_one(
                         + f"\n\nPRIOR OUTPUT was REJECTED: {err}\n"
                         + f"Emit valid JSON exactly per the schema above."
                     )
-                    raw2, meta2 = await domains.llm.rotator.chain.chat_judge_bandit_async(
+                    raw2, meta2 = await domains.settings.chat.service.chat_text_async(
                         repair_prompt,
                         max_tokens = params.MAX_TOKENS,
                         temperature = 0.0,
                         timeout_s = params.TIMEOUT_S,
                         response_format = schemas.DISTILL_RESPONSE_FORMAT,
-                        dd_process = "dd-reduce-label",
                     )
                     last_raw = raw2 or ""
                     last_deployment = (meta2 or {}).get("deployment") or last_deployment
@@ -151,14 +149,6 @@ async def distill_one(
                 f"raw={last_raw[:120]!r}) — using deterministic fallback "
                 f"distillate (doc kept, not dropped)"
             )
-
-        # Wave H2: tell the rotator whether this arm produced a usable distillate
-        # (opt-in, KD_ROTATOR_FEEDBACK; fire-and-forget, no latency impact).
-        try:
-            from domains.llm.rotator.chain.service import fire_feedback
-            fire_feedback(meta, 1.0 if (distillate is not None and not used_fallback) else 0.1)
-        except Exception:
-            pass
 
         wall_ms = int((time.monotonic() - t0) * 1000)
         return source_key, distillate, wall_ms, used_fallback, failure_reason

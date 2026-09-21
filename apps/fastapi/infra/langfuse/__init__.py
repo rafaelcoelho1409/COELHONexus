@@ -8,7 +8,7 @@ Trace ingestion flows through `infra.otel.exporters.add_langfuse_exporter`
   scores.py     — record_score(trace_id, name, value, comment)
   prompts.py    — get_prompt(name, label, vars) cached + bulletproof fallback
   datasets/     — uploader + runner for gold corpora
-  evals/judges/ — one file per judge (all route through the rotator)
+  evals/judges/ — one file per judge (all route through the chat endpoint)
 
 Every entry point fails soft: when the LangFuse package, network, or
 credentials are absent, callers get a graceful no-op + a debug log line,

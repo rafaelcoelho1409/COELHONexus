@@ -3,22 +3,19 @@
 # 'production' = ArgoCD with GitLab Container Registry
 environment: production
 
-# LLM endpoint the Docs Distiller / YCS apps call (OpenAI-compatible HTTP).
-# COELHO LLM Rotator is always a separately-deployed service (its own
-# `skaffold dev`, chart, namespace) — Nexus never bundles or deploys one.
-# This default is that service's dev-workflow address; override url/apiKey/
-# model here (or, at runtime, from the Settings page — takes precedence)
-# to point at a different rotator instance, or OpenAI/Anthropic directly.
-# Read by apps/fastapi/domains/llm/rotator/chain/service.py.
-# NOTE: no rotator currently runs in a production namespace — a real prod
-# deploy must override `llm.endpoint.url` (ArgoCD Application values) once
-# one exists; this default only resolves inside the local dev cluster.
+# LLM endpoint the Docs Distiller / YCS / RR apps call (OpenAI-compatible HTTP).
+# This is only the chart default; override url/apiKey/model here (or, at
+# runtime, from the Settings page — takes precedence) to point at the
+# operator's external endpoint. Read by apps/fastapi/domains/settings/chat/service.py
+# (legacy `COELHO_LLM_*` env names still honored).
+# NOTE: this default only resolves inside the local dev cluster; a real prod
+# deploy must override `llm.endpoint.url` (ArgoCD Application values).
 llm:
   endpoint:
     url: "http://coelho-llm-rotator-fastapi.coelho-llm-rotator-dev.svc.cluster.local:8000/api/v1/llm/openai/v1"
-    apiKey: ""          # blank = no auth. Required for OpenAI / a keyed external endpoint.
+    apiKey: ""          # blank = no auth. Required for a keyed external endpoint.
                         # TODO: move to a Secret before any real external/OpenAI use.
-    model: "auto"       # "auto" = let the rotator pick; a concrete model id for a plain endpoint
+    model: "auto"       # model id the endpoint should serve
 
 observability:
   enabled: true

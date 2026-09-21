@@ -1,8 +1,9 @@
 """Qdrant client + dimension defaults.
 
-Bind the dense vector size to the rotator's default embedding model
-(`nvidia/llama-nemotron-embed-1b-v2` → 2048). The Qdrant collection
-bootstrap reads this to size the dense vector slot."""
+Fallback dense vector size, used only when the configured embedding
+endpoint can't be probed yet at collection-create time. The real
+dimension is learned per endpoint via `domains.settings.embeddings`
+probe at runtime — never trust this past the first probe."""
 from __future__ import annotations
 
 import os
@@ -33,7 +34,9 @@ else:
 
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY") or None
 
-# `nvidia/llama-nemotron-embed-1b-v2`. Used at collection-create time.
+# Fallback only — `domains.ycs.embeddings.service.get_embedding_info()`
+# probes the real dimension from the configured endpoint. Used at
+# collection-create time when no probe has succeeded yet.
 DEFAULT_DENSE_DIM = 2048
 
 TIMEOUT_S = 60.0
