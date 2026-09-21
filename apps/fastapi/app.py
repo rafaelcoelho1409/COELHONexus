@@ -38,16 +38,10 @@ logging.basicConfig(
     format=_LOG_FORMAT,
 )
 
-import domains, infra
+import api, domains, infra
 import redis.asyncio as redis_aio_module
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
-from api.v1.router import api_v1
-from api.v1.ycs.agents.llm_chain import (
-    build_deprecated_llm_chain,
-    build_fast_llm_chain,
-)
 
 
 logger = logging.getLogger(__name__)
@@ -181,7 +175,7 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        app.state.llm = build_deprecated_llm_chain()
+        app.state.llm = api.v1.ycs.agents.service.build_deprecated_llm_chain()
     except Exception as e:
         app.state.llm = None
         logger.warning(
@@ -192,7 +186,7 @@ async def lifespan(app: FastAPI):
     # Dedicated FAST-mode client (short outputs, own bandit cell) —
     # direct_answer prefers it, falls back to app.state.llm when None.
     try:
-        app.state.llm_fast = build_fast_llm_chain()
+        app.state.llm_fast = api.v1.ycs.agents.service.build_fast_llm_chain()
     except Exception as e:
         app.state.llm_fast = None
         logger.warning(
@@ -302,7 +296,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(api_v1, prefix="/api")
+app.include_router(api.v1.router.api_v1, prefix="/api")
 
 
 @app.get("/")

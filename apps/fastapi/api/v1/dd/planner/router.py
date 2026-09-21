@@ -3,7 +3,7 @@ is the HTTP/SSE layer. SSE via Redis pub/sub, cancel via Redis flag,
 checkpoints in Postgres."""
 from __future__ import annotations
 
-from .params import PLANNER_LOCK_TTL_S, VALID_MODES
+from . import params
 
 import asyncio
 import json
@@ -14,11 +14,6 @@ import domains
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException, Response
 from starlette.responses import StreamingResponse
-
-from domains.dd.planner.task import (
-    resume_planner as resume_planner_task,
-    run_planner as run_planner_task,
-)
 
 
 logger = logging.getLogger(__name__)
@@ -45,8 +40,8 @@ async def planner_health(slug: str, response: Response) -> dict:
     `degraded` is the one-flag answer to 'will this plan be any good'."""
     response.headers["Cache-Control"] = "no-store"
     try:
-        from domains.dd.planner.nodes.plan_write.keys import latest_blob_key
-        raw = await domains.dd.ingestion.storage.service.get_storage().read_text(latest_blob_key(slug))
+        key = domains.dd.planner.nodes.plan_write.keys.latest_blob_key(slug)
+        raw = await domains.dd.ingestion.storage.service.get_storage().read_text(key)
         plan = json.loads(raw)
         stats = plan.get("stats") or {}
         ph = stats.get("pipeline_health") or {}
@@ -93,10 +88,10 @@ async def _budget_gate(slug: str, manifest: dict) -> None:
 async def start_planner(
     slug: str, mode: str = "llm", thread_id: str | None = None,
 ) -> dict:
-    if mode not in VALID_MODES:
+    if mode not in params.VALID_MODES:
         raise HTTPException(
             status_code=400,
-            detail=f"invalid mode {mode!r}; expected one of {sorted(VALID_MODES)}",
+            detail=f"invalid mode {mode!r}; expected one of {sorted(params.VALID_MODES)}",
         )
 
     _manifest = await domains.dd.ingestion.storage.service.read_framework_manifest(domains.dd.ingestion.storage.service.get_storage(), slug)
@@ -178,7 +173,7 @@ async def start_planner(
 
         acquired = await r.set(
             domains.dd.planner.keys.lock_key(slug), thread_id,
-            nx=True, ex=PLANNER_LOCK_TTL_S,
+            nx=True, ex=params.PLANNER_LOCK_TTL_S,
         )
         if not acquired:
             existing = await r.get(domains.dd.planner.keys.lock_key(slug))
@@ -201,7 +196,8 @@ async def start_planner(
         await domains.dd.planner.runtime.cancel.service.clear_cancel(r, thread_id)
 
         try:
-            async_result = run_planner_task.delay(thread_id, slug, mode)
+            import domains.dd.planner.task
+            async_result = domains.dd.planner.task.run_planner.delay(thread_id, slug, mode)
         except Exception as e:
             try:
                 await r.delete(domains.dd.planner.keys.lock_key(slug))
@@ -286,7 +282,8 @@ async def resume_planner(thread_id: str) -> dict:
         await r.aclose()
 
     try:
-        async_result = resume_planner_task.delay(thread_id)
+        import domains.dd.planner.task
+        async_result = domains.dd.planner.task.resume_planner.delay(thread_id)
     except Exception as e:
         logger.exception(
             f"[planner] {thread_id}: celery resume dispatch failed: "

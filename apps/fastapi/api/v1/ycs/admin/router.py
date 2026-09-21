@@ -8,8 +8,7 @@ from elasticsearch import AsyncElasticsearch
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from domains.ycs.content.domain import _absolutize_thumbnail_url
-from domains.ycs.graph_builder.params import SOURCE_LABEL
+import domains
 import infra.celery.service
 
 
@@ -22,7 +21,7 @@ def _es() -> AsyncElasticsearch:
 
 def _absolutize_thumb(url: str | None) -> str:
     """Thin wrapper over content-domain helper so library listing shares Source preview's exact behavior."""
-    return _absolutize_thumbnail_url(url or "")
+    return domains.ycs.content.domain._absolutize_thumbnail_url(url or "")
 
 
 async def _terms_facet(
@@ -254,9 +253,9 @@ async def _compute_video_statuses(
     if neo4j_graph is not None:
         try:
             rows = neo4j_graph.query(
-                f"MATCH (d:Document:{SOURCE_LABEL}) "
+                f"MATCH (d:Document:{domains.ycs.graph_builder.params.SOURCE_LABEL}) "
                 "WHERE d.video_id IN $vids OR d.parent_video_id IN $vids "
-                f"OPTIONAL MATCH (d)-[:MENTIONS]-(e:__Entity__:{SOURCE_LABEL}) "
+                f"OPTIONAL MATCH (d)-[:MENTIONS]-(e:__Entity__:{domains.ycs.graph_builder.params.SOURCE_LABEL}) "
                 "WITH COALESCE(d.parent_video_id, d.video_id) AS vid, "
                 "     d.part_total AS part_total, "
                 "     count(DISTINCT d) AS n_docs, "

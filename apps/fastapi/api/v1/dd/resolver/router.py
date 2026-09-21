@@ -3,7 +3,7 @@ llms_full > llms_txt > sitemap > docs > github."""
 import domains
 from fastapi import APIRouter
 
-from ..dependencies import CatalogEntry
+from . import schemas
 
 
 router = APIRouter()
@@ -16,5 +16,5 @@ def list_catalog() -> list[dict]:
 
 
 @router.get("/{slug}")
-def resolve_one(entry: CatalogEntry) -> dict:
+def resolve_one(entry: schemas.CatalogEntry) -> dict:
     return {**entry, "best_source": domains.dd.resolver.domain.pick_best_source(entry)}

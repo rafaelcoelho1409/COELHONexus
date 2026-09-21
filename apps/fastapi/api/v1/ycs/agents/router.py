@@ -1,47 +1,18 @@
 """ycs/agents — agentic RAG router: ask (sync+stream), ingest, graph stats, pipeline."""
 from __future__ import annotations
 
+from . import domain, schemas, service
+
 import asyncio
 import json
 import logging
 import time
 import uuid
+from typing import Any
 
+import domains
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-
-from domains.ycs.runtime.observability.metrics import record_ask_run
-
-from domains.ycs.cache.service import cache_response, get_cached_response
-from domains.ycs.conversation.params import DEFAULT_THREAD_ID
-from domains.ycs.conversation.service import (
-    branch_thread,
-    delete_thread,
-    delete_turn,
-    get_history,
-    get_thread_locked_scope,
-    insert_turn,
-    list_thread_messages,
-    list_threads,
-    save_turn,
-    update_turn_answer,
-)
-from domains.ycs.graph_builder.service import get_graph_stats
-from domains.ycs.runtime.llm_counter.service import (
-    clear_state as _llm_counter_reset,
-    read_counters as _llm_read_counters,
-    set_node as _llm_set_node,
-    set_thread as _llm_set_thread,
-)
-from domains.ycs.runtime.llm_counter.domain import diff_usage as _llm_diff_usage
-
-from .build import _serialize_update, build_graph_from_request
-from .schemas import (
-    GraphIngestRequest,
-    IngestRequest,
-    PipelineRequest,
-    RAGSearchRequest,
-)
 
 
 router = APIRouter()
@@ -196,7 +167,7 @@ def _result_to_graph_updates(result: dict[str, Any]) -> list[dict[str, dict[str,
 async def get_thread_usage(thread_id: str) -> dict:
     """Aggregate LLM usage for one Ask conversation (models + tokens per
     node, and totals) — mirrors Ingestion's per-video LLM drawer."""
-    return await _llm_read_counters(thread_id)
+    return await domains.ycs.runtime.llm_counter.service.read_counters(thread_id)
 
 
 @router.post("/endpoint/ping")
@@ -244,9 +215,9 @@ async def endpoint_ping(request: Request) -> dict:
 @router.get("/history/{thread_id}")
 async def get_thread_history(thread_id: str, request: Request) -> dict:
     """Return Q+A history for thread_id; empty list for default sentinel or unknown thread."""
-    if not thread_id or thread_id == DEFAULT_THREAD_ID:
+    if not thread_id or thread_id == domains.ycs.conversation.params.DEFAULT_THREAD_ID:
         return {"thread_id": thread_id, "items": [], "total": 0}
-    items = await list_thread_messages(
+    items = await domains.ycs.conversation.service.list_thread_messages(
         request.app.state.pg_url, thread_id,
     )
     return {"thread_id": thread_id, "items": items, "total": len(items)}
@@ -255,7 +226,7 @@ async def get_thread_history(thread_id: str, request: Request) -> dict:
 @router.get("/threads")
 async def get_threads(request: Request) -> dict:
     """List existing threads most-recent first; each item has thread_id/turn_count/last_seen/first_question."""
-    items = await list_threads(request.app.state.pg_url)
+    items = await domains.ycs.conversation.service.list_threads(request.app.state.pg_url)
     return {"items": items, "total": len(items)}
 
 
@@ -265,7 +236,7 @@ async def branch_thread_endpoint(
     request:   Request,
 ) -> dict:
     """Branch a thread at up_to_created_at (copies whole source if absent); returns new_thread_id + copied count."""
-    if not thread_id or thread_id == DEFAULT_THREAD_ID:
+    if not thread_id or thread_id == domains.ycs.conversation.params.DEFAULT_THREAD_ID:
         raise HTTPException(
             status_code = 400,
             detail      = "cannot branch the default sentinel",
@@ -276,7 +247,7 @@ async def branch_thread_endpoint(
         body = {}
     up_to = (body.get("up_to_created_at") or "").strip() or None
     new_thread_id = (uuid.uuid4().hex)[:12]
-    n = await branch_thread(
+    n = await domains.ycs.conversation.service.branch_thread(
         request.app.state.pg_url, thread_id, up_to, new_thread_id,
     )
     return {"new_thread_id": new_thread_id, "copied": n}
@@ -288,9 +259,9 @@ async def delete_thread_endpoint(
     request:   Request,
 ) -> dict:
     """Delete thread + all its turns; returns deleted row count (0 if not found); default sentinel is a no-op."""
-    if not thread_id or thread_id == DEFAULT_THREAD_ID:
+    if not thread_id or thread_id == domains.ycs.conversation.params.DEFAULT_THREAD_ID:
         return {"deleted": 0}
-    n = await delete_thread(request.app.state.pg_url, thread_id)
+    n = await domains.ycs.conversation.service.delete_thread(request.app.state.pg_url, thread_id)
     return {"deleted": n}
 
 
@@ -302,7 +273,7 @@ async def cancel_turn_endpoint(
     """Mark turn for early SSE exit and delete its PG row; idempotent (second call returns deleted=0)."""
     _CANCELLED_TURN_IDS.add(turn_id)
     try:
-        n = await delete_turn(request.app.state.pg_url, turn_id)
+        n = await domains.ycs.conversation.service.delete_turn(request.app.state.pg_url, turn_id)
     except Exception as e:
         logger.warning(
             f"[ycs:cancel] delete_turn({turn_id}) failed: "
@@ -314,12 +285,12 @@ async def cancel_turn_endpoint(
 
 @router.post("/search")
 async def rag_search(
-    payload: RAGSearchRequest,
+    payload: schemas.RAGSearchRequest,
     request: Request,
 ) -> dict:
     """Agentic RAG: cache check → history load → graph.ainvoke() → save turn → cache response."""
     if not payload.thread_id or payload.thread_id == "default":
-        cached = await get_cached_response(
+        cached = await domains.ycs.cache.service.get_cached_response(
             request.app.state.redis_aio,
             payload.question,
             payload.force_mode,
@@ -327,13 +298,13 @@ async def rag_search(
         if cached:
             cached["_from_cache"] = True
             return cached
-    history = await get_history(
+    history = await domains.ycs.conversation.service.get_history(
         request.app.state.pg_url, payload.thread_id,
     )
-    graph = await build_graph_from_request(request)
+    graph = await service.build_graph_from_request(request)
     initial_state = {
         "question":             payload.question,
-        "thread_id":            payload.thread_id or DEFAULT_THREAD_ID,
+        "thread_id":            payload.thread_id or domains.ycs.conversation.params.DEFAULT_THREAD_ID,
         "route":                "search",
         "contextualized":       False,
         "mode":                 "",
@@ -365,13 +336,13 @@ async def rag_search(
         # per-conversation LLM-usage counter accumulates across nodes.
         # Sync + stream both set it; ingestion's extract_id path is
         # unchanged (different context altogether).
-        _llm_set_thread(thread_id = _sess_id)
-        _llm_set_node(node = None)  # nodes tag themselves before calling
+        domains.ycs.runtime.llm_counter.service.set_thread(thread_id = _sess_id)
+        domains.ycs.runtime.llm_counter.service.set_node(node = None)  # nodes tag themselves before calling
         # 2026-09-16: pre-turn snapshot for the per-response usage badge
         # (see `_llm_diff_usage` below, mirroring the stream endpoint's
         # `_usage_before`/`_stamp_usage`).
         try:
-            _usage_before = await _llm_read_counters(_sess_id)
+            _usage_before = await domains.ycs.runtime.llm_counter.service.read_counters(_sess_id)
         except Exception:
             _usage_before = None
         _user_id  = (payload.channel_ids or ["default"])[0]
@@ -468,7 +439,7 @@ async def rag_search(
                     sub_questions = result.get("sub_questions"),
                     confidence_score = result.get("confidence_score"),
                 ))
-        record_ask_run(
+        domains.ycs.runtime.observability.metrics.record_ask_run(
             route = "search",
             mode = str(result.get("mode") or payload.force_mode or "standard"),
             outcome = "deadline" if result.get("_deadline_hit") else "done",
@@ -477,7 +448,7 @@ async def rag_search(
             citation_count = len(result.get("citations") or []),
         )
     except Exception as e:
-        record_ask_run(
+        domains.ycs.runtime.observability.metrics.record_ask_run(
             route = "search",
             mode = payload.force_mode or "unknown",
             outcome = "error",
@@ -491,8 +462,8 @@ async def rag_search(
     usage: dict = {"total": {}, "by_model": {}}
     if _usage_before is not None:
         try:
-            usage = _llm_diff_usage(
-                _usage_before, await _llm_read_counters(_sess_id),
+            usage = domains.ycs.runtime.llm_counter.domain.diff_usage(
+                _usage_before, await domains.ycs.runtime.llm_counter.service.read_counters(_sess_id),
             )
         except Exception:
             pass
@@ -509,7 +480,7 @@ async def rag_search(
     if mode == "deep":
         response["sub_questions"]    = result.get("sub_questions", [])
         response["confidence_score"] = result.get("confidence_score", 0.0)
-    await save_turn(
+    await domains.ycs.conversation.service.save_turn(
         request.app.state.pg_url,
         payload.thread_id,
         payload.question,
@@ -517,7 +488,7 @@ async def rag_search(
         mode,
     )
     if not payload.thread_id or payload.thread_id == "default":
-        await cache_response(
+        await domains.ycs.cache.service.cache_response(
             request.app.state.redis_aio,
             payload.question,
             response,
@@ -533,15 +504,15 @@ async def rag_search(
 
 @router.post("/search/stream")
 async def rag_search_stream(
-    payload: RAGSearchRequest,
+    payload: schemas.RAGSearchRequest,
     request: Request,
 ) -> StreamingResponse:
     """Streaming agentic RAG via SSE; one event per node completion; saves final answer to Postgres."""
-    history = await get_history(
+    history = await domains.ycs.conversation.service.get_history(
         request.app.state.pg_url, payload.thread_id,
     )
     # Thread scope is frozen to the first turn's channel_ids; enforce server-side so hand-crafted POSTs can't bypass.
-    locked_scope = await get_thread_locked_scope(
+    locked_scope = await domains.ycs.conversation.service.get_thread_locked_scope(
         request.app.state.pg_url, payload.thread_id,
     )
     effective_channel_ids = (
@@ -555,10 +526,10 @@ async def rag_search_stream(
             f"{locked_scope!r}; ignoring caller-supplied "
             f"channel_ids={payload.channel_ids!r}"
         )
-    graph = await build_graph_from_request(request)
+    graph = await service.build_graph_from_request(request)
     initial_state = {
         "question":             payload.question,
-        "thread_id":            payload.thread_id or DEFAULT_THREAD_ID,
+        "thread_id":            payload.thread_id or domains.ycs.conversation.params.DEFAULT_THREAD_ID,
         "route":                "search_stream",
         "contextualized":       False,
         "mode":                 "",
@@ -593,7 +564,7 @@ async def rag_search_stream(
         (not payload.thread_id or payload.thread_id == "default")
         and not (payload.sub_questions or [])
     ):
-        _hit = await get_cached_response(
+        _hit = await domains.ycs.cache.service.get_cached_response(
             request.app.state.redis_aio,
             payload.question,
             payload.force_mode,
@@ -602,7 +573,7 @@ async def rag_search_stream(
             async def _replay_cached():
                 _hit_turn_id: int | None = None
                 try:
-                    _hit_turn_id = await insert_turn(
+                    _hit_turn_id = await domains.ycs.conversation.service.insert_turn(
                         request.app.state.pg_url,
                         payload.thread_id,
                         payload.question,
@@ -627,7 +598,7 @@ async def rag_search_stream(
                 )
                 if _hit_turn_id is not None:
                     try:
-                        await update_turn_answer(
+                        await domains.ycs.conversation.service.update_turn_answer(
                             request.app.state.pg_url,
                             _hit_turn_id,
                             _hit.get("answer", ""),
@@ -655,7 +626,7 @@ async def rag_search_stream(
 
     turn_id: int | None = None
     try:
-        turn_id = await insert_turn(
+        turn_id = await domains.ycs.conversation.service.insert_turn(
             request.app.state.pg_url,
             payload.thread_id,
             payload.question,
@@ -795,8 +766,8 @@ async def rag_search_stream(
         if before is None:
             return
         try:
-            after = await _llm_read_counters(thread_id)
-            state["usage"] = _llm_diff_usage(before, after)
+            after = await domains.ycs.runtime.llm_counter.service.read_counters(thread_id)
+            state["usage"] = domains.ycs.runtime.llm_counter.domain.diff_usage(before, after)
         except Exception as e:
             logger.warning(
                 f"[ycs:stream] usage stamp failed thread_id={thread_id}: "
@@ -805,18 +776,18 @@ async def rag_search_stream(
 
     async def event_generator():
         import infra
-        _sess_id = payload.thread_id or DEFAULT_THREAD_ID
+        _sess_id = payload.thread_id or domains.ycs.conversation.params.DEFAULT_THREAD_ID
         _user_id = (effective_channel_ids or ["default"])[0]
         # 2026-09-15: same thread-tagging as sync `/search` so the
         # conversation-level usage counter captures this stream too.
-        _llm_set_thread(thread_id = _sess_id)
-        _llm_set_node(node = None)
+        domains.ycs.runtime.llm_counter.service.set_thread(thread_id = _sess_id)
+        domains.ycs.runtime.llm_counter.service.set_node(node = None)
         # 2026-09-16: pre-turn snapshot for the per-response usage badge
         # (`_stamp_usage` diffs against this at every terminal branch).
         # `None` on failure — `_stamp_usage` no-ops rather than stamping
         # a misleading delta off a missing baseline.
         try:
-            _usage_before = await _llm_read_counters(_sess_id)
+            _usage_before = await domains.ycs.runtime.llm_counter.service.read_counters(_sess_id)
         except Exception:
             _usage_before = None
         _session_cm = infra.langfuse.sessions.session(
@@ -1025,7 +996,7 @@ async def rag_search_stream(
                                 snap = dict(thinking_state)
                                 snap["_seq"] = hb_seq
                                 await asyncio.wait_for(
-                                    update_turn_answer(
+                                    domains.ycs.conversation.service.update_turn_answer(
                                         request.app.state.pg_url,
                                         turn_id, last_generation, last_mode,
                                         thinking_state = snap,
@@ -1110,7 +1081,7 @@ async def rag_search_stream(
                         thinking_state = _thinking_apply(
                             thinking_state, node_name, update,
                         )
-                        serializable_update = _serialize_update(
+                        serializable_update = domain.serialize_update(
                             node_name, update,
                         )
                         yield (
@@ -1124,7 +1095,7 @@ async def rag_search_stream(
                         if should_persist:
                             try:
                                 await asyncio.wait_for(
-                                    update_turn_answer(
+                                    domains.ycs.conversation.service.update_turn_answer(
                                         request.app.state.pg_url,
                                         turn_id, last_generation, last_mode,
                                         thinking_state = thinking_state,
@@ -1143,7 +1114,7 @@ async def rag_search_stream(
                     logger.info(
                         f"[ycs:stream] cancelled mid-flight turn_id={turn_id}"
                     )
-                    record_ask_run(
+                    domains.ycs.runtime.observability.metrics.record_ask_run(
                         route = "search_stream",
                         mode = last_mode or payload.force_mode or "unknown",
                         outcome = "cancelled",
@@ -1220,7 +1191,7 @@ async def rag_search_stream(
                             )
                             _stamp_citations(thinking_state, last_citations)
                             await asyncio.wait_for(
-                                update_turn_answer(
+                                domains.ycs.conversation.service.update_turn_answer(
                                     request.app.state.pg_url,
                                     turn_id, last_generation, last_mode,
                                     thinking_state = thinking_state,
@@ -1232,7 +1203,7 @@ async def rag_search_stream(
                                 f"[ycs:stream] deadline finalize failed: "
                                 f"{type(e).__name__}: {e}"
                             )
-                    record_ask_run(
+                    domains.ycs.runtime.observability.metrics.record_ask_run(
                         route = "search_stream",
                         mode = last_mode or payload.force_mode or "unknown",
                         outcome = "deadline",
@@ -1284,7 +1255,7 @@ async def rag_search_stream(
                             )
                             _stamp_citations(thinking_state, last_citations)
                             await asyncio.wait_for(
-                                update_turn_answer(
+                                domains.ycs.conversation.service.update_turn_answer(
                                     request.app.state.pg_url,
                                     turn_id, sentinel, last_mode,
                                     thinking_state = thinking_state,
@@ -1296,7 +1267,7 @@ async def rag_search_stream(
                                 f"[ycs:stream] watchdog finalize "
                                 f"failed: {type(e).__name__}: {e}"
                             )
-                    record_ask_run(
+                    domains.ycs.runtime.observability.metrics.record_ask_run(
                         route = "search_stream",
                         mode = last_mode or payload.force_mode or "unknown",
                         outcome = "stalled",
@@ -1331,7 +1302,7 @@ async def rag_search_stream(
                             )
                             _stamp_citations(thinking_state, last_citations)
                             await asyncio.wait_for(
-                                update_turn_answer(
+                                domains.ycs.conversation.service.update_turn_answer(
                                     request.app.state.pg_url,
                                     turn_id, last_generation, last_mode,
                                     thinking_state = thinking_state,
@@ -1352,7 +1323,7 @@ async def rag_search_stream(
                             )
                             _stamp_citations(thinking_state, last_citations)
                             await asyncio.wait_for(
-                                update_turn_answer(
+                                domains.ycs.conversation.service.update_turn_answer(
                                     request.app.state.pg_url,
                                     turn_id,
                                     "(no response — see Thinking for pipeline status)",
@@ -1366,7 +1337,7 @@ async def rag_search_stream(
                                 f"[ycs:stream] no-generation finalize "
                                 f"failed: {type(e).__name__}: {e}"
                             )
-                    record_ask_run(
+                    domains.ycs.runtime.observability.metrics.record_ask_run(
                         route = "search_stream",
                         mode = last_mode or payload.force_mode or "unknown",
                         outcome = "done",
@@ -1384,7 +1355,7 @@ async def rag_search_stream(
                         and not (payload.sub_questions or [])
                         and last_generation
                     ):
-                        await cache_response(
+                        await domains.ycs.cache.service.cache_response(
                             request.app.state.redis_aio,
                             payload.question,
                             {
@@ -1442,7 +1413,7 @@ async def rag_search_stream(
                 f"[ycs:stream] cancelled (client disconnect) "
                 f"turn_id={turn_id} — scheduling sentinel persist and re-raising"
             )
-            record_ask_run(
+            domains.ycs.runtime.observability.metrics.record_ask_run(
                 route = "search_stream",
                 mode = last_mode or payload.force_mode or "unknown",
                 outcome = "client_disconnect",
@@ -1477,7 +1448,7 @@ async def rag_search_stream(
                 ):
                     try:
                         await asyncio.wait_for(
-                            update_turn_answer(
+                            domains.ycs.conversation.service.update_turn_answer(
                                 pg_url, tid, answer, mode,
                                 thinking_state = state_snapshot,
                             ),
@@ -1506,18 +1477,18 @@ async def rag_search_stream(
                         await _stamp_usage(
                             thinking_state, _sess_id, _usage_before,
                         )
-                        await update_turn_answer(
+                        await domains.ycs.conversation.service.update_turn_answer(
                             request.app.state.pg_url,
                             turn_id, last_generation, last_mode,
                             thinking_state = thinking_state,
                         )
                     else:
-                        await delete_turn(
+                        await domains.ycs.conversation.service.delete_turn(
                             request.app.state.pg_url, turn_id,
                         )
                 except Exception:
                     pass
-            record_ask_run(
+            domains.ycs.runtime.observability.metrics.record_ask_run(
                 route = "search_stream",
                 mode = last_mode or payload.force_mode or "unknown",
                 outcome = "error",
@@ -1595,7 +1566,7 @@ async def _raise_if_embedding_migration_needed() -> None:
 
 
 @router.post("/ingest/qdrant")
-async def ingest_to_qdrant(payload: IngestRequest) -> dict:
+async def ingest_to_qdrant(payload: schemas.IngestRequest) -> dict:
     """Queue ES transcripts → Qdrant ingestion (Celery)."""
     await _raise_if_embedding_migration_needed()
     from domains.ycs.qdrant_task.task import ingest_to_qdrant as ingest_task
@@ -1612,7 +1583,7 @@ async def ingest_to_qdrant(payload: IngestRequest) -> dict:
 
 
 @router.post("/ingest/neo4j")
-async def ingest_to_neo4j(payload: GraphIngestRequest) -> dict:
+async def ingest_to_neo4j(payload: schemas.GraphIngestRequest) -> dict:
     """Queue entity extraction → Neo4j (Celery); 1 LLM call per transcript."""
     from domains.ycs.neo4j_task.task import ingest_to_neo4j as graph_task
     task = graph_task.delay(payload.video_ids, payload.batch_size)
@@ -1627,7 +1598,7 @@ async def ingest_to_neo4j(payload: GraphIngestRequest) -> dict:
 async def graph_stats(request: Request) -> dict:
     """Get Neo4j node/relationship counts."""
     try:
-        stats = await get_graph_stats(request.app.state.neo4j_graph)
+        stats = await domains.ycs.graph_builder.service.get_graph_stats(request.app.state.neo4j_graph)
         return stats
     except Exception as e:
         raise HTTPException(
@@ -1637,7 +1608,7 @@ async def graph_stats(request: Request) -> dict:
 
 
 @router.post("/pipeline")
-async def full_pipeline(payload: PipelineRequest) -> dict:
+async def full_pipeline(payload: schemas.PipelineRequest) -> dict:
     """Queue full Celery chain: extract → Qdrant → Neo4j → cache."""
     if payload.include_qdrant:
         await _raise_if_embedding_migration_needed()

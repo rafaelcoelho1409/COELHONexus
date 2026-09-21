@@ -6,7 +6,7 @@ corresponding pooled client so the change propagates to the next call.
 """
 from __future__ import annotations
 
-from .schemas import EmbeddingBody, EndpointBody
+from . import schemas
 
 import logging
 from dataclasses import asdict
@@ -33,9 +33,9 @@ _ENDPOINT_KEY_ENV = "COELHO_LLM_API_KEY"
 
 
 def _endpoint_view() -> dict:
-    s =domains.settings.credentials.service.get_store().read_settings() or {}
+    s = domains.settings.credentials.service.get_store().read_settings() or {}
     ep = s.get("llm_endpoint") or {}
-    st =domains.settings.credentials.service.get_store().key_status(_ENDPOINT_KEY_ENV)
+    st = domains.settings.credentials.service.get_store().key_status(_ENDPOINT_KEY_ENV)
     return {
         "url": ep.get("url") or "",
         "model": ep.get("model") or "auto",
@@ -43,8 +43,8 @@ def _endpoint_view() -> dict:
     }
 
 
-def _write_endpoint(body: EndpointBody) -> None:
-    store =domains.settings.credentials.service.get_store()
+def _write_endpoint(body: schemas.EndpointBody) -> None:
+    store = domains.settings.credentials.service.get_store()
     s = store.read_settings() or {}
     s["llm_endpoint"] = {
         "url": body.url.strip(),
@@ -68,7 +68,7 @@ async def get_endpoint() -> JSONResponse:
 
 
 @router.put("/endpoint")
-async def put_endpoint(body: EndpointBody) -> JSONResponse:
+async def put_endpoint(body: schemas.EndpointBody) -> JSONResponse:
     try:
         await run_in_threadpool(_write_endpoint, body)
     except domains.settings.credentials.errors.UnmanagedKeyEnv as e:
@@ -109,9 +109,9 @@ _EMBEDDING_KEY_ENV = "COELHO_EMBEDDING_API_KEY"
 
 
 def _embedding_view() -> dict:
-    s =domains.settings.credentials.service.get_store().read_settings() or {}
+    s = domains.settings.credentials.service.get_store().read_settings() or {}
     ep = s.get("embedding_endpoint") or {}
-    st =domains.settings.credentials.service.get_store().key_status(_EMBEDDING_KEY_ENV)
+    st = domains.settings.credentials.service.get_store().key_status(_EMBEDDING_KEY_ENV)
     return {
         "url": ep.get("url") or "",
         "model": ep.get("model") or "auto",
@@ -119,8 +119,8 @@ def _embedding_view() -> dict:
     }
 
 
-def _write_embedding(body: EmbeddingBody) -> None:
-    store =domains.settings.credentials.service.get_store()
+def _write_embedding(body: schemas.EmbeddingBody) -> None:
+    store = domains.settings.credentials.service.get_store()
     s = store.read_settings() or {}
     s["embedding_endpoint"] = {
         "url": body.url.strip(),
@@ -144,7 +144,7 @@ async def get_embedding() -> JSONResponse:
 
 
 @router.put("/embedding")
-async def put_embedding(body: EmbeddingBody) -> JSONResponse:
+async def put_embedding(body: schemas.EmbeddingBody) -> JSONResponse:
     try:
         await run_in_threadpool(_write_embedding, body)
     except domains.settings.credentials.errors.UnmanagedKeyEnv as e:

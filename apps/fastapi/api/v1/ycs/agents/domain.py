@@ -1,29 +1,10 @@
-"""ycs/agents — graph factory and LangGraph astream serializer."""
+"""ycs/agents domain — pure LangGraph update serializer (no I/O)."""
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import Request
 
-from domains.ycs.rag.adaptive.graph import build_adaptive_rag_graph
-
-
-async def build_graph_from_request(request: Request):
-    """Build the adaptive RAG graph wired to `app.state.llm` (chat model, not BYOK override).
-    BYOK exclusive-override was dropped — routing one user key through a shared
-    fallback defeats explicit provider choice; same workload as Planner/Synth so same endpoint path."""
-    app = request.app
-    return build_adaptive_rag_graph(
-        retriever    = app.state.smart_retriever,
-        grader       = app.state.grader,
-        llm          = app.state.llm,
-        checkpointer = None,
-        neo4j_graph  = app.state.neo4j_graph,
-        llm_fast     = getattr(app.state, "llm_fast", None),
-    )
-
-
-def _serialize_update(node_name: str, update: dict[str, Any]) -> dict[str, Any]:
+def serialize_update(node_name: str, update: dict[str, Any]) -> dict[str, Any]:
     """Project a LangGraph astream update patch into a JSON-safe dict for SSE. Documents are slugged; generations pass through."""
     result: dict[str, Any] = {"node": node_name}
     if "documents" in update:
@@ -54,7 +35,6 @@ def _serialize_update(node_name: str, update: dict[str, Any]) -> dict[str, Any]:
     if "research_plan" in update and update["research_plan"]:
         result["research_plan"] = update["research_plan"]
     if "sub_results" in update and update["sub_results"]:
-        result["sub_results_count"] = len(update["sub_results"])
         # 2026-09-16: ship the FULL list (not just latest) so the
         # frontend flips every card even on a bulk `run_subagents`
         # return; `latest_*` stay for backward compat with older JS.

@@ -1,13 +1,10 @@
 """v1 API surface. app.py mounts under /api → /api/v1/..."""
 from fastapi import APIRouter
 
-from .dd import router as dd_router
-from .rr import router as rr_router
-from .settings import router as settings_router
-from .ycs import router as ycs_router
+from . import dd, rr, settings, ycs
 
 api_v1 = APIRouter(prefix = "/v1")
-api_v1.include_router(settings_router, prefix = "/settings", tags = ["Settings"])
-api_v1.include_router(dd_router, prefix = "/docs-distiller", tags = ["Docs Distiller"])
-api_v1.include_router(ycs_router, prefix = "/ycs", tags = ["YouTube Content Search"])
-api_v1.include_router(rr_router, prefix = "/rr", tags = ["Research Radar"])
+api_v1.include_router(settings.router, prefix = "/settings", tags = ["Settings"])
+api_v1.include_router(dd.router, prefix = "/docs-distiller", tags = ["Docs Distiller"])
+api_v1.include_router(ycs.router, prefix = "/ycs", tags = ["YouTube Content Search"])
+api_v1.include_router(rr.router, prefix = "/rr", tags = ["Research Radar"])

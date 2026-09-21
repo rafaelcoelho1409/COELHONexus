@@ -3,7 +3,7 @@
 chapter_id lives in SynthState, not the thread_id."""
 from __future__ import annotations
 
-from .params import SYNTH_LOCK_TTL_S, VALID_ARTIFACTS, VALID_MODES
+from . import params
 
 import asyncio
 import json
@@ -21,13 +21,34 @@ from domains.dd.synth.task import (
     run_study as run_study_task,
 )
 
-from ..dependencies import get_plan
-
 
 logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
+
+
+async def _load_plan(slug: str) -> dict:
+    """Latest planner plan blob for this slug (MinIO + JSON parse + HTTP
+    error mapping). Private — the only caller is this router."""
+    minio = domains.dd.ingestion.storage.service.get_storage()
+    key = domains.dd.planner.keys.plan_latest_key(slug)
+    if not await minio.exists(key):
+        raise HTTPException(
+            status_code = 404,
+            detail = (
+                f"no planner plan for {slug!r} — run the planner first "
+                f"(POST /planner/{slug})"
+            ),
+        )
+    try:
+        text = await minio.read_text(key)
+        return json.loads(text) or {}
+    except Exception as e:
+        raise HTTPException(
+            status_code = 500,
+            detail = f"plan {key!r} unreadable: {type(e).__name__}: {e}",
+        )
 
 
 @router.get("/info")
@@ -48,7 +69,7 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
     """Drives the Study sidebar. `rendered` flags MUST NOT be cached —
     a stale 200 after a wipe would show phantom synthesized chapters."""
     response.headers["Cache-Control"] = "no-store"
-    plan = await get_plan(slug)
+    plan = await _load_plan(slug)
     chapters_in: list[dict] = plan.get("chapters") or []
     if not chapters_in:
         return {"framework_slug": slug, "chapters": []}
@@ -142,12 +163,12 @@ async def get_study_artifact(
     slug: str, chapter_id: str, artifact_name: str,
 ) -> StreamingResponse:
     """VALID_ARTIFACTS allow-list prevents arbitrary MinIO key reads."""
-    if artifact_name not in VALID_ARTIFACTS:
+    if artifact_name not in params.VALID_ARTIFACTS:
         raise HTTPException(
             status_code=400,
             detail=(
                 f"invalid artifact name {artifact_name!r}; valid: "
-                f"{sorted(VALID_ARTIFACTS)}"
+                f"{sorted(params.VALID_ARTIFACTS)}"
             ),
         )
     key = f"synth/{slug}/{chapter_id}/{artifact_name}"
@@ -174,7 +195,7 @@ async def get_study_artifact(
 
     return StreamingResponse(
         _gen(),
-        media_type=VALID_ARTIFACTS[artifact_name],
+        media_type=params.VALID_ARTIFACTS[artifact_name],
         headers={
             "Cache-Control": "public, max-age=60",
         },
@@ -229,13 +250,13 @@ async def start_synth(
 ) -> dict:
     """No chapter_id → STUDY mode (orchestrator runs all chapters);
     with chapter_id → single-chapter escape hatch."""
-    if mode not in VALID_MODES:
+    if mode not in params.VALID_MODES:
         raise HTTPException(
             status_code=400,
-            detail=f"invalid mode {mode!r}; expected one of {sorted(VALID_MODES)}",
+            detail=f"invalid mode {mode!r}; expected one of {sorted(params.VALID_MODES)}",
         )
 
-    plan = await get_plan(slug)
+    plan = await _load_plan(slug)
     plan_chapter_ids: list[str] = sorted(
         c["id"] for c in (plan.get("chapters") or [])
         if (c or {}).get("id")
@@ -316,7 +337,7 @@ async def start_synth(
 
             acquired = await r.set(
                 domains.dd.synth.keys.lock_key(slug), study_thread_id,
-                nx=True, ex=SYNTH_LOCK_TTL_S,
+                nx=True, ex=params.SYNTH_LOCK_TTL_S,
             )
             if not acquired:
                 existing = await r.get(domains.dd.synth.keys.lock_key(slug))
@@ -473,7 +494,7 @@ async def start_synth(
 
         acquired = await r.set(
             domains.dd.synth.keys.lock_key(slug), thread_id,
-            nx=True, ex=SYNTH_LOCK_TTL_S,
+            nx=True, ex=params.SYNTH_LOCK_TTL_S,
         )
         if not acquired:
             existing = await r.get(domains.dd.synth.keys.lock_key(slug))

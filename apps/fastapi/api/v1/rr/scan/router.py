@@ -12,23 +12,6 @@ import psycopg
 from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import StreamingResponse
 
-from domains.rr.keys import (
-    PG_TABLE_FINDINGS,
-    PG_TABLE_SCANS,
-)
-from domains.rr.runtime.service import (
-    get_code_synth_status,
-    mirror_index,
-    mirror_read,
-    set_code_synth_running,
-    store_task_id,
-    subscribe_events,
-)
-from domains.rr.runtime.llm_counter.service import read_counters as read_llm_counters
-from domains.rr.schemas import ScanCreated, ScanRequest, ScanResult
-from domains.rr.service import cancel_scan, delete_scan
-from domains.rr.task import run_code_synth, run_radar_scan
-
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +30,8 @@ async def list_recent_scans(profile_id: str = "default", limit: int = 20) -> dic
                 SELECT s.id, s.status, s.started_at, s.finished_at,
                        s.total_in_digest, s.topic, s.verticals, s.top_n,
                        f.digest_json -> 'themes' AS themes_preview
-                FROM {PG_TABLE_SCANS} s
-                LEFT JOIN {PG_TABLE_FINDINGS} f
+                FROM {domains.rr.keys.PG_TABLE_SCANS} s
+                LEFT JOIN {domains.rr.keys.PG_TABLE_FINDINGS} f
                   ON f.scan_id = s.id AND f.rank = 1
                 WHERE s.profile_id = %s
                 ORDER BY s.started_at DESC
@@ -76,13 +59,13 @@ async def list_recent_scans(profile_id: str = "default", limit: int = 20) -> dic
     return {"profile_id": profile_id, "items": items}
 
 
-@router.post("/scan", response_model=ScanCreated, status_code=202)
-async def create_scan(body: ScanRequest) -> ScanCreated:
+@router.post("/scan", response_model=domains.rr.schemas.ScanCreated, status_code=202)
+async def create_scan(body: domains.rr.schemas.ScanRequest) -> domains.rr.schemas.ScanCreated:
     """Enqueue a Celery scan task and return immediately. Clients poll GET /scan/{id} or subscribe to SSE."""
     scan_id  = uuid4()
     now      = datetime.now(timezone.utc)
 
-    task = run_radar_scan.delay(
+    task = domains.rr.task.run_radar_scan.delay(
         str(scan_id),
         body.profile_id,
         body.topic,
@@ -91,13 +74,13 @@ async def create_scan(body: ScanRequest) -> ScanCreated:
     )
 
     # Best-effort: store_task_id swallows Redis errors; cancel returns "not found" but scan still runs.
-    await store_task_id(str(scan_id), task.id)
+    await domains.rr.runtime.service.store_task_id(str(scan_id), task.id)
 
     logger.info(
         f"[rr-api] POST /scan accepted scan_id={scan_id} "
         f"task_id={task.id} profile={body.profile_id!r}"
     )
-    return ScanCreated(
+    return domains.rr.schemas.ScanCreated(
         scan_id    = scan_id,
         task_id    = task.id,
         status     = "pending",
@@ -108,14 +91,14 @@ async def create_scan(body: ScanRequest) -> ScanCreated:
 @router.delete("/scan/{scan_id}", status_code=200)
 async def delete_scan_endpoint(scan_id: UUID) -> dict:
     """Drop scan artifacts (Postgres + findings + MinIO). Neo4j / Qdrant / radar_seen are intentionally preserved."""
-    result = await delete_scan(scan_id)
+    result = await domains.rr.service.delete_scan(scan_id)
     return result
 
 
 @router.post("/scan/{scan_id}/cancel", status_code=202)
 async def cancel_scan_endpoint(scan_id: UUID) -> dict:
     """Revoke the Celery task and mark Postgres `cancelled`. 202 not 200 because SIGTERM is async; 404 if task_id unknown or TTL'd."""
-    ok = await cancel_scan(scan_id)
+    ok = await domains.rr.service.cancel_scan(scan_id)
     if not ok:
         raise HTTPException(
             status_code = 404,
@@ -124,8 +107,8 @@ async def cancel_scan_endpoint(scan_id: UUID) -> dict:
     return {"scan_id": str(scan_id), "revoked": True}
 
 
-@router.get("/scan/{scan_id}", response_model=ScanResult)
-async def get_scan(scan_id: UUID) -> ScanResult:
+@router.get("/scan/{scan_id}", response_model=domains.rr.schemas.ScanResult)
+async def get_scan(scan_id: UUID) -> domains.rr.schemas.ScanResult:
     """Scan lifecycle snapshot + digest findings when done. Findings is empty until status='done'."""
     async with await psycopg.AsyncConnection.connect(domains.dd.planner.keys.postgres_url()) as conn:
         async with conn.cursor() as cur:
@@ -133,7 +116,7 @@ async def get_scan(scan_id: UUID) -> ScanResult:
                 f"SELECT id, profile_id, status, started_at, finished_at, "
                 f"       total_candidates, total_in_digest, error, topic, "
                 f"       synthesis_themes, synthesis_summary "
-                f"FROM {PG_TABLE_SCANS} WHERE id = %s",
+                f"FROM {domains.rr.keys.PG_TABLE_SCANS} WHERE id = %s",
                 (str(scan_id),),
             )
             row = await cur.fetchone()
@@ -147,7 +130,7 @@ async def get_scan(scan_id: UUID) -> ScanResult:
             findings: list[dict] = []
             if status == "done":
                 await cur.execute(
-                    f"SELECT digest_json FROM {PG_TABLE_FINDINGS} "
+                    f"SELECT digest_json FROM {domains.rr.keys.PG_TABLE_FINDINGS} "
                     f"WHERE scan_id = %s ORDER BY rank ASC",
                     (str(scan_id),),
                 )
@@ -164,7 +147,7 @@ async def get_scan(scan_id: UUID) -> ScanResult:
                 synthesis_themes = [str(t) for t in parsed if t]
         except Exception:
             pass
-    return ScanResult(
+    return domains.rr.schemas.ScanResult(
         scan_id           = scan_id,
         profile_id        = profile_id,
         status            = status,
@@ -184,14 +167,14 @@ async def get_scan(scan_id: UUID) -> ScanResult:
 @router.get("/scan/{scan_id}/fs")
 async def list_fs(scan_id: UUID) -> dict:
     """All fs paths mirrored to Redis for this scan. Empty after 6h TTL."""
-    paths = await mirror_index(str(scan_id))
+    paths = await domains.rr.runtime.service.mirror_index(str(scan_id))
     return {"scan_id": str(scan_id), "paths": paths}
 
 
 @router.get("/scan/{scan_id}/fs/{path:path}")
 async def read_fs(scan_id: UUID, path: str) -> dict:
     """Read one mirrored fs entry. 404 on miss."""
-    value = await mirror_read(str(scan_id), path)
+    value = await domains.rr.runtime.service.mirror_read(str(scan_id), path)
     if value is None:
         raise HTTPException(
             status_code = 404,
@@ -203,7 +186,7 @@ async def read_fs(scan_id: UUID, path: str) -> dict:
 @router.get("/scan/{scan_id}/llm-counters")
 async def scan_llm_counters(scan_id: UUID) -> dict:
     """Per-scan LLM counters: total + by_phase + per-model. Empty on miss or after 6h TTL."""
-    return await read_llm_counters(str(scan_id))
+    return await domains.rr.runtime.llm_counter.service.read_counters(str(scan_id))
 
 
 @router.get("/scan/{scan_id}/finding/{arxiv_id}/code")
@@ -219,11 +202,9 @@ async def get_finding_code(scan_id: UUID, arxiv_id: str) -> dict:
     404 when none of the above — never started; the frontend shows the
     idle "Generate" button.
     """
-    from domains.rr.agent.tools.code_synth.params import CODE_SYNTH_PROMPT_VERSION
-    from domains.rr.stores import service as stores_service
 
-    cached = await stores_service.get_code_py(
-        str(scan_id), arxiv_id, CODE_SYNTH_PROMPT_VERSION,
+    cached = await domains.rr.stores.service.get_code_py(
+        str(scan_id), arxiv_id, domains.rr.agent.tools.code_synth.params.CODE_SYNTH_PROMPT_VERSION,
     )
     if cached is not None:
         return {
@@ -231,12 +212,12 @@ async def get_finding_code(scan_id: UUID, arxiv_id: str) -> dict:
             "scan_id":        str(scan_id),
             "arxiv_id":       arxiv_id,
             "code":           cached,
-            "prompt_version": CODE_SYNTH_PROMPT_VERSION,
+            "prompt_version": domains.rr.agent.tools.code_synth.params.CODE_SYNTH_PROMPT_VERSION,
             "cached":         True,
             "model_id":       None,
         }
 
-    status = await get_code_synth_status(str(scan_id), arxiv_id, CODE_SYNTH_PROMPT_VERSION)
+    status = await domains.rr.runtime.service.get_code_synth_status(str(scan_id), arxiv_id, domains.rr.agent.tools.code_synth.params.CODE_SYNTH_PROMPT_VERSION)
     if status:
         if status.get("status") == "running":
             return {"status": "pending", "scan_id": str(scan_id), "arxiv_id": arxiv_id}
@@ -269,11 +250,9 @@ async def generate_finding_code(scan_id: UUID, arxiv_id: str) -> dict:
     frontend polls `GET .../code` — server-side state (Redis + MinIO)
     means that poll shows the right status even after a page refresh.
     """
-    from domains.rr.agent.tools.code_synth.params import CODE_SYNTH_PROMPT_VERSION
-    from domains.rr.stores import service as stores_service
 
-    cached = await stores_service.get_code_py(
-        str(scan_id), arxiv_id, CODE_SYNTH_PROMPT_VERSION,
+    cached = await domains.rr.stores.service.get_code_py(
+        str(scan_id), arxiv_id, domains.rr.agent.tools.code_synth.params.CODE_SYNTH_PROMPT_VERSION,
     )
     if cached is not None:
         return {
@@ -281,12 +260,12 @@ async def generate_finding_code(scan_id: UUID, arxiv_id: str) -> dict:
             "scan_id":        str(scan_id),
             "arxiv_id":       arxiv_id,
             "code":           cached,
-            "prompt_version": CODE_SYNTH_PROMPT_VERSION,
+            "prompt_version": domains.rr.agent.tools.code_synth.params.CODE_SYNTH_PROMPT_VERSION,
             "cached":         True,
             "model_id":       None,
         }
 
-    status = await get_code_synth_status(str(scan_id), arxiv_id, CODE_SYNTH_PROMPT_VERSION)
+    status = await domains.rr.runtime.service.get_code_synth_status(str(scan_id), arxiv_id, domains.rr.agent.tools.code_synth.params.CODE_SYNTH_PROMPT_VERSION)
     if status and status.get("status") == "running":
         return {"status": "pending", "scan_id": str(scan_id), "arxiv_id": arxiv_id}
 
@@ -295,7 +274,7 @@ async def generate_finding_code(scan_id: UUID, arxiv_id: str) -> dict:
     async with await psycopg.AsyncConnection.connect(domains.dd.planner.keys.postgres_url()) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                f"SELECT 1 FROM {PG_TABLE_FINDINGS} WHERE scan_id = %s AND arxiv_id = %s",
+                f"SELECT 1 FROM {domains.rr.keys.PG_TABLE_FINDINGS} WHERE scan_id = %s AND arxiv_id = %s",
                 (str(scan_id), arxiv_id),
             )
             exists = await cur.fetchone()
@@ -308,9 +287,9 @@ async def generate_finding_code(scan_id: UUID, arxiv_id: str) -> dict:
             ),
         )
 
-    task = run_code_synth.delay(str(scan_id), arxiv_id, CODE_SYNTH_PROMPT_VERSION)
-    await set_code_synth_running(
-        str(scan_id), arxiv_id, CODE_SYNTH_PROMPT_VERSION, task_id=task.id,
+    task = domains.rr.task.run_code_synth.delay(str(scan_id), arxiv_id, domains.rr.agent.tools.code_synth.params.CODE_SYNTH_PROMPT_VERSION)
+    await domains.rr.runtime.service.set_code_synth_running(
+        str(scan_id), arxiv_id, domains.rr.agent.tools.code_synth.params.CODE_SYNTH_PROMPT_VERSION, task_id=task.id,
     )
     logger.info(
         f"[rr-api] POST .../code/generate dispatched scan_id={scan_id} "
@@ -340,7 +319,7 @@ async def scan_events(scan_id: UUID, request: Request) -> StreamingResponse:
 
 async def _sse_iter(scan_id: str, request: Request) -> AsyncIterator[str]:
     """Format Redis events as SSE frames. Terminates on phase=done|error|cancelled or disconnect."""
-    async for event in subscribe_events(scan_id, replay=True):
+    async for event in domains.rr.runtime.service.subscribe_events(scan_id, replay=True):
         if await request.is_disconnected():
             return
         line = f"data: {json.dumps(event, default=str)}\n\n"

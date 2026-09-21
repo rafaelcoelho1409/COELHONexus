@@ -9,3 +9,7 @@ class SetToolKeyBody(BaseModel):
     response (status responses carry only `has_key` / `source` / `last4`)."""
 
     api_key: str = Field(min_length=1)
+    force: bool = Field(
+        default=False,
+        description="Skip test-connect probe and store anyway.",
+    )

@@ -1,7 +1,7 @@
 """In-flight ingestion lifecycle. Single-flight per slug via Redis lock;
 the running tier polls a cancel flag and surrenders cleanly."""
 
-from .schemas import StartRunBody
+from . import schemas
 
 import uuid
 
@@ -9,7 +9,7 @@ import domains
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
 
-from ..dependencies import get_catalog_entry
+from .. import resolver
 
 
 router = APIRouter()
@@ -17,10 +17,10 @@ router = APIRouter()
 
 
 @router.post("")
-async def start_run(body: StartRunBody) -> dict:
+async def start_run(body: schemas.StartRunBody) -> dict:
     """Status: cached (manifest present, no refresh) / queued (lock
     acquired, Celery dispatched) / locked (another in flight)."""
-    entry = await get_catalog_entry(body.slug)
+    entry = await resolver.service.get_catalog_entry(body.slug)
 
     r = redis_aio.from_url(
         domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,

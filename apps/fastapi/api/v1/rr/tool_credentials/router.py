@@ -11,15 +11,14 @@ from starlette.concurrency import run_in_threadpool
 
 import domains
 
-from .params import TOOL_KEYS, ToolKeyDef, get_tool_key_def
-from .schemas import SetToolKeyBody
+from . import entities, params, schemas
 
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _view(d: ToolKeyDef) -> dict:
+def _view(d: entities.ToolKeyDef) -> dict:
     """`provider` (catalog) kept distinct from `KeyStatus.source` — same word would collide when flattened."""
     status = domains.settings.credentials.service.get_store().key_status(d.key_env)
     return {
@@ -33,8 +32,8 @@ def _view(d: ToolKeyDef) -> dict:
     }
 
 
-def _require_def(key_env: str) -> ToolKeyDef:
-    d = get_tool_key_def(key_env)
+def _require_def(key_env: str) -> entities.ToolKeyDef:
+    d = params.get_tool_key_def(key_env)
     if d is None:
         raise HTTPException(404, f"unknown tool key: {key_env!r}")
     return d
@@ -43,11 +42,11 @@ def _require_def(key_env: str) -> ToolKeyDef:
 @router.get("/keys")
 def list_tool_keys() -> JSONResponse:
     """All managed tool keys + their current status."""
-    return JSONResponse({"keys": [_view(d) for d in TOOL_KEYS]})
+    return JSONResponse({"keys": [_view(d) for d in params.TOOL_KEYS]})
 
 
 @router.post("/keys/{key_env}")
-async def set_tool_key(key_env: str, body: SetToolKeyBody) -> JSONResponse:
+async def set_tool_key(key_env: str, body: schemas.SetToolKeyBody) -> JSONResponse:
     """Save (or replace) a tool key. Optional probe before save (force=true skips)."""
     d = _require_def(key_env)
     api_key = body.api_key.strip()
@@ -122,7 +121,7 @@ _TESTERS = {
 }
 
 
-async def _test_key(d: ToolKeyDef, key: str) -> dict:
+async def _test_key(d: entities.ToolKeyDef, key: str) -> dict:
     tester = _TESTERS.get(d.key_env)
     if tester is None:
         return {"ok": True, "status": 0, "reason": "no test probe — assuming OK"}

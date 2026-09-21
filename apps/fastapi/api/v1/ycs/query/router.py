@@ -5,54 +5,37 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from domains.ycs.query.params import APP_BACKENDS, APPS, BACKENDS
-from domains.ycs.query.schemas import (
-    AIGenerateRequest,
-    NamespaceEntry,
-    NamespaceMap,
-    QueryRequest,
-    QueryResponse,
-    RawQueryRequest,
-    RawQueryResponse,
-)
-from domains.ycs.query.service import (
-    query_es,
-    query_neo4j,
-    query_qdrant,
-    raw_es,
-    raw_neo4j,
-    raw_qdrant,
-)
+import domains
 
 
 router = APIRouter()
 
 
-@router.get("/namespaces", response_model = NamespaceMap)
-async def get_namespaces() -> NamespaceMap:
+@router.get("/namespaces", response_model = domains.ycs.query.schemas.NamespaceMap)
+async def get_namespaces() -> domains.ycs.query.schemas.NamespaceMap:
     """Support matrix for the Query page — used to grey out unsupported chips."""
-    matrix: dict[str, dict[str, NamespaceEntry]] = {}
-    for app in APPS:
+    matrix: dict[str, dict[str, domains.ycs.query.schemas.NamespaceEntry]] = {}
+    for app in domains.ycs.query.params.APPS:
         matrix[app] = {}
-        for backend in BACKENDS:
-            ns = APP_BACKENDS[app][backend]
-            matrix[app][backend] = NamespaceEntry(
+        for backend in domains.ycs.query.params.BACKENDS:
+            ns = domains.ycs.query.params.APP_BACKENDS[app][backend]
+            matrix[app][backend] = domains.ycs.query.schemas.NamespaceEntry(
                 available = ns.available,
                 label     = ns.label,
                 target    = ns.target,
             )
-    return NamespaceMap(
-        apps     = list(APPS),
-        backends = list(BACKENDS),
+    return domains.ycs.query.schemas.NamespaceMap(
+        apps     = list(domains.ycs.query.params.APPS),
+        backends = list(domains.ycs.query.params.BACKENDS),
         matrix   = matrix,
     )
 
 
-@router.post("/elasticsearch", response_model = QueryResponse)
+@router.post("/elasticsearch", response_model = domains.ycs.query.schemas.QueryResponse)
 async def post_query_es(
-    payload: QueryRequest, request: Request,
-) -> QueryResponse:
-    return await query_es(
+    payload: domains.ycs.query.schemas.QueryRequest, request: Request,
+) -> domains.ycs.query.schemas.QueryResponse:
+    return await domains.ycs.query.service.query_es(
         app     = payload.app,
         q       = payload.q,
         limit   = payload.limit,
@@ -61,11 +44,11 @@ async def post_query_es(
     )
 
 
-@router.post("/qdrant", response_model = QueryResponse)
+@router.post("/qdrant", response_model = domains.ycs.query.schemas.QueryResponse)
 async def post_query_qdrant(
-    payload: QueryRequest, request: Request,
-) -> QueryResponse:
-    return await query_qdrant(
+    payload: domains.ycs.query.schemas.QueryRequest, request: Request,
+) -> domains.ycs.query.schemas.QueryResponse:
+    return await domains.ycs.query.service.query_qdrant(
         app     = payload.app,
         q       = payload.q,
         limit   = payload.limit,
@@ -73,11 +56,11 @@ async def post_query_qdrant(
     )
 
 
-@router.post("/neo4j", response_model = QueryResponse)
+@router.post("/neo4j", response_model = domains.ycs.query.schemas.QueryResponse)
 async def post_query_neo4j(
-    payload: QueryRequest, request: Request,
-) -> QueryResponse:
-    return await query_neo4j(
+    payload: domains.ycs.query.schemas.QueryRequest, request: Request,
+) -> domains.ycs.query.schemas.QueryResponse:
+    return await domains.ycs.query.service.query_neo4j(
         app     = payload.app,
         q       = payload.q,
         limit   = payload.limit,
@@ -85,29 +68,29 @@ async def post_query_neo4j(
     )
 
 
-@router.post("/raw/elasticsearch", response_model = RawQueryResponse)
+@router.post("/raw/elasticsearch", response_model = domains.ycs.query.schemas.RawQueryResponse)
 async def post_raw_es(
-    payload: RawQueryRequest, request: Request,
-) -> RawQueryResponse:
-    return await raw_es(
+    payload: domains.ycs.query.schemas.RawQueryRequest, request: Request,
+) -> domains.ycs.query.schemas.RawQueryResponse:
+    return await domains.ycs.query.service.raw_es(
         app = payload.app, body_text = payload.body, request = request,
     )
 
 
-@router.post("/raw/qdrant", response_model = RawQueryResponse)
+@router.post("/raw/qdrant", response_model = domains.ycs.query.schemas.RawQueryResponse)
 async def post_raw_qdrant(
-    payload: RawQueryRequest, request: Request,
-) -> RawQueryResponse:
-    return await raw_qdrant(
+    payload: domains.ycs.query.schemas.RawQueryRequest, request: Request,
+) -> domains.ycs.query.schemas.RawQueryResponse:
+    return await domains.ycs.query.service.raw_qdrant(
         app = payload.app, body_text = payload.body, request = request,
     )
 
 
-@router.post("/raw/neo4j", response_model = RawQueryResponse)
+@router.post("/raw/neo4j", response_model = domains.ycs.query.schemas.RawQueryResponse)
 async def post_raw_neo4j(
-    payload: RawQueryRequest, request: Request,
-) -> RawQueryResponse:
-    return await raw_neo4j(
+    payload: domains.ycs.query.schemas.RawQueryRequest, request: Request,
+) -> domains.ycs.query.schemas.RawQueryResponse:
+    return await domains.ycs.query.service.raw_neo4j(
         app = payload.app, body_text = payload.body, request = request,
     )
 
@@ -118,17 +101,12 @@ async def get_schema(
 ) -> dict:
     """Return a cached snapshot of the backend's schema. `refresh=true`
     bypasses the Redis cache for one call."""
-    from domains.ycs.query.service import (
-        get_es_schema,
-        get_neo4j_schema,
-        get_qdrant_schema,
-    )
     if backend == "elasticsearch":
-        schema = await get_es_schema(request = request, refresh = refresh)
+        schema = await domains.ycs.query.service.get_es_schema(request = request, refresh = refresh)
     elif backend == "qdrant":
-        schema = await get_qdrant_schema(request = request, refresh = refresh)
+        schema = await domains.ycs.query.service.get_qdrant_schema(request = request, refresh = refresh)
     elif backend == "neo4j":
-        schema = await get_neo4j_schema(request = request, refresh = refresh)
+        schema = await domains.ycs.query.service.get_neo4j_schema(request = request, refresh = refresh)
     else:
         raise HTTPException(status_code = 404, detail = f"unknown backend {backend!r}")
     # `cached_at` is set inside the cache wrapper; defend against the
@@ -147,7 +125,7 @@ _VALID_BACKENDS = {"elasticsearch", "qdrant", "neo4j"}
 
 @router.post("/ai/{backend}")
 async def post_ai_generate(
-    backend: str, payload: AIGenerateRequest, request: Request,
+    backend: str, payload: domains.ycs.query.schemas.AIGenerateRequest, request: Request,
 ) -> StreamingResponse:
     """AI text-to-DSL SSE stream. `final` on `done` replaces the editor (clean output even after a self-repair mid-stream)."""
     if backend not in _VALID_BACKENDS:
@@ -158,11 +136,10 @@ async def post_ai_generate(
         raise HTTPException(
             status_code = 400, detail = "`prompt` is required.",
         )
-    from domains.ycs.query.service import ai_generate_stream
 
     async def event_source():
         try:
-            async for frame in ai_generate_stream(
+            async for frame in domains.ycs.query.service.ai_generate_stream(
                 backend     = backend,
                 app         = payload.app,
                 user_prompt = payload.prompt,
@@ -197,14 +174,13 @@ async def list_history(
     """Return the latest history entries, newest-first. `backend` is an
     optional filter — UI passes the current backend so the user only
     sees relevant prior queries."""
-    from domains.ycs.query.service import list_query_history_entries
     pg_url = getattr(request.app.state, "pg_url", None)
     if not pg_url:
         raise HTTPException(
             status_code = 503,
             detail = "Postgres not initialized (YCS lifespan failed).",
         )
-    items = await list_query_history_entries(pg_url, backend = backend, limit = max(1, min(limit, 200)))
+    items = await domains.ycs.query.service.list_query_history_entries(pg_url, backend = backend, limit = max(1, min(limit, 200)))
     return {"items": items, "total": len(items)}
 
 
@@ -214,7 +190,6 @@ async def save_history(
 ) -> dict:
     """Persist one query into history. Body shape:
        `{backend, app?, body, prompt?, favorite?}`."""
-    from domains.ycs.query.service import save_query_history_entry
     pg_url = getattr(request.app.state, "pg_url", None)
     if not pg_url:
         raise HTTPException(
@@ -233,7 +208,7 @@ async def save_history(
         )
     if not body or not str(body).strip():
         raise HTTPException(status_code = 400, detail = "`body` is required.")
-    entry_id = await save_query_history_entry(
+    entry_id = await domains.ycs.query.service.save_query_history_entry(
         pg_url,
         backend  = backend,
         app      = payload.get("app", "ycs"),
@@ -246,12 +221,11 @@ async def save_history(
 
 @router.delete("/history/{entry_id}")
 async def delete_history(entry_id: int, request: Request) -> dict:
-    from domains.ycs.query.service import delete_query_history_entry
     pg_url = getattr(request.app.state, "pg_url", None)
     if not pg_url:
         raise HTTPException(
             status_code = 503,
             detail = "Postgres not initialized (YCS lifespan failed).",
         )
-    n = await delete_query_history_entry(pg_url, entry_id)
+    n = await domains.ycs.query.service.delete_query_history_entry(pg_url, entry_id)
     return {"deleted": n}

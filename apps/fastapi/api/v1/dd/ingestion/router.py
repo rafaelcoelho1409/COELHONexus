@@ -1,7 +1,6 @@
 """Read-only view of the per-framework MinIO content (canonical post-
 finalize corpus). Anything here survives Redis TTL."""
-
-from .params import ARTIFACT_MIME
+from . import params
 
 import logging
 
@@ -89,7 +88,7 @@ async def get_artifact(slug: str, name: str) -> Response:
             )
         raise
     ext = safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else ""
-    media_type = ARTIFACT_MIME.get(ext, "application/octet-stream")
+    media_type = params.ARTIFACT_MIME.get(ext, "application/octet-stream")
     return Response(
         content=data, media_type=media_type,
         headers={
