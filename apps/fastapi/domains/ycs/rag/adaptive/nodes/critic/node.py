@@ -6,20 +6,13 @@ caller still receives a usable envelope (deprecated rationale: prefer
 graceful degradation over total failure for DEEP mode).
 """
 from __future__ import annotations
-
-import asyncio
-
 import domains
 from domains.ycs.runtime.observability.service import traced
-
 from .... import service
 from ... import params, state
 from . import prompts, schemas
 
-
-# 2026-09-15: 90 → 60s tiering — failure falls back to
-# confidence=0.5 + grounded=True, so fail fast.
-_CRITIC_TIMEOUT_S = 60.0
+import asyncio
 
 
 @traced("rag.critic")
@@ -46,7 +39,7 @@ async def critic(state: state.AdaptiveRAGState, llm) -> dict:
                 "sub_results":  sub_results_text,
             },
             operation    = "critic",
-            timeout_s    = _CRITIC_TIMEOUT_S,
+            timeout_s    = params.CRITIC_TIMEOUT_S,
             max_attempts = 2,
         )
         return {

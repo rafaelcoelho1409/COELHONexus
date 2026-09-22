@@ -2,10 +2,9 @@
 Per `docs/CODE-CONVENTIONS.md` §2, key-builder functions belong in
 `keys.py` — they're storage path helpers, not loose constants."""
 from __future__ import annotations
+from . import params
 
 import hashlib
-
-from . import params
 
 
 def cache_key(question: str, mode: str | None = None) -> str:

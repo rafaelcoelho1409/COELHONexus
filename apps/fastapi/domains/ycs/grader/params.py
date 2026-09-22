@@ -36,3 +36,11 @@ GRADER_CONCURRENCY = 5
 # arm should drop the doc fast, not hold a semaphore slot (now 5-wide,
 # so a full 12-doc pass costs ~60s worst instead of ~180s).
 GRADER_CALL_TIMEOUT_S = 20.0
+
+# Every grade label that counts as "keep the document". Currently
+# `relevant` (direct match) and `likely_relevant` (lateral / on-topic
+# without literal answer). Keep/drop policy configurable in one place
+# instead of scattered across the parsed-path and rescue-path branches.
+# Tightening the policy in the future (drop `likely_relevant` again for
+# a high-precision query class) is one edit here.
+KEEPER_SCORES: frozenset[str] = frozenset(("relevant", "likely_relevant"))

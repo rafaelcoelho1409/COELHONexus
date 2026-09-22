@@ -13,6 +13,8 @@ Celery is sync; async work is wrapped in `asyncio.run(...)`. The
 for progress reporting, which Flower and `GET /tasks/{id}` consume.
 """
 from __future__ import annotations
+import infra.celery.service
+from . import service
 
 import asyncio
 import os
@@ -21,10 +23,6 @@ from typing import Any, Callable
 import domains
 from celery.utils.log import get_task_logger
 from elasticsearch import AsyncElasticsearch
-
-import infra.celery.service
-
-from . import service
 
 
 # Callback signature for live progress emission. The task wrapper

@@ -1,35 +1,19 @@
 """ycs/rag/standard/nodes/generate — GENERATE node. Formats retrieved docs + calls the LLM chain."""
 from __future__ import annotations
-
-import asyncio
-
 import domains
 from domains.ycs.runtime.observability.service import traced
-
 from .... import domain, service
-from ... import state
+from ... import params, state
 from . import prompts
 
-
-# 180s: after the Router exhausts its catalog, a hung connection won't raise TimeoutError natively.
-_GENERATE_TIMEOUT_S = 180.0
-
-# Context budget (2026-09-15): grader already judged these docs on their
-# first 2000 chars (`grader/params.py::PER_DOC_CHAR_CAP`) in FlashRank
-# order (best-first) — generate sees the SAME slice, top-weighted, under
-# a total cap. Unbounded full-chunk context (12 docs × multi-KB) made
-# slow free-tier arms time out at 180s; ~6 top docs ≈ 12KB is enough
-# evidence for a grounded answer and completes far faster. Narrow work
-# units = the Planner throughput lesson applied to Ask.
-_GENERATE_PER_DOC_CHARS = 2000
-_GENERATE_TOTAL_CHARS = 12000
+import asyncio
 
 
 @traced("rag.generate")
 async def generate(state: state.YouTubeRAGState, llm) -> dict:
     """Produce an answer using the relevant documents."""
     context_parts: list[str] = []
-    budget = _GENERATE_TOTAL_CHARS
+    budget = params.GENERATE_TOTAL_CHARS
     for doc in state["documents"]:
         if budget <= 0:
             break
@@ -38,7 +22,7 @@ async def generate(state: state.YouTubeRAGState, llm) -> dict:
             f"[Video: {meta.get('title', 'Unknown')}] "
             f"({meta.get('webpage_url', '')})"
         )
-        body = (doc.page_content or "")[:min(_GENERATE_PER_DOC_CHARS, budget)]
+        body = (doc.page_content or "")[:min(params.GENERATE_PER_DOC_CHARS, budget)]
         if not body.strip():
             continue
         context_parts.append(f"{header}\n{body}")
@@ -56,14 +40,14 @@ async def generate(state: state.YouTubeRAGState, llm) -> dict:
                 "history":  domain.history_to_messages(state.get("conversation_history")),
             },
             operation = "generate",
-            timeout_s = _GENERATE_TIMEOUT_S,
+            timeout_s = params.GENERATE_TIMEOUT_S,
         )
         return {"generation": domain.strip_think_tags(response.content)}
     except asyncio.TimeoutError:
         return {
             "generation": (
                 "The model didn't respond within "
-                f"{int(_GENERATE_TIMEOUT_S)}s. The rotator may have "
+                f"{int(params.GENERATE_TIMEOUT_S)}s. The rotator may have "
                 "exhausted its retries on a hung deployment — please "
                 "retry the question."
             ),

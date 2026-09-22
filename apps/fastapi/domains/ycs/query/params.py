@@ -11,7 +11,7 @@ unsupported flag rather than 404, so the UI can keep the tab visible
 and grey-out the chip."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from . import entities
 
 
 # Result-set sizing. `MAX_LIMIT` is the hard ceiling — clamps any
@@ -40,76 +40,45 @@ APPS:     tuple[str, ...] = (APP_DD, APP_YCS, APP_RR)
 BACKENDS: tuple[str, ...] = (BACKEND_ES, BACKEND_QDRANT, BACKEND_NEO4J)
 
 
-@dataclass(frozen=True, slots=True)
-class AppNamespace:
-    """What an app owns inside ONE backend.
-
-    `available` False = the app has no presence in that backend (DD is
-    this everywhere today). The UI greys out the chip and the service
-    short-circuits to an empty response. Keeping the entry (vs deleting)
-    lets the frontend render a uniform 3x3 grid + a clear "no data"
-    explanation."""
-    available: bool
-    # Human-readable namespace label for the response (and the UI's
-    # "Searching in: …" caption). Empty when unavailable.
-    label:     str = ""
-    # The actual store-side identifier:
-    #   - ES:     comma-joined index names ("idx_a,idx_b")
-    #   - Qdrant: collection name
-    #   - Neo4j:  comma-joined node labels searched
-    target:    str = ""
-
-
 # Source of truth — the 3x3 (app x backend) matrix. Service + router
 # both read from here so adding RR-to-ES later is a one-line change.
-APP_BACKENDS: dict[str, dict[str, AppNamespace]] = {
+APP_BACKENDS: dict[str, dict[str, entities.AppNamespace]] = {
     APP_DD: {
-        BACKEND_ES:     AppNamespace(available = False),
-        BACKEND_QDRANT: AppNamespace(available = False),
-        BACKEND_NEO4J:  AppNamespace(available = False),
+        BACKEND_ES:     entities.AppNamespace(available = False),
+        BACKEND_QDRANT: entities.AppNamespace(available = False),
+        BACKEND_NEO4J:  entities.AppNamespace(available = False),
     },
     APP_YCS: {
-        BACKEND_ES: AppNamespace(
+        BACKEND_ES: entities.AppNamespace(
             available = True,
             label     = "YCS · metadata + transcripts",
             target    = "coelhonexus-youtube-metadata,coelhonexus-youtube-transcriptions",
         ),
-        BACKEND_QDRANT: AppNamespace(
+        BACKEND_QDRANT: entities.AppNamespace(
             available = True,
             label     = "YCS · transcript chunks",
             target    = "youtube-transcripts",
         ),
-        BACKEND_NEO4J: AppNamespace(
+        BACKEND_NEO4J: entities.AppNamespace(
             available = True,
             label     = "YCS · entities + videos",
             target    = "__Entity__,Document,Video,Channel",
         ),
     },
     APP_RR: {
-        BACKEND_ES:     AppNamespace(available = False),
-        BACKEND_QDRANT: AppNamespace(
+        BACKEND_ES:     entities.AppNamespace(available = False),
+        BACKEND_QDRANT: entities.AppNamespace(
             available = True,
             label     = "RR · paper abstracts",
             target    = "radar_papers",
         ),
-        BACKEND_NEO4J: AppNamespace(
+        BACKEND_NEO4J: entities.AppNamespace(
             available = True,
             label     = "RR · papers + authors + concepts",
             target    = "Paper,Author,Concept,Source",
         ),
     },
 }
-
-
-def is_supported(app: str, backend: str) -> bool:
-    """True when the (app, backend) pair has data we can query."""
-    return APP_BACKENDS.get(app, {}).get(backend, AppNamespace(False)).available
-
-
-def namespace_label(app: str, backend: str) -> str:
-    """Human-readable label for the (app, backend) target — used in the
-    response's `namespace` field. Empty when unsupported."""
-    return APP_BACKENDS.get(app, {}).get(backend, AppNamespace(False)).label
 
 
 # Raw-DSL read-only safety guard tunables (`domain.py`'s
@@ -128,3 +97,23 @@ ES_MAX_SIZE = 200
 
 QDRANT_READ_OPS: tuple[str, ...] = ("search", "scroll", "query_points", "count")
 QDRANT_MAX_LIMIT = 200
+
+# Qdrant payload field shape — must match `domains.ycs.ingestion.domain
+# .build_payload`. Keep this list in sync if the writer changes.
+QDRANT_EXPECTED_PAYLOAD_KEYS = (
+    "content",
+    "video_id",
+    "chunk_index",
+    "total_chunks",
+    "title",
+    "channel",
+    "channel_id",
+    "lang",
+    "upload_date",
+    "webpage_url",
+    "content_hash",
+)
+
+
+# Schema-cache TTL — declared floor is static, live overlay refreshes cheaply.
+SCHEMA_TTL_S = 300

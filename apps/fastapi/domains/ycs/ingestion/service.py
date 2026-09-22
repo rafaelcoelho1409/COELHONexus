@@ -6,6 +6,8 @@ dispatch, upsert. Pure projection in `domain.py`, point-id builder in
 Memory-safe: never holds more than one transcript's chunks in memory
 at a time."""
 from __future__ import annotations
+import domains, infra
+from . import domain, keys, params
 
 import json
 import logging
@@ -28,10 +30,6 @@ from qdrant_client.http.models import (
     VectorParams,
 )
 from redis.asyncio import Redis
-
-import domains, infra
-
-from . import domain, keys, params
 
 
 logger = logging.getLogger(__name__)

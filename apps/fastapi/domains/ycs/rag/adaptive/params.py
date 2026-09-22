@@ -23,3 +23,21 @@ SUBAGENT_CONCURRENCY = 5
 # synthesize/critic. Revisit downward if the rotator stabilizes and 600s
 # proves to be pure tail-waiting rather than productive grinding.
 DEEP_FANOUT_DEADLINE_S = 600.0
+
+# Per-node LLM timeouts (2026-09-15 tiering: 45 → 30s, critic 90 → 60s).
+# Each node degrades gracefully (falls back / skips / low-confidence),
+# so slow arms fail over fast instead of burning the full budget.
+CLASSIFY_TIMEOUT_S = 30.0
+CONTEXTUALIZE_TIMEOUT_S = 30.0
+CRITIC_TIMEOUT_S = 60.0
+
+# FAST path — tighter ceiling than STANDARD's `generate` because there
+# is no retrieval to wait for. If a fast answer doesn't come back inside
+# 90 s the model is hung; better to surface an error than spin forever.
+DIRECT_ANSWER_TIMEOUT_S = 90.0
+
+# DEEP synthesis takes a long-context input (every sub-question's
+# answer concatenated) so it's the slowest single LLM call in the
+# graph. 240 s ceiling leaves headroom over a real long-context
+# completion while still capping the dead-arm wait.
+SYNTHESIZE_TIMEOUT_S = 240.0

@@ -11,23 +11,13 @@ Kept inline here per CODE-CONVENTIONS pragmatism: it's used only by
 this node and ~15 LOC of Cypher.
 """
 from __future__ import annotations
-
-import asyncio
-
 import domains
 from domains.ycs.runtime.observability.service import traced
-
 from .... import domain, service
 from ... import params, state
 from . import prompts, schemas
 
-
-# Single LLM call, output cap is small (mode + a handful of sub-
-# questions). With plain-JSON prompting we no longer wait on provider-
-# native structured-output validation. 2026-09-15: 45 → 30s tiering —
-# this node degrades gracefully (falls back to standard mode), so a
-# slow arm should fail over fast, not burn 45s.
-_CLASSIFY_TIMEOUT_S = 30.0
+import asyncio
 
 
 def _resolve_channel_ids(neo4j_graph, channel_names: list[str]) -> list[str]:
@@ -125,7 +115,7 @@ async def classify_query(
             chain,
             {"history": formatted_history, "question": state["question"]},
             operation    = "classify",
-            timeout_s    = _CLASSIFY_TIMEOUT_S,
+            timeout_s    = params.CLASSIFY_TIMEOUT_S,
             max_attempts = 2,
         )
         result = domain.parse_json_model_output(

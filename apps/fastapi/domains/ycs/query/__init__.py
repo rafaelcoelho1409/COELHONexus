@@ -10,5 +10,4 @@ The app→backend support matrix lives in `params.APP_BACKENDS` —
 single source of truth for both the service guards and the UI's
 grey-out behavior."""
 from __future__ import annotations
-
-from . import domain, entities, errors, params, patterns, prompts, schemas, service
+from . import domain, entities, errors, keys, params, patterns, prompts, schemas, service

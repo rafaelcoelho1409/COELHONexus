@@ -1,5 +1,6 @@
 """ycs/qdrant_task — ES transcripts → chunk → embed → Qdrant upsert + cache invalidate."""
 from __future__ import annotations
+import infra.celery.service
 
 import asyncio
 import logging
@@ -11,9 +12,6 @@ import redis.asyncio as redis_aio
 from celery.utils.log import get_task_logger
 from elasticsearch import AsyncElasticsearch
 from qdrant_client import AsyncQdrantClient
-
-import infra.celery.service
-
 
 logger = get_task_logger(__name__)
 

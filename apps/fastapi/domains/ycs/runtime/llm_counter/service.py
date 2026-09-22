@@ -18,15 +18,14 @@ extracted (DD's "node" is a LangGraph node/chapter; YCS has no
 distinct workflow stages here — one call type, so grouping by which
 video the call was for is the useful breakdown instead)."""
 from __future__ import annotations
+import domains
+from . import domain, keys, params
 
 import logging
 from contextvars import ContextVar
 from typing import Any
 
-import domains
 from langchain_core.callbacks import AsyncCallbackHandler
-
-from . import domain, keys, params
 
 
 logger = logging.getLogger(__name__)

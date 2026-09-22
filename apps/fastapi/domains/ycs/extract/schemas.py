@@ -1,9 +1,8 @@
 """ycs/extract — Pydantic boundary schemas (request inputs + per-video metadata).py:L441-531` (`YtDlpExtractor._normalize_video`)."""
 from __future__ import annotations
+from .. import content
 
 from pydantic import BaseModel, ConfigDict, Field
-
-from .. import content
 
 
 NonEmptyStr = content.schemas.NonEmptyStr

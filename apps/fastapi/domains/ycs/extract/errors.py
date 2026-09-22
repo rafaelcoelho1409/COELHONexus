@@ -4,7 +4,6 @@ yt-dlp subprocess errors live in `domains.ycs.content.errors` (both
 modules share the same subprocess wrapper shape) — only the
 input-normalization domain errors are local."""
 from __future__ import annotations
-
 from .. import content
 
 

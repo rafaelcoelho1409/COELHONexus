@@ -35,6 +35,7 @@ Internally:
      model) up to `MAX_RETRY_PASSES` times — see that constant's
      comment for why this replaced the old "arm-swap" framing."""
 from __future__ import annotations
+import infra.celery.service
 
 import asyncio
 import os
@@ -45,8 +46,6 @@ import domains
 from celery.utils.log import get_task_logger
 from elasticsearch import AsyncElasticsearch
 from langchain_neo4j import Neo4jGraph
-
-import infra.celery.service
 
 
 logger = get_task_logger(__name__)

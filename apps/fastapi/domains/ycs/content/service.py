@@ -5,15 +5,13 @@ bottom; every pure step delegates to `domain.*`; every side effect
 (subprocess, log, clock) is named explicitly here.
 """
 from __future__ import annotations
+import domains
+from . import domain, errors, params, schemas
 
 import asyncio
 import json
 import logging
 import time
-
-import domains
-
-from . import domain, errors, params, schemas
 
 
 logger = logging.getLogger(__name__)

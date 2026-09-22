@@ -6,12 +6,11 @@ dataclasses living in `entities.py`. But since these schemas are
 *returned* over JSON, Pydantic's `model_dump()` keeps the shape under
 one validation regime + supports OpenAPI doc generation."""
 from __future__ import annotations
+from . import params
 
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
-
-from . import params
 
 
 AppLiteral     = Literal["dd", "ycs", "rr"]

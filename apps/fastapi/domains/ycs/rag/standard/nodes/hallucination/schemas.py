@@ -17,9 +17,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-
-_TRUTHY = {"true", "1", "yes", "y", "on", True, 1}
-_FALSY  = {"false", "0", "no", "n", "off", False, 0}
+from . import params
 
 
 def _coerce_bool(v: Any) -> bool:
@@ -27,10 +25,10 @@ def _coerce_bool(v: Any) -> bool:
         return v
     if isinstance(v, str):
         lowered = v.strip().lower()
-        if lowered in _TRUTHY: return True
-        if lowered in _FALSY:  return False
-    if v in _TRUTHY: return True
-    if v in _FALSY:  return False
+        if lowered in params.TRUTHY: return True
+        if lowered in params.FALSY:  return False
+    if v in params.TRUTHY: return True
+    if v in params.FALSY:  return False
     raise ValueError(f"cannot coerce {v!r} to bool")
 
 

@@ -34,17 +34,16 @@ exists (no separate delete needed) but 409s if the alias NAME collides
 with a REAL collection — so cutover only needs to pre-delete when
 `QDRANT_COLLECTION` is still a real (pre-migration) collection."""
 from __future__ import annotations
+import domains
+from . import domain, keys, params
 
 import json
 import logging
 import time
 from typing import Any
 
-import domains
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http.models import CreateAlias, CreateAliasOperation
-
-from . import domain, keys, params
 
 
 logger = logging.getLogger(__name__)

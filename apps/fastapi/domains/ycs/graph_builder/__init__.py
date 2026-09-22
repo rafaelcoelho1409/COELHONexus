@@ -10,5 +10,4 @@ re-tuning against whatever the endpoint currently resolves to. Schema-free
 (NO `allowed_nodes` constraint) with formatting-only LLM guidance — works
 across any YouTube topic."""
 from __future__ import annotations
-
-from . import domain, params, prompts, schemas, service
+from . import domain, params, patterns, prompts, schemas, service

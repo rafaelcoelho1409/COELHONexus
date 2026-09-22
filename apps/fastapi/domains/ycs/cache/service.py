@@ -5,14 +5,13 @@ invalidate primitives. Caller passes the redis client (consistent
 with the deprecated signature; no module-level singleton).
 """
 from __future__ import annotations
+from . import keys, params
 
 import json
 import logging
 import time
 
 import redis.asyncio as redis_aio
-
-from . import keys, params
 
 
 logger = logging.getLogger(__name__)

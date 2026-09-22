@@ -4,6 +4,7 @@ Functional Core (`docs/CODE-CONVENTIONS.md` §4): no I/O, no async, no
 clock. Lives at the `rag/` level because `standard/` and `adaptive/`
 both call into it."""
 from __future__ import annotations
+from . import params, patterns
 
 import asyncio
 import json
@@ -12,8 +13,6 @@ from typing import Any, TypeVar
 from json_repair import loads as json_repair_loads
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel
-
-from . import params, patterns
 
 
 _ModelT = TypeVar("_ModelT", bound = BaseModel)

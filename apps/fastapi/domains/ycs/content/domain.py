@@ -11,10 +11,9 @@ What lives here:
 - `normalize_search_entry` — projects raw yt-dlp dict → VideoSnippet shape
 """
 from __future__ import annotations
+from . import params, patterns
 
 import re
-
-from . import params, patterns
 
 
 def build_string_filter(field: str, value: str) -> str:
@@ -98,17 +97,6 @@ def effective_fetch_count(max_results: int, conditions: list[str]) -> int:
 # Type filter (community-documented; e.g., SerpAPI sp-filter guide). Field
 # 2 of the proto = type:
 #   1 = video, 2 = channel, 3 = playlist, 4 = movie.
-# `ytsearch:` is video-only (the YouTube backend ignores `sp` from that
-# entry point), so channel/playlist searches MUST use the regular
-# `youtube.com/results?search_query=...&sp=...` URL — yt-dlp routes
-# those through `YoutubeSearchURLIE` and honors --flat-playlist /
-# --playlist-end the same way.
-_SP_KIND_FILTER: dict[str, str] = {
-    "channel":  "EgIQAg%3D%3D",
-    "playlist": "EgIQAw%3D%3D",
-    # Video filter is the default behavior of `ytsearch:` — no override
-    # needed when kind_filter is None or "video".
-}
 
 
 def build_search_args(
@@ -138,7 +126,7 @@ def build_search_args(
     For channel/playlist we instead hit `youtube.com/results?search_query=`
     with YouTube's own `sp=` type-filter (proto-encoded base64). yt-dlp's
     `YoutubeSearchURLIE` extracts that page the same way."""
-    sp_code = _SP_KIND_FILTER.get(kind_filter or "")
+    sp_code = params.SP_KIND_FILTER.get(kind_filter or "")
     if sp_code:
         # Search-URL path — channel or playlist.
         from urllib.parse import quote_plus
@@ -223,8 +211,8 @@ def resolve_playlist_input(playlist_input: str) -> str:
     s = (playlist_input or "").strip()
     if not s:
         return s
-    # Common playlist ID prefixes — see _PLAYLIST_ID_RE above.
-    if _PLAYLIST_ID_RE.match(s):
+    # Common playlist ID prefixes — see patterns.PLAYLIST_ID_RE above.
+    if patterns.PLAYLIST_ID_RE.match(s):
         return f"https://www.youtube.com/playlist?list={s}"
     # Already a playlist URL
     if "playlist?list=" in s or "/playlist/" in s:
@@ -308,10 +296,6 @@ def pick_best_thumbnail(thumbnails: list[dict] | None) -> str:
     return _absolutize_thumbnail_url((best or {}).get("url", "") or "")
 
 
-_PLAYLIST_ID_RE = re.compile(r"^(PL|UU|LL|RD|OL|FL|TL|EL)[A-Za-z0-9_-]{10,}")
-_CHANNEL_ID_RE  = re.compile(r"^UC[A-Za-z0-9_-]{22}$")
-
-
 def detect_entry_kind(entry: dict) -> str:
     """Classify a yt-dlp search entry as 'video' | 'channel' | 'playlist'.
 
@@ -337,7 +321,7 @@ def detect_entry_kind(entry: dict) -> str:
         or entry_type == "playlist"
         or "playlist?list=" in url_l
         or "/playlist/" in url_l
-        or _PLAYLIST_ID_RE.match(entry_id)
+        or patterns.PLAYLIST_ID_RE.match(entry_id)
     ):
         return "playlist"
     if (
@@ -347,7 +331,7 @@ def detect_entry_kind(entry: dict) -> str:
         or "youtube.com/channel/" in url_l
         or "youtube.com/c/" in url_l
         or "youtube.com/user/" in url_l
-        or _CHANNEL_ID_RE.match(entry_id)
+        or patterns.CHANNEL_ID_RE.match(entry_id)
     ):
         return "channel"
     return "video"

@@ -17,22 +17,13 @@ check_hallucination still couldn't verify the answer against them
 after every rewrite retry. Shares Parallel's rate-limit budget with
 `fallback_answer`, not a separate allowance."""
 from __future__ import annotations
-
-import asyncio
-
 import domains
 from domains.ycs.runtime.observability.service import traced
-
 from .... import service
-from ... import state
+from ... import params, state
 from . import prompts, schemas
 
-
-# Own budget, separate from `check_hallucination`'s 45s and
-# `fallback_answer`'s 60s — this node does a search THEN a judge call,
-# so it needs headroom for both, but this is still a rare best-effort
-# safety net, not a path worth waiting on indefinitely.
-_JUDGE_TIMEOUT_S = 30.0
+import asyncio
 
 
 @traced("rag.corroborate")
@@ -64,7 +55,7 @@ async def corroborate_claim(state: state.YouTubeRAGState, llm) -> dict:
                 "web_context": web_context,
             },
             operation    = "corroborate",
-            timeout_s    = _JUDGE_TIMEOUT_S,
+            timeout_s    = params.CORROBORATE_JUDGE_TIMEOUT_S,
             max_attempts = 2,
         )
     except (asyncio.TimeoutError, Exception):

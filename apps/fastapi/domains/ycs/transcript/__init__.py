@@ -8,5 +8,4 @@ Public surface (verbatim deprecated):
   TranscriptSegment, CaptionTrack — dataclasses
   TranscriptError, CDPConnectError, NoTranscriptFoundError — exceptions"""
 from __future__ import annotations
-
 from . import domain, errors, params, service

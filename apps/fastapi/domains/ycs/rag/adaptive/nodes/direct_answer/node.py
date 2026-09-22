@@ -5,21 +5,13 @@ Single LLM call, no retrieval. Returns a synthetic `grounded=True`
 with STANDARD / DEEP.
 """
 from __future__ import annotations
-
-import asyncio
-
 import domains
 from domains.ycs.runtime.observability.service import traced
-
 from .... import domain, service
-from ... import state
+from ... import params, state
 from . import prompts
 
-
-# FAST path — tighter ceiling than STANDARD's `generate` because there
-# is no retrieval to wait for. If a fast answer doesn't come back inside
-# 90 s the model is hung; better to surface an error than spin forever.
-_DIRECT_ANSWER_TIMEOUT_S = 90.0
+import asyncio
 
 
 @traced("rag.direct_answer")
@@ -40,7 +32,7 @@ async def direct_answer(state: state.AdaptiveRAGState, llm) -> dict:
                 "history":  domain.history_to_messages(state.get("conversation_history")),
             },
             operation = "direct_answer",
-            timeout_s = _DIRECT_ANSWER_TIMEOUT_S,
+            timeout_s = params.DIRECT_ANSWER_TIMEOUT_S,
         )
         return {
             "generation":        domain.strip_think_tags(response.content),
@@ -52,7 +44,7 @@ async def direct_answer(state: state.AdaptiveRAGState, llm) -> dict:
         return {
             "generation": (
                 f"The model didn't respond within "
-                f"{int(_DIRECT_ANSWER_TIMEOUT_S)}s. Please retry."
+                f"{int(params.DIRECT_ANSWER_TIMEOUT_S)}s. Please retry."
             ),
             "grounded": False,
         }

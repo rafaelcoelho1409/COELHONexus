@@ -15,15 +15,13 @@ NO PERSISTENCE in this layer — Celery tasks (Wave 4) wrap these calls +
 write to Elasticsearch + dispatch the Playwright transcript fetch.
 """
 from __future__ import annotations
+import domains
+from . import domain, params, schemas
 
 import asyncio
 import json
 import logging
 import time
-
-import domains
-
-from . import domain, params, schemas
 
 
 logger = logging.getLogger(__name__)

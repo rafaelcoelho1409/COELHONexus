@@ -10,16 +10,15 @@ The LLM (`llm` arg) is a plain chat model — a 429 or 5xx propagates to
 caller's concern, not this module's.
 """
 from __future__ import annotations
+import domains
+from . import domain, params, prompts, schemas
 
 import asyncio
 import logging
 import os
 from typing import Any
 
-import domains
 from langchain_core.documents import Document
-
-from . import domain, params, prompts, schemas
 
 
 logger = logging.getLogger(__name__)
@@ -113,18 +112,18 @@ class DocumentGrader:
             #   - parsed is None + parsing_error present → lenient fallback
             #   - parsed.score != "relevant" → drop
             parsed = result.get("parsed") if isinstance(result, dict) else None
-            # `domain.KEEPER_SCORES` is the single source of
+            # `params.KEEPER_SCORES` is the single source of
             # truth for "keep this doc". Both the parsed and rescue
             # paths gate on the same set so the ternary policy can't
             # accidentally diverge between them.
-            if parsed is not None and getattr(parsed, "score", None) in domain.KEEPER_SCORES:
+            if parsed is not None and getattr(parsed, "score", None) in params.KEEPER_SCORES:
                 kept.append(doc)
                 continue
             if isinstance(result, dict) and parsed is None:
                 raw = result.get("raw")
                 raw_content = getattr(raw, "content", "") if raw is not None else ""
                 score = domain.rescue_score(raw_content or "")
-                if score in domain.KEEPER_SCORES:
+                if score in params.KEEPER_SCORES:
                     kept.append(doc)
                     rescued += 1
                 elif score is None:

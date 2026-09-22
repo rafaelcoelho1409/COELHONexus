@@ -9,21 +9,11 @@ only way to surface them later: `grade_documents` replaces
 `state["documents"]` with the filtered subset, losing the rejected
 candidates forever otherwise."""
 from __future__ import annotations
-
-from langchain_core.documents import Document
-
 import domains
 from domains.ycs.runtime.observability.service import traced
+from ... import params, state
 
-from ... import state
-
-
-# Cap on the cross-round pre-grade pool. Sized for the fallback
-# prompt's input budget: 12 docs × ~500 chars/doc ≈ 6 KB context, well
-# inside every rotator arm's window. Higher cap risks token bloat with
-# no recall gain — the retriever ranks within each round, so the
-# top-K of each round (typically 8-10) are already the best matches.
-_PRE_GRADE_CAP = 12
+from langchain_core.documents import Document
 
 
 def _merge_pre_grade(
@@ -49,7 +39,7 @@ def _merge_pre_grade(
             continue
         seen.add(key)
         out.append(doc)
-        if len(out) >= _PRE_GRADE_CAP:
+        if len(out) >= params.RETRIEVE_PRE_GRADE_CAP:
             break
     return out
 

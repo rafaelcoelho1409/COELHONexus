@@ -19,14 +19,13 @@ SAFE: `check_migration_needed` reads live Qdrant data, not this status
 field, so the dispatch gate stays correctly closed) and the task's own
 FAILURE state is what the poller/UI surfaces."""
 from __future__ import annotations
+import infra.celery.service
 
 import asyncio
 import os
 
 from celery.utils.log import get_task_logger
 from qdrant_client import AsyncQdrantClient
-
-import infra.celery.service
 
 
 logger = get_task_logger(__name__)

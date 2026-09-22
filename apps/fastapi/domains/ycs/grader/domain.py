@@ -9,16 +9,6 @@ from __future__ import annotations
 from typing import Any
 
 
-# Every grade label that counts as "keep the document". Currently
-# `relevant` (direct match) and `likely_relevant` (lateral / on-topic
-# without literal answer). Promoted to a module-level `frozenset` so the
-# keep/drop policy is configurable in one place instead of scattered
-# across the parsed-path and rescue-path branches. Tightening the policy
-# in the future (drop `likely_relevant` again for a high-precision query
-# class) is one edit here.
-KEEPER_SCORES: frozenset[str] = frozenset(("relevant", "likely_relevant"))
-
-
 def flatten_message_content(raw_content: Any) -> str:
     """Flatten an `AIMessage.content` into a string regardless of shape.
 

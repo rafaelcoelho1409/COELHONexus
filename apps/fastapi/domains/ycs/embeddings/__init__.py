@@ -9,5 +9,4 @@ Public surface mirrors the old factory names so consumers don't need
 churn beyond `NVIDIAEmbeddings` → `ExternalEmbeddings` and
 `get_embedding_dimensions()` → `await get_embedding_info()`."""
 from __future__ import annotations
-
 from . import domain, errors, params, service

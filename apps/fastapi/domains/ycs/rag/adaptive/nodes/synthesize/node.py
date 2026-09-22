@@ -5,22 +5,13 @@ from all sub-results are deduped by `video_id`; retrieval sources are
 union'd.
 """
 from __future__ import annotations
-
-import asyncio
-
 import domains
 from domains.ycs.runtime.observability.service import traced
-
 from .... import domain, service
-from ... import state
+from ... import params, state
 from . import prompts
 
-
-# DEEP synthesis takes a long-context input (every sub-question's
-# answer concatenated) so it's the slowest single LLM call in the
-# graph. 240 s ceiling leaves headroom over a real long-context
-# completion while still capping the dead-arm wait.
-_SYNTHESIZE_TIMEOUT_S = 240.0
+import asyncio
 
 
 @traced("rag.synthesize")
@@ -63,12 +54,12 @@ async def synthesize(state: state.AdaptiveRAGState, llm) -> dict:
                 ),
             },
             operation = "synthesize",
-            timeout_s = _SYNTHESIZE_TIMEOUT_S,
+            timeout_s = params.SYNTHESIZE_TIMEOUT_S,
         )
         generation = domain.strip_think_tags(response.content)
     except asyncio.TimeoutError:
         generation = (
-            f"Synthesis didn't complete within {int(_SYNTHESIZE_TIMEOUT_S)}s — "
+            f"Synthesis didn't complete within {int(params.SYNTHESIZE_TIMEOUT_S)}s — "
             f"the long-context model on the rotator pool is hung. "
             f"Please retry."
         )

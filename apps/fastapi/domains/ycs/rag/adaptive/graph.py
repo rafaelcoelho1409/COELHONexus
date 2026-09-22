@@ -37,7 +37,6 @@ with an outer `DEEP_FANOUT_DEADLINE_S` deadline), so `synthesize`
 always starts on time regardless of how many sub-questions are still
 in flight."""
 from __future__ import annotations
-
 import domains
 from . import nodes, params, state
 from .. import standard

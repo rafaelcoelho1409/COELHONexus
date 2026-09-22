@@ -5,12 +5,11 @@ the same reason — rotator-routed models occasionally emit `"true"` /
 makes Groq's tool-call validator reject the response. See
 `standard/nodes/hallucination/schemas.py` for the canonical helper."""
 from __future__ import annotations
+from .... import standard
 
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
-
-from .... import standard
 
 
 class CriticAssessment(BaseModel):

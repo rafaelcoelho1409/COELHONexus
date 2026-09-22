@@ -11,16 +11,14 @@ Two near-symmetric writers (one per index). Both:
 Refresh policy is `True` so callers (Celery tasks → Qdrant ingest, retriever
 fetch) see new docs on the very next ES query."""
 from __future__ import annotations
+import infra
+from . import params
 
 import logging
 import time
 from typing import Any
 
 from elasticsearch import AsyncElasticsearch
-import infra
-
-
-from . import params
 
 
 logger = logging.getLogger(__name__)

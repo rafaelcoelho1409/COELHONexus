@@ -4,13 +4,10 @@ Functional Core (per `docs/CODE-CONVENTIONS.md` §4) — no I/O, no
 subprocess, no clock other than `_utc_now_iso` (which is a single
 isolated call used by the projection — deprecated did the same).py`."""
 from __future__ import annotations
-
-from datetime import datetime, timezone
-
 import domains
-
 from . import errors, params, patterns
 
+from datetime import datetime, timezone
 
 
 def normalize_video_id(raw: str) -> str:

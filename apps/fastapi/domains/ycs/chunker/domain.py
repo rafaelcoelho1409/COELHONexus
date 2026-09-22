@@ -6,11 +6,10 @@ deterministic; `chunk_transcript` is just a metadata projection over
 its output.
 """
 from __future__ import annotations
+from . import params
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-from . import params
 
 
 def create_chunker(

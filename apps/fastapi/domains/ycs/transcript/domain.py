@@ -6,6 +6,7 @@ Pure side: no Playwright handle, no async I/O. The HTTP probe for CDP URL
 resolution stays sync (`urllib.request.urlopen`) — `service.py` wraps it
 in `asyncio.to_thread`."""
 from __future__ import annotations
+from . import params
 
 import base64
 import json
@@ -16,8 +17,6 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 from urllib.request import urlopen
-
-from . import params
 
 
 logger = logging.getLogger(__name__)

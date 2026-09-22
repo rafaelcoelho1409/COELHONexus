@@ -5,20 +5,13 @@ Expands or rephrases the previous search query for a retry retrieval.
 `retry_count` so the conditional edges can cap the loop.
 """
 from __future__ import annotations
-
-import asyncio
-
 import domains
 from domains.ycs.runtime.observability.service import traced
-
 from .... import domain, service
-from ... import state
+from ... import params, state
 from . import prompts
 
-
-# 2026-09-15: 30 → 20s tiering — failure falls back to
-# "{question} (expanded)", so fail fast.
-_REWRITE_TIMEOUT_S = 20.0
+import asyncio
 
 
 @traced("rag.rewrite")
@@ -38,7 +31,7 @@ async def rewrite_query(state: state.YouTubeRAGState, llm) -> dict:
                 "search_query": state.get("search_query") or state["question"],
             },
             operation    = "rewrite",
-            timeout_s    = _REWRITE_TIMEOUT_S,
+            timeout_s    = params.REWRITE_TIMEOUT_S,
             max_attempts = 2,
         )
         new_query = domain.strip_think_tags(response.content)

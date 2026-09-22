@@ -15,18 +15,16 @@ The functions are best-effort: a store hiccup degrades to
 rather than 5xx, so the Query page can render one failed tab without
 killing the other two."""
 from __future__ import annotations
+import domains, infra
+from . import domain, errors, keys, params, prompts, schemas
 
 import logging
 import time
 from typing import Any
 
-import domains, infra
 import psycopg
 from elasticsearch import AsyncElasticsearch
 from fastapi import Request
-
-
-from . import domain, errors, params, prompts, schemas
 
 
 logger = logging.getLogger(__name__)
@@ -48,7 +46,7 @@ def _envelope(
         backend   = backend,           # type: ignore[arg-type]
         app       = app,               # type: ignore[arg-type]
         supported = True,
-        namespace = params.namespace_label(app, backend),
+        namespace = domain.namespace_label(app, backend),
         q         = q,
         total     = total,
         took_ms   = int((time.monotonic() - t0) * 1000),
@@ -68,7 +66,7 @@ async def query_es(
 
     Empty `q` returns a `match_all` page so the user can browse without
     typing — same idiom as the Ingest library view."""
-    if not params.is_supported(app, params.BACKEND_ES):
+    if not domain.is_supported(app, params.BACKEND_ES):
         return _unsupported(params.BACKEND_ES, app, q)
 
     es: AsyncElasticsearch = infra.elasticsearch.service.get_es()
@@ -127,7 +125,7 @@ async def query_qdrant(
     the dense vector here because RR's collection is dense-only. Keeping
     one path = one mental model. For YCS hybrid retrieval the agentic
     RAG pipeline still owns that surface (`/agents/search`)."""
-    if not params.is_supported(app, params.BACKEND_QDRANT):
+    if not domain.is_supported(app, params.BACKEND_QDRANT):
         return _unsupported(params.BACKEND_QDRANT, app, q)
 
     collection = params.APP_BACKENDS[app][params.BACKEND_QDRANT].target
@@ -198,86 +196,6 @@ async def query_qdrant(
     return _envelope(params.BACKEND_QDRANT, app, q, hits, total = len(hits), t0 = t0)
 
 
-# CONTAINS over toLower vs fulltext index: zero bootstrap cost; fast enough for current corpus size.
-_YCS_CYPHER_BROWSE = """
-MATCH (n)
-WHERE  n:Document OR n:Video OR n:Channel OR n:__Entity__
-WITH   n,
-       labels(n)[0] AS label,
-       coalesce(n.id, n.video_id, toString(elementId(n))) AS key
-RETURN label,
-       key,
-       coalesce(n.title, n.name, n.id, key)              AS title,
-       coalesce(n.description, n.text, '')               AS snippet,
-       coalesce(n.webpage_url, '')                       AS url,
-       properties(n)                                     AS properties
-ORDER BY label, title
-LIMIT  $limit
-"""
-
-_YCS_CYPHER_SEARCH = """
-MATCH (n)
-WHERE  (n:Document OR n:Video OR n:Channel OR n:__Entity__)
-  AND  (
-        toLower(toString(coalesce(n.title, '')))        CONTAINS $needle
-     OR toLower(toString(coalesce(n.name, '')))         CONTAINS $needle
-     OR toLower(toString(coalesce(n.id, '')))           CONTAINS $needle
-     OR toLower(toString(coalesce(n.video_id, '')))     CONTAINS $needle
-     OR toLower(toString(coalesce(n.description, '')))  CONTAINS $needle
-     OR toLower(toString(coalesce(n.text, '')))         CONTAINS $needle
-  )
-WITH   n,
-       labels(n)[0] AS label,
-       coalesce(n.id, n.video_id, toString(elementId(n))) AS key
-RETURN label,
-       key,
-       coalesce(n.title, n.name, n.id, key)              AS title,
-       coalesce(n.description, n.text, '')               AS snippet,
-       coalesce(n.webpage_url, '')                       AS url,
-       properties(n)                                     AS properties
-LIMIT  $limit
-"""
-
-_RR_CYPHER_BROWSE = """
-MATCH (n)
-WHERE  n:Paper OR n:Author OR n:Concept OR n:Source
-WITH   n, labels(n)[0] AS label, coalesce(n.id, n.name) AS key
-RETURN label,
-       key,
-       coalesce(n.title, n.name, n.id, key)              AS title,
-       coalesce(n.abstract, '')                          AS snippet,
-       CASE WHEN n.id IS NOT NULL AND label = 'Paper'
-            THEN 'https://arxiv.org/abs/' + toString(n.id)
-            ELSE ''
-       END                                               AS url,
-       properties(n)                                     AS properties
-ORDER BY label, coalesce(n.signal, 0) DESC, title
-LIMIT  $limit
-"""
-
-_RR_CYPHER_SEARCH = """
-MATCH (n)
-WHERE  (n:Paper OR n:Author OR n:Concept OR n:Source)
-  AND  (
-        toLower(toString(coalesce(n.title, '')))     CONTAINS $needle
-     OR toLower(toString(coalesce(n.name, '')))      CONTAINS $needle
-     OR toLower(toString(coalesce(n.id, '')))        CONTAINS $needle
-     OR toLower(toString(coalesce(n.abstract, '')))  CONTAINS $needle
-  )
-WITH   n, labels(n)[0] AS label, coalesce(n.id, n.name) AS key
-RETURN label,
-       key,
-       coalesce(n.title, n.name, n.id, key)              AS title,
-       coalesce(n.abstract, '')                          AS snippet,
-       CASE WHEN n.id IS NOT NULL AND label = 'Paper'
-            THEN 'https://arxiv.org/abs/' + toString(n.id)
-            ELSE ''
-       END                                               AS url,
-       properties(n)                                     AS properties
-LIMIT  $limit
-"""
-
-
 async def query_neo4j(
     *, app: str, q: str, limit: int, request: Request,
 ) -> schemas.QueryResponse:
@@ -287,14 +205,14 @@ async def query_neo4j(
     over title/name/id/text), `{limit}` for `_*_BROWSE` (no filter).
     `needle` is pre-lowered so the Cypher only does `toLower(field)
     CONTAINS $needle` once per field — cheaper than `=~ "(?i)..."`."""
-    if not params.is_supported(app, params.BACKEND_NEO4J):
+    if not domain.is_supported(app, params.BACKEND_NEO4J):
         return _unsupported(params.BACKEND_NEO4J, app, q)
 
     raw_q = q.strip()
     if app == params.APP_RR:
-        cypher = _RR_CYPHER_SEARCH if raw_q else _RR_CYPHER_BROWSE
+        cypher = prompts.RR_CYPHER_SEARCH if raw_q else prompts.RR_CYPHER_BROWSE
     else:
-        cypher = _YCS_CYPHER_SEARCH if raw_q else _YCS_CYPHER_BROWSE
+        cypher = prompts.YCS_CYPHER_SEARCH if raw_q else prompts.YCS_CYPHER_BROWSE
 
     cypher_params: dict[str, Any] = {"limit": limit}
     if raw_q:
@@ -353,7 +271,7 @@ def _raw_disallowed(backend: str, app: str, msg: str) -> schemas.RawQueryRespons
 async def raw_es(
     *, app: str, body_text: str, request: Request,
 ) -> schemas.RawQueryResponse:
-    if not params.is_supported(app, params.BACKEND_ES):
+    if not domain.is_supported(app, params.BACKEND_ES):
         return _raw_disallowed(
             params.BACKEND_ES, app,
             f"{app!r} has no presence in Elasticsearch.",
@@ -413,7 +331,7 @@ async def raw_es(
 async def raw_qdrant(
     *, app: str, body_text: str, request: Request,
 ) -> schemas.RawQueryResponse:
-    if not params.is_supported(app, params.BACKEND_QDRANT):
+    if not domain.is_supported(app, params.BACKEND_QDRANT):
         return _raw_disallowed(
             params.BACKEND_QDRANT, app,
             f"{app!r} has no presence in Qdrant.",
@@ -517,7 +435,7 @@ async def raw_qdrant(
 async def raw_neo4j(
     *, app: str, body_text: str, request: Request,
 ) -> schemas.RawQueryResponse:
-    if not params.is_supported(app, params.BACKEND_NEO4J):
+    if not domain.is_supported(app, params.BACKEND_NEO4J):
         return _raw_disallowed(
             params.BACKEND_NEO4J, app,
             f"{app!r} has no presence in Neo4j.",
@@ -819,11 +737,6 @@ async def ai_generate_stream(
     })}
 
 
-# Two-layer schema: declared floor (structural contract) + live overlay (real samples + LLM-generated rel names).
-_SCHEMA_TTL_S = 300
-_SCHEMA_KEY = "ycs:query:schema:{backend}:v3"
-
-
 async def _schema_cached(
     *, backend: str, request: Request, refresh: bool,
     builder,
@@ -836,7 +749,7 @@ async def _schema_cached(
     a distributed lock)."""
     import json as _json
     redis_aio = getattr(request.app.state, "redis_aio", None)
-    key = _SCHEMA_KEY.format(backend = backend)
+    key = keys.SCHEMA_KEY.format(backend = backend)
     if redis_aio is not None and not refresh:
         try:
             raw = await redis_aio.get(key)
@@ -852,7 +765,7 @@ async def _schema_cached(
     obj["cached_at"] = int(time.time())
     if redis_aio is not None:
         try:
-            await redis_aio.set(key, _json.dumps(obj), ex = _SCHEMA_TTL_S)
+            await redis_aio.set(key, _json.dumps(obj), ex = params.SCHEMA_TTL_S)
         except Exception as e:
             logger.warning(f"[ycs:query:schema] redis set failed: {e}")
     return obj
@@ -1052,32 +965,6 @@ async def get_qdrant_schema(*, request: Request, refresh: bool = False) -> dict[
     )
 
 
-# All read procedures only — no APOC dep.
-_SCHEMA_CYPHER_LABELS = "CALL db.labels() YIELD label RETURN collect(label) AS labels"
-_SCHEMA_CYPHER_RELS   = "CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) AS rels"
-_SCHEMA_CYPHER_PROPS  = (
-    "CALL db.schema.nodeTypeProperties() "
-    "YIELD nodeLabels, propertyName, propertyTypes "
-    "RETURN nodeLabels, propertyName, propertyTypes "
-    "ORDER BY nodeLabels, propertyName"
-)
-# db.schema.visualization() would be cheaper but is APOC-only.
-_SCHEMA_CYPHER_REL_PATTERNS = """
-MATCH (a)-[r]->(b)
-WITH labels(a)[0] AS src, type(r) AS rel, labels(b)[0] AS dst, count(*) AS n
-WHERE src IS NOT NULL AND dst IS NOT NULL
-RETURN src, rel, dst, n
-ORDER BY n DESC
-LIMIT 50
-"""
-_SCHEMA_CYPHER_LABEL_SAMPLES = """
-MATCH (n)
-WHERE labels(n)[0] = $label
-RETURN n
-LIMIT 3
-"""
-
-
 async def _build_neo4j_schema_live() -> dict[str, Any]:
     """Neo4j live schema — overlay layer for the two-layer merge.
 
@@ -1107,15 +994,15 @@ async def _build_neo4j_schema_live() -> dict[str, Any]:
         async with driver.session(
             database = infra.neo4j.params.NEO4J_DATABASE, default_access_mode = "READ",
         ) as session:
-            r = await session.run(_SCHEMA_CYPHER_LABELS)
+            r = await session.run(prompts.SCHEMA_CYPHER_LABELS)
             row = await r.single()
             out["labels"] = list(row["labels"]) if row else []
 
-            r = await session.run(_SCHEMA_CYPHER_RELS)
+            r = await session.run(prompts.SCHEMA_CYPHER_RELS)
             row = await r.single()
             out["relationship_types"] = list(row["rels"]) if row else []
 
-            r = await session.run(_SCHEMA_CYPHER_PROPS)
+            r = await session.run(prompts.SCHEMA_CYPHER_PROPS)
             props_by_label: dict[str, list[dict[str, Any]]] = {}
             async for row in r:
                 labels = list(row["nodeLabels"] or [])
@@ -1135,7 +1022,7 @@ async def _build_neo4j_schema_live() -> dict[str, Any]:
             # `(Document)-[MENTIONS]->(__Entity__) x 18402` rather
             # than guessing that `:MENTIONS` might exist.
             try:
-                r = await session.run(_SCHEMA_CYPHER_REL_PATTERNS)
+                r = await session.run(prompts.SCHEMA_CYPHER_REL_PATTERNS)
                 async for row in r:
                     out["relationship_patterns"].append({
                         "src":   row["src"],
@@ -1151,7 +1038,7 @@ async def _build_neo4j_schema_live() -> dict[str, Any]:
             for lab in (out["labels"] or [])[:10]:
                 try:
                     r = await session.run(
-                        _SCHEMA_CYPHER_LABEL_SAMPLES, {"label": lab},
+                        prompts.SCHEMA_CYPHER_LABEL_SAMPLES, {"label": lab},
                     )
                     samples: list[dict[str, Any]] = []
                     async for row in r:
@@ -1209,12 +1096,6 @@ async def get_neo4j_schema(*, request: Request, refresh: bool = False) -> dict[s
 # deploy surface unchanged).
 #
 # There's no auth yet — every user sees every row. Add an `owner` column
-# + filter when SSO lands; the schema below already accommodates it as a
-# nullable text.
-
-_HISTORY_TABLE_NAME = "query_history"
-
-
 async def ensure_query_history_table(pg_url: str) -> None:
     """Idempotent table init. Called lazily on first read/write — keeps
     Query out of the lifespan hot path (cheap when already created)."""
@@ -1222,7 +1103,7 @@ async def ensure_query_history_table(pg_url: str) -> None:
         pg_url, autocommit = True,
     ) as conn:
         await conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS {_HISTORY_TABLE_NAME} (
+            CREATE TABLE IF NOT EXISTS {keys.HISTORY_TABLE_NAME} (
                 id           BIGSERIAL PRIMARY KEY,
                 backend      TEXT      NOT NULL,
                 app          TEXT      NOT NULL DEFAULT 'ycs',
@@ -1235,11 +1116,11 @@ async def ensure_query_history_table(pg_url: str) -> None:
         """)
         await conn.execute(f"""
             CREATE INDEX IF NOT EXISTS query_history_created_idx
-                ON {_HISTORY_TABLE_NAME} (created_at DESC)
+                ON {keys.HISTORY_TABLE_NAME} (created_at DESC)
         """)
         await conn.execute(f"""
             CREATE INDEX IF NOT EXISTS query_history_backend_idx
-                ON {_HISTORY_TABLE_NAME} (backend, created_at DESC)
+                ON {keys.HISTORY_TABLE_NAME} (backend, created_at DESC)
         """)
 
 
@@ -1252,7 +1133,7 @@ async def save_query_history_entry(
     await ensure_query_history_table(pg_url)
     async with await psycopg.AsyncConnection.connect(pg_url) as conn:
         result = await conn.execute(
-            f"INSERT INTO {_HISTORY_TABLE_NAME} "
+            f"INSERT INTO {keys.HISTORY_TABLE_NAME} "
             f"(backend, app, body, prompt, favorite) "
             f"VALUES (%s, %s, %s, %s, %s) RETURNING id",
             (backend, app, body, prompt, favorite),
@@ -1273,14 +1154,14 @@ async def list_query_history_entries(
         if backend:
             result = await conn.execute(
                 f"SELECT id, backend, app, body, prompt, favorite, created_at "
-                f"FROM {_HISTORY_TABLE_NAME} WHERE backend = %s "
+                f"FROM {keys.HISTORY_TABLE_NAME} WHERE backend = %s "
                 f"ORDER BY created_at DESC LIMIT %s",
                 (backend, limit),
             )
         else:
             result = await conn.execute(
                 f"SELECT id, backend, app, body, prompt, favorite, created_at "
-                f"FROM {_HISTORY_TABLE_NAME} "
+                f"FROM {keys.HISTORY_TABLE_NAME} "
                 f"ORDER BY created_at DESC LIMIT %s",
                 (limit,),
             )
@@ -1304,7 +1185,7 @@ async def delete_query_history_entry(pg_url: str, entry_id: int) -> int:
     await ensure_query_history_table(pg_url)
     async with await psycopg.AsyncConnection.connect(pg_url) as conn:
         result = await conn.execute(
-            f"DELETE FROM {_HISTORY_TABLE_NAME} WHERE id = %s",
+            f"DELETE FROM {keys.HISTORY_TABLE_NAME} WHERE id = %s",
             (entry_id,),
         )
         await conn.commit()

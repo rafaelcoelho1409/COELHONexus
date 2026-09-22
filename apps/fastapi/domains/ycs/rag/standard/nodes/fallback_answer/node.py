@@ -28,45 +28,24 @@ are NOT added as citations (no stable per-user-session URL contract
 the rail's click-through UX expects) — they're prose context only,
 explicitly framed as external in the prompt's output rules."""
 from __future__ import annotations
+import domains
+from domains.ycs.runtime.observability.service import traced
+from .... import domain, service
+from ... import params, state
+from . import prompts
 
 import asyncio
 
 from langchain_core.documents import Document
 
-import domains
-from domains.ycs.runtime.observability.service import traced
-
-from .... import domain, service
-from ... import state
-from . import prompts
-
-
-# Tighter than `generate`'s 180s — soft-evidence prompts run shorter
-# context, so the rotator should answer faster. 2026-09-15: 90 → 60s
-# tiering — this is the last-resort answer; waiting 90s+ here is the
-# worst UX on the path.
-_FALLBACK_TIMEOUT_S = 60.0
-
-# Cap on soft-evidence docs passed into the prompt context. The state
-# field is capped at 12 across all rewrite rounds (see
-# `retrieve/node.py::_PRE_GRADE_CAP`); this is the per-call slice
-# the LLM actually reads. 8 keeps total prompt size near 4 KB so
-# every free-tier arm's window stays comfortable.
-_SOFT_EVIDENCE_FOR_PROMPT = 8
-
-# Cap on "related videos" citations surfaced in the right-rail. 6
-# matches the typical `format_citations` payload size — more would
-# overwhelm the rail UI, fewer would feel sparse.
-_RELATED_CITATIONS_CAP = 6
-
 
 def _format_soft_evidence(docs: list[Document]) -> str:
-    """Render up to `_SOFT_EVIDENCE_FOR_PROMPT` docs as a single
+    """Render up to `params.FALLBACK_SOFT_EVIDENCE_FOR_PROMPT` docs as a single
     delimited block suitable for the prompt's `{soft_evidence}` slot.
     Returns a "(no candidate matches)" sentinel string when there
     were zero retrievals — keeps the prompt structure stable for
     the LLM (always has SOMETHING in that slot)."""
-    slice_ = (docs or [])[:_SOFT_EVIDENCE_FOR_PROMPT]
+    slice_ = (docs or [])[:params.FALLBACK_SOFT_EVIDENCE_FOR_PROMPT]
     if not slice_:
         return (
             "(The retriever returned zero candidate documents — "
@@ -117,7 +96,7 @@ def _related_citations(docs: list[Document]) -> list[dict]:
             "source":   meta.get("source", ""),
             "snippet":  (getattr(doc, "page_content", "") or "")[:220].strip(),
         })
-        if len(out) >= _RELATED_CITATIONS_CAP:
+        if len(out) >= params.FALLBACK_RELATED_CITATIONS_CAP:
             break
     return out
 
@@ -163,7 +142,7 @@ async def fallback_answer(state: state.YouTubeRAGState, llm) -> dict:
                 ),
             },
             operation    = "fallback_answer",
-            timeout_s    = _FALLBACK_TIMEOUT_S,
+            timeout_s    = params.FALLBACK_TIMEOUT_S,
             max_attempts = 2,
         )
         return {
@@ -177,7 +156,7 @@ async def fallback_answer(state: state.YouTubeRAGState, llm) -> dict:
                 "The strict grader didn't find direct evidence for "
                 "your question in the indexed transcripts, and the "
                 "fallback generation didn't respond within "
-                f"{int(_FALLBACK_TIMEOUT_S)}s. Please retry — the "
+                f"{int(params.FALLBACK_TIMEOUT_S)}s. Please retry — the "
                 "rotator may pick a healthier arm next attempt."
             ),
             "citations": related_citations,

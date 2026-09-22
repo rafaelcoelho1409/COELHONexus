@@ -4,13 +4,12 @@ Module-level lazy singleton — `Ranker()` first call downloads ~100 MB
 of model weights. Subsequent calls re-use the in-process instance.
 """
 from __future__ import annotations
+import domains
+from . import params
 
 from typing import Any, Optional
 
-import domains
 from langchain_core.documents import Document
-
-from . import params
 
 
 # Lazy — initialized on first `rerank_documents` call.

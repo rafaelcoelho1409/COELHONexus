@@ -37,15 +37,13 @@ exhausts retries with zero corpus evidence surviving the strict
 grader. Every call is short-timeout, best-effort, and degrades to "no
 web context" on ANY failure."""
 from __future__ import annotations
+import domains
+from . import domain, params
 
 import asyncio
 import logging
 import random
 from typing import Any
-
-import domains
-
-from . import domain, params
 
 
 logger = logging.getLogger(__name__)

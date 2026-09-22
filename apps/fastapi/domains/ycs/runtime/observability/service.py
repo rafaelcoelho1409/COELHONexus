@@ -4,13 +4,13 @@
 `attach_span_attrs(prefix, attrs)` attaches a stats dict to the currently-active span.
 """
 from __future__ import annotations
+import infra
 
 import functools
 import logging
 from typing import Awaitable, Callable
 
 from opentelemetry import trace as _otel_trace
-import infra
 
 
 logger = logging.getLogger(__name__)

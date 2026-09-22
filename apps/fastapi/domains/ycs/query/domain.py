@@ -6,12 +6,13 @@ inputs → same outputs. The projectors here take raw store responses
 uniform `QueryHit` dicts so the imperative shell in `service.py`
 stays a thin orchestrator."""
 from __future__ import annotations
+from . import entities, errors, params, patterns
+
+import infra
 
 import json
 import re
 from typing import Any
-
-from . import entities, errors, params, patterns
 
 
 def _snippet(text: str | None) -> str:
@@ -26,9 +27,7 @@ def _snippet(text: str | None) -> str:
 
 # Elasticsearch — YCS only (metadata + transcriptions). The two indexes
 # have different shapes so we route by the `_index` ES echoes back on
-# every hit.
-_ES_METADATA_INDEX:        str = "coelhonexus-youtube-metadata"
-_ES_TRANSCRIPTIONS_INDEX:  str = "coelhonexus-youtube-transcriptions"
+# every hit. Names live in `infra.elasticsearch.keys` (single truth).
 
 
 def project_es_hit(hit: dict[str, Any], app: str = params.APP_YCS) -> dict[str, Any]:
@@ -43,7 +42,7 @@ def project_es_hit(hit: dict[str, Any], app: str = params.APP_YCS) -> dict[str, 
     hit_id = str(hit.get("_id", ""))
     score = hit.get("_score")
 
-    if index == _ES_TRANSCRIPTIONS_INDEX:
+    if index == infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS:
         video_id = src.get("video_id") or hit_id.split("_")[0]
         title    = f"Transcript · {video_id} ({src.get('lang') or 'n/a'})"
         snippet  = _snippet(src.get("content"))
@@ -194,23 +193,6 @@ def declared_es_schema() -> dict[str, Any]:
     }
 
 
-# Qdrant payload field shape — must match `domains.ycs.ingestion.domain
-# .build_payload`. Keep this list in sync if the writer changes.
-_QDRANT_EXPECTED_PAYLOAD_KEYS = (
-    "content",
-    "video_id",
-    "chunk_index",
-    "total_chunks",
-    "title",
-    "channel",
-    "channel_id",
-    "lang",
-    "upload_date",
-    "webpage_url",
-    "content_hash",
-)
-
-
 def declared_qdrant_schema() -> dict[str, Any]:
     """YCS Qdrant collection — vectors are NAMED (`dense` + `sparse`)
     so the AI knows to use `("dense", vector)` tuples on raw search.
@@ -239,7 +221,7 @@ def declared_qdrant_schema() -> dict[str, Any]:
                 "channel_id": {"data_type": "keyword"},
                 "video_id":   {"data_type": "keyword"},
             },
-            "observed_payload_keys": list(_QDRANT_EXPECTED_PAYLOAD_KEYS),
+            "observed_payload_keys": list(params.QDRANT_EXPECTED_PAYLOAD_KEYS),
             # Fields with a TEXT payload index — required for
             # `match: {text: ...}`. YCS ingestion creates none today;
             # for full-text search on transcripts the user should
@@ -927,3 +909,14 @@ def neo4j_jsonify(row: dict) -> dict:
     for k, v in row.items():
         out[k] = neo4j_value(v, Node = Node, Rel = Relationship, Path = Path)
     return out
+
+
+def is_supported(app: str, backend: str) -> bool:
+    """True when the (app, backend) pair has data we can query."""
+    return params.APP_BACKENDS.get(app, {}).get(backend, entities.AppNamespace(False)).available
+
+
+def namespace_label(app: str, backend: str) -> str:
+    """Human-readable label for the (app, backend) target — used in the
+    response's `namespace` field. Empty when unsupported."""
+    return params.APP_BACKENDS.get(app, {}).get(backend, entities.AppNamespace(False)).label

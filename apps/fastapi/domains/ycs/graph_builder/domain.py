@@ -7,19 +7,11 @@ because rapidfuzz IS a library call, but the *decisions* it feeds into
 gate, id coercion, id normalization, obvious-merge shortcut) live here
 so they're trivially testable."""
 from __future__ import annotations
+from . import params, patterns
 
 import math
-import re
 import unicodedata
 from typing import Any, Sequence
-
-from . import params
-
-
-# Pre-compiled regex for collapsing internal whitespace (multiple
-# spaces / tabs / newlines → single space). Module-level so we don't
-# re-compile per call inside the resolve_entities hot path.
-_WS_RE = re.compile(r"\s+")
 
 
 def pick_canonical(name_a: str, name_b: str) -> tuple[str, str]:
@@ -166,7 +158,7 @@ def normalize_entity_id(value: Any) -> str:
         c for c in decomposed if unicodedata.category(c) != "Mn"
     )
     folded = stripped.casefold()
-    return _WS_RE.sub(" ", folded).strip()
+    return patterns.WS_RE.sub(" ", folded).strip()
 
 
 def is_obvious_merge(a: Any, b: Any) -> bool:

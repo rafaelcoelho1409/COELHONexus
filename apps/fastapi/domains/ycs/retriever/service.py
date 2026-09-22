@@ -11,6 +11,8 @@ live together in one `service.py`, same role, same file). Pure dedup
 logic lives in `domain.py`.
 """
 from __future__ import annotations
+import domains, infra
+from . import domain, params, prompts, schemas
 
 import asyncio
 import logging
@@ -33,10 +35,6 @@ from qdrant_client.http.models import (
     SearchParams,
     SparseVector,
 )
-
-import domains, infra
-
-from . import domain, params, prompts, schemas
 
 
 logger = logging.getLogger(__name__)

@@ -7,19 +7,12 @@ acceptable. On structured-output error we DEFAULT to grounded=True
 on a transient LLM hiccup; the graph still bails after MAX_RETRIES).
 """
 from __future__ import annotations
-
-import asyncio
-
 from domains.ycs.runtime.observability.service import traced
-
 from .... import service
 from ... import state
 from . import params, prompts, schemas
 
-
-# 2026-09-15: 60 → 45s tiering — failure defaults to grounded=True
-# (non-blocking judge), so fail fast.
-_HALLUCINATION_TIMEOUT_S = 45.0
+import asyncio
 
 
 @traced("rag.hallucination")
@@ -49,7 +42,7 @@ async def check_hallucination(state: state.YouTubeRAGState, llm) -> dict:
                 "documents":  documents_str,
             },
             operation    = "hallucination",
-            timeout_s    = _HALLUCINATION_TIMEOUT_S,
+            timeout_s    = params.HALLUCINATION_TIMEOUT_S,
             max_attempts = 2,
         )
         # AND the two booleans — both must hold for "good enough".

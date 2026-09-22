@@ -49,7 +49,6 @@ this" note when the web evidence is decisive. Degrades to a silent
 no-op on any failure or genuinely inconclusive result — this can only
 ever ADD a signal, never block or replace the answer."""
 from __future__ import annotations
-
 import domains
 from . import nodes, params, state
 

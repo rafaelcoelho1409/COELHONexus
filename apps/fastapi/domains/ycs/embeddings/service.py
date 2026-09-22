@@ -17,6 +17,8 @@ weeks after NIM retired the previously-hardcoded model on 2026-08-25.
 Dimension is learned from the real endpoint response, never hardcoded —
 no provider publishes it in a models listing."""
 from __future__ import annotations
+import domains
+from . import domain, errors, params
 
 import asyncio
 import logging
@@ -25,10 +27,6 @@ from typing import Optional
 
 from langchain_core.embeddings import Embeddings
 from langchain_qdrant import FastEmbedSparse
-
-import domains
-
-from . import domain, errors, params
 
 
 logger = logging.getLogger(__name__)

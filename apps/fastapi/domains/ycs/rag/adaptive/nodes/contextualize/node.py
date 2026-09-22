@@ -5,20 +5,13 @@ If conversation history exists, rewrite the question to be standalone
 AGI"). Short-circuits with zero LLM cost when history is empty.
 """
 from __future__ import annotations
-
-import asyncio
-
 import domains
 from domains.ycs.runtime.observability.service import traced
-
 from .... import domain, service
 from ... import params, state
 from . import prompts
 
-
-# 2026-09-15: 45 → 30s tiering — failure degrades to skipping the
-# rewrite (uses the question as-is), so fail fast.
-_CONTEXTUALIZE_TIMEOUT_S = 30.0
+import asyncio
 
 
 @traced("rag.contextualize")
@@ -46,7 +39,7 @@ async def contextualize_question(state: state.AdaptiveRAGState, llm) -> dict:
                 "question": state["question"],
             },
             operation    = "contextualize",
-            timeout_s    = _CONTEXTUALIZE_TIMEOUT_S,
+            timeout_s    = params.CONTEXTUALIZE_TIMEOUT_S,
             max_attempts = 2,
         )
         rewritten = domain.strip_think_tags(response.content)

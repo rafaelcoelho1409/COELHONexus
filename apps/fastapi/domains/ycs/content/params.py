@@ -59,3 +59,16 @@ BASE_ARGS: tuple[str, ...] = (
     "--extractor-args", "youtube:player_client=android",
     "--extractor-args", f"youtubepot-bgutilhttp:base_url={_POT_PROVIDER_URL}",
 )
+
+
+# `ytsearch:` is video-only (the YouTube backend ignores `sp` from that
+# entry point), so channel/playlist searches MUST use the regular
+# `youtube.com/results?search_query=...&sp=...` URL — yt-dlp routes
+# those through `YoutubeSearchURLIE` and honors --flat-playlist /
+# --playlist-end the same way.
+SP_KIND_FILTER: dict[str, str] = {
+    "channel":  "EgIQAg%3D%3D",
+    "playlist": "EgIQAw%3D%3D",
+    # Video filter is the default behavior of `ytsearch:` — no override
+    # needed when kind_filter is None or "video".
+}

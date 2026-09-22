@@ -4,14 +4,12 @@ Calls into the deprecated `DocumentGrader` (per-doc parallel
 `asyncio.gather` of structured-output LLM calls).
 """
 from __future__ import annotations
+import domains
+from domains.ycs.runtime.observability.service import traced
+from ... import state
 
 import logging
 import os
-
-import domains
-from domains.ycs.runtime.observability.service import traced
-
-from ... import state
 
 
 logger = logging.getLogger(__name__)

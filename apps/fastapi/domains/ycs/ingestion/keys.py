@@ -15,10 +15,9 @@ problem `pipeline_task/service.py`'s own docstring already calls out.
 The two prefixes share the same literal value (`"ycs:pipeline:"`) by
 convention, not by import — if one changes, update the other."""
 from __future__ import annotations
+from . import params
 
 import hashlib
-
-from . import params
 
 
 def point_id(video_id: str, chunk_index: int) -> str:

@@ -6,5 +6,4 @@ Exception 1 — `import infra.celery.service` (use `infra.celery.service.app`) a
 Celery/Redis env vars); reach it via a direct
 `from domains.ycs.embedding_migration.task import finalize_embedding_migration`."""
 from __future__ import annotations
-
 from . import domain, keys, params, service

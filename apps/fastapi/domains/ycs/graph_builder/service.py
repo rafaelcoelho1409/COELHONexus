@@ -11,6 +11,8 @@ Public API:
   build_video_metadata_graph(neo4j_graph, videos)
 """
 from __future__ import annotations
+import domains
+from . import domain, params, prompts, schemas
 
 import asyncio
 import hashlib
@@ -25,10 +27,6 @@ from langchain_core.documents import Document
 from langchain_experimental.graph_transformers import LLMGraphTransformer
 from langchain_neo4j import Neo4jGraph
 from rapidfuzz import fuzz
-
-import domains
-
-from . import domain, params, prompts, schemas
 
 
 async def _embed_ids_for_resolution(ids: list[str]) -> dict[str, list[float]]:

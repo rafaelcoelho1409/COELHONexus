@@ -16,12 +16,12 @@ The `with` blocks are sync; the actual I/O `await` happens inside. OTel
 context propagates via contextvars across await boundaries.
 """
 from __future__ import annotations
+import infra
 
 import contextlib
 from typing import Iterator
 
 from opentelemetry import trace as _otel_trace
-import infra
 
 
 @contextlib.contextmanager

@@ -7,7 +7,6 @@ Cross-domain references go through the dotted `domains.*` path (see
 docs/CODE-CONVENTIONS.md §8) rather than bare `from domains.x.y import z` imports.
 """
 from __future__ import annotations
-
 from . import dd, rr, settings, ycs
 
 

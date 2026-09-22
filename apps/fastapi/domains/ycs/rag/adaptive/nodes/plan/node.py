@@ -8,16 +8,14 @@ rate-pressure storms (Gemini 429 → planner gives up → 3 generic
 sub-questions). One explicit retry lets the rotator pick a fresh
 arm before we degrade the user's plan to a stub."""
 from __future__ import annotations
-
-import asyncio
-import logging
-
 import domains
 from domains.ycs.runtime.observability.service import traced
-
 from .... import domain, service
 from ... import state
 from . import prompts, schemas
+
+import asyncio
+import logging
 
 
 logger = logging.getLogger(__name__)

@@ -33,6 +33,8 @@ The PlaywrightTranscriptService class is kept TOGETHER per port-fidelity
 with browser-pool + semaphore + retry + health-check coupled. Refactoring
 this class is explicitly out-of-scope for the port."""
 from __future__ import annotations
+import domains, infra
+from . import domain, params
 
 import asyncio
 import logging
@@ -43,10 +45,6 @@ from typing import Any, Callable
 import httpx
 from elasticsearch import AsyncElasticsearch
 from playwright.async_api import async_playwright
-
-import domains, infra
-
-from . import domain, params
 
 
 log = logging.getLogger("uvicorn.error")

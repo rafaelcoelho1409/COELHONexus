@@ -7,12 +7,11 @@ AsyncPostgresSaver pattern (no shared async pool needed for this
 low-volume table).
 """
 from __future__ import annotations
+from . import params
 
 import logging
 
 import psycopg
-
-from . import params
 
 
 logger = logging.getLogger(__name__)

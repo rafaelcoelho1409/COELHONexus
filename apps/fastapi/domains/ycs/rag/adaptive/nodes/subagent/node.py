@@ -14,16 +14,14 @@ Conventions: per `docs/CODE-CONVENTIONS.md` §2, prompts live in
 `prompts.py`, loose tunables in `params.py`, the LangGraph wrapper
 stays thin here."""
 from __future__ import annotations
-
-import asyncio
-import logging
-
 import domains
 from domains.ycs.runtime.observability.service import traced
-
 from .... import domain, service
 from ... import params as _adaptive_params
 from . import params, prompts
+
+import asyncio
+import logging
 
 
 logger = logging.getLogger(__name__)
