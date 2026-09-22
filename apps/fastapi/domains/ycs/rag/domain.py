@@ -184,3 +184,63 @@ def format_web_search_results(raw: Any) -> str:
         if block:
             parts.append(block)
     return "\n\n---\n\n".join(parts)
+
+
+def result_to_graph_updates(result: dict[str, Any]) -> list[dict[str, dict[str, Any]]]:
+    """Synthesize ainvoke() result into node-update events for the SSE bootstrap fallback."""
+    """Synthesize ainvoke() result into node-update events for the SSE bootstrap fallback."""
+    updates: list[dict[str, dict[str, Any]]] = []
+    mode = str(result.get("mode") or "").strip().lower()
+
+    classify_update: dict[str, Any] = {}
+    if mode:
+        classify_update["mode"] = mode
+    if mode == "deep":
+        sub_questions = result.get("sub_questions") or []
+        if sub_questions:
+            classify_update["sub_questions"] = sub_questions
+    if classify_update:
+        updates.append({"classify_query": classify_update})
+
+    if mode == "deep":
+        plan_update: dict[str, Any] = {}
+        sub_questions = result.get("sub_questions") or []
+        if sub_questions:
+            plan_update["sub_questions"] = sub_questions
+        research_plan = str(result.get("research_plan") or "").strip()
+        if research_plan:
+            plan_update["research_plan"] = research_plan
+        if plan_update:
+            updates.append({"plan_research": plan_update})
+        for item in result.get("sub_results") or []:
+            if isinstance(item, dict):
+                updates.append({"run_subagent": {"sub_results": [item]}})
+        synth_update: dict[str, Any] = {}
+        generation = str(result.get("generation") or "")
+        if generation:
+            synth_update["generation"] = generation
+        citations = result.get("citations")
+        if isinstance(citations, list) and citations:
+            synth_update["citations"] = citations
+        if synth_update:
+            updates.append({"synthesize": synth_update})
+        if result.get("confidence_score") is not None:
+            updates.append({
+                "critic": {"confidence_score": result.get("confidence_score")},
+            })
+        return updates
+
+    terminal_node = "direct_answer" if mode == "fast" else "run_standard"
+    terminal_update: dict[str, Any] = {}
+    generation = str(result.get("generation") or "")
+    if generation:
+        terminal_update["generation"] = generation
+    citations = result.get("citations")
+    if isinstance(citations, list) and citations:
+        terminal_update["citations"] = citations
+    search_query = str(result.get("search_query") or "").strip()
+    if search_query:
+        terminal_update["search_query"] = search_query
+    if terminal_update:
+        updates.append({terminal_node: terminal_update})
+    return updates

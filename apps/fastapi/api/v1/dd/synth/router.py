@@ -3,6 +3,7 @@
 chapter_id lives in SynthState, not the thread_id."""
 from __future__ import annotations
 
+import domains
 from . import params
 
 import asyncio
@@ -10,16 +11,9 @@ import json
 import logging
 import time
 
-import domains
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException, Query, Response
 from starlette.responses import StreamingResponse
-
-from domains.dd.synth.task import (
-    resume_synth as resume_synth_task,
-    run_single_chapter as run_single_chapter_task,
-    run_study as run_study_task,
-)
 
 
 logger = logging.getLogger(__name__)
@@ -359,8 +353,9 @@ async def start_synth(
 
             await domains.dd.synth.runtime.cancel.service.clear_cancel(r, study_thread_id)
 
+            import domains.dd.synth.task
             try:
-                async_result = run_study_task.delay(
+                async_result = domains.dd.synth.task.run_study.delay(
                     study_thread_id, slug, plan_chapter_ids, mode,
                 )
             except Exception as e:
@@ -516,8 +511,9 @@ async def start_synth(
 
         await domains.dd.synth.runtime.cancel.service.clear_cancel(r, thread_id)
 
+        import domains.dd.synth.task
         try:
-            async_result = run_single_chapter_task.delay(
+            async_result = domains.dd.synth.task.run_single_chapter.delay(
                 thread_id, slug, chapter_id, mode,
             )
         except Exception as e:
@@ -557,8 +553,9 @@ async def resume_synth(thread_id: str) -> dict:
     finally:
         await r.aclose()
 
+    import domains.dd.synth.task
     try:
-        async_result = resume_synth_task.delay(thread_id)
+        async_result = domains.dd.synth.task.resume_synth.delay(thread_id)
     except Exception as e:
         logger.exception(
             f"[synth] {thread_id}: celery resume dispatch failed: "

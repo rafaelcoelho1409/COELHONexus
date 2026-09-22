@@ -1,10 +1,10 @@
 """Read-only view of the per-framework MinIO content (canonical post-
 finalize corpus). Anything here survives Redis TTL."""
+import domains
 from . import params
 
 import logging
 
-import domains
 import redis.asyncio as redis_aio
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, HTTPException, Response
@@ -25,7 +25,9 @@ async def list_library() -> list[dict]:
         return []
     out: list[dict] = []
     for slug in slugs:
-        m = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)
+        m = await domains.dd.ingestion.storage.service.read_framework_manifest(
+            minio, 
+            slug)
         if not m:
             continue
         cat = catalog.get(slug, {})
@@ -47,7 +49,9 @@ async def list_library() -> list[dict]:
 
 @router.get("/{slug}/manifest")
 async def get_manifest(slug: str) -> dict:
-    m = await domains.dd.ingestion.storage.service.read_framework_manifest(domains.dd.ingestion.storage.service.get_storage(), slug)
+    m = await domains.dd.ingestion.storage.service.read_framework_manifest(
+        domains.dd.ingestion.storage.service.get_storage(), 
+        slug)
     if not m:
         raise HTTPException(
             status_code=404,
@@ -58,7 +62,10 @@ async def get_manifest(slug: str) -> dict:
 
 @router.get("/{slug}/pages/{idx}")
 async def get_page(slug: str, idx: int) -> dict:
-    body = await domains.dd.ingestion.storage.service.read_framework_page(domains.dd.ingestion.storage.service.get_storage(), slug, idx)
+    body = await domains.dd.ingestion.storage.service.read_framework_page(
+        domains.dd.ingestion.storage.service.get_storage(), 
+        slug, 
+        idx)
     if body is None:
         raise HTTPException(
             status_code=404,
@@ -90,7 +97,8 @@ async def get_artifact(slug: str, name: str) -> Response:
     ext = safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else ""
     media_type = params.ARTIFACT_MIME.get(ext, "application/octet-stream")
     return Response(
-        content=data, media_type=media_type,
+        content=data, 
+        media_type=media_type,
         headers={
             "Cache-Control": "public, max-age=31536000, immutable",
             "Content-Length": str(len(data)),
@@ -121,15 +129,21 @@ async def delete_framework(slug: str) -> dict:
                 f"{type(e).__name__}: {e}"
             )
             failed.append(prefix)
-
     r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        domains.dd.planner.keys.redis_url(), 
+        socket_connect_timeout=3.0, 
+        socket_timeout=5.0,
     )
     lock_released = False
     try:
-        held_run_id = await domains.dd.ingestion.progress.service.read_lock(r, slug)
+        held_run_id = await domains.dd.ingestion.progress.service.read_lock(
+            r, 
+            slug)
         if held_run_id:
-            lock_released = await domains.dd.ingestion.progress.service.release_lock(r, slug, held_run_id)
+            lock_released = await domains.dd.ingestion.progress.service.release_lock(
+                r, 
+                slug, 
+                held_run_id)
     except Exception as e:
         logger.warning(
             f"[delete] Redis lock cleanup failed for {slug!r}: "
@@ -137,7 +151,6 @@ async def delete_framework(slug: str) -> dict:
         )
     finally:
         await r.aclose()
-
     return {
         "slug":           slug,
         "deleted":        deleted,

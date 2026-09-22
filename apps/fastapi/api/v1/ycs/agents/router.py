@@ -1,14 +1,13 @@
 """ycs/agents — agentic RAG router: ask (sync+stream), ingest, graph stats, pipeline."""
 from __future__ import annotations
 
-from . import domain, schemas, service
+from . import domain, params, schemas, service
 
 import asyncio
 import json
 import logging
 import time
 import uuid
-from typing import Any
 
 import domains
 from fastapi import APIRouter, HTTPException, Request
@@ -18,149 +17,8 @@ from fastapi.responses import StreamingResponse
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Min gap between incremental Postgres writes; smaller = more live, larger = fewer PG round-trips.
-_STREAM_PERSIST_INTERVAL_S = 2.5
-
-# If no astream() event arrives within this window at bootstrap, fall back to ainvoke()
-# (local k3d hangs before the first stream event while ainvoke completes normally).
-# 2026-09-16: 15s → 60s. 15s assumed a healthy endpoint (prepare = 2 fast LLM
-# calls, first event in seconds). Observed live on a degraded endpoint: prepare
-# alone exceeds 15s while the graph is healthy-but-slow, so the fallback fired
-# spuriously and switched a good stream to blind ainvoke — plan cards never
-# painted, only the spinner, until the whole DEEP run landed at once. 60s keeps
-# the live path (plan render + per-card custom flips) through slow patches;
-# heartbeats keep TCP alive meanwhile, and the 15-min watchdog still guards a
-# genuinely hung producer. Tradeoff accepted: a true k3d-level hang now costs
-# 60s of spinner before fallback instead of 15s.
-_ASTREAM_BOOTSTRAP_FALLBACK_S = 60.0
-_ASTREAM_BOOTSTRAP_FALLBACK_TICKS = max(
-    1, int(_ASTREAM_BOOTSTRAP_FALLBACK_S / _STREAM_PERSIST_INTERVAL_S),
-)
-
-# 15 min ≈ 3× the slowest DEEP sub-agent (recursion_limit=12, cap=3).
-_LANGGRAPH_WATCHDOG_S = 15 * 60.0
-
-# Global per-request deadlines by requested mode (2026-09-15): bounds
-# the total grind during provider outages — DD's backstop principle at
-# graph scope. Auto gets the roomy default since it may classify deep;
-# forced modes get exact budgets. On expiry the request serves ONE
-# bounded `fallback_answer` pass (general knowledge + whatever was
-# asked) instead of spinning until the client gives up.
-_ASK_DEADLINE_S = {
-    "fast":     300.0,
-    "standard": 600.0,
-    "deep":     1500.0,
-}
-_ASK_DEADLINE_DEFAULT_S = 900.0
-
-# Hung PG connection blocks the heartbeat.
-_PERSIST_TIMEOUT_S = 3.0
-
 # In-memory per-pod; upgrade to Redis for >1 worker.
 _CANCELLED_TURN_IDS: set[int] = set()
-
-
-def _langfuse_ycs_input(
-    *,
-    question: str,
-    route: str,
-    force_mode: str,
-    channel_ids: list[str],
-    thread_id: str,
-) -> dict:
-    return {
-        "question": question,
-        "route": route,
-        "force_mode": force_mode or "",
-        "channel_ids": list(channel_ids or []),
-        "thread_id": thread_id,
-    }
-
-
-def _langfuse_ycs_output(
-    *,
-    status: str,
-    answer: str,
-    mode: str,
-    grounded: bool,
-    citations: list,
-    sub_questions: list | None = None,
-    confidence_score: float | None = None,
-    error: str | None = None,
-) -> dict:
-    output = {
-        "status": status,
-        "answer": answer[:4000],
-        "mode": mode or "",
-        "grounded": bool(grounded),
-        "citation_count": len(citations or []),
-    }
-    if sub_questions is not None:
-        output["sub_question_count"] = len(sub_questions or [])
-    if confidence_score is not None:
-        output["confidence_score"] = confidence_score
-    if error:
-        output["error"] = error
-    return output
-
-
-def _result_to_graph_updates(result: dict[str, Any]) -> list[dict[str, dict[str, Any]]]:
-    """Synthesize ainvoke() result into node-update events for the SSE bootstrap fallback."""
-    updates: list[dict[str, dict[str, Any]]] = []
-    mode = str(result.get("mode") or "").strip().lower()
-
-    classify_update: dict[str, Any] = {}
-    if mode:
-        classify_update["mode"] = mode
-    if mode == "deep":
-        sub_questions = result.get("sub_questions") or []
-        if sub_questions:
-            classify_update["sub_questions"] = sub_questions
-    if classify_update:
-        updates.append({"classify_query": classify_update})
-
-    if mode == "deep":
-        plan_update: dict[str, Any] = {}
-        sub_questions = result.get("sub_questions") or []
-        if sub_questions:
-            plan_update["sub_questions"] = sub_questions
-        research_plan = str(result.get("research_plan") or "").strip()
-        if research_plan:
-            plan_update["research_plan"] = research_plan
-        if plan_update:
-            updates.append({"plan_research": plan_update})
-        for item in result.get("sub_results") or []:
-            if isinstance(item, dict):
-                updates.append({"run_subagent": {"sub_results": [item]}})
-        synth_update: dict[str, Any] = {}
-        generation = str(result.get("generation") or "")
-        if generation:
-            synth_update["generation"] = generation
-        citations = result.get("citations")
-        if isinstance(citations, list) and citations:
-            synth_update["citations"] = citations
-        if synth_update:
-            updates.append({"synthesize": synth_update})
-        if result.get("confidence_score") is not None:
-            updates.append({
-                "critic": {"confidence_score": result.get("confidence_score")},
-            })
-        return updates
-
-    terminal_node = "direct_answer" if mode == "fast" else "run_standard"
-    terminal_update: dict[str, Any] = {}
-    generation = str(result.get("generation") or "")
-    if generation:
-        terminal_update["generation"] = generation
-    citations = result.get("citations")
-    if isinstance(citations, list) and citations:
-        terminal_update["citations"] = citations
-    search_query = str(result.get("search_query") or "").strip()
-    if search_query:
-        terminal_update["search_query"] = search_query
-    if terminal_update:
-        updates.append({terminal_node: terminal_update})
-    return updates
 
 
 @router.get("/usage/{thread_id}")
@@ -367,7 +225,7 @@ async def rag_search(
                     "langfuse.observation.metadata.workflow": "ycs_ask",
                 },
             ):
-                infra.langfuse.spans.set_current_span_langfuse_io(input_data = _langfuse_ycs_input(
+                infra.langfuse.spans.set_current_span_langfuse_io(input_data = domains.ycs.runtime.observability.domain.langfuse_ycs_input(
                     question = payload.question,
                     route = "search",
                     force_mode = payload.force_mode or "",
@@ -386,9 +244,9 @@ async def rag_search(
                     "channel_count": len(payload.channel_ids or []),
                 })
                 try:
-                    _deadline = _ASK_DEADLINE_S.get(
+                    _deadline = params.ASK_DEADLINE_S.get(
                         (payload.force_mode or "").lower(),
-                        _ASK_DEADLINE_DEFAULT_S,
+                        params.ASK_DEADLINE_DEFAULT_S,
                     )
                     try:
                         result = await asyncio.wait_for(
@@ -421,7 +279,7 @@ async def rag_search(
                             "_deadline_hit":     True,
                         }
                 except Exception as e:
-                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
                         status = "error",
                         answer = "",
                         mode = payload.force_mode or "unknown",
@@ -430,7 +288,7 @@ async def rag_search(
                         error = str(e),
                     ))
                     raise
-                infra.langfuse.spans.set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                infra.langfuse.spans.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
                     status = "done",
                     answer = str(result.get("generation") or ""),
                     mode = str(result.get("mode") or payload.force_mode or "standard"),
@@ -812,7 +670,7 @@ async def rag_search_stream(
             },
         )
         _span_cm.__enter__()
-        infra.langfuse.spans.set_current_span_langfuse_io(input_data = _langfuse_ycs_input(
+        infra.langfuse.spans.set_current_span_langfuse_io(input_data = domains.ycs.runtime.observability.domain.langfuse_ycs_input(
             question = payload.question,
             route = "search_stream",
             force_mode = payload.force_mode or "",
@@ -862,15 +720,15 @@ async def rag_search_stream(
         # `/search`'s per-mode table): the silence watchdog below only
         # catches a hung producer — a grinding producer (events flowing,
         # no progress) needs a wall-clock bound too.
-        _stream_deadline_s = _ASK_DEADLINE_S.get(
-            (payload.force_mode or "").lower(), _ASK_DEADLINE_DEFAULT_S,
+        _stream_deadline_s = params.ASK_DEADLINE_S.get(
+            (payload.force_mode or "").lower(), params.ASK_DEADLINE_DEFAULT_S,
         )
         # Heartbeat in the main loop, not a background task — CancelledError would silently kill a background coroutine.
         # DEEP sub-agents yield zero parent events for 5-15 min; ticks prevent false stall detection.
         hb_seq                  = 0
         heartbeats_since_event  = 0
         _MAX_HEARTBEATS_BEFORE_WATCHDOG = int(
-            _LANGGRAPH_WATCHDOG_S / _STREAM_PERSIST_INTERVAL_S
+            params.LANGGRAPH_WATCHDOG_S / params.STREAM_PERSIST_INTERVAL_S
         )
         try:
             if turn_id is not None:
@@ -939,7 +797,7 @@ async def rag_search_stream(
                             initial_state,
                             config = config,
                         )
-                    for ev in _result_to_graph_updates(result):
+                    for ev in domains.ycs.rag.domain.result_to_graph_updates(result):
                         await event_queue.put(("event", ev))
                     await event_queue.put(("done", None))
                 except asyncio.CancelledError:
@@ -976,14 +834,14 @@ async def rag_search_stream(
                     try:
                         kind, queue_payload = await asyncio.wait_for(
                             event_queue.get(),
-                            timeout = _STREAM_PERSIST_INTERVAL_S,
+                            timeout = params.STREAM_PERSIST_INTERVAL_S,
                         )
                     except asyncio.TimeoutError:
                         heartbeats_since_event += 1
                         if heartbeats_since_event >= _MAX_HEARTBEATS_BEFORE_WATCHDOG:
                             logger.warning(
                                 f"[ycs:stream] watchdog: no LangGraph "
-                                f"event for {int(_LANGGRAPH_WATCHDOG_S)}s "
+                                f"event for {int(params.LANGGRAPH_WATCHDOG_S)}s "
                                 f"on turn_id={turn_id} — assuming a "
                                 f"node hung silently inside the graph. "
                                 f"Bailing."
@@ -1001,7 +859,7 @@ async def rag_search_stream(
                                         turn_id, last_generation, last_mode,
                                         thinking_state = snap,
                                     ),
-                                    timeout = _PERSIST_TIMEOUT_S,
+                                    timeout = params.PERSIST_TIMEOUT_S,
                                 )
                             except (asyncio.TimeoutError, Exception) as e:
                                 logger.warning(
@@ -1012,12 +870,12 @@ async def rag_search_stream(
                             not saw_graph_event
                             and not using_invoke_fallback
                             and heartbeats_since_event
-                            >= _ASTREAM_BOOTSTRAP_FALLBACK_TICKS
+                            >= params.ASTREAM_BOOTSTRAP_FALLBACK_TICKS
                         ):
                             using_invoke_fallback = True
                             logger.warning(
                                 "[ycs:stream] no LangGraph stream event "
-                                f"after {int(_ASTREAM_BOOTSTRAP_FALLBACK_S)}s "
+                                f"after {int(params.ASTREAM_BOOTSTRAP_FALLBACK_S)}s "
                                 f"on turn_id={turn_id}; cancelling "
                                 "`astream()` producer and falling back "
                                 "to `ainvoke()`"
@@ -1090,7 +948,7 @@ async def rag_search_stream(
                         now_t = time.monotonic()
                         should_persist = turn_id is not None and (
                             not first_persist_done
-                            or now_t - last_persist_t >= _STREAM_PERSIST_INTERVAL_S
+                            or now_t - last_persist_t >= params.STREAM_PERSIST_INTERVAL_S
                         )
                         if should_persist:
                             try:
@@ -1100,7 +958,7 @@ async def rag_search_stream(
                                         turn_id, last_generation, last_mode,
                                         thinking_state = thinking_state,
                                     ),
-                                    timeout = _PERSIST_TIMEOUT_S,
+                                    timeout = params.PERSIST_TIMEOUT_S,
                                 )
                                 last_persisted = last_generation
                                 last_persist_t = now_t
@@ -1122,7 +980,7 @@ async def rag_search_stream(
                         duration_s = max(time.monotonic() - t_run_start, 0.0),
                         citation_count = len(last_citations),
                     )
-                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
                         status = "cancelled",
                         answer = last_generation,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1196,7 +1054,7 @@ async def rag_search_stream(
                                     turn_id, last_generation, last_mode,
                                     thinking_state = thinking_state,
                                 ),
-                                timeout = _PERSIST_TIMEOUT_S,
+                                timeout = params.PERSIST_TIMEOUT_S,
                             )
                         except (asyncio.TimeoutError, Exception) as e:
                             logger.warning(
@@ -1211,7 +1069,7 @@ async def rag_search_stream(
                         duration_s = max(time.monotonic() - t_run_start, 0.0),
                         citation_count = len(last_citations),
                     )
-                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
                         status = "done",
                         answer = last_generation,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1241,7 +1099,7 @@ async def rag_search_stream(
                 elif stalled:
                     sentinel = (
                         "(no response — pipeline stalled after "
-                        f"{int(_LANGGRAPH_WATCHDOG_S / 60)} min "
+                        f"{int(params.LANGGRAPH_WATCHDOG_S / 60)} min "
                         "of silence. A node hung without a "
                         "timeout; expand Thinking to see the "
                         "last reachable step.)"
@@ -1260,7 +1118,7 @@ async def rag_search_stream(
                                     turn_id, sentinel, last_mode,
                                     thinking_state = thinking_state,
                                 ),
-                                timeout = _PERSIST_TIMEOUT_S,
+                                timeout = params.PERSIST_TIMEOUT_S,
                             )
                         except (asyncio.TimeoutError, Exception) as e:
                             logger.warning(
@@ -1275,7 +1133,7 @@ async def rag_search_stream(
                         duration_s = max(time.monotonic() - t_run_start, 0.0),
                         citation_count = len(last_citations),
                     )
-                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
                         status = "stalled",
                         answer = sentinel,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1307,7 +1165,7 @@ async def rag_search_stream(
                                     turn_id, last_generation, last_mode,
                                     thinking_state = thinking_state,
                                 ),
-                                timeout = _PERSIST_TIMEOUT_S,
+                                timeout = params.PERSIST_TIMEOUT_S,
                             )
                         except (asyncio.TimeoutError, Exception) as e:
                             logger.warning(
@@ -1330,7 +1188,7 @@ async def rag_search_stream(
                                     last_mode,
                                     thinking_state = thinking_state,
                                 ),
-                                timeout = _PERSIST_TIMEOUT_S,
+                                timeout = params.PERSIST_TIMEOUT_S,
                             )
                         except (asyncio.TimeoutError, Exception) as e:
                             logger.warning(
@@ -1372,7 +1230,7 @@ async def rag_search_stream(
                         if last_generation else
                         "(no response — see Thinking for pipeline status)"
                     )
-                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
                         status = "done",
                         answer = final_answer,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1421,7 +1279,7 @@ async def rag_search_stream(
                 duration_s = max(time.monotonic() - t_run_start, 0.0),
                 citation_count = len(last_citations),
             )
-            infra.langfuse.spans.set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+            infra.langfuse.spans.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
                 status = "client_disconnect",
                 answer = last_generation,
                 mode = last_mode or payload.force_mode or "unknown",
@@ -1496,7 +1354,7 @@ async def rag_search_stream(
                 duration_s = max(time.monotonic() - t_run_start, 0.0),
                 citation_count = len(last_citations),
             )
-            infra.langfuse.spans.set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+            infra.langfuse.spans.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
                 status = "error",
                 answer = last_generation,
                 mode = last_mode or payload.force_mode or "unknown",

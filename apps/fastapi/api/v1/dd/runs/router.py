@@ -1,16 +1,13 @@
 """In-flight ingestion lifecycle. Single-flight per slug via Redis lock;
 the running tier polls a cancel flag and surrenders cleanly."""
-
+import domains
 from . import schemas
+from .. import resolver
 
 import uuid
 
-import domains
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
-
-from .. import resolver
-
 
 router = APIRouter()
 

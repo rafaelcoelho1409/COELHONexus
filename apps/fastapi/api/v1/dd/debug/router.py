@@ -1,9 +1,7 @@
 """Dev-time stage isolation. Synchronous (no Celery, no lock, no
 progress writes) so exceptions surface with full stack traces.
 Not gated — single-user dev cluster only."""
-
 import domains
-
 from . import params
 from .. import resolver
 
@@ -19,7 +17,9 @@ router = APIRouter()
 
 
 @router.post("/resolve/{slug}")
-async def debug_resolve(slug: str, entry: resolver.schemas.CatalogEntry) -> dict:
+async def debug_resolve(
+    slug: str, 
+    entry: resolver.schemas.CatalogEntry) -> dict:
     best = None
     available: list[dict] = []
     for kind in ("llms_full", "llms_txt", "sitemap", "docs", "github"):
@@ -61,18 +61,27 @@ async def debug_ingest_one_tier(
     debug_run_id = f"debug-tier{tier}-{slug}-{int(time.time())}"
     progress = domains.dd.ingestion.progress.service.Progress(debug_run_id)
     r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=10.0,
+        domains.dd.planner.keys.redis_url(), 
+        socket_connect_timeout=3.0, 
+        socket_timeout=10.0,
     )
     minio = domains.dd.ingestion.storage.service.get_storage()
-    store = domains.dd.ingestion.storage.service.Store(debug_run_id, slug, r, minio)
-
+    store = domains.dd.ingestion.storage.service.Store(
+        debug_run_id, 
+        slug, 
+        r, 
+        minio)
     try:
         mod = params.TIER_BY_KIND[kind][1]
         kwargs: dict = {
-            "url": url, "framework_slug": slug,
-            "progress": progress, "store": store,
+            "url": url, 
+            "framework_slug": slug,
+            "progress": progress, 
+            "store": store,
         }
-        if mod in (domains.dd.ingestion.tiers.tier3, domains.dd.ingestion.tiers.tier4):
+        if mod in (
+            domains.dd.ingestion.tiers.tier3, 
+            domains.dd.ingestion.tiers.tier4):
             kwargs["framework_name"] = entry["name"]
         if mod is domains.dd.ingestion.tiers.tier4 and language is not None:
             kwargs["language"] = language
@@ -86,7 +95,6 @@ async def debug_ingest_one_tier(
                 "hint": "use tier=2 next; the body looks like a llms.txt index",
                 "details": str(e),
             }
-
         return {
             "status": "done",
             "slug": slug, "tier": kind, "url": url,
@@ -106,19 +114,25 @@ async def debug_ingest_one_tier(
 
 
 @router.post("/post/{slug}")
-async def debug_post(slug: str, entry: resolver.schemas.CatalogEntry) -> dict:
+async def debug_post(
+    slug: str, 
+    entry: resolver.schemas.CatalogEntry) -> dict:
     """Re-runs post-process against current MinIO content (useful when
     tuning SPLIT_MIN_SECTION_BYTES without re-downloading)."""
     debug_run_id = f"debug-post-{slug}-{int(time.time())}"
     progress = domains.dd.ingestion.progress.service.Progress(debug_run_id)
     r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=10.0,
+        domains.dd.planner.keys.redis_url(), 
+        socket_connect_timeout=3.0, 
+        socket_timeout=10.0,
     )
     minio = domains.dd.ingestion.storage.service.get_storage()
-
     try:
         store = await domains.dd.ingestion.storage.service.Store.from_existing(
-            debug_run_id, slug, r, minio,
+            debug_run_id, 
+            slug, 
+            r, 
+            minio,
         )
         if not store.manifest:
             raise HTTPException(
@@ -156,26 +170,34 @@ async def debug_post(slug: str, entry: resolver.schemas.CatalogEntry) -> dict:
 
 
 @router.post("/finalize/{slug}")
-async def debug_finalize(slug: str, entry: resolver.schemas.CatalogEntry) -> dict:
+async def debug_finalize(
+    slug: str, 
+    entry: resolver.schemas.CatalogEntry) -> dict:
     """Re-writes the canonical manifest from prior in-memory state.
     Useful when the manifest payload shape changes."""
     debug_run_id = f"debug-finalize-{slug}-{int(time.time())}"
     r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=10.0,
+        domains.dd.planner.keys.redis_url(), 
+        socket_connect_timeout=3.0, 
+        socket_timeout=10.0,
     )
     minio = domains.dd.ingestion.storage.service.get_storage()
-
     try:
-        store = await domains.dd.ingestion.storage.service.Store.from_existing(debug_run_id, slug, r, minio)
+        store = await domains.dd.ingestion.storage.service.Store.from_existing(
+            debug_run_id, 
+            slug, 
+            r, 
+            minio)
         if not store.manifest:
             raise HTTPException(
                 status_code=404,
                 detail=f"no MinIO manifest for {slug!r} — run ingest first",
             )
-        await store.finalize(extra={
-            "framework_name": entry["name"],
-            "run_id": debug_run_id,
-            "note": "rewritten by debug-finalize",
+        await store.finalize(
+            extra={
+                "framework_name": entry["name"],
+                "run_id": debug_run_id,
+                "note": "rewritten by debug-finalize",
         })
         return {
             "slug": slug,
@@ -193,27 +215,49 @@ async def debug_finalize(slug: str, entry: resolver.schemas.CatalogEntry) -> dic
 @router.post("/snapshot/{slug}")
 async def debug_take_snapshot(
     slug: str,
-    entry: resolver.schemas.CatalogEntry, label: Optional[str] = None,
+    entry: resolver.schemas.CatalogEntry, 
+    label: Optional[str] = None,
 ) -> dict:
-    return await domains.dd.ingestion.storage.service.take_snapshot(domains.dd.ingestion.storage.service.get_storage(), slug, label=label)
+    return await domains.dd.ingestion.storage.service.take_snapshot(
+        domains.dd.ingestion.storage.service.get_storage(), 
+        slug, 
+        label=label)
 
 
 @router.get("/snapshots/{slug}")
-async def debug_list_snapshots(slug: str, entry: resolver.schemas.CatalogEntry) -> dict:
+async def debug_list_snapshots(
+    slug: str, 
+    entry: resolver.schemas.CatalogEntry) -> dict:
     return {
         "slug": slug,
-        "snapshots": await domains.dd.ingestion.storage.service.list_snapshots(domains.dd.ingestion.storage.service.get_storage(), slug),
+        "snapshots": await domains.dd.ingestion.storage.service.list_snapshots(
+            domains.dd.ingestion.storage.service.get_storage(), 
+            slug),
     }
 
 
 @router.post("/restore/{slug}")
-async def debug_restore_snapshot(slug: str, entry: resolver.schemas.CatalogEntry, ts: str) -> dict:
+async def debug_restore_snapshot(
+    slug: str, 
+    entry: resolver.schemas.CatalogEntry, 
+    ts: str) -> dict:
     try:
-        return await domains.dd.ingestion.storage.service.restore_snapshot(domains.dd.ingestion.storage.service.get_storage(), slug, ts)
+        return await domains.dd.ingestion.storage.service.restore_snapshot(
+            domains.dd.ingestion.storage.service.get_storage(), 
+            slug, 
+            ts)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(
+            status_code=404, 
+            detail=str(e))
 
 
 @router.delete("/snapshot/{slug}")
-async def debug_delete_snapshot(slug: str, entry: resolver.schemas.CatalogEntry, ts: str) -> dict:
-    return await domains.dd.ingestion.storage.service.delete_snapshot(domains.dd.ingestion.storage.service.get_storage(), slug, ts)
+async def debug_delete_snapshot(
+    slug: str, 
+    entry: resolver.schemas.CatalogEntry, 
+    ts: str) -> dict:
+    return await domains.dd.ingestion.storage.service.delete_snapshot(
+        domains.dd.ingestion.storage.service.get_storage(), 
+        slug, 
+        ts)

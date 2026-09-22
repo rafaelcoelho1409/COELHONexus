@@ -1,11 +1,11 @@
 """Cross-stage pipeline-state introspection. Per-slug cache map +
 global Planner/Synth lock status."""
+import domains
+
 import logging
 
-import domains
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
-
 
 
 logger = logging.getLogger(__name__)
@@ -17,14 +17,17 @@ async def pipeline_active() -> dict:
     """Drives the cross-stage proactive gate. Ingestion omitted — it's
     orthogonal to the Planner/Synth lock block."""
     r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        domains.dd.planner.keys.redis_url(), 
+        socket_connect_timeout=3.0, 
+        socket_timeout=5.0,
     )
-
     async def _first_lock(prefix: str) -> dict | None:
         cursor = 0
         while True:
             cursor, keys = await r.scan(
-                cursor=cursor, match=f"{prefix}*", count=100,
+                cursor=cursor, 
+                match=f"{prefix}*", 
+                count=100,
             )
             for k in keys:
                 ks = k.decode() if isinstance(k, bytes) else k
@@ -40,11 +43,10 @@ async def pipeline_active() -> dict:
                 }
             if cursor == 0:
                 return None
-
     try:
         return {
-            "planner": await _first_lock("dd:planner:lock:"),
-            "synth":   await _first_lock("dd:synth:lock:"),
+            "planner": await _first_lock(domains.dd.planner.keys.lock_prefix()),
+            "synth":   await _first_lock(domains.dd.synth.keys.lock_prefix()),
         }
     finally:
         await r.aclose()
@@ -58,16 +60,13 @@ async def pipeline_state(slug: str) -> dict:
             status_code=400,
             detail=f"invalid slug {slug!r}; slashes not allowed",
         )
-
     minio = domains.dd.ingestion.storage.service.get_storage()
-
     async def _exists(key: str) -> bool:
         try:
             return await minio.exists(key)
         except Exception as e:
             logger.info(f"[pipeline-state] exists({key!r}) failed: {e}")
             return False
-
     async def _has_any(prefix: str) -> bool:
         try:
             keys = await minio.list(prefix)
@@ -76,8 +75,8 @@ async def pipeline_state(slug: str) -> dict:
             return False
         return bool(keys)
 
-    ingestion = await _exists(f"ingestion/{slug}/manifest.json")
-    planner   = await _exists(f"planner/{slug}/plan-latest.json")
+    ingestion = await _exists(domains.dd.ingestion.storage.keys.manifest_key(slug))
+    planner   = await _exists(domains.dd.planner.keys.plan_latest_key(slug))
     synth     = await _has_any(f"synth/{slug}/")
     study = False
     if synth:

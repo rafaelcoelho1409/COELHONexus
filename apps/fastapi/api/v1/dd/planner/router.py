@@ -3,6 +3,7 @@ is the HTTP/SSE layer. SSE via Redis pub/sub, cancel via Redis flag,
 checkpoints in Postgres."""
 from __future__ import annotations
 
+import domains
 from . import params
 
 import asyncio
@@ -10,7 +11,6 @@ import json
 import logging
 import time
 
-import domains
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException, Response
 from starlette.responses import StreamingResponse
@@ -74,16 +74,6 @@ async def planner_timing(slug: str, response: Response) -> dict:
 
 
 
-_BUDGET_GATE_MIN_DOCS = 120
-
-
-async def _budget_gate(slug: str, manifest: dict) -> None:
-    """Wave H4 (opt-in KD_PLANNER_BUDGET_GATE): retired with the gateway —
-    there is no pool/cooldown surface to query anymore (single external
-    endpoint), so the gate is a no-op kept for call-site compat."""
-    return
-
-
 @router.post("/{slug}")
 async def start_planner(
     slug: str, mode: str = "llm", thread_id: str | None = None,
@@ -100,8 +90,6 @@ async def start_planner(
             status_code=404,
             detail=f"no ingested corpus for {slug!r} — run ingestion first",
         )
-
-    await _budget_gate(slug, _manifest)  # Wave H4 — no-op unless KD_PLANNER_BUDGET_GATE
 
     if not thread_id:
         thread_id = domains.dd.planner.runtime.dispatch.service.make_thread_id(slug)

@@ -45,6 +45,12 @@ def lock_key(slug: str) -> str:
     return f"dd:planner:lock:{slug}"
 
 
+def lock_prefix() -> str:
+    """Scan-match prefix for `lock_key` — must stay an exact prefix of
+    it, or active-run scans silently miss (no error, just empty)."""
+    return "dd:planner:lock:"
+
+
 def active_run_key(slug: str) -> str:
     return f"dd:planner:current:{slug}"
 

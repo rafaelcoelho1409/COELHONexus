@@ -1,9 +1,9 @@
 """Step 1 of the pipeline. Reads sources.yaml; tier priority:
 llms_full > llms_txt > sitemap > docs > github."""
 import domains
-from fastapi import APIRouter
-
 from . import schemas
+
+from fastapi import APIRouter
 
 
 router = APIRouter()
