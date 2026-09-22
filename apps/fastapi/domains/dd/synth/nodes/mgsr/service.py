@@ -16,10 +16,6 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Replan-call attempts before falling back to fallback_decision(). Same
-# retry idiom as outline_sdp/digest_construct/sawc_write/checklist_eval.
-_MAX_CALL_ATTEMPTS = 2
-
 
 async def _run_llm_replan(
     *,
@@ -47,7 +43,7 @@ async def _run_llm_replan(
 
     deployment: Optional[str] = None
     last_error: Optional[Exception] = None
-    for call_attempt in range(_MAX_CALL_ATTEMPTS):
+    for call_attempt in range(params.MAX_CALL_ATTEMPTS):
         try:
             response, meta = await domains.settings.chat.service.chat_text_async(
                 prompt,
@@ -60,7 +56,7 @@ async def _run_llm_replan(
             break
         except Exception as e:
             last_error = e
-            if call_attempt < _MAX_CALL_ATTEMPTS - 1:
+            if call_attempt < params.MAX_CALL_ATTEMPTS - 1:
                 # This node fires once per chapter per CoRefine iteration
                 # (not per-source/per-section like its siblings), so a
                 # cheap retry costs little — same idiom as
@@ -72,7 +68,7 @@ async def _run_llm_replan(
     if last_error is not None:
         wall_ms = int((time.monotonic() - t0) * 1000)
         logger.warning(
-            f"[mgsr_replan] LLM call failed after {_MAX_CALL_ATTEMPTS} "
+            f"[mgsr_replan] LLM call failed after {params.MAX_CALL_ATTEMPTS} "
             f"attempt(s): {type(last_error).__name__}: {last_error}"
         )
         return None, None, False, wall_ms

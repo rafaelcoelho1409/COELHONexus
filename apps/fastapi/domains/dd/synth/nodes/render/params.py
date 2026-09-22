@@ -31,3 +31,18 @@ NOISE_IDENTS = frozenset({
 })
 
 BLOB_PREFIX = "synth"
+
+
+# Languages where the LLM call is skipped — content is either plain
+# text (no formatting concept) or terminal output (whitespace is
+# semantic and any reformat is wrong).
+SKIP_LANGS = frozenset({
+    "", "text", "plaintext", "txt", "output", "console",
+    "log", "json", "yaml", "yml", "xml", "diff", "patch",
+    "mermaid", "ansi",
+})
+
+# Python gets AST validation (stdlib, no deps) — observed Mintlify MDX flattening strips function-body indent. Fail → retry LLM with error; second fail → keep best attempt.
+PYTHON_LANGS = frozenset({"python", "py", "py3", "python3"})
+
+NORMALIZE_MAX_CALL_ATTEMPTS = 2

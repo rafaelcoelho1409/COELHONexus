@@ -11,3 +11,6 @@ SECTION_ID_RE = re.compile(r"^s\d{1,3}$")
 
 # Hash-only matcher — the strict `/>` anchor was wrong when lang="..." is present; must match <code-ref hash="X" lang="python"/> too.
 VAULT_HASH_IN_TEXT_RE = re.compile(r'<code-ref hash="([0-9a-f]{16})"')
+
+
+JSON_RE = re.compile(r"\{.*\}", re.DOTALL)

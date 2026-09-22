@@ -88,3 +88,7 @@ AUTODOC_SELECTOR = (
     # Older Sphinx + nbsphinx (pre-namespaced)
     "dl.class, dl.function, dl.exception, dl.data"
 )
+
+
+# Landing sidebar ≥ this many links → assume full tree rendered (skip expansion BFS).
+FULL_TREE_HINT = 25

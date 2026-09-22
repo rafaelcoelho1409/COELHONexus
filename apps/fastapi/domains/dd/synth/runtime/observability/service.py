@@ -1,13 +1,12 @@
 """OTel span helpers for synth nodes; @traced wraps a node span with chapter_id for per-chapter Gantt, attach_span_attrs adds stats dict to active span."""
 from __future__ import annotations
+import domains, infra
 
 import functools
 import logging
 from typing import Awaitable, Callable
 
 from opentelemetry import trace
-
-import domains, infra
 
 
 logger = logging.getLogger(__name__)

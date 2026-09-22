@@ -1,13 +1,11 @@
 """Synth orchestration glue shared by the Celery task shell — lock release + checkpointer bootstrap."""
 from __future__ import annotations
+import domains
+from . import keys, params
 
 import logging
 
 import redis as redis_sync
-
-import domains
-
-from . import keys, params
 
 
 logger = logging.getLogger(__name__)

@@ -1,12 +1,10 @@
 """Celery task wrapping the async LangGraph planner; progress streams over Redis pub/sub from the worker process."""
+import domains
+import infra.celery.service
+from . import domain, service
+
 import asyncio
 import logging
-
-import domains
-
-import infra.celery.service
-
-from . import domain, service
 
 
 logger = logging.getLogger(__name__)

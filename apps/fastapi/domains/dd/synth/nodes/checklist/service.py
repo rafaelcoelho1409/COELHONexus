@@ -3,7 +3,7 @@ prompt builders, LLM verdict coercion, CoCoA two-stage alignment check, and
 atomic-claim grounding."""
 from __future__ import annotations
 import domains
-from . import domain, keys, params, prompts, schemas, versions
+from . import domain, keys, params, patterns, prompts, schemas, versions
 # For best-seen promotion — needs sawc's OWN versioned-key convention,
 # not checklist's (each node's versioned_blob_key hardcodes its own path
 # segment). See the best-seen fix below for why this lives here.
@@ -12,11 +12,8 @@ import asyncio
 import json
 import logging
 import random
-import re
 import time
 from typing import Optional
-
-
 
 
 logger = logging.getLogger(__name__)
@@ -37,8 +34,6 @@ def _emit_criterion_scores(framework: str, criteria: list[dict | schemas.Criteri
             dim = name,
             score = 1.0 if passed else 0.0,
         )
-
-
 
 
 async def _run_llm_judge(
@@ -62,7 +57,7 @@ async def _run_llm_judge(
     deployment: Optional[str] = None
     response: Optional[str] = None
     last_error: Optional[Exception] = None
-    for call_attempt in range(_MAX_CALL_ATTEMPTS):
+    for call_attempt in range(params.MAX_CALL_ATTEMPTS):
         prompt = domain.build_judge_prompt(
             chapter_id=chapter_id,
             chapter_title=chapter_title,
@@ -76,7 +71,7 @@ async def _run_llm_judge(
                 prompt,
                 max_tokens=_MAX_TOKENS_JUDGE,
                 temperature=_TEMPERATURE_JUDGE,
-                response_format=_JUDGE_RESPONSE_FORMAT,
+                response_format=schemas.JUDGE_RESPONSE_FORMAT,
                 timeout_s=_TIMEOUT_S_JUDGE,
             )
             deployment = (meta or {}).get("deployment")
@@ -84,7 +79,7 @@ async def _run_llm_judge(
             break
         except Exception as e:
             last_error = e
-            if call_attempt < _MAX_CALL_ATTEMPTS - 1:
+            if call_attempt < params.MAX_CALL_ATTEMPTS - 1:
                 # The Rotator's own cascade already exhausted — a retry
                 # mostly helps against a transient whole-pool wave. If
                 # this looks like context overflow (60K chars ≈ 15K
@@ -108,7 +103,7 @@ async def _run_llm_judge(
         wall_ms = int((time.monotonic() - t0) * 1000)
         logger.warning(
             f"[checklist_eval] LLM judge call failed after "
-            f"{_MAX_CALL_ATTEMPTS} attempt(s): "
+            f"{params.MAX_CALL_ATTEMPTS} attempt(s): "
             f"{type(last_error).__name__}: {last_error}"
         )
         return (
@@ -145,7 +140,7 @@ async def _run_llm_judge(
                 repair_prompt,
                 max_tokens=_MAX_TOKENS_REPAIR,
                 temperature=_TEMPERATURE_REPAIR,
-                response_format=_JUDGE_RESPONSE_FORMAT,
+                response_format=schemas.JUDGE_RESPONSE_FORMAT,
                 timeout_s=_TIMEOUT_S_REPAIR,
             )
             deployment = (rm or {}).get("deployment") or deployment
@@ -207,25 +202,6 @@ _MAX_REPAIR_ATTEMPTS    = 1
 
 # Issue #22 (2026-09-08): the two result-persistence writes below have no
 # bounded timeout and no log line either side — during the ch-05 retest,
-# checklist_eval went silent for 20+ minutes with no trace of where it was
-# stuck, coinciding with a real MinIO/network degradation window (Langfuse
-# + Alloy exporters were also timing out at the same time). A stuck write
-# here should fail loud and bounded, not hang indefinitely and invisibly.
-_TIMEOUT_S_PERSIST_WRITE = 60.0
-
-# Draft-call attempts before falling back to the conservative all-FAIL
-# verdict (which triggers a full mgsr_replan cycle) — same idiom as
-# outline_sdp/digest_construct/sawc_write's context-overflow retry.
-_MAX_CALL_ATTEMPTS = 2
-
-_JUDGE_RESPONSE_FORMAT = {
-    "type": "json_schema",
-    "json_schema": {
-        "name":   "checklist_judge",
-        "schema": schemas.LLMJudgePayload.model_json_schema(),
-        "strict": False,
-    },
-}
 
 
 # ---------------------------------------------------------------------------
@@ -612,8 +588,6 @@ async def cocoa_alignment_check(
 # Atomic-claim grounding — augments bundled LLM-judge's `claims_grounded_in_sources` via conservative-bias merge.
 # ---------------------------------------------------------------------------
 
-_ATOMIC_CLAIM_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
-
 
 async def atomic_claim_grounding(
     *,
@@ -758,7 +732,7 @@ async def _atomic_claim_extract_claims(prose: str) -> tuple[list[str], bool]:
             response_format = {"type": "json_object"},
             timeout_s = params.ATOMIC_CLAIM_EXTRACT_TIMEOUT_S,
         )
-        m = _ATOMIC_CLAIM_JSON_RE.search(raw or "")
+        m = patterns.ATOMIC_CLAIM_JSON_RE.search(raw or "")
         if not m:
             logger.warning(
                 "[atomic-claim-grounding] extraction failed: "
@@ -810,7 +784,7 @@ async def _atomic_claim_judge_claim(
                 response_format = {"type": "json_object"},
                 timeout_s = params.ATOMIC_CLAIM_JUDGE_TIMEOUT_S,
             )
-            m = _ATOMIC_CLAIM_JSON_RE.search(raw or "")
+            m = patterns.ATOMIC_CLAIM_JSON_RE.search(raw or "")
             if not m:
                 logger.debug(
                     "[atomic-claim-grounding] judge response unparseable "
@@ -1236,18 +1210,18 @@ async def checklist_eval_run(state: domains.dd.synth.state.SynthState) -> dict:
             minio.write(
                 versioned_key, blob_bytes, content_type = "application/json",
             ),
-            timeout = _TIMEOUT_S_PERSIST_WRITE,
+            timeout = params.TIMEOUT_S_PERSIST_WRITE,
         )
         await asyncio.wait_for(
             minio.write(
                 latest_key, blob_bytes, content_type = "application/json",
             ),
-            timeout = _TIMEOUT_S_PERSIST_WRITE,
+            timeout = params.TIMEOUT_S_PERSIST_WRITE,
         )
     except asyncio.TimeoutError:
         logger.warning(
             f"[checklist_eval] {slug}/{chapter_id}: evaluation persist "
-            f"timed out after {_TIMEOUT_S_PERSIST_WRITE}s (issue #22) — "
+            f"timed out after {params.TIMEOUT_S_PERSIST_WRITE}s (issue #22) — "
             f"MinIO likely degraded; re-raising"
         )
         raise

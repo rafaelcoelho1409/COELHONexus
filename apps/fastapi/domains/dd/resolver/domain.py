@@ -1,10 +1,9 @@
 """Pure helpers — no I/O."""
 from __future__ import annotations
+from . import params
 
 import re
 import unicodedata
-
-from . import params
 
 
 def slugify(name: str) -> str:

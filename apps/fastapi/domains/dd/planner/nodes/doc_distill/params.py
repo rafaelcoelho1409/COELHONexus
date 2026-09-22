@@ -72,3 +72,9 @@ FB_STOP = frozenset({
     "via", "are", "use", "how", "you", "can", "will", "not", "but", "its",
     "has", "see", "all", "one", "two", "any",
 })
+
+# Failure reasons worth retrying (vs failing straight to the fallback
+# distillate). timeout/connection genuinely clear within seconds; rate
+# limits from a shared pool do not — retrying those just burns ~8s per
+# occurrence for an identical outcome (confirmed live: 133/166 docs).
+TRANSIENT_REASONS = frozenset({"timeout", "connection"})

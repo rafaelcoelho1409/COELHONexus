@@ -1,11 +1,10 @@
 """Celery tasks for the docs distiller synth pipeline."""
-import asyncio
-import logging
-
 import domains
 import infra.celery.service
-
 from . import domain, params, service
+
+import asyncio
+import logging
 
 
 logger = logging.getLogger(__name__)

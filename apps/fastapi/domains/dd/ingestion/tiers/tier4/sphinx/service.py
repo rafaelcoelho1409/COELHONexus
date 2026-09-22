@@ -14,10 +14,6 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Landing sidebar ≥ this many links → assume full tree rendered (skip expansion BFS).
-_FULL_TREE_HINT = 25
-
-
 async def _probe_one(
     inv_url: str, client: httpx.AsyncClient,
 ) -> Optional[bytes]:
@@ -115,7 +111,7 @@ async def discover_via_toctree(
                 discovered[u] = None
 
     # Fast path: landing sidebar already lists a full tree.
-    if len(sidebar0) >= _FULL_TREE_HINT:
+    if len(sidebar0) >= params.FULL_TREE_HINT:
         logger.info(
             f"[sphinx-nav] {host}{subtree or ''}: {len(discovered)} URLs "
             f"(landing sidebar full tree, body added {len(body0)})"

@@ -2,6 +2,7 @@
 from __future__ import annotations
 import domains
 from . import domain, params
+
 import logging
 import time
 from urllib.parse import urlparse

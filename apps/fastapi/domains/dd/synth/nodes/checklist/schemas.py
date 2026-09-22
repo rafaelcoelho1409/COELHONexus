@@ -67,3 +67,13 @@ class LLMJudgePayload(BaseModel):
     terminology_consistent:             LLMVerdict
     prose_code_first_not_meta_framing:  LLMVerdict
     code_refs_introduced_in_prose:      LLMVerdict
+
+
+JUDGE_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name":   "checklist_judge",
+        "schema": LLMJudgePayload.model_json_schema(),
+        "strict": False,
+    },
+}

@@ -1,14 +1,12 @@
 """Per-DD-thread LLM call/token counters; Redis for in-flight, MinIO snapshot on completion — avoids live Langfuse queries for the drawer UI."""
 from __future__ import annotations
+import domains
+from . import domain, keys, params
 
 import json
 import logging
 from contextvars import ContextVar
 from typing import Any
-
-import domains
-
-from . import domain, keys, params
 
 
 logger = logging.getLogger(__name__)

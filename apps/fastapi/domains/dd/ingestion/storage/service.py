@@ -22,21 +22,6 @@ from botocore.exceptions import ClientError
 logger = logging.getLogger(__name__)
 
 
-_TRANSIENT_WRITE_CODES = (
-    "IncompleteBody", 
-    "RequestTimeout", 
-    "InternalError",
-    "ServiceUnavailable", 
-    "SlowDown",
-)
-_TRANSIENT_READ_CODES = (
-    "RequestTimeout", 
-    "InternalError", 
-    "ServiceUnavailable", 
-    "SlowDown",
-)
-
-
 class MinIOStorage:
     """Async MinIO/S3 storage for docs-distiller artifacts."""
     def __init__(
@@ -104,7 +89,7 @@ class MinIOStorage:
                 return len(body)
             except ClientError as e:
                 code = (e.response or {}).get("Error", {}).get("Code", "")
-                if code not in _TRANSIENT_WRITE_CODES or attempt == 2:
+                if code not in params.TRANSIENT_WRITE_CODES or attempt == 2:
                     raise
                 await asyncio.sleep(0.3 * (3 ** attempt))
         return len(body)
@@ -241,7 +226,7 @@ class MinIOStorage:
                     last_err = e
                     if isinstance(e, ClientError):
                         code = (e.response or {}).get("Error", {}).get("Code", "")
-                        if code not in _TRANSIENT_WRITE_CODES:
+                        if code not in params.TRANSIENT_WRITE_CODES:
                             raise
                 if attempt < max_chunk_retries - 1:
                     await asyncio.sleep(1.0 * (2 ** attempt))
@@ -301,7 +286,7 @@ class MinIOStorage:
                     last_err = e
                     if isinstance(e, ClientError):
                         code = (e.response or {}).get("Error", {}).get("Code", "")
-                        if code not in _TRANSIENT_READ_CODES:
+                        if code not in params.TRANSIENT_READ_CODES:
                             raise
                     logger.warning(
                         f"[minio] read_many chunk [{start}:{end}) attempt "

@@ -1,11 +1,10 @@
 """YAML catalog loader + slug index."""
 from __future__ import annotations
+from . import domain, params
 
 from collections import Counter
 
 import yaml
-
-from . import domain, params
 
 
 def load_catalog() -> list[dict]:

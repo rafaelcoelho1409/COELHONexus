@@ -91,7 +91,7 @@ async def start_planner(
         )
 
     if not thread_id:
-        thread_id = domains.dd.planner.runtime.dispatch.service.make_thread_id(slug)
+        thread_id = domains.dd.planner.runtime.dispatch.keys.make_thread_id(slug)
 
     r = redis_aio.from_url(
         domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,

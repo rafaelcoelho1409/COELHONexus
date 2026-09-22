@@ -24,21 +24,6 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-# 2026-09-09: "rate_limit" removed. A RouterRateLimitError here means
-# litellm's Router already checked every deployment in the pool and found
-# none available — benched for cooldown_time=120s (chain/service.py's
-# _get_router(), COELHOLLMRotator repo), not a one-off per-deployment
-# blip. The old 2-5s backoff before retrying could never land after a
-# deployment actually became free again, so both retries were guaranteed
-# to fail too — confirmed live on langchain-langgraph-deepagents: 133/166
-# docs hit this, each burning a doomed retry cycle before falling back to
-# the same fallback distillate anyway. Dropping it here means those calls
-# fail straight to fallback — identical outcome, ~8s less wasted wait per
-# occurrence. timeout/connection stay retryable — those genuinely can
-# clear within seconds.
-_TRANSIENT_REASONS = frozenset({"timeout", "connection"})
-
-
 async def distill_one(
     sem: asyncio.Semaphore,
     framework: str,
@@ -122,7 +107,7 @@ async def distill_one(
                 break       # parse_fail/validate_fail keep their reason; no further retry
             except Exception as e:
                 failure_reason = domain.classify_error(e)
-                is_transient = failure_reason in _TRANSIENT_REASONS
+                is_transient = failure_reason in params.TRANSIENT_REASONS
                 can_retry = attempt < params.MAX_TRANSIENT_RETRIES
                 logger.warning(
                     f"[doc_distill] {source_key} attempt {attempt + 1}: "

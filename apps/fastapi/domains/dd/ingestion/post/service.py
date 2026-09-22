@@ -12,11 +12,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-# 32 amortizes latency without overwhelming the MinIO pool (serial was 75s/1500 pages).
-_READ_CONCURRENCY = 32
-_DELETE_CONCURRENCY = 32
-
-
 async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> dict:
     """Single-large-entry → split; multi-page → dedup. Rewrites the manifest
     atomically; returns a summary dict for Progress.record_post."""
@@ -63,7 +58,7 @@ async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> d
         )
     if input_files == 0:
         return domain.make_summary("dedup", 0, 0, [])
-    read_sem = asyncio.BoundedSemaphore(_READ_CONCURRENCY)
+    read_sem = asyncio.BoundedSemaphore(params.READ_CONCURRENCY)
 
     async def _read_one(e):
         async with read_sem:
@@ -79,7 +74,7 @@ async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> d
     deduped, stubs, dupes = domain.dedup_pages(raw_pages)
     if stubs == 0 and dupes == 0:
         return domain.make_summary("dedup", input_files, input_bytes, current)
-    del_sem = asyncio.BoundedSemaphore(_DELETE_CONCURRENCY)
+    del_sem = asyncio.BoundedSemaphore(params.DELETE_CONCURRENCY)
 
     async def _del_one(e):
         async with del_sem:

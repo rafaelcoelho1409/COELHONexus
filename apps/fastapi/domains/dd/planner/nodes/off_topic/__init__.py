@@ -1,5 +1,5 @@
 """off_topic — planner substep 3."""
-from . import node
+from . import domain, node, params, patterns, prompts, service
 
 
-__all__ = ["node"]
+__all__ = ["domain", "node", "params", "patterns", "prompts", "service"]

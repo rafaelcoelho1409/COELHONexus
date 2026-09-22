@@ -2,7 +2,7 @@
 LLM normalization pass (cached per-content-hash) fixes ingestion-time drift; plain-text/output blocks bypass it."""
 from __future__ import annotations
 import domains
-from . import domain, keys, schemas, versions
+from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio
 import json
@@ -12,73 +12,7 @@ import random
 import time
 
 
-
-
-
 logger = logging.getLogger(__name__)
-
-
-# Languages where the LLM call is skipped — content is either plain
-# text (no formatting concept) or terminal output (whitespace is
-# semantic and any reformat is wrong).
-_SKIP_LANGS = frozenset({
-    "", "text", "plaintext", "txt", "output", "console",
-    "log", "json", "yaml", "yml", "xml", "diff", "patch",
-    "mermaid", "ansi",
-})
-
-# Python gets AST validation (stdlib, no deps) — observed Mintlify MDX flattening strips function-body indent. Fail → retry LLM with error; second fail → keep best attempt.
-_PYTHON_LANGS = frozenset({"python", "py", "py3", "python3"})
-
-
-_NORMALIZE_PROMPT_BASE = (
-    "You are a code formatter. Fix indentation, line-break, and "
-    "whitespace so the {lang} code below is correctly formatted. The "
-    "code was likely mangled by upstream tooling that flattened "
-    "indentation (Mintlify MDX export, HTML-rendered copy-paste, etc.) "
-    "— EVERY continuation that's supposed to be nested often ends up at "
-    "column 0.\n\n"
-    "Look for and fix THESE common failure modes (assume they're "
-    "present unless you can confirm otherwise):\n"
-    "1. Function / class / if / for / while / try / with bodies sitting "
-    "at the SAME column as their `def`/`class`/etc. header — must be "
-    "MORE indented (Python: 4 spaces deeper). This is a hard syntax "
-    "error.\n"
-    "2. Keyword arguments inside a function CALL `foo(` ... `)` sitting "
-    "at column 0 — must be indented one level deeper than the opening "
-    "`(`. This parses but is unreadable and wrong style.\n"
-    "3. Items inside `[...]` / `{{...}}` literals sitting at column 0 "
-    "— same rule: indent one level deeper than the opening bracket.\n"
-    "4. Method chains, conditional expressions, and `return` "
-    "continuations broken across lines but flattened to column 0 — "
-    "indent the continuation.\n\n"
-    "Strict rules:\n"
-    "- Preserve every identifier, string literal, number, operator, "
-    "comment, and language keyword BYTE-EXACT. Only whitespace may "
-    "change. NEVER rename, NEVER reorder, NEVER add or remove tokens.\n"
-    "- Use 4-space indents for Python; match the original style for "
-    "other languages.\n"
-    "- If the code is genuinely already correct, return it unchanged.\n"
-    "- Return ONLY the fixed code. NO fences, NO commentary, NO "
-    "preamble, NO explanation.\n\n"
-    "```{lang}\n{body}\n```"
-)
-
-_NORMALIZE_PROMPT_PYTHON_RETRY = (
-    "The Python code below failed to parse with `ast.parse` — likely "
-    "because function or class bodies are at the same indent level as "
-    "their `def`/`class` header (Mintlify MDX flattening). Fix the "
-    "indentation so every `def`/`class`/`if`/`for`/`while`/`try`/"
-    "`with`/`async def` block has its body indented at least 4 spaces "
-    "deeper than the header. Preserve every non-whitespace character "
-    "byte-exact. Parser error: {error}\n\n"
-    "Return ONLY the fixed code with NO fences, NO commentary, NO "
-    "preamble.\n\n"
-    "```python\n{body}\n```"
-)
-
-
-_NORMALIZE_MAX_CALL_ATTEMPTS = 2
 
 
 async def _llm_normalize_body(
@@ -87,7 +21,7 @@ async def _llm_normalize_body(
     """Single LLM normalize call → fence-stripped body or None. Handles prompt-following failures: strip outer fences, extract largest inner block if markers remain, reject if no code found."""
     last_error: Exception | None = None
     response: str | None = None
-    for call_attempt in range(_NORMALIZE_MAX_CALL_ATTEMPTS):
+    for call_attempt in range(params.NORMALIZE_MAX_CALL_ATTEMPTS):
         try:
             response, _meta = await domains.settings.chat.service.chat_text_async(
                 prompt,
@@ -99,7 +33,7 @@ async def _llm_normalize_body(
             break
         except Exception as e:
             last_error = e
-            if call_attempt < _NORMALIZE_MAX_CALL_ATTEMPTS - 1:
+            if call_attempt < params.NORMALIZE_MAX_CALL_ATTEMPTS - 1:
                 await asyncio.sleep(1.0 + random.random())
     if last_error is not None:
         # Lower stakes than sibling nodes: a failure here just means the
@@ -110,7 +44,7 @@ async def _llm_normalize_body(
         # losing a normalize pass to a one-off transient error anyway.
         logger.warning(
             f"[render-normalize] LLM call failed lang={lang!r} after "
-            f"{_NORMALIZE_MAX_CALL_ATTEMPTS} attempt(s): "
+            f"{params.NORMALIZE_MAX_CALL_ATTEMPTS} attempt(s): "
             f"{type(last_error).__name__}: {last_error}"
         )
         return None
@@ -152,7 +86,7 @@ async def _normalize_code_block(
         return fence_text, False
     open_marker, info_string, body, close_marker = parts
     lang = domain.lang_from_info(info_string)
-    if lang in _SKIP_LANGS:
+    if lang in params.SKIP_LANGS:
         return fence_text, False
     if not body.strip():
         return fence_text, False
@@ -170,7 +104,7 @@ async def _normalize_code_block(
 
     fixed_body = await _llm_normalize_body(
         body = body, lang = lang,
-        prompt = _NORMALIZE_PROMPT_BASE.format(
+        prompt = prompts.NORMALIZE_PROMPT_BASE.format(
             lang = lang or "code", body = body,
         ),
     )
@@ -178,12 +112,12 @@ async def _normalize_code_block(
         return fence_text, False
 
     # Python AST retry: re-prompt with parser error to rescue Mintlify-flatten cases (small models return body unchanged).
-    if lang in _PYTHON_LANGS:
+    if lang in params.PYTHON_LANGS:
         ok, err = domain.python_ast_valid(fixed_body)
         if not ok:
             retry = await _llm_normalize_body(
                 body = body, lang = lang,
-                prompt = _NORMALIZE_PROMPT_PYTHON_RETRY.format(
+                prompt = prompts.NORMALIZE_PROMPT_PYTHON_RETRY.format(
                     body = fixed_body, error = err,
                 ),
             )

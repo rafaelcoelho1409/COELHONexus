@@ -1,13 +1,12 @@
 """OTel span helpers — @traced wraps a node into a top-level span (Alloy gRPC + LangFuse); attach_span_attrs sets namespaced span attributes."""
 from __future__ import annotations
+import domains, infra
 
 import functools
 import logging
 from typing import Awaitable, Callable
 
 from opentelemetry import trace
-
-import domains, infra
 
 
 logger = logging.getLogger(__name__)

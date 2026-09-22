@@ -12,5 +12,4 @@ decorator), and `nodes` must load before `graph` (its `NODE_REGISTRY` dict
 is built at module level from `domains.dd.planner.nodes.*.node.*`).
 """
 from __future__ import annotations
-
 from . import domain, keys, params, service, state, runtime, nodes, graph

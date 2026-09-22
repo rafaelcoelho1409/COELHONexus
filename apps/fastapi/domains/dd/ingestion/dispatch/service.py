@@ -1,7 +1,6 @@
 """Cancel is cooperative (progress.raise_if_cancelled + watcher pre-empts blocking awaits). Lock TTL (35 min) outlasts Celery soft_time_limit (30 min) so crashed tasks self-release."""
 from __future__ import annotations
 import domains, infra
-
 from . import domain, params
 from .. import tiers
 

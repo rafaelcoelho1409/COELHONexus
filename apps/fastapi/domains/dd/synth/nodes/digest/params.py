@@ -22,3 +22,14 @@ SOURCE_TITLE_MIN_CHARS = 3
 SOURCE_TITLE_MAX_CHARS = 200
 
 BLOB_PREFIX = "synth"
+
+
+# Relevance-rank order for source routing (lower wins).
+RELEVANCE_RANK = {"primary": 0, "supporting": 1, "tangential": 2}
+
+
+CONTEXT_OVERFLOW_MARKERS = (
+    "context_length", "context window", "maximum context length",
+    "context_window_exceeded", "reduce the length", "too many tokens",
+    "context length exceeded", "prompt is too long",
+)

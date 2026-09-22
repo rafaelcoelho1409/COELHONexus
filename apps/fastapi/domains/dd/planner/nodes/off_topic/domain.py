@@ -1,10 +1,6 @@
 """off_topic pure helpers (verdict parser); prompt strings + head+tail prep in prompts.py."""
 from __future__ import annotations
-
-import re
-
-_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
-_VERDICT_RE = re.compile(r"\b(KEEP|DROP)\b", re.IGNORECASE)
+from . import patterns
 
 
 def parse_verdict(text: str) -> bool | None:
@@ -27,10 +23,10 @@ def parse_verdict(text: str) -> bool | None:
         # nothing past this point is a real conclusion, don't scan it for a
         # stray "keep"/"drop" mentioned in passing while still reasoning.
         return None
-    body = _THINK_BLOCK_RE.sub("", text).strip()
+    body = patterns.THINK_BLOCK_RE.sub("", text).strip()
     if not body:
         body = text.strip()
-    matches = _VERDICT_RE.findall(body)
+    matches = patterns.VERDICT_RE.findall(body)
     if not matches:
         return None
     return matches[-1].upper() == "KEEP"

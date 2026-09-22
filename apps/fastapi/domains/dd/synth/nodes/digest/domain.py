@@ -12,13 +12,9 @@ from pydantic import ValidationError
 from collections import defaultdict
 
 
-
-_RELEVANCE_RANK = {"primary": 0, "supporting": 1, "tangential": 2}
-
-
 def _best_relevance(a: str, b: str) -> str:
     """Return stronger relevance grade (primary > supporting > tangential)."""
-    return a if _RELEVANCE_RANK.get(a, 9) <= _RELEVANCE_RANK.get(b, 9) else b
+    return a if params.RELEVANCE_RANK.get(a, 9) <= params.RELEVANCE_RANK.get(b, 9) else b
 
 
 def build_per_section_index(
@@ -310,23 +306,13 @@ def derive_source_title_fallback(md_text: str, source_key: str) -> str:
     return title or source_key
 
 
-_CONTEXT_OVERFLOW_MARKERS = (
-    "context_length", "context window", "maximum context length",
-    "context_window_exceeded", "reduce the length", "too many tokens",
-    "context length exceeded", "prompt is too long",
-)
-
-
 def is_context_overflow_error(e: Exception) -> bool:
     """Heuristic substring match — same idiom as outline_sdp's classifier.
     The Rotator is a universal gateway with no context-length-aware arm
     filtering, so even a single 100K-char source can exceed a small
     -context arm from a heterogeneous multi-provider pool."""
     msg = str(e).lower()
-    return any(marker in msg for marker in _CONTEXT_OVERFLOW_MARKERS)
-
-
-_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+    return any(marker in msg for marker in params.CONTEXT_OVERFLOW_MARKERS)
 
 
 def parse_json_response(text: str) -> Optional[dict]:
@@ -342,7 +328,7 @@ def parse_json_response(text: str) -> Optional[dict]:
         return json.loads(cleaned)
     except Exception:
         pass
-    m = _JSON_RE.search(text)
+    m = patterns.JSON_RE.search(text)
     if not m:
         return None
     try:

@@ -41,3 +41,19 @@ COPY_MAX_CONCURRENT   = 16
 # travel with the framework but are excluded from `take()` / `restore()` body
 # operations to avoid recursive snapshotting.
 SNAPSHOTS_SUBDIR = "_snapshots/"
+
+# Retryable S3 error codes by direction — membership decides retry vs
+# fail-fast in the chunk read/write loops.
+TRANSIENT_WRITE_CODES = (
+    "IncompleteBody",
+    "RequestTimeout",
+    "InternalError",
+    "ServiceUnavailable",
+    "SlowDown",
+)
+TRANSIENT_READ_CODES = (
+    "RequestTimeout",
+    "InternalError",
+    "ServiceUnavailable",
+    "SlowDown",
+)

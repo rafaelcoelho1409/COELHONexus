@@ -1,5 +1,7 @@
 """Async orchestration: per-chapter, resume, strict-order study-loop, and book_harmonize (co-located so the Celery study task can run it in-process)."""
 from __future__ import annotations
+import domains, infra
+from . import domain, keys, params
 
 import asyncio
 import json
@@ -8,9 +10,6 @@ import time
 
 import redis.asyncio as redis_aio
 
-import domains, infra
-
-from . import domain, keys, params
 
 logger = logging.getLogger(__name__)
 

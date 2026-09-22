@@ -13,3 +13,7 @@ SPLIT_MIN_SECTION_BYTES = 300
 SPLIT_MAX_SECTION_BYTES = 150_000
 
 SOURCE_MIN_MARKERS = 3
+
+# 32 amortizes latency without overwhelming the MinIO pool (serial was 75s/1500 pages).
+READ_CONCURRENCY = 32
+DELETE_CONCURRENCY = 32

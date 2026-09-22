@@ -37,4 +37,8 @@ TIMEOUT_S_REPLAN    = 90.0
 TIMEOUT_S_REPAIR    = 90.0
 MAX_REPAIR_ATTEMPTS = 1
 
+# Replan-call attempts before falling back to fallback_decision(). Same
+# retry idiom as outline_sdp/digest_construct/sawc_write/checklist_eval.
+MAX_CALL_ATTEMPTS = 2
+
 BLOB_PREFIX = "synth"

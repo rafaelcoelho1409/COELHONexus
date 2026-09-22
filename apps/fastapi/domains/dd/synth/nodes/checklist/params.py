@@ -117,3 +117,52 @@ ATOMIC_CLAIM_MIN_EVALUATED_FRACTION = 0.5
 # a 1-section chapter's single timeout was folded into infra_degraded and
 # fed the sustained-outage counter).
 ATOMIC_CLAIM_MIN_ABSOLUTE_FAILURES_FOR_UNRESOLVED = 2
+
+
+# Common words that don't carry alignment signal even if they appear in
+# code (control-flow keywords, generic verbs). Lowercase. Frozenset for
+# O(1) membership.
+NOISE_IDENTS = frozenset({
+    "for", "and", "the", "with", "from", "import", "return", "true",
+    "false", "none", "null", "this", "self", "type", "string", "int",
+    "bool", "list", "dict", "set", "tuple", "any", "all", "function",
+    "async", "await", "class", "def", "let", "var", "const", "new",
+    "try", "except", "finally", "throw", "throws", "while", "case",
+    "switch", "break", "continue", "yield", "lambda", "print", "log",
+    "console", "data", "value", "result", "options", "params", "args",
+    "main", "init", "name", "key", "id", "config", "test", "tests",
+    "example", "examples", "default", "true", "false",
+})
+MIN_IDENT_LEN = 3
+
+CODE_EXCERPT_CHARS = 1200
+
+
+SYNC_ONLY_METHODS = frozenset({
+    "strip", "lstrip", "rstrip", "split", "rsplit", "splitlines",
+    "join", "replace", "format", "lower", "upper", "title", "casefold",
+    "encode", "decode", "startswith", "endswith", "isdigit", "isalpha",
+    "isalnum", "isspace", "zfill", "ljust", "rjust", "center",
+    "append", "extend", "insert", "pop", "remove", "sort", "reverse",
+    "get", "keys", "values", "items", "update", "setdefault",
+})
+
+
+CONTEXT_OVERFLOW_MARKERS = (
+    "context_length", "context window", "maximum context length",
+    "context_window_exceeded", "reduce the length", "too many tokens",
+    "context length exceeded", "prompt is too long",
+)
+
+
+# checklist_eval went silent for 20+ minutes with no trace of where it was
+# stuck, coinciding with a real MinIO/network degradation window (Langfuse
+# + Alloy exporters were also timing out at the same time). A stuck write
+# here should fail loud and bounded, not hang indefinitely and invisibly.
+TIMEOUT_S_PERSIST_WRITE = 60.0
+
+
+# Draft-call attempts before falling back to the conservative all-FAIL
+# verdict (which triggers a full mgsr_replan cycle) — same idiom as
+# outline_sdp/digest_construct/sawc_write's context-overflow retry.
+MAX_CALL_ATTEMPTS = 2

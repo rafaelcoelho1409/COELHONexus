@@ -4,7 +4,7 @@ manifest hashing, and the CoCoA/atomic-claim-grounding shared helpers (JSON
 extraction, identifier overlap, prompt-block rendering, fence stripping,
 cache-key hashing)."""
 from __future__ import annotations
-from . import params, schemas, versions
+from . import params, patterns, prompts, schemas, versions
 
 import ast
 import json
@@ -17,33 +17,10 @@ from typing import Optional
 from pydantic import ValidationError
 
 
-_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
-
-# Keyword-overlap pre-check: zero shared identifiers between prose and code → misaligned (no LLM call needed).
-_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
-# Common words that don't carry alignment signal even if they appear in
-# code (control-flow keywords, generic verbs). Lowercase. Frozenset for
-# O(1) membership.
-_NOISE_IDENTS = frozenset({
-    "for", "and", "the", "with", "from", "import", "return", "true",
-    "false", "none", "null", "this", "self", "type", "string", "int",
-    "bool", "list", "dict", "set", "tuple", "any", "all", "function",
-    "async", "await", "class", "def", "let", "var", "const", "new",
-    "try", "except", "finally", "throw", "throws", "while", "case",
-    "switch", "break", "continue", "yield", "lambda", "print", "log",
-    "console", "data", "value", "result", "options", "params", "args",
-    "main", "init", "name", "key", "id", "config", "test", "tests",
-    "example", "examples", "default", "true", "false",
-})
-_MIN_IDENT_LEN = 3
-
-_CODE_EXCERPT_CHARS = 1200
-
-
 def parse_json(text: str) -> dict | None:
     if not text:
         return None
-    m = _JSON_RE.search(text)
+    m = patterns.JSON_RE.search(text)
     if not m:
         return None
     try:
@@ -53,15 +30,15 @@ def parse_json(text: str) -> dict | None:
 
 
 def extract_identifiers(text: str) -> set[str]:
-    """Lowercased identifiers ≥_MIN_IDENT_LEN chars, noise-filtered."""
+    """Lowercased identifiers ≥params.MIN_IDENT_LEN chars, noise-filtered."""
     if not text:
         return set()
     out: set[str] = set()
-    for m in _IDENT_RE.finditer(text):
+    for m in patterns.IDENT_RE.finditer(text):
         tok = m.group(0).lower()
-        if len(tok) < _MIN_IDENT_LEN:
+        if len(tok) < params.MIN_IDENT_LEN:
             continue
-        if tok in _NOISE_IDENTS:
+        if tok in params.NOISE_IDENTS:
             continue
         out.add(tok)
     return out
@@ -81,7 +58,7 @@ def render_blocks_for_explainer(blocks: list[dict]) -> str:
     for b in blocks:
         bid = b["id"]
         lang = b.get("lang") or ""
-        body = (b.get("body") or "")[:_CODE_EXCERPT_CHARS]
+        body = (b.get("body") or "")[:params.CODE_EXCERPT_CHARS]
         parts.append(
             f"[id = {bid}, lang = {lang}]\n```{lang}\n{body}\n```"
         )
@@ -431,16 +408,6 @@ def check_code_uniqueness_ratio(sawc: dict) -> schemas.CriterionResult:
 # crawl4ai example (`domains.dd.synth.nodes.sawc_derive`); AST-parse alone
 # (already done at sawc_derive generation time) doesn't catch it because
 # the code is syntactically valid — it only fails at runtime.
-_SYNC_ONLY_METHODS = frozenset({
-    "strip", "lstrip", "rstrip", "split", "rsplit", "splitlines",
-    "join", "replace", "format", "lower", "upper", "title", "casefold",
-    "encode", "decode", "startswith", "endswith", "isdigit", "isalpha",
-    "isalnum", "isspace", "zfill", "ljust", "rjust", "center",
-    "append", "extend", "insert", "pop", "remove", "sort", "reverse",
-    "get", "keys", "values", "items", "update", "setdefault",
-})
-
-
 def _find_unawaited_chain_bugs(tree: ast.AST) -> list[str]:
     """Detect `await <call>(...).sync_method(...)` — AST-only, no
     execution, so it stays inside domain.py's purity contract."""
@@ -454,7 +421,7 @@ def _find_unawaited_chain_bugs(tree: ast.AST) -> list[str]:
         func = call.func
         if not isinstance(func, ast.Attribute):
             continue
-        if func.attr not in _SYNC_ONLY_METHODS:
+        if func.attr not in params.SYNC_ONLY_METHODS:
             continue
         if not isinstance(func.value, ast.Call):
             continue
@@ -655,58 +622,6 @@ def render_digest_for_grounding(
     return text
 
 
-_CRITERION_BLOCKS: dict[str, str] = {
-    "chapter_reads_coherently": (
-        "[c8] chapter_reads_coherently\n"
-        "  Reading sections in order, does the chapter flow as a single "
-        "document with smooth transitions, OR as disjoint reference "
-        "cards with abrupt scope shifts? PASS if it reads as one "
-        "document; FAIL if multiple sections feel like standalone "
-        "definitions with no connective tissue."
-    ),
-    "claims_grounded_in_sources": (
-        "[c9] claims_grounded_in_sources\n"
-        "  Spot-check 3-5 citations against the per-section grounding "
-        "above. Does each cited source actually back the specific claim "
-        "the section makes in prose nearby? PASS if claims align with "
-        "the digest's key_facts; FAIL if any cited source is being "
-        "stretched beyond what it supports."
-    ),
-    "terminology_consistent": (
-        "[c10] terminology_consistent\n"
-        "  Does the chapter use the SAME name for the SAME concept "
-        "across sections (e.g., not switching between 'field' and "
-        "'attribute' for the same Pydantic concept, or 'method' and "
-        "'function' interchangeably for the same API)? PASS if "
-        "terminology is stable; FAIL if you can point to ≥2 sections "
-        "using different names for the same thing."
-    ),
-    "prose_code_first_not_meta_framing": (
-        "[c11] prose_code_first_not_meta_framing\n"
-        "  Is each section's prose dense + production-focused (concrete "
-        "APIs, types, parameters, error modes), OR padded with meta-"
-        "framing ('In this chapter we will...', 'In summary...', 'It "
-        "is important to note that...')? PASS if prose is dense; FAIL "
-        "if meta-framing eats >20% of any section's `intro` or any "
-        "H3 subtopic's `explanation`."
-    ),
-    "code_refs_introduced_in_prose": (
-        "[c12] code_refs_introduced_in_prose\n"
-        "  In the v2 cookbook structure, each H3 subtopic emits "
-        "`{subheading} → {explanation} → [code-block]`. Does each "
-        "subtopic's explanation (1-2 sentences BEFORE the code) "
-        "actually introduce that specific code block — naming the "
-        "decorator/type/parameter the reader is about to see — OR is "
-        "it generic prose that could precede ANY code block? PASS if "
-        "explanations are tied to their specific code; FAIL if any "
-        "explanation reads as filler.\n"
-        "  NOTE: If a section has 0 subtopics (rare — usually a "
-        "placeholder), this criterion FAILS for that section. The "
-        "cookbook contract requires ≥3 subtopics per section."
-    ),
-}
-
-
 def criterion_order_for(chapter_id: str) -> list[str]:
     """Deterministic per-chapter shuffle; same chapter_id → same order (cache-safe) + bias averages out."""
     seed_material = (
@@ -736,7 +651,7 @@ def build_judge_prompt(
         if truncated else ""
     )
     order = criterion_order_for(chapter_id)
-    criteria_block = "\n\n".join(_CRITERION_BLOCKS[name] for name in order)
+    criteria_block = "\n\n".join(prompts.CRITERION_BLOCKS[name] for name in order)
     output_lines = ",\n".join(
         f'  {name!r:<40}: {{"passed": ..., "feedback": "..."}}'
         for name in order
@@ -846,20 +761,13 @@ def compute_manifest_hash(
     return sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-_CONTEXT_OVERFLOW_MARKERS = (
-    "context_length", "context window", "maximum context length",
-    "context_window_exceeded", "reduce the length", "too many tokens",
-    "context length exceeded", "prompt is too long",
-)
-
-
 def is_context_overflow_error(e: Exception) -> bool:
     """Heuristic substring match — same classifier idiom used across the
     synth pipeline. The Rotator is a universal gateway with no context
     -length-aware arm filtering, so the rendered chapter (up to
     MAX_RENDERED_CHAPTER_CHARS) can still exceed a small-context arm."""
     msg = str(e).lower()
-    return any(marker in msg for marker in _CONTEXT_OVERFLOW_MARKERS)
+    return any(marker in msg for marker in params.CONTEXT_OVERFLOW_MARKERS)
 
 
 def parse_json_response(text: str) -> Optional[dict]:
@@ -873,7 +781,7 @@ def parse_json_response(text: str) -> Optional[dict]:
         return json.loads(cleaned)
     except Exception:
         pass
-    m = _JSON_RE.search(text)
+    m = patterns.JSON_RE.search(text)
     if not m:
         return None
     try:
