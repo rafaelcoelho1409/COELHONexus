@@ -1,13 +1,12 @@
 """Pure functions for the RR agent's graph_build tool — no I/O."""
 from __future__ import annotations
+from .... import entities
 
 from datetime import date
 from typing import Any
 
-from .... import entities as rr_entities
 
-
-def dict_to_paper(d: dict[str, Any]) -> rr_entities.NormalizedPaper:
+def dict_to_paper(d: dict[str, Any]) -> entities.NormalizedPaper:
     """Reverse the triage `_paper_as_dict` shape into NormalizedPaper.
     Tolerant — missing fields default to safe values."""
     published = d.get("published")
@@ -17,7 +16,7 @@ def dict_to_paper(d: dict[str, Any]) -> rr_entities.NormalizedPaper:
             pub_date = date.fromisoformat(published)
         except (ValueError, TypeError):
             pub_date = None
-    return rr_entities.NormalizedPaper(
+    return entities.NormalizedPaper(
         arxiv_id              = d.get("arxiv_id"),
         title                 = d.get("title", "") or "",
         abstract              = d.get("abstract", "") or "",

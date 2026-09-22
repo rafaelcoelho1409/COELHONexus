@@ -7,12 +7,11 @@ architecture doc:
   → top-N
 """
 from __future__ import annotations
+from . import params
+from .... import domain, entities, keys
 
 import logging
 from typing import Any
-
-from .... import domain as rr_domain, entities as rr_entities, keys as rr_keys
-from . import params
 
 
 logger = logging.getLogger(__name__)
@@ -21,11 +20,11 @@ logger = logging.getLogger(__name__)
 # Source → normalizer mapping. Looked up at runtime so we can stay tolerant
 # to a missing discovery output (e.g. the hn subagent crashed mid-scan).
 NORMALIZER_BY_SOURCE = {
-    rr_keys.SOURCE_ARXIV:    rr_domain.normalize_arxiv,
-    rr_keys.SOURCE_S2:       rr_domain.normalize_s2,
-    rr_keys.SOURCE_HF:       rr_domain.normalize_hf,
-    rr_keys.SOURCE_HN:       rr_domain.normalize_hn,
-    rr_keys.SOURCE_OPENALEX: rr_domain.normalize_openalex,
+    keys.SOURCE_ARXIV:    domain.normalize_arxiv,
+    keys.SOURCE_S2:       domain.normalize_s2,
+    keys.SOURCE_HF:       domain.normalize_hf,
+    keys.SOURCE_HN:       domain.normalize_hn,
+    keys.SOURCE_OPENALEX: domain.normalize_openalex,
 }
 
 
@@ -94,7 +93,7 @@ def diversify_by_source(
 
 
 def paper_as_dict(
-    p: rr_entities.NormalizedPaper, *, score: float, topical_logit: float | None = None,
+    p: entities.NormalizedPaper, *, score: float, topical_logit: float | None = None,
 ) -> dict[str, Any]:
     """Materialize a NormalizedPaper as a JSON-safe dict for fs storage."""
     return {

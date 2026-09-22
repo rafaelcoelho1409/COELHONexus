@@ -19,5 +19,4 @@ DigestSchema and prompt patterns remain useful), but it is no longer
 wired into either topology.
 """
 from __future__ import annotations
-
 from . import service

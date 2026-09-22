@@ -8,5 +8,4 @@ Search (ycs/). Architecture: docs/RESEARCH-RADAR-AGENT-ARCHITECTURE-2026-06-11.m
 `from domains.rr.task import run_radar_scan`.
 """
 from __future__ import annotations
-
 from . import agent, domain, entities, keys, params, patterns, runtime, schemas, service, stores

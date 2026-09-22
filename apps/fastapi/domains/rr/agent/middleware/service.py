@@ -19,25 +19,20 @@ Both subclass `langchain.agents.middleware.AgentMiddleware`. Wired into
 `create_deep_agent(middleware=[...])` in ../graph.py.
 """
 from __future__ import annotations
+import infra
+from .. import keys, params, patterns, prompts, tools
+from ...runtime import service as runtime_service
 
 import logging
 import time
 from typing import Any
 
 from opentelemetry import context as _otel_ctx
-
 try:
     from langchain.agents.middleware import AgentMiddleware
 except ImportError:                                                       # pragma: no cover
     from langchain.agents.middleware.types import AgentMiddleware         # type: ignore
-
 from langchain_core.messages import SystemMessage, ToolMessage
-import infra
-
-
-from .. import keys, params, patterns, prompts
-from ..tools import state as tools_state
-from ...runtime import service as runtime_service
 
 
 logger = logging.getLogger(__name__)
@@ -85,7 +80,7 @@ class PhaseEnforcerMiddleware(AgentMiddleware):
         """Return source names whose discovery file is still absent. Empty ⇒ all 5 subagents stashed."""
         missing: list[str] = []
         for key in keys.REQUIRED_DISCOVERY_KEYS:
-            if tools_state.fs_read(scan_id, key) is None:
+            if tools.state.fs_read(scan_id, key) is None:
                 source = key.split("/", 1)[1].rsplit(".", 1)[0]
                 missing.append(source)
         return missing
@@ -93,7 +88,7 @@ class PhaseEnforcerMiddleware(AgentMiddleware):
     @staticmethod
     def _missing_deep_read_arxiv_ids(scan_id: str) -> list[str]:
         """Return arxiv_ids from triage's top_n that still lack an extraction file."""
-        top_n = tools_state.fs_read(scan_id, keys.FS_FILE_TRIAGE_TOPN)
+        top_n = tools.state.fs_read(scan_id, keys.FS_FILE_TRIAGE_TOPN)
         if not isinstance(top_n, list) or not top_n:
             return []
         expected_ids = [
@@ -102,7 +97,7 @@ class PhaseEnforcerMiddleware(AgentMiddleware):
         ]
         if not expected_ids:
             return []
-        existing = tools_state.fs_list(scan_id, prefix="extractions/")
+        existing = tools.state.fs_list(scan_id, prefix="extractions/")
         present_ids = set()
         for path in existing:
             if path.startswith("extractions/") and path.endswith(".json"):
@@ -117,7 +112,7 @@ class PhaseEnforcerMiddleware(AgentMiddleware):
         # Discovery: ALL 5 source files required (count=0 is OK; absence is not).
         if cls._missing_discovery_sources(scan_id):
             return "discovery"
-        top_n = tools_state.fs_read(scan_id, keys.FS_FILE_TRIAGE_TOPN)
+        top_n = tools.state.fs_read(scan_id, keys.FS_FILE_TRIAGE_TOPN)
         if top_n is None:
             return "triage"
         # A zero-candidate run is a legitimate, complete outcome — triage
@@ -136,7 +131,7 @@ class PhaseEnforcerMiddleware(AgentMiddleware):
         # All top_n papers must have extraction files, not just ≥1.
         if cls._missing_deep_read_arxiv_ids(scan_id):
             return "deep_read"
-        if tools_state.fs_read(scan_id, keys.FS_FILE_SYNTHESIS_REPORT) is None:
+        if tools.state.fs_read(scan_id, keys.FS_FILE_SYNTHESIS_REPORT) is None:
             return "synthesis"
         return None
 
@@ -145,7 +140,7 @@ class PhaseEnforcerMiddleware(AgentMiddleware):
         """True once triage has confirmed 0 candidates (top_n.json == [],
         not merely absent). Shared by `_next_missing_phase` (nudge) and
         `awrap_tool_call` (hard block) so both read the same signal."""
-        top_n = tools_state.fs_read(scan_id, keys.FS_FILE_TRIAGE_TOPN)
+        top_n = tools.state.fs_read(scan_id, keys.FS_FILE_TRIAGE_TOPN)
         return isinstance(top_n, list) and not top_n
 
     @staticmethod
@@ -198,7 +193,7 @@ class PhaseEnforcerMiddleware(AgentMiddleware):
                     "0 candidates confirmed for this scan — nothing to "
                     "build. Emit your final ScanComplete response now.",
                 )
-            if scan_id and tools_state.fs_read(scan_id, keys.FS_FILE_GRAPH_BUILD_DONE) is not None:
+            if scan_id and tools.state.fs_read(scan_id, keys.FS_FILE_GRAPH_BUILD_DONE) is not None:
                 return self._block(
                     request, keys.TOOL_GRAPH_BUILD,
                     "graph_build already ran for this scan — do not call "
@@ -222,7 +217,7 @@ class PhaseEnforcerMiddleware(AgentMiddleware):
                     )
                 if (
                     subagent_type == keys.SUBAGENT_SYNTHESIS
-                    and tools_state.fs_read(scan_id, keys.FS_FILE_SYNTHESIS_REPORT) is not None
+                    and tools.state.fs_read(scan_id, keys.FS_FILE_SYNTHESIS_REPORT) is not None
                 ):
                     return self._block(
                         request, f"task(subagent_type={subagent_type!r})",
@@ -231,7 +226,7 @@ class PhaseEnforcerMiddleware(AgentMiddleware):
                         "ScanComplete response now.",
                     )
                 discovery_key = keys.SUBAGENT_TO_DISCOVERY_KEY.get(subagent_type)
-                if discovery_key and tools_state.fs_read(scan_id, discovery_key) is not None:
+                if discovery_key and tools.state.fs_read(scan_id, discovery_key) is not None:
                     return self._block(
                         request, f"task(subagent_type={subagent_type!r})",
                         "this discovery source already has a result "
@@ -386,20 +381,20 @@ class PhaseEventsMiddleware(AgentMiddleware):
     def _current_phase(scan_id: str) -> tuple[str, str]:
         """(phase_name, message) — what the agent is doing RIGHT NOW based
         on what's in fs. Same precedence as the phase enforcer."""
-        n_discoveries = len(tools_state.fs_list(scan_id, prefix="discovery/"))
+        n_discoveries = len(tools.state.fs_list(scan_id, prefix="discovery/"))
         n_required = len(keys.REQUIRED_DISCOVERY_KEYS)
         if n_discoveries < n_required:
             return "discovery", f"{n_discoveries}/{n_required} sources stashed"
-        topn_raw = tools_state.fs_read(scan_id, keys.FS_FILE_TRIAGE_TOPN)
+        topn_raw = tools.state.fs_read(scan_id, keys.FS_FILE_TRIAGE_TOPN)
         if topn_raw is None:
             return "triage", "ranking + dedup"
         if isinstance(topn_raw, list) and not topn_raw:
             return "finalizing", "0 candidates matched — nothing to deep_read or synthesize"
-        n_extractions = len(tools_state.fs_list(scan_id, prefix="extractions/"))
+        n_extractions = len(tools.state.fs_list(scan_id, prefix="extractions/"))
         topn = topn_raw or []
         if n_extractions < len(topn):
             return "deep_read", f"{n_extractions}/{len(topn)} extractions written"
-        if tools_state.fs_read(scan_id, keys.FS_FILE_SYNTHESIS_REPORT) is None:
+        if tools.state.fs_read(scan_id, keys.FS_FILE_SYNTHESIS_REPORT) is None:
             return "synthesis", "clustering themes"
         # 2026-09-17: was `return "done", ...` — collided with the REAL
         # terminal "done" event `task.py` emits after digest assembly +

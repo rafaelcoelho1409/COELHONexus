@@ -19,5 +19,4 @@ with a domain.py (pure) / service.py (I/O) split, mirroring the dd/ycs
                   3-round generate/critique/revise loop
 """
 from __future__ import annotations
-
 from . import code_synth, discovery, fs, graph_build, state, triage

@@ -1,9 +1,8 @@
 """Pure functions for RR runtime — no I/O, no event loop, no mocks."""
 from __future__ import annotations
+from . import params
 
 import asyncio
-
-from . import params
 
 
 def is_transient(exc: BaseException) -> bool:

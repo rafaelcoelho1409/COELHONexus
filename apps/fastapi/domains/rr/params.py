@@ -92,3 +92,11 @@ class StoresParams:
 WEIGHTS       = SignalWeights()
 DOMAIN_PARAMS = DomainParams()
 STORES_PARAMS = StoresParams()
+
+# Inline backfill: recover extractions dropped by the orchestrator (phase enforcer exhausted, etc.).
+# Capped at 3 — beyond that, infra is likely wedged and retrying won't help.
+BACKFILL_MAX = 3
+
+# Per-call bound for one backfill extraction (single abstract → 6-field
+# JSON — much lighter than deep_read's full-paper-text shape).
+BACKFILL_CALL_TIMEOUT_S = 90.0

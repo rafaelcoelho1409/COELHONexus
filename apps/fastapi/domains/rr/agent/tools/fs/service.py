@@ -1,22 +1,20 @@
 """LangChain @tool wrappers around the module-level fs helpers in
 ../state.py — Imperative Shell."""
 from __future__ import annotations
+from . import domain, params
+from .. import state as tools_state
+from ... import keys
+from .... import runtime
 
 import json
 import logging
 from typing import Annotated, Any
 
 from langchain_core.tools import tool
-
 try:
     from langgraph.prebuilt import InjectedState
 except ImportError:                                                       # pragma: no cover
     from langgraph.prebuilt.tool_node import InjectedState                # type: ignore
-
-from . import domain
-from .. import state as tools_state
-from ... import keys
-from .... import runtime
 
 
 logger = logging.getLogger(__name__)
@@ -373,12 +371,6 @@ def read_synthesis_report(scan_id: str) -> str:
 _DEBUG_ATTEMPT_COUNTERS: dict[str, int] = {}
 _FAILED_ATTEMPT_COUNTERS: dict[str, int] = {}
 
-# 50 chars: any legitimate digest is thousands of chars; catches `{`, `}`, `null`, prose snippets.
-_MIN_DIGEST_JSON_LEN: int = 50
-# 2 strikes: if both fail the LLM is structurally confused; surface "give up" so the tool loop exits.
-_MAX_FAILED_ATTEMPTS: int = 2
-
-
 def _next_debug_attempt(scan_id: str) -> int:
     n = _DEBUG_ATTEMPT_COUNTERS.get(scan_id, 0) + 1
     _DEBUG_ATTEMPT_COUNTERS[scan_id] = n
@@ -426,10 +418,10 @@ def write_digest(scan_id: str, digest_json: str) -> str:
         return msg
 
     n_failed_already = _FAILED_ATTEMPT_COUNTERS.get(scan_id, 0)
-    if n_failed_already >= _MAX_FAILED_ATTEMPTS:
+    if n_failed_already >= params.MAX_FAILED_ATTEMPTS:
         msg = (
             f"ERROR: write_digest budget exhausted for this scan "
-            f"({n_failed_already}/{_MAX_FAILED_ATTEMPTS} failed attempts). "
+            f"({n_failed_already}/{params.MAX_FAILED_ATTEMPTS} failed attempts). "
             f"Stop retrying. The Python rebuild path will assemble the "
             f"digest from triage + extractions + synthesis on disk — "
             f"your job is DONE. Emit respond_in_format(DigestSchema) "
@@ -437,12 +429,12 @@ def write_digest(scan_id: str, digest_json: str) -> str:
         )
         logger.warning(
             f"[fs-tool] write_digest scan_id={scan_id} REJECTED: "
-            f"retry budget exhausted ({n_failed_already}/{_MAX_FAILED_ATTEMPTS})"
+            f"retry budget exhausted ({n_failed_already}/{params.MAX_FAILED_ATTEMPTS})"
         )
         return msg
 
     trimmed = (digest_json or "").strip()
-    if len(trimmed) < _MIN_DIGEST_JSON_LEN:
+    if len(trimmed) < params.MIN_DIGEST_JSON_LEN:
         # 2026-09-17: was `_peek_last_model() or "unknown"` — that read
         # litellm's global `last_response`, which only the litellm SDK's
         # own completion calls populate. Nothing calls it directly
@@ -453,7 +445,7 @@ def write_digest(scan_id: str, digest_json: str) -> str:
         model_id = "unknown"
         msg = (
             f"ERROR: digest_json was {len(trimmed)} chars — too short "
-            f"to be a valid digest (min {_MIN_DIGEST_JSON_LEN}). The "
+            f"to be a valid digest (min {params.MIN_DIGEST_JSON_LEN}). The "
             f"full digest with all top_n items must be emitted in this "
             f"single argument. Do NOT emit a placeholder like `{{`, "
             f"`{{}}`, or `null`; the digest_json argument carries the "
@@ -465,7 +457,7 @@ def write_digest(scan_id: str, digest_json: str) -> str:
             f"truncated digest_json len={len(trimmed)} "
             f"(payload={trimmed[:40]!r}) "
             f"model={model_id} "
-            f"failed_attempts={new_count}/{_MAX_FAILED_ATTEMPTS}"
+            f"failed_attempts={new_count}/{params.MAX_FAILED_ATTEMPTS}"
         )
         return msg
 
@@ -497,7 +489,7 @@ def write_digest(scan_id: str, digest_json: str) -> str:
         log_msg = (
             f"stored RAW after all repairs failed (debug={debug_path}); "
             f"model={model_id} "
-            f"failed_attempts={new_count}/{_MAX_FAILED_ATTEMPTS}; "
+            f"failed_attempts={new_count}/{params.MAX_FAILED_ATTEMPTS}; "
             f"Python `_build_digest_from_fs` will rebuild from upstream fs"
         )
 
@@ -524,7 +516,7 @@ def write_digest(scan_id: str, digest_json: str) -> str:
                 f"[fs-tool] write_digest scan_id={scan_id} REJECTED: "
                 f"{type(ve).__name__}: {str(ve)[:200]} "
                 f"model={model_id} "
-                f"failed_attempts={new_count}/{_MAX_FAILED_ATTEMPTS}"
+                f"failed_attempts={new_count}/{params.MAX_FAILED_ATTEMPTS}"
             )
             return msg
 

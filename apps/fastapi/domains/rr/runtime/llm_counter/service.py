@@ -1,6 +1,9 @@
 """Per-scan LLM call + token counters aggregated in Redis; read by FastAPI
 drawer — Imperative Shell."""
 from __future__ import annotations
+from . import domain, keys, params
+from .. import keys as runtime_keys
+from .. import params as runtime_params
 
 import logging
 import time
@@ -8,10 +11,6 @@ from contextvars import ContextVar
 from typing import Any
 
 from langchain_core.callbacks import BaseCallbackHandler
-
-from . import domain, keys, params
-from .. import keys as runtime_keys
-from .. import params as runtime_params
 
 
 logger = logging.getLogger(__name__)

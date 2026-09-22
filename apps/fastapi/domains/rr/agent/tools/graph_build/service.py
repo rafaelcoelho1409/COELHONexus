@@ -22,19 +22,17 @@ routes) — confirmed live to resolve to `nim/nvidia/nemotron-3-embed-1b`
 at 2048d, exactly matching the collection, so no resize/migration is
 needed, just this call-site fix."""
 from __future__ import annotations
+import domains
+from . import domain
+from .. import state
+from ... import keys
+from .... import service
 
 import asyncio
 import logging
 from typing import Any
 
 from langchain_core.tools import tool
-
-import domains
-
-from . import domain
-from .. import state as tools_state
-from ... import keys
-from .... import service as rr_service
 
 
 logger = logging.getLogger(__name__)
@@ -59,7 +57,7 @@ async def graph_build_papers(
         A short summary including the count of papers persisted and the
         count of skips (papers without arxiv_id or with empty abstracts).
     """
-    top_n = tools_state.fs_read(scan_id, keys.FS_FILE_TRIAGE_TOPN)
+    top_n = state.fs_read(scan_id, keys.FS_FILE_TRIAGE_TOPN)
     if isinstance(top_n, list) and not top_n:
         # A genuinely empty top_n (triage ran, found 0 candidates) is
         # FINAL — unlike the `top_n is None` branch below, retrying this
@@ -116,7 +114,7 @@ async def graph_build_papers(
     # same way an already-resolved discovery source or synthesis report
     # is blocked (Neo4j/Qdrant upserts are idempotent so a repeat call
     # isn't WRONG, just wasted rotator + DB round-trips).
-    tools_state.fs_write(
+    state.fs_write(
         scan_id, keys.FS_FILE_GRAPH_BUILD_DONE,
         {"persisted": persisted, "skipped": skipped, "errors": errors},
     )
@@ -148,7 +146,7 @@ async def _persist_one(
             if abstract:
                 vecs, _model = await domains.settings.embeddings.service.embed_texts_async([abstract])
                 embedding = vecs[0] if vecs else None
-            await rr_service.persist_paper(paper, embedding=embedding, signal=item.get("signal"))
+            await service.persist_paper(paper, embedding=embedding, signal=item.get("signal"))
             return "ok"
         except Exception as e:
             logger.warning(

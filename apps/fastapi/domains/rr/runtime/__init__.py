@@ -8,5 +8,4 @@ ephemeral coordination) that domain logic (`../domain.py`, `../service.py`)
 doesn't own.
 """
 from __future__ import annotations
-
 from . import domain, keys, llm_counter, metrics, params, service

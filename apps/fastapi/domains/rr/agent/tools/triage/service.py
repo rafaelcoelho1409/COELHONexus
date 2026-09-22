@@ -22,19 +22,18 @@ discovery outputs from the scan's virtual fs, runs the domain pipeline
   scan fd48309a).
 """
 from __future__ import annotations
+from . import domain
+from .. import state
+from ... import keys
+from .... import domain as rr_domain
+from .... import params as rr_params
+from .... import runtime
 
 import json
 import logging
 from datetime import date
 
 from langchain_core.tools import tool
-
-from . import domain
-from .. import state as tools_state
-from ... import keys
-from .... import domain as rr_domain
-from .... import params as rr_params
-from .... import runtime
 
 
 logger = logging.getLogger(__name__)
@@ -87,7 +86,7 @@ async def triage_candidates(
     # message saying "already done, use these arxiv_ids" → the orchestrator
     # can't change the scan's identity mid-flight. Single-source-of-truth
     # for top_n.json per scan.
-    existing_top_n = tools_state.fs_read(scan_id, keys.FS_FILE_TRIAGE_TOPN)
+    existing_top_n = state.fs_read(scan_id, keys.FS_FILE_TRIAGE_TOPN)
     if isinstance(existing_top_n, list) and existing_top_n:
         existing_ids = [
             p.get("arxiv_id") for p in existing_top_n
@@ -113,7 +112,7 @@ async def triage_candidates(
     per_source_counts: dict[str, int] = {}
     for source, normalizer in domain.NORMALIZER_BY_SOURCE.items():
         path = keys.fs_discovery_path(source)
-        raw = tools_state.fs_read(scan_id, path)
+        raw = state.fs_read(scan_id, path)
         if raw is None:
             per_source_counts[source] = 0
             continue
@@ -136,7 +135,7 @@ async def triage_candidates(
     if not candidates:
         msg = f"[triage] no candidates from any source ({per_source_counts})"
         logger.warning(msg)
-        tools_state.fs_write(scan_id, keys.FS_FILE_TRIAGE_TOPN, [])
+        state.fs_write(scan_id, keys.FS_FILE_TRIAGE_TOPN, [])
         try: runtime.service.mirror_write_sync(scan_id, keys.FS_FILE_TRIAGE_TOPN, [])
         except Exception: pass
         return msg
@@ -167,7 +166,7 @@ async def triage_candidates(
             f"per_source={per_source_counts}"
         )
         logger.warning(msg)
-        tools_state.fs_write(scan_id, keys.FS_FILE_TRIAGE_TOPN, [])
+        state.fs_write(scan_id, keys.FS_FILE_TRIAGE_TOPN, [])
         try: runtime.service.mirror_write_sync(scan_id, keys.FS_FILE_TRIAGE_TOPN, [])
         except Exception: pass
         return msg
@@ -213,7 +212,7 @@ async def triage_candidates(
         )
         for p, s in top
     ]
-    tools_state.fs_write(scan_id, keys.FS_FILE_TRIAGE_TOPN, payload)
+    state.fs_write(scan_id, keys.FS_FILE_TRIAGE_TOPN, payload)
     try: runtime.service.mirror_write_sync(scan_id, keys.FS_FILE_TRIAGE_TOPN, payload)
     except Exception: pass
     # Phase contextvar for LLM-counter attribution (Path A).

@@ -12,6 +12,7 @@ fresh `asyncio.run(...)`, so a sticky cache would resolve against a
 closed loop. We re-open whenever the running loop changes.
 """
 from __future__ import annotations
+from . import keys
 
 import asyncio
 import logging
@@ -20,8 +21,6 @@ from typing import Optional
 
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
-
-from . import keys
 
 
 logger = logging.getLogger(__name__)

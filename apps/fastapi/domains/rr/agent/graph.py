@@ -29,6 +29,9 @@ What's still TODO (architecture-doc §9.4 v2 deferrals):
     block at the bottom of this file)
 """
 from __future__ import annotations
+import domains
+from . import keys, memory, middleware, params, prompts, schemas, subagents, tools
+from .. import runtime
 
 import logging
 import os
@@ -37,11 +40,6 @@ from typing import Any
 from deepagents import create_deep_agent
 from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.memory import InMemorySaver
-
-import domains
-
-from . import keys, memory, middleware, params, prompts, schemas, subagents, tools
-from ..runtime import llm_counter
 
 
 logger = logging.getLogger(__name__)
@@ -58,7 +56,7 @@ logger = logging.getLogger(__name__)
 # `agent.ainvoke(config={"callbacks":[...]})` in task.py so we don't
 # need to mutate the model (model wrapping breaks DeepAgents'
 # `isinstance(model, BaseChatModel)` check — see service.py comments).
-_LLM_COUNTER_CB = llm_counter.service.RRLlmCounterCallback()
+_LLM_COUNTER_CB = runtime.llm_counter.service.RRLlmCounterCallback()
 
 
 def _orchestrator_model() -> BaseChatModel:

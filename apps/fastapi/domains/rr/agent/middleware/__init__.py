@@ -3,5 +3,4 @@
 `AgentMiddleware` subclasses — same role). Wired into
 `create_deep_agent(middleware=[...])` in ../graph.py."""
 from __future__ import annotations
-
 from . import service

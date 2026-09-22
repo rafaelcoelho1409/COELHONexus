@@ -1,10 +1,9 @@
 """Pure functions for the RR agent's fs tools — no I/O, no event loop."""
 from __future__ import annotations
+from . import patterns
 
 import json
 from typing import Any
-
-from . import patterns
 
 
 def parse_tool_message_content(content: Any) -> list[dict]:

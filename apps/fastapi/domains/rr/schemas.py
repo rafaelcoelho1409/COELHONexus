@@ -9,14 +9,13 @@ These schemas are used by:
   - domains/rr/task.py          — Celery task argument validation
 """
 from __future__ import annotations
+from . import domain
 
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
-
-from . import domain
 
 
 # POST /scan — the trigger

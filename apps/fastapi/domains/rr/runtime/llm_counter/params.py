@@ -1,10 +1,9 @@
 """Tunables + registries for RR's per-scan LLM counter."""
 from __future__ import annotations
+from .. import params
 
-from .. import params as _runtime_params
 
-
-LLM_COUNTERS_TTL_S: int = _runtime_params.SNAPSHOT_TTL_S
+LLM_COUNTERS_TTL_S: int = params.SNAPSHOT_TTL_S
 
 KNOWN_PHASES: tuple[str, ...] = (
     "orchestrator",

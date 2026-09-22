@@ -14,17 +14,18 @@ operations.
   Qdrant    radar_papers vector collection + payload index ops
 """
 from __future__ import annotations
+import domains, infra
+from .. import entities, keys as rr_keys, params as rr_params
+from . import keys, params, prompts
 
 import json
 import logging
 import os
 from typing import Any, Optional
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import UUID
 
 import aioboto3
-import domains, infra
 import psycopg
-from botocore.config import Config
 from botocore.exceptions import ClientError
 from neo4j import AsyncDriver
 from psycopg.types.json import Jsonb
@@ -40,9 +41,6 @@ from qdrant_client.http.models import (
 )
 
 
-from .. import entities, keys, params
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -52,13 +50,6 @@ logger = logging.getLogger(__name__)
 
 # Session / config — one Session per process; clients are per-operation
 _minio_session: Optional[aioboto3.Session] = None
-_MINIO_BOTO_CONFIG = Config(
-    signature_version    = "s3v4",      # MinIO requires v4; default v2 fails
-    max_pool_connections = 16,
-    connect_timeout      = 5.0,
-    read_timeout         = 30.0,
-    retries              = {"max_attempts": 3, "mode": "standard"},
-)
 
 
 def _minio_get_session() -> aioboto3.Session:
@@ -90,7 +81,7 @@ def _minio_client():
         aws_access_key_id     = os.environ["AWS_ACCESS_KEY_ID"],
         aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"],
         region_name           = "us-east-1",
-        config                = _MINIO_BOTO_CONFIG,
+        config                = params.MINIO_BOTO_CONFIG,
     )
 
 
@@ -103,7 +94,7 @@ async def bootstrap_minio() -> None:
             await s3.head_bucket(Bucket=bucket)
             logger.info(
                 f"[rr-minio] bucket {bucket!r} exists "
-                f"(prefix={keys.MINIO_PREFIX_RR!r})"
+                f"(prefix={rr_keys.MINIO_PREFIX_RR!r})"
             )
             return
         except ClientError as e:
@@ -116,21 +107,21 @@ async def bootstrap_minio() -> None:
 
 async def put_digest_json(scan_id: str, payload: dict[str, Any]) -> str:
     """Write the scan's digest snapshot. Returns the MinIO key."""
-    key  = keys.digest_minio_key(scan_id)
+    key  = rr_keys.digest_minio_key(scan_id)
     body = json.dumps(payload, default=str).encode("utf-8")
     async with _minio_client() as s3:
         await s3.put_object(
             Bucket      = _minio_bucket(),
             Key         = key,
             Body        = body,
-            ContentType = params.STORES_PARAMS.minio_json_content_type,
+            ContentType = rr_params.STORES_PARAMS.minio_json_content_type,
         )
     return key
 
 
 async def get_digest_json(scan_id: str) -> dict[str, Any] | None:
     """Read the digest snapshot. Returns None on 404."""
-    key = keys.digest_minio_key(scan_id)
+    key = rr_keys.digest_minio_key(scan_id)
     async with _minio_client() as s3:
         try:
             obj = await s3.get_object(Bucket=_minio_bucket(), Key=key)
@@ -149,7 +140,7 @@ async def delete_digest_json(scan_id: str) -> bool:
 
     Caller: `../service.py::delete_scan` (the per-row delete affordance in
     the Recent-scans dropdown)."""
-    key = keys.digest_minio_key(scan_id)
+    key = rr_keys.digest_minio_key(scan_id)
     async with _minio_client() as s3:
         try:
             await s3.delete_object(Bucket=_minio_bucket(), Key=key)
@@ -165,14 +156,14 @@ async def put_extraction_json(
     scan_id: str, arxiv_id: str, payload: dict[str, Any]
 ) -> str:
     """Write a deep_read extraction for one paper. Returns the MinIO key."""
-    key  = keys.extraction_minio_key(scan_id, arxiv_id)
+    key  = rr_keys.extraction_minio_key(scan_id, arxiv_id)
     body = json.dumps(payload, default=str).encode("utf-8")
     async with _minio_client() as s3:
         await s3.put_object(
             Bucket      = _minio_bucket(),
             Key         = key,
             Body        = body,
-            ContentType = params.STORES_PARAMS.minio_json_content_type,
+            ContentType = rr_params.STORES_PARAMS.minio_json_content_type,
         )
     return key
 
@@ -181,7 +172,7 @@ async def get_extraction_json(
     scan_id: str, arxiv_id: str,
 ) -> dict[str, Any] | None:
     """Read an extraction. Returns None on 404."""
-    key = keys.extraction_minio_key(scan_id, arxiv_id)
+    key = rr_keys.extraction_minio_key(scan_id, arxiv_id)
     async with _minio_client() as s3:
         try:
             obj = await s3.get_object(Bucket=_minio_bucket(), Key=key)
@@ -200,14 +191,14 @@ async def put_code_py(
     """Persist a synthesized Python file. Returns the MinIO key.
     Content-Type is `text/x-python` so an operator browsing MinIO sees it
     rendered as plain text instead of being treated as JSON."""
-    key  = keys.code_minio_key(scan_id, arxiv_id, prompt_version)
+    key  = rr_keys.code_minio_key(scan_id, arxiv_id, prompt_version)
     body = code.encode("utf-8")
     async with _minio_client() as s3:
         await s3.put_object(
             Bucket      = _minio_bucket(),
             Key         = key,
             Body        = body,
-            ContentType = keys.MINIO_PYTHON_CONTENT_TYPE,
+            ContentType = rr_keys.MINIO_PYTHON_CONTENT_TYPE,
         )
     return key
 
@@ -218,7 +209,7 @@ async def get_code_py(
     """Read a synthesized Python file. Returns None on 404 (i.e. the Build
     tab has never been opened for this paper at this prompt version, or
     the cache was wiped)."""
-    key = keys.code_minio_key(scan_id, arxiv_id, prompt_version)
+    key = rr_keys.code_minio_key(scan_id, arxiv_id, prompt_version)
     async with _minio_client() as s3:
         try:
             obj = await s3.get_object(Bucket=_minio_bucket(), Key=key)
@@ -236,7 +227,7 @@ async def delete_code_dir(scan_id: str) -> int:
     prompt versions). Idempotent — returns the count of objects deleted.
     Called by `../service.py::delete_scan` so the Recent-scans dropdown's
     delete button doesn't leak code blobs."""
-    prefix = f"{keys.MINIO_PREFIX_SCANS}/{scan_id}/code/"
+    prefix = f"{rr_keys.MINIO_PREFIX_SCANS}/{scan_id}/code/"
     deleted = 0
     async with _minio_client() as s3:
         continuation: str | None = None
@@ -268,17 +259,17 @@ async def delete_code_dir(scan_id: str) -> int:
 _NEO4J_BOOTSTRAP_STMTS: tuple[str, ...] = (
     # Uniqueness — guarantees MERGE-by-id is O(1)
     f"CREATE CONSTRAINT paper_id_unique IF NOT EXISTS "
-    f"FOR (p:{keys.NEO4J_LABEL_PAPER}) REQUIRE p.id IS UNIQUE",
+    f"FOR (p:{rr_keys.NEO4J_LABEL_PAPER}) REQUIRE p.id IS UNIQUE",
     f"CREATE CONSTRAINT concept_name_unique IF NOT EXISTS "
-    f"FOR (c:{keys.NEO4J_LABEL_CONCEPT}) REQUIRE c.name IS UNIQUE",
+    f"FOR (c:{rr_keys.NEO4J_LABEL_CONCEPT}) REQUIRE c.name IS UNIQUE",
     f"CREATE CONSTRAINT source_name_unique IF NOT EXISTS "
-    f"FOR (s:{keys.NEO4J_LABEL_SOURCE}) REQUIRE s.name IS UNIQUE",
+    f"FOR (s:{rr_keys.NEO4J_LABEL_SOURCE}) REQUIRE s.name IS UNIQUE",
     # Indexes — payoff for ORDER BY / WHERE clauses used by the synthesis
     # subagent's GraphRAG queries and the digest renderer's top-N pulls.
     f"CREATE INDEX paper_signal_idx IF NOT EXISTS "
-    f"FOR (p:{keys.NEO4J_LABEL_PAPER}) ON (p.signal)",
+    f"FOR (p:{rr_keys.NEO4J_LABEL_PAPER}) ON (p.signal)",
     f"CREATE INDEX paper_published_idx IF NOT EXISTS "
-    f"FOR (p:{keys.NEO4J_LABEL_PAPER}) ON (p.published)",
+    f"FOR (p:{rr_keys.NEO4J_LABEL_PAPER}) ON (p.published)",
 )
 
 
@@ -295,44 +286,6 @@ async def bootstrap_neo4j() -> None:
 
 
 # Paper upsert — MERGE by arxiv_id; sources / authors / concepts grafted
-# onto the same node so cross-source ingest collapses correctly.
-#
-# 2026-09-17: every node gets `:COELHONexus:RR` stamped on via `SET
-# n:{PROJECT_LABEL}:{SOURCE_LABEL}` — mirrors YCS's `:COELHONexus:YCS`
-# tagging (`domains/ycs/graph_builder/service.py`) so the shared Neo4j
-# instance can tell RR's nodes apart from any other domain's. Adding a
-# label is idempotent (Neo4j no-ops re-adding an existing label), so
-# this is safe on every re-MERGE, not just first-write.
-_UPSERT_PAPER_CYPHER = f"""
-MERGE (p:{keys.NEO4J_LABEL_PAPER} {{id: $arxiv_id}})
-SET   p:{keys.PROJECT_LABEL}:{keys.SOURCE_LABEL},
-      p.title    = coalesce($title,    p.title),
-      p.abstract = coalesce($abstract, p.abstract),
-      p.published = coalesce(date($published), p.published),
-      p.citations             = CASE WHEN $citations             > coalesce(p.citations, 0)             THEN $citations             ELSE coalesce(p.citations, 0)             END,
-      p.influential_citations = CASE WHEN $influential_citations > coalesce(p.influential_citations, 0) THEN $influential_citations ELSE coalesce(p.influential_citations, 0) END,
-      p.hn_points       = CASE WHEN $hn_points       > coalesce(p.hn_points, 0)       THEN $hn_points       ELSE coalesce(p.hn_points, 0)       END,
-      p.hn_num_comments = CASE WHEN $hn_num_comments > coalesce(p.hn_num_comments, 0) THEN $hn_num_comments ELSE coalesce(p.hn_num_comments, 0) END,
-      p.hf_upvotes      = CASE WHEN $hf_upvotes      > coalesce(p.hf_upvotes, 0)      THEN $hf_upvotes      ELSE coalesce(p.hf_upvotes, 0)      END,
-      p.signal = coalesce($signal, p.signal),
-      p.updated_at = datetime()
-WITH p
-UNWIND $sources AS source_name
-    MERGE (s:{keys.NEO4J_LABEL_SOURCE} {{name: source_name}})
-    SET   s:{keys.PROJECT_LABEL}:{keys.SOURCE_LABEL}
-    MERGE (p)-[:{keys.NEO4J_REL_FROM}]->(s)
-WITH p
-UNWIND $authors AS author_name
-    MERGE (a:{keys.NEO4J_LABEL_AUTHOR} {{name: author_name}})
-    SET   a:{keys.PROJECT_LABEL}:{keys.SOURCE_LABEL}
-    MERGE (a)-[:{keys.NEO4J_REL_AUTHORED}]->(p)
-WITH p
-UNWIND $categories AS concept_name
-    MERGE (c:{keys.NEO4J_LABEL_CONCEPT} {{name: concept_name}})
-    SET   c:{keys.PROJECT_LABEL}:{keys.SOURCE_LABEL}
-    MERGE (p)-[:{keys.NEO4J_REL_ABOUT}]->(c)
-RETURN DISTINCT p.id AS paper_id
-"""
 
 
 async def upsert_paper(
@@ -366,7 +319,7 @@ async def upsert_paper(
     }
     driver: AsyncDriver = infra.neo4j.service.get_driver()
     async with driver.session(database=infra.neo4j.params.NEO4J_DATABASE) as session:
-        result = await session.run(_UPSERT_PAPER_CYPHER, cypher_params)
+        result = await session.run(prompts.UPSERT_PAPER_CYPHER, cypher_params)
         record = await result.single()
     return record["paper_id"] if record else paper.arxiv_id
 
@@ -377,7 +330,7 @@ async def get_paper_count() -> int:
     """Total :Paper nodes. Cheap sanity check for the bootstrap smoke test."""
     driver: AsyncDriver = infra.neo4j.service.get_driver()
     async with driver.session(database=infra.neo4j.params.NEO4J_DATABASE) as session:
-        result = await session.run(f"MATCH (p:{keys.NEO4J_LABEL_PAPER}) RETURN count(p) AS n")
+        result = await session.run(f"MATCH (p:{rr_keys.NEO4J_LABEL_PAPER}) RETURN count(p) AS n")
         record = await result.single()
     return int(record["n"]) if record else 0
 
@@ -387,70 +340,6 @@ async def get_paper_count() -> int:
 # ---------------------------------------------------------------------------
 
 # Bootstrap — CREATE TABLE IF NOT EXISTS for all 4 RR tables. Idempotent.
-_PG_DDL = f"""
-CREATE TABLE IF NOT EXISTS {keys.PG_TABLE_SCANS} (
-    id                  UUID         PRIMARY KEY,
-    profile_id          TEXT         NOT NULL,
-    status              TEXT         NOT NULL,
-    started_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    finished_at         TIMESTAMPTZ,
-    total_candidates    INT          NOT NULL DEFAULT 0,
-    total_in_digest     INT          NOT NULL DEFAULT 0,
-    error               TEXT,
-    -- Per-scan request shape (2026-06-15) — what the operator asked for.
-    -- Surfaced in the Recent-scans dropdown so the operator can tell two
-    -- scans apart at a glance ("deep agents" vs "constrained decoding").
-    topic               TEXT,
-    verticals           TEXT[],
-    top_n               INT
-);
--- Idempotent ADDs for already-deployed environments.
-ALTER TABLE {keys.PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS topic        TEXT;
-ALTER TABLE {keys.PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS verticals    TEXT[];
-ALTER TABLE {keys.PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS top_n        INT;
--- 2026-06-17: per-scan LLM telemetry snapshot. Redis is the in-flight
--- cache (TTL-bound); this column is the durable archive written at
--- scan completion. Read path: Redis-first, falls back to this JSONB
--- when Redis returns empty. NULL on old rows + scans with zero LLM
--- activity (snapshot is skipped to keep the column sparse).
-ALTER TABLE {keys.PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS llm_counters JSONB;
--- 2026-06-17: scan-wide synthesis output — cross-paper themes (3-7
--- names spanning ≥2 papers each) + executive summary (2-3 sentences).
--- Written by `../service.py::persist_scan_result` at scan completion;
--- surfaced in ScanResult so the Digest page can render the themes
--- filter strip + summary without a separate MinIO fetch.
-ALTER TABLE {keys.PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS synthesis_themes  JSONB;
-ALTER TABLE {keys.PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS synthesis_summary TEXT;
-
-CREATE TABLE IF NOT EXISTS {keys.PG_TABLE_FINDINGS} (
-    scan_id     UUID  NOT NULL REFERENCES {keys.PG_TABLE_SCANS}(id) ON DELETE CASCADE,
-    arxiv_id    TEXT  NOT NULL,
-    rank        INT   NOT NULL,
-    signal      DOUBLE PRECISION NOT NULL,
-    digest_json JSONB NOT NULL,
-    PRIMARY KEY (scan_id, arxiv_id)
-);
-
-CREATE TABLE IF NOT EXISTS {keys.PG_TABLE_SEEN} (
-    profile_id  TEXT         NOT NULL,
-    arxiv_id    TEXT         NOT NULL,
-    first_seen  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (profile_id, arxiv_id)
-);
-
-CREATE TABLE IF NOT EXISTS {keys.PG_TABLE_PROFILES} (
-    id          TEXT         PRIMARY KEY,
-    interests   JSONB        NOT NULL,
-    weights     JSONB        NOT NULL,
-    created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_radar_scans_profile_status
-    ON {keys.PG_TABLE_SCANS} (profile_id, status);
-CREATE INDEX IF NOT EXISTS idx_radar_findings_signal
-    ON {keys.PG_TABLE_FINDINGS} (scan_id, signal DESC);
-""".strip()
 
 
 async def bootstrap_postgres() -> None:
@@ -460,7 +349,7 @@ async def bootstrap_postgres() -> None:
         domains.dd.planner.keys.postgres_url(),
     ) as conn:
         async with conn.cursor() as cur:
-            await cur.execute(_PG_DDL)
+            await cur.execute(prompts.PG_DDL)
         await conn.commit()
     logger.info("[rr-pg] bootstrap complete (4 tables + 2 indexes ensured)")
 
@@ -483,11 +372,11 @@ async def create_scan(
     ) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                f"INSERT INTO {keys.PG_TABLE_SCANS} "
+                f"INSERT INTO {rr_keys.PG_TABLE_SCANS} "
                 f"(id, profile_id, status, topic, verticals, top_n) "
                 f"VALUES (%s, %s, %s, %s, %s, %s)",
                 (
-                    str(scan_id), profile_id, keys.SCAN_STATUS_PENDING,
+                    str(scan_id), profile_id, rr_keys.SCAN_STATUS_PENDING,
                     topic, list(verticals or []) or None, top_n,
                 ),
             )
@@ -501,9 +390,9 @@ async def mark_scan_running(scan_id: UUID) -> None:
     ) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                f"UPDATE {keys.PG_TABLE_SCANS} SET status = %s "
+                f"UPDATE {rr_keys.PG_TABLE_SCANS} SET status = %s "
                 f"WHERE id = %s AND status = %s",
-                (keys.SCAN_STATUS_RUNNING, str(scan_id), keys.SCAN_STATUS_PENDING),
+                (rr_keys.SCAN_STATUS_RUNNING, str(scan_id), rr_keys.SCAN_STATUS_PENDING),
             )
         await conn.commit()
 
@@ -520,13 +409,13 @@ async def mark_scan_done(
     ) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                f"UPDATE {keys.PG_TABLE_SCANS} SET "
+                f"UPDATE {rr_keys.PG_TABLE_SCANS} SET "
                 f"  status = %s, "
                 f"  finished_at = NOW(), "
                 f"  total_candidates = %s, "
                 f"  total_in_digest = %s "
                 f"WHERE id = %s",
-                (keys.SCAN_STATUS_DONE, total_candidates, total_in_digest, str(scan_id)),
+                (rr_keys.SCAN_STATUS_DONE, total_candidates, total_in_digest, str(scan_id)),
             )
         await conn.commit()
 
@@ -539,7 +428,7 @@ async def mark_scan_error(scan_id: UUID, *, status: str, error: str) -> None:
     ) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                f"UPDATE {keys.PG_TABLE_SCANS} SET "
+                f"UPDATE {rr_keys.PG_TABLE_SCANS} SET "
                 f"  status = %s, finished_at = NOW(), error = %s "
                 f"WHERE id = %s",
                 (status, error[:1000], str(scan_id)),
@@ -568,7 +457,7 @@ async def record_findings(scan_id: UUID, findings: list[entities.Finding]) -> in
     ) as conn:
         async with conn.cursor() as cur:
             await cur.executemany(
-                f"INSERT INTO {keys.PG_TABLE_FINDINGS} "
+                f"INSERT INTO {rr_keys.PG_TABLE_FINDINGS} "
                 f"(scan_id, arxiv_id, rank, signal, digest_json) "
                 f"VALUES (%s, %s, %s, %s, %s) "
                 f"ON CONFLICT (scan_id, arxiv_id) DO NOTHING",
@@ -588,7 +477,7 @@ async def get_finding_digest_json(scan_id: UUID, arxiv_id: str) -> dict[str, Any
     ) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                f"SELECT digest_json FROM {keys.PG_TABLE_FINDINGS} "
+                f"SELECT digest_json FROM {rr_keys.PG_TABLE_FINDINGS} "
                 f"WHERE scan_id = %s AND arxiv_id = %s",
                 (str(scan_id), arxiv_id),
             )
@@ -643,7 +532,7 @@ async def mark_seen_batch(profile_id: str, arxiv_ids: list[str]) -> int:
     ) as conn:
         async with conn.cursor() as cur:
             await cur.executemany(
-                f"INSERT INTO {keys.PG_TABLE_SEEN} (profile_id, arxiv_id) "
+                f"INSERT INTO {rr_keys.PG_TABLE_SEEN} (profile_id, arxiv_id) "
                 f"VALUES (%s, %s) "
                 f"ON CONFLICT (profile_id, arxiv_id) DO NOTHING",
                 rows,
@@ -659,7 +548,7 @@ async def get_seen_ids(profile_id: str) -> frozenset[str]:
     ) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                f"SELECT arxiv_id FROM {keys.PG_TABLE_SEEN} WHERE profile_id = %s",
+                f"SELECT arxiv_id FROM {rr_keys.PG_TABLE_SEEN} WHERE profile_id = %s",
                 (profile_id,),
             )
             rows = await cur.fetchall()
@@ -681,7 +570,7 @@ async def write_synthesis_meta(
     ) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                f"UPDATE {keys.PG_TABLE_SCANS} "
+                f"UPDATE {rr_keys.PG_TABLE_SCANS} "
                 f"SET synthesis_themes = %s::jsonb, synthesis_summary = %s "
                 f"WHERE id = %s",
                 (
@@ -711,7 +600,7 @@ async def write_llm_counters(scan_id: UUID, payload: dict) -> bool:
     ) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                f"UPDATE {keys.PG_TABLE_SCANS} SET llm_counters = %s::jsonb "
+                f"UPDATE {rr_keys.PG_TABLE_SCANS} SET llm_counters = %s::jsonb "
                 f"WHERE id = %s",
                 (json.dumps(payload, default=str), str(scan_id)),
             )
@@ -731,7 +620,7 @@ async def read_llm_counters(scan_id: UUID) -> dict | None:
     ) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                f"SELECT llm_counters FROM {keys.PG_TABLE_SCANS} WHERE id = %s",
+                f"SELECT llm_counters FROM {rr_keys.PG_TABLE_SCANS} WHERE id = %s",
                 (str(scan_id),),
             )
             row = await cur.fetchone()
@@ -761,7 +650,7 @@ async def delete_scan_record(scan_id: UUID) -> bool:
     ) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                f"DELETE FROM {keys.PG_TABLE_SCANS} WHERE id = %s",
+                f"DELETE FROM {rr_keys.PG_TABLE_SCANS} WHERE id = %s",
                 (str(scan_id),),
             )
             n = cur.rowcount
@@ -779,7 +668,7 @@ async def reset_seen(profile_id: str) -> int:
     ) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                f"DELETE FROM {keys.PG_TABLE_SEEN} WHERE profile_id = %s",
+                f"DELETE FROM {rr_keys.PG_TABLE_SEEN} WHERE profile_id = %s",
                 (profile_id,),
             )
             n = cur.rowcount
@@ -796,7 +685,7 @@ async def get_profile(profile_id: str) -> dict[str, Any] | None:
         async with conn.cursor() as cur:
             await cur.execute(
                 f"SELECT id, interests, weights, created_at, updated_at "
-                f"FROM {keys.PG_TABLE_PROFILES} WHERE id = %s",
+                f"FROM {rr_keys.PG_TABLE_PROFILES} WHERE id = %s",
                 (profile_id,),
             )
             row = await cur.fetchone()
@@ -824,7 +713,7 @@ async def upsert_profile(
     ) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                f"INSERT INTO {keys.PG_TABLE_PROFILES} "
+                f"INSERT INTO {rr_keys.PG_TABLE_PROFILES} "
                 f"(id, interests, weights) VALUES (%s, %s, %s) "
                 f"ON CONFLICT (id) DO UPDATE SET "
                 f"  interests = EXCLUDED.interests, "
@@ -843,35 +732,35 @@ async def bootstrap_qdrant() -> None:
     """Ensure `radar_papers` collection exists with the right vector config
     + payload indexes. Safe to re-run."""
     client = infra.qdrant.service.get_qdrant()
-    exists = await client.collection_exists(collection_name=keys.QDRANT_COLLECTION)
+    exists = await client.collection_exists(collection_name=rr_keys.QDRANT_COLLECTION)
     if exists:
-        logger.info(f"[rr-qdrant] collection {keys.QDRANT_COLLECTION!r} already exists")
+        logger.info(f"[rr-qdrant] collection {rr_keys.QDRANT_COLLECTION!r} already exists")
     else:
         await client.create_collection(
-            collection_name = keys.QDRANT_COLLECTION,
+            collection_name = rr_keys.QDRANT_COLLECTION,
             vectors_config  = VectorParams(
-                size     = params.STORES_PARAMS.qdrant_vector_dim,
+                size     = rr_params.STORES_PARAMS.qdrant_vector_dim,
                 distance = Distance.COSINE,
             ),
             optimizers_config = OptimizersConfigDiff(
-                default_segment_number = params.STORES_PARAMS.qdrant_segment_count,
+                default_segment_number = rr_params.STORES_PARAMS.qdrant_segment_count,
             ),
         )
         logger.info(
-            f"[rr-qdrant] created collection {keys.QDRANT_COLLECTION!r} "
-            f"(dim={params.STORES_PARAMS.qdrant_vector_dim}, distance=COSINE)"
+            f"[rr-qdrant] created collection {rr_keys.QDRANT_COLLECTION!r} "
+            f"(dim={rr_params.STORES_PARAMS.qdrant_vector_dim}, distance=COSINE)"
         )
     # Payload indexes — idempotent (Qdrant ignores duplicates). These speed
     # up filter+search by 10-100× on the radar's typical queries.
     for field, schema in (
-        (keys.QDRANT_PAYLOAD_ARXIV_ID,  PayloadSchemaType.KEYWORD),
-        (keys.QDRANT_PAYLOAD_SIGNAL,    PayloadSchemaType.FLOAT),
-        (keys.QDRANT_PAYLOAD_PUBLISHED, PayloadSchemaType.DATETIME),
-        (keys.QDRANT_PAYLOAD_SOURCES,   PayloadSchemaType.KEYWORD),
+        (rr_keys.QDRANT_PAYLOAD_ARXIV_ID,  PayloadSchemaType.KEYWORD),
+        (rr_keys.QDRANT_PAYLOAD_SIGNAL,    PayloadSchemaType.FLOAT),
+        (rr_keys.QDRANT_PAYLOAD_PUBLISHED, PayloadSchemaType.DATETIME),
+        (rr_keys.QDRANT_PAYLOAD_SOURCES,   PayloadSchemaType.KEYWORD),
     ):
         try:
             await client.create_payload_index(
-                collection_name = keys.QDRANT_COLLECTION,
+                collection_name = rr_keys.QDRANT_COLLECTION,
                 field_name      = field,
                 field_schema    = schema,
             )
@@ -879,17 +768,6 @@ async def bootstrap_qdrant() -> None:
             # Idempotency: an already-existing index raises in some
             # qdrant-client versions; log + continue.
             logger.debug(f"[rr-qdrant] payload index {field!r} exists or skip: {e}")
-
-
-# Point IDs — deterministic UUIDs from arxiv_id so re-upserts overwrite in
-# place (Qdrant requires integer or UUID point ids; arxiv_id is a string).
-_QDRANT_POINT_NAMESPACE = uuid5(NAMESPACE_URL, "rr.point.arxiv")
-
-
-def _point_id(arxiv_id: str) -> str:
-    """Deterministic UUIDv5 for the arxiv_id → repeat upserts are
-    idempotent at the Qdrant layer."""
-    return str(uuid5(_QDRANT_POINT_NAMESPACE, arxiv_id))
 
 
 async def upsert_paper_vector(
@@ -906,13 +784,13 @@ async def upsert_paper_vector(
     if not paper.arxiv_id:
         raise ValueError("[rr-qdrant] upsert_paper_vector requires arxiv_id != None")
     point = PointStruct(
-        id      = _point_id(paper.arxiv_id),
+        id      = keys.point_id(paper.arxiv_id),
         vector  = list(embedding),
         payload = {
-            keys.QDRANT_PAYLOAD_ARXIV_ID:  paper.arxiv_id,
-            keys.QDRANT_PAYLOAD_SIGNAL:    float(signal) if signal is not None else 0.0,
-            keys.QDRANT_PAYLOAD_PUBLISHED: paper.published.isoformat() if paper.published else None,
-            keys.QDRANT_PAYLOAD_SOURCES:   sorted(paper.sources),
+            rr_keys.QDRANT_PAYLOAD_ARXIV_ID:  paper.arxiv_id,
+            rr_keys.QDRANT_PAYLOAD_SIGNAL:    float(signal) if signal is not None else 0.0,
+            rr_keys.QDRANT_PAYLOAD_PUBLISHED: paper.published.isoformat() if paper.published else None,
+            rr_keys.QDRANT_PAYLOAD_SOURCES:   sorted(paper.sources),
             "title":                       paper.title,
             "authors":                     list(paper.authors),
             "categories":                  list(paper.categories),
@@ -922,7 +800,7 @@ async def upsert_paper_vector(
         },
     )
     client = infra.qdrant.service.get_qdrant()
-    await client.upsert(collection_name=keys.QDRANT_COLLECTION, points=[point])
+    await client.upsert(collection_name=rr_keys.QDRANT_COLLECTION, points=[point])
     return point.id
 
 
@@ -945,7 +823,7 @@ async def search_by_embedding(
         flt = Filter(
             must=[
                 FieldCondition(
-                    key   = keys.QDRANT_PAYLOAD_ARXIV_ID,
+                    key   = rr_keys.QDRANT_PAYLOAD_ARXIV_ID,
                     match = MatchValue(value=aid),
                 )
                 for aid in arxiv_ids
@@ -953,7 +831,7 @@ async def search_by_embedding(
         )
     client = infra.qdrant.service.get_qdrant()
     response = await client.query_points(
-        collection_name = keys.QDRANT_COLLECTION,
+        collection_name = rr_keys.QDRANT_COLLECTION,
         query           = list(query_vector),
         query_filter    = flt,
         limit           = limit,
@@ -961,7 +839,7 @@ async def search_by_embedding(
     )
     return [
         {
-            "arxiv_id": r.payload.get(keys.QDRANT_PAYLOAD_ARXIV_ID) if r.payload else None,
+            "arxiv_id": r.payload.get(rr_keys.QDRANT_PAYLOAD_ARXIV_ID) if r.payload else None,
             "score":    r.score,
             "payload":  r.payload or {},
         }
@@ -972,5 +850,5 @@ async def search_by_embedding(
 async def count_points() -> int:
     """Total points in `radar_papers`. Cheap sanity check for bootstrap."""
     client = infra.qdrant.service.get_qdrant()
-    info = await client.get_collection(collection_name=keys.QDRANT_COLLECTION)
+    info = await client.get_collection(collection_name=rr_keys.QDRANT_COLLECTION)
     return int(getattr(info, "points_count", 0) or 0)

@@ -1,11 +1,10 @@
 """Pure functions for the RR domain — no I/O, no event loop, no mocks."""
 from __future__ import annotations
+from . import entities, keys, params, patterns
 
 import math
 from datetime import date, datetime
 from typing import Any
-
-from . import entities, keys, params, patterns
 
 
 def _canonical_arxiv_id(raw: str | None) -> str | None:

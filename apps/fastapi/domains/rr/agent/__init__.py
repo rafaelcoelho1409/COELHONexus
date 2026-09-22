@@ -10,5 +10,4 @@ cost). Callers reach it with a direct import:
     from domains.rr.agent.graph import build_radar_agent
 """
 from __future__ import annotations
-
 from . import keys, memory, middleware, params, patterns, prompts, schemas, service, skills, subagents, tools

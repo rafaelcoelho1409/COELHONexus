@@ -15,5 +15,4 @@ When DeepAgents stabilizes its `skills=` parameter, swap to that and keep
 the .md files in place.
 """
 from __future__ import annotations
-
 from . import service

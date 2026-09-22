@@ -19,15 +19,14 @@ Net effect:
   - Discovery phase wall-time: 10 min → 30 sec
 """
 from __future__ import annotations
+from . import domain
+from .. import state
+from ... import keys, service
 
 import logging
 from typing import Any
 
 from langchain_core.tools import tool
-
-from . import domain
-from .. import state as tools_state
-from ... import keys, service as agent_service
 
 
 logger = logging.getLogger(__name__)
@@ -47,7 +46,7 @@ async def _call_mcp_safely(
     discovery subagents into sending flat args that FastMCP rejected.)
     """
     try:
-        tools = await agent_service.get_tools_by_name(tool_name)
+        tools = await service.get_tools_by_name(tool_name)
         if not tools:
             logger.error(
                 f"[fs-tool] discover_{source} scan_id={scan_id}: "
@@ -100,7 +99,7 @@ async def discover_arxiv(
         keys.TOOL_ARXIV_SEARCH, args, scan_id=scan_id, source="arxiv"
     )
     path = keys.fs_discovery_path("arxiv")
-    tools_state.fs_write(scan_id, path, papers)
+    state.fs_write(scan_id, path, papers)
     logger.info(
         f"[fs-tool] discover_arxiv scan_id={scan_id} count={len(papers)} path={path}"
     )
@@ -133,7 +132,7 @@ async def discover_semantic_scholar(
         keys.TOOL_S2_SEARCH, args, scan_id=scan_id, source="semantic_scholar"
     )
     path = keys.fs_discovery_path("semantic_scholar")
-    tools_state.fs_write(scan_id, path, papers)
+    state.fs_write(scan_id, path, papers)
     logger.info(
         f"[fs-tool] discover_semantic_scholar scan_id={scan_id} "
         f"count={len(papers)} path={path}"
@@ -168,7 +167,7 @@ async def discover_huggingface_daily_papers(
         keys.TOOL_HF_DAILY, args, scan_id=scan_id, source="huggingface_daily_papers"
     )
     path = keys.fs_discovery_path("huggingface_daily_papers")
-    tools_state.fs_write(scan_id, path, papers)
+    state.fs_write(scan_id, path, papers)
     logger.info(
         f"[fs-tool] discover_huggingface_daily_papers scan_id={scan_id} "
         f"count={len(papers)} path={path}"
@@ -202,7 +201,7 @@ async def discover_hn(
         keys.TOOL_HN_SEARCH, args, scan_id=scan_id, source="hn"
     )
     path = keys.fs_discovery_path("hn")
-    tools_state.fs_write(scan_id, path, papers)
+    state.fs_write(scan_id, path, papers)
     logger.info(
         f"[fs-tool] discover_hn scan_id={scan_id} count={len(papers)} path={path}"
     )
@@ -237,7 +236,7 @@ async def discover_openalex(
         keys.TOOL_OPENALEX_SEARCH, args, scan_id=scan_id, source="openalex"
     )
     path = keys.fs_discovery_path("openalex")
-    tools_state.fs_write(scan_id, path, papers)
+    state.fs_write(scan_id, path, papers)
     logger.info(
         f"[fs-tool] discover_openalex scan_id={scan_id} count={len(papers)} path={path}"
     )

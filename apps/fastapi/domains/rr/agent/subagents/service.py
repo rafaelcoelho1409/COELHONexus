@@ -21,13 +21,11 @@ DigestSchema and prompt patterns remain useful), but it is no longer
 wired into either topology.
 """
 from __future__ import annotations
+from .. import keys, prompts, schemas, service, skills, tools
 
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
-
-from .. import keys, prompts, schemas, service as agent_service, skills
-from ..tools import fs as fs_tools
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +47,7 @@ from ..tools import fs as fs_tools
 
 async def build_discovery_arxiv(model: BaseChatModel) -> dict[str, Any]:
     """SubAgent dict for the arXiv discovery worker (SUBAGENTS mode)."""
-    mcp_tools = await agent_service.get_tools_by_name(keys.TOOL_ARXIV_SEARCH)
+    mcp_tools = await service.get_tools_by_name(keys.TOOL_ARXIV_SEARCH)
     full_prompt = (
         f"=== SKILL: arxiv_query_shaping ===\n\n"
         f"{skills.service.SKILL_ARXIV_QUERY_SHAPING}\n\n"
@@ -67,7 +65,7 @@ async def build_discovery_arxiv(model: BaseChatModel) -> dict[str, Any]:
             "ML / CS preprints not yet citation-tracked."
         ),
         "system_prompt": full_prompt,
-        "tools":         [*mcp_tools, fs_tools.service.stash_discovery_result],
+        "tools":         [*mcp_tools, tools.fs.service.stash_discovery_result],
         "model":         model,
     }
 
@@ -82,7 +80,7 @@ async def build_discovery_arxiv(model: BaseChatModel) -> dict[str, Any]:
 
 async def build_discovery_semantic_scholar(model: BaseChatModel) -> dict[str, Any]:
     """SubAgent dict for the Semantic Scholar discovery worker."""
-    mcp_tools = await agent_service.get_tools_by_name(keys.TOOL_S2_SEARCH)
+    mcp_tools = await service.get_tools_by_name(keys.TOOL_S2_SEARCH)
     full_prompt = (
         f"=== SKILL: rotator_etiquette ===\n\n"
         f"{skills.service.SKILL_ROTATOR_ETIQUETTE}\n\n"
@@ -99,7 +97,7 @@ async def build_discovery_semantic_scholar(model: BaseChatModel) -> dict[str, An
             "API_KEY for higher RPS."
         ),
         "system_prompt": full_prompt,
-        "tools":         [*mcp_tools, fs_tools.service.stash_discovery_result],
+        "tools":         [*mcp_tools, tools.fs.service.stash_discovery_result],
         "model":         model,
     }
 
@@ -116,7 +114,7 @@ async def build_discovery_huggingface_daily_papers(
     model: BaseChatModel,
 ) -> dict[str, Any]:
     """SubAgent dict for the HF Daily Papers discovery worker."""
-    mcp_tools = await agent_service.get_tools_by_name(keys.TOOL_HF_DAILY)
+    mcp_tools = await service.get_tools_by_name(keys.TOOL_HF_DAILY)
     full_prompt = (
         f"=== SKILL: rotator_etiquette ===\n\n"
         f"{skills.service.SKILL_ROTATOR_ETIQUETTE}\n\n"
@@ -132,7 +130,7 @@ async def build_discovery_huggingface_daily_papers(
             "arxiv_id always — the cross-source dedup primary lane."
         ),
         "system_prompt": full_prompt,
-        "tools":         [*mcp_tools, fs_tools.service.stash_discovery_result],
+        "tools":         [*mcp_tools, tools.fs.service.stash_discovery_result],
         "model":         model,
     }
 
@@ -147,7 +145,7 @@ async def build_discovery_huggingface_daily_papers(
 
 async def build_discovery_hn(model: BaseChatModel) -> dict[str, Any]:
     """SubAgent dict for the Hacker News discovery worker."""
-    mcp_tools = await agent_service.get_tools_by_name(keys.TOOL_HN_SEARCH)
+    mcp_tools = await service.get_tools_by_name(keys.TOOL_HN_SEARCH)
     full_prompt = (
         f"=== SKILL: rotator_etiquette ===\n\n"
         f"{skills.service.SKILL_ROTATOR_ETIQUETTE}\n\n"
@@ -163,7 +161,7 @@ async def build_discovery_hn(model: BaseChatModel) -> dict[str, Any]:
             "the story URL points at arxiv.org or HF papers."
         ),
         "system_prompt": full_prompt,
-        "tools":         [*mcp_tools, fs_tools.service.stash_discovery_result],
+        "tools":         [*mcp_tools, tools.fs.service.stash_discovery_result],
         "model":         model,
     }
 
@@ -179,7 +177,7 @@ async def build_discovery_hn(model: BaseChatModel) -> dict[str, Any]:
 
 async def build_discovery_openalex(model: BaseChatModel) -> dict[str, Any]:
     """SubAgent dict for the OpenAlex discovery worker."""
-    mcp_tools = await agent_service.get_tools_by_name(keys.TOOL_OPENALEX_SEARCH)
+    mcp_tools = await service.get_tools_by_name(keys.TOOL_OPENALEX_SEARCH)
     full_prompt = (
         f"=== SKILL: rotator_etiquette ===\n\n"
         f"{skills.service.SKILL_ROTATOR_ETIQUETTE}\n\n"
@@ -197,7 +195,7 @@ async def build_discovery_openalex(model: BaseChatModel) -> dict[str, Any]:
             "opportunistically from DOI downstream when present)."
         ),
         "system_prompt": full_prompt,
-        "tools":         [*mcp_tools, fs_tools.service.stash_discovery_result],
+        "tools":         [*mcp_tools, tools.fs.service.stash_discovery_result],
         "model":         model,
     }
 
@@ -237,7 +235,7 @@ def build_deep_read(model: BaseChatModel) -> dict[str, Any]:
             "Dispatch one per paper, in parallel for Phase 3 fan-out."
         ),
         "system_prompt": full_prompt,
-        "tools":         [fs_tools.service.read_top_n_papers, fs_tools.service.write_extraction],
+        "tools":         [tools.fs.service.read_top_n_papers, tools.fs.service.write_extraction],
         "model":         model,
     }
 
@@ -272,10 +270,10 @@ def build_synthesis(model: BaseChatModel) -> dict[str, Any]:
         ),
         "system_prompt": full_prompt,
         "tools": [
-            fs_tools.service.read_top_n_papers,
-            fs_tools.service.list_extractions,
-            fs_tools.service.read_extraction,
-            fs_tools.service.write_synthesis_report,
+            tools.fs.service.read_top_n_papers,
+            tools.fs.service.list_extractions,
+            tools.fs.service.read_extraction,
+            tools.fs.service.write_synthesis_report,
         ],
         "model":         model,
     }
@@ -333,11 +331,11 @@ def build_report(model: BaseChatModel) -> dict[str, Any]:
         ),
         "system_prompt": full_prompt,
         "tools": [
-            fs_tools.service.read_top_n_papers,
-            fs_tools.service.read_synthesis_report,
-            fs_tools.service.list_extractions,
-            fs_tools.service.read_extraction,
-            fs_tools.service.write_digest,
+            tools.fs.service.read_top_n_papers,
+            tools.fs.service.read_synthesis_report,
+            tools.fs.service.list_extractions,
+            tools.fs.service.read_extraction,
+            tools.fs.service.write_digest,
         ],
         "model":           model,
         "response_format": schemas.DigestSchema,

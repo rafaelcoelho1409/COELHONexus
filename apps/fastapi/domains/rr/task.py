@@ -10,17 +10,14 @@ SYNCHRONOUSLY via `runtime.service.emit_event_sync` so they survive even when th
 agent run is cancelled mid-await.
 """
 from __future__ import annotations
+import infra.celery.service
+import infra
+from . import agent, entities, params, runtime, service, stores
 
 import asyncio
 import logging
 from typing import Any
 from uuid import UUID
-
-import infra.celery.service
-import infra
-
-from .agent.graph import build_radar_agent
-from . import agent, entities, runtime, service, stores
 
 
 logger = logging.getLogger(__name__)
@@ -233,7 +230,8 @@ async def _run_radar_scan_async_inner(
             f"topic='{topic}' "
             f"top_n={top_n}"
         )
-        radar_agent = await build_radar_agent()
+        import domains.rr.agent.graph
+        radar_agent = await domains.rr.agent.graph.build_radar_agent()
         _llm_cb = getattr(radar_agent, "_rr_llm_counter_cb", None)
         callbacks = [c for c in (_llm_cb,) if c is not None]
         await radar_agent.ainvoke(
@@ -525,19 +523,8 @@ def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
     }
 
 
-# Inline backfill: recover extractions dropped by the orchestrator (phase enforcer exhausted, etc.).
-# Capped at 3 — beyond that, infra is likely wedged and retrying won't help.
-BACKFILL_MAX = 3
-
-# Per-call bound for one backfill extraction (single abstract → 6-field
-# JSON — much lighter than deep_read's full-paper-text shape). 2 attempts:
-# a transient NIM timeout/connection blip gets one retry via
-# `resilient_ainvoke`, same accelerator YCS Ask/Query use.
-_BACKFILL_CALL_TIMEOUT_S = 90.0
-
-
 async def _backfill_missing_extractions(scan_id: str) -> None:
-    """Recover extractions missing from fs up to BACKFILL_MAX. No-op when complete or gap > cap."""
+    """Recover extractions missing from fs up to params.BACKFILL_MAX. No-op when complete or gap > cap."""
     top_n_raw = agent.tools.state.fs_read(scan_id, agent.keys.FS_FILE_TRIAGE_TOPN)
     if not isinstance(top_n_raw, list) or not top_n_raw:
         return
@@ -558,10 +545,10 @@ async def _backfill_missing_extractions(scan_id: str) -> None:
     missing_ids = expected_ids - extracted_ids
     if not missing_ids:
         return
-    if len(missing_ids) > BACKFILL_MAX:  # likely infra issue; inline retry won't help
+    if len(missing_ids) > params.BACKFILL_MAX:  # likely infra issue; inline retry won't help
         logger.warning(
             f"[rr-task] backfill skipped scan_id={scan_id} "
-            f"missing={len(missing_ids)} > BACKFILL_MAX={BACKFILL_MAX} "
+            f"missing={len(missing_ids)} > params.BACKFILL_MAX={params.BACKFILL_MAX} "
             f"(likely infra issue — letting digest degrade naturally)"
         )
         return
@@ -583,11 +570,11 @@ async def _backfill_missing_extractions(scan_id: str) -> None:
     # 2026-09-17: was a sequential `for` loop — the one place in RR that
     # didn't match DD/YCS's gathered-concurrency pattern for "N
     # independent items" (same shape as `graph_build_papers`'
-    # Semaphore+gather, just never ported here). BACKFILL_MAX already
+    # Semaphore+gather, just never ported here). params.BACKFILL_MAX already
     # caps this at 3 items, so the semaphore is a safety margin rather
     # than a real rate-limit need — matches graph_build's default
     # concurrency (4) rather than inventing a new number.
-    sem = asyncio.Semaphore(min(4, max(1, BACKFILL_MAX)))
+    sem = asyncio.Semaphore(min(4, max(1, params.BACKFILL_MAX)))
 
     async def _guarded(arxiv_id: str, paper: dict[str, Any]) -> bool:
         async with sem:
@@ -650,7 +637,7 @@ async def _backfill_one(
             HumanMessage(content=user_msg),
         ],
         operation    = "backfill",
-        timeout_s    = _BACKFILL_CALL_TIMEOUT_S,
+        timeout_s    = params.BACKFILL_CALL_TIMEOUT_S,
         max_attempts = 2,
     )
     raw = (getattr(response, "content", None) or "").strip()

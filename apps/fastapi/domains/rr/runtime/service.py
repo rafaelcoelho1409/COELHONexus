@@ -31,6 +31,7 @@ sectioned below.
                      subagents do.
 """
 from __future__ import annotations
+from . import domain, keys, llm_counter, metrics, params
 
 import asyncio
 import json
@@ -40,8 +41,6 @@ import time
 from typing import Any, AsyncIterator
 
 import redis.asyncio as redis_aio
-
-from . import domain, keys, llm_counter, metrics, params
 
 
 logger = logging.getLogger(__name__)

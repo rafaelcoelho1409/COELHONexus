@@ -6,11 +6,10 @@ names, key namespaces) live in keys.py; numeric tunables (timeouts,
 retention) live in params.py.
 """
 from __future__ import annotations
+from . import params
 
 import os
 from urllib.parse import quote
-
-from . import params
 
 
 def redis_url() -> str:
