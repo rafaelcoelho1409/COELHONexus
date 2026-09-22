@@ -560,3 +560,33 @@ def describe_vertical(code: str) -> str:
     Learning'`). Returns an empty string for unknown codes; callers should
     branch on truthiness."""
     return ARXIV_DESCRIPTIONS.get(code, "")
+
+
+def item_to_finding(item: dict[str, Any]) -> entities.Finding:
+    """Convert one digest item to a entities.Finding dataclass for service.persist_*"""
+    ex_dict = item.get("extraction")
+    extraction = extraction_from_dict(ex_dict) if isinstance(ex_dict, dict) else None
+    return entities.Finding(
+        arxiv_id   = str(item.get("arxiv_id") or ""),
+        rank       = int(item.get("rank") or 0),
+        signal     = float(item.get("signal") or 0.0),
+        title      = str(item.get("title") or ""),
+        authors    = tuple(item.get("authors") or ()),
+        summary    = str(item.get("summary") or ""),
+        extraction = extraction,
+        is_new     = bool(item.get("is_new", True)),
+        themes     = tuple(item.get("themes") or ()),
+        sources    = frozenset(item.get("sources") or ()),
+    )
+
+
+def extraction_from_dict(d: dict[str, Any]) -> entities.Extraction:
+    return entities.Extraction(
+        arxiv_id     = str(d.get("arxiv_id") or ""),
+        problem      = str(d.get("problem") or ""),
+        method       = str(d.get("method") or ""),
+        math         = str(d.get("math") or ""),
+        how_to_build = str(d.get("how_to_build") or ""),
+        money_angle  = str(d.get("money_angle") or ""),
+        confidence   = float(d.get("confidence") or 0.5),
+    )

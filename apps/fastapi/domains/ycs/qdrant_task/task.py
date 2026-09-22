@@ -3,7 +3,6 @@ from __future__ import annotations
 import infra.celery.service
 
 import asyncio
-import logging
 import os
 from typing import Any
 

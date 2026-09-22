@@ -8,6 +8,7 @@ import domains
 from . import errors, params, patterns
 
 from datetime import datetime, timezone
+from typing import Any
 
 
 def normalize_video_id(raw: str) -> str:
@@ -180,4 +181,23 @@ def normalize_full_video(data: dict) -> dict:
         "extractor":              data.get("extractor", ""),
         "extractor_key":          data.get("extractor_key", ""),
         "extracted_at":           _utc_now_iso(),
+    }
+
+
+def project_video_meta(v: dict[str, Any]) -> dict[str, Any]:
+    """Pluck the subset of yt-dlp metadata shown on the FastHTML
+    progress card — same shape as the Search-page result row (minus
+    the thumbnail). Centralized so the 3 extract paths emit identical
+    payloads."""
+    return {
+        "id":              v.get("id"),
+        "title":           v.get("title"),
+        "channel":         v.get("channel"),
+        "channel_id":      v.get("channel_id"),
+        "duration":        v.get("duration"),
+        "duration_string": v.get("duration_string"),
+        "view_count":      v.get("view_count"),
+        "like_count":      v.get("like_count"),
+        "upload_date":     v.get("upload_date"),
+        "webpage_url":     v.get("webpage_url"),
     }

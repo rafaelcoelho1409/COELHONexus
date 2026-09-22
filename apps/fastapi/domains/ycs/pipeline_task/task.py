@@ -18,12 +18,9 @@ from typing import Any
 from celery import chain, group
 from celery.utils.log import get_task_logger
 
-from domains.ycs.extract.task import extract_channel
-from domains.ycs.neo4j_task.task import ingest_to_neo4j
-from domains.ycs.qdrant_task.task import (
-    ingest_to_qdrant,
-    invalidate_cache,
-)
+import domains.ycs.extract.task
+import domains.ycs.neo4j_task.task
+import domains.ycs.qdrant_task.task
 import infra.celery.service
 
 
@@ -48,17 +45,17 @@ def full_channel_pipeline(
     If any step fails, Celery retries that step — not the whole pipeline."""
     ingest_steps = []
     if include_qdrant:
-        ingest_steps.append(ingest_to_qdrant.si())
+        ingest_steps.append(domains.ycs.qdrant_task.task.ingest_to_qdrant.si())
     if include_graph:
-        ingest_steps.append(ingest_to_neo4j.si())
+        ingest_steps.append(domains.ycs.neo4j_task.task.ingest_to_neo4j.si())
     steps: list[Any] = [
-        extract_channel.si(channel_id, max_results, include_transcription),
+        domains.ycs.extract.task.extract_channel.si(channel_id, max_results, include_transcription),
     ]
     if len(ingest_steps) > 1:
         steps.append(group(*ingest_steps))
     else:
         steps.extend(ingest_steps)
-    steps.append(invalidate_cache.si())
+    steps.append(domains.ycs.qdrant_task.task.invalidate_cache.si())
     pipeline = chain(*steps)
     result = pipeline.apply_async()
     return {

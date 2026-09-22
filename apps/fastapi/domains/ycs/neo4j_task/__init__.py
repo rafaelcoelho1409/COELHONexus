@@ -8,3 +8,4 @@ shadow `from neo4j import ...`.
 `import infra.celery.service` (use `infra.celery.service.app`) at module level); reach it via a direct
 `from domains.ycs.neo4j_task.task import ingest_to_neo4j`."""
 from __future__ import annotations
+from . import params, service
