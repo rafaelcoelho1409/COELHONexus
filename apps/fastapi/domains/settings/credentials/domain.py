@@ -2,7 +2,24 @@ from __future__ import annotations
 from . import errors, keys
 
 import json
+from botocore.config import Config
 from cryptography.fernet import Fernet, InvalidToken
+
+
+def is_truthy(value: str | None) -> bool:
+    """Env-flag parsing — the IMPORT_ENV_FLAG opt-in accepts common truthy spellings."""
+    return (value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def build_boto_config(cfg) -> Config:
+    """S3 client value-object from the frozen config group (takes config
+    as an explicit param so it stays testable without config coupling)."""
+    return Config(
+        signature_version = cfg.signature_version,
+        connect_timeout = cfg.connect_timeout_s,
+        read_timeout = cfg.read_timeout_s,
+        retries = {"max_attempts": cfg.max_attempts, "mode": cfg.retry_mode},
+    )
 
 
 def mask_key(key: str | None) -> str | None:

@@ -111,16 +111,17 @@ _apply_endpoint(force=True)
 _CLIENT: object | None = None
 _CLIENT_LOCK = asyncio.Lock()
 
-def _build_limits() -> httpx.Limits:
-    return httpx.Limits(
-        max_connections=params.POOL_MAX_CONNECTIONS,
-        max_keepalive_connections=params.POOL_MAX_KEEPALIVE,
-        keepalive_expiry=params.POOL_KEEPALIVE_EXPIRY_S,
-    )
-
-def _build_timeout(timeout_s: float | None) -> httpx.Timeout:
-    t = timeout_s or params.CLIENT_MAX_TIMEOUT_S
-    return httpx.Timeout(timeout=t, connect=5.0, read=t, write=5.0, pool=5.0)
+_POOL_KWARGS = {
+    "max_connections": params.POOL_MAX_CONNECTIONS,
+    "max_keepalive_connections": params.POOL_MAX_KEEPALIVE,
+    "keepalive_expiry_s": params.POOL_KEEPALIVE_EXPIRY_S,
+}
+_TIMEOUT_KWARGS = {
+    "default_s": params.CLIENT_MAX_TIMEOUT_S,
+    "connect_s": params.CONNECT_TIMEOUT_S,
+    "write_s": params.WRITE_TIMEOUT_S,
+    "pool_s": params.POOL_TIMEOUT_S,
+}
 
 async def _get_async_openai():
     """Singleton AsyncOpenAI with pooled httpx client (lazy, thread-safe for async)."""
@@ -149,17 +150,17 @@ async def _get_async_openai():
         # is installed, http/1.1 keep-alive fallback otherwise.
         try:
             http_client = httpx.AsyncClient(
-                limits=_build_limits(),
+                limits=domain.build_pool_limits(**_POOL_KWARGS),
                 http2=True,
-                timeout=_build_timeout(None),
+                timeout=domain.build_client_timeout(None, **_TIMEOUT_KWARGS),
                 follow_redirects=True,
             )
             http2_enabled = True
         except ImportError:
             http_client = httpx.AsyncClient(
-                limits=_build_limits(),
+                limits=domain.build_pool_limits(**_POOL_KWARGS),
                 http2=False,
-                timeout=_build_timeout(None),
+                timeout=domain.build_client_timeout(None, **_TIMEOUT_KWARGS),
                 follow_redirects=True,
             )
             http2_enabled = False
@@ -195,16 +196,16 @@ def _get_shared_http_client():
         return _SHARED_HTTP_CLIENT
     try:
         client = httpx.AsyncClient(
-            limits=_build_limits(),
+            limits=domain.build_pool_limits(**_POOL_KWARGS),
             http2=True,
-            timeout=_build_timeout(None),
+            timeout=domain.build_client_timeout(None, **_TIMEOUT_KWARGS),
             follow_redirects=True,
         )
     except ImportError:
         client = httpx.AsyncClient(
-            limits=_build_limits(),
+            limits=domain.build_pool_limits(**_POOL_KWARGS),
             http2=False,
-            timeout=_build_timeout(None),
+            timeout=domain.build_client_timeout(None, **_TIMEOUT_KWARGS),
             follow_redirects=True,
         )
     _SHARED_HTTP_CLIENT = client
@@ -242,7 +243,7 @@ def build_chat_model(
         "base_url":          ENDPOINT.base_url,
         "api_key":           ENDPOINT.api_key,
         "model":             ENDPOINT.model,
-        "temperature":       temperature if temperature is not None else 0.0,
+        "temperature":       temperature if temperature is not None else params.DEFAULT_TEMPERATURE,
         "max_retries":       max_retries,
         "http_async_client": _get_shared_http_client(),
     }
@@ -261,8 +262,8 @@ def build_chat_model(
 
 async def chat_judge_async(
     prompt: str,
-    max_tokens: int = 8,
-    temperature: float = 0.0,
+    max_tokens: int = params.DEFAULT_MAX_TOKENS,
+    temperature: float = params.DEFAULT_TEMPERATURE,
 ) -> str:
     text, _ = await chat_text_async(prompt, max_tokens=max_tokens, temperature=temperature)
     return text
@@ -271,9 +272,9 @@ async def chat_judge_async(
 async def chat_text_async(
     prompt: str,
     *,
-    max_tokens: int = 8,
-    temperature: float = 0.0,
-    timeout_s: float = 30.0,
+    max_tokens: int = params.DEFAULT_MAX_TOKENS,
+    temperature: float = params.DEFAULT_TEMPERATURE,
+    timeout_s: float = params.DEFAULT_TIMEOUT_S,
     expected_pattern: str | None = None,
     response_format: dict | None = None,
 ) -> tuple[str, dict]:
@@ -303,7 +304,7 @@ async def chat_text_async(
     # ever raising. asyncio.wait_for enforces actual total duration instead.
     # Safe to rely on here because max_retries=0 above means there's no
     # internal SDK retry loop that could eat this budget out from under it.
-    backstop_s = (timeout_s or 30.0) + 15.0
+    backstop_s = (timeout_s or params.DEFAULT_TIMEOUT_S) + params.BACKSTOP_MARGIN_S
 
     async def _do_call():
         return await client.chat.completions.create(**kwargs)  # type: ignore[arg-type]

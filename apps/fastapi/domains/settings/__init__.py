@@ -8,7 +8,6 @@ user-configured external endpoints — the ONLY connections Nexus makes to
 external LLMs / embedding models. No bundled gateway, no provider fan-out.
 """
 from __future__ import annotations
-
 from . import chat, credentials, embeddings
 
 

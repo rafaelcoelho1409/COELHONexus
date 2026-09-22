@@ -14,3 +14,19 @@ class StorageLayout:
 
 
 STORAGE = StorageLayout()
+
+
+@dataclass(frozen = True, slots = True)
+class MinioClientConfig:
+    """S3 client shape for the credential/settings blobs — one concept,
+    tuned together (short timeouts + single attempt so a dead MinIO fails
+    fast into the env fallback instead of stalling callers)."""
+    signature_version: str = "s3v4"
+    region:            str = "us-east-1"
+    connect_timeout_s: int = 3
+    read_timeout_s:    int = 5
+    max_attempts:      int = 1
+    retry_mode:        str = "standard"
+
+
+MINIO_CLIENT = MinioClientConfig()

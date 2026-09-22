@@ -14,6 +14,20 @@ POOL_MAX_CONNECTIONS: int = 200
 POOL_MAX_KEEPALIVE: int = 100
 POOL_KEEPALIVE_EXPIRY_S: float = 30.0
 
+# Per-call defaults for the raw chat path (chat_text_async/chat_judge_async).
+DEFAULT_TIMEOUT_S: float = 30.0
+DEFAULT_MAX_TOKENS: int = 8
+DEFAULT_TEMPERATURE: float = 0.0
+
+# httpx connect/write/pool-acquire ceilings inside the pooled client
+# (the read ceiling is the per-request timeout itself — see domain.py).
+CONNECT_TIMEOUT_S: float = 5.0
+WRITE_TIMEOUT_S: float = 5.0
+POOL_TIMEOUT_S: float = 5.0
+
+# Hard wall-clock backstop = (timeout_s or DEFAULT_TIMEOUT_S) + margin.
+BACKSTOP_MARGIN_S: float = 15.0
+
 # Env fallbacks, read at import. `LLM_ENDPOINT_*` is the current name;
 # `COELHO_LLM_*` is the legacy name, still honored for deployed envs.
 URL_ENVS: tuple[str, ...] = ("LLM_ENDPOINT_URL", "COELHO_LLM_ROTATOR_URL", "COELHO_LLM_URL")

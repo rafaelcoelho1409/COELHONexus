@@ -1,6 +1,8 @@
 """chat — pure helpers (no I/O, no network, deterministic)."""
 from __future__ import annotations
 
+import httpx
+
 
 def normalize_base_url(url: str) -> str:
     """Return an OpenAI SDK base_url (scheme+host+prefix without /chat/completions).
@@ -37,3 +39,32 @@ def classify_error(exc: Exception) -> str:
     if "5" in msg and ("server" in msg or "internal" in msg or "bad gateway" in msg):
         return "server_error"
     return "unknown"
+
+
+def build_pool_limits(
+    *,
+    max_connections: int,
+    max_keepalive_connections: int,
+    keepalive_expiry_s: float,
+) -> httpx.Limits:
+    """Shared httpx pool shape — pure value-object construction (takes
+    params as explicit args so it stays testable without params coupling)."""
+    return httpx.Limits(
+        max_connections=max_connections,
+        max_keepalive_connections=max_keepalive_connections,
+        keepalive_expiry=keepalive_expiry_s,
+    )
+
+
+def build_client_timeout(
+    timeout_s: float | None,
+    *,
+    default_s: float,
+    connect_s: float,
+    write_s: float,
+    pool_s: float,
+) -> httpx.Timeout:
+    """Per-request httpx timeout — the read ceiling is the call's own
+    timeout (falls back to default_s); connect/write/pool are fixed."""
+    t = timeout_s or default_s
+    return httpx.Timeout(timeout=t, connect=connect_s, read=t, write=write_s, pool=pool_s)

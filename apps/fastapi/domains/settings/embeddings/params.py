@@ -10,3 +10,7 @@ ENDPOINT_RESOLVE_TTL_S: float = 10.0
 URL_ENVS: tuple[str, ...] = ("EMBEDDING_ENDPOINT_URL", "COELHO_EMBEDDING_URL")
 MODEL_ENVS: tuple[str, ...] = ("EMBEDDING_MODEL", "COELHO_EMBEDDING_MODEL")
 DEFAULT_MODEL: str = "auto"
+
+# Settings-page "Test" button probe (embed_probe_async) defaults.
+PROBE_TEXT: str = "connection test"
+PROBE_TIMEOUT_S: float = 20.0

@@ -158,9 +158,9 @@ def reset_embedding_client(*args, **kwargs) -> None:
 # ---------------------------------------------------------------------------
 
 async def embed_probe_async(
-    text: str = "connection test",
+    text: str = params.PROBE_TEXT,
     *,
-    timeout_s: float = 20.0,
+    timeout_s: float = params.PROBE_TIMEOUT_S,
 ) -> tuple[list[float], dict]:
     """One real embeddings call against the configured embedding endpoint."""
     client = await _get_async_openai()

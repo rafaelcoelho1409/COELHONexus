@@ -1,5 +1,5 @@
 """domains — business domains (bounded contexts): dd (Docs Distiller),
-rr (Research Radar), ycs (YouCanSee), settings (external endpoints +
+rr (Research Radar), ycs (YouTube Content Search), settings (external endpoints +
 credential store).
 
 Each domain owns its router, schemas, service/graph code, tasks and exceptions.

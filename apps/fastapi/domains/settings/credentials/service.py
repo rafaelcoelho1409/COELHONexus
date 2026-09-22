@@ -11,7 +11,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeoutError
 from typing import Optional
 
-from botocore.config import Config
 from botocore.exceptions import ClientError
 from botocore.session import get_session
 from cryptography.fernet import (
@@ -21,14 +20,6 @@ from cryptography.fernet import (
 
 
 logger = logging.getLogger(__name__)
-
-# warm() is best-effort (see its docstring) and runs from the async
-# lifespan — it must never block app startup for minutes because MinIO is
-# slow/unreachable. Short client-level timeouts are the primary control;
-# _MINIO_HARD_TIMEOUT_S is a wall-clock backstop around the whole warm()
-# call chain (up to ~6 sequential round trips: KEK resolve/autogen, reload,
-# maybe-import-env re-reload + persist).
-_MINIO_HARD_TIMEOUT_S = 15
 
 
 class CredentialStore:
@@ -44,12 +35,7 @@ class CredentialStore:
         self._bucket = os.environ["MINIO_BUCKET_COELHONEXUS"]
         self._access_key = os.environ["AWS_ACCESS_KEY_ID"]
         self._secret_key = os.environ["AWS_SECRET_ACCESS_KEY"]
-        self._boto_config = Config(
-            signature_version = "s3v4",
-            connect_timeout = 3,
-            read_timeout = 5,
-            retries = {"max_attempts": 1, "mode": "standard"},
-        )
+        self._boto_config = domain.build_boto_config(config.MINIO_CLIENT)
 
     def _client(self):
         return get_session().create_client(
@@ -57,7 +43,7 @@ class CredentialStore:
             endpoint_url = self._endpoint,
             aws_access_key_id = self._access_key,
             aws_secret_access_key = self._secret_key,
-            region_name = "us-east-1",
+            region_name = config.MINIO_CLIENT.region,
             config = self._boto_config,
         )
 
@@ -164,9 +150,7 @@ class CredentialStore:
         self._cache_valid = True
 
     def _maybe_import_env_keys(self) -> int:
-        if "KD_CREDS_IMPORT_ENV" not in os.environ:
-            return 0
-        if os.environ["KD_CREDS_IMPORT_ENV"].strip().lower() not in ("1", "true", "yes", "on"):
+        if not domain.is_truthy(os.environ.get(params.IMPORT_ENV_FLAG)):
             return 0
         imported = 0
         with self._lock:
@@ -202,11 +186,11 @@ class CredentialStore:
         executor = ThreadPoolExecutor(max_workers=1)
         try:
             future = executor.submit(self._warm_blocking)
-            future.result(timeout=_MINIO_HARD_TIMEOUT_S)
+            future.result(timeout=params.WARM_HARD_TIMEOUT_S)
         except _FutureTimeoutError:
             logger.warning(
                 "[settings-creds] warm exceeded %ss hard timeout — env fallback active",
-                _MINIO_HARD_TIMEOUT_S,
+                params.WARM_HARD_TIMEOUT_S,
             )
         except Exception as e:
             logger.warning(
