@@ -16,7 +16,6 @@ from tenacity import (
 )
 
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -34,7 +33,7 @@ async def run(
     *,
     url: str,
     framework_slug: str,
-    progress: domains.dd.ingestion.progress.service.Progress,
+    progress: domains.dd.ingestion.runtime.progress.service.Progress,
     store: domains.dd.ingestion.storage.service.Store,
 ) -> int:
     """Fetch bundle, write one page, return 1. Raises ManifestDetected if body is a link index, RuntimeError on fetch failure or HTTP non-200."""

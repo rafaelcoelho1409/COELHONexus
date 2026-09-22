@@ -1,25 +1,58 @@
 """MinIO adapter + per-framework Store. Redis manifest keyed by run_id (live); MinIO manifest keyed by framework_slug (canonical on finalize). ensure_bucket() is idempotent."""
 from __future__ import annotations
-import domains
-from . import entities, keys, params
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import time
+from collections.abc import Iterator
 from dataclasses import asdict, fields
 from datetime import datetime, timezone
 from typing import Optional
 
 import aioboto3
 import httpx
+import infra
 import redis.asyncio as redis_aio
 from botocore.config import Config
 from botocore.exceptions import ClientError
+from opentelemetry import trace
 
+import domains
+
+from . import entities, keys, params
 
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _s3_span(operation: str, *, bucket: str, key: str) -> Iterator[object | None]:
+    """No dedicated OTel auto-instrumentation covers aioboto3/aiobotocore's
+    async client (unlike sync botocore, which `opentelemetry-instrumentation-
+    botocore` patches) — hand-rolled, mirroring the `aws.s3.*` semconv names
+    (https://opentelemetry.io/docs/specs/semconv/object-stores/s3/) even
+    though this is MinIO, not AWS, for interoperability with S3-shaped
+    tooling/dashboards."""
+    tracer = infra.otel.service.get_tracer()
+    if tracer is None:
+        yield None
+        return
+    with tracer.start_as_current_span(
+        f"aws.s3.{operation}",
+        kind       = trace.SpanKind.CLIENT,
+        attributes = {
+            "aws.s3.bucket": bucket,
+            "aws.s3.key":    key,
+        },
+    ) as span:
+        try:
+            yield span
+        except Exception as e:
+            span.set_attribute("error.type", type(e).__name__)
+            span.record_exception(e)
+            raise
 
 
 class MinIOStorage:
@@ -77,36 +110,41 @@ class MinIOStorage:
         content_type: entities.ContentType = "text/markdown",
     ) -> int:
         body = content.encode("utf-8") if isinstance(content, str) else content
-        for attempt in range(3):
-            try:
-                async with self._client() as s3:
-                    await s3.put_object(
-                        Bucket = self.bucket,
-                        Key = key,
-                        Body = body,
-                        ContentType = content_type,
-                    )
-                return len(body)
-            except ClientError as e:
-                code = (e.response or {}).get("Error", {}).get("Code", "")
-                if code not in params.TRANSIENT_WRITE_CODES or attempt == 2:
-                    raise
-                await asyncio.sleep(0.3 * (3 ** attempt))
+        with _s3_span("put_object", bucket = self.bucket, key = key) as span:
+            for attempt in range(3):
+                try:
+                    async with self._client() as s3:
+                        await s3.put_object(
+                            Bucket = self.bucket,
+                            Key = key,
+                            Body = body,
+                            ContentType = content_type,
+                        )
+                    if span is not None:
+                        span.set_attribute("aws.s3.write_bytes", len(body))
+                    return len(body)
+                except ClientError as e:
+                    code = (e.response or {}).get("Error", {}).get("Code", "")
+                    if code not in params.TRANSIENT_WRITE_CODES or attempt == 2:
+                        raise
+                    await asyncio.sleep(0.3 * (3 ** attempt))
         return len(body)
 
     async def read_text(self, key: str, encoding: str = "utf-8") -> str:
-        async with self._client() as s3:
-            resp = await s3.get_object(Bucket = self.bucket, Key = key)
-            async with resp["Body"] as stream:
-                data = await stream.read()
+        with _s3_span("get_object", bucket = self.bucket, key = key):
+            async with self._client() as s3:
+                resp = await s3.get_object(Bucket = self.bucket, Key = key)
+                async with resp["Body"] as stream:
+                    data = await stream.read()
         return data.decode(encoding)
 
     async def read_bytes(self, key: str) -> bytes:
         """Raw binary read (.npz embeddings, cluster matrices)."""
-        async with self._client() as s3:
-            resp = await s3.get_object(Bucket = self.bucket, Key = key)
-            async with resp["Body"] as stream:
-                return await stream.read()
+        with _s3_span("get_object", bucket = self.bucket, key = key):
+            async with self._client() as s3:
+                resp = await s3.get_object(Bucket = self.bucket, Key = key)
+                async with resp["Body"] as stream:
+                    return await stream.read()
 
     async def delete(self, key: str) -> None:
         async with self._client() as s3:

@@ -1,13 +1,13 @@
 """In-flight ingestion lifecycle. Single-flight per slug via Redis lock;
 the running tier polls a cancel flag and surrenders cleanly."""
-import domains
-from . import schemas
-from .. import resolver
-
 import uuid
 
+import domains
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
+
+from .. import resolver
+from . import schemas
 
 router = APIRouter()
 
@@ -52,7 +52,7 @@ async def start_run(body: schemas.StartRunBody) -> dict:
                     f"cancel it before starting {body.slug!r}."
                 ),
             }
-        active = await domains.dd.ingestion.progress.service.read_lock(r, body.slug)
+        active = await domains.dd.ingestion.runtime.progress.service.read_lock(r, body.slug)
         if active:
             return {
                 "status": "locked",
@@ -96,8 +96,8 @@ async def start_run(body: schemas.StartRunBody) -> dict:
                     )
 
         run_id = uuid.uuid4().hex
-        if not await domains.dd.ingestion.progress.service.acquire_lock(r, body.slug, run_id):
-            active = await domains.dd.ingestion.progress.service.read_lock(r, body.slug)
+        if not await domains.dd.ingestion.runtime.progress.service.acquire_lock(r, body.slug, run_id):
+            active = await domains.dd.ingestion.runtime.progress.service.read_lock(r, body.slug)
             return {
                 "status": "locked",
                 "slug": body.slug,
@@ -105,14 +105,14 @@ async def start_run(body: schemas.StartRunBody) -> dict:
                 "message": "Concurrent acquire race; try again.",
             }
 
-        await domains.dd.ingestion.progress.service.clear_cancel(r, run_id)
+        await domains.dd.ingestion.runtime.progress.service.clear_cancel(r, run_id)
 
         try:
             from domains.dd.ingestion.task import run_ingestion
             run_ingestion.delay(run_id, body.slug)
         except Exception:
             try:
-                await domains.dd.ingestion.progress.service.release_lock(r, body.slug, run_id)
+                await domains.dd.ingestion.runtime.progress.service.release_lock(r, body.slug, run_id)
             except Exception:
                 pass
             raise
@@ -148,7 +148,7 @@ async def list_active_runs() -> dict:
                     run_id_raw.decode()
                     if isinstance(run_id_raw, bytes) else run_id_raw
                 )
-                progress = await domains.dd.ingestion.progress.service.read_progress(r, run_id)
+                progress = await domains.dd.ingestion.runtime.progress.service.read_progress(r, run_id)
                 if progress and progress.get("status") in ("running", "idle"):
                     active.append({
                         "slug": slug,
@@ -168,7 +168,7 @@ async def cancel_run(run_id: str) -> dict:
         domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
-        await domains.dd.ingestion.progress.service.request_cancel(r, run_id)
+        await domains.dd.ingestion.runtime.progress.service.request_cancel(r, run_id)
     finally:
         await r.aclose()
     return {"run_id": run_id, "status": "cancel_requested"}
@@ -182,9 +182,9 @@ async def get_run(run_id: str) -> dict:
         domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
-        progress = await domains.dd.ingestion.progress.service.read_progress(r, run_id)
+        progress = await domains.dd.ingestion.runtime.progress.service.read_progress(r, run_id)
         manifest = await domains.dd.ingestion.storage.service.read_live_manifest(r, run_id)
-        post = await domains.dd.ingestion.progress.service.read_post(r, run_id)
+        post = await domains.dd.ingestion.runtime.progress.service.read_post(r, run_id)
     finally:
         await r.aclose()
 
@@ -205,7 +205,7 @@ async def get_url_records(run_id: str) -> list[dict]:
         domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
-        return await domains.dd.ingestion.progress.service.read_url_records(r, run_id)
+        return await domains.dd.ingestion.runtime.progress.service.read_url_records(r, run_id)
     finally:
         await r.aclose()
 

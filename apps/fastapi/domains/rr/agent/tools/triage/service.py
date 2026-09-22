@@ -28,6 +28,7 @@ from ... import keys
 from .... import domain as rr_domain
 from .... import params as rr_params
 from .... import runtime
+from domains.rr.runtime.observability.service import traced_tool
 
 import json
 import logging
@@ -40,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 @tool
+@traced_tool
 async def triage_candidates(
     scan_id: str,
     topic: str,

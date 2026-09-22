@@ -16,12 +16,12 @@ The `with` blocks are sync; the actual I/O `await` happens inside. OTel
 context propagates via contextvars across await boundaries.
 """
 from __future__ import annotations
-import infra
 
 import contextlib
 from typing import Iterator
 
-from opentelemetry import trace as _otel_trace
+import infra
+from opentelemetry import trace
 
 
 @contextlib.contextmanager
@@ -44,7 +44,7 @@ def _db_span(
             span_attrs[k] = v
     with tracer.start_as_current_span(
         f"db.{system}.{operation}",
-        kind        = _otel_trace.SpanKind.CLIENT,
+        kind        = trace.SpanKind.CLIENT,
         attributes  = span_attrs,
     ) as span:
         try:
@@ -122,7 +122,7 @@ def ycs_retriever_fanout_span(*, top_k: int) -> Iterator[object | None]:
         return
     with tracer.start_as_current_span(
         "ycs.retriever.smart_fanout",
-        kind        = _otel_trace.SpanKind.INTERNAL,
+        kind        = trace.SpanKind.INTERNAL,
         attributes  = {"ycs.top_k": top_k},
     ) as span:
         try:
@@ -147,7 +147,7 @@ def reranker_span(
         return
     with tracer.start_as_current_span(
         "gen_ai.rerank",
-        kind = _otel_trace.SpanKind.CLIENT,
+        kind = trace.SpanKind.CLIENT,
         attributes = {
             "gen_ai.system":           "flashrank",
             "gen_ai.operation.name":   "rerank",

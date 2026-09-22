@@ -1,14 +1,13 @@
 """Read-only view of the per-framework MinIO content (canonical post-
 finalize corpus). Anything here survives Redis TTL."""
-import domains
-from . import params
-
 import logging
 
+import domains
 import redis.asyncio as redis_aio
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, HTTPException, Response
 
+from . import params
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -136,11 +135,11 @@ async def delete_framework(slug: str) -> dict:
     )
     lock_released = False
     try:
-        held_run_id = await domains.dd.ingestion.progress.service.read_lock(
+        held_run_id = await domains.dd.ingestion.runtime.progress.service.read_lock(
             r, 
             slug)
         if held_run_id:
-            lock_released = await domains.dd.ingestion.progress.service.release_lock(
+            lock_released = await domains.dd.ingestion.runtime.progress.service.release_lock(
                 r, 
                 slug, 
                 held_run_id)

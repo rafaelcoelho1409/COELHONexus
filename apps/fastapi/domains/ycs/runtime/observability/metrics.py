@@ -1,6 +1,24 @@
-"""YCS Ask metric recorders."""
+"""YCS Ask + extract/ingest pipeline metric recorders."""
 from __future__ import annotations
 import infra
+
+
+def record_ycs_ingest_run(
+    *,
+    kind: str,
+    outcome: str,
+    duration_s: float,
+) -> None:
+    """`kind` ∈ {extract_videos, extract_channel, extract_playlist,
+    embedding_migration}; `outcome` ∈ {ok, error}."""
+    try:
+        attrs = {"kind": kind, "outcome": outcome}
+        if (inst := infra.otel.service.get_instrument("ycs_ingest_run_total")) is not None:
+            inst.add(1, attributes = attrs)
+        if (inst := infra.otel.service.get_instrument("ycs_ingest_run_duration")) is not None:
+            inst.record(duration_s, attributes = attrs)
+    except Exception:
+        pass
 
 
 def record_ask_run(

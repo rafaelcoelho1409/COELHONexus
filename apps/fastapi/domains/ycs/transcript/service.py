@@ -1026,35 +1026,58 @@ class PlaywrightTranscriptService:
         video_id:      str,
         prefer_manual: bool = True,
     ) -> dict[str, Any]:
-        """Fetch transcript for a single video with semaphore + retry."""
+        """Fetch transcript for a single video with semaphore + retry.
+
+        No official OTel instrumentation exists for Playwright (confirmed
+        via research) — no `db.*`/`gen_ai.*` semconv applies either, so
+        this uses a small custom `browser.*` attribute set, reusing the
+        stable `error.type` attribute where it genuinely applies. Wraps
+        only this outer retry loop, not `_fetch_single_attempt`'s internals
+        (context acquisition, page navigation, extraction cascade) — this
+        class is explicitly kept as one cohesive unit per port-fidelity
+        (see module docstring), so the span records outcome/attempt-count
+        without touching that logic."""
         last_error: str | None = None
-        for attempt in range(self.max_retries + 1):
-            try:
-                result = await self._fetch_single_attempt(
-                    video_id, prefer_manual, attempt,
-                )
-                if "error" not in result:
-                    return result
-                error_msg = result.get("error", "").lower()
-                if any(
-                    x in error_msg
-                    for x in ("no transcript", "button not found", "unavailable")
-                ):
-                    return result
-                last_error = result.get("error")
-            except Exception as e:
-                last_error = str(e)
-            if attempt < self.max_retries:
-                wait_time = 2 ** attempt
-                log.info(
-                    f"[transcript-service] {video_id} retry "
-                    f"{attempt + 1}/{self.max_retries} in {wait_time}s",
-                )
-                await asyncio.sleep(wait_time)
-        return {
-            "video_id": video_id,
-            "error":    last_error or "Max retries exceeded",
-        }
+        with infra.otel.service.get_tracer().start_as_current_span(
+            "browser.fetch_transcript",
+            attributes = {
+                "coelho.langfuse.keep": True,
+                "browser.video_id":     video_id,
+                "browser.max_retries":  self.max_retries,
+            },
+        ) as span:
+            for attempt in range(self.max_retries + 1):
+                try:
+                    result = await self._fetch_single_attempt(
+                        video_id, prefer_manual, attempt,
+                    )
+                    if "error" not in result:
+                        span.set_attribute("browser.attempts", attempt + 1)
+                        return result
+                    error_msg = result.get("error", "").lower()
+                    if any(
+                        x in error_msg
+                        for x in ("no transcript", "button not found", "unavailable")
+                    ):
+                        span.set_attribute("browser.attempts", attempt + 1)
+                        span.set_attribute("error.type", "permanent_unavailable")
+                        return result
+                    last_error = result.get("error")
+                except Exception as e:
+                    last_error = str(e)
+                if attempt < self.max_retries:
+                    wait_time = 2 ** attempt
+                    log.info(
+                        f"[transcript-service] {video_id} retry "
+                        f"{attempt + 1}/{self.max_retries} in {wait_time}s",
+                    )
+                    await asyncio.sleep(wait_time)
+            span.set_attribute("browser.attempts", self.max_retries + 1)
+            span.set_attribute("error.type", "max_retries_exceeded")
+            return {
+                "video_id": video_id,
+                "error":    last_error or "Max retries exceeded",
+            }
 
     async def _fetch_single_attempt(
         self,

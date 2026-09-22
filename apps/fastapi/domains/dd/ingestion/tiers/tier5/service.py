@@ -18,7 +18,6 @@ from tenacity import (
 )
 
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -93,7 +92,7 @@ async def _fetch_one(
     org: str, repo: str, branch: str,
     path: str,
     *,
-    progress: domains.dd.ingestion.progress.service.Progress,
+    progress: domains.dd.ingestion.runtime.progress.service.Progress,
 ) -> tuple[str, str, str, str] | None:
     raw_url = f"{params.RAW_BASE}/{org}/{repo}/{branch}/{path}"
     t0 = time.monotonic()
@@ -150,7 +149,7 @@ async def run(
     *,
     url: str,
     framework_slug: str,
-    progress: domains.dd.ingestion.progress.service.Progress,
+    progress: domains.dd.ingestion.runtime.progress.service.Progress,
     store: domains.dd.ingestion.storage.service.Store,
 ) -> int:
     parsed = domain.parse_repo(url)

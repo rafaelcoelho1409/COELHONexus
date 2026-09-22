@@ -27,7 +27,6 @@ from tenacity import (
 )
 
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -130,7 +129,7 @@ async def crawl_urls(
     urls: list[str],
     *,
     framework_slug: str,
-    progress: domains.dd.ingestion.progress.service.Progress,
+    progress: domains.dd.ingestion.runtime.progress.service.Progress,
     store: domains.dd.ingestion.storage.service.Store,
     min_ok_bytes: int = params.DEFAULT_MIN_OK_BYTES,
 ) -> tuple[int, list[str]]:
@@ -425,7 +424,7 @@ async def _fetch_one(
     client: httpx.AsyncClient,
     url: str,
     *,
-    progress: domains.dd.ingestion.progress.service.Progress,
+    progress: domains.dd.ingestion.runtime.progress.service.Progress,
     inventory: domains.dd.ingestion.tiers.tier4.sphinx.entities.Inventory | None = None,
     framework_slug: str | None = None,
     store: domains.dd.ingestion.storage.service.Store | None = None,
@@ -526,7 +525,7 @@ async def run(
     *,
     url: str,
     framework_slug: str,
-    progress: domains.dd.ingestion.progress.service.Progress,
+    progress: domains.dd.ingestion.runtime.progress.service.Progress,
     store: domains.dd.ingestion.storage.service.Store,
     language: str | None = None,
     framework_name: str | None = None,
@@ -729,7 +728,7 @@ async def _phase4b_playwright(
     urls: list[str],
     *,
     framework_slug: str,
-    progress: domains.dd.ingestion.progress.service.Progress,
+    progress: domains.dd.ingestion.runtime.progress.service.Progress,
     store: domains.dd.ingestion.storage.service.Store,
 ) -> int:
     written, failed = await crawl_urls(

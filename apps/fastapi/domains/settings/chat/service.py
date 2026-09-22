@@ -309,40 +309,71 @@ async def chat_text_async(
     async def _do_call():
         return await client.chat.completions.create(**kwargs)  # type: ignore[arg-type]
 
+    usage = None
     try:
-        resp = await asyncio.wait_for(_do_call(), timeout = backstop_s)
-    except asyncio.TimeoutError as e:
-        raise errors.ChatTimeoutError(
-            f"chat_text_async hard backstop fired after "
-            f"{backstop_s:.0f}s (requested timeout_s={timeout_s})"
-        ) from e
-    except Exception as e:
-        # Preserve message for upstream domain.classify_error
-        raise errors.ChatError(f"{type(e).__name__}: {e}") from e
+        with domains.settings.runtime.observability.spans.chat_completion_span(
+            model = ENDPOINT.model, temperature = temperature, max_tokens = max_tokens,
+        ) as span:
+            try:
+                resp = await asyncio.wait_for(_do_call(), timeout = backstop_s)
+            except asyncio.TimeoutError as e:
+                raise errors.ChatTimeoutError(
+                    f"chat_text_async hard backstop fired after "
+                    f"{backstop_s:.0f}s (requested timeout_s={timeout_s})"
+                ) from e
+            except Exception as e:
+                # Preserve message for upstream domain.classify_error
+                raise errors.ChatError(f"{type(e).__name__}: {e}") from e
 
-    latency_s = float(time.monotonic() - t0)
+            latency_s = float(time.monotonic() - t0)
 
-    # Extract text — OpenAI returns choices[0].message.content
-    try:
-        choice = resp.choices[0] if getattr(resp, "choices", None) else None
-        msg = getattr(choice, "message", None) if choice else None
-        text = (getattr(msg, "content", "") or "").strip() if msg else ""
-        # Fallback for dict responses
-        if not text and isinstance(resp, dict):
-            text = (((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+            # Extract text — OpenAI returns choices[0].message.content
+            try:
+                choice = resp.choices[0] if getattr(resp, "choices", None) else None
+                msg = getattr(choice, "message", None) if choice else None
+                text = (getattr(msg, "content", "") or "").strip() if msg else ""
+                # Fallback for dict responses
+                if not text and isinstance(resp, dict):
+                    text = (((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+            except Exception:
+                text = ""
+
+            # `resp.model` is whatever the endpoint reports as the serving model.
+            model = ENDPOINT.model
+            try:
+                m = getattr(resp, "model", None)
+                if isinstance(m, str) and m:
+                    model = m
+                elif isinstance(resp, dict) and resp.get("model"):
+                    model = str(resp["model"])
+            except Exception:
+                pass
+
+            usage = getattr(resp, "usage", None)
+            domains.settings.runtime.observability.spans.record_chat_response(
+                span,
+                model         = model,
+                input_tokens  = getattr(usage, "prompt_tokens", None) if usage is not None else None,
+                output_tokens = getattr(usage, "completion_tokens", None) if usage is not None else None,
+            )
+    except errors.ChatTimeoutError:
+        domains.settings.runtime.observability.metrics.record_gen_ai_call(
+            operation = "chat", model = ENDPOINT.model, outcome = "timeout",
+            duration_s = time.monotonic() - t0,
+        )
+        raise
     except Exception:
-        text = ""
+        domains.settings.runtime.observability.metrics.record_gen_ai_call(
+            operation = "chat", model = ENDPOINT.model, outcome = "error",
+            duration_s = time.monotonic() - t0,
+        )
+        raise
 
-    # `resp.model` is whatever the endpoint reports as the serving model.
-    model = ENDPOINT.model
-    try:
-        m = getattr(resp, "model", None)
-        if isinstance(m, str) and m:
-            model = m
-        elif isinstance(resp, dict) and resp.get("model"):
-            model = str(resp["model"])
-    except Exception:
-        pass
+    domains.settings.runtime.observability.metrics.record_gen_ai_call(
+        operation = "chat", model = model, outcome = "ok", duration_s = latency_s,
+        input_tokens  = getattr(usage, "prompt_tokens", None) if usage is not None else None,
+        output_tokens = getattr(usage, "completion_tokens", None) if usage is not None else None,
+    )
 
     meta = {
         "model": model,
@@ -359,8 +390,8 @@ async def chat_text_async(
             pass
 
     # Usage extraction for the DD per-run LLM counter (best-effort, never raises).
+    # `usage` was already read off `resp` above, while enriching the gen_ai span.
     try:
-        usage = getattr(resp, "usage", None)
         if usage is not None:
             class _Msg:
                 content = text

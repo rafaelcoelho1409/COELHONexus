@@ -18,7 +18,6 @@ from tenacity import (
 )
 
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -70,7 +69,7 @@ async def _fetch_page(
     client: httpx.AsyncClient,
     url: str,
     *,
-    progress: domains.dd.ingestion.progress.service.Progress,
+    progress: domains.dd.ingestion.runtime.progress.service.Progress,
     framework_slug: str | None = None,
     store: domains.dd.ingestion.storage.service.Store | None = None,
 ) -> tuple[str, str, str, str] | None:
@@ -149,7 +148,7 @@ async def run(
     *,
     url: str,
     framework_slug: str,
-    progress: domains.dd.ingestion.progress.service.Progress,
+    progress: domains.dd.ingestion.runtime.progress.service.Progress,
     store: domains.dd.ingestion.storage.service.Store,
     language: str | None = None,
     framework_name: str | None = None,

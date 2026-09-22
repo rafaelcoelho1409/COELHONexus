@@ -167,16 +167,40 @@ async def embed_probe_async(
     kwargs: dict = {"model": ENDPOINT.model, "input": [text]}
     t0 = time.monotonic()
     try:
-        resp = await asyncio.wait_for(
-            client.embeddings.create(**kwargs), timeout=timeout_s,
+        with domains.settings.runtime.observability.spans.embedding_span(
+            model = ENDPOINT.model, input_count = 1,
+        ) as span:
+            try:
+                resp = await asyncio.wait_for(
+                    client.embeddings.create(**kwargs), timeout=timeout_s,
+                )
+            except asyncio.TimeoutError as e:
+                raise errors.EmbeddingTimeoutError(
+                    f"embed_probe_async timed out after {timeout_s:.0f}s"
+                ) from e
+            latency_s = time.monotonic() - t0
+            vector = list(resp.data[0].embedding) if resp.data else []
+            model = getattr(resp, "model", None) or ENDPOINT.model
+            domains.settings.runtime.observability.spans.record_embedding_response(
+                span, model = model, vector_count = len(resp.data or []),
+            )
+    except errors.EmbeddingTimeoutError:
+        domains.settings.runtime.observability.metrics.record_gen_ai_call(
+            operation = "embedding", model = ENDPOINT.model, outcome = "timeout",
+            duration_s = time.monotonic() - t0,
         )
-    except asyncio.TimeoutError as e:
-        raise errors.EmbeddingTimeoutError(
-            f"embed_probe_async timed out after {timeout_s:.0f}s"
-        ) from e
-    latency_s = time.monotonic() - t0
-    vector = list(resp.data[0].embedding) if resp.data else []
-    model = getattr(resp, "model", None) or ENDPOINT.model
+        raise
+    except Exception:
+        domains.settings.runtime.observability.metrics.record_gen_ai_call(
+            operation = "embedding", model = ENDPOINT.model, outcome = "error",
+            duration_s = time.monotonic() - t0,
+        )
+        raise
+
+    domains.settings.runtime.observability.metrics.record_gen_ai_call(
+        operation = "embedding", model = model, outcome = "ok", duration_s = latency_s,
+    )
+
     meta = {
         "model": model,
         "deployment": model,  # compat alias — YCS records `deployment`
@@ -199,10 +223,29 @@ async def embed_texts_async(
         return [], ENDPOINT.model
     client = await _get_async_openai()
     kwargs: dict = {"model": ENDPOINT.model, "input": texts}
+    t0 = time.monotonic()
     try:
-        resp = await client.embeddings.create(**kwargs)
-    except Exception as e:
-        raise errors.EmbeddingError(f"{type(e).__name__}: {e}") from e
-    data = sorted(resp.data, key=lambda d: d.index)
-    model = getattr(resp, "model", None) or ENDPOINT.model
+        with domains.settings.runtime.observability.spans.embedding_span(
+            model = ENDPOINT.model, input_count = len(texts),
+        ) as span:
+            try:
+                resp = await client.embeddings.create(**kwargs)
+            except Exception as e:
+                raise errors.EmbeddingError(f"{type(e).__name__}: {e}") from e
+            data = sorted(resp.data, key=lambda d: d.index)
+            model = getattr(resp, "model", None) or ENDPOINT.model
+            domains.settings.runtime.observability.spans.record_embedding_response(
+                span, model = model, vector_count = len(data),
+            )
+    except Exception:
+        domains.settings.runtime.observability.metrics.record_gen_ai_call(
+            operation = "embedding", model = ENDPOINT.model, outcome = "error",
+            duration_s = time.monotonic() - t0,
+        )
+        raise
+
+    domains.settings.runtime.observability.metrics.record_gen_ai_call(
+        operation = "embedding", model = model, outcome = "ok",
+        duration_s = time.monotonic() - t0,
+    )
     return [list(d.embedding) for d in data], model

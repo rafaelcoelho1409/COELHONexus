@@ -22,6 +22,7 @@ from __future__ import annotations
 from . import domain
 from .. import state
 from ... import keys, service
+from domains.rr.runtime.observability.service import traced_tool
 
 import logging
 from typing import Any
@@ -76,6 +77,7 @@ async def _call_mcp_safely(
 #   - Other args mirror each source's MCP SearchInput shape.
 #   - Sensible defaults so the orchestrator can call with minimal args.
 @tool
+@traced_tool
 async def discover_arxiv(
     scan_id: str,
     query: str,
@@ -107,6 +109,7 @@ async def discover_arxiv(
 
 
 @tool
+@traced_tool
 async def discover_semantic_scholar(
     scan_id: str,
     query: str,
@@ -141,6 +144,7 @@ async def discover_semantic_scholar(
 
 
 @tool
+@traced_tool
 async def discover_huggingface_daily_papers(
     scan_id: str,
     n_max: int = 20,
@@ -176,6 +180,7 @@ async def discover_huggingface_daily_papers(
 
 
 @tool
+@traced_tool
 async def discover_hn(
     scan_id: str,
     query: str,
@@ -209,6 +214,7 @@ async def discover_hn(
 
 
 @tool
+@traced_tool
 async def discover_openalex(
     scan_id: str,
     query: str,

@@ -13,10 +13,12 @@ Celery is sync; async work is wrapped in `asyncio.run(...)`. The
 for progress reporting, which Flower and `GET /tasks/{id}` consume.
 """
 from __future__ import annotations
+import domains
 import infra.celery.service
 from . import service
 
 import asyncio
+import time
 from typing import Any
 from celery.utils.log import get_task_logger
 
@@ -45,12 +47,36 @@ def extract_videos(
     def _progress(payload: dict[str, Any]) -> None:
         self.update_state(state = "PROGRESS", meta = payload)
 
-    result = asyncio.run(
-        service.extract_videos_async(
-            video_ids, include_transcription, languages,
-            progress_cb = _progress,
-            extract_id  = self.request.id,
-        ),
+    async def _run() -> dict[str, Any]:
+        with infra.langfuse.sessions.session(
+            "ycs-extract", session_id = self.request.id or "(no-request-id)",
+        ), infra.otel.service.get_tracer().start_as_current_span(
+            "ycs.extract.videos",
+            attributes = {
+                "coelho.langfuse.keep":        True,
+                "coelho.langfuse.kind":        "workflow_root",
+                "langfuse.trace.name":         "ycs.extract.videos",
+                "ycs.extract.kind":            "videos",
+                "ycs.video_count":             len(video_ids),
+                "ycs.include_transcription":   include_transcription,
+            },
+        ):
+            return await service.extract_videos_async(
+                video_ids, include_transcription, languages,
+                progress_cb = _progress,
+                extract_id  = self.request.id,
+            )
+
+    t0 = time.monotonic()
+    try:
+        result = asyncio.run(_run())
+    except Exception:
+        domains.ycs.runtime.observability.metrics.record_ycs_ingest_run(
+            kind = "extract_videos", outcome = "error", duration_s = time.monotonic() - t0,
+        )
+        raise
+    domains.ycs.runtime.observability.metrics.record_ycs_ingest_run(
+        kind = "extract_videos", outcome = "ok", duration_s = time.monotonic() - t0,
     )
     logger.info(f"[extract_videos] Done: {result}")
     return result
@@ -75,10 +101,38 @@ def extract_channel(
         state = "PROGRESS",
         meta  = {"status": "extracting", "channel_id": channel_id},
     )
-    result = asyncio.run(
-        service.extract_channel_async(
-            channel_id, max_results, include_transcription, languages,
-        ),
+
+    async def _run() -> dict[str, Any]:
+        with infra.langfuse.sessions.session(
+            "ycs-extract",
+            session_id = self.request.id or "(no-request-id)",
+            channel_id = channel_id,
+        ), infra.otel.service.get_tracer().start_as_current_span(
+            "ycs.extract.channel",
+            attributes = {
+                "coelho.langfuse.keep":      True,
+                "coelho.langfuse.kind":      "workflow_root",
+                "langfuse.trace.name":       "ycs.extract.channel",
+                "ycs.extract.kind":          "channel",
+                "ycs.channel_id":            channel_id,
+                "ycs.max_results":           max_results,
+                "ycs.include_transcription": include_transcription,
+            },
+        ):
+            return await service.extract_channel_async(
+                channel_id, max_results, include_transcription, languages,
+            )
+
+    t0 = time.monotonic()
+    try:
+        result = asyncio.run(_run())
+    except Exception:
+        domains.ycs.runtime.observability.metrics.record_ycs_ingest_run(
+            kind = "extract_channel", outcome = "error", duration_s = time.monotonic() - t0,
+        )
+        raise
+    domains.ycs.runtime.observability.metrics.record_ycs_ingest_run(
+        kind = "extract_channel", outcome = "ok", duration_s = time.monotonic() - t0,
     )
     logger.info(
         f"[extract_channel] Done: {result.get('total_videos')} videos",
@@ -105,10 +159,36 @@ def extract_playlist(
         state = "PROGRESS",
         meta  = {"status": "extracting", "playlist_id": playlist_id},
     )
-    result = asyncio.run(
-        service.extract_playlist_async(
-            playlist_id, max_results, include_transcription, languages,
-        ),
+
+    async def _run() -> dict[str, Any]:
+        with infra.langfuse.sessions.session(
+            "ycs-extract", session_id = self.request.id or "(no-request-id)",
+        ), infra.otel.service.get_tracer().start_as_current_span(
+            "ycs.extract.playlist",
+            attributes = {
+                "coelho.langfuse.keep":      True,
+                "coelho.langfuse.kind":      "workflow_root",
+                "langfuse.trace.name":       "ycs.extract.playlist",
+                "ycs.extract.kind":          "playlist",
+                "ycs.playlist_id":           playlist_id,
+                "ycs.max_results":           max_results,
+                "ycs.include_transcription": include_transcription,
+            },
+        ):
+            return await service.extract_playlist_async(
+                playlist_id, max_results, include_transcription, languages,
+            )
+
+    t0 = time.monotonic()
+    try:
+        result = asyncio.run(_run())
+    except Exception:
+        domains.ycs.runtime.observability.metrics.record_ycs_ingest_run(
+            kind = "extract_playlist", outcome = "error", duration_s = time.monotonic() - t0,
+        )
+        raise
+    domains.ycs.runtime.observability.metrics.record_ycs_ingest_run(
+        kind = "extract_playlist", outcome = "ok", duration_s = time.monotonic() - t0,
     )
     logger.info(
         f"[extract_playlist] Done: {result.get('total_videos')} videos",

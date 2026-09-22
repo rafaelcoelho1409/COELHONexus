@@ -19,10 +19,12 @@ SAFE: `check_migration_needed` reads live Qdrant data, not this status
 field, so the dispatch gate stays correctly closed) and the task's own
 FAILURE state is what the poller/UI surfaces."""
 from __future__ import annotations
+import domains
 import infra.celery.service
 
 import asyncio
 import os
+import time
 
 from celery.utils.log import get_task_logger
 from qdrant_client import AsyncQdrantClient
@@ -59,13 +61,35 @@ def finalize_embedding_migration(self, physical_collection: str) -> dict:
             port    = int(os.environ.get("QDRANT_PORT", "6333")),
             api_key = qdrant_api_key if qdrant_api_key else None,
         )
-        try:
-            await service.cutover(redis, qdrant, physical_collection)
-            return {"status": "done", "collection": physical_collection}
-        finally:
-            await qdrant.close()
-            await redis.aclose()
+        with infra.langfuse.sessions.session(
+            "ycs-embedding-migration",
+            session_id = self.request.id or "(no-request-id)",
+        ), infra.otel.service.get_tracer().start_as_current_span(
+            "ycs.embedding_migration.finalize",
+            attributes = {
+                "coelho.langfuse.keep":          True,
+                "coelho.langfuse.kind":          "workflow_root",
+                "langfuse.trace.name":           "ycs.embedding_migration.finalize",
+                "ycs.embedding_migration.target": physical_collection,
+            },
+        ):
+            try:
+                await service.cutover(redis, qdrant, physical_collection)
+                return {"status": "done", "collection": physical_collection}
+            finally:
+                await qdrant.close()
+                await redis.aclose()
 
-    result = asyncio.run(_run())
+    t0 = time.monotonic()
+    try:
+        result = asyncio.run(_run())
+    except Exception:
+        domains.ycs.runtime.observability.metrics.record_ycs_ingest_run(
+            kind = "embedding_migration", outcome = "error", duration_s = time.monotonic() - t0,
+        )
+        raise
+    domains.ycs.runtime.observability.metrics.record_ycs_ingest_run(
+        kind = "embedding_migration", outcome = "ok", duration_s = time.monotonic() - t0,
+    )
     logger.info(f"[finalize_embedding_migration] Done: {result}")
     return result

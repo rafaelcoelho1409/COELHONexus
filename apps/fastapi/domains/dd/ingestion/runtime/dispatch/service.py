@@ -1,13 +1,14 @@
 """Cancel is cooperative (progress.raise_if_cancelled + watcher pre-empts blocking awaits). Lock TTL (35 min) outlasts Celery soft_time_limit (30 min) so crashed tasks self-release."""
 from __future__ import annotations
-import domains, infra
+import domains
+from ... import tiers
 from . import domain, params
-from .. import tiers
 
 import asyncio
 import logging
 from dataclasses import asdict
 
+import infra
 import redis.asyncio as redis_aio
 
 
@@ -33,7 +34,7 @@ async def _cancel_watcher(
     try:
         while not main_task.done():
             try:
-                if await domains.dd.ingestion.progress.service.is_cancelled(redis_client, run_id):
+                if await domains.dd.ingestion.runtime.progress.service.is_cancelled(redis_client, run_id):
                     logger.info(
                         f"[dispatch] {run_id}: cancel flag detected by "
                         f"watcher → cancelling main task"
@@ -61,20 +62,30 @@ async def _cleanup_framework(minio, framework_slug: str) -> int:
 
 
 async def run(run_id: str, slug: str) -> dict:
-    """Span + metrics wrapper around the ingestion dispatcher."""
+    """Session + span + metrics wrapper around the ingestion dispatcher.
+    The session wrapper was missing until now — every other DD/RR/YCS
+    pipeline groups its spans into one LangFuse trace via `session(...)`;
+    ingestion had the span but not the session, so its spans never
+    grouped into one trace in the LangFuse UI."""
     t0 = asyncio.get_running_loop().time()
-    with infra.otel.service.get_tracer().start_as_current_span(
+    with infra.langfuse.sessions.session(
+        "dd-ingestion",
+        session_id = run_id,
+        user_id    = slug,
+        framework  = slug,
+    ), infra.otel.service.get_tracer().start_as_current_span(
         "dd.ingestion.run",
         attributes = {
             "dd.domain":                "ingestion",
             "dd.run.kind":              "ingestion",
             "ingestion.run_id":         run_id,
             "ingestion.framework_slug": slug,
+            "coelho.langfuse.keep":     True,
         },
     ):
         result = await _run_inner(run_id, slug)
     post_summary = result.get("post") or {}
-    domains.dd.ingestion.observability.record_ingestion_run(
+    domains.dd.ingestion.runtime.observability.metrics.record_ingestion_run(
         framework = slug,
         tier_kind = str(result.get("tier_kind") or "unknown"),
         outcome = str(result.get("status") or "unknown"),
@@ -104,9 +115,9 @@ async def _run_inner(run_id: str, slug: str) -> dict:
             "error": "no source URLs in catalog entry",
         }
 
-    progress = domains.dd.ingestion.progress.service.Progress(run_id)
+    progress = domains.dd.ingestion.runtime.progress.service.Progress(run_id)
     r = redis_aio.from_url(
-        domains.dd.ingestion.progress.keys.redis_url(),
+        domains.dd.ingestion.runtime.progress.keys.redis_url(),
         socket_connect_timeout = params.REDIS_CONNECT_TIMEOUT_S,
         socket_timeout = params.REDIS_OP_TIMEOUT_S,
     )
@@ -150,7 +161,7 @@ async def _run_inner(run_id: str, slug: str) -> dict:
                 base_result["tier_kind"] = "llms_txt"
                 base_result["tier_url"] = entry["llms_txt"]
                 await progress.close()
-                progress = domains.dd.ingestion.progress.service.Progress(run_id)
+                progress = domains.dd.ingestion.runtime.progress.service.Progress(run_id)
                 await domains.dd.ingestion.tiers.tier2.service.run(
                     url = entry["llms_txt"], framework_slug = slug,
                     progress = progress, store = store,
@@ -181,7 +192,7 @@ async def _run_inner(run_id: str, slug: str) -> dict:
             base_result["tier_kind"] = fb_kind
             base_result["tier_url"] = fb_url
             await progress.close()
-            progress = domains.dd.ingestion.progress.service.Progress(run_id)
+            progress = domains.dd.ingestion.runtime.progress.service.Progress(run_id)
             fb_kwargs = {
                 "url": fb_url, "framework_slug": slug,
                 "progress": progress, "store": store,
@@ -228,7 +239,7 @@ async def _run_inner(run_id: str, slug: str) -> dict:
             "manifest": [asdict(e) for e in store.manifest],
         }
 
-    except (domains.dd.ingestion.progress.errors.IngestCancelled, asyncio.CancelledError):
+    except (domains.dd.ingestion.runtime.progress.errors.IngestCancelled, asyncio.CancelledError):
         logger.info(f"[dispatch] {slug}: cancelled by user (run_id={run_id})")
         # CRITICAL: stop watcher BEFORE cleanup — poll loop fires a second main_task.cancel() mid-cleanup, raising CancelledError inside delete_prefix and leaving MinIO stragglers (observed: 428).
         watcher_task.cancel()
@@ -267,7 +278,7 @@ async def _run_inner(run_id: str, slug: str) -> dict:
         except (asyncio.CancelledError, Exception):
             pass
         try:
-            await domains.dd.ingestion.progress.service.release_lock(r, slug, run_id)
+            await domains.dd.ingestion.runtime.progress.service.release_lock(r, slug, run_id)
         except Exception:
             pass
         try:

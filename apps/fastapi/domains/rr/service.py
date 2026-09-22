@@ -291,7 +291,7 @@ async def run_scan_async(
                 "degradation_reasons": list(result.get("degradation_reasons") or [])[:10],
                 "error": result.get("error"),
             })
-    runtime.metrics.record_scan_run(
+    runtime.observability.metrics.record_scan_run(
         degraded = bool(result.get("degraded", result.get("status") != "done")),
         outcome = str(result.get("status") or "unknown"),
         duration_s = max(asyncio.get_running_loop().time() - t0, 0.0),

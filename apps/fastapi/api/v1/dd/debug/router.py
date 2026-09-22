@@ -1,15 +1,15 @@
 """Dev-time stage isolation. Synchronous (no Celery, no lock, no
 progress writes) so exceptions surface with full stack traces.
 Not gated — single-user dev cluster only."""
-import domains
-from . import params
-from .. import resolver
-
 import time
 from typing import Optional
 
+import domains
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
+
+from .. import resolver
+from . import params
 
 router = APIRouter()
 
@@ -59,7 +59,7 @@ async def debug_ingest_one_tier(
         )
 
     debug_run_id = f"debug-tier{tier}-{slug}-{int(time.time())}"
-    progress = domains.dd.ingestion.progress.service.Progress(debug_run_id)
+    progress = domains.dd.ingestion.runtime.progress.service.Progress(debug_run_id)
     r = redis_aio.from_url(
         domains.dd.planner.keys.redis_url(), 
         socket_connect_timeout=3.0, 
@@ -120,7 +120,7 @@ async def debug_post(
     """Re-runs post-process against current MinIO content (useful when
     tuning SPLIT_MIN_SECTION_BYTES without re-downloading)."""
     debug_run_id = f"debug-post-{slug}-{int(time.time())}"
-    progress = domains.dd.ingestion.progress.service.Progress(debug_run_id)
+    progress = domains.dd.ingestion.runtime.progress.service.Progress(debug_run_id)
     r = redis_aio.from_url(
         domains.dd.planner.keys.redis_url(), 
         socket_connect_timeout=3.0, 

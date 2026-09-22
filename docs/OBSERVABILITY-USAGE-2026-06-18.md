@@ -142,20 +142,61 @@ community discussions — workable, not authoritative.
 
 ## TL;DR — The folder shape
 
-For a new domain `foo`:
+**Status (2026-09-22): this section is now a trigger table, not a fixed
+file list** — mirrors `docs/CODE-CONVENTIONS.md` §2's philosophy exactly:
+create a file only when its trigger holds, never for uniformity alone. A
+36-line domain and a 400-line domain do NOT get the same folder shape, and
+that's correct, not an inconsistency to "fix" by padding the small one.
 
-```
-apps/fastapi/domains/foo/runtime/observability/
-  __init__.py    # re-export the public surface
-  spans.py       # @traced decorator + context-manager span helpers
-  metrics.py     # record_* recorders calling get_instrument(key)
-  scores.py      # record_score wrapper(s) for the LangFuse SDK
-```
+**Location.** Observability code lives at
+`domains/<feature>/runtime/observability/`, a sibling of that feature's
+other `runtime/` concerns (`dispatch/`, `progress/`, `cancel/`,
+`checkpoint/`). **Exception:** a feature with no `runtime/` folder at all
+yet (nothing to group observability code alongside) may keep a single flat
+`domains/<feature>/observability.py` instead. The moment that feature grows
+a `runtime/` folder for any other reason, the flat file should move under
+it like everywhere else, rather than staying an orphan next to a `runtime/`
+folder that already exists — **this exception is now theoretical, not
+demonstrated**: `dd/ingestion` was the one domain using it (see the audit
+row below) and was moved under `runtime/` on 2026-09-22, at the user's
+explicit request for uniformity across `dd/`, even though the trigger
+table alone wouldn't have forced the move on its own (36 lines, one
+caller). Kept as documentation of the pattern for whichever future domain
+starts small enough to need it again.
 
-Plus, the two cross-cutting locations:
+**File triggers, once inside `runtime/observability/`:**
+
+| File | Trigger (create iff) | What goes in it |
+|---|---|---|
+| `__init__.py` | REQUIRED CORE | re-export whichever files below are present |
+| `metrics.py` | REQUIRED CORE the moment this feature records ≥1 metric | `record_*` functions calling `infra.otel.service.get_instrument(key)` |
+| `service.py` | ≥2 call sites need the SAME span-wrapping shape (e.g. a `@traced` decorator applied across several LangGraph node files) | The decorator/wrapper — the "one span per node" idiom |
+| `spans.py` | the feature wraps ≥1 external I/O call (a `db.*` or `gen_ai.*` span) that is its OWN dedicated context manager, distinct from the generic node decorator above | One context-manager span helper per backend/operation (`qdrant_search_span`, `chat_completion_span`, ...) |
+| `keys.py` | ≥3 attribute/span-name string constants are shared across `spans.py`, especially when they mirror an external semantic convention (`gen_ai.*`, `aws.s3.*`) | Attribute-name constants, span-name constants, operation-value constants |
+| `domain.py` | the span-gating/attribute logic contains ≥1 pure decision worth unit-testing without a real span object | Pure predicate/attribute-shaping functions, no I/O |
+
+Notably absent from this table: a per-domain `scores.py`. Scoring calls
+`infra.langfuse.scores.record_score(...)` directly from wherever a score is
+computed (see §5) — no domain ever needed its own wrapper for it, so one
+was never created. If a feature eventually does, the same trigger logic
+above applies to it too.
+
+Plus the two cross-cutting locations touched regardless of which files
+above you add:
 
 - `apps/fastapi/infra/otel/entities.py` — append a `MetricSpec` for each new instrument.
-- `apps/fastapi/infra/otel/params.py` — add `foo_id` to `ALLOWED_BAGGAGE_KEYS` if needed.
+- `apps/fastapi/infra/otel/keys.py` — add `foo_id` to `ALLOWED_BAGGAGE_KEYS` if it needs propagating onto every child span (moved here from `params.py` in the 2026-09-22 `infra/otel/` reorg — see the file index below).
+
+**Audit against these triggers (2026-09-22)** — every existing domain
+already matches, with one real exception:
+
+| Domain | Files present | Matches triggers? |
+|---|---|---|
+| `dd/planner`, `dd/synth` | `metrics.py`, `service.py` | ✅ — `service.py` earned its keep (≥8 node files import it); no `spans.py`/`keys.py`/`domain.py` because neither trigger holds yet |
+| `ycs` | `metrics.py`, `service.py`, `spans.py`, `domain.py` | ✅ — the richest, because YCS genuinely has all four needs (node spans, `db.*`/`gen_ai.rerank` I/O spans, and pure attribute helpers) |
+| `settings` | `metrics.py`, `spans.py`, `keys.py` | ✅ — no `service.py` (chat/embeddings are 2 leaf functions, not a multi-node graph, so no shared node-decorator need); `keys.py` earned its keep mirroring the `gen_ai.*` semconv |
+| `dd/ingestion` | `runtime/{dispatch,observability,progress}/`, `observability/` has only `metrics.py` | ✅ — moved under `runtime/` 2026-09-22 to match planner/synth structurally (`dispatch/`+`progress/`+`observability/` relocated together, not just observability alone — moving observability by itself would have left a `runtime/` folder holding exactly one thing, a worse inconsistency than the flat file it replaced). No `service.py`/`spans.py`/`keys.py`/`domain.py` — ingestion's one span is still inline in `runtime/dispatch/service.py:run()`, no fan-out of consumers exists to justify extracting it |
+| `rr` | `runtime/observability/{metrics,service}.py` | ✅ (2026-09-22 consolidation) — `runtime/metrics.py` moved to `runtime/observability/metrics.py`; the `@traced_tool` decorator moved from `agent/tools/observability.py` (an orphan next to an already-existing `runtime/` folder — the placement mistake, not a legitimate exception) to `runtime/observability/service.py`, mirroring planner/synth's `@traced`. The 4 tool-module callers now reach it via `from domains.rr.runtime.observability.service import traced_tool` (a plain import, not a `domains.*` attribute chase — required per §8 Exception 2 since `@traced_tool` runs at module-exec time). Phase-transition spans deliberately stay in `agent/middleware/service.py` — tightly coupled to `PhaseEventsMiddleware`'s own state, a legitimate exception, not fragmentation. |
 
 ---
 
@@ -523,7 +564,8 @@ one gap it has, #8), to carry into any new Python + LLM project:
 | `infra/otel/service.py` | SDK init, exporter builders (Alloy + LangFuse OTLP + Mimir), `BaggageSpanProcessor` + `bag_context()`, `get_instrument(key)` factory, library auto-instrumentation |
 | `infra/otel/domain.py` | Pure predicates — LangFuse span-gate (`should_keep_span`) + baggage-key allow check (`is_allowed_baggage_key`) |
 | `infra/otel/entities.py` | Central `INSTRUMENTS` list (`MetricSpec` registry) + `DedupeRateLimitFilter` (stateful log-dedup entity) |
-| `infra/otel/params.py` | Tunables + allow/deny-lists (`ALLOWED_BAGGAGE_KEYS`, `CELERY_DOMAIN_PREFIXES`, `MCP_TRANSPORT_DROPS`, BSP/OTLP timeouts) |
+| `infra/otel/keys.py` | Task-path / route-name tables + `ALLOWED_BAGGAGE_KEYS` — consumed by `domain.py`, not `service.py` (moved out of `params.py` 2026-09-22) |
+| `infra/otel/params.py` | Tunables consumed only by `service.py` itself (service identity, BSP/OTLP timeouts, `FASTAPI_EXCLUDED_URLS`, `OTEL_NOISY_LOGGERS`) |
 | `infra/langfuse/service.py` | Lazy SDK singleton |
 | `infra/langfuse/sessions.py` | `session(...)` context manager |
 | `infra/langfuse/scores.py` | `record_score(...)` |
@@ -531,7 +573,7 @@ one gap it has, #8), to carry into any new Python + LLM project:
 | `infra/langfuse/callbacks.py` | `build_langchain_callback(...)` |
 | `infra/langfuse/datasets/` | uploader + runner |
 | `infra/langfuse/evals/judges/` | one file per LLM-judge |
-| `domains/<feature>/runtime/observability/` | per-domain enrichment (spans + metrics + scores) |
+| `domains/<feature>/runtime/observability/` | per-domain enrichment — which files exist is trigger-based, see the TL;DR table at the top |
 | `scripts/observability/` | one-shot publish scripts for LangFuse-managed prompts + eval runners |
 | `observability/grafana-dashboards/` | importable JSONs |
 | `observability/fixtures/` | gold corpora |

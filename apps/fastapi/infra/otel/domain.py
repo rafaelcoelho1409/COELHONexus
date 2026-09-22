@@ -7,12 +7,11 @@ plain data out — no OTel SDK objects, no env reads, no clocks — so it's
 unit-testable without mocks.
 """
 from __future__ import annotations
+from . import keys
 
 import base64
 import logging
 from collections.abc import Mapping
-
-from . import keys
 
 # --- LangFuse span gate ------------------------------------------------------
 

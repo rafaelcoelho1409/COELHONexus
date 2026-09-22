@@ -27,6 +27,7 @@ from . import domain
 from .. import state
 from ... import keys
 from .... import service
+from domains.rr.runtime.observability.service import traced_tool
 
 import asyncio
 import logging
@@ -39,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 @tool
+@traced_tool
 async def graph_build_papers(
     scan_id: str,
     max_concurrency: int = 4,

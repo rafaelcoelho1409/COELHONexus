@@ -2,11 +2,10 @@
 progress + manifest flow back through Redis."""
 from __future__ import annotations
 import infra.celery.service
-from . import dispatch
+from . import runtime
 
 import asyncio
 import logging
-
 
 
 logger = logging.getLogger(__name__)
@@ -24,7 +23,7 @@ def run_ingestion(self, run_id: str, slug: str) -> dict:
     """Run docs ingestion for `slug`; manifest lands at `dd:runs:{run_id}:*`."""
     logger.info(f"[task] run_ingestion run_id={run_id} slug={slug}")
     try:
-        return asyncio.run(dispatch.service.run(run_id, slug))
+        return asyncio.run(runtime.dispatch.service.run(run_id, slug))
     except Exception as e:
         logger.exception(f"[task] run_ingestion failed: {e}")
         return {

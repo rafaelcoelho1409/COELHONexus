@@ -42,22 +42,39 @@ def full_channel_pipeline(
     """Full pipeline: extract → {Qdrant, Neo4j concurrently} → clear cache.
 
     Each task runs in its own Celery worker (possibly on different queues).
-    If any step fails, Celery retries that step — not the whole pipeline."""
-    ingest_steps = []
-    if include_qdrant:
-        ingest_steps.append(domains.ycs.qdrant_task.task.ingest_to_qdrant.si())
-    if include_graph:
-        ingest_steps.append(domains.ycs.neo4j_task.task.ingest_to_neo4j.si())
-    steps: list[Any] = [
-        domains.ycs.extract.task.extract_channel.si(channel_id, max_results, include_transcription),
-    ]
-    if len(ingest_steps) > 1:
-        steps.append(group(*ingest_steps))
-    else:
-        steps.extend(ingest_steps)
-    steps.append(domains.ycs.qdrant_task.task.invalidate_cache.si())
-    pipeline = chain(*steps)
-    result = pipeline.apply_async()
+    If any step fails, Celery retries that step — not the whole pipeline.
+
+    This span covers only the (synchronous, near-instant) chain-build +
+    dispatch — it does NOT wrap the actual pipeline work, which runs later
+    in separate worker processes. Each dispatched step already opens its
+    own `session(...)` under its own task id (see extract/qdrant_task/
+    neo4j_task's task.py), so this span is a dispatcher-side record of
+    "which steps were chosen for this run", not a parent of their traces."""
+    with infra.otel.service.get_tracer().start_as_current_span(
+        "ycs.pipeline.full_channel.dispatch",
+        attributes = {
+            "coelho.langfuse.keep":  True,
+            "ycs.channel_id":        channel_id,
+            "ycs.max_results":       max_results,
+            "ycs.include_qdrant":    include_qdrant,
+            "ycs.include_graph":     include_graph,
+        },
+    ):
+        ingest_steps = []
+        if include_qdrant:
+            ingest_steps.append(domains.ycs.qdrant_task.task.ingest_to_qdrant.si())
+        if include_graph:
+            ingest_steps.append(domains.ycs.neo4j_task.task.ingest_to_neo4j.si())
+        steps: list[Any] = [
+            domains.ycs.extract.task.extract_channel.si(channel_id, max_results, include_transcription),
+        ]
+        if len(ingest_steps) > 1:
+            steps.append(group(*ingest_steps))
+        else:
+            steps.extend(ingest_steps)
+        steps.append(domains.ycs.qdrant_task.task.invalidate_cache.si())
+        pipeline = chain(*steps)
+        result = pipeline.apply_async()
     return {
         "pipeline_id": result.id,
         "steps":       [

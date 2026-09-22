@@ -4,14 +4,13 @@
 `attach_span_attrs(prefix, attrs)` attaches a stats dict to the currently-active span.
 """
 from __future__ import annotations
-import infra
 
 import functools
 import logging
 from typing import Awaitable, Callable
 
-from opentelemetry import trace as _otel_trace
-
+import infra
+from opentelemetry import trace
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +53,7 @@ def traced(name: str) -> Callable:
 def attach_span_attrs(prefix: str, attrs: dict) -> None:
     """Set namespaced attributes on the current OTel span; no-op if uninitialized; None values skipped."""
     try:
-        span = _otel_trace.get_current_span()
+        span = trace.get_current_span()
         for k, v in attrs.items():
             if v is None:
                 continue

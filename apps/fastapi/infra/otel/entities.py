@@ -7,13 +7,12 @@ invariant — see DedupeRateLimitFilter). Neither belongs in service.py,
 which is I/O only.
 """
 from __future__ import annotations
+from . import domain, params
 
 import logging
 import time
 from dataclasses import dataclass
 from typing import Literal
-
-from . import domain, params
 
 
 @dataclass(frozen = True, slots = True)
@@ -220,6 +219,40 @@ INSTRUMENTS: tuple[MetricSpec, ...] = (
         key         = "rr_phase_event_total",
         name        = "rr.phase_event_total",
         description = "Research Radar phase event count by phase",
+        kind        = "counter",
+    ),
+    MetricSpec(
+        key         = "gen_ai_call_duration",
+        name        = "gen_ai.call_duration_seconds",
+        description = "LLM/embedding call wall-clock — labels: operation ∈ {chat, embedding}, model, outcome",
+        kind        = "histogram",
+        unit        = "s",
+    ),
+    MetricSpec(
+        key         = "gen_ai_call_total",
+        name        = "gen_ai.call_total",
+        description = "LLM/embedding call count by operation, model, and outcome ∈ {ok, timeout, error}",
+        kind        = "counter",
+    ),
+    MetricSpec(
+        key         = "gen_ai_usage_tokens",
+        name        = "gen_ai.usage_tokens",
+        description = "Token usage per call — labels: operation, model, token_type ∈ {input, output}",
+        kind        = "histogram",
+        unit        = "1",
+    ),
+    MetricSpec(
+        key         = "ycs_ingest_run_duration",
+        name        = "ycs.ingest_run_duration_seconds",
+        description = ("YCS extract/ingest pipeline run duration — labels: kind ∈ "
+                       "{extract_videos, extract_channel, extract_playlist, embedding_migration}, outcome"),
+        kind        = "histogram",
+        unit        = "s",
+    ),
+    MetricSpec(
+        key         = "ycs_ingest_run_total",
+        name        = "ycs.ingest_run_total",
+        description = "YCS extract/ingest pipeline run count by kind and outcome ∈ {ok, error}",
         kind        = "counter",
     ),
 )

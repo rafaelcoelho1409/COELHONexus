@@ -5,6 +5,7 @@ from . import domain, params
 from .. import state as tools_state
 from ... import keys
 from .... import runtime
+from domains.rr.runtime.observability.service import traced_tool
 
 import json
 import logging
@@ -37,6 +38,7 @@ def _safe_emit(scan_id: str, phase: str, message: str) -> None:
 
 
 @tool
+@traced_tool
 def stash_discovery_result(
     scan_id: str,
     source: str,
@@ -161,6 +163,7 @@ def stash_discovery_result(
 
 
 @tool
+@traced_tool
 def write_extraction(
     scan_id: str,
     arxiv_id: str,
@@ -246,6 +249,7 @@ def write_extraction(
 
 
 @tool
+@traced_tool
 def list_extractions(scan_id: str) -> str:
     """List all extraction file paths for this scan. Returns a newline-separated list."""
     paths = tools_state.fs_list(scan_id, prefix=keys.FS_DIR_EXTRACTIONS + "/")
@@ -253,6 +257,7 @@ def list_extractions(scan_id: str) -> str:
 
 
 @tool
+@traced_tool
 def read_extraction(scan_id: str, arxiv_id: str) -> str:
     """Read a single paper's extraction. Returns JSON string."""
     payload = tools_state.fs_read(scan_id, keys.fs_extraction_path(arxiv_id))
@@ -262,6 +267,7 @@ def read_extraction(scan_id: str, arxiv_id: str) -> str:
 
 
 @tool
+@traced_tool
 def read_top_n_papers(scan_id: str) -> str:
     """Read the triage-ranked top-N paper list. Returns JSON string of NormalizedPaper dicts."""
     payload = tools_state.fs_read(scan_id, keys.FS_FILE_TRIAGE_TOPN)
@@ -271,6 +277,7 @@ def read_top_n_papers(scan_id: str) -> str:
 
 
 @tool
+@traced_tool
 def write_synthesis_report(
     scan_id: str,
     themes: list[str],
@@ -360,6 +367,7 @@ def write_synthesis_report(
 
 
 @tool
+@traced_tool
 def read_synthesis_report(scan_id: str) -> str:
     """Read the synthesis report. Used by the report subagent."""
     payload = tools_state.fs_read(scan_id, keys.FS_FILE_SYNTHESIS_REPORT)
@@ -384,6 +392,7 @@ def _bump_failed(scan_id: str) -> int:
 
 
 @tool
+@traced_tool
 def write_digest(scan_id: str, digest_json: str) -> str:
     """Persist the final ranked digest as JSON.
 
