@@ -2,7 +2,6 @@
 (queue `synth-{env}`). thread_id = `docs-distiller/synth/{slug}/{uuid}`;
 chapter_id lives in SynthState, not the thread_id."""
 from __future__ import annotations
-
 import domains
 from . import params
 

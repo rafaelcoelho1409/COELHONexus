@@ -1,7 +1,6 @@
 """ycs/query — Query workbench: namespaces, ES/Qdrant/Neo4j queries (simple + raw DSL), AI text-to-DSL SSE, history.
 Backend endpoints return 200 even on validation rejection (`ok=False` envelope) for inline editor messages."""
 from __future__ import annotations
-
 import domains
 
 from fastapi import APIRouter, HTTPException, Request

@@ -1,11 +1,10 @@
 """Profile endpoints — per-profile Postgres state."""
 from __future__ import annotations
+import domains
 
 import logging
 
 from fastapi import APIRouter, HTTPException
-
-import domains
 
 from . import schemas
 

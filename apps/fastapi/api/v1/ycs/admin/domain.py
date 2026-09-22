@@ -1,6 +1,5 @@
 """admin domain — pure listing helpers (no I/O)."""
 from __future__ import annotations
-
 import domains
 
 

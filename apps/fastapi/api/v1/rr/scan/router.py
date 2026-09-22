@@ -1,5 +1,6 @@
 """Scan endpoints — Celery dispatch, Postgres status reads, Redis SSE relay."""
 from __future__ import annotations
+import domains
 
 import json
 import logging
@@ -7,7 +8,6 @@ from datetime import datetime, timezone
 from typing import AsyncIterator
 from uuid import UUID, uuid4
 
-import domains
 import psycopg
 from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import StreamingResponse

@@ -1,6 +1,5 @@
 """ycs/agents — Pydantic request schemas for the agentic-RAG endpoints."""
 from __future__ import annotations
-
 import domains
 
 from typing import Literal

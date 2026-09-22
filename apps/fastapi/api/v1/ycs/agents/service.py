@@ -1,6 +1,5 @@
 """ycs/agents service — builders for the Ask runtime (graph + LLM clients)."""
 from __future__ import annotations
-
 import domains
 
 from fastapi import HTTPException, Request

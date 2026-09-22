@@ -1,6 +1,5 @@
 """admin service — ES/Neo4j listing orchestration shared by endpoints."""
 from __future__ import annotations
-
 import domains, infra
 from . import domain
 

@@ -1,7 +1,6 @@
 """ycs/content — sync yt-dlp search + Celery dispatchers for video/channel/playlist ingestion.
 yt-dlp errors translate to 502 (subprocess failure) / 504 (timeout)."""
 from __future__ import annotations
-
 import domains
 from . import service
 

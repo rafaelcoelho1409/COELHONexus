@@ -2,7 +2,6 @@
 is the HTTP/SSE layer. SSE via Redis pub/sub, cancel via Redis flag,
 checkpoints in Postgres."""
 from __future__ import annotations
-
 import domains
 from . import params
 

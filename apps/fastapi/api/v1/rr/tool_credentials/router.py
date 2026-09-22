@@ -1,6 +1,5 @@
 """BYOK API-key management for FastMCP source tools. Same MinIO+Fernet store as the endpoint settings (different whitelist)."""
 from __future__ import annotations
-
 import domains
 from . import params, schemas, service
 

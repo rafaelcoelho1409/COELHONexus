@@ -1,6 +1,5 @@
 """tool_credentials service — key-status views, probes, and save/test orchestration."""
 from __future__ import annotations
-
 import domains
 from . import entities, params
 

@@ -5,7 +5,6 @@ masked status (`has_key`/`source`/`last4`). Every mutation resets the
 corresponding pooled client so the change propagates to the next call.
 """
 from __future__ import annotations
-
 import domains
 from . import schemas, service
 

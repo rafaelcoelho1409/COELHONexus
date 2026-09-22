@@ -4,11 +4,11 @@
 param → catalog dict or 404", resolved by `service.get_catalog_entry`)
 used by the resolver/runs/debug routers.
 """
+from . import service
+
 from typing import Annotated
 
 from fastapi import Depends
-
-from . import service
 
 
 CatalogEntry = Annotated[dict, Depends(service.get_catalog_entry)]

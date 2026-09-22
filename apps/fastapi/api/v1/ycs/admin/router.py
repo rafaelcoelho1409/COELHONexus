@@ -1,6 +1,5 @@
 """ycs/admin — ES aggregations, library view, and Celery task-status helpers for FastHTML."""
 from __future__ import annotations
-
 from . import domain, service
 
 from typing import Any

@@ -1,6 +1,5 @@
 """content service — ingestion guards + client factories shared by endpoints."""
 from __future__ import annotations
-
 import domains
 
 from fastapi import HTTPException

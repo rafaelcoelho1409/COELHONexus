@@ -1,6 +1,5 @@
 """Catalog of tool API keys the Settings UI exposes. To add a key: add a row here + `_TESTERS` entry in router.py + `MANAGED_KEY_ENVS` whitelist."""
 from __future__ import annotations
-
 from . import entities
 
 

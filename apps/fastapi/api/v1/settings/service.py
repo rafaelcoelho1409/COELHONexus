@@ -1,6 +1,5 @@
 """settings service — endpoint view builders + save handlers shared by endpoints."""
 from __future__ import annotations
-
 import domains
 from . import schemas
 
