@@ -1,11 +1,11 @@
 """ycs/agents — Pydantic request schemas for the agentic-RAG endpoints."""
 from __future__ import annotations
 
+import domains
+
 from typing import Literal
 
 from pydantic import BaseModel
-
-import domains
 
 
 # Agentic RAG Requests

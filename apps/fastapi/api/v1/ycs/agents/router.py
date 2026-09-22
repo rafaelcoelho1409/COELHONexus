@@ -1,6 +1,7 @@
 """ycs/agents — agentic RAG router: ask (sync+stream), ingest, graph stats, pipeline."""
 from __future__ import annotations
 
+import domains
 from . import domain, params, schemas, service
 
 import asyncio
@@ -9,16 +10,12 @@ import logging
 import time
 import uuid
 
-import domains
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-# In-memory per-pod; upgrade to Redis for >1 worker.
-_CANCELLED_TURN_IDS: set[int] = set()
 
 
 @router.get("/usage/{thread_id}")
@@ -129,7 +126,7 @@ async def cancel_turn_endpoint(
     request: Request,
 ) -> dict:
     """Mark turn for early SSE exit and delete its PG row; idempotent (second call returns deleted=0)."""
-    _CANCELLED_TURN_IDS.add(turn_id)
+    service.mark_turn_cancelled(turn_id)
     try:
         n = await domains.ycs.conversation.service.delete_turn(request.app.state.pg_url, turn_id)
     except Exception as e:
@@ -256,10 +253,7 @@ async def rag_search(
                     except asyncio.TimeoutError:
                         # Global deadline hit — one bounded fallback pass
                         # instead of grinding until the client disconnects.
-                        from domains.ycs.rag.standard.nodes.fallback_answer.node import (
-                            fallback_answer as _deadline_fallback,
-                        )
-                        _fb = await _deadline_fallback(
+                        _fb = await domains.ycs.rag.standard.nodes.fallback_answer.node.fallback_answer(
                             {
                                 "question":             payload.question,
                                 "conversation_history": history,
@@ -812,7 +806,7 @@ async def rag_search_stream(
             producer_tasks.append(producer_task)
             try:
                 while True:
-                    if turn_id is not None and turn_id in _CANCELLED_TURN_IDS:
+                    if service.is_turn_cancelled(turn_id):
                         cancelled = True
                         break
                     if await request.is_disconnected():
@@ -1004,11 +998,8 @@ async def rag_search_stream(
                     # live branch only ever inserted the placeholder
                     # text below. Merged into one branch.)
                     if not last_generation:
-                        from domains.ycs.rag.standard.nodes.fallback_answer.node import (
-                            fallback_answer as _deadline_fallback,
-                        )
                         try:
-                            _fb = await _deadline_fallback(
+                            _fb = await domains.ycs.rag.standard.nodes.fallback_answer.node.fallback_answer(
                                 {
                                     "question":             payload.question,
                                     "conversation_history": history,
@@ -1381,8 +1372,7 @@ async def rag_search_stream(
                 _session_cm.__exit__(None, None, None)
             except Exception:
                 pass
-            if turn_id is not None:
-                _CANCELLED_TURN_IDS.discard(turn_id)
+            service.clear_turn_cancelled(turn_id)
 
     return StreamingResponse(
         event_generator(),
@@ -1394,41 +1384,12 @@ async def rag_search_stream(
     )
 
 
-async def _raise_if_embedding_migration_needed() -> None:
-    """2026-09-15: shares the SAME check `api/v1/ycs/content/router.py`
-    uses before every Videos-tab dispatch. This endpoint (the Source
-    tab's "Continue to Qdrant" follow-up, `static/js/ycs/ingest.js`) and
-    `/pipeline` below (when `include_qdrant`) had NO gate at all before
-    this — either can write a video's vectors under a DIFFERENT model
-    than everything already in the active collection, exactly the
-    silent-corpus-fragmentation failure mode the gate exists to
-    prevent. See `domains.ycs.embedding_migration.check_migration_needed_now`
-    for the actual check."""
-    from domains.ycs.embedding_migration.service import check_migration_needed_now
-    mismatch = await check_migration_needed_now()
-    if mismatch is not None:
-        raise HTTPException(
-            status_code = 423,
-            detail = {
-                "error": "embedding_migration_required",
-                "message": (
-                    f"The configured embedding model changed from "
-                    f"{mismatch['from_model']!r} to {mismatch['to_model']!r} "
-                    f"since the last ingestion. Start a migration "
-                    f"(POST /api/v1/ycs/content/embedding-migration/start) "
-                    f"before ingesting more videos."
-                ),
-                **mismatch,
-            },
-        )
-
-
 @router.post("/ingest/qdrant")
 async def ingest_to_qdrant(payload: schemas.IngestRequest) -> dict:
     """Queue ES transcripts → Qdrant ingestion (Celery)."""
-    await _raise_if_embedding_migration_needed()
-    from domains.ycs.qdrant_task.task import ingest_to_qdrant as ingest_task
-    task = ingest_task.delay(
+    await service._raise_if_embedding_migration_needed()
+    import domains.ycs.qdrant_task.task
+    task = domains.ycs.qdrant_task.task.ingest_to_qdrant.delay(
         payload.video_ids,
         payload.chunk_size,
         payload.chunk_overlap,
@@ -1443,8 +1404,8 @@ async def ingest_to_qdrant(payload: schemas.IngestRequest) -> dict:
 @router.post("/ingest/neo4j")
 async def ingest_to_neo4j(payload: schemas.GraphIngestRequest) -> dict:
     """Queue entity extraction → Neo4j (Celery); 1 LLM call per transcript."""
-    from domains.ycs.neo4j_task.task import ingest_to_neo4j as graph_task
-    task = graph_task.delay(payload.video_ids, payload.batch_size)
+    import domains.ycs.neo4j_task.task
+    task = domains.ycs.neo4j_task.task.ingest_to_neo4j.delay(payload.video_ids, payload.batch_size)
     return {
         "task_id":  task.id,
         "status":   "queued",
@@ -1469,9 +1430,9 @@ async def graph_stats(request: Request) -> dict:
 async def full_pipeline(payload: schemas.PipelineRequest) -> dict:
     """Queue full Celery chain: extract → Qdrant → Neo4j → cache."""
     if payload.include_qdrant:
-        await _raise_if_embedding_migration_needed()
-    from domains.ycs.pipeline_task.task import full_channel_pipeline
-    task = full_channel_pipeline.delay(
+        await service._raise_if_embedding_migration_needed()
+    import domains.ycs.pipeline_task.task
+    task = domains.ycs.pipeline_task.task.full_channel_pipeline.delay(
         payload.channel_id,
         payload.max_results,
         payload.include_transcription,

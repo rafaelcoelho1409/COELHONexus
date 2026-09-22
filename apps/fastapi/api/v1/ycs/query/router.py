@@ -2,10 +2,10 @@
 Backend endpoints return 200 even on validation rejection (`ok=False` envelope) for inline editor messages."""
 from __future__ import annotations
 
+import domains
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-
-import domains
 
 
 router = APIRouter()
@@ -120,15 +120,12 @@ async def get_schema(
     }
 
 
-_VALID_BACKENDS = {"elasticsearch", "qdrant", "neo4j"}
-
-
 @router.post("/ai/{backend}")
 async def post_ai_generate(
     backend: str, payload: domains.ycs.query.schemas.AIGenerateRequest, request: Request,
 ) -> StreamingResponse:
     """AI text-to-DSL SSE stream. `final` on `done` replaces the editor (clean output even after a self-repair mid-stream)."""
-    if backend not in _VALID_BACKENDS:
+    if backend not in domains.ycs.query.params.BACKENDS:
         raise HTTPException(
             status_code = 404, detail = f"unknown backend {backend!r}",
         )
@@ -202,7 +199,7 @@ async def save_history(
         raise HTTPException(status_code = 400, detail = "Invalid JSON body.")
     backend = payload.get("backend")
     body    = payload.get("body")
-    if not backend or backend not in _VALID_BACKENDS:
+    if not backend or backend not in domains.ycs.query.params.BACKENDS:
         raise HTTPException(
             status_code = 400, detail = f"unknown or missing backend: {backend!r}",
         )
