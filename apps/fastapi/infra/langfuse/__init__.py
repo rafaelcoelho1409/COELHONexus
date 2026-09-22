@@ -1,6 +1,6 @@
 """LangFuse SDK surface — features OTel doesn't cover.
 
-Trace ingestion flows through `infra.otel.exporters.add_langfuse_exporter`
+Trace ingestion flows through `infra.otel.service.add_langfuse_exporter`
 (OTLP/HTTP). This package owns the SDK-only features:
 
   service.py    — lazy `Langfuse` singleton (env-driven)

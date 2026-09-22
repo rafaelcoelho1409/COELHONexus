@@ -1,14 +1,19 @@
-"""Central registry of every DD metric — single source of truth for
-instrument names, units, descriptions, and label vocabulary.
+"""Value objects and stateful entities this package manipulates.
 
-Recorders live next to their callers (`domains/*/runtime/observability/
-metrics.py`); those modules import this registry and the factory in
-`infra.otel.metrics` to create/look up instruments by key.
+Two unrelated concerns share this file because both are genuine "things",
+not orchestration: the central metric registry (a plain value object per
+instrument), and the log-dedup filter (a stateful entity with a real
+invariant — see DedupeRateLimitFilter). Neither belongs in service.py,
+which is I/O only.
 """
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
 from typing import Literal
+
+from . import domain, params
 
 
 @dataclass(frozen = True, slots = True)
@@ -218,3 +223,34 @@ INSTRUMENTS: tuple[MetricSpec, ...] = (
         kind        = "counter",
     ),
 )
+
+
+class DedupeRateLimitFilter(logging.Filter):
+    """OTLP export-failure log-spam dampener. First-then-suppress per
+    (logger, level, msg-prefix) preserves the initial degradation signal
+    without flooding app logs when the collector is unreachable.
+
+    A real invariant lives on the instance — a given key only passes once
+    per `interval_s` window (tracked in `_last`) — which is why this is a
+    class with a mutating method rather than a free function in domain.py.
+    The key computation itself IS pure, so it's delegated to
+    `domain.dedupe_key` instead of inlined here.
+    """
+
+    def __init__(self, interval_s: float = params.DEDUPE_LOG_INTERVAL_S):
+        super().__init__()
+        self._interval = interval_s
+        self._last: dict = {}
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        key = domain.dedupe_key(record)
+        now = time.monotonic()
+        prev = self._last.get(key)
+        if prev is None or (now - prev) >= self._interval:
+            self._last[key] = now
+            return True
+        return False
+
+
+# One shared instance — service.py attaches it to every noisy OTel logger.
+DEDUPE_LOG_FILTER = DedupeRateLimitFilter()

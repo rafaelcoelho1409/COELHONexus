@@ -81,7 +81,7 @@ app.conf.include = keys.TASK_INCLUDE
 def _worker_process_init(**_kwargs) -> None:
     # OTel MUST run first: each fork needs its own provider (parent SDK state doesn't survive fork()).
     try:
-        import infra.otel
+        import infra
         infra.otel.service.init_otel_for_celery_worker()
     except Exception as e:
         logger.warning(

@@ -13,16 +13,19 @@ Env vars (init no-ops when OTEL_EXPORTER_OTLP_ENDPOINT is unset):
   LANGFUSE_OTLP_ENDPOINT        → LangFuse v3 /api/public/otel
   LANGFUSE_PUBLIC_KEY           → HTTP Basic
   LANGFUSE_SECRET_KEY
-"""
-from . import baggage, entities, exporters, filters, metrics, params, service
 
+  domain.py    — pure span-gate + baggage-key predicates
+  entities.py  — MetricSpec registry (INSTRUMENTS) + DedupeRateLimitFilter
+  keys.py      — task-path / route-name tables, baggage-key allow-list
+  params.py    — tunables (service identity, timeouts, backpressure)
+  service.py   — bootstrap, exporters, baggage wiring, instrument factory
+"""
+from . import domain, entities, keys, params, service
 
 __all__ = [
-    "baggage",
-    "exporters",
-    "filters",
-    "metrics",
+    "domain",
     "entities",
+    "keys",
     "params",
     "service",
 ]

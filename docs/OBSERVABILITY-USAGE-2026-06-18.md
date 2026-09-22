@@ -2,10 +2,141 @@
 
 **Date:** 2026-06-18
 **Audience:** future-me adding observability to a new domain.
+**Updated 2026-09-22:** added the Current State Audit, a live-research SOTA
+update, and a portable standards checklist for future projects. Corrected two
+stale claims (§6b judge import path, §10 "shipped" claim) and replaced the
+dead link to the deleted SOTA doc at the bottom.
 
 This guide answers: *"I have a new domain `foo`; how do I add spans / metrics / scores / sessions / prompts so it renders in LangFuse + Tempo + Mimir like the existing ones?"*
 
 Every section below is **copy-pasteable** from a real shipped pattern in the codebase.
+
+---
+
+## Current State Audit — 2026-09-22
+
+Full repo inventory (`apps/fastapi`, `apps/fastmcp`, `apps/fasthtml`, plus a
+peek at COELHOLLMRotator and COELHOCloud) against this guide's claims.
+
+**Confirmed good, no action needed:**
+- LangFuse SDK is fully installed and far more built out than the (now
+  corrected) `project_observability_sota_2026_06_18` memory suggested — 12+
+  files under `infra/langfuse/` covering sessions, scores, prompts (cache +
+  fallback), `annotation.py` (`flag_for_review`), the LangChain callback
+  builder, dataset uploader/runner, and 4 LLM-judges (faithfulness, novelty,
+  citation_accuracy, ragas_relevance).
+- Celery instrumentation timing (`worker_process_init` signal, post-fork) and
+  the deliberate exclusion of Redis auto-instrumentation ("task-queue chatter
+  produces thousands of zero-value spans") both still match current
+  OTel-Python-Contrib guidance — no change needed.
+- FastMCP relies on the app setting the global `TracerProvider`, no separate
+  SDK needed — matches FastMCP's own current telemetry docs.
+
+**P0 — the system-wide dark spot.** `COELHOLLMRotator`'s
+`domains/llm/rotator/observability/service.py:1` is literally
+`"""No-op observability — OTel/LangFuse removed for demo. All spans are
+no-ops."""`. Every `genai_completion_span` / `genai_embedding_span` /
+`genai_bandit_*` call site in `chain/service.py` (~15 of them) now yields a
+`_NoOpSpan` stub. Nexus's own outbound call (`domains/settings/chat/service.py`)
+has zero span code either — it relies entirely on `HTTPXClientInstrumentor`'s
+generic `POST` span, which the Langfuse gate's allow-list doesn't match (no
+`gen_ai.*` attrs, no `dd./rr./ycs.` prefix). **Net effect: no LLM call
+anywhere in the system currently produces a `gen_ai.*` span or a Langfuse
+"generation" observation** — despite the Rotator having a fully-designed
+`gen_ai.*` + `bandit.*` attribute contract sitting dormant in
+`observability/keys.py`, and the entire evals/scores/prompts machinery on the
+Nexus side built to consume exactly that data. Treat this as a decision
+point, not a bug to blindly revert — confirm why it was stubbed (repo split?
+version conflict? perf?) before re-wiring.
+
+**P1 — stale doc claims**, both fixed inline below: §6b's judge sample
+pointed at `domains.llm.rotator.chain` (retired 2026-09-21 per
+`docs/CODE-CONVENTIONS.md`); the real path is
+`domains.settings.chat.service.chat_judge_async`. §10 claimed
+`build_langchain_callback` "shipped in `domains/rr/task.py`" — it has no call
+sites anywhere outside its own definition.
+
+**P1 — FastHTML is a trace dead-end.** Zero OTel/Langfuse dependency, no
+`infra/otel`, no trace-context propagation on its calls into the FastAPI
+backend. Every FastHTML→FastAPI hop starts a brand-new trace; a user click
+can't be followed through to the backend spans it triggered.
+
+**P2 — a parallel, un-unified telemetry system.**
+`domains/ycs/runtime/llm_counter/` and `domains/rr/runtime/llm_counter/` are
+Redis-backed LangChain-callback counters feeding the FastHTML "usage drawer"
+— legitimate (sync UI read vs. trace-store query) but they duplicate exactly
+the token/cost data the (currently dark) `gen_ai.usage.*` spans were meant to
+carry. Once P0 is fixed, decide whether these should dual-write an OTel
+metric too, or stay separate by design.
+
+**P2 — not a bug.** `infra/otel/` in `apps/fastapi` and `apps/fastmcp`
+duplicate the LangFuse allow-list logic — deliberate per the fastmcp port
+comment, since the two are independently deployed apps. **Update
+2026-09-22:** `apps/fastapi/infra/otel/` was reorganized to the
+`domain.py`/`service.py`/`params.py`/`entities.py` shape (§2 below) — the
+old `_LangFuseSpanGate` class is now free functions in `domain.py`
+(`should_keep_span`), so the two apps' copies are no longer byte-identical,
+just logically equivalent. `apps/fastmcp/infra/otel/` was intentionally left
+untouched (out of scope for this pass) — mirror the same file split there
+when it's next touched, or accept the drift; either is fine, just don't
+"fix" it into a cross-app shared import (`docs/CODE-CONVENTIONS.md` §8's
+dotted-path rule is for references *inside* one app, not a mandate to share
+code across independently-deployed apps).
+
+---
+
+## SOTA Update — 2026-09-22 (live research, see bottom of this section for sources)
+
+1. **Langfuse SDK is pinned `langfuse>=3,<4`; v4 has been current since March
+   2026** — OTel-native `get_client()` / `@observe` /
+   `start_as_current_observation()`, with the old `trace()/span()/generation()`
+   calls deprecated. Self-hosted Langfuse has more runway than Cloud (legacy
+   ingestion sunsets on Cloud 2026-11-16; self-hosted v3 gets patches until
+   2027-01), so this isn't urgent — but plan the v4 bump as its own deliberate
+   wave, not a side-effect of the next unrelated `infra/langfuse/` change.
+2. **The hand-rolled `_LangFuseSpanGate` + `langfuse.observation.*` /
+   `langfuse.trace.*` attribute-setting is doing, by hand, roughly what
+   Langfuse's own `langfuse.otel.LangfuseSpanProcessor` now does out of the
+   box** (auto-recognizes OpenInference/native `gen_ai.*` spans, owns the
+   attribute mapping). Worth a spike to see if `LangfuseSpanProcessor` can
+   replace the hand-rolled gate — less code to keep in sync with Langfuse's
+   evolving ingestion schema. Known SDK limitation: it can't currently send to
+   an external OTLP endpoint *without* Langfuse also configured as a
+   destination — a non-issue here since dual-export to Alloy is wanted
+   anyway; it just means this SDK component can only replace the Langfuse-side
+   processor, not the Alloy one.
+3. **`gen_ai.*` semantic conventions are still "Development" stability**,
+   moved to their own dedicated repo in OTel-Python v1.42.0 (2026-06-12), with
+   no versioned schema URL yet. Treat the Rotator's `observability/keys.py`
+   attribute names as pinned-to-a-snapshot, not a stable API — schedule a
+   deliberate re-sync whenever OTel ships a stable `gen_ai` release, rather
+   than letting it silently drift.
+4. **LangGraph instrumentation**: the hand-rolled `@traced` decorator + RR's
+   `PhaseEventsMiddleware` is a legitimate, actively-recommended pattern
+   (native manual spans) — not something to feel behind on.
+   `openinference-instrumentation-langchain` (Arize, actively maintained,
+   releases through 2026-09-18) hooks LangChain's callback system for less
+   boilerplate, but has a known root-graph-span fidelity gap — if adopted,
+   use it to *supplement* node-level `@traced` spans, not replace them.
+5. **Evals are fully unrestricted OSS** since Langfuse open-sourced all eval
+   features (2025-06) — no license gate blocking anything in
+   `infra/langfuse/evals/`. The free-tier-only judge path (`chat_judge_async`
+   → rotator → NIM) is already the correct SOTA pattern; keep running judges
+   as dataset batch evals, not synchronously per production trace, to keep
+   cost/latency off the hot path.
+
+**Sources:** [Langfuse SDK overview](https://langfuse.com/docs/observability/sdk/overview) ·
+[Python v2→v3 upgrade](https://langfuse.com/docs/observability/sdk/upgrade-path/python-v2-to-v3) ·
+[Migrate v3→v4](https://langfuse.com/self-hosting/upgrade/upgrade-guides/upgrade-v3-to-v4) ·
+[Add Langfuse to an existing OTel setup](https://langfuse.com/faq/all/existing-otel-setup) ·
+[semantic-conventions-genai repo](https://github.com/open-telemetry/semantic-conventions-genai) ·
+[FastMCP telemetry docs](https://gofastmcp.com/servers/telemetry) ·
+[OTel Python Contrib — Celery](https://opentelemetry-python-contrib.readthedocs.io/en/latest/instrumentation/celery/celery.html) ·
+[OpenInference LangGraph root-span gap (issue #3339)](https://github.com/Arize-ai/openinference/issues/3339).
+Caveats: the exact current Langfuse *server* version wasn't independently
+confirmed (inferred from SDK-compatibility requirements); no official
+Langfuse-published Collector-fan-out reference architecture exists beyond
+community discussions — workable, not authoritative.
 
 ---
 
@@ -24,7 +155,7 @@ apps/fastapi/domains/foo/runtime/observability/
 Plus, the two cross-cutting locations:
 
 - `apps/fastapi/infra/otel/entities.py` — append a `MetricSpec` for each new instrument.
-- `apps/fastapi/infra/otel/baggage.py` — add `foo_id` to `ALLOWED_BAGGAGE_KEYS` if needed.
+- `apps/fastapi/infra/otel/params.py` — add `foo_id` to `ALLOWED_BAGGAGE_KEYS` if needed.
 
 ---
 
@@ -39,7 +170,7 @@ import functools
 from typing import Awaitable, Callable
 
 from opentelemetry import trace as _otel_trace
-from infra.otel import get_tracer
+import infra.otel
 
 
 def traced(name: str) -> Callable:
@@ -47,7 +178,7 @@ def traced(name: str) -> Callable:
     def decorator(fn: Callable[..., Awaitable[dict]]):
         @functools.wraps(fn)
         async def wrapper(state: dict, *args, **kwargs) -> dict:
-            tracer = get_tracer()
+            tracer = infra.otel.service.get_tracer()
             with tracer.start_as_current_span(
                 f"foo/{name}",
                 attributes = {"foo.node": name, "foo.thread_id": state.get("thread_id", "")},
@@ -88,7 +219,7 @@ from typing import Iterator
 def foo_backend_span(
     *, operation: str, item_count: int,
 ) -> Iterator[object | None]:
-    tracer = get_tracer()
+    tracer = infra.otel.service.get_tracer()
     if tracer is None:
         yield None; return
     with tracer.start_as_current_span(
@@ -142,13 +273,13 @@ INSTRUMENTS: tuple[MetricSpec, ...] = (
 
 ```python
 # domains/foo/runtime/observability/metrics.py
-from infra.otel.metrics import get_instrument
+import infra.otel
 
 
 def record_foo_write(*, tenant: str, status: str) -> None:
     """Increment when a Foo write completes."""
     try:
-        if (inst := get_instrument("foo_writes")) is not None:
+        if (inst := infra.otel.service.get_instrument("foo_writes")) is not None:
             inst.add(1, attributes = {"tenant": tenant, "status": status})
     except Exception:
         pass
@@ -257,7 +388,7 @@ observability/fixtures/foo/<dataset_name>/
 ```python
 # apps/fastapi/infra/langfuse/evals/judges/foo_quality.py
 async def foo_quality(input_: dict, expected: dict, actual: dict) -> float:
-    from domains.llm.rotator.chain import chat_judge_async
+    from domains.settings.chat.service import chat_judge_async  # domains/llm/ retired 2026-09-21
     prompt = f"Score 1-5. Expected={expected}; actual={actual}"
     raw = await chat_judge_async(prompt, max_tokens=8, temperature=0.0)
     import re
@@ -316,7 +447,11 @@ callbacks = [c for c in (existing_cb, cb) if c is not None]
 await agent.ainvoke({"messages": [...]}, config = {"callbacks": callbacks})
 ```
 
-Shipped in `domains/rr/task.py`. Returns `None` when LangFuse is unavailable — the `None`-filter line keeps the existing path intact.
+**Not yet wired anywhere** (corrected 2026-09-22 — previously claimed shipped
+in `domains/rr/task.py`; `build_langchain_callback` currently has no call
+sites outside its own definition). RR is the natural first caller once its
+DeepAgents orchestrator lands. Returns `None` when LangFuse is unavailable —
+the `None`-filter line keeps the existing path intact regardless of caller.
 
 ---
 
@@ -330,15 +465,65 @@ Shipped in `domains/rr/task.py`. Returns `None` when LangFuse is unavailable —
 
 ---
 
+## Portable Standards Checklist — for this project and the next one
+
+A project-agnostic version of what COELHONexus already gets right (plus the
+one gap it has, #8), to carry into any new Python + LLM project:
+
+1. **Two vendor folders, never mixed with domain code.** `infra/otel/` =
+   transport only (TracerProvider, exporters, resource attrs, library
+   auto-instrumentation, metric registry). `infra/langfuse/` = SDK features
+   only (sessions, scores, prompts, evals, callbacks). Domain-specific
+   enrichment — what to name a span, which attributes matter for *this*
+   workflow — lives under `domains/<feature>/runtime/observability/`, never
+   inside the vendor folders.
+2. **One `@traced(name)` decorator per app, applied at the node/handler
+   boundary** — not scattered inline `start_as_current_span` calls. Keeps
+   every span's shape consistent and makes "does this workflow have tracing?"
+   a one-line grep.
+3. **A single allow-list gate decides what reaches the expensive/rate-limited
+   backend** (Langfuse here) while everything reaches the cheap unlimited one
+   (Tempo/Alloy here) unconditionally. Gate on semantics (`gen_ai.*` present,
+   known name prefixes), not on a per-call-site flag threaded through
+   business code.
+4. **Session/user/tag context rides OTel Baggage, not function parameters.**
+   One context manager at the workflow entry point (`with session(...)`), and
+   a `BaggageSpanProcessor` mirrors it onto every descendant span
+   automatically — including spans emitted by libraries you don't control
+   (LiteLLM, LangChain).
+5. **Every observability call is fail-soft by construction.** Wrap in
+   `try/except: pass` (or return `None`) at the *helper* level, not at every
+   call site — a dead Langfuse/Alloy endpoint must never be able to fail a
+   production request.
+6. **Metrics live in one central registry** (`entities.py: INSTRUMENTS`
+   here), not declared ad hoc per module — makes "what do we measure" a
+   single file to read, and prevents duplicate-instrument-name bugs.
+7. **Pin semantic-convention attribute names to a dated snapshot** when the
+   spec is pre-1.0/"Development" (true of `gen_ai.*` today) — put the source
+   commit/date in a comment next to the constant, and schedule a re-sync
+   rather than silently drifting.
+8. **Decide LLM-call span ownership before building the consumer side.** If a
+   gateway/rotator sits between your app and the provider, the *gateway* must
+   own the `gen_ai.*` span — it has the model/tokens/latency/provider-
+   selection data your app doesn't. Building the evals/scores/dashboards
+   layer before that span exists (this project's current P0) leaves the
+   whole stack with nothing real to show.
+9. **Reach for the official SDK's own OTel bridge before hand-rolling
+   attribute mapping** (Langfuse's `LangfuseSpanProcessor` is one), and
+   re-check this at each major SDK bump — a hand-rolled gate that was
+   necessary at integration time can become redundant maintenance once the
+   vendor ships the same thing natively.
+
+---
+
 ## File index — observability code by responsibility
 
 | File | What it owns |
 |---|---|
-| `infra/otel/service.py` | SDK init, library auto-instrumentation, LiteLLM callback wiring |
-| `infra/otel/exporters.py` | Alloy + LangFuse OTLP + Mimir exporter builders |
-| `infra/otel/baggage.py` | `BaggageSpanProcessor` + `bag_context()` |
-| `infra/otel/entities.py` | Central `INSTRUMENTS` list |
-| `infra/otel/metrics.py` | `get_instrument(key)` factory |
+| `infra/otel/service.py` | SDK init, exporter builders (Alloy + LangFuse OTLP + Mimir), `BaggageSpanProcessor` + `bag_context()`, `get_instrument(key)` factory, library auto-instrumentation |
+| `infra/otel/domain.py` | Pure predicates — LangFuse span-gate (`should_keep_span`) + baggage-key allow check (`is_allowed_baggage_key`) |
+| `infra/otel/entities.py` | Central `INSTRUMENTS` list (`MetricSpec` registry) + `DedupeRateLimitFilter` (stateful log-dedup entity) |
+| `infra/otel/params.py` | Tunables + allow/deny-lists (`ALLOWED_BAGGAGE_KEYS`, `CELERY_DOMAIN_PREFIXES`, `MCP_TRANSPORT_DROPS`, BSP/OTLP timeouts) |
 | `infra/langfuse/service.py` | Lazy SDK singleton |
 | `infra/langfuse/sessions.py` | `session(...)` context manager |
 | `infra/langfuse/scores.py` | `record_score(...)` |
@@ -355,4 +540,10 @@ Shipped in `domains/rr/task.py`. Returns `None` when LangFuse is unavailable —
 
 ## Want to extend further?
 
-See `docs/OBSERVABILITY-LANGFUSE-OTEL-SOTA-2026-06-18.md` §3-4 for the **full** LangFuse + OTel feature menu — annotation queues, prompt experiments, exemplars, tail sampling, SLO recording rules.
+The original SOTA doc this pointed to (`docs/OBSERVABILITY-LANGFUSE-OTEL-SOTA-2026-06-18.md`)
+was deleted 2026-07-03 during a docs cleanup — its content is superseded by
+the **Current State Audit** and **SOTA Update** sections above. Remaining
+open items from that doc not yet covered anywhere: prompt experiments,
+exemplars, tail sampling, SLO recording rules. Annotation queues are now
+partially shipped (`infra/langfuse/annotation.py:flag_for_review`) but not
+wired into any UI review flow yet.

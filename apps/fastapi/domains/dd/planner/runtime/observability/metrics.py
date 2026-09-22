@@ -17,14 +17,14 @@ def record_planner_run(
         "outcome":   outcome or "unknown",
     }
     try:
-        if (inst := infra.otel.metrics.get_instrument("planner_run_total")) is not None:
+        if (inst := infra.otel.service.get_instrument("planner_run_total")) is not None:
             inst.add(1, attributes = attrs)
         if duration_s is not None and (
-            inst := infra.otel.metrics.get_instrument("planner_run_duration")
+            inst := infra.otel.service.get_instrument("planner_run_duration")
         ) is not None:
             inst.record(max(duration_s, 0.0), attributes = attrs)
         if chapter_count is not None and (
-            inst := infra.otel.metrics.get_instrument("planner_chapter_count")
+            inst := infra.otel.service.get_instrument("planner_chapter_count")
         ) is not None:
             inst.record(max(chapter_count, 0), attributes = attrs)
     except Exception:
