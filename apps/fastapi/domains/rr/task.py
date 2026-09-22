@@ -119,7 +119,6 @@ async def _run_radar_scan_async(
     top_n: int,
 ) -> dict:
     """Span + metrics wrapper around the RR scan orchestration."""
-    import infra
     t0 = asyncio.get_running_loop().time()
     with infra.langfuse.sessions.session(
         "rr",
@@ -230,8 +229,8 @@ async def _run_radar_scan_async_inner(
             f"topic='{topic}' "
             f"top_n={top_n}"
         )
-        import domains.rr.agent.graph
-        radar_agent = await domains.rr.agent.graph.build_radar_agent()
+        from domains.rr.agent import graph
+        radar_agent = await graph.build_radar_agent()
         _llm_cb = getattr(radar_agent, "_rr_llm_counter_cb", None)
         callbacks = [c for c in (_llm_cb,) if c is not None]
         await radar_agent.ainvoke(
@@ -354,7 +353,6 @@ async def _run_radar_scan_async_inner(
             pass
         agent.tools.state.clear_scan_fs(scan_id)
         # Explicit close: asyncio.run() tears the loop down before __del__ runs, leaking sockets otherwise.
-        import infra
         try:
             await infra.neo4j.service.close_neo4j()
         except Exception as e:

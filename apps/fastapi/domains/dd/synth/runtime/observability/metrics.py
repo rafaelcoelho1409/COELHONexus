@@ -59,7 +59,6 @@ def record_grader_dim_score(*, framework: str, dim: str, score: float) -> None:
     except Exception:
         pass
     try:
-        import infra
         infra.langfuse.scores.record_score(
             f"grader.{dim}",
             score,

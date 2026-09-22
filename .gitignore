@@ -72,3 +72,5 @@ k8s/helm/charts
 .antigravitycli/
 .codex/
 .agents/
+
+.ruff_cache/

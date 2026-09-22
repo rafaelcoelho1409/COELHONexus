@@ -352,9 +352,9 @@ async def start_synth(
 
             await domains.dd.synth.runtime.cancel.service.clear_cancel(r, study_thread_id)
 
-            import domains.dd.synth.task
+            from domains.dd.synth import task
             try:
-                async_result = domains.dd.synth.task.run_study.delay(
+                async_result = task.run_study.delay(
                     study_thread_id, slug, plan_chapter_ids, mode,
                 )
             except Exception as e:
@@ -510,9 +510,9 @@ async def start_synth(
 
         await domains.dd.synth.runtime.cancel.service.clear_cancel(r, thread_id)
 
-        import domains.dd.synth.task
+        from domains.dd.synth import task
         try:
-            async_result = domains.dd.synth.task.run_single_chapter.delay(
+            async_result = task.run_single_chapter.delay(
                 thread_id, slug, chapter_id, mode,
             )
         except Exception as e:
@@ -552,9 +552,9 @@ async def resume_synth(thread_id: str) -> dict:
     finally:
         await r.aclose()
 
-    import domains.dd.synth.task
+    from domains.dd.synth import task
     try:
-        async_result = domains.dd.synth.task.resume_synth.delay(thread_id)
+        async_result = task.resume_synth.delay(thread_id)
     except Exception as e:
         logger.exception(
             f"[synth] {thread_id}: celery resume dispatch failed: "

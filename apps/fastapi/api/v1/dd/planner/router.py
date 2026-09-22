@@ -183,8 +183,8 @@ async def start_planner(
         await domains.dd.planner.runtime.cancel.service.clear_cancel(r, thread_id)
 
         try:
-            import domains.dd.planner.task
-            async_result = domains.dd.planner.task.run_planner.delay(thread_id, slug, mode)
+            from domains.dd.planner import task
+            async_result = task.run_planner.delay(thread_id, slug, mode)
         except Exception as e:
             try:
                 await r.delete(domains.dd.planner.keys.lock_key(slug))
@@ -269,8 +269,8 @@ async def resume_planner(thread_id: str) -> dict:
         await r.aclose()
 
     try:
-        import domains.dd.planner.task
-        async_result = domains.dd.planner.task.resume_planner.delay(thread_id)
+        from domains.dd.planner import task
+        async_result = task.resume_planner.delay(thread_id)
     except Exception as e:
         logger.exception(
             f"[planner] {thread_id}: celery resume dispatch failed: "
