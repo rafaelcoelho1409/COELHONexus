@@ -2,7 +2,10 @@
 from __future__ import annotations
 import domains
 
+import os
+
 from fastapi import HTTPException
+from qdrant_client import AsyncQdrantClient
 
 
 async def _raise_if_embedding_migration_needed(include_transcription: bool) -> None:
@@ -46,8 +49,6 @@ async def _raise_if_embedding_migration_needed(include_transcription: bool) -> N
 
 
 def _build_qdrant():
-    import os
-    from qdrant_client import AsyncQdrantClient
     qdrant_api_key = os.environ.get("QDRANT_API_KEY")
     return AsyncQdrantClient(
         url     = os.environ.get("QDRANT_URL", "http://localhost:6333"),

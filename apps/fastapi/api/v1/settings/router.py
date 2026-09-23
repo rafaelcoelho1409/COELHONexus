@@ -9,6 +9,7 @@ import domains
 from . import schemas, service
 
 import logging
+import time
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
@@ -36,9 +37,7 @@ async def put_endpoint(body: schemas.EndpointBody) -> JSONResponse:
 @router.post("/endpoint/test")
 async def test_endpoint() -> JSONResponse:
     """One tiny completion against the currently-configured endpoint."""
-    import time as _time
-
-    t0 = _time.monotonic()
+    t0 = time.monotonic()
     try:
         text, meta = await domains.settings.chat.service.chat_text_async(
             "Reply with exactly: OK", max_tokens=5, timeout_s=20.0,
@@ -46,14 +45,14 @@ async def test_endpoint() -> JSONResponse:
         return JSONResponse(content={
             "ok": True,
             "reply": (text or "").strip()[:80],
-            "latency_ms": int((_time.monotonic() - t0) * 1000),
+            "latency_ms": int((time.monotonic() - t0) * 1000),
             "model": (meta or {}).get("model"),
         })
     except Exception as e:
         return JSONResponse(content={
             "ok": False,
             "error": f"{type(e).__name__}: {str(e)[:200]}",
-            "latency_ms": int((_time.monotonic() - t0) * 1000),
+            "latency_ms": int((time.monotonic() - t0) * 1000),
         })
 
 
@@ -75,20 +74,18 @@ async def put_embedding(body: schemas.EmbeddingBody) -> JSONResponse:
 async def test_embedding() -> JSONResponse:
     """One tiny real embeddings call against the currently-configured
     embedding endpoint — proves it actually works."""
-    import time as _time
-
-    t0 = _time.monotonic()
+    t0 = time.monotonic()
     try:
         vector, meta = await domains.settings.embeddings.service.embed_probe_async()
         return JSONResponse(content={
             "ok": True,
             "dimensions": len(vector),
             "model": meta.get("model"),
-            "latency_ms": int((_time.monotonic() - t0) * 1000),
+            "latency_ms": int((time.monotonic() - t0) * 1000),
         })
     except Exception as e:
         return JSONResponse(content={
             "ok": False,
             "error": f"{type(e).__name__}: {str(e)[:200]}",
-            "latency_ms": int((_time.monotonic() - t0) * 1000),
+            "latency_ms": int((time.monotonic() - t0) * 1000),
         })

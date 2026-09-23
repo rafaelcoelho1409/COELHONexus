@@ -5,38 +5,10 @@ AsyncPostgresSaver, Redis, Postgres, Neo4j, ES, Qdrant, LLM chains.
 """
 import asyncio
 import logging
-import os
 from contextlib import asynccontextmanager
 
 
-_LOG_FORMAT = (
-    "%(asctime)s %(levelname)s %(name)s "
-    "[trace_id=%(otelTraceID)s span_id=%(otelSpanID)s] %(message)s"
-)
 
-
-def _install_log_record_defaults() -> None:
-    old_factory = logging.getLogRecordFactory()
-    if getattr(old_factory, "_coelho_otel_defaults", False):
-        return
-
-    def record_factory(*args, **kwargs):
-        record = old_factory(*args, **kwargs)
-        record.otelTraceID = getattr(record, "otelTraceID", "0")
-        record.otelSpanID = getattr(record, "otelSpanID", "0")
-        return record
-
-    record_factory._coelho_otel_defaults = True  # type: ignore[attr-defined]
-    logging.setLogRecordFactory(record_factory)
-
-
-# basicConfig BEFORE first-party imports so module-load log calls
-# use our format, not stderr default.
-_install_log_record_defaults()
-logging.basicConfig(
-    level=logging.INFO,
-    format=_LOG_FORMAT,
-)
 
 import api, domains, infra
 import redis.asyncio as redis_aio_module
@@ -45,28 +17,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 
 logger = logging.getLogger(__name__)
-
-
-def _redis_url_from_env() -> str:
-    # URL-encode password so DSN parsing survives %, @, &, etc.
-    from urllib.parse import quote
-    host = os.environ.get("REDIS_HOST", "localhost")
-    port = os.environ.get("REDIS_PORT", "6379")
-    password = os.environ.get("REDIS_PASSWORD", "")
-    if password:
-        return f"redis://:{quote(password, safe = '')}@{host}:{port}"
-    return f"redis://{host}:{port}"
-
-
-def _postgres_url_from_env() -> str:
-    # URL-encode user+password; raw % in a password breaks asyncpg DSN parsing with "invalid percent-encoded token".
-    from urllib.parse import quote
-    user = quote(os.environ.get("POSTGRES_USER", "postgres"), safe = "")
-    password = quote(os.environ.get("POSTGRES_PASSWORD", ""), safe = "")
-    host = os.environ.get("POSTGRES_HOST", "postgres")
-    port = os.environ.get("POSTGRES_PORT", "5432")
-    db = os.environ.get("POSTGRES_DB", "postgres")
-    return f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
 
 @asynccontextmanager
@@ -147,7 +97,7 @@ async def lifespan(app: FastAPI):
 
     try:
         app.state.redis_aio = redis_aio_module.from_url(
-            _redis_url_from_env(),
+            domains.ycs.runtime.keys.redis_url(),
         )
     except Exception as e:
         app.state.redis_aio = None
@@ -157,7 +107,7 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        app.state.pg_url = _postgres_url_from_env()
+        app.state.pg_url = domains.ycs.runtime.keys.postgres_url()
         await domains.ycs.conversation.service.ensure_conversation_table(app.state.pg_url)
     except Exception as e:
         logger.warning(

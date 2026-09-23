@@ -157,9 +157,7 @@ def build_adaptive_rag_graph(
         Worst case drops from 30s + 30s serial to max(30s, 30s); the
         no-history fast path is unchanged (contextualize passthrough
         is instant, classify runs as before)."""
-        import asyncio as _asyncio
-
-        ctx_result, cls_result = await _asyncio.gather(
+        ctx_result, cls_result = await asyncio.gather(
             nodes.contextualize.node.contextualize_question(s, llm),
             nodes.classify.node.classify_query(s, llm, neo4j_graph),
         )

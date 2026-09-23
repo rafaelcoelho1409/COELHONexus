@@ -43,7 +43,7 @@ def vault_sentinelized_key(framework_slug: str, idx: int, slug: str) -> str:
 
 
 def live_manifest_key(run_id: str) -> str:
-    return f"dd:runs:{run_id}:manifest"
+    return f"coelhonexus:dd:runs:{run_id}:manifest"
 
 
 # Content-addressed (`{sha256[:16]}.{ext}`) → auto-dedup across pages + reingest.

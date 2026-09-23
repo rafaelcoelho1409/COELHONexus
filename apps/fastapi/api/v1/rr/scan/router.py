@@ -149,8 +149,7 @@ async def get_scan(scan_id: UUID) -> domains.rr.schemas.ScanResult:
         synthesis_themes = [str(t) for t in synthesis_themes_raw if t]
     elif isinstance(synthesis_themes_raw, str):
         try:
-            import json as _json
-            parsed = _json.loads(synthesis_themes_raw)
+            parsed = json.loads(synthesis_themes_raw)
             if isinstance(parsed, list):
                 synthesis_themes = [str(t) for t in parsed if t]
         except Exception:

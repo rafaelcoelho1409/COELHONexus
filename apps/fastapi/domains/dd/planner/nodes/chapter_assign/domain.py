@@ -8,6 +8,8 @@ import json
 from hashlib import sha256
 from typing import Optional
 
+import json_repair  # type: ignore
+
 
 
 def parse(raw: str) -> Optional[dict]:
@@ -20,8 +22,6 @@ def parse(raw: str) -> Optional[dict]:
         return json.loads(m.group(0))
     except Exception:
         try:
-            import json_repair  # type: ignore
-
             return json_repair.loads(m.group(0))  # type: ignore
         except Exception:
             return None

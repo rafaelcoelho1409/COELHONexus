@@ -34,6 +34,7 @@ inputs (`video_ids`, transcription flags) keyed by the extract task id
 so the Ingest page's "Rerun" button can resurrect a run without making
 the user re-pick videos from Search."""
 from __future__ import annotations
+import domains
 
 import json
 import logging
@@ -41,9 +42,10 @@ import os
 
 from typing import Any
 
-import domains
 import redis.asyncio as redis_aio
 from celery.result import AsyncResult
+from elasticsearch import AsyncElasticsearch
+from qdrant_client import AsyncQdrantClient
 
 from . import keys, params
 
@@ -146,9 +148,6 @@ async def wipe_videos_data(
     Best-effort across all 3 stores — a failure in one store is logged
     and counted, the others still run. Returns a summary dict the
     Wipe button surfaces in the panel status text."""
-    from elasticsearch import AsyncElasticsearch
-    from qdrant_client import AsyncQdrantClient
-
     if not video_ids:
         return {"status": "noop", "reason": "no video_ids"}
 
@@ -233,7 +232,7 @@ def revoke_pipeline_phases(
     Returns `{task_id: outcome}` for log/UI surfacing. `outcome` is
     `"revoked"` on success or `"error: …"` on failure (one bad ID
     doesn't sink the rest of the sweep)."""
-    import infra.celery.service
+    import infra.celery
 
     outcomes: dict[str, str] = {}
     for tid in phase_ids:

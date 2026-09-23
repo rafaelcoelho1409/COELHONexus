@@ -16,29 +16,33 @@ def redis_url() -> str:
 
 
 def cancel_key(thread_id: str) -> str:
-    return f"dd:synth:{thread_id}:cancel"
+    return f"coelhonexus:dd:synth:{thread_id}:cancel"
 
 
 def event_channel(thread_id: str) -> str:
-    return f"dd:synth:{thread_id}:events"
+    return f"coelhonexus:dd:synth:{thread_id}:events"
 
 
 def snapshot_key(thread_id: str) -> str:
-    return f"dd:synth:{thread_id}:events:snapshot"
+    return f"coelhonexus:dd:synth:{thread_id}:events:snapshot"
 
 
 def lock_key(slug: str) -> str:
-    return f"dd:synth:lock:{slug}"
+    return f"coelhonexus:dd:synth:lock:{slug}"
 
 
 def lock_prefix() -> str:
     """Scan-match prefix for `lock_key` — must stay an exact prefix of
     it, or active-run scans silently miss (no error, just empty)."""
-    return "dd:synth:lock:"
+    return "coelhonexus:dd:synth:lock:"
 
 
 def active_study_key(slug: str) -> str:
-    return f"dd:study:current:{slug}"
+    return f"coelhonexus:dd:study:current:{slug}"
+
+
+def active_chapters_key(study_thread_id: str) -> str:
+    return f"coelhonexus:dd:study:{study_thread_id}:active_chapters"
 
 
 def study_timing_key(slug: str) -> str:

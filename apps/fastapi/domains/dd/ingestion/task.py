@@ -1,7 +1,7 @@
 """Celery bridge for ingestion. Queued from POST /api/v1/docs-distiller/runs;
 progress + manifest flow back through Redis."""
 from __future__ import annotations
-import infra.celery.service
+import infra.celery
 from . import runtime
 
 import asyncio

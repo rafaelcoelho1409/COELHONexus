@@ -14,12 +14,13 @@ and `domain.py` (pure converters). Anything that is not an
 `@infra.celery.service.app.task` belongs there, not here.
 """
 from __future__ import annotations
-import infra.celery.service
 import infra
+import infra.celery
 from . import runtime, service
 
 import asyncio
 import logging
+from uuid import UUID
 
 
 logger = logging.getLogger(__name__)
@@ -101,7 +102,6 @@ def run_radar_scan(
         # growing duration (this row was already ~4h40m "running" by
         # the time it was found, not a real 4-hour scan).
         try:
-            from uuid import UUID
             asyncio.run(service.fail_scan(UUID(scan_id), err))
         except Exception as fe:
             logger.warning(f"[rr-task] outer-scope service.fail_scan also failed: {fe}")

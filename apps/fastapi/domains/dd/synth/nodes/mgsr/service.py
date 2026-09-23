@@ -1,7 +1,6 @@
 """mgsr — service functions (prompts, validators, halt logic, orchestrator)."""
 from __future__ import annotations
-import domains
-import infra
+import domains, infra
 from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio

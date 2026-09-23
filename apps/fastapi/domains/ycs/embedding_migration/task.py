@@ -20,7 +20,7 @@ field, so the dispatch gate stays correctly closed) and the task's own
 FAILURE state is what the poller/UI surfaces."""
 from __future__ import annotations
 import domains
-import infra.celery.service
+import infra.celery
 
 import asyncio
 import os

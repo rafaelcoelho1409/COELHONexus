@@ -2,7 +2,7 @@
 from __future__ import annotations
 from . import domain, schemas
 
-import json as _json
+import json
 
 
 
@@ -23,7 +23,7 @@ async def get_or_build_source_vault(
     # 1. Try pre-built artifacts.
     if await minio.exists(vault_key) and await minio.exists(sentinel_key):
         try:
-            manifest = _json.loads(await minio.read_text(vault_key))
+            manifest = json.loads(await minio.read_text(vault_key))
             sentinelized = await minio.read_text(sentinel_key)
             entries: dict[str, schemas.VaultEntry] = {}
             for h, d in (manifest.get("entries") or {}).items():

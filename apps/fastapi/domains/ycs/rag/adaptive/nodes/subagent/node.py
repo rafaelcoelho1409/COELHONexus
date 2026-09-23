@@ -16,12 +16,15 @@ stays thin here."""
 from __future__ import annotations
 import domains
 from domains.ycs.runtime.observability.service import traced
-from .... import domain, service
-from ... import params as _adaptive_params
 from . import params, prompts
+from ... import params as _adaptive_params
+from .... import domain, service
 
 import asyncio
 import logging
+import time
+
+from langgraph.config import get_stream_writer
 
 
 logger = logging.getLogger(__name__)
@@ -304,7 +307,6 @@ async def run_subagents_bounded(
     if not sub_questions:
         return {"sub_results": []}
     try:
-        from langgraph.config import get_stream_writer
         _writer = get_stream_writer()
     except Exception:
         _writer = None
@@ -343,13 +345,12 @@ async def run_subagents_bounded(
                 "error_kind":        "hard_error",
             }
 
-    import time as _time
     sub_results: list[dict] = []
     remaining_tasks = {asyncio.ensure_future(run_one(q)): q for q in sub_questions}
-    _start = _time.monotonic()
+    _start = time.monotonic()
     try:
         while remaining_tasks:
-            _elapsed = _time.monotonic() - _start
+            _elapsed = time.monotonic() - _start
             _budget = deadline_s - _elapsed
             if _budget <= 0:
                 break

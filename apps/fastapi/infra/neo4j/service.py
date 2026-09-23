@@ -26,6 +26,7 @@ stalls 25-45s on every instantiation. Schema introspection isn't
 needed for ingestion or retrieval queries we ship. `Neo4jGraph` wraps
 a SYNC driver, so it does NOT need per-loop caching."""
 from __future__ import annotations
+from . import domain, params
 
 import asyncio
 import logging
@@ -34,8 +35,6 @@ from typing import Any, Optional
 
 from langchain_neo4j import Neo4jGraph
 from neo4j import AsyncDriver, AsyncGraphDatabase
-
-from . import domain, params
 
 
 logger = logging.getLogger(__name__)

@@ -1,6 +1,6 @@
 """MinIO adapter + per-framework Store. Redis manifest keyed by run_id (live); MinIO manifest keyed by framework_slug (canonical on finalize). ensure_bucket() is idempotent."""
 from __future__ import annotations
-import domains
+import domains, infra
 from . import entities, keys, params
 
 import asyncio
@@ -16,7 +16,6 @@ from typing import Optional
 
 import aioboto3
 import httpx
-import infra
 import redis.asyncio as redis_aio
 from botocore.config import Config
 from botocore.exceptions import ClientError

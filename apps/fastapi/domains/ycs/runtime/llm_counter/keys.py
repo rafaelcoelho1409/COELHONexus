@@ -7,8 +7,8 @@ from __future__ import annotations
 
 
 def counters_key(id_: str) -> str:
-    return f"ycs:{id_}:llm:counters"
+    return f"coelhonexus:ycs:{id_}:llm:counters"
 
 
 def models_key(id_: str, sub_id: str) -> str:
-    return f"ycs:{id_}:llm:models:{sub_id}"
+    return f"coelhonexus:ycs:{id_}:llm:models:{sub_id}"

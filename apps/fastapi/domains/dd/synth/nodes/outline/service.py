@@ -8,6 +8,8 @@ import logging
 import time
 from typing import Optional
 
+import numpy as np
+
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,6 @@ async def _detect_semantic_h2_duplicates(
         embeddings, _model = await domains.settings.embeddings.service.embed_texts_async(
             [f"{s.heading}\n{s.description}" for s in sections],
         )
-        import numpy as np
         embs = np.array(embeddings, dtype=np.float32)
         norms = np.linalg.norm(embs, axis=1, keepdims=True)
         norms[norms == 0] = 1.0

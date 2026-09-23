@@ -35,7 +35,7 @@ Internally:
      model) up to `params.MAX_RETRY_PASSES` times — see that constant's
      comment for why this replaced the old "arm-swap" framing."""
 from __future__ import annotations
-import infra.celery.service
+import infra.celery
 from . import service
 
 import asyncio

@@ -18,6 +18,7 @@ from __future__ import annotations
 import domains, infra
 from . import domain, errors, keys, params, prompts, schemas
 
+import json
 import logging
 import time
 from typing import Any
@@ -547,8 +548,6 @@ async def ai_generate_stream(
       5. Emit a terminal `data: {"event": "done", "ok": ..., "final":
          "..."}` frame so the client can replace the editor with the
          clean text (vs. the streamed-with-self-repair chatter)."""
-    import json as _json
-
     # prefer the speed-optimised `dd-reduce-label` chain
     # built once at lifespan as `app.state.query_ai_llm`. It targets
     # fast non-reasoning arms (Groq Llama-3.3-70b LPU, Gemini Flash
@@ -563,7 +562,7 @@ async def ai_generate_stream(
         or getattr(request.app.state, "llm", None)
     )
     if llm is None:
-        yield {"data": _json.dumps({
+        yield {"data": json.dumps({
             "event": "error",
             "error": "LLM endpoint not initialized (YCS lifespan failed).",
         })}
@@ -623,7 +622,7 @@ async def ai_generate_stream(
         text = str(text)
         if text:
             accumulated = text
-            payload = _json.dumps({"event": "chunk", "data": text})
+            payload = json.dumps({"event": "chunk", "data": text})
             yield ("yield", payload, accumulated)
 
         try:
@@ -678,14 +677,14 @@ async def ai_generate_stream(
         examples    = examples,
         previous    = previous,
     )
-    yield {"data": _json.dumps({"event": "start", "phase": "generate"})}
+    yield {"data": json.dumps({"event": "start", "phase": "generate"})}
     acc = ""
     stream_err: str | None = None
     async for kind, payload, txt in _stream_with_retry(prompt1):
         if kind == "yield":
             yield {"data": payload}
         elif kind == "model":
-            yield {"data": _json.dumps({"event": "model", "model": payload})}
+            yield {"data": json.dumps({"event": "model", "model": payload})}
         elif kind == "error":
             stream_err = payload
             acc = txt
@@ -695,7 +694,7 @@ async def ai_generate_stream(
             break
 
     if stream_err is not None:
-        yield {"data": _json.dumps({
+        yield {"data": json.dumps({
             "event": "done", "ok": False,
             "error": stream_err, "final": acc,
         })}
@@ -711,7 +710,7 @@ async def ai_generate_stream(
             backend, err, final[:1500],
         )
         # Self-repair — one retry.
-        yield {"data": _json.dumps({
+        yield {"data": json.dumps({
             "event": "repair",
             "error": err or "(unknown parse error)",
         })}
@@ -728,7 +727,7 @@ async def ai_generate_stream(
             if kind == "yield":
                 yield {"data": payload}
             elif kind == "model":
-                yield {"data": _json.dumps({"event": "model", "model": payload})}
+                yield {"data": json.dumps({"event": "model", "model": payload})}
             elif kind == "error":
                 stream_err = payload
                 acc2 = txt
@@ -737,7 +736,7 @@ async def ai_generate_stream(
                 acc2 = txt
                 break
         if stream_err is not None:
-            yield {"data": _json.dumps({
+            yield {"data": json.dumps({
                 "event": "done", "ok": False,
                 "error": stream_err, "final": domain.post_clean(acc2, backend = backend),
             })}
@@ -750,7 +749,7 @@ async def ai_generate_stream(
                 backend, err, final[:1500],
             )
 
-    yield {"data": _json.dumps({
+    yield {"data": json.dumps({
         "event": "done",
         "ok":    ok,
         "error": err,
@@ -768,7 +767,6 @@ async def _schema_cached(
     schema; we never call it twice in parallel under cache contention
     (the cost of a duplicate refresh is bounded so we don't bother with
     a distributed lock)."""
-    import json as _json
     redis_aio = getattr(request.app.state, "redis_aio", None)
     key = keys.SCHEMA_KEY.format(backend = backend)
     if redis_aio is not None and not refresh:
@@ -778,7 +776,7 @@ async def _schema_cached(
             raw = None
         if raw:
             try:
-                obj = _json.loads(raw)
+                obj = json.loads(raw)
                 return obj
             except Exception:
                 pass
@@ -786,7 +784,7 @@ async def _schema_cached(
     obj["cached_at"] = int(time.time())
     if redis_aio is not None:
         try:
-            await redis_aio.set(key, _json.dumps(obj), ex = params.SCHEMA_TTL_S)
+            await redis_aio.set(key, json.dumps(obj), ex = params.SCHEMA_TTL_S)
         except Exception as e:
             logger.warning(f"[ycs:query:schema] redis set failed: {e}")
     return obj

@@ -4,23 +4,23 @@ import os
 
 
 def progress_key(run_id: str) -> str:
-    return f"dd:runs:{run_id}:progress"
+    return f"coelhonexus:dd:runs:{run_id}:progress"
 
 
 def url_records_key(run_id: str) -> str:
-    return f"dd:runs:{run_id}:url_records"
+    return f"coelhonexus:dd:runs:{run_id}:url_records"
 
 
 def post_key(run_id: str) -> str:
-    return f"dd:runs:{run_id}:post"
+    return f"coelhonexus:dd:runs:{run_id}:post"
 
 
 def cancel_key(run_id: str) -> str:
-    return f"dd:runs:{run_id}:cancel"
+    return f"coelhonexus:dd:runs:{run_id}:cancel"
 
 
 def lock_key(framework_slug: str) -> str:
-    return f"dd:lock:{framework_slug}"
+    return f"coelhonexus:dd:lock:{framework_slug}"
 
 
 def redis_url() -> str:

@@ -21,7 +21,7 @@ from celery.utils.log import get_task_logger
 import domains.ycs.extract.task
 import domains.ycs.neo4j_task.task
 import domains.ycs.qdrant_task.task
-import infra.celery.service
+import infra.celery
 
 
 logger = get_task_logger(__name__)

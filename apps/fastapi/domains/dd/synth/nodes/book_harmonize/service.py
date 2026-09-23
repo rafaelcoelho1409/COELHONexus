@@ -6,6 +6,7 @@ from . import domain, params, prompts
 import asyncio
 import logging
 import random
+import time
 from typing import Optional
 
 
@@ -49,7 +50,6 @@ async def harmonize_book(
     chapters: list[dict],
 ) -> dict:
     """Run the 3-phase cross-chapter harmonization pass; fail-soft per chapter."""
-    import time
     t0 = time.monotonic()
 
     if len(chapters) < 2:

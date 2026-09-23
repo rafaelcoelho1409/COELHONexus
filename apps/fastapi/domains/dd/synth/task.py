@@ -1,6 +1,6 @@
 """Celery tasks for the docs distiller synth pipeline."""
 import domains
-import infra.celery.service
+import infra.celery
 from . import domain, params, service
 
 import asyncio

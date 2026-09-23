@@ -28,7 +28,6 @@ async def get_thread_usage(thread_id: str) -> dict:
 @router.post("/endpoint/ping")
 async def endpoint_ping(request: Request) -> dict:
     """Connectivity check against the live chat model."""
-    import time
     llm = getattr(request.app.state, "llm", None)
     if llm is None:
         return {

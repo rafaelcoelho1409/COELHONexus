@@ -11,7 +11,6 @@ importing it must stay an explicit per-caller choice
 (`import infra.celery.service`, then `infra.celery.service.app`).
 """
 from __future__ import annotations
-
 from . import elasticsearch, langfuse, neo4j, otel, qdrant
 
 

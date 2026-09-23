@@ -6,15 +6,17 @@ composes them into the operations the agent (graph_build, report) and
 the FastAPI router will call.
 """
 from __future__ import annotations
-import domains
-import infra
+import domains, infra
 from . import agent, domain, entities, keys, params, runtime, stores
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
+
+from langchain_core.messages import HumanMessage, SystemMessage
 
 
 logger = logging.getLogger(__name__)
@@ -127,7 +129,7 @@ async def cancel_scan(scan_id: UUID, *, reason: str = "cancelled by user") -> bo
     Order: revoke → mark Postgres → emit SSE → drop task_id key.
     A failure in step 2/3/4 doesn't roll back step 1; the worker is already dead.
     """
-    import infra.celery.service
+    import infra.celery
 
     task_id = await runtime.service.get_task_id(str(scan_id))
     if not task_id:
@@ -678,8 +680,6 @@ async def backfill_one(
     chain: Any,
 ) -> None:
     """Run one inline deep_read extraction via the bandit chain. Raises on failure."""
-    from langchain_core.messages import HumanMessage, SystemMessage
-
     title    = (paper.get("title")    or "").strip()
     abstract = (paper.get("abstract") or "").strip()
     if not abstract:
@@ -722,9 +722,8 @@ async def backfill_one(
         if lines and lines[-1].strip().startswith("```"):
             lines = lines[:-1]
         raw = "\n".join(lines).strip()
-    import json as _json
     try:
-        data = _json.loads(raw)
+        data = json.loads(raw)
     except Exception as e:
         raise RuntimeError(f"json parse failed: {e}; head={raw[:120]!r}")
     if not isinstance(data, dict):

@@ -779,11 +779,11 @@ async def _run_study_async_inner(
                 await domains.dd.synth.runtime.cancel.service.clear_cancel(r, chapter_thread_id)
                 try:
                     await r.sadd(
-                        f"dd:study:{study_thread_id}:active_chapters",
+                        domains.dd.synth.keys.active_chapters_key(study_thread_id),
                         chapter_thread_id,
                     )
                     await r.expire(
-                        f"dd:study:{study_thread_id}:active_chapters",
+                        domains.dd.synth.keys.active_chapters_key(study_thread_id),
                         86400,
                     )
                 except Exception as _e:
@@ -847,7 +847,7 @@ async def _run_study_async_inner(
                 )
                 try:
                     await _rc.srem(
-                        f"dd:study:{study_thread_id}:active_chapters",
+                        domains.dd.synth.keys.active_chapters_key(study_thread_id),
                         chapter_thread_id,
                     )
                 except Exception:

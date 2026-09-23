@@ -10,9 +10,9 @@ arm before we degrade the user's plan to a stub."""
 from __future__ import annotations
 import domains
 from domains.ycs.runtime.observability.service import traced
-from .... import domain, service
-from ... import state
 from . import prompts, schemas
+from ... import state
+from .... import domain, service
 
 import asyncio
 import logging

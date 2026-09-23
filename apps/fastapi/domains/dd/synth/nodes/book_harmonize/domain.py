@@ -7,6 +7,8 @@ import hashlib
 import json
 from typing import Optional
 
+import json_repair  # type: ignore
+
 
 
 def compute_harmonize_manifest_hash(chapters: list[dict]) -> str:
@@ -155,7 +157,6 @@ def parse_json_block(raw: Optional[str]) -> Optional[dict]:
             continue
     for candidate in candidates:
         try:
-            import json_repair  # type: ignore
             return json_repair.loads(candidate)  # type: ignore
         except Exception:
             continue

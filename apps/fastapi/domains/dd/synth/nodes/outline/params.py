@@ -2,7 +2,7 @@
 headings, USC vote tuning, LLM call budgets."""
 from __future__ import annotations
 
-import os as _os
+import os
 
 
 # see versions.py rationale.
@@ -74,7 +74,7 @@ TIMEOUT_S_DRAFT  = 120.0
 TIMEOUT_S_VOTE   = 45.0
 TIMEOUT_S_REPAIR = 120.0
 
-OPTIMAL_STOPPING_ENABLED = _os.environ.get(
+OPTIMAL_STOPPING_ENABLED = os.environ.get(
     "KD_OUTLINE_OPTIMAL_STOPPING", "true",
 ).lower() in ("true", "1", "yes", "on")
 

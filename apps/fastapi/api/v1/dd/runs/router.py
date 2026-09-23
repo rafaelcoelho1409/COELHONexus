@@ -1,15 +1,18 @@
 """In-flight ingestion lifecycle. Single-flight per slug via Redis lock;
 the running tier polls a cancel flag and surrenders cleanly."""
 import domains
-from .. import resolver
 from . import schemas
+from .. import resolver
 
+import logging
 import uuid
 
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
 from opentelemetry import trace
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -78,8 +81,6 @@ async def start_run(body: schemas.StartRunBody) -> dict:
                     "manifest": cached,
                 }
         else:
-            import logging
-            _log = logging.getLogger(__name__)
             for prefix in (
                 domains.dd.ingestion.storage.keys.framework_prefix(body.slug),
                 f"ingestion-raw/{body.slug}/",
@@ -88,12 +89,12 @@ async def start_run(body: schemas.StartRunBody) -> dict:
                 try:
                     n = await minio.delete_prefix(prefix)
                     if n:
-                        _log.info(
+                        logger.info(
                             f"[runs] refresh wipe: deleted {n} stale objects "
                             f"from {prefix!r} before re-ingestion"
                         )
                 except Exception as e:
-                    _log.warning(
+                    logger.warning(
                         f"[runs] refresh wipe failed for {prefix!r}: {e}"
                     )
 

@@ -8,8 +8,7 @@ SOTA Sept 2026 on coelho-llm-rotator pooled:
 - Prompt static prefix (chapters rubric) before dynamic doc → KV-cache reuse.
 """
 from __future__ import annotations
-import domains
-import infra
+import domains, infra
 from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio

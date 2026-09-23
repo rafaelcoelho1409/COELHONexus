@@ -44,5 +44,5 @@ SCROLL_KEEPALIVE = "5m"
 # `PIPELINE_STATE_TTL_S` for the same reason (24h — long enough to
 # survive a slow run, short enough that a crashed run's buffer doesn't
 # linger in Redis forever).
-STREAMING_KEY_PREFIX = "ycs:pipeline:"
+STREAMING_KEY_PREFIX = "coelhonexus:ycs:pipeline:"
 STREAMING_KEY_TTL_S = 86400

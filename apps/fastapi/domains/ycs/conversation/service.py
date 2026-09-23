@@ -10,6 +10,7 @@ from __future__ import annotations
 import domains
 from . import params
 
+import json
 import logging
 
 import psycopg
@@ -367,7 +368,6 @@ async def update_turn_answer(
     leaves the column untouched; pass `{}` to clear it explicitly."""
     if turn_id is None:
         return
-    import json as _json
     with domains.ycs.runtime.observability.spans.postgres_span(
         operation = "update", table = params.TABLE_NAME,
     ):
@@ -391,7 +391,7 @@ async def update_turn_answer(
                         thinking_state = %s::jsonb
                     WHERE id = %s
                     """,
-                    (answer, mode, _json.dumps(thinking_state), turn_id),
+                    (answer, mode, json.dumps(thinking_state), turn_id),
                 )
             await conn.commit()
 

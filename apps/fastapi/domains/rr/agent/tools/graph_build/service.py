@@ -23,11 +23,11 @@ at 2048d, exactly matching the collection, so no resize/migration is
 needed, just this call-site fix."""
 from __future__ import annotations
 import domains
+from domains.rr.runtime.observability.service import traced_tool
 from . import domain
 from .. import state
 from ... import keys
 from .... import service
-from domains.rr.runtime.observability.service import traced_tool
 
 import asyncio
 import logging

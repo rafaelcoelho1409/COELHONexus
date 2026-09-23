@@ -15,11 +15,11 @@ function, not this wrapper's `*args, **kwargs`):
         ...
 """
 from __future__ import annotations
+import infra
 
 import asyncio
 import functools
 
-import infra
 from opentelemetry import trace
 
 

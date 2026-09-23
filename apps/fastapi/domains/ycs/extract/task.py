@@ -14,7 +14,7 @@ for progress reporting, which Flower and `GET /tasks/{id}` consume.
 """
 from __future__ import annotations
 import domains
-import infra.celery.service
+import infra.celery
 from . import service
 
 import asyncio

@@ -13,6 +13,8 @@ What lives here:
 from __future__ import annotations
 from . import params, patterns
 
+from urllib.parse import quote_plus
+
 import re
 
 
@@ -129,7 +131,6 @@ def build_search_args(
     sp_code = params.SP_KIND_FILTER.get(kind_filter or "")
     if sp_code:
         # Search-URL path — channel or playlist.
-        from urllib.parse import quote_plus
         search_url = (
             f"https://www.youtube.com/results"
             f"?search_query={quote_plus(query)}&sp={sp_code}"

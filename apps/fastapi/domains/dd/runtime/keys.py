@@ -8,11 +8,11 @@ SNAPSHOT_PREFIX = "observability/dd/llm-counters"
 
 
 def counters_key(thread_id: str) -> str:
-    return f"dd:{thread_id}:llm:counters"
+    return f"coelhonexus:dd:{thread_id}:llm:counters"
 
 
 def models_key(thread_id: str, node_id: str) -> str:
-    return f"dd:{thread_id}:llm:models:{node_id}"
+    return f"coelhonexus:dd:{thread_id}:llm:models:{node_id}"
 
 
 def snapshot_key(thread_id: str) -> str:

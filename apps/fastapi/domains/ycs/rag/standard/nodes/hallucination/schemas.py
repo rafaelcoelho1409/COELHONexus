@@ -12,12 +12,11 @@ loops into rewrite — even though the underlying answer was correct.
 Accepts the strict bool, the `"true"/"false"` string form, `1/0`, and
 `"yes"/"no"` (case-insensitive) for resilience across model styles."""
 from __future__ import annotations
+from . import params
 
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
-
-from . import params
 
 
 def _coerce_bool(v: Any) -> bool:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import domains, infra
 from . import domain, keys, params
 
+import asyncio
 import json
 import logging
 from typing import Any, AsyncIterator, Callable
@@ -754,8 +755,6 @@ async def _flush_buffer(
     lost those videos' points (22/24). A later video's flush or the
     final drain retries them. The embed call itself gets 3 attempts
     with backoff before giving up for this flush."""
-    import asyncio as _asyncio
-
     from redis.asyncio.lock import Lock
 
     lock = Lock(
@@ -848,7 +847,7 @@ async def _flush_buffer(
                     f"({type(e).__name__}: {e}) — "
                     f"{len(docs)} chunks stay buffered for retry"
                 )
-                await _asyncio.sleep(2 * (attempt + 1))
+                await asyncio.sleep(2 * (attempt + 1))
         if dense_vectors is None:
             # All attempts failed — re-queue for a later flush / drain.
             await _requeue("embed failure")

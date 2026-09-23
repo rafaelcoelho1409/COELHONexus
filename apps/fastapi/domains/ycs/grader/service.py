@@ -10,8 +10,7 @@ The LLM (`llm` arg) is a plain chat model — a 429 or 5xx propagates to
 caller's concern, not this module's.
 """
 from __future__ import annotations
-import domains
-import infra
+import domains, infra
 from . import domain, params, prompts, schemas
 
 import asyncio

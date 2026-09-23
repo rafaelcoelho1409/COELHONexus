@@ -28,6 +28,7 @@ import re
 import time
 
 import httpx
+from langchain_openai import ChatOpenAI
 
 
 logger = logging.getLogger(__name__)
@@ -142,7 +143,7 @@ async def _get_async_openai():
         if _CLIENT is not None:
             return _CLIENT
         try:
-            import openai as _openai
+            import openai
         except Exception as e:
             raise errors.ChatError(f"openai SDK not installed: {e}") from e
 
@@ -164,7 +165,7 @@ async def _get_async_openai():
                 follow_redirects=True,
             )
             http2_enabled = False
-        client = _openai.AsyncOpenAI(
+        client = openai.AsyncOpenAI(
             base_url=ENDPOINT.base_url,
             api_key=ENDPOINT.api_key,
             max_retries=0,  # the endpoint owns retries; SDK retries would stack a redundant loop
@@ -237,8 +238,6 @@ def build_chat_model(
     Every instance shares ONE module-level pooled `httpx.AsyncClient`
     (same pool shape as the raw hot path's client). Per-request
     `timeout_s` still governs each call."""
-    from langchain_openai import ChatOpenAI
-
     kwargs: dict = {
         "base_url":          ENDPOINT.base_url,
         "api_key":           ENDPOINT.api_key,

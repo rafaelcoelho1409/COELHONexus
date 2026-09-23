@@ -11,14 +11,13 @@ loop-bound; reusing it across `asyncio.run()` boundaries surfaces as
 keyed on the running loop gives FastAPI one client for life (1 loop) AND
 Celery one client per task (auto-evicted when the task's loop is GC'd)."""
 from __future__ import annotations
+from . import params
 
 import asyncio
 import logging
 import weakref
 
 from qdrant_client import AsyncQdrantClient
-
-from . import params
 
 
 logger = logging.getLogger(__name__)

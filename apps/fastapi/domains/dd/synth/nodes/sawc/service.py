@@ -1,8 +1,7 @@
 """SAWC — Section-Aware Writer-Critic. v2 cookbook: {heading, intro, subtopics: [{subheading, explanation, code_ref_hash}], citations}.
 Best-of-N writer drafts + critic-picker (MAMM-Refine arXiv 2503.15272); 2-attempt repair loop for alignment violations."""
 from __future__ import annotations
-import domains
-import infra
+import domains, infra
 from . import domain, keys, params, schemas, versions
 
 import asyncio

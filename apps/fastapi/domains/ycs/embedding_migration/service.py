@@ -39,6 +39,7 @@ from . import domain, keys, params
 
 import json
 import logging
+import os
 import time
 from typing import Any
 
@@ -50,7 +51,6 @@ logger = logging.getLogger(__name__)
 
 
 def _build_qdrant() -> AsyncQdrantClient:
-    import os
     qdrant_api_key = os.environ.get("QDRANT_API_KEY")
     return AsyncQdrantClient(
         url     = os.environ.get("QDRANT_URL", "http://localhost:6333"),

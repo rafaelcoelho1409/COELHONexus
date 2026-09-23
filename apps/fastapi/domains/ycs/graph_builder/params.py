@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os as _os
+import os
 
 
 DEFAULT_BATCH_SIZE = 3
@@ -55,7 +55,7 @@ DEFAULT_BATCH_SIZE = 3
 # 3 trades a little peak throughput for meaningfully fewer 429/504
 # retries at that scale.
 EXTRACT_CONCURRENCY = max(
-    1, int(_os.environ.get("YCS_NEO4J_CONCURRENCY", "3") or "3"),
+    1, int(os.environ.get("YCS_NEO4J_CONCURRENCY", "3") or "3"),
 )
 
 # 2026-09-14: 600 -> 700. Must exceed this client's own ChatOpenAI
@@ -64,7 +64,7 @@ EXTRACT_CONCURRENCY = max(
 # making the larger client budget pointless. NEO4J_EXTRACT_
 # SEM_LEASE_S below derives from this, so it scales automatically.
 GRAPH_BATCH_TIMEOUT_S = max(
-    300.0, float(_os.environ.get("YCS_NEO4J_BATCH_WATCHDOG_S", "700") or "700"),
+    300.0, float(os.environ.get("YCS_NEO4J_BATCH_WATCHDOG_S", "700") or "700"),
 )
 
 # 2026-09-14: EXTRACT_CONCURRENCY only ever gated an in-process
@@ -79,7 +79,7 @@ GRAPH_BATCH_TIMEOUT_S = max(
 # self-healing via score-based eviction) shared by every worker/pod —
 # EXTRACT_CONCURRENCY now caps the TRUE global in-flight call count,
 # not just one process's view of it.
-NEO4J_EXTRACT_SEM_KEY = "ycs:neo4j:extract:sem"
+NEO4J_EXTRACT_SEM_KEY = "coelhonexus:ycs:neo4j:extract:sem"
 
 # Lease TTL for one held slot. Must exceed GRAPH_BATCH_TIMEOUT_S (the
 # hard per-call watchdog) — a legitimately-still-running holder must

@@ -7,13 +7,12 @@ metadata + transcriptions indexes.
 Deprecated provenance: `app.py:L105-113` (client init) +
 `helpers.py:L1862-2000` (`create_youtube_indexes`)."""
 from __future__ import annotations
+from . import domain, params
 
 import logging
 from typing import Optional
 
 from elasticsearch import AsyncElasticsearch
-
-from . import domain, params
 
 
 logger = logging.getLogger(__name__)

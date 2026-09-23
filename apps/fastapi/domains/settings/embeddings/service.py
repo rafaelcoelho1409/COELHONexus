@@ -119,10 +119,10 @@ async def _get_async_openai():
         if _CLIENT is not None:
             return _CLIENT
         try:
-            import openai as _openai
+            import openai
         except Exception as e:
             raise errors.EmbeddingError(f"openai SDK not installed: {e}") from e
-        client = _openai.AsyncOpenAI(
+        client = openai.AsyncOpenAI(
             base_url=ENDPOINT.base_url,
             api_key=ENDPOINT.api_key,
             max_retries=0,

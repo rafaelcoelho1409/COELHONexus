@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from typing import Optional
 
@@ -66,8 +67,6 @@ async def _reexplain_one(
     derived_code: str,
 ) -> Optional[str]:
     """One bandit-routed call to regenerate explanation for the newly-promoted derived code. Returns new explanation string or None (caller keeps old)."""
-    import json as _json
-
     prompt = prompts.build_reexplain_prompt(
         framework=framework,
         section_heading=section_heading,
@@ -94,12 +93,11 @@ async def _reexplain_one(
         return None
     if not response:
         return None
-    import re as _re
-    m = _re.search(r"\{.*\}", response, _re.DOTALL)
+    m = re.search(r"\{.*\}", response, re.DOTALL)
     if not m:
         return None
     try:
-        parsed = _json.loads(m.group())
+        parsed = json.loads(m.group())
     except Exception:
         return None
     expl = (parsed.get("explanation") or "").strip()

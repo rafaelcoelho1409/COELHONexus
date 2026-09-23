@@ -5,6 +5,8 @@ from . import patterns
 
 import json
 
+import json_repair  # type: ignore
+
 
 
 def load_outline(text: str) -> dict:
@@ -38,8 +40,6 @@ def parse_order_response(text: str, n_chapters: int) -> list[int] | None:
         parsed = json.loads(text.strip())
     except Exception:
         try:
-            import json_repair  # type: ignore
-
             parsed = json_repair.loads(text.strip())  # type: ignore
         except Exception:
             m = patterns.JSON_RE.search(text)
@@ -49,8 +49,6 @@ def parse_order_response(text: str, n_chapters: int) -> list[int] | None:
                 parsed = json.loads(m.group(0))
             except Exception:
                 try:
-                    import json_repair  # type: ignore
-
                     parsed = json_repair.loads(m.group(0))  # type: ignore
                 except Exception:
                     return None

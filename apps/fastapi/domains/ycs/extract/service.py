@@ -26,6 +26,8 @@ import time
 from typing import Any, Callable
 
 from elasticsearch import AsyncElasticsearch
+from langchain_neo4j import Neo4jGraph
+from qdrant_client import AsyncQdrantClient
 
 
 logger = logging.getLogger(__name__)
@@ -308,7 +310,6 @@ async def dispatch_streaming_totals(
             neo4j_total > 0 and neo4j_finished >= neo4j_total
         )
         if qdrant_completed_here:
-            from qdrant_client import AsyncQdrantClient
             qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:6333")
             qdrant_port = int(os.environ.get("QDRANT_PORT", "6333"))
             qdrant_api_key = os.environ.get("QDRANT_API_KEY")
@@ -371,7 +372,6 @@ async def dispatch_streaming_totals(
             # — same class of risk the Qdrant drain above already
             # guards against, just missed here on the first pass.
             try:
-                from langchain_neo4j import Neo4jGraph
                 neo4j_graph = Neo4jGraph(
                     url      = os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
                     username = os.environ.get("NEO4J_USERNAME", "neo4j"),

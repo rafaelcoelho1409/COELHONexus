@@ -6,13 +6,14 @@ inputs → same outputs. The projectors here take raw store responses
 uniform `QueryHit` dicts so the imperative shell in `service.py`
 stays a thin orchestrator."""
 from __future__ import annotations
-from . import entities, errors, params, patterns
-
 import infra
+from . import entities, errors, params, patterns
 
 import json
 import re
 from typing import Any
+
+from neo4j.graph import Node, Path, Relationship
 
 
 def _snippet(text: str | None) -> str:
@@ -904,7 +905,6 @@ def neo4j_jsonify(row: dict) -> dict:
     directly JSON-serializable. Convert each row into a plain `dict` of
     primitives preserving the graph-shape under `_node` / `_relationship`
     keys so the frontend can build a Cytoscape graph view from them."""
-    from neo4j.graph import Node, Path, Relationship
     out: dict = {}
     for k, v in row.items():
         out[k] = neo4j_value(v, Node = Node, Rel = Relationship, Path = Path)

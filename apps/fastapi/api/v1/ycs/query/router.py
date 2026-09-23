@@ -3,6 +3,8 @@ Backend endpoints return 200 even on validation rejection (`ok=False` envelope) 
 from __future__ import annotations
 import domains
 
+import json
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
@@ -144,10 +146,9 @@ async def post_ai_generate(
             ):
                 yield f"data: {frame['data']}\n\n"
         except Exception as e:
-            import json as _json
             yield (
                 "data: "
-                + _json.dumps({"event": "error", "error": f"{type(e).__name__}: {e}"})
+                + json.dumps({"event": "error", "error": f"{type(e).__name__}: {e}"})
                 + "\n\n"
             )
 

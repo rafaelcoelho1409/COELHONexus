@@ -12,8 +12,8 @@ would pull in `pipeline_task/__init__.py`'s full chain (`.task` →
 every `domains.ycs.*` Celery task module) just to read one string
 constant, which is exactly the "clean import in test environments"
 problem `pipeline_task/service.py`'s own docstring already calls out.
-The two prefixes share the same literal value (`"ycs:pipeline:"`) by
-convention, not by import — if one changes, update the other."""
+The two prefixes share the same literal value (`"coelhonexus:ycs:pipeline:"`)
+by convention, not by import — if one changes, update the other."""
 from __future__ import annotations
 from . import params
 

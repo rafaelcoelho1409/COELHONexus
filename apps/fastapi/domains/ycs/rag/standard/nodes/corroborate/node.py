@@ -19,9 +19,9 @@ after every rewrite retry. Shares Parallel's rate-limit budget with
 from __future__ import annotations
 import domains
 from domains.ycs.runtime.observability.service import traced
-from .... import service
-from ... import params, state
 from . import prompts, schemas
+from ... import params, state
+from .... import service
 
 import asyncio
 

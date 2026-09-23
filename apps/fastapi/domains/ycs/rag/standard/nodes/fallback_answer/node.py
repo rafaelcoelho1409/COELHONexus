@@ -30,9 +30,9 @@ explicitly framed as external in the prompt's output rules."""
 from __future__ import annotations
 import domains
 from domains.ycs.runtime.observability.service import traced
-from .... import domain, service
-from ... import params, state
 from . import prompts
+from ... import params, state
+from .... import domain, service
 
 import asyncio
 

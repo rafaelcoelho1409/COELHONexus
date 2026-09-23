@@ -1,12 +1,12 @@
 """ycs/qdrant_task — ES transcripts → chunk → embed → Qdrant upsert + cache invalidate."""
 from __future__ import annotations
-import infra.celery.service
+import domains
+import infra.celery
 
 import asyncio
 import os
 from typing import Any
 
-import domains
 import redis.asyncio as redis_aio
 from celery.utils.log import get_task_logger
 from elasticsearch import AsyncElasticsearch

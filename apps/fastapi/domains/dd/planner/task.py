@@ -1,6 +1,6 @@
 """Celery task wrapping the async LangGraph planner; progress streams over Redis pub/sub from the worker process."""
 import domains
-import infra.celery.service
+import infra.celery
 from . import domain, service
 
 import asyncio

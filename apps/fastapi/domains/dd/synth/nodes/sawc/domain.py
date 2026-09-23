@@ -10,6 +10,7 @@ from . import params, schemas, versions
 import ast
 import json
 import re
+from collections import defaultdict
 from hashlib import sha256
 from typing import Optional
 
@@ -937,8 +938,6 @@ def dedupe_vault_hashes_across_sections(
     per_section_index: dict[str, list[dict]],
 ) -> tuple[int, int]:
     """Modify per_section_index in-place so each vault hash appears in at most one section. Winner = strongest relevance, then smallest pool, then sorted section_id. Returns (n_hashes_deduped, n_refs_removed)."""
-    from collections import defaultdict
-
     # Pass 1: for each (hash, section), find the BEST relevance any
     # contribution in that section asserts for the hash.
     hash_section_best_rel: dict[tuple[str, str], str] = {}

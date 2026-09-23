@@ -8,6 +8,8 @@ import re
 from hashlib import sha256
 from typing import Optional
 
+import json_repair  # type: ignore
+
 
 
 def parse(raw: str) -> Optional[dict]:
@@ -21,8 +23,6 @@ def parse(raw: str) -> Optional[dict]:
     except Exception:
         try:
             # SOTA: json_repair tolerates trailing commas/quotes (x.ai strict still leaks)
-            import json_repair  # type: ignore
-
             return json_repair.loads(m.group(0))  # type: ignore
         except Exception:
             return None

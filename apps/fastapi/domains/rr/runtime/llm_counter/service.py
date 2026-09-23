@@ -5,10 +5,13 @@ from . import domain, keys, params
 from .. import keys as runtime_keys
 from .. import params as runtime_params
 
+import json
 import logging
+import re
 import time
 from contextvars import ContextVar
 from typing import Any
+from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackHandler
 
@@ -210,7 +213,6 @@ class RRLlmCounterCallback(BaseCallbackHandler):
             if isinstance(val, str) and val:
                 return val
         if input_str and isinstance(input_str, str):
-            import json
             try:
                 parsed = json.loads(input_str)
                 if isinstance(parsed, dict):
@@ -218,7 +220,6 @@ class RRLlmCounterCallback(BaseCallbackHandler):
                     if isinstance(val, str) and val:
                         return val
             except (json.JSONDecodeError, ValueError):
-                import re
                 m = re.search(
                     r"subagent_type['\"]?\s*[:=]\s*['\"]([\w_]+)['\"]",
                     input_str,
@@ -399,8 +400,6 @@ async def read_counters(scan_id: str) -> dict[str, Any]:
 async def _read_from_postgres(scan_id: str) -> dict[str, Any] | None:
     """Fallback read from radar_scans.llm_counters when Redis TTL'd. Never raises."""
     try:
-        from uuid import UUID
-
         from ... import stores
         return await stores.service.read_llm_counters(UUID(scan_id))
     except Exception as e:
@@ -429,8 +428,6 @@ async def snapshot_to_postgres(scan_id: str) -> bool:
         )
         return False
     try:
-        from uuid import UUID
-
         from ... import stores
         ok = await stores.service.write_llm_counters(UUID(scan_id), payload)
         if ok:

@@ -1,11 +1,11 @@
 """LangChain @tool wrappers around the module-level fs helpers in
 ../state.py — Imperative Shell."""
 from __future__ import annotations
+from domains.rr.runtime.observability.service import traced_tool
 from . import domain, params
 from .. import state as tools_state
 from ... import keys
 from .... import runtime
-from domains.rr.runtime.observability.service import traced_tool
 
 import json
 import logging

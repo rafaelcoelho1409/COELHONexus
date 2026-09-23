@@ -36,6 +36,7 @@ from . import domain, keys, llm_counter, observability, params
 import asyncio
 import json
 import logging
+import os
 import random
 import time
 from typing import Any, AsyncIterator
@@ -370,7 +371,6 @@ async def _extraction_redis() -> redis_aio.Redis | None:
     """Lazy Redis client — None on env-misconfig so callers fall back
     gracefully (write_extraction proceeds without caching; prefill
     returns 0 hits)."""
-    import os
     if "REDIS_HOST" not in os.environ:
         return None
     host = os.environ["REDIS_HOST"].strip()

@@ -19,10 +19,10 @@ Net effect:
   - Discovery phase wall-time: 10 min → 30 sec
 """
 from __future__ import annotations
+from domains.rr.runtime.observability.service import traced_tool
 from . import domain
 from .. import state
 from ... import keys, service
-from domains.rr.runtime.observability.service import traced_tool
 
 import logging
 from typing import Any

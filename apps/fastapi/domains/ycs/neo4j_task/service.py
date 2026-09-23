@@ -3,7 +3,7 @@ extraction → Neo4j (Imperative Shell). Thin Celery bridge lives in
 `task.py`; pure helpers (if any emerge) belong in `domain.py` (created
 on first need — no trigger holds yet)."""
 from __future__ import annotations
-import infra
+import domains, infra
 from . import params
 
 import asyncio
@@ -13,7 +13,6 @@ import random
 from collections.abc import Callable
 from typing import Any
 
-import domains
 from elasticsearch import AsyncElasticsearch
 from langchain_neo4j import Neo4jGraph
 

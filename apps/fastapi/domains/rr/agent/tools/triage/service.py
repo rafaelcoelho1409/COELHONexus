@@ -22,13 +22,13 @@ discovery outputs from the scan's virtual fs, runs the domain pipeline
   scan fd48309a).
 """
 from __future__ import annotations
+from domains.rr.runtime.observability.service import traced_tool
 from . import domain
 from .. import state
 from ... import keys
 from .... import domain as rr_domain
 from .... import params as rr_params
 from .... import runtime
-from domains.rr.runtime.observability.service import traced_tool
 
 import json
 import logging

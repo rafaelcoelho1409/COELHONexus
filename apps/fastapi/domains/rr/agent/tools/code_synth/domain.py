@@ -1,6 +1,7 @@
 """Pure functions for the RR agent's code_synth tool — no I/O, no event loop."""
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -27,7 +28,6 @@ def as_text(v: Any) -> str:
         parts = [as_text(item) for item in v]
         return "\n".join(p for p in parts if p).strip()
     if isinstance(v, dict):
-        import json
         try:
             return json.dumps(v, ensure_ascii=False, indent=2).strip()
         except Exception:

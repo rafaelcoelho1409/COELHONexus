@@ -9,6 +9,8 @@ from collections import Counter
 from hashlib import sha256
 from typing import Optional
 
+import json_repair  # type: ignore
+
 
 
 def target_chapters_for_n_docs(n_docs: int) -> int:
@@ -177,8 +179,6 @@ def parse(raw: str) -> Optional[dict]:
         return json.loads(m.group(0))
     except Exception:
         try:
-            import json_repair  # type: ignore
-
             return json_repair.loads(m.group(0))  # type: ignore
         except Exception:
             return None

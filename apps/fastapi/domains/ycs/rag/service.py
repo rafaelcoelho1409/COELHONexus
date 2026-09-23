@@ -46,6 +46,7 @@ import random
 from typing import Any
 
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
 
 logger = logging.getLogger(__name__)
@@ -289,7 +290,6 @@ async def _get_search_tool() -> Any | None:
         _tool = None
         _client_loop = None
     try:
-        from langchain_mcp_adapters.client import MultiServerMCPClient
         _client = MultiServerMCPClient({
             "parallel": {
                 "url":       params.PARALLEL_MCP_URL,

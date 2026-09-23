@@ -490,8 +490,7 @@ class YtDlpSearchService:
                 # declared on the model, so direct attribute set works.
                 s.video_count = n
 
-        import asyncio as _asyncio
-        await _asyncio.gather(
+        await asyncio.gather(
             *[_one(s, u) for s, u in probe_targets],
             return_exceptions = False,
         )
