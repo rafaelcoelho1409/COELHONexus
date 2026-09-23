@@ -1,4 +1,4 @@
-"""Cancel flag I/O + watcher task; per-thread flag at dd:synth:{thread_id}:cancel, polls 1s, cancels main task on first True."""
+"""Cancel flag I/O + watcher task; per-thread flag at coelhonexus:dd:synth:{thread_id}:cancel, polls 1s, cancels main task on first True."""
 from __future__ import annotations
 import domains
 

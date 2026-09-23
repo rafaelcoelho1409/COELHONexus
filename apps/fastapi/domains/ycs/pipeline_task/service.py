@@ -35,6 +35,9 @@ so the Ingest page's "Rerun" button can resurrect a run without making
 the user re-pick videos from Search."""
 from __future__ import annotations
 import domains
+import domains.ycs.qdrant_task.task
+import domains.ycs.extract.task
+import infra.celery
 
 import json
 import logging
@@ -76,9 +79,7 @@ def dispatch_videos_pipeline(
     streaming-aggregator lookup key (not real task ids — see docstring);
     `invalidate` is `""` (its real id is only known once the run's
     exactly-once finalize actually dispatches it)."""
-    from domains.ycs.extract.task import extract_videos
-
-    result: AsyncResult = extract_videos.apply_async(
+    result: AsyncResult = domains.ycs.extract.task.extract_videos.apply_async(
         args = (video_ids, include_transcription, languages),
     )
     extract_id = result.id
@@ -232,8 +233,6 @@ def revoke_pipeline_phases(
     Returns `{task_id: outcome}` for log/UI surfacing. `outcome` is
     `"revoked"` on success or `"error: …"` on failure (one bad ID
     doesn't sink the rest of the sweep)."""
-    import infra.celery
-
     outcomes: dict[str, str] = {}
     for tid in phase_ids:
         if not tid:
@@ -649,8 +648,7 @@ async def maybe_finalize(redis: redis_aio.Redis, extract_id: str) -> bool:
         f"[ycs:pipeline:streaming] {extract_id}: both phases complete, "
         f"finalizing (invalidate_cache)"
     )
-    from domains.ycs.qdrant_task.task import invalidate_cache
-    invalidate_cache.delay()
+    domains.ycs.qdrant_task.task.invalidate_cache.delay()
     return True
 
 

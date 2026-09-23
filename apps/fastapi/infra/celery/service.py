@@ -10,6 +10,7 @@ of importing it: the worker cannot import the FastAPI app (it would
 pull the whole web lifespan into every fork).
 """
 from __future__ import annotations
+import domains, infra
 
 import asyncio
 import logging
@@ -44,10 +45,11 @@ def _install_log_record_defaults() -> None:
 _install_log_record_defaults()
 logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
 
-from celery import Celery
-from celery.signals import worker_process_init
 
 from . import keys, params
+
+from celery import Celery
+from celery.signals import worker_process_init
 
 
 logger = logging.getLogger(__name__)
@@ -81,7 +83,6 @@ app.conf.include = keys.TASK_INCLUDE
 def _worker_process_init(**_kwargs) -> None:
     # OTel MUST run first: each fork needs its own provider (parent SDK state doesn't survive fork()).
     try:
-        import infra
         infra.otel.service.init_otel_for_celery_worker()
     except Exception as e:
         logger.warning(
@@ -90,7 +91,6 @@ def _worker_process_init(**_kwargs) -> None:
             f"Tempo data from this worker"
         )
     try:
-        import domains
         asyncio.run(domains.dd.ingestion.storage.service.get_storage().ensure_bucket())
     except Exception as e:
         logger.warning(
@@ -99,7 +99,6 @@ def _worker_process_init(**_kwargs) -> None:
             f"MinIO is reachable + creds are correct"
         )
     try:
-        import domains
         domains.settings.credentials.service.warm()
     except Exception as e:
         logger.warning(

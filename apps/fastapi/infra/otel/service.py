@@ -39,13 +39,17 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import SpanProcessor
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
     SpanExporter,
     SpanExportResult,
 )
-
+from opentelemetry.instrumentation.celery import CeleryInstrumentor
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.logging import LoggingInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+from opentelemetry.processor.baggage import BaggageSpanProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -314,16 +318,6 @@ def get_baggage_processor():
     isn't installed — init_otel() then proceeds without it (baggage still
     propagates in context, just not onto spans)."""
     try:
-        from opentelemetry.processor.baggage import BaggageSpanProcessor
-    except Exception as e:
-        logger.warning(
-            f"[otel] BaggageSpanProcessor unavailable "
-            f"({type(e).__name__}: {e}) — baggage will propagate through "
-            "context but won't appear as span attributes"
-        )
-        return None
-
-    try:
         return BaggageSpanProcessor(domain.is_allowed_baggage_key)
     except Exception as e:
         logger.warning(f"[otel] BaggageSpanProcessor init failed: {e}")
@@ -401,17 +395,14 @@ def _instrument_libraries() -> None:
     injection on `.delay()`); workers re-instrument idempotently on consume
     via `init_otel_for_celery_worker`."""
     try:
-        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
         HTTPXClientInstrumentor().instrument()
     except Exception as e:
         logger.debug(f"[otel] httpx instrumentation skipped: {e}")
     try:
-        from opentelemetry.instrumentation.logging import LoggingInstrumentor
         LoggingInstrumentor().instrument(set_logging_format=True)
     except Exception as e:
         logger.debug(f"[otel] logging instrumentation skipped: {e}")
     try:
-        from opentelemetry.instrumentation.celery import CeleryInstrumentor
         CeleryInstrumentor().instrument()
     except Exception as e:
         logger.debug(f"[otel] celery instrumentation skipped: {e}")
@@ -426,9 +417,6 @@ def init_otel(also_instrument_fastapi_app=None) -> bool:
     if _otel_initialized:
         if also_instrument_fastapi_app is not None:
             try:
-                from opentelemetry.instrumentation.fastapi import (
-                    FastAPIInstrumentor,
-                )
                 FastAPIInstrumentor.instrument_app(
                     also_instrument_fastapi_app,
                     excluded_urls=params.FASTAPI_EXCLUDED_URLS,
@@ -438,8 +426,6 @@ def init_otel(also_instrument_fastapi_app=None) -> bool:
         return True
 
     try:
-        from opentelemetry.sdk.trace import TracerProvider
-
         quiet_otel_export_logs()
 
         resource = build_resource()
@@ -466,9 +452,6 @@ def init_otel(also_instrument_fastapi_app=None) -> bool:
 
         if also_instrument_fastapi_app is not None:
             try:
-                from opentelemetry.instrumentation.fastapi import (
-                    FastAPIInstrumentor,
-                )
                 FastAPIInstrumentor.instrument_app(
                     also_instrument_fastapi_app,
                     excluded_urls=params.FASTAPI_EXCLUDED_URLS,
@@ -507,7 +490,6 @@ def init_otel_for_celery_worker() -> bool:
     Celery tasks (study_id correlation in trace context)."""
     ok = init_otel(also_instrument_fastapi_app=None)
     try:
-        from opentelemetry.instrumentation.celery import CeleryInstrumentor
         CeleryInstrumentor().instrument()
         logger.info("[otel] Celery instrumentation attached (worker)")
     except Exception as e:

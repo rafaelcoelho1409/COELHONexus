@@ -6,6 +6,8 @@ from . import params, patterns, schemas
 import hashlib
 import re
 
+from markdown_it import MarkdownIt
+
 
 
 def _hash_block(payload: str, salt: int = 0) -> str:
@@ -42,10 +44,6 @@ def sentinelize_doc(md_text: str) -> tuple[str, dict[str, schemas.VaultEntry]]:
             "source already contains vault sentinels — cannot safely "
             "re-vault (double-vault bug or adversarial input)"
         )
-    # Local import — markdown-it-py is already a top-level dep but
-    # lazy-importing keeps `from .vault import ...` cheap.
-    from markdown_it import MarkdownIt
-
     md = MarkdownIt("commonmark")
     tokens = md.parse(md_text)
     # split(\n) (not splitlines) preserves a trailing empty so

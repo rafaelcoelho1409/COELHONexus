@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-SCHEMA_KEY = "ycs:query:schema:{backend}:v3"
+SCHEMA_KEY = "coelhonexus:ycs:query:schema:{backend}:v3"
 
 
 # + filter when SSO lands; the schema below already accommodates it as a

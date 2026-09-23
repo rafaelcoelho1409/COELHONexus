@@ -1,6 +1,7 @@
 """In-flight ingestion lifecycle. Single-flight per slug via Redis lock;
 the running tier polls a cancel flag and surrenders cleanly."""
 import domains
+import domains.dd.ingestion.task
 from . import schemas
 from .. import resolver
 
@@ -32,7 +33,7 @@ async def start_run(body: schemas.StartRunBody) -> dict:
         running_slug = None
         running_run_id = None
         while True:
-            cursor, keys = await r.scan(cursor=cursor, match="dd:lock:*", count=100)
+            cursor, keys = await r.scan(cursor=cursor, match="coelhonexus:dd:lock:*", count=100)
             for k in keys:
                 ks = k.decode() if isinstance(k, bytes) else k
                 other_slug = ks.split("dd:lock:", 1)[-1]
@@ -111,8 +112,7 @@ async def start_run(body: schemas.StartRunBody) -> dict:
         await domains.dd.ingestion.runtime.progress.service.clear_cancel(r, run_id)
 
         try:
-            from domains.dd.ingestion.task import run_ingestion
-            task = run_ingestion.delay(run_id, body.slug)
+            task = domains.dd.ingestion.task.run_ingestion.delay(run_id, body.slug)
             # Nice-to-have cross-reference (Tempo/Langfuse UI ↔ task_id in
             # logs) — CeleryInstrumentor already links this HTTP span to the
             # task's own root span via injected trace-context headers, this
@@ -145,7 +145,7 @@ async def list_active_runs() -> dict:
     try:
         cursor = 0
         while True:
-            cursor, keys = await r.scan(cursor=cursor, match="dd:lock:*", count=100)
+            cursor, keys = await r.scan(cursor=cursor, match="coelhonexus:dd:lock:*", count=100)
             for k in keys:
                 ks = k.decode() if isinstance(k, bytes) else k
                 slug = ks.split("dd:lock:", 1)[-1]

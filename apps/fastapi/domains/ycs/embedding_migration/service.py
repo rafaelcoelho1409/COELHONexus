@@ -35,6 +35,8 @@ with a REAL collection — so cutover only needs to pre-delete when
 `QDRANT_COLLECTION` is still a real (pre-migration) collection."""
 from __future__ import annotations
 import domains
+import domains.ycs.embedding_migration.task
+import domains.ycs.qdrant_task.task
 from . import domain, keys, params
 
 import json
@@ -218,12 +220,9 @@ async def dispatch_migration(
     if state.get("task_id"):
         return state  # already dispatched (idempotency hit in start_migration)
 
-    from domains.ycs.embedding_migration.task import finalize_embedding_migration
-    from domains.ycs.qdrant_task.task import ingest_to_qdrant
-
     physical = state["physical_collection"]
-    sig = ingest_to_qdrant.si(video_ids = None, collection_name = physical)
-    sig.link(finalize_embedding_migration.si(physical))
+    sig = domains.ycs.qdrant_task.task.ingest_to_qdrant.si(video_ids = None, collection_name = physical)
+    sig.link(domains.ycs.embedding_migration.task.finalize_embedding_migration.si(physical))
     result = sig.apply_async()
 
     await set_migration_task_id(redis, result.id)

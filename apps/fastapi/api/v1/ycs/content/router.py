@@ -2,6 +2,7 @@
 yt-dlp errors translate to 502 (subprocess failure) / 504 (timeout)."""
 from __future__ import annotations
 import domains
+import domains.ycs.extract.task
 from . import service
 
 from fastapi import APIRouter, HTTPException, Request
@@ -45,7 +46,6 @@ async def get_videos(payload: domains.ycs.extract.schemas.VideosRequest) -> dict
             status_code = 400, detail = "video_ids is required",
         )
     await service._raise_if_embedding_migration_needed(payload.include_transcription)
-    import domains.ycs.extract.task
     task = domains.ycs.extract.task.extract_videos.delay(
         payload.video_ids,
         payload.include_transcription,
@@ -420,7 +420,6 @@ async def playlist_pipeline(
 @router.post("/channel")
 async def get_channel_videos(payload: domains.ycs.extract.schemas.ChannelRequest) -> dict:
     """Extract all channel videos → ES (Celery). `max_results=0` fetches ALL videos."""
-    import domains.ycs.extract.task
     task = domains.ycs.extract.task.extract_channel.delay(
         payload.channel_id,
         payload.max_results,
@@ -438,7 +437,6 @@ async def get_channel_videos(payload: domains.ycs.extract.schemas.ChannelRequest
 @router.post("/playlist")
 async def get_playlist_videos(payload: domains.ycs.extract.schemas.PlaylistRequest) -> dict:
     """Extract all playlist videos → ES (Celery). `max_results=0` fetches ALL videos."""
-    import domains.ycs.extract.task
     task = domains.ycs.extract.task.extract_playlist.delay(
         payload.playlist_id,
         payload.max_results,

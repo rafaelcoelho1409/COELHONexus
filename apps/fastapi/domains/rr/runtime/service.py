@@ -32,6 +32,7 @@ sectioned below.
 """
 from __future__ import annotations
 from . import domain, keys, llm_counter, observability, params
+from .. import agent
 
 import asyncio
 import json
@@ -41,6 +42,7 @@ import random
 import time
 from typing import Any, AsyncIterator
 
+import redis as redis_sync
 import redis.asyncio as redis_aio
 
 
@@ -63,7 +65,6 @@ def emit_event_sync(scan_id: str, phase: str, **fields) -> None:
     }
     payload = json.dumps(event, default=str)
     observability.metrics.record_phase_event(phase = phase)
-    import redis as redis_sync
     try:
         r = redis_sync.from_url(
             keys.redis_url(),
@@ -495,11 +496,6 @@ async def prefill_extractions_from_cache(
     behavior was re-dispatching deep_read AFTER synthesis when it couldn't
     point to a `task()` log entry proving extractions were "its own").
     """
-    # Deferred import — avoids a circular at module-load time (agent →
-    # runtime for other things; this direction only needed at call time,
-    # long after both packages have fully imported).
-    from .. import agent
-
     if not top_n:
         return []
     rds = await _extraction_redis()
@@ -562,7 +558,6 @@ def mirror_write_sync(scan_id: str, path: str, value: Any) -> None:
     the tool may not be awaitable in all subagent contexts."""
     if not scan_id or not path:
         return
-    import redis as redis_sync
     try:
         r = redis_sync.from_url(
             keys.redis_url(),

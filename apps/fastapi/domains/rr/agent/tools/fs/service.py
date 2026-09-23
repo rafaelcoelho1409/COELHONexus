@@ -5,6 +5,7 @@ from domains.rr.runtime.observability.service import traced_tool
 from . import domain, params
 from .. import state as tools_state
 from ... import keys
+from ... import schemas as agent_schemas
 from .... import runtime
 
 import json
@@ -509,7 +510,6 @@ def write_digest(scan_id: str, digest_json: str) -> str:
     )
     if isinstance(payload, dict) and not is_raw_envelope:
         try:
-            from ... import schemas as agent_schemas
             agent_schemas.DigestSchema.model_validate(payload)
         except Exception as ve:
             msg = (

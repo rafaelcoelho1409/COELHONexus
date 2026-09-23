@@ -2,8 +2,8 @@
 progress writes) so exceptions surface with full stack traces.
 Not gated — single-user dev cluster only."""
 import domains
-from .. import resolver
 from . import params
+from .. import resolver
 
 import time
 from typing import Optional

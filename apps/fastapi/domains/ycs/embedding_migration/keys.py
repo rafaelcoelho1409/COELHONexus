@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-_PREFIX = "ycs:embedding_migration:"
+_PREFIX = "coelhonexus:ycs:embedding_migration:"
 
 
 def migration_state_key() -> str:

@@ -60,6 +60,7 @@ async def run_standard_pipeline(
     sub_config = {
         "recursion_limit": standard.params.DEFAULT_RECURSION_LIMIT,
         "configurable":    {"max_retries": max_retries},
+        "callbacks":       (config or {}).get("callbacks") or [],
     }
     try:
         result = await standard_graph.ainvoke(initial, config = sub_config)

@@ -6,7 +6,7 @@ inputs → same outputs. The projectors here take raw store responses
 uniform `QueryHit` dicts so the imperative shell in `service.py`
 stays a thin orchestrator."""
 from __future__ import annotations
-import infra
+import domains, infra
 from . import entities, errors, params, patterns
 
 import json
@@ -175,7 +175,6 @@ def project_neo4j_row(row: dict[str, Any], app: str) -> dict[str, Any]:
 def declared_es_schema() -> dict[str, Any]:
     """Pull the canonical mappings out of `infra/elasticsearch/schemas.py`
     so we never drift from what `ensure_indexes()` actually creates."""
-    import infra
     return {
         "indices": {
             infra.elasticsearch.keys.INDEX_METADATA: {
@@ -206,7 +205,6 @@ def declared_qdrant_schema() -> dict[str, Any]:
     Pydantic layer ("Extra inputs not permitted"). The prompt
     renderer surfaces this so the LLM stops generating bogus
     `match_text` / `match: {text: ...}` filters."""
-    import domains
     return {
         "collections": [{
             "name":           domains.ycs.ingestion.params.QDRANT_COLLECTION,

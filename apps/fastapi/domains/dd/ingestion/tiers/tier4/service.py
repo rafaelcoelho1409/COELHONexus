@@ -19,6 +19,18 @@ from urllib.parse import urlparse
 from urllib.request import urlopen
 
 import httpx
+from crawl4ai import (
+    AsyncUrlSeeder,
+    AsyncWebCrawler,
+    BrowserConfig,
+    CacheMode,
+    CrawlerRunConfig,
+    LXMLWebScrapingStrategy,
+    SeedingConfig,
+)
+from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher, RateLimiter
+from crawl4ai.content_filter_strategy import PruningContentFilter
+from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -67,7 +79,6 @@ def resolve_cdp_ws_url(cdp_http_url: str) -> Optional[str]:
 
 def _build_browser_config():
     """Build BrowserConfig using remote CDP if available, else local."""
-    from crawl4ai import BrowserConfig
     cdp_http = (os.environ.get("PLAYWRIGHT_CDP_HEADLESS") or "").strip() or None
     cdp_ws = resolve_cdp_ws_url(cdp_http) if cdp_http else None
     if cdp_ws:
@@ -108,14 +119,7 @@ async def _install_resource_blocker(crawler) -> None:
 
 
 def _build_md_generator():
-    """PruningContentFilter + DefaultMarkdownGenerator. Falls back to None
-    if the content_filter_strategy import is missing on this crawl4ai
-    version (callers should still work; extraction is just less aggressive)."""
-    try:
-        from crawl4ai.content_filter_strategy import PruningContentFilter
-        from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
-    except ImportError:
-        return None
+    """PruningContentFilter + DefaultMarkdownGenerator."""
     return DefaultMarkdownGenerator(
         content_filter = PruningContentFilter(
             threshold = 0.45,
@@ -136,17 +140,6 @@ async def crawl_urls(
     """Crawl URLs via Playwright; stream successes to store immediately. Transient navigation failures get one retry with longer timeouts. Returns (pages_written, failed_urls)."""
     if not urls:
         return 0, []
-
-    from crawl4ai import (
-        AsyncWebCrawler,
-        CacheMode,
-        CrawlerRunConfig,
-        LXMLWebScrapingStrategy,
-    )
-    from crawl4ai.async_dispatcher import (
-        MemoryAdaptiveDispatcher,
-        RateLimiter,
-    )
 
     browser_cfg = _build_browser_config()
     md_generator = _build_md_generator()
@@ -307,11 +300,6 @@ async def _seeder_discover(
 ) -> list[str]:
     """Crawl4AI seeder URL list. [] on any failure — caller falls back to BFS.
     Import is deferred so tiers 1/2/3 don't pay the crawl4ai load cost."""
-    try:
-        from crawl4ai import AsyncUrlSeeder, SeedingConfig
-    except ImportError as e:
-        logger.warning(f"[seeder] crawl4ai not installed: {e}")
-        return []
     cfg = SeedingConfig(
         source="sitemap+cc",
         pattern=domain.seed_pattern_for(docs_path),

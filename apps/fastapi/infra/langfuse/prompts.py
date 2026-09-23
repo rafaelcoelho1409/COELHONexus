@@ -29,6 +29,7 @@ from . import params, service
 
 import logging
 import time
+import functools
 from threading import Lock
 
 
@@ -130,8 +131,6 @@ def with_langfuse_override(
     When a template IS published under `dd.synth.sawc.writer / production`,
     every call uses it with the kwargs substituted in.
     """
-    import functools
-
     def _coerce(v):
         if isinstance(v, (str, int, float, bool)) or v is None:
             return v

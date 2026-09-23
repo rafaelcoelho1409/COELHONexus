@@ -16,6 +16,8 @@ write to Elasticsearch + dispatch the Playwright transcript fetch.
 """
 from __future__ import annotations
 import domains
+import domains.ycs.qdrant_task.task
+import  domains.ycs.neo4j_task.task
 from . import domain, params, schemas
 
 import asyncio
@@ -527,10 +529,9 @@ async def extract_videos_async(
                 nonlocal neo4j_chunk
                 if not neo4j_chunk:
                     return
-                from domains.ycs.neo4j_task.task import ingest_to_neo4j
                 chunk = neo4j_chunk
                 neo4j_chunk = []
-                neo4j_task = ingest_to_neo4j.si(
+                neo4j_task = domains.ycs.neo4j_task.task.ingest_to_neo4j.si(
                     chunk, len(chunk), skip_resolution = True, extract_id = extract_id,
                 ).apply_async()
                 _track_dispatched(neo4j_task.id)
@@ -560,12 +561,11 @@ async def extract_videos_async(
                 # `extract_id` is this task's own id (`self.request.id`,
                 # threaded in from `extract_videos`) — the namespace
                 # every downstream piece of Redis bookkeeping shares.
-                from domains.ycs.qdrant_task.task import stream_video_to_qdrant
                 dispatched_ids.append(vid)
                 neo4j_chunk.append(vid)
                 if len(neo4j_chunk) >= domains.ycs.graph_builder.params.EXTRACT_CONCURRENCY:
                     _flush_neo4j_chunk()
-                qdrant_task = stream_video_to_qdrant.si(
+                qdrant_task = domains.ycs.qdrant_task.task.stream_video_to_qdrant.si(
                     vid, extract_id,
                 ).apply_async()
                 _track_dispatched(qdrant_task.id)

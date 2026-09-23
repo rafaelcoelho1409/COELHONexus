@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
     time_limit=3660,
 )
 def run_ingestion(self, run_id: str, slug: str) -> dict:
-    """Run docs ingestion for `slug`; manifest lands at `dd:runs:{run_id}:*`."""
+    """Run docs ingestion for `slug`; manifest lands at `coelhonexus:dd:runs:{run_id}:*`."""
     logger.info(f"[task] run_ingestion run_id={run_id} slug={slug}")
     try:
         return asyncio.run(runtime.dispatch.service.run(run_id, slug))

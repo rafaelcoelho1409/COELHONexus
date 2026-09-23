@@ -10,6 +10,7 @@ from . import params
 from typing import Any, Optional
 
 from langchain_core.documents import Document
+from flashrank import Ranker, RerankRequest
 
 
 # Lazy — initialized on first `rerank_documents` call.
@@ -21,7 +22,6 @@ def _get_ranker():
     paths that don't rerank (e.g. /search, /content/*)."""
     global _ranker
     if _ranker is None:
-        from flashrank import Ranker
         _ranker = Ranker()
     return _ranker
 
@@ -39,8 +39,6 @@ def rerank_documents(
     only see precomputed vectors)."""
     if not documents:
         return []
-    from flashrank import RerankRequest
-
     with domains.ycs.runtime.observability.spans.reranker_span(
         model     = "flashrank-default",
         doc_count = len(documents),

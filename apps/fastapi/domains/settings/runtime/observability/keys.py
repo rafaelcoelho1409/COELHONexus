@@ -38,3 +38,4 @@ SYSTEM_NEXUS_EMBEDDING_ENDPOINT = "coelhonexus-embedding-endpoint"
 # even when conventions shift under us.
 LANGFUSE_OBSERVATION_TYPE   = "langfuse.observation.type"
 OBSERVATION_TYPE_GENERATION = "generation"
+OBSERVATION_TYPE_EMBEDDING  = "embedding"

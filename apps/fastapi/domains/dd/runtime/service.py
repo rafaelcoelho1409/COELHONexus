@@ -8,6 +8,9 @@ import logging
 from contextvars import ContextVar
 from typing import Any
 
+import redis as redis_sync
+import redis.asyncio as redis_aio
+
 
 logger = logging.getLogger(__name__)
 
@@ -84,8 +87,6 @@ def _bump_sync(
     tokens_out: int,
     reasoning_tokens: int,
 ) -> None:
-    import redis as redis_sync
-
     try:
         r = redis_sync.from_url(
             domains.dd.planner.keys.redis_url(),
@@ -157,8 +158,6 @@ async def read_counters(thread_id: str) -> dict[str, Any]:
     }
     if not thread_id:
         return empty
-
-    import redis.asyncio as redis_aio
 
     try:
         r = redis_aio.from_url(

@@ -1,6 +1,9 @@
 """ycs/agents — agentic RAG router: ask (sync+stream), ingest, graph stats, pipeline."""
 from __future__ import annotations
 import domains, infra
+import domains.ycs.qdrant_task.task
+import domains.ycs.neo4j_task.task
+import domains.ycs.pipeline_task.task
 from . import domain, params, schemas, service
 
 import asyncio
@@ -182,9 +185,9 @@ async def rag_search(
             "max_retries": payload.max_retries,
         },
         "recursion_limit": 100,
+        "callbacks": [c for c in (infra.langfuse.service.build_langchain_callback(),) if c is not None],
     }
     try:
-        import infra
         _sess_id  = payload.thread_id or "default"
         # 2026-09-15: every graph call runs under this thread key so the
         # per-conversation LLM-usage counter accumulates across nodes.
@@ -426,6 +429,7 @@ async def rag_search_stream(
             "max_retries": payload.max_retries,
         },
         "recursion_limit": 100,
+        "callbacks": [c for c in (infra.langfuse.service.build_langchain_callback(),) if c is not None],
     }
     # 2026-09-15: stream-side answer cache (parity with sync `/search`).
     # Stateless turns only (same condition as sync), never a caller-
@@ -648,7 +652,6 @@ async def rag_search_stream(
             )
 
     async def event_generator():
-        import infra
         _sess_id = payload.thread_id or domains.ycs.conversation.params.DEFAULT_THREAD_ID
         _user_id = (effective_channel_ids or ["default"])[0]
         # 2026-09-15: same thread-tagging as sync `/search` so the
@@ -1409,7 +1412,6 @@ async def rag_search_stream(
 async def ingest_to_qdrant(payload: schemas.IngestRequest) -> dict:
     """Queue ES transcripts → Qdrant ingestion (Celery)."""
     await service._raise_if_embedding_migration_needed()
-    import domains.ycs.qdrant_task.task
     task = domains.ycs.qdrant_task.task.ingest_to_qdrant.delay(
         payload.video_ids,
         payload.chunk_size,
@@ -1426,7 +1428,6 @@ async def ingest_to_qdrant(payload: schemas.IngestRequest) -> dict:
 @router.post("/ingest/neo4j")
 async def ingest_to_neo4j(payload: schemas.GraphIngestRequest) -> dict:
     """Queue entity extraction → Neo4j (Celery); 1 LLM call per transcript."""
-    import domains.ycs.neo4j_task.task
     task = domains.ycs.neo4j_task.task.ingest_to_neo4j.delay(payload.video_ids, payload.batch_size)
     trace.get_current_span().set_attribute("celery.task_id", task.id)
     return {
@@ -1454,7 +1455,6 @@ async def full_pipeline(payload: schemas.PipelineRequest) -> dict:
     """Queue full Celery chain: extract → Qdrant → Neo4j → cache."""
     if payload.include_qdrant:
         await service._raise_if_embedding_migration_needed()
-    import domains.ycs.pipeline_task.task
     task = domains.ycs.pipeline_task.task.full_channel_pipeline.delay(
         payload.channel_id,
         payload.max_results,

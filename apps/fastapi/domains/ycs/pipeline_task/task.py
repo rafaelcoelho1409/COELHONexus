@@ -12,16 +12,15 @@ With only one of the two flags set, that single step runs plain
 (a group of one buys nothing). `invalidate_cache` always runs last
 (no-op if no ingestion happened upstream)."""
 from __future__ import annotations
+import domains.ycs.extract.task
+import domains.ycs.neo4j_task.task
+import domains.ycs.qdrant_task.task
+import infra.celery
 
 from typing import Any
 
 from celery import chain, group
 from celery.utils.log import get_task_logger
-
-import domains.ycs.extract.task
-import domains.ycs.neo4j_task.task
-import domains.ycs.qdrant_task.task
-import infra.celery
 
 
 logger = get_task_logger(__name__)

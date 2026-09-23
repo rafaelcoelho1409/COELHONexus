@@ -63,7 +63,6 @@ def build_propose_prompt(
     namespaces_block = ", ".join(seeds.get("namespaces") or []) or "(none)"
 
     try:
-        import infra
         _rendered = infra.langfuse.prompts.get_prompt(
             "dd.planner.chapter_propose",
             label     = "production",

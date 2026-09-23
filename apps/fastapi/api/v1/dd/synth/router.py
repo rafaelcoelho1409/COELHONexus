@@ -3,6 +3,7 @@
 chapter_id lives in SynthState, not the thread_id."""
 from __future__ import annotations
 import domains
+import domains.dd.synth.task
 from . import params
 
 import asyncio
@@ -10,6 +11,7 @@ import json
 import logging
 import time
 
+import psycopg
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException, Query, Response
 from opentelemetry import trace
@@ -199,8 +201,6 @@ async def get_study_artifact(
 @router.get("/recent")
 async def list_recent_synth() -> dict:
     """Most-recent thread per slug for page-refresh recovery."""
-    import psycopg
-
     dsn = domains.dd.planner.keys.postgres_url()
 
     out: list[dict] = []
@@ -275,7 +275,7 @@ async def start_synth(
             cursor = 0
             while True:
                 cursor, keys = await r.scan(
-                    cursor=cursor, match="dd:planner:lock:*", count=100,
+                    cursor=cursor, match=f"{domains.dd.planner.keys.lock_prefix()}*", count=100,
                 )
                 for k in keys:
                     ks = k.decode() if isinstance(k, bytes) else k
@@ -306,7 +306,7 @@ async def start_synth(
             cursor = 0
             while True:
                 cursor, keys = await r.scan(
-                    cursor=cursor, match="dd:synth:lock:*", count=100,
+                    cursor=cursor, match=f"{domains.dd.synth.keys.lock_prefix()}*", count=100,
                 )
                 for k in keys:
                     ks = k.decode() if isinstance(k, bytes) else k
@@ -357,9 +357,8 @@ async def start_synth(
 
             await domains.dd.synth.runtime.cancel.service.clear_cancel(r, study_thread_id)
 
-            from domains.dd.synth import task
             try:
-                async_result = task.run_study.delay(
+                async_result = domains.dd.synth.task.run_study.delay(
                     study_thread_id, slug, plan_chapter_ids, mode,
                 )
                 trace.get_current_span().set_attribute(
@@ -436,7 +435,7 @@ async def start_synth(
         cursor = 0
         while True:
             cursor, keys = await r.scan(
-                cursor=cursor, match="dd:planner:lock:*", count=100,
+                cursor=cursor, match=f"{domains.dd.planner.keys.lock_prefix()}*", count=100,
             )
             for k in keys:
                 ks = k.decode() if isinstance(k, bytes) else k
@@ -467,7 +466,7 @@ async def start_synth(
         cursor = 0
         while True:
             cursor, keys = await r.scan(
-                cursor=cursor, match="dd:synth:lock:*", count=100,
+                cursor=cursor, match=f"{domains.dd.synth.keys.lock_prefix()}*", count=100,
             )
             for k in keys:
                 ks = k.decode() if isinstance(k, bytes) else k
@@ -518,9 +517,8 @@ async def start_synth(
 
         await domains.dd.synth.runtime.cancel.service.clear_cancel(r, thread_id)
 
-        from domains.dd.synth import task
         try:
-            async_result = task.run_single_chapter.delay(
+            async_result = domains.dd.synth.task.run_single_chapter.delay(
                 thread_id, slug, chapter_id, mode,
             )
             trace.get_current_span().set_attribute(
@@ -563,9 +561,8 @@ async def resume_synth(thread_id: str) -> dict:
     finally:
         await r.aclose()
 
-    from domains.dd.synth import task
     try:
-        async_result = task.resume_synth.delay(thread_id)
+        async_result = domains.dd.synth.task.resume_synth.delay(thread_id)
         trace.get_current_span().set_attribute("celery.task_id", async_result.id)
     except Exception as e:
         logger.exception(
@@ -603,7 +600,7 @@ async def cancel_synth(thread_id: str) -> dict:
             # SADDs before spawn → catches chapters that just started but haven't emitted a progress event yet (invisible to snapshot scan).
             try:
                 members = await r.smembers(
-                    f"dd:study:{thread_id}:active_chapters",
+                    domains.dd.synth.keys.active_chapters_key(thread_id),
                 )
                 for raw in members or []:
                     ch_tid = raw.decode() if isinstance(raw, bytes) else raw
@@ -622,13 +619,13 @@ async def cancel_synth(thread_id: str) -> dict:
             # SADD). Idempotent: we de-dupe via `seen`.
             chapter_prefix = f"docs-distiller/synth/{slug}/"
             scan_pattern = (
-                f"dd:synth:{chapter_prefix}*:events:snapshot"
+                f"coelhonexus:dd:synth:{chapter_prefix}*:events:snapshot"
             )
             try:
                 async for key in r.scan_iter(match=scan_pattern, count=200):
                     if isinstance(key, bytes):
                         key = key.decode()
-                    ch_tid = key[len("dd:synth:"):-len(":events:snapshot")]
+                    ch_tid = key[len("coelhonexus:dd:synth:"):-len(":events:snapshot")]
                     if ch_tid in seen:
                         continue
                     await domains.dd.synth.runtime.cancel.service.request_cancel(r, ch_tid)
@@ -777,8 +774,6 @@ async def wipe_synth(slug: str) -> dict:
     """Wipes MinIO synth/{slug}/, Postgres checkpoints for synth+study
     threads, Redis SSE snapshots + lock. Without the Redis sweep a wiped
     slug "comes back from the dead" via the cached study SSE snapshot."""
-    import psycopg
-
     if not slug or "/" in slug:
         raise HTTPException(
             status_code=400,
@@ -830,7 +825,7 @@ async def wipe_synth(slug: str) -> dict:
         )
         try:
             for kind in ("synth", "study"):
-                match = f"dd:synth:docs-distiller/{kind}/{slug}/*"
+                match = f"coelhonexus:dd:synth:docs-distiller/{kind}/{slug}/*"
                 batch: list = []
                 async for k in r.scan_iter(match=match, count=500):
                     batch.append(k)

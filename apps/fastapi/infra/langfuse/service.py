@@ -22,7 +22,11 @@ import logging
 import os
 import re
 import threading
-from typing import Iterator, Literal, Sequence
+from typing import Iterator, Literal
+
+from langfuse import Langfuse
+from langfuse.langchain import CallbackHandler
+from opentelemetry import trace
 
 
 logger = logging.getLogger(__name__)
@@ -89,14 +93,6 @@ def get_client():
                 "[langfuse] SDK init skipped — host/public_key/secret_key not "
                 "all set (host=%s pk_set=%s sk_set=%s)",
                 bool(host), bool(pk), bool(sk),
-            )
-            return None
-        try:
-            from langfuse import Langfuse
-        except Exception as e:
-            logger.warning(
-                f"[langfuse] SDK import failed ({type(e).__name__}: {e}) — "
-                "SDK features disabled; OTLP trace ingestion still active"
             )
             return None
         try:
@@ -234,7 +230,6 @@ def flag_for_review(
     """Tag the active trace as needing review. Set span attributes +
     optionally record a `review.required` score."""
     try:
-        from opentelemetry import trace
         span = trace.get_current_span()
         is_recording = getattr(span, "is_recording", None)
         if callable(is_recording) and not is_recording():
@@ -264,43 +259,31 @@ def flag_for_review(
 # ---------------------------------------------------------------------------
 # Callbacks — LangChain CallbackHandler with fail-soft defaults.
 #
+# The v3 SDK's `CallbackHandler` takes no session_id/user_id/tags kwargs
+# (that's a v2-era signature — confirmed dead via `inspect.signature`:
+# real ctor is `(*, public_key=None, update_trace=False, trace_context=None)`).
+# It creates spans via the ambient OTel context instead, so session/user
+# grouping comes from the SAME `session(...)` baggage mechanism every other
+# span in this codebase already relies on — call this from inside a
+# `session(...)` block, not by passing session/user args here.
+#
 # Usage:
 #     import infra
-#     cb = infra.langfuse.service.build_langchain_callback(
-#         session_id=scan_id, user_id=profile_id, tags=["rr", "digest"])
-#     callbacks = [c for c in (existing_cb, cb) if c is not None]
-#     await agent.ainvoke(..., config={"callbacks": callbacks})
+#     with infra.langfuse.service.session("rr", session_id=scan_id, user_id=profile_id):
+#         cb = infra.langfuse.service.build_langchain_callback()
+#         callbacks = [c for c in (existing_cb, cb) if c is not None]
+#         await agent.ainvoke(..., config={"callbacks": callbacks})
 #
 # Returns None when LangFuse is unavailable — callers filter Nones out.
 # ---------------------------------------------------------------------------
 
-def build_langchain_callback(
-    *,
-    session_id: str | None = None,
-    user_id:    str | None = None,
-    tags:       Sequence[str] | None = None,
-):
+def build_langchain_callback():
     """Build a LangChain CallbackHandler that emits to LangFuse, or None
     when the SDK / credentials aren't available."""
     if not is_available():
         return None
     try:
-        from langfuse.langchain import CallbackHandler
-    except Exception as e:
-        logger.debug(
-            f"[langfuse] CallbackHandler import failed "
-            f"({type(e).__name__}: {e}) — agent runs without LangFuse callback"
-        )
-        return None
-    try:
-        kwargs: dict = {}
-        if session_id:
-            kwargs["session_id"] = session_id
-        if user_id:
-            kwargs["user_id"] = user_id
-        if tags:
-            kwargs["tags"] = list(tags)
-        return CallbackHandler(**kwargs)
+        return CallbackHandler()
     except Exception as e:
         logger.warning(
             f"[langfuse] CallbackHandler init failed: {type(e).__name__}: {e}"

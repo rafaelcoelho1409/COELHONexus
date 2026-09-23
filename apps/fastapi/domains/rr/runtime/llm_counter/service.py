@@ -4,6 +4,7 @@ from __future__ import annotations
 from . import domain, keys, params
 from .. import keys as runtime_keys
 from .. import params as runtime_params
+from ... import stores
 
 import json
 import logging
@@ -12,6 +13,9 @@ import time
 from contextvars import ContextVar
 from typing import Any
 from uuid import UUID
+
+import redis as redis_sync
+import redis.asyncio as redis_aio
 
 from langchain_core.callbacks import BaseCallbackHandler
 
@@ -233,7 +237,6 @@ def bump_retry_sync(scan_id: str, phase: str) -> None:
     """Sync retry counter bump — increments phase:X:retries + total:retries in the per-scan HASH."""
     if not scan_id or not phase:
         return
-    import redis as redis_sync
     try:
         r = redis_sync.from_url(
             runtime_keys.redis_url(),
@@ -275,7 +278,6 @@ def _bump_sync(
     tokens_out: int,
 ) -> None:
     """Sync Redis pipeline bumping totals + per-model breakdown. Best-effort."""
-    import redis as redis_sync
     try:
         r = redis_sync.from_url(
             runtime_keys.redis_url(),
@@ -327,7 +329,6 @@ async def read_counters(scan_id: str) -> dict[str, Any]:
     if not scan_id:
         return empty
 
-    import redis.asyncio as redis_aio
     try:
         r = redis_aio.from_url(
             runtime_keys.redis_url(),
@@ -400,7 +401,6 @@ async def read_counters(scan_id: str) -> dict[str, Any]:
 async def _read_from_postgres(scan_id: str) -> dict[str, Any] | None:
     """Fallback read from radar_scans.llm_counters when Redis TTL'd. Never raises."""
     try:
-        from ... import stores
         return await stores.service.read_llm_counters(UUID(scan_id))
     except Exception as e:
         logger.warning(
@@ -428,7 +428,6 @@ async def snapshot_to_postgres(scan_id: str) -> bool:
         )
         return False
     try:
-        from ... import stores
         ok = await stores.service.write_llm_counters(UUID(scan_id), payload)
         if ok:
             logger.info(

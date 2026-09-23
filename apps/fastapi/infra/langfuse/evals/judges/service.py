@@ -4,6 +4,7 @@ Single choke point for every rubric judge: one prompt in, one 1-5 float
 out, 0.0 on any failure. `label` tags the log line per judge.
 """
 from __future__ import annotations
+import domains
 from . import domain, params, prompts
 
 import logging
@@ -27,7 +28,6 @@ async def run_rubric_judge(
     """
     if chat_fn is None:
         async def chat_fn(prompt, max_tokens, temperature):
-            import domains  # legacy edge — inject chat_fn to bypass
             return await domains.settings.chat.service.chat_judge_async(
                 prompt, max_tokens = max_tokens, temperature = temperature,
             )

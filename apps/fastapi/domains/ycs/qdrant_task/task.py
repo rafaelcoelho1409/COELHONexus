@@ -1,6 +1,6 @@
 """ycs/qdrant_task — ES transcripts → chunk → embed → Qdrant upsert + cache invalidate."""
 from __future__ import annotations
-import domains
+import domains, infra
 import infra.celery
 
 import asyncio
@@ -44,7 +44,6 @@ def ingest_to_qdrant(
         self.update_state(state = "PROGRESS", meta = payload)
 
     async def _run() -> dict[str, Any]:
-        import domains, infra
         with infra.langfuse.service.session(
             "ycs-ingest-qdrant",
             session_id = self.request.id or "(no-request-id)",

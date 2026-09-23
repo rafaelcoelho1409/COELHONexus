@@ -21,11 +21,13 @@ FAILURE state is what the poller/UI surfaces."""
 from __future__ import annotations
 import domains
 import infra.celery
+from . import service
 
 import asyncio
 import os
 import time
 
+import redis.asyncio as redis_aio
 from celery.utils.log import get_task_logger
 from qdrant_client import AsyncQdrantClient
 
@@ -44,9 +46,6 @@ def finalize_embedding_migration(self, physical_collection: str) -> dict:
     logger.info(f"[finalize_embedding_migration] cutover -> {physical_collection!r}")
 
     async def _run() -> dict:
-        import redis.asyncio as redis_aio
-        from . import service
-
         redis_host = os.environ.get("REDIS_HOST", "localhost")
         redis_port = os.environ.get("REDIS_PORT", "6379")
         redis_password = os.environ.get("REDIS_PASSWORD", "")

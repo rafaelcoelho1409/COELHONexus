@@ -32,7 +32,7 @@ def run_single_chapter(
     chapter_id: str,
     mode: str = "quality",
 ) -> dict:
-    """Run a single-chapter synth pass; releases dd:synth:lock:{slug} on exit."""
+    """Run a single-chapter synth pass; releases coelhonexus:dd:synth:lock:{slug} on exit."""
     logger.info(
         f"[task] run_single_chapter thread_id={thread_id} slug={slug} "
         f"chapter_id={chapter_id} mode={mode}"
@@ -110,7 +110,7 @@ def run_study(
     chapter_ids: list[str],
     mode: str = "quality",
 ) -> dict:
-    """Run strict-order study orchestrator; releases dd:synth:lock:{slug} on exit."""
+    """Run strict-order study orchestrator; releases coelhonexus:dd:synth:lock:{slug} on exit."""
     logger.info(
         f"[task] run_study study_thread_id={study_thread_id} slug={slug} "
         f"n_chapters={len(chapter_ids)} mode={mode}"

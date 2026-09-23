@@ -3,6 +3,7 @@ is the HTTP/SSE layer. SSE via Redis pub/sub, cancel via Redis flag,
 checkpoints in Postgres."""
 from __future__ import annotations
 import domains
+import domains.dd.planner.task
 from . import params
 
 import asyncio
@@ -10,6 +11,7 @@ import json
 import logging
 import time
 
+import psycopg
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException, Response
 from opentelemetry import trace
@@ -101,7 +103,7 @@ async def start_planner(
         cursor = 0
         while True:
             cursor, keys = await r.scan(
-                cursor=cursor, match="dd:synth:lock:*", count=100,
+                cursor=cursor, match=f"{domains.dd.synth.keys.lock_prefix()}*", count=100,
             )
             for k in keys:
                 ks = k.decode() if isinstance(k, bytes) else k
@@ -132,7 +134,7 @@ async def start_planner(
         cursor = 0
         while True:
             cursor, keys = await r.scan(
-                cursor=cursor, match="dd:planner:lock:*", count=100,
+                cursor=cursor, match=f"{domains.dd.planner.keys.lock_prefix()}*", count=100,
             )
             for k in keys:
                 ks = k.decode() if isinstance(k, bytes) else k
@@ -184,8 +186,7 @@ async def start_planner(
         await domains.dd.planner.runtime.cancel.service.clear_cancel(r, thread_id)
 
         try:
-            from domains.dd.planner import task
-            async_result = task.run_planner.delay(thread_id, slug, mode)
+            async_result = domains.dd.planner.task.run_planner.delay(thread_id, slug, mode)
             trace.get_current_span().set_attribute(
                 "celery.task_id", async_result.id,
             )
@@ -273,8 +274,7 @@ async def resume_planner(thread_id: str) -> dict:
         await r.aclose()
 
     try:
-        from domains.dd.planner import task
-        async_result = task.resume_planner.delay(thread_id)
+        async_result = domains.dd.planner.task.resume_planner.delay(thread_id)
         trace.get_current_span().set_attribute("celery.task_id", async_result.id)
     except Exception as e:
         logger.exception(
@@ -298,8 +298,6 @@ async def list_recent_planners() -> dict:
     """Per-slug thread selection prefers the thread with the MOST
     checkpoints — sorting by checkpoint_id alone picks abandoned threads
     that died early over later threads that completed all nodes."""
-    import psycopg
-
     dsn = domains.dd.planner.keys.postgres_url()
 
     out: list[dict] = []
@@ -343,8 +341,6 @@ async def wipe_planner(slug: str) -> dict:
     """Wipes MinIO planner/{slug}/, Postgres checkpoints, Redis lock +
     active-run registry. Drops the lock so the next Start Planner click
     isn't rejected by a stale lock that survived the wipe."""
-    import psycopg
-
     if not slug or "/" in slug:
         raise HTTPException(
             status_code=400,

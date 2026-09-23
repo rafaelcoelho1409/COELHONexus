@@ -7,7 +7,9 @@ the FastAPI router will call.
 """
 from __future__ import annotations
 import domains, infra
+import infra.celery
 from . import agent, domain, entities, keys, params, runtime, stores
+from .agent import graph
 
 import asyncio
 import json
@@ -129,8 +131,6 @@ async def cancel_scan(scan_id: UUID, *, reason: str = "cancelled by user") -> bo
     Order: revoke → mark Postgres → emit SSE → drop task_id key.
     A failure in step 2/3/4 doesn't roll back step 1; the worker is already dead.
     """
-    import infra.celery
-
     task_id = await runtime.service.get_task_id(str(scan_id))
     if not task_id:
         logger.info(f"[rr-service] cancel_scan {scan_id}: no task_id found")
@@ -335,10 +335,13 @@ async def run_scan_pipeline(
             f"topic='{topic}' "
             f"top_n={top_n}"
         )
-        from domains.rr.agent import graph
         radar_agent = await graph.build_radar_agent()
         _llm_cb = getattr(radar_agent, "_rr_llm_counter_cb", None)
-        callbacks = [c for c in (_llm_cb,) if c is not None]
+        # Session/user grouping comes from run_scan_async's enclosing
+        # infra.langfuse.service.session(...) baggage, not from ctor args —
+        # the v3 CallbackHandler no longer takes session_id/user_id/tags.
+        _lf_cb = infra.langfuse.service.build_langchain_callback()
+        callbacks = [c for c in (_llm_cb, _lf_cb) if c is not None]
         await radar_agent.ainvoke(
             {"messages": [{"role": "user", "content": user_message}]},
             config = {

@@ -129,7 +129,6 @@ async def run_single_chapter_async(
 ) -> dict:
     """Fresh per-chapter run. Builds initial state + graph, spawns cancel
     watcher, awaits terminal."""
-    import infra
     with infra.langfuse.service.session(
         "dd-synth",
         session_id = thread_id,
@@ -172,7 +171,10 @@ async def run_single_chapter_async(
                 "mode": mode,
             })
             graph = domains.dd.synth.graph.build_graph()
-            config = {"configurable": {"thread_id": thread_id}}
+            config = {
+                "configurable": {"thread_id": thread_id},
+                "callbacks": [c for c in (infra.langfuse.service.build_langchain_callback(),) if c is not None],
+            }
 
             r = redis_aio.from_url(
                 domains.dd.synth.keys.redis_url(),
@@ -218,7 +220,10 @@ async def run_missing_nodes_async(
     Needed when a thread reached END BEFORE a new IMPLEMENTED node was added
     (ainvoke(None) would short-circuit the consumed END marker)."""
     graph = domains.dd.synth.graph.build_graph()
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "callbacks": [c for c in (infra.langfuse.service.build_langchain_callback(),) if c is not None],
+    }
 
     terminal_patch: dict = {"status": "done"}
     try:
@@ -276,7 +281,10 @@ async def run_missing_nodes_async(
 async def resume_synth_async(thread_id: str) -> dict:
     """Resume from last checkpoint. Three sub-paths handled inline."""
     graph = domains.dd.synth.graph.build_graph()
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "callbacks": [c for c in (infra.langfuse.service.build_langchain_callback(),) if c is not None],
+    }
 
     snap = await graph.aget_state(config)
     if snap.values == {}:
@@ -596,7 +604,6 @@ async def run_study_async(
     mode: str = "quality",
 ) -> dict:
     """Strict-order study orchestrator; emits chapter_ready per render so UI shows each chapter as it completes (TTFR ~10-15 min vs ~2h batch).     Runs book_harmonize post-loop if ≥2 done."""
-    import infra
     with infra.langfuse.service.session(
         "dd",
         session_id = study_thread_id,
@@ -801,7 +808,10 @@ async def _run_study_async_inner(
                 "synth_mode":     mode,
                 "status":         "running",
             }
-            config = {"configurable": {"thread_id": chapter_thread_id}}
+            config = {
+                "configurable": {"thread_id": chapter_thread_id},
+                "callbacks": [c for c in (infra.langfuse.service.build_langchain_callback(),) if c is not None],
+            }
 
             main_task = asyncio.create_task(
                 graph.ainvoke(initial_state, config),

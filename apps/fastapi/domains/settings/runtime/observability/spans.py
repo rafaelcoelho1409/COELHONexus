@@ -92,6 +92,7 @@ def embedding_span(
             keys.GEN_AI_OPERATION_NAME:      keys.OP_EMBEDDING,
             keys.GEN_AI_REQUEST_MODEL:       model,
             keys.GEN_AI_REQUEST_INPUT_COUNT: input_count,
+            keys.LANGFUSE_OBSERVATION_TYPE:  keys.OBSERVATION_TYPE_EMBEDDING,
             "coelho.langfuse.keep":          True,
         },
     ) as span:

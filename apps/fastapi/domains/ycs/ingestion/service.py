@@ -31,6 +31,7 @@ from qdrant_client.http.models import (
     VectorParams,
 )
 from redis.asyncio import Redis
+from redis.asyncio.lock import Lock
 
 
 logger = logging.getLogger(__name__)
@@ -755,8 +756,6 @@ async def _flush_buffer(
     lost those videos' points (22/24). A later video's flush or the
     final drain retries them. The embed call itself gets 3 attempts
     with backoff before giving up for this flush."""
-    from redis.asyncio.lock import Lock
-
     lock = Lock(
         redis, keys.qdrant_flush_lock_key(extract_id), timeout = 60, blocking_timeout = 0,
     )

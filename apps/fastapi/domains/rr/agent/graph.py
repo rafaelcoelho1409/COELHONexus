@@ -29,7 +29,7 @@ What's still TODO (architecture-doc §9.4 v2 deferrals):
     block at the bottom of this file)
 """
 from __future__ import annotations
-import domains
+import domains, infra
 from . import keys, memory, middleware, params, prompts, schemas, subagents, tools
 from .. import runtime
 
@@ -132,7 +132,6 @@ def _build_orchestrator_prompt(mode: str) -> str:
         else prompts.ORCHESTRATOR_SYSTEM_PROMPT_TOOLS
     )
     try:
-        import infra
         prompt_name = (
             "rr.agent.orchestrator_subagents"
             if mode == keys.DISCOVERY_MODE_AGENTS

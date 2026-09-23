@@ -28,6 +28,7 @@ import re
 import time
 
 import httpx
+import openai
 from langchain_openai import ChatOpenAI
 
 
@@ -142,10 +143,6 @@ async def _get_async_openai():
     async with _CLIENT_LOCK:
         if _CLIENT is not None:
             return _CLIENT
-        try:
-            import openai
-        except Exception as e:
-            raise errors.ChatError(f"openai SDK not installed: {e}") from e
 
         # Use a shared AsyncClient with pooling; http2 multiplexing if h2
         # is installed, http/1.1 keep-alive fallback otherwise.

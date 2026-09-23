@@ -15,11 +15,14 @@ whenever the system prompt or refine-loop logic changes. MinIO keys
 embed the version so old cached outputs don't shadow the new prompt.
 """
 from __future__ import annotations
+import domains
 from . import domain, params, prompts
 from .... import runtime
 
 import logging
 from typing import Any
+
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 
 logger = logging.getLogger(__name__)
@@ -38,12 +41,6 @@ async def synth_code(finding: dict[str, Any]) -> dict[str, str]:
         Raises RuntimeError on empty output or fenced-block extraction
         failure — caller should NOT cache failures.
     """
-    # Lazy imports — keep cold-start light and avoid pulling the chat
-    # client into smoke tests that import this module.
-    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-
-    import domains
-
     extraction = finding.get("extraction") or {}
     user_msg   = domain.build_user_message(finding, extraction)
     chain      = domains.settings.chat.service.build_chat_model()

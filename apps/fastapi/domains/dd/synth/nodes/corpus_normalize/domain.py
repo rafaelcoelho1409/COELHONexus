@@ -5,6 +5,8 @@ from . import params, patterns, schemas, versions
 import unicodedata
 from typing import Optional
 
+from markdown_it import MarkdownIt
+
 
 
 def normalize_doc(
@@ -89,7 +91,6 @@ def _boundary_pass(text: str) -> tuple[str, int]:
 
 def _identify_fence_ranges(text: str) -> list[tuple[int, int, int]]:
     """Return (open_line_idx, close_exclusive, kind) tuples; kind=0 backtick, 1 tilde."""
-    from markdown_it import MarkdownIt
     md = MarkdownIt("commonmark")
     ranges: list[tuple[int, int, int]] = []
     for tok in md.parse(text):

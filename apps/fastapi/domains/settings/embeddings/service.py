@@ -15,6 +15,8 @@ import logging
 import os
 import time
 
+import openai
+
 
 logger = logging.getLogger(__name__)
 
@@ -118,10 +120,6 @@ async def _get_async_openai():
     async with _CLIENT_LOCK:
         if _CLIENT is not None:
             return _CLIENT
-        try:
-            import openai
-        except Exception as e:
-            raise errors.EmbeddingError(f"openai SDK not installed: {e}") from e
         client = openai.AsyncOpenAI(
             base_url=ENDPOINT.base_url,
             api_key=ENDPOINT.api_key,

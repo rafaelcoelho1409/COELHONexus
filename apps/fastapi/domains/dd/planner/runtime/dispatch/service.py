@@ -1,6 +1,7 @@
 """Async planner orchestration (kickoff, resume, catch-up) shared by FastAPI and Celery — same logic, different runtime location."""
 from __future__ import annotations
 import domains
+import infra
 from . import domain
 
 import asyncio
@@ -225,7 +226,6 @@ async def run_planner_async(
 ) -> dict:
     """Fresh planner kickoff. Builds graph + initial state, spawns the
     LangGraph task + cancel watcher, awaits terminal."""
-    import infra
     with infra.langfuse.service.session(
         "dd-planner",
         session_id = thread_id,
@@ -281,7 +281,10 @@ async def _run_planner_async_inner(
     mode: str = "llm",
 ) -> dict:
     graph = domains.dd.planner.graph.build_graph()
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "callbacks": [c for c in (infra.langfuse.service.build_langchain_callback(),) if c is not None],
+    }
 
     r = redis_aio.from_url(
         domains.dd.planner.keys.redis_url(),
@@ -316,7 +319,10 @@ async def run_missing_nodes_async(
 ) -> dict:
     """Catch-up worker for threads that reached END before a new IMPLEMENTED node was added (ainvoke(None) would short-circuit at the consumed END marker)."""
     graph = domains.dd.planner.graph.build_graph()
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "callbacks": [c for c in (infra.langfuse.service.build_langchain_callback(),) if c is not None],
+    }
 
     terminal_patch: dict = {"status": "done"}
     try:
@@ -377,7 +383,10 @@ async def run_missing_nodes_async(
 async def resume_planner_async(thread_id: str) -> dict:
     """Resume from last checkpoint. Three sub-paths handled inline."""
     graph = domains.dd.planner.graph.build_graph()
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "callbacks": [c for c in (infra.langfuse.service.build_langchain_callback(),) if c is not None],
+    }
 
     snap = await graph.aget_state(config)
     if snap.values == {}:
