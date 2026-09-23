@@ -1,8 +1,9 @@
 """Prompt templates: extract/canonicalize/detect/patch for cross-chapter coherence pass."""
 from __future__ import annotations
+import infra
 
 
-EXTRACT_CLAIMS_PROMPT = """Extract the atomic factual claims from this chapter of a distilled technical book.
+_EXTRACT_CLAIMS_PROMPT = """Extract the atomic factual claims from this chapter of a distilled technical book.
 
 Atomic claim = a single verifiable assertion about the technology (e.g., "library X
 uses Y as its default serializer", "the timeout defaults to 30 seconds"). Cap at
@@ -26,7 +27,19 @@ Return strict JSON:
 }}"""
 
 
-CANONICALIZE_PROMPT = """You are harmonizing terminology across the chapters of a distilled
+@infra.langfuse.prompts.with_langfuse_override("dd.synth.book_harmonize.extract_claims")
+def build_extract_claims_prompt(
+    *,
+    max_claims: str,
+    prose: str,
+) -> str:
+    return _EXTRACT_CLAIMS_PROMPT.format(
+        max_claims = max_claims,
+        prose = prose,
+    )
+
+
+_CANONICALIZE_PROMPT = """You are harmonizing terminology across the chapters of a distilled
 technical book about {framework}. Below are the terms each chapter uses, with the
 working definition the chapter applies.
 
@@ -53,7 +66,19 @@ Return strict JSON:
 If no canonicalization is needed, return {{"canonical_terms": [], "rationale": "..."}}."""
 
 
-DETECT_PROMPT = """You are auditing chapter {chapter_id} of a distilled technical book about
+@infra.langfuse.prompts.with_langfuse_override("dd.synth.book_harmonize.canonicalize")
+def build_canonicalize_prompt(
+    *,
+    framework: str,
+    terms_block: str,
+) -> str:
+    return _CANONICALIZE_PROMPT.format(
+        framework = framework,
+        terms_block = terms_block,
+    )
+
+
+_DETECT_PROMPT = """You are auditing chapter {chapter_id} of a distilled technical book about
 {framework} for cross-chapter consistency issues.
 
 Inspect for THREE classes of violations:
@@ -91,7 +116,25 @@ Return strict JSON:
 If no violations found, return {{"has_violations": false, "violations": [], "summary": "..."}}."""
 
 
-PATCH_PROMPT = """You are minimally rewriting chapter {chapter_id} of a distilled technical book
+@infra.langfuse.prompts.with_langfuse_override("dd.synth.book_harmonize.detect")
+def build_detect_prompt(
+    *,
+    canonical_terms: str,
+    chapter_id: str,
+    framework: str,
+    sibling_claims: str,
+    this_prose: str,
+) -> str:
+    return _DETECT_PROMPT.format(
+        canonical_terms = canonical_terms,
+        chapter_id = chapter_id,
+        framework = framework,
+        sibling_claims = sibling_claims,
+        this_prose = this_prose,
+    )
+
+
+_PATCH_PROMPT = """You are minimally rewriting chapter {chapter_id} of a distilled technical book
 about {framework} to resolve cross-chapter consistency violations. Preserve EVERYTHING
 that isn't violating — same structure, same headings, same code references, same
 citations, same tone.
@@ -111,3 +154,21 @@ CANONICAL TERMINOLOGY (use these definitions/names):
 
 Output: the full chapter prose, minimally edited. NO commentary, NO explanation,
 NO JSON wrapping — output ONLY the markdown."""
+
+
+@infra.langfuse.prompts.with_langfuse_override("dd.synth.book_harmonize.patch")
+def build_patch_prompt(
+    *,
+    canonical_terms: str,
+    chapter_id: str,
+    framework: str,
+    original_prose: str,
+    violations_block: str,
+) -> str:
+    return _PATCH_PROMPT.format(
+        canonical_terms = canonical_terms,
+        chapter_id = chapter_id,
+        framework = framework,
+        original_prose = original_prose,
+        violations_block = violations_block,
+    )

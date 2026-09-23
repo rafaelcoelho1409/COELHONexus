@@ -104,7 +104,7 @@ async def _normalize_code_block(
 
     fixed_body = await _llm_normalize_body(
         body = body, lang = lang,
-        prompt = prompts.NORMALIZE_PROMPT_BASE.format(
+        prompt = prompts.build_normalize_base(
             lang = lang or "code", body = body,
         ),
     )
@@ -117,7 +117,7 @@ async def _normalize_code_block(
         if not ok:
             retry = await _llm_normalize_body(
                 body = body, lang = lang,
-                prompt = prompts.NORMALIZE_PROMPT_PYTHON_RETRY.format(
+                prompt = prompts.build_normalize_python_retry(
                     body = fixed_body, error = err,
                 ),
             )

@@ -61,7 +61,7 @@ def finalize_embedding_migration(self, physical_collection: str) -> dict:
             port    = int(os.environ.get("QDRANT_PORT", "6333")),
             api_key = qdrant_api_key if qdrant_api_key else None,
         )
-        with infra.langfuse.sessions.session(
+        with infra.langfuse.service.session(
             "ycs-embedding-migration",
             session_id = self.request.id or "(no-request-id)",
         ), infra.otel.service.get_tracer().start_as_current_span(

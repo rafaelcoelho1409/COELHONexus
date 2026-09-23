@@ -271,7 +271,7 @@ async def _cocoa_explain_blocks(blocks: list[dict]) -> dict[str, str]:
     if not misses:
         return cached
 
-    prompt = prompts.COCOA_EXPLAINER_PROMPT.format(
+    prompt = prompts.build_cocoa_explainer_prompt(
         blocks_block = domain.render_blocks_for_explainer(misses),
     )
     try:
@@ -320,7 +320,7 @@ async def _cocoa_judge_pairs(pairs: list[dict]) -> dict[str, dict]:
     either aligned or misaligned."""
     if not pairs:
         return {}
-    prompt = prompts.COCOA_JUDGE_PROMPT.format(
+    prompt = prompts.build_cocoa_judge_prompt(
         pairs_block = domain.render_pairs_for_judge(pairs),
     )
     try:
@@ -724,7 +724,7 @@ async def _atomic_claim_extract_claims(prose: str) -> tuple[list[str], bool]:
         )
 
     try:
-        prompt = prompts.ATOMIC_CLAIM_EXTRACT_PROMPT.format(
+        prompt = prompts.build_atomic_claim_extract_prompt(
             max_claims = params.ATOMIC_CLAIM_MAX_CLAIMS, prose_chars = len(prose), prose = prose,
         )
         raw, _ = await domains.settings.chat.service.chat_text_async(
@@ -778,7 +778,7 @@ async def _atomic_claim_judge_claim(
     anti-hallucination, so rubber-stamping without a trace defeats it)."""
     async with sem:
         try:
-            prompt = prompts.ATOMIC_CLAIM_JUDGE_PROMPT.format(claim = claim, source = source)
+            prompt = prompts.build_atomic_claim_judge_prompt(claim = claim, source = source)
             raw, _ = await domains.settings.chat.service.chat_text_async(
                 prompt, max_tokens = params.ATOMIC_CLAIM_JUDGE_MAX_TOKENS, temperature = 0.0,
                 response_format = {"type": "json_object"},

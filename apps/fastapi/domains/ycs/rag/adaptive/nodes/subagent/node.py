@@ -167,7 +167,7 @@ async def _rephrase_subquestion(
     the no_docs retry and report the first attempt's placeholder."""
     if llm is None:
         return None
-    chain = prompts.REPHRASE_PROMPT | llm
+    chain = service.resolve_prompt(prompts.REPHRASE_PROMPT, "ycs.rag.subagent") | llm
     try:
         domains.ycs.runtime.llm_counter.service.set_node(node = "subagent_rephrase")
         response = await asyncio.wait_for(

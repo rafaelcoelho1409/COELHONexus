@@ -26,7 +26,7 @@ async def critic(state: state.AdaptiveRAGState, llm) -> dict:
 
     # default `method="json_schema"` — see
     # `standard/nodes/hallucination/node.py` for the rationale.
-    chain = prompts.CRITIC_PROMPT | llm.with_structured_output(
+    chain = service.resolve_prompt(prompts.CRITIC_PROMPT, "ycs.rag.critic") | llm.with_structured_output(
         schemas.CriticAssessment,
     )
     try:

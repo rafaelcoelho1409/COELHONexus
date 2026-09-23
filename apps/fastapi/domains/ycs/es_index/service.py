@@ -11,7 +11,7 @@ Two near-symmetric writers (one per index). Both:
 Refresh policy is `True` so callers (Celery tasks → Qdrant ingest, retriever
 fetch) see new docs on the very next ES query."""
 from __future__ import annotations
-import infra
+import domains, infra
 from . import params
 
 import logging
@@ -52,10 +52,13 @@ async def index_videos_to_elasticsearch(
     )
     start_time = time.time()
     try:
-        response = await es_client.bulk(
-            operations = operations,
-            refresh = params.BULK_REFRESH,
-        )
+        with domains.ycs.runtime.observability.spans.es_search_span(
+            index = index, top_k = len(operations) // 2, operation = "bulk_index",
+        ):
+            response = await es_client.bulk(
+                operations = operations,
+                refresh = params.BULK_REFRESH,
+            )
         elapsed = time.time() - start_time
         indexed = sum(
             1
@@ -111,10 +114,13 @@ async def index_transcriptions_to_elasticsearch(
     )
     start_time = time.time()
     try:
-        response = await es_client.bulk(
-            operations = operations,
-            refresh = params.BULK_REFRESH,
-        )
+        with domains.ycs.runtime.observability.spans.es_search_span(
+            index = index, top_k = len(operations) // 2, operation = "bulk_index",
+        ):
+            response = await es_client.bulk(
+                operations = operations,
+                refresh = params.BULK_REFRESH,
+            )
         elapsed = time.time() - start_time
         indexed = sum(
             1
@@ -190,12 +196,15 @@ async def delete_videos_from_es(
     )
     for index_label, index_name, query in queries:
         try:
-            resp = await es.delete_by_query(
-                index = index_name,
-                query = query,
-                refresh = True,
-                conflicts = "proceed",
-            )
+            with domains.ycs.runtime.observability.spans.es_search_span(
+                index = index_name, top_k = len(video_ids), operation = "delete_by_query",
+            ):
+                resp = await es.delete_by_query(
+                    index = index_name,
+                    query = query,
+                    refresh = True,
+                    conflicts = "proceed",
+                )
             n = int(resp.get("deleted", 0) or 0)
             out[f"{index_label}_deleted"] = n
             logger.info(

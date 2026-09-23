@@ -395,9 +395,11 @@ def get_instrument(key: str):
 # ---------------------------------------------------------------------------
 
 def _instrument_libraries() -> None:
-    """Auto-instrument httpx/logging once per process.
+    """Auto-instrument httpx/logging/celery once per process.
     Redis intentionally excluded: task-queue chatter produces thousands of
-    zero-value spans."""
+    zero-value spans. Celery here covers the PRODUCER side (traceparent
+    injection on `.delay()`); workers re-instrument idempotently on consume
+    via `init_otel_for_celery_worker`."""
     try:
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
         HTTPXClientInstrumentor().instrument()
@@ -408,6 +410,11 @@ def _instrument_libraries() -> None:
         LoggingInstrumentor().instrument(set_logging_format=True)
     except Exception as e:
         logger.debug(f"[otel] logging instrumentation skipped: {e}")
+    try:
+        from opentelemetry.instrumentation.celery import CeleryInstrumentor
+        CeleryInstrumentor().instrument()
+    except Exception as e:
+        logger.debug(f"[otel] celery instrumentation skipped: {e}")
 
 
 def init_otel(also_instrument_fastapi_app=None) -> bool:

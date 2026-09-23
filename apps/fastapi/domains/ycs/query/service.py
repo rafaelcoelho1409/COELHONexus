@@ -90,13 +90,16 @@ async def query_es(
 
     t0 = time.monotonic()
     try:
-        response = await es.search(
-            index = indexes,
-            query = query,
-            size  = limit,
-            from_ = offset,
-            _source = True,
-        )
+        with domains.ycs.runtime.observability.spans.es_search_span(
+            index = indexes, top_k = limit,
+        ):
+            response = await es.search(
+                index = indexes,
+                query = query,
+                size  = limit,
+                from_ = offset,
+                _source = True,
+            )
     except Exception as e:
         logger.warning(f"[ycs:query:es] search failed: {type(e).__name__}: {e}")
         return _envelope(
@@ -162,14 +165,17 @@ async def query_qdrant(
             # tuple into its own `using=` kwarg, and the vector itself
             # goes bare into `query=`. Same shape `retriever/service.py`'s
             # `QdrantHybridRetriever` already uses for the RAG path.
-            response = await client.query_points(
-                collection_name = collection,
-                query           = vector,
-                using           = using,
-                limit           = limit,
-                with_payload    = True,
-            )
-            results = response.points
+            with domains.ycs.runtime.observability.spans.qdrant_search_span(
+                collection = collection, top_k = limit,
+            ):
+                response = await client.query_points(
+                    collection_name = collection,
+                    query           = vector,
+                    using           = using,
+                    limit           = limit,
+                    with_payload    = True,
+                )
+                results = response.points
         except Exception as e:
             logger.warning(f"[ycs:query:qdrant] search failed: {type(e).__name__}: {e}")
             return _envelope(
@@ -180,12 +186,15 @@ async def query_qdrant(
         return _envelope(params.BACKEND_QDRANT, app, q, hits, total = len(hits), t0 = t0)
 
     try:
-        records, _next = await client.scroll(
-            collection_name = collection,
-            limit           = limit,
-            with_payload    = True,
-            with_vectors    = False,
-        )
+        with domains.ycs.runtime.observability.spans.qdrant_search_span(
+            collection = collection, top_k = limit, operation = "scroll",
+        ):
+            records, _next = await client.scroll(
+                collection_name = collection,
+                limit           = limit,
+                with_payload    = True,
+                with_vectors    = False,
+            )
     except Exception as e:
         logger.warning(f"[ycs:query:qdrant] scroll failed: {type(e).__name__}: {e}")
         return _envelope(
@@ -221,9 +230,12 @@ async def query_neo4j(
     t0 = time.monotonic()
     try:
         driver = infra.neo4j.service.get_driver()
-        async with driver.session(database = infra.neo4j.params.NEO4J_DATABASE) as session:
-            result = await session.run(cypher, cypher_params)
-            records = [dict(record) async for record in result]
+        with domains.ycs.runtime.observability.spans.neo4j_query_span(
+            operation = "search" if raw_q else "browse",
+        ):
+            async with driver.session(database = infra.neo4j.params.NEO4J_DATABASE) as session:
+                result = await session.run(cypher, cypher_params)
+                records = [dict(record) async for record in result]
     except Exception as e:
         logger.warning(f"[ycs:query:neo4j] cypher failed: {type(e).__name__}: {e}")
         return _envelope(
@@ -291,7 +303,10 @@ async def raw_es(
         )
 
     try:
-        response = await es.search(index = indexes, body = parsed.body)
+        with domains.ycs.runtime.observability.spans.es_search_span(
+            index = indexes, top_k = parsed.body.get("size", 0), operation = "raw_search",
+        ):
+            response = await es.search(index = indexes, body = parsed.body)
     except Exception as e:
         logger.warning(f"[ycs:query:raw_es] failed: {type(e).__name__}: {e}")
         return _raw_envelope(
@@ -357,34 +372,37 @@ async def raw_qdrant(
     body["collection_name"] = collection
 
     try:
-        if op == "search":
-            # 2026-09-17: `AsyncQdrantClient.search()` was removed in
-            # qdrant-client 1.16 (live-confirmed via the semantic-search
-            # tab throwing `AttributeError: 'AsyncQdrantClient' object
-            # has no attribute 'search'`) — "search" is this editor's
-            # DEFAULT op (`domain.py::parse_qdrant_body`), so this was
-            # broken for anyone who didn't explicitly type `"op":
-            # "query_points"`. Translate the legacy body shape and
-            # dispatch through `query_points()` instead, same as the
-            # explicit `query_points` branch below.
-            r = await client.query_points(**domain.translate_search_body(body))
-            results = getattr(r, "points", r)
-        elif op == "scroll":
-            records, _ = await client.scroll(**body)
-            results    = records
-        elif op == "query_points":
-            r = await client.query_points(**body)
-            results = getattr(r, "points", r)
-        elif op == "count":
-            n = await client.count(**body)
-            return _raw_envelope(
-                params.BACKEND_QDRANT, app, t0,
-                hits  = [{"summary": f"count={n.count}", "raw": {"count": n.count}}],
-                total = int(n.count),
-                notes = notes,
-            )
-        else:
-            return _raw_disallowed(params.BACKEND_QDRANT, app, f"unknown op {op!r}")
+        with domains.ycs.runtime.observability.spans.qdrant_search_span(
+            collection = collection, top_k = 0, operation = f"raw_{op}",
+        ):
+            if op == "search":
+                # 2026-09-17: `AsyncQdrantClient.search()` was removed in
+                # qdrant-client 1.16 (live-confirmed via the semantic-search
+                # tab throwing `AttributeError: 'AsyncQdrantClient' object
+                # has no attribute 'search'`) — "search" is this editor's
+                # DEFAULT op (`domain.py::parse_qdrant_body`), so this was
+                # broken for anyone who didn't explicitly type `"op":
+                # "query_points"`. Translate the legacy body shape and
+                # dispatch through `query_points()` instead, same as the
+                # explicit `query_points` branch below.
+                r = await client.query_points(**domain.translate_search_body(body))
+                results = getattr(r, "points", r)
+            elif op == "scroll":
+                records, _ = await client.scroll(**body)
+                results    = records
+            elif op == "query_points":
+                r = await client.query_points(**body)
+                results = getattr(r, "points", r)
+            elif op == "count":
+                n = await client.count(**body)
+                return _raw_envelope(
+                    params.BACKEND_QDRANT, app, t0,
+                    hits  = [{"summary": f"count={n.count}", "raw": {"count": n.count}}],
+                    total = int(n.count),
+                    notes = notes,
+                )
+            else:
+                return _raw_disallowed(params.BACKEND_QDRANT, app, f"unknown op {op!r}")
     except TypeError as e:
         # Pydantic / qdrant-client kwargs mismatch on user-supplied body.
         return _raw_envelope(
@@ -448,11 +466,14 @@ async def raw_neo4j(
     t0 = time.monotonic()
     try:
         driver = infra.neo4j.service.get_driver()
-        async with driver.session(
-            database = infra.neo4j.params.NEO4J_DATABASE, default_access_mode = "READ",
-        ) as session:
-            result = await session.run(body_text)
-            records = [dict(r) async for r in result]
+        with domains.ycs.runtime.observability.spans.neo4j_query_span(
+            operation = "raw_cypher",
+        ):
+            async with driver.session(
+                database = infra.neo4j.params.NEO4J_DATABASE, default_access_mode = "READ",
+            ) as session:
+                result = await session.run(body_text)
+                records = [dict(r) async for r in result]
     except Exception as e:
         logger.warning(f"[ycs:query:raw_neo4j] failed: {type(e).__name__}: {e}")
         return _raw_envelope(
@@ -791,8 +812,11 @@ async def _build_es_schema_live() -> dict[str, Any]:
     out: dict[str, Any] = {"indices": {}}
     for idx in indices:
         try:
-            mapping = await es.indices.get_mapping(index = idx)
-            stats   = await es.indices.stats(index = idx, metric = "docs")
+            with domains.ycs.runtime.observability.spans.es_search_span(
+                index = idx, top_k = 0, operation = "get_mapping",
+            ):
+                mapping = await es.indices.get_mapping(index = idx)
+                stats   = await es.indices.stats(index = idx, metric = "docs")
         except Exception as e:
             out["indices"][idx] = {"error": f"{type(e).__name__}: {str(e)[:160]}"}
             continue
@@ -805,11 +829,14 @@ async def _build_es_schema_live() -> dict[str, Any]:
 
         samples: list[dict[str, Any]] = []
         try:
-            s_resp = await es.search(
-                index = idx,
-                size  = 2,
-                query = {"match_all": {}},
-            )
+            with domains.ycs.runtime.observability.spans.es_search_span(
+                index = idx, top_k = 2, operation = "schema_sample",
+            ):
+                s_resp = await es.search(
+                    index = idx,
+                    size  = 2,
+                    query = {"match_all": {}},
+                )
             for h in s_resp.get("hits", {}).get("hits", []):
                 samples.append({
                     "_id":     h.get("_id"),
@@ -831,9 +858,12 @@ async def _build_es_schema_live() -> dict[str, Any]:
                 for i, name in enumerate(keyword_fields)
             }
             try:
-                a_resp = await es.search(
-                    index = idx, size = 0, aggs = aggs,
-                )
+                with domains.ycs.runtime.observability.spans.es_search_span(
+                    index = idx, top_k = 0, operation = "schema_aggs",
+                ):
+                    a_resp = await es.search(
+                        index = idx, size = 0, aggs = aggs,
+                    )
                 buckets = a_resp.get("aggregations", {}) or {}
                 for i, name in enumerate(keyword_fields):
                     raw = buckets.get(f"v_{i}", {}).get("buckets", []) or []
@@ -886,7 +916,10 @@ async def _build_qdrant_schema_live() -> dict[str, Any]:
     collection = params.APP_BACKENDS[params.APP_YCS][params.BACKEND_QDRANT].target
     client = infra.qdrant.service.get_qdrant()
     try:
-        info = await client.get_collection(collection_name = collection)
+        with domains.ycs.runtime.observability.spans.qdrant_search_span(
+            collection = collection, top_k = 0, operation = "get_collection",
+        ):
+            info = await client.get_collection(collection_name = collection)
     except Exception as e:
         return {"collections": [{
             "name": collection,
@@ -907,12 +940,15 @@ async def _build_qdrant_schema_live() -> dict[str, Any]:
     # Sample payloads: payload_schema only has indexed keys; scrolling catches additional unindexed ones.
     samples: list[dict[str, Any]] = []
     try:
-        records, _ = await client.scroll(
-            collection_name = collection,
-            limit           = 3,
-            with_payload    = True,
-            with_vectors    = False,
-        )
+        with domains.ycs.runtime.observability.spans.qdrant_search_span(
+            collection = collection, top_k = 3, operation = "schema_scroll",
+        ):
+            records, _ = await client.scroll(
+                collection_name = collection,
+                limit           = 3,
+                with_payload    = True,
+                with_vectors    = False,
+            )
         for r in records:
             payload = (getattr(r, "payload", None) or {})
             samples.append({
@@ -991,68 +1027,71 @@ async def _build_neo4j_schema_live() -> dict[str, Any]:
         "node_samples": {},
     }
     try:
-        async with driver.session(
-            database = infra.neo4j.params.NEO4J_DATABASE, default_access_mode = "READ",
-        ) as session:
-            r = await session.run(prompts.SCHEMA_CYPHER_LABELS)
-            row = await r.single()
-            out["labels"] = list(row["labels"]) if row else []
+        with domains.ycs.runtime.observability.spans.neo4j_query_span(
+            operation = "schema_introspect",
+        ):
+            async with driver.session(
+                database = infra.neo4j.params.NEO4J_DATABASE, default_access_mode = "READ",
+            ) as session:
+                r = await session.run(prompts.SCHEMA_CYPHER_LABELS)
+                row = await r.single()
+                out["labels"] = list(row["labels"]) if row else []
 
-            r = await session.run(prompts.SCHEMA_CYPHER_RELS)
-            row = await r.single()
-            out["relationship_types"] = list(row["rels"]) if row else []
+                r = await session.run(prompts.SCHEMA_CYPHER_RELS)
+                row = await r.single()
+                out["relationship_types"] = list(row["rels"]) if row else []
 
-            r = await session.run(prompts.SCHEMA_CYPHER_PROPS)
-            props_by_label: dict[str, list[dict[str, Any]]] = {}
-            async for row in r:
-                labels = list(row["nodeLabels"] or [])
-                name   = row["propertyName"]
-                types  = list(row["propertyTypes"] or [])
-                if not name:
-                    continue
-                for lab in labels:
-                    props_by_label.setdefault(lab, []).append({
-                        "name":  name,
-                        "types": types,
-                    })
-            out["node_properties"] = props_by_label
-
-            # Real connectivity — frequency-ranked. This is the
-            # single highest-ROI add for AI grounding: the LLM sees
-            # `(Document)-[MENTIONS]->(__Entity__) x 18402` rather
-            # than guessing that `:MENTIONS` might exist.
-            try:
-                r = await session.run(prompts.SCHEMA_CYPHER_REL_PATTERNS)
+                r = await session.run(prompts.SCHEMA_CYPHER_PROPS)
+                props_by_label: dict[str, list[dict[str, Any]]] = {}
                 async for row in r:
-                    out["relationship_patterns"].append({
-                        "src":   row["src"],
-                        "rel":   row["rel"],
-                        "dst":   row["dst"],
-                        "count": int(row["n"] or 0),
-                    })
-            except Exception as e:
-                logger.debug(f"[ycs:query:schema:neo4j] rel patterns failed: {e}")
-
-            # Sample 3 nodes per label. Capped to first 10 labels to
-            # keep schema size bounded; the rest get an empty list.
-            for lab in (out["labels"] or [])[:10]:
-                try:
-                    r = await session.run(
-                        prompts.SCHEMA_CYPHER_LABEL_SAMPLES, {"label": lab},
-                    )
-                    samples: list[dict[str, Any]] = []
-                    async for row in r:
-                        n = row["n"]
-                        props = dict(n) if n else {}
-                        samples.append({
-                            "id":         n.element_id if n else None,
-                            "properties": domain.truncate_doc(props),
+                    labels = list(row["nodeLabels"] or [])
+                    name   = row["propertyName"]
+                    types  = list(row["propertyTypes"] or [])
+                    if not name:
+                        continue
+                    for lab in labels:
+                        props_by_label.setdefault(lab, []).append({
+                            "name":  name,
+                            "types": types,
                         })
-                    out["node_samples"][lab] = samples
+                out["node_properties"] = props_by_label
+
+                # Real connectivity — frequency-ranked. This is the
+                # single highest-ROI add for AI grounding: the LLM sees
+                # `(Document)-[MENTIONS]->(__Entity__) x 18402` rather
+                # than guessing that `:MENTIONS` might exist.
+                try:
+                    r = await session.run(prompts.SCHEMA_CYPHER_REL_PATTERNS)
+                    async for row in r:
+                        out["relationship_patterns"].append({
+                            "src":   row["src"],
+                            "rel":   row["rel"],
+                            "dst":   row["dst"],
+                            "count": int(row["n"] or 0),
+                        })
                 except Exception as e:
-                    logger.debug(
-                        f"[ycs:query:schema:neo4j] samples for {lab!r} failed: {e}",
-                    )
+                    logger.debug(f"[ycs:query:schema:neo4j] rel patterns failed: {e}")
+
+                # Sample 3 nodes per label. Capped to first 10 labels to
+                # keep schema size bounded; the rest get an empty list.
+                for lab in (out["labels"] or [])[:10]:
+                    try:
+                        r = await session.run(
+                            prompts.SCHEMA_CYPHER_LABEL_SAMPLES, {"label": lab},
+                        )
+                        samples: list[dict[str, Any]] = []
+                        async for row in r:
+                            n = row["n"]
+                            props = dict(n) if n else {}
+                            samples.append({
+                                "id":         n.element_id if n else None,
+                                "properties": domain.truncate_doc(props),
+                            })
+                        out["node_samples"][lab] = samples
+                    except Exception as e:
+                        logger.debug(
+                            f"[ycs:query:schema:neo4j] samples for {lab!r} failed: {e}",
+                        )
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {str(e)[:200]}"
     return out
@@ -1099,29 +1138,32 @@ async def get_neo4j_schema(*, request: Request, refresh: bool = False) -> dict[s
 async def ensure_query_history_table(pg_url: str) -> None:
     """Idempotent table init. Called lazily on first read/write — keeps
     Query out of the lifespan hot path (cheap when already created)."""
-    async with await psycopg.AsyncConnection.connect(
-        pg_url, autocommit = True,
-    ) as conn:
-        await conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS {keys.HISTORY_TABLE_NAME} (
-                id           BIGSERIAL PRIMARY KEY,
-                backend      TEXT      NOT NULL,
-                app          TEXT      NOT NULL DEFAULT 'ycs',
-                body         TEXT      NOT NULL,
-                prompt       TEXT      NOT NULL DEFAULT '',
-                favorite     BOOLEAN   NOT NULL DEFAULT FALSE,
-                owner        TEXT,
-                created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-            )
-        """)
-        await conn.execute(f"""
-            CREATE INDEX IF NOT EXISTS query_history_created_idx
-                ON {keys.HISTORY_TABLE_NAME} (created_at DESC)
-        """)
-        await conn.execute(f"""
-            CREATE INDEX IF NOT EXISTS query_history_backend_idx
-                ON {keys.HISTORY_TABLE_NAME} (backend, created_at DESC)
-        """)
+    with domains.ycs.runtime.observability.spans.postgres_span(
+        operation = "bootstrap", table = keys.HISTORY_TABLE_NAME,
+    ):
+        async with await psycopg.AsyncConnection.connect(
+            pg_url, autocommit = True,
+        ) as conn:
+            await conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {keys.HISTORY_TABLE_NAME} (
+                    id           BIGSERIAL PRIMARY KEY,
+                    backend      TEXT      NOT NULL,
+                    app          TEXT      NOT NULL DEFAULT 'ycs',
+                    body         TEXT      NOT NULL,
+                    prompt       TEXT      NOT NULL DEFAULT '',
+                    favorite     BOOLEAN   NOT NULL DEFAULT FALSE,
+                    owner        TEXT,
+                    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            await conn.execute(f"""
+                CREATE INDEX IF NOT EXISTS query_history_created_idx
+                    ON {keys.HISTORY_TABLE_NAME} (created_at DESC)
+            """)
+            await conn.execute(f"""
+                CREATE INDEX IF NOT EXISTS query_history_backend_idx
+                    ON {keys.HISTORY_TABLE_NAME} (backend, created_at DESC)
+            """)
 
 
 async def save_query_history_entry(
@@ -1131,15 +1173,18 @@ async def save_query_history_entry(
     """Insert one row, return its id. Errors propagate up so the router
     can 5xx on Postgres outages instead of silently no-op'ing."""
     await ensure_query_history_table(pg_url)
-    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
-        result = await conn.execute(
-            f"INSERT INTO {keys.HISTORY_TABLE_NAME} "
-            f"(backend, app, body, prompt, favorite) "
-            f"VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (backend, app, body, prompt, favorite),
-        )
-        row = await result.fetchone()
-        await conn.commit()
+    with domains.ycs.runtime.observability.spans.postgres_span(
+        operation = "insert", table = keys.HISTORY_TABLE_NAME,
+    ):
+        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+            result = await conn.execute(
+                f"INSERT INTO {keys.HISTORY_TABLE_NAME} "
+                f"(backend, app, body, prompt, favorite) "
+                f"VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                (backend, app, body, prompt, favorite),
+            )
+            row = await result.fetchone()
+            await conn.commit()
     return int(row[0]) if row else 0
 
 
@@ -1150,22 +1195,25 @@ async def list_query_history_entries(
     backend. Body is included so the UI can show a snippet without an
     extra round-trip."""
     await ensure_query_history_table(pg_url)
-    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
-        if backend:
-            result = await conn.execute(
-                f"SELECT id, backend, app, body, prompt, favorite, created_at "
-                f"FROM {keys.HISTORY_TABLE_NAME} WHERE backend = %s "
-                f"ORDER BY created_at DESC LIMIT %s",
-                (backend, limit),
-            )
-        else:
-            result = await conn.execute(
-                f"SELECT id, backend, app, body, prompt, favorite, created_at "
-                f"FROM {keys.HISTORY_TABLE_NAME} "
-                f"ORDER BY created_at DESC LIMIT %s",
-                (limit,),
-            )
-        rows = await result.fetchall()
+    with domains.ycs.runtime.observability.spans.postgres_span(
+        operation = "select", table = keys.HISTORY_TABLE_NAME,
+    ):
+        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+            if backend:
+                result = await conn.execute(
+                    f"SELECT id, backend, app, body, prompt, favorite, created_at "
+                    f"FROM {keys.HISTORY_TABLE_NAME} WHERE backend = %s "
+                    f"ORDER BY created_at DESC LIMIT %s",
+                    (backend, limit),
+                )
+            else:
+                result = await conn.execute(
+                    f"SELECT id, backend, app, body, prompt, favorite, created_at "
+                    f"FROM {keys.HISTORY_TABLE_NAME} "
+                    f"ORDER BY created_at DESC LIMIT %s",
+                    (limit,),
+                )
+            rows = await result.fetchall()
     return [
         {
             "id":         int(r[0]),
@@ -1183,11 +1231,14 @@ async def list_query_history_entries(
 async def delete_query_history_entry(pg_url: str, entry_id: int) -> int:
     """DELETE one row by id. Returns 1 if removed, 0 if not found."""
     await ensure_query_history_table(pg_url)
-    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
-        result = await conn.execute(
-            f"DELETE FROM {keys.HISTORY_TABLE_NAME} WHERE id = %s",
-            (entry_id,),
-        )
-        await conn.commit()
+    with domains.ycs.runtime.observability.spans.postgres_span(
+        operation = "delete", table = keys.HISTORY_TABLE_NAME,
+    ):
+        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+            result = await conn.execute(
+                f"DELETE FROM {keys.HISTORY_TABLE_NAME} WHERE id = %s",
+                (entry_id,),
+            )
+            await conn.commit()
     # psycopg cursor.rowcount carries the affected-row count.
     return int(getattr(result, "rowcount", 0) or 0)

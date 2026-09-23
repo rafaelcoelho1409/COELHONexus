@@ -1,5 +1,6 @@
 """render — Jinja2 environment + inline chapter template."""
 from __future__ import annotations
+import infra
 
 from jinja2 import Environment, StrictUndefined
 
@@ -60,7 +61,7 @@ CHAPTER_MD_TEMPLATE = """\
 """
 
 
-NORMALIZE_PROMPT_BASE = (
+_NORMALIZE_PROMPT_BASE = (
     "You are a code formatter. Fix indentation, line-break, and "
     "whitespace so the {lang} code below is correctly formatted. The "
     "code was likely mangled by upstream tooling that flattened "
@@ -93,7 +94,19 @@ NORMALIZE_PROMPT_BASE = (
     "```{lang}\n{body}\n```"
 )
 
-NORMALIZE_PROMPT_PYTHON_RETRY = (
+
+@infra.langfuse.prompts.with_langfuse_override("dd.synth.render.normalize_base")
+def build_normalize_base(
+    *,
+    body: str,
+    lang: str,
+) -> str:
+    return _NORMALIZE_PROMPT_BASE.format(
+        body = body,
+        lang = lang,
+    )
+
+_NORMALIZE_PROMPT_PYTHON_RETRY = (
     "The Python code below failed to parse with `ast.parse` — likely "
     "because function or class bodies are at the same indent level as "
     "their `def`/`class` header (Mintlify MDX flattening). Fix the "
@@ -105,3 +118,15 @@ NORMALIZE_PROMPT_PYTHON_RETRY = (
     "preamble.\n\n"
     "```python\n{body}\n```"
 )
+
+
+@infra.langfuse.prompts.with_langfuse_override("dd.synth.render.normalize_python_retry")
+def build_normalize_python_retry(
+    *,
+    body: str,
+    error: str,
+) -> str:
+    return _NORMALIZE_PROMPT_PYTHON_RETRY.format(
+        body = body,
+        error = error,
+    )

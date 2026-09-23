@@ -226,7 +226,7 @@ async def run_planner_async(
     """Fresh planner kickoff. Builds graph + initial state, spawns the
     LangGraph task + cancel watcher, awaits terminal."""
     import infra
-    with infra.langfuse.sessions.session(
+    with infra.langfuse.service.session(
         "dd-planner",
         session_id = thread_id,
         user_id    = slug,

@@ -9,6 +9,7 @@ SOTA Sept 2026 on coelho-llm-rotator pooled:
 """
 from __future__ import annotations
 import domains
+import infra
 from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio
@@ -301,15 +302,11 @@ async def chapter_assign_run(state: domains.dd.planner.state.PlannerState) -> di
             f"chapter_select. Sample: "
             f"{[(r['key'], r['original_conf']) for r in rescued[:10]]}"
         )
-        try:
-            import infra.langfuse
-            infra.langfuse.annotation.flag_for_review(
-                f"chapter_assign rescued {len(rescued)} doc(s) in confidence "
-                f"band [{params.RESCUE_FLOOR}, {params.CONFIDENCE_THRESHOLD})",
-                severity = "low",
-            )
-        except Exception:
-            pass
+        infra.langfuse.service.flag_for_review(
+            f"chapter_assign rescued {len(rescued)} doc(s) in confidence "
+            f"band [{params.RESCUE_FLOOR}, {params.CONFIDENCE_THRESHOLD})",
+            severity = "low",
+        )
 
     # Rebuild coverage_count AFTER rescue so the post-rescue picture is
     # what flows into the stats payload.

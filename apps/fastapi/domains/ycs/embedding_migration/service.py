@@ -241,13 +241,17 @@ async def cutover(redis: Any, qdrant: AsyncQdrantClient, physical_collection: st
     real_names = {c.name for c in (await qdrant.get_collections()).collections}
     if domains.ycs.ingestion.params.QDRANT_COLLECTION in real_names:
         await qdrant.delete_collection(domains.ycs.ingestion.params.QDRANT_COLLECTION)
-    await qdrant.update_collection_aliases(
-        change_aliases_operations = [
-            CreateAliasOperation(create_alias = CreateAlias(
-                collection_name = physical_collection, alias_name = domains.ycs.ingestion.params.QDRANT_COLLECTION,
-            )),
-        ],
-    )
+    with domains.ycs.runtime.observability.spans.qdrant_admin_span(
+        operation = "update_collection_aliases",
+        collection = domains.ycs.ingestion.params.QDRANT_COLLECTION,
+    ):
+        await qdrant.update_collection_aliases(
+            change_aliases_operations = [
+                CreateAliasOperation(create_alias = CreateAlias(
+                    collection_name = physical_collection, alias_name = domains.ycs.ingestion.params.QDRANT_COLLECTION,
+                )),
+            ],
+        )
     await redis.delete(keys.migration_state_key())
     logger.info(
         f"[ycs:embedding_migration] cutover complete — {domains.ycs.ingestion.params.QDRANT_COLLECTION!r} "

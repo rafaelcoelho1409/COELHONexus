@@ -1,6 +1,7 @@
 """mgsr — service functions (prompts, validators, halt logic, orchestrator)."""
 from __future__ import annotations
 import domains
+import infra
 from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio
@@ -284,6 +285,13 @@ async def mgsr_replan_run(state: domains.dd.synth.state.SynthState) -> dict:
     )
     pass_rate = float(checklist.get("pass_rate", 0.0))
     chapter_passed = bool(checklist.get("chapter_passed", False))
+    infra.langfuse.service.record_score(
+        "mgsr.pass_rate", pass_rate, comment = f"chapter={chapter_id}",
+    )
+    infra.langfuse.service.record_score(
+        "mgsr.chapter_passed", 1.0 if chapter_passed else 0.0,
+        comment = f"chapter={chapter_id}",
+    )
     failed_feedback = list(checklist.get("failed_feedback") or [])
     n_failed = len(failed_feedback)
     failed_names = [

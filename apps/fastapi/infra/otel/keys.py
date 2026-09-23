@@ -36,6 +36,7 @@ ALLOWED_BAGGAGE_KEYS: frozenset[str] = frozenset({
     "framework",
     "channel_id",
     "digest_id",
+    "chapter_id",
     "tenant",
     "arm_name",
     "session_id",

@@ -1,6 +1,7 @@
 """ycs/agents — agentic RAG router: ask (sync+stream), ingest, graph stats, pipeline."""
 from __future__ import annotations
 import domains
+import infra
 from . import domain, params, schemas, service
 
 import asyncio
@@ -11,6 +12,7 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from opentelemetry import trace
 
 
 router = APIRouter()
@@ -200,8 +202,9 @@ async def rag_search(
         except Exception:
             _usage_before = None
         _user_id  = (payload.channel_ids or ["default"])[0]
+        _trace_id = None  # captured inside the ask span; returned for /feedback
         t0 = time.monotonic()
-        with infra.langfuse.sessions.session(
+        with infra.langfuse.service.session(
             "ycs",
             session_id = _sess_id,
             user_id    = _user_id,
@@ -239,6 +242,12 @@ async def rag_search(
                     "route": "search",
                     "channel_count": len(payload.channel_ids or []),
                 })
+                try:
+                    _trace_id = format(
+                        trace.get_current_span().get_span_context().trace_id, "032x",
+                    )
+                except Exception:
+                    _trace_id = None
                 try:
                     _deadline = params.ASK_DEADLINE_S.get(
                         (payload.force_mode or "").lower(),
@@ -328,6 +337,8 @@ async def rag_search(
         "search_query":       result.get("search_query", payload.question),
         "usage":              usage,
     }
+    if _trace_id is not None:
+        response["trace_id"] = _trace_id
     if mode == "deep":
         response["sub_questions"]    = result.get("sub_questions", [])
         response["confidence_score"] = result.get("confidence_score", 0.0)
@@ -351,6 +362,19 @@ async def rag_search(
             mode = payload.force_mode,
         )
     return response
+
+
+@router.post("/feedback")
+async def ask_feedback(payload: schemas.AskFeedbackRequest) -> dict:
+    """User rating for an ask turn. Fire-and-forget by design (score writes
+    must never fail a request): returns `accepted` when the payload is
+    valid; the `user.feedback` score lands on the turn's trace."""
+    infra.langfuse.service.record_score(
+        "user.feedback", payload.rating,
+        trace_id = payload.trace_id,
+        comment  = payload.comment or None,
+    )
+    return {"accepted": True}
 
 
 @router.post("/search/stream")
@@ -641,7 +665,7 @@ async def rag_search_stream(
             _usage_before = await domains.ycs.runtime.llm_counter.service.read_counters(_sess_id)
         except Exception:
             _usage_before = None
-        _session_cm = infra.langfuse.sessions.session(
+        _session_cm = infra.langfuse.service.session(
             "ycs",
             session_id = _sess_id,
             user_id    = _user_id,
@@ -739,7 +763,7 @@ async def rag_search_stream(
 
             async def _producer_stream():
                 try:
-                    with infra.langfuse.sessions.session(
+                    with infra.langfuse.service.session(
                         "ycs",
                         session_id = _sess_id,
                         user_id    = _user_id,
@@ -780,7 +804,7 @@ async def rag_search_stream(
 
             async def _producer_invoke_fallback():
                 try:
-                    with infra.langfuse.sessions.session(
+                    with infra.langfuse.service.session(
                         "ycs",
                         session_id = _sess_id,
                         user_id    = _user_id,
@@ -1393,6 +1417,7 @@ async def ingest_to_qdrant(payload: schemas.IngestRequest) -> dict:
         payload.chunk_size,
         payload.chunk_overlap,
     )
+    trace.get_current_span().set_attribute("celery.task_id", task.id)
     return {
         "task_id":  task.id,
         "status":   "queued",
@@ -1405,6 +1430,7 @@ async def ingest_to_neo4j(payload: schemas.GraphIngestRequest) -> dict:
     """Queue entity extraction → Neo4j (Celery); 1 LLM call per transcript."""
     import domains.ycs.neo4j_task.task
     task = domains.ycs.neo4j_task.task.ingest_to_neo4j.delay(payload.video_ids, payload.batch_size)
+    trace.get_current_span().set_attribute("celery.task_id", task.id)
     return {
         "task_id":  task.id,
         "status":   "queued",
@@ -1438,6 +1464,7 @@ async def full_pipeline(payload: schemas.PipelineRequest) -> dict:
         payload.include_qdrant,
         payload.include_graph,
     )
+    trace.get_current_span().set_attribute("celery.task_id", task.id)
     return {
         "task_id":  task.id,
         "status":   "queued",

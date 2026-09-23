@@ -29,11 +29,19 @@ def is_mcp_transport_drop(name: str) -> bool:
 
 def is_curated_keep(name: str, attributes: Mapping[str, object]) -> bool:
     """True when domain code opted in explicitly, or the span name matches a
-    known domain/task-root prefix."""
+    known domain/task-root prefix.
+
+    No `"rotator."` prefix here (removed 2026-09-22) — that matched spans
+    the OLD internal `domains/llm/` gateway used to emit before it was
+    retired 2026-09-21 in favor of the external COELHOLLMRotator repo +
+    `domains/settings/chat`+`embeddings`. Nothing in this app creates a
+    `rotator.*`-named span anymore; the external Rotator's own spans (once
+    it stops no-op-stubbing them) go through its own exporter pipeline in
+    its own process, never through this gate."""
     if attributes.get("coelho.langfuse.keep") is True:
         return True
     return (
-        name.startswith(("dd.", "rr.", "ycs.", "mcp.tool.", "rotator."))
+        name.startswith(("dd.", "rr.", "ycs.", "mcp.tool."))
         or any(name.startswith(prefix) for prefix in keys.CELERY_DOMAIN_PREFIXES)
     )
 

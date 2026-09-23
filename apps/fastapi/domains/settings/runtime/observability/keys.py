@@ -32,3 +32,9 @@ OP_EMBEDDING = "embedding"
 
 SYSTEM_NEXUS_CHAT_ENDPOINT      = "coelhonexus-chat-endpoint"
 SYSTEM_NEXUS_EMBEDDING_ENDPOINT = "coelhonexus-embedding-endpoint"
+
+# LangFuse observation typing — an explicit type always wins over ingest
+# inference, so chat spans classify as `generation` (cost + Metrics tab)
+# even when conventions shift under us.
+LANGFUSE_OBSERVATION_TYPE   = "langfuse.observation.type"
+OBSERVATION_TYPE_GENERATION = "generation"

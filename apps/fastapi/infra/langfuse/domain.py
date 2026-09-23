@@ -1,10 +1,9 @@
 """langfuse domain — pure span-attribute encoders (no I/O, deterministic)."""
 from __future__ import annotations
+from . import params, patterns
 
 import json
 from typing import Any
-
-from . import params, patterns
 
 
 def truncate(text: str, cap: int) -> str:

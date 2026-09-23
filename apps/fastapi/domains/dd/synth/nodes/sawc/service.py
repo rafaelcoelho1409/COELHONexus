@@ -2,6 +2,7 @@
 Best-of-N writer drafts + critic-picker (MAMM-Refine arXiv 2503.15272); 2-attempt repair loop for alignment violations."""
 from __future__ import annotations
 import domains
+import infra
 from . import domain, keys, params, schemas, versions
 
 import asyncio
@@ -14,12 +15,6 @@ from typing import Optional
 
 
 logger = logging.getLogger(__name__)
-
-
-try:
-    import infra
-except Exception:
-    infra.langfuse.prompts.with_langfuse_override = lambda *a, **kw: (lambda fn: fn)  # noqa: E731
 
 
 # Draft-call attempts before permanently losing this draft slot (best-of-N

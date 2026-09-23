@@ -40,7 +40,7 @@ async def synthesize(state: state.AdaptiveRAGState, llm) -> dict:
         )
     sub_results_text = "\n\n".join(parts)
 
-    chain = prompts.SYNTHESIZE_PROMPT | llm
+    chain = service.resolve_prompt(prompts.SYNTHESIZE_PROMPT, "ycs.rag.synthesize") | llm
     try:
         domains.ycs.runtime.llm_counter.service.set_node(node = "synthesize")
         response = await service.resilient_ainvoke(

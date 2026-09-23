@@ -29,7 +29,7 @@ async def contextualize_question(state: state.AdaptiveRAGState, llm) -> dict:
         )
     formatted = "\n---\n".join(parts)
 
-    chain = prompts.CONTEXTUALIZE_PROMPT | llm
+    chain = service.resolve_prompt(prompts.CONTEXTUALIZE_PROMPT, "ycs.rag.contextualize") | llm
     try:
         domains.ycs.runtime.llm_counter.service.set_node(node = "contextualize")
         response = await service.resilient_ainvoke(

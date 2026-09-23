@@ -1,5 +1,7 @@
 """ycs/admin — ES aggregations, library view, and Celery task-status helpers for FastHTML."""
 from __future__ import annotations
+import domains
+import infra.celery.service
 from . import domain, service
 
 from typing import Any
@@ -7,8 +9,6 @@ from typing import Any
 from celery.result import AsyncResult
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-
-import infra.celery.service
 
 
 router = APIRouter()
@@ -140,19 +140,23 @@ async def list_videos(
         })
     query: dict[str, Any] = {"bool": {"must": must}} if must else {"match_all": {}}
     try:
-        response = await es.search(
+        with domains.ycs.runtime.observability.spans.es_search_span(
             index = infra.elasticsearch.keys.INDEX_METADATA,
-            query = query,
-            size  = max(1, min(int(limit), 500)),
-            from_ = max(0, int(offset)),
-            sort  = [{"_score": "desc"}, {"upload_date": "desc"}],
-            _source = [
-                "id", "title", "channel", "channel_id", "duration",
-                "duration_string", "view_count", "like_count",
-                "upload_date", "webpage_url", "thumbnail_url",
-                "playlist_id", "playlist_title", "description",
-            ],
-        )
+            top_k = max(1, min(int(limit), 500)),
+        ):
+            response = await es.search(
+                index = infra.elasticsearch.keys.INDEX_METADATA,
+                query = query,
+                size  = max(1, min(int(limit), 500)),
+                from_ = max(0, int(offset)),
+                sort  = [{"_score": "desc"}, {"upload_date": "desc"}],
+                _source = [
+                    "id", "title", "channel", "channel_id", "duration",
+                    "duration_string", "view_count", "like_count",
+                    "upload_date", "webpage_url", "thumbnail_url",
+                    "playlist_id", "playlist_title", "description",
+                ],
+            )
     except Exception as e:
         raise HTTPException(
             status_code = 503, detail = f"Elasticsearch error: {e}",
@@ -248,22 +252,26 @@ async def videos_facets(request: Request) -> dict:
     }
 
     try:
-        c_resp = await es.search(
-            index = infra.elasticsearch.keys.INDEX_METADATA,
-            size  = 0,
-            aggs  = {
-                "by_channel": {
-                    "terms": {"field": "channel_id", "size": 1000},
-                    "aggs": {
-                        "first_doc": {
-                            "top_hits": {
-                                "size": 1, "_source": ["channel"],
+        with domains.ycs.runtime.observability.spans.es_search_span(
+            index = infra.elasticsearch.keys.INDEX_METADATA, top_k = 0,
+            operation = "facet_channels",
+        ):
+            c_resp = await es.search(
+                index = infra.elasticsearch.keys.INDEX_METADATA,
+                size  = 0,
+                aggs  = {
+                    "by_channel": {
+                        "terms": {"field": "channel_id", "size": 1000},
+                        "aggs": {
+                            "first_doc": {
+                                "top_hits": {
+                                    "size": 1, "_source": ["channel"],
+                                },
                             },
                         },
                     },
                 },
-            },
-        )
+            )
         buckets = (
             c_resp.get("aggregations", {})
             .get("by_channel", {}).get("buckets", [])
@@ -289,13 +297,17 @@ async def videos_facets(request: Request) -> dict:
         pass
 
     try:
-        t_resp = await es.search(
-            index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
-            size  = 0,
-            aggs  = {
-                "by_lang": {"terms": {"field": "lang", "size": 50}},
-            },
-        )
+        with domains.ycs.runtime.observability.spans.es_search_span(
+            index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS, top_k = 0,
+            operation = "facet_languages",
+        ):
+            t_resp = await es.search(
+                index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
+                size  = 0,
+                aggs  = {
+                    "by_lang": {"terms": {"field": "lang", "size": 50}},
+                },
+            )
         for b in t_resp.get("aggregations", {}).get("by_lang", {}).get("buckets", []):
             out["languages"].append({
                 "key":   b["key"],
@@ -309,9 +321,13 @@ async def videos_facets(request: Request) -> dict:
         # Bounded like `list_videos`'s own transcript lookup — fine at
         # this scale (10k id cap); a corpus past that needs a real
         # scroll, not a bigger constant.
-        id_resp = await es.search(
-            index = infra.elasticsearch.keys.INDEX_METADATA, size = 10000, _source = False,
-        )
+        with domains.ycs.runtime.observability.spans.es_search_span(
+            index = infra.elasticsearch.keys.INDEX_METADATA, top_k = 10000,
+            operation = "facet_status_ids",
+        ):
+            id_resp = await es.search(
+                index = infra.elasticsearch.keys.INDEX_METADATA, size = 10000, _source = False,
+            )
         all_ids = [h["_id"] for h in id_resp.get("hits", {}).get("hits", [])]
         video_meta = await service._compute_video_statuses(
             es, getattr(request.app.state, "neo4j_graph", None), all_ids,

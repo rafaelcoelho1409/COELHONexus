@@ -68,7 +68,7 @@ async def run(run_id: str, slug: str) -> dict:
     ingestion had the span but not the session, so its spans never
     grouped into one trace in the LangFuse UI."""
     t0 = asyncio.get_running_loop().time()
-    with infra.langfuse.sessions.session(
+    with infra.langfuse.service.session(
         "dd-ingestion",
         session_id = run_id,
         user_id    = slug,

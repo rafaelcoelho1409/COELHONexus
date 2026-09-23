@@ -1,7 +1,9 @@
 """sawc_derive — LLM prompt builders (analogical expansion + re-explain)."""
 from __future__ import annotations
+import infra
 
 
+@infra.langfuse.prompts.with_langfuse_override("dd.synth.sawc_derive.reexplain")
 def build_reexplain_prompt(
     *,
     framework: str,
@@ -40,6 +42,7 @@ def build_reexplain_prompt(
     )
 
 
+@infra.langfuse.prompts.with_langfuse_override("dd.synth.sawc_derive.analogical")
 def build_analogical_prompt(
     *,
     framework: str,

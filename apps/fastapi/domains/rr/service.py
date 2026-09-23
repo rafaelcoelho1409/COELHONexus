@@ -224,7 +224,7 @@ async def run_scan_async(
 ) -> dict:
     """Span + metrics wrapper around the RR scan orchestration."""
     t0 = asyncio.get_running_loop().time()
-    with infra.langfuse.sessions.session(
+    with infra.langfuse.service.session(
         "rr",
         session_id = scan_id,
         user_id    = profile_id,

@@ -48,7 +48,7 @@ def extract_videos(
         self.update_state(state = "PROGRESS", meta = payload)
 
     async def _run() -> dict[str, Any]:
-        with infra.langfuse.sessions.session(
+        with infra.langfuse.service.session(
             "ycs-extract", session_id = self.request.id or "(no-request-id)",
         ), infra.otel.service.get_tracer().start_as_current_span(
             "ycs.extract.videos",
@@ -103,7 +103,7 @@ def extract_channel(
     )
 
     async def _run() -> dict[str, Any]:
-        with infra.langfuse.sessions.session(
+        with infra.langfuse.service.session(
             "ycs-extract",
             session_id = self.request.id or "(no-request-id)",
             channel_id = channel_id,
@@ -161,7 +161,7 @@ def extract_playlist(
     )
 
     async def _run() -> dict[str, Any]:
-        with infra.langfuse.sessions.session(
+        with infra.langfuse.service.session(
             "ycs-extract", session_id = self.request.id or "(no-request-id)",
         ), infra.otel.service.get_tracer().start_as_current_span(
             "ycs.extract.playlist",

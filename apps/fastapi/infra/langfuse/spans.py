@@ -8,12 +8,11 @@ Use on the CURRENT active span, typically the workflow-root span for DD,
 YCS, and RR.
 """
 from __future__ import annotations
+from . import domain, keys
 
 from typing import Any, Mapping
 
 from opentelemetry import trace
-
-from . import domain
 
 
 def _current_span():
@@ -40,12 +39,12 @@ def set_current_span_langfuse_io(
     try:
         if input_data is not None:
             encoded = domain.json_attr(input_data)
-            span.set_attribute("langfuse.observation.input", encoded)
-            span.set_attribute("langfuse.trace.input", encoded)
+            span.set_attribute(keys.OBS_INPUT, encoded)
+            span.set_attribute(keys.TRACE_INPUT, encoded)
         if output_data is not None:
             encoded = domain.json_attr(output_data)
-            span.set_attribute("langfuse.observation.output", encoded)
-            span.set_attribute("langfuse.trace.output", encoded)
+            span.set_attribute(keys.OBS_OUTPUT, encoded)
+            span.set_attribute(keys.TRACE_OUTPUT, encoded)
     except Exception:
         pass
 
@@ -64,7 +63,7 @@ def set_current_span_langfuse_trace_metadata(
             if value is None:
                 continue
             span.set_attribute(
-                f"langfuse.trace.metadata.{domain.metadata_key(key)}",
+                f"{keys.TRACE_META_PREFIX}{domain.metadata_key(key)}",
                 domain.metadata_value(value),
             )
     except Exception:
@@ -85,7 +84,7 @@ def set_current_span_langfuse_observation_metadata(
             if value is None:
                 continue
             span.set_attribute(
-                f"langfuse.observation.metadata.{domain.metadata_key(key)}",
+                f"{keys.OBS_META_PREFIX}{domain.metadata_key(key)}",
                 domain.metadata_value(value),
             )
     except Exception:

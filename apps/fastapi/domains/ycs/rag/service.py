@@ -37,13 +37,15 @@ exhausts retries with zero corpus evidence surviving the strict
 grader. Every call is short-timeout, best-effort, and degrades to "no
 web context" on ANY failure."""
 from __future__ import annotations
-import domains
+import domains, infra
 from . import domain, params
 
 import asyncio
 import logging
 import random
 from typing import Any
+
+from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
 
 
 logger = logging.getLogger(__name__)
@@ -82,6 +84,38 @@ async def capture_llm_usage(response: object) -> None:
         logger.warning(
             f"[ycs:rag:usage] capture failed: {type(e).__name__}: {e}"
         )
+
+
+def resolve_prompt(template: ChatPromptTemplate, name: str) -> ChatPromptTemplate:
+    """System-message override layer for LangChain RAG chains.
+
+    Multi-message templates (history placeholders, human messages) can't be
+    wholesale-swapped, so only the `system` message is replaceable: when a
+    template is published under `name`/`production`, the chain runs with the
+    managed system message and unchanged structure. Otherwise (or on any
+    failure) the static template is returned untouched — zero behavior
+    change until someone publishes.
+
+    Usage (in a node): `chain = service.resolve_prompt(prompts.X, "ycs.rag.x") | llm`
+    """
+    try:
+        override = infra.langfuse.prompts.get_prompt(name, label = "production")
+    except Exception:
+        return template
+    if not override:
+        return template
+    try:
+        msgs = []
+        replaced = False
+        for m in template.messages:
+            if not replaced and isinstance(m, SystemMessagePromptTemplate):
+                msgs.append(SystemMessagePromptTemplate.from_template(override))
+                replaced = True
+            else:
+                msgs.append(m)
+        return ChatPromptTemplate.from_messages(msgs) if replaced else template
+    except Exception:
+        return template
 
 
 async def resilient_ainvoke(

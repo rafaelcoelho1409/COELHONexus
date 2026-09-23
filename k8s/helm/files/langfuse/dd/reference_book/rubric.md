@@ -1,6 +1,7 @@
 # Faithfulness rubric — DD chapter outline
 
-Used by `infra/langfuse/evals/judges/faithfulness.py`. The LLM judge sees
+Used by `infra/langfuse/evals/judges/service.py::faithfulness` (template in
+`infra/langfuse/evals/judges/prompts.py`). The LLM judge sees
 this rubric inline in its prompt; do not rely on the markdown structure
 when editing.
 

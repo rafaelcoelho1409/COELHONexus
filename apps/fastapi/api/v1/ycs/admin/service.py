@@ -3,9 +3,10 @@ from __future__ import annotations
 import domains, infra
 from . import domain
 
+from typing import Any
+
 from elasticsearch import AsyncElasticsearch
 from fastapi import HTTPException
-from typing import Any
 
 
 def _es() -> AsyncElasticsearch:
@@ -34,11 +35,15 @@ async def _terms_facet(
         },
     }
     try:
-        response = await es.search(
-            index = infra.elasticsearch.keys.INDEX_METADATA,
-            size  = 0,
-            aggs  = aggs,
-        )
+        with domains.ycs.runtime.observability.spans.es_search_span(
+            index = infra.elasticsearch.keys.INDEX_METADATA, top_k = 0,
+            operation = "terms_facet",
+        ):
+            response = await es.search(
+                index = infra.elasticsearch.keys.INDEX_METADATA,
+                size  = 0,
+                aggs  = aggs,
+            )
     except Exception as e:
         raise HTTPException(
             status_code = 503,
@@ -91,24 +96,29 @@ async def _compute_video_statuses(
         return {}
     transcript_meta: dict[str, dict[str, Any]] = {}
     try:
-        t_response = await es.search(
+        with domains.ycs.runtime.observability.spans.es_search_span(
             index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
-            size  = min(10000, max(200, len(video_ids) * 10)),
-            query = {"bool": {"should": [
-                {"terms": {"video_id": video_ids}},
-                # `.keyword`, not the bare field — `parent_video_id` is
-                # mapped `text` (analyzed) with a `.keyword` sub-field;
-                # a `terms` query against the bare name tokenizes and
-                # silently matches nothing. This clause has been dead
-                # since it was first added (2026-09-14) until fixed
-                # live (2026-09-15) — every split video's status was
-                # computed as if it had no transcript at all, since its
-                # transcript docs (keyed by partition id) were never
-                # found when this ran with the PARENT id.
-                {"terms": {"parent_video_id.keyword": video_ids}},
-            ]}},
-            _source = ["video_id", "parent_video_id", "part_total", "lang", "content"],
-        )
+            top_k = min(10000, max(200, len(video_ids) * 10)),
+            operation = "video_status_lookup",
+        ):
+            t_response = await es.search(
+                index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
+                size  = min(10000, max(200, len(video_ids) * 10)),
+                query = {"bool": {"should": [
+                    {"terms": {"video_id": video_ids}},
+                    # `.keyword`, not the bare field — `parent_video_id` is
+                    # mapped `text` (analyzed) with a `.keyword` sub-field;
+                    # a `terms` query against the bare name tokenizes and
+                    # silently matches nothing. This clause has been dead
+                    # since it was first added (2026-09-14) until fixed
+                    # live (2026-09-15) — every split video's status was
+                    # computed as if it had no transcript at all, since its
+                    # transcript docs (keyed by partition id) were never
+                    # found when this ran with the PARENT id.
+                    {"terms": {"parent_video_id.keyword": video_ids}},
+                ]}},
+                _source = ["video_id", "parent_video_id", "part_total", "lang", "content"],
+            )
         grouped: dict[str, list[dict]] = {}
         for h in t_response.get("hits", {}).get("hits", []):
             s = h.get("_source") or {}

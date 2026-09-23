@@ -4,7 +4,7 @@ level (re-runs only add new items; LangFuse dedupes by source identity
 when provided).
 
 Usage (Python):
-    from infra.langfuse.datasets import upload_dataset_from_fixtures
+    from infra.langfuse.evals.datasets.uploader import upload_dataset_from_fixtures
     upload_dataset_from_fixtures(
         "/etc/langfuse-fixtures/dd/reference_book",
         dataset_name = "dd.reference_book.v1",
@@ -12,19 +12,18 @@ Usage (Python):
     )
 
 Usage (CLI, run inside the FastAPI image):
-    python -m infra.langfuse.datasets.uploader \\
+    python -m infra.langfuse.evals.datasets.uploader \\
         /etc/langfuse-fixtures/dd/reference_book dd.reference_book.v1
 
 Returns the number of items uploaded (0 if LangFuse is unavailable).
 """
 from __future__ import annotations
+from ... import service
 
 import json
 import logging
 import sys
 from pathlib import Path
-
-import infra.langfuse
 
 
 logger = logging.getLogger(__name__)
@@ -37,7 +36,7 @@ def upload_dataset_from_fixtures(
     description:  str = "",
 ) -> int:
     """Push `inputs.json` from `fixture_dir` into LangFuse. Returns count."""
-    client = infra.langfuse.service.get_client()
+    client = service.get_client()
     if client is None:
         logger.warning("[langfuse-datasets] client unavailable — upload skipped")
         return 0
@@ -78,7 +77,7 @@ def upload_dataset_from_fixtures(
 def _main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(
-            "usage: python -m infra.langfuse.datasets.uploader "
+            "usage: python -m infra.langfuse.evals.datasets.uploader "
             "<fixture_dir> <dataset_name> [description]",
             file = sys.stderr,
         )

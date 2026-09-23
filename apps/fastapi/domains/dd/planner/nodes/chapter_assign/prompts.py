@@ -1,9 +1,11 @@
 """Prompt builder: static rubric prefix before dynamic per-doc data for KV-cache reuse."""
 from __future__ import annotations
+import infra
 from . import params
 
 
 
+@infra.langfuse.prompts.with_langfuse_override("dd.planner.chapter_assign")
 def build_prompt(
     *,
     framework: str,

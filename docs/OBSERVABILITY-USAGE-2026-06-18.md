@@ -176,7 +176,7 @@ starts small enough to need it again.
 | `domain.py` | the span-gating/attribute logic contains ≥1 pure decision worth unit-testing without a real span object | Pure predicate/attribute-shaping functions, no I/O |
 
 Notably absent from this table: a per-domain `scores.py`. Scoring calls
-`infra.langfuse.scores.record_score(...)` directly from wherever a score is
+`infra.langfuse.service.record_score(...)` directly from wherever a score is
 computed (see §5) — no domain ever needed its own wrapper for it, so one
 was never created. If a feature eventually does, the same trigger logic
 above applies to it too.
@@ -193,10 +193,11 @@ already matches, with one real exception:
 | Domain | Files present | Matches triggers? |
 |---|---|---|
 | `dd/planner`, `dd/synth` | `metrics.py`, `service.py` | ✅ — `service.py` earned its keep (≥8 node files import it); no `spans.py`/`keys.py`/`domain.py` because neither trigger holds yet |
-| `ycs` | `metrics.py`, `service.py`, `spans.py`, `domain.py` | ✅ — the richest, because YCS genuinely has all four needs (node spans, `db.*`/`gen_ai.rerank` I/O spans, and pure attribute helpers) |
+| `dd/runtime` (shared) | `observability/spans.py` (new 2026-09-22) | ✅ — `api/v1/dd/{synth,planner}/router.py` both query the LangGraph `checkpoints` table directly (recent-threads listing, wipe endpoints) — real SQL we authored, not `AsyncPostgresSaver` internals — so it earned a shared `postgres_span(operation, **attrs)` at the `dd/runtime` level (used by both routers) rather than duplicating one per stage. `AsyncPostgresSaver`'s own internals (`domains/dd/planner/runtime/checkpoint/service.py`) stay unwrapped — third-party library code, not ours to instrument |
+| `ycs` | `metrics.py`, `service.py`, `spans.py`, `domain.py` | ✅ — the richest, because YCS genuinely has all four needs (node spans, `db.*`/`gen_ai.rerank` I/O spans, and pure attribute helpers). 2026-09-22: `spans.py` gained `postgres_span`, `qdrant_upsert_span`, `qdrant_admin_span`; every remaining raw Postgres/ES/Qdrant call site across `conversation/`, `query/`, `ingestion/`, `es_index/`, `embedding_migration/`, `transcript/service.py`, and `api/v1/ycs/admin/{router,service}.py` is now wrapped — no bare `psycopg`/ES-client/Qdrant-client call left un-spanned in `apps/fastapi/domains/ycs/` or its router |
 | `settings` | `metrics.py`, `spans.py`, `keys.py` | ✅ — no `service.py` (chat/embeddings are 2 leaf functions, not a multi-node graph, so no shared node-decorator need); `keys.py` earned its keep mirroring the `gen_ai.*` semconv |
 | `dd/ingestion` | `runtime/{dispatch,observability,progress}/`, `observability/` has only `metrics.py` | ✅ — moved under `runtime/` 2026-09-22 to match planner/synth structurally (`dispatch/`+`progress/`+`observability/` relocated together, not just observability alone — moving observability by itself would have left a `runtime/` folder holding exactly one thing, a worse inconsistency than the flat file it replaced). No `service.py`/`spans.py`/`keys.py`/`domain.py` — ingestion's one span is still inline in `runtime/dispatch/service.py:run()`, no fan-out of consumers exists to justify extracting it |
-| `rr` | `runtime/observability/{metrics,service}.py` | ✅ (2026-09-22 consolidation) — `runtime/metrics.py` moved to `runtime/observability/metrics.py`; the `@traced_tool` decorator moved from `agent/tools/observability.py` (an orphan next to an already-existing `runtime/` folder — the placement mistake, not a legitimate exception) to `runtime/observability/service.py`, mirroring planner/synth's `@traced`. The 4 tool-module callers now reach it via `from domains.rr.runtime.observability.service import traced_tool` (a plain import, not a `domains.*` attribute chase — required per §8 Exception 2 since `@traced_tool` runs at module-exec time). Phase-transition spans deliberately stay in `agent/middleware/service.py` — tightly coupled to `PhaseEventsMiddleware`'s own state, a legitimate exception, not fragmentation. |
+| `rr` | `runtime/observability/{metrics,service,spans}.py` | ✅ (2026-09-22 consolidation) — `runtime/metrics.py` moved to `runtime/observability/metrics.py`; the `@traced_tool` decorator moved from `agent/tools/observability.py` (an orphan next to an already-existing `runtime/` folder — the placement mistake, not a legitimate exception) to `runtime/observability/service.py`, mirroring planner/synth's `@traced`. The 4 tool-module callers now reach it via `from domains.rr.runtime.observability.service import traced_tool` (a plain import, not a `domains.*` attribute chase — required per §8 Exception 2 since `@traced_tool` runs at module-exec time). Phase-transition spans deliberately stay in `agent/middleware/service.py` — tightly coupled to `PhaseEventsMiddleware`'s own state, a legitimate exception, not fragmentation. `stores/service.py`'s 32 functions across Neo4j/Postgres/Qdrant/MinIO are fully spanned; `api/v1/rr/scan/router.py`'s 3 raw Postgres reads reuse the same `postgres_span`. **Bug caught 2026-09-22**: the metrics-file move left `runtime/service.py` importing a stale sibling name (`from . import ..., metrics, ...` instead of `observability`), which only surfaces as `ImportError: cannot import name 'metrics' from partially initialized module` on a real `import domains` — invisible to `compileall`/`pyflakes`/`ruff` since those never execute package `__init__` chains. Fixed to `from . import ..., observability, ...` + `observability.metrics.record_phase_event(...)`. Takeaway: after any sibling-module move, run a real `import domains` (not just static checks) to catch circular/stale-name breakage |
 
 ---
 
@@ -338,7 +339,7 @@ sum by (tenant, status) (rate(foo_writes_total[5m]))
 **Pattern:** `with session(...)` around the entry point. Every span inside the block — including LiteLLM auto-emitted ones — gets `session_id` / `user_id` baggage, which `BaggageSpanProcessor` mirrors onto every child span. LangFuse's OTLP ingester groups traces by `session_id` automatically.
 
 ```python
-from infra.langfuse.sessions import session as _lf_session
+from infra.langfuse.service import session as _lf_session
 
 async def run_foo_pipeline(workflow_id: str, tenant: str):
     with _lf_session(
@@ -362,7 +363,7 @@ The same pattern is shipped in:
 
 ```python
 # Inside a span context — score is bound to the active trace.
-from infra.langfuse.scores import record_score
+from infra.langfuse.service import record_score
 
 record_score("foo.quality.precision", 0.92, comment = "tenant=acme")
 ```
@@ -477,7 +478,7 @@ trace_id=(\w+)   →   Tempo datasource → ${__value.raw}
 ## 10. Wire a LangChain callback (DeepAgents / LangGraph)
 
 ```python
-from infra.langfuse.callbacks import build_langchain_callback
+from infra.langfuse.service import build_langchain_callback
 
 cb = build_langchain_callback(
     session_id = workflow_id,
@@ -566,11 +567,10 @@ one gap it has, #8), to carry into any new Python + LLM project:
 | `infra/otel/entities.py` | Central `INSTRUMENTS` list (`MetricSpec` registry) + `DedupeRateLimitFilter` (stateful log-dedup entity) |
 | `infra/otel/keys.py` | Task-path / route-name tables + `ALLOWED_BAGGAGE_KEYS` — consumed by `domain.py`, not `service.py` (moved out of `params.py` 2026-09-22) |
 | `infra/otel/params.py` | Tunables consumed only by `service.py` itself (service identity, BSP/OTLP timeouts, `FASTAPI_EXCLUDED_URLS`, `OTEL_NOISY_LOGGERS`) |
-| `infra/langfuse/service.py` | Lazy SDK singleton |
-| `infra/langfuse/sessions.py` | `session(...)` context manager |
-| `infra/langfuse/scores.py` | `record_score(...)` |
+| `infra/langfuse/service.py` | I/O shell — client singleton, `session(...)`, `record_score(...)`, `flag_for_review(...)`, `build_langchain_callback(...)` (consolidated from separate `sessions.py`/`scores.py`/`callbacks.py`/`annotation.py` files sometime before 2026-09-22 — confirmed via a live repo check, not a change made in this doc's own edit history) |
+| `infra/langfuse/spans.py` | current-span LangFuse attribute setters |
+| `infra/langfuse/domain.py` | pure span-attribute encoders |
 | `infra/langfuse/prompts.py` | `get_prompt(...)` with cache + fallback |
-| `infra/langfuse/callbacks.py` | `build_langchain_callback(...)` |
 | `infra/langfuse/datasets/` | uploader + runner |
 | `infra/langfuse/evals/judges/` | one file per LLM-judge |
 | `domains/<feature>/runtime/observability/` | per-domain enrichment — which files exist is trigger-based, see the TL;DR table at the top |
@@ -587,5 +587,5 @@ was deleted 2026-07-03 during a docs cleanup — its content is superseded by
 the **Current State Audit** and **SOTA Update** sections above. Remaining
 open items from that doc not yet covered anywhere: prompt experiments,
 exemplars, tail sampling, SLO recording rules. Annotation queues are now
-partially shipped (`infra/langfuse/annotation.py:flag_for_review`) but not
-wired into any UI review flow yet.
+partially shipped (`infra/langfuse/service.py:flag_for_review`, moved from
+a since-removed `annotation.py`) but not wired into any UI review flow yet.

@@ -1,13 +1,15 @@
 """In-flight ingestion lifecycle. Single-flight per slug via Redis lock;
 the running tier polls a cancel flag and surrenders cleanly."""
-import uuid
-
 import domains
-import redis.asyncio as redis_aio
-from fastapi import APIRouter, HTTPException
-
 from .. import resolver
 from . import schemas
+
+import uuid
+
+import redis.asyncio as redis_aio
+from fastapi import APIRouter, HTTPException
+from opentelemetry import trace
+
 
 router = APIRouter()
 
@@ -109,7 +111,12 @@ async def start_run(body: schemas.StartRunBody) -> dict:
 
         try:
             from domains.dd.ingestion.task import run_ingestion
-            run_ingestion.delay(run_id, body.slug)
+            task = run_ingestion.delay(run_id, body.slug)
+            # Nice-to-have cross-reference (Tempo/Langfuse UI ↔ task_id in
+            # logs) — CeleryInstrumentor already links this HTTP span to the
+            # task's own root span via injected trace-context headers, this
+            # doesn't replace that.
+            trace.get_current_span().set_attribute("celery.task_id", task.id)
         except Exception:
             try:
                 await domains.dd.ingestion.runtime.progress.service.release_lock(r, body.slug, run_id)

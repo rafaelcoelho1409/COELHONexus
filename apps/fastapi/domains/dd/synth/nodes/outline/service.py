@@ -1,6 +1,6 @@
 from __future__ import annotations
 import domains
-from . import domain, keys, params, schemas, versions
+from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio
 import json
@@ -154,7 +154,7 @@ async def _usc_pick(
         domain.summarize_candidate(o, d, issues)
         for (o, d, issues) in candidates
     ]
-    prompt = domain.build_usc_vote_prompt(
+    prompt = prompts.build_usc_vote_prompt(
         candidates_summary=summaries,
         chapter_id=chapter_id,
         chapter_title=chapter_title,
@@ -390,7 +390,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
 
     # Adaptive cap (not fixed 8): old fixed-8 pushed LLM to over-section small chapters (then hard-trimmed or deadlocked). Correct count up front → winner rarely needs trimming.
     adaptive_target = params.max_h2_for_n_sources(len(sources))
-    prompt = domain.build_outline_prompt(
+    prompt = prompts.build_outline_prompt(
         framework = slug,
         chapter_id = chapter_id,
         chapter_title = chapter_title,
@@ -452,7 +452,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
                 bodies, max_chars = retry_budget,
             )
             n_vault_hashes = domain.count_vault_sentinels(sources_concat_md)
-            retry_prompt = domain.build_outline_prompt(
+            retry_prompt = prompts.build_outline_prompt(
                 framework = slug,
                 chapter_id = chapter_id,
                 chapter_title = chapter_title,
@@ -513,7 +513,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
             attempt = attempt + 1,
             n_violations = len(issues),
         )
-        repair_prompt = domain.build_repair_prompt(
+        repair_prompt = prompts.build_repair_prompt(
             framework = slug,
             chapter_id = chapter_id,
             chapter_title = chapter_title,

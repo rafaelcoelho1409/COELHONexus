@@ -130,7 +130,7 @@ async def run_single_chapter_async(
     """Fresh per-chapter run. Builds initial state + graph, spawns cancel
     watcher, awaits terminal."""
     import infra
-    with infra.langfuse.sessions.session(
+    with infra.langfuse.service.session(
         "dd-synth",
         session_id = thread_id,
         user_id    = slug,
@@ -597,7 +597,7 @@ async def run_study_async(
 ) -> dict:
     """Strict-order study orchestrator; emits chapter_ready per render so UI shows each chapter as it completes (TTFR ~10-15 min vs ~2h batch).     Runs book_harmonize post-loop if ≥2 done."""
     import infra
-    with infra.langfuse.sessions.session(
+    with infra.langfuse.service.session(
         "dd",
         session_id = study_thread_id,
         user_id    = slug,

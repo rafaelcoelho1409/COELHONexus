@@ -12,6 +12,7 @@ import time
 
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException, Response
+from opentelemetry import trace
 from starlette.responses import StreamingResponse
 
 
@@ -185,6 +186,9 @@ async def start_planner(
         try:
             from domains.dd.planner import task
             async_result = task.run_planner.delay(thread_id, slug, mode)
+            trace.get_current_span().set_attribute(
+                "celery.task_id", async_result.id,
+            )
         except Exception as e:
             try:
                 await r.delete(domains.dd.planner.keys.lock_key(slug))
@@ -271,6 +275,7 @@ async def resume_planner(thread_id: str) -> dict:
     try:
         from domains.dd.planner import task
         async_result = task.resume_planner.delay(thread_id)
+        trace.get_current_span().set_attribute("celery.task_id", async_result.id)
     except Exception as e:
         logger.exception(
             f"[planner] {thread_id}: celery resume dispatch failed: "
@@ -299,31 +304,35 @@ async def list_recent_planners() -> dict:
 
     out: list[dict] = []
     try:
-        async with await psycopg.AsyncConnection.connect(dsn) as conn:
-            async with conn.cursor() as cur:
-                await cur.execute("""
-                    WITH thread_stats AS (
-                        SELECT
-                            split_part(thread_id, '/', 2) AS slug,
-                            thread_id,
-                            count(*)             AS ckpt_count,
-                            max(checkpoint_id)   AS latest_ckpt
-                        FROM checkpoints
-                        WHERE thread_id LIKE 'docs-distiller/%'
-                        GROUP BY thread_id
-                    )
-                    SELECT DISTINCT ON (slug)
-                        slug, thread_id, ckpt_count, latest_ckpt
-                    FROM thread_stats
-                    ORDER BY slug, ckpt_count DESC, latest_ckpt DESC
-                """)
-                for slug, tid, ckpt_count, latest in await cur.fetchall():
-                    out.append({
-                        "slug":          slug,
-                        "thread_id":     tid,
-                        "checkpoint_id": str(latest),
-                        "ckpt_count":    int(ckpt_count),
-                    })
+        with domains.dd.runtime.observability.spans.postgres_span(
+            "select", **{"db.postgres.table": "checkpoints"},
+        ):
+            async with await psycopg.AsyncConnection.connect(dsn) as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("""
+                        WITH thread_stats AS (
+                            SELECT
+                                split_part(thread_id, '/', 2) AS slug,
+                                thread_id,
+                                count(*)             AS ckpt_count,
+                                max(checkpoint_id)   AS latest_ckpt
+                            FROM checkpoints
+                            WHERE thread_id LIKE 'docs-distiller/%'
+                            GROUP BY thread_id
+                        )
+                        SELECT DISTINCT ON (slug)
+                            slug, thread_id, ckpt_count, latest_ckpt
+                        FROM thread_stats
+                        ORDER BY slug, ckpt_count DESC, latest_ckpt DESC
+                    """)
+                    rows = await cur.fetchall()
+        for slug, tid, ckpt_count, latest in rows:
+            out.append({
+                "slug":          slug,
+                "thread_id":     tid,
+                "checkpoint_id": str(latest),
+                "ckpt_count":    int(ckpt_count),
+            })
     except Exception as e:
         logger.warning(f"[planner-recent] query failed: {e}")
     return {"recent": out}
@@ -354,19 +363,22 @@ async def wipe_planner(slug: str) -> dict:
     counts: dict = {}
     pattern = f"docs-distiller/{slug}/%"
     try:
-        async with await psycopg.AsyncConnection.connect(
-            dsn, autocommit=True,
-        ) as conn:
-            for tbl in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
-                async with conn.cursor() as cur:
-                    try:
-                        await cur.execute(
-                            f"DELETE FROM {tbl} WHERE thread_id LIKE %s",
-                            (pattern,),
-                        )
-                        counts[tbl] = cur.rowcount
-                    except Exception as e:
-                        counts[tbl] = f"skipped: {type(e).__name__}: {e}"
+        with domains.dd.runtime.observability.spans.postgres_span(
+            "delete", **{"db.postgres.table": "checkpoints,checkpoint_writes,checkpoint_blobs"},
+        ):
+            async with await psycopg.AsyncConnection.connect(
+                dsn, autocommit=True,
+            ) as conn:
+                for tbl in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
+                    async with conn.cursor() as cur:
+                        try:
+                            await cur.execute(
+                                f"DELETE FROM {tbl} WHERE thread_id LIKE %s",
+                                (pattern,),
+                            )
+                            counts[tbl] = cur.rowcount
+                        except Exception as e:
+                            counts[tbl] = f"skipped: {type(e).__name__}: {e}"
     except Exception as e:
         logger.warning(f"[planner-wipe] Postgres delete failed for {slug!r}: {e}")
         counts["error"] = f"{type(e).__name__}: {e}"

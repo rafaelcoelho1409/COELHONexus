@@ -11,6 +11,7 @@ caller's concern, not this module's.
 """
 from __future__ import annotations
 import domains
+import infra
 from . import domain, params, prompts, schemas
 
 import asyncio
@@ -50,7 +51,9 @@ class DocumentGrader:
     payload when the parser dies (see `domain.rescue_score`)."""
 
     def __init__(self, llm: Any) -> None:
-        self.grader = prompts.GRADING_PROMPT | llm.with_structured_output(
+        self.grader = domains.ycs.rag.service.resolve_prompt(
+            prompts.GRADING_PROMPT, "ycs.grader",
+        ) | llm.with_structured_output(
             schemas.GradeResult,
             include_raw = True,
         )
@@ -152,4 +155,8 @@ class DocumentGrader:
                 f"empty set"
             )
             return list(documents[:fallback_n])
+        if documents:
+            infra.langfuse.service.record_score(
+                "ycs.grader.keep_rate", len(kept) / len(documents),
+            )
         return kept

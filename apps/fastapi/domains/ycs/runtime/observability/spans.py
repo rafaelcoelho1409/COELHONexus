@@ -1,5 +1,5 @@
 """YCS retriever-side spans — db.* semconv for the storage tier
-(Qdrant / Elasticsearch / Neo4j) and gen_ai.* for the rerank step.
+(Qdrant / Elasticsearch / Neo4j / Postgres) and gen_ai.* for the rerank step.
 
 Wraps the hot-path search calls in OTel spans so each YCS Ask traces
 out as: orchestrator → adaptive_node → qdrant_search → es_search →
@@ -16,11 +16,11 @@ The `with` blocks are sync; the actual I/O `await` happens inside. OTel
 context propagates via contextvars across await boundaries.
 """
 from __future__ import annotations
+import infra
 
 import contextlib
 from typing import Iterator
 
-import infra
 from opentelemetry import trace
 
 
@@ -96,6 +96,40 @@ def es_search_span(
 
 
 @contextlib.contextmanager
+def qdrant_upsert_span(
+    *,
+    collection:   str,
+    point_count:  int,
+) -> Iterator[object | None]:
+    """Qdrant `upsert` — ingestion write path, distinct from
+    `qdrant_search_span`'s read-path shape (`point_count` vs `top_k`)."""
+    with _db_span(
+        "qdrant", "upsert",
+        **{
+            "db.qdrant.collection_name": collection,
+            "db.qdrant.point_count":     point_count,
+        },
+    ) as span:
+        yield span
+
+
+@contextlib.contextmanager
+def qdrant_admin_span(
+    *,
+    operation:   str,
+    collection:  str | None = None,
+) -> Iterator[object | None]:
+    """Qdrant collection/alias admin ops (cutover, cleanup) — distinct
+    from the read/write hot paths above, which all target one
+    collection's points rather than the collection catalog itself."""
+    with _db_span(
+        "qdrant", operation,
+        **{"db.qdrant.collection_name": collection},
+    ) as span:
+        yield span
+
+
+@contextlib.contextmanager
 def neo4j_query_span(
     *,
     operation:         str,
@@ -107,6 +141,27 @@ def neo4j_query_span(
         "neo4j", operation,
         **{
             "db.statement": statement_summary,
+        },
+    ) as span:
+        yield span
+
+
+@contextlib.contextmanager
+def postgres_span(
+    *,
+    operation:  str,
+    table:      str | None = None,
+    row_count:  int | None = None,
+) -> Iterator[object | None]:
+    """Postgres query — `table` names the primary table touched; `row_count`
+    for batch inserts/updates when known upfront. Added 2026-09-22 alongside
+    `conversation/service.py`/`query/service.py`'s Postgres calls — until
+    then only Qdrant/ES/Neo4j had a wrapper here."""
+    with _db_span(
+        "postgresql", operation,
+        **{
+            "db.postgres.table":     table,
+            "db.postgres.row_count": row_count,
         },
     ) as span:
         yield span

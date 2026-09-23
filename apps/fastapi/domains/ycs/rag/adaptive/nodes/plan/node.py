@@ -47,7 +47,7 @@ async def plan_research(state: state.AdaptiveRAGState, llm) -> dict:
     # match classify's plain-JSON strategy. Native
     # structured-output validation can wedge before emitting any graph
     # update; local validation keeps the planner portable across arms.
-    chain = prompts.PLAN_FALLBACK_PROMPT | llm
+    chain = service.resolve_prompt(prompts.PLAN_FALLBACK_PROMPT, "ycs.rag.plan") | llm
     last_exc: BaseException | None = None
     for attempt in range(1, _PLAN_MAX_ATTEMPTS + 1):
         try:

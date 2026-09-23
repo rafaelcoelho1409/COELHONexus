@@ -210,22 +210,26 @@ async def _scroll_transcripts(
         {"terms": {"video_id": video_ids}} if video_ids
         else {"match_all": {}}
     )
-    response = await es.search(
-        index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
-        query = query,
-        size = batch_size,
-        scroll = params.SCROLL_KEEPALIVE,
-        # 2026-09-14: parent_video_id/part_index/part_total added for
-        # the long-video splitter's partition-group completion
-        # tracking (neo4j_task/qdrant_task need to know "is this a
-        # partition, and how many siblings does it have") — omitted
-        # before this, they'd silently read as None/missing downstream
-        # even though the ES document actually carries them.
-        _source = [
-            "video_id", "content", "lang", "channel_id",
-            "parent_video_id", "part_index", "part_total",
-        ],
-    )
+    with domains.ycs.runtime.observability.spans.es_search_span(
+        index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS, top_k = batch_size,
+        operation = "scroll_open",
+    ):
+        response = await es.search(
+            index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
+            query = query,
+            size = batch_size,
+            scroll = params.SCROLL_KEEPALIVE,
+            # 2026-09-14: parent_video_id/part_index/part_total added for
+            # the long-video splitter's partition-group completion
+            # tracking (neo4j_task/qdrant_task need to know "is this a
+            # partition, and how many siblings does it have") — omitted
+            # before this, they'd silently read as None/missing downstream
+            # even though the ES document actually carries them.
+            _source = [
+                "video_id", "content", "lang", "channel_id",
+                "parent_video_id", "part_index", "part_total",
+            ],
+        )
     scroll_id = response.get("_scroll_id")
     hits = response["hits"]["hits"]
     try:
@@ -260,14 +264,19 @@ async def fetch_metadata_from_es(
     if not video_ids:
         return {}
     lookup_ids = {vid: domain.parent_video_id(vid) for vid in video_ids}
-    response = await es.search(
+    with domains.ycs.runtime.observability.spans.es_search_span(
         index = infra.elasticsearch.keys.INDEX_METADATA,
-        query = {"ids": {"values": list(set(lookup_ids.values()))}},
-        size = len(set(lookup_ids.values())),
-        _source = [
-            "title", "channel", "channel_id", "upload_date", "webpage_url",
-        ],
-    )
+        top_k = len(set(lookup_ids.values())),
+        operation = "mget_by_ids",
+    ):
+        response = await es.search(
+            index = infra.elasticsearch.keys.INDEX_METADATA,
+            query = {"ids": {"values": list(set(lookup_ids.values()))}},
+            size = len(set(lookup_ids.values())),
+            _source = [
+                "title", "channel", "channel_id", "upload_date", "webpage_url",
+            ],
+        )
     by_parent = {h["_id"]: h["_source"] for h in response["hits"]["hits"]}
     return {
         vid: by_parent[parent]
@@ -453,9 +462,12 @@ async def ingest_to_qdrant(
             )
             for i, doc in enumerate(buffer)
         ]
-        await qdrant.upsert(
-            collection_name = collection_name, points = points,
-        )
+        with domains.ycs.runtime.observability.spans.qdrant_upsert_span(
+            collection = collection_name, point_count = len(points),
+        ):
+            await qdrant.upsert(
+                collection_name = collection_name, points = points,
+            )
         total_upserted += len(points)
         buffer.clear()
         for vid in pending_vids:
@@ -558,18 +570,23 @@ async def expand_with_partition_ids(
     if not video_ids:
         return []
     try:
-        resp = await es.search(
+        with domains.ycs.runtime.observability.spans.es_search_span(
             index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
-            size  = min(10000, max(200, len(video_ids) * 10)),
-            # `.keyword`, not the bare field — `parent_video_id` is
-            # mapped `text` (analyzed) with a `.keyword` sub-field for
-            # exact matching (unlike `video_id`, which is pure
-            # `keyword`); a `terms` query against the bare name
-            # tokenizes and silently matches nothing. Verified live
-            # against real partition data (2026-09-15).
-            query = {"terms": {"parent_video_id.keyword": list(video_ids)}},
-            _source = ["video_id"],
-        )
+            top_k = min(10000, max(200, len(video_ids) * 10)),
+            operation = "partition_expand",
+        ):
+            resp = await es.search(
+                index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
+                size  = min(10000, max(200, len(video_ids) * 10)),
+                # `.keyword`, not the bare field — `parent_video_id` is
+                # mapped `text` (analyzed) with a `.keyword` sub-field for
+                # exact matching (unlike `video_id`, which is pure
+                # `keyword`); a `terms` query against the bare name
+                # tokenizes and silently matches nothing. Verified live
+                # against real partition data (2026-09-15).
+                query = {"terms": {"parent_video_id.keyword": list(video_ids)}},
+                _source = ["video_id"],
+            )
         partition_ids = {
             h["_source"]["video_id"]
             for h in resp.get("hits", {}).get("hits", [])
@@ -853,7 +870,10 @@ async def _flush_buffer(
             for i, doc in enumerate(docs)
         ]
         try:
-            await qdrant.upsert(collection_name = params.QDRANT_COLLECTION, points = points)
+            with domains.ycs.runtime.observability.spans.qdrant_upsert_span(
+                collection = params.QDRANT_COLLECTION, point_count = len(points),
+            ):
+                await qdrant.upsert(collection_name = params.QDRANT_COLLECTION, points = points)
         except Exception:
             # An upsert failure must not lose already-popped chunks.
             await _requeue("upsert failure")

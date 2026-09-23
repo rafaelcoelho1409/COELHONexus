@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 import psycopg
 from fastapi import APIRouter, HTTPException, Request
+from opentelemetry import trace
 from starlette.responses import StreamingResponse
 
 
@@ -23,23 +24,26 @@ router = APIRouter()
 async def list_recent_scans(profile_id: str = "default", limit: int = 20) -> dict:
     """Most-recent scans for a profile. LEFT JOIN rank-1 finding for a 1-3 theme preview."""
     limit = max(1, min(int(limit), 100))
-    async with await psycopg.AsyncConnection.connect(domains.dd.planner.keys.postgres_url()) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                f"""
-                SELECT s.id, s.status, s.started_at, s.finished_at,
-                       s.total_in_digest, s.topic, s.verticals, s.top_n,
-                       f.digest_json -> 'themes' AS themes_preview
-                FROM {domains.rr.keys.PG_TABLE_SCANS} s
-                LEFT JOIN {domains.rr.keys.PG_TABLE_FINDINGS} f
-                  ON f.scan_id = s.id AND f.rank = 1
-                WHERE s.profile_id = %s
-                ORDER BY s.started_at DESC
-                LIMIT %s
-                """,
-                (profile_id, limit),
-            )
-            rows = await cur.fetchall()
+    with domains.rr.runtime.observability.spans.postgres_span(
+        "select", **{"db.postgres.table": domains.rr.keys.PG_TABLE_SCANS},
+    ):
+        async with await psycopg.AsyncConnection.connect(domains.dd.planner.keys.postgres_url()) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"""
+                    SELECT s.id, s.status, s.started_at, s.finished_at,
+                           s.total_in_digest, s.topic, s.verticals, s.top_n,
+                           f.digest_json -> 'themes' AS themes_preview
+                    FROM {domains.rr.keys.PG_TABLE_SCANS} s
+                    LEFT JOIN {domains.rr.keys.PG_TABLE_FINDINGS} f
+                      ON f.scan_id = s.id AND f.rank = 1
+                    WHERE s.profile_id = %s
+                    ORDER BY s.started_at DESC
+                    LIMIT %s
+                    """,
+                    (profile_id, limit),
+                )
+                rows = await cur.fetchall()
     items = []
     for row in rows:
         themes_raw = row[8]
@@ -72,6 +76,7 @@ async def create_scan(body: domains.rr.schemas.ScanRequest) -> domains.rr.schema
         body.verticals,
         body.top_n,
     )
+    trace.get_current_span().set_attribute("celery.task_id", task.id)
 
     # Best-effort: store_task_id swallows Redis errors; cancel returns "not found" but scan still runs.
     await domains.rr.runtime.service.store_task_id(str(scan_id), task.id)
@@ -110,31 +115,34 @@ async def cancel_scan_endpoint(scan_id: UUID) -> dict:
 @router.get("/scan/{scan_id}", response_model=domains.rr.schemas.ScanResult)
 async def get_scan(scan_id: UUID) -> domains.rr.schemas.ScanResult:
     """Scan lifecycle snapshot + digest findings when done. Findings is empty until status='done'."""
-    async with await psycopg.AsyncConnection.connect(domains.dd.planner.keys.postgres_url()) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                f"SELECT id, profile_id, status, started_at, finished_at, "
-                f"       total_candidates, total_in_digest, error, topic, "
-                f"       synthesis_themes, synthesis_summary "
-                f"FROM {domains.rr.keys.PG_TABLE_SCANS} WHERE id = %s",
-                (str(scan_id),),
-            )
-            row = await cur.fetchone()
-            if row is None:
-                raise HTTPException(status_code=404, detail="scan not found")
-            (
-                _id, profile_id, status, started_at, finished_at,
-                total_candidates, total_in_digest, error, topic,
-                synthesis_themes_raw, synthesis_summary,
-            ) = row
-            findings: list[dict] = []
-            if status == "done":
+    with domains.rr.runtime.observability.spans.postgres_span(
+        "select", **{"db.postgres.table": domains.rr.keys.PG_TABLE_SCANS},
+    ):
+        async with await psycopg.AsyncConnection.connect(domains.dd.planner.keys.postgres_url()) as conn:
+            async with conn.cursor() as cur:
                 await cur.execute(
-                    f"SELECT digest_json FROM {domains.rr.keys.PG_TABLE_FINDINGS} "
-                    f"WHERE scan_id = %s ORDER BY rank ASC",
+                    f"SELECT id, profile_id, status, started_at, finished_at, "
+                    f"       total_candidates, total_in_digest, error, topic, "
+                    f"       synthesis_themes, synthesis_summary "
+                    f"FROM {domains.rr.keys.PG_TABLE_SCANS} WHERE id = %s",
                     (str(scan_id),),
                 )
-                findings = [r[0] for r in await cur.fetchall()]
+                row = await cur.fetchone()
+                if row is None:
+                    raise HTTPException(status_code=404, detail="scan not found")
+                (
+                    _id, profile_id, status, started_at, finished_at,
+                    total_candidates, total_in_digest, error, topic,
+                    synthesis_themes_raw, synthesis_summary,
+                ) = row
+                findings: list[dict] = []
+                if status == "done":
+                    await cur.execute(
+                        f"SELECT digest_json FROM {domains.rr.keys.PG_TABLE_FINDINGS} "
+                        f"WHERE scan_id = %s ORDER BY rank ASC",
+                        (str(scan_id),),
+                    )
+                    findings = [r[0] for r in await cur.fetchall()]
     # psycopg3 returns JSONB as list directly; guard against legacy str rows.
     synthesis_themes: list[str] = []
     if isinstance(synthesis_themes_raw, list):
@@ -271,13 +279,16 @@ async def generate_finding_code(scan_id: UUID, arxiv_id: str) -> dict:
 
     # Verify the finding actually exists before dispatching — a bad
     # arxiv_id would otherwise burn a Celery round-trip just to error.
-    async with await psycopg.AsyncConnection.connect(domains.dd.planner.keys.postgres_url()) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                f"SELECT 1 FROM {domains.rr.keys.PG_TABLE_FINDINGS} WHERE scan_id = %s AND arxiv_id = %s",
-                (str(scan_id), arxiv_id),
-            )
-            exists = await cur.fetchone()
+    with domains.rr.runtime.observability.spans.postgres_span(
+        "select", **{"db.postgres.table": domains.rr.keys.PG_TABLE_FINDINGS},
+    ):
+        async with await psycopg.AsyncConnection.connect(domains.dd.planner.keys.postgres_url()) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"SELECT 1 FROM {domains.rr.keys.PG_TABLE_FINDINGS} WHERE scan_id = %s AND arxiv_id = %s",
+                    (str(scan_id), arxiv_id),
+                )
+                exists = await cur.fetchone()
     if exists is None:
         raise HTTPException(
             status_code = 404,
@@ -288,6 +299,7 @@ async def generate_finding_code(scan_id: UUID, arxiv_id: str) -> dict:
         )
 
     task = domains.rr.task.run_code_synth.delay(str(scan_id), arxiv_id, domains.rr.agent.tools.code_synth.params.CODE_SYNTH_PROMPT_VERSION)
+    trace.get_current_span().set_attribute("celery.task_id", task.id)
     await domains.rr.runtime.service.set_code_synth_running(
         str(scan_id), arxiv_id, domains.rr.agent.tools.code_synth.params.CODE_SYNTH_PROMPT_VERSION, task_id=task.id,
     )

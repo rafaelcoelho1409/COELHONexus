@@ -166,7 +166,7 @@ async def _extract_claims_and_terms(
     async with sem:
         chapter_id = chapter.get("chapter_id")
         try:
-            prompt = prompts.EXTRACT_CLAIMS_PROMPT.format(
+            prompt = prompts.build_extract_claims_prompt(
                 max_claims=params.MAX_CLAIMS_PER_CHAPTER,
                 prose=(chapter.get("prose") or "")[:params.PROSE_CHARS_FOR_CLAIMS],
             )
@@ -241,7 +241,7 @@ async def _canonicalize_terms(
                 lines.append(f"  - {name}: {defn[:200]}")
     terms_block = "\n".join(lines)[:8000]
     try:
-        prompt = prompts.CANONICALIZE_PROMPT.format(
+        prompt = prompts.build_canonicalize_prompt(
             framework=framework_name, terms_block=terms_block,
         )
         raw, err = await _call_with_retry(
@@ -278,7 +278,7 @@ async def _detect_violations(
 ) -> dict:
     async with sem:
         try:
-            prompt = prompts.DETECT_PROMPT.format(
+            prompt = prompts.build_detect_prompt(
                 chapter_id=chapter_id,
                 framework=framework_name,
                 this_prose=this_prose[:params.PROSE_CHARS_FOR_CLAIMS],
@@ -329,7 +329,7 @@ async def _patch_chapter(
                 violations_lines.append(
                     f"  - [{kind}] this chapter: {says!r} → should: {should!r}"
                 )
-            prompt = prompts.PATCH_PROMPT.format(
+            prompt = prompts.build_patch_prompt(
                 chapter_id=chapter_id,
                 framework=framework_name,
                 violations_block="\n".join(violations_lines),

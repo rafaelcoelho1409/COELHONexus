@@ -7,6 +7,7 @@ AsyncPostgresSaver pattern (no shared async pool needed for this
 low-volume table).
 """
 from __future__ import annotations
+import domains
 from . import params
 
 import logging
@@ -28,34 +29,37 @@ async def ensure_conversation_table(pg_url: str) -> None:
     the Thinking expander to its exact state — both mid-stream and
     after completion. `ADD COLUMN IF NOT EXISTS` is the safe migration
     path for existing deployments."""
-    async with await psycopg.AsyncConnection.connect(
-        pg_url, autocommit = True,
-    ) as conn:
-        await conn.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {params.TABLE_NAME} (
-                id              SERIAL PRIMARY KEY,
-                thread_id       TEXT NOT NULL,
-                question        TEXT NOT NULL,
-                answer          TEXT NOT NULL,
-                mode            TEXT,
-                thinking_state  JSONB,
-                created_at      TIMESTAMPTZ DEFAULT NOW()
+    with domains.ycs.runtime.observability.spans.postgres_span(
+        operation = "bootstrap", table = params.TABLE_NAME,
+    ):
+        async with await psycopg.AsyncConnection.connect(
+            pg_url, autocommit = True,
+        ) as conn:
+            await conn.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {params.TABLE_NAME} (
+                    id              SERIAL PRIMARY KEY,
+                    thread_id       TEXT NOT NULL,
+                    question        TEXT NOT NULL,
+                    answer          TEXT NOT NULL,
+                    mode            TEXT,
+                    thinking_state  JSONB,
+                    created_at      TIMESTAMPTZ DEFAULT NOW()
+                )
+                """,
             )
-            """,
-        )
-        await conn.execute(
-            f"""
-            ALTER TABLE {params.TABLE_NAME}
-            ADD COLUMN IF NOT EXISTS thinking_state JSONB
-            """,
-        )
-        await conn.execute(
-            f"""
-            CREATE INDEX IF NOT EXISTS {params.INDEX_NAME}
-            ON {params.TABLE_NAME}(thread_id, created_at DESC)
-            """,
-        )
+            await conn.execute(
+                f"""
+                ALTER TABLE {params.TABLE_NAME}
+                ADD COLUMN IF NOT EXISTS thinking_state JSONB
+                """,
+            )
+            await conn.execute(
+                f"""
+                CREATE INDEX IF NOT EXISTS {params.INDEX_NAME}
+                ON {params.TABLE_NAME}(thread_id, created_at DESC)
+                """,
+            )
 
 
 async def get_history(
@@ -70,16 +74,19 @@ async def get_history(
     Shape: `[{"question": str, "answer": str}, ...]`."""
     if not thread_id or thread_id == params.DEFAULT_THREAD_ID:
         return []
-    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
-        result = await conn.execute(
-            f"""
-            SELECT question, answer FROM {params.TABLE_NAME}
-            WHERE thread_id = %s
-            ORDER BY created_at DESC LIMIT %s
-            """,
-            (thread_id, limit),
-        )
-        rows = await result.fetchall()
+    with domains.ycs.runtime.observability.spans.postgres_span(
+        operation = "select", table = params.TABLE_NAME,
+    ):
+        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+            result = await conn.execute(
+                f"""
+                SELECT question, answer FROM {params.TABLE_NAME}
+                WHERE thread_id = %s
+                ORDER BY created_at DESC LIMIT %s
+                """,
+                (thread_id, limit),
+            )
+            rows = await result.fetchall()
     return [{"question": r[0], "answer": r[1]} for r in reversed(rows)]
 
 
@@ -94,24 +101,27 @@ async def list_threads(
 
     The `default` sentinel is excluded — stateless single-turn queries
     never land in the picker."""
-    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
-        result = await conn.execute(
-            f"""
-            SELECT
-                thread_id,
-                COUNT(*) AS turn_count,
-                MAX(created_at) AS last_seen,
-                (ARRAY_AGG(question ORDER BY created_at ASC))[1]
-                    AS first_question
-            FROM {params.TABLE_NAME}
-            WHERE thread_id <> %s
-            GROUP BY thread_id
-            ORDER BY MAX(created_at) DESC
-            LIMIT %s
-            """,
-            (params.DEFAULT_THREAD_ID, limit),
-        )
-        rows = await result.fetchall()
+    with domains.ycs.runtime.observability.spans.postgres_span(
+        operation = "select", table = params.TABLE_NAME,
+    ):
+        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+            result = await conn.execute(
+                f"""
+                SELECT
+                    thread_id,
+                    COUNT(*) AS turn_count,
+                    MAX(created_at) AS last_seen,
+                    (ARRAY_AGG(question ORDER BY created_at ASC))[1]
+                        AS first_question
+                FROM {params.TABLE_NAME}
+                WHERE thread_id <> %s
+                GROUP BY thread_id
+                ORDER BY MAX(created_at) DESC
+                LIMIT %s
+                """,
+                (params.DEFAULT_THREAD_ID, limit),
+            )
+            rows = await result.fetchall()
     return [
         {
             "thread_id":      r[0],
@@ -138,17 +148,20 @@ async def list_thread_messages(
     Returns [] for the `default` sentinel."""
     if not thread_id or thread_id == params.DEFAULT_THREAD_ID:
         return []
-    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
-        result = await conn.execute(
-            f"""
-            SELECT id, question, answer, mode, thinking_state, created_at
-            FROM {params.TABLE_NAME}
-            WHERE thread_id = %s
-            ORDER BY created_at ASC LIMIT %s
-            """,
-            (thread_id, limit),
-        )
-        rows = await result.fetchall()
+    with domains.ycs.runtime.observability.spans.postgres_span(
+        operation = "select", table = params.TABLE_NAME,
+    ):
+        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+            result = await conn.execute(
+                f"""
+                SELECT id, question, answer, mode, thinking_state, created_at
+                FROM {params.TABLE_NAME}
+                WHERE thread_id = %s
+                ORDER BY created_at ASC LIMIT %s
+                """,
+                (thread_id, limit),
+            )
+            rows = await result.fetchall()
     return [
         {
             # `id` exposed so the frontend can issue
@@ -189,18 +202,21 @@ async def get_thread_locked_scope(
         contain a `channel_ids` field (pre-2026-06-17 rows)."""
     if not thread_id or thread_id == params.DEFAULT_THREAD_ID:
         return None
-    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
-        result = await conn.execute(
-            f"""
-            SELECT thinking_state
-            FROM {params.TABLE_NAME}
-            WHERE thread_id = %s
-            ORDER BY created_at ASC
-            LIMIT 1
-            """,
-            (thread_id,),
-        )
-        row = await result.fetchone()
+    with domains.ycs.runtime.observability.spans.postgres_span(
+        operation = "select", table = params.TABLE_NAME,
+    ):
+        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+            result = await conn.execute(
+                f"""
+                SELECT thinking_state
+                FROM {params.TABLE_NAME}
+                WHERE thread_id = %s
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (thread_id,),
+            )
+            row = await result.fetchone()
     if not row or not row[0]:
         return None
     ts = row[0]  # JSONB → dict
@@ -232,25 +248,28 @@ async def branch_thread(
         return 0
     if not new_thread_id:
         return 0
-    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
-        query_params: tuple = (new_thread_id, source_thread_id)
-        cutoff_sql = ""
-        if up_to_created_at:
-            cutoff_sql = "AND created_at <= %s"
-            query_params = (new_thread_id, source_thread_id, up_to_created_at)
-        result = await conn.execute(
-            f"""
-            INSERT INTO {params.TABLE_NAME} (thread_id, question, answer, mode, created_at)
-            SELECT %s, question, answer, mode, created_at
-            FROM {params.TABLE_NAME}
-            WHERE thread_id = %s
-            {cutoff_sql}
-            ORDER BY created_at ASC
-            """,
-            query_params,
-        )
-        await conn.commit()
-        return int(result.rowcount or 0)
+    with domains.ycs.runtime.observability.spans.postgres_span(
+        operation = "insert", table = params.TABLE_NAME,
+    ):
+        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+            query_params: tuple = (new_thread_id, source_thread_id)
+            cutoff_sql = ""
+            if up_to_created_at:
+                cutoff_sql = "AND created_at <= %s"
+                query_params = (new_thread_id, source_thread_id, up_to_created_at)
+            result = await conn.execute(
+                f"""
+                INSERT INTO {params.TABLE_NAME} (thread_id, question, answer, mode, created_at)
+                SELECT %s, question, answer, mode, created_at
+                FROM {params.TABLE_NAME}
+                WHERE thread_id = %s
+                {cutoff_sql}
+                ORDER BY created_at ASC
+                """,
+                query_params,
+            )
+            await conn.commit()
+            return int(result.rowcount or 0)
 
 
 async def delete_thread(
@@ -265,13 +284,16 @@ async def delete_thread(
     delete on `default` would otherwise be a no-op anyway."""
     if not thread_id or thread_id == params.DEFAULT_THREAD_ID:
         return 0
-    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
-        result = await conn.execute(
-            f"DELETE FROM {params.TABLE_NAME} WHERE thread_id = %s",
-            (thread_id,),
-        )
-        await conn.commit()
-        return int(result.rowcount or 0)
+    with domains.ycs.runtime.observability.spans.postgres_span(
+        operation = "delete", table = params.TABLE_NAME,
+    ):
+        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+            result = await conn.execute(
+                f"DELETE FROM {params.TABLE_NAME} WHERE thread_id = %s",
+                (thread_id,),
+            )
+            await conn.commit()
+            return int(result.rowcount or 0)
 
 
 async def save_turn(
@@ -288,15 +310,18 @@ async def save_turn(
     answered."""
     if not thread_id or thread_id == params.DEFAULT_THREAD_ID:
         return
-    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
-        await conn.execute(
-            f"""
-            INSERT INTO {params.TABLE_NAME} (thread_id, question, answer, mode)
-            VALUES (%s, %s, %s, %s)
-            """,
-            (thread_id, question, answer, mode),
-        )
-        await conn.commit()
+    with domains.ycs.runtime.observability.spans.postgres_span(
+        operation = "insert", table = params.TABLE_NAME,
+    ):
+        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+            await conn.execute(
+                f"""
+                INSERT INTO {params.TABLE_NAME} (thread_id, question, answer, mode)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (thread_id, question, answer, mode),
+            )
+            await conn.commit()
 
 
 async def insert_turn(
@@ -311,17 +336,20 @@ async def insert_turn(
     it. Returns `None` for the `default` sentinel."""
     if not thread_id or thread_id == params.DEFAULT_THREAD_ID:
         return None
-    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
-        result = await conn.execute(
-            f"""
-            INSERT INTO {params.TABLE_NAME} (thread_id, question, answer, mode)
-            VALUES (%s, %s, '', %s)
-            RETURNING id
-            """,
-            (thread_id, question, mode),
-        )
-        row = await result.fetchone()
-        await conn.commit()
+    with domains.ycs.runtime.observability.spans.postgres_span(
+        operation = "insert", table = params.TABLE_NAME,
+    ):
+        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+            result = await conn.execute(
+                f"""
+                INSERT INTO {params.TABLE_NAME} (thread_id, question, answer, mode)
+                VALUES (%s, %s, '', %s)
+                RETURNING id
+                """,
+                (thread_id, question, mode),
+            )
+            row = await result.fetchone()
+            await conn.commit()
     return int(row[0]) if row else None
 
 
@@ -340,29 +368,32 @@ async def update_turn_answer(
     if turn_id is None:
         return
     import json as _json
-    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
-        if thinking_state is None:
-            await conn.execute(
-                f"""
-                UPDATE {params.TABLE_NAME}
-                SET answer = %s,
-                    mode   = COALESCE(NULLIF(%s, ''), mode)
-                WHERE id = %s
-                """,
-                (answer, mode, turn_id),
-            )
-        else:
-            await conn.execute(
-                f"""
-                UPDATE {params.TABLE_NAME}
-                SET answer         = %s,
-                    mode           = COALESCE(NULLIF(%s, ''), mode),
-                    thinking_state = %s::jsonb
-                WHERE id = %s
-                """,
-                (answer, mode, _json.dumps(thinking_state), turn_id),
-            )
-        await conn.commit()
+    with domains.ycs.runtime.observability.spans.postgres_span(
+        operation = "update", table = params.TABLE_NAME,
+    ):
+        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+            if thinking_state is None:
+                await conn.execute(
+                    f"""
+                    UPDATE {params.TABLE_NAME}
+                    SET answer = %s,
+                        mode   = COALESCE(NULLIF(%s, ''), mode)
+                    WHERE id = %s
+                    """,
+                    (answer, mode, turn_id),
+                )
+            else:
+                await conn.execute(
+                    f"""
+                    UPDATE {params.TABLE_NAME}
+                    SET answer         = %s,
+                        mode           = COALESCE(NULLIF(%s, ''), mode),
+                        thinking_state = %s::jsonb
+                    WHERE id = %s
+                    """,
+                    (answer, mode, _json.dumps(thinking_state), turn_id),
+                )
+            await conn.commit()
 
 
 async def delete_turn(pg_url: str, turn_id: int | None) -> None:
@@ -371,9 +402,12 @@ async def delete_turn(pg_url: str, turn_id: int | None) -> None:
     empty answer haunting the picker forever)."""
     if turn_id is None:
         return
-    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
-        await conn.execute(
-            f"DELETE FROM {params.TABLE_NAME} WHERE id = %s",
-            (turn_id,),
-        )
-        await conn.commit()
+    with domains.ycs.runtime.observability.spans.postgres_span(
+        operation = "delete", table = params.TABLE_NAME,
+    ):
+        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+            await conn.execute(
+                f"DELETE FROM {params.TABLE_NAME} WHERE id = %s",
+                (turn_id,),
+            )
+            await conn.commit()

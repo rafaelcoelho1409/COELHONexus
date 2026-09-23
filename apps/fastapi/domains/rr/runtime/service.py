@@ -31,7 +31,7 @@ sectioned below.
                      subagents do.
 """
 from __future__ import annotations
-from . import domain, keys, llm_counter, metrics, params
+from . import domain, keys, llm_counter, observability, params
 
 import asyncio
 import json
@@ -61,7 +61,7 @@ def emit_event_sync(scan_id: str, phase: str, **fields) -> None:
         **fields,
     }
     payload = json.dumps(event, default=str)
-    metrics.record_phase_event(phase = phase)
+    observability.metrics.record_phase_event(phase = phase)
     import redis as redis_sync
     try:
         r = redis_sync.from_url(
@@ -95,7 +95,7 @@ async def emit_event(scan_id: str, phase: str, **fields) -> None:
         **fields,
     }
     payload = json.dumps(event, default=str)
-    metrics.record_phase_event(phase = phase)
+    observability.metrics.record_phase_event(phase = phase)
     r = redis_aio.from_url(
         keys.redis_url(),
         socket_connect_timeout = params.REDIS_CONNECT_TIMEOUT_S,

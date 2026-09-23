@@ -30,7 +30,7 @@ async def ingest_async(
     task_id:         str,
     progress_cb:     Callable[[dict[str, Any]], None],
 ) -> dict[str, Any]:
-    with infra.langfuse.sessions.session(
+    with infra.langfuse.service.session(
         "ycs-ingest-neo4j",
         session_id = task_id or "(no-request-id)",
     ):

@@ -45,7 +45,7 @@ def ingest_to_qdrant(
 
     async def _run() -> dict[str, Any]:
         import domains, infra
-        with infra.langfuse.sessions.session(
+        with infra.langfuse.service.session(
             "ycs-ingest-qdrant",
             session_id = self.request.id or "(no-request-id)",
         ):

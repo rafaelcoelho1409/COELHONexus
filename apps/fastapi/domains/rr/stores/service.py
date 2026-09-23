@@ -14,8 +14,10 @@ operations.
   Qdrant    radar_papers vector collection + payload index ops
 """
 from __future__ import annotations
-import domains, infra
-from .. import entities, keys as rr_keys, params as rr_params
+import domains
+from .. import entities
+from .. import keys as rr_keys
+from .. import params as rr_params
 from . import keys, params, prompts
 
 import json
@@ -25,6 +27,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 import aioboto3
+import infra
 import psycopg
 from botocore.exceptions import ClientError
 from neo4j import AsyncDriver
@@ -89,48 +92,55 @@ async def bootstrap_minio() -> None:
     """head_bucket; create_bucket on 404. Same pattern as the dd ingestion
     storage's ensure_bucket()."""
     bucket = _minio_bucket()
-    async with _minio_client() as s3:
-        try:
-            await s3.head_bucket(Bucket=bucket)
-            logger.info(
-                f"[rr-minio] bucket {bucket!r} exists "
-                f"(prefix={rr_keys.MINIO_PREFIX_RR!r})"
-            )
-            return
-        except ClientError as e:
-            code = (e.response or {}).get("Error", {}).get("Code", "")
-            if code not in ("404", "NoSuchBucket", "NoSuchKey"):
-                raise
-        await s3.create_bucket(Bucket=bucket)
-        logger.info(f"[rr-minio] created bucket {bucket!r}")
+    with domains.rr.runtime.observability.spans.minio_span("ensure_bucket", bucket = bucket):
+        async with _minio_client() as s3:
+            try:
+                await s3.head_bucket(Bucket=bucket)
+                logger.info(
+                    f"[rr-minio] bucket {bucket!r} exists "
+                    f"(prefix={rr_keys.MINIO_PREFIX_RR!r})"
+                )
+                return
+            except ClientError as e:
+                code = (e.response or {}).get("Error", {}).get("Code", "")
+                if code not in ("404", "NoSuchBucket", "NoSuchKey"):
+                    raise
+            await s3.create_bucket(Bucket=bucket)
+            logger.info(f"[rr-minio] created bucket {bucket!r}")
 
 
 async def put_digest_json(scan_id: str, payload: dict[str, Any]) -> str:
     """Write the scan's digest snapshot. Returns the MinIO key."""
     key  = rr_keys.digest_minio_key(scan_id)
     body = json.dumps(payload, default=str).encode("utf-8")
-    async with _minio_client() as s3:
-        await s3.put_object(
-            Bucket      = _minio_bucket(),
-            Key         = key,
-            Body        = body,
-            ContentType = rr_params.STORES_PARAMS.minio_json_content_type,
-        )
+    with domains.rr.runtime.observability.spans.minio_span(
+        "put_object", bucket = _minio_bucket(), key = key,
+    ):
+        async with _minio_client() as s3:
+            await s3.put_object(
+                Bucket      = _minio_bucket(),
+                Key         = key,
+                Body        = body,
+                ContentType = rr_params.STORES_PARAMS.minio_json_content_type,
+            )
     return key
 
 
 async def get_digest_json(scan_id: str) -> dict[str, Any] | None:
     """Read the digest snapshot. Returns None on 404."""
     key = rr_keys.digest_minio_key(scan_id)
-    async with _minio_client() as s3:
-        try:
-            obj = await s3.get_object(Bucket=_minio_bucket(), Key=key)
-        except ClientError as e:
-            code = (e.response or {}).get("Error", {}).get("Code", "")
-            if code in ("404", "NoSuchKey"):
-                return None
-            raise
-        body = await obj["Body"].read()
+    with domains.rr.runtime.observability.spans.minio_span(
+        "get_object", bucket = _minio_bucket(), key = key,
+    ):
+        async with _minio_client() as s3:
+            try:
+                obj = await s3.get_object(Bucket=_minio_bucket(), Key=key)
+            except ClientError as e:
+                code = (e.response or {}).get("Error", {}).get("Code", "")
+                if code in ("404", "NoSuchKey"):
+                    return None
+                raise
+            body = await obj["Body"].read()
     return json.loads(body)
 
 
@@ -141,15 +151,18 @@ async def delete_digest_json(scan_id: str) -> bool:
     Caller: `../service.py::delete_scan` (the per-row delete affordance in
     the Recent-scans dropdown)."""
     key = rr_keys.digest_minio_key(scan_id)
-    async with _minio_client() as s3:
-        try:
-            await s3.delete_object(Bucket=_minio_bucket(), Key=key)
-            return True
-        except ClientError as e:
-            code = (e.response or {}).get("Error", {}).get("Code", "")
-            if code in ("404", "NoSuchKey"):
-                return False
-            raise
+    with domains.rr.runtime.observability.spans.minio_span(
+        "delete_object", bucket = _minio_bucket(), key = key,
+    ):
+        async with _minio_client() as s3:
+            try:
+                await s3.delete_object(Bucket=_minio_bucket(), Key=key)
+                return True
+            except ClientError as e:
+                code = (e.response or {}).get("Error", {}).get("Code", "")
+                if code in ("404", "NoSuchKey"):
+                    return False
+                raise
 
 
 async def put_extraction_json(
@@ -158,13 +171,16 @@ async def put_extraction_json(
     """Write a deep_read extraction for one paper. Returns the MinIO key."""
     key  = rr_keys.extraction_minio_key(scan_id, arxiv_id)
     body = json.dumps(payload, default=str).encode("utf-8")
-    async with _minio_client() as s3:
-        await s3.put_object(
-            Bucket      = _minio_bucket(),
-            Key         = key,
-            Body        = body,
-            ContentType = rr_params.STORES_PARAMS.minio_json_content_type,
-        )
+    with domains.rr.runtime.observability.spans.minio_span(
+        "put_object", bucket = _minio_bucket(), key = key,
+    ):
+        async with _minio_client() as s3:
+            await s3.put_object(
+                Bucket      = _minio_bucket(),
+                Key         = key,
+                Body        = body,
+                ContentType = rr_params.STORES_PARAMS.minio_json_content_type,
+            )
     return key
 
 
@@ -173,15 +189,18 @@ async def get_extraction_json(
 ) -> dict[str, Any] | None:
     """Read an extraction. Returns None on 404."""
     key = rr_keys.extraction_minio_key(scan_id, arxiv_id)
-    async with _minio_client() as s3:
-        try:
-            obj = await s3.get_object(Bucket=_minio_bucket(), Key=key)
-        except ClientError as e:
-            code = (e.response or {}).get("Error", {}).get("Code", "")
-            if code in ("404", "NoSuchKey"):
-                return None
-            raise
-        body = await obj["Body"].read()
+    with domains.rr.runtime.observability.spans.minio_span(
+        "get_object", bucket = _minio_bucket(), key = key,
+    ):
+        async with _minio_client() as s3:
+            try:
+                obj = await s3.get_object(Bucket=_minio_bucket(), Key=key)
+            except ClientError as e:
+                code = (e.response or {}).get("Error", {}).get("Code", "")
+                if code in ("404", "NoSuchKey"):
+                    return None
+                raise
+            body = await obj["Body"].read()
     return json.loads(body)
 
 
@@ -193,13 +212,16 @@ async def put_code_py(
     rendered as plain text instead of being treated as JSON."""
     key  = rr_keys.code_minio_key(scan_id, arxiv_id, prompt_version)
     body = code.encode("utf-8")
-    async with _minio_client() as s3:
-        await s3.put_object(
-            Bucket      = _minio_bucket(),
-            Key         = key,
-            Body        = body,
-            ContentType = rr_keys.MINIO_PYTHON_CONTENT_TYPE,
-        )
+    with domains.rr.runtime.observability.spans.minio_span(
+        "put_object", bucket = _minio_bucket(), key = key,
+    ):
+        async with _minio_client() as s3:
+            await s3.put_object(
+                Bucket      = _minio_bucket(),
+                Key         = key,
+                Body        = body,
+                ContentType = rr_keys.MINIO_PYTHON_CONTENT_TYPE,
+            )
     return key
 
 
@@ -210,15 +232,18 @@ async def get_code_py(
     tab has never been opened for this paper at this prompt version, or
     the cache was wiped)."""
     key = rr_keys.code_minio_key(scan_id, arxiv_id, prompt_version)
-    async with _minio_client() as s3:
-        try:
-            obj = await s3.get_object(Bucket=_minio_bucket(), Key=key)
-        except ClientError as e:
-            code = (e.response or {}).get("Error", {}).get("Code", "")
-            if code in ("404", "NoSuchKey"):
-                return None
-            raise
-        body = await obj["Body"].read()
+    with domains.rr.runtime.observability.spans.minio_span(
+        "get_object", bucket = _minio_bucket(), key = key,
+    ):
+        async with _minio_client() as s3:
+            try:
+                obj = await s3.get_object(Bucket=_minio_bucket(), Key=key)
+            except ClientError as e:
+                code = (e.response or {}).get("Error", {}).get("Code", "")
+                if code in ("404", "NoSuchKey"):
+                    return None
+                raise
+            body = await obj["Body"].read()
     return body.decode("utf-8")
 
 
@@ -229,24 +254,29 @@ async def delete_code_dir(scan_id: str) -> int:
     delete button doesn't leak code blobs."""
     prefix = f"{rr_keys.MINIO_PREFIX_SCANS}/{scan_id}/code/"
     deleted = 0
-    async with _minio_client() as s3:
-        continuation: str | None = None
-        while True:
-            kwargs: dict[str, Any] = {"Bucket": _minio_bucket(), "Prefix": prefix}
-            if continuation:
-                kwargs["ContinuationToken"] = continuation
-            page = await s3.list_objects_v2(**kwargs)
-            objs = page.get("Contents") or []
-            if not objs:
-                break
-            await s3.delete_objects(
-                Bucket = _minio_bucket(),
-                Delete = {"Objects": [{"Key": o["Key"]} for o in objs]},
-            )
-            deleted += len(objs)
-            if not page.get("IsTruncated"):
-                break
-            continuation = page.get("NextContinuationToken")
+    with domains.rr.runtime.observability.spans.minio_span(
+        "delete_objects_batch", bucket = _minio_bucket(), key = prefix,
+    ) as span:
+        async with _minio_client() as s3:
+            continuation: str | None = None
+            while True:
+                kwargs: dict[str, Any] = {"Bucket": _minio_bucket(), "Prefix": prefix}
+                if continuation:
+                    kwargs["ContinuationToken"] = continuation
+                page = await s3.list_objects_v2(**kwargs)
+                objs = page.get("Contents") or []
+                if not objs:
+                    break
+                await s3.delete_objects(
+                    Bucket = _minio_bucket(),
+                    Delete = {"Objects": [{"Key": o["Key"]} for o in objs]},
+                )
+                deleted += len(objs)
+                if not page.get("IsTruncated"):
+                    break
+                continuation = page.get("NextContinuationToken")
+        if span is not None:
+            span.set_attribute("aws.s3.delete_count", deleted)
     return deleted
 
 
@@ -275,10 +305,11 @@ _NEO4J_BOOTSTRAP_STMTS: tuple[str, ...] = (
 
 async def bootstrap_neo4j() -> None:
     """Create constraints + indexes if missing. Idempotent."""
-    driver: AsyncDriver = infra.neo4j.service.get_driver()
-    async with driver.session(database=infra.neo4j.params.NEO4J_DATABASE) as session:
-        for stmt in _NEO4J_BOOTSTRAP_STMTS:
-            await session.run(stmt)
+    with domains.rr.runtime.observability.spans.neo4j_span("bootstrap"):
+        driver: AsyncDriver = infra.neo4j.service.get_driver()
+        async with driver.session(database=infra.neo4j.params.NEO4J_DATABASE) as session:
+            for stmt in _NEO4J_BOOTSTRAP_STMTS:
+                await session.run(stmt)
     logger.info(
         f"[rr-neo4j] bootstrap complete "
         f"({len(_NEO4J_BOOTSTRAP_STMTS)} statements, db={infra.neo4j.params.NEO4J_DATABASE!r})"
@@ -317,10 +348,13 @@ async def upsert_paper(
         "authors":               [a for a in paper.authors if a],
         "categories":            [c for c in paper.categories if c],
     }
-    driver: AsyncDriver = infra.neo4j.service.get_driver()
-    async with driver.session(database=infra.neo4j.params.NEO4J_DATABASE) as session:
-        result = await session.run(prompts.UPSERT_PAPER_CYPHER, cypher_params)
-        record = await result.single()
+    with domains.rr.runtime.observability.spans.neo4j_span(
+        "upsert_paper", **{"db.neo4j.arxiv_id": paper.arxiv_id},
+    ):
+        driver: AsyncDriver = infra.neo4j.service.get_driver()
+        async with driver.session(database=infra.neo4j.params.NEO4J_DATABASE) as session:
+            result = await session.run(prompts.UPSERT_PAPER_CYPHER, cypher_params)
+            record = await result.single()
     return record["paper_id"] if record else paper.arxiv_id
 
 
@@ -328,10 +362,11 @@ async def upsert_paper(
 # Kept minimal in step 3; expand as the synthesis subagent's needs solidify.
 async def get_paper_count() -> int:
     """Total :Paper nodes. Cheap sanity check for the bootstrap smoke test."""
-    driver: AsyncDriver = infra.neo4j.service.get_driver()
-    async with driver.session(database=infra.neo4j.params.NEO4J_DATABASE) as session:
-        result = await session.run(f"MATCH (p:{rr_keys.NEO4J_LABEL_PAPER}) RETURN count(p) AS n")
-        record = await result.single()
+    with domains.rr.runtime.observability.spans.neo4j_span("count"):
+        driver: AsyncDriver = infra.neo4j.service.get_driver()
+        async with driver.session(database=infra.neo4j.params.NEO4J_DATABASE) as session:
+            result = await session.run(f"MATCH (p:{rr_keys.NEO4J_LABEL_PAPER}) RETURN count(p) AS n")
+            record = await result.single()
     return int(record["n"]) if record else 0
 
 
@@ -345,12 +380,13 @@ async def get_paper_count() -> int:
 async def bootstrap_postgres() -> None:
     """Create RR's tables + indexes if missing. Idempotent. Call once at
     FastAPI lifespan startup (or before the first scan)."""
-    async with await psycopg.AsyncConnection.connect(
-        domains.dd.planner.keys.postgres_url(),
-    ) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(prompts.PG_DDL)
-        await conn.commit()
+    with domains.rr.runtime.observability.spans.postgres_span("bootstrap"):
+        async with await psycopg.AsyncConnection.connect(
+            domains.dd.planner.keys.postgres_url(),
+        ) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(prompts.PG_DDL)
+            await conn.commit()
     logger.info("[rr-pg] bootstrap complete (4 tables + 2 indexes ensured)")
 
 
@@ -367,34 +403,40 @@ async def create_scan(
     it to `running` when work starts and `done`/`error` at the end. The
     request shape (topic + verticals + top_n) is persisted alongside so
     the Recent-scans dropdown can show what each scan was searching for."""
-    async with await psycopg.AsyncConnection.connect(
-        domains.dd.planner.keys.postgres_url(),
-    ) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                f"INSERT INTO {rr_keys.PG_TABLE_SCANS} "
-                f"(id, profile_id, status, topic, verticals, top_n) "
-                f"VALUES (%s, %s, %s, %s, %s, %s)",
-                (
-                    str(scan_id), profile_id, rr_keys.SCAN_STATUS_PENDING,
-                    topic, list(verticals or []) or None, top_n,
-                ),
-            )
-        await conn.commit()
+    with domains.rr.runtime.observability.spans.postgres_span(
+        "insert", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
+    ):
+        async with await psycopg.AsyncConnection.connect(
+            domains.dd.planner.keys.postgres_url(),
+        ) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"INSERT INTO {rr_keys.PG_TABLE_SCANS} "
+                    f"(id, profile_id, status, topic, verticals, top_n) "
+                    f"VALUES (%s, %s, %s, %s, %s, %s)",
+                    (
+                        str(scan_id), profile_id, rr_keys.SCAN_STATUS_PENDING,
+                        topic, list(verticals or []) or None, top_n,
+                    ),
+                )
+            await conn.commit()
 
 
 async def mark_scan_running(scan_id: UUID) -> None:
     """Flip pending → running. No-op if already past pending."""
-    async with await psycopg.AsyncConnection.connect(
-        domains.dd.planner.keys.postgres_url(),
-    ) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                f"UPDATE {rr_keys.PG_TABLE_SCANS} SET status = %s "
-                f"WHERE id = %s AND status = %s",
-                (rr_keys.SCAN_STATUS_RUNNING, str(scan_id), rr_keys.SCAN_STATUS_PENDING),
-            )
-        await conn.commit()
+    with domains.rr.runtime.observability.spans.postgres_span(
+        "update", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
+    ):
+        async with await psycopg.AsyncConnection.connect(
+            domains.dd.planner.keys.postgres_url(),
+        ) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"UPDATE {rr_keys.PG_TABLE_SCANS} SET status = %s "
+                    f"WHERE id = %s AND status = %s",
+                    (rr_keys.SCAN_STATUS_RUNNING, str(scan_id), rr_keys.SCAN_STATUS_PENDING),
+                )
+            await conn.commit()
 
 
 async def mark_scan_done(
@@ -404,36 +446,42 @@ async def mark_scan_done(
     total_in_digest: int,
 ) -> None:
     """Mark the scan complete + write the counts. Sets finished_at = NOW()."""
-    async with await psycopg.AsyncConnection.connect(
-        domains.dd.planner.keys.postgres_url(),
-    ) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                f"UPDATE {rr_keys.PG_TABLE_SCANS} SET "
-                f"  status = %s, "
-                f"  finished_at = NOW(), "
-                f"  total_candidates = %s, "
-                f"  total_in_digest = %s "
-                f"WHERE id = %s",
-                (rr_keys.SCAN_STATUS_DONE, total_candidates, total_in_digest, str(scan_id)),
-            )
-        await conn.commit()
+    with domains.rr.runtime.observability.spans.postgres_span(
+        "update", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
+    ):
+        async with await psycopg.AsyncConnection.connect(
+            domains.dd.planner.keys.postgres_url(),
+        ) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"UPDATE {rr_keys.PG_TABLE_SCANS} SET "
+                    f"  status = %s, "
+                    f"  finished_at = NOW(), "
+                    f"  total_candidates = %s, "
+                    f"  total_in_digest = %s "
+                    f"WHERE id = %s",
+                    (rr_keys.SCAN_STATUS_DONE, total_candidates, total_in_digest, str(scan_id)),
+                )
+            await conn.commit()
 
 
 async def mark_scan_error(scan_id: UUID, *, status: str, error: str) -> None:
     """Mark the scan failed/cancelled with a short error string. Caller
     passes the terminal status (SCAN_STATUS_ERROR or SCAN_STATUS_CANCELLED)."""
-    async with await psycopg.AsyncConnection.connect(
-        domains.dd.planner.keys.postgres_url(),
-    ) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                f"UPDATE {rr_keys.PG_TABLE_SCANS} SET "
-                f"  status = %s, finished_at = NOW(), error = %s "
-                f"WHERE id = %s",
-                (status, error[:1000], str(scan_id)),
-            )
-        await conn.commit()
+    with domains.rr.runtime.observability.spans.postgres_span(
+        "update", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
+    ):
+        async with await psycopg.AsyncConnection.connect(
+            domains.dd.planner.keys.postgres_url(),
+        ) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"UPDATE {rr_keys.PG_TABLE_SCANS} SET "
+                    f"  status = %s, finished_at = NOW(), error = %s "
+                    f"WHERE id = %s",
+                    (status, error[:1000], str(scan_id)),
+                )
+            await conn.commit()
 
 
 # Findings — one row per digest item; idempotent on (scan_id, arxiv_id)
@@ -452,18 +500,22 @@ async def record_findings(scan_id: UUID, findings: list[entities.Finding]) -> in
         )
         for f in findings
     ]
-    async with await psycopg.AsyncConnection.connect(
-        domains.dd.planner.keys.postgres_url(),
-    ) as conn:
-        async with conn.cursor() as cur:
-            await cur.executemany(
-                f"INSERT INTO {rr_keys.PG_TABLE_FINDINGS} "
-                f"(scan_id, arxiv_id, rank, signal, digest_json) "
-                f"VALUES (%s, %s, %s, %s, %s) "
-                f"ON CONFLICT (scan_id, arxiv_id) DO NOTHING",
-                rows,
-            )
-        await conn.commit()
+    with domains.rr.runtime.observability.spans.postgres_span(
+        "insert_many",
+        **{"db.postgres.table": rr_keys.PG_TABLE_FINDINGS, "db.postgres.row_count": len(rows)},
+    ):
+        async with await psycopg.AsyncConnection.connect(
+            domains.dd.planner.keys.postgres_url(),
+        ) as conn:
+            async with conn.cursor() as cur:
+                await cur.executemany(
+                    f"INSERT INTO {rr_keys.PG_TABLE_FINDINGS} "
+                    f"(scan_id, arxiv_id, rank, signal, digest_json) "
+                    f"VALUES (%s, %s, %s, %s, %s) "
+                    f"ON CONFLICT (scan_id, arxiv_id) DO NOTHING",
+                    rows,
+                )
+            await conn.commit()
     return len(rows)
 
 
@@ -472,16 +524,19 @@ async def get_finding_digest_json(scan_id: UUID, arxiv_id: str) -> dict[str, Any
     `_finding_as_dict` writes. Used by the code-synth Celery task to
     recover a finding's extraction fields without a request-scoped
     payload (the task runs in the worker process, not the API request)."""
-    async with await psycopg.AsyncConnection.connect(
-        domains.dd.planner.keys.postgres_url(),
-    ) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                f"SELECT digest_json FROM {rr_keys.PG_TABLE_FINDINGS} "
-                f"WHERE scan_id = %s AND arxiv_id = %s",
-                (str(scan_id), arxiv_id),
-            )
-            row = await cur.fetchone()
+    with domains.rr.runtime.observability.spans.postgres_span(
+        "select", **{"db.postgres.table": rr_keys.PG_TABLE_FINDINGS},
+    ):
+        async with await psycopg.AsyncConnection.connect(
+            domains.dd.planner.keys.postgres_url(),
+        ) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"SELECT digest_json FROM {rr_keys.PG_TABLE_FINDINGS} "
+                    f"WHERE scan_id = %s AND arxiv_id = %s",
+                    (str(scan_id), arxiv_id),
+                )
+                row = await cur.fetchone()
     if row is None:
         return None
     return row[0] or {}
@@ -527,31 +582,38 @@ async def mark_seen_batch(profile_id: str, arxiv_ids: list[str]) -> int:
     rows = [(profile_id, aid) for aid in arxiv_ids if aid]
     if not rows:
         return 0
-    async with await psycopg.AsyncConnection.connect(
-        domains.dd.planner.keys.postgres_url(),
-    ) as conn:
-        async with conn.cursor() as cur:
-            await cur.executemany(
-                f"INSERT INTO {rr_keys.PG_TABLE_SEEN} (profile_id, arxiv_id) "
-                f"VALUES (%s, %s) "
-                f"ON CONFLICT (profile_id, arxiv_id) DO NOTHING",
-                rows,
-            )
-        await conn.commit()
+    with domains.rr.runtime.observability.spans.postgres_span(
+        "insert_many",
+        **{"db.postgres.table": rr_keys.PG_TABLE_SEEN, "db.postgres.row_count": len(rows)},
+    ):
+        async with await psycopg.AsyncConnection.connect(
+            domains.dd.planner.keys.postgres_url(),
+        ) as conn:
+            async with conn.cursor() as cur:
+                await cur.executemany(
+                    f"INSERT INTO {rr_keys.PG_TABLE_SEEN} (profile_id, arxiv_id) "
+                    f"VALUES (%s, %s) "
+                    f"ON CONFLICT (profile_id, arxiv_id) DO NOTHING",
+                    rows,
+                )
+            await conn.commit()
     return len(rows)
 
 
 async def get_seen_ids(profile_id: str) -> frozenset[str]:
     """All arxiv_ids ever surfaced to the profile. Fed into diff_vs_seen."""
-    async with await psycopg.AsyncConnection.connect(
-        domains.dd.planner.keys.postgres_url(),
-    ) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                f"SELECT arxiv_id FROM {rr_keys.PG_TABLE_SEEN} WHERE profile_id = %s",
-                (profile_id,),
-            )
-            rows = await cur.fetchall()
+    with domains.rr.runtime.observability.spans.postgres_span(
+        "select", **{"db.postgres.table": rr_keys.PG_TABLE_SEEN},
+    ):
+        async with await psycopg.AsyncConnection.connect(
+            domains.dd.planner.keys.postgres_url(),
+        ) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"SELECT arxiv_id FROM {rr_keys.PG_TABLE_SEEN} WHERE profile_id = %s",
+                    (profile_id,),
+                )
+                rows = await cur.fetchall()
     return frozenset(r[0] for r in rows)
 
 
@@ -565,22 +627,25 @@ async def write_synthesis_meta(
     Themes is the cross-paper theme list (3-7 names); summary is the
     executive paragraph. Both can be empty/None (degraded scans).
     Returns True if a row was updated."""
-    async with await psycopg.AsyncConnection.connect(
-        domains.dd.planner.keys.postgres_url(),
-    ) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                f"UPDATE {rr_keys.PG_TABLE_SCANS} "
-                f"SET synthesis_themes = %s::jsonb, synthesis_summary = %s "
-                f"WHERE id = %s",
-                (
-                    json.dumps(list(themes or []), default=str),
-                    summary or None,
-                    str(scan_id),
-                ),
-            )
-            n = cur.rowcount
-        await conn.commit()
+    with domains.rr.runtime.observability.spans.postgres_span(
+        "update", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
+    ):
+        async with await psycopg.AsyncConnection.connect(
+            domains.dd.planner.keys.postgres_url(),
+        ) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"UPDATE {rr_keys.PG_TABLE_SCANS} "
+                    f"SET synthesis_themes = %s::jsonb, synthesis_summary = %s "
+                    f"WHERE id = %s",
+                    (
+                        json.dumps(list(themes or []), default=str),
+                        summary or None,
+                        str(scan_id),
+                    ),
+                )
+                n = cur.rowcount
+            await conn.commit()
     return bool(n)
 
 
@@ -595,17 +660,20 @@ async def write_llm_counters(scan_id: UUID, payload: dict) -> bool:
 
     DELETE on the scan row removes the counters atomically — no separate
     cleanup needed in delete_scan_record."""
-    async with await psycopg.AsyncConnection.connect(
-        domains.dd.planner.keys.postgres_url(),
-    ) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                f"UPDATE {rr_keys.PG_TABLE_SCANS} SET llm_counters = %s::jsonb "
-                f"WHERE id = %s",
-                (json.dumps(payload, default=str), str(scan_id)),
-            )
-            n = cur.rowcount
-        await conn.commit()
+    with domains.rr.runtime.observability.spans.postgres_span(
+        "update", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
+    ):
+        async with await psycopg.AsyncConnection.connect(
+            domains.dd.planner.keys.postgres_url(),
+        ) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"UPDATE {rr_keys.PG_TABLE_SCANS} SET llm_counters = %s::jsonb "
+                    f"WHERE id = %s",
+                    (json.dumps(payload, default=str), str(scan_id)),
+                )
+                n = cur.rowcount
+            await conn.commit()
     return bool(n)
 
 
@@ -615,15 +683,18 @@ async def read_llm_counters(scan_id: UUID) -> dict | None:
     (b) the row exists but llm_counters is NULL (old row OR zero-LLM
     scan whose snapshot was skipped). Called as the Redis-TTL fallback
     from `domains.rr.runtime.llm_counter.service.read_counters`."""
-    async with await psycopg.AsyncConnection.connect(
-        domains.dd.planner.keys.postgres_url(),
-    ) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                f"SELECT llm_counters FROM {rr_keys.PG_TABLE_SCANS} WHERE id = %s",
-                (str(scan_id),),
-            )
-            row = await cur.fetchone()
+    with domains.rr.runtime.observability.spans.postgres_span(
+        "select", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
+    ):
+        async with await psycopg.AsyncConnection.connect(
+            domains.dd.planner.keys.postgres_url(),
+        ) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"SELECT llm_counters FROM {rr_keys.PG_TABLE_SCANS} WHERE id = %s",
+                    (str(scan_id),),
+                )
+                row = await cur.fetchone()
     if row is None:
         return None
     payload = row[0]
@@ -645,16 +716,19 @@ async def delete_scan_record(scan_id: UUID) -> bool:
 
     Per-scan LLM-counter snapshot (llm_counters JSONB column on the same
     row) is removed atomically with the row — no separate cleanup."""
-    async with await psycopg.AsyncConnection.connect(
-        domains.dd.planner.keys.postgres_url(),
-    ) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                f"DELETE FROM {rr_keys.PG_TABLE_SCANS} WHERE id = %s",
-                (str(scan_id),),
-            )
-            n = cur.rowcount
-        await conn.commit()
+    with domains.rr.runtime.observability.spans.postgres_span(
+        "delete", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
+    ):
+        async with await psycopg.AsyncConnection.connect(
+            domains.dd.planner.keys.postgres_url(),
+        ) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"DELETE FROM {rr_keys.PG_TABLE_SCANS} WHERE id = %s",
+                    (str(scan_id),),
+                )
+                n = cur.rowcount
+            await conn.commit()
     return bool(n)
 
 
@@ -663,32 +737,38 @@ async def reset_seen(profile_id: str) -> int:
     scan reads as `is_new = True` again. Returns the row count that was
     deleted. Operator-triggered (POST /profile/{id}/reset-seen) — never
     called from the scan pipeline."""
-    async with await psycopg.AsyncConnection.connect(
-        domains.dd.planner.keys.postgres_url(),
-    ) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                f"DELETE FROM {rr_keys.PG_TABLE_SEEN} WHERE profile_id = %s",
-                (profile_id,),
-            )
-            n = cur.rowcount
-        await conn.commit()
+    with domains.rr.runtime.observability.spans.postgres_span(
+        "delete", **{"db.postgres.table": rr_keys.PG_TABLE_SEEN},
+    ):
+        async with await psycopg.AsyncConnection.connect(
+            domains.dd.planner.keys.postgres_url(),
+        ) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"DELETE FROM {rr_keys.PG_TABLE_SEEN} WHERE profile_id = %s",
+                    (profile_id,),
+                )
+                n = cur.rowcount
+            await conn.commit()
     return int(n or 0)
 
 
 # Profiles — interest verticals + per-profile SignalWeights overrides
 async def get_profile(profile_id: str) -> dict[str, Any] | None:
     """Fetch a profile's interests + weights. Returns None if missing."""
-    async with await psycopg.AsyncConnection.connect(
-        domains.dd.planner.keys.postgres_url(),
-    ) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                f"SELECT id, interests, weights, created_at, updated_at "
-                f"FROM {rr_keys.PG_TABLE_PROFILES} WHERE id = %s",
-                (profile_id,),
-            )
-            row = await cur.fetchone()
+    with domains.rr.runtime.observability.spans.postgres_span(
+        "select", **{"db.postgres.table": rr_keys.PG_TABLE_PROFILES},
+    ):
+        async with await psycopg.AsyncConnection.connect(
+            domains.dd.planner.keys.postgres_url(),
+        ) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"SELECT id, interests, weights, created_at, updated_at "
+                    f"FROM {rr_keys.PG_TABLE_PROFILES} WHERE id = %s",
+                    (profile_id,),
+                )
+                row = await cur.fetchone()
     if row is None:
         return None
     return {
@@ -708,20 +788,23 @@ async def upsert_profile(
 ) -> None:
     """INSERT a profile or UPDATE its interests/weights in place. updated_at
     is bumped on every call."""
-    async with await psycopg.AsyncConnection.connect(
-        domains.dd.planner.keys.postgres_url(),
-    ) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                f"INSERT INTO {rr_keys.PG_TABLE_PROFILES} "
-                f"(id, interests, weights) VALUES (%s, %s, %s) "
-                f"ON CONFLICT (id) DO UPDATE SET "
-                f"  interests = EXCLUDED.interests, "
-                f"  weights = EXCLUDED.weights, "
-                f"  updated_at = NOW()",
-                (profile_id, Jsonb(interests), Jsonb(weights)),
-            )
-        await conn.commit()
+    with domains.rr.runtime.observability.spans.postgres_span(
+        "upsert", **{"db.postgres.table": rr_keys.PG_TABLE_PROFILES},
+    ):
+        async with await psycopg.AsyncConnection.connect(
+            domains.dd.planner.keys.postgres_url(),
+        ) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"INSERT INTO {rr_keys.PG_TABLE_PROFILES} "
+                    f"(id, interests, weights) VALUES (%s, %s, %s) "
+                    f"ON CONFLICT (id) DO UPDATE SET "
+                    f"  interests = EXCLUDED.interests, "
+                    f"  weights = EXCLUDED.weights, "
+                    f"  updated_at = NOW()",
+                    (profile_id, Jsonb(interests), Jsonb(weights)),
+                )
+            await conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -731,43 +814,44 @@ async def upsert_profile(
 async def bootstrap_qdrant() -> None:
     """Ensure `radar_papers` collection exists with the right vector config
     + payload indexes. Safe to re-run."""
-    client = infra.qdrant.service.get_qdrant()
-    exists = await client.collection_exists(collection_name=rr_keys.QDRANT_COLLECTION)
-    if exists:
-        logger.info(f"[rr-qdrant] collection {rr_keys.QDRANT_COLLECTION!r} already exists")
-    else:
-        await client.create_collection(
-            collection_name = rr_keys.QDRANT_COLLECTION,
-            vectors_config  = VectorParams(
-                size     = rr_params.STORES_PARAMS.qdrant_vector_dim,
-                distance = Distance.COSINE,
-            ),
-            optimizers_config = OptimizersConfigDiff(
-                default_segment_number = rr_params.STORES_PARAMS.qdrant_segment_count,
-            ),
-        )
-        logger.info(
-            f"[rr-qdrant] created collection {rr_keys.QDRANT_COLLECTION!r} "
-            f"(dim={rr_params.STORES_PARAMS.qdrant_vector_dim}, distance=COSINE)"
-        )
-    # Payload indexes — idempotent (Qdrant ignores duplicates). These speed
-    # up filter+search by 10-100× on the radar's typical queries.
-    for field, schema in (
-        (rr_keys.QDRANT_PAYLOAD_ARXIV_ID,  PayloadSchemaType.KEYWORD),
-        (rr_keys.QDRANT_PAYLOAD_SIGNAL,    PayloadSchemaType.FLOAT),
-        (rr_keys.QDRANT_PAYLOAD_PUBLISHED, PayloadSchemaType.DATETIME),
-        (rr_keys.QDRANT_PAYLOAD_SOURCES,   PayloadSchemaType.KEYWORD),
-    ):
-        try:
-            await client.create_payload_index(
+    with domains.rr.runtime.observability.spans.qdrant_span("bootstrap"):
+        client = infra.qdrant.service.get_qdrant()
+        exists = await client.collection_exists(collection_name=rr_keys.QDRANT_COLLECTION)
+        if exists:
+            logger.info(f"[rr-qdrant] collection {rr_keys.QDRANT_COLLECTION!r} already exists")
+        else:
+            await client.create_collection(
                 collection_name = rr_keys.QDRANT_COLLECTION,
-                field_name      = field,
-                field_schema    = schema,
+                vectors_config  = VectorParams(
+                    size     = rr_params.STORES_PARAMS.qdrant_vector_dim,
+                    distance = Distance.COSINE,
+                ),
+                optimizers_config = OptimizersConfigDiff(
+                    default_segment_number = rr_params.STORES_PARAMS.qdrant_segment_count,
+                ),
             )
-        except Exception as e:
-            # Idempotency: an already-existing index raises in some
-            # qdrant-client versions; log + continue.
-            logger.debug(f"[rr-qdrant] payload index {field!r} exists or skip: {e}")
+            logger.info(
+                f"[rr-qdrant] created collection {rr_keys.QDRANT_COLLECTION!r} "
+                f"(dim={rr_params.STORES_PARAMS.qdrant_vector_dim}, distance=COSINE)"
+            )
+        # Payload indexes — idempotent (Qdrant ignores duplicates). These speed
+        # up filter+search by 10-100× on the radar's typical queries.
+        for field, schema in (
+            (rr_keys.QDRANT_PAYLOAD_ARXIV_ID,  PayloadSchemaType.KEYWORD),
+            (rr_keys.QDRANT_PAYLOAD_SIGNAL,    PayloadSchemaType.FLOAT),
+            (rr_keys.QDRANT_PAYLOAD_PUBLISHED, PayloadSchemaType.DATETIME),
+            (rr_keys.QDRANT_PAYLOAD_SOURCES,   PayloadSchemaType.KEYWORD),
+        ):
+            try:
+                await client.create_payload_index(
+                    collection_name = rr_keys.QDRANT_COLLECTION,
+                    field_name      = field,
+                    field_schema    = schema,
+                )
+            except Exception as e:
+                # Idempotency: an already-existing index raises in some
+                # qdrant-client versions; log + continue.
+                logger.debug(f"[rr-qdrant] payload index {field!r} exists or skip: {e}")
 
 
 async def upsert_paper_vector(
@@ -799,8 +883,11 @@ async def upsert_paper_vector(
             "hf_upvotes":                  int(paper.hf_upvotes),
         },
     )
-    client = infra.qdrant.service.get_qdrant()
-    await client.upsert(collection_name=rr_keys.QDRANT_COLLECTION, points=[point])
+    with domains.rr.runtime.observability.spans.qdrant_span(
+        "upsert", **{"db.qdrant.arxiv_id": paper.arxiv_id},
+    ):
+        client = infra.qdrant.service.get_qdrant()
+        await client.upsert(collection_name=rr_keys.QDRANT_COLLECTION, points=[point])
     return point.id
 
 
@@ -829,14 +916,19 @@ async def search_by_embedding(
                 for aid in arxiv_ids
             ]
         )
-    client = infra.qdrant.service.get_qdrant()
-    response = await client.query_points(
-        collection_name = rr_keys.QDRANT_COLLECTION,
-        query           = list(query_vector),
-        query_filter    = flt,
-        limit           = limit,
-        with_payload    = True,
-    )
+    with domains.rr.runtime.observability.spans.qdrant_span(
+        "query_points", **{"db.qdrant.limit": limit},
+    ) as span:
+        client = infra.qdrant.service.get_qdrant()
+        response = await client.query_points(
+            collection_name = rr_keys.QDRANT_COLLECTION,
+            query           = list(query_vector),
+            query_filter    = flt,
+            limit           = limit,
+            with_payload    = True,
+        )
+        if span is not None:
+            span.set_attribute("db.qdrant.result_count", len(response.points))
     return [
         {
             "arxiv_id": r.payload.get(rr_keys.QDRANT_PAYLOAD_ARXIV_ID) if r.payload else None,
@@ -849,6 +941,7 @@ async def search_by_embedding(
 
 async def count_points() -> int:
     """Total points in `radar_papers`. Cheap sanity check for bootstrap."""
-    client = infra.qdrant.service.get_qdrant()
-    info = await client.get_collection(collection_name=rr_keys.QDRANT_COLLECTION)
+    with domains.rr.runtime.observability.spans.qdrant_span("count"):
+        client = infra.qdrant.service.get_qdrant()
+        info = await client.get_collection(collection_name=rr_keys.QDRANT_COLLECTION)
     return int(getattr(info, "points_count", 0) or 0)

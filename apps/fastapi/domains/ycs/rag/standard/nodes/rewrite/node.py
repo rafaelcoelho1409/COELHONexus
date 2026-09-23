@@ -21,7 +21,7 @@ async def rewrite_query(state: state.YouTubeRAGState, llm) -> dict:
         route = str(state.get("route") or "unknown"),
         mode = str(state.get("mode") or "standard"),
     )
-    chain = prompts.REWRITE_PROMPT | llm
+    chain = service.resolve_prompt(prompts.REWRITE_PROMPT, "ycs.rag.rewrite") | llm
     try:
         domains.ycs.runtime.llm_counter.service.set_node(node = "rewrite")
         response = await service.resilient_ainvoke(

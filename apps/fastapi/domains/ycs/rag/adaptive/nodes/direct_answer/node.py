@@ -17,7 +17,7 @@ import asyncio
 @traced("rag.direct_answer")
 async def direct_answer(state: state.AdaptiveRAGState, llm) -> dict:
     """FAST path: direct LLM answer without retrieval."""
-    chain = prompts.DIRECT_ANSWER_PROMPT | llm
+    chain = service.resolve_prompt(prompts.DIRECT_ANSWER_PROMPT, "ycs.rag.direct_answer") | llm
     try:
         domains.ycs.runtime.llm_counter.service.set_node(node = "direct_answer")
         # 2026-09-15: hedged racer (Tail-at-Scale) instead of plain

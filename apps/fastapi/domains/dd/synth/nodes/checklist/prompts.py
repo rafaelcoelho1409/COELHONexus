@@ -1,8 +1,9 @@
 """checklist_eval — LLM templates for CoCoA alignment + atomic-claim grounding."""
 from __future__ import annotations
+import infra
 
 
-COCOA_EXPLAINER_PROMPT = """You are the Code Explainer (CoCoA stage 1).
+_COCOA_EXPLAINER_PROMPT = """You are the Code Explainer (CoCoA stage 1).
 
 For each code snippet below, write ONE concise behavioral abstraction (1
 sentence, 12-30 words) describing WHAT the code does and which key
@@ -26,7 +27,17 @@ Cover EVERY input id. No prose outside JSON.
 == END CODE BLOCKS =="""
 
 
-COCOA_JUDGE_PROMPT = """You are the Alignment Judge (CoCoA stage 2).
+@infra.langfuse.prompts.with_langfuse_override("dd.synth.checklist.cocoa_explainer")
+def build_cocoa_explainer_prompt(
+    *,
+    blocks_block: str,
+) -> str:
+    return _COCOA_EXPLAINER_PROMPT.format(
+        blocks_block = blocks_block,
+    )
+
+
+_COCOA_JUDGE_PROMPT = """You are the Alignment Judge (CoCoA stage 2).
 
 For each row below, decide if the documentation EXPLANATION faithfully
 describes the BEHAVIORAL SPEC of its associated code block. Both fields
@@ -62,7 +73,17 @@ prefer FAIL with a specific reason naming the drift.
 == END PAIRS =="""
 
 
-ATOMIC_CLAIM_EXTRACT_PROMPT = """Extract the atomic factual claims from this chapter prose.
+@infra.langfuse.prompts.with_langfuse_override("dd.synth.checklist.cocoa_judge")
+def build_cocoa_judge_prompt(
+    *,
+    pairs_block: str,
+) -> str:
+    return _COCOA_JUDGE_PROMPT.format(
+        pairs_block = pairs_block,
+    )
+
+
+_ATOMIC_CLAIM_EXTRACT_PROMPT = """Extract the atomic factual claims from this chapter prose.
 An atomic claim is a single verifiable fact about the technology being documented.
 
 Examples of valid claims:
@@ -84,7 +105,21 @@ Return strict JSON. Cap at {max_claims} most-important claims.
 JSON: {{"claims": ["claim 1", "claim 2", ...]}}"""
 
 
-ATOMIC_CLAIM_JUDGE_PROMPT = """Is the atomic claim at the END faithful to the source documentation?
+@infra.langfuse.prompts.with_langfuse_override("dd.synth.checklist.atomic_claim_extract")
+def build_atomic_claim_extract_prompt(
+    *,
+    max_claims: str,
+    prose: str,
+    prose_chars: str,
+) -> str:
+    return _ATOMIC_CLAIM_EXTRACT_PROMPT.format(
+        max_claims = max_claims,
+        prose = prose,
+        prose_chars = prose_chars,
+    )
+
+
+_ATOMIC_CLAIM_JUDGE_PROMPT = """Is the atomic claim at the END faithful to the source documentation?
 
 A claim is SUPPORTED when ANY of these hold:
   (a) the source explicitly states it; OR
@@ -113,6 +148,18 @@ Answer in strict JSON: {{"supported": true | false, "evidence": "short quote OR 
 --- END SOURCE ---
 
 CLAIM: {claim}"""
+
+
+@infra.langfuse.prompts.with_langfuse_override("dd.synth.checklist.atomic_claim_judge")
+def build_atomic_claim_judge_prompt(
+    *,
+    claim: str,
+    source: str,
+) -> str:
+    return _ATOMIC_CLAIM_JUDGE_PROMPT.format(
+        claim = claim,
+        source = source,
+    )
 
 
 CRITERION_BLOCKS: dict[str, str] = {

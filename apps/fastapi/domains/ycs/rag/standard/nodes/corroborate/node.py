@@ -42,7 +42,7 @@ async def corroborate_claim(state: state.YouTubeRAGState, llm) -> dict:
     if not web_context.strip():
         return {}
 
-    chain = prompts.CORROBORATION_PROMPT | llm.with_structured_output(
+    chain = service.resolve_prompt(prompts.CORROBORATION_PROMPT, "ycs.rag.corroborate") | llm.with_structured_output(
         schemas.CorroborationResult,
     )
     try:

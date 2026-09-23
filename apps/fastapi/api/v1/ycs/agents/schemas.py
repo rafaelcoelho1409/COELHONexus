@@ -4,7 +4,7 @@ import domains
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # Agentic RAG Requests
@@ -52,3 +52,13 @@ class PipelineRequest(BaseModel):
     include_transcription: bool = True
     include_qdrant:        bool = True
     include_graph:         bool = False
+
+
+# Feedback
+class AskFeedbackRequest(BaseModel):
+    """User rating for an ask turn. `trace_id` is the 32-hex OTel trace id
+    returned as `trace_id` in the `/search` response; `rating` is 0.0 (bad)
+    to 1.0 (good). Lands as a `user.feedback` score on the trace."""
+    trace_id: str   = Field(pattern = r"^[0-9a-f]{32}$")
+    rating:   float = Field(ge = 0.0, le = 1.0)
+    comment:  str   = ""

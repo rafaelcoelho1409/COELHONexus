@@ -21,6 +21,7 @@ DigestSchema and prompt patterns remain useful), but it is no longer
 wired into either topology.
 """
 from __future__ import annotations
+import infra
 from .. import keys, prompts, schemas, service, skills, tools
 
 from typing import Any
@@ -45,6 +46,19 @@ from langchain_core.language_models import BaseChatModel
 # ship in the repo to serve as a DeepAgents reference.
 # ---------------------------------------------------------------------------
 
+def _resolve_role(static: str, name: str) -> str:
+    """Managed-override layer for a subagent ROLE block. Skills/memory stay
+    local (dynamic per-build); only the static role text is replaceable.
+    Returns `static` unless a template is published under `name`."""
+    try:
+        return infra.langfuse.prompts.get_prompt(
+            name, label = "production", fallback = static,
+        ) or static
+    except Exception:
+        return static
+
+
+
 async def build_discovery_arxiv(model: BaseChatModel) -> dict[str, Any]:
     """SubAgent dict for the arXiv discovery worker (SUBAGENTS mode)."""
     mcp_tools = await service.get_tools_by_name(keys.TOOL_ARXIV_SEARCH)
@@ -54,7 +68,7 @@ async def build_discovery_arxiv(model: BaseChatModel) -> dict[str, Any]:
         f"=== SKILL: rotator_etiquette ===\n\n"
         f"{skills.service.SKILL_ROTATOR_ETIQUETTE}\n\n"
         f"=== ROLE ===\n\n"
-        f"{prompts.DISCOVERY_ARXIV_SYSTEM_PROMPT}"
+        f"{_resolve_role(prompts.DISCOVERY_ARXIV_SYSTEM_PROMPT, "rr.agent.discovery_arxiv")}"
     )
     return {
         "name":          keys.SUBAGENT_DISCOVERY_ARXIV,
@@ -85,7 +99,7 @@ async def build_discovery_semantic_scholar(model: BaseChatModel) -> dict[str, An
         f"=== SKILL: rotator_etiquette ===\n\n"
         f"{skills.service.SKILL_ROTATOR_ETIQUETTE}\n\n"
         f"=== ROLE ===\n\n"
-        f"{prompts.DISCOVERY_S2_SYSTEM_PROMPT}"
+        f"{_resolve_role(prompts.DISCOVERY_S2_SYSTEM_PROMPT, "rr.agent.discovery_s2")}"
     )
     return {
         "name":          keys.SUBAGENT_DISCOVERY_S2,
@@ -119,7 +133,7 @@ async def build_discovery_huggingface_daily_papers(
         f"=== SKILL: rotator_etiquette ===\n\n"
         f"{skills.service.SKILL_ROTATOR_ETIQUETTE}\n\n"
         f"=== ROLE ===\n\n"
-        f"{prompts.DISCOVERY_HF_SYSTEM_PROMPT}"
+        f"{_resolve_role(prompts.DISCOVERY_HF_SYSTEM_PROMPT, "rr.agent.discovery_hf")}"
     )
     return {
         "name":          keys.SUBAGENT_DISCOVERY_HF,
@@ -150,7 +164,7 @@ async def build_discovery_hn(model: BaseChatModel) -> dict[str, Any]:
         f"=== SKILL: rotator_etiquette ===\n\n"
         f"{skills.service.SKILL_ROTATOR_ETIQUETTE}\n\n"
         f"=== ROLE ===\n\n"
-        f"{prompts.DISCOVERY_HN_SYSTEM_PROMPT}"
+        f"{_resolve_role(prompts.DISCOVERY_HN_SYSTEM_PROMPT, "rr.agent.discovery_hn")}"
     )
     return {
         "name":          keys.SUBAGENT_DISCOVERY_HN,
@@ -182,7 +196,7 @@ async def build_discovery_openalex(model: BaseChatModel) -> dict[str, Any]:
         f"=== SKILL: rotator_etiquette ===\n\n"
         f"{skills.service.SKILL_ROTATOR_ETIQUETTE}\n\n"
         f"=== ROLE ===\n\n"
-        f"{prompts.DISCOVERY_OPENALEX_SYSTEM_PROMPT}"
+        f"{_resolve_role(prompts.DISCOVERY_OPENALEX_SYSTEM_PROMPT, "rr.agent.discovery_openalex")}"
     )
     return {
         "name":          keys.SUBAGENT_DISCOVERY_OPENALEX,
@@ -224,7 +238,7 @@ def build_deep_read(model: BaseChatModel) -> dict[str, Any]:
         f"=== SKILL: paper_extraction ===\n\n"
         f"{skills.service.SKILL_PAPER_EXTRACTION}\n\n"
         f"=== ROLE ===\n\n"
-        f"{prompts.DEEP_READ_SYSTEM_PROMPT}"
+        f"{_resolve_role(prompts.DEEP_READ_SYSTEM_PROMPT, "rr.agent.deep_read")}"
     )
     return {
         "name":          keys.SUBAGENT_DEEP_READ,
@@ -257,7 +271,7 @@ def build_synthesis(model: BaseChatModel) -> dict[str, Any]:
         f"=== SKILL: cross_paper_synthesis ===\n\n"
         f"{skills.service.SKILL_CROSS_PAPER_SYNTHESIS}\n\n"
         f"=== ROLE ===\n\n"
-        f"{prompts.SYNTHESIS_SYSTEM_PROMPT}"
+        f"{_resolve_role(prompts.SYNTHESIS_SYSTEM_PROMPT, "rr.agent.synthesis")}"
     )
     return {
         "name":          keys.SUBAGENT_SYNTHESIS,
@@ -310,7 +324,7 @@ def build_report(model: BaseChatModel) -> dict[str, Any]:
         f"=== SKILL: digest_rendering ===\n\n"
         f"{skills.service.SKILL_DIGEST_RENDERING}\n\n"
         f"=== ROLE ===\n\n"
-        f"{prompts.REPORT_SYSTEM_PROMPT}\n\n"
+        f"{_resolve_role(prompts.REPORT_SYSTEM_PROMPT, "rr.agent.report")}\n\n"
         f"=== TERMINATION ===\n\n"
         f"After write_digest persists the digest, call `respond_in_format` "
         f"ONCE with the same payload (Pydantic DigestSchema). The framework "

@@ -1,5 +1,6 @@
 """Prompt builders for mgsr replan + repair, and the compact formatters they consume."""
 from __future__ import annotations
+import infra
 from . import params
 
 
@@ -24,6 +25,7 @@ def _format_failed_feedback(failed_feedback: list[str]) -> str:
     return "\n".join(f"  - {x}" for x in failed_feedback)
 
 
+@infra.langfuse.prompts.with_langfuse_override("dd.synth.mgsr.replan")
 def build_replan_prompt(
     *,
     framework: str,
@@ -128,6 +130,7 @@ def build_replan_prompt(
     )
 
 
+@infra.langfuse.prompts.with_langfuse_override("dd.synth.mgsr.repair")
 def build_repair_prompt(
     *,
     framework: str,

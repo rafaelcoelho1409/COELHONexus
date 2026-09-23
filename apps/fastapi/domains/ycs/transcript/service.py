@@ -1473,12 +1473,16 @@ async def _check_existing_transcriptions(
     if not es_client or not video_ids:
         return {}
     try:
-        result = await es_client.search(
-            index   = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
-            query   = {"terms": {"video_id": video_ids}},
-            _source = ["video_id", "lang"],
-            size    = len(video_ids) * 10,  # up to 10 langs per video
-        )
+        with domains.ycs.runtime.observability.spans.es_search_span(
+            index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
+            top_k = len(video_ids) * 10, operation = "cache_check",
+        ):
+            result = await es_client.search(
+                index   = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
+                query   = {"terms": {"video_id": video_ids}},
+                _source = ["video_id", "lang"],
+                size    = len(video_ids) * 10,  # up to 10 langs per video
+            )
         existing: dict[str, set[str]] = {}
         for hit in result.get("hits", {}).get("hits", []):
             source = hit.get("_source", {})

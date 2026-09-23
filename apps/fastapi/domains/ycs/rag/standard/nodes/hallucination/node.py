@@ -30,7 +30,7 @@ async def check_hallucination(state: state.YouTubeRAGState, llm) -> dict:
     # responses with string `"true"` instead of boolean true, which
     # made the graph cycle through every model in the pool before the
     # `except Exception → grounded=True` fallback finally fired.
-    chain = prompts.HALLUCINATION_PROMPT | llm.with_structured_output(
+    chain = service.resolve_prompt(prompts.HALLUCINATION_PROMPT, "ycs.rag.hallucination") | llm.with_structured_output(
         schemas.HallucinationCheck,
     )
     try:

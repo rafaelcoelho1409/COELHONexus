@@ -37,6 +37,7 @@ def chat_completion_span(
         keys.GEN_AI_SYSTEM:         keys.SYSTEM_NEXUS_CHAT_ENDPOINT,
         keys.GEN_AI_OPERATION_NAME: keys.OP_CHAT,
         keys.GEN_AI_REQUEST_MODEL:  model,
+        keys.LANGFUSE_OBSERVATION_TYPE: keys.OBSERVATION_TYPE_GENERATION,
         "coelho.langfuse.keep":     True,
     }
     if temperature is not None:

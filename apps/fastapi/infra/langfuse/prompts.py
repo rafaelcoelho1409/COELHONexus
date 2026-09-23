@@ -2,7 +2,7 @@
 in-process caching and a bulletproof local fallback.
 
 Pattern (in a planner / synth / agent node):
-    import infra.langfuse
+    import infra
 
     rendered = infra.langfuse.prompts.get_prompt(
         "dd.planner.chapter_propose",
@@ -25,10 +25,7 @@ TTL-bounded so live updates show up within `ttl_s` seconds. Substitution
 happens per call (variables can change per invocation).
 """
 from __future__ import annotations
-
-import infra.langfuse
-
-from . import params
+from . import params, service
 
 import logging
 import time
@@ -58,7 +55,7 @@ def get_prompt(
     variables, return the rendered string. Returns `fallback` on any
     failure — caller may pass None to indicate it has its own local
     rendering path."""
-    client = infra.langfuse.service.get_client()
+    client = service.get_client()
     if client is None:
         return fallback
 

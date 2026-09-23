@@ -1,5 +1,6 @@
 """digest_construct — LLM prompt builders (per-source digest + repair)."""
 from __future__ import annotations
+import infra
 
 
 def _format_outline_compact(outline_sections: list[dict]) -> str:
@@ -13,6 +14,7 @@ def _format_outline_compact(outline_sections: list[dict]) -> str:
     return "\n".join(lines)
 
 
+@infra.langfuse.prompts.with_langfuse_override("dd.synth.digest")
 def build_digest_prompt(
     *,
     chapter_id: str,
@@ -105,6 +107,7 @@ def build_digest_prompt(
     )
 
 
+@infra.langfuse.prompts.with_langfuse_override("dd.synth.digest.repair")
 def build_repair_prompt(
     *,
     chapter_id: str,
