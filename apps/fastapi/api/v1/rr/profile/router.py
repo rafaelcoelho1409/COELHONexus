@@ -1,12 +1,11 @@
 """Profile endpoints — per-profile Postgres state."""
 from __future__ import annotations
 import domains
+from . import schemas
 
 import logging
 
 from fastapi import APIRouter, HTTPException
-
-from . import schemas
 
 
 logger = logging.getLogger(__name__)

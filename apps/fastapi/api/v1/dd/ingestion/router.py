@@ -1,13 +1,14 @@
 """Read-only view of the per-framework MinIO content (canonical post-
 finalize corpus). Anything here survives Redis TTL."""
+import domains
+from . import params
+
 import logging
 
-import domains
 import redis.asyncio as redis_aio
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, HTTPException, Response
 
-from . import params
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

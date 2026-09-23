@@ -1,15 +1,16 @@
 """Dev-time stage isolation. Synchronous (no Celery, no lock, no
 progress writes) so exceptions surface with full stack traces.
 Not gated — single-user dev cluster only."""
+import domains
+from .. import resolver
+from . import params
+
 import time
 from typing import Optional
 
-import domains
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
 
-from .. import resolver
-from . import params
 
 router = APIRouter()
 

@@ -1,7 +1,7 @@
 """v1 API surface. app.py mounts under /api → /api/v1/..."""
 from fastapi import APIRouter
 
-from . import dd, rr, settings, ycs
+from . import dd, rr, ycs, settings
 
 api_v1 = APIRouter(prefix = "/v1")
 api_v1.include_router(settings.router, prefix = "/settings", tags = ["Settings"])

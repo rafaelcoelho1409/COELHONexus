@@ -1,7 +1,6 @@
 """ycs/agents — agentic RAG router: ask (sync+stream), ingest, graph stats, pipeline."""
 from __future__ import annotations
-import domains
-import infra
+import domains, infra
 from . import domain, params, schemas, service
 
 import asyncio
