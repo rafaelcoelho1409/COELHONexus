@@ -1,6 +1,7 @@
 """Scan endpoints — Celery dispatch, Postgres status reads, Redis SSE relay."""
 from __future__ import annotations
 import domains
+import domains.rr.task
 
 import json
 import logging
