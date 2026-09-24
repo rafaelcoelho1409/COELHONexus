@@ -17,7 +17,7 @@ write to Elasticsearch + dispatch the Playwright transcript fetch.
 from __future__ import annotations
 import domains
 import domains.ycs.qdrant_task.task
-import  domains.ycs.neo4j_task.task
+import domains.ycs.neo4j_task.task
 from . import domain, params, schemas
 
 import asyncio

@@ -87,14 +87,24 @@ alloy:
     create: true
     content: |
       // ====================================================================
-      // Alloy River config — LGTM unified collector
+      // Alloy River config — metrics + OTLP gateway (alloy-metrics instance)
       // ====================================================================
       // Pipelines:
-      //   1. Kubernetes pod log tailing (namespace-scoped) → Loki
-      //   2. ServiceMonitor + PodMonitor scraping → Mimir
-      //   3. Kubelet + cAdvisor scraping (with relabel drop of high-card series) → Mimir
-      //   4. Alloy self-scrape → Mimir
-      //   5. (CONDITIONAL) OTLP gRPC/HTTP receiver → batch → Tempo/Mimir/Loki
+      //   1. ServiceMonitor + PodMonitor scraping → Mimir
+      //   2. Kubelet + cAdvisor scraping (with relabel drop of high-card series) → Mimir
+      //   3. Alloy self-scrape → Mimir
+      //   4. (CONDITIONAL) OTLP gRPC/HTTP receiver → batch → Tempo/Mimir/Loki
+      //
+      // Kubernetes pod log tailing lives in the SEPARATE `alloy-logs` DaemonSet
+      // release (helm_release.alloy_logs in main.tf) — split out because
+      // `loki.source.kubernetes` (API-based tailing) never garbage-collects
+      // tailers for deleted pods, so under frequent redeploys zombie tailer
+      // retries accumulate until this Deployment CPU-starves and fails its
+      // own readiness probe — taking the OTLP receiver below down with it
+      // (Service loses all ready endpoints). alloy-logs uses file-based
+      // tailing instead (fsnotify drops a watch cleanly when the log file is
+      // removed — no API-retry loop). Ported from the COELHO Cloud fix,
+      // 2026-09-23 (see that repo's docs/alloy_optimization.md).
       // ====================================================================
 
       logging {
@@ -114,6 +124,11 @@ alloy:
             min_shards            = 1
             max_samples_per_send  = 500    // default 2000
             batch_send_deadline   = "5s"
+            // Fail fast on stale samples (ported from COELHO Cloud's
+            // 2026-09-05 fix: WAL-replay ancients got 400
+            // err-mimir-sample-timestamp-too-old + EOF retry storms).
+            // Homelab-style deployments prefer gaps over retry spirals.
+            sample_age_limit      = "10m"
           }
         }
 
@@ -252,6 +267,23 @@ alloy:
             insecure = true
           }
         }
+
+        // Bound the blast radius of a slow Tempo (ported from COELHO Cloud's
+        // 2026-09-05 fix: endless DeadlineExceeded retries → queue growth →
+        // OOMKill). Drop after ~2m instead of retrying forever; keep the
+        // queue small (docs warn a very high queue_size causes OOM kills).
+        retry_on_failure {
+          enabled           = true
+          initial_interval  = "5s"
+          max_interval      = "30s"
+          max_elapsed_time  = "2m"
+        }
+
+        sending_queue {
+          enabled       = true
+          num_consumers = 2
+          queue_size    = 100
+        }
       }
 
       // ----- OTLP METRICS → Mimir (via the unconditional remote_write above)
@@ -283,71 +315,6 @@ alloy:
         forward_to = [loki.write.default.receiver]
       }
 %{ endif ~}
-
-      // ====================================================================
-      // KUBERNETES POD LOG COLLECTION (namespace-scoped allowlist)
-      // ====================================================================
-      // Was previously cluster-wide. Now scoped to apps we care about — drops
-      // kube-system, cattle-*, helm-operation-*, local-path-storage chatter.
-      discovery.kubernetes "pods" {
-        role = "pod"
-        namespaces {
-          names = ${alloy_log_namespaces_json}
-        }
-      }
-
-      // Relabel: surface useful K8s metadata as Loki labels.
-      discovery.relabel "pods" {
-        targets = discovery.kubernetes.pods.targets
-        rule {
-          source_labels = ["__meta_kubernetes_pod_node_name"]
-          target_label  = "node"
-        }
-        rule {
-          source_labels = ["__meta_kubernetes_namespace"]
-          target_label  = "namespace"
-        }
-        rule {
-          source_labels = ["__meta_kubernetes_pod_name"]
-          target_label  = "pod"
-        }
-        rule {
-          source_labels = ["__meta_kubernetes_pod_container_name"]
-          target_label  = "container"
-        }
-        rule {
-          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
-          target_label  = "app"
-        }
-      }
-
-      loki.source.kubernetes "pods" {
-        targets    = discovery.relabel.pods.output
-        forward_to = [loki.process.pods.receiver]
-      }
-
-      loki.process "pods" {
-        forward_to = [loki.write.default.receiver]
-
-        // Defense in depth: even if a namespace slips through the allowlist
-        // above, drop chatty names at the process stage.
-        stage.match {
-          selector = "{namespace=~\"kube-system|cattle-.*|helm-.*|local-path-storage\"}"
-          action   = "drop"
-        }
-
-        // Drop DEBUG-level lines from the LGTM stack itself (extremely chatty).
-        stage.match {
-          selector = "{namespace=~\"mimir|loki|tempo\"} |~ \"level=debug\""
-          action   = "drop"
-        }
-
-        stage.static_labels {
-          values = {
-            cluster = "${cluster_label}",
-          }
-        }
-      }
 
       // ====================================================================
       // PROMETHEUS-OPERATOR DISCOVERY
@@ -409,7 +376,10 @@ alloy:
         forward_to = [prometheus.remote_write.mimir.receiver]
         rule {
           source_labels = ["__name__"]
-          regex         = "container_network_.*|container_tasks_state|container_memory_failures_total|container_fs_(reads|writes)_(bytes_)?total"
+          // Extended with container_blkio_.*|container_sockets 2026-09-23,
+          // ported from COELHO Cloud's 2026-09-05 fix (blkio series with
+          // device/major/minor labels seen rejected downstream).
+          regex         = "container_network_.*|container_tasks_state|container_memory_failures_total|container_fs_(reads|writes)_(bytes_)?total|container_blkio_.*|container_sockets"
           action        = "drop"
         }
         // IMPORTANT (fixed 2026-05-29): do NOT add `id` back to this labeldrop.
@@ -470,10 +440,10 @@ alloy:
       }
 
 # -----------------------------------------------------------------------------
-# Deployment mode — single replica is fine for homelab.
-#   - log collection uses Kubelet API (works cluster-wide from 1 pod)
-#   - prometheus.operator.* discovers SMs/PMs cluster-wide
-# DaemonSet would give 1 pod per node = 4× the resource cost on this k3d cluster.
+# Deployment mode — single replica. This instance no longer tails pod logs
+# (moved to the alloy-logs DaemonSet, see River config header above), so it
+# has no reason to run per-node: OTLP receipt, ServiceMonitor/PodMonitor
+# discovery and cAdvisor scraping are all inherently cluster-wide from 1 pod.
 # -----------------------------------------------------------------------------
 controller:
   type: deployment

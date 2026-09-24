@@ -1,7 +1,8 @@
 """SAWC — Section-Aware Writer-Critic. v2 cookbook: {heading, intro, subtopics: [{subheading, explanation, code_ref_hash}], citations}.
 Best-of-N writer drafts + critic-picker (MAMM-Refine arXiv 2503.15272); 2-attempt repair loop for alignment violations."""
 from __future__ import annotations
-import domains, infra
+import domains
+from infra.langfuse.prompts import with_langfuse_override
 from . import domain, keys, params, schemas, versions
 
 import asyncio
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 _MAX_CALL_ATTEMPTS = 2
 
 
-@infra.langfuse.prompts.with_langfuse_override("dd.synth.sawc.repair")
+@with_langfuse_override("dd.synth.sawc.repair")
 def build_repair_prompt(
     *,
     framework: str,

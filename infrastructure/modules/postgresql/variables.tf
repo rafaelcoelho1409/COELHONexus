@@ -194,30 +194,23 @@ variable "minio_bucket" {
 }
 
 # -----------------------------------------------------------------------------
-# External TCP exposure (optional)
+# Local access (k3d dev clusters only — e.g. coelhonexus standalone)
 # -----------------------------------------------------------------------------
-# Expose Postgres at <hostname>.<external-domain>:5432 for direct psql access
-# from your laptop or any external device. Uses the external ingress controller's
-# LoadBalancer service pattern (spec.loadBalancerClass: tailscale) — the
-# operator provisions a proxy pod that registers a TCP service on the
-# external network. Note: the external network is already encrypted (WireGuard), so
-# Postgres can run plaintext over the proxy — no need for Postgres TLS.
+# Opt-in NodePort Service so a human on their own laptop can run psql against
+# localhost:<port> during development. Leave `enable_local_expose` unset
+# (default false) on any environment where external Ingress already provides
+# access — the module below is never even instantiated in that case. See
+# infrastructure/modules/k3d_expose/.
 # -----------------------------------------------------------------------------
 
-variable "enable_tailscale_exposure" {
-  description = "Expose Postgres on the external network via the external ingress controller's LoadBalancer pattern. Off by default (Postgres is internal); turn on for direct psql access from your laptop."
+variable "enable_local_expose" {
+  description = "Create a NodePort Service for localhost psql access via k3d's loadbalancer port mapping. Only meaningful on k3d-based dev clusters."
   type        = bool
   default     = false
 }
 
-variable "tailscale_hostname" {
-  description = "Short external hostname for direct psql access (e.g. 'postgresql' → postgresql.<domain>.example.com:5432). Only used when enable_tailscale_exposure=true."
-  type        = string
-  default     = "postgresql"
-}
-
-variable "tailscale_domain" {
-  description = "External domain (e.g. 'YOUR_EXTERNAL_DOMAIN.example.com'). Comes from env.hcl. Required when enable_tailscale_exposure=true."
-  type        = string
-  default     = ""
+variable "k3d_postgres_node_port" {
+  description = "NodePort for local psql access (target port 5432). Required only when enable_local_expose = true; must be unique across the whole cluster."
+  type        = number
+  default     = null
 }

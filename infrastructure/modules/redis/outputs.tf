@@ -66,15 +66,6 @@ output "connection" {
   sensitive = true
 }
 
-# -----------------------------------------------------------------------------
-# External access — only when external exposure is enabled
-# -----------------------------------------------------------------------------
-
-output "tailscale_host" {
-  description = "External hostname for redis-cli access. Empty when not exposed."
-  value       = var.enable_tailscale_exposure && var.tailscale_domain != "" ? "${var.tailscale_hostname}.${var.tailscale_domain}" : ""
-}
-
 output "ready" {
   description = "Helm release status string ('deployed' on success)."
   value       = helm_release.redis.status

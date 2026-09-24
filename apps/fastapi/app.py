@@ -3,15 +3,13 @@
 Lifespan provisions: OTel (Alloy gRPC + LangFuse), MinIO bucket,
 AsyncPostgresSaver, Redis, Postgres, Neo4j, ES, Qdrant, LLM chains.
 """
+import api, domains, infra
+
 import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-
-
-
-import api, domains, infra
-import redis.asyncio as redis_aio_module
+import redis.asyncio as redis_aio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -28,7 +26,6 @@ async def lifespan(app: FastAPI):
             f"[lifespan] OTel setup failed: {type(e).__name__}: {e}. "
             f"LLM traces will not be exported."
         )
-
     # Bounded (2026-09-08): ensure_bucket() previously had no timeout of its
     # own — during a MinIO hiccup it could hang the entire lifespan (and
     # thus the readiness probe) indefinitely instead of just failing the
@@ -36,7 +33,9 @@ async def lifespan(app: FastAPI):
     # "offline" event (see COELHOCloud minio module fix, same date) froze
     # this exact call and left the pod stuck at 1/2 Ready until killed.
     try:
-        await asyncio.wait_for(domains.dd.ingestion.storage.service.get_storage().ensure_bucket(), timeout=30.0)
+        await asyncio.wait_for(
+            domains.dd.ingestion.storage.service.get_storage().ensure_bucket(), 
+            timeout=30.0)
     except asyncio.TimeoutError:
         logger.warning(
             "[lifespan] MinIO ensure_bucket timed out after 30s — "
@@ -96,7 +95,7 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        app.state.redis_aio = redis_aio_module.from_url(
+        app.state.redis_aio = redis_aio.from_url(
             domains.ycs.runtime.keys.redis_url(),
         )
     except Exception as e:
@@ -108,7 +107,8 @@ async def lifespan(app: FastAPI):
 
     try:
         app.state.pg_url = domains.ycs.runtime.keys.postgres_url()
-        await domains.ycs.conversation.service.ensure_conversation_table(app.state.pg_url)
+        await domains.ycs.conversation.service.ensure_conversation_table(
+            app.state.pg_url)
     except Exception as e:
         logger.warning(
             f"[lifespan] YCS conversation table init failed: "
@@ -155,7 +155,7 @@ async def lifespan(app: FastAPI):
     # ceiling; a healthy arm's NL→DSL output is well under 10s anyway.
     try:
         app.state.query_ai_llm = domains.settings.chat.service.build_chat_model(
-            timeout_s    = 60.0,
+            timeout_s=60.0,
         )
     except Exception as e:
         app.state.query_ai_llm = None

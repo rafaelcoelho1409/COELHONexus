@@ -1,12 +1,20 @@
 # =============================================================================
 # Leaf — alloy (coelhonexus standalone, 30-observability layer)
 # =============================================================================
-# Alloy — single-Deployment LGTM telemetry collector. Receives:
-#   - OTLP gRPC :4317 + HTTP :4318 (from in-cluster apps — DD/YCS/RR spans
-#     and metrics from FastAPI + Celery)
-#   - K8s pod logs → Loki push
-#   - ServiceMonitor + PodMonitor discovery → Mimir remote_write
-# All three storage backends MUST be applied first.
+# Alloy — TWO Helm releases from this one unit (split 2026-09-23, ported from
+# the COELHO Cloud fix — see that repo's docs/alloy_optimization.md):
+#   - helm_release.alloy (Deployment, 1 replica):
+#       - OTLP gRPC :4317 + HTTP :4318 (from in-cluster apps — DD/YCS/RR
+#         spans and metrics from FastAPI + Celery)
+#       - ServiceMonitor + PodMonitor discovery → Mimir remote_write
+#       - Kubelet + cAdvisor scraping → Mimir
+#   - helm_release.alloy_logs (DaemonSet, 1 pod/node):
+#       - K8s pod log tailing (file-based, `loki.source.file`) → Loki
+#
+# Split into two releases because the Deployment's previous
+# `loki.source.kubernetes` log pipeline leaked retrying tailers for deleted
+# pods under frequent redeploys, CPU-starving the OTLP receiver along with
+# it. All three storage backends MUST be applied first.
 #
 # Adaptations vs COELHO Cloud's leaf:
 #   - DROP the external-ingress-operator dependency
@@ -95,6 +103,10 @@ inputs = {
   alloy_enable_otlp_receiver = true
 
   # Defaults from variables.tf are appropriate:
-  #   chart 1.8.0, Deployment 1 replica, 100m/256Mi/768Mi resources,
-  #   ServiceMonitor on, RBAC for ServiceMonitor/PodMonitor discovery.
+  #   helm_release.alloy: chart 1.8.0, Deployment 1 replica, 100m/256Mi/512Mi
+  #     resources, ServiceMonitor on, RBAC for ServiceMonitor/PodMonitor
+  #     discovery.
+  #   helm_release.alloy_logs: same chart, DaemonSet 1 pod/node, 20m/48Mi/
+  #     128Mi resources (no OTLP/scrape/WAL overhead), namespace denylist =
+  #     alloy_log_namespace_denylist default.
 }

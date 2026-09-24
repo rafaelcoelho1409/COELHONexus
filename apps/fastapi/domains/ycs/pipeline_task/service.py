@@ -68,12 +68,6 @@ def dispatch_videos_pipeline(
     this module's docstring for why there's no static chain/chord to
     build any more).
 
-    Imports are deferred (function-local) because the Celery task
-    modules import the worker app, and that app has a chain of imports
-    that touch optional infra (langchain_neo4j, qdrant_client). Keeping
-    these inside the function lets `domains/ycs/pipeline_task/` import
-    cleanly in test environments without those deps installed.
-
     Returns `{extract, qdrant, neo4j, invalidate}` — `extract` is a
     real Celery task id; `qdrant`/`neo4j` are `extract_id` reused as the
     streaming-aggregator lookup key (not real task ids — see docstring);

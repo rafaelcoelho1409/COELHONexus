@@ -104,16 +104,27 @@ resource "kubernetes_manifest" "backup_cronjob" {
 }
 
 # -----------------------------------------------------------------------------
-# External TCP exposure (optional)
+# Local access (k3d dev only) — NodePort Service, opt-in via enable_local_expose
 # -----------------------------------------------------------------------------
-resource "kubernetes_manifest" "tailscale_service" {
-  count = var.enable_tailscale_exposure ? 1 : 0
+# redis-cli access from your laptop during development. Selector matches the
+# Bitnami chart's master pod (`app.kubernetes.io/component: master`),
+# verified via `kubectl get svc redis-master -n redis -o yaml` against a
+# live Bitnami redis release.
+# -----------------------------------------------------------------------------
+module "k3d_expose" {
+  count  = var.enable_local_expose ? 1 : 0
+  source = "../k3d_expose"
 
-  manifest = yamldecode(templatefile("${path.module}/k8s/service-tailscale.yaml.tpl", {
-    namespace          = kubernetes_namespace_v1.redis.metadata[0].name
-    release_name       = var.release_name
-    tailscale_hostname = var.tailscale_hostname
-  }))
+  namespace    = kubernetes_namespace_v1.redis.metadata[0].name
+  service_name = var.release_name
+  pod_selector = {
+    "app.kubernetes.io/instance"  = var.release_name
+    "app.kubernetes.io/name"      = "redis"
+    "app.kubernetes.io/component" = "master"
+  }
+  ports = [
+    { name = "redis", target_port = 6379, node_port = var.k3d_redis_node_port },
+  ]
 
   depends_on = [helm_release.redis]
 }

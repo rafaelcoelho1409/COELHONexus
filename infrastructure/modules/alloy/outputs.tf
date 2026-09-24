@@ -40,3 +40,12 @@ output "ready" {
   description = "Helm release status string ('deployed' on success)."
   value       = helm_release.alloy.status
 }
+
+# -----------------------------------------------------------------------------
+# alloy-logs (DaemonSet, log tailing) — see main.tf header
+# -----------------------------------------------------------------------------
+
+output "logs_ready" {
+  description = "alloy-logs Helm release status string ('deployed' on success)."
+  value       = helm_release.alloy_logs.status
+}

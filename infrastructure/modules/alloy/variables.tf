@@ -9,12 +9,15 @@
 # Loki, Tempo). Stay on the original `grafana/alloy` chart. If/when the
 # community fork happens, switch the repo URL.
 #
-# Role: unified telemetry collector for the LGTM stack.
+# Role: metrics + OTLP gateway for the LGTM stack (alloy-metrics instance).
 #   - Receives OTLP (gRPC 4317 + HTTP 4318) from in-cluster apps
 #   - Discovers ServiceMonitors + PodMonitors → scrapes → writes to Mimir
-#   - Tails every Pod's stdout/stderr via the Kubelet API → writes to Loki
 #   - Forwards OTLP traces → Tempo, OTLP metrics → Mimir, OTLP logs → Loki
 #   - Self-scrapes its own /metrics
+#
+# Pod log tailing lives in the separate helm_release.alloy_logs (DaemonSet,
+# file-based tailing) defined in this same module — ported from the
+# COELHO Cloud fix, 2026-09-23.
 # =============================================================================
 
 variable "chart_version" {
@@ -93,9 +96,9 @@ variable "memory_request" {
 }
 
 variable "memory_limit" {
-  description = "Memory limit. NOTE 2026-05-25: previous default 768Mi was being silently DROPPED by the chart because `resources:` was at the wrong YAML path (top-level instead of `alloy.resources`). Now correctly nested. 512Mi + GOMEMLIMIT=450MiB is the tight working budget; bump to 768Mi if you add many ServiceMonitors or high-cardinality metrics."
+  description = "Memory limit. Raised 512Mi→768Mi 2026-09-23, ported from COELHO Cloud's 2026-09-05 fix: under real sustained load (ServiceMonitor growth, slow downstream exports) Alloy OOMKilled ×2 at 512Mi while retry-storming. Not cluster-specific — the same growth pattern applies to any real install of this stack, not just a fresh/idle one."
   type        = string
-  default     = "512Mi"
+  default     = "768Mi"
 }
 
 variable "alloy_image_tag" {
@@ -105,9 +108,9 @@ variable "alloy_image_tag" {
 }
 
 variable "alloy_gomemlimit" {
-  description = "Go runtime soft memory ceiling (GOMEMLIMIT). ~90% of memory_limit so Go GC fires aggressively below the cgroup hard limit. The pod was previously BestEffort QoS (no limit applied due to chart YAML-path bug) → Go runtime had no memory pressure signal → RSS drifted to 1.2 GiB."
+  description = "Go runtime soft memory ceiling (GOMEMLIMIT). ~90% of memory_limit so Go GC fires aggressively below the cgroup hard limit. 450MiB→680MiB 2026-09-23 alongside the memory_limit bump above (ported from COELHO Cloud's 2026-09-05 fix)."
   type        = string
-  default     = "450MiB"
+  default     = "680MiB"
 }
 
 variable "alloy_gogc" {
@@ -116,25 +119,55 @@ variable "alloy_gogc" {
   default     = 75
 }
 
-variable "alloy_log_namespaces" {
-  description = "Allowlist of namespaces for log collection (discovery.kubernetes filter). Default omits kube-system, cattle-*, helm-operation-*, local-path-storage (high-volume, low-signal). Add new namespaces as you deploy apps you care about."
-  type        = list(string)
-  default = [
-    # LGTM stack itself
-    "mimir", "loki", "tempo", "grafana", "monitoring",
-    # Apps
-    "gitlab", "airflow", "elasticsearch", "langfuse",
-    "openwebui", "mlflow", "neo4j", "qdrant",
-    "minio", "postgresql", "redis",
-    "argocd", "homepage", "vaultwarden",
-    "playwright", "coelhonexus-dev",
-    "default", "tailscale", "elastic-system",
-    "pgadmin", "redisinsight",
-  ]
-}
-
 variable "alloy_enable_otlp_receiver" {
   description = "Run the otelcol.receiver.otlp listener on :4317 (gRPC) and :4318 (HTTP). Disable when no in-cluster app pushes OTLP — saves ~30-50 MiB of receiver buffer pools. Re-enable if/when an app starts pushing OTLP traces/metrics/logs to alloy."
   type        = bool
   default     = false
+}
+
+# -----------------------------------------------------------------------------
+# helm_release.alloy_logs — Kubernetes pod log tailing (DaemonSet)
+# -----------------------------------------------------------------------------
+# Split out from helm_release.alloy 2026-09-23 (ported from the COELHO Cloud
+# fix) — file-based tailing instead of the API-based `loki.source.kubernetes`,
+# which leaks retrying tailers for deleted pods under frequent redeploys.
+# Sized much lighter than the metrics release: each pod only tails its OWN
+# node's pod logs (server-side field selector on spec.nodeName), no
+# OTLP/Prometheus-scrape/WAL overhead.
+# -----------------------------------------------------------------------------
+
+variable "logs_release_name" {
+  description = "Helm release name for the log-tailing DaemonSet."
+  type        = string
+  default     = "alloy-logs"
+}
+
+variable "logs_cpu_request" {
+  description = "CPU request per alloy-logs pod (one per node)."
+  type        = string
+  default     = "20m"
+}
+
+variable "logs_memory_request" {
+  description = "Memory request per alloy-logs pod."
+  type        = string
+  default     = "48Mi"
+}
+
+variable "logs_memory_limit" {
+  description = "Memory limit per alloy-logs pod. File-based tailing has no WAL/receiver buffers, so this stays far below the metrics release's limit."
+  type        = string
+  default     = "128Mi"
+}
+
+variable "logs_gomemlimit" {
+  description = "Go runtime soft memory ceiling (GOMEMLIMIT) for alloy-logs. ~90% of logs_memory_limit."
+  type        = string
+  default     = "115MiB"
+}
+
+variable "alloy_log_namespace_denylist" {
+  description = "Regex (relabel-style alternation) of namespaces to EXCLUDE from log collection. A denylist, not an allowlist: discovery.kubernetes runs cluster-wide and this small, effectively-fixed regex of K8s/Rancher internals is dropped at the discovery.relabel stage — every current and future project namespace is collected automatically, with no terragrunt apply needed when a new one appears."
+  type        = string
+  default     = "kube-system|cattle-.*|helm-.*|local-path-storage"
 }

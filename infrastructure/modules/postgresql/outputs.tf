@@ -83,21 +83,6 @@ output "connection" {
 }
 
 # -----------------------------------------------------------------------------
-# External access — only populated if enable_tailscale_exposure=true
-# -----------------------------------------------------------------------------
-
-output "tailscale_host" {
-  description = "Fully-qualified external hostname when exposure is enabled (e.g. 'postgresql.YOUR_EXTERNAL_DOMAIN.example.com'). Empty string when not exposed."
-  value       = var.enable_tailscale_exposure && var.tailscale_domain != "" ? "${var.tailscale_hostname}.${var.tailscale_domain}" : ""
-}
-
-output "tailscale_psql_url" {
-  description = "psql connection string for laptop/external use via the external proxy. Empty when not exposed."
-  value       = var.enable_tailscale_exposure && var.tailscale_domain != "" ? "postgresql://${var.admin_user}:${var.admin_password}@${var.tailscale_hostname}.${var.tailscale_domain}:5432/${var.default_database}" : ""
-  sensitive   = true
-}
-
-# -----------------------------------------------------------------------------
 # Dependency signal
 # -----------------------------------------------------------------------------
 

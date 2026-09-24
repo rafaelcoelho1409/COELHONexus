@@ -1,6 +1,6 @@
 """checklist_eval — LLM templates for CoCoA alignment + atomic-claim grounding."""
 from __future__ import annotations
-import infra
+from infra.langfuse.prompts import with_langfuse_override
 
 
 _COCOA_EXPLAINER_PROMPT = """You are the Code Explainer (CoCoA stage 1).
@@ -27,7 +27,7 @@ Cover EVERY input id. No prose outside JSON.
 == END CODE BLOCKS =="""
 
 
-@infra.langfuse.prompts.with_langfuse_override("dd.synth.checklist.cocoa_explainer")
+@with_langfuse_override("dd.synth.checklist.cocoa_explainer")
 def build_cocoa_explainer_prompt(
     *,
     blocks_block: str,
@@ -73,7 +73,7 @@ prefer FAIL with a specific reason naming the drift.
 == END PAIRS =="""
 
 
-@infra.langfuse.prompts.with_langfuse_override("dd.synth.checklist.cocoa_judge")
+@with_langfuse_override("dd.synth.checklist.cocoa_judge")
 def build_cocoa_judge_prompt(
     *,
     pairs_block: str,
@@ -105,7 +105,7 @@ Return strict JSON. Cap at {max_claims} most-important claims.
 JSON: {{"claims": ["claim 1", "claim 2", ...]}}"""
 
 
-@infra.langfuse.prompts.with_langfuse_override("dd.synth.checklist.atomic_claim_extract")
+@with_langfuse_override("dd.synth.checklist.atomic_claim_extract")
 def build_atomic_claim_extract_prompt(
     *,
     max_claims: str,
@@ -150,7 +150,7 @@ Answer in strict JSON: {{"supported": true | false, "evidence": "short quote OR 
 CLAIM: {claim}"""
 
 
-@infra.langfuse.prompts.with_langfuse_override("dd.synth.checklist.atomic_claim_judge")
+@with_langfuse_override("dd.synth.checklist.atomic_claim_judge")
 def build_atomic_claim_judge_prompt(
     *,
     claim: str,

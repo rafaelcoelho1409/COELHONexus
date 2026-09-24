@@ -126,25 +126,28 @@ resource "kubernetes_manifest" "backup_cronjob" {
 }
 
 # -----------------------------------------------------------------------------
-# External TCP exposure (optional — type=LoadBalancer, external operator class)
+# Local access (k3d dev only) — NodePort Service, opt-in via enable_local_expose
 # -----------------------------------------------------------------------------
-# When enabled, creates a SECOND Service alongside the chart-managed ClusterIP.
-# The external ingress controller detects the loadBalancerClass and provisions
-# a proxy pod that registers `<external_hostname>.<domain>` on the external
-# network, routing inbound TCP 5432 to the primary Postgres pod.
-#
-# Both services co-exist:
-#   - chart's ClusterIP: in-cluster app traffic (5432)
-#   - this LoadBalancer:   external psql access from any external device
+# Direct psql access from your laptop during development. Selector matches
+# the Bitnami chart's primary pod (`app.kubernetes.io/component: primary`),
+# verified via `kubectl get svc postgresql -n postgresql -o yaml` against a
+# live Bitnami postgresql release — works whether you stay standalone or
+# scale to HA with read replicas later (only the primary gets traffic).
 # -----------------------------------------------------------------------------
-resource "kubernetes_manifest" "tailscale_service" {
-  count = var.enable_tailscale_exposure ? 1 : 0
+module "k3d_expose" {
+  count  = var.enable_local_expose ? 1 : 0
+  source = "../k3d_expose"
 
-  manifest = yamldecode(templatefile("${path.module}/k8s/service-tailscale.yaml.tpl", {
-    namespace          = kubernetes_namespace_v1.postgresql.metadata[0].name
-    release_name       = var.release_name
-    tailscale_hostname = var.tailscale_hostname
-  }))
+  namespace    = kubernetes_namespace_v1.postgresql.metadata[0].name
+  service_name = var.release_name
+  pod_selector = {
+    "app.kubernetes.io/instance"  = var.release_name
+    "app.kubernetes.io/name"      = "postgresql"
+    "app.kubernetes.io/component" = "primary"
+  }
+  ports = [
+    { name = "postgresql", target_port = 5432, node_port = var.k3d_postgres_node_port },
+  ]
 
   depends_on = [helm_release.postgresql]
 }

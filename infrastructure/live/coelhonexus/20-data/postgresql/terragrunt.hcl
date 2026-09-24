@@ -22,7 +22,7 @@ include "root" {
 }
 
 terraform {
-  source = "${get_repo_root()}/infrastructure/modules/postgresql"
+  source = "${get_repo_root()}/infrastructure/modules//postgresql"
 }
 
 dependency "k3d" {
@@ -79,8 +79,9 @@ inputs = {
   minio_access_key = dependency.minio.outputs.s3_config.access_key
   minio_secret_key = dependency.minio.outputs.s3_config.secret_key
 
-  # External exposure OFF — module supports the toggle.
-  enable_tailscale_exposure = false
+  # Local access OFF by default — set true + k3d_postgres_node_port to open
+  # a NodePort for direct psql access (see infrastructure/modules/k3d_expose/).
+  enable_local_expose = false
 
   # Defaults from variables.tf are appropriate:
   #   chart 18.6.2, standalone, 10Gi PVC, 50m/200Mi/384Mi resources,

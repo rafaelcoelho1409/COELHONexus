@@ -158,27 +158,24 @@ variable "minio_bucket" {
 }
 
 # -----------------------------------------------------------------------------
-# External exposure (optional — off by default)
+# Local access (k3d dev clusters only — e.g. coelhonexus standalone)
 # -----------------------------------------------------------------------------
 # Redis is in-cluster only by default. Apps connect via the ClusterIP service.
-# Enable external exposure if you want redis-cli access from your laptop —
-# same external LoadBalancer pattern as Postgres.
+# Opt-in NodePort Service so a human on their own laptop can run redis-cli
+# against localhost:<port> during development. Leave `enable_local_expose`
+# unset (default false) on any environment where external Ingress already
+# provides access — the module below is never even instantiated in that
+# case. See infrastructure/modules/k3d_expose/.
 # -----------------------------------------------------------------------------
 
-variable "enable_tailscale_exposure" {
-  description = "Expose Redis externally via an external LoadBalancer controller's pattern. Off by default."
+variable "enable_local_expose" {
+  description = "Create a NodePort Service for localhost redis-cli access via k3d's loadbalancer port mapping. Only meaningful on k3d-based dev clusters."
   type        = bool
   default     = false
 }
 
-variable "tailscale_hostname" {
-  description = "Short external hostname (e.g. 'redis' → redis.<domain>.example.com:6379). Used only when external exposure is enabled."
-  type        = string
-  default     = "redis"
-}
-
-variable "tailscale_domain" {
-  description = "External domain (e.g. 'YOUR_EXTERNAL_DOMAIN.example.com'). Required when external exposure is enabled."
-  type        = string
-  default     = ""
+variable "k3d_redis_node_port" {
+  description = "NodePort for local redis-cli access (target port 6379). Required only when enable_local_expose = true; must be unique across the whole cluster."
+  type        = number
+  default     = null
 }

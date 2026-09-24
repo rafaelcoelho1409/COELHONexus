@@ -4,12 +4,12 @@ override decorator's cached fetch doesn't contaminate the pure core).
 Local builders stay the source of truth; LangFuse is the additive layer.
 """
 from __future__ import annotations
-import infra
+from infra.langfuse.prompts import with_langfuse_override
 from . import params
 
 
 
-@infra.langfuse.prompts.with_langfuse_override("dd.synth.outline")
+@with_langfuse_override("dd.synth.outline")
 def build_outline_prompt(
     *,
     framework: str,
@@ -134,7 +134,7 @@ def build_outline_prompt(
     )
 
 
-@infra.langfuse.prompts.with_langfuse_override("dd.synth.outline.usc_vote")
+@with_langfuse_override("dd.synth.outline.usc_vote")
 def build_usc_vote_prompt(
     *,
     candidates_summary: list[dict],
@@ -204,7 +204,7 @@ def build_usc_vote_prompt(
     )
 
 
-@infra.langfuse.prompts.with_langfuse_override("dd.synth.outline.repair")
+@with_langfuse_override("dd.synth.outline.repair")
 def build_repair_prompt(
     *,
     framework: str,

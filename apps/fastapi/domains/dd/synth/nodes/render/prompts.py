@@ -1,6 +1,6 @@
 """render — Jinja2 environment + inline chapter template."""
 from __future__ import annotations
-import infra
+from infra.langfuse.prompts import with_langfuse_override
 
 from jinja2 import Environment, StrictUndefined
 
@@ -95,7 +95,7 @@ _NORMALIZE_PROMPT_BASE = (
 )
 
 
-@infra.langfuse.prompts.with_langfuse_override("dd.synth.render.normalize_base")
+@with_langfuse_override("dd.synth.render.normalize_base")
 def build_normalize_base(
     *,
     body: str,
@@ -120,7 +120,7 @@ _NORMALIZE_PROMPT_PYTHON_RETRY = (
 )
 
 
-@infra.langfuse.prompts.with_langfuse_override("dd.synth.render.normalize_python_retry")
+@with_langfuse_override("dd.synth.render.normalize_python_retry")
 def build_normalize_python_retry(
     *,
     body: str,

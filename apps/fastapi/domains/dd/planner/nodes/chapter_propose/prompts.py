@@ -1,6 +1,7 @@
 """Prompt builders: chapter proposer + USC vote picker + corpus block renderers."""
 from __future__ import annotations
 import infra
+from infra.langfuse.prompts import with_langfuse_override
 from . import params
 
 from typing import Optional
@@ -152,7 +153,7 @@ def build_propose_prompt(
     )
 
 
-@infra.langfuse.prompts.with_langfuse_override("dd.planner.chapter_propose.usc_vote")
+@with_langfuse_override("dd.planner.chapter_propose.usc_vote")
 def build_usc_vote_prompt(
     *,
     framework: str,

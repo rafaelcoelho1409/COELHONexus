@@ -1,6 +1,6 @@
 """Prompt templates: extract/canonicalize/detect/patch for cross-chapter coherence pass."""
 from __future__ import annotations
-import infra
+from infra.langfuse.prompts import with_langfuse_override
 
 
 _EXTRACT_CLAIMS_PROMPT = """Extract the atomic factual claims from this chapter of a distilled technical book.
@@ -27,7 +27,7 @@ Return strict JSON:
 }}"""
 
 
-@infra.langfuse.prompts.with_langfuse_override("dd.synth.book_harmonize.extract_claims")
+@with_langfuse_override("dd.synth.book_harmonize.extract_claims")
 def build_extract_claims_prompt(
     *,
     max_claims: str,
@@ -66,7 +66,7 @@ Return strict JSON:
 If no canonicalization is needed, return {{"canonical_terms": [], "rationale": "..."}}."""
 
 
-@infra.langfuse.prompts.with_langfuse_override("dd.synth.book_harmonize.canonicalize")
+@with_langfuse_override("dd.synth.book_harmonize.canonicalize")
 def build_canonicalize_prompt(
     *,
     framework: str,
@@ -116,7 +116,7 @@ Return strict JSON:
 If no violations found, return {{"has_violations": false, "violations": [], "summary": "..."}}."""
 
 
-@infra.langfuse.prompts.with_langfuse_override("dd.synth.book_harmonize.detect")
+@with_langfuse_override("dd.synth.book_harmonize.detect")
 def build_detect_prompt(
     *,
     canonical_terms: str,
@@ -156,7 +156,7 @@ Output: the full chapter prose, minimally edited. NO commentary, NO explanation,
 NO JSON wrapping — output ONLY the markdown."""
 
 
-@infra.langfuse.prompts.with_langfuse_override("dd.synth.book_harmonize.patch")
+@with_langfuse_override("dd.synth.book_harmonize.patch")
 def build_patch_prompt(
     *,
     canonical_terms: str,
