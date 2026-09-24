@@ -65,11 +65,21 @@ async def run(run_id: str, slug: str) -> dict:
     The session wrapper was missing until now — every other DD/RR/YCS
     pipeline groups its spans into one LangFuse trace via `session(...)`;
     ingestion had the span but not the session, so its spans never
-    grouped into one trace in the LangFuse UI."""
+    grouped into one trace in the LangFuse UI.
+
+    2026-09-24: the LangFuse `session_id` is a friendly
+    `docs-distiller/{slug}/{run_id}` label (matches planner's
+    `docs-distiller/{slug}/...` and synth's
+    `docs-distiller/study/{slug}/...`) instead of the bare `run_id` —
+    ingestion was the only DD stage findable in the LangFuse UI only by
+    trace ID. `run_id` itself is untouched everywhere else (Redis
+    locks/progress keys, MinIO manifest paths, the `/runs/{run_id}`
+    REST routes all still use the plain uuid4 hex) — this only changes
+    the cosmetic label LangFuse groups spans under."""
     t0 = asyncio.get_running_loop().time()
     with infra.langfuse.service.session(
         "dd-ingestion",
-        session_id = run_id,
+        session_id = f"docs-distiller/{slug}/{run_id}",
         user_id    = slug,
         framework  = slug,
     ), infra.otel.service.get_tracer().start_as_current_span(

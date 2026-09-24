@@ -105,7 +105,14 @@ class DocumentGrader:
         rescued = 0
         for doc, result in zip(documents, results):
             if isinstance(result, Exception):
-                logger.info(f"[ycs:grader] hard error: {result}")
+                # 2026-09-24: `result` is usually `asyncio.TimeoutError`
+                # (from the per-call timeout above), whose `str()` is
+                # always empty — this line used to log "hard error: "
+                # with nothing after the colon, permanently hiding which
+                # error actually fired.
+                logger.info(
+                    f"[ycs:grader] hard error: {type(result).__name__}: {result}"
+                )
                 continue
             # With `include_raw=True`, success returns a dict
             #   {"raw": AIMessage, "parsed": schemas.GradeResult | None,

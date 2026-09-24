@@ -43,6 +43,7 @@ from . import domain, params
 import asyncio
 import logging
 import random
+import time
 from typing import Any
 
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
@@ -52,7 +53,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 logger = logging.getLogger(__name__)
 
 
-async def capture_llm_usage(response: object) -> None:
+async def capture_llm_usage(response: object, *, duration_s: float | None = None) -> None:
     """2026-09-16 fix: every Ask node calls `resilient_ainvoke`/
     `hedged_ainvoke`, but neither ever read the response's token usage
     — `set_node()` (called by every node before invoking) only tags
@@ -64,19 +65,39 @@ async def capture_llm_usage(response: object) -> None:
     populates `AIMessage.usage_metadata` from any OpenAI-compatible
     `usage` response field automatically, no endpoint-specific parsing
     needed. Best-effort: a malformed/missing usage block must never
-    fail the caller's real answer."""
+    fail the caller's real answer.
+
+    2026-09-24: also records `gen_ai_call_total`/`gen_ai_call_duration`
+    (the same custom metric Docs Distiller's calls populate) — this was
+    a second, separate gap from the one above: LangFuse already tracks
+    every Ask chat call as a `GENERATION` automatically (LangChain's own
+    instrumentation), but nothing fed the Mimir-side metric, so
+    Grafana panels built on it were blind to all of Ask's traffic.
+    `duration_s` is optional (omitted call sites just skip the duration
+    histogram point) so this stays a additive, non-breaking change for
+    any other caller of this function."""
+    model = "unknown"
     try:
+        meta = getattr(response, "response_metadata", None) or {}
+        model = meta.get("model_name") or meta.get("model") or "unknown"
         usage = getattr(response, "usage_metadata", None) or {}
         tokens_in  = int(usage.get("input_tokens") or 0)
         tokens_out = int(usage.get("output_tokens") or 0)
+        if duration_s is not None:
+            domains.settings.runtime.observability.metrics.record_gen_ai_call(
+                operation     = "chat",
+                model         = model,
+                outcome       = "ok",
+                duration_s    = duration_s,
+                input_tokens  = tokens_in or None,
+                output_tokens = tokens_out or None,
+            )
         if not (tokens_in or tokens_out):
             return
         details = usage.get("output_token_details") or {}
         reasoning = int(
             (details.get("reasoning") if isinstance(details, dict) else 0) or 0
         )
-        meta = getattr(response, "response_metadata", None) or {}
-        model = meta.get("model_name") or meta.get("model") or "unknown"
         await domains.ycs.runtime.llm_counter.service.bump_current_call(
             tokens_in = tokens_in, tokens_out = tokens_out,
             reasoning_tokens = reasoning, model = model,
@@ -133,15 +154,28 @@ async def resilient_ainvoke(
     unchanged when attempts run out (or immediately for non-transient)."""
     last_exc: BaseException | None = None
     for attempt in range(1, max_attempts + 1):
+        t0 = time.monotonic()
         try:
             result = await asyncio.wait_for(
                 chain.ainvoke(payload),
                 timeout = timeout_s,
             )
-            await capture_llm_usage(result)
+            await capture_llm_usage(result, duration_s = time.monotonic() - t0)
             return result
         except Exception as e:  # noqa: BLE001 — classified below
             last_exc = e
+            outcome = (
+                "timeout"
+                if isinstance(e, asyncio.TimeoutError)
+                or "timeout" in (type(e).__name__ + str(e)).lower()
+                else "error"
+            )
+            domains.settings.runtime.observability.metrics.record_gen_ai_call(
+                operation  = "chat",
+                model      = domains.settings.chat.service.ENDPOINT.model,
+                outcome    = outcome,
+                duration_s = time.monotonic() - t0,
+            )
             if not domain.is_transient(e) or attempt >= max_attempts:
                 break
             delay = backoff_s[min(attempt - 1, len(backoff_s) - 1)]
@@ -189,8 +223,9 @@ async def hedged_ainvoke(
     async def _one() -> object:
         nonlocal invokes
         invokes += 1
+        t0 = time.monotonic()
         result = await chain.ainvoke(payload)
-        await capture_llm_usage(result)
+        await capture_llm_usage(result, duration_s = time.monotonic() - t0)
         return result
 
     async def _delayed() -> object:

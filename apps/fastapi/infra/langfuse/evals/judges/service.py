@@ -23,8 +23,10 @@ async def run_rubric_judge(
 
     `chat_fn` is the injectable LLM edge — `await chat_fn(prompt,
     max_tokens, temperature) -> str`. Defaults to the settings chat
-    endpoint (lazy import, the legacy infra→domains edge); pass a fake
-    in tests or a custom endpoint in notebooks to bypass it entirely.
+    endpoint (the legacy infra→domains edge — `domains/__init__.py`'s
+    2026-09-24 lazy-import fix means this costs nothing until actually
+    called); pass a fake in tests or a custom endpoint in notebooks to
+    bypass it entirely.
     """
     if chat_fn is None:
         async def chat_fn(prompt, max_tokens, temperature):

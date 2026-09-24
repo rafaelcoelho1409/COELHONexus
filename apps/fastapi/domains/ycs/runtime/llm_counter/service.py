@@ -16,12 +16,24 @@ instead of being read from a return value.
 "node_id" in the shared `{total, by_node}` shape is the video_id being
 extracted (DD's "node" is a LangGraph node/chapter; YCS has no
 distinct workflow stages here — one call type, so grouping by which
-video the call was for is the useful breakdown instead)."""
+video the call was for is the useful breakdown instead).
+
+2026-09-24: `YCSLLMUsageCallback` also opens/closes a `gen_ai.chat`
+OTel span and records `gen_ai_call_total`/`gen_ai_call_duration` per
+call (`on_llm_start` + `on_llm_end`/`on_llm_error`), keyed by
+LangChain's `run_id` since one callback instance is shared across
+`EXTRACT_CONCURRENCY` concurrently-running extractions. Before this,
+`LLMGraphTransformer`'s calls — including every failure that halts a
+run's retry passes — were invisible to Tempo, LangFuse and Mimir alike
+(confirmed live: 0 `gen_ai.chat` spans, 0 `GENERATION` observations, 0
+`gen_ai_call_total{operation="chat"}` increments across two real runs
+with genuine LLM failures, all only visible in raw Celery logs)."""
 from __future__ import annotations
 import domains
 from . import domain, keys, params
 
 import logging
+import time
 from contextvars import ContextVar
 from typing import Any
 
@@ -238,14 +250,41 @@ class YCSLLMUsageCallback(AsyncCallbackHandler):
     `llm.with_config(callbacks=[YCSLLMUsageCallback()])` so it fires
     for every internal call `LLMGraphTransformer` makes through that
     LLM instance, without needing access to its return value (which
-    `aconvert_to_graph_documents` never exposes to its caller)."""
+    `aconvert_to_graph_documents` never exposes to its caller).
 
-    async def on_llm_end(self, response: Any, **kwargs: Any) -> None:
+    Also opens/closes a `gen_ai.chat` span and records
+    `gen_ai_call_total`/`gen_ai_call_duration` — see this module's
+    docstring. `self._pending` is instance-local (a fresh
+    `YCSLLMUsageCallback()` is built per `.with_config(...)` call,
+    matching one batch's lifetime) and keyed by `run_id` because
+    `EXTRACT_CONCURRENCY` concurrent extractions share one instance."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._pending: dict[Any, tuple[object | None, float, str]] = {}
+
+    async def on_llm_start(
+        self, serialized: dict, prompts: list, *, run_id: Any, **kwargs: Any,
+    ) -> None:
+        """Opens the span/timer for this call, closed in `on_llm_end`
+        or `on_llm_error`. `serialized`/`prompts` are unused — the
+        request model is read off the endpoint singleton, same as the
+        raw hot path (`chat_text_async`) does before its own response
+        arrives."""
+        try:
+            model = domains.settings.chat.service.ENDPOINT.model
+            span = domains.settings.runtime.observability.spans.start_chat_span(model = model)
+            self._pending[run_id] = (span, time.monotonic(), model)
+        except Exception as e:
+            logger.warning(f"[ycs-llm-counter] on_llm_start failed: {type(e).__name__}: {e}")
+
+    async def on_llm_end(self, response: Any, *, run_id: Any, **kwargs: Any) -> None:
         """Fires for every LLM call — LangChain's `with_structured_output`
         goes through this same hook (the wrapper is just a Runnable that
         delegates to the inner `Runnable` — verified in langchain-openai
         1.x). Nodes tag themselves via `set_node` right before invoking,
         so this lands in the right bucket."""
+        span, t0, req_model = self._pending.pop(run_id, (None, None, None))
         try:
             parsed = domain.parse_callback_response(response)
             await bump_current_call(
@@ -254,5 +293,45 @@ class YCSLLMUsageCallback(AsyncCallbackHandler):
                 reasoning_tokens = parsed["reasoning_tokens"],
                 model            = parsed["model"],
             )
+            domains.settings.runtime.observability.spans.record_chat_response(
+                span,
+                model         = parsed["model"],
+                input_tokens  = parsed["tokens_in"] or None,
+                output_tokens = parsed["tokens_out"] or None,
+            )
+            domains.settings.runtime.observability.metrics.record_gen_ai_call(
+                operation     = "chat",
+                model         = parsed["model"] or req_model or "unknown",
+                outcome       = "ok",
+                duration_s    = (time.monotonic() - t0) if t0 is not None else 0.0,
+                input_tokens  = parsed["tokens_in"] or None,
+                output_tokens = parsed["tokens_out"] or None,
+            )
         except Exception as e:
             logger.warning(f"[ycs-llm-counter] on_llm_end failed: {type(e).__name__}: {e}")
+        finally:
+            domains.settings.runtime.observability.spans.end_chat_span(span)
+
+    async def on_llm_error(self, error: BaseException, *, run_id: Any, **kwargs: Any) -> None:
+        """LangChain fires this instead of `on_llm_end` when the call
+        raises — e.g. the `InternalServerError: 504` timeouts that halt
+        a run's retry passes. Before this hook existed those failures
+        were invisible to gen_ai_call_total/LangFuse/Tempo — Loki was
+        the only place they showed up."""
+        span, t0, req_model = self._pending.pop(run_id, (None, None, None))
+        try:
+            outcome = (
+                "timeout"
+                if "timeout" in (type(error).__name__ + str(error)).lower()
+                else "error"
+            )
+            domains.settings.runtime.observability.metrics.record_gen_ai_call(
+                operation  = "chat",
+                model      = req_model or "unknown",
+                outcome    = outcome,
+                duration_s = (time.monotonic() - t0) if t0 is not None else 0.0,
+            )
+        except Exception as e:
+            logger.warning(f"[ycs-llm-counter] on_llm_error failed: {type(e).__name__}: {e}")
+        finally:
+            domains.settings.runtime.observability.spans.end_chat_span(span, error = error)

@@ -74,6 +74,64 @@ def record_chat_response(
         span.set_attribute(keys.GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens)
 
 
+def start_chat_span(
+    *,
+    model:       str,
+    temperature: float | None = None,
+    max_tokens:  int | None   = None,
+) -> object | None:
+    """Split-lifecycle counterpart to `chat_completion_span`, for a
+    caller that can't wrap the whole call in one `with` block — e.g. a
+    LangChain callback (`on_llm_start`/`on_llm_end`/`on_llm_error` are
+    three separate invocations, and under concurrency they can
+    interleave with OTHER calls' start/end pairs on the same callback
+    instance).
+
+    Deliberately uses `start_span`, not `start_as_current_span`: the
+    latter attaches the span to the ambient context and expects the
+    SAME `with` block (same coroutine, same await chain) to detach it
+    — splitting attach/detach across two independent async callback
+    invocations trips OTel's context-detach mismatch check under
+    concurrency. `start_span` creates the span without touching the
+    ambient context, so the caller is responsible for its own
+    correlation (e.g. keying it by LangChain's `run_id`) and must pair
+    every call with `end_chat_span`."""
+    tracer = infra.otel.service.get_tracer()
+    if tracer is None:
+        return None
+    attrs: dict = {
+        keys.GEN_AI_SYSTEM:         keys.SYSTEM_NEXUS_CHAT_ENDPOINT,
+        keys.GEN_AI_OPERATION_NAME: keys.OP_CHAT,
+        keys.GEN_AI_REQUEST_MODEL:  model,
+        keys.LANGFUSE_OBSERVATION_TYPE: keys.OBSERVATION_TYPE_GENERATION,
+        "coelho.langfuse.keep":     True,
+    }
+    if temperature is not None:
+        attrs[keys.GEN_AI_REQUEST_TEMPERATURE] = temperature
+    if max_tokens is not None:
+        attrs[keys.GEN_AI_REQUEST_MAX_TOKENS] = max_tokens
+    return tracer.start_span(
+        keys.SPAN_NAME_CHAT, kind = trace.SpanKind.CLIENT, attributes = attrs,
+    )
+
+
+def end_chat_span(span: object | None, *, error: BaseException | None = None) -> None:
+    """Close a span opened by `start_chat_span`. `start_as_current_span`
+    (used by `chat_completion_span`) sets error status/records the
+    exception automatically on `with`-block exit; `start_span` does
+    neither, so both are done here explicitly on the error path."""
+    if span is None:
+        return
+    try:
+        if error is not None:
+            span.set_attribute("error.type", type(error).__name__)
+            span.record_exception(error)
+            span.set_status(trace.Status(trace.StatusCode.ERROR, str(error)))
+        span.end()
+    except Exception:
+        pass
+
+
 @contextlib.contextmanager
 def embedding_span(
     *,

@@ -121,7 +121,16 @@ async def classify_query(
         result = domain.parse_json_model_output(
             response.content, schemas.QueryClassification,
         )
-        mode = force or result.mode
+        # 2026-09-24: `result.mode` is free-text LLM output — the prompt
+        # states lowercase ('fast'/'standard'/'deep') but the model
+        # doesn't always follow it (observed: "DEEP"). Routing already
+        # tolerated this (`_route_by_mode` lowercases before comparing),
+        # but the un-normalized value flowed straight into
+        # `record_ask_run`'s `mode` metric label, splitting one mode's
+        # data across two label values (`ycs_ask_run_total{mode="DEEP"}`
+        # vs `mode="deep"`). Normalize once here so every consumer of
+        # `state["mode"]` gets a consistent value.
+        mode = (force or result.mode).lower()
         sub_questions = result.sub_questions if mode == "deep" else []
         if not channel_ids and result.channel_names and neo4j_graph:
             channel_ids = _resolve_channel_ids(
