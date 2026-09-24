@@ -18,9 +18,11 @@ from __future__ import annotations
 import domains, infra
 from . import domain, errors, keys, params, prompts, schemas
 
+import contextlib
 import json
 import logging
 import time
+import uuid
 from typing import Any
 
 import psycopg
@@ -56,7 +58,39 @@ def _envelope(
     )
 
 
+@contextlib.contextmanager
+def _query_span(operation: str, *, backend: str, app: str):
+    """Shared OTel span + LangFuse session for every YCS Query route.
+    2026-09-24: this whole feature (AI-generate + simple + raw, all 3
+    backends) had ZERO instrumentation before this — confirmed empty
+    across Tempo, LangFuse and Mimir. One-shot requests (unlike Ask's
+    per-thread conversations), so `session_id` is just a fresh id per
+    call rather than something a user would look up by name."""
+    session_id = f"ycs-query-{backend}-{uuid.uuid4().hex[:12]}"
+    with infra.langfuse.service.session(
+        "ycs-query", session_id = session_id, user_id = app or "default",
+    ), infra.otel.service.get_tracer().start_as_current_span(
+        f"ycs.query.{operation}",
+        attributes = {
+            "coelho.langfuse.keep":                   True,
+            "coelho.langfuse.kind":                   "workflow_root",
+            "langfuse.trace.name":                    f"ycs.query.{operation}",
+            "ycs.query.backend":                      backend,
+            "ycs.query.app":                          app or "",
+            "langfuse.observation.metadata.workflow": "ycs_query",
+        },
+    ):
+        yield
+
+
 async def query_es(
+    *, app: str, q: str, limit: int, offset: int, request: Request,
+) -> schemas.QueryResponse:
+    with _query_span("es.simple", backend = "elasticsearch", app = app):
+        return await _query_es_inner(app = app, q = q, limit = limit, offset = offset, request = request)
+
+
+async def _query_es_inner(
     *, app: str, q: str, limit: int, offset: int, request: Request,
 ) -> schemas.QueryResponse:
     """Multi-index ES search for the selected app.
@@ -115,6 +149,13 @@ async def query_es(
 
 
 async def query_qdrant(
+    *, app: str, q: str, limit: int, request: Request,
+) -> schemas.QueryResponse:
+    with _query_span("qdrant.simple", backend = "qdrant", app = app):
+        return await _query_qdrant_inner(app = app, q = q, limit = limit, request = request)
+
+
+async def _query_qdrant_inner(
     *, app: str, q: str, limit: int, request: Request,
 ) -> schemas.QueryResponse:
     """Qdrant kNN over the app's collection.
@@ -209,6 +250,13 @@ async def query_qdrant(
 async def query_neo4j(
     *, app: str, q: str, limit: int, request: Request,
 ) -> schemas.QueryResponse:
+    with _query_span("neo4j.simple", backend = "neo4j", app = app):
+        return await _query_neo4j_inner(app = app, q = q, limit = limit, request = request)
+
+
+async def _query_neo4j_inner(
+    *, app: str, q: str, limit: int, request: Request,
+) -> schemas.QueryResponse:
     """Cypher search over the app's labels.
 
     Two parameter shapes: `{needle, limit}` for `_*_SEARCH` (CONTAINS
@@ -284,6 +332,13 @@ def _raw_disallowed(backend: str, app: str, msg: str) -> schemas.RawQueryRespons
 async def raw_es(
     *, app: str, body_text: str, request: Request,
 ) -> schemas.RawQueryResponse:
+    with _query_span("es.raw", backend = "elasticsearch", app = app):
+        return await _raw_es_inner(app = app, body_text = body_text, request = request)
+
+
+async def _raw_es_inner(
+    *, app: str, body_text: str, request: Request,
+) -> schemas.RawQueryResponse:
     if not domain.is_supported(app, params.BACKEND_ES):
         return _raw_disallowed(
             params.BACKEND_ES, app,
@@ -345,6 +400,13 @@ async def raw_es(
 # pin the collection name from the (app, backend) matrix so the user
 # can't query a different collection.
 async def raw_qdrant(
+    *, app: str, body_text: str, request: Request,
+) -> schemas.RawQueryResponse:
+    with _query_span("qdrant.raw", backend = "qdrant", app = app):
+        return await _raw_qdrant_inner(app = app, body_text = body_text, request = request)
+
+
+async def _raw_qdrant_inner(
     *, app: str, body_text: str, request: Request,
 ) -> schemas.RawQueryResponse:
     if not domain.is_supported(app, params.BACKEND_QDRANT):
@@ -454,6 +516,13 @@ async def raw_qdrant(
 async def raw_neo4j(
     *, app: str, body_text: str, request: Request,
 ) -> schemas.RawQueryResponse:
+    with _query_span("neo4j.raw", backend = "neo4j", app = app):
+        return await _raw_neo4j_inner(app = app, body_text = body_text, request = request)
+
+
+async def _raw_neo4j_inner(
+    *, app: str, body_text: str, request: Request,
+) -> schemas.RawQueryResponse:
     if not domain.is_supported(app, params.BACKEND_NEO4J):
         return _raw_disallowed(
             params.BACKEND_NEO4J, app,
@@ -529,6 +598,53 @@ async def raw_neo4j(
 
 
 async def ai_generate_stream(
+    *, backend: str, app: str, user_prompt: str, previous: str, request: Request,
+):
+    """Span/session wrapper around `_ai_generate_stream_inner` — this
+    endpoint (and every other YCS Query route) had ZERO OTel/LangFuse
+    instrumentation until now (2026-09-24): confirmed live via Tempo
+    (0 traces under `/query/`, not even a generic HTTP server span),
+    LangFuse (no session/trace ever created) and Mimir (no custom
+    metric). Manual `.__enter__()`/`.__exit__()` instead of a `with`
+    block, matching `api/v1/ycs/agents/router.py`'s
+    `ycs.ask.stream.run` — the proven pattern for a span that must
+    stay open across an entire SSE-streamed generator's lifetime
+    rather than one bounded call."""
+    session_id = f"ycs-query-{backend}-{uuid.uuid4().hex[:12]}"
+    session_cm = infra.langfuse.service.session(
+        "ycs-query", session_id = session_id, user_id = app or "default",
+    )
+    session_cm.__enter__()
+    span_cm = infra.otel.service.get_tracer().start_as_current_span(
+        "ycs.query.ai.generate",
+        attributes = {
+            "coelho.langfuse.keep":                    True,
+            "coelho.langfuse.kind":                    "workflow_root",
+            "langfuse.trace.name":                     "ycs.query.ai.generate",
+            "ycs.query.backend":                       backend,
+            "ycs.query.prompt":                         user_prompt[:200],
+            "langfuse.observation.metadata.workflow":  "ycs_query_ai",
+        },
+    )
+    span_cm.__enter__()
+    try:
+        async for frame in _ai_generate_stream_inner(
+            backend = backend, app = app, user_prompt = user_prompt,
+            previous = previous, request = request,
+        ):
+            yield frame
+    finally:
+        try:
+            span_cm.__exit__(None, None, None)
+        except Exception:
+            pass
+        try:
+            session_cm.__exit__(None, None, None)
+        except Exception:
+            pass
+
+
+async def _ai_generate_stream_inner(
     *, backend: str, app: str, user_prompt: str, previous: str, request: Request,
 ):
     """Async-generator that yields {"event": ..., "data": ...} dicts the
@@ -632,8 +748,8 @@ async def ai_generate_stream(
 
         yield ("done", "", accumulated)
 
-    async def _stream_with_retry(prompt_text: str, *, max_attempts: int = 2):
-        """One retry when an attempt fails before emitting any real
+    async def _stream_with_retry(prompt_text: str, *, max_attempts: int = 3):
+        """Retries while an attempt fails before emitting any real
         text — every OTHER LLM call site in this codebase goes through
         `resilient_ainvoke` (max_attempts=2); this generator-streaming
         path never had an equivalent, so a single bad FGTS-VA bandit
@@ -649,22 +765,35 @@ async def ai_generate_stream(
         `on_chat_model_start` before the provider has sent anything.
         Once real text has reached the client, a later failure ships
         as-is rather than risk a duplicated/confusing second
-        generation on top of what's already rendered."""
+        generation on top of what's already rendered.
+
+        2026-09-24: bumped 2→3 attempts — re-reproduced the exact
+        2026-09-17 scenario (two consecutive hung arms), which exhausted
+        the old 2-attempt budget and shipped `final=""` with no error
+        surfaced anywhere but the (easy to miss) status line, reading to
+        the user as "the query editor silently didn't update." A third
+        attempt gives the bandit one more real shot at a healthy arm.
+        Also logs the give-up case explicitly, which this never did
+        before — a fully-exhausted retry was previously indistinguishable
+        in logs from a single-attempt success."""
         for attempt in range(max_attempts):
             got_text = False
             async for kind, payload, txt in _stream(prompt_text):
                 if kind == "yield":
                     got_text = True
-                if (
-                    kind == "error" and not got_text
-                    and attempt + 1 < max_attempts
-                ):
+                if kind == "error" and not got_text:
+                    if attempt + 1 < max_attempts:
+                        logger.warning(
+                            f"[ycs:query:ai] stream attempt {attempt + 1}/"
+                            f"{max_attempts} failed before any text "
+                            f"({payload!r}); retrying"
+                        )
+                        break
                     logger.warning(
                         f"[ycs:query:ai] stream attempt {attempt + 1}/"
                         f"{max_attempts} failed before any text "
-                        f"({payload!r}); retrying"
+                        f"({payload!r}); giving up — endpoint likely down"
                     )
-                    break
                 yield (kind, payload, txt)
                 if kind in ("done", "error"):
                     return

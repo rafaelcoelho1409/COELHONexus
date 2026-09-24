@@ -78,6 +78,10 @@ _RULES = {
         "   inventing a relationship type.\n"
         " · USE REAL PROPERTY VALUES — pull example IDs / names / titles from the `# sample nodes`\n"
         "   block rather than inventing placeholders.\n"
+        " · `nodes()` and `relationships()` REQUIRE a bound PATH variable — `p = (a)-[*1..2]-(b)`,\n"
+        "   never just the relationship pattern alone. `MATCH (a)-[r*1..2]-(b) ... nodes(r)` is a\n"
+        "   Cypher type error (`r` is a List<Relationship>, not a Path) — always bind the whole\n"
+        "   path (`p = ...`) first if you need `nodes(p)`/`relationships(p)`.\n"
     ),
 }
 
@@ -450,6 +454,18 @@ NEO4J_EXAMPLES: list[dict[str, str]] = [
             "RETURN other.id AS co_entity, co\n"
             "ORDER BY co DESC\n"
             "LIMIT 20"
+        ),
+    },
+    {
+        "question": "draw the graph of people connected to X within 2 hops",
+        "query": (
+            # `p = (a)-[*1..2]-(b)` binds the whole PATH — `nodes(p)`/
+            # `relationships(p)` are only valid on a bound path, never
+            # on a bare relationship pattern like `(a)-[r*1..2]-(b)`.
+            'MATCH p = (target:Person {id: "REPLACE_PERSON"})-[*1..2]-(other:Person)\n'
+            "WHERE other <> target\n"
+            "RETURN target, other, relationships(p) AS rels\n"
+            "LIMIT 50"
         ),
     },
 ]

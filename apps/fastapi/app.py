@@ -145,7 +145,7 @@ async def lifespan(app: FastAPI):
         )
 
     # query_ai_llm targets the external provider for NL→DSL translation
-    # (tiny deterministic output — 60s ceiling is plenty); falls back
+    # (tiny deterministic output — 40s ceiling is plenty); falls back
     # to app.state.llm at request time.
     # 2026-09-17: 120s → 60s. `ai_generate_stream`'s `_stream_with_retry`
     # now retries once on a dead endpoint pick (live-observed: the
@@ -153,9 +153,14 @@ async def lifespan(app: FastAPI):
     # 120s/attempt that made the worst case ~240s before the user saw
     # anything. 60s keeps 2 attempts inside the old single-attempt
     # ceiling; a healthy arm's NL→DSL output is well under 10s anyway.
+    # 2026-09-24: 60s → 40s, paired with `max_attempts` going 2→3 in
+    # the same commit — live-reproduced the 2026-09-17 scenario again
+    # (two consecutive hung arms), which needed a 3rd attempt to
+    # recover. Kept at 3×40s=120s instead of letting 3×60s=180s become
+    # the new worst case, since a healthy arm is still well under 10s.
     try:
         app.state.query_ai_llm = domains.settings.chat.service.build_chat_model(
-            timeout_s=60.0,
+            timeout_s=40.0,
         )
     except Exception as e:
         app.state.query_ai_llm = None
