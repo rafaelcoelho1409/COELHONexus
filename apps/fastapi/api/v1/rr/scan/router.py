@@ -23,6 +23,11 @@ router = APIRouter()
 
 @router.get("/scans/recent")
 async def list_recent_scans(profile_id: str = "default", limit: int = 20) -> dict:
+    with domains.rr.runtime.observability.spans.scan_read_span("scans_recent", scan_id = "-"):
+        return await _list_recent_scans_inner(profile_id, limit)
+
+
+async def _list_recent_scans_inner(profile_id: str, limit: int) -> dict:
     """Most-recent scans for a profile. LEFT JOIN rank-1 finding for a 1-3 theme preview."""
     limit = max(1, min(int(limit), 100))
     with domains.rr.runtime.observability.spans.postgres_span(
@@ -115,6 +120,11 @@ async def cancel_scan_endpoint(scan_id: UUID) -> dict:
 
 @router.get("/scan/{scan_id}", response_model=domains.rr.schemas.ScanResult)
 async def get_scan(scan_id: UUID) -> domains.rr.schemas.ScanResult:
+    with domains.rr.runtime.observability.spans.scan_read_span("get", scan_id = str(scan_id)):
+        return await _get_scan_inner(scan_id)
+
+
+async def _get_scan_inner(scan_id: UUID) -> domains.rr.schemas.ScanResult:
     """Scan lifecycle snapshot + digest findings when done. Findings is empty until status='done'."""
     with domains.rr.runtime.observability.spans.postgres_span(
         "select", **{"db.postgres.table": domains.rr.keys.PG_TABLE_SCANS},
@@ -174,6 +184,11 @@ async def get_scan(scan_id: UUID) -> domains.rr.schemas.ScanResult:
 
 @router.get("/scan/{scan_id}/fs")
 async def list_fs(scan_id: UUID) -> dict:
+    with domains.rr.runtime.observability.spans.scan_read_span("fs.list", scan_id = str(scan_id)):
+        return await _list_fs_inner(scan_id)
+
+
+async def _list_fs_inner(scan_id: UUID) -> dict:
     """All fs paths mirrored to Redis for this scan. Empty after 6h TTL."""
     paths = await domains.rr.runtime.service.mirror_index(str(scan_id))
     return {"scan_id": str(scan_id), "paths": paths}
@@ -181,6 +196,11 @@ async def list_fs(scan_id: UUID) -> dict:
 
 @router.get("/scan/{scan_id}/fs/{path:path}")
 async def read_fs(scan_id: UUID, path: str) -> dict:
+    with domains.rr.runtime.observability.spans.scan_read_span("fs.read", scan_id = str(scan_id)):
+        return await _read_fs_inner(scan_id, path)
+
+
+async def _read_fs_inner(scan_id: UUID, path: str) -> dict:
     """Read one mirrored fs entry. 404 on miss."""
     value = await domains.rr.runtime.service.mirror_read(str(scan_id), path)
     if value is None:
@@ -193,12 +213,17 @@ async def read_fs(scan_id: UUID, path: str) -> dict:
 
 @router.get("/scan/{scan_id}/llm-counters")
 async def scan_llm_counters(scan_id: UUID) -> dict:
-    """Per-scan LLM counters: total + by_phase + per-model. Empty on miss or after 6h TTL."""
-    return await domains.rr.runtime.llm_counter.service.read_counters(str(scan_id))
+    with domains.rr.runtime.observability.spans.scan_read_span("llm_counters", scan_id = str(scan_id)):
+        return await domains.rr.runtime.llm_counter.service.read_counters(str(scan_id))
 
 
 @router.get("/scan/{scan_id}/finding/{arxiv_id}/code")
 async def get_finding_code(scan_id: UUID, arxiv_id: str) -> dict:
+    with domains.rr.runtime.observability.spans.scan_read_span("finding.code", scan_id = str(scan_id)):
+        return await _get_finding_code_inner(scan_id, arxiv_id)
+
+
+async def _get_finding_code_inner(scan_id: UUID, arxiv_id: str) -> dict:
     """Poll for Build-tab synthesis. NEVER triggers work — see
     `POST .../code/generate` to kick one off. Cache-first (MinIO), then
     the Redis in-flight/error marker set by that Celery task.
@@ -330,11 +355,26 @@ async def scan_events(scan_id: UUID, request: Request) -> StreamingResponse:
 
 
 async def _sse_iter(scan_id: str, request: Request) -> AsyncIterator[str]:
-    """Format Redis events as SSE frames. Terminates on phase=done|error|cancelled or disconnect."""
-    async for event in domains.rr.runtime.service.subscribe_events(scan_id, replay=True):
-        if await request.is_disconnected():
-            return
-        line = f"data: {json.dumps(event, default=str)}\n\n"
-        yield line
-        if event.get("phase") in ("done", "error", "cancelled"):
-            return
+    """Format Redis events as SSE frames. Terminates on phase=done|error|cancelled or disconnect.
+
+    Span/session use manual `.__enter__()`/`.__exit__()` — same reason
+    as `ycs.query.ai.generate`'s stream wrapper: this span must stay
+    open across the whole SSE connection's lifetime (potentially many
+    minutes, terminated by either a terminal phase or a client
+    disconnect), which a `with` block wrapping an async generator's
+    body doesn't reliably guarantee on abrupt disconnect."""
+    span_cm = domains.rr.runtime.observability.spans.scan_read_span("events", scan_id = scan_id)
+    span_cm.__enter__()
+    try:
+        async for event in domains.rr.runtime.service.subscribe_events(scan_id, replay=True):
+            if await request.is_disconnected():
+                return
+            line = f"data: {json.dumps(event, default=str)}\n\n"
+            yield line
+            if event.get("phase") in ("done", "error", "cancelled"):
+                return
+    finally:
+        try:
+            span_cm.__exit__(None, None, None)
+        except Exception:
+            pass

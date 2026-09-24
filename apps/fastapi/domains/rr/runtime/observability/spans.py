@@ -16,6 +16,7 @@ from __future__ import annotations
 import infra
 
 import contextlib
+import uuid
 from collections.abc import Iterator
 
 from opentelemetry import trace
@@ -56,6 +57,39 @@ def postgres_span(operation: str, **attrs):
 
 def qdrant_span(operation: str, **attrs):
     return _db_span("qdrant", operation, **attrs)
+
+
+@contextlib.contextmanager
+def scan_read_span(operation: str, *, scan_id: str) -> Iterator[None]:
+    """Workflow-root span + LangFuse session for the scan READ/viewing
+    endpoints (`GET /scan/{id}`, `/llm-counters`, `/fs/*`, `/events`
+    SSE, `/scans/recent`, `/finding/{arxiv_id}/code`) — 2026-09-24: this
+    whole read side had zero instrumentation (confirmed empty across
+    Tempo/LangFuse/Mimir despite ~200 requests per scan from the
+    frontend's poll loop), unlike the scan CREATE/execute path which
+    already had it. One-shot session id per call — these are stateless
+    polls, not a conversation, so there's no natural persistent id to
+    reuse the way Ask has a thread_id.
+
+    Supports both `with scan_read_span(...):` for a bounded call AND
+    manual `.__enter__()`/`.__exit__()` for a span that must stay open
+    across an SSE generator's full lifetime (same reason
+    `ycs.query.ai.generate` uses manual enter/exit — a `with` block
+    doesn't safely span a generator across client disconnects)."""
+    session_id = f"rr-scan-read-{scan_id}-{uuid.uuid4().hex[:8]}"
+    with infra.langfuse.service.session(
+        "rr-scan-read", session_id = session_id, user_id = "default",
+    ), infra.otel.service.get_tracer().start_as_current_span(
+        f"rr.scan.{operation}",
+        attributes = {
+            "coelho.langfuse.keep":                   True,
+            "coelho.langfuse.kind":                   "workflow_root",
+            "langfuse.trace.name":                    f"rr.scan.{operation}",
+            "rr.scan_id":                              scan_id,
+            "langfuse.observation.metadata.workflow": "rr_scan_read",
+        },
+    ):
+        yield
 
 
 @contextlib.contextmanager
