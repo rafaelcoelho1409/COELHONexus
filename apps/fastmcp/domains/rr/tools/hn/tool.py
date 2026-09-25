@@ -11,22 +11,18 @@ RR tools.
   ├── domain.py     PURE: parse Algolia JSON → list[Hit]
   ├── schemas.py    Pydantic SearchInput + Hit (HN-specific shape)
   ├── config.py     frozen-dataclass HNConfig
-  ├── keys.py       DEFAULT_TAGS + VALID_TAGS tuples
+  ├── keys.py       TOOL_NAME + DEFAULT_TAGS + VALID_TAGS tuples
   └── patterns.py   ARXIV_URL_RE + HF_PAPERS_URL_RE (cross-source dedup)
 """
 from __future__ import annotations
+import middleware
+from . import config, keys, schemas, service
 
 import httpx
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 
-from middleware import ratelimit
-
 from datetime import date
-
-from .config import HN
-from .schemas import Hit, SearchInput, SortBy
-from .service import search_hn
 
 
 def register(mcp: FastMCP) -> None:
@@ -36,9 +32,9 @@ def register(mcp: FastMCP) -> None:
     RateLimitMiddleware (0.5 s polite default — Algolia HN gives 10k req/hr,
     no auth needed at all).
     """
-    ratelimit.register("hn_search", HN.min_request_interval_s)
+    middleware.ratelimit.register(keys.TOOL_NAME, config.HN.min_request_interval_s)
 
-    @mcp.tool(name="hn_search")
+    @mcp.tool(name=keys.TOOL_NAME)
     async def hn_search(
         ctx:              Context,
         query:            str,
@@ -47,8 +43,8 @@ def register(mcp: FastMCP) -> None:
         min_points:       int       | None = None,
         min_num_comments: int       | None = None,
         since:            date      | None = None,
-        sort_by:          SortBy           = "relevance",
-    ) -> list[Hit]:
+        sort_by:          schemas.SortBy   = "relevance",
+    ) -> list[schemas.Hit]:
         """Search Hacker News via Algolia for stories matching a query.
 
         The news / community-traction tier of Research Radar — complements
@@ -83,7 +79,7 @@ def register(mcp: FastMCP) -> None:
         """
         # Flat params on the boundary so any LLM tool-call shape works;
         # internal service still consumes the SearchInput value object.
-        req = SearchInput(
+        req = schemas.SearchInput(
             query            = query,
             n_max            = n_max,
             tags             = tags,
@@ -93,7 +89,7 @@ def register(mcp: FastMCP) -> None:
             sort_by          = sort_by,
         )
         try:
-            return await search_hn(req, ctx)
+            return await service.search_hn(req, ctx)
         except httpx.HTTPStatusError as e:
             raise ToolError(
                 f"HN Algolia returned {e.response.status_code}: "

@@ -8,17 +8,13 @@ Reads top-to-bottom as the algorithm:
   resolve date → GET → parse → post-filter upvotes → trim to n_max.
 """
 from __future__ import annotations
+from . import config, domain, schemas
 
 import logging
 from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING
 
 import httpx
-
-from .config import HF_DAILY
-from .domain import parse_daily_papers_response
-from .schemas import Paper, SearchInput
-
 if TYPE_CHECKING:
     from fastmcp import Context
 
@@ -26,7 +22,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _resolve_date(req: SearchInput) -> date:
+def _resolve_date(req: schemas.SearchInput) -> date:
     """Default to today (UTC) when the caller didn't specify a date.
 
     UTC because HF's daily curation rolls over at UTC midnight — using the
@@ -37,8 +33,8 @@ def _resolve_date(req: SearchInput) -> date:
 
 
 async def fetch_daily_papers(
-    req: SearchInput, ctx: Context | None = None,
-) -> list[Paper]:
+    req: schemas.SearchInput, ctx: Context | None = None,
+) -> list[schemas.Paper]:
     """Fetch HF's daily curated papers for the resolved date.
 
     Cross-cutting RateLimitMiddleware has already blocked us if we're inside
@@ -53,14 +49,14 @@ async def fetch_daily_papers(
         await ctx.report_progress(0.0, 1.0)
 
     params = {"date": target.isoformat()}
-    headers = {"User-Agent": HF_DAILY.user_agent, "Accept": "application/json"}
+    headers = {"User-Agent": config.HF_DAILY.user_agent, "Accept": "application/json"}
 
     if ctx:
         await ctx.report_progress(0.25, 1.0)
 
-    async with httpx.AsyncClient(timeout=HF_DAILY.timeout_s) as client:
+    async with httpx.AsyncClient(timeout=config.HF_DAILY.timeout_s) as client:
         resp = await client.get(
-            f"{HF_DAILY.base_url}{HF_DAILY.daily_papers_path}",
+            f"{config.HF_DAILY.base_url}{config.HF_DAILY.daily_papers_path}",
             params=params,
             headers=headers,
         )
@@ -71,7 +67,7 @@ async def fetch_daily_papers(
         await ctx.report_progress(0.6, 1.0)
 
     body = resp.json()
-    papers = parse_daily_papers_response(body)
+    papers = domain.parse_daily_papers_response(body)
     total_curated = len(papers)
 
     # Apply min_upvotes filter post-parse (HF doesn't filter server-side here).

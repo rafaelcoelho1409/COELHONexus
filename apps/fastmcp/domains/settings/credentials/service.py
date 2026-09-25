@@ -16,8 +16,8 @@ fails for any reason, all functions degrade gracefully — env-only mode,
 log a warning, never raise.
 """
 from __future__ import annotations
+from . import domain, keys, params
 
-import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeoutError
@@ -32,20 +32,12 @@ from cryptography.fernet import Fernet, InvalidToken
 logger = logging.getLogger(__name__)
 
 
-# Same MinIO paths the fastapi credential store writes to.
-_CREDENTIALS_KEY = "llm/credentials.enc"
-_KEK_KEY = "llm/kek.key"
-_KEK_ENV = "KD_CREDS_KEY"
-
-# This whole step is called synchronously at module-import time (no event
-# loop yet — see server.py), is explicitly best-effort per the module
-# docstring, and must never be allowed to block startup for minutes just
-# because MinIO is slow/unreachable. Short client-level timeouts are the
-# primary control; _MINIO_HARD_TIMEOUT_S below is a wall-clock backstop in
-# case a stall (e.g. DNS) outlives botocore's own per-call timeouts.
-_MINIO_CONNECT_TIMEOUT_S = 3
-_MINIO_READ_TIMEOUT_S = 5
-_MINIO_HARD_TIMEOUT_S = 8
+# Credential resolution runs synchronously at server startup (see
+# server.py), is explicitly best-effort per the module docstring, and must
+# never block boot for minutes just because MinIO is slow/unreachable.
+# Short client-level timeouts are the primary control; the hard timeout in
+# `params.py` is a wall-clock backstop in case a stall (e.g. DNS) outlives
+# botocore's own per-call timeouts. Store identifiers live in `keys.py`.
 
 
 def _minio_client():
@@ -61,8 +53,8 @@ def _minio_client():
         region_name="us-east-1",
         config=Config(
             signature_version="s3v4",
-            connect_timeout=_MINIO_CONNECT_TIMEOUT_S,
-            read_timeout=_MINIO_READ_TIMEOUT_S,
+            connect_timeout=params.MINIO_CONNECT_TIMEOUT_S,
+            read_timeout=params.MINIO_READ_TIMEOUT_S,
             retries={"max_attempts": 1, "mode": "standard"},
         ),
     )
@@ -91,15 +83,15 @@ def _get_object(key: str) -> Optional[bytes]:
 def _resolve_kek() -> Optional[bytes]:
     """KEK from env (preferred — operator-managed) or from the MinIO autogen
     blob. None if neither yields a usable key."""
-    env = os.environ.get(_KEK_ENV, "").strip()
+    env = os.environ.get(keys.KEK_ENV, "").strip()
     if env:
         try:
             Fernet(env.encode())   # validate
             return env.encode()
         except Exception as e:
-            logger.warning("[creds] %s in env is not a valid Fernet key: %s", _KEK_ENV, e)
+            logger.warning("[creds] %s in env is not a valid Fernet key: %s", keys.KEK_ENV, e)
     try:
-        raw = _get_object(_KEK_KEY)
+        raw = _get_object(keys.KEK_KEY)
         return raw.strip() if raw and raw.strip() else None
     except Exception as e:
         logger.debug("[creds] KEK fetch from MinIO failed: %s", e)
@@ -112,14 +104,12 @@ def _load_creds_dict_blocking() -> dict[str, str]:
         kek = _resolve_kek()
         if not kek:
             return {}
-        raw = _get_object(_CREDENTIALS_KEY)
+        raw = _get_object(keys.CREDENTIALS_KEY)
         if not raw:
             return {}
-        data = Fernet(kek).decrypt(raw).decode("utf-8")
-        loaded = json.loads(data)
-        return {str(k): str(v) for k, v in (loaded or {}).items() if v}
+        return domain.decrypt_creds_dict(kek, raw)
     except InvalidToken:
-        logger.warning("[creds] %s failed to decrypt — env fallback", _CREDENTIALS_KEY)
+        logger.warning("[creds] %s failed to decrypt — env fallback", keys.CREDENTIALS_KEY)
         return {}
     except Exception as e:
         logger.warning(
@@ -139,11 +129,11 @@ def _load_creds_dict() -> dict[str, str]:
     executor = ThreadPoolExecutor(max_workers=1)
     try:
         future = executor.submit(_load_creds_dict_blocking)
-        return future.result(timeout=_MINIO_HARD_TIMEOUT_S)
+        return future.result(timeout=params.MINIO_HARD_TIMEOUT_S)
     except _FutureTimeoutError:
         logger.warning(
             "[creds] credential load exceeded %ss hard timeout — env fallback",
-            _MINIO_HARD_TIMEOUT_S,
+            params.MINIO_HARD_TIMEOUT_S,
         )
         return {}
     finally:

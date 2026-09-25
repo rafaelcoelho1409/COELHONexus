@@ -10,19 +10,18 @@ cross-source dedup with the arxiv tool can't work, and the paper has no
 canonical URL.
 """
 from __future__ import annotations
+from . import schemas
 
 from datetime import date, datetime
 from typing import Any
 
-from .schemas import Paper
 
-
-def parse_daily_papers_response(body: Any) -> list[Paper]:
+def parse_daily_papers_response(body: Any) -> list[schemas.Paper]:
     """Parse the JSON response (a list of daily-paper entries) into Paper
     objects. The endpoint returns a top-level JSON ARRAY (not a dict)."""
     if not isinstance(body, list):
         return []
-    papers: list[Paper] = []
+    papers: list[schemas.Paper] = []
     for raw in body:
         try:
             paper = _parse_entry(raw)
@@ -33,7 +32,7 @@ def parse_daily_papers_response(body: Any) -> list[Paper]:
     return papers
 
 
-def _parse_entry(raw: Any) -> Paper | None:
+def _parse_entry(raw: Any) -> schemas.Paper | None:
     """Pure: one daily-paper entry → Paper. Returns None when the entry
     lacks the required `arxiv_id` (the cross-source link) or `title`."""
     if not isinstance(raw, dict):
@@ -51,7 +50,7 @@ def _parse_entry(raw: Any) -> Paper | None:
     if not title:
         return None
 
-    return Paper(
+    return schemas.Paper(
         arxiv_id=arxiv_id,
         title=" ".join(title.split()),
         abstract=_optional_str(paper_obj.get("summary") or raw.get("summary")),

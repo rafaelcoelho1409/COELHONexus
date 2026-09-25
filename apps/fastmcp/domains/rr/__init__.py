@@ -4,3 +4,8 @@ this sub-server over Streamable-HTTP.
 
 See docs/RESEARCH-RADAR-DESIGN-2026-06-10.md for the full design.
 """
+from __future__ import annotations
+from . import prompts, resources, server, tools
+
+
+__all__ = ["prompts", "resources", "server", "tools"]

@@ -8,16 +8,12 @@ Reads top-to-bottom as the algorithm:
   build params (+ mailto polite-pool tag) → GET → parse → return.
 """
 from __future__ import annotations
+from . import config, domain, schemas
 
 import logging
 from typing import TYPE_CHECKING
 
 import httpx
-
-from .config import OPENALEX
-from .domain import parse_search_response
-from .schemas import Paper, SearchInput
-
 if TYPE_CHECKING:
     from fastmcp import Context
 
@@ -25,15 +21,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _build_params(req: SearchInput) -> dict[str, str | int]:
+def _build_params(req: schemas.SearchInput) -> dict[str, str | int]:
     """Compose the /works querystring. Filters are server-side via
     OpenAlex's comma-separated `filter=` param."""
     params: dict[str, str | int] = {
         "search": req.query,
-        "per_page": min(req.n_max, OPENALEX.max_results_per_call),
+        "per_page": min(req.n_max, config.OPENALEX.max_results_per_call),
         "sort": "publication_date:desc",
         # Polite pool — a query param, not a header, per OpenAlex's docs.
-        "mailto": OPENALEX.mailto,
+        "mailto": config.OPENALEX.mailto,
     }
 
     filters: list[str] = []
@@ -49,7 +45,7 @@ def _build_params(req: SearchInput) -> dict[str, str | int]:
     return params
 
 
-async def search_openalex(req: SearchInput, ctx: Context | None = None) -> list[Paper]:
+async def search_openalex(req: schemas.SearchInput, ctx: Context | None = None) -> list[schemas.Paper]:
     """Search OpenAlex's /works. The cross-cutting RateLimitMiddleware has
     already paced us before this function runs."""
     if ctx:
@@ -57,13 +53,13 @@ async def search_openalex(req: SearchInput, ctx: Context | None = None) -> list[
         await ctx.report_progress(0.0, 1.0)
 
     params = _build_params(req)
-    headers = {"User-Agent": OPENALEX.user_agent}
+    headers = {"User-Agent": config.OPENALEX.user_agent}
 
     if ctx:
         await ctx.report_progress(0.25, 1.0)
 
-    async with httpx.AsyncClient(timeout=OPENALEX.timeout_s) as client:
-        resp = await client.get(OPENALEX.base_url, params=params, headers=headers)
+    async with httpx.AsyncClient(timeout=config.OPENALEX.timeout_s) as client:
+        resp = await client.get(config.OPENALEX.base_url, params=params, headers=headers)
         resp.raise_for_status()
 
     if ctx:
@@ -72,7 +68,7 @@ async def search_openalex(req: SearchInput, ctx: Context | None = None) -> list[
 
     body = resp.json()
     total_available = int((body.get("meta") or {}).get("count") or 0)
-    papers = parse_search_response(body)
+    papers = domain.parse_search_response(body)
 
     msg = f"openalex: parsed {len(papers)} papers (total available: {total_available})"
     if ctx:

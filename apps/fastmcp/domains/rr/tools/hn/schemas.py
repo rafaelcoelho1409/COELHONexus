@@ -8,6 +8,7 @@ Source-specific shape (NOT a copy of arxiv.Paper) — surfaces HN-unique fields
 (`points`, `num_comments`, `story_text`) and the extracted `arxiv_id` which
 enables cross-source dedup with the arxiv and huggingface_daily_papers tools.
 """
+from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal
 

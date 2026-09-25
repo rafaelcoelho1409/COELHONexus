@@ -11,6 +11,7 @@ shape here is SOURCE-SPECIFIC — it surfaces OpenAlex-unique fields
 than copying arxiv's or S2's shape. The agent normalizes across sources
 at the Neo4j-ingest boundary, not in the tool.
 """
+from __future__ import annotations
 from datetime import date
 from typing import Literal
 

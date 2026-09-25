@@ -10,22 +10,19 @@ The conventions-compliant per-tool layout is:
     ├── service.py    async httpx + rate limit + ctx logging/progress
     ├── domain.py     PURE: parse Atom XML → list[Paper]
     ├── schemas.py    Pydantic SearchInput + Paper (LLM-visible boundary)
-    └── params.py     frozen-dataclass ArxivConfig (tunables)
+    ├── config.py     frozen-dataclass ArxivConfig (tunables)
+    └── keys.py       TOOL_NAME + ATOM_NAMESPACES
 
 Every subsequent source tool (semantic_scholar, hn, …) copies this shape.
 """
 from __future__ import annotations
+from . import config, keys, schemas, service
+
+import middleware
 
 import httpx
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
-
-from middleware import ratelimit
-
-from .config import ARXIV
-from .keys import TOOL_NAME
-from .schemas import Paper, SearchInput, SortBy
-from .service import search_arxiv
 
 
 def register(mcp: FastMCP) -> None:
@@ -37,16 +34,16 @@ def register(mcp: FastMCP) -> None:
 
     # Cross-cutting rate limit: the middleware reads from this registry per
     # call (arxiv ToS: 1 request per 3 seconds, per IP).
-    ratelimit.register(TOOL_NAME, ARXIV.min_request_interval_s)
+    middleware.ratelimit.register(keys.TOOL_NAME, config.ARXIV.min_request_interval_s)
 
-    @mcp.tool(name=TOOL_NAME)
+    @mcp.tool(name=keys.TOOL_NAME)
     async def arxiv_search(
         ctx:        Context,
         query:      str,
         n_max:      int             = 20,
-        sort_by:    SortBy          = "submittedDate",
+        sort_by:    schemas.SortBy  = "submittedDate",
         categories: list[str] | None = None,
-    ) -> list[Paper]:
+    ) -> list[schemas.Paper]:
         """Search arXiv for recent papers matching a free-text query.
 
         Returns structured Paper objects (title · abstract · authors ·
@@ -62,14 +59,14 @@ def register(mcp: FastMCP) -> None:
         Respects arXiv's 1-request-per-3-seconds polite rate (enforced
         per-process).
         """
-        req = SearchInput(
+        req = schemas.SearchInput(
             query      = query,
             n_max      = n_max,
             sort_by    = sort_by,
             categories = categories,
         )
         try:
-            return await search_arxiv(req, ctx)
+            return await service.search_arxiv(req, ctx)
         except httpx.HTTPStatusError as e:
             raise ToolError(
                 f"arXiv API returned {e.response.status_code}: {e.response.text[:200]}"

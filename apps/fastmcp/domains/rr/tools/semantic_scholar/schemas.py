@@ -10,6 +10,7 @@ S2-unique fields (tldr · influential_citation_count · external_ids ·
 open_access_pdf) that arxiv simply doesn't have. The agent normalizes across
 sources at the Neo4j-ingest boundary, not in the tool.
 """
+from __future__ import annotations
 from datetime import date
 from typing import Literal
 

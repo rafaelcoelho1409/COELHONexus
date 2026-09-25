@@ -10,6 +10,11 @@ Source: https://hn.algolia.com/api (the `tags` parameter)
 from __future__ import annotations
 
 
+# MCP tool name — shared by tool.py's registration calls (rate limiter,
+# @mcp.tool) so the two can't drift.
+TOOL_NAME: str = "hn_search"
+
+
 # the points + comment signal); comments are usually too granular to surface
 # in a daily digest.
 DEFAULT_TAGS: tuple[str, ...] = ("story",)

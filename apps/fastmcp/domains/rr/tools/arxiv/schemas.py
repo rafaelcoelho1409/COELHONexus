@@ -7,6 +7,7 @@ Two boundaries:
 Per docs/CODE-CONVENTIONS.md §2: Pydantic ONLY at the boundary; internal
 value objects go in entities.py (none needed here yet).
 """
+from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 

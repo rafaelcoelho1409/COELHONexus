@@ -10,8 +10,12 @@ entries — so tools/<source>/service.py can keep reading
 Read-only: write paths live in apps/fastapi/domains/llm/credentials. This
 peer app only consumes. KV → env injection happens ONCE at startup; key
 changes require a fastmcp pod restart to take effect.
+
+Callers use the dotted path — e.g.
+`domains.settings.credentials.service.inject_user_keys_into_env(...)`.
 """
-from .service import inject_user_keys_into_env, resolve_key
+from __future__ import annotations
+from . import domain, keys, params, service
 
 
-__all__ = ["inject_user_keys_into_env", "resolve_key"]
+__all__ = ["domain", "keys", "params", "service"]

@@ -8,18 +8,13 @@ Reads top-to-bottom as the algorithm:
   build numericFilters → build params → pick endpoint → GET → parse → return.
 """
 from __future__ import annotations
+from . import config, domain, keys, schemas
 
 import logging
 from datetime import datetime, time, timezone
 from typing import TYPE_CHECKING
 
 import httpx
-
-from .config import HN
-from .domain import parse_search_response
-from .keys import DEFAULT_TAGS
-from .schemas import Hit, SearchInput
-
 if TYPE_CHECKING:
     from fastmcp import Context
 
@@ -27,7 +22,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _build_numeric_filters(req: SearchInput) -> list[str]:
+def _build_numeric_filters(req: schemas.SearchInput) -> list[str]:
     """Algolia's `numericFilters` are comma-separated `field<op>value` strings.
     Pushed server-side so we don't post-filter (cheaper + preserves ranking)."""
     filters: list[str] = []
@@ -42,13 +37,13 @@ def _build_numeric_filters(req: SearchInput) -> list[str]:
     return filters
 
 
-def _build_params(req: SearchInput) -> dict[str, str | int]:
+def _build_params(req: schemas.SearchInput) -> dict[str, str | int]:
     """Compose the /search querystring."""
-    tags = ",".join(req.tags) if req.tags else ",".join(DEFAULT_TAGS)
+    tags = ",".join(req.tags) if req.tags else ",".join(keys.DEFAULT_TAGS)
     params: dict[str, str | int] = {
         "query": req.query,
         "tags": tags,
-        "hitsPerPage": min(req.n_max, HN.max_results_per_call),
+        "hitsPerPage": min(req.n_max, config.HN.max_results_per_call),
     }
     filters = _build_numeric_filters(req)
     if filters:
@@ -56,7 +51,7 @@ def _build_params(req: SearchInput) -> dict[str, str | int]:
     return params
 
 
-async def search_hn(req: SearchInput, ctx: Context | None = None) -> list[Hit]:
+async def search_hn(req: schemas.SearchInput, ctx: Context | None = None) -> list[schemas.Hit]:
     """Search HN via Algolia. The cross-cutting RateLimitMiddleware blocks
     before this runs if we're inside the min-interval window."""
     if ctx:
@@ -64,7 +59,7 @@ async def search_hn(req: SearchInput, ctx: Context | None = None) -> list[Hit]:
         await ctx.report_progress(0.0, 1.0)
 
     params = _build_params(req)
-    headers = {"User-Agent": HN.user_agent, "Accept": "application/json"}
+    headers = {"User-Agent": config.HN.user_agent, "Accept": "application/json"}
 
     # Algolia exposes two endpoints: relevance vs strict-date order.
     path = "/search" if req.sort_by == "relevance" else "/search_by_date"
@@ -72,9 +67,9 @@ async def search_hn(req: SearchInput, ctx: Context | None = None) -> list[Hit]:
     if ctx:
         await ctx.report_progress(0.25, 1.0)
 
-    async with httpx.AsyncClient(timeout=HN.timeout_s) as client:
+    async with httpx.AsyncClient(timeout=config.HN.timeout_s) as client:
         resp = await client.get(
-            f"{HN.base_url}{path}",
+            f"{config.HN.base_url}{path}",
             params=params,
             headers=headers,
         )
@@ -86,7 +81,7 @@ async def search_hn(req: SearchInput, ctx: Context | None = None) -> list[Hit]:
 
     body = resp.json()
     total_available = int(body.get("nbHits") or 0)
-    hits = parse_search_response(body)
+    hits = domain.parse_search_response(body)
 
     msg = (
         f"hn: parsed {len(hits)} hits "

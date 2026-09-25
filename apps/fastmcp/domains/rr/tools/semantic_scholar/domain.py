@@ -9,16 +9,15 @@ papers over 0). The orchestrator (service.py) compares response['data']
 length vs returned list length and logs the discrepancy if it cares.
 """
 from __future__ import annotations
+from . import schemas
 
 from datetime import date
 from typing import Any
 
-from .schemas import Paper
 
-
-def parse_search_response(body: dict[str, Any]) -> list[Paper]:
+def parse_search_response(body: dict[str, Any]) -> list[schemas.Paper]:
     """Parse an S2 /paper/search response into Paper objects."""
-    papers: list[Paper] = []
+    papers: list[schemas.Paper] = []
     for raw in body.get("data") or []:
         try:
             papers.append(_parse_paper(raw))
@@ -27,14 +26,14 @@ def parse_search_response(body: dict[str, Any]) -> list[Paper]:
     return papers
 
 
-def _parse_paper(raw: dict[str, Any]) -> Paper:
+def _parse_paper(raw: dict[str, Any]) -> schemas.Paper:
     """Pure: one entry from /paper/search → Paper."""
     paper_id = raw.get("paperId")
     title = raw.get("title")
     if not paper_id or not title:
         raise ValueError("missing required field: paperId or title")
 
-    return Paper(
+    return schemas.Paper(
         s2_id=str(paper_id),
         title=" ".join(str(title).split()),
         abstract=_optional_str(raw.get("abstract")),

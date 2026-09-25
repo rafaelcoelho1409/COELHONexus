@@ -9,15 +9,6 @@ dependencies = [
     "uvicorn[standard]>=0.32,<1.0",
     "httpx>=0.28,<1.0",
     "pydantic>=2.9,<3.0",
-    # OTel dual-export: Alloy (gRPC) + LangFuse (HTTP). No fastapi/redis/celery instrumentation.
-    "opentelemetry-api>=1.30,<2.0",
-    "opentelemetry-sdk>=1.30,<2.0",
-    "opentelemetry-exporter-otlp-proto-grpc>=1.30,<2.0",
-    "opentelemetry-exporter-otlp-proto-http>=1.30,<2.0",
-    "opentelemetry-instrumentation-httpx>=0.50b0,<1.0",
-    "opentelemetry-instrumentation-logging>=0.50b0,<1.0",
-    # W3C traceparent extraction: links tool-call spans as children of the Celery rr.scan.run span.
-    "opentelemetry-instrumentation-asgi>=0.50b0,<1.0",
     # MinIO+Fernet BYOK store reader; same versions as apps/fastapi.
     "botocore>=1.34,<2.0",
     "cryptography>=46.0.7,<49",
@@ -31,4 +22,6 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = []
+dev = [
+    "pyflakes>=3.2,<4.0",
+]

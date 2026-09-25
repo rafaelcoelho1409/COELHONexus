@@ -19,17 +19,12 @@ structurally avoids both failure modes the other 4 tools hit repeatedly
 (arxiv's 406 load-shedding under concurrency, S2's contested shared pool).
 """
 from __future__ import annotations
+import middleware
+from . import config, keys, schemas, service
 
 import httpx
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
-
-from middleware import ratelimit
-
-from .config import OPENALEX
-from .keys import TOOL_NAME
-from .schemas import Paper, SearchInput
-from .service import search_openalex
 
 
 def register(mcp: FastMCP) -> None:
@@ -38,9 +33,9 @@ def register(mcp: FastMCP) -> None:
     Also declares the per-tool min-interval to the cross-cutting
     RateLimitMiddleware so the wait happens BEFORE the tool body runs.
     """
-    ratelimit.register(TOOL_NAME, OPENALEX.min_request_interval_s)
+    middleware.ratelimit.register(keys.TOOL_NAME, config.OPENALEX.min_request_interval_s)
 
-    @mcp.tool(name=TOOL_NAME)
+    @mcp.tool(name=keys.TOOL_NAME)
     async def openalex_search(
         ctx:              Context,
         query:            str,
@@ -48,7 +43,7 @@ def register(mcp: FastMCP) -> None:
         year_min:         int      | None = None,
         year_max:         int      | None = None,
         open_access_only: bool            = False,
-    ) -> list[Paper]:
+    ) -> list[schemas.Paper]:
         """Search OpenAlex — a free, keyless, 320M+-work academic index —
         for works matching a free-text query.
 
@@ -70,7 +65,7 @@ def register(mcp: FastMCP) -> None:
         No API key, no documented hard rate limit for polite callers
         (requests are tagged with an email via the `mailto` param).
         """
-        req = SearchInput(
+        req = schemas.SearchInput(
             query=query,
             n_max=n_max,
             year_min=year_min,
@@ -78,7 +73,7 @@ def register(mcp: FastMCP) -> None:
             open_access_only=open_access_only,
         )
         try:
-            return await search_openalex(req, ctx)
+            return await service.search_openalex(req, ctx)
         except httpx.HTTPStatusError as e:
             raise ToolError(
                 f"OpenAlex API returned {e.response.status_code}: {e.response.text[:200]}"

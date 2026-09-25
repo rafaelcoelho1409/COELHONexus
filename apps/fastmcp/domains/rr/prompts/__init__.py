@@ -10,13 +10,28 @@ We expose one:
                    notable in today's research." Useful for ad-hoc
                    scans without writing the full scan request.
 
+Layout (per docs/CODE-CONVENTIONS.md §4):
+  keys.py      prompt-name registry (DIGEST_TODAY)
+  prompts.py   template strings
+  versions.py  version markers (cache-invalidation knobs)
+  domain.py    PURE build/validate helpers
+  prompt.py    thin `@mcp.prompt` boundary (one wrapper per prompt)
+  __init__.py  ← THIS — re-exports + register(mcp) dispatch only
+
 Architecture-doc §2.2.2.
 """
-from fastmcp import FastMCP
+from __future__ import annotations
+from . import domain, keys, prompt, prompts, versions
 
-from . import digest_today
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fastmcp import FastMCP
+
+
+__all__ = ["domain", "keys", "prompt", "prompts", "versions"]
 
 
 def register(mcp: FastMCP) -> None:
     """Register all RR prompts on the root server."""
-    digest_today.register(mcp)
+    prompt.register(mcp)

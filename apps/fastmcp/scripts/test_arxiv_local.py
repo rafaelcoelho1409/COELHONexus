@@ -1,5 +1,8 @@
 """Local smoke test for the arxiv_search MCP tool.
 
+Superseded by scripts/smoke_all.py (all 5 tools + resources + prompts);
+kept for single-tool debugging.
+
 Run AFTER `skaffold dev` is up and port-forward 23024 is live:
 
     # default — quick sanity check
@@ -35,9 +38,9 @@ async def main() -> None:
         tools = await client.list_tools()
         print(f"\nTools on {URL}: {[t.name for t in tools]}\n")
 
-        args = {"input": {"query": query, "n_max": n_max}}
+        args = {"query": query, "n_max": n_max}
         if categories:
-            args["input"]["categories"] = list(categories)
+            args["categories"] = list(categories)
 
         print(f"Calling arxiv_search(query={query!r}, n_max={n_max}, "
               f"categories={categories})\n")

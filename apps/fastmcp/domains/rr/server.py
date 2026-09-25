@@ -18,32 +18,37 @@ The radar repo now exercises all 4 FastMCP primitives that ship in v3.x:
   Composition — TODO (mount() — only matters when a 2nd domain exposes
               MCP tools, e.g. DD-as-MCP)
 
+Layout (per docs/CODE-CONVENTIONS.md §4):
+  tools/      5 sources × {tool, service, domain, schemas, config, keys}
+  resources/  resource.py boundary + service/domain/keys/params
+  prompts/    prompt.py boundary + prompts/versions/keys/domain
+  server.py   ← THIS — register(mcp) dispatch only: one dotted call per
+              capability, no tools/resources/prompts defined here.
+              New capability = one line below; new domain = a second
+              register() mounted via Composition, not lines here.
+
 openalex_search (2026-09-20) is not yet wired into the RR agent's 4-source
 discovery phase (prompts/keys/triage normalizer all still assume exactly
 4) — it's registered here as a usable MCP tool; integrating it as a 5th
 discovery subagent is a separate, larger change.
 """
-from fastmcp import FastMCP
+from __future__ import annotations
 
-from .prompts import register as register_prompts
-from .resources import register as register_resources
-from .tools.arxiv import tool as arxiv_tool
-from .tools.hn import tool as hn_tool
-from .tools.huggingface_daily_papers import tool as huggingface_daily_papers_tool
-from .tools.openalex import tool as openalex_tool
-from .tools.semantic_scholar import tool as semantic_scholar_tool
+import domains
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fastmcp import FastMCP
 
 
 def register(mcp: FastMCP) -> None:
     """Register every Research Radar MCP capability on the root server."""
-    # Tools (5)
-    arxiv_tool.register(mcp)
-    semantic_scholar_tool.register(mcp)
-    huggingface_daily_papers_tool.register(mcp)
-    hn_tool.register(mcp)
-    openalex_tool.register(mcp)
-    # Resources (2)
-    register_resources(mcp)
-    # Prompts (1)
-    register_prompts(mcp)
+    domains.rr.tools.arxiv.register(mcp)
+    domains.rr.tools.semantic_scholar.register(mcp)
+    domains.rr.tools.huggingface_daily_papers.register(mcp)
+    domains.rr.tools.hn.register(mcp)
+    domains.rr.tools.openalex.register(mcp)
+    domains.rr.resources.register(mcp)
+    domains.rr.prompts.register(mcp)
     # TODO Auth + Composition: see module docstring.

@@ -8,19 +8,17 @@ hits over 0). The orchestrator (service.py) compares `body.nbHits` vs
 returned length and logs if it cares.
 """
 from __future__ import annotations
+from . import patterns, schemas
 
 from datetime import datetime, timezone
 from typing import Any
 
-from .patterns import ARXIV_URL_RE, HF_PAPERS_URL_RE
-from .schemas import Hit
 
-
-def parse_search_response(body: Any) -> list[Hit]:
+def parse_search_response(body: Any) -> list[schemas.Hit]:
     """Parse Algolia HN /search or /search_by_date response into Hit objects."""
     if not isinstance(body, dict):
         return []
-    hits: list[Hit] = []
+    hits: list[schemas.Hit] = []
     for raw in body.get("hits") or []:
         try:
             hit = _parse_hit(raw)
@@ -31,7 +29,7 @@ def parse_search_response(body: Any) -> list[Hit]:
     return hits
 
 
-def _parse_hit(raw: Any) -> Hit | None:
+def _parse_hit(raw: Any) -> schemas.Hit | None:
     """Pure: one Algolia hit → Hit. Returns None when objectID or title is
     missing (a story with neither isn't usable for radar surfacing)."""
     if not isinstance(raw, dict):
@@ -50,7 +48,7 @@ def _parse_hit(raw: Any) -> Hit | None:
     url = _optional_str(raw.get("url"))
     arxiv_id = extract_arxiv_id_from_url(url) if url else None
 
-    return Hit(
+    return schemas.Hit(
         hn_id=hn_id,
         title=" ".join(title.split()),
         url=url,
@@ -72,10 +70,10 @@ def extract_arxiv_id_from_url(url: str) -> str | None:
     versioning so the agent can decide whether to merge v1 and v2."""
     if not url:
         return None
-    m = ARXIV_URL_RE.search(url)
+    m = patterns.ARXIV_URL_RE.search(url)
     if m:
         return m.group(1)
-    m = HF_PAPERS_URL_RE.search(url)
+    m = patterns.HF_PAPERS_URL_RE.search(url)
     if m:
         return m.group(1)
     return None

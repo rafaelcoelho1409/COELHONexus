@@ -10,22 +10,18 @@ layout as arxiv/tool.py.
   ├── service.py    async httpx + ctx logging/progress
   ├── domain.py     PURE: parse S2 JSON → list[Paper]
   ├── schemas.py    Pydantic SearchInput + Paper (S2-specific shape)
-  ├── config.py     frozen-dataclass SemanticScholarConfig
-  └── keys.py       DEFAULT_FIELDS + FIELDS_OF_STUDY tuples
+├── config.py     frozen-dataclass SemanticScholarConfig
+└── keys.py       TOOL_NAME + DEFAULT_FIELDS + FIELDS_OF_STUDY tuples
 """
 from __future__ import annotations
+import middleware
+from . import config, keys, schemas, service
 
 import os
 
 import httpx
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
-
-from middleware import ratelimit
-
-from .config import S2
-from .schemas import Paper, SearchInput
-from .service import search_s2
 
 
 def register(mcp: FastMCP) -> None:
@@ -35,14 +31,14 @@ def register(mcp: FastMCP) -> None:
     RateLimitMiddleware. With SEMANTIC_SCHOLAR_API_KEY env var set, the
     interval drops from 3s (unauth shared pool) to 1s (keyed ~1 RPS).
     """
-    has_key = bool(os.environ.get(S2.api_key_env))
+    has_key = bool(os.environ.get(config.S2.api_key_env))
     interval = (
-        S2.min_request_interval_keyed_s if has_key
-        else S2.min_request_interval_s
+        config.S2.min_request_interval_keyed_s if has_key
+        else config.S2.min_request_interval_s
     )
-    ratelimit.register("semantic_scholar_search", interval)
+    middleware.ratelimit.register(keys.TOOL_NAME, interval)
 
-    @mcp.tool(name="semantic_scholar_search")
+    @mcp.tool(name=keys.TOOL_NAME)
     async def semantic_scholar_search(
         ctx:                Context,
         query:              str,
@@ -52,7 +48,7 @@ def register(mcp: FastMCP) -> None:
         fields_of_study:    list[str] | None = None,
         min_citation_count: int      | None = None,
         venue_filter:       list[str] | None = None,
-    ) -> list[Paper]:
+    ) -> list[schemas.Paper]:
         """Search Semantic Scholar for papers matching a free-text query.
 
         Returns Paper objects with S2-unique signal fields:
@@ -76,7 +72,7 @@ def register(mcp: FastMCP) -> None:
         Query syntax: free text (AND), `"phrase"` exact, `+must`, `-exclude`,
         `a|b` OR.
         """
-        req = SearchInput(
+        req = schemas.SearchInput(
             query              = query,
             n_max              = n_max,
             year_min           = year_min,
@@ -86,7 +82,7 @@ def register(mcp: FastMCP) -> None:
             venue_filter       = venue_filter,
         )
         try:
-            return await search_s2(req, ctx)
+            return await service.search_s2(req, ctx)
         except httpx.HTTPStatusError as e:
             raise ToolError(
                 f"Semantic Scholar API returned {e.response.status_code}: "

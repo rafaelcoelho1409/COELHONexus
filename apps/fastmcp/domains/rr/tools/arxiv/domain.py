@@ -4,14 +4,14 @@ Per docs/CODE-CONVENTIONS.md §4: no I/O, no async, no network, no logging,
 no clocks, no mutable globals. Deterministic in / deterministic out.
 Trivially unit-testable: feed XML string in, get list[Paper] out.
 """
+from __future__ import annotations
+from . import keys, schemas
+
 from datetime import datetime
 from xml.etree import ElementTree as ET
 
-from .keys import ATOM_NAMESPACES
-from .schemas import Paper, SearchInput
 
-
-def build_search_query(req: SearchInput) -> str:
+def build_search_query(req: schemas.SearchInput) -> str:
     """Compose arXiv's `search_query` string from a SearchInput.
 
     Wraps the free-text query in DOUBLE QUOTES for **phrase matching**. Without
@@ -33,7 +33,7 @@ def build_search_query(req: SearchInput) -> str:
     return " AND ".join(parts)
 
 
-def parse_atom_feed(xml_str: str) -> list[Paper]:
+def parse_atom_feed(xml_str: str) -> list[schemas.Paper]:
     """Parse an arXiv API Atom XML response into a list of Paper objects.
 
     Returns an empty list if the feed has no <entry> elements (zero hits is
@@ -45,10 +45,10 @@ def parse_atom_feed(xml_str: str) -> list[Paper]:
     except ET.ParseError as e:
         raise ValueError(f"Malformed arXiv Atom feed: {e}") from e
 
-    return [_parse_entry(entry) for entry in root.findall("atom:entry", ATOM_NAMESPACES)]
+    return [_parse_entry(entry) for entry in root.findall("atom:entry", keys.ATOM_NAMESPACES)]
 
 
-def _parse_entry(entry: ET.Element) -> Paper:
+def _parse_entry(entry: ET.Element) -> schemas.Paper:
     """Pure: <atom:entry> element → Paper."""
     arxiv_id = _strip_id(_text(entry, "atom:id"))
     title = _collapse_ws(_text(entry, "atom:title"))
@@ -56,17 +56,17 @@ def _parse_entry(entry: ET.Element) -> Paper:
 
     authors = [
         _text(a, "atom:name")
-        for a in entry.findall("atom:author", ATOM_NAMESPACES)
+        for a in entry.findall("atom:author", keys.ATOM_NAMESPACES)
     ]
 
-    primary_cat_elem = entry.find("arxiv:primary_category", ATOM_NAMESPACES)
+    primary_cat_elem = entry.find("arxiv:primary_category", keys.ATOM_NAMESPACES)
     primary_category = (
         primary_cat_elem.get("term", "") if primary_cat_elem is not None else ""
     )
 
     categories = [
         c.get("term", "")
-        for c in entry.findall("atom:category", ATOM_NAMESPACES)
+        for c in entry.findall("atom:category", keys.ATOM_NAMESPACES)
         if c.get("term")
     ]
 
@@ -77,7 +77,7 @@ def _parse_entry(entry: ET.Element) -> Paper:
     # (the /abs/ HTML page) and one with title='pdf' (the PDF). Pick by attr.
     pdf_url = ""
     abs_url = ""
-    for link in entry.findall("atom:link", ATOM_NAMESPACES):
+    for link in entry.findall("atom:link", keys.ATOM_NAMESPACES):
         if link.get("title") == "pdf":
             pdf_url = link.get("href", "")
         elif link.get("rel") == "alternate":
@@ -86,7 +86,7 @@ def _parse_entry(entry: ET.Element) -> Paper:
     doi = _optional_text(entry, "arxiv:doi")
     comment = _optional_text(entry, "arxiv:comment")
 
-    return Paper(
+    return schemas.Paper(
         arxiv_id=arxiv_id,
         title=title,
         abstract=abstract,
@@ -104,13 +104,13 @@ def _parse_entry(entry: ET.Element) -> Paper:
 
 def _text(elem: ET.Element, path: str) -> str:
     """Get the text under `path` (relative to elem), stripped. Empty if missing."""
-    found = elem.find(path, ATOM_NAMESPACES)
+    found = elem.find(path, keys.ATOM_NAMESPACES)
     return (found.text or "").strip() if found is not None else ""
 
 
 def _optional_text(elem: ET.Element, path: str) -> str | None:
     """Like _text but returns None instead of empty string when absent."""
-    found = elem.find(path, ATOM_NAMESPACES)
+    found = elem.find(path, keys.ATOM_NAMESPACES)
     if found is None or not found.text:
         return None
     return found.text.strip()

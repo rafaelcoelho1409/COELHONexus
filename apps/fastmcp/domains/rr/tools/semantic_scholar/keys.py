@@ -4,6 +4,11 @@ docs/CODE-CONVENTIONS.md §2 (tuple-of-strings name lists belong here).
 from __future__ import annotations
 
 
+# MCP tool name — shared by tool.py's registration calls (rate limiter,
+# @mcp.tool) so the two can't drift.
+TOOL_NAME: str = "semantic_scholar_search"
+
+
 # The rich `fields` set requested on every /paper/search call. Picked to
 # maximize radar signal:
 #   - paperId / title / abstract / year / publicationDate — base record

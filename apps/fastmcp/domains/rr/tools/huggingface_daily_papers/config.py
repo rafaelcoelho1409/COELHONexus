@@ -2,9 +2,8 @@
 per docs/CODE-CONVENTIONS.md §3.
 
 Six related tunables describing one concept ("how this tool talks to HF").
-No API key needed — the daily_papers endpoint is fully open. No keys.py
-sibling because there are no identifier registries (no field-list config,
-no category enums) — the API returns everything for the day.
+No API key needed — the daily_papers endpoint is fully open. The MCP tool
+name lives in `keys.py` (`TOOL_NAME`), shared with `tool.py` registration.
 """
 from __future__ import annotations
 

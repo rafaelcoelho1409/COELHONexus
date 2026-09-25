@@ -8,11 +8,10 @@ Robustness: malformed entries are silently dropped (the radar prefers N-1
 papers over 0), same policy as semantic_scholar/domain.py.
 """
 from __future__ import annotations
+from . import schemas
 
 from datetime import date
 from typing import Any
-
-from .schemas import Paper
 
 
 def reconstruct_abstract(inverted_index: dict[str, list[int]] | None) -> str | None:
@@ -39,9 +38,9 @@ def reconstruct_abstract(inverted_index: dict[str, list[int]] | None) -> str | N
     return text or None
 
 
-def parse_search_response(body: dict[str, Any]) -> list[Paper]:
+def parse_search_response(body: dict[str, Any]) -> list[schemas.Paper]:
     """Parse an OpenAlex /works response into Paper objects."""
-    papers: list[Paper] = []
+    papers: list[schemas.Paper] = []
     for raw in body.get("results") or []:
         try:
             papers.append(_parse_paper(raw))
@@ -50,14 +49,14 @@ def parse_search_response(body: dict[str, Any]) -> list[Paper]:
     return papers
 
 
-def _parse_paper(raw: dict[str, Any]) -> Paper:
+def _parse_paper(raw: dict[str, Any]) -> schemas.Paper:
     """Pure: one entry from /works results → Paper."""
     openalex_id = _short_id(raw.get("id"))
     title = raw.get("title") or raw.get("display_name")
     if not openalex_id or not title:
         raise ValueError("missing required field: id or title")
 
-    return Paper(
+    return schemas.Paper(
         openalex_id=openalex_id,
         title=" ".join(str(title).split()),
         abstract=reconstruct_abstract(raw.get("abstract_inverted_index")),

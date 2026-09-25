@@ -8,6 +8,7 @@ Source-specific Paper shape (NOT a copy of arxiv.Paper or s2.Paper) — surfaces
 HF-unique fields (`upvotes`, `num_comments`, `discussion_id`) plus the
 `arxiv_id` which enables cross-source dedup with the arxiv tool's results.
 """
+from __future__ import annotations
 from datetime import date
 from typing import Literal
 
