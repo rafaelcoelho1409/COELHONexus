@@ -252,18 +252,6 @@ export const SUBSTEP_RENDERERS = {
         (sub ? '<div class="fw-stat-card-sub">' + escapeHtml(sub) + '</div>' : '') +
       '</div>';
 
-    if (s.skipped === 'pass_through_small_n') {
-      const cards =
-        kpi('Skipped', 'PASS-THROUGH', 'small-N optimization') +
-        kpi('Files',   String(s.n_files || 0), 'no LLM call needed') +
-        kpi('Reason',  'N ≤ 80',               'proposer ingests raw bodies') +
-        kpi('Wall',    (s.wall_ms || 0) + ' ms', 'cheap');
-      return '<div class="fw-stat-grid">' + cards + '</div>' +
-        '<div class="fw-stat-foot">' +
-          'doc_distill bypassed; chapter_propose reads doc bodies directly. ' +
-          'Triggered only when relevant_files ≤ 80 — keeps small corpora fast.' +
-        '</div>';
-    }
     const n = s.n_files || 0;
     const distilled = s.n_distilled || 0;
     const failed = s.n_failed || 0;

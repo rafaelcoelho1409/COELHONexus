@@ -52,7 +52,6 @@ async def distill_one(
                 False, "empty_body",
             )
 
-        prompt = prompts.build_prompt(framework, source_key, body)
         distillate: Optional[schemas.DocDistillate] = None
         failure_reason: Optional[str] = None
         last_err = ""
@@ -60,6 +59,14 @@ async def distill_one(
 
         # Retry only transient errors — pooled rotator rotates arm, jitter avoids herd.
         for attempt in range(params.MAX_TRANSIENT_RETRIES + 1):
+            # Shrink the body on a retry (same shape as
+            # synth/nodes/digest's `_MAX_SOURCE_CHARS // 2` on retry) — a
+            # smaller prompt improves the odds a retry actually finishes
+            # inside TIMEOUT_S instead of reproducing the same timeout.
+            max_chars = params.BODY_CHARS_MAX
+            if attempt > 0:
+                max_chars = params.BODY_CHARS_MAX // params.BODY_CHARS_RETRY_DIVISOR
+            prompt = prompts.build_prompt(framework, source_key, body, max_chars = max_chars)
             try:
                 distillate, meta = await domains.settings.chat.service.chat_structured_async(
                     prompt,
@@ -174,24 +181,7 @@ async def doc_distill_run(state: domains.dd.planner.state.PlannerState) -> dict:
     await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "doc_distill", "start",
         n_files = n,
-        pass_through_threshold = params.PASS_THROUGH_THRESHOLD,
     )
-
-    if n <= params.PASS_THROUGH_THRESHOLD:   # small-N pass-through; downstream uses raw bodies
-        wall_ms = int((time.monotonic() - t0) * 1000)
-        await domains.dd.planner.runtime.progress.service.emit_progress(
-            thread_id, "doc_distill", "done",
-            skipped = "pass_through_small_n",
-            n_files = n, wall_ms = wall_ms,
-        )
-        return {
-            "doc_distill_ref": None,
-            "doc_distill_stats": {
-                "skipped": "pass_through_small_n",
-                "n_files": n,
-                "wall_ms": wall_ms,
-            },
-        }
 
     minio = domains.dd.ingestion.storage.service.get_storage()
     manifest = domain.manifest_hash(slug = slug, relevant_files = relevant_files)

@@ -185,8 +185,7 @@ export function _renderLiveProgress(stepName, ev) {
     else if (ev.kind === 'repair_attempt')   text = '· repair attempt ' + (ev.attempt||0) + ': missing ' + (ev.missing||0) + ', dup ' + (ev.duplicate||0) + ', unknown ' + (ev.unknown||0);
     else if (ev.kind === 'done')             text = '✓ ' + (ev.n_chapters||0) + ' chapters' + (ev.n_repairs ? ' (' + ev.n_repairs + ' repair' + (ev.n_repairs > 1 ? 's' : '') + ')' : '') + (ev.forced_repair ? ' [forced]' : '') + ' · ' + (ev.wall_ms||0) + ' ms';
   } else if (stepName === 'doc_distill') {
-    if (ev.kind === 'start')           text = '· distilling ' + (ev.n_files||0) + ' docs… (skip≤' + (ev.pass_through_threshold||80) + ')';
-    else if (ev.kind === 'done' && ev.skipped) text = '✓ skipped (small N pass-through, ' + (ev.wall_ms||0) + ' ms)';
+    if (ev.kind === 'start')           text = '· distilling ' + (ev.n_files||0) + ' docs…';
     else if (ev.kind === 'done')       text = '✓ ' + (ev.n_distilled||0) + ' distilled' + (ev.n_failed ? ' · ' + ev.n_failed + ' failed' : '') + ' (' + (ev.cache_hit ? 'cache hit' : ((ev.wall_ms||0) + ' ms')) + ')';
   } else if (stepName === 'chapter_propose') {
     if (ev.kind === 'start')           text = '· loading distillates + extracting structural seeds…';

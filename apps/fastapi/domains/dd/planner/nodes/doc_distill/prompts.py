@@ -4,8 +4,15 @@ from . import params
 
 
 
-def build_prompt(framework: str, source_key: str, body: str) -> str:
-    """Static rubric prefix FIRST, dynamic file content LAST: yields 2-3× TTFT after warmup on auto-cache providers (Groq, Gemini, DeepSeek, NIM)."""
+def build_prompt(
+    framework: str, source_key: str, body: str, *,
+    max_chars: int = params.BODY_CHARS_MAX,
+) -> str:
+    """Static rubric prefix FIRST, dynamic file content LAST: yields 2-3× TTFT after warmup on auto-cache providers (Groq, Gemini, DeepSeek, NIM).
+
+    `max_chars` defaults to the full-page cap but is overridable — `service.
+    distill_one` passes a smaller value on a transient-failure retry (same
+    shrink-on-retry shape as `synth/nodes/digest`)."""
     return (
         # Static prefix — KV-cacheable across all corpus calls.
         f"You are summarizing ONE documentation file from the "
@@ -25,6 +32,6 @@ def build_prompt(framework: str, source_key: str, body: str) -> str:
         # Dynamic suffix — changes per call, so placed last.
         f"FILE: {source_key}\n\n"
         f"--- FILE CONTENT ---\n"
-        f"{body[:params.BODY_CHARS_MAX]}\n"
+        f"{body[:max_chars]}\n"
         f"--- END FILE ---"
     )

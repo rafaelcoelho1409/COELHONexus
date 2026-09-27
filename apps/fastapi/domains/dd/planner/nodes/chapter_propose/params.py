@@ -16,13 +16,27 @@ PROPOSALS_DIVISOR = 11        # ~docs per chapter (anchors CC 140 → 13)
 PROPOSALS_TARGET_FLOOR = 5
 PROPOSALS_TARGET_CEILING = 24
 
-# LLM context budget. 6000→4000 cuts TTFT ~30% on free-tier (tianpan) while still fits 24 ch×400ch.
-MAX_TOKENS_PROPOSE = 4000
+# LLM context budget. Was 6000, cut to 4000 for ~30% TTFT (tianpan) on
+# free-tier. 2026-09-27: reverted 4000 -> 6000 — that cut was a latency
+# trade, not an accuracy one, and this node hits the exact failure mode
+# already diagnosed in off_topic/doc_distill: a reasoning model spends
+# part of its budget on a <think> preamble before the JSON, so near
+# PROPOSALS_TARGET_CEILING (24 chapters) 4000 was tight and risked
+# truncated/empty output. Quality over latency here.
+MAX_TOKENS_PROPOSE = 6000
 
 # Sample N parallel proposals to mitigate single-arm variance, then
 # USC-vote pick the best (matches reduce node's pattern).
-N_SAMPLES = 3
-MAX_TOKENS_VOTE = 200
+# 2026-09-27: 3 -> 5. More parallel drafts = better best-of-N diversity for
+# USC-vote to choose from — the ReASC/Blend-ASC citation below already
+# argues parallel best-of-N scales quality with more samples when pooled;
+# this node was under-using its own cited research at 3.
+N_SAMPLES = 5
+MAX_TOKENS_VOTE = 350   # 2026-09-27: 200 -> 350. Same reasoning-preamble
+# risk as JUDGE_MAX_TOKENS/MAX_TOKENS_PROPOSE (VotePick's actual answer —
+# chosen_index + a short reason — is tiny), just no documented failure here
+# yet since this is one low-frequency call per run, not per-doc. Cheap
+# insurance ahead of the same failure mode, not a reaction to one.
 
 TEMPERATURE_PROPOSE = 0.4   # diversity across samples
 TEMPERATURE_VOTE    = 0.0
@@ -36,7 +50,11 @@ TEMPERATURE_VOTE    = 0.0
 # live run this whole investigation. 120s gives ~1.37x margin over the
 # real max, matching chapter_assign's justification (both have larger,
 # more complex calls than off_topic/doc_distill/order_chapters).
-DRAFT_TIMEOUT_S = 120.0
+# 2026-09-27: 120s -> 150s, paired with MAX_TOKENS_PROPOSE's 4000->6000
+# raise above — those p99 numbers were measured at the smaller token
+# budget; a 50% bigger completion budget needs proportionally more time
+# to actually generate, not just to avoid a network timeout.
+DRAFT_TIMEOUT_S = 150.0
 
 # 2026-09-09: this node runs right after doc_distill with zero recovery
 # gap — doc_distill/chapter_assign/order_chapters all got their own
@@ -48,7 +66,9 @@ DRAFT_TIMEOUT_S = 120.0
 # nodes got their fix.
 SETTLE_DELAY_S = 130.0
 
-MAX_REPAIR_ATTEMPTS = 1
+# 2026-09-27: 1 -> 2. Cheap, low-risk: gives a malformed-schema draft one
+# more chance at temp=0 before the sample is discarded outright.
+MAX_REPAIR_ATTEMPTS = 2
 
 # Optimal-stopping (CGES 2511.02603): node scales floor to ~0.7×adaptive_target so large corpora don't early-stop on a small sample-0.
 # SOTA Sept 2026: with coelho-llm-rotator pooled http2 (200/100) 3×6000 tok drafts
@@ -62,7 +82,9 @@ OPTIMAL_STOPPING_ENABLED = (
     in ("true", "1", "yes", "on")
 )
 
-# Per-doc body cap when feeding raw bodies (small-N pass-through).
+# Per-doc body cap when feeding raw bodies. 2026-09-27: no longer a
+# "small-N pass-through" path — doc_distill now always produces a ref, so
+# this only fires as a fallback when the distillates map fails to load.
 # Generous but bounded so the total prompt stays within Cerebras 128K /
 # Gemini 1M.
 BODY_CHARS_PER_DOC = 2_000

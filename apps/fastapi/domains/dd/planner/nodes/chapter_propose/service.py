@@ -76,10 +76,13 @@ async def draft_one(
 ) -> Optional[schemas.ChapterProposalList]:
     """One LLM call, decoded via LangChain's `.with_structured_output()`
     (same pattern as chapter_assign's `_score_call`). A parse/validation
-    failure gets ONE repair attempt at temp=0; a network/provider failure
-    on the first call returns None immediately — same split as before,
-    now driven by `chat_structured_async`'s own exception taxonomy
-    (ValidationError/ValueError = reask-eligible, anything else = not)."""
+    failure gets up to `params.MAX_REPAIR_ATTEMPTS` repair attempts at
+    temp=0, each feeding back the LATEST rejection reason (not just the
+    first) so a repeatedly-malformed draft gets progressively more
+    specific correction; a network/provider failure on the first call
+    returns None immediately — same split as before, now driven by
+    `chat_structured_async`'s own exception taxonomy (ValidationError/
+    ValueError = reask-eligible, anything else = not)."""
     try:
         payload, _meta = await domains.settings.chat.service.chat_structured_async(
             prompt,
@@ -98,23 +101,29 @@ async def draft_one(
         )
         return None
 
-    if params.MAX_REPAIR_ATTEMPTS <= 0:
-        return None
-    # ONE repair attempt at temp=0 — feeds the rejection reason back verbatim.
-    repair_prompt = (
-        prompt + f"\n\nPRIOR OUTPUT REJECTED: {err}\nEmit valid JSON per the schema."
-    )
-    try:
-        payload2, _ = await domains.settings.chat.service.chat_structured_async(
-            repair_prompt,
-            schemas.ChapterProposalList,
-            max_tokens = params.MAX_TOKENS_PROPOSE,
-            temperature = 0.0,
-            timeout_s = params.DRAFT_TIMEOUT_S,
+    for repair_attempt in range(params.MAX_REPAIR_ATTEMPTS):
+        repair_prompt = (
+            prompt + f"\n\nPRIOR OUTPUT REJECTED: {err}\nEmit valid JSON per the schema."
         )
-        return payload2
-    except Exception:
-        return None
+        try:
+            payload2, _ = await domains.settings.chat.service.chat_structured_async(
+                repair_prompt,
+                schemas.ChapterProposalList,
+                max_tokens = params.MAX_TOKENS_PROPOSE,
+                temperature = 0.0,
+                timeout_s = params.DRAFT_TIMEOUT_S,
+            )
+            return payload2
+        except (ValidationError, ValueError) as e:
+            err = str(e)[:300]
+        except Exception as e:
+            logger.warning(
+                f"[chapter_propose] sample {sample_idx} repair "
+                f"{repair_attempt + 1}/{params.MAX_REPAIR_ATTEMPTS} "
+                f"LLM failed: {type(e).__name__}: {e}"
+            )
+            return None
+    return None
 
 
 async def usc_pick(

@@ -7,7 +7,12 @@ BLOB_PREFIX = "planner"
 # Number of independent LLM ordering samples to draw before Borda
 # aggregation. 3 is the USC sweet spot: enough diversity to reveal
 # disagreement, cheap enough on free tiers (3 calls/study at ~10s each).
-N_SAMPLES = 3
+# 2026-09-27: 3 -> 5. Different rationale than chapter_propose's N_SAMPLES
+# bump — this is rank AGGREGATION (Borda count), and more independent
+# rankings genuinely converge closer to the true consensus order (reduces
+# how much any one sample's idiosyncratic ranking skews the result), a
+# well-established property of aggregation methods generally.
+N_SAMPLES = 5
 # Temperature for sampling. Slightly diversified to capture different
 # valid orderings.
 TEMPERATURE = 0.3
@@ -22,7 +27,9 @@ MAX_TOKENS = 1200
 # tokens.
 DESCRIPTION_CHARS = 240
 # Concurrency for the N parallel sample calls.
-SAMPLE_CONCURRENCY = 3
+# 2026-09-27: 3 -> 5, paired with N_SAMPLES above — otherwise 5 samples
+# would run in batches of 3 instead of fully parallel.
+SAMPLE_CONCURRENCY = 5
 
 # 2026-09-08: 60s -> 120s -> 70s. First raised to 120s using Synth's own
 # percentile numbers by analogy — did not fix this node (still 100% failed

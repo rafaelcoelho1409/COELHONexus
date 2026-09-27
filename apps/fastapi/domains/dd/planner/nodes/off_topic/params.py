@@ -13,7 +13,7 @@ JUDGE_BODY_MIN_FOR_SPLIT = (
     JUDGE_HEAD_CHARS + JUDGE_TAIL_CHARS + len(JUDGE_HEAD_TAIL_SEP)
 )
 
-JUDGE_MAX_TOKENS = 400     # not just "KEEP"/"DROP": the rotator's general pool
+JUDGE_MAX_TOKENS = 700     # not just "KEEP"/"DROP": the rotator's general pool
 # includes reasoning-tuned models (gpt-oss, deepseek-v4) that emit a <think>
 # block before the verdict. At 8 tokens that block alone eats the whole
 # budget and the response comes back empty — confirmed from a real run
@@ -24,6 +24,9 @@ JUDGE_MAX_TOKENS = 400     # not just "KEEP"/"DROP": the rotator's general pool
 # ceiling costs nothing for models that finish early, so widening it is
 # free insurance. judge_one() also escalates further (+200, temp 0.4) on
 # the in-node retry specifically for this failure mode.
+# 2026-09-27: 400 -> 700, same free-insurance logic — no new failure spike,
+# just closing the gap before this node needs its own emergency bump like
+# chapter_propose/doc_distill did.
 # Concurrency: 16 parallel (was 24). 24×144 burst → 49 timeouts (88s) on
 # free-tier general; 16 cuts burst ~33% and jitter 1.3× avoids herd.
 # SOTA: Baseten/Decodo 200/100 pool handles 16×8tok easily, 24 saturated.
