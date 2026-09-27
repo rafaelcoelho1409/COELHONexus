@@ -1,30 +1,13 @@
-"""chapter_assign — pure helpers (JSON parse, lexical fallback assigner,
-manifest hash). Prompt builder lives in prompts.py; Pydantic schemas in
-schemas.py."""
+"""chapter_assign — pure helpers (lexical fallback assigner, manifest
+hash). Prompt builder lives in prompts.py; Pydantic schemas in
+schemas.py. LLM output decoding is `chat_structured_async` — no manual
+JSON parse needed here anymore."""
 from __future__ import annotations
 from . import params, patterns, versions
 
-import json
 from hashlib import sha256
 from typing import Optional
 
-import json_repair  # type: ignore
-
-
-
-def parse(raw: str) -> Optional[dict]:
-    if not raw:
-        return None
-    m = patterns.JSON_RE.search(raw)
-    if not m:
-        return None
-    try:
-        return json.loads(m.group(0))
-    except Exception:
-        try:
-            return json_repair.loads(m.group(0))  # type: ignore
-        except Exception:
-            return None
 
 
 def fallback_assign_scores(

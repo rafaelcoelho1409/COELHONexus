@@ -78,3 +78,37 @@ def resume_planner(self, thread_id: str) -> dict:
     finally:
         if slug:
             service._release_planner_lock(slug, thread_id)
+
+
+@infra.celery.service.app.task(
+    name = "domains.dd.planner.task.prune_old_checkpoints",
+    bind = True,
+    acks_late = False,
+    track_started = True,
+)
+def prune_old_checkpoints(self, older_than_days: int = 30, dry_run: bool = False) -> dict:
+    """Periodic maintenance sweep — trigger via an external scheduler
+    (k8s CronJob, celery beat, or manual `.delay()`); nothing in this
+    codebase invokes it automatically. See
+    `runtime.checkpoint.service.prune_old_threads` for the eligibility
+    rule and why MinIO/Redis are untouched."""
+    logger.info(
+        f"[task] prune_old_checkpoints older_than_days={older_than_days} "
+        f"dry_run={dry_run}"
+    )
+    try:
+        return asyncio.run(
+            service._init_and_run(
+                domains.dd.planner.runtime.checkpoint.service.prune_old_threads(
+                    older_than_days = older_than_days, dry_run = dry_run,
+                )
+            )
+        )
+    except Exception as e:
+        logger.exception(f"[task] prune_old_checkpoints failed: {e}")
+        return {
+            "older_than_days": older_than_days,
+            "dry_run": dry_run,
+            "status": "failed",
+            "error": f"{type(e).__name__}: {e}",
+        }

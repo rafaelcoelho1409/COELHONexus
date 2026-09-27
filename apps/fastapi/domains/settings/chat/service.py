@@ -9,13 +9,19 @@ subagents, Langfuse judges) builds through `build_chat_model()` or calls
 `chat_text_async()` directly.
 
 SOTA Sept 2026 optimizations (kept from the previous adapter):
-- Singleton AsyncOpenAI with pooled httpx.AsyncClient (Limits 200/100,
-  http2, keepalive 30s) → reuses TCP connections across 135+ corpus
-  calls, avoids per-call client construction (~15 ms + TLS overhead).
-- Raw OpenAI SDK path instead of LangChain ChatOpenAI wrapper for the
-  hot loop → cuts ~20-30 ms of message conversion per call.
+- Singleton pooled httpx.AsyncClient (Limits 200/100, http2, keepalive
+  30s) shared by every `ChatOpenAI` built here → reuses TCP connections
+  across 135+ corpus calls, avoids per-call client construction (~15 ms
+  + TLS overhead). `ChatOpenAI` itself IS constructed fresh per call
+  (see `build_chat_model`) since it's a thin config wrapper — the
+  actual network client underneath is the one shared singleton.
 - MinIO I/O decoupled from the LLM semaphore (see doc_distill service)
   — the semaphore gates only the network-bound LLM hop.
+
+Every text/structured LLM call in this module goes through real
+LangChain `ChatOpenAI.ainvoke()` — never a raw provider SDK — so every
+caller gets a genuine `AIMessage` (`.content`, `.usage_metadata`,
+`.response_metadata`) instead of a hand-parsed dict.
 """
 from __future__ import annotations
 import domains
@@ -26,13 +32,17 @@ import logging
 import os
 import re
 import time
+from typing import TypeVar
 
 import httpx
-import openai
+from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel
 
 
 logger = logging.getLogger(__name__)
+
+_SchemaT = TypeVar("_SchemaT", bound=BaseModel)
 
 
 # ---------------------------------------------------------------------------
@@ -107,11 +117,8 @@ _apply_endpoint(force=True)
 
 
 # ---------------------------------------------------------------------------
-# Pooled AsyncOpenAI singleton
+# Pooled httpx transport shared by every ChatOpenAI instance
 # ---------------------------------------------------------------------------
-
-_CLIENT: object | None = None
-_CLIENT_LOCK = asyncio.Lock()
 
 _POOL_KWARGS = {
     "max_connections": params.POOL_MAX_CONNECTIONS,
@@ -125,56 +132,9 @@ _TIMEOUT_KWARGS = {
     "pool_s": params.POOL_TIMEOUT_S,
 }
 
-async def _get_async_openai():
-    """Singleton AsyncOpenAI with pooled httpx client (lazy, thread-safe for async)."""
-    global _CLIENT
-    # Pick up a Settings-page endpoint change (throttled store re-read). A
-    # process that didn't call reset_chat_client() itself (e.g. the celery
-    # worker when the change was made from fastapi) converges within
-    # ENDPOINT_RESOLVE_TTL_S.
-    if _apply_endpoint() and _CLIENT is not None:
-        stale, _CLIENT = _CLIENT, None
-        try:
-            await stale.close()
-        except Exception:
-            pass
-    if _CLIENT is not None:
-        return _CLIENT
-    async with _CLIENT_LOCK:
-        if _CLIENT is not None:
-            return _CLIENT
-
-        # Use a shared AsyncClient with pooling; http2 multiplexing if h2
-        # is installed, http/1.1 keep-alive fallback otherwise.
-        try:
-            http_client = httpx.AsyncClient(
-                limits=domain.build_pool_limits(**_POOL_KWARGS),
-                http2=True,
-                timeout=domain.build_client_timeout(None, **_TIMEOUT_KWARGS),
-                follow_redirects=True,
-            )
-            http2_enabled = True
-        except ImportError:
-            http_client = httpx.AsyncClient(
-                limits=domain.build_pool_limits(**_POOL_KWARGS),
-                http2=False,
-                timeout=domain.build_client_timeout(None, **_TIMEOUT_KWARGS),
-                follow_redirects=True,
-            )
-            http2_enabled = False
-        client = openai.AsyncOpenAI(
-            base_url=ENDPOINT.base_url,
-            api_key=ENDPOINT.api_key,
-            max_retries=0,  # the endpoint owns retries; SDK retries would stack a redundant loop
-            http_client=http_client,
-        )
-        _CLIENT = client
-        logger.info(f"[chat-endpoint] AsyncOpenAI pooled client → {ENDPOINT.base_url} model={ENDPOINT.model} (http2={http2_enabled})")
-        return client
-
 
 # ---------------------------------------------------------------------------
-# Helpers — ChatOpenAI via endpoint (LangChain callers)
+# Helpers — ChatOpenAI via endpoint (every caller, agent + hot-loop alike)
 # ---------------------------------------------------------------------------
 
 _SHARED_HTTP_CLIENT: object | None = None
@@ -187,8 +147,9 @@ def _get_shared_http_client():
 
     The pool is transport-agnostic (per-request base_url comes from the
     SDK client, not this transport), so a Settings-page endpoint move
-    needs no rebuild here — only `_get_async_openai`'s bound client
-    needs the reset treatment."""
+    needs no rebuild here — `build_chat_model` reads the current
+    `ENDPOINT` global fresh on every call, it just reuses this same
+    pooled transport underneath."""
     global _SHARED_HTTP_CLIENT
     if _SHARED_HTTP_CLIENT is not None:
         return _SHARED_HTTP_CLIENT
@@ -253,7 +214,7 @@ def build_chat_model(
 
 
 # ------------------------------------------------------------------
-# Chat — raw AsyncOpenAI pooled, no per-call ChatOpenAI construction
+# Chat — real LangChain `ChatOpenAI.ainvoke()`, pooled transport underneath
 # ------------------------------------------------------------------
 
 async def chat_judge_async(
@@ -274,23 +235,18 @@ async def chat_text_async(
     expected_pattern: str | None = None,
     response_format: dict | None = None,
 ) -> tuple[str, dict]:
-    client = await _get_async_openai()
+    # Pick up a Settings-page endpoint change (throttled store re-read).
+    # `_get_async_openai` used to own this call; `build_chat_model` reads
+    # the `ENDPOINT` global fresh on every invocation, so re-resolving it
+    # here — same TTL cadence as before — keeps that convergence behavior.
+    _apply_endpoint()
 
-    # Build OpenAI-compatible kwargs — only send non-None to stay minimal
-    kwargs: dict = {
-        "model": ENDPOINT.model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "timeout": timeout_s,
-    }
-    if response_format is not None:
-        # OpenAI expects {"type": "json_object"} or {"type": "json_schema", "json_schema": {...}}
-        kwargs["response_format"] = response_format  # type: ignore
-
-    # Remove None timeout entry if SDK disallows it as None
-    if kwargs.get("timeout") is None:
-        kwargs.pop("timeout", None)
+    model = build_chat_model(
+        timeout_s        = timeout_s,
+        max_tokens       = max_tokens,
+        temperature      = temperature,
+        response_format  = response_format,
+    )
 
     t0 = time.monotonic()
     # Hard wall-clock backstop. httpx's `read` timeout measures time between
@@ -303,15 +259,17 @@ async def chat_text_async(
     backstop_s = (timeout_s or params.DEFAULT_TIMEOUT_S) + params.BACKSTOP_MARGIN_S
 
     async def _do_call():
-        return await client.chat.completions.create(**kwargs)  # type: ignore[arg-type]
+        return await model.ainvoke([HumanMessage(content=prompt)])
 
-    usage = None
+    ai_message = None
+    resp_model = ENDPOINT.model
+    usage: dict = {}
     try:
         with domains.settings.runtime.observability.spans.chat_completion_span(
             model = ENDPOINT.model, temperature = temperature, max_tokens = max_tokens,
         ) as span:
             try:
-                resp = await asyncio.wait_for(_do_call(), timeout = backstop_s)
+                ai_message = await asyncio.wait_for(_do_call(), timeout = backstop_s)
             except asyncio.TimeoutError as e:
                 raise errors.ChatTimeoutError(
                     f"chat_text_async hard backstop fired after "
@@ -322,35 +280,20 @@ async def chat_text_async(
                 raise errors.ChatError(f"{type(e).__name__}: {e}") from e
 
             latency_s = float(time.monotonic() - t0)
+            content = ai_message.content
+            text = (content or "").strip() if isinstance(content, str) else str(content or "")
 
-            # Extract text — OpenAI returns choices[0].message.content
-            try:
-                choice = resp.choices[0] if getattr(resp, "choices", None) else None
-                msg = getattr(choice, "message", None) if choice else None
-                text = (getattr(msg, "content", "") or "").strip() if msg else ""
-                # Fallback for dict responses
-                if not text and isinstance(resp, dict):
-                    text = (((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
-            except Exception:
-                text = ""
+            # `response_metadata["model_name"]` is whatever the endpoint
+            # reports as the serving model — same as the old `resp.model`.
+            rm = ai_message.response_metadata or {}
+            resp_model = rm.get("model_name") or rm.get("model") or ENDPOINT.model
 
-            # `resp.model` is whatever the endpoint reports as the serving model.
-            model = ENDPOINT.model
-            try:
-                m = getattr(resp, "model", None)
-                if isinstance(m, str) and m:
-                    model = m
-                elif isinstance(resp, dict) and resp.get("model"):
-                    model = str(resp["model"])
-            except Exception:
-                pass
-
-            usage = getattr(resp, "usage", None)
+            usage = ai_message.usage_metadata or {}
             domains.settings.runtime.observability.spans.record_chat_response(
                 span,
-                model         = model,
-                input_tokens  = getattr(usage, "prompt_tokens", None) if usage is not None else None,
-                output_tokens = getattr(usage, "completion_tokens", None) if usage is not None else None,
+                model         = resp_model,
+                input_tokens  = usage.get("input_tokens"),
+                output_tokens = usage.get("output_tokens"),
             )
     except errors.ChatTimeoutError:
         domains.settings.runtime.observability.metrics.record_gen_ai_call(
@@ -366,14 +309,14 @@ async def chat_text_async(
         raise
 
     domains.settings.runtime.observability.metrics.record_gen_ai_call(
-        operation = "chat", model = model, outcome = "ok", duration_s = latency_s,
-        input_tokens  = getattr(usage, "prompt_tokens", None) if usage is not None else None,
-        output_tokens = getattr(usage, "completion_tokens", None) if usage is not None else None,
+        operation = "chat", model = resp_model, outcome = "ok", duration_s = latency_s,
+        input_tokens  = usage.get("input_tokens"),
+        output_tokens = usage.get("output_tokens"),
     )
 
     meta = {
-        "model": model,
-        "deployment": model,  # compat alias — DD/RR/YCS counter + log call sites read `deployment`
+        "model": resp_model,
+        "deployment": resp_model,  # compat alias — DD/RR/YCS counter + log call sites read `deployment`
         "attempts": 1,
         "latency_s": round(latency_s, 3),
     }
@@ -385,28 +328,141 @@ async def chat_text_async(
         except Exception:
             pass
 
-    # Usage extraction for the DD per-run LLM counter (best-effort, never raises).
-    # `usage` was already read off `resp` above, while enriching the gen_ai span.
+    # Usage extraction for the DD per-run LLM counter (best-effort, never
+    # raises). `ai_message` is a real `AIMessage` — no fake shim needed,
+    # `_bump_dd_llm_counter` already reads `.content`/`.usage_metadata`.
     try:
-        if usage is not None:
-            class _Msg:
-                content = text
-                response_metadata = {"model_name": model}
-                usage_metadata = {
-                    "input_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-                    "output_tokens": getattr(usage, "completion_tokens", 0) or 0,
-                }
-            _bump_dd_llm_counter(_Msg(), model=model)
-        else:
-            class _Msg2:
-                content = text
-                response_metadata = {"model_name": model}
-                usage_metadata = {}
-            _bump_dd_llm_counter(_Msg2(), model=model)
+        _bump_dd_llm_counter(ai_message, model=resp_model)
     except Exception:
         pass
 
     return text, meta
+
+
+async def chat_structured_async(
+    prompt: str,
+    schema: type[_SchemaT],
+    *,
+    max_tokens: int = params.DEFAULT_MAX_TOKENS,
+    temperature: float = params.DEFAULT_TEMPERATURE,
+    timeout_s: float = params.DEFAULT_TIMEOUT_S,
+    strict: bool = True,
+) -> tuple[_SchemaT, dict]:
+    """Structured-output counterpart to `chat_text_async` — same endpoint
+    resolution/pooling/backstop/spans/counter, decoded via LangChain's
+    native `.with_structured_output()` instead of a hand-rolled
+    response_format dict + json_repair + manual `model_validate`.
+
+    `strict=False` for schemas with a field carrying a Python default
+    (e.g. checklist's `LLMVerdict.feedback: str = ""`) — OpenAI strict
+    json_schema mode requires EVERY property in `required`, which
+    `model_json_schema()` normally omits for a defaulted field. Passing
+    `strict=True` there either gets rejected server-side or silently
+    reshaped; `strict=False` matches what the schema's own
+    hand-built `response_format` dict already used.
+
+    Raises `ValueError` when the model's output didn't parse into
+    `schema` (mirrors the old "unparseable" case) or the schema's own
+    `pydantic.ValidationError` — same reask-eligible failure split
+    callers already build their retry logic around. Anything else
+    (timeout, provider outage) propagates as `errors.ChatTimeoutError`/
+    `errors.ChatError`, same as `chat_text_async`.
+
+    NOT a drop-in for every `response_format` call site: this assumes
+    the model actually honors `json_schema` mode, and that no
+    normalize-before-validate step runs on the raw dict first. Some DD
+    nodes (book_harmonize, sawc, sawc_derive, digest) carry hand-rolled
+    repair loops specifically because some Rotator provider arms don't
+    honor `response_format` server-side ("Gemini slips through" per
+    those files' own comments); `outline`'s draft call runs
+    `normalize_outline_dict()` before Pydantic-validating. Those stay
+    on `chat_text_async` until verified safe per-provider."""
+    _apply_endpoint()
+
+    structured_model = build_chat_model(
+        timeout_s   = timeout_s,
+        max_tokens  = max_tokens,
+        temperature = temperature,
+    ).with_structured_output(schema, method="json_schema", strict=strict, include_raw=True)
+
+    t0 = time.monotonic()
+    backstop_s = (timeout_s or params.DEFAULT_TIMEOUT_S) + params.BACKSTOP_MARGIN_S
+
+    async def _do_call():
+        return await structured_model.ainvoke([HumanMessage(content=prompt)])
+
+    ai_message = None
+    resp_model = ENDPOINT.model
+    usage: dict = {}
+    parsed = None
+    parsing_error = None
+    try:
+        with domains.settings.runtime.observability.spans.chat_completion_span(
+            model = ENDPOINT.model, temperature = temperature, max_tokens = max_tokens,
+        ) as span:
+            try:
+                result = await asyncio.wait_for(_do_call(), timeout = backstop_s)
+            except asyncio.TimeoutError as e:
+                raise errors.ChatTimeoutError(
+                    f"chat_structured_async hard backstop fired after "
+                    f"{backstop_s:.0f}s (requested timeout_s={timeout_s})"
+                ) from e
+            except Exception as e:
+                raise errors.ChatError(f"{type(e).__name__}: {e}") from e
+
+            ai_message    = result["raw"]
+            parsed        = result["parsed"]
+            parsing_error = result["parsing_error"]
+            latency_s     = float(time.monotonic() - t0)
+
+            rm = ai_message.response_metadata or {}
+            resp_model = rm.get("model_name") or rm.get("model") or ENDPOINT.model
+
+            usage = ai_message.usage_metadata or {}
+            domains.settings.runtime.observability.spans.record_chat_response(
+                span,
+                model         = resp_model,
+                input_tokens  = usage.get("input_tokens"),
+                output_tokens = usage.get("output_tokens"),
+            )
+    except errors.ChatTimeoutError:
+        domains.settings.runtime.observability.metrics.record_gen_ai_call(
+            operation = "chat", model = ENDPOINT.model, outcome = "timeout",
+            duration_s = time.monotonic() - t0,
+        )
+        raise
+    except Exception:
+        domains.settings.runtime.observability.metrics.record_gen_ai_call(
+            operation = "chat", model = ENDPOINT.model, outcome = "error",
+            duration_s = time.monotonic() - t0,
+        )
+        raise
+
+    domains.settings.runtime.observability.metrics.record_gen_ai_call(
+        operation = "chat", model = resp_model, outcome = "ok", duration_s = latency_s,
+        input_tokens  = usage.get("input_tokens"),
+        output_tokens = usage.get("output_tokens"),
+    )
+
+    try:
+        _bump_dd_llm_counter(ai_message, model=resp_model)
+    except Exception:
+        pass
+
+    if parsing_error is not None or parsed is None:
+        raw_text = getattr(ai_message, "content", "") or ""
+        raise ValueError(
+            f"structured output failed to parse into {schema.__name__}: "
+            f"{parsing_error}; raw={str(raw_text)[:200]!r}"
+        )
+
+    meta = {
+        "model": resp_model,
+        "deployment": resp_model,
+        "attempts": 1,
+        "latency_s": round(latency_s, 3),
+    }
+    return parsed, meta
 
 
 def _bump_dd_llm_counter(response, model: str | None = None) -> dict | None:
@@ -426,25 +482,12 @@ def _bump_dd_llm_counter(response, model: str | None = None) -> dict | None:
 
 
 def reset_chat_client(*args, **kwargs) -> None:
-    """Re-resolve the endpoint (Settings page just changed it) then drop the
-    pooled client so the next call rebuilds against the new URL/key/model."""
-    global _CLIENT
+    """Re-resolve the endpoint (Settings page just changed it). No pooled
+    client to drop — `build_chat_model` constructs a fresh `ChatOpenAI`
+    off the current `ENDPOINT` global on every call; only the shared
+    httpx transport underneath is reused, and it's base_url-agnostic."""
     try:
         _apply_endpoint(force=True)
-    except Exception:
-        pass
-    try:
-        if _CLIENT is not None:
-            try:
-                if hasattr(_CLIENT, "close"):
-                    try:
-                        loop = asyncio.get_running_loop()
-                        loop.create_task(_CLIENT.close())  # type: ignore
-                    except RuntimeError:
-                        pass
-            except Exception:
-                pass
-        _CLIENT = None
     except Exception:
         pass
     return None

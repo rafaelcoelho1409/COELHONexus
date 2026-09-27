@@ -35,6 +35,37 @@ async def bootstrap_stores() -> None:
     logger.info(f"[rr-service] bootstrap_stores: 4/4 complete ({len(results)})")
 
 
+def bootstrap_langfuse_prompts() -> None:
+    """Ensure every RR subagent/orchestrator prompt exists in LangFuse
+    under the `production` label. Sync (the SDK client is sync) + safe to
+    re-run — `infra.langfuse.prompts.ensure_prompts` only creates what's
+    missing. See that function's docstring for why this exists at all:
+    without it, `get_prompt()`'s override layer 404s forever and never
+    actually serves a LangFuse-managed prompt."""
+    mapping = {
+        "rr.agent.discovery_arxiv":        agent.prompts.DISCOVERY_ARXIV_SYSTEM_PROMPT,
+        "rr.agent.discovery_s2":           agent.prompts.DISCOVERY_S2_SYSTEM_PROMPT,
+        "rr.agent.discovery_hf":           agent.prompts.DISCOVERY_HF_SYSTEM_PROMPT,
+        "rr.agent.discovery_hn":           agent.prompts.DISCOVERY_HN_SYSTEM_PROMPT,
+        "rr.agent.discovery_openalex":     agent.prompts.DISCOVERY_OPENALEX_SYSTEM_PROMPT,
+        "rr.agent.deep_read":              agent.prompts.DEEP_READ_SYSTEM_PROMPT,
+        "rr.agent.synthesis":              agent.prompts.SYNTHESIS_SYSTEM_PROMPT,
+        "rr.agent.report":                 agent.prompts.REPORT_SYSTEM_PROMPT,
+        "rr.agent.orchestrator_subagents": agent.prompts.ORCHESTRATOR_SYSTEM_PROMPT_SUBAGENTS,
+        "rr.agent.orchestrator_tools":     agent.prompts.ORCHESTRATOR_SYSTEM_PROMPT_TOOLS,
+    }
+    results = infra.langfuse.prompts.ensure_prompts(mapping)
+    created = sum(1 for v in results.values() if v == "created")
+    errors  = {k: v for k, v in results.items() if v.startswith("error")}
+    logger.info(
+        f"[rr-service] bootstrap_langfuse_prompts: {created} created, "
+        f"{len(results) - created - len(errors)} already existed, "
+        f"{len(errors)} error(s)"
+    )
+    if errors:
+        logger.warning(f"[rr-service] bootstrap_langfuse_prompts errors: {errors}")
+
+
 async def persist_paper(
     paper: entities.NormalizedPaper,
     *,

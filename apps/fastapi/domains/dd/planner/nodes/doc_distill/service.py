@@ -20,6 +20,8 @@ import random
 import time
 from typing import Optional
 
+from pydantic import ValidationError
+
 
 logger = logging.getLogger(__name__)
 
@@ -53,60 +55,54 @@ async def distill_one(
         prompt = prompts.build_prompt(framework, source_key, body)
         distillate: Optional[schemas.DocDistillate] = None
         failure_reason: Optional[str] = None
-        last_raw = ""
+        last_err = ""
         last_deployment = "?"
-        meta: dict | None = None
 
         # Retry only transient errors — pooled rotator rotates arm, jitter avoids herd.
         for attempt in range(params.MAX_TRANSIENT_RETRIES + 1):
             try:
-                raw, meta = await domains.settings.chat.service.chat_text_async(
+                distillate, meta = await domains.settings.chat.service.chat_structured_async(
                     prompt,
+                    schemas.DocDistillate,
                     max_tokens = params.MAX_TOKENS,
                     temperature = params.TEMPERATURE,
                     timeout_s = params.TIMEOUT_S,
-                    response_format = schemas.DISTILL_RESPONSE_FORMAT,
                 )
-                last_raw = raw or ""
                 last_deployment = (meta or {}).get("deployment") or "?"
-                parsed = domain.parse(raw)
-                if not parsed:
-                    # Empty/unparseable raw — often a reasoning model that spent
-                    # its whole token budget on a <think> block and never reached
-                    # the JSON. Same repair path as a validation failure below,
-                    # not an immediate drop to parse_fail: one reask with the
-                    # rejection reason fed back gives it a chance to recover.
-                    distillate = None
-                    err = f"unparseable JSON (raw={raw[:200]!r})"
-                    failure_reason = "parse_fail"
-                else:
-                    distillate, err = domain.try_validate(parsed)
-                    if distillate is None:
-                        failure_reason = "validate_fail"
-                if distillate is None and params.MAX_REPAIR_ATTEMPTS > 0:
+                failure_reason = None
+                break  # success
+            except (ValidationError, ValueError) as e:
+                # Parse/validate failure — often a reasoning model that spent its
+                # whole token budget on a <think> block and never reached the
+                # JSON, or a schema mismatch. ONE repair attempt with the
+                # rejection reason fed back, NOT part of the transient-retry
+                # loop above (retrying a malformed-output call unchanged just
+                # reproduces the same failure).
+                last_err = str(e)[:200]
+                failure_reason = "validate_fail" if isinstance(e, ValidationError) else "parse_fail"
+                if params.MAX_REPAIR_ATTEMPTS > 0:
                     repair_prompt = (
                         prompt
-                        + f"\n\nPRIOR OUTPUT was REJECTED: {err}\n"
+                        + f"\n\nPRIOR OUTPUT was REJECTED: {last_err}\n"
                         + f"Emit valid JSON exactly per the schema above."
                     )
-                    raw2, meta2 = await domains.settings.chat.service.chat_text_async(
-                        repair_prompt,
-                        max_tokens = params.MAX_TOKENS,
-                        temperature = 0.0,
-                        timeout_s = params.TIMEOUT_S,
-                        response_format = schemas.DISTILL_RESPONSE_FORMAT,
-                    )
-                    last_raw = raw2 or ""
-                    last_deployment = (meta2 or {}).get("deployment") or last_deployment
-                    parsed2 = domain.parse(raw2)
-                    if parsed2:
-                        distillate, _ = domain.try_validate(parsed2)
-                if distillate is not None:
-                    failure_reason = None
-                    break   # success
-                break       # parse_fail/validate_fail keep their reason; no further retry
+                    try:
+                        distillate, meta2 = await domains.settings.chat.service.chat_structured_async(
+                            repair_prompt,
+                            schemas.DocDistillate,
+                            max_tokens = params.MAX_TOKENS,
+                            temperature = 0.0,
+                            timeout_s = params.TIMEOUT_S,
+                        )
+                        last_deployment = (meta2 or {}).get("deployment") or last_deployment
+                        failure_reason = None
+                    except Exception as e2:
+                        distillate = None
+                        last_err = str(e2)[:200]
+                break  # parse_fail/validate_fail keep their reason; no further retry
             except Exception as e:
                 failure_reason = domain.classify_error(e)
+                last_err = str(e)[:200]
                 is_transient = failure_reason in params.TRANSIENT_REASONS
                 can_retry = attempt < params.MAX_TRANSIENT_RETRIES
                 logger.warning(
@@ -131,7 +127,7 @@ async def distill_one(
             logger.info(
                 f"[doc_distill] {source_key}: distill failed "
                 f"({failure_reason or 'unknown'}, deployment={last_deployment}, "
-                f"raw={last_raw[:120]!r}) — using deterministic fallback "
+                f"err={last_err[:120]!r}) — using deterministic fallback "
                 f"distillate (doc kept, not dropped)"
             )
 

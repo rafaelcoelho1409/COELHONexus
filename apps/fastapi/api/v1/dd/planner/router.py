@@ -406,6 +406,31 @@ async def wipe_planner(slug: str) -> dict:
     }
 
 
+@router.post("/prune")
+async def prune_checkpoints(older_than_days: int = 30, dry_run: bool = True) -> dict:
+    """Manual trigger for the checkpoint-retention sweep (see
+    `runtime.checkpoint.service.prune_old_threads`). `dry_run=true`
+    (default) previews eligible thread_ids inline, no Celery hop, no
+    deletion. `dry_run=false` dispatches to Celery — a full-table scan
+    across every slug can run long, and this actually deletes rows, so
+    it shouldn't block the request or run without an explicit opt-in.
+    Nothing in this codebase calls this on a schedule; wire it up via a
+    k8s CronJob or celery beat if periodic pruning is wanted."""
+    if dry_run:
+        result = await domains.dd.planner.runtime.checkpoint.service.prune_old_threads(
+            older_than_days = older_than_days, dry_run = True,
+        )
+        return result
+    async_result = domains.dd.planner.task.prune_old_checkpoints.delay(
+        older_than_days, False,
+    )
+    return {
+        "dispatched":     True,
+        "celery_task_id": async_result.id,
+        "older_than_days": older_than_days,
+    }
+
+
 @router.get("/{thread_id:path}/events")
 async def planner_events(thread_id: str) -> StreamingResponse:
     """Initial `: stream open` forces proxies to flush headers (avoids

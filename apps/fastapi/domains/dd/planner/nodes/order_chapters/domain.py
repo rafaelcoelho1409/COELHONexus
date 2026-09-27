@@ -1,12 +1,11 @@
-"""order_chapters — pure helpers (parse, Borda aggregate, foundational
-prefix rule, outline loader). Prompt builder lives in prompts.py."""
+"""order_chapters — pure helpers (permutation check, Borda aggregate,
+foundational prefix rule, outline loader). Prompt builder lives in
+prompts.py; Pydantic schema in schemas.py. LLM output decoding is
+`chat_structured_async` — no manual JSON parse needed here anymore."""
 from __future__ import annotations
 from . import patterns
 
 import json
-
-import json_repair  # type: ignore
-
 
 
 def load_outline(text: str) -> dict:
@@ -32,43 +31,16 @@ def is_foundational(title: str) -> bool:
     return bool(patterns.FOUNDATIONAL_RE.search(title))
 
 
-def parse_order_response(text: str, n_chapters: int) -> list[int] | None:
-    """Permutation of [0, n) or None. Strict: any duplicate or out-of-range → None."""
-    if not text:
-        return None
-    try:
-        parsed = json.loads(text.strip())
-    except Exception:
-        try:
-            parsed = json_repair.loads(text.strip())  # type: ignore
-        except Exception:
-            m = patterns.JSON_RE.search(text)
-            if not m:
-                return None
-            try:
-                parsed = json.loads(m.group(0))
-            except Exception:
-                try:
-                    parsed = json_repair.loads(m.group(0))  # type: ignore
-                except Exception:
-                    return None
-    if isinstance(parsed, dict):
-        order_raw = parsed.get("order")
-    elif isinstance(parsed, list):
-        order_raw = parsed
-    else:
-        return None
-    if not isinstance(order_raw, list):
-        return None
-    try:
-        order = [int(x) for x in order_raw]
-    except (ValueError, TypeError):
-        return None
-    if len(order) != n_chapters:
-        return None
-    if sorted(order) != list(range(n_chapters)):
-        return None
-    return order
+def is_valid_permutation(order: list[int], n_chapters: int) -> bool:
+    """True iff `order` is exactly a permutation of [0, n_chapters).
+    The Pydantic schema (`schemas.ChapterOrder`) only constrains the JSON
+    shape (a list of ints); this checks the semantic property strict
+    JSON schema mode can't express — any duplicate or out-of-range
+    index fails it."""
+    return (
+        len(order) == n_chapters
+        and sorted(order) == list(range(n_chapters))
+    )
 
 
 def borda_aggregate(

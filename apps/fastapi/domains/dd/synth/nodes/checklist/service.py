@@ -15,6 +15,8 @@ import random
 import time
 from typing import Optional
 
+from pydantic import ValidationError
+
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +57,10 @@ async def _run_llm_judge(
     cur_truncated = truncated
 
     deployment: Optional[str] = None
-    response: Optional[str] = None
-    last_error: Optional[Exception] = None
+    payload: Optional[schemas.LLMJudgePayload] = None
+    err: Optional[str] = None
+    infra_failed = False
+    last_infra_error: Optional[Exception] = None
     for call_attempt in range(params.MAX_CALL_ATTEMPTS):
         prompt = domain.build_judge_prompt(
             chapter_id=chapter_id,
@@ -67,18 +71,28 @@ async def _run_llm_judge(
             truncated=cur_truncated,
         )
         try:
-            response, meta = await domains.settings.chat.service.chat_text_async(
+            payload, meta = await domains.settings.chat.service.chat_structured_async(
                 prompt,
+                schemas.LLMJudgePayload,
                 max_tokens=_MAX_TOKENS_JUDGE,
                 temperature=_TEMPERATURE_JUDGE,
-                response_format=schemas.JUDGE_RESPONSE_FORMAT,
                 timeout_s=_TIMEOUT_S_JUDGE,
+                strict=False,
             )
             deployment = (meta or {}).get("deployment")
-            last_error = None
+            infra_failed = False
+            break
+        except (ValidationError, ValueError) as e:
+            # Content issue, not infra — the context-overflow retry below
+            # is for infra only (matches the original: parse/validate
+            # failures were only ever handled by the one-shot repair
+            # pass after this loop, never by this loop itself).
+            err = str(e)[:300]
+            infra_failed = False
             break
         except Exception as e:
-            last_error = e
+            last_infra_error = e
+            infra_failed = True
             if call_attempt < params.MAX_CALL_ATTEMPTS - 1:
                 # The Rotator's own cascade already exhausted — a retry
                 # mostly helps against a transient whole-pool wave. If
@@ -99,32 +113,26 @@ async def _run_llm_judge(
                         digest, char_cap=10_000,
                     )
                 await asyncio.sleep(1.0 + random.random())
-    if last_error is not None:
+    if infra_failed:
         wall_ms = int((time.monotonic() - t0) * 1000)
         logger.warning(
             f"[checklist_eval] LLM judge call failed after "
             f"{params.MAX_CALL_ATTEMPTS} attempt(s): "
-            f"{type(last_error).__name__}: {last_error}"
+            f"{type(last_infra_error).__name__}: {last_infra_error}"
         )
         return (
-            domain.fallback_llm_verdicts(f"{type(last_error).__name__}"),
+            domain.fallback_llm_verdicts(f"{type(last_infra_error).__name__}"),
             None, False, wall_ms,
         )
 
-    parsed = domain.parse_json_response(response)
-    payload: Optional[schemas.LLMJudgePayload] = None
-    err: Optional[str] = None
     repaired = False
-
-    if parsed is not None:
-        payload, err = domain.try_parse_judge(parsed)
 
     # One repair attempt if parse OR Pydantic failed
     if payload is None and _MAX_REPAIR_ATTEMPTS > 0:
         repair_issues = [
             err if err else "previous response was not parseable JSON"
         ]
-        current_json = json.dumps(parsed or {"_raw": (response or "")[:400]})
+        current_json = json.dumps({"_raw": err or "unknown"})
         repair_prompt = domain.build_repair_prompt(
             chapter_id=chapter_id,
             chapter_title=chapter_title,
@@ -136,19 +144,16 @@ async def _run_llm_judge(
             issues=repair_issues,
         )
         try:
-            rr, rm = await domains.settings.chat.service.chat_text_async(
+            payload, rm = await domains.settings.chat.service.chat_structured_async(
                 repair_prompt,
+                schemas.LLMJudgePayload,
                 max_tokens=_MAX_TOKENS_REPAIR,
                 temperature=_TEMPERATURE_REPAIR,
-                response_format=schemas.JUDGE_RESPONSE_FORMAT,
                 timeout_s=_TIMEOUT_S_REPAIR,
+                strict=False,
             )
             deployment = (rm or {}).get("deployment") or deployment
-            rp = domain.parse_json_response(rr)
-            if rp is not None:
-                payload, err = domain.try_parse_judge(rp)
-                if payload is not None:
-                    repaired = True
+            repaired = True
         except Exception as e:
             logger.warning(
                 f"[checklist_eval] LLM judge repair failed: "
@@ -275,11 +280,11 @@ async def _cocoa_explain_blocks(blocks: list[dict]) -> dict[str, str]:
         blocks_block = domain.render_blocks_for_explainer(misses),
     )
     try:
-        response, _ = await domains.settings.chat.service.chat_text_async(
+        result, _ = await domains.settings.chat.service.chat_structured_async(
             prompt,
+            schemas.CocoaExplainerResponse,
             max_tokens = params.COCOA_EXPLAINER_MAX_TOKENS,
             temperature = params.COCOA_EXPLAINER_TEMPERATURE,
-            response_format = {"type": "json_object"},
             timeout_s = params.COCOA_EXPLAINER_TIMEOUT_S,
         )
     except Exception as e:
@@ -287,15 +292,10 @@ async def _cocoa_explain_blocks(blocks: list[dict]) -> dict[str, str]:
             f"[cocoa] explainer call failed: {type(e).__name__}: {e}"
         )
         return cached    # ship whatever we had cached; bundled judge stands
-    parsed = domain.parse_json(response or "")
-    if not parsed:
-        return cached
     fresh: dict[str, str] = {}
-    for row in (parsed.get("abstractions") or []):
-        if not isinstance(row, dict):
-            continue
-        rid = str(row.get("id") or "").strip()
-        spec = str(row.get("spec") or "").strip()
+    for row in result.abstractions:
+        rid = row.id.strip()
+        spec = row.spec.strip()
         if rid and spec:
             fresh[rid] = spec
 
@@ -324,11 +324,11 @@ async def _cocoa_judge_pairs(pairs: list[dict]) -> dict[str, dict]:
         pairs_block = domain.render_pairs_for_judge(pairs),
     )
     try:
-        response, _ = await domains.settings.chat.service.chat_text_async(
+        result, _ = await domains.settings.chat.service.chat_structured_async(
             prompt,
+            schemas.CocoaJudgeResponse,
             max_tokens = params.COCOA_JUDGE_MAX_TOKENS,
             temperature = params.COCOA_JUDGE_TEMPERATURE,
-            response_format = {"type": "json_object"},
             timeout_s = params.COCOA_JUDGE_TIMEOUT_S,
         )
     except Exception as e:
@@ -336,19 +336,14 @@ async def _cocoa_judge_pairs(pairs: list[dict]) -> dict[str, dict]:
             f"[cocoa] judge call failed: {type(e).__name__}: {e}"
         )
         return {}
-    parsed = domain.parse_json(response or "")
-    if not parsed:
-        return {}
     out: dict[str, dict] = {}
-    for row in (parsed.get("verdicts") or []):
-        if not isinstance(row, dict):
-            continue
-        rid = str(row.get("id") or "").strip()
+    for row in result.verdicts:
+        rid = row.id.strip()
         if not rid:
             continue
         out[rid] = {
-            "aligned": bool(row.get("aligned")),
-            "reason": str(row.get("reason") or "").strip(),
+            "aligned": row.aligned,
+            "reason": row.reason.strip(),
         }
     return out
 
@@ -727,24 +722,14 @@ async def _atomic_claim_extract_claims(prose: str) -> tuple[list[str], bool]:
         prompt = prompts.build_atomic_claim_extract_prompt(
             max_claims = params.ATOMIC_CLAIM_MAX_CLAIMS, prose_chars = len(prose), prose = prose,
         )
-        raw, _ = await domains.settings.chat.service.chat_text_async(
-            prompt, max_tokens = params.ATOMIC_CLAIM_EXTRACT_MAX_TOKENS, temperature = 0.0,
-            response_format = {"type": "json_object"},
+        result, _ = await domains.settings.chat.service.chat_structured_async(
+            prompt, schemas.AtomicClaimExtraction,
+            max_tokens = params.ATOMIC_CLAIM_EXTRACT_MAX_TOKENS, temperature = 0.0,
             timeout_s = params.ATOMIC_CLAIM_EXTRACT_TIMEOUT_S,
         )
-        m = patterns.ATOMIC_CLAIM_JSON_RE.search(raw or "")
-        if not m:
-            logger.warning(
-                "[atomic-claim-grounding] extraction failed: "
-                "no JSON object in response"
-            )
-            return [], False
-        data = json.loads(m.group(0))
-        claims = data.get("claims") or []
-        # Sanitize: strings only, non-empty, capped
+        # Sanitize: non-empty, capped
         out = [
-            str(c).strip() for c in claims
-            if isinstance(c, str) and c.strip()
+            c.strip() for c in result.claims if c.strip()
         ][:params.ATOMIC_CLAIM_MAX_CLAIMS]
     except Exception as e:
         logger.warning(
@@ -779,19 +764,12 @@ async def _atomic_claim_judge_claim(
     async with sem:
         try:
             prompt = prompts.build_atomic_claim_judge_prompt(claim = claim, source = source)
-            raw, _ = await domains.settings.chat.service.chat_text_async(
-                prompt, max_tokens = params.ATOMIC_CLAIM_JUDGE_MAX_TOKENS, temperature = 0.0,
-                response_format = {"type": "json_object"},
+            result, _ = await domains.settings.chat.service.chat_structured_async(
+                prompt, schemas.AtomicClaimJudge,
+                max_tokens = params.ATOMIC_CLAIM_JUDGE_MAX_TOKENS, temperature = 0.0,
                 timeout_s = params.ATOMIC_CLAIM_JUDGE_TIMEOUT_S,
             )
-            m = patterns.ATOMIC_CLAIM_JSON_RE.search(raw or "")
-            if not m:
-                logger.debug(
-                    "[atomic-claim-grounding] judge response unparseable "
-                    "— defaulting to supported=True"
-                )
-                return {"supported": True, "_call_failed": True}
-            return json.loads(m.group(0))
+            return {"supported": result.supported, "evidence": result.evidence}
         except Exception as e:
             logger.debug(
                 f"[atomic-claim-grounding] judge call failed: "

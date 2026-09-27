@@ -134,15 +134,29 @@ def _select_best_track(
     tracks:        list[CaptionTrack],
     prefer_manual: bool = True,
 ) -> CaptionTrack:
-    """Pick the highest-priority track. English manual > Portuguese manual
-    > any manual > English auto > any. Ports helpers.py:L880-891."""
-    def priority(t: CaptionTrack) -> tuple[bool, int]:
-        is_english    = t.language_code.startswith("en")
-        is_portuguese = t.language_code.startswith("pt")
-        return (
-            t.is_auto_generated if prefer_manual else False,
-            0 if is_english else (1 if is_portuguese else 2),
-        )
+    """Pick the highest-priority track: manual > auto-generated, ties
+    broken by YouTube's own listing order (typically the original/native
+    track first, translations after).
+
+    2026-09-26: dropped the old English > Portuguese > any hardcoded
+    language tiebreak (ported from helpers.py:L880-891, presumably
+    written when the corpus was English-only). Live-confirmed it
+    mislabeled 3 videos from a Portuguese-language channel (Heni Ozi
+    Cukier) as `transcript_langs: ["en-US"]` even though the actually-
+    downloaded transcript content was still genuinely Portuguese —
+    `language_code` just reported whichever track this function picked,
+    which the old bias always pushed toward "en*" when an English track
+    (e.g. an auto-translated one) existed at all, regardless of whether
+    it matched the channel's real language. Confirmed-wrong metadata for
+    any consumer that trusts `transcript_langs` (UI badges, language
+    filters); entity-extraction quality itself is a separate question —
+    that step runs on the raw text regardless of this tag, so it isn't
+    provably affected by the mislabel. There is no principled reason to
+    prefer English content for a non-English channel; `sorted` is
+    stable, so among equal-tier tracks, YouTube's own returned order
+    (`state.get("tracks")` in service.py) decides — no language bias."""
+    def priority(t: CaptionTrack) -> bool:
+        return t.is_auto_generated if prefer_manual else False
     return sorted(tracks, key = priority)[0]
 
 

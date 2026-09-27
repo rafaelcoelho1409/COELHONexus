@@ -76,6 +76,15 @@ async def lifespan(app: FastAPI):
         )
 
     try:
+        domains.rr.service.bootstrap_langfuse_prompts()
+    except Exception as e:
+        logger.warning(
+            f"[lifespan] RR bootstrap_langfuse_prompts failed: "
+            f"{type(e).__name__}: {e}. RR prompts will keep falling back "
+            f"to local text until this runs successfully."
+        )
+
+    try:
         await infra.elasticsearch.service.ensure_indexes()
     except Exception as e:
         logger.warning(

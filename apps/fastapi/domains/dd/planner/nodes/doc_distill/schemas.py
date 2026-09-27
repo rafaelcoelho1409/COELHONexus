@@ -66,13 +66,3 @@ class DocDistillate(BaseModel):
                 f"(minimum {params.KEY_TERMS_MIN})"
             )
         return out
-
-
-DISTILL_RESPONSE_FORMAT = {
-    "type": "json_schema",
-    "json_schema": {
-        "name":   "doc_distillate",
-        "schema": DocDistillate.model_json_schema(),
-        "strict": True,
-    },
-}

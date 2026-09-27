@@ -773,20 +773,14 @@ async def _pairwise_judge_match(
     )
 
     try:
-        # json_object forces {"winner":"A"|"B"} without prose preamble — eliminates most parse-failed tiebreaks.
-        response, meta = await domains.settings.chat.service.chat_text_async(
+        result, meta = await domains.settings.chat.service.chat_structured_async(
             prompt,
+            schemas.PairwiseWinner,
             max_tokens=_MAX_TOKENS_CRITIC,
             temperature=_TEMPERATURE_CRITIC,
-            response_format={"type": "json_object"},
             timeout_s=_TIMEOUT_S_CRITIC,
         )
-        deployment_critic = (meta or {}).get("deployment")
-        parsed = domain.parse_json_response(response)
-        if parsed and "winner" in parsed:
-            w = str(parsed["winner"]).strip().upper()[:1]
-            if w in ("A", "B"):
-                return w, deployment_critic
+        return result.winner, (meta or {}).get("deployment")
     except Exception as e:
         logger.warning(
             f"[sawc_write] {section_id}: pairwise match failed: "

@@ -163,18 +163,25 @@ async def wipe_videos_data(
         api_key = qdrant_api_key if qdrant_api_key else None,
     )
     try:
-        # 1. Elasticsearch — metadata + transcripts indexes
-        summary["es"] = await domains.ycs.es_index.service.delete_videos_from_es(es, video_ids)
-        # 2. Qdrant — hybrid collection (dense + sparse). 2026-09-15:
-        # Qdrant point payloads carry `video_id` only (a split video's
-        # chunks are tagged with the PARTITION id, e.g. "xyz#p1" — there
-        # is no `parent_video_id` payload field to OR against, unlike ES
-        # transcripts/Neo4j Documents, which both have one). Expand the
-        # requested ids with any known partition ids first — ES's
-        # transcripts index still has the parent→partition mapping even
-        # for docs ingested before this fix, so this stays correct for
-        # old data too, without a Qdrant payload schema change.
+        # 1. Expand to partition ids FIRST, while ES's transcripts index
+        # still has the parent→partition mapping. 2026-09-26: this used
+        # to run AFTER the ES delete below, which had already destroyed
+        # that exact mapping — for any partitioned (long) video, the
+        # expansion silently found nothing to expand to, so step 2's
+        # Qdrant delete only ever targeted the bare parent id and never
+        # touched the real "xyz#p1"/"#p2"/"#p3" points. Live-confirmed:
+        # a wipe+re-ingest cycle on a 56min video left its old Qdrant
+        # points (and their content_hash) intact, so the fresh run's
+        # `_already_current` skip-check found a "match" against stale
+        # data and silently skipped re-embedding it entirely.
         expanded_ids = await domains.ycs.ingestion.service.expand_with_partition_ids(es, video_ids)
+        # 2. Elasticsearch — metadata + transcripts indexes
+        summary["es"] = await domains.ycs.es_index.service.delete_videos_from_es(es, video_ids)
+        # 3. Qdrant — hybrid collection (dense + sparse). Point payloads
+        # carry `video_id` only (a split video's chunks are tagged with
+        # the PARTITION id, e.g. "xyz#p1" — there is no `parent_video_id`
+        # payload field to OR against, unlike ES transcripts/Neo4j
+        # Documents, which both have one), hence the expansion above.
         summary["qdrant"] = await domains.ycs.ingestion.service.delete_points_for_videos(qdrant, expanded_ids)
         # 3. Neo4j — Document + Video nodes (entities left intact;
         #    may be referenced by other videos' graphs)

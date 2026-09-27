@@ -9,7 +9,7 @@ SOTA Sept 2026 on coelho-llm-rotator pooled:
 """
 from __future__ import annotations
 import domains
-from . import domain, keys, params, prompts, versions
+from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio
 import json
@@ -34,43 +34,48 @@ async def sample_one_ordering(
     doc_distill/chapter_propose/chapter_assign."""
     async with sem:
         try:
-            response, meta = await domains.settings.chat.service.chat_text_async(
+            result, meta = await domains.settings.chat.service.chat_structured_async(
                 prompt,
+                schemas.ChapterOrder,
                 max_tokens = params.MAX_TOKENS,
                 temperature = params.TEMPERATURE,
                 timeout_s = params.TIMEOUT_S,
-                response_format = {"type": "json_object"},
             )
+            order = result.order if domain.is_valid_permutation(result.order, n_chapters) else None
+            bad_order = None if order is not None else result.order
+        except ValueError:
+            # Didn't even parse into the schema — same reask-eligible
+            # bucket as a schema-valid-but-bad-permutation response.
+            order, bad_order, meta = None, None, {}
         except Exception as e:
             return None, {"error": f"{type(e).__name__}: {str(e)[:120]}"}
-    order = domain.parse_order_response(response, n_chapters)
     if order is not None:
         return order, meta
 
     repair_prompt = (
         prompt
         + f"\n\nPRIOR OUTPUT was invalid/unparseable "
-        f"(raw={(response or '')[:200]!r}). Emit valid JSON exactly per "
+        f"(raw={str(bad_order)[:200]!r}). Emit valid JSON exactly per "
         f"the schema above."
     )
     async with sem:
         try:
-            response2, meta2 = await domains.settings.chat.service.chat_text_async(
+            result2, meta2 = await domains.settings.chat.service.chat_structured_async(
                 repair_prompt,
+                schemas.ChapterOrder,
                 max_tokens = params.MAX_TOKENS,
                 temperature = 0.0,
                 timeout_s = params.TIMEOUT_S,
-                response_format = {"type": "json_object"},
             )
         except Exception as e:
             return None, {"error": f"reask {type(e).__name__}: {str(e)[:120]}"}
-    order2 = domain.parse_order_response(response2, n_chapters)
+    order2 = result2.order if domain.is_valid_permutation(result2.order, n_chapters) else None
     if order2 is not None:
         return order2, meta2
     return None, {
         **meta2,
         "error": "parse_failed_after_reask",
-        "raw": (response2 or "")[:120],
+        "raw": str(result2.order)[:120],
     }
 
 

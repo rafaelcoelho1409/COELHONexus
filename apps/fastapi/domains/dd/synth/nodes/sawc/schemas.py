@@ -6,7 +6,7 @@ from . import params, patterns, versions
 import re
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 
@@ -326,6 +326,13 @@ class SAWCStats(BaseModel):
     total_citations:      int
     avg_subtopics_per_section: float
     avg_explanation_words: float
+
+
+class PairwiseWinner(BaseModel):
+    """Pairwise-picker tiebreak verdict — which section draft wins."""
+    model_config = ConfigDict(extra = "forbid")
+
+    winner: Literal["A", "B"]
 
 
 class ChapterDraft(BaseModel):

@@ -14,6 +14,7 @@ import asyncio
 import logging
 import os
 import time
+import weakref
 
 import openai
 
@@ -100,55 +101,71 @@ _apply_endpoint(force=True)
 
 
 # ---------------------------------------------------------------------------
-# Pooled AsyncOpenAI singleton — separate from chat's pooled client
+# Pooled AsyncOpenAI client — separate from chat's pooled client
 # ---------------------------------------------------------------------------
 
-_CLIENT: object | None = None
-_CLIENT_LOCK = asyncio.Lock()
+# Per-event-loop cache, same pattern as `infra.neo4j.service.get_driver()` /
+# `infra.qdrant.service.get_qdrant()`. A single module-level client would
+# bind its internal httpx connection pool to whichever event loop was
+# running at construction; reusing it from a LATER `asyncio.run()` call in
+# the same worker process (e.g. a second Celery RR scan, or YCS/RR sharing
+# this same endpoint from different processes) raises `RuntimeError: Event
+# loop is closed`. Live-confirmed 2026-09-27 on an RR scan's embed call —
+# entries auto-evict once their loop is garbage-collected.
+_clients: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, object]" = (
+    weakref.WeakKeyDictionary()
+)
+_clients_lock = asyncio.Lock()
 
 
 async def _get_async_openai():
-    global _CLIENT
-    if _apply_endpoint() and _CLIENT is not None:
-        stale, _CLIENT = _CLIENT, None
-        try:
-            await stale.close()
-        except Exception:
-            pass
-    if _CLIENT is not None:
-        return _CLIENT
-    async with _CLIENT_LOCK:
-        if _CLIENT is not None:
-            return _CLIENT
+    loop = asyncio.get_running_loop()
+    if _apply_endpoint():
+        # Endpoint changed (Settings-page save) — every cached client,
+        # regardless of loop, now points at the wrong URL/key/model.
+        stale = list(_clients.items())
+        _clients.clear()
+        for _, client in stale:
+            try:
+                await client.close()
+            except Exception:
+                pass
+    client = _clients.get(loop)
+    if client is not None:
+        return client
+    async with _clients_lock:
+        client = _clients.get(loop)
+        if client is not None:
+            return client
         client = openai.AsyncOpenAI(
             base_url=ENDPOINT.base_url,
             api_key=ENDPOINT.api_key,
             max_retries=0,
         )
-        _CLIENT = client
-        logger.info(f"[embedding-endpoint] AsyncOpenAI client → {ENDPOINT.base_url} model={ENDPOINT.model}")
+        _clients[loop] = client
+        logger.info(
+            f"[embedding-endpoint] AsyncOpenAI client → {ENDPOINT.base_url} "
+            f"model={ENDPOINT.model} (loop={id(loop):x})"
+        )
         return client
 
 
 def reset_embedding_client(*args, **kwargs) -> None:
     """Called after the Settings page saves a new embedding endpoint —
-    re-resolves + drops the pooled client so the next call rebuilds
-    against the new URL/key/model."""
-    global _CLIENT
+    re-resolves + drops every pooled client so the next call per loop
+    rebuilds against the new URL/key/model."""
     try:
         _apply_endpoint(force=True)
     except Exception:
         pass
-    try:
-        if _CLIENT is not None:
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(_CLIENT.close())
-            except RuntimeError:
-                pass
-        _CLIENT = None
-    except Exception:
-        pass
+    stale = list(_clients.items())
+    _clients.clear()
+    for loop, client in stale:
+        try:
+            if loop.is_running():
+                loop.create_task(client.close())
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------

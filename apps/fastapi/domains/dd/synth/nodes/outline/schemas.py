@@ -2,7 +2,7 @@
 from __future__ import annotations
 from . import params, patterns
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 
@@ -118,4 +118,8 @@ OUTLINE_RESPONSE_FORMAT = {
     },
 }
 
-USC_VOTE_RESPONSE_FORMAT = {"type": "json_object"}
+class VotePick(BaseModel):
+    """USC-vote LLM output — which candidate outline to keep."""
+    model_config = ConfigDict(extra = "forbid")
+
+    chosen_index: int = Field(description = "Index of the best candidate outline.")

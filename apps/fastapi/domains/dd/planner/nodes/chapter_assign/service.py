@@ -24,20 +24,18 @@ logger = logging.getLogger(__name__)
 
 
 async def _score_call(prompt: str) -> schemas.DocAssignment:
-    """One LLM call + parse + validate. Raises ValueError (unparseable) or
-    pydantic ValidationError (schema mismatch) for reask-eligible failures;
-    anything else (timeout, provider outage) propagates as-is."""
-    raw, _ = await domains.settings.chat.service.chat_text_async(
+    """One LLM call, decoded via LangChain's `.with_structured_output()`.
+    Raises ValueError (unparseable) or pydantic ValidationError (schema
+    mismatch) for reask-eligible failures; anything else (timeout,
+    provider outage) propagates as-is."""
+    assignment, _ = await domains.settings.chat.service.chat_structured_async(
         prompt,
+        schemas.DocAssignment,
         max_tokens = params.MAX_TOKENS,
         temperature = params.TEMPERATURE,
         timeout_s = params.TIMEOUT_S,
-        response_format = schemas.ASSIGN_RESPONSE_FORMAT,
     )
-    parsed = domain.parse(raw)
-    if not parsed:
-        raise ValueError(f"unparseable LLM output: {str(raw)[:200]!r}")
-    return schemas.DocAssignment.model_validate(parsed)
+    return assignment
 
 
 async def assign_one(

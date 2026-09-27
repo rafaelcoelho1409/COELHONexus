@@ -305,7 +305,17 @@ async def _run_planner_async_inner(
 
     # Total wall-clock (span, not sum — nodes can fan out in parallel).
     t0 = time.monotonic()
-    main_task = asyncio.create_task(graph.ainvoke(initial_state, config))
+    # durability="sync" — checkpoint written BEFORE the next super-step,
+    # not the library default "async" (checkpoint persisted during the
+    # next step, small crash-window risk). DD's whole resume/catch-up
+    # story depends on every completed node's checkpoint actually
+    # landing (confirmed incident category: a redeploy mid-run kills the
+    # worker — see [[project_synth_redeploy_interrupts]] memory), and
+    # nodes here are LLM/MinIO-call-dominated (seconds to minutes), so a
+    # synchronous single-row Postgres INSERT is immaterial overhead.
+    main_task = asyncio.create_task(
+        graph.ainvoke(initial_state, config, durability = "sync"),
+    )
     watcher_task = asyncio.create_task(domains.dd.planner.runtime.cancel.service.watcher(thread_id, main_task))
     return await _await_with_watcher(
         graph, config, main_task, watcher_task, thread_id,
@@ -439,7 +449,10 @@ async def resume_planner_async(thread_id: str) -> dict:
         thread_id, "planner", "resumed",
         next_nodes = list(snap.next or []),
     )
-    main_task = asyncio.create_task(graph.ainvoke(None, config))
+    # durability="sync" — see rationale in run_planner_async above.
+    main_task = asyncio.create_task(
+        graph.ainvoke(None, config, durability = "sync"),
+    )
     watcher_task = asyncio.create_task(domains.dd.planner.runtime.cancel.service.watcher(thread_id, main_task))
     return await _await_with_watcher(
         graph, config, main_task, watcher_task, thread_id,

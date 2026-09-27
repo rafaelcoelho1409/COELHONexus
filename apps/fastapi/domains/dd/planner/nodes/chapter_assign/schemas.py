@@ -1,4 +1,6 @@
-"""chapter_assign — Pydantic value objects + LLM response_format spec."""
+"""chapter_assign — Pydantic value objects. Decoded directly via
+`chat_structured_async(prompt, DocAssignment)` — no manual
+response_format dict needed."""
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -40,13 +42,3 @@ class DocAssignment(BaseModel):
             "the chapters list shown in the prompt)."
         ),
     )
-
-
-ASSIGN_RESPONSE_FORMAT = {
-    "type": "json_schema",
-    "json_schema": {
-        "name":   "doc_assignment",
-        "schema": DocAssignment.model_json_schema(),
-        "strict": True,
-    },
-}

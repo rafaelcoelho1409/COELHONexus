@@ -24,13 +24,14 @@ needed, just this call-site fix."""
 from __future__ import annotations
 import domains
 from domains.rr.runtime.observability.service import traced_tool
-from . import domain
+from . import domain, params
 from .. import state
 from ... import keys
 from .... import service
 
 import asyncio
 import logging
+import random
 from typing import Any
 
 from langchain_core.tools import tool
@@ -133,6 +134,34 @@ async def graph_build_papers(
     return msg
 
 
+async def _embed_with_retry(abstract: str, arxiv_id: str) -> list[float] | None:
+    """Transient-only retry around the embed call — mirrors
+    `domains.rr.runtime.service.resilient_ainvoke`'s classification, but
+    against `embed_texts_async`'s `(texts) -> (vectors, model)` shape
+    rather than a `chain.ainvoke`."""
+    last_exc: BaseException | None = None
+    for attempt in range(1, params.EMBED_MAX_ATTEMPTS + 1):
+        try:
+            vecs, _model = await domains.settings.embeddings.service.embed_texts_async([abstract])
+            return vecs[0] if vecs else None
+        except Exception as e:
+            last_exc = e
+            if (
+                not domains.rr.runtime.domain.is_transient(e)
+                or attempt >= params.EMBED_MAX_ATTEMPTS
+            ):
+                break
+            delay = params.EMBED_BACKOFF_S[min(attempt - 1, len(params.EMBED_BACKOFF_S) - 1)]
+            delay *= 1.0 + random.random() * 0.2
+            logger.warning(
+                f"[graph_build] embed transient failure for {arxiv_id} "
+                f"(attempt {attempt}/{params.EMBED_MAX_ATTEMPTS}), "
+                f"retrying in {delay:.1f}s: {type(e).__name__}: {e}"
+            )
+            await asyncio.sleep(delay)
+    raise last_exc
+
+
 async def _persist_one(
     sem: asyncio.Semaphore, item: dict[str, Any],
 ) -> str:
@@ -146,8 +175,7 @@ async def _persist_one(
     async with sem:
         try:
             if abstract:
-                vecs, _model = await domains.settings.embeddings.service.embed_texts_async([abstract])
-                embedding = vecs[0] if vecs else None
+                embedding = await _embed_with_retry(abstract, arxiv_id)
             await service.persist_paper(paper, embedding=embedding, signal=item.get("signal"))
             return "ok"
         except Exception as e:

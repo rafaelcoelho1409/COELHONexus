@@ -1,15 +1,13 @@
 """chapter_propose — pure helpers (target sizing, structural seed
-extraction, summary helper, JSON parse, manifest hash). Prompt builders
-live in prompts.py; Pydantic schemas in schemas.py."""
+extraction, summary helper, manifest hash). Prompt builders live in
+prompts.py; Pydantic schemas in schemas.py. LLM output decoding is
+`chat_structured_async` — no manual JSON parse needed here anymore."""
 from __future__ import annotations
 from . import params, patterns, schemas, versions
 
-import json
 from collections import Counter
 from hashlib import sha256
 from typing import Optional
-
-import json_repair  # type: ignore
 
 
 
@@ -169,28 +167,6 @@ def summarize_proposal(props: list[schemas.ChapterProposal]) -> dict:
     }
 
 
-def parse(raw: str) -> Optional[dict]:
-    if not raw:
-        return None
-    m = patterns.JSON_RE.search(raw)
-    if not m:
-        return None
-    try:
-        return json.loads(m.group(0))
-    except Exception:
-        try:
-            return json_repair.loads(m.group(0))  # type: ignore
-        except Exception:
-            return None
-
-
-def try_validate(
-    d: dict,
-) -> tuple[Optional[schemas.ChapterProposalList], Optional[str]]:
-    try:
-        return schemas.ChapterProposalList.model_validate(d), None
-    except Exception as e:
-        return None, str(e)[:300]
 
 
 def manifest_hash(

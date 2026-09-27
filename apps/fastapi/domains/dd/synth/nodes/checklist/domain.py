@@ -9,24 +9,11 @@ from . import params, patterns, prompts, schemas, versions
 import ast
 import json
 import random
-import re
 from collections import Counter
 from hashlib import sha256
 from typing import Optional
 
 from pydantic import ValidationError
-
-
-def parse_json(text: str) -> dict | None:
-    if not text:
-        return None
-    m = patterns.JSON_RE.search(text)
-    if not m:
-        return None
-    try:
-        return json.loads(m.group())
-    except Exception:
-        return None
 
 
 def extract_identifiers(text: str) -> set[str]:
@@ -768,37 +755,6 @@ def is_context_overflow_error(e: Exception) -> bool:
     MAX_RENDERED_CHAPTER_CHARS) can still exceed a small-context arm."""
     msg = str(e).lower()
     return any(marker in msg for marker in params.CONTEXT_OVERFLOW_MARKERS)
-
-
-def parse_json_response(text: str) -> Optional[dict]:
-    if not text:
-        return None
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-    try:
-        return json.loads(cleaned)
-    except Exception:
-        pass
-    m = patterns.JSON_RE.search(text)
-    if not m:
-        return None
-    try:
-        return json.loads(m.group(0))
-    except Exception:
-        return None
-
-
-def try_parse_judge(
-    raw: dict,
-) -> tuple[Optional[schemas.LLMJudgePayload], Optional[str]]:
-    try:
-        return schemas.LLMJudgePayload.model_validate(raw), None
-    except ValidationError as e:
-        return None, shorten_pydantic_error(e)
-    except Exception as e:
-        return None, f"{type(e).__name__}: {str(e)[:200]}"
 
 
 def fallback_llm_verdicts(reason: str) -> list[schemas.CriterionResult]:

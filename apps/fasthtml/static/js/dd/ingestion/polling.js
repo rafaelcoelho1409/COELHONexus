@@ -102,31 +102,28 @@ export async function pollRun(runId) {
         return;
       }
       if (st === 'failed' || st === 'cancelled') {
-        const cancelledSlug = Si.activeSlug;
         Si.setActiveRunId(null);
         refreshGenerateState();
-        // Hide the live progress box + restore Step 2 + Step 4 to their
-        // initial pick-a-framework state.
-        Si.progressBox.style.display = 'none';
-        Si.step2Summary.innerHTML = '';
-        Si.step2Grid.innerHTML =
-          '<div class="fw-empty">Pick a framework in the catalog or ' +
-          'the sidebar to see its downloaded files.</div>';
-        if (Si.activeSlug === cancelledSlug) {
-          Si.setActiveSlug(null);
-          if (Si.pagesSummary) Si.pagesSummary.innerHTML = '';
-          if (Si.pageGrid) Si.pageGrid.innerHTML =
-            '<div class="fw-empty">Pick an item from the sidebar or ' +
-            'generate a new study.</div>';
-          Si.sidebarList.querySelectorAll('.fw-lib-item.active')
-            .forEach(x => x.classList.remove('active'));
-        }
-        const { loadLibrary } = await import('@dd/shared/library.js');
-        await loadLibrary();
-        const { refreshPlannerStartState } = await import('@dd/planner/planner.js');
-        refreshPlannerStartState();
-        showToast('Ingestion ' + st + '. ' +
-          (st === 'cancelled' ? 'Partial pages cleared from storage.' : ''));
+        // Hide the live progress box + reset the explorer (June redesign
+        // replaced #fw-step2-grid / #fw-page-grid / #fw-sidebar-list with
+        // the explorer tree — writing those removed IDs threw and left
+        // the page on "Loading…" with no toast, 2026-09-26 Qdrant 404).
+        if (Si.progressBox) Si.progressBox.style.display = 'none';
+        try {
+          const { resetExplorer } = await import('./explorer.js');
+          resetExplorer();
+        } catch (e) { console.warn('[pollRun failed] resetExplorer failed:', e); }
+        try {
+          const { loadLibrary } = await import('@dd/shared/library.js');
+          await loadLibrary();
+        } catch (e) { console.warn('[pollRun failed] loadLibrary failed:', e); }
+        try {
+          const { refreshPlannerStartState } = await import('@dd/planner/planner.js');
+          refreshPlannerStartState();
+        } catch (e) { console.warn('[pollRun failed] planner import failed:', e); }
+        const reason = (data.progress && data.progress.error) || '';
+        showToast('Ingestion ' + st + (reason ? ': ' + reason : '.') +
+          (st === 'cancelled' ? ' Partial pages cleared from storage.' : ''));
         return;
       }
     } catch (e) {

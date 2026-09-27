@@ -121,12 +121,12 @@ class ChapterProposalList(BaseModel):
         return v
 
 
-PROPOSE_RESPONSE_FORMAT = {
-    "type": "json_schema",
-    "json_schema": {
-        "name":   "chapter_proposal_list",
-        "schema": ChapterProposalList.model_json_schema(),
-        "strict": True,
-    },
-}
-VOTE_RESPONSE_FORMAT = {"type": "json_object"}
+class VotePick(BaseModel):
+    """USC-vote LLM output — which candidate sample to keep. Both fields
+    required (not optional) — OpenAI strict json_schema mode requires
+    every property in `required`, and the prompt already always asks
+    for both."""
+    model_config = ConfigDict(extra = "forbid")
+
+    chosen_index: int = Field(description = "Index of the best candidate sample.")
+    reason: str = Field(description = "Short justification.")

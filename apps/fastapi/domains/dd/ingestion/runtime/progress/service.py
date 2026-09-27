@@ -237,9 +237,16 @@ class Progress:
         except Exception as e:
             logger.info(f"[progress] record_post skipped: {e}")
 
-    async def finish(self, status: str = "done") -> None:
-        """status ∈ {done, failed, aborted, downgrade, cancelled}."""
+    async def finish(self, status: str = "done", error: str | None = None) -> None:
+        """status ∈ {done, failed, aborted, downgrade, cancelled}.
+
+        `error` surfaces the terminal reason to `GET /runs/{id}` pollers
+        (2026-09-26: Qdrant Tier-1 404 failed with the reason only in the
+        Celery result — the page sat on Loading… forever). Truncated to
+        500 chars like url-record `error_msg`."""
         self._state["status"] = status
+        if error:
+            self._state["error"] = error[:500]
         await self._flush(force = True)
 
     async def close(self) -> None:

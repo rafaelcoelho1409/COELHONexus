@@ -197,7 +197,14 @@ async def run_single_chapter_async(
                 "run_started_at": time.time(),
             }
 
-            main_task = asyncio.create_task(graph.ainvoke(initial_state, config))
+            # durability="sync" — checkpoint written before the next
+            # super-step, not the library default "async". See
+            # planner/runtime/dispatch/service.py::run_planner_async for
+            # the full rationale (crash-window risk vs. LLM-call-
+            # dominated node runtime making sync overhead immaterial).
+            main_task = asyncio.create_task(
+                graph.ainvoke(initial_state, config, durability = "sync"),
+            )
             watcher_task = asyncio.create_task(domains.dd.synth.runtime.cancel.service.watcher(thread_id, main_task))
             result = await _await_with_watcher(
                 graph, config, main_task, watcher_task, thread_id,
@@ -349,7 +356,10 @@ async def resume_synth_async(thread_id: str) -> dict:
             f"(wall-clock RETHINK gate will use the stale value): "
             f"{type(e).__name__}: {e}"
         )
-    main_task = asyncio.create_task(graph.ainvoke(None, config))
+    # durability="sync" — see rationale in run_single_chapter_async above.
+    main_task = asyncio.create_task(
+        graph.ainvoke(None, config, durability = "sync"),
+    )
     watcher_task = asyncio.create_task(domains.dd.synth.runtime.cancel.service.watcher(thread_id, main_task))
     return await _await_with_watcher(
         graph, config, main_task, watcher_task, thread_id,
@@ -813,8 +823,11 @@ async def _run_study_async_inner(
                 "callbacks": [c for c in (infra.langfuse.service.build_langchain_callback(),) if c is not None],
             }
 
+            # durability="sync" — see rationale in run_single_chapter_async
+            # above; this is the same fan-out-per-chapter path within a
+            # full study run.
             main_task = asyncio.create_task(
-                graph.ainvoke(initial_state, config),
+                graph.ainvoke(initial_state, config, durability = "sync"),
             )
             watcher_task = asyncio.create_task(
                 domains.dd.synth.runtime.cancel.service.watcher(chapter_thread_id, main_task),

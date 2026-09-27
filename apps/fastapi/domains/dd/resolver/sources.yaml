@@ -841,10 +841,12 @@ frameworks:
 - name: Qdrant
   logo: https://qdrant.tech/img/qdrant-logo.svg
   docs: https://qdrant.tech/documentation/
-  llms_full: https://qdrant.tech/llms-full.txt
   llms_txt: https://qdrant.tech/llms.txt
   sitemap: https://qdrant.tech/sitemap.xml
   github: https://github.com/qdrant/qdrant
+  # NOTE: qdrant.tech/llms-full.txt returned HTTP 404 (verified 2026-09-26;
+  # llms.txt at 177 KB is live). Dropped so Tier 2 takes over instead of a
+  # hard Tier 1 fail with a stuck Loading… page.
 
 - name: Qiskit
   logo: https://logowik.com/content/uploads/images/qiskit9093.logowik.com.webp

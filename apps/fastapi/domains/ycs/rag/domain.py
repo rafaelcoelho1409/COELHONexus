@@ -12,6 +12,7 @@ from typing import Any, TypeVar
 
 from json_repair import loads as json_repair_loads
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages.utils import count_tokens_approximately, trim_messages
 from pydantic import BaseModel
 
 
@@ -32,6 +33,20 @@ def history_to_messages(history: list[dict] | None) -> list[BaseMessage]:
     conversations. Older context is preserved indirectly via the
     `contextualize` node's question-rewrite (it sees all rows).
 
+    That row cap bounds COUNT, not SIZE — a handful of unusually long
+    answers (e.g. quoting video transcript excerpts) could still balloon
+    past what "8 turns" is meant to imply. Two safety nets on top:
+    each answer is truncated to `params.HISTORY_ANSWER_CHARS_CAP` BEFORE
+    building messages (so no single answer can exceed the aggregate
+    budget on its own — verified live 2026-09-26 that skipping this let
+    one oversized answer make `trim_messages()` return an empty list
+    entirely, via its `allow_partial=False` default, instead of
+    degrading gracefully), then `trim_messages()` keeps the most recent
+    messages that fit `params.HISTORY_MAX_TOKENS` in aggregate, dropping
+    older ones first (`strategy="last"`), never stranding a lone
+    AIMessage without its question (`start_on="human"`). Normal case
+    (short answers, well under budget) is unaffected by either.
+
     Used by: generate / direct_answer / synthesize nodes."""
     if not history:
         return []
@@ -39,27 +54,34 @@ def history_to_messages(history: list[dict] | None) -> list[BaseMessage]:
     out: list[BaseMessage] = []
     for row in rows:
         q = (row.get("question") or "").strip()
-        a = (row.get("answer")   or "").strip()
+        a = (row.get("answer")   or "").strip()[:params.HISTORY_ANSWER_CHARS_CAP]
         if q:
             out.append(HumanMessage(content = q))
         if a:
             out.append(AIMessage(content = a))
-    return out
+    if not out:
+        return out
+    return trim_messages(
+        out,
+        strategy      = "last",
+        token_counter = count_tokens_approximately,
+        max_tokens    = params.HISTORY_MAX_TOKENS,
+        start_on      = "human",
+    )
 
 
 def strip_think_tags(text: Any) -> str:
     """Strip `<think>...</think>` reasoning tokens from model output.
 
-    Accepts either:
-      - `str` — the classic shape from chat models.
-      - `list` of content blocks — modern LangChain (1.x) returns
-        `AIMessage.content` as `list[dict|str]` for thinking-aware
-        models (Claude `thinking`, NIM reasoning, GPT-OSS, DeepSeek
-        R1, Qwen 3 reasoning). Each block is either `{"type":"text",
-        "text": "..."}`, `{"type":"thinking", "thinking": "..."}`,
-        or a bare string. Reasoning blocks are DROPPED in line with
-        what the `<think>` regex already does for inline tokens.
-      - Anything else — coerced via `str()`.
+    Docs-aligned (`docs.langchain.com/oss/python/langchain/messages`):
+    accepts a full `BaseMessage` (prefers standardized `.content_blocks` /
+    `.text`), a raw `content` value (`str | list[dict|str]`), or anything
+    else (coerced via `str()`).
+
+    Standard blocks handled: `text` (kept), `reasoning`/`thinking`
+    (dropped, incl. provider extras like `signature` / `summary`),
+    bare strings (kept). Falls back to raw `content` list parsing when
+    `.content_blocks` is unavailable (older provider shapes).
 
     Why this matters (2026-06-11): the rotator's pool occasionally
     routes to a reasoning model whose response.content is a list,
@@ -70,6 +92,37 @@ def strip_think_tags(text: Any) -> str:
     (direct_answer, contextualize, rewrite, generate, synthesize)."""
     if text is None:
         return ""
+    # Full message object — prefer standardized content_blocks / text
+    # (LangChain v1). Never touches transport; pure client-side parse.
+    content_blocks = getattr(text, "content_blocks", None)
+    if isinstance(content_blocks, list):
+        parts: list[str] = []
+        for block in content_blocks:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if btype in ("thinking", "reasoning"):
+                continue
+            # LangChain v1 wraps provider-native thinking as
+            # non_standard{value:{type:thinking,...}} — drop those too.
+            if btype == "non_standard":
+                nested = block.get("value")
+                if isinstance(nested, dict) and nested.get("type") in (
+                    "thinking", "reasoning",
+                ):
+                    continue
+            if isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        if parts or content_blocks:
+            text = "".join(parts) if parts else ""
+            text = patterns.THINK_TAG_RE.sub("", text)
+            if "</think>" in text:
+                text = text.rsplit("</think>", 1)[-1]
+            return text.strip()
+        # Empty standardized view — fall through to raw content below.
+    raw_content = getattr(text, "content", None)
+    if isinstance(raw_content, (str, list)):
+        text = raw_content
     if isinstance(text, list):
         parts: list[str] = []
         for block in text:

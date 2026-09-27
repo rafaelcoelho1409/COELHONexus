@@ -96,6 +96,51 @@ def get_prompt(
         return fallback
 
 
+def ensure_prompts(
+    mapping: dict[str, str], *, label: str = "production",
+) -> dict[str, str]:
+    """Idempotent bootstrap for a feature's LangFuse-managed prompts —
+    same "create if missing" role as `bootstrap_neo4j()`'s `IF NOT
+    EXISTS` constraints, applied to prompt rows instead of graph schema.
+
+    2026-09-27: `get_prompt()`'s fallback design means a feature can ship
+    fully wired to LangFuse prompt management and still never actually
+    USE it, because nothing ever created the prompt rows — every call
+    404s and silently falls back forever (live-confirmed on RR: 3 prompt
+    names 404ing repeatedly across a single scan, always resolved via
+    `fallback`, `error.status_code=404` polluting trace error rates).
+    Callers own their own {name: current_fallback_text} mapping (see
+    `domains.rr.service.bootstrap_langfuse_prompts`) — seeding with the
+    text already live via `fallback` means zero behavior change the
+    moment this runs; it only makes the LangFuse-managed copy live and
+    editable going forward.
+
+    Returns {name: "created" | "exists" | "error: ..."}."""
+    client = service.get_client()
+    if client is None:
+        return {name: "error: no langfuse client" for name in mapping}
+    results: dict[str, str] = {}
+    for name, text in mapping.items():
+        try:
+            client.get_prompt(name, label = label)
+            results[name] = "exists"
+        except Exception:
+            try:
+                client.create_prompt(
+                    name = name, prompt = text, type = "text", labels = [label],
+                )
+                results[name] = "created"
+                logger.info(f"[langfuse] prompt created: {name!r} (label={label!r})")
+            except Exception as e:
+                results[name] = f"error: {type(e).__name__}: {e}"
+                logger.warning(
+                    f"[langfuse] prompt create failed for {name!r}: "
+                    f"{type(e).__name__}: {e}"
+                )
+    invalidate_cache()
+    return results
+
+
 def invalidate_cache(name: str | None = None) -> None:
     """Drop cached prompts. Useful in tests or when promoting a new label."""
     with _cache_lock:

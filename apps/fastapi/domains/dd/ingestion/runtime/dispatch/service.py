@@ -274,7 +274,7 @@ async def _run_inner(run_id: str, slug: str) -> dict:
         logger.exception(f"[dispatch] {slug}: failed")
         # Wipe partial state so the next cached-check sees nothing.
         await _cleanup_framework(minio, slug)
-        await progress.finish(status = "failed")
+        await progress.finish(status = "failed", error = f"{type(e).__name__}: {e}")
         return {
             **base_result, "status": "failed",
             "error": f"{type(e).__name__}: {e}",

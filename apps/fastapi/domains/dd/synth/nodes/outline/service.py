@@ -162,18 +162,15 @@ async def _usc_pick(
         adaptive_cap=adaptive_cap,
     )
     try:
-        response, _ = await domains.settings.chat.service.chat_text_async(
+        vote, _ = await domains.settings.chat.service.chat_structured_async(
             prompt,
+            schemas.VotePick,
             max_tokens=params.MAX_TOKENS_VOTE,
             temperature=params.TEMPERATURE_VOTE,
-            response_format=schemas.USC_VOTE_RESPONSE_FORMAT,
             timeout_s=params.TIMEOUT_S_VOTE,
         )
-        parsed = domain.parse_json_response(response)
-        if parsed and "chosen_index" in parsed:
-            idx = int(parsed["chosen_index"])
-            if 0 <= idx < len(candidates):
-                return idx
+        if 0 <= vote.chosen_index < len(candidates):
+            return vote.chosen_index
     except Exception as e:
         logger.warning(
             f"[outline_sdp] USC picker failed: "

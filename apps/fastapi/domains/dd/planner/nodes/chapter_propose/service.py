@@ -19,6 +19,8 @@ import os
 import time
 from typing import Optional
 
+from pydantic import ValidationError
+
 
 class PlannerDegradedAbort(RuntimeError):
     """Raised (opt-in, KD_PLANNER_ABORT_ON_DEGRADE) when chapter_propose fell back
@@ -72,49 +74,47 @@ async def load_bodies(
 async def draft_one(
     prompt: str, sample_idx: int,
 ) -> Optional[schemas.ChapterProposalList]:
+    """One LLM call, decoded via LangChain's `.with_structured_output()`
+    (same pattern as chapter_assign's `_score_call`). A parse/validation
+    failure gets ONE repair attempt at temp=0; a network/provider failure
+    on the first call returns None immediately — same split as before,
+    now driven by `chat_structured_async`'s own exception taxonomy
+    (ValidationError/ValueError = reask-eligible, anything else = not)."""
     try:
-        raw, _meta = await domains.settings.chat.service.chat_text_async(
+        payload, _meta = await domains.settings.chat.service.chat_structured_async(
             prompt,
+            schemas.ChapterProposalList,
             max_tokens = params.MAX_TOKENS_PROPOSE,
             temperature = params.TEMPERATURE_PROPOSE,
             timeout_s = params.DRAFT_TIMEOUT_S,
-            response_format = schemas.PROPOSE_RESPONSE_FORMAT,
         )
+        return payload
+    except (ValidationError, ValueError) as e:
+        err = str(e)[:300]
     except Exception as e:
         logger.warning(
             f"[chapter_propose] sample {sample_idx} LLM failed: "
             f"{type(e).__name__}: {e}"
         )
         return None
-    parsed = domain.parse(raw)
-    if not parsed:
-        # Empty/unparseable raw (reasoning model exhausted its budget before
-        # reaching the JSON, or plain malformed output) — same repair path as
-        # a validation failure below, not an immediate None. Same bug pattern
-        # that cost doc_distill a 74% fallback rate before this fix.
-        payload, err = None, f"unparseable JSON (raw={raw[:200]!r})"
-    else:
-        payload, err = domain.try_validate(parsed)
-    if payload is None and params.MAX_REPAIR_ATTEMPTS > 0:
-        # ONE repair attempt at temp=0.
-        repair_prompt = (
-            prompt
-            + f"\n\nPRIOR OUTPUT REJECTED: {err}\nEmit valid JSON per the schema."
+
+    if params.MAX_REPAIR_ATTEMPTS <= 0:
+        return None
+    # ONE repair attempt at temp=0 — feeds the rejection reason back verbatim.
+    repair_prompt = (
+        prompt + f"\n\nPRIOR OUTPUT REJECTED: {err}\nEmit valid JSON per the schema."
+    )
+    try:
+        payload2, _ = await domains.settings.chat.service.chat_structured_async(
+            repair_prompt,
+            schemas.ChapterProposalList,
+            max_tokens = params.MAX_TOKENS_PROPOSE,
+            temperature = 0.0,
+            timeout_s = params.DRAFT_TIMEOUT_S,
         )
-        try:
-            raw2, _ = await domains.settings.chat.service.chat_text_async(
-                repair_prompt,
-                max_tokens = params.MAX_TOKENS_PROPOSE,
-                temperature = 0.0,
-                timeout_s = params.DRAFT_TIMEOUT_S,
-                response_format = schemas.PROPOSE_RESPONSE_FORMAT,
-            )
-            parsed2 = domain.parse(raw2)
-            if parsed2:
-                payload, _ = domain.try_validate(parsed2)
-        except Exception:
-            pass
-    return payload
+        return payload2
+    except Exception:
+        return None
 
 
 async def usc_pick(
@@ -127,18 +127,15 @@ async def usc_pick(
         framework = framework, candidates_summary = summaries,
     )
     try:
-        raw, _ = await domains.settings.chat.service.chat_text_async(
+        vote, _ = await domains.settings.chat.service.chat_structured_async(
             prompt,
+            schemas.VotePick,
             max_tokens = params.MAX_TOKENS_VOTE,
             temperature = params.TEMPERATURE_VOTE,
             timeout_s = 20.0,
-            response_format = schemas.VOTE_RESPONSE_FORMAT,
         )
-        parsed = domain.parse(raw)
-        if parsed and "chosen_index" in parsed:
-            idx = int(parsed["chosen_index"])
-            if 0 <= idx < len(candidates):
-                return idx
+        if 0 <= vote.chosen_index < len(candidates):
+            return vote.chosen_index
     except Exception as e:
         logger.warning(
             f"[chapter_propose] USC pick failed: {type(e).__name__}: {e}"
