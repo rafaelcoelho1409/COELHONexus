@@ -175,10 +175,3 @@ def compute_manifest_hash(
         f"schema={versions.MGSR_SCHEMA_VERSION}"
     )
     return sha256(payload.encode("utf-8")).hexdigest()[:16]
-
-
-def load_mgsr_payload(text: str) -> dict:
-    """Parse the persisted mgsr blob. render_audit_write checks
-    `decision.halt` to know whether to render the current chapter as
-    final (halt=true) or loop back (halt=false; v2 only)."""
-    return json.loads(text)

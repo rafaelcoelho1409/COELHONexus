@@ -7,11 +7,9 @@ from __future__ import annotations
 from . import params, patterns, prompts, schemas, versions
 
 import ast
-import json
 import random
 from collections import Counter
 from hashlib import sha256
-from typing import Optional
 
 from pydantic import ValidationError
 
@@ -784,8 +782,3 @@ def shorten_pydantic_error(e: ValidationError) -> str:
         lines.append(f"{loc}: {msg}")
     suffix = f" (+{len(errs) - 6} more)" if len(errs) > 6 else ""
     return "; ".join(lines) + suffix
-
-
-def load_checklist_payload(text: str) -> dict:
-    """Parse the persisted checklist blob."""
-    return json.loads(text)

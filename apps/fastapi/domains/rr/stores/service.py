@@ -165,43 +165,6 @@ async def delete_digest_json(scan_id: str) -> bool:
                 raise
 
 
-async def put_extraction_json(
-    scan_id: str, arxiv_id: str, payload: dict[str, Any]
-) -> str:
-    """Write a deep_read extraction for one paper. Returns the MinIO key."""
-    key  = rr_keys.extraction_minio_key(scan_id, arxiv_id)
-    body = json.dumps(payload, default=str).encode("utf-8")
-    with domains.rr.runtime.observability.spans.minio_span(
-        "put_object", bucket = _minio_bucket(), key = key,
-    ):
-        async with _minio_client() as s3:
-            await s3.put_object(
-                Bucket      = _minio_bucket(),
-                Key         = key,
-                Body        = body,
-                ContentType = rr_params.STORES_PARAMS.minio_json_content_type,
-            )
-    return key
-
-
-async def get_extraction_json(
-    scan_id: str, arxiv_id: str,
-) -> dict[str, Any] | None:
-    """Read an extraction. Returns None on 404."""
-    key = rr_keys.extraction_minio_key(scan_id, arxiv_id)
-    with domains.rr.runtime.observability.spans.minio_span(
-        "get_object", bucket = _minio_bucket(), key = key,
-    ):
-        async with _minio_client() as s3:
-            try:
-                obj = await s3.get_object(Bucket=_minio_bucket(), Key=key)
-            except ClientError as e:
-                code = (e.response or {}).get("Error", {}).get("Code", "")
-                if code in ("404", "NoSuchKey"):
-                    return None
-                raise
-            body = await obj["Body"].read()
-    return json.loads(body)
 
 
 async def put_code_py(

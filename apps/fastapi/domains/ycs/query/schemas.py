@@ -128,28 +128,6 @@ class RawQueryResponse(BaseModel):
     hits:       list[RawQueryHit] = Field(default_factory = list)
 
 
-# Schema discovery — Phase 3
-class SchemaResponse(BaseModel):
-    """Per-backend schema snapshot. Shape is intentionally loose (a
-    dict) — the renderer's job is to read the keys it knows about, the
-    store's actual schema is what we care about.
-
-    `cached_at` is the unix-epoch second the snapshot was taken; the UI
-    can render "Refreshed Ns ago" without computing it.
-
-    Typical shape:
-      ES → `{"indices": {name: {"mappings": {...}, "doc_count": N}, ...}}`
-      Qdrant → `{"collections": [{"name": ..., "vectors_count": ..., "payload_schema": ...}, ...]}`
-      Neo4j → `{"labels": [...], "relationship_types": [...], "node_properties": {label: [props]}}`"""
-    backend:    BackendLiteral
-    app:        AppLiteral
-    cached_at:  int
-    schema_:    dict[str, Any] = Field(default_factory = dict, alias = "schema")
-
-    class Config:
-        populate_by_name = True
-
-
 # AI text-to-DSL — Phase 4
 class AIGenerateRequest(BaseModel):
     """`prompt` is the user's natural-language description; `previous`
@@ -172,14 +150,3 @@ class HistoryEntry(BaseModel):
     favorite:   bool      = False
 
 
-class HistoryList(BaseModel):
-    items: list[HistoryEntry] = Field(default_factory = list)
-    total: int                = 0
-
-
-class HistorySaveRequest(BaseModel):
-    backend:  BackendLiteral
-    app:      AppLiteral = "ycs"
-    body:     str
-    prompt:   str         = ""
-    favorite: bool        = False

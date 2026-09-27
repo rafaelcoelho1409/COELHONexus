@@ -271,12 +271,6 @@ async def mgsr_replan_run(state: domains.dd.synth.state.SynthState) -> dict:
             "error":  f"checklist/outline unreadable: {type(e).__name__}: {e}",
         }
 
-    outline_data = outline_payload.get("outline") or {}
-    outline_sections = outline_data.get("sections") or []
-    valid_section_ids = {
-        s.get("section_id", "") for s in outline_sections
-        if s.get("section_id")
-    }
     chapter_title = (
         checklist.get("chapter_title")
         or outline_payload.get("chapter_title")

@@ -150,11 +150,6 @@ def extract_internal_pages(html: str, base_url: str) -> dict[str, list[str]]:
     }
 
 
-def extract_sidebar_links(html: str, base_url: str) -> list[str]:
-    """Sidebar-only accessor (kept for fixture tests)."""
-    return extract_internal_pages(html, base_url)["sidebar"]
-
-
 def _slugify(s: str) -> str:
     return patterns.SLUG_RE.sub("-", (s or "").lower()).strip("-")[:80] or "section"
 

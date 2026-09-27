@@ -376,8 +376,3 @@ def compute_manifest_hash(
         f"schema = {versions.DIGEST_SCHEMA_VERSION}"
     )
     return sha256(payload.encode("utf-8")).hexdigest()[:16]
-
-
-def load_digest_payload(text: str) -> dict:
-    """Parse the persisted digest blob."""
-    return json.loads(text)

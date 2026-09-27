@@ -23,7 +23,7 @@ router = APIRouter()
 async def start_run(body: schemas.StartRunBody) -> dict:
     """Status: cached (manifest present, no refresh) / queued (lock
     acquired, Celery dispatched) / locked (another in flight)."""
-    entry = await resolver.service.get_catalog_entry(body.slug)
+    await resolver.service.get_catalog_entry(body.slug)
 
     r = redis_aio.from_url(
         domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,

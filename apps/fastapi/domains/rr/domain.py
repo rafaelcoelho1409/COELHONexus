@@ -555,13 +555,6 @@ ARXIV_DESCRIPTIONS: dict[str, str] = {
 }
 
 
-def describe_vertical(code: str) -> str:
-    """Return the human subject name for a code (e.g. `'cs.LG' → 'Machine
-    Learning'`). Returns an empty string for unknown codes; callers should
-    branch on truthiness."""
-    return ARXIV_DESCRIPTIONS.get(code, "")
-
-
 def item_to_finding(item: dict[str, Any]) -> entities.Finding:
     """Convert one digest item to a entities.Finding dataclass for service.persist_*"""
     ex_dict = item.get("extraction")

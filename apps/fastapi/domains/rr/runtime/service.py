@@ -398,35 +398,6 @@ async def _extraction_redis() -> redis_aio.Redis | None:
         return None
 
 
-async def get_extraction(arxiv_id: str) -> dict[str, Any] | None:
-    """Look up a cached extraction by arxiv_id under the current prompt
-    version. Returns None on miss / Redis unavailable / parse error."""
-    rds = await _extraction_redis()
-    if rds is None:
-        return None
-    try:
-        raw = await rds.get(keys.extraction_cache_key(arxiv_id))
-        if not raw:
-            return None
-        if isinstance(raw, bytes):
-            raw = raw.decode()
-        data = json.loads(raw)
-        if not isinstance(data, dict):
-            return None
-        return data
-    except Exception as e:
-        logger.debug(
-            f"[rr-cache] get failed for {arxiv_id}: "
-            f"{type(e).__name__}: {e}"
-        )
-        return None
-    finally:
-        try:
-            await rds.aclose()
-        except Exception:
-            pass
-
-
 async def set_extraction(
     arxiv_id: str, extraction: dict[str, Any],
 ) -> bool:

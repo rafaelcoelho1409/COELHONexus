@@ -589,9 +589,3 @@ def is_context_overflow_error(e: Exception) -> bool:
     indistinguishable from any other unless we pattern-match the message."""
     msg = str(e).lower()
     return any(marker in msg for marker in _CONTEXT_OVERFLOW_MARKERS)
-
-
-def load_outline_payload(text: str) -> dict:
-    """Parse the persisted outline blob. Returns the full payload dict;
-    downstream nodes pick the fields they need (outline, dag, etc.)."""
-    return json.loads(text)

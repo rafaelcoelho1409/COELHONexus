@@ -167,7 +167,6 @@ async def off_topic_run(state: domains.dd.planner.state.PlannerState) -> dict:
     deployment_summary = agg["deployment_summary"]
     error_breakdown = agg["error_breakdown"]
 
-    domain_coherence = 0.0
     elapsed_ms = int((time.monotonic() - t0) * 1000)
 
     # Retrieve descriptors for stats (no embedding)

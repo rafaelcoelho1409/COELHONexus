@@ -591,21 +591,10 @@ class Store:
             )
         return await self.minio.read_text(self._cached_manifest[idx].key)
 
-    async def delete_body(self, idx: int) -> None:
-        if idx < 0 or idx >= len(self._cached_manifest):
-            return
-        try:
-            await self.minio.delete(self._cached_manifest[idx].key)
-        except Exception as e:
-            logger.info(f"[store] delete body idx={idx} skipped: {e}")
-
     async def replace_manifest(self, entries: list[entities.ManifestEntry]) -> None:
         """Atomically replace the manifest. Caller writes new bodies first."""
         self._cached_manifest = list(entries)
         await self._write_live_manifest(force=True)
-
-    async def write_body_by_key(self, key: str, body: str) -> int:
-        return await self.minio.write(key, body, content_type="text/markdown")
 
     async def read_body_by_key(self, key: str) -> str:
         return await self.minio.read_text(key)

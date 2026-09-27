@@ -3,7 +3,7 @@ prompt builders, LLM verdict coercion, CoCoA two-stage alignment check, and
 atomic-claim grounding."""
 from __future__ import annotations
 import domains
-from . import domain, keys, params, patterns, prompts, schemas, versions
+from . import domain, keys, params, prompts, schemas, versions
 # For best-seen promotion — needs sawc's OWN versioned-key convention,
 # not checklist's (each node's versioned_blob_key hardcodes its own path
 # segment). See the best-seen fix below for why this lives here.

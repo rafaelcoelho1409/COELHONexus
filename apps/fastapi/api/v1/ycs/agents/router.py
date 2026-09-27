@@ -708,7 +708,6 @@ async def rag_search_stream(
         })
         last_generation = ""
         last_mode       = ""
-        last_persisted  = ""
         last_citations: list = []
         last_grounded = False
         t_run_start     = time.monotonic()
@@ -978,7 +977,6 @@ async def rag_search_stream(
                                     ),
                                     timeout = params.PERSIST_TIMEOUT_S,
                                 )
-                                last_persisted = last_generation
                                 last_persist_t = now_t
                                 first_persist_done = True
                             except (asyncio.TimeoutError, Exception) as e:

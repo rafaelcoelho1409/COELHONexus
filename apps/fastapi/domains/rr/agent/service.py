@@ -90,13 +90,3 @@ async def get_tools_by_name(*names: str) -> list[BaseTool]:
             f"tools/<source>/tool.py @mcp.tool(name=...) registration."
         )
     return [by_name[n] for n in names]
-
-
-async def reset_mcp_client() -> None:
-    """Drop the cached client + tools so the next call re-connects.
-    Useful when the FastMCP server restarts mid-session."""
-    global _client, _tools_cache, _client_loop
-    _client = None
-    _tools_cache = None
-    _client_loop = None
-    logger.info("[rr-mcp] client cache reset")

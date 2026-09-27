@@ -236,15 +236,6 @@ class PhaseEnforcerMiddleware(AgentMiddleware):
 
         return await handler(request)
 
-    @staticmethod
-    def _last_was_terminal(messages: list[Any]) -> bool:
-        if not messages:
-            return False
-        last = messages[-1]
-        if type(last).__name__ != "AIMessage":
-            return False
-        return not getattr(last, "tool_calls", None)
-
     def before_model(self, state: dict[str, Any], runtime: Any = None) -> dict[str, Any] | None:
         """Inject a high-priority SystemMessage when a phase is incomplete."""
         messages = state.get("messages", []) or []

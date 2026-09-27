@@ -96,13 +96,6 @@ def get_thread_state() -> tuple[str | None, str | None]:
     return _thread_id_var.get(), _node_var.get()
 
 
-def clear_state() -> None:
-    """Reset ALL four vars — safe default for a request boundary."""
-    set_context(extract_id=None, video_id=None)
-    set_thread(thread_id=None)
-    set_node(node=None)
-
-
 async def bump_current_call(
     *,
     tokens_in:    int,

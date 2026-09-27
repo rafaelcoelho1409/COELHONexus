@@ -5,7 +5,6 @@ from . import params, patterns, prompts, schemas, versions
 
 import ast
 import hashlib
-import json
 import re
 
 
@@ -402,11 +401,6 @@ def compute_manifest_hash(
         f"schema={versions.RENDER_SCHEMA_VERSION}"
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-
-
-def load_render_payload(text: str) -> dict:
-    """Parse the persisted render-latest.json blob."""
-    return json.loads(text)
 
 
 def strip_code_fences(s: str) -> str:

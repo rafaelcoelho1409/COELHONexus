@@ -176,23 +176,3 @@ async def backfill_normalize_for_framework(slug: str) -> dict:
         "normalized": normalized, "unchanged": unchanged,
         "errors": errors,
     }
-
-
-async def backfill_all_normalize() -> list[dict]:
-    """Normalize every page of every framework + rebuild vaults."""
-    slugs = await _list_framework_slugs()
-    if not slugs:
-        return []
-    print(f"[backfill-normalize] discovered {len(slugs)} framework(s): "
-          + ", ".join(slugs))
-    out = []
-    for slug in slugs:
-        print(f"[backfill-normalize] {slug}: starting…")
-        r = await backfill_normalize_for_framework(slug)
-        print(
-            f"[backfill-normalize] {slug}: pages = {r['pages']} "
-            f"normalized = {r['normalized']} unchanged = {r['unchanged']} "
-            f"errors = {r['errors']}"
-        )
-        out.append(r)
-    return out

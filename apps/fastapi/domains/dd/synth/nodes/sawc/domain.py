@@ -372,13 +372,6 @@ def score_draft_structural(
     vault_rich: dict | None = None,
 ) -> float:
     """Structural quality score (Self-Certainty proxy, arXiv 2502.18581) for when critic LLM fails. Penalizes vault/citation violations and heading mismatch; rewards subtopic count + citation density + explanation length."""
-    issues = validate_section_against_inputs(
-        draft,
-        expected_heading = expected_heading,
-        allowed_hashes = allowed_hashes,
-        valid_source_keys = valid_source_keys,
-        vault_rich = vault_rich,
-    )
     # v2 cookbook scoring: subtopic count + explanation density + heading
     # match + citation count drive the structural score.
     n_vault_violations = sum(
@@ -835,60 +828,6 @@ def build_writer_prompt(
     )
 
 
-def build_critic_picker_prompt(
-    *,
-    section_id: str,
-    section_heading: str,
-    n_primary_contribs: int,
-    candidates_summary: list[dict],
-) -> str:
-    """MAMM-Refine critic (arXiv 2503.15272): structural summaries only (not full prose) — per §4, reranking > regeneration."""
-    lines: list[str] = []
-    for i, c in enumerate(candidates_summary):
-        violations = c.get("violations") or []
-        viol_str = (
-            f" violations = ({len(violations)}: " + "; ".join(violations[:3]) + ")"
-            if violations
-            else " violations = (none)"
-        )
-        lines.append(
-            f"  [{i}] subtopics = {c.get('n_subtopics')}, "
-            f"intro_chars = {c.get('intro_chars')}, "
-            f"avg_expl_words = {c.get('avg_expl_words', 0):.0f}, "
-            f"citations = {c.get('n_citations')}, "
-            f"heading_match = {'✓' if c.get('heading_match') else '✗'}, "
-            f"structural_score = {c.get('structural_score', 0):.2f}"
-            f"{viol_str}"
-        )
-    candidates_block = "\n".join(lines)
-    return (
-        f"You are the Critic-Picker for section {section_id} "
-        f"({section_heading!r}). Pick the SINGLE BEST draft from "
-        f"{len(candidates_summary)} candidates. Per MAMM-Refine "
-        f"(arXiv 2503.15272), this rerank step outperforms regenerating; "
-        f"choose deliberately by the rubric below — IN ORDER.\n\n"
-
-        f"Rubric (apply top-down — a higher-priority criterion decides "
-        f"ties on lower ones):\n"
-        f"1. ZERO violations (subtopic hashes outside allowed, citations "
-        f"   outside valid source_keys, heading mismatch). A candidate "
-        f"   with any violations LOSES to any clean candidate.\n"
-        f"2. Subtopic count in sweet spot: 4-6 subtopics is ideal; "
-        f"   3 is acceptable; 7-8 is OK for content-heavy sections.\n"
-        f"3. Citation count near or above n_primary_contribs = "
-        f"{n_primary_contribs} (one citation per primary contribution).\n"
-        f"4. Average explanation words 15-60 (concise per subtopic).\n"
-        f"5. Highest structural_score (a deterministic proxy combining "
-        f"   the above — useful as a tiebreaker).\n\n"
-
-        f"Candidates:\n{candidates_block}\n\n"
-
-        f"Respond ONLY with valid JSON: {{\"chosen_index\": <int>}} "
-        f"where the integer is 0..{len(candidates_summary) - 1}. "
-        f"No prose, no explanation."
-    )
-
-
 def summarize_candidate(
     draft: schemas.LLMSectionDraft,
     *,
@@ -1085,11 +1024,4 @@ def shorten_pydantic_error(e: ValidationError) -> str:
         lines.append(f"{loc}: {msg}")
     suffix = f" (+{len(errs) - 4} more)" if len(errs) > 4 else ""
     return "; ".join(lines) + suffix
-
-
-def load_sawc_payload(text: str) -> dict:
-    """Parse the persisted sawc blob. Returns the full payload dict;
-    downstream nodes pick the fields they need (sections, memory_final,
-    coverage_stats, etc.)."""
-    return json.loads(text)
 

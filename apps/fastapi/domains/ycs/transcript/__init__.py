@@ -6,6 +6,6 @@ Public surface (verbatim deprecated):
   close_transcript_service()      — async cleanup
   fetch_transcriptions_batch(...) — cache-aware batch driver
   TranscriptSegment, CaptionTrack — dataclasses
-  TranscriptError, CDPConnectError, NoTranscriptFoundError — exceptions"""
+  TranscriptError — base exception"""
 from __future__ import annotations
 from . import domain, errors, params, service

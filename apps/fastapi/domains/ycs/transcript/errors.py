@@ -9,12 +9,3 @@ from __future__ import annotations
 
 class TranscriptError(Exception):
     """Base class for transcript-extraction failures."""
-
-
-class CDPConnectError(TranscriptError):
-    """Failed to (re)connect to the Playwright CDP endpoint after retries."""
-
-
-class NoTranscriptFoundError(TranscriptError):
-    """Video has no transcript (button absent, panel empty, captions
-    disabled)."""

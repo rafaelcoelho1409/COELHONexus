@@ -7,7 +7,6 @@ from . import params, patterns, schemas, versions
 
 import re
 from hashlib import sha256
-from typing import Optional
 
 
 

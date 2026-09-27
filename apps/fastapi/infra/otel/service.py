@@ -344,14 +344,6 @@ def bag_context(**kwargs: str | None) -> Iterator[None]:
         context.detach(token)
 
 
-def current_baggage() -> dict[str, str]:
-    """Snapshot of baggage entries in the active context (diagnostics)."""
-    try:
-        return dict(baggage.get_all())
-    except Exception:
-        return {}
-
-
 # ---------------------------------------------------------------------------
 # Lazy instrument factory — one OTel instrument per MetricSpec in
 # entities.INSTRUMENTS. Idempotent: instruments are created on the first
