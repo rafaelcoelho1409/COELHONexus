@@ -16,6 +16,13 @@ eck-elasticsearch:
 
   # http: {}  # using ECK's auto-generated TLS — no overrides needed
 
+  # secureSettings: ECK loads each KEY from this Secret into ES's keystore on
+  # pod start. Required for the s3 snapshot repo plugin (ES 8.18 rejects
+  # inline credentials in repo settings). Ported from COELHO Cloud, 2026-09-28
+  # — coexists with `auth:` below (separate top-level ECK CR fields).
+  secureSettings:
+    - secretName: elasticsearch-s3-keystore
+
 %{ if elastic_file_realm_secret_name != "" || app_file_realm_secret_name != "" || app_roles_secret_name != "" ~}
   auth:
 %{ if elastic_file_realm_secret_name != "" ~}

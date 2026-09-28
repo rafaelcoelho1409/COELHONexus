@@ -13,6 +13,11 @@
 #   - External Ingresses (console + API) REMOVED from main.tf (2026-07-02) —
 #     always inert on this cluster. Access MinIO via port-forward/NodePort.
 #   - Credentials from env.hcl `demo` map instead of SOPS
+#   - Ported 2026-09-28: memory_request/memory_limit/gomemlimit bump — Cloud
+#     hit repeated OOMKills at the module's 384Mi default under real load
+#     (MinIO's IAM refresh subsystem freezing under GC pressure), manifesting
+#     as FastAPI lifespan hangs + Planner stalls on MinIO reads/writes. Same
+#     chart/architecture here, so applying the same headroom pre-emptively.
 # =============================================================================
 
 include "root" {
@@ -68,10 +73,15 @@ inputs = {
   root_user     = include.root.locals.env.demo.minio_access_key
   root_password = include.root.locals.env.demo.minio_secret_key
 
-  # Defaults from variables.tf are appropriate for the standalone path:
-  #   chart 5.4.0, standalone, 15Gi PVC, 10m/200Mi/384Mi resources,
-  #   GOMEMLIMIT=350MiB. Default bucket = "backups" (inlined in
-  #   helm/values.yaml.tpl).
+  # Memory bump ported from COELHO Cloud (2026-09-28) — see adaptations note
+  # above. 1.5Gi limit + GOMEMLIMIT ~10% under it.
+  memory_request = "512Mi"
+  memory_limit   = "1536Mi"
+  gomemlimit     = "1400MiB"
+
+  # Other defaults from variables.tf are appropriate for the standalone path:
+  #   chart 5.4.0, standalone, 15Gi PVC, 10m CPU request. Default bucket =
+  #   "backups" (inlined in helm/values.yaml.tpl).
 
   # Local access (k3d only) — API 30479->23015, Console 30480->23016, via
   # `k3d cluster edit coelhonexus --port-add "23015:30479@loadbalancer"`

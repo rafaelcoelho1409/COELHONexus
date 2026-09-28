@@ -14,6 +14,9 @@
 #   - Password from env.hcl `demo` map (not SOPS)
 #   - External exposure stays off (module default + we have no
 #     external ingress operator anyway)
+#   - Ported 2026-09-28: backup CronJob's upload container migrated
+#     minio/mc:latest → amazon/aws-cli:2.37.1 (mc is dead upstream —
+#     archived Jul 2026, Docker Hub pulls denied).
 # =============================================================================
 
 include "root" {

@@ -12,6 +12,10 @@
 #     own browser_advertised_address/bolt_advertised_address Helm values still
 #     reference it (unrelated to the Ingress resources that got removed).
 #   - neo4j_password from env.hcl `demo` map (not SOPS)
+#   - Ported 2026-09-28: backup ensure_bucket Job + CronJob's upload
+#     container migrated minio/mc:latest → amazon/aws-cli:2.37.1 (mc is dead
+#     upstream — archived Jul 2026, Docker Hub pulls denied; was a broken
+#     image pull waiting to happen).
 # =============================================================================
 
 include "root" {

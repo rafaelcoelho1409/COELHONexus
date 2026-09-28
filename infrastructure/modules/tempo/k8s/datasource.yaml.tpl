@@ -47,3 +47,18 @@ data:
             datasourceUid: mimir
           nodeGraph:
             enabled: true
+          # Disabled (ported from COELHO Cloud's 2026-09-23 incident fix):
+          # Grafana derives its streaming connection from this same HTTP
+          # URL/port but speaks gRPC-over-h2c for it. This chart's monolithic
+          # Tempo doesn't have `stream_over_http_enabled` on, so port 3200
+          # only ever answers plain HTTP/1.1 — every streaming attempt fails
+          # with "grpc: addrConn.createTransport ... error reading server
+          # preface: http2: frame too large" (Grafana apiserver logs), which
+          # reads as "Grafana can't connect to Tempo" in the UI. Streaming is
+          # a progressive-results nicety, not a functional requirement —
+          # disabling it falls back to plain HTTP polling, which already
+          # works fine (/api/search and /api/traces/{id} both serve over
+          # this same port/URL).
+          streamingEnabled:
+            search: false
+            metrics: false

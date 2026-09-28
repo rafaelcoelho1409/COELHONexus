@@ -17,7 +17,6 @@
 #   - service is API (port 9000); consoleService is UI (port 9001) — TWO Services
 #   - ServiceMonitor template missing — we create it manually in main.tf
 #   - Pod labels are legacy `app=minio` (NOT app.kubernetes.io/name=...)
-#     This is why ingress annotations include gethomepage.dev/pod-selector.
 # =============================================================================
 
 # Standalone mode — 1 pod, 1 PVC. Switch to "distributed" for HA (≥4 nodes).
@@ -74,15 +73,32 @@ resources:
   limits:
     memory: "${memory_limit}"
 
-extraEnvVars:
-  - name: GOMEMLIMIT
-    value: "${gomemlimit}"
+# NOTE (ported from COELHO Cloud, 2026-09-28): this chart (charts.min.io/minio
+# v5.4.0) has NO `extraEnvVars` key in its schema — the previous version of
+# this file used that key and it was silently ignored by Helm (unknown values
+# keys don't error). Confirmed against the upstream chart source
+# (github.com/minio/minio helm/minio/values.yaml): the real key is
+# `environment:` (a map, not a list). Neither GOMEMLIMIT nor
+# MINIO_SCANNER_SPEED below were ever actually applied before this fix.
+environment:
+  GOMEMLIMIT: "${gomemlimit}"
   # Single-drive xl-single mode has no parity → healing can't repair anything,
   # and no bucket uses versioning or ILM rules → no lifecycle work to schedule.
-  # `default` speed was burning 2.65 cores on pure bit-rot detection. `slowest`
-  # drops scanner CPU ~99%. Re-evaluate if lifecycle rules are ever added.
-  - name: MINIO_SCANNER_SPEED
-    value: "slowest"
+  # `default` speed was intended to drop scanner CPU ~99% (never actually
+  # active before this fix — see note above).
+  MINIO_SCANNER_SPEED: "slowest"
+  # Single-drive/single-node — MinIO's built-in disk-writability probe
+  # (cmd/xl-storage-disk-id-check.go, ~30s threshold) periodically takes the
+  # drive "offline" under local-path host I/O contention even though the
+  # drive is fine (self-heals within the same 30-40s every time). With 1
+  # drive there's no quorum to fall back on, so each false positive is a full
+  # outage — this is exactly Nexus's topology (single-node, local-path PVC)
+  # and would manifest as MinIO reads/writes hanging mid-Synth-chapter and
+  # FastAPI's ensure_bucket() hanging on lifespan startup. Undocumented but
+  # community-confirmed knob (github.com/minio/minio/discussions/18909).
+  # Acceptable here — dev/homelab single-node instance, no other drives to
+  # protect via failover anyway.
+  _MINIO_DRIVE_ACTIVE_MONITORING: "off"
 
 # -----------------------------------------------------------------------------
 # Security context — non-root, fsGroup for PVC ownership.

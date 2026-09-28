@@ -5,9 +5,11 @@
 #   - Init container (alpine + curl/jq): POST /collections/{c}/snapshots for
 #     every collection, downloads each snapshot to /backup, then DELETEs the
 #     snapshot from Qdrant (cleanup).
-#   - Main container (minio/mc): uploads each snapshot to MinIO under
+#   - Main container (amazon/aws-cli): uploads each snapshot to MinIO under
 #     `backups/qdrant/<collection>/<timestamp>.snapshot`. Retention applied
 #     per-collection (keep last N).
+#     (minio/mc is dead upstream — archived Jul 2026, Docker Hub pulls
+#     denied. Ported from COELHO Cloud, 2026-09-28.)
 #
 # Inherits MinIO creds + Qdrant API key from the backup_creds Secret.
 # =============================================================================
@@ -116,9 +118,9 @@ spec:
                 limits:
                   memory: 512Mi
           containers:
-            # Phase 2 — upload to MinIO with per-collection retention
+            # Phase 2 — upload to MinIO with per-collection retention (aws-cli)
             - name: upload
-              image: minio/mc:latest
+              image: amazon/aws-cli:2.37.1
               command:
                 - /bin/sh
                 - -c
@@ -137,38 +139,49 @@ spec:
 
                   RETENTION=${backup_retention}
 
+                  export AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" AWS_DEFAULT_REGION=us-east-1 AWS_EC2_METADATA_DISABLED=true
+                  aws configure set s3.addressing_style path
+                  EP="--endpoint-url $MINIO_ENDPOINT"
+
                   echo "=== Uploading to MinIO ==="
-                  mc alias set m "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+                  if aws $EP s3api head-bucket --bucket "$MINIO_BUCKET" 2>/dev/null; then
+                    echo "exists: $MINIO_BUCKET"
+                  else
+                    aws $EP s3api create-bucket --bucket "$MINIO_BUCKET"
+                  fi
 
                   while IFS='|' read -r collection filename; do
                     echo "--- $collection ---"
-                    mc cp "/backup/$filename" "m/$MINIO_BUCKET/qdrant/$collection/"
+                    aws $EP s3 cp "/backup/$filename" "s3://$MINIO_BUCKET/qdrant/$collection/"
 
                     # Retention: keep last N snapshots per collection
                     echo "Pruning to last $RETENTION snapshots..."
-                    mc ls "m/$MINIO_BUCKET/qdrant/$collection/" 2>/dev/null \
-                      | sort -t' ' -k1,1 -k2,2 \
-                      | head -n -$RETENTION \
-                      | while read -r line; do
-                          old=$(echo "$line" | rev | cut -d' ' -f1 | rev)
+                    KEYS=$(aws $EP s3api list-objects-v2 --bucket "$MINIO_BUCKET" --prefix "qdrant/$collection/" --query "sort_by(Contents, &LastModified)[].Key" --output text 2>/dev/null || echo "None")
+                    if [ -n "$KEYS" ] && [ "$KEYS" != "None" ]; then
+                      TOTAL=$(echo "$KEYS" | wc -w)
+                      if [ "$TOTAL" -gt "$RETENTION" ]; then
+                        echo "$KEYS" | tr '\t' '\n' | head -n $((TOTAL - RETENTION)) | while read -r old; do
                           if [ -n "$old" ]; then
                             echo "  delete: $old"
-                            mc rm "m/$MINIO_BUCKET/qdrant/$collection/$old"
+                            aws $EP s3api delete-object --bucket "$MINIO_BUCKET" --key "$old" >/dev/null
                           fi
                         done
+                      fi
+                    fi
                   done < /backup/FILES
 
                   echo "=== Backup complete ==="
-                  mc ls --recursive "m/$MINIO_BUCKET/qdrant/" | tail -10
+                  aws $EP s3 ls --recursive "s3://$MINIO_BUCKET/qdrant/" | tail -10
               envFrom:
                 - secretRef:
                     name: ${creds_secret}
               volumeMounts:
                 - name: backup-data
                   mountPath: /backup
+              # aws-cli (Python) is heavier than mc — 256Mi limit headroom.
               resources:
                 requests:
                   cpu: 50m
                   memory: 64Mi
                 limits:
-                  memory: 128Mi
+                  memory: 256Mi

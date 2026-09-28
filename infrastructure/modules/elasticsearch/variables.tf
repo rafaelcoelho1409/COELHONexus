@@ -182,6 +182,62 @@ variable "elastic_password_override" {
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
+# MinIO — snapshot backups (ported from COELHO Cloud, 2026-09-28)
+# -----------------------------------------------------------------------------
+# Cloud registers the MinIO bucket as an ES snapshot repository and runs a
+# CronJob against it; Nexus's main.tf never wired this up even though the
+# k8s/backup-cronjob.yaml.tpl template already existed on disk (dead code).
+# This closes that gap using the same MinIO-backed-backup idiom already used
+# by Nexus's own qdrant/neo4j/postgresql/redis modules.
+#
+# ES 8.18 rejects inline S3 credentials in snapshot repo settings — creds
+# must go through ES's keystore (secureSettings in the Helm values, loaded
+# by ECK from kubernetes_secret_v1.es_s3_keystore in main.tf).
+# -----------------------------------------------------------------------------
+
+variable "minio_endpoint" {
+  description = "MinIO S3 endpoint (in-cluster, with scheme)."
+  type        = string
+  default     = "http://minio.minio.svc.cluster.local:9000"
+}
+
+variable "minio_access_key" {
+  description = "MinIO access key."
+  type        = string
+  sensitive   = true
+}
+
+variable "minio_secret_key" {
+  description = "MinIO secret key."
+  type        = string
+  sensitive   = true
+}
+
+variable "backup_bucket" {
+  description = "MinIO bucket for ES snapshots. Uses the shared `backups` bucket with an `elasticsearch/` prefix (set as the snapshot repo's base_path)."
+  type        = string
+  default     = "backups"
+}
+
+variable "snapshot_repo_name" {
+  description = "ES snapshot repository name."
+  type        = string
+  default     = "minio-backup"
+}
+
+variable "backup_schedule" {
+  description = "Cron schedule for the snapshot CronJob. Default: every 6 hours."
+  type        = string
+  default     = "30 */6 * * *"
+}
+
+variable "backup_retention" {
+  description = "Number of snapshots to keep in the ES repo."
+  type        = number
+  default     = 20
+}
+
+# -----------------------------------------------------------------------------
 # Local access (k3d dev clusters only — e.g. coelhonexus standalone)
 # -----------------------------------------------------------------------------
 # Opt-in NodePort Services so a human on their own laptop can open Kibana and

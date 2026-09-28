@@ -9,7 +9,9 @@
 # Trace events live in MinIO already (durable on the same disk).
 #
 # The CronJob runs as one container (postgres:16-alpine ships psql + bash).
-# `mc` is downloaded inside the container at runtime — avoids an init container.
+# S3 upload uses aws-cli from Alpine packages (minio/mc is dead upstream —
+# archived Jul 2026, Docker Hub pulls denied, dl.min.io unreliable). Ported
+# from COELHO Cloud 2026-09-28.
 # =============================================================================
 apiVersion: batch/v1
 kind: CronJob
@@ -62,9 +64,10 @@ spec:
               args:
                 - |
                   set -euo pipefail
-                  apk add --no-cache curl ca-certificates >/dev/null
-                  curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
-                  chmod +x /usr/local/bin/mc
+                  apk add --no-cache aws-cli >/dev/null
+                  export AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" AWS_DEFAULT_REGION=us-east-1 AWS_EC2_METADATA_DISABLED=true
+                  aws configure set s3.addressing_style path
+                  EP="--endpoint-url $MINIO_ENDPOINT"
 
                   STAMP=$(date -u +%Y-%m-%dT%H-%M-%SZ)
                   DUMP=/tmp/langfuse-$${STAMP}.sql.gz
@@ -76,12 +79,21 @@ spec:
                   ls -lh "$${DUMP}"
 
                   echo "[2/3] upload to s3://$${BUCKET}/$${PREFIX}/postgres/"
-                  mc alias set m "$$MINIO_ENDPOINT" "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY"
-                  mc cp "$${DUMP}" "m/$${BUCKET}/$${PREFIX}/postgres/langfuse-$${STAMP}.sql.gz"
+                  aws $EP s3 cp "$${DUMP}" "s3://$${BUCKET}/$${PREFIX}/postgres/langfuse-$${STAMP}.sql.gz"
 
-                  echo "[3/3] prune snapshots older than $$RETENTION_DAYS days"
-                  mc rm --recursive --force --older-than "$${RETENTION_DAYS}d" \
-                    "m/$${BUCKET}/$${PREFIX}/postgres/" || true
+                  echo "[3/3] prune snapshots older than $RETENTION_DAYS days"
+                  CUTOFF=$(date -u -d "$RETENTION_DAYS days ago" +%Y-%m-%dT%H:%M:%S.000Z)
+                  OLD=$(aws $EP s3api list-objects-v2 --bucket "$BUCKET" --prefix "$PREFIX/postgres/" --query "Contents[?LastModified<='$CUTOFF'].Key" --output text 2>/dev/null || echo "None")
+                  if [ -n "$OLD" ] && [ "$OLD" != "None" ]; then
+                    echo "$OLD" | tr '\t' '\n' | while read -r key; do
+                      if [ -n "$key" ]; then
+                        echo "  delete: $key"
+                        aws $EP s3api delete-object --bucket "$BUCKET" --key "$key" >/dev/null
+                      fi
+                    done
+                  else
+                    echo "Nothing older than $CUTOFF"
+                  fi
 
                   echo "Backup complete: $${STAMP}"
               resources:

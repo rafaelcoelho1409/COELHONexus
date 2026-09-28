@@ -115,8 +115,11 @@ resource "kubernetes_job_v1" "ensure_bucket" {
         restart_policy = "OnFailure"
 
         container {
-          name  = "mc"
-          image = "minio/mc:latest"
+          name = "mc"
+          # minio/mc is dead upstream (archived Jul 2026, Docker Hub pulls
+          # denied) — amazon/aws-cli is the maintained S3-compatible replacement.
+          # Ported from COELHO Cloud (2026-09-28).
+          image = "amazon/aws-cli:2.37.1"
 
           env_from {
             secret_ref {
@@ -127,19 +130,25 @@ resource "kubernetes_job_v1" "ensure_bucket" {
           command = ["/bin/sh", "-c"]
           args = [<<-EOT
             set -euo pipefail
-            mc alias set m "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-            mc mb --ignore-existing "m/$MINIO_BUCKET"
-            echo "Bucket $MINIO_BUCKET ready."
+            export AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" AWS_DEFAULT_REGION=us-east-1 AWS_EC2_METADATA_DISABLED=true
+            aws configure set s3.addressing_style path
+            if aws --endpoint-url "$MINIO_ENDPOINT" s3api head-bucket --bucket "$MINIO_BUCKET" 2>/dev/null; then
+              echo "Bucket $MINIO_BUCKET ready (exists)."
+            else
+              aws --endpoint-url "$MINIO_ENDPOINT" s3api create-bucket --bucket "$MINIO_BUCKET"
+              echo "Bucket $MINIO_BUCKET ready (created)."
+            fi
           EOT
           ]
 
+          # aws-cli (Python) is heavier than mc — 64Mi/128Mi headroom.
           resources {
             requests = {
               cpu    = "10m"
-              memory = "32Mi"
+              memory = "64Mi"
             }
             limits = {
-              memory = "64Mi"
+              memory = "128Mi"
             }
           }
         }

@@ -1,6 +1,15 @@
 # Leaf — tempo (coelhonexus standalone, 30-observability layer)
 # Single-binary trace storage. Backend = local MinIO (tempo-traces bucket).
 # Grafana datasource ConfigMap created here; sidecar imports on startup.
+#
+# Adaptations vs COELHO Cloud's leaf:
+#   - memory_request/memory_limit lifted 256Mi/1Gi -> 512Mi/2Gi (local-only
+#     override below; 1Gi default OOMKilled on multi-trace Explore here).
+#   - Ported 2026-09-28 from COELHO Cloud's 2026-09-23 incident fixes
+#     (same DD ingestion workload triggers the same burst pattern here):
+#     loosened livenessProbe/readinessProbe in helm/values.yaml.tpl, and
+#     streamingEnabled: false in k8s/datasource.yaml.tpl (gRPC-over-h2c
+#     streaming incompatible with this chart's plain-HTTP Tempo).
 
 include "root" {
   path   = find_in_parent_folders("root.hcl")

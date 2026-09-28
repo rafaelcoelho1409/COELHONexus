@@ -19,6 +19,11 @@
 #     The external-domain input is kept: main.tf's public_url fallback still references it.
 #   - All SOPS secrets → env.hcl `demo` map
 #   - enable_otel_ingestion = true (matches COELHO Cloud for the OTLP path)
+#
+# Ported from COELHO Cloud (2026-09-28, generic IaC fixes only):
+#   - web/worker memory 768Mi→4Gi limit (OOM fix, see modules/langfuse/
+#     variables.tf) + bootstrap_bucket Job minio/mc→amazon/aws-cli (mc dead
+#     upstream). Tailscale/SOPS-specific parts of Cloud's leaf excluded.
 # =============================================================================
 
 include "root" {
@@ -129,7 +134,7 @@ inputs = {
   enable_otel_ingestion = true
 
   # Defaults from variables.tf are appropriate:
-  #   chart 1.5.31, ClickHouse 1Gi/3Gi (10Gi PVC), web + worker 100m/1Gi,
+  #   chart 1.5.31, ClickHouse 1Gi/3Gi (10Gi PVC), web + worker 200m/2-4Gi,
   #   daily pg_dump backup, 14-day retention.
 
   # Local access (k3d only) — NodePort 30481->23017, mapped via

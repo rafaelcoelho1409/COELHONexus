@@ -11,6 +11,18 @@
 #     k3d_expose NodePort module below.
 #   - api_key from env.hcl `demo` map (deterministic demo credential;
 #     same value is injected into the app layer as `QDRANT_API_KEY`)
+#   - Ported 2026-09-28: backup ensure_bucket Job + CronJob's upload
+#     container migrated minio/mc:latest → amazon/aws-cli:2.37.1 (mc is dead
+#     upstream — archived Jul 2026, Docker Hub pulls denied).
+#   - NOT ported: Cloud's helm/values.yaml.tpl `apiKey: true` +
+#     `apiKeySecretKeyRef` rewrite. Verified against the upstream chart
+#     source (qdrant/qdrant-helm values.yaml) — the documented schema is
+#     `apiKey.valueFrom.secretKeyRef`, which is what Nexus already uses.
+#     Cloud's rewrite doesn't match any documented key, silently falls back
+#     to chart auto-generation, and is the root cause of the secret-name
+#     drift ("qdrant-apikey" vs "qdrant-api-key") its backup CronJob patches
+#     around with a QDRANT_API_KEY env override. Nexus's original config is
+#     correct; keep it.
 # =============================================================================
 
 include "root" {

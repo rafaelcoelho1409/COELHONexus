@@ -111,7 +111,13 @@ variable "memory_request" {
 }
 
 variable "memory_limit" {
-  description = "Memory limit per MinIO pod. Below 384Mi risks OOM under load (verified in v1)."
+  # COELHO Cloud (2026-09-10): 384Mi OOMKilled repeatedly under real load
+  # (RELEASE.2024-12-18 IAM refreshes freezing under GC pressure — "IAM
+  # refresh took 459s" for 0 items). Symptoms there: FastAPI lifespan hung on
+  # credential reads, Planner runs stalled mid-node on distillate writes —
+  # same architecture Nexus runs. The homelab leaf overrides to 1536Mi; kept
+  # conservative here as the module default for other consumers.
+  description = "Memory limit per MinIO pod. 384Mi is too low under real load — override to ≥1.5Gi if you see FastAPI lifespan hangs or Planner stalls on MinIO reads/writes."
   type        = string
   default     = "384Mi"
 }

@@ -31,7 +31,7 @@
 # -----------------------------------------------------------------------------
 # Locals — endpoint format conversion (same gotcha as Mimir/Loki)
 # -----------------------------------------------------------------------------
-# mc CLI (bootstrap Job) wants the full URL with scheme.
+# AWS CLI (bootstrap Job) wants the full URL with scheme.
 # Tempo's S3 client (thanos-style) wants host:port ONLY (no scheme); the
 # `insecure: true` flag selects HTTP. Build both from var.minio_endpoint.
 # -----------------------------------------------------------------------------
@@ -100,8 +100,11 @@ resource "kubernetes_job_v1" "create_bucket" {
         restart_policy = "OnFailure"
 
         container {
-          name  = "create-bucket"
-          image = "minio/mc:latest"
+          name = "create-bucket"
+          # minio/mc is dead upstream (archived Jul 2026, Docker Hub pulls
+          # denied) — amazon/aws-cli is the maintained S3-compatible
+          # replacement (ported from COELHO Cloud's fix).
+          image = "amazon/aws-cli:2.37.1"
 
           env {
             name  = "MINIO_ENDPOINT"
@@ -123,26 +126,32 @@ resource "kubernetes_job_v1" "create_bucket" {
           command = ["/bin/sh", "-c"]
           args = [<<-EOT
             set -euo pipefail
-            echo "=== Configuring mc client against $MINIO_ENDPOINT ==="
-            mc alias set minio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+            echo "=== Configuring AWS CLI against $MINIO_ENDPOINT ==="
+            export AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" AWS_DEFAULT_REGION=us-east-1 AWS_EC2_METADATA_DISABLED=true
+            aws configure set s3.addressing_style path
 
             echo "=== Creating Tempo bucket (idempotent) ==="
-            mc mb --ignore-existing "minio/$TRACES_BUCKET"
+            if aws --endpoint-url "$MINIO_ENDPOINT" s3api head-bucket --bucket "$TRACES_BUCKET" 2>/dev/null; then
+              echo "exists: $TRACES_BUCKET"
+            else
+              aws --endpoint-url "$MINIO_ENDPOINT" s3api create-bucket --bucket "$TRACES_BUCKET"
+            fi
 
             echo "=== Verifying ==="
-            mc ls "minio/$TRACES_BUCKET"
+            aws --endpoint-url "$MINIO_ENDPOINT" s3api head-bucket --bucket "$TRACES_BUCKET"
 
             echo "=== Done. ==="
           EOT
           ]
 
+          # aws-cli (Python) is heavier than mc — 64Mi/128Mi headroom.
           resources {
             requests = {
               cpu    = "10m"
-              memory = "32Mi"
+              memory = "64Mi"
             }
             limits = {
-              memory = "64Mi"
+              memory = "128Mi"
             }
           }
         }

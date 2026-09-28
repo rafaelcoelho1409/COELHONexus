@@ -8,12 +8,6 @@
 #   - app AsyncPostgresSaver (LangGraph checkpointing for planner + synth)
 #
 # Backup CronJob: nightly 02:00 UTC → MinIO `backups` bucket / `postgres/` prefix.
-#
-# Adaptations vs COELHO Cloud's leaf:
-#   - DROP the external-ingress-operator dependency
-#   - External exposure disabled (module supports the toggle)
-#   - admin_password from env.hcl `demo` map (not SOPS)
-#   - minio creds from dependency.minio.outputs.s3_config (verbatim)
 # =============================================================================
 
 include "root" {

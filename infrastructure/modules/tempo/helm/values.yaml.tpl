@@ -100,6 +100,44 @@ tempo:
     - secretRef:
         name: ${minio_credentials_secret}
 
+  # Probes — loosened from chart defaults (ported from COELHO Cloud's
+  # 2026-09-23 incident fix).
+  # NOTE: must live under `tempo:` — chart 2.1.0's StatefulSet renders
+  # `.Values.tempo.livenessProbe` / `.Values.tempo.readinessProbe`; top-level
+  # keys are accepted by Helm but silently ignored.
+  #
+  # Root cause in Cloud: a burst of concurrent /api/traces/{id} lookups
+  # against large traces (thousands of spans each, from a real Docs
+  # Distiller ingestion run) saturated Tempo's internal querier worker pool
+  # long enough that even its own /ready endpoint missed 3 consecutive
+  # checks at the chart default 5s timeout / 10s period (~30-40s window) —
+  # kubelet killed and restarted the pod. Single-replica StatefulSet, so the
+  # restart dropped Grafana's Tempo datasource connectivity briefly
+  # (self-recovered, zero data loss). Nexus runs the identical DD ingestion
+  # workload, so the same burst pattern applies here too — give the probes
+  # more slack to ride out a legitimate load spike without a disruptive
+  # restart, since Tempo's own querier already has its own 10s per-query
+  # timeout to fail slow lookups cleanly on its own.
+  livenessProbe:
+    httpGet:
+      path: /ready
+      port: 3200
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 10
+    failureThreshold: 6
+    successThreshold: 1
+
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: 3200
+    initialDelaySeconds: 20
+    periodSeconds: 10
+    timeoutSeconds: 10
+    failureThreshold: 6
+    successThreshold: 1
+
 # -----------------------------------------------------------------------------
 # Persistence — WAL + recent blocks before S3 ship-out
 # -----------------------------------------------------------------------------
@@ -113,6 +151,8 @@ persistence:
 # -----------------------------------------------------------------------------
 service:
   type: ClusterIP
+
+# NOTE: probes live under `tempo:` above — chart 2.1.0 ignores top-level keys.
 
 # -----------------------------------------------------------------------------
 # ServiceMonitor — Prometheus-Operator-style scrape target

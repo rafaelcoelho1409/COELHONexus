@@ -4,8 +4,10 @@
 # Two-phase Pod:
 #   - Init container (neo4j:5-community with cypher-shell): runs apoc.export.cypher.all
 #     to /backup, falls back to basic Cypher export if APOC fails.
-#   - Main container (minio/mc): uploads the gzipped Cypher script to MinIO
-#     under `backups/neo4j/<timestamp>.cypher.gz` with retention.
+#   - Main container (amazon/aws-cli): uploads the gzipped Cypher script to
+#     MinIO under `backups/neo4j/<timestamp>.cypher.gz` with retention.
+#     (minio/mc is dead upstream — archived Jul 2026, Docker Hub pulls
+#     denied. Ported from COELHO Cloud, 2026-09-28.)
 #
 # Restore: download the file, gunzip, pipe into cypher-shell.
 # =============================================================================
@@ -105,7 +107,7 @@ spec:
                   memory: 512Mi
           containers:
             - name: upload
-              image: minio/mc:latest
+              image: amazon/aws-cli:2.37.1
               command:
                 - /bin/sh
                 - -c
@@ -120,34 +122,50 @@ spec:
 
                   FILENAME=$(cat /backup/FILENAME)
                   RETENTION=${backup_retention}
+                  PREFIX="neo4j"
+
+                  export AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" AWS_DEFAULT_REGION=us-east-1 AWS_EC2_METADATA_DISABLED=true
+                  aws configure set s3.addressing_style path
+                  EP="--endpoint-url $MINIO_ENDPOINT"
 
                   echo "=== Uploading $FILENAME ==="
-                  mc alias set m "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-                  mc cp "/backup/$FILENAME" "m/$MINIO_BUCKET/neo4j/"
+                  if aws $EP s3api head-bucket --bucket "$MINIO_BUCKET" 2>/dev/null; then
+                    echo "exists: $MINIO_BUCKET"
+                  else
+                    aws $EP s3api create-bucket --bucket "$MINIO_BUCKET"
+                  fi
+                  aws $EP s3 cp "/backup/$FILENAME" "s3://$MINIO_BUCKET/$PREFIX/"
 
                   echo "Pruning to last $RETENTION..."
-                  mc ls "m/$MINIO_BUCKET/neo4j/" | \
-                    sort -t' ' -k1,1 -k2,2 | \
-                    head -n -$RETENTION | \
-                    while read -r line; do
-                      old=$(echo "$line" | rev | cut -d' ' -f1 | rev)
-                      if [ -n "$old" ]; then
-                        echo "  delete: $old"
-                        mc rm "m/$MINIO_BUCKET/neo4j/$old"
-                      fi
-                    done
+                  KEYS=$(aws $EP s3api list-objects-v2 --bucket "$MINIO_BUCKET" --prefix "$PREFIX/" --query "sort_by(Contents, &LastModified)[].Key" --output text 2>/dev/null || echo "None")
+                  if [ -n "$KEYS" ] && [ "$KEYS" != "None" ]; then
+                    TOTAL=$(echo "$KEYS" | wc -w)
+                    if [ "$TOTAL" -gt "$RETENTION" ]; then
+                      echo "$KEYS" | tr '\t' '\n' | head -n $((TOTAL - RETENTION)) | while read -r old; do
+                        if [ -n "$old" ]; then
+                          echo "  delete: $old"
+                          aws $EP s3api delete-object --bucket "$MINIO_BUCKET" --key "$old" >/dev/null
+                        fi
+                      done
+                    else
+                      echo "Nothing to prune ($TOTAL <= $RETENTION)"
+                    fi
+                  else
+                    echo "No objects under $PREFIX/"
+                  fi
 
                   echo "=== Done ==="
-                  mc ls "m/$MINIO_BUCKET/neo4j/" | tail -5
+                  aws $EP s3 ls "s3://$MINIO_BUCKET/$PREFIX/" | tail -5
               envFrom:
                 - secretRef:
                     name: ${creds_secret}
               volumeMounts:
                 - name: backup-data
                   mountPath: /backup
+              # aws-cli (Python) is heavier than mc — 256Mi limit headroom.
               resources:
                 requests:
                   cpu: 50m
                   memory: 64Mi
                 limits:
-                  memory: 128Mi
+                  memory: 256Mi

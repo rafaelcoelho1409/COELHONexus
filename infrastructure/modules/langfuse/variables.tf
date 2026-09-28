@@ -238,6 +238,19 @@ variable "init_user_password" {
 
 # -----------------------------------------------------------------------------
 # Resources (homelab-tuned, NOT langfuse-recommended production budgets)
+#
+# Ported from COELHO Cloud (2026-09-28): web/worker memory raised 768Mi→4Gi
+# (limit) after a real OOM crash ("FATAL ERROR: Reached heap limit...
+# JavaScript heap out of memory") fetching a large trace's full observation
+# tree via GET /api/public/traces/{id}. Known, unfixed upstream limitation
+# (github.com/langfuse/langfuse#10524, closed "not planned" — no pagination,
+# loads every observation into memory at once; reproduced by others even at
+# 4096MB heap on ~10K observations, #10367). Official self-hosting minimum is
+# 2 CPU / 4GB per container (langfuse.com/self-hosting/deployment/
+# infrastructure/containers) — this raises memory to that floor. Worker gets
+# the same bump per the same doc's guidance and its own OOM reports (#13287,
+# #17327). CPU requests are left at the existing homelab value (not
+# implicated by this bug).
 # -----------------------------------------------------------------------------
 variable "web_cpu_request" {
   type    = string
@@ -245,11 +258,11 @@ variable "web_cpu_request" {
 }
 variable "web_memory_request" {
   type    = string
-  default = "640Mi"
+  default = "2048Mi"
 }
 variable "web_memory_limit" {
   type    = string
-  default = "768Mi"
+  default = "4096Mi"
 }
 variable "worker_cpu_request" {
   type    = string
@@ -257,20 +270,20 @@ variable "worker_cpu_request" {
 }
 variable "worker_memory_request" {
   type    = string
-  default = "640Mi"
+  default = "2048Mi"
 }
 variable "worker_memory_limit" {
   type    = string
-  default = "768Mi"
+  default = "4096Mi"
 }
 
 # -----------------------------------------------------------------------------
-# Node.js / V8 tuning — Tier 1 RAM optimization
+# Node.js / V8 tuning
 # -----------------------------------------------------------------------------
 variable "node_max_old_space_size_mb" {
-  description = "V8 max-old-space-size for web + worker. ~80% of memory limit so JVM-style heap cap doesn't fight cgroup."
+  description = "V8 max-old-space-size for web + worker. 2026-09-28 (ported from COELHO Cloud): set EQUAL to the memory limit (was ~80% of it) per Langfuse's own FAQ (langfuse.com/faq/all/self-hosting-javascript-heap-out-of-memory) — 'the value should be equal or above the memory limit of the container', so an oversized allocation gets a clean cgroup OOMKill + pod restart instead of V8's own uncatchable heap-exhaustion crash."
   type        = number
-  default     = 640
+  default     = 4096
 }
 
 variable "log_level" {

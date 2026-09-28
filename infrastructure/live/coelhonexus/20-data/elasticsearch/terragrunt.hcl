@@ -13,6 +13,12 @@
 #   - DROP the external-ingress-operator dependency
 #   - DUMMY external-domain + ingress_class inputs (2 Ingresses inert in main.tf)
 #   - minio creds via dependency
+#   - Ported 2026-09-28: MinIO-backed snapshot backups. Cloud's main.tf
+#     registers the MinIO bucket as an ES snapshot repo (via keystore
+#     secureSettings, ES 8.18-compliant) and runs a CronJob against it;
+#     Nexus's main.tf never wired this up even though the
+#     k8s/backup-cronjob.yaml.tpl template already existed (dead code).
+#     Added the `dependency "minio"` block below to match.
 # =============================================================================
 
 include "root" {
@@ -34,6 +40,18 @@ dependency "k3d" {
   mock_outputs = {
     cluster_name    = "mock"
     kubeconfig_path = "/tmp/nonexistent-kubeconfig"
+  }
+  mock_outputs_allowed_terraform_commands = ["validate", "init", "plan"]
+}
+
+# Snapshot backup CronJob target.
+dependency "minio" {
+  config_path = "../minio"
+
+  mock_outputs = {
+    api_endpoint = "http://minio.minio.svc.cluster.local:9000"
+    access_key   = "mock"
+    secret_key   = "mock"
   }
   mock_outputs_allowed_terraform_commands = ["validate", "init", "plan"]
 }
@@ -71,7 +89,12 @@ inputs = {
   elastic_password_override = include.root.locals.env.demo.elasticsearch_password
 
   # ECK auto-generates the `elastic` superuser password — no input needed.
-  #
+
+  # MinIO snapshot backup endpoint (ported from COELHO Cloud, 2026-09-28).
+  minio_endpoint   = dependency.minio.outputs.api_endpoint
+  minio_access_key = dependency.minio.outputs.access_key
+  minio_secret_key = dependency.minio.outputs.secret_key
+
   # Defaults from variables.tf are appropriate:
   #   eck-operator 3.3.2, eck-stack 0.18.2, ES + Kibana 8.18.8, single node,
   #   200m/2Gi resources, 10Gi PVC, snapshots every 6h, retention 20.

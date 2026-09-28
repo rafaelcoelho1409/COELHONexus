@@ -96,9 +96,9 @@ variable "memory_request" {
 }
 
 variable "memory_limit" {
-  description = "Memory limit. Raised 512Mi→768Mi 2026-09-23, ported from COELHO Cloud's 2026-09-05 fix: under real sustained load (ServiceMonitor growth, slow downstream exports) Alloy OOMKilled ×2 at 512Mi while retry-storming. Not cluster-specific — the same growth pattern applies to any real install of this stack, not just a fresh/idle one."
+  description = "Memory limit. Raised 512Mi→768Mi 2026-09-23, ported from COELHO Cloud's 2026-09-05 fix: under real sustained load (ServiceMonitor growth, slow downstream exports) Alloy OOMKilled ×2 at 512Mi while retry-storming. Raised 768Mi→1536Mi 2026-09-28, ported from COELHO Cloud's 2026-09-24 fix: the same DD/YCS/RR workload that runs in this cluster pushed a Cloud Alloy pod to 95% memory with the readiness probe failing under GC pressure. Not cluster-specific — Nexus runs the identical Celery/FastAPI app traffic, just at smaller scale, and nodes have ample headroom either way."
   type        = string
-  default     = "768Mi"
+  default     = "1536Mi"
 }
 
 variable "alloy_image_tag" {
@@ -108,9 +108,9 @@ variable "alloy_image_tag" {
 }
 
 variable "alloy_gomemlimit" {
-  description = "Go runtime soft memory ceiling (GOMEMLIMIT). ~90% of memory_limit so Go GC fires aggressively below the cgroup hard limit. 450MiB→680MiB 2026-09-23 alongside the memory_limit bump above (ported from COELHO Cloud's 2026-09-05 fix)."
+  description = "Go runtime soft memory ceiling (GOMEMLIMIT). ~90% of memory_limit so Go GC fires aggressively below the cgroup hard limit. 450MiB→680MiB 2026-09-23 alongside the first memory_limit bump (ported from COELHO Cloud's 2026-09-05 fix). 680MiB→1380MiB 2026-09-28, paired with the 768Mi→1536Mi memory_limit bump (ported from COELHO Cloud's 2026-09-24 fix)."
   type        = string
-  default     = "680MiB"
+  default     = "1380MiB"
 }
 
 variable "alloy_gogc" {
@@ -155,15 +155,15 @@ variable "logs_memory_request" {
 }
 
 variable "logs_memory_limit" {
-  description = "Memory limit per alloy-logs pod. File-based tailing has no WAL/receiver buffers, so this stays far below the metrics release's limit."
+  description = "Memory limit per alloy-logs pod. File-based tailing has no WAL/receiver buffers, so this stays far below the metrics release's limit. Raised 128Mi→256Mi 2026-09-28, ported from COELHO Cloud's 2026-09-27 fix: live-observed OOMKilled DaemonSet pods under sustained DD/YCS/RR log volume, the same growth pattern that already forced memory_limit up twice above. Cheap insurance given available node headroom."
   type        = string
-  default     = "128Mi"
+  default     = "256Mi"
 }
 
 variable "logs_gomemlimit" {
-  description = "Go runtime soft memory ceiling (GOMEMLIMIT) for alloy-logs. ~90% of logs_memory_limit."
+  description = "Go runtime soft memory ceiling (GOMEMLIMIT) for alloy-logs. ~90% of logs_memory_limit. 115MiB→230MiB 2026-09-28, paired with the 128Mi→256Mi bump above (ported from COELHO Cloud's 2026-09-27 fix)."
   type        = string
-  default     = "115MiB"
+  default     = "230MiB"
 }
 
 variable "alloy_log_namespace_denylist" {

@@ -270,19 +270,30 @@ alloy:
 
         // Bound the blast radius of a slow Tempo (ported from COELHO Cloud's
         // 2026-09-05 fix: endless DeadlineExceeded retries → queue growth →
-        // OOMKill). Drop after ~2m instead of retrying forever; keep the
-        // queue small (docs warn a very high queue_size causes OOM kills).
+        // OOMKill). Drop after ~5m instead of retrying forever; keep the
+        // queue bounded (docs warn a very high queue_size causes OOM kills).
+        //
+        // Widened 2026-09-28, ported from COELHO Cloud's 2026-09-26 fix
+        // (project_alloy_tempo_queue_fix): live-observed DeadlineExceeded on
+        // this exporter during a sustained DD Synth run (Celery worker),
+        // coinciding with 100% span loss for that workload's traces despite
+        // the app-side OTel export being confirmed correct. Root cause: this
+        // queue was sized for steady low-volume FastAPI traffic, not a
+        // sustained Celery LLM trace burst — Nexus runs the identical DD
+        // Synth/Celery pipeline, so the same burst pattern applies here.
+        // memory_limit was already raised 768Mi→1536Mi above, so there's
+        // headroom for the larger queue without repeating an OOM.
         retry_on_failure {
           enabled           = true
           initial_interval  = "5s"
           max_interval      = "30s"
-          max_elapsed_time  = "2m"
+          max_elapsed_time  = "5m"
         }
 
         sending_queue {
           enabled       = true
-          num_consumers = 2
-          queue_size    = 100
+          num_consumers = 4
+          queue_size    = 256
         }
       }
 

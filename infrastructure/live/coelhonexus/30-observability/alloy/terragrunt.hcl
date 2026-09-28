@@ -103,10 +103,17 @@ inputs = {
   alloy_enable_otlp_receiver = true
 
   # Defaults from variables.tf are appropriate:
-  #   helm_release.alloy: chart 1.8.0, Deployment 1 replica, 100m/256Mi/512Mi
-  #     resources, ServiceMonitor on, RBAC for ServiceMonitor/PodMonitor
-  #     discovery.
-  #   helm_release.alloy_logs: same chart, DaemonSet 1 pod/node, 20m/48Mi/
-  #     128Mi resources (no OTLP/scrape/WAL overhead), namespace denylist =
-  #     alloy_log_namespace_denylist default.
+  #   helm_release.alloy: chart 1.8.0/v1.16.1 image, Deployment 1 replica,
+  #     100m cpu / 256Mi req / 1536Mi limit, GOMEMLIMIT 1380MiB, ServiceMonitor
+  #     on, RBAC for ServiceMonitor/PodMonitor discovery.
+  #   helm_release.alloy_logs: same chart, DaemonSet 1 pod/node, 20m cpu /
+  #     48Mi req / 256Mi limit (no OTLP/scrape/WAL overhead), namespace
+  #     denylist = alloy_log_namespace_denylist default.
+  #
+  # memory_limit/gomemlimit (both releases) and the Tempo exporter's
+  # retry_on_failure/sending_queue sizing were bumped 2026-09-28, ported from
+  # COELHO Cloud fixes (2026-09-24, 2026-09-27, 2026-09-26 respectively) —
+  # same DD/YCS/RR FastAPI+Celery workload runs in this cluster, so the same
+  # sustained-load OOM / Tempo-export-burst patterns apply. See variables.tf
+  # and helm/values.yaml.tpl for the per-value history.
 }

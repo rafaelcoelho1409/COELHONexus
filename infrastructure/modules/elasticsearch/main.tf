@@ -10,8 +10,10 @@
 #      reconciles them into actual Pods/Services/Secrets.
 #   3. ECK auto-generates: TLS certs (CA + node certs), the `elastic` user
 #      password (Secret `elasticsearch-es-elastic-user`).
-#   4. Snapshot backup CronJob hits the in-cluster ES API with inline S3
-#      credentials in the repo registration JSON.
+#   4. MinIO snapshot backups (ported from COELHO Cloud, 2026-09-28): S3
+#      creds go into ES's keystore via `secureSettings` (ES 8.18 rejects
+#      inline creds in repo settings) — see the "MinIO snapshot backups"
+#      section below for the keystore Secret + bootstrap Jobs + CronJob.
 #
 # Why ECK over the Helm-chart-only options:
 #   - elastic/elasticsearch chart was archived 2023, broken with newer ES
@@ -23,9 +25,9 @@
 # Apply order (Terraform handles via depends_on):
 #   1. ECK Operator (CRDs first — must exist before eck-stack chart renders)
 #   2. ECK Stack (Elasticsearch + Kibana CRs)
-#   3. Wait for elastic user Secret + ES readiness
-#   4. Register snapshot repo via REST
-#   5. Create backup CronJob + external Ingress for Kibana
+#   3. Bootstrap Job — ensure MinIO backup bucket exists
+#   4. Bootstrap Job — register MinIO as an ES snapshot repository via REST
+#   5. Snapshot CronJob + local k3d_expose access
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -199,6 +201,7 @@ resource "helm_release" "eck_stack" {
     kubernetes_secret_v1.elastic_file_realm,
     kubernetes_secret_v1.app_user,
     kubernetes_secret_v1.app_roles,
+    kubernetes_secret_v1.es_s3_keystore,
   ]
 }
 
@@ -237,6 +240,263 @@ resource "kubernetes_secret_v1" "elastic_file_realm" {
   }
 
   depends_on = [kubernetes_namespace_v1.elasticsearch]
+}
+
+# -----------------------------------------------------------------------------
+# MinIO snapshot backups (ported from COELHO Cloud, 2026-09-28)
+# -----------------------------------------------------------------------------
+# ES keystore Secret — S3 client credentials for the snapshot repo. ECK reads
+# `secureSettings` from this Secret (see helm/values-stack.yaml.tpl) and
+# auto-injects each KEY into ES's keystore on pod start. ES 8.18 REQUIRES
+# this — inline credentials in repo settings are rejected outright.
+# -----------------------------------------------------------------------------
+resource "kubernetes_secret_v1" "es_s3_keystore" {
+  metadata {
+    name      = "elasticsearch-s3-keystore"
+    namespace = kubernetes_namespace_v1.elasticsearch.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "elasticsearch"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  data = {
+    "s3.client.default.access_key" = var.minio_access_key
+    "s3.client.default.secret_key" = var.minio_secret_key
+  }
+
+  depends_on = [kubernetes_namespace_v1.elasticsearch]
+}
+
+# -----------------------------------------------------------------------------
+# Backup CronJob env-from Secret — MinIO + ES host (no S3 creds — keystore
+# handles it).
+# -----------------------------------------------------------------------------
+resource "kubernetes_secret_v1" "backup_creds" {
+  metadata {
+    name      = "elasticsearch-backup-creds"
+    namespace = kubernetes_namespace_v1.elasticsearch.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "elasticsearch-backup"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  data = {
+    MINIO_ENDPOINT     = var.minio_endpoint
+    MINIO_ACCESS_KEY   = var.minio_access_key
+    MINIO_SECRET_KEY   = var.minio_secret_key
+    MINIO_BUCKET       = var.backup_bucket
+    ELASTICSEARCH_HOST = "elasticsearch-es-http.${kubernetes_namespace_v1.elasticsearch.metadata[0].name}.svc.cluster.local"
+    SNAPSHOT_REPO      = var.snapshot_repo_name
+  }
+
+  depends_on = [kubernetes_namespace_v1.elasticsearch]
+}
+
+# -----------------------------------------------------------------------------
+# Bootstrap Job — ensure backup bucket exists
+# -----------------------------------------------------------------------------
+resource "kubernetes_job_v1" "ensure_bucket" {
+  metadata {
+    name      = "elasticsearch-ensure-bucket"
+    namespace = kubernetes_namespace_v1.elasticsearch.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "elasticsearch-bootstrap"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  spec {
+    ttl_seconds_after_finished = 300
+    backoff_limit              = 5
+
+    template {
+      metadata {
+        labels = {
+          "app.kubernetes.io/name" = "elasticsearch-bootstrap"
+        }
+      }
+
+      spec {
+        restart_policy = "OnFailure"
+
+        container {
+          name = "mc"
+          # minio/mc is dead upstream (archived Jul 2026, Docker Hub pulls
+          # denied) — amazon/aws-cli is the maintained S3-compatible replacement.
+          image = "amazon/aws-cli:2.37.1"
+
+          env_from {
+            secret_ref {
+              name = kubernetes_secret_v1.backup_creds.metadata[0].name
+            }
+          }
+
+          command = ["/bin/sh", "-c"]
+          args = [<<-EOT
+            set -euo pipefail
+            export AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" AWS_DEFAULT_REGION=us-east-1 AWS_EC2_METADATA_DISABLED=true
+            aws configure set s3.addressing_style path
+            if aws --endpoint-url "$MINIO_ENDPOINT" s3api head-bucket --bucket "$MINIO_BUCKET" 2>/dev/null; then
+              echo "Bucket $MINIO_BUCKET ready (exists)."
+            else
+              aws --endpoint-url "$MINIO_ENDPOINT" s3api create-bucket --bucket "$MINIO_BUCKET"
+              echo "Bucket $MINIO_BUCKET ready (created)."
+            fi
+          EOT
+          ]
+
+          # aws-cli (Python) is heavier than mc — 64Mi/128Mi headroom.
+          resources {
+            requests = {
+              cpu    = "10m"
+              memory = "64Mi"
+            }
+            limits = {
+              memory = "128Mi"
+            }
+          }
+        }
+      }
+    }
+  }
+
+  wait_for_completion = true
+  timeouts {
+    create = "5m"
+  }
+
+  depends_on = [kubernetes_secret_v1.backup_creds]
+}
+
+# -----------------------------------------------------------------------------
+# Bootstrap Job — register MinIO as snapshot repository
+# -----------------------------------------------------------------------------
+# Reads the effective `elastic` password Secret at runtime (mounted as an
+# env). Inline S3 creds are NOT in the JSON body — ES 8.18 rejects those;
+# ES reads s3.client.default.access_key/secret_key from its keystore
+# (loaded by ECK from kubernetes_secret_v1.es_s3_keystore above).
+# -----------------------------------------------------------------------------
+resource "kubernetes_job_v1" "register_repo" {
+  metadata {
+    name      = "elasticsearch-register-repo"
+    namespace = kubernetes_namespace_v1.elasticsearch.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "elasticsearch-bootstrap"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  spec {
+    ttl_seconds_after_finished = 300
+    backoff_limit              = 5
+
+    template {
+      metadata {
+        labels = {
+          "app.kubernetes.io/name" = "elasticsearch-register-repo"
+        }
+      }
+
+      spec {
+        restart_policy = "OnFailure"
+
+        container {
+          name  = "register"
+          image = "curlimages/curl:8.5.0"
+
+          # Inject MinIO creds + ES host
+          env_from {
+            secret_ref {
+              name = kubernetes_secret_v1.backup_creds.metadata[0].name
+            }
+          }
+
+          # Inject the effective elastic password (override Secret if set,
+          # else ECK's auto-generated Secret) as ELASTIC_PASSWORD env var.
+          env {
+            name = "ELASTIC_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = local.admin_password_secret_name
+                key  = local.admin_password_secret_key
+              }
+            }
+          }
+
+          command = ["/bin/sh", "-c"]
+          args = [<<-EOT
+            set -euo pipefail
+            ES="https://$ELASTICSEARCH_HOST:9200"
+
+            echo "Waiting for Elasticsearch..."
+            for i in $(seq 1 60); do
+              if curl -sfku "elastic:$ELASTIC_PASSWORD" "$ES/_cluster/health" | grep -q '"status"'; then
+                echo "ES ready"
+                break
+              fi
+              sleep 5
+            done
+
+            echo "Registering S3 snapshot repo $SNAPSHOT_REPO ..."
+            ES_S3_ENDPOINT=$(echo "$MINIO_ENDPOINT" | sed -E 's,^https?://,,')
+            # NO inline access_key/secret_key — ES 8.18 rejects these as insecure.
+            # ES reads s3.client.default.access_key/secret_key from its keystore
+            # (loaded by ECK from kubernetes_secret_v1.es_s3_keystore).
+            curl -sfku "elastic:$ELASTIC_PASSWORD" -X PUT \
+              "$ES/_snapshot/$SNAPSHOT_REPO" \
+              -H 'Content-Type: application/json' \
+              -d "{
+                \"type\": \"s3\",
+                \"settings\": {
+                  \"bucket\": \"$MINIO_BUCKET\",
+                  \"endpoint\": \"$ES_S3_ENDPOINT\",
+                  \"protocol\": \"http\",
+                  \"path_style_access\": true,
+                  \"base_path\": \"elasticsearch\"
+                }
+              }"
+            echo
+            echo "Done."
+          EOT
+          ]
+
+          resources {
+            requests = {
+              cpu    = "10m"
+              memory = "32Mi"
+            }
+            limits = {
+              memory = "64Mi"
+            }
+          }
+        }
+      }
+    }
+  }
+
+  wait_for_completion = true
+  timeouts {
+    create = "5m"
+  }
+
+  depends_on = [helm_release.eck_stack]
+}
+
+# -----------------------------------------------------------------------------
+# Snapshot CronJob
+# -----------------------------------------------------------------------------
+resource "kubernetes_manifest" "backup_cronjob" {
+  manifest = yamldecode(templatefile("${path.module}/k8s/backup-cronjob.yaml.tpl", {
+    namespace        = kubernetes_namespace_v1.elasticsearch.metadata[0].name
+    backup_schedule  = var.backup_schedule
+    backup_retention = var.backup_retention
+    creds_secret     = kubernetes_secret_v1.backup_creds.metadata[0].name
+    admin_secret     = local.admin_password_secret_name
+  }))
+
+  depends_on = [kubernetes_job_v1.register_repo]
 }
 
 # -----------------------------------------------------------------------------
