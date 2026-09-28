@@ -2,8 +2,6 @@
 derived-body LOC band)."""
 from __future__ import annotations
 
-import os
-
 
 # MPSC (arXiv 2503.04611): N=3 — bounded token budget; majority-of-3 rejects 1-2 AST hallucinations per section.
 N_MPSC_SAMPLES = 3
@@ -41,11 +39,10 @@ REQUEST_TIMEOUT_S = 60.0
 MAX_OUTPUT_TOKENS = 1200
 
 
-# Optimal-Stopping: ship sample 1 if AST-valid + in band; else fire remaining + rank. KD_SAWC_DERIVE_OPTIMAL_STOPPING (default true) — same
-# .get()-with-default pattern as outline_sdp's equivalent flag, so a
-# missing env var degrades to the sane default instead of a hard crash.
-DERIVE_OPTIMAL_STOPPING_ENABLED = os.environ.get(
-    "KD_SAWC_DERIVE_OPTIMAL_STOPPING", "true",
-).lower() in ("true", "1", "yes", "on")
+# Optimal-Stopping: ship sample 1 if AST-valid + in band; else fire remaining
+# + rank. 2026-09-27: was a KD_SAWC_DERIVE_OPTIMAL_STOPPING env flag — removed
+# from Helm after confirming it had been "true" (this same default) since
+# introduction with zero history of ever being toggled.
+DERIVE_OPTIMAL_STOPPING_ENABLED = True
 
 BLOB_PREFIX = "synth"

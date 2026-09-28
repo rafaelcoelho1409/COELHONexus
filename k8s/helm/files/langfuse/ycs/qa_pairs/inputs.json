@@ -53,5 +53,38 @@
       "ground_truth": "Judge model scores generator model; rubric-based; scalable but biased."
     },
     "metadata": {"topic": "evals", "fixture_version": "v1"}
+  },
+  {
+    "input": {
+      "question": "What is the difference between mixture-of-experts and a dense transformer?",
+      "channel_ids": []
+    },
+    "expected_output": {
+      "answer": "A mixture-of-experts (MoE) model routes each token to a small subset of expert sub-networks via a learned gate, so only a fraction of parameters activate per token. A dense transformer activates all its parameters for every token.",
+      "ground_truth": "Sparse activation via routing/gating vs full dense activation; same total params, lower FLOPs per token for MoE."
+    },
+    "metadata": {"topic": "architectures", "fixture_version": "v1"}
+  },
+  {
+    "input": {
+      "question": "What does it mean for a model to be 'quantized', and why do it?",
+      "channel_ids": []
+    },
+    "expected_output": {
+      "answer": "Quantization reduces the numerical precision of a model's weights and/or activations (e.g. FP16 to INT8 or INT4), shrinking memory footprint and speeding up inference at some cost to output quality.",
+      "ground_truth": "Lower numerical precision of weights/activations; smaller memory, faster inference; small quality tradeoff."
+    },
+    "metadata": {"topic": "inference-optimization", "fixture_version": "v1"}
+  },
+  {
+    "input": {
+      "question": "Why doesn't this video mention anything about quantum computing?",
+      "channel_ids": []
+    },
+    "expected_output": {
+      "answer": "The available transcript content does not cover quantum computing, so no grounded answer can be given for that topic from these sources.",
+      "ground_truth": "Off-topic / not covered by the indexed transcripts — correct behavior is to decline rather than fabricate an answer."
+    },
+    "metadata": {"topic": "off-topic-negative-case", "fixture_version": "v1"}
   }
 ]

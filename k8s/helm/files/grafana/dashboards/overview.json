@@ -14,7 +14,7 @@
   "version": 1,
   "refresh": "30s",
   "time": {
-    "from": "now-24h",
+    "from": "now-7d",
     "to": "now"
   },
   "links": [
@@ -73,7 +73,7 @@
       },
       "targets": [
         {
-          "expr": "sum(max_over_time(dd_planner_run_total[24h]))",
+          "expr": "sum(max_over_time(dd_planner_run_total[7d]))",
           "legendFormat": "planner runs"
         }
       ]
@@ -95,7 +95,7 @@
       },
       "targets": [
         {
-          "expr": "sum(max_over_time(dd_study_completion_seconds_count[24h]))",
+          "expr": "sum(max_over_time(dd_study_completion_seconds_count[7d]))",
           "legendFormat": "studies"
         }
       ]
@@ -145,7 +145,7 @@
       },
       "targets": [
         {
-          "expr": "sum(max_over_time(ycs_ask_run_total[24h]))",
+          "expr": "sum(max_over_time(ycs_ask_run_total[7d]))",
           "legendFormat": "asks"
         }
       ]
@@ -167,7 +167,7 @@
       },
       "targets": [
         {
-          "expr": "sum(max_over_time(ycs_grounded_total[24h]))",
+          "expr": "sum(max_over_time(ycs_grounded_total[7d]))",
           "legendFormat": "grounded"
         }
       ]
@@ -217,7 +217,7 @@
       },
       "targets": [
         {
-          "expr": "sum(max_over_time(rr_scan_run_total[24h]))",
+          "expr": "sum(max_over_time(rr_scan_run_total[7d]))",
           "legendFormat": "scans"
         }
       ]
@@ -239,7 +239,7 @@
       },
       "targets": [
         {
-          "expr": "sum(max_over_time(rr_scan_run_total{degraded=\"true\"}[24h])) / clamp_min(sum(max_over_time(rr_scan_run_total[24h])), 1)",
+          "expr": "sum(max_over_time(rr_scan_run_total{degraded=\"true\"}[7d])) / clamp_min(sum(max_over_time(rr_scan_run_total[7d])), 1)",
           "legendFormat": "degraded share"
         }
       ],
@@ -652,7 +652,7 @@
             "type": "prometheus",
             "uid": "mimir"
           },
-          "expr": "sum(max_over_time(ycs_grounded_total[24h])) / clamp_min(sum(max_over_time(ycs_ask_run_total[24h])), 1) * 100",
+          "expr": "sum(max_over_time(ycs_grounded_total[7d])) / clamp_min(sum(max_over_time(ycs_ask_run_total[7d])), 1) * 100",
           "legendFormat": "YCS grounded rate",
           "refId": "A"
         }
@@ -714,7 +714,7 @@
             "type": "prometheus",
             "uid": "mimir"
           },
-          "expr": "sum(max_over_time(rr_scan_run_total{degraded=\"true\"}[24h])) / clamp_min(sum(max_over_time(rr_scan_run_total[24h])), 1) * 100",
+          "expr": "sum(max_over_time(rr_scan_run_total{degraded=\"true\"}[7d])) / clamp_min(sum(max_over_time(rr_scan_run_total[7d])), 1) * 100",
           "legendFormat": "RR degraded scan rate",
           "refId": "A"
         }

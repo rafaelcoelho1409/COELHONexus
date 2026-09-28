@@ -13,7 +13,7 @@
   "version": 1,
   "refresh": "30s",
   "time": {
-    "from": "now-24h",
+    "from": "now-6d",
     "to": "now"
   },
   "links": [
@@ -173,7 +173,7 @@
     {
       "id": 6,
       "type": "table",
-      "title": "Observed service edges (24h)",
+      "title": "Observed service edges (7d)",
       "datasource": {
         "type": "prometheus",
         "uid": "mimir"
@@ -186,7 +186,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (client, server) (max_over_time(traces_service_graph_request_total[24h]))",
+          "expr": "sum by (client, server) (max_over_time(traces_service_graph_request_total[7d]))",
           "format": "table",
           "instant": true
         }
@@ -196,7 +196,7 @@
       "id": 7,
       "type": "traces",
       "title": "Cross-service error traces",
-      "description": "Error-status spans across all COELHO Nexus services. Pairs with the service-graph edge metrics above \u2014 when an edge shows high failure rate, drill into traces here to see the root cause span.",
+      "description": "Error-status spans across all COELHO Nexus services. Pairs with the service-graph edge metrics above — when an edge shows high failure rate, drill into traces here to see the root cause span.",
       "datasource": {
         "type": "tempo",
         "uid": "tempo"

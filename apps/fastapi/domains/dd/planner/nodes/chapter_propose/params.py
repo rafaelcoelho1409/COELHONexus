@@ -78,7 +78,7 @@ MAX_REPAIR_ATTEMPTS = 2
 # scales best when pooled.
 OPTIMAL_STOPPING_MIN_PROPOSALS = 6
 OPTIMAL_STOPPING_ENABLED = (
-    os.getenv("KD_PROPOSE_OPTIMAL_STOPPING", "false").lower()
+    os.getenv("DD_PROPOSE_OPTIMAL_STOPPING", "false").lower()
     in ("true", "1", "yes", "on")
 )
 

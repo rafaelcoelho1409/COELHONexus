@@ -2,7 +2,7 @@
 
 Thin OpenAI-compatible client over the user-configured external endpoint
 (Settings page "LLM Endpoint" card → `llm_endpoint` {url, model} + managed
-key `COELHO_LLM_API_KEY`). No gateway logic here: no arm pool, no bandit
+key `LLM_API_KEY`). No gateway logic here: no arm pool, no bandit
 cells, no cascade, no feedback loop — the endpoint owns all of that.
 Every caller (DD planner/synth, YCS Ask/query/graph, RR orchestrator/
 subagents, Langfuse judges) builds through `build_chat_model()` or calls
@@ -82,7 +82,7 @@ def _resolve_endpoint(*, force_store: bool = False) -> entities.EndpointConfig:
         if isinstance(ep, dict):
             url = (ep.get("url") or "").strip() or url
             model = (ep.get("model") or "").strip() or model
-        k = (domains.settings.credentials.service.resolve_key(keys.KEY_ENV) or "").strip()
+        k = (domains.settings.credentials.service.resolve_key(*keys.KEY_ENVS) or "").strip()
         if k:
             key = k
     except Exception as e:  # store/import miss → env + default

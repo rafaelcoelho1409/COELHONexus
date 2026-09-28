@@ -11,6 +11,9 @@ KEK_ENV = "KD_CREDS_KEY"
 MANAGED_KEY_ENVS: tuple[str, ...] = (
     # API key for the chat endpoint DD / YCS / RR call. Blank when the
     # endpoint needs no auth. See domains/settings/chat/service.py.
+    # LLM_API_KEY is current; COELHO_LLM_API_KEY is the legacy name, kept
+    # so an already-stored key under the old name stays readable/deletable.
+    "LLM_API_KEY",
     "COELHO_LLM_API_KEY",
     # Same idea, independent endpoint — embeddings (YCS, RR) can point at
     # a different provider than chat. See domains/settings/embeddings/service.py.

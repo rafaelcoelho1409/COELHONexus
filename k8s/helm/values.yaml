@@ -7,7 +7,7 @@ environment: production
 # This is only the chart default; override url/apiKey/model here (or, at
 # runtime, from the Settings page — takes precedence) to point at the
 # operator's external endpoint. Read by apps/fastapi/domains/settings/chat/service.py
-# (legacy `COELHO_LLM_*` env names still honored).
+# as LLM_ENDPOINT_URL/LLM_API_KEY/LLM_MODEL (legacy `COELHO_LLM_*` names still honored).
 # NOTE: this default only resolves inside the local dev cluster; a real prod
 # deploy must override `llm.endpoint.url` (ArgoCD Application values).
 llm:
@@ -19,7 +19,6 @@ llm:
 
 observability:
   enabled: true
-  otlp_endpoint: "alloy.monitoring:4317"
 
 # Dual-export OTel: Alloy gRPC (empty = disable) + LangFuse HTTP (empty = LGTM-only).
 # Celery overrides OTEL_SERVICE_NAME at pod level to avoid masquerading as fastapi.
@@ -66,37 +65,6 @@ playwright:
 embedding:
   model: "nvidia/llama-nemotron-embed-1b-v2"
 
-dd:
-  useClassicalMap: "1"
-  useClassicalGrader: "1"
-  useClassicalCritic: "1"
-  useClassicalOutline: "1"
-  useClassicalRefiner: "1"
-  useClassicalCurator: "1"
-  useClassicalSummary: "1"
-  useSynthPool: "1"
-  # One model pinned per chapter for Self-Refine convergence (same model sees its own attempts).
-  pinChapterModel: "1"
-  # Global LLM concurrency cap per process; prevents cascade-exhaustion on free-tier providers.
-  llmGlobalConcurrency: "10"
-  # "0" = per-shard mode (stable default); "1" = global KMeans (regressed on <500-file corpora).
-  globalMap: "0"
-  # "1" = live discovery + benchmark ranking; "0" = static catalog fallback.
-  dynamicCatalog: "1"
-  # "1" = disable ParetoBandit (rollback to simple-shuffle); "0" = bandit runs.
-  paretoBanditDisable: "0"
-  # "1" = GMM soft-membership resolver (~85% LLM-judge reduction at ~3-5pp accuracy cost).
-  refineUseGmm: "1"
-  proposeOptimalStopping: "true"
-  sawcDeriveOptimalStopping: "true"
-  # Roll back to "1" if 429 cascades resume.
-  studySem: "2"
-  # "1" = abort a Planner run right after chapter_propose when it fell back to
-  # deterministic seed titles on a large corpus (>=50 docs) — a near-certain
-  # predictor of a throwaway plan. Saves chapter_assign's ~18 min; the proposals
-  # artifact is persisted so /resume works once the LLM pool recovers. Default off.
-  plannerAbortOnDegrade: "0"
-
 secretName: coelhonexus-secret
 
 # BYOK credential store: keys entered via /settings UI → Fernet-encrypted MinIO.
@@ -120,22 +88,6 @@ secretMappings:
     key: aws-access-key-id
   - envName: AWS_SECRET_ACCESS_KEY
     key: aws-secret-access-key
-  # LLM provider keys are BYOK via /settings UI (Fernet-encrypted MinIO).
-  # Uncomment to restore env fallback, or use llmCredentials.importEnvKeys=true to migrate.
-  # - envName: GROQ_API_KEY
-  #   key: groq-api-key
-  # - envName: NVIDIA_API_KEY
-  #   key: nvidia-api-key
-  # - envName: SAMBANOVA_API_KEY
-  #   key: sambanova-api-key
-  # - envName: CEREBRAS_API_KEY
-  #   key: cerebras-api-key
-  # - envName: MISTRAL_API_KEY
-  #   key: mistral-api-key
-  # - envName: GOOGLE_API_KEY
-  #   key: google-api-key
-  # - envName: DEEPSEEK_API_KEY
-  #   key: deepseek-api-key
   - envName: ELASTICSEARCH_PASSWORD
     key: elasticsearch-password
   - envName: QDRANT_API_KEY
@@ -151,11 +103,7 @@ secretMappings:
   - envName: FLOWER_BASIC_AUTH
     key: flower-basic-auth
 
-# localhost:5001 resolves correctly on any cluster targeting this chart —
-# each cluster's own containerd mirror (see registries.yaml.tpl) translates
-# it to that cluster's own in-cluster registry. No per-cluster override needed.
 registry:
-  url: localhost:5001
   imagePullSecret: ""
 
 fastapi:

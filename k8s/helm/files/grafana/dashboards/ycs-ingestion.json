@@ -1,15 +1,15 @@
 {
-  "title": "COELHO Nexus - LLM Rotator — Discovery + Benchmark Health",
-  "uid": "coelhonexus-rotator-red",
+  "title": "COELHO Nexus - YCS Ingestion",
+  "uid": "coelhonexus-ycs-ingestion",
   "tags": [
     "coelhonexus",
-    "rotator",
-    "llm",
+    "ycs",
+    "ingestion",
     "otel",
     "mimir"
   ],
   "schemaVersion": 38,
-  "version": 2,
+  "version": 1,
   "refresh": "30s",
   "time": {
     "from": "now-7d",
@@ -41,6 +41,12 @@
       "targetBlank": false
     },
     {
+      "title": "LLM Call Health",
+      "type": "link",
+      "url": "/d/coelhonexus-llm-call-health",
+      "targetBlank": false
+    },
+    {
       "title": "Service Topology",
       "type": "link",
       "url": "/d/coelhonexus-service-topology",
@@ -56,13 +62,13 @@
   "templating": {
     "list": [
       {
-        "name": "provider",
+        "name": "kind",
         "type": "query",
         "datasource": {
           "type": "prometheus",
           "uid": "mimir"
         },
-        "query": "label_values(dd_rotator_models_alive, provider)",
+        "query": "label_values(ycs_ingest_run_total, kind)",
         "includeAll": true,
         "multi": true,
         "current": {
@@ -75,51 +81,49 @@
   "panels": [
     {
       "id": 1,
-      "type": "timeseries",
-      "title": "Alive models by provider",
+      "type": "stat",
+      "title": "Ingest run outcomes observed",
+      "description": "kind ∈ {extract_videos, extract_channel, extract_playlist, embedding_migration}.",
       "datasource": {
         "type": "prometheus",
         "uid": "mimir"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
+        "h": 6,
+        "w": 8,
         "x": 0,
         "y": 0
       },
       "targets": [
         {
-          "expr": "max by (provider, job) (max_over_time(dd_rotator_models_alive{provider=~\"$provider\"}[1h]))",
-          "legendFormat": "{{provider}} / {{job}}"
+          "expr": "sum by (kind, outcome) (max_over_time(ycs_ingest_run_total{kind=~\"$kind\"}[7d]))",
+          "legendFormat": "{{kind}} / {{outcome}}"
         }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        }
-      }
+      ]
     },
     {
       "id": 2,
       "type": "timeseries",
-      "title": "Discovery duration (p50 / p95)",
+      "title": "Ingest duration (p50 / p95, all kinds)",
       "datasource": {
         "type": "prometheus",
         "uid": "mimir"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
+        "h": 6,
+        "w": 8,
+        "x": 8,
         "y": 0
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(dd_rotator_discovery_duration_seconds_bucket[30m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(ycs_ingest_run_duration_seconds_bucket{kind=~\"$kind\"}[30m])))",
+          "exemplar": true,
           "legendFormat": "p50"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(dd_rotator_discovery_duration_seconds_bucket[30m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(ycs_ingest_run_duration_seconds_bucket{kind=~\"$kind\"}[30m])))",
+          "exemplar": true,
           "legendFormat": "p95"
         }
       ],
@@ -130,32 +134,37 @@
       }
     },
     {
-      "id": 4,
-      "type": "table",
-      "title": "Benchmark cache hits observed",
-      "description": "dd_rotator_benchmark_fetch_total (a 'fetch outcomes' panel previously here) has never been recorded by any code in this app — removed rather than ship a permanently-empty panel. If that instrument is reintroduced (likely in the separate COELHOLLMRotator repo), re-add it here.",
+      "id": 3,
+      "type": "stat",
+      "title": "Error share",
       "datasource": {
         "type": "prometheus",
         "uid": "mimir"
       },
       "gridPos": {
-        "h": 7,
-        "w": 24,
-        "x": 0,
-        "y": 8
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 0
       },
       "targets": [
         {
-          "expr": "sum by (layer) (max_over_time(dd_rotator_benchmark_cache_hit_total[7d]))",
-          "format": "table",
-          "instant": true
+          "expr": "sum(max_over_time(ycs_ingest_run_total{kind=~\"$kind\",outcome=\"error\"}[7d])) / clamp_min(sum(max_over_time(ycs_ingest_run_total{kind=~\"$kind\"}[7d])), 1)",
+          "legendFormat": "error share"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      }
     },
     {
-      "id": 5,
-      "type": "table",
-      "title": "Canonical resolution observed",
+      "id": 4,
+      "type": "timeseries",
+      "title": "Ingest duration p95 by kind",
       "datasource": {
         "type": "prometheus",
         "uid": "mimir"
@@ -164,20 +173,24 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 15
+        "y": 6
       },
       "targets": [
         {
-          "expr": "sum by (layer) (max_over_time(dd_rotator_canonical_resolution_total[7d]))",
-          "format": "table",
-          "instant": true
+          "expr": "histogram_quantile(0.95, sum by (le, kind) (rate(ycs_ingest_run_duration_seconds_bucket{kind=~\"$kind\"}[30m])))",
+          "legendFormat": "{{kind}}"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
     },
     {
-      "id": 6,
+      "id": 5,
       "type": "table",
-      "title": "Discovery errors observed",
+      "title": "Ingest run summary by kind / outcome",
       "datasource": {
         "type": "prometheus",
         "uid": "mimir"
@@ -186,21 +199,21 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 15
+        "y": 6
       },
       "targets": [
         {
-          "expr": "sum by (provider, error_type) (max_over_time(dd_rotator_discovery_error_total{provider=~\"$provider\"}[7d]))",
+          "expr": "sum by (kind, outcome) (max_over_time(ycs_ingest_run_total{kind=~\"$kind\"}[7d]))",
           "format": "table",
           "instant": true
         }
       ]
     },
     {
-      "id": 7,
+      "id": 6,
       "type": "logs",
-      "title": "Recent rotator error logs",
-      "description": "Discovery, benchmark, and canonicalization issues from the FastAPI and Celery services.",
+      "title": "Recent YCS ingestion error logs",
+      "description": "Celery log lines from the extract/qdrant_task/neo4j_task/embedding_migration tasks.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -209,7 +222,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 22
+        "y": 13
       },
       "targets": [
         {
@@ -217,7 +230,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-fastapi|coelhonexus-celery\"} |~ \"(?i)(rotator|benchmark|canonical|discovery|error|exception|traceback|failed)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\" | regexp \"(?P<provider>(?i)(nim|groq|gemini|cerebras|mistral|sambanova))\"",
+          "expr": "{namespace=~\"coelhonexus.*\",service_name=\"coelhonexus-celery\"} |~ \"(?i)(extract_videos|extract_channel|extract_playlist|ingest_to_qdrant|ingest_to_neo4j|embedding_migration|error|exception|traceback|failed)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\"",
           "refId": "A"
         }
       ],
@@ -233,10 +246,10 @@
       }
     },
     {
-      "id": 8,
+      "id": 7,
       "type": "timeseries",
-      "title": "Rotator log rate by level",
-      "description": "5-minute rolling rate of rotator log events by severity. Error spikes = provider 429s or benchmark fetch failures.",
+      "title": "YCS ingestion log rate by level",
+      "description": "5-minute rolling rate of YCS ingestion log events by severity.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -245,7 +258,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 22
+        "y": 13
       },
       "targets": [
         {
@@ -253,7 +266,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum by (detected_level) (count_over_time({namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-fastapi|coelhonexus-celery\"} |~ \"(?i)(rotator|benchmark|canonical|discovery)\" [5m]))",
+          "expr": "sum by (detected_level) (count_over_time({namespace=~\"coelhonexus.*\",service_name=\"coelhonexus-celery\"} |~ \"(?i)(extract_videos|extract_channel|extract_playlist|ingest_to_qdrant|ingest_to_neo4j|embedding_migration)\" [5m]))",
           "legendFormat": "{{detected_level}}",
           "refId": "A"
         }
@@ -316,6 +329,35 @@
           "placement": "bottom"
         }
       }
+    },
+    {
+      "id": 8,
+      "type": "traces",
+      "title": "YCS ingestion workflow-root traces (Tempo)",
+      "description": "ycs.extract.{videos,channel,playlist} / ycs.ingest.{qdrant,neo4j}.run / ycs.embedding_migration.finalize — one row per Celery ingestion task run. Click a row to open the full trace waterfall.",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name=\"coelhonexus-celery\" && name =~ \"ycs.(extract|ingest).+|ycs.embedding_migration.finalize\" }",
+          "limit": 20,
+          "refId": "A",
+          "tableType": "traces"
+        }
+      ]
     }
   ]
 }

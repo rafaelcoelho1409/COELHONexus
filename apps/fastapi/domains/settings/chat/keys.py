@@ -6,5 +6,7 @@ from __future__ import annotations
 # (`CredentialStore.read_settings()["llm_endpoint"]` → {url, model}).
 SETTINGS_KEY = "llm_endpoint"
 
-# Managed-key name for this endpoint's API key (see credentials/keys.py).
-KEY_ENV = "COELHO_LLM_API_KEY"
+# Managed-key names for this endpoint's API key (see credentials/keys.py).
+# `LLM_API_KEY` is the current name; `COELHO_LLM_API_KEY` is the legacy
+# name, still honored for deployed envs / already-stored keys.
+KEY_ENVS: tuple[str, ...] = ("LLM_API_KEY", "COELHO_LLM_API_KEY")

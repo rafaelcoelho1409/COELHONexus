@@ -1,5 +1,5 @@
 {
-  "title": "COELHO Nexus - RR \u2014 Research Radar Scan Health",
+  "title": "COELHO Nexus - RR — Research Radar Scan Health",
   "uid": "coelhonexus-rr-digests",
   "tags": [
     "coelhonexus",
@@ -12,7 +12,7 @@
   "version": 2,
   "refresh": "30s",
   "time": {
-    "from": "now-24h",
+    "from": "now-6d",
     "to": "now"
   },
   "links": [
@@ -70,7 +70,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (outcome, degraded) (max_over_time(rr_scan_run_total[24h]))",
+          "expr": "sum by (outcome, degraded) (max_over_time(rr_scan_run_total[7d]))",
           "legendFormat": "{{outcome}} / degraded={{degraded}}"
         }
       ]
@@ -123,7 +123,7 @@
       },
       "targets": [
         {
-          "expr": "sum(max_over_time(rr_scan_run_total{degraded=\"true\"}[24h])) / clamp_min(sum(max_over_time(rr_scan_run_total[24h])), 1)",
+          "expr": "sum(max_over_time(rr_scan_run_total{degraded=\"true\"}[7d])) / clamp_min(sum(max_over_time(rr_scan_run_total[7d])), 1)",
           "legendFormat": "degraded share"
         }
       ],
@@ -241,7 +241,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (phase) (max_over_time(rr_phase_event_total[24h]))",
+          "expr": "sum by (phase) (max_over_time(rr_phase_event_total[7d]))",
           "format": "table",
           "instant": true
         }
@@ -428,6 +428,122 @@
       "options": {
         "dedupStrategy": "none"
       }
+    },
+    {
+      "id": 12,
+      "type": "traces",
+      "title": "RR storage backend spans (Tempo)",
+      "description": "db.neo4j.* / db.postgresql.* / db.qdrant.* spans — RR touches all 4 stores per scan; shows which one is slow or erroring right now.",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 37
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name=~\"coelhonexus-fastapi|coelhonexus-celery\" && name =~ \"db.(neo4j|postgresql|qdrant).+\" }",
+          "limit": 30,
+          "refId": "A",
+          "tableType": "spans"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "traces",
+      "title": "RR MinIO spans (Tempo)",
+      "description": "aws.s3.* spans from RR's own aioboto3 client — digest/extraction/code storage reads and writes.",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 37
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name=~\"coelhonexus-fastapi|coelhonexus-celery\" && name =~ \"aws.s3..+\" }",
+          "limit": 30,
+          "refId": "A",
+          "tableType": "spans"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "traces",
+      "title": "RR tool-call spans (Tempo)",
+      "description": "execute_tool {name} spans — one per orchestrator tool call (discover_arxiv, discover_s2, discover_hn, discover_openalex, discover_hf, triage_candidates, graph_build_papers, ...). Shows which tool is slow or erroring.",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 45
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name=~\"coelhonexus-fastapi|coelhonexus-celery\" && name =~ \"execute_tool .+\" }",
+          "limit": 30,
+          "refId": "A",
+          "tableType": "spans"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "traces",
+      "title": "RR scan workflow-root traces (Tempo)",
+      "description": "rr.scan.run — one row per full scan execution. Click a row to open the full trace waterfall (agent orchestration + all tool/phase children).",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 45
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name=~\"coelhonexus-fastapi|coelhonexus-celery\" && name=\"rr.scan.run\" }",
+          "limit": 20,
+          "refId": "A",
+          "tableType": "traces"
+        }
+      ]
     }
   ]
 }

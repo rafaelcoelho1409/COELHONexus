@@ -15,14 +15,9 @@ Credentials are loaded from secret via secretRef
 {{- define "coelhonexus.commonEnvVars" -}}
 ENVIRONMENT: "{{ .Values.environment }}"
 FASTAPI_HOST: "coelhonexus-fastapi"
-# LLM endpoint (Docs Distiller / YCS) — always a separately-deployed
-# OpenAI-compatible endpoint (COELHO LLM Rotator, or otherwise); Nexus never
-# bundles one. Override llm.endpoint.* for a different instance. Read by
-# domains/llm/rotator/chain/service.py. A runtime override from the Settings
-# page (credential store) takes precedence over these when present.
-COELHO_LLM_ROTATOR_URL: "{{ .Values.llm.endpoint.url }}"
-COELHO_LLM_API_KEY: "{{ .Values.llm.endpoint.apiKey }}"
-COELHO_LLM_MODEL: "{{ .Values.llm.endpoint.model }}"
+LLM_ENDPOINT_URL: "{{ .Values.llm.endpoint.url }}"
+LLM_API_KEY: "{{ .Values.llm.endpoint.apiKey }}"
+LLM_MODEL: "{{ .Values.llm.endpoint.model }}"
 REDIS_HOST: "{{ .Values.redis.host }}"
 REDIS_PORT: "{{ .Values.redis.port }}"
 MINIO_HOST: "{{ .Values.minio.host }}"
@@ -43,38 +38,6 @@ PLAYWRIGHT_CDP_HEADLESS: "{{ .Values.playwright.cdp_headless }}"
 PLAYWRIGHT_CDP_HEADED: "{{ .Values.playwright.cdp_headed }}"
 # Embedding model (NVIDIA NIM API — see docs/NVIDIA-NIM-EMBEDDING-MODELS.md)
 NVIDIA_EMBEDDING_MODEL: "{{ .Values.embedding.model }}"
-# KD planner MAP step routing — "1" enables the classical pipeline (rotator
-# embed + community_detection + KeyLLM); "0" keeps the legacy LLM path.
-# Read at runtime by graphs/knowledge/distiller.py.
-DD_USE_CLASSICAL_MAP: "{{ .Values.dd.useClassicalMap }}"
-# Phase 1.3 (2026-05-13): routes synth grader through classical scorer when "1".
-# See dd.useClassicalGrader in values.yaml.
-DD_USE_CLASSICAL_GRADER: "{{ .Values.dd.useClassicalGrader }}"
-# Phase 2.1 (2026-05-13): replaces critic's per-chapter LLM faithfulness call
-# with dd-embed similarity heuristic when "1". See dd.useClassicalCritic above.
-DD_USE_CLASSICAL_CRITIC: "{{ .Values.dd.useClassicalCritic }}"
-# Phase 3.1 (2026-05-13): routes Phase A outline through classical path when "1".
-# See dd.useClassicalOutline in values.yaml.
-DD_USE_CLASSICAL_OUTLINE: "{{ .Values.dd.useClassicalOutline }}"
-# Phase 4 (2026-05-13): when "1", Self-Refine loop attempts deterministic patches
-# on patchable grader Issue dims before LLM re-synth, and uses template-based
-# adjustment text instead of the ADJUSTMENT_PROMPT LLM call. See
-# dd.useClassicalRefiner in values.yaml.
-DD_USE_CLASSICAL_REFINER: "{{ .Values.dd.useClassicalRefiner }}"
-# Phase 5 (2026-05-13): when "1", per-chapter curator pass runs through
-# services/knowledge/curator_classical.py (deterministic regex passes, no LLM
-# call). See dd.useClassicalCurator in values.yaml.
-DD_USE_CLASSICAL_CURATOR: "{{ .Values.dd.useClassicalCurator }}"
-# Phase 5 (2026-05-13): when "1", summary.md / assembler step runs through
-# services/knowledge/summary_classical.py (deterministic reading plan +
-# small-LLM creative artifacts only). See dd.useClassicalSummary in values.yaml.
-DD_USE_CLASSICAL_SUMMARY: "{{ .Values.dd.useClassicalSummary }}"
-# Scope B (2026-05-12 night): when "1", section synth uses the dd-synth
-# non-reasoning pool instead of dd-all. See dd.useSynthPool in values.yaml.
-DD_USE_SYNTH_POOL: "{{ .Values.dd.useSynthPool }}"
-# Fix #2 (2026-05-12 night): per-chapter model pinning. See dd.pinChapterModel
-# in values.yaml.
-DD_PIN_CHAPTER_MODEL: "{{ .Values.dd.pinChapterModel }}"
 # OpenTelemetry (2026-05-12 night) — dual-export to Alloy (LGTM) + LangFuse v3.
 # Set OTEL_EXPORTER_OTLP_ENDPOINT to Alloy's OTLP gRPC receiver (typically
 # alloy.monitoring.svc.cluster.local:4317). Set LANGFUSE_OTLP_ENDPOINT to the
@@ -102,34 +65,16 @@ LITELLM_OTEL_V2: "true"
 # resource builder skips them.
 GIT_SHA: {{ .Values.otel.git_sha | default "" | quote }}
 HELM_CHART_VERSION: {{ .Chart.Version | quote }}
-# Scope B (2026-05-12 night): per-process LLM concurrency cap. See
-# dd.llmGlobalConcurrency in values.yaml and _get_llm_semaphore() in
-# graphs/knowledge/helpers.py.
-DD_LLM_GLOBAL_CONCURRENCY: "{{ .Values.dd.llmGlobalConcurrency }}"
-# R8 (2026-05-11): when "1", MAP runs ONE global pass (label_corpus_classical)
-# instead of per-shard. See `dd.globalMap` in values.yaml and `_use_global_map`
-# in graphs/knowledge/distiller.py.
-DD_GLOBAL_MAP: "{{ .Values.dd.globalMap }}"
-# Phase 1 rotator rebuild (2026-05-14): when "1", build the LiteLLM Router's
-# model_list from live discovery (services/discovery.py) + benchmark ranking
-# (services/benchmarks.py) instead of the hand-curated static catalog in
-# services/llm_chain.py. Falls back to static catalog on any error.
-# See dd.dynamicCatalog in values.yaml.
-DD_DYNAMIC_CATALOG: "{{ .Values.dd.dynamicCatalog }}"
-# Phase 2 — ParetoBandit ALWAYS-ON adaptive routing (2026-05-14): the bandit
-# runs by default; set "1" to disable (emergency rollback to Phase 1).
-# See dd.paretoBanditDisable in values.yaml + docs/KD-ROTATOR-ALWAYS-ON-BANDIT-MAY2026.md.
-DD_PARETO_BANDIT_DISABLE: "{{ .Values.dd.paretoBanditDisable }}"
-# Phase D (2026-05-23): deterministic soft-membership boundary resolver for refine.
-# See dd.refineUseGmm in values.yaml + docs/KD-PLANNER-SOTA-IMPROVEMENTS-2026-05-23.md.
-KD_REFINE_USE_GMM: "{{ .Values.dd.refineUseGmm }}"
-# chapter_propose / sawc_derive Optimal-Stopping feature flags.
-KD_PROPOSE_OPTIMAL_STOPPING: "{{ .Values.dd.proposeOptimalStopping }}"
-KD_SAWC_DERIVE_OPTIMAL_STOPPING: "{{ .Values.dd.sawcDeriveOptimalStopping }}"
-# Per-study chapter concurrency semaphore.
-KD_STUDY_SEM: "{{ .Values.dd.studySem }}"
-# "1" = abort right after a degraded chapter_propose on a big corpus (opt-in).
-KD_PLANNER_ABORT_ON_DEGRADE: "{{ .Values.dd.plannerAbortOnDegrade }}"
+# chapter_propose Optimal-Stopping feature flag. Diverges from the code's own
+# default ("false") — kept live here rather than in values.yaml/params.py so
+# rolling it back doesn't need a rebuild.
+DD_PROPOSE_OPTIMAL_STOPPING: "true"
+# Per-study chapter concurrency semaphore. Roll back to "1" if 429 cascades
+# resume. Kept live here (not values.yaml/params.py) as a fast rollback lever.
+DD_STUDY_SEM: "2"
+# "1" = abort right after a degraded chapter_propose on a big corpus (opt-in,
+# currently off). Kept live here as an incident-response toggle.
+DD_PLANNER_ABORT_ON_DEGRADE: "0"
 {{- end -}}
 
 

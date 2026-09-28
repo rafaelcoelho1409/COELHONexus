@@ -1,17 +1,10 @@
 {{- if .Values.flower.enabled }}
+{{- $appName := "flower" -}}
+{{- $appConfig := index $.Values $appName }}
 apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: coelhonexus-flower
-  namespace: {{ .Release.Namespace }}
-  labels:
-    app.kubernetes.io/name: {{ .Chart.Name }}
-    app.kubernetes.io/instance: {{ .Release.Name }}
-    app.kubernetes.io/version: {{ .Chart.AppVersion }}
-    app.kubernetes.io/component: flower
-    app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- include "coelhonexus.DeploymentSettings" (dict "appName" $appName "root" .) | nindent 0 }}
 spec:
-  replicas: {{ .Values.flower.replicas }}
+  replicas: {{ $appConfig.replicas }}
   # Recreate (not RollingUpdate): shelve DB is single-writer + RWO PVC can't
   # be mounted by 2 pods simultaneously. Two pods touching the same shelve
   # file = corrupted task history.
@@ -71,19 +64,8 @@ spec:
             - name: http
               containerPort: 5555
               protocol: TCP
-          {{- with .Values.flower.livenessProbeSettings }}
-          {{- toYaml . | nindent 10 }}
-          {{- end }}
-          {{- with .Values.flower.readinessProbeSettings }}
-          {{- toYaml . | nindent 10 }}
-          {{- end }}
-          resources:
-            requests:
-              memory: {{ .Values.flower.resources.requests.memory }}
-              cpu: {{ .Values.flower.resources.requests.cpu }}
-            limits:
-              memory: {{ .Values.flower.resources.limits.memory }}
-              cpu: {{ .Values.flower.resources.limits.cpu }}
+{{- include "coelhonexus.ProbeSettings" (dict "appName" $appName "root" .) | nindent 10 }}
+{{- include "coelhonexus.DeploymentResources" (dict "appName" $appName "root" .) | nindent 10 }}
           {{- if .Values.flower.persistDb }}
           volumeMounts:
             - name: data

@@ -200,19 +200,24 @@ class CredentialStore:
         finally:
             executor.shutdown(wait=False)
 
-    def resolve_key(self, key_env: str) -> str:
-        """Never raises."""
-        try:
-            self._ensure_fresh()
-            with self._lock:
-                v = (self._cache.get(key_env) or "").strip()
-            if v:
-                return v
-        except Exception as e:
-            logger.debug("[settings-creds] resolve_key(%s) store miss: %s", key_env, e)
-        if key_env not in os.environ:
-            return ""
-        return os.environ[key_env].strip()
+    def resolve_key(self, *key_envs: str) -> str:
+        """Never raises. Tries each name in order (store, then env);
+        first non-empty wins. Lets a key name be renamed (new name first,
+        old name last) without orphaning an already-stored/-set key."""
+        for key_env in key_envs:
+            try:
+                self._ensure_fresh()
+                with self._lock:
+                    v = (self._cache.get(key_env) or "").strip()
+                if v:
+                    return v
+            except Exception as e:
+                logger.debug("[settings-creds] resolve_key(%s) store miss: %s", key_env, e)
+            if key_env in os.environ:
+                v = os.environ[key_env].strip()
+                if v:
+                    return v
+        return ""
 
     def set_key(self, key_env: str, api_key: str) -> entities.KeyStatus:
         domain.validate_managed(key_env)
@@ -296,14 +301,17 @@ def get_store() -> CredentialStore:
     return _store
 
 
-def resolve_key(key_env: str) -> str:
+def resolve_key(*key_envs: str) -> str:
     """Never raises."""
     try:
-        return get_store().resolve_key(key_env)
+        return get_store().resolve_key(*key_envs)
     except Exception:
-        if key_env not in os.environ:
-            return ""
-        return os.environ[key_env].strip()
+        for key_env in key_envs:
+            if key_env in os.environ:
+                v = os.environ[key_env].strip()
+                if v:
+                    return v
+        return ""
 
 
 def warm() -> None:

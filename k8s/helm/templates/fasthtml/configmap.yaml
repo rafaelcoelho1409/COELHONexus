@@ -1,5 +1,7 @@
+{{- $appName := "fasthtml" -}}
+
 apiVersion: v1
-{{- include "coelhonexus.ConfigMapSettings" (dict "appName" "fasthtml" "root" .) | nindent 0}}
+{{- include "coelhonexus.ConfigMapSettings" (dict "appName" $appName "root" .) | nindent 0}}
 data:
   {{- include "coelhonexus.commonEnvVars" . | nindent 2 }}
   # FastHTML server configuration

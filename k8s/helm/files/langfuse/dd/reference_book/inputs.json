@@ -23,5 +23,113 @@
       ]
     },
     "metadata": {"framework_type": "cli-and-library", "fixture_version": "v1"}
+  },
+  {
+    "input": {
+      "framework": "PixelFlow",
+      "source_keys": ["pixelflow/filters.md", "pixelflow/pipeline.md", "pixelflow/io.md", "pixelflow/gpu.md"],
+      "target_chapters": 4,
+      "summary": "PixelFlow is a library for building image-processing pipelines. Filters (blur, sharpen, color transforms) compose into a Pipeline object; IO handles decoding/encoding across formats; a GPU backend accelerates filter execution via CUDA kernels."
+    },
+    "expected_output": {
+      "chapters": [
+        {
+          "title": "Filter Catalog",
+          "key_concepts": ["GaussianBlur", "Sharpen", "ColorTransform"]
+        },
+        {
+          "title": "Building Pipelines",
+          "key_concepts": ["Pipeline", "filter composition", "lazy evaluation"]
+        },
+        {
+          "title": "Image IO",
+          "key_concepts": ["decode", "encode", "format support"]
+        },
+        {
+          "title": "GPU Acceleration",
+          "key_concepts": ["CUDA kernels", "device transfer", "batch execution"]
+        }
+      ]
+    },
+    "metadata": {"framework_type": "library", "fixture_version": "v1"}
+  },
+  {
+    "input": {
+      "framework": "ConfigTree",
+      "source_keys": ["configtree/schema.md", "configtree/merge.md"],
+      "target_chapters": 2,
+      "summary": "ConfigTree is a small config-management library: a schema DSL for validating nested config, and a merge strategy for layering environment overrides on top of defaults."
+    },
+    "expected_output": {
+      "chapters": [
+        {
+          "title": "Schema Validation",
+          "key_concepts": ["Schema DSL", "type coercion", "validation errors"]
+        },
+        {
+          "title": "Layered Overrides",
+          "key_concepts": ["merge strategy", "environment layering", "default resolution"]
+        }
+      ]
+    },
+    "metadata": {"framework_type": "library", "fixture_version": "v1"}
+  },
+  {
+    "input": {
+      "framework": "StreamDB",
+      "source_keys": ["streamdb/ingestion.md", "streamdb/query.md", "streamdb/replication.md", "streamdb/backup.md", "streamdb/monitoring.md"],
+      "target_chapters": 5,
+      "summary": "StreamDB is a streaming time-series database. Covers write-path ingestion (append-only segments), the query engine (windowed aggregation), multi-node replication (leader/follower), backup/restore (snapshot + WAL replay), and built-in monitoring metrics."
+    },
+    "expected_output": {
+      "chapters": [
+        {
+          "title": "Write-Path Ingestion",
+          "key_concepts": ["append-only segments", "write buffer", "flush interval"]
+        },
+        {
+          "title": "Windowed Queries",
+          "key_concepts": ["query engine", "windowed aggregation", "downsampling"]
+        },
+        {
+          "title": "Multi-Node Replication",
+          "key_concepts": ["leader/follower", "replication lag", "failover"]
+        },
+        {
+          "title": "Backup and Restore",
+          "key_concepts": ["snapshot", "WAL replay", "point-in-time recovery"]
+        },
+        {
+          "title": "Monitoring Metrics",
+          "key_concepts": ["ingestion rate", "query latency", "replication lag metric"]
+        }
+      ]
+    },
+    "metadata": {"framework_type": "database", "fixture_version": "v1"}
+  },
+  {
+    "input": {
+      "framework": "EdgeCache",
+      "source_keys": ["edgecache/invalidation.md", "edgecache/warming.md", "edgecache/routing.md"],
+      "target_chapters": 3,
+      "summary": "EdgeCache is a CDN edge-caching layer. Covers cache invalidation (purge-by-tag, TTL expiry), cache warming (pre-fetch on deploy, predictive warming from traffic patterns), and request routing across edge nodes (geo-routing, health-based failover). Invalidation and warming are closely related but distinct lifecycle phases, testing scope distinctness."
+    },
+    "expected_output": {
+      "chapters": [
+        {
+          "title": "Cache Invalidation",
+          "key_concepts": ["purge-by-tag", "TTL expiry", "stale-while-revalidate"]
+        },
+        {
+          "title": "Cache Warming",
+          "key_concepts": ["pre-fetch on deploy", "predictive warming", "traffic pattern analysis"]
+        },
+        {
+          "title": "Edge Request Routing",
+          "key_concepts": ["geo-routing", "health-based failover", "anycast"]
+        }
+      ]
+    },
+    "metadata": {"framework_type": "infrastructure", "fixture_version": "v1"}
   }
 ]
