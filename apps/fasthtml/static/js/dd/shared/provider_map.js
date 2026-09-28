@@ -26,7 +26,7 @@ export function getProviderMap() {
   return stale ? Promise.resolve(_map) : _promise;
 }
 
-// Rotator canonical provider id → human display name (see COELHOLLMRotator
+// Rotator canonical provider id → human display name (see the rotator's own
 // chain/service.py's _PROVIDER_ID_CANDIDATES for the canonical id list).
 const _DISPLAY_NAMES = {
   nim: 'NVIDIA NIM',

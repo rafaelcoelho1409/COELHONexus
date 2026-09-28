@@ -31,7 +31,7 @@ CONCURRENCY = 10
 # 2026-09-08: 20.0 -> 130.0. The original 20s was arithmetically
 # guaranteed to be unreliable: the Rotator's own Router sets
 # cooldown_time=120 (chain/service.py's _get_router(), this session's
-# COELHOLLMRotator repo) — any deployment benched in roughly the last 100s
+# external rotator repo) — any deployment benched in roughly the last 100s
 # of off_topic's run is still cooling 20s later, so whether this "worked"
 # was a coin-flip on exactly when off_topic's last cooldown got triggered,
 # not a real guarantee. Confirmed live: a fastapi run happened to land

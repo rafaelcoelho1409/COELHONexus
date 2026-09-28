@@ -2,25 +2,25 @@
 
 Goal: make the LLM endpoint a **runtime choice** instead of a build-time Helm
 dependency, so:
-- `skaffold dev` on COELHOLLMRotator + `skaffold dev` on COELHONexus can run side by
+- `skaffold dev` on the external LLM Rotator repo + `skaffold dev` on COELHONexus can run side by
   side; rotator changes iterate in seconds, no commit → GitHub Actions → chart publish →
   `helm dependency update` cycle.
 - The Settings page becomes a single OpenAI-compatible endpoint field (URL + key +
   model) instead of per-provider BYOK management.
-- Eventually: delete the bundled `coelho-llm-rotator` subchart and the provider-key
+- Eventually: delete the bundled `llm-rotator` subchart and the provider-key
   settings from COELHONexus entirely, once every app (Planner, Synth, YCS agents) is
-  proven against an external COELHO LLM Rotator.
+  proven against an external LLM Rotator.
 
 ## Current integration (as of `51e20d2` rotator / this Nexus tree)
 
 - `apps/fastapi/domains/llm/rotator/chain/service.py` in **COELHONexus is already a
-  thin HTTP adapter** — `AsyncOpenAI(base_url=COELHO_ROTATOR_URL)`, OpenAI SDK, no
+  thin HTTP adapter** — `AsyncOpenAI(base_url=ROTATOR_URL)`, OpenAI SDK, no
   in-process routing. `mark_inaccessible`, `_get_router`, `_redis_for_bandit` etc. are
   no-op shims. All FGTS-VA / bandit / discovery logic runs **server-side** in the
-  standalone rotator (the 2389-line `chain/service.py` in the COELHOLLMRotator repo).
-- URL already env-configurable: `COELHO_LLM_ROTATOR_URL` (default
-  `http://coelho-llm-rotator-fastapi:8000/api/v1/llm/openai/v1`), plus `COELHO_LLM_MODEL`
-  (default `auto`), `COELHO_LLM_API_KEY` (default `dummy`). `_normalize_base_url()`
+  standalone rotator (the 2389-line `chain/service.py` in the external LLM Rotator repo).
+- URL already env-configurable: `LLM_ROTATOR_URL` (default
+  `http://llm-rotator-fastapi:8000/api/v1/llm/openai/v1`), plus `LLM_MODEL`
+  (default `auto`), `LLM_API_KEY` (default `dummy`). `_normalize_base_url()`
   already accepts OpenAI's `/v1` shape and external hosts.
 - **Second coupling point:** `domains.llm.rotator.discovery` / `.benchmarks` are
   imported *in-process* by:
@@ -36,36 +36,36 @@ dependency, so:
 
 Chart-only, no app-logic change. Unblocks the two-`skaffold dev` workflow immediately.
 
-- `k8s/helm/Chart.yaml` — added `condition: coelho-llm-rotator.enabled` to the subchart
+- `k8s/helm/Chart.yaml` — added `condition: llm-rotator.enabled` to the subchart
   dependency.
-- `k8s/helm/values.yaml` — added `coelho-llm-rotator.enabled: true` and a new `llm.endpoint`
+- `k8s/helm/values.yaml` — added `llm-rotator.enabled: true` and a new `llm.endpoint`
   block (`url` / `apiKey` / `model`).
-- `k8s/helm/templates/_helpers.tpl` — `commonEnvVars` now renders `COELHO_LLM_ROTATOR_URL`
-  / `COELHO_LLM_API_KEY` / `COELHO_LLM_MODEL` from `llm.endpoint.*` into all three app
+- `k8s/helm/templates/_helpers.tpl` — `commonEnvVars` now renders `LLM_ROTATOR_URL`
+  / `LLM_API_KEY` / `LLM_MODEL` from `llm.endpoint.*` into all three app
   configmaps (fastapi, celery, fasthtml).
 
-Verified: `helm template . --set coelho-llm-rotator.enabled=false` drops the rotator
+Verified: `helm template . --set llm-rotator.enabled=false` drops the rotator
 Deployment/Service/etc.; default still renders it.
 
 ### How to run the two-skaffold workflow
 
-The rotator's `skaffold.yaml` deploys release `coelho-llm-rotator` to namespace
-**`coelho-llm-rotator-dev`**, service `coelho-llm-rotator-fastapi`. It serves the
+The rotator's `skaffold.yaml` deploys release `llm-rotator` to namespace
+**`llm-rotator-dev`**, service `llm-rotator-fastapi`. It serves the
 OpenAI-compat API at `/api/v1/llm/openai/v1/chat/completions` (verified) — same path
 as the Nexus default, only the host differs (cross-namespace FQDN).
 
-1. `skaffold dev` in COELHOLLMRotator → rotator + Valkey in `coelho-llm-rotator-dev`.
+1. `skaffold dev` in the external LLM Rotator repo → rotator + Valkey in `llm-rotator-dev`.
 2. `skaffold dev --profile external-llm` in COELHONexus — the profile (added to
    `skaffold.yaml`, 2026-09-10) sets:
-   - `coelho-llm-rotator.enabled=false` (bundled subchart not deployed)
-   - `llm.endpoint.url=http://coelho-llm-rotator-fastapi.coelho-llm-rotator-dev.svc.cluster.local:8000/api/v1/llm/openai/v1`
+   - `llm-rotator.enabled=false` (bundled subchart not deployed)
+   - `llm.endpoint.url=http://llm-rotator-fastapi.llm-rotator-dev.svc.cluster.local:8000/api/v1/llm/openai/v1`
 3. Edit rotator code → its skaffold syncs `**/*.py` in seconds. No chart cycle.
 
-Verified: `helm template --set coelho-llm-rotator.enabled=false` renders the FQDN into
+Verified: `helm template --set llm-rotator.enabled=false` renders the FQDN into
 the app configmaps and drops the rotator Deployment.
 
 Caveats:
-- `COELHO_LLM_API_KEY` rides in the configmap (blank by default). Move it to a Secret
+- `LLM_API_KEY` rides in the configmap (blank by default). Move it to a Secret
   before any real external/OpenAI use — see `creds-kek-secret.yaml`.
 - `is_external_endpoint()` (Phase 3a) is now "resolved URL != the literal in-namespace
   default, OR an API key is set" — so the cross-namespace rotator reads as external and
@@ -79,14 +79,14 @@ Caveats:
 Storage: the **credential store** (MinIO-backed, shared across fastapi/celery/rotator
 deployments, already the settings-persistence layer) — not a new Redis key. URL + model
 live in `settings.json` under `llm_endpoint`; the API key goes through the encrypted
-credentials blob via the managed env name `COELHO_LLM_API_KEY`.
+credentials blob via the managed env name `LLM_API_KEY`.
 
-- `domains/llm/credentials/keys.py` — added `COELHO_LLM_API_KEY` to `MANAGED_KEY_ENVS`
+- `domains/llm/credentials/keys.py` — added `LLM_API_KEY` to `MANAGED_KEY_ENVS`
   so `set_key`/`delete_key`/`key_status` accept it.
-- `domains/llm/rotator/chain/service.py` — `COELHO_ROTATOR_URL` / `COELHO_ROTATOR_MODEL`
-  / `COELHO_API_KEY` are now *resolved* globals, not fixed constants:
+- `domains/llm/rotator/chain/service.py` — `ROTATOR_URL` / `ROTATOR_MODEL`
+  / `API_KEY` are now *resolved* globals, not fixed constants:
   - `_resolve_endpoint()` — precedence: `settings["llm_endpoint"]` + `resolve_key(
-    "COELHO_LLM_API_KEY")` → env var → in-cluster default. Store reads are TTL-cached,
+    "LLM_API_KEY")` → env var → in-cluster default. Store reads are TTL-cached,
     never raise.
   - `_apply_endpoint(force=…)` — re-resolve + reassign globals; throttled to every
     `_ENDPOINT_RESOLVE_TTL_S` (10s) unless forced.
@@ -117,7 +117,7 @@ All Python compiles; JS passes `node --check`.
   and build a one-off client.
 - The provider-key / free-model section below the card is still shown. It only matters
   for the bundled rotator — consider hiding it when the URL points away from
-  `coelho-llm-rotator-fastapi` (Phase 3 territory).
+  `llm-rotator-fastapi` (Phase 3 territory).
 - `~10s` convergence for the celery worker on an endpoint change (throttled store
   re-read). A settings change mid-planner-run won't retro-apply to in-flight calls;
   fine for an ops action.
@@ -130,7 +130,7 @@ Additive only — nothing deleted. Makes external mode functional so it can be v
 before the destructive Phase 3c.
 
 - `rotator/chain/service.py` — `is_bundled_rotator()` / `is_external_endpoint()`
-  (host check: resolved URL contains `coelho-llm-rotator-fastapi` → bundled). Exported
+  (host check: resolved URL contains `llm-rotator-fastapi` → bundled). Exported
   from `chain/__init__.py`.
 - `rotator/discovery/service.py` — `missing_required_keys()` returns `[]` early when
   `is_external_endpoint()` (lazy import, no cycle — `chain` doesn't import `discovery`).
@@ -155,23 +155,23 @@ Verified: `is_bundled_rotator()` True on the default URL; import clean, no cycle
 
 Triggered by a real incident: a Planner run silently served on a 20h-stale
 rotator build because plain `skaffold dev` on Nexus deploys the bundled
-`coelho-llm-rotator` subchart from a pinned registry image, while the F–L
+`llm-rotator` subchart from a pinned registry image, while the F–L
 wave batch was only ever built by the rotator's *own* `skaffold dev` into
-`coelho-llm-rotator-dev`. Two copies, one drifting silently — the Settings
+`llm-rotator-dev`. Two copies, one drifting silently — the Settings
 endpoint field existed (Phase 2) but nothing forced its use, so a store-read
 hiccup (or a celery process older than the save) fell back to the bundled
 in-namespace default with only a debug-level log. Decision: don't patch the
 fallback — remove the second copy so there's nothing to fall back to.
 
-- `k8s/helm/Chart.yaml` — deleted the `coelho-llm-rotator` dependency block
+- `k8s/helm/Chart.yaml` — deleted the `llm-rotator` dependency block
   entirely (no more `condition:`/`skaffold --profile external-llm` dance).
-- `k8s/helm/values.yaml` — deleted the `coelho-llm-rotator:` block; `llm.endpoint.url`
+- `k8s/helm/values.yaml` — deleted the `llm-rotator:` block; `llm.endpoint.url`
   now defaults to the rotator's own dev-workflow FQDN:
-  `http://coelho-llm-rotator-fastapi.coelho-llm-rotator-dev.svc.cluster.local:8000/api/v1/llm/openai/v1`.
-- `k8s/helm/Chart.lock` + vendored `charts/coelho-llm-rotator-*.tgz` — deleted.
+  `http://llm-rotator-fastapi.llm-rotator-dev.svc.cluster.local:8000/api/v1/llm/openai/v1`.
+- `k8s/helm/Chart.lock` + vendored `charts/llm-rotator-*.tgz` — deleted.
 - `skaffold.yaml` — deleted the `external-llm` profile; plain `skaffold dev` is
   now the only mode. Run the rotator's own `skaffold dev` (namespace
-  `coelho-llm-rotator-dev`) alongside it — the default already points there.
+  `llm-rotator-dev`) alongside it — the default already points there.
 - `chain/service.py` — `_DEFAULT_ROTATOR_URL` updated to the same FQDN;
   `is_bundled_rotator()` → always `False`, `is_external_endpoint()` → always
   `True` (kept as named shims for the two remaining callers rather than
@@ -210,8 +210,8 @@ Only once every app is proven against an external endpoint:
 2. Delete `domains/llm/rotator/{bandit,discovery,benchmarks}` from Nexus (keep `chain/`).
 3. Delete the provider-key / free-model-selection routes + UI from the settings page;
    keep only the endpoint card. Drop the `[data-llm-external]` dimming CSS with it.
-4. Remove the `coelho-llm-rotator` dependency from `Chart.yaml` + the `coelho-llm-rotator`
-   block from `values.yaml`. Keep `llm.endpoint`. Delete `charts/coelho-llm-rotator-*.tgz`.
+4. Remove the `llm-rotator` dependency from `Chart.yaml` + the `llm-rotator`
+   block from `values.yaml`. Keep `llm.endpoint`. Delete `charts/llm-rotator-*.tgz`.
 5. The external rotator now owns ALL provider-key management, model selection, bandit
    tuning — verify its own settings page covers every field Nexus's did before deleting.
 

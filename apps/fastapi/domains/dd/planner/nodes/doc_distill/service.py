@@ -1,7 +1,7 @@
 """doc_distill I/O shell — per-doc LLM distillation, latest-blob loader,
 and the doc_distill_run orchestration.
 
-SOTA Sept 2026 — fully on coelho-llm-rotator pooled client:
+SOTA Sept 2026 — fully on the rotator pooled client:
 - I/O decoupled from LLM semaphore (MinIO reads bulk-fetched before LLM fan-out).
 - Pooled AsyncOpenAI (http2, 200/100 limits) replaces per-call ChatOpenAI construction
   → eliminates per-call TLS + client alloc, reuses keep-alive across 135+ docs.

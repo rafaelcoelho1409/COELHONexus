@@ -3,14 +3,14 @@
 Context: following the Playwright speed pass (see
 `YCS-PLAYWRIGHT-PERFORMANCE-2026-09-13.md`), attention turned to Neo4j —
 the slowest of the four ingestion phases, running sequentially against
-COELHO LLM Rotator. This doc covers the architecture question that
+the LLM Rotator. This doc covers the architecture question that
 started it, the client-config fix that came out of it, a same-day
 regression from over-tightening a timeout, the structural circuit-
 breaker fix (SHIPPED), the Qdrant+Neo4j concurrency fix (SHIPPED — see
 bottom section), and the remaining, deliberately-deferred piece of the
 streaming-architecture proposal.
 
-## Starting question: should DD's "timeout engine" move into COELHO LLM Rotator?
+## Starting question: should DD's "timeout engine" move into the LLM Rotator?
 
 Investigated by reading `chat_judge_bandit_async` (DD Planner's
 `doc_distill` node, the actual code, not assumption) side by side with
@@ -159,7 +159,7 @@ attempt).
 ### Root-cause reframe: the circuit breaker existed to enable arm-swapping, which doesn't exist
 
 Before fixing this, a separate question forced a reframe: **"we're
-using COELHO LLM Rotator as the external LLM provider, so we don't
+using the LLM Rotator as the external LLM provider, so we don't
 need the old LLM Rotator codes from COELHO Nexus anymore, right?"**
 
 Checked directly against the actual code (not assumption):
@@ -167,7 +167,7 @@ Checked directly against the actual code (not assumption):
 `release_ycs_provider_slot()` (`domains/llm/rotator/chain/service.py`)
 were all confirmed to be **pure no-op shims** — the FGTS-VA bandit
 (arm-selection, reward tracking, slot management) now lives entirely
-**server-side**, inside the external COELHO LLM Rotator itself. Every
+**server-side**, inside the external LLM Rotator itself. Every
 client-side call these three functions made resolved to the same
 `model="auto"` target regardless of which "arm" the local shim thought
 it was swapping to. Confirmed zero remaining callers via grep before
@@ -183,8 +183,8 @@ arm-swap that never actually changed anything.
 
 Also verified (separately, via grep of actual import paths, not
 assumption) that **all** YCS Ingestion LLM/embedding calls route
-exclusively through COELHO LLM Rotator or its embedding-gateway
-sibling — Neo4j via `chain/service.py`'s `COELHO_ROTATOR_URL`, Qdrant/
+exclusively through the LLM Rotator or its embedding-gateway
+sibling — Neo4j via `chain/service.py`'s rotator-URL env var, Qdrant/
 entity-resolution embeddings via the new `domains/llm/embeddings/
 service.py`'s `COELHO_EMBEDDING_URL` — with zero imports of the
 orphaned NVIDIA-hardcoded fallback path (`embed_via_router_sync`/

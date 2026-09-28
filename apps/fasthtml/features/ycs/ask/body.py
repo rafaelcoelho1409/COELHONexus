@@ -36,7 +36,7 @@ def _AskLlmUsageDrawer():
             Div(
                 Div("LLM usage", id = "ycs-ask-llm-drawer-name",
                     cls = "fw-drawer-name"),
-                Div("COELHO LLM Rotator usage for this conversation.",
+                Div("LLM Rotator usage for this conversation.",
                     id = "ycs-ask-llm-drawer-meta", cls = "fw-drawer-meta"),
                 cls = "fw-drawer-title",
             ),

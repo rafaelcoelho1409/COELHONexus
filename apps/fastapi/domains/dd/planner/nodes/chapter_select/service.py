@@ -4,7 +4,7 @@ orchestration.
 
 SOTA Sept 2026: pure-algorithm node (no LLM rotator) — fastest via parallel
 I/O (gather proposals/assignments/seeds, concurrent 4-blob writes) and
-vectorized greedy. No coelho-llm-rotator call here, so old built-in vs
+vectorized greedy. No rotator call here, so old built-in vs
 pooled is no-op; old rotator never touched this node.
 """
 from __future__ import annotations

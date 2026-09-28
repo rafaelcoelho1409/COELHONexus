@@ -133,7 +133,7 @@
       "id": 4,
       "type": "table",
       "title": "Benchmark cache hits observed",
-      "description": "dd_rotator_benchmark_fetch_total (a 'fetch outcomes' panel previously here) has never been recorded by any code in this app — removed rather than ship a permanently-empty panel. If that instrument is reintroduced (likely in the separate COELHOLLMRotator repo), re-add it here.",
+      "description": "dd_rotator_benchmark_fetch_total (a 'fetch outcomes' panel previously here) has never been recorded by any code in this app — removed rather than ship a permanently-empty panel. If that instrument is reintroduced upstream, re-add it here.",
       "datasource": {
         "type": "prometheus",
         "uid": "mimir"

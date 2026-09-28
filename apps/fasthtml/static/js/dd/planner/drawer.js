@@ -197,7 +197,7 @@ export const NodeDrawer = (function() {
         '</div>'
       : '';
     const modelRows = Array.isArray(ctx.modelRows) ? ctx.modelRows : [];
-    // No provider column — the configured LLM endpoint (COELHO LLM Rotator,
+    // No provider column — the configured LLM endpoint (the LLM Rotator,
     // OpenAI, Anthropic, a single-model deployment, ...) is a fixed,
     // page-level fact, not a per-row one. `model` is that endpoint's
     // response `model` field shown as-is: the rotator formats it itself as

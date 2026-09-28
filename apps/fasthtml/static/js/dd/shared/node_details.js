@@ -69,7 +69,7 @@ const PLANNER_DETAILS = {
     ],
     inputs: ['raw_files'],
     outputs: ['relevant_files', 'off_topic_stats'],
-    llm: 'Per-document LLM judge calls through coelho-llm-rotator (pooled http2).',
+    llm: 'Per-document LLM judge calls through the rotator (pooled http2).',
     metrics(values) {
       const s = values.off_topic_stats || {};
       return [
@@ -405,7 +405,7 @@ export function buildDdTokenMetrics(stage, nodeId, counters) {
   const top = _topModel(node.by_model);
   if (top) {
     // Show the model string verbatim — whatever the configured LLM endpoint
-    // returned in its response's `model` field. COELHO LLM Rotator already
+    // returned in its response's `model` field. The LLM Rotator already
     // formats it as "PROVIDER/model" (e.g. "NVIDIA/openai/gpt-oss-20b");
     // any other endpoint returns its own bare id. Slicing to the last
     // path segment used to assume a specific shape and silently dropped
@@ -426,7 +426,7 @@ export function buildDdModelRows(stage, nodeId, counters) {
   return Object.entries(node.by_model)
     .map(([model, stats]) => ({
       // No provider column, no client-side provider guessing — the
-      // configured LLM endpoint (COELHO LLM Rotator, OpenAI, Anthropic, a
+      // configured LLM endpoint (the LLM Rotator, OpenAI, Anthropic, a
       // single-model deployment, ...) is a fixed, page-level fact, not a
       // per-row one. `model` is its response's `model` field, shown as-is.
       raw: model,

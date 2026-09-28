@@ -1,6 +1,6 @@
 """off_topic I/O shell — LLM-only KEEP/DROP per doc (embed_corpus removed).
 
-SOTA Sept 2026 on coelho-llm-rotator pooled client:
+SOTA Sept 2026 on the rotator pooled client:
 - Pooled AsyncOpenAI (http2, 200/100) replaces per-call ChatOpenAI alloc.
 - CONCURRENCY 24 saturates pool, no embedding work.
 - Dedupe via head_tail_truncate collapses mirrored dumps → single LLM call.
@@ -191,7 +191,7 @@ async def off_topic_run(state: domains.dd.planner.state.PlannerState) -> dict:
         "anchor_positive":     positive_descriptor,
         "anchor_negative":     negative_descriptor,
         "judge_concurrency":   params.JUDGE_CONCURRENCY,
-        "judge_router":        "coelho-llm-rotator",
+        "judge_router":        "llm-rotator",
     }
 
     domains.dd.planner.runtime.observability.service.attach_span_attrs("off_topic", {

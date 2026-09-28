@@ -69,7 +69,7 @@ export const SUBSTEP_RENDERERS = {
   },
 
   // off_topic — pure LLM-as-Judge (no embedding, LLM-only after embed_corpus removal 2026-09-03).
-  // Routed via coelho-llm-rotator pooled http2; KPI cards show keep/drop split +
+  // Routed via the rotator pooled http2; KPI cards show keep/drop split +
   // deployment telemetry. The verdict table shows per-page judgments.
   1: function renderOffTopic(values) {
     const s = values.off_topic_stats || {};
@@ -219,7 +219,7 @@ export const SUBSTEP_RENDERERS = {
         '</div>';
     }
 
-    const router = s.judge_router || 'coelho-llm-rotator';
+    const router = s.judge_router || 'llm-rotator';
     const foot =
       '<div class="fw-stat-foot">' +
         'judge <strong>' + escapeHtml(router) + '</strong>' +

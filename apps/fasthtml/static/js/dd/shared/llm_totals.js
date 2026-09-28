@@ -82,7 +82,7 @@ function _modelRows(payload) {
     .map(([model, stats]) => {
       return {
         // `model` is whatever the configured LLM endpoint returns verbatim
-        // in its response's `model` field — COELHO LLM Rotator formats it
+        // in its response's `model` field — the LLM Rotator formats it
         // as "PROVIDER/model" itself (e.g. "NVIDIA/openai/gpt-oss-20b");
         // any other endpoint (OpenAI, Anthropic, a single-model deployment)
         // just returns its own bare model id. No client-side parsing.

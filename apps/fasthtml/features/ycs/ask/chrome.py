@@ -132,7 +132,7 @@ def AskLlmUsageTrigger():
         type  = "button",
         id    = "ycs-ask-llm-open",
         cls   = "dd-catfilter-trigger ycs-ask-llm-open-btn",
-        title = "Open this conversation's LLM usage (COELHO LLM Rotator)",
+        title = "Open this conversation's LLM usage (the LLM Rotator)",
     )
 
 

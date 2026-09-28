@@ -5,7 +5,7 @@
  * prov-key-row / prov-key-input / set-btn / prov-result` card markup +
  * settings.css rules that originally styled the multi-provider LLM chat
  * registry (static/js/settings.js, removed 2026-09-11 — chat routing is
- * now always the external COELHO LLM Rotator via the LLM Endpoint field).
+ * now always the external LLM Rotator via the LLM Endpoint field).
  * Those CSS classes stayed because this module still needs them; only the
  * JS that used to populate the registry is gone. The only addition here is
  * a `tk-description` block (provider URL · summary · benefit · signup link)

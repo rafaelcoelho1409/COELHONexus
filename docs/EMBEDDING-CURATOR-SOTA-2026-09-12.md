@@ -1,7 +1,7 @@
 # Embedding Curator — design + build plan (2026-09-12)
 
 **Status (2026-09-13):** rotator-side Embedding Curator shipped and tested against real infra. Nexus-side YCS integration also shipped (code complete, compiles + import-checked; live end-to-end testing still needs a skaffold redeploy — no Nexus pods running at time of writing).
-**Ships in:** `~/Workbench/COELHOLLMRotator` (`domains/embeddings/`) + `~/Workbench/COELHONexus` (`domains/llm/embeddings/`, `domains/ycs/embeddings/`, and every YCS call site listed below).
+**Ships in:** the external LLM Rotator's own repo (`domains/embeddings/`) + this repo (`domains/llm/embeddings/`, `domains/ycs/embeddings/`, and every YCS call site listed below).
 **Triggered by:** a real production break in YCS's Qdrant ingestion, discovered while assessing a Raiam Santos McArn channel ingestion run.
 
 ---
@@ -120,4 +120,4 @@ Why a new top-level domain and not a new repo: the rotator already has the exact
 6. **Decision needed before step 7:** re-embed migration strategy — in-place re-embed vs collection versioning by model+dim. Not blocking initial ship (current pick stays until manually triggered), but must be decided before Nexus wiring points anywhere.
 7. **Nexus:** rewire `domains/ycs/embeddings/service.py` to call the rotator's new endpoint instead of NIM directly (same shift chat completions already made).
 8. **Validate:** redeploy both services, run a real YCS ingestion batch, confirm no more 410-class failures and the picked model matches expectations.
-9. **Document:** log to `~/Workbench/COELHOLLMRotator/docs/rotator-roadmap.md` per the rotator's existing tracking convention.
+9. **Document:** log to the rotator's own roadmap doc per its existing tracking convention.

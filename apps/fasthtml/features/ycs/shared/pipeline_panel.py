@@ -54,7 +54,7 @@ def _Bar(prefix: str, title: str, hint: str, show_llm_usage: bool = False):
                         id = f"ycs-bar-{prefix}-llm-open",
                         cls = "ycs-bar-llm-btn",
                         type = "button",
-                        title = "Open LLM usage (COELHO LLM Rotator)",
+                        title = "Open LLM usage (the LLM Rotator)",
                     )] if show_llm_usage else []
                 )
             ),
@@ -80,7 +80,7 @@ def _YcsLlmUsageDrawer():
             Div(
                 Div("LLM usage", id = "ycs-llm-drawer-name",
                     cls = "fw-drawer-name"),
-                Div("COELHO LLM Rotator usage for this run's Neo4j extraction.",
+                Div("LLM Rotator usage for this run's Neo4j extraction.",
                     id = "ycs-llm-drawer-meta", cls = "fw-drawer-meta"),
                 cls = "fw-drawer-title",
             ),

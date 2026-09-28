@@ -16,7 +16,7 @@ Every section below is **copy-pasteable** from a real shipped pattern in the cod
 ## Current State Audit — 2026-09-22
 
 Full repo inventory (`apps/fastapi`, `apps/fastmcp`, `apps/fasthtml`, plus a
-peek at COELHOLLMRotator and COELHOCloud) against this guide's claims.
+peek at the external LLM Rotator and COELHOCloud) against this guide's claims.
 
 **Confirmed good, no action needed:**
 - LangFuse SDK is fully installed and far more built out than the (now
@@ -32,7 +32,7 @@ peek at COELHOLLMRotator and COELHOCloud) against this guide's claims.
 - FastMCP relies on the app setting the global `TracerProvider`, no separate
   SDK needed — matches FastMCP's own current telemetry docs.
 
-**P0 — the system-wide dark spot.** `COELHOLLMRotator`'s
+**P0 — the system-wide dark spot.** The external LLM Rotator's
 `domains/llm/rotator/observability/service.py:1` is literally
 `"""No-op observability — OTel/LangFuse removed for demo. All spans are
 no-ops."""`. Every `genai_completion_span` / `genai_embedding_span` /

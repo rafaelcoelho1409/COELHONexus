@@ -2,7 +2,7 @@
 endpoint adapters — https://opentelemetry.io/docs/specs/semconv/gen-ai/
 
 Mirrors the same attribute vocabulary already designed (dormant) on the
-COELHOLLMRotator side (`domains/llm/rotator/observability/keys.py`) so a
+rotator's own side (`domains/llm/rotator/observability/keys.py`) so a
 trace that spans both services — Nexus's outbound call, then whatever the
 Rotator eventually emits — reads consistently under the same names, even
 though today only this Nexus-side span is live. `gen_ai.system` differs

@@ -10,7 +10,7 @@ Server renders only the skeletons; the JS modules populate them:
 
 2026-09-11: the old multi-provider chat registry (Groq / OpenRouter / Cerebras /
 Mistral / Gemini / SambaNova / DeepSeek + NIM-for-chat) was removed from this
-page — chat routing is now always the externally-deployed COELHO LLM Rotator,
+page — chat routing is now always the externally-deployed LLM Rotator,
 configured via the single LLM Endpoint field below.
 
 2026-09-12: the standalone "NVIDIA API Key" card (added when YCS embeddings/

@@ -33,7 +33,7 @@ def is_curated_keep(name: str, attributes: Mapping[str, object]) -> bool:
 
     No `"rotator."` prefix here (removed 2026-09-22) — that matched spans
     the OLD internal `domains/llm/` gateway used to emit before it was
-    retired 2026-09-21 in favor of the external COELHOLLMRotator repo +
+    retired 2026-09-21 in favor of the external rotator repo +
     `domains/settings/chat`+`embeddings`. Nothing in this app creates a
     `rotator.*`-named span anymore; the external Rotator's own spans (once
     it stops no-op-stubbing them) go through its own exporter pipeline in

@@ -59,7 +59,7 @@ DRAFT_TIMEOUT_S = 150.0
 # 2026-09-09: this node runs right after doc_distill with zero recovery
 # gap — doc_distill/chapter_assign/order_chapters all got their own
 # SETTLE_DELAY_S (130s = the Rotator Router's own cooldown_time=120 + 10s
-# buffer, chain/service.py's _get_router() in the COELHOLLMRotator repo),
+# buffer, chain/service.py's _get_router() in the rotator's own repo),
 # but this one was missed, making it the single most exposed node to the
 # same cooldown-timing problem. Confirmed live: chapter_propose failed all
 # 3 samples on every numpy run tried, before AND after the other three
@@ -71,7 +71,7 @@ SETTLE_DELAY_S = 130.0
 MAX_REPAIR_ATTEMPTS = 2
 
 # Optimal-stopping (CGES 2511.02603): node scales floor to ~0.7×adaptive_target so large corpora don't early-stop on a small sample-0.
-# SOTA Sept 2026: with coelho-llm-rotator pooled http2 (200/100) 3×6000 tok drafts
+# SOTA Sept 2026: with the rotator pooled http2 (200/100) 3×6000 tok drafts
 # run concurrently ~1× latency vs 2× sequential s0→remaining. Old default true
 # was cost-saving for bandit cascade; for fastest, default false (env override
 # keeps cost mode). ReASC/Blend-ASC papers show parallel best-of-N + USC

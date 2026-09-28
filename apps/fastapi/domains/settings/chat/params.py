@@ -28,8 +28,7 @@ POOL_TIMEOUT_S: float = 5.0
 # Hard wall-clock backstop = (timeout_s or DEFAULT_TIMEOUT_S) + margin.
 BACKSTOP_MARGIN_S: float = 15.0
 
-# Env fallbacks, read at import. `LLM_ENDPOINT_*` is the current name;
-# `COELHO_LLM_*` is the legacy name, still honored for deployed envs.
-URL_ENVS: tuple[str, ...] = ("LLM_ENDPOINT_URL", "COELHO_LLM_ROTATOR_URL", "COELHO_LLM_URL")
-MODEL_ENVS: tuple[str, ...] = ("LLM_MODEL", "COELHO_LLM_MODEL")
+# Env fallback, read at import.
+URL_ENVS: tuple[str, ...] = ("LLM_ENDPOINT_URL",)
+MODEL_ENVS: tuple[str, ...] = ("LLM_MODEL",)
 DEFAULT_MODEL: str = "auto"

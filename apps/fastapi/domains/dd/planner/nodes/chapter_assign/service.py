@@ -1,7 +1,7 @@
 """chapter_assign I/O shell — per-doc LLM scoring, latest-blob loader,
 and the chapter_assign_run orchestration.
 
-SOTA Sept 2026 on coelho-llm-rotator pooled:
+SOTA Sept 2026 on the rotator pooled:
 - Pooled AsyncOpenAI http2 200/100 replaces per-call ChatOpenAI alloc.
 - CONCURRENCY 12 (was 24 → 103 lexical fallback 75%; 12 cuts burst 50%).
 - Bulk read_many for summary-miss docs outside semaphore (shared S3 client).

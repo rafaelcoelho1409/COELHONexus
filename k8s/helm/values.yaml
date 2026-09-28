@@ -4,15 +4,14 @@
 environment: production
 
 # LLM endpoint the Docs Distiller / YCS / RR apps call (OpenAI-compatible HTTP).
-# This is only the chart default; override url/apiKey/model here (or, at
-# runtime, from the Settings page — takes precedence) to point at the
-# operator's external endpoint. Read by apps/fastapi/domains/settings/chat/service.py
-# as LLM_ENDPOINT_URL/LLM_API_KEY/LLM_MODEL (legacy `COELHO_LLM_*` names still honored).
-# NOTE: this default only resolves inside the local dev cluster; a real prod
-# deploy must override `llm.endpoint.url` (ArgoCD Application values).
+# No default endpoint is baked into the chart — set url/apiKey/model here, or
+# configure it at runtime from the Settings page (BYOK, takes precedence over
+# these chart defaults either way). Read by
+# apps/fastapi/domains/settings/chat/service.py as
+# LLM_ENDPOINT_URL/LLM_API_KEY/LLM_MODEL.
 llm:
   endpoint:
-    url: "http://coelho-llm-rotator-fastapi.coelho-llm-rotator-dev.svc.cluster.local:8000/api/v1/llm/openai/v1"
+    url: ""             # blank = must be set here or via the Settings page before any pipeline call works
     apiKey: ""          # blank = no auth. Required for a keyed external endpoint.
                         # TODO: move to a Secret before any real external/OpenAI use.
     model: "auto"       # model id the endpoint should serve
