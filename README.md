@@ -166,25 +166,25 @@ YouTube transcript search blends three retrieval signals at once: Qdrant dense v
 |---|---|---|---|
 | **Playwright** (server + headed + headless) | 1.7Gi | 7.2Gi | Real Chromium instances — the single biggest consumer |
 | **Mimir** (9 microservices) | 1.8Gi | 4.1Gi | Ingester, distributor, querier, compactor, ruler, gateway, etc. |
-| **Langfuse** (web + worker + ClickHouse) | 2Gi | 3Gi | LLM tracing backend |
+| **Langfuse** (web + worker + ClickHouse) | 4.8Gi | 9.5Gi | LLM tracing backend — web/worker memory raised 2026-09-28 per Langfuse's own OOM guidance |
 | **Neo4j** | 2Gi | 2Gi | Fixed heap sizing |
 | **Elasticsearch** (+ Kibana) | 1.4Gi | 2.1Gi | |
 | **ArgoCD** (server + controller + repo-server + image-updater) | 0.8Gi | 1.6Gi | |
 | **Rancher** | 512Mi | 1.5Gi | Optional — cluster management UI |
-| **Tempo** | 256Mi | 1Gi | |
+| **Tempo** | 512Mi | 2Gi | Raised from 256Mi/1Gi — local OOM headroom |
 | **Redis** | 96Mi | 448Mi | |
 | **PostgreSQL** | 200Mi | 384Mi | |
-| **MinIO** | 200Mi | 384Mi | |
+| **MinIO** | 512Mi | 1.5Gi | Raised from 200Mi/384Mi 2026-09-28 — drive-monitoring/OOM fix |
 | **Qdrant** | 200Mi | 512Mi | |
-| **Grafana / Loki / Alloy** (~256Mi req / ~512Mi lim each) | 768Mi | 1.5Gi | |
-| **Total (approximate)** | **~12Gi** | **~26Gi** | Plus `cert-manager`, `k3d`, and CRD-only modules — negligible footprint |
+| **Grafana / Loki / Alloy** | 768Mi | 2.5Gi | Grafana + Loki at 256Mi/512Mi each; Alloy raised to 256Mi/1536Mi 2026-09-28 for sustained-load OOM headroom |
+| **Total (approximate)** | **~15Gi** | **~36Gi** | Plus `cert-manager`, `k3d`, and CRD-only modules — negligible footprint |
 
 ### Minimum hardware
 
 | Tier | RAM | CPU Cores | Notes |
 |---|---|---|---|
-| **Minimum** | 16GB | 6 | Fine for running one feature pipeline at a time; expect tighter headroom under concurrent load |
-| **Recommended** | 32GB | 8+ | Comfortable headroom for the full stack plus Docker + host OS overhead (~4-6GB) |
+| **Minimum** | 20GB | 6 | Fine for running one feature pipeline at a time; expect tighter headroom under concurrent load (raised from 16GB 2026-09-28 — request floor grew to ~15Gi) |
+| **Recommended** | 40GB | 8+ | Comfortable headroom for the full stack plus Docker + host OS overhead (~4-6GB); raised from 32GB alongside the limit-ceiling increase to ~36Gi |
 
 ## Installation
 
@@ -427,7 +427,7 @@ COELHONexus/
 │   ├── modules/                  # 18 reusable modules (one per service)
 │   └── live/coelhonexus/         # environment composition, layered:
 │       ├── 00-bootstrap/           # k3d cluster
-│       ├── 10-platform/            # ArgoCD, cert-manager, monitoring CRDs
+│   ├── 10-platform/            # ArgoCD, cert-manager, Rancher, monitoring CRDs
 │       ├── 20-data/                # postgres, redis, neo4j, qdrant, es, minio
 │       ├── 30-observability/       # alloy, loki, tempo, mimir, grafana
 │       ├── 40-apps/                # langfuse
