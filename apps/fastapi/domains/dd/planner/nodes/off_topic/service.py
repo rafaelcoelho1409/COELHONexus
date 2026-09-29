@@ -28,11 +28,14 @@ async def judge_one(
     framework_category: str,
     body: str,
     on_complete = None,
+    summary: str = "",
 ) -> tuple[bool, str, str | None, dict]:
     """ONE bandit-routed LLM-judge call. Returns (keep, raw, error, meta).
     Defaults to KEEP on any failure (quality-over-speed rule).
-    `on_complete` (optional) is invoked per judgment for live progress."""
-    prompt = prompts.build_judge_prompt(framework_name, framework_category, body)
+    `on_complete` (optional) is invoked per judgment for live progress.
+    `summary` (Tier 2 index summary, "" otherwise) enriches the static prompt
+    prefix; "" reproduces the legacy prompt exactly (Tier 1 unaffected)."""
+    prompt = prompts.build_judge_prompt(framework_name, framework_category, body, summary)
     last_error: str | None = None
     last_response: str = ""
     last_meta: dict = {}
@@ -97,6 +100,9 @@ async def off_topic_run(state: domains.dd.planner.state.PlannerState) -> dict:
     entry = domains.dd.resolver.service.index_by_slug().get(slug, {})
     framework_name = entry.get("name") or entry.get("slug") or slug
     framework_category = entry.get("category") or ""
+    # Tier 2 index summary via corpus_stats (corpus_load read it off the
+    # manifest; "" for Tier 1 / pre-upgrade manifests → legacy prompt).
+    index_summary = (state.get("corpus_stats") or {}).get("index_summary") or ""
 
     t0 = time.monotonic()
     minio = domains.dd.ingestion.storage.service.get_storage()
@@ -145,6 +151,7 @@ async def off_topic_run(state: domains.dd.planner.state.PlannerState) -> dict:
         judge_one(
             sem, framework_name, framework_category, key,
             on_complete = _on_judge_complete,
+            summary = index_summary,
         )
         for key in unique_keys
     ]
@@ -170,7 +177,7 @@ async def off_topic_run(state: domains.dd.planner.state.PlannerState) -> dict:
     elapsed_ms = int((time.monotonic() - t0) * 1000)
 
     # Retrieve descriptors for stats (no embedding)
-    positive_descriptor = prompts.build_positive_descriptor(entry)
+    positive_descriptor = prompts.build_positive_descriptor(entry, index_summary)
     negative_descriptor = params.NEGATIVE_DESCRIPTOR
 
     stats = {

@@ -200,6 +200,17 @@ async def _run_inner(run_id: str, slug: str) -> dict:
             )
             base_result["tier_kind"] = fb_kind
             base_result["tier_url"] = fb_url
+            # Downgrade marker (mirror of Tier 1's ManifestDetected path, which
+            # records status="downgrade" before falling through to Tier 2):
+            # without this the old progress row sits at "running" forever and
+            # the UI trail loses the fact a fallback happened at all.
+            await progress.record_url(
+                url,
+                status = "downgrade",
+                tier = "llms_txt",
+                error_msg = f"zero links, falling through to Tier {fb_kind}",
+            )
+            await progress.finish(status = "downgrade")
             await progress.close()
             progress = domains.dd.ingestion.runtime.progress.service.Progress(run_id)
             fb_kwargs = {
@@ -259,6 +270,9 @@ async def _run_inner(run_id: str, slug: str) -> dict:
             "tier_kind":      base_result["tier_kind"],
             "tier_url":       base_result["tier_url"],
             "run_id":         run_id,
+            # Tier 2 llms.txt blockquote summary ("" when absent — Tier 1 and
+            # fallback tiers never set it; readers must .get() with fallback).
+            "index_summary":  getattr(store, "index_summary", "") or "",
         })
 
         await progress.finish(status = "done")

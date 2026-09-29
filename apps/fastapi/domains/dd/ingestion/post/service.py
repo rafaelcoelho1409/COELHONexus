@@ -112,6 +112,10 @@ async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> d
             # mirrored so downstream consumers can always read source_path
             # without an url fallback.
             source_path = url,
+            # Tier 2 enrichment survives the rewrite (prev matched on
+            # url+slug); Tier 1 entries carry "" and stay "" here.
+            section = (prev.section if prev else "") or "",
+            notes = (prev.notes if prev else "") or "",
         ))
     await store.minio.write_many(write_batch)
     await store.replace_manifest(new_entries)

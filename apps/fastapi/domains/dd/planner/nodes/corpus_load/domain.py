@@ -16,6 +16,8 @@ def build_corpus_stats(
     manifest: dict,
     load_ms: int,
     excluded_changelog: int = 0,
+    excluded_course: int = 0,
+    excluded_blog: int = 0,
 ) -> dict:
     """Compute the corpus stats dict from a sorted list of per-page byte
     sizes. Mirrors the v1 PlannerProgress `record_corpus_load()` fields."""
@@ -34,4 +36,9 @@ def build_corpus_stats(
         "tier_kind":    manifest.get("tier_kind"),
         "ingested_at":  manifest.get("ingested_at"),
         "excluded_changelog": excluded_changelog,
+        "excluded_course": excluded_course,
+        "excluded_blog": excluded_blog,
+        # Tier 2 llms.txt blockquote summary ("", absent for all other tiers).
+        # off_topic reads this for its judge-prompt anchor; "" = static anchor.
+        "index_summary": manifest.get("index_summary") or "",
     }

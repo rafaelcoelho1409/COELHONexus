@@ -423,6 +423,9 @@ class Store:
         # Lazy artifact client — every tier flows through add_page.
         self._artifact_client: "httpx.AsyncClient | None" = None
         self._artifact_lock = asyncio.Lock()
+        # Tier 2 index summary (llms.txt blockquote) — set by tier2.service.run,
+        # read by dispatch.finalize into the manifest. "" = absent (all tiers).
+        self.index_summary: str = ""
 
     async def add_page(
         self,
@@ -432,6 +435,8 @@ class Store:
         body: str,
         tier: str,
         title: str = "",
+        section: str = "",
+        notes: str = "",
     ) -> entities.ManifestEntry:
         """Stream page to store. idx-assign+manifest append are locked; MinIO PUT is not (concurrent writes to distinct keys). Raw body also → ingestion-raw/ for normalizer-version reversibility."""
         # Markdown-side artifact hook for tiers 1/2/3/5 (tier4 uses HTML-stage).
@@ -476,6 +481,8 @@ class Store:
                 bytes = normalized_bytes, 
                 title = title or slug, 
                 key = key,
+                section = section or "",
+                notes = notes or "",
             )
             self._cached_manifest.append(entry)
         await asyncio.gather(

@@ -4,20 +4,26 @@ from . import params
 
 
 
-def build_positive_descriptor(entry: dict) -> str:
-    """Anchor prompt for the framework. Uses the catalog name + category."""
+def build_positive_descriptor(entry: dict, summary: str = "") -> str:
+    """Anchor prompt for the framework. Uses the catalog name + category.
+    `summary` (Tier 2 llms.txt blockquote, "" otherwise) appends the author's
+    own description — stats-only enrichment, never affects the judge prompt."""
     name = entry.get("name") or entry.get("slug") or "unknown"
     category = entry.get("category") or ""
     if category:
-        return (
+        base = (
             f"Documentation for {name}, a {category} library / framework. "
             f"Teaching content: tutorials, guides, API reference, how-to "
             f"articles, conceptual explanations."
         )
-    return (
-        f"Documentation for {name}. Teaching content: tutorials, guides, "
-        f"API reference, how-to articles, conceptual explanations."
-    )
+    else:
+        base = (
+            f"Documentation for {name}. Teaching content: tutorials, guides, "
+            f"API reference, how-to articles, conceptual explanations."
+        )
+    if summary:
+        base += f" About {name}: {summary}"
+    return base
 
 
 def head_tail_truncate(body: str) -> str:
@@ -36,17 +42,23 @@ def head_tail_truncate(body: str) -> str:
 
 
 def build_judge_prompt(
-    framework_name: str, framework_category: str, body: str,
+    framework_name: str, framework_category: str, body: str, summary: str = "",
 ) -> str:
-    """Single-shot KEEP/DROP rubric; unambiguous instruction so model returns one-word verdict at temperature=0."""
+    """Single-shot KEEP/DROP rubric; unambiguous instruction so model returns one-word verdict at temperature=0.
+
+    `summary` (Tier 2 llms.txt blockquote, "" for every other tier) adds one
+    author-written sentence to the static prefix — still prefix-positioned, so
+    KV-cache reuse is preserved. "" yields the exact legacy string, so Tier 1
+    prompts are byte-identical to before."""
     cat_clause = (
         f", a {framework_category} library/framework"
         if framework_category else ""
     )
     truncated = head_tail_truncate(body)
+    summary_clause = f" About {framework_name}: {summary}" if summary else ""
     return (
         f"You are filtering pages from the official documentation site of "
-        f"{framework_name}{cat_clause}.\n\n"
+        f"{framework_name}{cat_clause}.{summary_clause}\n\n"
         f"Decide if this page is:\n"
         f"  KEEP → teaching content (tutorials, guides, API reference, "
         f"how-to articles, conceptual explanations of how to use the library)\n"

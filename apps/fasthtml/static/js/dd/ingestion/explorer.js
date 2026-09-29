@@ -48,7 +48,13 @@ const S = {
 };
 
 // ============================================================
-// Grouping — derive a navigable tree from the page's real per-page URL.
+// Grouping — derive a navigable tree from the entry's curated section
+// first, URL path second.
+//   Tier 2 entries carry `section` (the llms.txt `##` file-list heading
+//   each link was found under, e.g. "Documentation", "Optional") — the
+//   author's own curation, strictly better than URL-guessing. Entries
+//   without one (all other tiers, or pre-upgrade manifests) fall back to
+//   the URL-path heuristic below.
 //   `https://docs.browser-use.com/open-source/llms-full.txt`
 //      → host = docs.browser-use.com
 //      → path = /open-source/llms-full.txt
@@ -64,6 +70,7 @@ const S = {
 // back to `url`, which is already per-page for tiers 2-5.
 // ============================================================
 function _prefixForEntry(e) {
+  if (e.section && String(e.section).trim()) return String(e.section).trim().slice(0, 60);
   const raw = e.source_path || e.url || '';
   try {
     const u = new URL(raw);
@@ -117,6 +124,7 @@ function _runFilter() {
     if (q) {
       const hay = (
         (e.title || '') + ' ' + (e.slug || '') + ' ' +
+        (e.section || '') + ' ' + (e.notes || '') + ' ' +
         (e.source_path || e.url || '')
       ).toLowerCase();
       if (!hay.includes(q)) continue;
@@ -171,10 +179,13 @@ function _renderTree() {
       html.push('<div class="fw-explorer-group-body">');
       for (const { e, i } of visibleEntries) {
         const active = (i === S.activeIdx);
+        // Tooltip prefers the index's own `: notes` description (Tier 2)
+        // over the bare URL — hover-only, zero layout risk for other tiers.
+        const tip = e.notes ? (e.notes + ' — ' + (e.url || '')) : (e.url || '');
         html.push(
           '<div class="fw-explorer-row' + (active ? ' active' : '') +
           '" data-idx="' + i + '" title="' +
-          _escapeAttr(e.url || '') + '">' +
+          _escapeAttr(tip) + '">' +
           '<span class="fw-explorer-row-title">' +
           _escapeHtml(e.title || e.slug || '(untitled)') +
           '</span>' +
