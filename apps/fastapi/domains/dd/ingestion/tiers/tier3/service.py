@@ -35,8 +35,10 @@ async def _expand_sitemap(
     client: httpx.AsyncClient,
     url: str,
     depth: int = 0,
-) -> list[str]:
-    """Recursively flatten sitemap indexes. Returns a list of page URLs."""
+) -> list[tuple[str, str]]:
+    """Recursively flatten sitemap indexes. Returns [(page_url, lastmod)] —
+    `lastmod` is "" when the index carries none. Callers must treat "" as
+    unknown, never as old."""
     if depth > params.INDEX_MAX_DEPTH:
         logger.info(f"[tier-3] sitemap depth cap hit at {url}")
         return []
@@ -52,7 +54,7 @@ async def _expand_sitemap(
         soup = BeautifulSoup(resp.text or "", "lxml-xml")
     except Exception:
         soup = BeautifulSoup(resp.text or "", "html.parser")
-    out: list[str] = []
+    out: list[tuple[str, str]] = []
     for sm in soup.find_all("sitemap"):
         loc = sm.find("loc")
         if loc and loc.text:
@@ -61,7 +63,11 @@ async def _expand_sitemap(
     for u in soup.find_all("url"):
         loc = u.find("loc")
         if loc and loc.text:
-            out.append(loc.text.strip())
+            lm = u.find("lastmod")
+            out.append((
+                loc.text.strip(),
+                (lm.text.strip() if lm and lm.text else "")[:32],
+            ))
     return out
 
 
@@ -175,10 +181,12 @@ async def run(
         timeout = httpx.Timeout(params.TIMEOUT_S, connect = 10.0),
         follow_redirects = True,
     ) as client:
-        all_urls = await _expand_sitemap(client, url)
-        if not all_urls:
+        all_entries = await _expand_sitemap(client, url)
+        if not all_entries:
             await progress.finish(status = "failed")
             raise RuntimeError(f"Tier 3: {url} yielded zero URLs")
+        all_urls = [u for u, _ in all_entries]
+        lastmod_by_url = {u: lm for u, lm in all_entries if lm}
         kept = [u for u in all_urls if _keep(u)]
         seen: set[str] = set()
         deduped: list[str] = []
@@ -187,13 +195,39 @@ async def run(
                 continue
             seen.add(u)
             deduped.append(u)
+        n_lastmod = sum(1 for u in deduped if lastmod_by_url.get(u))
         logger.info(
             f"[tier-3] {len(all_urls)} total → {len(kept)} after filter → "
-            f"{len(deduped)} after dedup"
+            f"{len(deduped)} after dedup ({n_lastmod} with lastmod)"
         )
         await progress.update_total(len(deduped))
         sem = asyncio.Semaphore(params.CONCURRENCY)
+        slug_lock = asyncio.Lock()
+        slug_owner: dict[str, str] = {}
         written = 0
+
+        async def _claim_slug(base: str, link: str) -> str:
+            """Collision-free slug within this run (ported from Tier 2:
+            first claimant keeps the bare slug, later same-title pages take
+            the nearest distinctive URL ancestor, counter as fallback).
+            Keys were already unique (idx-prefixed) — this only cleans
+            manifests/explorer titles. Cross-product same-topic pages
+            (langchain/langgraph/deepagents `streaming`×3) and tutorial-vs-
+            reference pairs (fastapi `middleware`×2) are the live cases."""
+            async with slug_lock:
+                if base not in slug_owner:
+                    slug_owner[base] = link
+                    return base
+                if slug_owner[base] == link:
+                    return base
+                stem = domain.collision_suffix(base, link) or "x"
+                cand = f"{base}-{stem}"[:80]
+                i = 2
+                while cand in slug_owner and slug_owner[cand] != link:
+                    cand = f"{base}-{stem}-{i}"[:80]
+                    i += 1
+                slug_owner[cand] = link
+                return cand
 
         async def _bound(u: str):
             nonlocal written
@@ -208,12 +242,14 @@ async def run(
                 )
             if r is not None:
                 slug, src_url, body, title = r
+                slug = await _claim_slug(slug, src_url)
                 await store.add_page(
                     slug = slug,
                     url = src_url,
                     body = body,
                     tier = "sitemap",
                     title = title,
+                    lastmod = lastmod_by_url.get(src_url, ""),
                 )
                 written += 1
             await progress.update(current = written, last_url = u)

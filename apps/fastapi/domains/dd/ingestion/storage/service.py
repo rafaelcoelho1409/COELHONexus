@@ -437,6 +437,7 @@ class Store:
         title: str = "",
         section: str = "",
         notes: str = "",
+        lastmod: str = "",
     ) -> entities.ManifestEntry:
         """Stream page to store. idx-assign+manifest append are locked; MinIO PUT is not (concurrent writes to distinct keys). Raw body also → ingestion-raw/ for normalizer-version reversibility."""
         # Markdown-side artifact hook for tiers 1/2/3/5 (tier4 uses HTML-stage).
@@ -483,6 +484,7 @@ class Store:
                 key = key,
                 section = section or "",
                 notes = notes or "",
+                lastmod = lastmod or "",
             )
             self._cached_manifest.append(entry)
         await asyncio.gather(

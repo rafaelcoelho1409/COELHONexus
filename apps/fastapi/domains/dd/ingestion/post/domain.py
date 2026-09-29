@@ -345,10 +345,14 @@ def _size_aware_recursive_split(
     source_path: str,
     h1_prefix: str,
     levels: tuple[int, ...],
+    max_bytes: int | None = None,
 ) -> list[tuple[str, str, str]]:
     """Sub-split only over the size cap; falls through on ORIGINAL body
-    (not on stub-dropped fragments)."""
-    if len(body.encode("utf-8")) <= params.SPLIT_MAX_SECTION_BYTES:
+    (not on stub-dropped fragments). `max_bytes` overrides
+    SPLIT_MAX_SECTION_BYTES for callers with a smaller budget (the monolith
+    path omits it and keeps the default)."""
+    limit = max_bytes if max_bytes is not None else params.SPLIT_MAX_SECTION_BYTES
+    if len(body.encode("utf-8")) <= limit:
         return [(slug, body, source_path)]
     if not levels:
         return [(slug, body, source_path)]
@@ -374,11 +378,33 @@ def _size_aware_recursive_split(
         if len(sb.encode("utf-8")) >= params.SPLIT_MIN_SECTION_BYTES
     ]
     if len(sub_writes) < 2:
-        return _size_aware_recursive_split(slug, body, source_path, h1_prefix, rest_levels)
+        return _size_aware_recursive_split(slug, body, source_path, h1_prefix, rest_levels, max_bytes = max_bytes)
     out: list[tuple[str, str, str]] = []
     for ss, sb in sub_writes:
-        out.extend(_size_aware_recursive_split(ss, sb, source_path, h1_prefix, rest_levels))
+        out.extend(_size_aware_recursive_split(ss, sb, source_path, h1_prefix, rest_levels, max_bytes = max_bytes))
     return out
+
+
+def split_oversized_page(
+    slug: str,
+    body: str,
+    max_bytes: int,
+) -> list[tuple[str, str, str]]:
+    """Split ONE oversized page from a multi-page corpus on H2/H3 (same
+    atomic-fence machinery as the monolith path, parent H1 prepended for
+    self-containment). Returns [(slug, body, "")] — single element, unsplit —
+    when no clean split exists. Deliberately NOT the changelog path (Tier-1
+    monolith's territory) and no stub/dup filtering (dedup already ran);
+    slugs get hash-suffixed on collision like everywhere else here."""
+    h1_match = patterns.H1_PREFIX_RE.match(body)
+    h1_prefix = (h1_match.group(1) + "\n\n") if h1_match else ""
+    out = _size_aware_recursive_split(
+        slug, body, "", h1_prefix = h1_prefix, levels = (2, 3),
+        max_bytes = max_bytes,
+    )
+    if len(out) <= 1:
+        return [(slug, body, "")]
+    return _disambiguate_duplicate_slugs(out)
 
 
 def dedup_pages(

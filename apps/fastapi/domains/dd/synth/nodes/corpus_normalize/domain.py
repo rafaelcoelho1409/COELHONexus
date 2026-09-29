@@ -1,4 +1,4 @@
-"""corpus_normalize — 8-pass markdown cleanup pipeline; pure + idempotent."""
+"""corpus_normalize — 9-pass markdown cleanup pipeline; pure + idempotent."""
 from __future__ import annotations
 from . import params, patterns, schemas, versions
 
@@ -31,6 +31,9 @@ def normalize_doc(
     stats.fence_meta_stripped       = n_meta
     stats.container_admonitions     = n_admon
     stats.orphan_tags_stripped      = n_orphan
+
+    text, n_permalink = _permalink_pass(text)
+    stats.permalink_debris_stripped = n_permalink
 
     text, n_ent, n_blank, n_trail = _whitespace_entity_pass(text)
     stats.html_entities_decoded = n_ent
@@ -188,6 +191,30 @@ def _strip_admonition_markers(line: str) -> tuple[str, bool]:
         if pattern.fullmatch(line):
             return "", True
     return line, False
+
+
+def _permalink_pass(text: str) -> tuple[str, int]:
+    """Strip static-site permalink debris from prose lines, fence-aware
+    (code samples quoting `[¶](#…)` markup must survive verbatim)."""
+    fence_ranges = _identify_fence_ranges(text)
+    fenced: set[int] = set()
+    for (open_idx, close_idx, _) in fence_ranges:
+        # Same convention as _token_aware_passes: opener + body lines are
+        # fence territory; close_idx itself is exclusive (first line after).
+        fenced.add(open_idx)
+        fenced.update(range(open_idx + 1, close_idx))
+    n = 0
+    out: list[str] = []
+    for i, line in enumerate(text.split("\n")):
+        if i in fenced:
+            out.append(line)
+            continue
+        new_line = patterns.PERMALINK_LEADING_RE.sub("", line)
+        new_line = patterns.PERMALINK_TRAILING_RE.sub("", new_line)
+        if new_line != line:
+            n += 1
+        out.append(new_line)
+    return "\n".join(out), n
 
 
 def _strip_mdx_wrapper_tags(line: str) -> tuple[str, int]:

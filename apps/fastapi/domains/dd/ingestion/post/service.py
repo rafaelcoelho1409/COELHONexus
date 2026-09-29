@@ -81,7 +81,29 @@ async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> d
         await asyncio.gather(*(_read_one(e) for e in current))
     )
     deduped, stubs, dupes = domain.dedup_pages(raw_pages)
-    if stubs == 0 and dupes == 0:
+    # Oversized pre-split (multi-page corpora only — the monolith branch
+    # above owns single-page corpora): individual pages over
+    # OVERSIZED_SPLIT_BYTES would otherwise truncate silently at
+    # doc_distill/digest's 100KB caps. Same H2/H3 splitter, H1-prepended
+    # self-contained children sharing the parent URL; no clean split →
+    # page passes through intact, never dropped here.
+    expanded: list[tuple[str, str, str, tuple[str, str]]] = []
+    n_oversized = 0
+    for s, u, b in deduped:
+        if len(b.encode("utf-8")) >= params.OVERSIZED_SPLIT_BYTES:
+            subs = domain.split_oversized_page(s, b, params.OVERSIZED_SPLIT_BYTES)
+            if len(subs) > 1:
+                for ns, nb, _sp in subs:
+                    expanded.append((ns, u, nb, (s, u)))
+                n_oversized += 1
+                logger.info(
+                    f"[post] oversized pre-split: {s} "
+                    f"({len(b.encode('utf-8')) // 1024} KB) → "
+                    f"{len(subs)} sections"
+                )
+                continue
+        expanded.append((s, u, b, (s, u)))
+    if stubs == 0 and dupes == 0 and n_oversized == 0:
         return domain.make_summary("dedup", input_files, input_bytes, current)
     del_sem = asyncio.BoundedSemaphore(params.DELETE_CONCURRENCY)
 
@@ -92,12 +114,16 @@ async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> d
     await asyncio.gather(*(_del_one(e) for e in current))
     new_entries = []
     write_batch: list = []
-    for new_idx, (slug, url, body) in enumerate(deduped):
+    for new_idx, (slug, url, body, parent) in enumerate(expanded):
+        pslug, purl = parent
         prev = next(
-            (e for e in current if e.url == url and e.slug == slug), None,
+            (e for e in current if e.url == purl and e.slug == pslug), None,
         )
         tier = prev.tier if prev else (current[0].tier if current else "unknown")
-        title = prev.title if prev else slug
+        # Split children (slug != parent slug) take their own heading-derived
+        # slug as title, mirroring the monolith split branch; untouched pages
+        # keep the parent title.
+        title = prev.title if (prev and slug == pslug) else slug
         new_key = domains.dd.ingestion.storage.keys.page_key(store.framework_slug, new_idx, slug)
         write_batch.append((new_key, body, "text/markdown"))
         new_entries.append(domains.dd.ingestion.storage.entities.ManifestEntry(
@@ -116,6 +142,8 @@ async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> d
             # url+slug); Tier 1 entries carry "" and stay "" here.
             section = (prev.section if prev else "") or "",
             notes = (prev.notes if prev else "") or "",
+            # Tier 3 sitemap lastmod, same prev-match survival.
+            lastmod = (prev.lastmod if prev else "") or "",
         ))
     await store.minio.write_many(write_batch)
     await store.replace_manifest(new_entries)
@@ -124,7 +152,7 @@ async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> d
         input_files, 
         input_bytes, 
         new_entries,
-        was_split = False, 
+        was_split = n_oversized > 0, 
         stubs = stubs, 
         dupes = dupes,
     )

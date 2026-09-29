@@ -64,5 +64,14 @@ GITBOOK_TABS_CLOSE_RE = re.compile(
     re.MULTILINE,
 )
 
+# Static-site permalink debris (MkDocs Material `[¶](#slug "Permanent link")`
+# appended to every heading; empty-text `[](#anchor)` prepended by others).
+# Narrow on purpose: link TEXT must be empty or `¶` — a real trailing prose
+# link (`…see [the guide](/x)`) never matches, so clean pages are untouched.
+# (Verified 2026-09-29: zero matches across 63KB of Mintlify Tier-1 samples;
+# dozens per page on MkDocs Tier-3 corpora like k3d/FastAPI.)
+PERMALINK_TRAILING_RE = re.compile(r"\s*\[¶?\]\([^)]*\)\s*$")
+PERMALINK_LEADING_RE = re.compile(r"^\s*\[¶?\]\(#[^)]*\)\s*")
+
 # Zero-width + BOM + miscellaneous formatting chars.
 ZERO_WIDTH_RE = re.compile(r"[​‌‍⁠﻿]")

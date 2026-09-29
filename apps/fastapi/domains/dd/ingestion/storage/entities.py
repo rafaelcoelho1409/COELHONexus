@@ -32,3 +32,7 @@ class ManifestEntry:
     # all other tiers; downstream must fall back to URL-path grouping when "".
     section: str = ""
     notes: str = ""
+    # Tier 3 sitemap `<lastmod>` for this URL ("" when the index carries
+    # none). Freshness signal for the explorer + future incremental
+    # re-ingest; never a correctness input.
+    lastmod: str = ""

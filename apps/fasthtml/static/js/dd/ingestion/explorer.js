@@ -74,12 +74,22 @@ function _prefixForEntry(e) {
   const raw = e.source_path || e.url || '';
   try {
     const u = new URL(raw);
-    const parts = u.pathname.split('/').filter(Boolean);
+    let parts = u.pathname.split('/').filter(Boolean);
+    // Skip version pins (`/v5.9.0/…`, k3d) — frozen at ingestion time, zero
+    // topic signal, and otherwise collapses the whole corpus into one group.
+    while (parts.length > 1 && /^v?\d+(\.\d+)*$/.test(parts[0])) parts = parts.slice(1);
+    // Skip scope roots (`/oss/python/…`, langchain triad) — language/platform
+    // namespace, not a topic; stripping both lands on the product name.
+    // Kept to >2 so a genuine `/python/<page>` pair still groups as-is.
+    while (parts.length > 2 && (parts[0] === 'oss' || parts[0] === 'python')) parts = parts.slice(1);
     if (parts.length <= 1) return '(root)';
     // First segment is usually the section ("docs", "guides", "api"…)
     // Two segments give more useful grouping for sites that namespace
     // everything under /docs/<section>/<page>.
     if (parts[0] === 'docs' && parts.length >= 2) return parts[1];
+    // Same idea for single-container sites (`/usage/commands/…`, k3d):
+    // the container alone would mega-group, so keep one more level.
+    if (parts[0] === 'usage' && parts.length >= 3) return parts[0] + '/' + parts[1];
     return parts[0];
   } catch (_) {
     return '(root)';

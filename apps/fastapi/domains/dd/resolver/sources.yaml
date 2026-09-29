@@ -348,6 +348,9 @@ frameworks:
   docs: https://k3d.io/stable/
   sitemap: https://k3d.io/stable/sitemap.xml
   github: https://github.com/k3d-io/k3d
+  # NOTE: sitemap pins /v5.9.0/ (verified 2026-09-29: all 48 URLs) — no
+  # /stable/ alias with real locs. Corpus freezes at ingestion time;
+  # re-ingest on k3d minor/major releases to stay current.
 
 - name: Kafka (Python)
   logo: https://kafka.apache.org/logos/kafka_logo--simple.png
