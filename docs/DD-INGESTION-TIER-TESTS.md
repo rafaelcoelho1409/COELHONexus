@@ -86,3 +86,23 @@ for e in data:
 for t,n in tiers.items(): print(f'Tier {t}: {len(n)} entries')
 "
 ```
+
+---
+
+## Planner + Synth validation picks (2026-09-29)
+
+The table above proves the *download* pipeline. These picks prove the *downstream*
+pipelines consume each tier's corpus shape correctly. One pick per tier, each
+proving something different. **Sequential only, after any running Synth finishes**
+— concurrent full-pipeline runs sharing the Rotator pool reproduce the 2026-09-29
+pool-exhaustion incident (all 19 arms benched, 6 FastMCP chapters lost to
+`sawc` ChatErrors, Rotator OOMKill).
+
+| Tier | Pick (pages) | Proves | Scale follow-up (only if clean) |
+|---|---|---|---|
+| 1 | **FastMCP** (467) | Reference baseline (already validated) | dbt (1025), Claude Code (~322 eff.) |
+| 2 | **FastHTML** (20) | Summary anchor, `section` grouping, cross-host pages — cheapest complete proof | Qdrant (~382 eff. post-quarantine) |
+| 3 | **FastAPI** (169) | Pre-split giants, disambiguated slugs, debris-stripped bodies, tutorial/reference pairs | LangChain triad (189) |
+| 4 | **Asyncio** (73 slices) | Fragment-collapse: 8 base pages re-derived as anchor sections flow through judge → distill → propose | Pandas (186, known-good regression baseline) |
+
+Order: FastHTML → FastAPI → Asyncio, then Qdrant/Pandas only if those three are clean.

@@ -106,7 +106,7 @@ registry:
   imagePullSecret: ""
 
 fastapi:
-  image: localhost:5001/coelhonexus-fastapi:latest
+  image: coelho-cloud-registry:5000/coelhonexus-fastapi:latest
   imagePullPolicy: Always
   replicas: 1
   resources:
@@ -173,7 +173,6 @@ flower:
   maxTasks: 10000
   purgeOfflineWorkersSeconds: 300
   stateSaveInterval: 10000
-  # Tailnet is the trust boundary by default. Enable + set FLOWER_BASIC_AUTH in the secret for auth.
   basicAuth:
     enabled: false
   resources:
@@ -209,7 +208,7 @@ flower:
       failureThreshold: 3
 
 fasthtml:
-  image: localhost:5001/coelhonexus-fasthtml:latest
+  image: coelho-cloud-registry:5000/coelhonexus-fasthtml:latest
   imagePullPolicy: Always
   replicas: 1
   resources:
@@ -252,7 +251,7 @@ fasthtml:
       failureThreshold: 3
 
 fastmcp:
-  image: localhost:5001/coelhonexus-fastmcp:latest
+  image: coelho-cloud-registry:5000/coelhonexus-fastmcp:latest
   imagePullPolicy: Always
   replicas: 1
   resources:
