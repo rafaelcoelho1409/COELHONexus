@@ -41,7 +41,7 @@ def _ProgressBox():
         ),
         Div(
             Span("", id = "fw-progress-counter"),
-            Span(""),
+            Span("", id = "fw-progress-post-summary"),
             cls = "fw-progress-meta",
         ),
         Div("", id = "fw-progress-url", cls = "fw-progress-url"),

@@ -10,6 +10,7 @@ export const progressStatus    = document.querySelector('#fw-progress-status');
 export const progressBar       = document.querySelector('#fw-progress-bar');
 export const progressFill      = document.querySelector('#fw-progress-fill');
 export const progressCounter   = document.querySelector('#fw-progress-counter');
+export const progressPostSummary = document.querySelector('#fw-progress-post-summary');
 export const progressUrl       = document.querySelector('#fw-progress-url');
 export const progressLogos     = document.querySelector('#fw-progress-logos');
 export const progressFramework = document.querySelector('#fw-progress-framework');

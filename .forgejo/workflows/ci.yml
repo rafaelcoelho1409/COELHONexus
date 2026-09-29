@@ -1,0 +1,84 @@
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: coelho-cloud-registry:5000
+  IMAGES: "coelhonexus-fastapi coelhonexus-fasthtml coelhonexus-fastmcp"
+  SKAFFOLD_VERSION: v2.18.1 # keep in sync with local dev pin (`skaffold version`)
+  DOCKER_BUILDKIT: "1"
+jobs:
+  build:
+    name: skaffold build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Skaffold
+        run: |
+          set -euo pipefail
+          curl -sSL -o /tmp/skaffold \
+            "https://storage.googleapis.com/skaffold/releases/${SKAFFOLD_VERSION}/skaffold-linux-amd64"
+          chmod +x /tmp/skaffold
+          if [ -w /usr/local/bin ]; then
+            mv /tmp/skaffold /usr/local/bin/skaffold
+          else
+            mkdir -p "$HOME/.local/bin"
+            mv /tmp/skaffold "$HOME/.local/bin/skaffold"
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          fi
+          skaffold version
+
+      - name: Install Helm
+        # `skaffold build` shells out to helm (helm deployer configured in
+        # skaffold.yaml), and the act image ships none. Major-pinned v3 to
+        # match Skaffold v2.18.x; bump deliberately with Skaffold.
+        run: |
+          set -euo pipefail
+          curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          helm version --short
+
+      - name: Helm lint (chart validity gate)
+        # Fails fast on template errors before paying for 3 image builds.
+        # Same check as local `helm lint k8s/helm` — currently clean.
+        run: |
+          set -euo pipefail
+          helm lint k8s/helm
+
+      - name: Wait for Docker (runner dind)
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            docker info >/dev/null 2>&1 && break
+            sleep 2
+          done
+          docker info
+
+      - name: Skaffold build + push (fastapi, fasthtml, fastmcp)
+        run: |
+          set -euo pipefail
+          SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            skaffold build -p ci --tag="${SHORT_SHA}"
+          else
+            skaffold build -p ci --push --tag="${SHORT_SHA}"
+            for IMAGE in ${IMAGES}; do
+              DEST="${REGISTRY}/${IMAGE}"
+              docker pull "${DEST}:${SHORT_SHA}"
+              docker tag "${DEST}:${SHORT_SHA}" "${DEST}:latest"
+              docker push "${DEST}:latest"
+            done
+          fi

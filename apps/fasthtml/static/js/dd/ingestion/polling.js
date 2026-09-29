@@ -23,10 +23,48 @@ import { navigateToStage } from '../shared/nav.js';
 // ============================================================
 import { renderManifest, loadManifestForSlug } from './manifest.js';
 
+// Raw `tier` values are internal dispatch keys (ingestion/runtime/dispatch/
+// service.py's _TIER_MODULES + the post-fetch phases) — shown verbatim
+// before this map existed, so a run would sit on the literal text "post"
+// for however long split/dedup/vault-backfill took, with no indication
+// anything was still happening. `vault_backfill` additionally carries a
+// real total/current (see dispatch/service.py) — this map is just the label.
+const TIER_LABELS = {
+  llms_full:      'Fetching documentation bundle',
+  llms_txt:       'Fetching page index',
+  sitemap:        'Crawling sitemap',
+  docs:           'Crawling documentation site',
+  github:         'Fetching GitHub repository',
+  post:           'Splitting & deduplicating pages',
+  vault_backfill: 'Building citation index',
+  finalize:       'Finalizing',
+};
+
+// `post` (record_post's summary — GET /runs/{id}'s `post` field, previously
+// fetched but never rendered) turns the "Splitting & deduplicating pages"
+// phase from a silent wait into a concrete result the moment it lands,
+// instead of the tier label being the only signal anything happened.
+export function renderPostSummary(post) {
+  if (!Si.progressPostSummary) return;
+  if (!post) { Si.progressPostSummary.textContent = ''; return; }
+  const parts = [];
+  if (post.was_split) {
+    parts.push(
+      'split into ' + post.output_files + ' page' +
+      (post.output_files === 1 ? '' : 's'),
+    );
+  } else if (post.output_files !== post.input_files) {
+    parts.push(post.input_files + ' → ' + post.output_files + ' pages');
+  }
+  if (post.duplicates_dropped) parts.push('-' + post.duplicates_dropped + ' dupes');
+  if (post.stubs_dropped) parts.push('-' + post.stubs_dropped + ' stubs');
+  Si.progressPostSummary.textContent = parts.length ? '(' + parts.join(', ') + ')' : '';
+}
+
 export function renderProgress(p) {
   if (!p) return;
   if (!Si.progressTier) return;   // not on the ingestion page — no-op
-  Si.progressTier.textContent = p.tier || '—';
+  Si.progressTier.textContent = (p.tier && TIER_LABELS[p.tier]) || p.tier || '—';
   Si.progressStatus.textContent = p.status || '—';
   Si.progressUrl.textContent = p.last_url || '';
   if (p.total && p.total > 0) {
@@ -50,6 +88,7 @@ export async function pollRun(runId) {
   // function can be safely awaited from other stages (which still
   // need the activeRunId state for the global running-dot indicator).
   if (Si.progressBox) Si.progressBox.style.display = '';
+  renderPostSummary(null);
   if (Si.cancelBtn) {
     Si.cancelBtn.disabled = false;
     Si.cancelBtn.innerHTML = 'Cancel ingestion';
@@ -61,6 +100,7 @@ export async function pollRun(runId) {
       if (r.status === 404) { await sleep(800); continue; }
       const data = await r.json();
       renderProgress(data.progress);
+      renderPostSummary(data.post);
       const st = data.progress?.status;
       if (st === 'done') {
         const completedSlug = Si.activeSlug;

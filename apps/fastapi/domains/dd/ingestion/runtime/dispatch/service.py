@@ -229,6 +229,29 @@ async def _run_inner(run_id: str, slug: str) -> dict:
 
         await progress.raise_if_cancelled()
 
+        # split_monolith/dedup_pages rewrite the manifest with fresh idx/keys
+        # (post.service.apply_to_store) — the vaults Store.add_page built at
+        # fetch time are keyed off the PRE-split idx/slug and are now orphaned;
+        # every new entry has none. Idempotent (skips entries that already
+        # have both vault blobs), so this is cheap even when nothing changed.
+        # Own tier + real total/current — on a large framework (400+ pages)
+        # this was previously a single multi-second block with the progress
+        # UI stuck showing "post" and no counter moving at all.
+        await progress.start(tier = "vault_backfill", total = post_summary["output_files"])
+
+        async def _on_backfill_progress(done: int, total: int) -> None:
+            await progress.update(current = done)
+
+        try:
+            await domains.dd.synth.nodes.backfill.service.backfill_vaults_for_framework(
+                slug, on_progress = _on_backfill_progress,
+            )
+        except Exception as e:
+            logger.warning(
+                f"[dispatch] {slug}: post-ingest vault backfill failed: "
+                f"{type(e).__name__}: {e}"
+            )
+
         await progress.start(tier = "finalize", total = 0)
 
         await store.finalize(extra = {

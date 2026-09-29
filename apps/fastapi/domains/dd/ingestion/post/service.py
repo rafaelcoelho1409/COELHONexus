@@ -33,17 +33,26 @@ async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> d
         await store.delete_body_by_key(only.key)
         new_entries: list[domains.dd.ingestion.storage.entities.ManifestEntry] = []
         write_batch: list = []
-        for new_idx, (slug, sec_body) in enumerate(writes):
+        for new_idx, (slug, sec_body, source_path) in enumerate(writes):
             new_key = domains.dd.ingestion.storage.keys.page_key(store.framework_slug, new_idx, slug)
             write_batch.append((new_key, sec_body, "text/markdown"))
+            # A changelog-release sub-page (domain._split_changelog_releases)
+            # gets its own tier so corpus_load can drop it from the Planner/
+            # Synth path — every other split page keeps the parent's tier.
+            tier = (
+                "changelog"
+                if domains.dd.ingestion.post.patterns.CHANGELOG_RELEASE_MARKER in slug
+                else only.tier
+            )
             new_entries.append(domains.dd.ingestion.storage.entities.ManifestEntry(
-                idx = new_idx, 
-                slug = slug, 
-                url = only.url, 
-                tier = only.tier,
+                idx = new_idx,
+                slug = slug,
+                url = only.url,
+                tier = tier,
                 bytes = len(sec_body.encode("utf-8")),
-                title = slug, 
+                title = slug,
                 key = new_key,
+                source_path = source_path,
             ))
         await store.minio.write_many(write_batch)
         await store.replace_manifest(new_entries)
@@ -92,13 +101,17 @@ async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> d
         new_key = domains.dd.ingestion.storage.keys.page_key(store.framework_slug, new_idx, slug)
         write_batch.append((new_key, body, "text/markdown"))
         new_entries.append(domains.dd.ingestion.storage.entities.ManifestEntry(
-            idx = new_idx, 
-            slug = slug, 
-            url = url, 
+            idx = new_idx,
+            slug = slug,
+            url = url,
             tier = tier,
             bytes = len(body.encode("utf-8")),
-            title = title, 
+            title = title,
             key = new_key,
+            # Already distinct per page here (unlike the split branch) —
+            # mirrored so downstream consumers can always read source_path
+            # without an url fallback.
+            source_path = url,
         ))
     await store.minio.write_many(write_batch)
     await store.replace_manifest(new_entries)

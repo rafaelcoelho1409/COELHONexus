@@ -334,9 +334,12 @@ frameworks:
 - name: Inference (Roboflow)
   logo: https://cdn.simpleicons.org/roboflow
   docs: https://inference.roboflow.com/
-  llms_full: https://inference.roboflow.com/llms-full.txt
-  llms_txt: https://inference.roboflow.com/llms.txt
-  sitemap: https://inference.roboflow.com/sitemap.xml
+  # llms_full/llms_txt/sitemap all verified dead-end 2026-09-29: llms-full.txt
+  # is a 908B stub (one paragraph + a leaked raw YAML front-matter block),
+  # llms.txt lists exactly one link ("Home"), sitemap.xml lists exactly one
+  # URL (the root) — none reach the real mkdocs-material doc tree. Falls
+  # through to Tier 4 (BFS crawl from `docs`), which isn't dependent on any
+  # of those three and can actually discover the real pages.
   github: https://github.com/roboflow/inference
   category: Python
 

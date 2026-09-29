@@ -5,6 +5,7 @@ from . import domain
 
 import asyncio
 import logging
+from typing import Awaitable, Callable, Optional
 
 
 
@@ -69,16 +70,34 @@ async def _backfill_one(
             return (page_slug, 0, "error")
 
 
-async def backfill_vaults_for_framework(slug: str) -> dict:
-    """Build vaults for every existing page of `slug`. Idempotent."""
+async def backfill_vaults_for_framework(
+    slug: str,
+    on_progress: Optional[Callable[[int, int], Awaitable[None]]] = None,
+) -> dict:
+    """Build vaults for every existing page of `slug`. Idempotent.
+    `on_progress(done, total)` is awaited after each page finishes (built,
+    skipped, or errored alike) — lets a caller (ingestion's dispatch) surface
+    live progress instead of this whole call being one silent multi-second
+    block on a large framework."""
     page_keys = await _list_page_keys(slug)
     if not page_keys:
+        if on_progress:
+            await on_progress(0, 0)
         return {"slug": slug, "pages": 0, "built": 0,
                 "skipped": 0, "errors": 0, "total_fences": 0}
     sem = asyncio.Semaphore(domains.dd.synth.params.BACKFILL_CONCURRENCY)
-    results = await asyncio.gather(*(
-        _backfill_one(slug, k, sem) for k in page_keys
-    ))
+    total = len(page_keys)
+    done = 0
+
+    async def _one(k: str) -> tuple[str, int, str]:
+        nonlocal done
+        result = await _backfill_one(slug, k, sem)
+        done += 1
+        if on_progress:
+            await on_progress(done, total)
+        return result
+
+    results = await asyncio.gather(*(_one(k) for k in page_keys))
     built = sum(1 for _, _, s in results if s == "built")
     skipped = sum(1 for _, _, s in results if s == "skipped")
     errors = sum(1 for _, _, s in results if s == "error")

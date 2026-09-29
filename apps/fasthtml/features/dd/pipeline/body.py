@@ -367,15 +367,47 @@ _PLANNER_DONE_SYNTH_SYNC = """\
 # programmatically click #fw-synth-start so Synth starts without the
 # user lifting a finger. Listens for the CustomEvent the planner's
 # polling module dispatches on terminal SSE.
+#
+# 2026-09-29 fix: this used to fire a single blind setTimeout(…, 1500)
+# then click unconditionally. But `_PLANNER_DONE_SYNTH_SYNC` above (the
+# handler that actually clears the two things gating the button —
+# Sy.synthHasPlan via a plan-gate fetch, and the cross-stage lock via up
+# to 5 retries) is ALSO an async listener on the same event, kicked off
+# at the same instant — it documents itself as taking "up to ~3s" in the
+# worst case. `dispatchEvent` doesn't wait for async listeners, so the
+# two ran concurrently, not in the sequence the old comment assumed.
+# When the sync chain lost that race, #fw-synth-start was still
+# `disabled` at the 1500ms mark — and `.click()` on a disabled button is
+# a silent no-op, so auto-chain would just do nothing with no error.
+# Fix: poll until the button is actually enabled (bounded, with a
+# failure toast instead of silent giving-up) rather than guessing a
+# fixed delay.
 _AUTO_CHAIN_WIRING = """\
 (function () {
   var KEY = 'dd:pipeline:autochain';
+  var POLL_MS = 300;
+  var MAX_WAIT_MS = 10000;   // comfortably above the ~3.25s worst case
   var cb = document.getElementById('fw-pipeline-autochain');
   if (cb) {
     try { cb.checked = localStorage.getItem(KEY) === '1'; } catch (_) {}
     cb.addEventListener('change', function () {
       try { localStorage.setItem(KEY, cb.checked ? '1' : '0'); } catch (_) {}
     });
+  }
+  function showFlash(msg) {
+    try {
+      var box = document.createElement('div');
+      box.textContent = msg;
+      box.style.cssText =
+        'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);' +
+        'background:#1a3a52;color:#fff;padding:12px 20px;border-radius:6px;' +
+        'font-size:14px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.3);max-width:90vw';
+      document.body.appendChild(box);
+      setTimeout(function () { box.remove(); }, 3500);
+    } catch (_) {}
+  }
+  function isEnabled(btn) {
+    return !btn.disabled && btn.getAttribute('disabled') !== 'disabled';
   }
   document.addEventListener('dd:planner:terminal', function (ev) {
     var enabled = false;
@@ -388,23 +420,21 @@ _AUTO_CHAIN_WIRING = """\
     if (status !== 'done') return;
     var synthBtn = document.getElementById('fw-synth-start');
     if (!synthBtn) return;
-    // Brief delay so the Planner UI finishes its terminal cleanup
-    // (refreshes Start state, releases the cross-stage lock via the
-    // backend CAD-finally) before we click — otherwise the click hits
-    // a still-locked endpoint and shows a `locked` toast.
-    setTimeout(function () {
-      try {
-        var box = document.createElement('div');
-        box.textContent = '▷ Auto-chain: Planner done → starting Synth…';
-        box.style.cssText =
-          'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);' +
-          'background:#1a3a52;color:#fff;padding:12px 20px;border-radius:6px;' +
-          'font-size:14px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.3)';
-        document.body.appendChild(box);
-        setTimeout(function () { box.remove(); }, 3500);
-      } catch (_) {}
-      synthBtn.click();
-    }, 1500);
+    var waited = 0;
+    (function tick() {
+      if (isEnabled(synthBtn)) {
+        showFlash('▷ Auto-chain: Planner done → starting Synth…');
+        synthBtn.click();
+        return;
+      }
+      waited += POLL_MS;
+      if (waited >= MAX_WAIT_MS) {
+        var reason = synthBtn.getAttribute('title') || 'Synth Start is still blocked.';
+        showFlash('Auto-chain: Planner finished, but Synth never became startable — ' + reason);
+        return;
+      }
+      setTimeout(tick, POLL_MS);
+    })();
   });
 })();
 """

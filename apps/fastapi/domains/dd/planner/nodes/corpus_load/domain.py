@@ -15,6 +15,7 @@ def build_corpus_stats(
     byte_sizes: list[int],
     manifest: dict,
     load_ms: int,
+    excluded_changelog: int = 0,
 ) -> dict:
     """Compute the corpus stats dict from a sorted list of per-page byte
     sizes. Mirrors the v1 PlannerProgress `record_corpus_load()` fields."""
@@ -32,4 +33,5 @@ def build_corpus_stats(
         "load_ms":      load_ms,
         "tier_kind":    manifest.get("tier_kind"),
         "ingested_at":  manifest.get("ingested_at"),
+        "excluded_changelog": excluded_changelog,
     }

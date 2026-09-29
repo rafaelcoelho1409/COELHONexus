@@ -48,16 +48,25 @@ const S = {
 };
 
 // ============================================================
-// Grouping — derive a navigable tree from entry.url path segments.
+// Grouping — derive a navigable tree from the page's real per-page URL.
 //   `https://docs.browser-use.com/open-source/llms-full.txt`
 //      → host = docs.browser-use.com
 //      → path = /open-source/llms-full.txt
 //      → group prefix = "open-source"   (first path segment)
 //   Pages whose URL parse fails or has no path → group "(root)".
+//
+// `source_path` (ingestion.post.domain's per-section `Source:` URL) is
+// preferred over `url` when present — every Tier-1 split page shares the
+// SAME `url` (the one llms-full.txt bundle it all came from), so grouping
+// by `url` alone collapses an entire framework into one "(root)" bucket.
+// `source_path` is the actual page each split section came from; entries
+// without one (H1/H2-fallback split, or pages that were never split) fall
+// back to `url`, which is already per-page for tiers 2-5.
 // ============================================================
 function _prefixForEntry(e) {
+  const raw = e.source_path || e.url || '';
   try {
-    const u = new URL(e.url || '');
+    const u = new URL(raw);
     const parts = u.pathname.split('/').filter(Boolean);
     if (parts.length <= 1) return '(root)';
     // First segment is usually the section ("docs", "guides", "api"…)
@@ -107,7 +116,8 @@ function _runFilter() {
     if (tierActive && !S.activeTiers.has(e.tier || '')) continue;
     if (q) {
       const hay = (
-        (e.title || '') + ' ' + (e.slug || '') + ' ' + (e.url || '')
+        (e.title || '') + ' ' + (e.slug || '') + ' ' +
+        (e.source_path || e.url || '')
       ).toLowerCase();
       if (!hay.includes(q)) continue;
     }

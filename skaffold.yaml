@@ -192,3 +192,23 @@ portForward:
 # Development (Skaffold): ports 23030-23039
 # sh mirror_localhost_tailscale.sh $(for i in {23030..23034}; do echo $i; done)
 # skaffold dev --cache-artifacts=false --no-prune=false --auto-sync=false
+
+profiles:
+  - name: ci
+    build:
+      artifacts:
+        - image: coelho-cloud-registry:5000/coelhonexus-fastapi
+          context: apps/fastapi
+          docker:
+            dockerfile: Dockerfile.fastapi
+            noCache: false
+        - image: coelho-cloud-registry:5000/coelhonexus-fasthtml
+          context: apps/fasthtml
+          docker:
+            dockerfile: Dockerfile.fasthtml
+            noCache: false
+        - image: coelho-cloud-registry:5000/coelhonexus-fastmcp
+          context: apps/fastmcp
+          docker:
+            dockerfile: Dockerfile.fastmcp
+            noCache: false
