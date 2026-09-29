@@ -144,6 +144,8 @@ async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> d
             notes = (prev.notes if prev else "") or "",
             # Tier 3 sitemap lastmod, same prev-match survival.
             lastmod = (prev.lastmod if prev else "") or "",
+            # Tier 4 collapsed anchors, same prev-match survival.
+            anchors = list(prev.anchors) if prev and prev.anchors else [],
         ))
     await store.minio.write_many(write_batch)
     await store.replace_manifest(new_entries)

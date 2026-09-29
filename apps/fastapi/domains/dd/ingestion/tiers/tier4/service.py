@@ -425,7 +425,7 @@ async def _fetch_one(
         await progress.record_url(
             url,
             status = "fetch_error",
-            tier = "http",
+            tier = "docs",
             fetch_ms = int((time.monotonic() - t0) * 1000),
             error_msg = f"{type(e).__name__}: {e}",
         )
@@ -435,7 +435,7 @@ async def _fetch_one(
         await progress.record_url(
             url,
             status = "http_error",
-            tier = "http",
+            tier = "docs",
             http_code = resp.status_code,
             fetch_ms = fetch_ms,
             bytes_fetched = len(resp.content or b""),
@@ -474,7 +474,7 @@ async def _fetch_one(
         await progress.record_url(
             url,
             status = "success",
-            tier = "http",
+            tier = "docs",
             http_code = resp.status_code,
             fetch_ms = fetch_ms,
             bytes_fetched = len(raw),
@@ -489,7 +489,7 @@ async def _fetch_one(
         await progress.record_url(
             url,
             status = "extract_empty",
-            tier = "http",
+            tier = "docs",
             http_code = resp.status_code,
             fetch_ms = fetch_ms,
             bytes_fetched = len(raw),
@@ -500,7 +500,7 @@ async def _fetch_one(
     await progress.record_url(
         url,
         status = "success",
-        tier = "http",
+        tier = "docs",
         http_code = resp.status_code,
         fetch_ms = fetch_ms,
         bytes_fetched = len(raw),
@@ -531,7 +531,7 @@ async def run(
         f"[tier-4] framework={framework_slug} host={host} "
         f"subtree={subtree or '(none)'} url={url}"
     )
-    await progress.start(tier = "http", total = 0)
+    await progress.start(tier = "docs", total = 0)
     async with httpx.AsyncClient(
         headers = {"User-Agent": params.USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
         timeout = httpx.Timeout(params.TIMEOUT_S, connect = 10.0),
@@ -571,13 +571,26 @@ async def run(
                 f"[tier-4] toctree sidebar contributed {len(toctree)} URLs"
             )
         # Order-preserving union; sorting alphabetizes and breaks chapter order (Bash GNU regression). Priority: most-author-curated wins.
+        # Fragment canonicalization (Google: fragments are never canonical
+        # identities): `page#anchor` seeds (mostly objects.inv `std:label`
+        # entities) collapse onto their base page; anchors are kept as
+        # per-page metadata instead of separate documents. Without this,
+        # asyncio-style corpora ingest ~9 near-duplicate overlapping slices
+        # per real page (65/73 asyncio pages were `#` fragments).
         seeds: list[str] = []
+        anchors_by_page: dict[str, list[str]] = {}
         _seen: set[str] = set()
         for src in (toctree, inv_pages, seeded, enriched, [url]):
             for u in src:
-                if u not in _seen:
-                    _seen.add(u)
-                    seeds.append(u)
+                base, _, frag = (u or "").partition("#")
+                base = base.strip()
+                if not base:
+                    continue
+                if frag and frag not in anchors_by_page.get(base, []):
+                    anchors_by_page.setdefault(base, []).append(frag)
+                if base not in _seen:
+                    _seen.add(base)
+                    seeds.append(base)
         if len(seeds) < params.DISCOVERY_MIN_URLS:
             logger.info(
                 f"[tier-4] discovery sparse ({len(seeds)} URLs) — "
@@ -666,12 +679,22 @@ async def run(
                     failed.append(u)
                 else:
                     for slug, src_url, body, title in results:
+                        # Sub-page urls may themselves carry `#anchor`
+                        # (page_split emits per-anchor slices) — same
+                        # canonicalization as seeds: base page is the
+                        # identity, anchors merge into metadata.
+                        base, _, sub_frag = (src_url or "").partition("#")
+                        base = base.strip() or src_url
+                        anchors = list(anchors_by_page.get(base, []))
+                        if sub_frag and sub_frag not in anchors:
+                            anchors.append(sub_frag)
                         await store.add_page(
                             slug = slug,
-                            url = src_url,
+                            url = base,
                             body = body,
-                            tier = "http",
+                            tier = "docs",
                             title = title,
+                            anchors = anchors,
                         )
                         written += 1
                 return results

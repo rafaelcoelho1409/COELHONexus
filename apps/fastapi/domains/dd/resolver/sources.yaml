@@ -61,6 +61,10 @@ frameworks:
   logo: https://cdn.simpleicons.org/python
   docs: https://docs.python.org/3/library/asyncio.html
   category: Python
+  # NOTE: pinned to /3/ (current major). Re-pin when Python 3.14+ ships as
+  # /4/ or the stable alias moves. objects.inv labels ride along as
+  # `#anchor` seeds — collapsed onto base pages with anchors kept as
+  # metadata (ingestion no longer stores fragment slices as documents).
   path_filter:
     include: ["/library/asyncio"]
 
@@ -838,6 +842,8 @@ frameworks:
   # /stable/ or /latest/ alias exists. /xla/master/ is the dev branch.
   # Pinned to current stable (r2.8) — update when XLA r2.9 ships. objects.inv
   # at this path → 119 pages, balanced (perf/learn/contribute/features/etc.).
+  # NOTE: page `<title>`s still read "master documentation" (site-side
+  # staleness, not our slug); content is r2.8.
 
 - name: Python
   logo: https://upload.wikimedia.org/wikipedia/commons/thumb/f/f8/Python_logo_and_wordmark.svg/3840px-Python_logo_and_wordmark.svg.png

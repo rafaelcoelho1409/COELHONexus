@@ -72,6 +72,30 @@ def slugify_heading(s: str, fallback: str) -> str:
     return s2 or fallback
 
 
+def _fallback_heading(body: str) -> str:
+    """First substantive prose line for heading-less split sections (bare
+    `#` anchor headings). Skips fences, blank lines, blockquotes, list
+    markers, and markdown links/images — returns "" when nothing qualifies,
+    letting the caller fall through to its positional fallback."""
+    in_fence = False
+    for line in (body or "").splitlines():
+        s = line.strip()
+        if s.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence or not s:
+            continue
+        if s[0] in (">", "-", "*", "+", "|"):
+            continue
+        if re.match(r"^\d+[.)]\s+", s):
+            continue
+        s = re.sub(r"!?\[[^\]]*\]\([^)]*\)", "", s).strip()
+        s = re.sub(r"[*_`~#]+", "", s).strip()
+        if len(s) >= 20 and re.search(r"[a-zA-Z]{3,}", s):
+            return s[:120]
+    return ""
+
+
 _HEADING_LOOKAHEAD_LINES = 6
 
 
@@ -203,8 +227,12 @@ def split_monolith(
     width = max(4, len(str(max(0, len(sections) - 1))))
     writes: list[tuple[str, str, str]] = []
     for i, (h1, h2, sec_body, source_url) in enumerate(sections):
-        # H1 (parent) wins over H2 to preserve parent context.
-        heading = h1 or h2 or f"section-{i:0{width}d}"
+        # H1 (parent) wins over H2 to preserve parent context. Empty H1+H2
+        # (anchor-only headings like print.html's bare `#` lines — all 109
+        # Rust sections hit this) falls back to the first substantive prose
+        # line before surrendering to `section-NNNN`, so slugs/titles carry
+        # signal for the explorer + Planner seeds instead of position.
+        heading = h1 or h2 or _fallback_heading(sec_body) or f"section-{i:0{width}d}"
         sub = slugify_heading(heading, f"section-{i:0{width}d}")
         base = sub if sub.startswith(parent_slug) else f"{parent_slug}-{sub}"
         writes.append((base, sec_body, source_url))

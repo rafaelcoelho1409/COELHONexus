@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 
@@ -36,3 +36,8 @@ class ManifestEntry:
     # none). Freshness signal for the explorer + future incremental
     # re-ingest; never a correctness input.
     lastmod: str = ""
+    # Tier 4 fragment anchors collapsed onto this base page (objects.inv
+    # `std:label` entities, page-split sub-slices). The base URL is the
+    # canonical identity (fragments never are); anchors stay queryable
+    # metadata instead of separate near-duplicate documents.
+    anchors: list = field(default_factory = list)
