@@ -121,9 +121,8 @@ fastapi:
       - name: http
         port: 8000
         targetPort: 8000
-        nodePort: 30021
         protocol: TCP
-    type: LoadBalancer
+    type: ClusterIP
   startupProbeSettings:
     startupProbe:
       httpGet:
@@ -252,10 +251,6 @@ fasthtml:
       periodSeconds: 5
       failureThreshold: 3
 
-# Internal-by-design (Research Radar agent connects as MCP client via Streamable-HTTP at
-# /mcp/) but exposed via LoadBalancer nodePort anyway, same as fastapi/flower/fasthtml —
-# lets a human reach it directly for debugging tool calls, mirroring the old port-forward
-# script's behavior.
 fastmcp:
   image: localhost:5001/coelhonexus-fastmcp:latest
   imagePullPolicy: Always
@@ -279,9 +274,8 @@ fastmcp:
       - name: http
         port: 8001
         targetPort: 8000
-        nodePort: 30025
         protocol: TCP
-    type: LoadBalancer
+    type: ClusterIP
   startupProbeSettings:
     startupProbe:
       httpGet:
