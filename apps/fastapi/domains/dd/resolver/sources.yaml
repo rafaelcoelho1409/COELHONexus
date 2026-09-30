@@ -34,6 +34,17 @@ frameworks:
   github: https://github.com/seldonio/alibi
   category: Python
 
+- name: Alloy
+  logo: https://grafana.com/media/docs/alloy/alloy_icon.png
+  docs: https://grafana.com/docs/alloy/
+  sitemap: https://grafana.com/en/sitemap.xml
+  github: https://github.com/grafana/alloy
+  category: Infrastructure
+  path_filter:
+    include:
+      - "/docs/alloy/"
+      - "/docs/agent/"
+
 - name: Ansible
   logo: https://cdn.simpleicons.org/ansible
   docs: https://docs.ansible.com/projects/ansible/latest/
@@ -131,6 +142,20 @@ frameworks:
   sitemap: https://docs.getdbt.com/sitemap.xml
   github: https://github.com/dbt-labs/dbt-core
   category: Data
+
+- name: DeepAgents
+  logo: https://raw.githubusercontent.com/langchain-ai/deepagents/main/.github/images/logo-dark.svg
+  docs: https://docs.langchain.com/oss/python/deepagents/
+  sitemap: https://docs.langchain.com/sitemap.xml
+  github: https://github.com/langchain-ai/deepagents
+  category: AI
+  path_filter:
+    include:
+      - "/oss/python/deepagents/"
+      - "/oss/python/concepts/"
+      - "/oss/python/migrate/"
+      - "/oss/python/releases/"
+      - "/oss/python/integrations/"
 
 - name: Delta Lake (Python)
   logo: https://docs.delta.io/_astro/delta-lake-logo-dark.Dx7tzbyv.svg
@@ -285,50 +310,6 @@ frameworks:
       - "/docs/grafana/"
       - "/docs/helm-charts/"
 
-- name: Alloy
-  logo: https://grafana.com/media/docs/alloy/alloy_icon.png
-  docs: https://grafana.com/docs/alloy/
-  sitemap: https://grafana.com/en/sitemap.xml
-  github: https://github.com/grafana/alloy
-  category: Infrastructure
-  path_filter:
-    include:
-      - "/docs/alloy/"
-      - "/docs/agent/"
-
-- name: Loki
-  logo: https://grafana.com/media/docs/loki/logo-grafana-loki.png
-  docs: https://grafana.com/docs/loki/
-  sitemap: https://grafana.com/en/sitemap.xml
-  github: https://github.com/grafana/loki
-  category: Infrastructure
-  path_filter:
-    include:
-      - "/docs/loki/"
-      - "/docs/enterprise-logs/"
-
-- name: Mimir
-  logo: https://grafana.com/media/docs/mimir/GrafanaLogo_Mimir_icon.png
-  docs: https://grafana.com/docs/mimir/
-  sitemap: https://grafana.com/en/sitemap.xml
-  github: https://github.com/grafana/mimir
-  category: Infrastructure
-  path_filter:
-    include:
-      - "/docs/mimir/"
-      - "/docs/enterprise-metrics/"
-
-- name: Tempo
-  logo: https://grafana.com/static/assets/img/blog/tempo.png
-  docs: https://grafana.com/docs/tempo/
-  sitemap: https://grafana.com/en/sitemap.xml
-  github: https://github.com/grafana/tempo
-  category: Infrastructure
-  path_filter:
-    include:
-      - "/docs/tempo/"
-      - "/docs/enterprise-traces/"
-
 - name: Helm
   logo: https://helm.sh/img/helm.svg
   docs: https://helm.sh/docs/
@@ -388,34 +369,6 @@ frameworks:
       - "/oss/python/releases/"
       - "/oss/python/integrations/"
 
-- name: LangGraph
-  logo: https://raw.githubusercontent.com/langchain-ai/langgraph/main/.github/images/logo-dark.svg
-  docs: https://docs.langchain.com/oss/python/langgraph/
-  sitemap: https://docs.langchain.com/sitemap.xml
-  github: https://github.com/langchain-ai/langgraph
-  category: AI
-  path_filter:
-    include:
-      - "/oss/python/langgraph/"
-      - "/oss/python/concepts/"
-      - "/oss/python/migrate/"
-      - "/oss/python/releases/"
-      - "/oss/python/integrations/"
-
-- name: DeepAgents
-  logo: https://raw.githubusercontent.com/langchain-ai/deepagents/main/.github/images/logo-dark.svg
-  docs: https://docs.langchain.com/oss/python/deepagents/
-  sitemap: https://docs.langchain.com/sitemap.xml
-  github: https://github.com/langchain-ai/deepagents
-  category: AI
-  path_filter:
-    include:
-      - "/oss/python/deepagents/"
-      - "/oss/python/concepts/"
-      - "/oss/python/migrate/"
-      - "/oss/python/releases/"
-      - "/oss/python/integrations/"
-
 - name: LangFuse
   logo: https://langfuse.com/langfuse-wordart.svg
   docs: https://langfuse.com/docs
@@ -429,15 +382,19 @@ frameworks:
       - "/guides/"        # how-to guides (~56) — code-rich
       - "/self-hosting/"  # self-host operator guide (~43) — docker/helm/env config
 
-- name: LlamaIndex
-  logo: https://developers.llamaindex.ai/_astro/llamaindex-light.m3GU97oV.svg
-  docs: https://developers.llamaindex.ai/python/framework/
-  sitemap: https://developers.llamaindex.ai/sitemap.xml
-  github: https://github.com/run-llama/llama_index
+- name: LangGraph
+  logo: https://raw.githubusercontent.com/langchain-ai/langgraph/main/.github/images/logo-dark.svg
+  docs: https://docs.langchain.com/oss/python/langgraph/
+  sitemap: https://docs.langchain.com/sitemap.xml
+  github: https://github.com/langchain-ai/langgraph
   category: AI
   path_filter:
     include:
-      - "/python/framework/"
+      - "/oss/python/langgraph/"
+      - "/oss/python/concepts/"
+      - "/oss/python/migrate/"
+      - "/oss/python/releases/"
+      - "/oss/python/integrations/"
 
 - name: LaTeX
   logo: https://www.latex-project.org/img/latex-project-logo.svg
@@ -458,6 +415,16 @@ frameworks:
     include:
       - "/docs/"  # 741 pages of full LiteLLM docs (proxy, completions API, integrations)
 
+- name: LlamaIndex
+  logo: https://developers.llamaindex.ai/_astro/llamaindex-light.m3GU97oV.svg
+  docs: https://developers.llamaindex.ai/python/framework/
+  sitemap: https://developers.llamaindex.ai/sitemap.xml
+  github: https://github.com/run-llama/llama_index
+  category: AI
+  path_filter:
+    include:
+      - "/python/framework/"
+
 - name: Locust
   logo: https://upload.wikimedia.org/wikipedia/commons/e/eb/Locust-logo.png
   docs: https://docs.locust.io/en/stable/
@@ -465,6 +432,17 @@ frameworks:
   llms_txt: https://docs.locust.io/en/stable/llms.txt
   github: https://github.com/locustio/locust
   category: Python
+
+- name: Loki
+  logo: https://grafana.com/media/docs/loki/logo-grafana-loki.png
+  docs: https://grafana.com/docs/loki/
+  sitemap: https://grafana.com/en/sitemap.xml
+  github: https://github.com/grafana/loki
+  category: Infrastructure
+  path_filter:
+    include:
+      - "/docs/loki/"
+      - "/docs/enterprise-logs/"
 
 - name: Luigi
   logo: https://raw.githubusercontent.com/spotify/luigi/master/doc/luigi.png
@@ -489,6 +467,17 @@ frameworks:
   sitemap: https://docs.metasploit.com/sitemap.xml
   github: https://github.com/rapid7/metasploit-framework
   category: Pentest
+
+- name: Mimir
+  logo: https://grafana.com/media/docs/mimir/GrafanaLogo_Mimir_icon.png
+  docs: https://grafana.com/docs/mimir/
+  sitemap: https://grafana.com/en/sitemap.xml
+  github: https://github.com/grafana/mimir
+  category: Infrastructure
+  path_filter:
+    include:
+      - "/docs/mimir/"
+      - "/docs/enterprise-metrics/"
 
 - name: MLflow
   logo: https://mlflow.org/docs/latest/images/logo-dark.svg
@@ -734,6 +723,11 @@ frameworks:
       - "/reference/"
       - "/development/"
 
+- name: Python
+  logo: https://upload.wikimedia.org/wikipedia/commons/thumb/f/f8/Python_logo_and_wordmark.svg/3840px-Python_logo_and_wordmark.svg.png
+  docs: https://docs.python.org/3/
+  category: Programming Language
+
 - name: PyTorch
   logo: https://docs.pytorch.org/docs/2.12/_static/img/logo-white.svg
   docs: https://docs.pytorch.org/
@@ -767,11 +761,6 @@ frameworks:
   docs: https://docs.pytorch.org/xla/release/r2.8/
   github: https://github.com/pytorch/xla
   category: Python
-
-- name: Python
-  logo: https://upload.wikimedia.org/wikipedia/commons/thumb/f/f8/Python_logo_and_wordmark.svg/3840px-Python_logo_and_wordmark.svg.png
-  docs: https://docs.python.org/3/
-  category: Programming Language
 
 - name: Qdrant
   logo: https://qdrant.tech/img/qdrant-logo.svg
@@ -978,6 +967,33 @@ frameworks:
   github: https://github.com/roboflow/supervision
   category: Python
 
+- name: Tailscale
+  logo: https://cdn.simpleicons.org/tailscale
+  docs: https://tailscale.com/docs/
+  sitemap: https://tailscale.com/sitemap.xml
+  github: https://github.com/tailscale/tailscale
+  category: Infrastructure
+  # NOTE: llms.txt/llms-full.txt are soft-404 Next.js shells (identical
+  # 224KB, HTTP 200) — deliberately NOT listed. Tier 3 sitemap (684 /docs/
+  # URLs; blog + marketing live outside /docs/ so the include already scopes
+  # them out). Only billing excluded (commercial precedent).
+  path_filter:
+    include:
+      - "/docs/"
+    exclude:
+      - "/docs/account/billing"
+
+- name: Tempo
+  logo: https://grafana.com/static/assets/img/blog/tempo.png
+  docs: https://grafana.com/docs/tempo/
+  sitemap: https://grafana.com/en/sitemap.xml
+  github: https://github.com/grafana/tempo
+  category: Infrastructure
+  path_filter:
+    include:
+      - "/docs/tempo/"
+      - "/docs/enterprise-traces/"
+
 - name: TensorRT
   logo: https://developer-blogs.nvidia.com/wp-content/uploads/2020/04/tensorrt-logo.png
   docs: https://docs.nvidia.com/deeplearning/tensorrt/latest/index.html
@@ -995,22 +1011,6 @@ frameworks:
       - "/blogs/"
       - "/_cpp_gen/"
       - "/_includes/"
-
-- name: Tailscale
-  logo: https://cdn.simpleicons.org/tailscale
-  docs: https://tailscale.com/docs/
-  sitemap: https://tailscale.com/sitemap.xml
-  github: https://github.com/tailscale/tailscale
-  category: Infrastructure
-  # NOTE: llms.txt/llms-full.txt are soft-404 Next.js shells (identical
-  # 224KB, HTTP 200) — deliberately NOT listed. Tier 3 sitemap (684 /docs/
-  # URLs; blog + marketing live outside /docs/ so the include already scopes
-  # them out). Only billing excluded (commercial precedent).
-  path_filter:
-    include:
-      - "/docs/"
-    exclude:
-      - "/docs/account/billing"
 
 - name: Terraform
   logo: https://upload.wikimedia.org/wikipedia/commons/thumb/0/04/Terraform_Logo.svg/1280px-Terraform_Logo.svg.png
