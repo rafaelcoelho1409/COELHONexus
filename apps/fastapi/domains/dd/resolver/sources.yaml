@@ -38,11 +38,9 @@ frameworks:
   logo: https://cdn.simpleicons.org/ansible
   docs: https://docs.ansible.com/projects/ansible/latest/
   github: https://github.com/ansible/ansible
+  category: Infrastructure
   path_filter:
     exclude:
-      # Per-module reference dump (11,910 pages, 96% of corpus): amazon.aws.*,
-      # community.general.*, cisco.*, etc. — programming lookup, not study material.
-      # /collections_guide/ (how-to-use guide) is kept — distinct path.
       - "/collections/"
 
 - name: Apache Airflow
@@ -56,15 +54,12 @@ frameworks:
   docs: https://argo-cd.readthedocs.io/
   sitemap: https://argo-cd.readthedocs.io/sitemap.xml
   github: https://github.com/argoproj/argo-cd
+  category: Infrastructure
 
 - name: Asyncio
   logo: https://cdn.simpleicons.org/python
   docs: https://docs.python.org/3/library/asyncio.html
   category: Python
-  # NOTE: pinned to /3/ (current major). Re-pin when Python 3.14+ ships as
-  # /4/ or the stable alias moves. objects.inv labels ride along as
-  # `#anchor` seeds — collapsed onto base pages with anchors kept as
-  # metadata (ingestion no longer stores fragment slices as documents).
   path_filter:
     include: ["/library/asyncio"]
 
@@ -81,8 +76,6 @@ frameworks:
   sitemap: https://docs.browser-use.com/sitemap.xml
   github: https://github.com/browser-use/browser-use
   category: Python
-  # Tier 1 (llms-full at /open-source/) wins → 45 OSS pages. Sitemap (173 URLs)
-  # includes 128 pages of paid Browser Use Cloud product — scope fallback to OSS.
   path_filter:
     include:
       - "/open-source/"
@@ -107,6 +100,7 @@ frameworks:
   llms_txt: https://code.claude.com/docs/llms.txt
   sitemap: https://code.claude.com/docs/sitemap.xml
   github: https://github.com/anthropics/claude-code
+  category: AI
 
 - name: Crawl4AI
   logo: https://docs.crawl4ai.com/favicon.ico
@@ -136,6 +130,7 @@ frameworks:
   llms_txt: https://docs.getdbt.com/llms.txt
   sitemap: https://docs.getdbt.com/sitemap.xml
   github: https://github.com/dbt-labs/dbt-core
+  category: Data
 
 - name: Delta Lake (Python)
   logo: https://docs.delta.io/_astro/delta-lake-logo-dark.Dx7tzbyv.svg
@@ -143,18 +138,21 @@ frameworks:
   github: https://github.com/delta-io/delta-rs
   category: Python
 
+- name: Diffusers
+  logo: https://raw.githubusercontent.com/huggingface/diffusers/77aadfee6a891ab9fcfb780f87c693f7a5beeb8e/docs/source/imgs/diffusers_library.jpg
+  docs: https://huggingface.co/docs/diffusers/
+  llms_txt: https://huggingface.co/docs/diffusers/llms.txt
+  github: https://github.com/huggingface/diffusers
+  category: AI
+
 - name: Docker
   logo: https://upload.wikimedia.org/wikipedia/commons/1/1e/Docker_Logo.png
   docs: https://docs.docker.com/
   sitemap: https://docs.docker.com/sitemap.xml
   github: https://github.com/docker/cli
-  # NOTE: llms-full.txt at docs.docker.com is misleadingly named — it's a 323 KB
-  # INDEX file (URL: / Markdown: line pairs), not content. 0 Source markers, 1 H1.
-  # Adding it would give Tier 1 an un-splittable blob. Stick with Tier 3 sitemap.
+  category: Infrastructure
   path_filter:
     exclude:
-      # Commercial plan administration (paywalled features unrelated to Docker
-      # the technology — billing, subscriptions, account management, paid build cloud).
       - "/billing/"
       - "/subscription/"
       - "/accounts/"
@@ -162,7 +160,7 @@ frameworks:
       - "/build-cloud/"
 
 - name: DuckDB (Python)
-  logo: https://duckdb.org/images/logo-dl/DuckDB_Logo-horizontal.svg
+  logo: https://duckdb.org/images/designmanual/DuckDB_inline-lightmode.svg
   docs: https://duckdb.org/docs/
   sitemap: https://duckdb.org/sitemap.xml
   github: https://github.com/duckdb/duckdb
@@ -180,15 +178,9 @@ frameworks:
   category: Python
   path_filter:
     include:
-      # === Python-specific ===
-      # Official elasticsearch-py client (tutorials + reference + integrations)
       - "/reference/elasticsearch/clients/python"
-      # Python ingestion how-tos
       - "/ingest-data-with-python-on-elasticsearch-service"
       - "/ingest-logs-from-python-application-using-filebeat"
-
-      # === Core ES knowledge (essential for any Python ES user) ===
-      # ES core reference
       - "/reference/elasticsearch"
       - "/reference/query-languages"
       - "/reference/aggregations"
@@ -199,30 +191,22 @@ frameworks:
       - "/reference/ecs"
       - "/reference/machine-learning"
       - "/reference/elasticsearch-hadoop"
-      # ES data lifecycle (ILM, ingest, mappings)
       - "/manage-data"
-      # ES cluster ops & deployment (security, users-roles, monitoring, upgrades)
       - "/deploy-manage"
-      # ES analytics & ML features
       - "/explore-analyze/machine-learning"
       - "/explore-analyze/ai-features"
       - "/explore-analyze/scripting"
       - "/explore-analyze/query-filter"
       - "/explore-analyze/transforms"
       - "/explore-analyze/elastic-inference"
-      # ES Search solution
       - "/solutions/search"
       - "/solutions/elasticsearch-solution-project"
-      # Extending ES
       - "/extend/elasticsearch"
-      # ES troubleshooting (not Kibana/Observability)
       - "/troubleshoot/elasticsearch"
       - "/troubleshoot/ingest"
       - "/troubleshoot/deployments"
       - "/troubleshoot/monitoring"
-      # ES release notes
       - "/release-notes/elasticsearch"
-      # Intro
       - "/get-started"
 
 - name: Evidently
@@ -270,19 +254,15 @@ frameworks:
   docs: https://git-scm.com/docs/git
   sitemap: https://git-scm.com/sitemap.xml
   github: https://github.com/git/git
+  category: Tools
   path_filter:
     include:
-      # Pro Git book v2 (English)
       - "/book/en/v2"
-      # Command reference + docs landing
       - "/doc/"
       - "/docs/"
-      # Install instructions
       - "/install/"
     exclude:
-      # Pro Git v1 (older edition, superseded by v2)
       - "/book/en/v1"
-      # /docs/{cmd}/{lang}.html translations (NON_TARGET_LANGUAGE_PATH_RE misses these)
       - "/docs/[^/]+/[^/]+\\.html$"
 
 - name: Go
@@ -292,36 +272,61 @@ frameworks:
   category: Programming Language
   path_filter:
     exclude:
-      # Per-version release notes (Go 1.1 — 1.26, ~26 pages × 25–45 KB each).
-      # Historical reference; distracts from learning Go itself.
       - "/doc/devel/"
 
-- name: Grafana - Alloy - Loki - Mimir - Tempo
-  logos:
-    - https://cdn.simpleicons.org/grafana
-    - https://grafana.com/media/docs/alloy/alloy_icon.png
-    - https://grafana.com/media/docs/loki/logo-grafana-loki.png
-    - https://grafana.com/media/docs/mimir/GrafanaLogo_Mimir_icon.png
-    - https://grafana.com/static/assets/img/blog/tempo.png
+- name: Grafana
   logo: https://cdn.simpleicons.org/grafana
   docs: https://grafana.com/docs/grafana/
   sitemap: https://grafana.com/en/sitemap.xml
   github: https://github.com/grafana/grafana
+  category: Infrastructure
   path_filter:
     include:
-      # LGTM stack OSS + Alloy collector
       - "/docs/grafana/"
-      - "/docs/alloy/"
-      - "/docs/loki/"
-      - "/docs/tempo/"
-      - "/docs/mimir/"
-      # Grafana Agent — Alloy's predecessor (still referenced in current docs)
-      - "/docs/agent/"
-      # Helm charts for the stack
       - "/docs/helm-charts/"
-      # Grafana Enterprise variants of LTM
+
+- name: Alloy
+  logo: https://grafana.com/media/docs/alloy/alloy_icon.png
+  docs: https://grafana.com/docs/alloy/
+  sitemap: https://grafana.com/en/sitemap.xml
+  github: https://github.com/grafana/alloy
+  category: Infrastructure
+  path_filter:
+    include:
+      - "/docs/alloy/"
+      - "/docs/agent/"
+
+- name: Loki
+  logo: https://grafana.com/media/docs/loki/logo-grafana-loki.png
+  docs: https://grafana.com/docs/loki/
+  sitemap: https://grafana.com/en/sitemap.xml
+  github: https://github.com/grafana/loki
+  category: Infrastructure
+  path_filter:
+    include:
+      - "/docs/loki/"
       - "/docs/enterprise-logs/"
+
+- name: Mimir
+  logo: https://grafana.com/media/docs/mimir/GrafanaLogo_Mimir_icon.png
+  docs: https://grafana.com/docs/mimir/
+  sitemap: https://grafana.com/en/sitemap.xml
+  github: https://github.com/grafana/mimir
+  category: Infrastructure
+  path_filter:
+    include:
+      - "/docs/mimir/"
       - "/docs/enterprise-metrics/"
+
+- name: Tempo
+  logo: https://grafana.com/static/assets/img/blog/tempo.png
+  docs: https://grafana.com/docs/tempo/
+  sitemap: https://grafana.com/en/sitemap.xml
+  github: https://github.com/grafana/tempo
+  category: Infrastructure
+  path_filter:
+    include:
+      - "/docs/tempo/"
       - "/docs/enterprise-traces/"
 
 - name: Helm
@@ -329,21 +334,14 @@ frameworks:
   docs: https://helm.sh/docs/
   sitemap: https://helm.sh/sitemap.xml
   github: https://github.com/helm/helm
+  category: Infrastructure
   path_filter:
     include:
-      # Only Helm documentation (drops /blog/ 82 + /community/ 67 — events,
-      # contributor lists, meeting notes; not study material)
       - "/docs/"
 
 - name: Inference (Roboflow)
   logo: https://cdn.simpleicons.org/roboflow
   docs: https://inference.roboflow.com/
-  # llms_full/llms_txt/sitemap all verified dead-end 2026-09-29: llms-full.txt
-  # is a 908B stub (one paragraph + a leaked raw YAML front-matter block),
-  # llms.txt lists exactly one link ("Home"), sitemap.xml lists exactly one
-  # URL (the root) — none reach the real mkdocs-material doc tree. Falls
-  # through to Tier 4 (BFS crawl from `docs`), which isn't dependent on any
-  # of those three and can actually discover the real pages.
   github: https://github.com/roboflow/inference
   category: Python
 
@@ -352,9 +350,7 @@ frameworks:
   docs: https://k3d.io/stable/
   sitemap: https://k3d.io/stable/sitemap.xml
   github: https://github.com/k3d-io/k3d
-  # NOTE: sitemap pins /v5.9.0/ (verified 2026-09-29: all 48 URLs) — no
-  # /stable/ alias with real locs. Corpus freezes at ingestion time;
-  # re-ingest on k3d minor/major releases to stay current.
+  category: Infrastructure
 
 - name: Kafka (Python)
   logo: https://kafka.apache.org/logos/kafka_logo--simple.png
@@ -366,37 +362,59 @@ frameworks:
   logo: https://cdn.jsdelivr.net/gh/devicons/devicon/icons/kubeflow/kubeflow-original.svg
   docs: https://www.kubeflow.org/docs/
   github: https://github.com/kubeflow/kubeflow
+  category: Infrastructure
 
 - name: Kubernetes
   logo: https://upload.wikimedia.org/wikipedia/commons/6/67/Kubernetes_logo.svg
   docs: https://kubernetes.io/docs/
   sitemap: https://kubernetes.io/en/sitemap.xml
   github: https://github.com/kubernetes/kubernetes
+  category: Infrastructure
   path_filter:
     include:
-      # Only K8s documentation. Drops /blog/ (740), /case-studies/ (57),
-      # /releases/ (42 per-version notes), /community/, /training/,
-      # /partners/, /careers/ — all noise for study purposes.
       - "/docs/"
 
-- name: LangChain - LangGraph - DeepAgents
-  logos:
-    - https://raw.githubusercontent.com/langchain-ai/langchain/master/.github/images/logo-dark.svg
-    - https://raw.githubusercontent.com/langchain-ai/langgraph/main/.github/images/logo-dark.svg
-    - https://raw.githubusercontent.com/langchain-ai/deepagents/main/.github/images/logo-dark.svg
+- name: LangChain
   logo: https://raw.githubusercontent.com/langchain-ai/langchain/master/.github/images/logo-dark.svg
-  docs: https://docs.langchain.com/
+  docs: https://docs.langchain.com/oss/python/langchain/
   sitemap: https://docs.langchain.com/sitemap.xml
   github: https://github.com/langchain-ai/langchain
-  category: Python
-  # NOTE: llms-full.txt (11.3 MB, 1393 Sources) + llms.txt (203 KB) both cover
-  # the ENTIRE docs.langchain.com including LangSmith (954 pages, hosted SaaS)
-  # and JavaScript OSS (183 pages). Tier 1 would ignore path_filter — so they
-  # are intentionally NOT listed; we route Tier 3 (sitemap) instead and scope
-  # to the OSS Python triad (LangChain + LangGraph + DeepAgents) below.
+  category: AI
   path_filter:
     include:
-      - "/oss/python/"
+      - "/oss/python/langchain/"
+      - "/oss/python/concepts/"
+      - "/oss/python/migrate/"
+      - "/oss/python/releases/"
+      - "/oss/python/integrations/"
+
+- name: LangGraph
+  logo: https://raw.githubusercontent.com/langchain-ai/langgraph/main/.github/images/logo-dark.svg
+  docs: https://docs.langchain.com/oss/python/langgraph/
+  sitemap: https://docs.langchain.com/sitemap.xml
+  github: https://github.com/langchain-ai/langgraph
+  category: AI
+  path_filter:
+    include:
+      - "/oss/python/langgraph/"
+      - "/oss/python/concepts/"
+      - "/oss/python/migrate/"
+      - "/oss/python/releases/"
+      - "/oss/python/integrations/"
+
+- name: DeepAgents
+  logo: https://raw.githubusercontent.com/langchain-ai/deepagents/main/.github/images/logo-dark.svg
+  docs: https://docs.langchain.com/oss/python/deepagents/
+  sitemap: https://docs.langchain.com/sitemap.xml
+  github: https://github.com/langchain-ai/deepagents
+  category: AI
+  path_filter:
+    include:
+      - "/oss/python/deepagents/"
+      - "/oss/python/concepts/"
+      - "/oss/python/migrate/"
+      - "/oss/python/releases/"
+      - "/oss/python/integrations/"
 
 - name: LangFuse
   logo: https://langfuse.com/langfuse-wordart.svg
@@ -404,12 +422,6 @@ frameworks:
   sitemap: https://langfuse.com/sitemap-0.xml
   github: https://github.com/langfuse/langfuse
   category: Python
-  # NOTE: /llms-docs.txt is a real 99-link index but only covers /docs/* (~97
-  # pages). Dropped in favor of Tier 3 sitemap. /faq/ + /security/ removed from
-  # an earlier broader scope — the 2026-06-02 ingest revealed 27 tiny (<1 KB)
-  # FAQ stubs ("how-do-i-enforce-2fa", "where-do-i-find-api-keys", etc.) plus
-  # ~77 small (1-3 KB) Q&A/policy pages, all prose-no-code. Dropping those
-  # sections focuses on code-rich content (SDK guides, integrations, deployment).
   path_filter:
     include:
       - "/docs/"          # core docs (~98) — SDK + concepts, code-rich
@@ -417,16 +429,31 @@ frameworks:
       - "/guides/"        # how-to guides (~56) — code-rich
       - "/self-hosting/"  # self-host operator guide (~43) — docker/helm/env config
 
+- name: LlamaIndex
+  logo: https://developers.llamaindex.ai/_astro/llamaindex-light.m3GU97oV.svg
+  docs: https://developers.llamaindex.ai/python/framework/
+  sitemap: https://developers.llamaindex.ai/sitemap.xml
+  github: https://github.com/run-llama/llama_index
+  category: AI
+  path_filter:
+    include:
+      - "/python/framework/"
+
+- name: LaTeX
+  logo: https://www.latex-project.org/img/latex-project-logo.svg
+  docs: https://www.latex-project.org/help/
+  github: https://github.com/latex3/latex2e
+  category: Tools
+  path_filter:
+    include:
+      - "/help/"
+
 - name: LiteLLM
   logo: https://storage.googleapis.com/arize-phoenix-assets/assets/images/phoenix-docs-images/76dcba22-image.jpeg
   docs: https://docs.litellm.ai/
   sitemap: https://docs.litellm.ai/sitemap.xml
   github: https://github.com/BerriAI/litellm
   category: Python
-  # NOTE: llms-full.txt (550 KB, 45 H1s) + llms.txt (52 bullets) are a
-  # CURATED DIGEST — way smaller than the 741-page /docs/ corpus.
-  # Dropped so Tier 3 sitemap + path_filter takes over for comprehensive
-  # coverage. /blog/ is hardcoded-filtered; /release_notes/ excluded below.
   path_filter:
     include:
       - "/docs/"  # 741 pages of full LiteLLM docs (proxy, completions API, integrations)
@@ -451,14 +478,9 @@ frameworks:
   sitemap: https://ai.google.dev/sitemap.xml
   github: https://github.com/google-ai-edge/mediapipe
   category: Python
-  # ai.google.dev sitemap is an INDEX with 4 gzipped children (~46 MB each)
-  # covering Gemini + Edge + MediaPipe + Genkit + AI Studio. path_filter
-  # scopes to MediaPipe-only: ~525 URLs/child × 4 ≈ 1500-2500 pages.
   path_filter:
     include:
-      # MediaPipe solutions, framework, customization, getstarted, model-maker
       - "/edge/mediapipe/"
-      # MediaPipe Python API reference (excludes Java/iOS/web JS API refs)
       - "/edge/api/mediapipe/python/"
 
 - name: Metasploit
@@ -480,12 +502,7 @@ frameworks:
   docs: https://neo4j.com/docs/
   sitemap: https://neo4j.com/docs/sitemap_index.xml
   github: https://github.com/neo4j/neo4j
-  # NOTE: The catalog previously had llms-full.txt (a 55 KB marketing-style
-  # overview — 0 Source / 23 H1 sub-headings, NOT real docs), llms.txt (1 bullet,
-  # useless), and sitemap_index.xml at site root (marketing: blog/press/videos/
-  # customer-stories — no /docs/ coverage). All three were misleading. Switched
-  # to /docs/sitemap_index.xml which indexes 44 sub-sitemaps across every Neo4j
-  # product. python-manual excluded — covered by the separate Neo4j (Python) entry.
+  category: Data
   path_filter:
     exclude:
       - "/docs/python-manual/"
@@ -503,12 +520,8 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Per-function autodoc (1353 pages, 88% of corpus): per-algorithm/per-class
-      # lookup reference, not study material. Same pattern as Ansible /collections/.
       - "/reference/"
-      # Per-version release notes (43 pages).
       - "/release/"
-      # Contributor / development docs (18 pages), not user-facing.
       - "/developer/"
 
 - name: NeuralProphet
@@ -522,13 +535,6 @@ frameworks:
   docs: https://nmap.org/book/toc.html
   github: https://github.com/nmap/nmap
   category: Pentest
-  # NOTE: nmap.org ships a gzipped sitemap with `Content-Type: application/x-gzip`
-  # (not `Content-Encoding: gzip`) — httpx won't auto-decode and the pipeline has
-  # no gzip-body handling, so a `sitemap:` line would silently yield 0 URLs.
-  # Routing Tier 4 from /book/toc.html instead — the Nmap Network Scanning book
-  # online (~162 chapters), which is the canonical NMAP study resource. NSE
-  # script reference (/nsedoc/ 761 pages) and manpages (/man/ 290) live elsewhere
-  # and would need pipeline gzip support to ingest cleanly.
 
 - name: Numba
   logo: https://numba.pydata.org/_static/numba-blue-horizontal-rgb.svg
@@ -537,11 +543,8 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Contributor / JIT internals docs (31 pages) — maintainer-focused, not study material.
       - "/developer/"
-      # Per-version release notes (15 pages).
       - "/release/"
-      # Design proposals / NEP-style discussions (8 pages).
       - "/proposals/"
 
 - name: NumPy
@@ -551,12 +554,8 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Per-function autodoc (2518 pages, 92% of corpus) — lookup reference, not
-      # study material. Same pattern as NetworkX /reference/ and Ansible /collections/.
       - "/reference/"
-      # Per-version release notes (125 pages).
       - "/release/"
-      # Contributor / NumPy-internals docs (16 pages).
       - "/dev/"
 
 - name: NVIDIA DCGM Exporter
@@ -564,12 +563,7 @@ frameworks:
   docs: https://docs.nvidia.com/datacenter/dcgm/latest/
   sitemap: https://docs.nvidia.com/datacenter/dcgm/latest/sitemap.xml
   github: https://github.com/NVIDIA/dcgm-exporter
-  # Catalog entry is named "DCGM Exporter" but the exporter is just 1 page within
-  # the broader DCGM Sphinx site. Ingesting only that page is meaningless — broaden
-  # to the full DCGM docs (~28 pages: gpu-telemetry/dcgm-exporter, user-guide
-  # diagnostics, getting-started, troubleshooting, release notes). Exclude the
-  # 23-page /dcgm-api/ C API reference (relevant to library developers, not
-  # exporter operators).
+  category: Infrastructure
   path_filter:
     exclude:
       - "/dcgm-api/"
@@ -578,23 +572,19 @@ frameworks:
   logo: https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/_static/nvidia-logo-horiz-rgb-wht-for-screen.svg
   docs: https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/
   github: https://github.com/nvidia/gpu-operator
+  category: Infrastructure
 
 - name: NVIDIA Merlin
   logo: https://avatars.githubusercontent.com/u/81591093?s=200&v=4
   docs: https://nvidia-merlin.github.io/Merlin/stable/
   github: https://github.com/NVIDIA-Merlin/Merlin
   category: Python
-  # /Merlin/ root is a 682 B redirect landing (no objects.inv there). Pinned to
-  # /stable/ where the 1.4 KB inventory lives — 48 pages, mostly RecSys tutorials
-  # (Movielens, Criteo, ranking, multi-stage RecSys, SageMaker, Quick Start).
-  # Sibling components (NVTabular, Transformers4Rec, HugeCTR, dataloader, core)
-  # have their own /main/ docs sites at nvidia-merlin.github.io and would be
-  # separate catalog entries if needed.
 
 - name: NVIDIA Triton Inference Server
   logo: https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/_static/nvidia-logo-horiz-rgb-wht-for-screen.svg
   docs: https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/
   github: https://github.com/triton-inference-server/server
+  category: AI
 
 - name: OpenCV (Python)
   logo: https://cdn.simpleicons.org/opencv
@@ -602,16 +592,6 @@ frameworks:
   sitemap: https://pyimagesearch.com/post-sitemap.xml
   github: https://github.com/opencv/opencv-python
   category: Python
-  # Audit 2026-06-02. Previous candidates:
-  #  - docs.opencv.org/4.x/ Doxygen: NO `<pre>`/`<code>` tags despite 57 Python
-  #    `cv.` calls per page → markdownify can't extract code fences (user's
-  #    "no good code blocks" complaint).
-  #  - opencv-tutorial.readthedocs.io: 18 chapters but 2019-era ("too weak").
-  # Switched to PyImageSearch (Adrian Rosebrock) — 782 OpenCV/CV tutorial
-  # posts on WordPress, actively maintained (22 posts in 2026, 54 in 2025).
-  # Sample 2024 post has 48 code blocks. Scoped to 2022-2026 for fresh
-  # code-rich posts (~254) — older posts include book-marketing landings
-  # that are mostly prose.
   path_filter:
     include:
       - "/202[2-6]/"
@@ -621,10 +601,7 @@ frameworks:
   docs: https://opentelemetry.io/docs/
   sitemap: https://opentelemetry.io/en/sitemap.xml
   github: https://github.com/open-telemetry
-  # /docs/ is 792 of 1087 sitemap URLs. /blog/ (250) gets hardcoded-filtered.
-  # Scope to /docs/ and exclude the 153-page /docs/languages/ multi-language
-  # dump (covered by per-language entries like OpenTelemetry (Python)) plus
-  # 12 contributor-only docs.
+  category: Infrastructure
   path_filter:
     include:
       - "/docs/"
@@ -638,9 +615,6 @@ frameworks:
   sitemap: https://opentelemetry.io/en/sitemap.xml
   github: https://github.com/open-telemetry/opentelemetry-python
   category: Python
-  # 13 Python-specific pages in the OTel site sitemap. Without path_filter the
-  # sitemap pulls 1087 mixed URLs; scoping to /docs/languages/python/ gives
-  # exactly the Python SDK docs.
   path_filter:
     include:
       - "/docs/languages/python/"
@@ -650,13 +624,8 @@ frameworks:
   docs: https://docs.openvino.ai/2026/index.html
   github: https://github.com/openvinotoolkit/openvino
   category: Python
-  # NOTE: docs.openvino.ai/sitemap.xml is the STALE 2025 version — 4682 URLs all
-  # under /2025/. Current version is 2026 (objects.inv at /2026/ has 4876 entities).
-  # Routing Tier 4 + objects.inv for the canonical 2026 docs.
   path_filter:
     exclude:
-      # C++ class/struct/method autodoc (4195 pages, 86% of corpus) — lookup
-      # reference, not study material. Same pattern as NumPy/NetworkX/Ansible.
       - "/api/"
 
 - name: Optimum
@@ -665,11 +634,6 @@ frameworks:
   llms_txt: https://huggingface.co/docs/optimum/llms.txt
   github: https://github.com/huggingface/optimum
   category: Python
-  # NOTE: /llms-full.txt at huggingface.co/docs/optimum is mislabeled — it's a
-  # bullet-link index (20 links to .md URLs), NOT a content bundle. The Tier 1
-  # manifest detector (`_looks_like_manifest` in tier1.py) only catches
-  # `URL:`/`Markdown:` line-pair indexes; it'd save the 89 KB file as 1 unsplit
-  # page. Dropped. Tier 2 (llms.txt, 16 canonical bullet links) yields 16 pages.
 
 - name: Optuna
   logo: https://optuna.readthedocs.io/en/stable/_static/optuna-logo.png
@@ -678,8 +642,6 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Per-class/function autodoc (149 pages, 82% of corpus) — lookup reference,
-      # not study material. Same pattern as NumPy/NetworkX/Numba.
       - "/reference/"
 
 - name: Pandas
@@ -689,11 +651,8 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Per-function autodoc (2196 pages, 93% of corpus) — same pattern as NumPy.
       - "/reference/"
-      # Per-version release notes (106 pages).
       - "/whatsnew/"
-      # Contributor docs (14 pages).
       - "/development/"
 
 - name: Pennylane
@@ -704,14 +663,9 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Per-function autodoc (1422 pages, 72% of sitemap).
       - "/code/"
-      # Sphinx-generated source-view pages ("[source]" link targets, 499 pages of
-      # raw Python listings — pure noise for study).
       - "/_modules/"
-      # Contributor docs.
       - "/development/"
-      # Release notes.
       - "/news/"
 
 - name: Playwright (Python)
@@ -720,9 +674,6 @@ frameworks:
   sitemap: https://playwright.dev/python/sitemap.xml
   github: https://github.com/microsoft/playwright-python
   category: Python
-  # NOTE: prior `sitemap: /sitemap.xml` was the root site sitemap (353 URLs of
-  # shared/mcp/agent-cli with ZERO Python pages). Playwright ships per-language
-  # sub-sitemaps; /python/sitemap.xml has 188 Python URLs.
   path_filter:
     include:
       - "/python/docs/"  # 88 stable Python SDK docs
@@ -737,9 +688,6 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Per-trace-attribute autodoc (67 pages) — lookup reference, not study.
-      # The 179 individual chart-example pages (violin, waterfall, 3d-axes, t-sne,
-      # etc.) are the study gold.
       - "/reference/"
 
 - name: PostgreSQL
@@ -748,25 +696,16 @@ frameworks:
   sitemap: https://www.postgresql.org/sitemap.xml
   github: https://github.com/postgres/postgres
   category: Programming Language
-  # NOTE: sitemap has 28,377 URLs — /docs/ alone is 27,148 split across 15+
-  # version paths (9.0 → 18 + current). Each version is ~1100-1200 pages of
-  # near-duplicate content. /docs/current/ is the stable alias for the latest
-  # release and is version-stable across PG upgrades.
   path_filter:
     include:
       - "/docs/current/"
 
 - name: Project Discovery
-  logo: https://projectdiscovery.io/_next/static/media/ProjectDiscoveryLogo.08p_n6s01y-jv.svg
+  logo: https://avatars.githubusercontent.com/u/50994705
   docs: https://docs.projectdiscovery.io/
   sitemap: https://docs.projectdiscovery.io/sitemap.xml
   github: https://github.com/projectdiscovery
   category: Pentest
-  # NOTE: llms-full.txt is a real 281-page bundle, but Tier 1 ignores path_filter
-  # so the 128 auto-generated Cloud-SaaS REST endpoint docs (/api-reference/)
-  # would always come along. Dropped llms_full + llms.txt to route Tier 3 with
-  # the exclude below — gives ~150 pages focused on the OSS pentesting tools
-  # (Nuclei, Subfinder, Naabu, HTTPX, Katana, Nuclei templates) + Cloud usage.
   path_filter:
     exclude:
       - "/api-reference/"
@@ -792,10 +731,7 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Per-method autodoc (2411 pages, 98% of corpus) — same pattern as
-      # NumPy/Pandas/PySpark. DataFrame methods, SQL functions, RDD ops, ML APIs.
       - "/reference/"
-      # Contributor / Spark-internals docs.
       - "/development/"
 
 - name: PyTorch
@@ -804,11 +740,6 @@ frameworks:
   sitemap: https://docs.pytorch.org/sitemap.xml
   github: https://github.com/pytorch/pytorch
   category: Python
-  # Root sitemap is an INDEX with 4 sub-sitemaps: /docs/stable/, /tutorials/,
-  # /executorch/stable/, /ao/stable/. Scope to core PyTorch (docs + tutorials);
-  # ExecuTorch and TorchAO are separate products that warrant their own entries.
-  # Exclude /generated/ — the 2693-page autodoc dump inside /docs/stable/
-  # (torch.nn.*, torch.functional.*, every API). Same pattern as Pandas/NumPy.
   path_filter:
     include:
       - "/docs/stable/"
@@ -823,12 +754,10 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Sphinx autosummary autodoc (460 pages, 87% of corpus) — same pattern
-      # as PyTorch /generated/ and Pandas /reference/.
       - "/generated/"
 
 - name: PyTorch Lightning
-  logo: https://lightning.ai/static/logo-with-text-dark-XEKB6mjM.svg
+  logo: https://avatars.githubusercontent.com/u/98025367
   docs: https://lightning.ai/docs/pytorch/stable/
   github: https://github.com/Lightning-AI/pytorch-lightning
   category: Python
@@ -838,12 +767,6 @@ frameworks:
   docs: https://docs.pytorch.org/xla/release/r2.8/
   github: https://github.com/pytorch/xla
   category: Python
-  # The /xla/ root is a JS-redirect landing (not pipeline-follow-able). No
-  # /stable/ or /latest/ alias exists. /xla/master/ is the dev branch.
-  # Pinned to current stable (r2.8) — update when XLA r2.9 ships. objects.inv
-  # at this path → 119 pages, balanced (perf/learn/contribute/features/etc.).
-  # NOTE: page `<title>`s still read "master documentation" (site-side
-  # staleness, not our slug); content is r2.8.
 
 - name: Python
   logo: https://upload.wikimedia.org/wikipedia/commons/thumb/f/f8/Python_logo_and_wordmark.svg/3840px-Python_logo_and_wordmark.svg.png
@@ -856,9 +779,7 @@ frameworks:
   llms_txt: https://qdrant.tech/llms.txt
   sitemap: https://qdrant.tech/sitemap.xml
   github: https://github.com/qdrant/qdrant
-  # NOTE: qdrant.tech/llms-full.txt returned HTTP 404 (verified 2026-09-26;
-  # llms.txt at 177 KB is live). Dropped so Tier 2 takes over instead of a
-  # hard Tier 1 fail with a stuck Loading… page.
+  category: Data
 
 - name: Qiskit
   logo: https://logowik.com/content/uploads/images/qiskit9093.logowik.com.webp
@@ -866,9 +787,6 @@ frameworks:
   sitemap: https://quantum.cloud.ibm.com/sitemap.xml
   github: https://github.com/Qiskit/qiskit
   category: Python
-  # quantum.cloud.ibm.com hosts ~1189 docs URLs covering Qiskit core, IBM
-  # Runtime, transpiler, 5 addons, plus C bindings + REST APIs.
-  # Trailing slash on /api/qiskit/ avoids overlap with /api/qiskit-* siblings.
   path_filter:
     include:
       - "/docs/en/api/qiskit/"            # Qiskit core (574 pages)
@@ -883,13 +801,8 @@ frameworks:
   docs: https://docs.ray.io/en/latest/
   github: https://github.com/ray-project/ray
   category: Python
-  # NOTE: docs.ray.io/sitemap.xml is upstream-broken — `<loc>` URLs are
-  # `docs.ray.io/en/latesten/...` (missing `/` between "latest" and "en"),
-  # confirmed 404. Same Sphinx site_url misconfig as delta-rs/Kubeflow.
-  # Dropped; Tier 4 + objects.inv (135 KB, 4060 pages) drives discovery.
   path_filter:
     exclude:
-      # Contributor / governance docs (~16 pages, not user-facing study material).
       - "/ray-contribute/"
       - "/ray-governance/"
 
@@ -900,10 +813,7 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Per-class/per-module autodoc (134 pages) — recommender models, datasets,
-      # samplers, evaluators. Same pattern as Pandas/NumPy /reference/.
       - "/recbole/"
-      # Contributor docs.
       - "/developer_guide/"
 
 - name: Redis
@@ -911,13 +821,9 @@ frameworks:
   docs: https://redis.io/docs/
   sitemap: https://redis.io/docs/latest/sitemap.xml
   github: https://github.com/redis/redis
-  # llms.txt has only 199 curated links. Sitemap has 2517 comprehensive URLs
-  # covering /operate/ 1196 (cluster/sentinel/Enterprise), /commands/ 561,
-  # /develop/ 488, /integrate/ 242. Following MLflow precedent — preferring
-  # comprehensive sitemap coverage over the narrow curated index.
+  category: Data
   path_filter:
     exclude:
-      # Auto-generated category/tag navigation (25 pages, not study material).
       - "/categories/"
       - "/tags/"
 
@@ -927,8 +833,6 @@ frameworks:
   sitemap: https://redis.io/docs/latest/sitemap.xml
   github: https://github.com/redis/redis-py
   category: Python
-  # 14 redis-py pages live within the broader Redis sitemap (2517 URLs).
-  # Scope to the Python client only.
   path_filter:
     include:
       - "/develop/clients/redis-py/"
@@ -941,10 +845,7 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Per-class autodoc (7707 pages, 99% of corpus) — every model/metric/stream
-      # component. Same Ansible/Pandas pattern, extreme scale.
       - "/api/"
-      # Per-version release notes (40 pages).
       - "/releases/"
 
 - name: Roboflow
@@ -953,12 +854,8 @@ frameworks:
   sitemap: https://docs.roboflow.com/sitemap-pages.xml
   github: https://github.com/roboflow/roboflow-python
   category: Python
-  # llms-full.txt is a real content bundle (392 fences, 113 H1s, Tier 1 valid)
-  # but the sitemap covers 242 pages — ~2× more coverage. Following the
-  # MLflow/Redis pattern: prefer comprehensive sitemap over narrow curated bundle.
   path_filter:
     exclude:
-      # Commercial billing pages (12).
       - "/billing/"
 
 - name: Rust
@@ -966,12 +863,6 @@ frameworks:
   docs: https://doc.rust-lang.org/book/print.html
   github: https://github.com/rust-lang/rust
   category: Programming Language
-  # mdBook landing page hides most chapter nav behind JS (only 5 visible hrefs)
-  # → Tier 4 BFS would miss chapters 5-20. /book/print.html is the entire Rust
-  # Book on one 1.8 MB page with 112 H1 chapter boundaries. Post-processing
-  # monolith splitter (input_files==1 + body >= 24 KB) splits on H1 → ~112 pages.
-  # Rust ecosystem extras (/std/, /cargo/, /reference/, /nomicon/, /rust-by-example/)
-  # would warrant their own catalog entries.
 
 - name: Scikit-Learn
   logo: https://scikit-learn.org/stable/_static/scikit-learn-logo-without-subtitle.svg
@@ -980,12 +871,8 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Per-class/function autodoc (630 pages, 58% of corpus). The /auto_examples/
-      # 315 Sphinx-gallery code examples and /api/ 42 high-level reference are kept.
       - "/modules/"
-      # Per-version release notes (24 pages).
       - "/whats_new/"
-      # Contributor docs (16 pages).
       - "/developers/"
 
 - name: Scikit-Learn Extra
@@ -1001,9 +888,7 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Per-class autodoc (67 pages, 60% of corpus).
       - "/api/"
-      # Per-version release notes (27 pages).
       - "/release_notes/"
 
 - name: Seaborn
@@ -1013,10 +898,7 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Sphinx autosummary autodoc (152 pages, 61% of corpus). The 50
-      # Sphinx-gallery examples and 13 tutorials are kept.
       - "/generated/"
-      # Per-version release notes (26 pages).
       - "/whatsnew/"
 
 - name: Sentence Transformers
@@ -1026,9 +908,6 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Autodoc package reference (41 pages). Other /docs/ subsections
-      # (sentence_transformer, pretrained-models, cross_encoder, sparse_encoder)
-      # plus quickstart/installation/migration_guide are kept.
       - "/docs/package_reference/"
 
 - name: SGLang
@@ -1047,8 +926,6 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Sphinx autosummary autodoc (78 pages, 74% of corpus). The 14 example
-      # notebooks and 14 top-level pages (user guide, installation, FAQ) are kept.
       - "/generated/"
 
 - name: SHAP-IQ
@@ -1058,7 +935,6 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Sphinx autosummary autodoc (87 pages, 55% of corpus).
       - "/generated/"
 
 - name: Skaffold
@@ -1066,6 +942,7 @@ frameworks:
   docs: https://skaffold.dev/docs/
   sitemap: https://skaffold.dev/sitemap.xml
   github: https://github.com/GoogleContainerTools/skaffold
+  category: Infrastructure
 
 - name: Skforecast
   logo: https://skforecast.org/latest/img/banner-landing-page-dark-mode-skforecast-no-background.png#only-dark
@@ -1073,11 +950,6 @@ frameworks:
   sitemap: https://skforecast.org/latest/sitemap.xml
   github: https://github.com/skforecast/skforecast
   category: Python
-  # NOTE: llms-full.txt is a custom AI-skills artifact (header says
-  # "AUTO-GENERATED FILE... Source: tools/ai/llms-base.txt + skills/") — 331 H1s
-  # in 196 KB = ~600 bytes/H1, way too fragmented to be page boundaries.
-  # Sticking with sitemap → 95 real docs pages (user_guides 47, api 21, faq 12,
-  # quick-start 5, examples 3, more 3, plus singletons). All study-relevant.
 
 - name: Statsmodels
   logo: https://www.statsmodels.org/stable/_images/statsmodels-logo-v2-horizontal.svg
@@ -1086,13 +958,8 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Per-class/function autodoc (6144 pages, 95% of corpus) — every model
-      # (OLS, GLM, ARIMA, VAR, MixedLM, etc.) and helper. Same Ansible/NumPy
-      # pattern, the largest in the catalog yet.
       - "/generated/"
-      # Contributor / dev docs (143 pages).
       - "/dev/"
-      # Per-version release notes (26 pages).
       - "/release/"
 
 - name: Streamlit
@@ -1110,48 +977,54 @@ frameworks:
   sitemap: https://supervision.roboflow.com/sitemap.xml
   github: https://github.com/roboflow/supervision
   category: Python
-  # NOTE: /llms.txt at this host is prose-only (intro + APIs paragraphs, 0
-  # link bullets) — Tier 2 parser returns 0 links and cascades to sitemap.
-  # Dropped to skip the wasted Tier 2 fetch. Same pattern as GitLab.
 
 - name: TensorRT
   logo: https://developer-blogs.nvidia.com/wp-content/uploads/2020/04/tensorrt-logo.png
   docs: https://docs.nvidia.com/deeplearning/tensorrt/latest/index.html
   github: https://github.com/nvidia/tensorrt
+  category: AI
 
 - name: TensorRT-LLM
   logo: https://nvidia.github.io/TensorRT-LLM/_static/nvidia-logo-horiz-rgb-wht-for-screen.svg
   docs: https://nvidia.github.io/TensorRT-LLM/
   github: https://github.com/NVIDIA/TensorRT-LLM
+  category: AI
   path_filter:
     exclude:
-      # Legacy / obsolete docs (44 pages).
       - "/legacy/"
-      # Blog posts (30). NOTE: hardcoded /blog/ regex catches singular only —
-      # explicit /blogs/ exclude needed.
       - "/blogs/"
-      # C++ autodoc + Sphinx internal include shards.
       - "/_cpp_gen/"
       - "/_includes/"
+
+- name: Tailscale
+  logo: https://cdn.simpleicons.org/tailscale
+  docs: https://tailscale.com/docs/
+  sitemap: https://tailscale.com/sitemap.xml
+  github: https://github.com/tailscale/tailscale
+  category: Infrastructure
+  # NOTE: llms.txt/llms-full.txt are soft-404 Next.js shells (identical
+  # 224KB, HTTP 200) — deliberately NOT listed. Tier 3 sitemap (684 /docs/
+  # URLs; blog + marketing live outside /docs/ so the include already scopes
+  # them out). Only billing excluded (commercial precedent).
+  path_filter:
+    include:
+      - "/docs/"
+    exclude:
+      - "/docs/account/billing"
 
 - name: Terraform
   logo: https://upload.wikimedia.org/wikipedia/commons/thumb/0/04/Terraform_Logo.svg/1280px-Terraform_Logo.svg.png
   docs: https://developer.hashicorp.com/terraform/docs
   sitemap: https://developer.hashicorp.com/sitemap.xml
   github: https://github.com/hashicorp/terraform
-  # NOTE: previous `llms_full` at mintlify.com/hashicorp/terraform/ now returns
-  # HTTP 410 GONE — Mintlify pulled the bundle. Root sitemap is a sitemap-index
-  # with 2 children covering all HashiCorp products (~2097 Terraform URLs).
+  category: Infrastructure
   path_filter:
     include:
       - "/terraform/"
     exclude:
-      # Paid commercial: Terraform Enterprise + Terraform Cloud (818 pages).
       - "/terraform/enterprise/"
       - "/terraform/cloud-docs/"
-      # CDK for Terraform — Python/TS wrapper, separate product (79).
       - "/terraform/cdktf/"
-      # Sphinx partials — internal duplicated content (105).
       - "/terraform/partials/"
 
 - name: Terragrunt
@@ -1159,10 +1032,7 @@ frameworks:
   docs: https://docs.terragrunt.com/
   sitemap: https://docs.terragrunt.com/sitemap.xml
   github: https://github.com/gruntwork-io/terragrunt
-  # NOTE: llms-full.txt has 0 Source markers + 347 H1 boundaries in 1 MB —
-  # Tier 1 would over-split into 347 small ~3 KB chunks (H1s include
-  # sub-section headings, not just page boundaries). Sitemap has 128 clean
-  # per-page URLs across all study-relevant sections.
+  category: Infrastructure
 
 - name: TerraTorch
   logo: https://torchgeo.org/terratorch/stable/figs/logo.png
@@ -1170,10 +1040,13 @@ frameworks:
   sitemap: https://torchgeo.org/terratorch/stable/sitemap.xml
   github: https://github.com/torchgeo/terratorch
   category: Python
-  # NOTE: sitemap was version-pinned to 1.2.8 (would rot at next release). The
-  # /stable/sitemap.xml alias auto-updates. `<loc>` URLs inside point at
-  # torchgeo.github.io (which 301-redirects to torchgeo.org canonical), 49 URLs
-  # across /guide/ 21, /package/ 14, /tutorials/ 7, /about/ 5, plus singletons.
+
+- name: Transformers
+  logo: https://camo.githubusercontent.com/4d76569b4d17ab35fbf2de42aa02b56a65ad0549812be2c96875dcde39824ece/68747470733a2f2f68756767696e67666163652e636f2f64617461736574732f68756767696e67666163652f646f63756d656e746174696f6e2d696d616765732f7261772f6d61696e2f7472616e73666f726d6572732d6c6f676f2d6461726b2e737667
+  docs: https://huggingface.co/docs/transformers/
+  llms_txt: https://huggingface.co/docs/transformers/llms.txt
+  github: https://github.com/huggingface/transformers
+  category: AI
 
 - name: TRL
   logo: https://camo.githubusercontent.com/43833709f83c9ff958d834a21af558036d5f6877ac32ec573649aed1f9ca9a81/68747470733a2f2f68756767696e67666163652e636f2f64617461736574732f74726c2d6c69622f646f63756d656e746174696f6e2d696d616765732f7265736f6c76652f6d61696e2f74726c5f62616e6e65725f6461726b2e706e67
@@ -1191,14 +1064,9 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Autodoc API reference (189 pages, 31% of corpus).
       - "/reference/"
-      # Auto-generated pairwise model comparisons (156 pages, "YOLOv11 vs X",
-      # "YOLOv8 vs X" — SEO-style noise, not study material).
       - "/compare/"
-      # Legacy YOLOv5 docs (19 pages) — current is YOLOv11+.
       - "/yolov5/"
-      # Ultralytics commercial platform (24 pages).
       - "/platform/"
 
 - name: UMAP
@@ -1231,9 +1099,7 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Per-class/function autodoc (1764 pages, 86% of corpus).
       - "/api/"
-      # Contributor docs (16 pages).
       - "/contributing/"
 
 - name: XGBoost
@@ -1243,14 +1109,10 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Sphinx temp/build artifacts (68 pages) — pure noise.
       - "/tmp/"
-      # JVM (Java/Scala) and R bindings — non-Python.
       - "/jvm/"
       - "/R-package/"
-      # Contributor docs (12 pages).
       - "/contrib/"
-      # Per-version release notes (5 pages).
       - "/changes/"
 
 - name: Yellowbrick
@@ -1260,8 +1122,5 @@ frameworks:
   category: Python
   path_filter:
     exclude:
-      # Project governance + contributor docs (11 pages combined). The /api/
-      # 66 pages are per-visualizer with code examples (like Plotly chart pages)
-      # so kept.
       - "/governance/"
       - "/contributing/"

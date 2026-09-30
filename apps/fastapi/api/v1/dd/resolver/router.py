@@ -11,8 +11,14 @@ router = APIRouter()
 
 @router.get("")
 def list_catalog() -> list[dict]:
-    """Re-read every request so YAML edits land without a pod restart."""
-    return domains.dd.resolver.service.load_catalog()
+    """Re-read every request so YAML edits land without a pod restart.
+    Each entry carries its resolved `tier` (1-5, None when sourceless) so
+    the Catalog UI can facet-filter without a second round-trip."""
+    out = []
+    for e in domains.dd.resolver.service.load_catalog():
+        best = domains.dd.resolver.domain.pick_best_source(e)
+        out.append({**e, "tier": best["tier"] if best else None})
+    return out
 
 
 @router.get("/{slug}")

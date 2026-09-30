@@ -117,15 +117,122 @@ export function applyFilter() {
   Sc.tiles.forEach(t => {
     const name = t.dataset.name.toLowerCase();
     const cat = t.dataset.category;
+    // data-tier is "" when the tile pre-dates the backend join — treat
+    // unknown as its own bucket ("—", matching the server-rendered chip).
+    const tier = t.dataset.tier || '—';
+    const status = Sc.ingestedSlugs.has(t.dataset.slug) ? 'Ingested' : 'Not ingested';
     const matchQ = !Sc.query || name.includes(Sc.query);
     const matchC = Sc.activeChip === 'All' || cat === Sc.activeChip;
-    const show = matchQ && matchC;
+    const matchT = Sc.activeTiers.size === 0 || Sc.activeTiers.has(tier);
+    const matchS = Sc.activeStatuses.size === 0 || Sc.activeStatuses.has(status);
+    const show = matchQ && matchC && matchT && matchS;
     t.style.display = show ? '' : 'none';
     if (show) visible++;
   });
   if (Sc.grid) Sc.grid.classList.toggle('fw-grid-empty', visible === 0);
   if (Sc.countEl) Sc.countEl.textContent = visible + ' of ' + Sc.total;
+  _refreshFacetCounts();
 }
+
+// Recompute per-option counts against everything EXCEPT that option's own
+// facet (SOTA disjunctive counts: options stay selectable after selection).
+function _refreshFacetCounts() {
+  const tierCounts = {};
+  const statusCounts = { Ingested: 0, 'Not ingested': 0 };
+  Sc.tiles.forEach(t => {
+    const name = t.dataset.name.toLowerCase();
+    const cat = t.dataset.category;
+    const tier = t.dataset.tier || '—';
+    const status = Sc.ingestedSlugs.has(t.dataset.slug) ? 'Ingested' : 'Not ingested';
+    if ((!Sc.query || name.includes(Sc.query)) &&
+        (Sc.activeChip === 'All' || cat === Sc.activeChip) &&
+        (Sc.activeStatuses.size === 0 || Sc.activeStatuses.has(status))) {
+      tierCounts[tier] = (tierCounts[tier] || 0) + 1;
+    }
+    if ((!Sc.query || name.includes(Sc.query)) &&
+        (Sc.activeChip === 'All' || cat === Sc.activeChip) &&
+        (Sc.activeTiers.size === 0 || Sc.activeTiers.has(tier))) {
+      statusCounts[status]++;
+    }
+  });
+  document.querySelectorAll('[data-facet="tier"][data-value]').forEach(btn => {
+    const v = btn.dataset.value;
+    if (!v) return;
+    const el = btn.querySelector('.dd-catfilter-count');
+    if (el) el.textContent = tierCounts[v] || 0;
+  });
+  document.querySelectorAll('[data-facet="status"][data-value]').forEach(btn => {
+    const v = btn.dataset.value;
+    if (!v) return;
+    const el = btn.querySelector('.dd-catfilter-count');
+    if (el) el.textContent = statusCounts[v] || 0;
+  });
+  const tierLabel = document.querySelector('#dd-tierfilter-label');
+  if (tierLabel) {
+    tierLabel.textContent = Sc.activeTiers.size === 0
+      ? 'All' : [...Sc.activeTiers].sort().join(', ');
+  }
+  const statusLabel = document.querySelector('#dd-statusfilter-label');
+  if (statusLabel) {
+    statusLabel.textContent = Sc.activeStatuses.size === 0
+      ? 'All' : [...Sc.activeStatuses].sort().join(', ');
+  }
+}
+
+// Generic multi-toggle facet wiring (Tier + Status share it). Mirrors the
+// category dropdown's open/close/scroll/Escape behavior; options toggle
+// instead of single-select, Reset clears just its own facet.
+function _wireFacet(rootId, triggerId, popoverId, onToggle) {
+  const root = document.querySelector('#' + rootId);
+  if (!root) return;
+  const trigger = root.querySelector('#' + triggerId);
+  const popover = root.querySelector('#' + popoverId);
+  const setOpen = (open) => {
+    root.classList.toggle('open', open);
+    trigger?.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+  trigger?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setOpen(!root.classList.contains('open'));
+  });
+  document.addEventListener('click', (e) => {
+    if (root.classList.contains('open') && !root.contains(e.target)) {
+      setOpen(false);
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && root.classList.contains('open')) {
+      setOpen(false);
+      trigger?.focus();
+    }
+  });
+  window.addEventListener('scroll', () => {
+    if (root.classList.contains('open')) setOpen(false);
+  }, { passive: true });
+  popover?.querySelectorAll('.dd-catfilter-option').forEach(opt => {
+    opt.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (opt.classList.contains('dd-catfilter-reset')) {
+        popover.querySelectorAll('.dd-catfilter-option')
+          .forEach(o => o.classList.remove('active'));
+        onToggle(null);
+      } else {
+        opt.classList.toggle('active');
+        onToggle(opt.dataset.value);
+      }
+      applyFilter();
+    });
+  });
+}
+
+_wireFacet('dd-tierfilter', 'dd-tierfilter-trigger', 'dd-tierfilter-popover', (v) => {
+  if (v === null) Sc.activeTiers.clear();
+  else Sc.toggleTier(v);
+});
+_wireFacet('dd-statusfilter', 'dd-statusfilter-trigger', 'dd-statusfilter-popover', (v) => {
+  if (v === null) Sc.activeStatuses.clear();
+  else Sc.toggleStatus(v);
+});
 
 // Green-badge the catalog tiles whose slug is already in the /ingestion
 // library (Sc.ingestedSlugs, populated by loadLibrary). Called from
@@ -135,6 +242,9 @@ export function markIngestedTiles() {
   Sc.tiles.forEach(t => {
     t.classList.toggle('fw-tile-ingested', Sc.ingestedSlugs.has(t.dataset.slug));
   });
+  // Status-facet counts/visibility depend on this set arriving — re-filter
+  // once it lands (no-op when no status constraint is active).
+  applyFilter();
 }
 
 Sc.search?.addEventListener('input', e => {

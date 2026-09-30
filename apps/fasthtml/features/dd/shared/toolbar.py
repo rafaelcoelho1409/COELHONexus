@@ -4,7 +4,9 @@ Left content branches per stage. Catalog drops the framework picker (its
 grid IS the framework list; ingested ones are green-badged inline)."""
 from fasthtml.common import Div
 
-from ..catalog.chrome import CatalogSearch, CategoryFilter
+from ..catalog.chrome import (
+    CatalogSearch, CategoryFilter, StatusFilter, TierFilter,
+)
 from ..pipeline.chrome import PipelineActions
 from ..planner.chrome import PlannerActions, PlannerPill
 from ..study.chrome import StudyTabs, StudyViewButtons
@@ -15,7 +17,10 @@ from .picker import FrameworkPicker
 def StageToolbar(active_stage: str, slug: str | None,
                  catalog: list[dict] | None = None):
     if active_stage == "catalog":
-        left = [CatalogSearch(catalog), CategoryFilter(catalog)]
+        left = [
+            CatalogSearch(catalog), CategoryFilter(catalog),
+            TierFilter(catalog), StatusFilter(),
+        ]
     elif active_stage == "ingestion":
         # Row 3 summary line for Ingestion (2026-06-08): the manifest
         # — the body version is removed), so JS in

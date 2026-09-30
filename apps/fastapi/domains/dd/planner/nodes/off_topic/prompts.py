@@ -4,6 +4,12 @@ from . import params
 
 
 
+def _article(word: str) -> str:
+    """a/an for the anchor sentence (new categories like AI/Infrastructure
+    need 'an')."""
+    return "an" if (word or "")[:1].lower() in "aeiou" else "a"
+
+
 def build_positive_descriptor(entry: dict, summary: str = "") -> str:
     """Anchor prompt for the framework. Uses the catalog name + category.
     `summary` (Tier 2 llms.txt blockquote, "" otherwise) appends the author's
@@ -12,7 +18,8 @@ def build_positive_descriptor(entry: dict, summary: str = "") -> str:
     category = entry.get("category") or ""
     if category:
         base = (
-            f"Documentation for {name}, a {category} library / framework. "
+            f"Documentation for {name}, {_article(category)} {category} "
+            f"library / framework. "
             f"Teaching content: tutorials, guides, API reference, how-to "
             f"articles, conceptual explanations."
         )
@@ -48,10 +55,12 @@ def build_judge_prompt(
 
     `summary` (Tier 2 llms.txt blockquote, "" for every other tier) adds one
     author-written sentence to the static prefix — still prefix-positioned, so
-    KV-cache reuse is preserved. "" yields the exact legacy string, so Tier 1
-    prompts are byte-identical to before."""
+    KV-cache reuse is preserved. "" yields the exact legacy string for all
+    consonant-initial categories (every pre-existing one), so Tier 1 prompts
+    are byte-identical to before; only new vowel-initial categories (AI,
+    Infrastructure) take "an"."""
     cat_clause = (
-        f", a {framework_category} library/framework"
+        f", {_article(framework_category)} {framework_category} library/framework"
         if framework_category else ""
     )
     truncated = head_tail_truncate(body)

@@ -28,4 +28,5 @@ def _tile(f: dict):
         data_name = f["name"],
         data_slug = f["slug"],
         data_category = (f.get("category") or "Other"),
+        data_tier = str(f.get("tier") or ""),
     )
