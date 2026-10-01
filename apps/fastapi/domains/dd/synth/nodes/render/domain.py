@@ -292,6 +292,41 @@ def _build_toc(sections_ctx: list[dict]) -> list[dict]:
     return toc
 
 
+def _is_fence_line(ln: str) -> bool:
+    return ln.lstrip().startswith(("```", "~~~"))
+
+
+def _strip_outer_wrapper_fences(md: str) -> str:
+    """Drop a leading wrapper fence and its stray trailing closer.
+
+    LLM-written sections sometimes arrive wrapped in ```markdown fences; the
+    chapter template always starts with `# title`, so a fence on line 0 is
+    never legitimate — it pairs with the last fence line and swallows the
+    whole chapter into one code block (observed live: 10/16 langfuse
+    chapters; inner blocks are otherwise well-formed). The trailing drop
+    only fires when a leading wrapper was dropped, so legit docs ending in
+    a code block are untouched.
+    """
+    try:
+        lines = (md or "").split("\n")
+        if not lines or not _is_fence_line(lines[0]):
+            return md
+        rest = lines[1:]
+        while rest and not rest[0].strip():
+            rest = rest[1:]
+        if not rest or not rest[0].lstrip().startswith("#"):
+            return md
+        lines = lines[1:]
+        end = len(lines) - 1
+        while end >= 0 and not lines[end].strip():
+            end -= 1
+        if end >= 0 and _is_fence_line(lines[end]) and not lines[end].strip("`~ ").strip():
+            lines = lines[:end] + lines[end + 1:]
+        return "\n".join(lines)
+    except Exception:
+        return md
+
+
 def render_chapter_md(
     chapter_title: str,
     sections_ctx: list[dict],
@@ -305,6 +340,7 @@ def render_chapter_md(
         toc = toc,
     )
     md = re.sub(r"\n{4,}", "\n\n\n", md)
+    md = _strip_outer_wrapper_fences(md)
     return md.rstrip() + "\n"
 
 

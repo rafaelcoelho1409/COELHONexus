@@ -176,7 +176,27 @@ export async function _loadStudyReadme(slug, cid) {
   Ss.studyReadmeEl.innerHTML =
     '<div class="fw-empty">Loading chapter…</div>';
   try {
-    const raw = await _loadStudyArtifact(slug, cid, 'README.md');
+    let raw = await _loadStudyArtifact(slug, cid, 'README.md');
+    // Belt: a leading wrapper fence (template always starts with `#`,
+    // so a fence on line 0 is never legitimate) pairs with the last
+    // fence line and swallows the chapter into one code block (seen
+    // live). Drop the wrapper opener and its stray trailing closer.
+    try {
+      const lines = String(raw || '').split('\n');
+      const isFence = (s) => /^\s*(```|~~~)/.test(s || '');
+      const isBareFence = (s) => { const t = (s || '').trim().replace(/^[`~ ]+/, '').trim(); return isFence(s) && !t; };
+      if (lines.length && isFence(lines[0])) {
+        let j = 1;
+        while (j < lines.length && !lines[j].trim()) j++;
+        if (j < lines.length && /^\s*#/.test(lines[j])) {
+          lines.shift();
+          let e = lines.length - 1;
+          while (e >= 0 && !lines[e].trim()) e--;
+          if (e >= 0 && isBareFence(lines[e])) lines.splice(e, 1);
+          raw = lines.join('\n');
+        }
+      }
+    } catch (_) { /* keep raw */ }
     await _renderMarkdownInto(Ss.studyReadmeEl, raw, {
       // Post-process hook: fold "Sources for this section" lists into
       // collapsed <details> and drop the inline ## Contents block (the
