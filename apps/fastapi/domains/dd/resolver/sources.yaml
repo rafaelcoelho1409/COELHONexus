@@ -195,12 +195,12 @@ frameworks:
       - "/docs/current/clients/python"
       - "/docs/current/guides/python"
 
-- name: ElasticSearch (Python)
+- name: ElasticSearch
   logo: https://upload.wikimedia.org/wikipedia/commons/thumb/f/f4/Elasticsearch_logo.svg/3840px-Elasticsearch_logo.svg.png
   docs: https://www.elastic.co/docs
   sitemap: https://www.elastic.co/docs/sitemap.xml
-  github: https://github.com/elastic/elasticsearch-py
-  category: Python
+  github: https://github.com/elastic/elasticsearch
+  category: Data
   path_filter:
     include:
       - "/reference/elasticsearch/clients/python"
@@ -233,6 +233,12 @@ frameworks:
       - "/troubleshoot/monitoring"
       - "/release-notes/elasticsearch"
       - "/get-started"
+
+- name: ElasticSearch (Python)
+  logo: https://upload.wikimedia.org/wikipedia/commons/thumb/f/f4/Elasticsearch_logo.svg/3840px-Elasticsearch_logo.svg.png
+  docs: https://elasticsearch-py.readthedocs.io/en/stable/
+  github: https://github.com/elastic/elasticsearch-py
+  category: Python
 
 - name: Evidently
   logo: https://mintcdn.com/evi/gn-d62Rtg7HFSug2/logo/evidently_ai_logo_docs_dark.svg?fit=max&auto=format&n=gn-d62Rtg7HFSug2&q=85&s=ef8bd36f926452f7826a150472cc41fa
