@@ -201,12 +201,13 @@ def dedupe_and_align_sections(
     *,
     drop_mismatch: bool = True,
 ) -> dict:
-    """Mutate sections_ctx in place; return {n_dedup, n_mismatch}. #1 cross-section body dedup (catches ~45% recycling that vault-hash dedup misses); #4 per-subtopic mismatch removal."""
-    seen: dict[str, tuple[str, str, str]] = {}
+    """Mutate sections_ctx in place; return {n_dedup, n_mismatch}. Cross-section
+    dedup DISABLED per user request — every subtopic shows its full code block
+    even when recycled (n_dedup always 0); only per-subtopic mismatch removal
+    still applies."""
     n_dedup = 0
     n_mismatch = 0
     for sec in sections_ctx:
-        heading = sec.get("heading") or "?"
         for sub in (sec.get("subtopics") or []):
             raw_block = sub.get("code_block") or ""
             inner = _code_inner(raw_block)
@@ -230,29 +231,8 @@ def dedupe_and_align_sections(
                     inner = fixed_inner
             if not inner:
                 continue
+
             subheading = sub.get("subheading") or "?"
-            nontrivial = (
-                inner.count("\n") + 1 >= params.DEDUP_MIN_LINES
-                or len(inner) >= params.DEDUP_MIN_CHARS
-            )
-
-            if nontrivial:
-                key = _norm_body(inner)
-                prev = seen.get(key)
-                if prev and (prev[0], prev[1]) != (heading, subheading):
-                    fh, fsub, fanchor = prev
-                    ref = (
-                        f"[**{fh} → {fsub}**](#{fanchor})"
-                        if fanchor else f"**{fh} → {fsub}**"
-                    )
-                    sub["code_block"] = (
-                        f"> _↳ Same code as {ref}; shown once, "
-                        f"not repeated._"
-                    )
-                    sub["derived_caption"] = ""
-                    n_dedup += 1
-                    continue
-
             if drop_mismatch:
                 ci = _idents(inner)
                 if len(ci) >= params.MISMATCH_MIN_CODE_IDENTS:
@@ -268,10 +248,6 @@ def dedupe_and_align_sections(
                         n_mismatch += 1
                         continue
 
-            if nontrivial:
-                seen.setdefault(
-                    key, (heading, subheading, sub.get("anchor") or ""),
-                )
     return {"n_dedup": n_dedup, "n_mismatch": n_mismatch}
 
 
