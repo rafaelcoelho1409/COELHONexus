@@ -71,6 +71,20 @@ def greedy_select(
                 covered.add(k)
         coverage = len(covered) / n_assignable if n_assignable else 1.0
 
+    # Floor: coverage-driven stopping can finish with 1-2 chapters when one
+    # broad chapter ("API Reference") absorbs >=95% of docs. Top up to
+    # MIN_KEPT_CHAPTERS with the next-best chapters by total confidence mass.
+    if n_proposals >= params.MIN_KEPT_CHAPTERS:
+        mass = {
+            ci: sum(cv.get(ci, 0.0) for cv in doc_confidences.values())
+            for ci in range(n_proposals) if ci not in selected_set
+        }
+        for ci, _m in sorted(mass.items(), key = lambda p: p[1], reverse = True):
+            if len(selected) >= params.MIN_KEPT_CHAPTERS:
+                break
+            selected.append(ci)
+            selected_set.add(ci)
+
     # Assign each doc to its highest-confidence SELECTED chapter; sub-threshold
     # docs still land somewhere to preserve lineage.
     doc_to_chapter: dict[str, int] = {}

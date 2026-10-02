@@ -22,4 +22,4 @@ from __future__ import annotations
 # empty (120s cooldown), so the old 2-5s retry backoff could never
 # succeed. Same fallback outcome either way, ~8s less wasted wait per
 # occurrence. timeout/connection remain retryable.
-PROMPT_VERSION = "v7-no-retry-rate-limit-2026-09-09"
+PROMPT_VERSION = "v8-clamp-key-terms-2026-10-02"

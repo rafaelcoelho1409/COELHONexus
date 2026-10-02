@@ -39,4 +39,4 @@ from __future__ import annotations
 # uniqueness validator with no further fallback — killing the whole run.
 # Confirmed live on the fastmcp corpus: duplicate 'How It Works' after all
 # 3 LLM samples had already failed.
-PROMPT_VERSION = "v9-fallback-title-dedup-2026-09-09"
+PROMPT_VERSION = "v10-tolerant-proposals-2026-10-02"

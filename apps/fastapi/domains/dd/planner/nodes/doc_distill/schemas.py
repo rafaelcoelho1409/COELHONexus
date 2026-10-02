@@ -41,28 +41,25 @@ class DocDistillate(BaseModel):
     @field_validator("key_terms")
     @classmethod
     def _validate_terms(cls, v: list[str]) -> list[str]:
-        if not (params.KEY_TERMS_MIN <= len(v) <= params.KEY_TERMS_MAX):
-            raise ValueError(
-                f"key_terms count must be {params.KEY_TERMS_MIN}-{params.KEY_TERMS_MAX}; "
-                f"got {len(v)}"
-            )
+        # Repair, don't reject: over-long lists are clipped to KEY_TERMS_MAX
+        # and out-of-range / duplicate terms dropped; only a genuine
+        # shortfall (< KEY_TERMS_MIN usable terms) raises.
         out: list[str] = []
         seen: set[str] = set()
         for t in v:
             s = " ".join(t.strip().split())
             if not (params.KEY_TERM_CHARS_MIN <= len(s) <= params.KEY_TERM_CHARS_MAX):
-                raise ValueError(
-                    f"key_term length must be {params.KEY_TERM_CHARS_MIN}-"
-                    f"{params.KEY_TERM_CHARS_MAX}; got {len(s)}"
-                )
+                continue
             k = s.casefold()
             if k in seen:
                 continue
             seen.add(k)
             out.append(s)
+            if len(out) >= params.KEY_TERMS_MAX:
+                break
         if len(out) < params.KEY_TERMS_MIN:
             raise ValueError(
-                f"after dedup, only {len(out)} unique key_terms "
+                f"only {len(out)} usable unique key_terms "
                 f"(minimum {params.KEY_TERMS_MIN})"
             )
         return out

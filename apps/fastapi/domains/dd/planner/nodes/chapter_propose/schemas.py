@@ -59,28 +59,24 @@ class ChapterProposal(BaseModel):
     @field_validator("key_concepts")
     @classmethod
     def _validate_concepts(cls, v: list[str]) -> list[str]:
-        if not (params.CONCEPTS_MIN <= len(v) <= params.CONCEPTS_MAX):
-            raise ValueError(
-                f"key_concepts count must be {params.CONCEPTS_MIN}-"
-                f"{params.CONCEPTS_MAX}; got {len(v)}"
-            )
+        # Repair, don't reject: clip to CONCEPTS_MAX, drop out-of-range /
+        # duplicate concepts; only a real shortfall raises.
         out: list[str] = []
         seen: set[str] = set()
         for c in v:
             s = " ".join(c.strip().split())
             if not (params.CONCEPT_CHARS_MIN <= len(s) <= params.CONCEPT_CHARS_MAX):
-                raise ValueError(
-                    f"concept length must be {params.CONCEPT_CHARS_MIN}-"
-                    f"{params.CONCEPT_CHARS_MAX}; got {len(s)}"
-                )
+                continue
             k = s.casefold()
             if k in seen:
                 continue
             seen.add(k)
             out.append(s)
+            if len(out) >= params.CONCEPTS_MAX:
+                break
         if len(out) < params.CONCEPTS_MIN:
             raise ValueError(
-                f"after dedup only {len(out)} key_concepts "
+                f"only {len(out)} usable key_concepts "
                 f"(minimum {params.CONCEPTS_MIN})"
             )
         return out
@@ -99,25 +95,40 @@ class ChapterProposalList(BaseModel):
         ),
     )
 
+    @field_validator("proposals", mode = "before")
+    @classmethod
+    def _drop_bad_proposals(cls, v):
+        """Keep the valid proposals of a partly-bad sample (invalid items and
+        case-insensitive duplicate titles are dropped, overflow clipped to
+        PROPOSALS_MAX) instead of rejecting the whole sample."""
+        if not isinstance(v, list):
+            return v
+        out: list = []
+        seen: set[str] = set()
+        for item in v:
+            try:
+                p = item if isinstance(item, ChapterProposal) else ChapterProposal.model_validate(item)
+            except Exception:
+                continue
+            k = p.title.casefold()
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(p)
+            if len(out) >= params.PROPOSALS_MAX:
+                break
+        return out
+
     @field_validator("proposals")
     @classmethod
     def _validate_count(
         cls, v: list[ChapterProposal],
     ) -> list[ChapterProposal]:
-        if not (params.PROPOSALS_MIN <= len(v) <= params.PROPOSALS_MAX):
+        if len(v) < params.PROPOSALS_MIN:
             raise ValueError(
-                f"proposals count must be {params.PROPOSALS_MIN}-{params.PROPOSALS_MAX}; "
-                f"got {len(v)}"
+                f"only {len(v)} valid proposals "
+                f"(minimum {params.PROPOSALS_MIN})"
             )
-        seen: set[str] = set()
-        for p in v:
-            k = p.title.casefold()
-            if k in seen:
-                raise ValueError(
-                    f"duplicate chapter title (case-insensitive): "
-                    f"{p.title!r}"
-                )
-            seen.add(k)
         return v
 
 

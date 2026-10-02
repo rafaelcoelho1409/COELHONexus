@@ -23,7 +23,9 @@ PROPOSALS_TARGET_CEILING = 24
 # part of its budget on a <think> preamble before the JSON, so near
 # PROPOSALS_TARGET_CEILING (24 chapters) 4000 was tight and risked
 # truncated/empty output. Quality over latency here.
-MAX_TOKENS_PROPOSE = 6000
+# 2026-10-02: 6000 -> 10000. elasticsearch-python (685 docs, 66k-token prompt)
+# hit LengthFinishReasonError at 6000 on 3/10 samples, then fell back to seeds.
+MAX_TOKENS_PROPOSE = 10000
 
 # Sample N parallel proposals to mitigate single-arm variance, then
 # USC-vote pick the best (matches reduce node's pattern).
@@ -54,7 +56,8 @@ TEMPERATURE_VOTE    = 0.0
 # raise above — those p99 numbers were measured at the smaller token
 # budget; a 50% bigger completion budget needs proportionally more time
 # to actually generate, not just to avoid a network timeout.
-DRAFT_TIMEOUT_S = 150.0
+# 2026-10-02: 150s -> 240s, paired with MAX_TOKENS_PROPOSE 6000 -> 10000.
+DRAFT_TIMEOUT_S = 240.0
 
 # 2026-09-09: this node runs right after doc_distill with zero recovery
 # gap — doc_distill/chapter_assign/order_chapters all got their own

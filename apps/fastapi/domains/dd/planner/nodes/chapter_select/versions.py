@@ -2,4 +2,4 @@
 from __future__ import annotations
 
 
-PROMPT_VERSION = "v2-no-orphan-prune-2026-06-05"
+PROMPT_VERSION = "v3-min-chapters-floor-2026-10-02"

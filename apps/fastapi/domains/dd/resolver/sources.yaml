@@ -729,6 +729,12 @@ frameworks:
       - "/reference/"
       - "/development/"
 
+- name: Pytest
+  logo: https://cdn.simpleicons.org/pytest
+  docs: https://docs.pytest.org/en/stable/
+  github: https://github.com/pytest-dev/pytest
+  category: Python
+
 - name: Python
   logo: https://upload.wikimedia.org/wikipedia/commons/thumb/f/f8/Python_logo_and_wordmark.svg/3840px-Python_logo_and_wordmark.svg.png
   docs: https://docs.python.org/3/

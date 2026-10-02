@@ -21,6 +21,7 @@ def pipeline_health(state: domains.dd.planner.state.PlannerState) -> dict:
     pr = state.get("propose_stats") or {}
     asg = state.get("assign_stats") or {}
     ordc = state.get("order_chapters_stats") or {}
+    sel = state.get("select_stats") or {}
 
     def _pct(num, den):
         return round(100.0 * num / den, 1) if den else 0.0
@@ -44,7 +45,9 @@ def pipeline_health(state: domains.dd.planner.state.PlannerState) -> dict:
         pr.get("fallback_used", False)
         or _pct(dd.get("n_fallback", 0), dd_n) >= 40.0
         or _pct(asg.get("n_fallback", 0), asg_n) >= 50.0
+        or (0 < sel.get("n_chapters_out", 99) < 3)   # collapsed plan
     )
+    health["chapter_select_n_chapters"] = sel.get("n_chapters_out", 0)
     return health
 
 
