@@ -624,6 +624,9 @@ class Store:
             "page_count":     len(self._cached_manifest),
             "total_bytes":    sum(e.bytes for e in self._cached_manifest),
             "entries":        [asdict(e) for e in self._cached_manifest],
+            # Pages above were written through add_page's normalize_doc at this
+            # version; Synth's ensure_framework_normalized compares against it.
+            "normalizer_version": domains.dd.synth.nodes.corpus_normalize.versions.NORMALIZER_VERSION,
         }
         if extra:
             payload.update(extra)

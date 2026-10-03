@@ -121,6 +121,17 @@ async def _await_with_watcher(
     }
 
 
+async def _ensure_corpus_current(slug: str) -> None:
+    """Re-normalize the slug's stored pages if the normalizer has moved on since ingestion (no-op otherwise). Never blocks a Synth run."""
+    try:
+        await domains.dd.synth.nodes.backfill.service.ensure_framework_normalized(slug)
+    except Exception as e:
+        logger.warning(
+            f"[synth] {slug}: ensure_framework_normalized failed "
+            f"({type(e).__name__}: {e}) — continuing on stored pages"
+        )
+
+
 async def run_single_chapter_async(
     thread_id: str,
     slug: str,
@@ -170,6 +181,7 @@ async def run_single_chapter_async(
                 "chapter_id": chapter_id,
                 "mode": mode,
             })
+            await _ensure_corpus_current(slug)
             graph = domains.dd.synth.graph.build_graph()
             config = {
                 "configurable": {"thread_id": thread_id},
@@ -684,6 +696,7 @@ async def _run_study_async_inner(
 ) -> dict:
     n_total = len(chapter_ids)
     study_t0 = time.monotonic()
+    await _ensure_corpus_current(slug)
     # Seed from prior blob so skipped-on-resume chapters keep their measured time.
     chapter_ms: dict[str, int] = {}
     try:

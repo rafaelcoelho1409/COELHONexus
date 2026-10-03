@@ -4,6 +4,7 @@ import domains
 from . import domain
 
 import asyncio
+import json
 import logging
 from typing import Awaitable, Callable, Optional
 
@@ -147,9 +148,13 @@ async def _normalize_one(
             body = await s.read_text(page_key_str)
             normalized = domains.dd.synth.nodes.corpus_normalize.domain.normalize_doc(body).body
             changed = normalized != body
-            # Raw always preserved; cheap idempotent overwrite on subsequent runs.
+            # Raw always preserved. Only seed it when absent: a page ingested
+            # after the add_page hook already has its true raw body there, and
+            # `body` here is the (previously normalized) stored copy — writing
+            # it over the original would destroy normalizer reversibility.
             raw_k = domains.dd.ingestion.storage.keys.raw_page_key(slug, idx, page_slug)
-            await s.write(raw_k, body, content_type = "text/markdown")
+            if not await s.exists(raw_k):
+                await s.write(raw_k, body, content_type = "text/markdown")
             if changed:
                 await s.write(
                     page_key_str, normalized, content_type = "text/markdown",
@@ -195,3 +200,33 @@ async def backfill_normalize_for_framework(slug: str) -> dict:
         "normalized": normalized, "unchanged": unchanged,
         "errors": errors,
     }
+
+
+async def ensure_framework_normalized(slug: str) -> dict:
+    """Bring a framework's stored pages (+ vaults) up to the current normalizer version before Synth reads them. Version-gated via `normalizer_version` in the ingestion manifest (absent = pre-versioning = 0), so it is a single manifest read when nothing is stale. Without it, a normalizer improvement only ever reached corpora ingested afterwards — Synth kept sentinelizing the old pages and produced the old output. Stamps the manifest only on a clean pass so a partial failure retries on the next run."""
+    current = domains.dd.synth.nodes.corpus_normalize.versions.NORMALIZER_VERSION
+    s = domains.dd.ingestion.storage.service.get_storage()
+    manifest = await domains.dd.ingestion.storage.service.read_framework_manifest(s, slug)
+    if not manifest:
+        return {"slug": slug, "skipped": "no_manifest"}
+    stored = int(manifest.get("normalizer_version") or 0)
+    if stored >= current:
+        return {"slug": slug, "skipped": "up_to_date", "normalizer_version": stored}
+    logger.info(
+        f"[backfill-normalize] {slug}: stored pages at normalizer v{stored} < "
+        f"v{current} — re-normalizing {manifest.get('page_count')} page(s) + rebuilding vaults"
+    )
+    result = await backfill_normalize_for_framework(slug)
+    if result["errors"] == 0:
+        manifest["normalizer_version"] = current
+        await s.write(
+            domains.dd.ingestion.storage.keys.manifest_key(slug),
+            json.dumps(manifest, separators = (",", ":")),
+            content_type = "application/json",
+        )
+    logger.info(
+        f"[backfill-normalize] {slug}: normalized={result['normalized']} "
+        f"unchanged={result['unchanged']} errors={result['errors']} "
+        f"(manifest {'stamped v' + str(current) if result['errors'] == 0 else 'NOT stamped — will retry'})"
+    )
+    return {**result, "normalizer_version": current if result["errors"] == 0 else stored}
