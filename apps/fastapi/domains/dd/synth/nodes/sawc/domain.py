@@ -1001,7 +1001,16 @@ def parse_json_response(text: str) -> Optional[dict]:
 
 def try_parse_draft(
     raw: dict,
+    *,
+    expected_heading: Optional[str] = None,
 ) -> tuple[Optional[schemas.LLMSectionDraft], Optional[str]]:
+    """Pydantic-validate a writer draft. `heading` is only an echo of the
+    outline's H2, so when `expected_heading` is given the authoritative copy
+    replaces whatever the LLM emitted — a writer that trims or rewrites a
+    heading (e.g. drops permalink debris, leaving a 1-word name) must not
+    sink an otherwise good draft or burn repair round-trips on it."""
+    if expected_heading and isinstance(raw, dict):
+        raw = {**raw, "heading": expected_heading}
     try:
         return schemas.LLMSectionDraft.model_validate(raw), None
     except ValidationError as e:

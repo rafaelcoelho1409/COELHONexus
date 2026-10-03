@@ -19,7 +19,14 @@ OUTLINE_ADAPTIVE_DIVISOR  = 4
 OUTLINE_H2_FUZZY_DEDUP_THRESHOLD = 0.85
 
 MAX_PREREQS_PER_NODE = 3
-HEADING_MIN_WORDS = 2
+# Min 1: API-reference chapters are organised by module / namespace /
+# resource names that are legitimately one word ('Aggregations', 'Fleet',
+# 'Migration'). A 2-word floor rejected the WHOLE outline over one such
+# heading — confirmed live on elasticsearch-python (ch-01/05/11/16 each lost
+# a sample; ch-01 lost all three and shipped the heuristic fallback).
+# Generic one-worders ('Overview', 'Introduction', ...) stay out via
+# BANNED_HEADINGS_LC.
+HEADING_MIN_WORDS = 1
 HEADING_MAX_WORDS = 8
 DESCRIPTION_MIN_CHARS = 20
 DESCRIPTION_MAX_CHARS = 400
@@ -73,6 +80,17 @@ MAX_TOKENS_REPAIR  = 8000
 TIMEOUT_S_DRAFT  = 120.0
 TIMEOUT_S_VOTE   = 45.0
 TIMEOUT_S_REPAIR = 120.0
+
+# Draft-call attempts per sample. chat_text_async runs with max_retries=0, so a
+# single dropped connection used to forfeit the sample outright; two of the
+# three samples died that way on elasticsearch-python ch-01 (APIConnectionError,
+# same instant) and, with the third sample rejected on a heading, the chapter
+# fell through to the heuristic fallback. Same idiom as sawc_write's draft calls.
+MAX_CALL_ATTEMPTS = 2
+
+# Tag carried by every section description the heuristic fallback emits, so a
+# cached fallback outline is recognisable (and re-drafted) on the next run.
+FALLBACK_DESCRIPTION_TAG = "synthesized as fallback after LLM outline generation failed"
 
 OPTIMAL_STOPPING_ENABLED = os.environ.get(
     "KD_OUTLINE_OPTIMAL_STOPPING", "true",

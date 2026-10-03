@@ -325,6 +325,18 @@ def parse_json_response(text: str) -> Optional[dict]:
         return None
 
 
+def clean_heading(text: str) -> str:
+    """Strip markup debris from a heading: markdown links (permalink anchors
+    like `[](#id "Link to this heading")` vanish, `[text](url)` keeps its
+    text), `¶`/icon-font glyphs, backslash escapes, trailing `#`s, and runs
+    of whitespace. Plain headings pass through unchanged."""
+    h = patterns.HEADING_MD_LINK_RE.sub(lambda m: m.group(1), text or "")
+    h = patterns.HEADING_ICON_GLYPH_RE.sub("", h)
+    h = patterns.HEADING_MD_ESCAPE_RE.sub(r"\1", h)
+    h = h.strip().rstrip("#").strip()
+    return " ".join(h.split())
+
+
 def normalize_outline_dict(raw: dict) -> dict:
     """Fix format-only violations the model reliably makes before they
     ever reach Pydantic — structured-output modes guarantee JSON shape,
@@ -370,6 +382,8 @@ def normalize_outline_dict(raw: dict) -> dict:
         heading = sec.get("heading")
         if not isinstance(heading, str):
             continue
+        heading = clean_heading(heading)
+        sec["heading"] = heading
         words = heading.split()
         if len(words) > params.HEADING_MAX_WORDS:
             head = re.split(r",| and |;", heading, maxsplit=1)[0].strip()
@@ -483,46 +497,72 @@ def scope_words(text: str) -> set[str]:
     return out - _SCOPE_STOPWORDS
 
 
-def heuristic_fallback_outline(md_text: str) -> schemas.ChapterOutline:
-    """Last-resort fallback when all N samples fail to parse: derive sections from H1/H2 in source. Keeps chapter graph runnable; mgsr_replan rewrites it."""
-    headings = re.findall(r"(?m)^#{1,3}\s+(.+)$", md_text or "")
-    cleaned: list[str] = []
+def _source_headings(md_text: str) -> list[str]:
+    """Distinct, cleaned H1-H3 headings of the concatenated sources, in
+    document order. Fence-aware (a `# comment` inside a code block is not a
+    heading) with the fence state reset at each source boundary, since
+    `concat_sources` can cut a body mid-fence. Banned content-type headings
+    ('Overview', ...) and empty-after-cleaning ones are skipped."""
+    out: list[str] = []
     seen: set[str] = set()
-    for h in headings:
-        h = h.strip().rstrip("#").strip()
-        if not h:
-            continue
-        key = h.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        words = h.split()
-        if len(words) > 8:
-            h = " ".join(words[:8])
-        if key in {"introduction", "overview", "summary", "conclusion"}:
-            continue
-        cleaned.append(h)
-        if len(cleaned) >= 8:
-            break
+    for body in (md_text or "").split(_SOURCE_CONCAT_SEPARATOR):
+        in_fence = False
+        for line in body.split("\n"):
+            if patterns.FENCE_LINE_RE.match(line):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            m = patterns.ATX_HEADING_RE.match(line)
+            if not m:
+                continue
+            h = clean_heading(m.group(1))
+            key = h.casefold()
+            if not h or key in seen or key in params.BANNED_HEADINGS_LC:
+                continue
+            seen.add(key)
+            words = h.split()
+            out.append(" ".join(words[:params.HEADING_MAX_WORDS]))
+    return out
 
-    while len(cleaned) < 4:
-        cleaned.append(f"Topic {len(cleaned) + 1}")
+
+def heuristic_fallback_outline(
+    md_text: str, *, max_sections: int = 8,
+) -> schemas.ChapterOutline:
+    """Last-resort fallback when all N samples fail to parse: derive sections from the H1-H3 headings in the sources, spread evenly across the whole corpus (the first N headings alone only ever cover the first page or two). Sections are independent (no prerequisite chain), so the DAG stays flat and writable in parallel. Keeps the chapter graph runnable."""
+    headings = _source_headings(md_text)
+    n_target = max(params.SECTIONS_MIN, max_sections)
+    if len(headings) > n_target:
+        step = len(headings) / n_target
+        headings = [headings[int(i * step)] for i in range(n_target)]
+
+    while len(headings) < params.SECTIONS_MIN:
+        headings.append(f"Topic {len(headings) + 1}")
 
     sections = [
         schemas.OutlineSection(
             section_id=f"s{i + 1}",
-            heading=h if len(h.split()) >= 2 else f"{h} Concepts",
+            heading=h,
             description=(
                 f"Auto-derived section from source heading {h!r}; "
-                "synthesized as fallback after LLM outline generation "
-                "failed. Refine in MGSR."
+                f"{params.FALLBACK_DESCRIPTION_TAG}."
             ),
-            prerequisites=[f"s{i}"] if i > 0 else [],
+            prerequisites=[],
             needs_code=True,
         )
-        for i, h in enumerate(cleaned)
+        for i, h in enumerate(headings)
     ]
     return schemas.ChapterOutline(sections=sections)
+
+
+def is_heuristic_fallback_outline(outline_dict: dict) -> bool:
+    """True when every section still carries the fallback's description tag — i.e. no LLM draft or repair ever replaced it. Works on cached blobs written before this check existed."""
+    sections = (outline_dict or {}).get("sections") or []
+    return bool(sections) and all(
+        isinstance(s, dict)
+        and params.FALLBACK_DESCRIPTION_TAG in (s.get("description") or "")
+        for s in sections
+    )
 
 
 def serialize_outline_with_dag(

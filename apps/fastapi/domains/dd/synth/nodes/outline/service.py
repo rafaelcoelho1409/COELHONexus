@@ -5,6 +5,7 @@ from . import domain, keys, params, prompts, schemas, versions
 import asyncio
 import json
 import logging
+import random
 import time
 from typing import Optional
 
@@ -188,15 +189,28 @@ async def _draft_one_outline(
 ) -> tuple[Optional[dict], dict]:
     """One LLM call for outline draft. Emits `sample_done` SSE per sample so UI shows per-sample progress during asyncio.gather (otherwise silent for ~30s)."""
     t0 = time.monotonic()
-    try:
-        response, meta = await domains.settings.chat.service.chat_text_async(
-            prompt,
-            max_tokens=params.MAX_TOKENS_DRAFT,
-            temperature=params.TEMPERATURE_DRAFT,
-            response_format=schemas.OUTLINE_RESPONSE_FORMAT,
-            timeout_s=params.TIMEOUT_S_DRAFT,
-        )
-    except Exception as e:
+    last_error: Optional[Exception] = None
+    for call_attempt in range(params.MAX_CALL_ATTEMPTS):
+        try:
+            response, meta = await domains.settings.chat.service.chat_text_async(
+                prompt,
+                max_tokens=params.MAX_TOKENS_DRAFT,
+                temperature=params.TEMPERATURE_DRAFT,
+                response_format=schemas.OUTLINE_RESPONSE_FORMAT,
+                timeout_s=params.TIMEOUT_S_DRAFT,
+            )
+            last_error = None
+            break
+        except Exception as e:
+            last_error = e
+            # Resending the same oversized prompt can't help — the caller
+            # already owns the half-budget overflow retry.
+            if domain.is_context_overflow_error(e):
+                break
+            if call_attempt < params.MAX_CALL_ATTEMPTS - 1:
+                await asyncio.sleep(1.0 + random.random())
+    if last_error is not None:
+        e = last_error
         error_tag = (
             "context_overflow" if domain.is_context_overflow_error(e)
             else f"{type(e).__name__}: {str(e)[:200]}"
@@ -354,31 +368,40 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
             cached = json.loads(cached_text)
             outline_dict = (cached or {}).get("outline") or {}
             dag_dict     = (cached or {}).get("dag") or {}
-            elapsed = int((time.monotonic() - t0) * 1000)
-            stats = {
-                "n_sections":   len(outline_dict.get("sections") or []),
-                "max_stage":    int(dag_dict.get("max_stage", 0)),
-                "n_stages":     len(dag_dict.get("stages") or {}),
-                "n_removed_edges": len(dag_dict.get("removed_edges") or []),
-                "wall_ms":      elapsed,
-                "store_path":   latest_key,
-                "versioned_path": versioned_key,
-                "manifest_hash":  manifest_hash,
-                "cache_hit":    True,
-                "prompt_version": cached.get("prompt_version"),
-            }
-            await domains.dd.synth.runtime.progress.service.emit_progress(
-                thread_id, "outline_sdp", "done",
-                n_sections = stats["n_sections"],
-                max_stage = stats["max_stage"],
-                wall_ms = elapsed, cache_hit = True,
-            )
-            logger.info(
-                f"[outline_sdp] {slug}/{chapter_id}: CACHE HIT — "
-                f"{stats['n_sections']} sections, max_stage = "
-                f"{stats['max_stage']}, {elapsed} ms"
-            )
-            return {"outline_path": latest_key, "outline_stats": stats}
+            if domain.is_heuristic_fallback_outline(outline_dict):
+                # A prior run's LLM drafts all failed and shipped the
+                # heuristic fallback; serving it from cache would turn a
+                # transient outage into a permanent bad outline.
+                logger.info(
+                    f"[outline_sdp] {slug}/{chapter_id}: cached outline is a "
+                    f"heuristic fallback — ignoring cache, re-drafting"
+                )
+            else:
+                elapsed = int((time.monotonic() - t0) * 1000)
+                stats = {
+                    "n_sections":   len(outline_dict.get("sections") or []),
+                    "max_stage":    int(dag_dict.get("max_stage", 0)),
+                    "n_stages":     len(dag_dict.get("stages") or {}),
+                    "n_removed_edges": len(dag_dict.get("removed_edges") or []),
+                    "wall_ms":      elapsed,
+                    "store_path":   latest_key,
+                    "versioned_path": versioned_key,
+                    "manifest_hash":  manifest_hash,
+                    "cache_hit":    True,
+                    "prompt_version": cached.get("prompt_version"),
+                }
+                await domains.dd.synth.runtime.progress.service.emit_progress(
+                    thread_id, "outline_sdp", "done",
+                    n_sections = stats["n_sections"],
+                    max_stage = stats["max_stage"],
+                    wall_ms = elapsed, cache_hit = True,
+                )
+                logger.info(
+                    f"[outline_sdp] {slug}/{chapter_id}: CACHE HIT — "
+                    f"{stats['n_sections']} sections, max_stage = "
+                    f"{stats['max_stage']}, {elapsed} ms"
+                )
+                return {"outline_path": latest_key, "outline_stats": stats}
         except Exception as e:
             logger.warning(
                 f"[outline_sdp] {slug}/{chapter_id}: cached blob "
@@ -477,7 +500,9 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
             f"[outline_sdp] {slug}/{chapter_id}: ALL {params.N_SAMPLES} samples "
             f"failed to parse; emitting heuristic fallback outline"
         )
-        outline = domain.heuristic_fallback_outline(sources_concat_md)
+        outline = domain.heuristic_fallback_outline(
+            sources_concat_md, max_sections = adaptive_target,
+        )
         dag = domain.derive_dag(outline.sections)
         candidates = [(outline, dag, ["heuristic_fallback"])]
 

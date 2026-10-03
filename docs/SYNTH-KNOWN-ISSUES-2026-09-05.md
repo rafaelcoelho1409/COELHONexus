@@ -5,6 +5,23 @@ Found by direct log/artifact inspection of all 11 chapters of the
 (`docs-distiller/study/claude-code/59353d70-e1ef-4d06-9708-947b1273017f`),
 now complete.
 
+## ✅ 22. ElasticSearch (Python) `ch-01` shipped `needs_review` with an empty section — outline fell back to a heuristic whose headings were permalink debris — FIXED 2026-10-03
+
+**Severity: medium — 18/19 chapters passed; one chapter's whole outline was junk, and the junk was cached.**
+
+Study `60d29778-…` (2026-10-03): `ch-01-elasticsearch-api` (102 sources) → `HALT no-recovery (score=0.47)`, `audit_passed=False`, section 8 an empty placeholder. Chain of causes, in order:
+
+1. **`outline_sdp` lost all 3 samples.** Two died on a transient `APIConnectionError` (`chat_text_async` runs `max_retries=0` and the outline draft had no retry, unlike sawc/digest/checklist); the third was rejected whole by Pydantic for one 1-word heading (`'Aggregations'`) — the 2-word floor is wrong for API-reference chapters organised by module names. Same rejection cost a sample on ch-05/11/16.
+2. **Heuristic fallback outline was built from poisoned headings.** `corpus_normalize`'s permalink pass only matched empty link text or `¶`; Sphinx's Read-the-Docs theme emits its headerlink as an icon-font glyph (U+F0C1), so every heading/autodoc `dt` in the ingested corpus kept `[<glyph>](#id "Link to this heading")`. The fallback copied those verbatim as H2 headings, took only the first 8 headings of the corpus (first page or two), and chained prerequisites (`max_stage=7`).
+3. **`sawc_write` then rejected the sections.** The writer cleaned the junk heading to e.g. `'Migration'`, the 2-word validator rejected it through both repairs → placeholder → audit fail. The CoRefine loop can't help (it re-runs `sawc_write` only, and the no-recovery floor short-circuits at iter 1).
+4. **The bad outline was sticky:** the fallback outline was cached like any other, so a re-run would have served it again.
+
+**Fixed:** (a) `corpus_normalize` permalink regexes accept a single Private-Use-Area glyph as link text (`NORMALIZER_VERSION` 2→3); (b) `HEADING_MIN_WORDS` 2→1 in outline/sawc/mgsr; (c) `outline_sdp` draft call retries once (`MAX_CALL_ATTEMPTS=2`, skipped on context-overflow); (d) `heuristic_fallback_outline` cleans headings (`clean_heading`, also applied to LLM headings in `normalize_outline_dict`), skips fenced code, spreads picks across the corpus, emits flat prerequisites; (e) a cached outline whose sections all carry the fallback tag is ignored and re-drafted; (f) `sawc_write` forces the outline's heading onto the parsed draft (`try_parse_draft(expected_heading=…)`) instead of rejecting an echo mismatch.
+
+**To apply to the existing corpus:** redeploy, then either re-ingest or re-normalize in place — `kubectl -n coelhonexus exec deploy/coelhonexus-fastapi -c coelhonexus-fastapi -- python -c "import asyncio, domains; print(asyncio.run(domains.dd.synth.nodes.backfill.service.backfill_normalize_for_framework('elasticsearch-python')))"` — then Resume Synth (only `ch-01` re-runs; the other 18 passed their audit).
+
+---
+
 ## ✅ 17. Nearly every Synth LLM call used a bare 30s timeout — the likely dominant cause of "too many chapters fail" — FIXED 2026-09-07
 
 **Severity: high — plausibly the single biggest lever on chapter quality across all 5 study runs.**

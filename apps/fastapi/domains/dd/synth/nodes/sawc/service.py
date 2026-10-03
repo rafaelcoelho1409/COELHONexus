@@ -506,7 +506,7 @@ async def _draft_one_section(
         )
         return None, deployment, wall_ms, 0, "parse_failed"
 
-    draft, err = domain.try_parse_draft(parsed)
+    draft, err = domain.try_parse_draft(parsed, expected_heading=section_heading)
     n_repairs = 0
     current = parsed
 
@@ -541,7 +541,7 @@ async def _draft_one_section(
             rp = domain.parse_json_response(rr)
             if rp:
                 current = rp
-                draft, err = domain.try_parse_draft(rp)
+                draft, err = domain.try_parse_draft(rp, expected_heading=section_heading)
         except Exception as e:
             logger.warning(
                 f"[sawc_write] {section_id} draft {draft_idx}: repair "
@@ -601,7 +601,7 @@ async def _draft_one_section(
             rp = domain.parse_json_response(rr)
             if not rp:
                 break
-            new_draft, new_err = domain.try_parse_draft(rp)
+            new_draft, new_err = domain.try_parse_draft(rp, expected_heading=section_heading)
             if new_draft is None:
                 break
             new_issues = domain.validate_section_against_inputs(
