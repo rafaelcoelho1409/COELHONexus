@@ -27,6 +27,9 @@ def normalize_doc(
     text, n_bound = _boundary_pass(text)
     stats.boundary_markers_stripped = n_bound
 
+    text, n_hoisted = _hoist_nested_fences_pass(text)
+    stats.nested_fences_hoisted = n_hoisted
+
     text, n_meta, n_admon, n_orphan = _token_aware_passes(text)
     stats.fence_meta_stripped       = n_meta
     stats.container_admonitions     = n_admon
@@ -104,6 +107,62 @@ def _identify_fence_ranges(text: str) -> list[tuple[int, int, int]]:
         ranges.append((start, end, kind))
     ranges.sort()
     return ranges
+
+
+def _hoist_nested_fences_pass(text: str) -> tuple[str, int]:
+    """Dedent fenced blocks CommonMark can't see so the vault can.
+
+    Sphinx autodoc pages put every code example inside a `<dd>`, which
+    markdownify renders as a `:   ` definition-list body with all lines —
+    fences included — indented 4 spaces. CommonMark has no definition lists,
+    so those fences parse as indented code/paragraph text, never as `fence`
+    tokens: the vault saw nothing, the writer got no code, and whole chapters
+    shipped prose-only (confirmed 2026-10-03: asyncio 0/18 code refs,
+    elasticsearch-python 0/102). Only blocks the parser did NOT already
+    recognise are touched — fences inside list items etc. are left in place.
+    The block is dedented by its opener's indent and set off by blank lines;
+    the dd prose around it keeps its indentation. Idempotent."""
+    recognised: set[int] = set()
+    for (open_idx, close_idx, _) in _identify_fence_ranges(text):
+        recognised.update(range(open_idx, close_idx))
+
+    lines = text.split("\n")
+    out: list[str] = []
+    n = 0
+    i = 0
+    while i < len(lines):
+        m = None if i in recognised else patterns.INDENTED_FENCE_OPEN_RE.match(lines[i])
+        if m is None or (m.group("fence")[0] == "`" and "`" in m.group("info")):
+            out.append(lines[i])
+            i += 1
+            continue
+        indent, fence = m.group("indent"), m.group("fence")
+        close = None
+        for j in range(i + 1, len(lines)):
+            body = lines[j]
+            if not body.strip():
+                continue
+            if not body.startswith(indent):
+                break    # not uniformly nested — leave untouched
+            inner = body[len(indent):].rstrip()
+            if inner and set(inner) == {fence[0]} and len(inner) >= len(fence):
+                close = j
+                break
+        if close is None:
+            out.append(lines[i])
+            i += 1
+            continue
+        if out and out[-1].strip():
+            out.append("")
+        out.extend(
+            ln[len(indent):] if ln.startswith(indent) else ln.strip()
+            for ln in lines[i:close + 1]
+        )
+        if close + 1 < len(lines) and lines[close + 1].strip():
+            out.append("")
+        n += 1
+        i = close + 1
+    return "\n".join(out), n
 
 
 def _strip_fence_info_string(info: str) -> tuple[str, bool]:

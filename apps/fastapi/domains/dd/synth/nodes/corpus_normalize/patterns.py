@@ -82,3 +82,9 @@ PERMALINK_LEADING_RE = re.compile(r"^\s*\[[¶\ue000-\uf8ff]?\]\(#[^)]*\)\s*")
 
 # Zero-width + BOM + miscellaneous formatting chars.
 ZERO_WIDTH_RE = re.compile(r"[​‌‍⁠﻿]")
+
+# Opener of a fenced block that sits behind ≥1 space/tab of indentation —
+# markdownify nests `<pre>` inside Sphinx `<dd>` bodies as `:   ` definition-list
+# content, i.e. 4 spaces of indent, which CommonMark reads as an indented code
+# block / paragraph continuation instead of a fence (see `_hoist_nested_fences_pass`).
+INDENTED_FENCE_OPEN_RE = re.compile(r"^(?P<indent>[ \t]+)(?P<fence>`{3,}|~{3,})(?P<info>.*)$")

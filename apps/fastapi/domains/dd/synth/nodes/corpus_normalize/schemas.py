@@ -15,6 +15,7 @@ class NormalizeStats(BaseModel):
     orphan_tags_stripped:       int  = 0
     container_admonitions:      int  = 0
     permalink_debris_stripped:  int  = 0
+    nested_fences_hoisted:      int  = 0
     frontmatter_extracted:      bool = False
     html_entities_decoded:      int  = 0
     blank_lines_collapsed:      int  = 0

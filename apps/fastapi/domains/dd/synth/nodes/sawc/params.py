@@ -6,7 +6,7 @@ from __future__ import annotations
 # each Subtopic is a 1:1 pair of (explanation, code block).
 SUBTOPICS_MIN = 3
 SUBTOPICS_MAX = 12
-SUBHEADING_MIN_WORDS = 2
+SUBHEADING_MIN_WORDS = 1    # API-reference subtopics are named by a bare identifier ('asyncio.BoundedSemaphore') — a 2-word floor rejected whole drafts over it
 SUBHEADING_MAX_WORDS = 10
 EXPLANATION_WORDS_MIN = 8
 EXPLANATION_WORDS_MAX = 80

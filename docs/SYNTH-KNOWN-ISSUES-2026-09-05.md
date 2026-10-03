@@ -5,6 +5,18 @@ Found by direct log/artifact inspection of all 11 chapters of the
 (`docs-distiller/study/claude-code/59353d70-e1ef-4d06-9708-947b1273017f`),
 now complete.
 
+## ✅ 23. Sphinx autodoc corpora (asyncio, elasticsearch-python) synthesized with zero code — fences nested in definition lists were invisible to the vault — FIXED 2026-10-03
+
+**Severity: high — every Sphinx autodoc source lost most or all of its code excerpts; chapters shipped prose-only with `0/0 code_refs`.**
+
+Not a regression from #22 (the pre-#22 elasticsearch-python run already logged `visible vault loaded — 0 entries across 102 sources`). markdownify renders Sphinx `<dd>` bodies as `:   ` definition-list content, so every `<pre>` inside — fences included — is indented 4 spaces. The code *is* in the stored pages, but `sentinelize_doc` (CommonMark, no deflist support) parses those as indented code/paragraph text, never `fence` tokens → vault empty → no `<code-ref>` for digest/sawc to route → no code in the chapter. Measured on stored pages: asyncio 29 vault entries of ~76 real blocks; elasticsearch-python 0 of ~100; fence-at-column-0 corpora (langgraph, deepagents, qdrant, opentelemetry-python, neo4j-python) unaffected.
+
+**Fixed:** new `corpus_normalize` pass `_hoist_nested_fences_pass` (NORMALIZER_VERSION 3→4) dedents any fenced block CommonMark did not already recognise (opener indented, matching closer at the same indent) to column 0, set off by blank lines. Recognised fences (list items etc.) are never touched; idempotent; 0 hoists on the five column-0 corpora. Replayed on stored pages: asyncio 29→76 vault entries, elasticsearch-python 0→27 on a 176-page sample. Also `SUBHEADING_MIN_WORDS` 2→1 — `sawc_write` rejected a draft whose subtopic was named by a bare identifier (`asyncio.BoundedSemaphore`), same class as #22's heading floor.
+
+**To apply to existing corpora:** redeploy, then per affected slug run `backfill_normalize_for_framework` (rewrites pages + rebuilds vaults, same command shape as #22) for `asyncio`, `elasticsearch-python`, and any other Sphinx-sourced slug, then wipe that slug's Synth output and re-run — Resume would skip chapters whose old render passed its audit.
+
+---
+
 ## ✅ 22. ElasticSearch (Python) `ch-01` shipped `needs_review` with an empty section — outline fell back to a heuristic whose headings were permalink debris — FIXED 2026-10-03
 
 **Severity: medium — 18/19 chapters passed; one chapter's whole outline was junk, and the junk was cached.**
