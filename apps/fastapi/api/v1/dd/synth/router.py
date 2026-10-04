@@ -108,9 +108,19 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
             try:
                 text = await minio.read_text(render_key)
                 rp = json.loads(text)
+                if domains.dd.synth.nodes.render.domain.render_is_stale(rp, ch):
+                    # Built under an older plan: don't present it as this chapter.
+                    entry["rendered"] = False
+                    entry["render_path"] = None
+                    entry["stale"] = True
+                    out.append(entry)
+                    continue
                 entry["audit_passed"] = bool(
                     (rp.get("audit") or {}).get("audit_passed", False)
                 )
+                for _k in ("n_sources_cited", "n_code_available", "n_code_used"):
+                    if _k in rp:
+                        entry[_k] = rp[_k]
                 entry["rendered_chars"] = rp.get("rendered_chars", 0)
                 entry["n_sections"] = rp.get("n_sections", 0)
                 entry["thread_id"] = rp.get("thread_id") or None
@@ -769,16 +779,75 @@ async def synth_history(thread_id: str) -> dict:
     return {"thread_id": thread_id, "history": history}
 
 
+async def _wipe_one_chapter(slug: str, chapter_id: str) -> dict:
+    """Delete ONE chapter's MinIO outputs + caches (synth/{slug}/{chapter_id}/) so a
+    single-chapter run recomputes it from scratch — without it a rerun just hits
+    the chapter's cached outline/digest/sawc blobs, and a full wipe means redoing
+    every chapter. MinIO only: Postgres checkpoints / Redis snapshots belong to
+    run threads, not chapters, and the rest of the study stays intact."""
+    if (
+        not chapter_id or "/" in chapter_id or ".." in chapter_id
+        or not chapter_id.startswith("ch-")
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid chapter_id {chapter_id!r}; expected 'ch-…' without slashes",
+        )
+    # Never delete outputs a running study is still writing.
+    try:
+        r = redis_aio.from_url(
+            domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        )
+        try:
+            running = await r.get(domains.dd.synth.keys.active_study_key(slug))
+        finally:
+            await r.aclose()
+        if running:
+            raise HTTPException(
+                status_code=409,
+                detail=f"a study for {slug!r} is running — cancel it before wiping a chapter",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[synth-wipe] {slug}/{chapter_id}: active-study check skipped ({type(e).__name__})")
+
+    minio = domains.dd.ingestion.storage.service.get_storage()
+    try:
+        n_minio = await minio.delete_prefix(f"synth/{slug}/{chapter_id}/")
+    except Exception as e:
+        logger.warning(f"[synth-wipe] MinIO delete failed for {slug}/{chapter_id}: {e}")
+        n_minio = -1
+
+    # Keep the persisted timing roll-up consistent with the chapter being gone.
+    try:
+        tkey = domains.dd.synth.keys.study_timing_key(slug)
+        t = json.loads(await minio.read_text(tkey))
+        gone = int((t.get("per_chapter_ms") or {}).pop(chapter_id, 0) or 0)
+        if gone:
+            t["total_wall_ms"] = max(int(t.get("total_wall_ms") or 0) - gone, 0)
+            await minio.write(tkey, json.dumps(t, indent = 2), content_type = "application/json")
+    except Exception:
+        pass
+
+    logger.info(f"[synth-wipe] {slug}/{chapter_id}: minio={n_minio} blobs")
+    return {"slug": slug, "chapter_id": chapter_id, "minio_deleted": n_minio}
+
+
 @router.delete("/{slug}/wipe")
-async def wipe_synth(slug: str) -> dict:
+async def wipe_synth(slug: str, chapter_id: str | None = Query(default=None)) -> dict:
     """Wipes MinIO synth/{slug}/, Postgres checkpoints for synth+study
     threads, Redis SSE snapshots + lock. Without the Redis sweep a wiped
-    slug "comes back from the dead" via the cached study SSE snapshot."""
+    slug "comes back from the dead" via the cached study SSE snapshot.
+    With `chapter_id`, wipes only that chapter's MinIO outputs (see
+    `_wipe_one_chapter`)."""
     if not slug or "/" in slug:
         raise HTTPException(
             status_code=400,
             detail=f"invalid slug {slug!r}; slashes not allowed",
         )
+    if chapter_id is not None:
+        return await _wipe_one_chapter(slug, chapter_id)
 
     minio = domains.dd.ingestion.storage.service.get_storage()
     try:

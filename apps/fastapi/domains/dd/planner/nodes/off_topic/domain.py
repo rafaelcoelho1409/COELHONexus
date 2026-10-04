@@ -1,6 +1,6 @@
 """off_topic pure helpers (verdict parser); prompt strings + head+tail prep in prompts.py."""
 from __future__ import annotations
-from . import patterns
+from . import params, patterns
 
 
 def parse_verdict(text: str) -> bool | None:
@@ -30,6 +30,21 @@ def parse_verdict(text: str) -> bool | None:
     if not matches:
         return None
     return matches[-1].upper() == "KEEP"
+
+
+def reference_page_keys(entries: list[dict]) -> set[str]:
+    """Doc keys that are virtual sub-pages of a reference page: they carry
+    anchors, and their parent page (URL without fragment) produced at least
+    REFERENCE_MIN_SIBLINGS such sub-pages. Pure; `entries` are manifest entries."""
+    parent = lambda e: (e.get("url") or "").split("#", 1)[0]
+    anchored = [e for e in entries if e.get("key") and e.get("anchors") and parent(e)]
+    siblings: dict[str, int] = {}
+    for e in anchored:
+        siblings[parent(e)] = siblings.get(parent(e), 0) + 1
+    return {
+        e["key"] for e in anchored
+        if siblings[parent(e)] >= params.REFERENCE_MIN_SIBLINGS
+    }
 
 
 def aggregate_verdicts(

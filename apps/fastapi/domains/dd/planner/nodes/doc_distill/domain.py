@@ -85,6 +85,70 @@ def build_fallback_distillate(source_key: str, body: str) -> schemas.DocDistilla
     )
 
 
+def _clip_summary(summary: str) -> str:
+    """Whitespace-collapse; over-long → the longest leading run of whole sentences within SUMMARY_WORDS_MAX words (if it still has ≥ SUMMARY_WORDS_MIN), else a hard clip at the limit."""
+    words = " ".join((summary or "").split()).split()
+    if len(words) <= params.SUMMARY_WORDS_MAX:
+        return " ".join(words)
+    head = " ".join(words[:params.SUMMARY_WORDS_MAX])
+    ends = [m.end() for m in re.finditer(r"[.!?](?=\s|$)", head)]
+    if ends and len(head[:ends[-1]].split()) >= params.SUMMARY_WORDS_MIN:
+        return head[:ends[-1]]
+    return head.rstrip(",;:- ")
+
+
+def normalize_distillate(
+    summary: str, key_terms: list[str], source_key: str, body: str,
+) -> schemas.DocDistillate:
+    """Normalize-then-validate for the LLM's distillate: clip an over-long
+    summary, top up a too-short one and a key-term shortfall from the doc itself
+    (identifier tokens, then title words — the same sources the deterministic
+    fallback uses), so a near-miss keeps the model's actual content. Output
+    always satisfies `DocDistillate`; anything unfixable raises for the caller's
+    fallback."""
+    title = doc_title(source_key, body)
+    clipped = _clip_summary(summary)
+    words = clipped.split()
+    if len(words) < params.SUMMARY_WORDS_MIN:
+        if not words:
+            raise ValueError("empty summary")
+        words += f"(from {title})".split()
+        if len(words) < params.SUMMARY_WORDS_MIN:
+            words += "in the official documentation".split()
+    clipped = " ".join(words[:params.SUMMARY_WORDS_MAX])
+
+    terms: list[str] = []
+    seen: set[str] = set()
+
+    def _add(t: str) -> None:
+        t = " ".join((t or "").strip().split())
+        if (
+            params.KEY_TERM_CHARS_MIN <= len(t) <= params.KEY_TERM_CHARS_MAX
+            and t.casefold() not in seen and len(terms) < params.KEY_TERMS_MAX
+        ):
+            seen.add(t.casefold())
+            terms.append(t)
+
+    for t in key_terms or []:
+        _add(t)
+    if len(terms) < params.KEY_TERMS_MIN:
+        for tok in patterns.FB_IDENT_RE.findall(body or ""):
+            if tok.lower() not in params.FB_STOP:
+                _add(tok)
+            if len(terms) >= params.KEY_TERMS_MIN:
+                break
+    if len(terms) < params.KEY_TERMS_MIN:
+        for w in title.split():
+            _add(w)
+            if len(terms) >= params.KEY_TERMS_MIN:
+                break
+    for g in ("overview", "reference", "guide"):
+        if len(terms) >= params.KEY_TERMS_MIN:
+            break
+        _add(g)
+    return schemas.DocDistillate(summary = clipped, key_terms = terms)
+
+
 def manifest_hash(*, slug: str, relevant_files: list[str]) -> str:
     h = sha256()
     h.update(versions.PROMPT_VERSION.encode())

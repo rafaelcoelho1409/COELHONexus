@@ -53,3 +53,11 @@ NEGATIVE_DESCRIPTOR = (
     "changelog dumps, release notes, generated index pages with no real "
     "teaching content, license text, governance policies, blog posts."
 )
+
+# API-reference pages are on-topic by construction: virtual sub-pages (one per
+# documented class/function/section, split out of a framework's own reference
+# page) are never sent to the relevance judge. A parent page must yield at least
+# this many such sub-pages to count as a reference page. Measured: every doc the
+# judge dropped on elasticsearch-python (7: Exceptions & Warnings, Autoscaling)
+# and asyncio (1: asyncio.wrap_future) was one of these.
+REFERENCE_MIN_SIBLINGS = 4

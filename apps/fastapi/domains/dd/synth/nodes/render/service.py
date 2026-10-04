@@ -496,6 +496,15 @@ async def render_audit_write_run(state: domains.dd.synth.state.SynthState) -> di
         rendered_chapter_md = chapter_md,
     )
 
+    coverage = domain.coverage_metrics(
+        sections, source_keys, len(vault), len(audit.n_orphan_unused),
+    )
+    logger.info(
+        f"[render_audit_write] {slug}/{chapter_id}: coverage — cited "
+        f"{coverage['n_sources_cited']}/{coverage['n_sources_total']} sources, "
+        f"{coverage['n_code_used']}/{coverage['n_code_available']} code blocks used"
+    )
+
     # CONTENT-PRESENT GATE: empty sections (0 subtopics) pass byte-audit since they have no code refs — masked ch-07/ch-08. Fail audit explicitly so Study sidebar shows not-ready.
     n_placeholder_sections = sum(
         1 for s in sections_ctx if not (s.get("subtopics"))
@@ -546,6 +555,20 @@ async def render_audit_write_run(state: domains.dd.synth.state.SynthState) -> di
         artifact_names = [a.name for a in artifacts],
     )
 
+    # Fingerprint of the plan chapter this render was built from (fail-soft: a
+    # missing/unreadable plan just leaves it empty, i.e. "valid").
+    plan_hash = ""
+    try:
+        plan = json.loads(await minio.read_text(keys.planner_latest_key(slug)))
+        plan_hash = domain.plan_sources_hash(
+            domains.dd.synth.nodes.outline.domain.find_chapter(plan, chapter_id),
+        )
+    except Exception as e:
+        logger.info(
+            f"[render_audit_write] {slug}/{chapter_id}: plan fingerprint "
+            f"unavailable ({type(e).__name__}) — render stays unfingerprinted"
+        )
+
     elapsed = int((time.monotonic() - t0) * 1000)
     result = schemas.RenderResult(
         chapter_id = chapter_id,
@@ -563,6 +586,8 @@ async def render_audit_write_run(state: domains.dd.synth.state.SynthState) -> di
         wall_ms = elapsed,
         # Must pass explicitly — schema default "" causes chapters API to return None, breaking LangGraph canvas repaint after page refresh.
         thread_id = thread_id,
+        plan_sources_hash = plan_hash,
+        **coverage,
     )
     payload = result.model_dump()
     blob_bytes = json.dumps(payload, indent = 2, ensure_ascii = False)
@@ -589,6 +614,7 @@ async def render_audit_write_run(state: domains.dd.synth.state.SynthState) -> di
         "n_vault_files_loaded":  n_loaded,
         "n_vault_files_skipped": n_skipped,
         "n_vault_entries":       len(vault),
+        **coverage,
         "wall_ms":               elapsed,
         "store_path":            latest_key,
         "versioned_path":        versioned_key,

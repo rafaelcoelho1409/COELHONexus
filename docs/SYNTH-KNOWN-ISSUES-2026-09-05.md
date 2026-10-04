@@ -5,6 +5,33 @@ Found by direct log/artifact inspection of all 11 chapters of the
 (`docs-distiller/study/claude-code/59353d70-e1ef-4d06-9708-947b1273017f`),
 now complete.
 
+## ✅ 26. Assessment of the asyncio re-run (12/12 `done`) — four follow-ups — FIXED 2026-10-04
+
+Findings: all audits passed, 72/72 README code blocks byte-exact from the vault, 0 unsupported API tokens in prose (108 checked), 0 picker fallbacks (59 before). Gaps: `ch-02` (16 sources) collapsed to one section citing 3/16 sources yet scored 93%; Policies/Queues shipped no code though 2 + 1 blocks were captured (the "<3 blocks → prose" rule; fixed by #25's mixed mode, not yet deployed when the run happened); Extending has no code because its live page has none; every fence was bare (0/146 tagged).
+
+1. **Per-chapter wipe** — `DELETE /synth/{slug}/wipe?chapter_id=ch-…` deletes only `synth/{slug}/{chapter_id}/` (+ that chapter's timing entry). Needed because a plain re-run hits the chapter's cached outline/digest/sawc blobs and would return the old prose; the alternative was a full 32-min re-run. Refuses (409) while a study is running; rejects malformed ids (400); `ch-1` can't touch `ch-10`. Behavior without the parameter is unchanged.
+2. **`code_density_appropriate` waived for chapters whose sources contain no code** (digest `n_total_vault_hashes == 0`); an absent signal (older digest) keeps the old behavior. Chapters with code but unused (Policies, Queues) still fail it, correctly.
+3. **Informational coverage metrics** in `render-latest.json`, the render log line and the chapter list: `n_sources_cited/total`, `n_code_used/available`. Never scored — no pass/fail change; collect data across frameworks before promoting to criteria (a `ch-02`-style chapter should trigger a re-draft, but the threshold needs evidence).
+4. **Code fences carry their language.** `html_to_markdown` (tiers 2/3/4) now tags `<pre>` blocks from `highlight-<lang>` / `language-<lang>` / `highlight-source-<lang>` / `data-language`; Sphinx's `highlight-default` ("python3, else none") is sniffed (`>>>` → `pycon`; parses with real statements/calls → `python`; JSON/prose stay untagged). Measured on live pages: asyncio-task 33/34, requests 36/36, ES-py esql 28/32, Docusaurus 64/72, Pydantic 46/46; FastAPI's MkDocs build has no language markup and stays untagged. Applies to future ingestions only (stored corpora unchanged); a re-ingest changes vault hashes.
+
+To re-run just the two code-less asyncio chapters after deploying: `DELETE …/synth/asyncio/wipe?chapter_id=<id>` then `POST …/synth/asyncio?chapter_id=<id>`.
+
+---
+
+## ✅ 25. Follow-ups after the asyncio re-run (12/12 `done`, 73 code refs vs 10) — stale renders, 1–2-block sections, false off-topic drops, partial score vectors, rejected near-miss summaries — FIXED 2026-10-04
+
+Each change is failure-path-only, additive, or backward compatible; blast radius was replayed read-only against every stored corpus/plan before shipping.
+
+1. **Stale-render guard.** `render-latest.json` now carries `plan_sources_hash` (title + sorted sources of the plan chapter). Resume (`_run_study_async_inner`) and the Study chapter list treat a render whose hash differs from the current plan as stale (re-run / `stale: true, rendered: false`). Renders without the field (everything existing) stay valid — no existing study changes. Also fixed a misleading relevance log line (`0 block(s) matched`).
+2. **Mixed code/prose mode.** A section with 1–2 usable code blocks (bank < `SUBTOPICS_MIN`) was forced fully prose, dropping the only examples (asyncio Queues: 1 block, Policies: 2 → both chapters shipped with no code). Now `mixed_mode`: one subtopic anchored to each block, the rest prose. Sections with 0 routed blocks stay prose; sections with ≥3 stay code-first — only the 1–2-block case changes.
+3. **Reference pages skip the off-topic judge.** Virtual sub-pages of a reference page (manifest `anchors`, ≥4 siblings per parent URL) are on-topic by construction. All 8 pages the judge ever dropped on elasticsearch-python (7) and asyncio (1) were such pages. Replay: only asyncio changes (judge calls 104→11); every other stored framework has 0 such pages. Non-reference docs are still judged (verified with a fake judge: changelog still dropped).
+4. **Incomplete score vectors are re-asked** (corrected plan — all-zero is *not* a failure signal: it is deterministic and mostly legitimate, e.g. namespaces with no proposed chapter; consolidation already places those). The failure is a model scoring only some chapters: elasticsearch-python 12/694 docs (16 of 30), fastmcp 21/351, langfuse 30/310, qdrant 21/367, none on the ≤14-proposal plans. One reask, keep the original if no more complete.
+5. **Distillates normalize instead of reject.** The LLM now emits a lenient `DocDistillateRaw`; `normalize_distillate` clips an over-long summary at a sentence boundary, tops up a short one / a key-term shortfall from the doc's own identifiers and title. Before, a 64-word summary or 2 usable terms was thrown away for a content-free fallback — and because the chat layer wraps the `ValidationError` in a `ChatError`, the existing repair retry never ran. For healthy output the result is identical to the strict validator (399/399 comparable random samples).
+
+Not shipped: chapter-order hint from the source site's page order and the "introduction chapter" rescue — their effect on healthy plans can't be replayed offline.
+
+---
+
 ## ✅ 24. ES (Python) / asyncio audit — seven fixes: lost pages, torn namespaces, dropped examples, wrapper fences, dead picker, invented hashes, prose-only sections — FIXED 2026-10-04
 
 Assessment of the elasticsearch-python and asyncio runs. Most code-less ES chapters are correct (the read-the-docs reference has 148 code blocks across 641 pages, 86% in three chapters); the rest traced to these defects, each fixed and replay-tested on the stored data:

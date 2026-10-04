@@ -41,9 +41,11 @@ def build_repair_prompt(
     current_json: str,
     issues: list[str],
     prose_mode: bool = False,
+    mixed_mode: bool = False,
 ) -> str:
     """Repair prompt: same context as writer + issue list, requesting a corrected output. Wrapped in a LangFuse-managed-override layer (falls back to this local body when no template is published)."""
-    prose = prose_mode or not allowed_hashes
+    mixed = bool(mixed_mode) and bool(allowed_hashes) and not prose_mode
+    prose = (prose_mode or not allowed_hashes) and not mixed
     prereqs_str = (
         ", ".join(section_prerequisites)
         if section_prerequisites else "(none)"
@@ -56,6 +58,11 @@ def build_repair_prompt(
         else (
             "\n".join(f"  - {h}" for h in allowed_hashes)
             if allowed_hashes else "  (none)"
+        ) + (
+            "\n  MIXED MODE: use each hash above in exactly ONE subtopic; every "
+            "other subtopic is prose — code_ref_hash \"\" (empty). Keep ≥3 "
+            "subtopics in total."
+            if mixed else ""
         )
     )
     source_list = (
@@ -63,6 +70,12 @@ def build_repair_prompt(
         if valid_source_keys else "  (none)"
     )
     issues_block = "\n".join(f"- {x}" for x in issues)
+    if prose:
+        code_hash_hint = ""
+    elif mixed:
+        code_hash_hint = '16-hex, or "" for a prose subtopic'
+    else:
+        code_hash_hint = "16-hex"
     return (
         f"Fix structural issues in this cookbook-schema section draft. "
         f"Keep the same v2 schema (heading + intro + subtopics + citations). "
@@ -95,7 +108,7 @@ def build_repair_prompt(
         f'  "intro": "1-2 sentence section framing",\n'
         f'  "subtopics": [\n'
         f'    {{"subheading": "2-10 words", "explanation": "8-80 words", '
-        f'"code_ref_hash": "{"" if prose else "16-hex"}"}},\n'
+        f'"code_ref_hash": "{code_hash_hint}"}},\n'
         f'    ... 3-12 entries ...\n'
         f'  ],\n'
         f'  "citations": [{{"source_key": "...", "claim": "..."}}, ...]\n'
@@ -198,6 +211,7 @@ async def _write_section_best_of_n(
     chapter_title: str,
     thread_id: str,
     prose_mode: bool = False,
+    mixed_mode: bool = False,
     already_shown_hashes: set[str] | None = None,
     citation_fallback: bool = False,
     prior_feedback: list[str] | None = None,
@@ -225,6 +239,7 @@ async def _write_section_best_of_n(
                 n_primary_contribs=n_primary_contribs,
                 vault_rich=vault_rich,
                 prose_mode=prose_mode,
+                mixed_mode=mixed_mode,
                 already_shown_hashes=already_shown_hashes,
                 prior_feedback=prior_feedback,
             )
@@ -410,6 +425,7 @@ async def _draft_one_section(
     n_primary_contribs: int,
     vault_rich: dict | None = None,
     prose_mode: bool = False,
+    mixed_mode: bool = False,
     already_shown_hashes: set[str] | None = None,
     prior_feedback: list[str] | None = None,
 ) -> tuple[Optional[schemas.LLMSectionDraft], Optional[str], int, int, Optional[str]]:
@@ -438,6 +454,7 @@ async def _draft_one_section(
             n_primary_contribs=n_primary_contribs,
             vault_rich=vault_rich,
             prose_mode=prose_mode,
+                mixed_mode=mixed_mode,
             already_shown_hashes=already_shown_hashes,
             vault_char_budget=vault_char_budget,
             prior_feedback=prior_feedback,
@@ -529,6 +546,7 @@ async def _draft_one_section(
             current_json=json.dumps(current, indent=2),
             issues=issues,
             prose_mode=prose_mode,
+                mixed_mode=mixed_mode,
         )
         try:
             rr, rm = await domains.settings.chat.service.chat_text_async(
@@ -589,6 +607,7 @@ async def _draft_one_section(
             current_json=json.dumps(draft.model_dump(), indent=2),
             issues=issues,
             prose_mode=prose_mode,
+                mixed_mode=mixed_mode,
         )
         try:
             rr, rm = await domains.settings.chat.service.chat_text_async(
@@ -1159,11 +1178,12 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
                     relevant = relevant[:_BANK_PAD_TO - n_routed_hashes]
                     allowed_hashes_set.update(relevant)
                     n_routed_hashes += len(relevant)
-                    logger.info(
-                        f"[sawc_write] {sid}: digest routed few/no code blocks; "
-                        f"{len(relevant)} chapter-wide block(s) matched this "
-                        f"section by relevance → bank {len(allowed_hashes_set)}"
-                    )
+                    if relevant:
+                        logger.info(
+                            f"[sawc_write] {sid}: digest routed few/no code blocks; "
+                            f"{len(relevant)} chapter-wide block(s) matched this "
+                            f"section by relevance → bank {len(allowed_hashes_set)}"
+                        )
             if vault_rich and len(allowed_hashes_set) < _MIN_BANK_SIZE:
                 chapter_wide = list(vault_rich.keys())
                 ranked_chapter = domains.dd.synth.nodes.vault.domain.rank_hashes_by_pedagogy(
@@ -1207,7 +1227,12 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
                     f"({len(valid_source_keys)} sources) for citations"
                 )
             # PROSE PATH: gate on pre-pad n_routed_hashes (not padded bank) so a no-code section with stray chapter hashes stays prose instead of failing to placeholder.
-            prose_mode = (n_routed_hashes == 0) or (len(allowed_hashes) < params.SUBTOPICS_MIN)
+            prose_mode = n_routed_hashes == 0
+            # 1-2 code blocks (fewer than SUBTOPICS_MIN): used to force the whole
+            # section prose and drop the only examples there are (asyncio Queues:
+            # 1 block, Policies: 2 — both chapters shipped with no code). Mixed
+            # mode anchors a subtopic to each block and fills the rest with prose.
+            mixed_mode = (not prose_mode) and len(allowed_hashes) < params.SUBTOPICS_MIN
             return await _write_section_best_of_n(
                 sem = sem,
                 section_id = sid,
@@ -1227,6 +1252,7 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
                 chapter_title = chapter_title,
                 thread_id = thread_id,
                 prose_mode = prose_mode,
+                mixed_mode = mixed_mode,
                 already_shown_hashes = set(chapter_used_hashes),
                 citation_fallback = citation_fallback,
                 prior_feedback = prior_feedback,

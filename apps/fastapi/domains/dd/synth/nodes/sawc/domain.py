@@ -577,11 +577,12 @@ def build_writer_prompt(
     n_primary_contribs: int,
     vault_rich: dict | None = None,
     prose_mode: bool = False,
+    mixed_mode: bool = False,
     already_shown_hashes: set[str] | None = None,
     vault_char_budget: int | None = None,
     prior_feedback: list[str] | None = None,
 ) -> str:
-    """Build the per-section writer prompt. vault_rich enables Visible Vault (LLM sees code bodies; hash-only listing otherwise). prose_mode=True when bank is empty (prose subtopics instead of placeholder). already_shown_hashes suppresses cross-section hash recycling. vault_char_budget overrides MAX_VAULT_CHARS_TOTAL — used to retry at a smaller budget after a context-overflow failure. prior_feedback: checklist's failed-criteria feedback strings from the PREVIOUS RETHINK iteration — closes the self-refine loop (arXiv 2303.17651 requires critique to inform regeneration; before this, a RETHINK iteration reran blind with zero signal about what was actually wrong, which is why some iterations regressed instead of improving)."""
+    """Build the per-section writer prompt. mixed_mode=True when the code bank holds only 1-2 blocks (fewer than SUBTOPICS_MIN): the writer anchors one subtopic to each block and fills the rest with prose, instead of the section going fully prose and dropping the only examples there are. Original notes follow. vault_rich enables Visible Vault (LLM sees code bodies; hash-only listing otherwise). prose_mode=True when bank is empty (prose subtopics instead of placeholder). already_shown_hashes suppresses cross-section hash recycling. vault_char_budget overrides MAX_VAULT_CHARS_TOTAL — used to retry at a smaller budget after a context-overflow failure. prior_feedback: checklist's failed-criteria feedback strings from the PREVIOUS RETHINK iteration — closes the self-refine loop (arXiv 2303.17651 requires critique to inform regeneration; before this, a RETHINK iteration reran blind with zero signal about what was actually wrong, which is why some iterations regressed instead of improving)."""
     prior_feedback_block = ""
     if prior_feedback:
         feedback_lines = "\n".join(f"  - {fb}" for fb in prior_feedback[:8])
@@ -599,7 +600,8 @@ def build_writer_prompt(
     )
     # A section with an empty code bank is a conceptual/prose topic — write
     # prose subtopics rather than failing to an empty placeholder.
-    prose = prose_mode or not allowed_hashes
+    mixed = bool(mixed_mode) and bool(allowed_hashes) and not prose_mode
+    prose = (prose_mode or not allowed_hashes) and not mixed
 
     already_shown_hashes = already_shown_hashes or set()
     shown_here = sorted(h for h in (already_shown_hashes or set()) if h)
@@ -664,7 +666,32 @@ def build_writer_prompt(
     )
 
     # Prose vs code-first: build the bank section + a top-of-prompt directive.
-    if prose:
+    if mixed:
+        n_bank = len(allowed_hashes)
+        prose_note = (
+            f"🟨 MIXED MODE — this section's code bank has only {n_bank} "
+            f"block(s), too few for a code-first section. Anchor ONE subtopic "
+            f"to EACH bank block (code_ref_hash = that block's hash). Every "
+            f"OTHER subtopic is PROSE (code_ref_hash \"\"), so the section "
+            f"still has ≥3 DISTINCT subtopics. The CODE-FIRST rules below "
+            f"(unique hash, identifier grounding, no embellishment) apply ONLY "
+            f"to the subtopics you anchor to a bank block; the 'at least 3 "
+            f"subtopics' floor is met by the prose ones.\n\n"
+        )
+        bank_section = (
+            f"== CODE BANK — {n_bank} block(s); use EACH in exactly one "
+            f"subtopic ==\n"
+            f"{hash_list}\n\n"
+            f"== PROSE SUBTOPICS — everything beyond the bank ==\n"
+            f"Emit 3-6 subtopics in total. Anchored subtopic: code_ref_hash = "
+            f"the block's hash, a subheading naming what THAT block shows, and "
+            f"an 8-80 word explanation citing ≥1 identifier visible in it — "
+            f"describe ONLY what the block shows. Every other subtopic: "
+            f"code_ref_hash \"\" (EMPTY) and a substantial 40-80 word "
+            f"explanation grounded in the contributions + citations (no "
+            f"invented specifics).\n"
+        )
+    elif prose:
         prose_note = (
             "🟦 PROSE MODE — this section's sources have NO code; it is a "
             "CONCEPTUAL topic. The CODE-FIRST rules below (pick a hash first, "

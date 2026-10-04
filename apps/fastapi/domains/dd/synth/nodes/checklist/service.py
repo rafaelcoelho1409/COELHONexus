@@ -936,10 +936,17 @@ async def checklist_eval_run(state: domains.dd.synth.state.SynthState) -> dict:
                 f"recomputing"
             )
 
+    # Signal for the checks only (not persisted): does this chapter's source
+    # material contain ANY code block? None when the digest predates the field.
+    _n_vault = digest.get("n_total_vault_hashes")
+    sawc_for_checks = {
+        **sawc,
+        "_chapter_has_code": (int(_n_vault) > 0) if isinstance(_n_vault, (int, float)) else None,
+    }
     pre_results: list[schemas.CriterionResult] = []
     for fn in domain.DETERMINISTIC_CHECKS:
         try:
-            pre_results.append(fn(sawc))
+            pre_results.append(fn(sawc_for_checks))
         except Exception as e:
             logger.warning(
                 f"[checklist_eval] pre-gate {fn.__name__} crashed: "

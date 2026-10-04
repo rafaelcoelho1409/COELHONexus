@@ -147,7 +147,13 @@ async def _normalize_one(
             s = domains.dd.ingestion.storage.service.get_storage()
             body = await s.read_text(page_key_str)
             normalized = domains.dd.synth.nodes.corpus_normalize.domain.normalize_doc(body).body
-            changed = normalized != body
+            # A trailing-whitespace-only difference is not worth rewriting a
+            # page for: it changes the page's bytes — and with them every
+            # downstream cache key (the outline manifest hash includes source
+            # bytes) — without changing a character of content. Measured on
+            # fastmcp: 334 of its 355 "changed" pages differed only by a final
+            # newline, which would have invalidated a finished study's caches.
+            changed = normalized.rstrip() != body.rstrip()
             # Raw always preserved. Only seed it when absent: a page ingested
             # after the add_page hook already has its true raw body there, and
             # `body` here is the (previously normalized) stored copy — writing
@@ -159,20 +165,23 @@ async def _normalize_one(
                 await s.write(
                     page_key_str, normalized, content_type = "text/markdown",
                 )
-            # Vault rebuild on normalized body — existing vault was hashed
-            # against raw, so post-normalize it's stale.
-            sentinelized, manifest = domains.dd.synth.nodes.vault.domain.build_manifest(
-                framework = slug, source_key = page_key_str, md_text = normalized,
-            )
-            vk = domains.dd.ingestion.storage.keys.vault_manifest_key(slug, idx, page_slug)
-            sk = domains.dd.ingestion.storage.keys.vault_sentinelized_key(slug, idx, page_slug)
-            await asyncio.gather(
-                s.write(
-                    vk, manifest.model_dump_json(),
-                    content_type = "application/json",
-                ),
-                s.write(sk, sentinelized, content_type = "text/markdown"),
-            )
+            # Vault rebuild on the normalized body — an existing vault was hashed
+            # against the old text, so it is stale once the page changed. An
+            # unchanged page that already has its vault is left untouched.
+            if changed or not await _vault_exists(slug, idx, page_slug):
+                sentinelized, manifest = domains.dd.synth.nodes.vault.domain.build_manifest(
+                    framework = slug, source_key = page_key_str,
+                    md_text = normalized if changed else body,
+                )
+                vk = domains.dd.ingestion.storage.keys.vault_manifest_key(slug, idx, page_slug)
+                sk = domains.dd.ingestion.storage.keys.vault_sentinelized_key(slug, idx, page_slug)
+                await asyncio.gather(
+                    s.write(
+                        vk, manifest.model_dump_json(),
+                        content_type = "application/json",
+                    ),
+                    s.write(sk, sentinelized, content_type = "text/markdown"),
+                )
             return (page_slug, "normalized" if changed else "unchanged")
         except Exception as e:
             logger.warning(

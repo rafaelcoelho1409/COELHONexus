@@ -63,3 +63,28 @@ class DocDistillate(BaseModel):
                 f"(minimum {params.KEY_TERMS_MIN})"
             )
         return out
+
+
+class DocDistillateRaw(BaseModel):
+    """What the LLM is asked to emit — same fields and guidance as
+    `DocDistillate`, but NO word/term-count validators. Near misses (a 64-word
+    summary, 2 usable key terms) used to be rejected whole — and because the
+    chat layer wraps the ValidationError in a ChatError, the repair retry never
+    even ran — so a good summary was thrown away for a content-free fallback
+    (13/701 elasticsearch-python docs, 3/104 asyncio). `domain.normalize_distillate`
+    clips/pads this into a valid `DocDistillate` instead."""
+    model_config = ConfigDict(extra = "forbid")
+
+    summary: str = Field(
+        description = (
+            f"{params.SUMMARY_WORDS_MIN}-{params.SUMMARY_WORDS_MAX} words. ONE sentence "
+            f"describing what THIS file teaches/documents."
+        ),
+    )
+    key_terms: list[str] = Field(
+        description = (
+            f"{params.KEY_TERMS_MIN}-{params.KEY_TERMS_MAX} technical identifiers "
+            f"(function/class names, CLI commands, config keys, type names) "
+            f"that appear in this doc."
+        ),
+    )

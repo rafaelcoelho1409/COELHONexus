@@ -9,6 +9,12 @@ from hashlib import sha256
 
 
 
+def missing_chapter_idxs(scores: list[dict], n_proposals: int) -> list[int]:
+    """Chapter indices a doc's score vector skipped. The prompt asks for ONE entry per proposal, but models sometimes list only a subset (elasticsearch-python: 12 of 694 docs scored 16 of 30 chapters); the skipped chapters then read as confidence 0.0 downstream, i.e. 'not this chapter' rather than 'not judged'."""
+    seen = {int(s["chapter_idx"]) for s in scores}
+    return [i for i in range(n_proposals) if i not in seen]
+
+
 def fallback_assign_scores(
     doc_summary: str, doc_terms: list[str], proposals: list[dict],
     source_key: str = "",

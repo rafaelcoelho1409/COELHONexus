@@ -2,6 +2,7 @@
 from __future__ import annotations
 from . import params
 
+import ast
 import logging
 import re
 from typing import Optional
@@ -131,6 +132,77 @@ def _normalize_math_to_markdown(soup: BeautifulSoup) -> None:
         scr.replace_with(NavigableString(_wrap_math(src, is_display)))
 
 
+_LANG_CLASS_RE = re.compile(
+    r"^(?:language|lang|highlight-source|highlight)[-_]([A-Za-z][A-Za-z0-9+#_-]{0,19})$"
+)
+_LANG_IGNORE = frozenset({
+    "none", "text", "plain", "plaintext", "nohighlight", "notranslate",
+    "source", "highlight", "code", "output", "raw",
+})
+# Sphinx's `highlight-default` means "python3, falling back to no highlighting
+# when it doesn't lex" — i.e. unlabeled Python-library examples (elasticsearch-py,
+# requests). Sniffed from the content rather than assumed.
+_DEFAULT_MARK = "@default"
+_PY_STATEMENTS = (
+    ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
+    ast.Assign, ast.AugAssign, ast.AnnAssign, ast.For, ast.AsyncFor, ast.While,
+    ast.If, ast.With, ast.AsyncWith, ast.Try, ast.Return, ast.Raise,
+)
+_LANG_ALIASES = {"python3": "python", "py3": "python", "py": "python"}
+
+
+def _lang_from_classes(classes) -> str:
+    for c in classes or []:
+        m = _LANG_CLASS_RE.match(c)
+        if not m:
+            continue
+        lang = m.group(1).lower()
+        if lang == "default":
+            return _DEFAULT_MARK
+        if lang in _LANG_IGNORE:
+            continue
+        return _LANG_ALIASES.get(lang, lang)
+    return ""
+
+
+def _sniff_default_language(text: str) -> str:
+    """'pycon' for a >>> session, 'python' when the snippet parses AND has real statements or a call (a bare word, number or JSON literal also parses, and must not be called Python), else ''."""
+    t = (text or "").strip()
+    if not t:
+        return ""
+    if t.startswith(">>>"):
+        return "pycon"
+    try:
+        tree = ast.parse(t)
+    except (SyntaxError, ValueError, MemoryError, RecursionError):
+        return ""
+    for n in ast.walk(tree):
+        if isinstance(n, _PY_STATEMENTS) or (isinstance(n, ast.Expr) and isinstance(n.value, (ast.Call, ast.Await))):
+            return "python"
+    return ""
+
+
+def code_language(pre: Tag) -> str:
+    """Language of a `<pre>` code block, "" when the markup doesn't say. markdownify emits a bare fence unless asked, so every HTML-converted tier (2/3/4) produced untagged code — asyncio's 73 code blocks all had none, though the Sphinx source marks them `highlight-python3`. Looks at the pre, its `<code>` child, a `data-language` attribute, then up to three ancestors (Sphinx wraps `<pre>` in `<div class="highlight-python3">`; MkDocs/Docusaurus/GitHub use `language-x` / `highlight-source-x`)."""
+    nodes = [pre]
+    code = pre.find("code")
+    if code is not None:
+        nodes.append(code)
+    nodes.extend(list(pre.parents)[:3])
+    for node in nodes:
+        if not isinstance(node, Tag):
+            continue
+        lang = _lang_from_classes(node.get("class"))
+        if lang == _DEFAULT_MARK:
+            return _sniff_default_language(pre.get_text())
+        if lang:
+            return lang
+        attr = (node.get("data-language") or node.get("data-lang") or "").strip().lower()
+        if attr and attr not in _LANG_IGNORE and re.fullmatch(r"[a-z][a-z0-9+#_-]{0,19}", attr):
+            return _LANG_ALIASES.get(attr, attr)
+    return ""
+
+
 def html_to_markdown(html: str, source_url: Optional[str] = None) -> str:
     """HTML → markdown: strip chrome, pick content root, convert with markdownify (ATX headings, fenced code, strip empty anchors). Empty string on bad input."""
     if not html or not html.strip():
@@ -150,6 +222,7 @@ def html_to_markdown(html: str, source_url: Optional[str] = None) -> str:
         str(root),
         heading_style = "ATX",
         code_language = "",
+        code_language_callback = code_language,
         bullets = "*-+",
         strip = ["script", "style"],
     )

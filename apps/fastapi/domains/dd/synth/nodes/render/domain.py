@@ -6,6 +6,7 @@ from . import params, patterns, prompts, schemas, versions
 import ast
 import hashlib
 import re
+from typing import Optional
 
 
 
@@ -270,6 +271,38 @@ def _build_toc(sections_ctx: list[dict]) -> list[dict]:
 
 def _is_fence_line(ln: str) -> bool:
     return ln.lstrip().startswith(("```", "~~~"))
+
+
+def plan_sources_hash(chapter: Optional[dict]) -> str:
+    """16-hex fingerprint of a plan chapter (title + sorted sources); "" when the chapter is unknown. A re-plan that changes either invalidates renders built under the old plan (chapter ids are stable across re-plans, so the id alone can't tell them apart)."""
+    if not chapter:
+        return ""
+    payload = (chapter.get("title") or "") + "\n" + "\n".join(sorted(chapter.get("sources") or []))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def render_is_stale(render_blob: dict, chapter: Optional[dict]) -> bool:
+    """True only when the render carries a plan fingerprint AND the current plan's chapter has a different one. Missing on either side → not stale (renders from before the field existed, or a plan that can't be read, must never be thrown away)."""
+    stored = (render_blob or {}).get("plan_sources_hash") or ""
+    current = plan_sources_hash(chapter)
+    return bool(stored and current and stored != current)
+
+
+def coverage_metrics(
+    sections: list[dict], source_keys: list[str], n_vault: int, n_orphan_unused: int,
+) -> dict:
+    """Informational per-chapter coverage: distinct plan sources cited by any section, and distinct vault code blocks actually referenced. Pure; counts only, no thresholds."""
+    plan_sources = set(source_keys or [])
+    cited = {
+        c.get("source_key") for s in sections or [] for c in (s.get("citations") or [])
+        if c.get("source_key")
+    }
+    return {
+        "n_sources_total":  len(plan_sources),
+        "n_sources_cited":  len(cited & plan_sources),
+        "n_code_available": max(int(n_vault), 0),
+        "n_code_used":      max(int(n_vault) - int(n_orphan_unused), 0),
+    }
 
 
 def strip_outer_wrapper_fences(md: str) -> str:

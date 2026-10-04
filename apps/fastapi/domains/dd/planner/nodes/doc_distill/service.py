@@ -68,12 +68,15 @@ async def distill_one(
                 max_chars = params.BODY_CHARS_MAX // params.BODY_CHARS_RETRY_DIVISOR
             prompt = prompts.build_prompt(framework, source_key, body, max_chars = max_chars)
             try:
-                distillate, meta = await domains.settings.chat.service.chat_structured_async(
+                raw, meta = await domains.settings.chat.service.chat_structured_async(
                     prompt,
-                    schemas.DocDistillate,
+                    schemas.DocDistillateRaw,
                     max_tokens = params.MAX_TOKENS,
                     temperature = params.TEMPERATURE,
                     timeout_s = params.TIMEOUT_S,
+                )
+                distillate = domain.normalize_distillate(
+                    raw.summary, raw.key_terms, source_key, body,
                 )
                 last_deployment = (meta or {}).get("deployment") or "?"
                 failure_reason = None
@@ -94,12 +97,15 @@ async def distill_one(
                         + f"Emit valid JSON exactly per the schema above."
                     )
                     try:
-                        distillate, meta2 = await domains.settings.chat.service.chat_structured_async(
+                        raw2, meta2 = await domains.settings.chat.service.chat_structured_async(
                             repair_prompt,
-                            schemas.DocDistillate,
+                            schemas.DocDistillateRaw,
                             max_tokens = params.MAX_TOKENS,
                             temperature = 0.0,
                             timeout_s = params.TIMEOUT_S,
+                        )
+                        distillate = domain.normalize_distillate(
+                            raw2.summary, raw2.key_terms, source_key, body,
                         )
                         last_deployment = (meta2 or {}).get("deployment") or last_deployment
                         failure_reason = None

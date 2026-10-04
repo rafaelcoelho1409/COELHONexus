@@ -38,6 +38,14 @@ async def _score_call(prompt: str) -> schemas.DocAssignment:
     return assignment
 
 
+def _valid_scores(assignment: schemas.DocAssignment, n_proposals: int) -> list[dict]:
+    return [
+        {"chapter_idx": sc.chapter_idx, "confidence": sc.confidence}
+        for sc in assignment.scores
+        if 0 <= sc.chapter_idx < n_proposals
+    ]
+
+
 async def assign_one(
     sem: asyncio.Semaphore,
     *args,
@@ -128,14 +136,32 @@ async def assign_one(
 
         if assignment is not None:
             n_proposals = len(proposals)
-            scores = [
-                {
-                    "chapter_idx": s.chapter_idx,
-                    "confidence":  s.confidence,
-                }
-                for s in assignment.scores
-                if 0 <= s.chapter_idx < n_proposals
-            ]
+            scores = _valid_scores(assignment, n_proposals)
+            missing = domain.missing_chapter_idxs(scores, n_proposals)
+            if missing:
+                # The model scored only some chapters. Reask once (complete
+                # vectors — the norm — never reach this branch); keep the
+                # original if the second answer is no more complete.
+                logger.info(
+                    f"[chapter_assign] {source_key}: scored {n_proposals - len(missing)}"
+                    f"/{n_proposals} chapters — reasking for the rest"
+                )
+                try:
+                    again = await _score_call(
+                        f"{prompt}\n\nYour previous response scored only "
+                        f"{n_proposals - len(missing)} of the {n_proposals} chapters "
+                        f"(missing chapter_idx: {missing[:30]}). Return ONE entry for "
+                        f"EVERY chapter 0..{n_proposals - 1}, with confidence 0.0 where "
+                        f"the doc does not apply."
+                    )
+                    again_scores = _valid_scores(again, n_proposals)
+                    if len(domain.missing_chapter_idxs(again_scores, n_proposals)) < len(missing):
+                        scores = again_scores
+                except Exception as e:
+                    logger.info(
+                        f"[chapter_assign] {source_key}: completeness reask failed "
+                        f"({type(e).__name__}) — keeping the partial vector"
+                    )
 
         # Failed LLM (None) → lexical fallback so doc reaches chapter_select.
         # Successful but empty (LLM judged irrelevant) is left as-is.

@@ -115,15 +115,28 @@ async def off_topic_run(state: domains.dd.planner.state.PlannerState) -> dict:
     bodies = await minio.read_many(raw_files)
     sem = asyncio.Semaphore(params.JUDGE_CONCURRENCY)
 
+    # Reference-page sub-pages (one per documented class/function) are the
+    # framework's own API docs — on-topic by construction, so they skip the
+    # judge. Best-effort: without the manifest everything is judged as before.
+    auto_keep_idx: set[int] = set()
+    try:
+        manifest_obj = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)
+        reference_keys = domain.reference_page_keys((manifest_obj or {}).get("entries") or [])
+        auto_keep_idx = {i for i, k in enumerate(raw_files) if k in reference_keys}
+    except Exception as e:
+        logger.info(f"[off_topic] {slug}: manifest unavailable for reference-page auto-keep ({type(e).__name__})")
+
     # Dedupe identical judge inputs before spending LLM calls — the judge prompt
     # is a pure function of head_tail_truncate(body), so pages that collapse to the
     # same prompt (empty pages, stub redirects, scaffold duplicates, mirrored dumps)
     # share one verdict. Group first, judge unique prompts concurrently, fan out.
     groups: dict[str, list[int]] = {}
     for i, body in enumerate(bodies):
+        if i in auto_keep_idx:
+            continue
         groups.setdefault(prompts.head_tail_truncate(body or ""), []).append(i)
     unique_keys = list(groups.keys())
-    n_deduped = n - len(unique_keys)
+    n_deduped = (n - len(auto_keep_idx)) - len(unique_keys)
 
     judged_done = {"n": 0, "keep": 0, "drop": 0, "err": 0}
     n_to_judge = len(unique_keys)
@@ -160,6 +173,8 @@ async def off_topic_run(state: domains.dd.planner.state.PlannerState) -> dict:
     # Fan unique verdicts back out to the original doc order. Duplicates inherit
     # the same verdict + meta (deployment usage counted once on the unique call).
     verdicts: list = [None] * n
+    for i in auto_keep_idx:
+        verdicts[i] = (True, "AUTO_KEEP", None, {"deployment": "(auto-keep)"})
     for key, res in zip(unique_keys, unique_verdicts):
         for doc_idx in groups[key]:
             verdicts[doc_idx] = res
@@ -169,7 +184,7 @@ async def off_topic_run(state: domains.dd.planner.state.PlannerState) -> dict:
     per_file = agg["per_file"]
     judge_decisions = agg["judge_decisions"]
     judge_errors = agg["judge_errors"]
-    llm_kept = agg["llm_kept"]
+    llm_kept = agg["llm_kept"] - len(auto_keep_idx)   # auto-kept docs carry a KEEP verdict but never reached the judge
     llm_dropped = agg["llm_dropped"]
     deployment_summary = agg["deployment_summary"]
     error_breakdown = agg["error_breakdown"]
@@ -186,6 +201,7 @@ async def off_topic_run(state: domains.dd.planner.state.PlannerState) -> dict:
         "total":               n,
         "llm_judged":          n_to_judge,
         "llm_deduped":         n_deduped,
+        "n_auto_kept":         len(auto_keep_idx),
         "llm_kept":            llm_kept,
         "llm_dropped":         llm_dropped,
         "llm_errors":          len(judge_errors),
@@ -218,7 +234,8 @@ async def off_topic_run(state: domains.dd.planner.state.PlannerState) -> dict:
     logger.info(
         f"[off_topic] {slug}: kept {stats['kept']}/{n} "
         f"(dropped {stats['dropped']}); "
-        f"llm judged={n_to_judge} (deduped {n_deduped}) "
+        f"llm judged={n_to_judge} (deduped {n_deduped}, "
+        f"auto-kept reference pages {len(auto_keep_idx)}) "
         f"(keep={llm_kept} drop={llm_dropped}, "
         f"errors={len(judge_errors)} = "
         f"{dict(sorted(error_breakdown.items()))}); "

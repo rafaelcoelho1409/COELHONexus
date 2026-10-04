@@ -269,6 +269,19 @@ def check_code_density_appropriate(sawc: dict) -> schemas.CriterionResult:
             feedback = "no sections — chapter is empty",
         )
 
+    # Not applicable when the chapter's sources hold no code at all — the writer
+    # cannot cite blocks that do not exist, so failing it only mislabels a
+    # corpus property as a writing defect (asyncio "Extending": its live page has
+    # zero code blocks). Only an explicit False waives; an absent signal (older
+    # digest) keeps the original behavior.
+    if sawc.get("_chapter_has_code") is False:
+        return schemas.CriterionResult(
+            name = "code_density_appropriate",
+            passed = True,
+            kind = "deterministic",
+            feedback = "",
+        )
+
     n_refs_per_section: list[tuple[str, int]] = []
     thin_coverage: list[str] = []
     n_total_refs = 0

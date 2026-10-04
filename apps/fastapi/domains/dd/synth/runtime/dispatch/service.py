@@ -719,6 +719,19 @@ async def _run_study_async_inner(
     counters = {"completed": 0, "needs_review": 0, "failed": 0, "cancelled": False}
     sem = asyncio.Semaphore(domains.dd.synth.params.study_sem())
 
+    # Current plan's chapters by id, for the stale-render check (fail-soft:
+    # without the plan no render is ever judged stale).
+    plan_chapters: dict[str, dict] = {}
+    try:
+        _plan = json.loads(await domains.dd.ingestion.storage.service.get_storage().read_text(
+            domains.dd.synth.nodes.render.keys.planner_latest_key(slug),
+        ))
+        plan_chapters = {
+            c["id"]: c for c in (_plan.get("chapters") or []) if (c or {}).get("id")
+        }
+    except Exception as e:
+        logger.info(f"[study-orchestrator] {slug}: plan unreadable for stale-render check ({type(e).__name__})")
+
     async def _run_one(position: int, chapter_id: str) -> None:
         if await _study_cancelled(study_thread_id):
             counters["cancelled"] = True
@@ -734,6 +747,16 @@ async def _run_study_async_inner(
                     _prior_audit_passed = bool(
                         (_prior_render.get("audit") or {}).get("audit_passed", True)
                     )
+                    if _prior_audit_passed and domains.dd.synth.nodes.render.domain.render_is_stale(
+                        _prior_render, plan_chapters.get(chapter_id),
+                    ):
+                        # Built under an older plan (re-plan changed this
+                        # chapter's title/sources) — never "already done".
+                        logger.info(
+                            f"[study-orchestrator] {slug}/{chapter_id}: prior "
+                            f"render belongs to an older plan — not skipping, re-running"
+                        )
+                        _prior_audit_passed = False
                 except Exception as e:
                     logger.warning(
                         f"[study-orchestrator] {slug}/{chapter_id}: "
