@@ -4,7 +4,9 @@ from __future__ import annotations
 from . import params, patterns, schemas
 
 import hashlib
+import math
 import re
+from collections import Counter
 
 from markdown_it import MarkdownIt
 
@@ -271,6 +273,46 @@ def rank_hashes_by_pedagogy(
     ]
     scored.sort(key = lambda x: (-x[0], x[1]))
     return [h for _, h in scored]
+
+
+def _relevance_tokens(text: str) -> set[str]:
+    out: set[str] = set()
+    for word in patterns.IDENT_RE.findall(text or ""):
+        spaced = patterns.CAMEL_SPLIT_RE.sub(r"\1 \2", word).replace("_", " ").lower()
+        for part in spaced.split():
+            if len(part) >= params.RELEVANCE_MIN_TOKEN_LEN and part not in params.RELEVANCE_STOPWORDS:
+                out.add(part)
+    return out
+
+
+def rank_hashes_by_relevance(
+    hashes: list[str], vault: dict[str, schemas.VaultEntry], query_text: str,
+) -> list[tuple[str, float]]:
+    """Score each vault block by how much of ITS identifier vocabulary the
+    `query_text` (a section's heading + description + routed summaries) covers —
+    idf-weighted over the candidate pool and normalised by the block's own
+    weight, so a long query can't inflate every score and a block full of
+    unrelated identifiers can't ride one shared word. Returns (hash, score in
+    [0, 1]) for score > 0, best first; deterministic (ties by hash)."""
+    docs = {
+        h: _relevance_tokens(vault[h].fence_text) for h in hashes if h in vault
+    }
+    if not docs:
+        return []
+    n = len(docs)
+    df = Counter(t for ts in docs.values() for t in ts)
+    idf = {t: math.log((n + 1) / (c + 1)) for t, c in df.items()}
+    q = _relevance_tokens(query_text)
+    scored: list[tuple[str, float]] = []
+    for h, ts in docs.items():
+        total = sum(idf[t] for t in ts)
+        if total <= 0:
+            continue
+        hit = sum(idf[t] for t in ts & q)
+        if hit > 0:
+            scored.append((h, hit / total))
+    scored.sort(key = lambda x: (-x[1], x[0]))
+    return scored
 
 
 def build_manifest(

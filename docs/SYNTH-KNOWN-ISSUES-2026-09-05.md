@@ -5,6 +5,22 @@ Found by direct log/artifact inspection of all 11 chapters of the
 (`docs-distiller/study/claude-code/59353d70-e1ef-4d06-9708-947b1273017f`),
 now complete.
 
+## ✅ 24. ES (Python) / asyncio audit — seven fixes: lost pages, torn namespaces, dropped examples, wrapper fences, dead picker, invented hashes, prose-only sections — FIXED 2026-10-04
+
+Assessment of the elasticsearch-python and asyncio runs. Most code-less ES chapters are correct (the read-the-docs reference has 148 code blocks across 641 pages, 86% in three chapters); the rest traced to these defects, each fixed and replay-tested on the stored data:
+
+1. **Wrapper fence in `book_harmonize` write-back** — the patch LLM's output was stored raw, so ch-02/ch-06 READMEs were one ```` ```markdown ```` block (Study page hid it with a reader-side check). Now stripped in `_patch_chapter` and at write-back; a patch that alters/drops any fenced block is rejected (`code_blocks_preserved`) so the vault's byte-exact guarantee survives harmonization.
+2. **`PairwiseWinner` schema forbade the `reason` field the picker prompt asks for** — 59 of the ES+asyncio picks failed validation and fell back to the structural tiebreak. Field added.
+3. **Sphinx splitter dropped everything outside entity containers** — intro text and "Examples" sections (where reference pages keep their code; asyncio Queues/Subprocesses shipped with 0 code). New `_split_residual` emits one page per leftover H2 section + an overview, for the autodoc, inventory and anchor splits. Live check: Queues gains `Examples`, Subprocesses 4 blocks, asyncio-task 34. **Needs re-ingest** of Sphinx slugs.
+4. **Planner silently lost pages** — elasticsearch-python: 53 of 694 docs in no chapter while stats said `n_dropped: 0` (docs scoring 0.0 against every proposal — nobody proposed Watcher/Transforms/CCR/… — were skipped as "no signal"; 26 more were stuffed into the catch-all). `chapter_select` now runs `consolidate_placements`: families follow their chapter, unselected proposals that still own ≥3 weak docs are rescued, uncovered families become gap chapters named after their page, leftovers go to the lexically nearest chapter. Replay on the real blobs: 641→694/694 docs, 19→25 chapters (+Enrich, EQL, Project rescued; CCR, Transforms, Watcher gap-filled). `pipeline_health.chapter_select_unplaced_docs` now reports the loss honestly.
+5. **Torn namespaces** — the per-doc assigner split `api/ml.html` 36/37 between "Machine Learning" and "Inference API". A family torn between two chapters (≥8 docs, top-2 hold ≥90%, minor ≥25%) is re-homed to the chapter its page title matches (ML 36→74, Inference 75→39).
+6. **ES ch-11: 31 of 32 code blocks routed to s1** (they live in two guide pages) → s2–s4 had 0 routed hashes → prose mode despite on-topic blocks. Sections with <6 routed blocks now also take chapter-wide blocks whose identifier vocabulary the section's text covers (idf-weighted, ≥0.35, ≥3 blocks, else unchanged). Replay: s3 Functions prose→code with 12 blocks; s2/s4 correctly stay prose.
+7. **asyncio ch-07 `needs_review`** — the writer cited a hash not in the vault (`n_hallucinated: 1`); such refs now degrade to prose subtopics after the repair loops instead of failing the audit.
+
+**To get the full effect:** re-ingest Sphinx slugs (3), re-plan (4–5), wipe, run once.
+
+---
+
 ## ✅ 23. Sphinx autodoc corpora (asyncio, elasticsearch-python) synthesized with zero code — fences nested in definition lists were invisible to the vault — FIXED 2026-10-03
 
 **Severity: high — every Sphinx autodoc source lost most or all of its code excerpts; chapters shipped prose-only with `0/0 code_refs`.**

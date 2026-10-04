@@ -132,7 +132,14 @@ async def harmonize_book(
             for ch, _, violations in patch_tasks
         ])
         for (ch, det, violations), patched_prose in zip(patch_tasks, patched_results):
+            original = domains.dd.synth.nodes.render.domain.strip_outer_wrapper_fences(ch["prose"])
             ok = bool(patched_prose and len(patched_prose) > 0.5 * len(ch["prose"]))
+            if ok and not domain.code_blocks_preserved(original, patched_prose):
+                logger.info(
+                    f"[book_harmonize] {ch['chapter_id']}: patch rejected — it "
+                    f"altered or dropped fenced code blocks (vault byte-exactness)"
+                )
+                ok = False
             patches.append({
                 "chapter_id": ch["chapter_id"],
                 "n_violations": len(violations),
@@ -342,7 +349,12 @@ async def _patch_chapter(
             )
             if err is not None:
                 raise err
-            return (raw or "").strip() or None
+            # The patch LLM often returns the chapter wrapped in ```markdown;
+            # left in, the whole README renders as one code block.
+            patched = domains.dd.synth.nodes.render.domain.strip_outer_wrapper_fences(
+                (raw or "").strip(),
+            )
+            return patched.strip() or None
         except Exception as e:
             logger.warning(
                 f"[book_harmonize] patch failed for {chapter_id}: "

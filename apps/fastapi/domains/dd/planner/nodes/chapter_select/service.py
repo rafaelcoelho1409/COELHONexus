@@ -124,11 +124,48 @@ async def chapter_select_run(state: domains.dd.planner.state.PlannerState) -> di
         pinned = pinned,
         proposals = proposals,
     )
-    kept = final["kept"]
     pruned = final["pruned"]
     orphan_protected = final["orphan_protected"]
-    doc_to_chapter = final["doc_to_chapter"]
-    out_chapters = final["out_chapters"]
+
+    # No page left behind: re-home torn families, rescue/gap-fill chapters for
+    # docs the proposals never covered. Family = parent page URL, title = page
+    # title, both from the ingestion manifest (best-effort — the consolidation
+    # degrades to per-doc lexical placement without it).
+    doc_family: dict[str, str] = {}
+    doc_title: dict[str, str] = {}
+    try:
+        manifest_obj = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)
+        for e in (manifest_obj or {}).get("entries", []):
+            if e.get("key"):
+                doc_family[e["key"]] = (e.get("url") or "").split("#", 1)[0]
+                doc_title[e["key"]] = e.get("title") or ""
+    except Exception as e:
+        logger.warning(
+            f"[chapter_select] {slug}: manifest unavailable for family "
+            f"consolidation ({type(e).__name__}: {e}) — per-doc fallback only"
+        )
+    consolidated = domain.consolidate_placements(
+        kept = final["kept"],
+        doc_to_chapter = final["doc_to_chapter"],
+        assignments = assignments,
+        proposals = proposals,
+        doc_family = doc_family,
+        doc_title = doc_title,
+    )
+    kept = consolidated["kept"]
+    doc_to_chapter = consolidated["doc_to_chapter"]
+    out_chapters = consolidated["out_chapters"]
+    consolidation = consolidated["stats"]
+    if consolidation["n_unplaced_final"]:
+        logger.warning(
+            f"[chapter_select] {slug}: {consolidation['n_unplaced_final']} doc(s) "
+            f"still unplaced after consolidation — they will be missing from the plan"
+        )
+    if any(consolidation[k] for k in (
+        "n_family_consolidated", "n_rehomed_to_family",
+        "n_rescued_chapters", "n_gap_chapters", "n_leftover_placed",
+    )):
+        logger.info(f"[chapter_select] {slug}: placement consolidation {consolidation}")
 
     n_assigned_docs = len(doc_to_chapter)
     n_total_docs = len(assignments)
@@ -142,8 +179,9 @@ async def chapter_select_run(state: domains.dd.planner.state.PlannerState) -> di
         "pinned_indices":        sorted(pinned),
         "orphan_protected":      orphan_protected,
         "n_proposals_in":        len(proposals),
-        "n_chapters_out":        len(kept),
+        "n_chapters_out":        len(out_chapters),
         "n_orphan_protected":    len(orphan_protected),
+        "consolidation":         consolidation,
         "n_assigned_docs":       n_assigned_docs,
         "n_total_docs":          n_total_docs,
         "coverage_fraction":     (
@@ -168,7 +206,7 @@ async def chapter_select_run(state: domains.dd.planner.state.PlannerState) -> di
             ],
         },
         "n_clusters_in":   len(proposals),
-        "n_chapters_out":  len(kept),
+        "n_chapters_out":  len(out_chapters),
         "n_repairs":       0,
         "forced_repair":   False,
         "source":          "llm_first_chapter_select_v1",
@@ -185,8 +223,9 @@ async def chapter_select_run(state: domains.dd.planner.state.PlannerState) -> di
     wall_ms = int((time.monotonic() - t0) * 1000)
     stats = {
         "n_proposals_in":     len(proposals),
-        "n_chapters_out":     len(kept),
+        "n_chapters_out":     len(out_chapters),
         "n_pruned":           len(pruned),
+        "consolidation":      consolidation,
         "n_orphan_protected": len(orphan_protected),
         "n_assigned_docs":    n_assigned_docs,
         "n_total_docs":       n_total_docs,
@@ -206,7 +245,7 @@ async def chapter_select_run(state: domains.dd.planner.state.PlannerState) -> di
         )
     await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "chapter_select", "done",
-        n_chapters = len(kept),
+        n_chapters = len(out_chapters),
         n_pruned = len(pruned),
         n_orphan_protected = len(orphan_protected),
         coverage = stats["coverage_fraction"],

@@ -5,10 +5,18 @@ from . import patterns, versions
 
 import hashlib
 import json
+from collections import Counter
 from typing import Optional
 
 import json_repair  # type: ignore
 
+
+
+def code_blocks_preserved(original: str, patched: str) -> bool:
+    """True when every fenced code block in `original` appears byte-identical in `patched` (as a multiset). Chapter code is materialized byte-exact from the vault; a prose patch that reflows or rewrites it silently breaks that guarantee, so such a patch must be rejected rather than shipped."""
+    before = Counter(m.group(0) for m in patterns.FENCED_BLOCK_RE.finditer(original or ""))
+    after = Counter(m.group(0) for m in patterns.FENCED_BLOCK_RE.finditer(patched or ""))
+    return not (before - after)
 
 
 def compute_harmonize_manifest_hash(chapters: list[dict]) -> str:

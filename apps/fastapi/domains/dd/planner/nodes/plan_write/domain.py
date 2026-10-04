@@ -48,6 +48,18 @@ def pipeline_health(state: domains.dd.planner.state.PlannerState) -> dict:
         or (0 < sel.get("n_chapters_out", 99) < 3)   # collapsed plan
     )
     health["chapter_select_n_chapters"] = sel.get("n_chapters_out", 0)
+    # Docs the plan lost between assignment and plan — must be 0. `n_unassigned`
+    # in the plan stats only compares against docs that reached plan_write, so
+    # it reported 0 while 53 of 694 elasticsearch-python docs had vanished.
+    health["chapter_select_unplaced_docs"] = max(
+        int(sel.get("n_total_docs", 0)) - int(sel.get("n_assigned_docs", 0)), 0,
+    )
+    cons = sel.get("consolidation") or {}
+    health["chapter_select_rescued_chapters"] = cons.get("n_rescued_chapters", 0)
+    health["chapter_select_gap_chapters"] = cons.get("n_gap_chapters", 0)
+    health["chapter_select_family_rehomed"] = (
+        cons.get("n_family_consolidated", 0) + cons.get("n_rehomed_to_family", 0)
+    )
     return health
 
 

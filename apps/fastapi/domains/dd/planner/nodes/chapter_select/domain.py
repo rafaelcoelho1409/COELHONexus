@@ -2,6 +2,8 @@
 from __future__ import annotations
 from . import params, versions
 
+import re
+from collections import Counter, defaultdict
 from hashlib import sha256
 
 
@@ -216,6 +218,228 @@ def prune_and_finalize_selection(
         "orphan_protected": orphan_protected,
         "doc_to_chapter":   doc_to_chapter,
         "out_chapters":     out_chapters,
+    }
+
+
+_STOP_TOKENS = frozenset({
+    "api", "apis", "the", "of", "and", "for", "an", "to", "in", "on", "with",
+    "client", "python", "documentation", "docs", "guide", "reference",
+})
+
+
+def _tokens(text: str) -> set[str]:
+    return {
+        t for t in re.findall(r"[a-z0-9]+", (text or "").lower())
+        if len(t) > 1 and t not in _STOP_TOKENS
+    }
+
+
+def _slot_tokens(slot: dict) -> set[str]:
+    return _tokens(" ".join([
+        slot.get("title") or "", slot.get("description") or "",
+        " ".join(slot.get("key_concepts") or []),
+    ]))
+
+
+def consolidate_placements(
+    *,
+    kept: list[int],
+    doc_to_chapter: dict[str, int],
+    assignments: dict[str, list[dict]],
+    proposals: list[dict],
+    doc_family: dict[str, str],
+    doc_title: dict[str, str],
+) -> dict:
+    """Make the plan place EVERY doc, and place it sensibly.
+
+    `greedy_select` + `prune_and_finalize_selection` left three gaps on
+    API-reference corpora (elasticsearch-python: 53 of 694 docs silently
+    absent from the plan, `n_dropped: 0`; 26 more stuffed into the catch-all
+    'Elasticsearch API'; the ML namespace split across two chapters):
+      * docs scored 0.0 against every proposal (a namespace nobody proposed a
+        chapter for) were skipped as "no signal";
+      * docs whose best proposal was never selected landed in an arbitrary
+        selected chapter at confidence 0;
+      * per-doc assignment is family-blind, so one reference page's docs can
+        be torn between two chapters.
+    Steps, in order: (0) re-home a *torn* family wholly into the chapter its
+    page title matches; (1) weak/unplaced docs follow their family's chapter;
+    (2) an unselected proposal that still owns ≥ MIN_DOCS weak/unplaced docs is
+    selected after all; (3) remaining families of ≥ MIN_DOCS docs become a gap
+    chapter named after their page; (4) leftovers go to the lexically nearest
+    chapter. Pure + deterministic. `doc_family` / `doc_title` may be partial.
+    Returns {kept, doc_to_chapter, out_chapters, stats}; slot ids are
+    proposal indices, or negative ints for gap chapters."""
+    thr = params.CONFIDENCE_THRESHOLD
+    min_docs = params.MIN_DOCS_PER_CHAPTER
+
+    scores: dict[str, dict[int, float]] = {
+        k: {int(s["chapter_idx"]): float(s.get("confidence") or 0.0) for s in sc}
+        for k, sc in assignments.items()
+    }
+
+    def conf(k: str, slot: int) -> float:
+        return scores.get(k, {}).get(slot, 0.0) if slot >= 0 else 0.0
+
+    def best_proposal(k: str) -> tuple[int, float]:
+        sc = scores.get(k) or {}
+        if not sc:
+            return -1, 0.0
+        ci = min(sc, key = lambda c: (-sc[c], c))
+        return ci, sc[ci]
+
+    slots: dict[int, dict] = {}
+
+    def _open_slot(slot: int, p: dict, origin: str) -> None:
+        slots[slot] = {
+            "title":       p.get("title"),
+            "description": p.get("description"),
+            "key_concepts": p.get("key_concepts") or [],
+            "origin":      origin,
+            "proposal_idx": slot if slot >= 0 else None,
+        }
+
+    for ci in kept:
+        _open_slot(ci, proposals[ci], "proposal")
+    place: dict[str, int] = {k: ci for k, ci in doc_to_chapter.items() if ci in slots}
+
+    stats = {
+        "n_family_consolidated": 0, "n_rehomed_to_family": 0,
+        "n_rescued_chapters": 0, "n_gap_chapters": 0,
+        "n_leftover_placed": 0, "n_unplaced_final": 0,
+    }
+
+    families: dict[str, list[str]] = defaultdict(list)
+    for k in sorted(assignments):
+        families[doc_family.get(k) or k].append(k)
+
+    def family_title(f: str) -> str:
+        c = Counter(
+            (doc_title.get(k) or "").split(" — ")[0].strip()
+            for k in families.get(f, []) if doc_title.get(k)
+        )
+        c.pop("", None)
+        if c:
+            return c.most_common(1)[0][0]
+        base = f.rstrip("/").rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        return re.sub(r"[-_]+", " ", base).strip().title() or "Additional Topics"
+
+    # (0) torn families → the chapter whose title matches the page's title.
+    for f in sorted(families):
+        docs = families[f]
+        if len(docs) < params.TORN_FAMILY_MIN_DOCS:
+            continue
+        counts = Counter(place[k] for k in docs if k in place)
+        if len(counts) < 2:
+            continue
+        (a, na), (b, nb) = sorted(counts.items(), key = lambda kv: (-kv[1], kv[0]))[:2]
+        n = len(docs)
+        if (na + nb) / n < params.TORN_FAMILY_TOP2_SHARE or nb / n < params.TORN_FAMILY_MIN_MINOR:
+            continue
+        ft = _tokens(family_title(f))
+        sa, sb = len(ft & _slot_tokens(slots[a])), len(ft & _slot_tokens(slots[b]))
+        if sa == sb:
+            continue
+        win, lose = (a, b) if sa > sb else (b, a)
+        for k in docs:
+            if place.get(k) == lose:
+                place[k] = win
+                stats["n_family_consolidated"] += 1
+
+    # candidates: unplaced docs + docs sitting in a chapter that scored them < threshold
+    cands = {k for k in assignments if k not in place}
+    cands |= {k for k, c in place.items() if conf(k, c) < thr}
+
+    # (1) follow the family's (confidently placed) chapter.
+    for k in sorted(cands):
+        fam_docs = families.get(doc_family.get(k) or k, [])
+        strong = [place[j] for j in fam_docs if j in place and j not in cands]
+        # A handful of confident siblings must not drag a whole namespace
+        # along (3 stray Watcher pages would otherwise pull all 13 into the
+        # catch-all chapter): the family has to be mostly confidently placed.
+        if not strong or len(strong) / len(fam_docs) < params.FAMILY_MIN_STRONG_SHARE:
+            continue
+        dom, n = Counter(strong).most_common(1)[0]
+        if n / len(strong) >= params.FAMILY_DOMINANCE:
+            if place.get(k) != dom:
+                stats["n_rehomed_to_family"] += 1
+            place[k] = dom
+            cands.discard(k)
+
+    # (2) rescue unselected proposals that still own enough weak/unplaced docs.
+    by_prop: dict[int, list[str]] = defaultdict(list)
+    for k in sorted(cands):
+        ci, c = best_proposal(k)
+        if ci >= 0 and c >= thr and ci not in slots:
+            by_prop[ci].append(k)
+    for ci in sorted(by_prop):
+        if len(by_prop[ci]) >= min_docs:
+            _open_slot(ci, proposals[ci], "rescued")
+            for k in by_prop[ci]:
+                place[k] = ci
+                cands.discard(k)
+            stats["n_rescued_chapters"] += 1
+
+    # (3) gap chapters for families nobody proposed a chapter for.
+    gap_fams: dict[str, list[str]] = defaultdict(list)
+    for k in sorted(cands):
+        if k not in place:                       # weak docs keep their placement
+            gap_fams[doc_family.get(k) or k].append(k)
+    next_gap = -1
+    for f in sorted(gap_fams):
+        docs = gap_fams[f]
+        if len(docs) < min_docs:
+            continue
+        title = family_title(f)
+        _open_slot(next_gap, {
+            "title": title,
+            "description": f"Reference documentation for {title} ({len(docs)} pages).",
+            "key_concepts": [],
+        }, "gap")
+        for k in docs:
+            place[k] = next_gap
+            cands.discard(k)
+        next_gap -= 1
+        stats["n_gap_chapters"] += 1
+
+    # (4) leftovers → lexically nearest chapter; no overlap anywhere → the largest (catch-all) chapter.
+    sizes = Counter(place.values())
+    slot_toks = {sid: _slot_tokens(sl) for sid, sl in slots.items()}
+    for k in sorted(k for k in cands if k not in place):
+        dt = _tokens(f"{doc_title.get(k) or ''} {doc_family.get(k) or ''}")
+        best = max(
+            slots,
+            key = lambda sid: (len(dt & slot_toks[sid]), sizes.get(sid, 0), -sid),
+        )
+        place[k] = best
+        sizes[best] += 1
+        stats["n_leftover_placed"] += 1
+
+    stats["n_unplaced_final"] = sum(1 for k in assignments if k not in place)
+
+    members: dict[int, list[str]] = defaultdict(list)
+    for k, sid in place.items():
+        members[sid].append(k)
+    order = [sid for sid in slots if members.get(sid)]
+    out_chapters = []
+    for i, sid in enumerate(order, 1):
+        sl = slots[sid]
+        out_chapters.append({
+            "title":               sl["title"],
+            "description":         sl["description"],
+            "key_concepts":        sl["key_concepts"],
+            "member_doc_keys":     sorted(members[sid]),
+            "n_member_docs":       len(members[sid]),
+            "order":               i,
+            "source_proposal_idx": sl["proposal_idx"],
+            "origin":              sl["origin"],
+            "pinned":              False,
+        })
+    return {
+        "kept":           [sid for sid in order if sid >= 0],
+        "doc_to_chapter": place,
+        "out_chapters":   out_chapters,
+        "stats":          stats,
     }
 
 

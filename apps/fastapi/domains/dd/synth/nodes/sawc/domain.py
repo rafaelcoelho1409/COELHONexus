@@ -209,6 +209,34 @@ SOFT_ISSUE_PREFIXES = (
 )
 
 
+def section_relevance_query(outline_sec: dict, contributions: list[dict]) -> str:
+    """Text describing what a section is about, for matching chapter code blocks to it: outline heading + description + the routed sources' summaries and key facts."""
+    parts = [outline_sec.get("heading") or "", outline_sec.get("description") or ""]
+    for c in contributions:
+        parts.append(c.get("summary") or "")
+        parts.extend(c.get("key_facts") or [])
+    return " ".join(parts)[:params.RELEVANCE_QUERY_MAX_CHARS]
+
+
+def drop_unknown_code_refs(
+    draft: schemas.LLMSectionDraft, allowed_hashes: set[str],
+) -> tuple[schemas.LLMSectionDraft, int]:
+    """Turn subtopics citing a code hash that is not in the allowed bank into prose subtopics (empty hash) instead of shipping the invented reference. The vault guarantees every rendered block is real source code; an unresolvable hash can only render as nothing and fails the chapter audit (asyncio ch-07: 2 of 3 refs valid, 1 invented → `needs_review` for an otherwise 93% chapter). Runs after the repair loops, as the last resort. Returns (draft, n_converted)."""
+    bad = {
+        i for i, st in enumerate(draft.subtopics)
+        if st.code_ref_hash and st.code_ref_hash not in allowed_hashes
+    }
+    if not bad:
+        return draft, 0
+    subs = [
+        st.model_copy(update = {
+            "code_ref_hash": "", "code_source": "verbatim", "derived_code": None,
+        }) if i in bad else st
+        for i, st in enumerate(draft.subtopics)
+    ]
+    return draft.model_copy(update = {"subtopics": subs}), len(bad)
+
+
 def hard_issues(issues: list[str]) -> list[str]:
     """Filter to issues that trigger writer repair. Soft issues still ship in .issues for visibility but skip repair — writer can't reliably close them."""
     return [

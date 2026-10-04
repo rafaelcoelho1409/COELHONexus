@@ -272,7 +272,7 @@ def _is_fence_line(ln: str) -> bool:
     return ln.lstrip().startswith(("```", "~~~"))
 
 
-def _strip_outer_wrapper_fences(md: str) -> str:
+def strip_outer_wrapper_fences(md: str) -> str:
     """Drop a leading wrapper fence and its stray trailing closer.
 
     LLM-written sections sometimes arrive wrapped in ```markdown fences; the
@@ -316,7 +316,7 @@ def render_chapter_md(
         toc = toc,
     )
     md = re.sub(r"\n{4,}", "\n\n\n", md)
-    md = _strip_outer_wrapper_fences(md)
+    md = strip_outer_wrapper_fences(md)
     return md.rstrip() + "\n"
 
 

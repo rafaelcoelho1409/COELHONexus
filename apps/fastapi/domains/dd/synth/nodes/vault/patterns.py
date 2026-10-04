@@ -17,3 +17,8 @@ SENTINEL_HASH_RE = re.compile(r'<code-ref hash="([0-9a-f]{16})"')
 # Hash + ANY trailing attrs (used by `materialize` so unknown LLM-added
 # attrs like `theme="..."` don't break restoration).
 SENTINEL_ANY_RE = re.compile(r'<code-ref hash="([0-9a-f]{16})"[^/]*/>')
+
+# Identifier-ish word in code or prose (relevance matching splits it into
+# snake_case / camelCase parts).
+IDENT_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]+")
+CAMEL_SPLIT_RE = re.compile(r"([a-z0-9])([A-Z])")

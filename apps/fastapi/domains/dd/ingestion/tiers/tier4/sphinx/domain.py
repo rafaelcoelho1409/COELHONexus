@@ -6,6 +6,7 @@ from __future__ import annotations
 import domains
 from . import entities, params, patterns
 
+import copy
 import logging
 import zlib
 from typing import Optional
@@ -172,25 +173,31 @@ def maybe_split_page(
     if inventory is not None:
         out = _split_by_inventory(soup, root, source_url, parent_title, inventory)
         if out:
+            n_entity = len(out)
+            out += _split_residual(root, out, source_url, parent_title)
             logger.info(
-                f"[page-split] inventory split: {len(out)} virtual pages "
-                f"from {source_url}"
+                f"[page-split] inventory split: {n_entity} entity + "
+                f"{len(out) - n_entity} narrative virtual pages from {source_url}"
             )
             return out
 
     out = _split_autodoc(root, source_url, parent_title)
     if out:
+        n_entity = len(out)
+        out += _split_residual(root, out, source_url, parent_title)
         logger.info(
-            f"[page-split] autodoc split: {len(out)} virtual pages from "
-            f"{source_url}"
+            f"[page-split] autodoc split: {n_entity} entity + "
+            f"{len(out) - n_entity} narrative virtual pages from {source_url}"
         )
         return out
 
     out = _split_anchored(root, source_url, parent_title)
     if out:
+        n_entity = len(out)
+        out += _split_residual(root, out, source_url, parent_title)
         logger.info(
-            f"[page-split] anchor split: {len(out)} virtual pages from "
-            f"{source_url}"
+            f"[page-split] anchor split: {n_entity} section + "
+            f"{len(out) - n_entity} narrative virtual pages from {source_url}"
         )
     return out
 
@@ -264,6 +271,94 @@ def _split_by_inventory(
                 f"keeping parent page whole"
             )
         return []
+    return out
+
+
+def _is_h2_section(sec: Tag) -> bool:
+    """A `<section>`/`div.section` whose own heading is an h2."""
+    head = sec.find(["h1", "h2", "h3", "h4"], recursive=False)
+    return head is not None and head.name == "h2"
+
+
+def _split_residual(
+    root: Tag, emitted: list[entities.SubPage], source_url: str, parent_title: str,
+) -> list[entities.SubPage]:
+    """Narrative the entity/anchor split would otherwise discard.
+
+    The autodoc / inventory / anchor splits keep only their own containers
+    (`dl` definitions, entity sections, anchored H2s), so everything between
+    them — lead text, concept sections, and above all "Examples" sections,
+    where a Sphinx reference page keeps its code — never reached the corpus
+    (asyncio Queues/Subprocesses chapter shipped with no code because both
+    pages' examples were dropped). Remove the containers already emitted from
+    a copy of the page and turn what is left into one page per H2 section
+    plus an overview page for the text outside any H2. Stubs too small to be
+    useful (a bare heading once its `dl` is gone) are skipped."""
+    emitted_ids = [
+        sp.sub_url.split("#", 1)[1] for sp in emitted if "#" in sp.sub_url
+    ]
+    taken = set(emitted_ids)
+    work = copy.copy(root)
+    for anchor in emitted_ids:
+        node = _container_for_anchor(work, work, anchor)
+        if node is not None and node is not work:
+            node.decompose()
+
+    parent_url = source_url.split("#", 1)[0]
+    md_of = domains.dd.ingestion.tiers.extract.domain.html_to_markdown
+
+    def _unique(anchor: str) -> str:
+        base, n = anchor, 1
+        while anchor in taken:
+            n += 1
+            anchor = f"{base}-narrative" if n == 2 else f"{base}-narrative-{n}"
+        taken.add(anchor)
+        return anchor
+
+    def _title(text: str, fallback: str) -> str:
+        text = (text or "").rstrip("¶").strip()[:160]
+        if parent_title and text and text not in parent_title:
+            return f"{parent_title} — {text}"
+        return text or parent_title or fallback
+
+    out: list[entities.SubPage] = []
+    sections = [
+        sec for sec in work.select("section, div.section")
+        if _is_h2_section(sec)
+    ]
+    for sec in sections:
+        body_md = md_of(str(sec), source_url=source_url)
+        heading = sec.find("h2")
+        if len(body_md.encode("utf-8")) >= params.MIN_BODY_BYTES:
+            anchor = _unique(
+                (sec.get("id") or "").strip()
+                or _slugify(heading.get_text(strip=True) if heading else "")
+            )
+            out.append(entities.SubPage(
+                slug_suffix=_slugify(anchor),
+                sub_url=f"{parent_url}#{anchor}",
+                title=_title(heading.get_text(strip=True) if heading else "", anchor),
+                body_md=body_md,
+            ))
+        sec.decompose()
+
+    overview_md = md_of(str(work), source_url=source_url)
+    if len(overview_md.encode("utf-8")) >= params.MIN_BODY_BYTES:
+        h1_sec = next(
+            (sec for sec in work.select("section, div.section")
+             if sec.find("h1", recursive=False) is not None),
+            None,
+        )
+        anchor = _unique(
+            ((h1_sec.get("id") or "").strip() if h1_sec is not None else "")
+            or "overview"
+        )
+        out.append(entities.SubPage(
+            slug_suffix=_slugify(anchor),
+            sub_url=f"{parent_url}#{anchor}",
+            title=_title("Overview", anchor),
+            body_md=overview_md,
+        ))
     return out
 
 

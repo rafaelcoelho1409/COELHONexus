@@ -333,6 +333,11 @@ class PairwiseWinner(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
     winner: Literal["A", "B"]
+    # The picker prompt asks for `{"winner", "reason"}`; with only `winner`
+    # declared, `extra = "forbid"` rejected nearly every verdict (59 of the
+    # ES-Python + asyncio picks) and every match fell back to the structural
+    # tiebreak. Accept the field the prompt requests; it is not used.
+    reason: str = ""
 
 
 class ChapterDraft(BaseModel):

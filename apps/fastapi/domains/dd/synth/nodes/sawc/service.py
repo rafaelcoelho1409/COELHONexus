@@ -624,6 +624,15 @@ async def _draft_one_section(
             )
             break
 
+    # Last resort after the repair loops: never ship an invented code hash.
+    draft, n_invented = domain.drop_unknown_code_refs(draft, allowed_hash_set)
+    if n_invented:
+        logger.warning(
+            f"[sawc_write] {section_id} draft {draft_idx}: {n_invented} "
+            f"code_ref_hash(es) not in the allowed bank survived repair — "
+            f"converted to prose subtopic(s)"
+        )
+
     wall_ms = int((time.monotonic() - t0) * 1000)
     await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "sawc_write", "section_draft_done",
@@ -1136,6 +1145,25 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
             n_routed_hashes = len(allowed_hashes_set)
             _MIN_BANK_SIZE = 6
             _BANK_PAD_TO = 20
+            # Chapter-wide blocks the digest never routed here but whose
+            # vocabulary this section's own text covers — keeps a section of a
+            # multi-topic code page out of prose mode (see params.RELEVANT_PAD_*).
+            if vault_rich and n_routed_hashes < _MIN_BANK_SIZE:
+                scored = domains.dd.synth.nodes.vault.domain.rank_hashes_by_relevance(
+                    [h for h in vault_rich if h not in allowed_hashes_set],
+                    vault_rich,
+                    domain.section_relevance_query(outline_sec, contributions),
+                )
+                relevant = [h for h, sc in scored if sc >= params.RELEVANT_PAD_MIN_SCORE]
+                if n_routed_hashes + len(relevant) >= params.RELEVANT_PAD_MIN_BLOCKS:
+                    relevant = relevant[:_BANK_PAD_TO - n_routed_hashes]
+                    allowed_hashes_set.update(relevant)
+                    n_routed_hashes += len(relevant)
+                    logger.info(
+                        f"[sawc_write] {sid}: digest routed few/no code blocks; "
+                        f"{len(relevant)} chapter-wide block(s) matched this "
+                        f"section by relevance → bank {len(allowed_hashes_set)}"
+                    )
             if vault_rich and len(allowed_hashes_set) < _MIN_BANK_SIZE:
                 chapter_wide = list(vault_rich.keys())
                 ranked_chapter = domains.dd.synth.nodes.vault.domain.rank_hashes_by_pedagogy(

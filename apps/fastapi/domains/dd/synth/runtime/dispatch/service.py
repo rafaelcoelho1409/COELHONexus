@@ -532,7 +532,7 @@ async def _run_book_harmonize_impl(
         try:
             await minio.write(
                 domains.dd.synth.keys.chapter_readme_key(slug, cid),
-                new_prose,
+                domains.dd.synth.nodes.render.domain.strip_outer_wrapper_fences(new_prose).rstrip() + "\n",
                 content_type = "text/markdown",
             )
             n_overwritten += 1

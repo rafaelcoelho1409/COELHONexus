@@ -39,3 +39,15 @@ MEMORY_SUMMARY_CHARS_MIN = 40
 MEMORY_SUMMARY_CHARS_MAX = 600
 
 BLOB_PREFIX = "synth"
+
+# Section-relevance code routing. The digest routes a source to the section(s)
+# it is mostly about, so every block of a multi-topic guide page lands in ONE
+# section and the others — given 0 routed hashes — go prose-only even though the
+# chapter holds on-topic code (elasticsearch-python ch-11: 31 blocks → s1, 0 → s2-s4).
+# A section with too few routed blocks also considers chapter-wide blocks whose
+# vocabulary the section's own text covers at least this much …
+RELEVANT_PAD_MIN_SCORE  = 0.35
+# … and only leaves prose mode when this many such blocks exist (< this and
+# the section stays prose rather than being handed loosely related code).
+RELEVANT_PAD_MIN_BLOCKS = 3
+RELEVANCE_QUERY_MAX_CHARS = 30000
