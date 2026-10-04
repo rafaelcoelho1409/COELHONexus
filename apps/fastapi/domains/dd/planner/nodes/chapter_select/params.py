@@ -18,3 +18,11 @@ TORN_FAMILY_TOP2_SHARE    = 0.90   # two chapters must hold ≥ this share of th
 TORN_FAMILY_MIN_MINOR     = 0.25   # … and the smaller of them ≥ this share (a genuine split)
 FAMILY_DOMINANCE          = 0.50   # a weak/unplaced doc follows its family's chapter above this share …
 FAMILY_MIN_STRONG_SHARE   = 0.50   # … but only if at least this share of the whole family is confidently placed
+
+# Rescue of unselected proposals follows the assigner's own evidence: when weak/
+# unplaced docs trigger a rescue (≥ MIN_DOCS_PER_CHAPTER of them), docs that
+# STRICTLY prefer that proposal (it is their argmax at ≥ PREFER_MIN_CONF and beats
+# their current chapter's score) move with them. Preference alone never triggers a
+# rescue: replayed on stored plans it added a chapter to deepagents, langchain and
+# langgraph, whose plans were fine.
+PREFER_MIN_CONF  = 0.70

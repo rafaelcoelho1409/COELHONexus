@@ -190,7 +190,13 @@ async def doc_distill_run(state: domains.dd.planner.state.PlannerState) -> dict:
     )
 
     minio = domains.dd.ingestion.storage.service.get_storage()
-    manifest = domain.manifest_hash(slug = slug, relevant_files = relevant_files)
+    content_fp = ""
+    try:
+        _m = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)
+        content_fp = domain.corpus_content_fingerprint(relevant_files, (_m or {}).get("entries") or [])
+    except Exception:
+        pass
+    manifest = domain.manifest_hash(slug = slug, relevant_files = relevant_files, content_fp = content_fp)
     vkey = keys.versioned_key(slug, manifest)
     lkey = keys.latest_key(slug)
     if await minio.exists(vkey) and await minio.exists(lkey):

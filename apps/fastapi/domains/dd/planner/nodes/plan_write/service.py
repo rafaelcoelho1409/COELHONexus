@@ -10,6 +10,7 @@ import domains
 from . import domain, keys, versions
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -49,10 +50,27 @@ async def plan_write_run(state: domains.dd.planner.state.PlannerState) -> dict:
 
     t0 = time.monotonic()
 
-    manifest_hash = domain.compute_manifest_hash(chapter_plan_ref, versions.SCHEMA_VERSION)
+    minio = domains.dd.ingestion.storage.service.get_storage()
+
+    # Cache identity must follow the CONTENT of what this plan is built from.
+    # `chapter_plan_ref` is the constant "latest" path, so hashing the ref alone
+    # made every re-plan of a slug hit this cache and return the PREVIOUS plan
+    # even when chapter_select had just produced a different one (it only ever
+    # looked right because planners were wiped first). Fold in a hash of the
+    # chapter-plan blob and the (content-addressed) order ref.
+    outline_text: str | None = None
+    try:
+        outline_text = await minio.read_text(chapter_plan_ref)
+    except Exception:
+        pass
+    plan_identity = (
+        f"{chapter_plan_ref}#"
+        f"{hashlib.sha256((outline_text or '').encode('utf-8')).hexdigest()[:16]}"
+        f"|order={state.get('chapter_order_ref') or ''}"
+    )
+    manifest_hash = domain.compute_manifest_hash(plan_identity, versions.SCHEMA_VERSION)
     versioned_key = keys.versioned_blob_key(slug, manifest_hash)
     latest_key = keys.latest_blob_key(slug)
-    minio = domains.dd.ingestion.storage.service.get_storage()
 
     # Unconditional `start` so the UI shows running even on cache hit.
     await domains.dd.planner.runtime.progress.service.emit_progress(
@@ -113,7 +131,8 @@ async def plan_write_run(state: domains.dd.planner.state.PlannerState) -> dict:
                 f"({type(e).__name__}: {e}); regenerating"
             )
 
-    outline_text = await minio.read_text(chapter_plan_ref)
+    if outline_text is None:
+        outline_text = await minio.read_text(chapter_plan_ref)
     outline = domain.load_outline(outline_text)
 
     cluster_keys: list[str] = []
@@ -245,10 +264,12 @@ async def plan_write_run(state: domains.dd.planner.state.PlannerState) -> dict:
         n_unassigned = len(unassigned_keys),
         n_dropped = n_dropped, wall_ms = elapsed,
     )
+    sizes = [len(c["sources"]) for c in chapters]
     logger.info(
         f"[plan_write] {slug}: {len(chapters)} chapters, "
         f"{n_sources_total} sources, {n_dropped} dropped, "
-        f"{len(unassigned_keys)} unassigned; wrote {latest_key} + "
+        f"{len(unassigned_keys)} unassigned; chapter sizes max={max(sizes) if sizes else 0} "
+        f"min={min(sizes) if sizes else 0}; wrote {latest_key} + "
         f"{versioned_key} in {elapsed} ms"
     )
     return {

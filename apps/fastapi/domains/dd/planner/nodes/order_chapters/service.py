@@ -94,11 +94,20 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
 
     t0 = time.monotonic()
 
+    minio = domains.dd.ingestion.storage.service.get_storage()
+    # Identity follows the chapter plan's CONTENT: `reduce_ref` is the constant
+    # "latest" path, so hashing it alone served the previous run's order for a
+    # different chapter set (asyncio: the same order file name for a 12- and a
+    # 10-chapter plan) — silently wrong when the chapter count happened to match.
+    try:
+        _content = await minio.read_text(reduce_ref)
+    except Exception:
+        _content = ""
     mh = sha256(
-        f"reduce={reduce_ref}|n={params.N_SAMPLES}|v={versions.PROMPT_VERSION}".encode("utf-8"),
+        f"reduce={reduce_ref}#{sha256(_content.encode('utf-8')).hexdigest()[:16]}"
+        f"|n={params.N_SAMPLES}|v={versions.PROMPT_VERSION}".encode("utf-8"),
     ).hexdigest()[:16]
     cache_key = keys.blob_key(slug, mh)
-    minio = domains.dd.ingestion.storage.service.get_storage()
 
     if await minio.exists(cache_key):
         try:

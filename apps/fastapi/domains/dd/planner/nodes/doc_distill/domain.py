@@ -149,11 +149,23 @@ def normalize_distillate(
     return schemas.DocDistillate(summary = clipped, key_terms = terms)
 
 
-def manifest_hash(*, slug: str, relevant_files: list[str]) -> str:
+def corpus_content_fingerprint(relevant_files: list[str], manifest_entries: list[dict]) -> str:
+    """Fingerprint of the page CONTENT behind `relevant_files` (key + stored byte size from the ingestion manifest). The cache key used to be file names only, so a re-ingest that changed what is inside the pages — new language tags, a fixed splitter, re-normalized text — kept hitting the old distillates unless the planner was wiped first. "" when no sizes are known (then the identity is the legacy name-only one)."""
+    sizes = {e.get("key"): e.get("bytes") for e in manifest_entries or [] if e.get("key")}
+    if not sizes:
+        return ""
+    payload = "|".join(f"{k}:{sizes.get(k)}" for k in sorted(relevant_files))
+    return sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def manifest_hash(*, slug: str, relevant_files: list[str], content_fp: str = "") -> str:
     h = sha256()
     h.update(versions.PROMPT_VERSION.encode())
     h.update(slug.encode())
     for k in sorted(relevant_files):
         h.update(b"|")
         h.update(k.encode())
+    if content_fp:
+        h.update(b"|content=")
+        h.update(content_fp.encode())
     return h.hexdigest()[:16]

@@ -11,6 +11,23 @@ import numpy as np
 
 
 
+def chapter_size_profile(sizes: list[int]) -> dict:
+    """max / median chapter size, the largest chapter's share of all sources, and an `oversized_chapter` flag (max ≥ 20 docs AND ≥ 2.5× the median). Informational only."""
+    sizes = sorted(int(x) for x in sizes if isinstance(x, (int, float)))
+    if not sizes:
+        return {}
+    mx = sizes[-1]
+    mid = len(sizes) // 2
+    median = sizes[mid] if len(sizes) % 2 else (sizes[mid - 1] + sizes[mid]) / 2
+    total = sum(sizes)
+    return {
+        "chapter_size_max":          mx,
+        "chapter_size_median":       median,
+        "chapter_largest_share_pct": round(100.0 * mx / total, 1) if total else 0.0,
+        "oversized_chapter":         bool(mx >= 20 and median > 0 and mx >= 2.5 * median),
+    }
+
+
 def pipeline_health(state: domains.dd.planner.state.PlannerState) -> dict:
     """Roll the per-node fallback/degradation signals into the plan's stats so a
     'done' plan that silently ran on deterministic fallbacks (generic chapter
@@ -48,6 +65,10 @@ def pipeline_health(state: domains.dd.planner.state.PlannerState) -> dict:
         or (0 < sel.get("n_chapters_out", 99) < 3)   # collapsed plan
     )
     health["chapter_select_n_chapters"] = sel.get("n_chapters_out", 0)
+    # Informational chapter-size profile (never feeds `degraded`): one chapter
+    # swallowing a quarter of the corpus is visible here before Synth spends an
+    # hour on it (asyncio: a 26-page catch-all cited 12 of its 26 sources).
+    health.update(chapter_size_profile(sel.get("chapter_sizes") or []))
     # Docs the plan lost between assignment and plan — must be 0. `n_unassigned`
     # in the plan stats only compares against docs that reached plan_write, so
     # it reported 0 while 53 of 694 elasticsearch-python docs had vanished.

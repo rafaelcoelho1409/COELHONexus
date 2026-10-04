@@ -5,6 +5,7 @@ prompts.py; Pydantic schemas in schemas.py. LLM output decoding is
 from __future__ import annotations
 from . import params, patterns, schemas, versions
 
+import json
 from collections import Counter
 from hashlib import sha256
 from typing import Optional
@@ -169,11 +170,19 @@ def summarize_proposal(props: list[schemas.ChapterProposal]) -> dict:
 
 
 
+def fingerprint(obj) -> str:
+    """16-hex content fingerprint of any JSON-able object (stable key order)."""
+    return sha256(
+        json.dumps(obj, sort_keys = True, ensure_ascii = False, default = str).encode("utf-8"),
+    ).hexdigest()[:16]
+
+
 def manifest_hash(
     *,
     slug: str,
     source_keys: list[str],
     distill_ref: Optional[str],
+    distill_fp: str = "",
 ) -> str:
     h = sha256()
     h.update(versions.PROMPT_VERSION.encode())
@@ -183,4 +192,9 @@ def manifest_hash(
         h.update(k.encode())
     h.update(b"|distill=")
     h.update((distill_ref or "").encode())
+    if distill_fp:
+        # `distill_ref` is the constant "latest" path: without the CONTENT of the
+        # distillates, a re-distilled corpus kept hitting the old proposals.
+        h.update(b"|distill_content=")
+        h.update(distill_fp.encode())
     return h.hexdigest()[:16]

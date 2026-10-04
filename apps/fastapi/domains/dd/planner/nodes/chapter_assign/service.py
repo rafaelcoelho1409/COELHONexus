@@ -225,6 +225,9 @@ async def chapter_assign_run(state: domains.dd.planner.state.PlannerState) -> di
         slug = slug,
         proposals_ref = proposals_ref,
         source_keys = relevant_files,
+        content_fp = domains.dd.planner.nodes.chapter_propose.domain.fingerprint(
+            {"proposals": proposals_dicts, "distillates": distillates},
+        ),
     )
     vkey = keys.versioned_key(slug, manifest)
     lkey = keys.latest_key(slug)

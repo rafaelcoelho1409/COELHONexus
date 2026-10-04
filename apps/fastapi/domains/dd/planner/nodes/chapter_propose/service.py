@@ -189,8 +189,16 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
     n = len(relevant_files)
     minio = domains.dd.ingestion.storage.service.get_storage()
 
+    distill_fp = ""
+    try:
+        distill_fp = domain.fingerprint(
+            await domains.dd.planner.nodes.doc_distill.service.load_distillates(minio, slug),
+        )
+    except Exception:
+        pass
     manifest = domain.manifest_hash(
         slug = slug, source_keys = relevant_files, distill_ref = distill_ref,
+        distill_fp = distill_fp,
     )
     vkey = keys.versioned_key(slug, manifest)
     lkey = keys.latest_key(slug)

@@ -108,6 +108,7 @@ def manifest_hash(
     slug: str,
     proposals_ref: str,
     source_keys: list[str],
+    content_fp: str = "",
 ) -> str:
     h = sha256()
     h.update(versions.PROMPT_VERSION.encode())
@@ -117,4 +118,9 @@ def manifest_hash(
     for k in sorted(source_keys):
         h.update(b"|")
         h.update(k.encode())
+    if content_fp:
+        # proposals_ref is the constant "latest" path; the proposals AND distillates
+        # CONTENT is what the scores are computed from.
+        h.update(b"|content=")
+        h.update(content_fp.encode())
     return h.hexdigest()[:16]

@@ -262,12 +262,13 @@ def consolidate_placements(
         selected chapter at confidence 0;
       * per-doc assignment is family-blind, so one reference page's docs can
         be torn between two chapters.
-    Steps, in order: (0) re-home a *torn* family wholly into the chapter its
-    page title matches; (1) weak/unplaced docs follow their family's chapter;
-    (2) an unselected proposal that still owns ≥ MIN_DOCS weak/unplaced docs is
-    selected after all; (3) remaining families of ≥ MIN_DOCS docs become a gap
-    chapter named after their page; (4) leftovers go to the lexically nearest
-    chapter. Pure + deterministic. `doc_family` / `doc_title` may be partial.
+    Steps, in order: (0) re-home a *torn* family into the chapter its page
+    title matches (only docs the assigner scored ≥ threshold there); (1) an
+    unselected proposal that still owns ≥ MIN_DOCS weak/unplaced docs is selected
+    after all, taking along the docs that strictly prefer it; (2) remaining
+    weak/unplaced docs follow their family's chapter; (3) remaining families of
+    ≥ MIN_DOCS docs become a gap chapter named after their page; (4) leftovers go
+    to the lexically nearest chapter. Pure + deterministic. `doc_family` / `doc_title` may be partial.
     Returns {kept, doc_to_chapter, out_chapters, stats}; slot ids are
     proposal indices, or negative ints for gap chapters."""
     thr = params.CONFIDENCE_THRESHOLD
@@ -305,7 +306,7 @@ def consolidate_placements(
 
     stats = {
         "n_family_consolidated": 0, "n_rehomed_to_family": 0,
-        "n_rescued_chapters": 0, "n_gap_chapters": 0,
+        "n_rescued_chapters": 0, "n_rescue_pulled": 0, "n_gap_chapters": 0,
         "n_leftover_placed": 0, "n_unplaced_final": 0,
     }
 
@@ -342,7 +343,12 @@ def consolidate_placements(
             continue
         win, lose = (a, b) if sa > sb else (b, a)
         for k in docs:
-            if place.get(k) == lose:
+            # A title match alone must never override the assigner: only move a
+            # doc the assigner itself scored as a valid home for the winning
+            # chapter. (asyncio: 7 pages scored 0.7-1.0 for "Task Management" and
+            # 0.0-0.3 for "…Coroutines" were moved on the word "coroutines" in
+            # their page title, gutting the task chapter.)
+            if place.get(k) == lose and conf(k, win) >= thr:
                 place[k] = win
                 stats["n_family_consolidated"] += 1
 
@@ -350,7 +356,33 @@ def consolidate_placements(
     cands = {k for k in assignments if k not in place}
     cands |= {k for k, c in place.items() if conf(k, c) < thr}
 
-    # (1) follow the family's (confidently placed) chapter.
+    # (1) rescue unselected proposals — before the family-follow step, which would
+    # otherwise pull their weak docs into whichever chapter the rest of the page
+    # landed in (asyncio: the call-graph pages were dragged into "Futures" although
+    # they scored 1.0 for their own proposal).
+    #   weak:   weak/unplaced docs whose best proposal is p (conf ≥ thr) — the trigger
+    #   prefer: confidently placed docs that strictly prefer p (conf ≥ PREFER_MIN_CONF,
+    #           above their current chapter's score) — they move along once triggered
+    unsel: dict[int, dict[str, list[str]]] = defaultdict(lambda: {"weak": [], "prefer": []})
+    for k in sorted(assignments):
+        ci, c = best_proposal(k)
+        if ci < 0 or ci in slots or c < thr:
+            continue
+        if k in cands:
+            unsel[ci]["weak"].append(k)
+        elif c >= params.PREFER_MIN_CONF and c > conf(k, place[k]):
+            unsel[ci]["prefer"].append(k)
+    for ci in sorted(unsel):
+        weak, prefer = unsel[ci]["weak"], unsel[ci]["prefer"]
+        if len(weak) >= min_docs:
+            _open_slot(ci, proposals[ci], "rescued")
+            for k in weak + prefer:
+                place[k] = ci
+                cands.discard(k)
+            stats["n_rescued_chapters"] += 1
+            stats["n_rescue_pulled"] += len(prefer)
+
+    # (2) remaining weak/unplaced docs follow the family's (confidently placed) chapter.
     for k in sorted(cands):
         fam_docs = families.get(doc_family.get(k) or k, [])
         strong = [place[j] for j in fam_docs if j in place and j not in cands]
@@ -365,20 +397,6 @@ def consolidate_placements(
                 stats["n_rehomed_to_family"] += 1
             place[k] = dom
             cands.discard(k)
-
-    # (2) rescue unselected proposals that still own enough weak/unplaced docs.
-    by_prop: dict[int, list[str]] = defaultdict(list)
-    for k in sorted(cands):
-        ci, c = best_proposal(k)
-        if ci >= 0 and c >= thr and ci not in slots:
-            by_prop[ci].append(k)
-    for ci in sorted(by_prop):
-        if len(by_prop[ci]) >= min_docs:
-            _open_slot(ci, proposals[ci], "rescued")
-            for k in by_prop[ci]:
-                place[k] = ci
-                cands.discard(k)
-            stats["n_rescued_chapters"] += 1
 
     # (3) gap chapters for families nobody proposed a chapter for.
     gap_fams: dict[str, list[str]] = defaultdict(list)
