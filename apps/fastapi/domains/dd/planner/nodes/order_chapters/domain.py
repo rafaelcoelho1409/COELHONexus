@@ -65,6 +65,31 @@ def borda_aggregate(
     )
 
 
+def source_order_ranking(chapters: list[dict], key_idx: dict[str, int]) -> list[int] | None:
+    """Chapter indices ordered by where their pages sit in the source docs (mean
+    manifest `idx` of the members). Chapters with no known page go last, in
+    their current order. None when no chapter has a known page."""
+    means: list[float | None] = []
+    for ch in chapters:
+        idxs = [key_idx[k] for k in (ch.get("member_doc_keys") or []) if k in key_idx]
+        means.append(sum(idxs) / len(idxs) if idxs else None)
+    if all(m is None for m in means):
+        return None
+    return sorted(
+        range(len(chapters)),
+        key = lambda i: (means[i] is None, means[i] if means[i] is not None else 0.0, i),
+    )
+
+
+def pin_foundations_first(order: list[int], chapters: list[dict]) -> tuple[list[int], list[int]]:
+    """The Foundations chapter (role == "foundations", built by chapter_select
+    from overview + cross-cutting pages) opens the book. Returns (order, pinned)."""
+    pinned = [i for i in order if (chapters[i] or {}).get("role") == "foundations"]
+    if not pinned:
+        return list(order), []
+    return pinned + [i for i in order if i not in set(pinned)], pinned
+
+
 def apply_foundational_prefix_rule(
     order: list[int],
     chapters: list[dict],

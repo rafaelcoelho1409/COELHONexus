@@ -200,6 +200,15 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
             },
         }
 
+    # Source order: where each chapter's pages sit in the docs' own navigation.
+    source_ranking: list[int] | None = None
+    try:
+        _m = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)
+        _idx = {e["key"]: int(e.get("idx") or 0) for e in (_m or {}).get("entries") or [] if e.get("key")}
+        source_ranking = domain.source_order_ranking(chapters, _idx)
+    except Exception as e:
+        logger.info(f"[order_chapters] {slug}: source order unavailable ({type(e).__name__})")
+
     # Settle window — see SETTLE_DELAY_S. Only reached past the cache-hit
     # and trivial-n_chapters checks above.
     if params.SETTLE_DELAY_S > 0:
@@ -259,7 +268,8 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
         # of this failure is diagnosable from the stored blob/state instead
         # of needing to catch a warning log before it rolls off.
         elapsed = int((time.monotonic() - t0) * 1000)
-        identity = list(range(n_chapters))
+        identity = list(source_ranking) if source_ranking else list(range(n_chapters))
+        identity, _ = domain.pin_foundations_first(identity, chapters)
         sample_errors = [
             (m or {}).get("error", "unknown") for m in sample_metas
         ]
@@ -297,11 +307,17 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
             },
         }
 
-    aggregated = domain.borda_aggregate(valid_orderings, n_chapters)
+    rankings = list(valid_orderings)
+    if source_ranking:
+        rankings += [source_ranking] * params.SOURCE_ORDER_WEIGHT
+    aggregated = domain.borda_aggregate(rankings, n_chapters)
 
     final_order, foundational_idx = domain.apply_foundational_prefix_rule(
         aggregated, chapters,
     )
+    # The Foundations chapter (overview + cross-cutting pages) opens the book, ahead
+    # of install/setup chapters.
+    final_order, foundations_idx = domain.pin_foundations_first(final_order, chapters)
 
     dep_usage: dict[str, int] = {}
     for m in sample_metas:
@@ -317,6 +333,8 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
         "samples":          valid_orderings,
         "aggregated":       aggregated,
         "foundational_idx": foundational_idx,
+        "foundations_idx":  foundations_idx,
+        "source_order":     source_ranking,
         "n_chapters":       n_chapters,
         "prompt_version":   versions.PROMPT_VERSION,
         "deployment_usage": deployment_summary,
@@ -334,6 +352,8 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
         "foundational":     foundational_idx,
         "order":            final_order,
         "aggregated":       aggregated,
+        "source_order":     source_ranking,
+        "foundations":      foundations_idx,
         "wall_ms":          elapsed,
         "store_path":       cache_key,
         "cache_hit":        False,

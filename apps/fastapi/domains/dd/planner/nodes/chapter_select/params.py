@@ -19,6 +19,46 @@ TORN_FAMILY_MIN_MINOR     = 0.25   # … and the smaller of them ≥ this share 
 FAMILY_DOMINANCE          = 0.50   # a weak/unplaced doc follows its family's chapter above this share …
 FAMILY_MIN_STRONG_SHARE   = 0.50   # … but only if at least this share of the whole family is confidently placed
 
+# Family harmonization — sibling sub-pages of ONE reference page stay together.
+# Only ANCHORED families count (virtual sub-pages split out of one page, e.g.
+# asyncio-task.html → create_task / TaskGroup / sleep …): on flat sites and on
+# single-URL dumps (llms-full.txt: every doc shares one URL) the URL says nothing
+# about topical kinship, and harmonizing there would pour a whole corpus into one
+# chapter. A doc outside its family's majority chapter moves there only when the
+# assigner itself rated that chapter a plausible home for it.
+FAMILY_HARMONIZE_MIN_DOCS  = 3      # smaller families are left to per-doc scores
+FAMILY_HARMONIZE_MAX_SHARE = 0.35   # a "family" bigger than this share of the corpus is not a page
+FAMILY_HARMONIZE_MAJORITY  = 0.60   # a chapter must hold ≥ this share of the family's placed docs
+HARMONIZE_MIN_CONF         = 0.30   # a minority doc moves only if the majority chapter scored it ≥ this …
+HARMONIZE_MAX_GAP          = 0.40   # … and its current chapter beats that score by at most this
+
+# Oversize split — a chapter holding more than SPLIT_MAX_SHARE of the corpus is
+# split by ONE LLM call over family/doc units (see schemas.SplitPlan). The prompt
+# rule "split above 40%" is only a request; this is the guarantee.
+SPLIT_MAX_SHARE      = 0.30
+SPLIT_MEDIAN_RATIO   = 2.0   # … AND bigger than this × the median chapter (a 5-chapter plan at 30.3% is not lopsided)
+SPLIT_MIN_TOTAL_DOCS = 24    # tiny corpora legitimately have one big chapter
+SPLIT_MIN_CHAPTER_DOCS = 12
+SPLIT_MAX_PARTS      = 4
+SPLIT_MAX_TOKENS     = 3000
+SPLIT_TIMEOUT_S      = 120.0
+SPLIT_UNIT_SUMMARY_CHARS = 220
+SPLIT_SETTLE_CAP_S   = 130.0   # cap of the Rotator-recovery wait before the split call(s)
+
+# Foundations chapter — cross-cutting single pages (overview/landing, platform
+# support, debugging, threading notes …) have no topical home and used to be
+# scattered into whichever chapter scored them highest. doc_distill labels each
+# doc's `role`; those labelled below, and standing alone on their own page, are
+# collected into one front-matter chapter (pinned first by order_chapters).
+FOUNDATIONS_ROLES      = ("overview", "cross_cutting")
+FOUNDATIONS_MIN_DOCS   = 4      # fewer than this → no chapter (docs stay where they are)
+FOUNDATIONS_MAX_SHARE  = 0.15   # never more than this share of the corpus (keeps role over-labelling harmless)
+FOUNDATIONS_TITLE      = "Foundations and Diagnostics"
+FOUNDATIONS_DESCRIPTION = (
+    "Orientation and cross-cutting material: framework overview, platform "
+    "support, debugging, diagnostics and runtime notes that apply across topics."
+)
+
 # Rescue of unselected proposals follows the assigner's own evidence: when weak/
 # unplaced docs trigger a rescue (≥ MIN_DOCS_PER_CHAPTER of them), docs that
 # STRICTLY prefer that proposal (it is their argmax at ≥ PREFER_MIN_CONF and beats

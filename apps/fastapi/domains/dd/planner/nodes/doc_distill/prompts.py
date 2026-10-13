@@ -27,6 +27,14 @@ def build_prompt(
         f'the file: function names, class names, CLI subcommands, config '
         f'keys, type names. NOT generic words like "function" or '
         f'"configuration". */\n'
+        f'  "role":      "overview" | "cross_cutting" | "tutorial" | "how_to" | '
+        f'"reference" | "explanation"  /* what KIND of page this is: '
+        f'overview = a landing/index/table-of-contents page that mostly points at '
+        f'other pages; cross_cutting = platform support, debugging/diagnostics, '
+        f'performance, threading or compatibility notes that apply across the whole '
+        f'framework instead of one topic; tutorial = guided lesson; how_to = task '
+        f'recipe; reference = API/option listing; explanation = concepts and design '
+        f'rationale. When unsure, choose reference. */\n'
         f"}}\n\n"
         f"Respond ONLY with valid JSON. No prose, no markdown wrap.\n\n"
         # Dynamic suffix — changes per call, so placed last.

@@ -2,4 +2,6 @@
 from __future__ import annotations
 
 
-PROMPT_VERSION = "v4-no-page-left-behind-2026-10-04"
+# v5 (2026-10-13): anchored-family harmonization, Foundations chapter (doc_distill
+# `role`), and the LLM oversize split (chapters > 30% of the corpus).
+PROMPT_VERSION = "v5-family-split-foundations-2026-10-13"

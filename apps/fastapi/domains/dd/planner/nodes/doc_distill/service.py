@@ -76,7 +76,7 @@ async def distill_one(
                     timeout_s = params.TIMEOUT_S,
                 )
                 distillate = domain.normalize_distillate(
-                    raw.summary, raw.key_terms, source_key, body,
+                    raw.summary, raw.key_terms, source_key, body, raw.role,
                 )
                 last_deployment = (meta or {}).get("deployment") or "?"
                 failure_reason = None
@@ -105,7 +105,7 @@ async def distill_one(
                             timeout_s = params.TIMEOUT_S,
                         )
                         distillate = domain.normalize_distillate(
-                            raw2.summary, raw2.key_terms, source_key, body,
+                            raw2.summary, raw2.key_terms, source_key, body, raw2.role,
                         )
                         last_deployment = (meta2 or {}).get("deployment") or last_deployment
                         failure_reason = None

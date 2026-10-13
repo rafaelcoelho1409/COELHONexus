@@ -52,6 +52,11 @@ TIMEOUT_S = 70.0
 # time there). 130s (cooldown_time + 10s buffer) actually guarantees it.
 SETTLE_DELAY_S = 130.0
 
+# The docs' own navigation order is the strongest free ordering signal (authors
+# sequence their pages pedagogically). It votes as this many extra rankings next
+# to the LLM samples in the Borda aggregation, and is the fallback order when
+# every LLM sample fails (instead of arbitrary chapter-index order).
+SOURCE_ORDER_WEIGHT = 2
 # Foundational-prefix rule: these patterns pin the chapter to position 0 regardless of LLM ordering; only the FIRST match anchors.
 FOUNDATIONAL_KEYWORDS = (
     "install",

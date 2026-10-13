@@ -40,6 +40,56 @@ def _render_full_bodies_block(
     return "\n".join(parts)
 
 
+def _structure_signal(source_structure: str) -> str:
+    if not source_structure:
+        return ""
+    return (
+        "SOURCE STRUCTURE (the documentation's own navigation order; pages that "
+        "share a parent page are ONE family):\n"
+        f"{source_structure}\n"
+    )
+
+
+def _structure_rules(source_structure: str) -> str:
+    if not source_structure:
+        return ""
+    return (
+        "8. Keep every family (parent page, see SOURCE STRUCTURE) whole inside ONE chapter; "
+        "never scatter a family's pages across chapters. Prefer chapters that follow the "
+        "source structure's own grouping and order.\n"
+        "9. Do NOT create chapters for overview/landing pages, platform support, debugging "
+        "or diagnostics notes — those cross-cutting pages are collected into a separate "
+        "Foundations chapter automatically.\n"
+    )
+
+
+def _extra_signal_block(source_structure: str) -> str:
+    """Appended to a LangFuse-rendered prompt: the deployed template predates this
+    node's local rules (it still says "split above 40%"), and LangFuse wins when
+    reachable. Always carries the tightened size rule; adds SOURCE STRUCTURE (the
+    docs' own navigation order, parent pages as families) and the two rules that
+    depend on it when the corpus has multi-page families."""
+    out = (
+        "\n\nOVERRIDING RULE 6: split any chapter that would absorb more than 30% "
+        "of the docs (not 40%), and any chapter whose docs span clearly unrelated "
+        "sub-themes."
+    )
+    if source_structure:
+        out += (
+            "\n\n== SOURCE STRUCTURE (the documentation's own navigation order; pages "
+            "that share a parent page are ONE family) ==\n"
+            f"{source_structure}\n"
+            "== END SOURCE STRUCTURE ==\n"
+            "ADDITIONAL RULES:\n"
+            "- Keep every family whole inside ONE chapter; never scatter a family's pages "
+            "across chapters. Prefer chapters that follow this structure's own grouping and order.\n"
+            "- Do NOT create chapters for overview/landing pages, platform support, debugging "
+            "or diagnostics notes — those cross-cutting pages are collected into a separate "
+            "Foundations chapter automatically."
+        )
+    return out + "\n\nRespond ONLY with valid JSON. No prose, no markdown wrap."
+
+
 def build_propose_prompt(
     *,
     framework: str,
@@ -49,6 +99,7 @@ def build_propose_prompt(
     seeds: dict,
     body_chars_per_doc: int,
     target_chapters: int,
+    source_structure: str = "",
 ) -> str:
     """Proposer prompt. distillates=None → full-body pass-through (small N). LangFuse template `dd.planner.chapter_propose` wins over local f-string when deployed; local is the source of truth."""
     if distillates is not None:
@@ -84,7 +135,9 @@ def build_propose_prompt(
             },
         )
         if _rendered:
-            return _rendered
+            # The deployed template predates the SOURCE STRUCTURE signal and the
+            # family/foundations rules — append them so they apply on this path too.
+            return _rendered + _extra_signal_block(source_structure)
     except Exception:
         pass
 
@@ -108,7 +161,8 @@ def build_propose_prompt(
         f"Top recurring headings (appear in ≥2 docs):\n"
         f"  {headings_block}\n"
         f"File-tree namespaces (likely top-level groupings):\n"
-        f"  {namespaces_block}\n\n"
+        f"  {namespaces_block}\n"
+        f"{_structure_signal(source_structure)}\n"
         f"== CORPUS — {len(source_keys)} {corpus_label} ==\n"
         f"{corpus_block}\n"
         f"== END CORPUS ==\n\n"
@@ -136,7 +190,7 @@ def build_propose_prompt(
         f"5. For CLI tools: ensure every TOP-LEVEL subcommand visible "
         f"in the corpus has chapter coverage somewhere.\n"
         f"6. Avoid mega-chapters AND grab-bag chapters: if your draft "
-        f"has any chapter that would absorb >40% of the docs, SPLIT "
+        f"has any chapter that would absorb >30% of the docs, SPLIT "
         f"it. Also split a chapter whose docs span clearly unrelated "
         f"sub-themes even if it stays under that threshold — "
         f"semantic incoherence matters as much as raw size.\n"
@@ -148,8 +202,9 @@ def build_propose_prompt(
         f"and from CI/CD or configuration. Group ALL such docs into "
         f"one dedicated 'SDK Reference' (or similarly concrete) "
         f"chapter rather than letting them scatter into whichever "
-        f"adjacent chapter happens to mention extensibility.\n\n"
-        f"Respond ONLY with valid JSON. No prose, no markdown wrap."
+        f"adjacent chapter happens to mention extensibility.\n"
+        f"{_structure_rules(source_structure)}"
+        f"\nRespond ONLY with valid JSON. No prose, no markdown wrap."
     )
 
 

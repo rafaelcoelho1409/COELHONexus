@@ -39,4 +39,7 @@ from __future__ import annotations
 # uniqueness validator with no further fallback — killing the whole run.
 # Confirmed live on the fastmcp corpus: duplicate 'How It Works' after all
 # 3 LLM samples had already failed.
-PROMPT_VERSION = "v10-tolerant-proposals-2026-10-02"
+# v11 (2026-10-13): SOURCE STRUCTURE signal (the docs' own parent pages in
+# navigation order) + family-cohesion and no-overview-chapter rules; the
+# "split a chapter" rule tightened >40% → >30% to match chapter_select's cap.
+PROMPT_VERSION = "v11-source-structure-2026-10-13"

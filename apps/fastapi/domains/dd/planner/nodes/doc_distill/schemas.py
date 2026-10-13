@@ -2,7 +2,16 @@
 from __future__ import annotations
 from . import params
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# What kind of page this is, in the Diátaxis sense plus two roles chapter planning
+# needs: `overview` (landing/index/TOC pages that mostly point at other pages) and
+# `cross_cutting` (platform support, debugging/diagnostics, performance, threading
+# or compatibility notes that apply across the whole framework, not to one topic).
+DocRole = Literal["overview", "cross_cutting", "tutorial", "how_to", "reference", "explanation"]
+DEFAULT_ROLE = "reference"
 
 
 
@@ -24,6 +33,10 @@ class DocDistillate(BaseModel):
             f"(function/class names, CLI commands, config keys, type names) "
             f"that appear in this doc."
         ),
+    )
+    role: DocRole = Field(
+        default = DEFAULT_ROLE,
+        description = "Page role; defaults to reference for fallback/legacy distillates.",
     )
 
     @field_validator("summary")
@@ -86,5 +99,15 @@ class DocDistillateRaw(BaseModel):
             f"{params.KEY_TERMS_MIN}-{params.KEY_TERMS_MAX} technical identifiers "
             f"(function/class names, CLI commands, config keys, type names) "
             f"that appear in this doc."
+        ),
+    )
+    role: DocRole = Field(
+        description = (
+            "What kind of page this is. overview = landing/index/table-of-contents page "
+            "that mainly points at other pages; cross_cutting = platform support, "
+            "debugging/diagnostics, performance, threading or compatibility notes "
+            "that apply across the whole framework rather than to one topic; "
+            "tutorial = guided lesson; how_to = task recipe; reference = API/option "
+            "listing; explanation = concepts and design rationale."
         ),
     )

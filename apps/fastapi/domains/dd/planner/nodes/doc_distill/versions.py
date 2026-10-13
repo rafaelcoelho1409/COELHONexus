@@ -22,4 +22,8 @@ from __future__ import annotations
 # empty (120s cooldown), so the old 2-5s retry backoff could never
 # succeed. Same fallback outcome either way, ~8s less wasted wait per
 # occurrence. timeout/connection remain retryable.
-PROMPT_VERSION = "v8-clamp-key-terms-2026-10-02"
+# v9 (2026-10-13): every distillate now carries `role` (overview / cross_cutting /
+# tutorial / how_to / reference / explanation) — chapter_select collects single-page
+# overview + cross-cutting docs into a Foundations chapter. Cached v8 distillates
+# have no role (treated as reference), so this bump re-distills once.
+PROMPT_VERSION = "v9-doc-role-2026-10-13"

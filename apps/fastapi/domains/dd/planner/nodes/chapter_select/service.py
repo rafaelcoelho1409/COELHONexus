@@ -2,14 +2,17 @@
 reduce-compatible plan, each versioned + latest) + the chapter_select_run
 orchestration.
 
-SOTA Sept 2026: pure-algorithm node (no LLM rotator) — fastest via parallel
-I/O (gather proposals/assignments/seeds, concurrent 4-blob writes) and
-vectorized greedy. No rotator call here, so old built-in vs
-pooled is no-op; old rotator never touched this node.
+SOTA Sept 2026: deterministic selection (greedy coverage → prune →
+consolidation incl. anchored-family harmonization → Foundations chapter, all in
+`domain.select_pipeline`, shared with the offline replay) plus ONE optional LLM
+step: an oversize chapter (> params.SPLIT_MAX_SHARE of the corpus) is split by a
+single structured call over family/doc units. That step is fail-soft — any
+error leaves the chapter exactly as the deterministic pipeline produced it.
+Parallel I/O (gather proposals/assignments/seeds, concurrent 4-blob writes).
 """
 from __future__ import annotations
 import domains
-from . import domain, keys, versions
+from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio
 import json
@@ -18,6 +21,93 @@ import time
 
 
 logger = logging.getLogger(__name__)
+
+
+async def _split_one(
+    framework: str, chapter: dict, units: list[dict], n_parts: int, other_titles: list[str],
+) -> list[dict] | None:
+    """One structured LLM call (+ one repair) partitioning `units` into
+    `n_parts` cohesive chapters. None on any failure → caller keeps the chapter."""
+    repair = ""
+    for attempt in range(2):
+        prompt = prompts.build_split_prompt(
+            framework = framework, title = chapter["title"],
+            description = chapter.get("description") or "", units = units,
+            n_parts = n_parts, other_titles = other_titles, repair = repair,
+        )
+        try:
+            plan, _meta = await domains.settings.chat.service.chat_structured_async(
+                prompt, schemas.SplitPlan,
+                max_tokens = params.SPLIT_MAX_TOKENS, temperature = 0.2 if attempt == 0 else 0.0,
+                timeout_s = params.SPLIT_TIMEOUT_S,
+            )
+        except Exception as e:
+            logger.warning(
+                f"[chapter_select] split of {chapter['title']!r} attempt {attempt + 1}: "
+                f"{type(e).__name__}: {str(e)[:160]}"
+            )
+            repair = f"output could not be parsed ({type(e).__name__}); return strictly valid JSON"
+            continue
+        parts = [g.model_dump() for g in plan.groups]
+        ok, reason = domain.validate_split(parts, units, {t.casefold() for t in other_titles})
+        if ok:
+            return domain.apply_split(chapter, parts, units)
+        logger.info(f"[chapter_select] split of {chapter['title']!r} rejected: {reason}")
+        repair = reason
+    return None
+
+
+async def split_oversize_chapters(
+    framework: str,
+    out_chapters: list[dict],
+    *,
+    anchored_family: dict[str, str],
+    doc_title: dict[str, str],
+    distillates: dict[str, dict],
+    key_idx: dict[str, int],
+) -> tuple[list[dict], dict]:
+    """Split every chapter over the share cap (see domain.plan_splits). Fail-soft
+    per chapter; splits run concurrently after one Rotator-recovery wait (the
+    preceding node, chapter_assign, just burst the pool)."""
+    plans = domain.plan_splits(out_chapters)
+    stats = {"n_split_planned": len(plans), "n_split_applied": 0, "splits": []}
+    if not plans:
+        return out_chapters, stats
+    try:
+        await domains.settings.chat.service.wait_for_rotator_settle(params.SPLIT_SETTLE_CAP_S)
+    except Exception as e:
+        logger.info(f"[chapter_select] settle wait skipped ({type(e).__name__}: {e})")
+    titles = [c["title"] for c in out_chapters]
+
+    async def _one(pos: int, k: int):
+        ch = out_chapters[pos]
+        units = domain.build_split_units(
+            ch["member_doc_keys"], anchored_family = anchored_family, doc_title = doc_title,
+            distillates = distillates, key_idx = key_idx,
+        )
+        if len(units) < 2:
+            return pos, None
+        return pos, await _split_one(
+            framework, ch, units, k, [t for t in titles if t != ch["title"]],
+        )
+
+    results = await asyncio.gather(*[_one(pos, k) for pos, k in plans], return_exceptions = True)
+    replaced: dict[int, list[dict]] = {}
+    for (pos, k), res in zip(plans, results):
+        parts = None if isinstance(res, Exception) else res[1]
+        stats["splits"].append({
+            "title": out_chapters[pos]["title"], "n_docs": len(out_chapters[pos]["member_doc_keys"]),
+            "n_parts": k, "applied": bool(parts),
+        })
+        if parts:
+            replaced[pos] = parts
+    if not replaced:
+        return out_chapters, stats
+    new_chapters: list[dict] = []
+    for i, c in enumerate(out_chapters):
+        new_chapters.extend(replaced.get(i, [c]))
+    stats["n_split_applied"] = len(replaced)
+    return domain._renumber(new_chapters), stats
 
 
 async def persist_select_outputs(
@@ -103,69 +193,68 @@ async def chapter_select_run(state: domains.dd.planner.state.PlannerState) -> di
             "select_stats": {"skipped": "no_assignments"},
         }
 
-    pinned = domain.detect_pinned_indices(proposals, seeds)
-
-    await domains.dd.planner.runtime.progress.service.emit_progress(
-        thread_id, "chapter_select", "start",
-        n_proposals = len(proposals),
-        n_docs = len(assignments),
-        n_pinned = len(pinned),
-    )
-
-    selected, doc_to_chapter = domain.greedy_select(
-        proposals = proposals, assignments = assignments,
-        pinned_indices = pinned,
-    )
-
-    final = domain.prune_and_finalize_selection(
-        selected = selected,
-        doc_to_chapter = doc_to_chapter,
-        assignments = assignments,
-        pinned = pinned,
-        proposals = proposals,
-    )
-    pruned = final["pruned"]
-    orphan_protected = final["orphan_protected"]
-
-    # No page left behind: re-home torn families, rescue/gap-fill chapters for
-    # docs the proposals never covered. Family = parent page URL, title = page
-    # title, both from the ingestion manifest (best-effort — the consolidation
-    # degrades to per-doc lexical placement without it).
-    doc_family: dict[str, str] = {}
-    doc_title: dict[str, str] = {}
+    # Manifest (best-effort): parent-page family, title and source order per doc.
+    # Without it the pipeline degrades to per-doc placement (no families/order).
+    entries: list[dict] = []
     try:
         manifest_obj = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)
-        for e in (manifest_obj or {}).get("entries", []):
-            if e.get("key"):
-                doc_family[e["key"]] = (e.get("url") or "").split("#", 1)[0]
-                doc_title[e["key"]] = e.get("title") or ""
+        entries = (manifest_obj or {}).get("entries") or []
     except Exception as e:
         logger.warning(
             f"[chapter_select] {slug}: manifest unavailable for family "
             f"consolidation ({type(e).__name__}: {e}) — per-doc fallback only"
         )
-    consolidated = domain.consolidate_placements(
-        kept = final["kept"],
-        doc_to_chapter = final["doc_to_chapter"],
-        assignments = assignments,
-        proposals = proposals,
-        doc_family = doc_family,
-        doc_title = doc_title,
+    doc_family = {e["key"]: (e.get("url") or "").split("#", 1)[0] for e in entries if e.get("key")}
+    doc_title = {e["key"]: e.get("title") or "" for e in entries if e.get("key")}
+    key_idx = {e["key"]: int(e.get("idx") or 0) for e in entries if e.get("key")}
+    anchored_family = domain.anchored_family_map(entries)
+    try:
+        distillates = await domains.dd.planner.nodes.doc_distill.service.load_distillates(minio, slug)
+    except Exception:
+        distillates = {}
+
+    await domains.dd.planner.runtime.progress.service.emit_progress(
+        thread_id, "chapter_select", "start",
+        n_proposals = len(proposals),
+        n_docs = len(assignments),
+        n_pinned = len(domain.detect_pinned_indices(proposals, seeds)),
     )
-    kept = consolidated["kept"]
-    doc_to_chapter = consolidated["doc_to_chapter"]
-    out_chapters = consolidated["out_chapters"]
-    consolidation = consolidated["stats"]
+
+    result = domain.select_pipeline(
+        proposals = proposals, assignments = assignments, seeds = seeds,
+        doc_family = doc_family, doc_title = doc_title, distillates = distillates,
+        key_idx = key_idx, anchored_family = anchored_family,
+    )
+    pinned = result["pinned"]
+    pruned = result["pruned"]
+    orphan_protected = result["orphan_protected"]
+    kept = result["kept"]
+    out_chapters = result["out_chapters"]
+    consolidation = result["stats"]
     if consolidation["n_unplaced_final"]:
         logger.warning(
             f"[chapter_select] {slug}: {consolidation['n_unplaced_final']} doc(s) "
             f"still unplaced after consolidation — they will be missing from the plan"
         )
-    if any(consolidation[k] for k in (
-        "n_family_consolidated", "n_rehomed_to_family",
-        "n_rescued_chapters", "n_gap_chapters", "n_leftover_placed",
+    if any(consolidation.get(k) for k in (
+        "n_family_consolidated", "n_family_harmonized", "n_rehomed_to_family",
+        "n_rescued_chapters", "n_gap_chapters", "n_leftover_placed", "n_foundations",
     )):
         logger.info(f"[chapter_select] {slug}: placement consolidation {consolidation}")
+
+    # Oversize split — the one LLM step; fail-soft (chapter kept as-is on any error).
+    split_stats = {"n_split_planned": 0, "n_split_applied": 0, "splits": []}
+    try:
+        out_chapters, split_stats = await split_oversize_chapters(
+            slug, out_chapters, anchored_family = anchored_family, doc_title = doc_title,
+            distillates = distillates, key_idx = key_idx,
+        )
+    except Exception as e:
+        logger.warning(f"[chapter_select] {slug}: oversize split skipped ({type(e).__name__}: {e})")
+    consolidation = {**consolidation, **{k: v for k, v in split_stats.items() if k != "splits"}}
+    if split_stats["splits"]:
+        logger.info(f"[chapter_select] {slug}: oversize split {split_stats['splits']}")
+    doc_to_chapter = {k: i for i, c in enumerate(out_chapters) for k in c["member_doc_keys"]}
 
     n_assigned_docs = len(doc_to_chapter)
     n_total_docs = len(assignments)
@@ -175,6 +264,7 @@ async def chapter_select_run(state: domains.dd.planner.state.PlannerState) -> di
         "framework_slug":        slug,
         "manifest_hash":         manifest,
         "selected_indices":      kept,
+        "splits":                split_stats["splits"],
         "pruned_indices":        pruned,
         "pinned_indices":        sorted(pinned),
         "orphan_protected":      orphan_protected,
@@ -201,6 +291,8 @@ async def chapter_select_run(state: domains.dd.planner.state.PlannerState) -> di
                     "member_cluster_ids": [],   # n/a — LLM-first path
                     "member_doc_keys":    c["member_doc_keys"],
                     "order":              c["order"],
+                    "origin":             c.get("origin"),
+                    "role":               c.get("role"),
                 }
                 for c in out_chapters
             ],

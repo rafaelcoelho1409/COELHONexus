@@ -2,6 +2,7 @@
 from __future__ import annotations
 from . import params, versions
 
+import math
 import re
 from collections import Counter, defaultdict
 from hashlib import sha256
@@ -249,6 +250,7 @@ def consolidate_placements(
     proposals: list[dict],
     doc_family: dict[str, str],
     doc_title: dict[str, str],
+    anchored_family: dict[str, str] | None = None,
 ) -> dict:
     """Make the plan place EVERY doc, and place it sensibly.
 
@@ -268,7 +270,11 @@ def consolidate_placements(
     after all, taking along the docs that strictly prefer it; (2) remaining
     weak/unplaced docs follow their family's chapter; (3) remaining families of
     ≥ MIN_DOCS docs become a gap chapter named after their page; (4) leftovers go
-    to the lexically nearest chapter. Pure + deterministic. `doc_family` / `doc_title` may be partial.
+    to the lexically nearest chapter. Last, (5) harmonizes ANCHORED
+    families of any size ≥ FAMILY_HARMONIZE_MIN_DOCS: docs outside the family's
+    majority chapter follow it when the assigner rated that chapter a plausible
+    home (`anchored_family` — only virtual sub-pages of one page; see params).
+    Pure + deterministic. `doc_family` / `doc_title` may be partial.
     Returns {kept, doc_to_chapter, out_chapters, stats}; slot ids are
     proposal indices, or negative ints for gap chapters."""
     thr = params.CONFIDENCE_THRESHOLD
@@ -305,7 +311,7 @@ def consolidate_placements(
     place: dict[str, int] = {k: ci for k, ci in doc_to_chapter.items() if ci in slots}
 
     stats = {
-        "n_family_consolidated": 0, "n_rehomed_to_family": 0,
+        "n_family_consolidated": 0, "n_family_harmonized": 0, "n_rehomed_to_family": 0,
         "n_rescued_chapters": 0, "n_rescue_pulled": 0, "n_gap_chapters": 0,
         "n_leftover_placed": 0, "n_unplaced_final": 0,
     }
@@ -433,6 +439,40 @@ def consolidate_placements(
         sizes[best] += 1
         stats["n_leftover_placed"] += 1
 
+    # (5) harmonize anchored families — LAST, once every chapter that will exist is
+    # open (rescue/gap steps above can open a family's real home): sub-pages of one
+    # reference page belong together. A minority doc follows the family's majority chapter when that
+    # chapter is a plausible home by the assigner's own score and its current
+    # chapter doesn't beat it by much — a strong, specific disagreement stays.
+    # (asyncio: subprocess 6/1, queue 3/1, exceptions 2/1 split across chapters.)
+    if anchored_family:
+        fam_docs: dict[str, list[str]] = defaultdict(list)
+        for k in sorted(assignments):
+            f = anchored_family.get(k)
+            if f:
+                fam_docs[f].append(k)
+        max_family = max(params.FAMILY_HARMONIZE_MIN_DOCS,
+                         int(params.FAMILY_HARMONIZE_MAX_SHARE * len(assignments)))
+        for f in sorted(fam_docs):
+            docs = fam_docs[f]
+            if not (params.FAMILY_HARMONIZE_MIN_DOCS <= len(docs) <= max_family):
+                continue
+            placed = [k for k in docs if k in place]
+            if len(placed) < params.FAMILY_HARMONIZE_MIN_DOCS:
+                continue
+            counts = Counter(place[k] for k in placed)
+            (maj, n_maj), = counts.most_common(1)
+            if len(counts) < 2 or n_maj / len(placed) < params.FAMILY_HARMONIZE_MAJORITY:
+                continue
+            for k in placed:
+                cur = place[k]
+                if cur == maj:
+                    continue
+                c_maj, c_cur = conf(k, maj), conf(k, cur)
+                if c_maj >= params.HARMONIZE_MIN_CONF and (c_cur - c_maj) <= params.HARMONIZE_MAX_GAP:
+                    place[k] = maj
+                    stats["n_family_harmonized"] += 1
+
     stats["n_unplaced_final"] = sum(1 for k in assignments if k not in place)
 
     members: dict[int, list[str]] = defaultdict(list)
@@ -458,6 +498,245 @@ def consolidate_placements(
         "doc_to_chapter": place,
         "out_chapters":   out_chapters,
         "stats":          stats,
+    }
+
+
+def anchored_family_map(entries: list[dict]) -> dict[str, str]:
+    """key → parent-page URL for every entry under a URL that was split into
+    virtual sub-pages (at least one entry carries anchors) — the page's own intro
+    doc (no anchors itself) is a member too. Only these form families for
+    harmonization/splitting: on a flat site, or a single-URL dump, the URL says
+    nothing about kinship."""
+    parent = lambda e: (e.get("url") or "").split("#", 1)[0]
+    split_pages = {parent(e) for e in entries if e.get("anchors") and parent(e)}
+    return {e["key"]: parent(e) for e in entries if e.get("key") and parent(e) in split_pages}
+
+
+def _renumber(chapters: list[dict]) -> list[dict]:
+    for i, c in enumerate(chapters, 1):
+        c["order"] = i
+        c["n_member_docs"] = len(c["member_doc_keys"])
+    return chapters
+
+
+def apply_foundations(
+    *,
+    out_chapters: list[dict],
+    doc_role: dict[str, str],
+    doc_family: dict[str, str],
+    key_idx: dict[str, int],
+) -> tuple[list[dict], dict]:
+    """Collect cross-cutting single pages into one front-matter chapter.
+
+    A doc qualifies when doc_distill labelled its role in FOUNDATIONS_ROLES AND it
+    stands alone on its page (no siblings under the same parent URL) — reference
+    sub-pages come in families, overview/platform/debugging pages do not. At most
+    FOUNDATIONS_MAX_SHARE of the corpus is moved (overview first, then source
+    order), never from a chapter that would drop below MIN_DOCS_PER_CHAPTER, and
+    nothing happens below FOUNDATIONS_MIN_DOCS. Returns (chapters, stats)."""
+    total = sum(len(c["member_doc_keys"]) for c in out_chapters)
+    fam_size = Counter(doc_family.get(k) or k for c in out_chapters for k in c["member_doc_keys"])
+    cands = [
+        (c_i, k)
+        for c_i, c in enumerate(out_chapters)
+        for k in c["member_doc_keys"]
+        if doc_role.get(k) in params.FOUNDATIONS_ROLES and fam_size[doc_family.get(k) or k] == 1
+    ]
+    stats = {"n_foundations": 0, "foundations_candidates": len(cands)}
+    if len(cands) < params.FOUNDATIONS_MIN_DOCS:
+        return out_chapters, stats
+    cap = max(params.FOUNDATIONS_MIN_DOCS, int(params.FOUNDATIONS_MAX_SHARE * total))
+    cands.sort(key = lambda ck: (
+        0 if doc_role.get(ck[1]) == "overview" else 1, key_idx.get(ck[1], 1 << 30), ck[1],
+    ))
+    remaining = {i: len(c["member_doc_keys"]) for i, c in enumerate(out_chapters)}
+    moved: list[tuple[int, str]] = []
+    for c_i, k in cands:
+        if len(moved) >= cap:
+            break
+        if remaining[c_i] - 1 < params.MIN_DOCS_PER_CHAPTER:
+            continue
+        remaining[c_i] -= 1
+        moved.append((c_i, k))
+    if len(moved) < params.FOUNDATIONS_MIN_DOCS:
+        return out_chapters, stats
+    moved_keys = {k for _, k in moved}
+    new_chapters = []
+    for c in out_chapters:
+        members = [k for k in c["member_doc_keys"] if k not in moved_keys]
+        new_chapters.append({**c, "member_doc_keys": members})
+    foundations = {
+        "title":               params.FOUNDATIONS_TITLE,
+        "description":         params.FOUNDATIONS_DESCRIPTION,
+        "key_concepts":        [],
+        "member_doc_keys":     sorted(moved_keys, key = lambda k: (key_idx.get(k, 1 << 30), k)),
+        "n_member_docs":       len(moved_keys),
+        "order":               1,
+        "source_proposal_idx": None,
+        "origin":              "foundations",
+        "role":                "foundations",
+        "pinned":              False,
+    }
+    stats["n_foundations"] = len(moved_keys)
+    return _renumber([foundations] + new_chapters), stats
+
+
+def plan_splits(out_chapters: list[dict], max_chapters: int = 30) -> list[tuple[int, int]]:
+    """[(chapter position, n_parts)] for chapters over SPLIT_MAX_SHARE of the corpus."""
+    total = sum(len(c["member_doc_keys"]) for c in out_chapters)
+    if total < params.SPLIT_MIN_TOTAL_DOCS:
+        return []
+    out: list[tuple[int, int]] = []
+    n_chapters = len(out_chapters)
+    sizes = sorted(len(c["member_doc_keys"]) for c in out_chapters if c.get("origin") != "foundations")
+    median = sizes[len(sizes) // 2] if sizes else 0
+    for i, c in enumerate(out_chapters):
+        n = len(c["member_doc_keys"])
+        if c.get("origin") == "foundations" or n < params.SPLIT_MIN_CHAPTER_DOCS:
+            continue
+        share = n / total
+        if share <= params.SPLIT_MAX_SHARE or n <= params.SPLIT_MEDIAN_RATIO * median:
+            continue
+        k = min(
+            params.SPLIT_MAX_PARTS,
+            max(2, math.ceil(share / params.SPLIT_MAX_SHARE)),
+            n // params.MIN_DOCS_PER_CHAPTER,
+        )
+        if k >= 2 and n_chapters + (k - 1) <= max_chapters:
+            out.append((i, k))
+            n_chapters += k - 1
+    return out
+
+
+def _unit_label(title: str) -> str:
+    return (title or "").split(" — ")[0].strip() or "(untitled)"
+
+
+def build_split_units(
+    member_keys: list[str],
+    *,
+    anchored_family: dict[str, str],
+    doc_title: dict[str, str],
+    distillates: dict[str, dict],
+    key_idx: dict[str, int],
+) -> list[dict]:
+    """The items an oversize chapter is partitioned over: anchored sibling
+    sub-pages of one page are ONE unit (so a split can never tear a family);
+    every other doc is its own unit. Ordered by position in the source docs."""
+    groups: dict[str, list[str]] = defaultdict(list)
+    for k in member_keys:
+        groups[anchored_family.get(k) or k].append(k)
+    units = []
+    for g, keys in groups.items():
+        keys = sorted(keys, key = lambda k: (key_idx.get(k, 1 << 30), k))
+        summ = " ".join(
+            ((distillates.get(k) or {}).get("summary") or "").strip() for k in keys[:3]
+        ).strip()
+        units.append({
+            "keys":    keys,
+            "label":   _unit_label(doc_title.get(keys[0], "")),
+            "summary": summ[:params.SPLIT_UNIT_SUMMARY_CHARS],
+        })
+    units.sort(key = lambda u: (key_idx.get(u["keys"][0], 1 << 30), u["keys"][0]))
+    for i, u in enumerate(units):
+        u["id"] = i
+    return units
+
+
+def validate_split(
+    parts: list[dict], units: list[dict], other_titles: set[str],
+) -> tuple[bool, str]:
+    """Check an LLM split proposal: parts = [{title, description, unit_ids}].
+    Pure. Returns (ok, reason) — the reason is fed back to the model on repair."""
+    n_docs = sum(len(u["keys"]) for u in units)
+    if not (2 <= len(parts) <= params.SPLIT_MAX_PARTS):
+        return False, f"need between 2 and {params.SPLIT_MAX_PARTS} groups, got {len(parts)}"
+    seen: set[int] = set()
+    for p in parts:
+        for u in p.get("unit_ids") or []:
+            if u in seen:
+                return False, f"unit {u} appears in more than one group"
+            seen.add(u)
+    all_ids = {u["id"] for u in units}
+    if seen - all_ids:
+        return False, f"unknown unit ids {sorted(seen - all_ids)[:10]}"
+    if all_ids - seen:
+        return False, f"units not placed in any group: {sorted(all_ids - seen)[:10]}"
+    floor = max(params.MIN_DOCS_PER_CHAPTER, math.ceil(0.15 * n_docs))
+    titles: set[str] = set()
+    for p in parts:
+        size = sum(len(units[u]["keys"]) for u in p["unit_ids"])
+        if size < floor:
+            return False, f"group {p.get('title')!r} has only {size} docs (minimum {floor})"
+        t = " ".join((p.get("title") or "").split())
+        if not (2 <= len(t.split()) <= 8):
+            return False, f"title {t!r} must be 2-8 words"
+        if t.casefold() in titles or t.casefold() in other_titles:
+            return False, f"title {t!r} is not unique among chapters"
+        titles.add(t.casefold())
+    return True, ""
+
+
+def apply_split(chapter: dict, parts: list[dict], units: list[dict]) -> list[dict]:
+    """Replace one chapter by its validated parts (order within the chapter by source position)."""
+    out = []
+    for j, p in enumerate(parts):
+        keys = sorted(k for u in p["unit_ids"] for k in units[u]["keys"])
+        out.append({
+            **chapter,
+            "title":               " ".join(p["title"].split()),
+            "description":         (p.get("description") or chapter.get("description") or "").strip(),
+            "key_concepts":        [],
+            "member_doc_keys":     keys,
+            "n_member_docs":       len(keys),
+            "source_proposal_idx": chapter.get("source_proposal_idx") if j == 0 else None,
+            "origin":              "split",
+        })
+    return out
+
+
+def select_pipeline(
+    *,
+    proposals: list[dict],
+    assignments: dict[str, list[dict]],
+    seeds: dict,
+    doc_family: dict[str, str],
+    doc_title: dict[str, str],
+    distillates: dict[str, dict],
+    key_idx: dict[str, int],
+    anchored_family: dict[str, str] | None = None,
+) -> dict:
+    """The whole deterministic selection: greedy coverage → prune → consolidate
+    (incl. anchored-family harmonization) → Foundations chapter. Shared by the
+    node and the offline replay (scripts/dd/replay_select.py), so what is
+    measured is what ships. The LLM oversize-split runs after this, in the node."""
+    pinned = detect_pinned_indices(proposals, seeds)
+    selected, doc_to_chapter = greedy_select(
+        proposals = proposals, assignments = assignments, pinned_indices = pinned,
+    )
+    final = prune_and_finalize_selection(
+        selected = selected, doc_to_chapter = doc_to_chapter, assignments = assignments,
+        pinned = pinned, proposals = proposals,
+    )
+    cons = consolidate_placements(
+        kept = final["kept"], doc_to_chapter = final["doc_to_chapter"],
+        assignments = assignments, proposals = proposals,
+        doc_family = doc_family, doc_title = doc_title, anchored_family = anchored_family,
+    )
+    doc_role = {k: (d or {}).get("role") for k, d in (distillates or {}).items()}
+    chapters, f_stats = apply_foundations(
+        out_chapters = cons["out_chapters"], doc_role = doc_role,
+        doc_family = doc_family, key_idx = key_idx,
+    )
+    stats = {**cons["stats"], **f_stats}
+    return {
+        "kept":             cons["kept"],
+        "pruned":           final["pruned"],
+        "orphan_protected": final["orphan_protected"],
+        "pinned":           pinned,
+        "out_chapters":     chapters,
+        "doc_to_chapter":   {k: i for i, c in enumerate(chapters) for k in c["member_doc_keys"]},
+        "stats":            stats,
     }
 
 

@@ -267,7 +267,10 @@ async def chapter_assign_run(state: domains.dd.planner.state.PlannerState) -> di
         await domains.dd.planner.runtime.progress.service.emit_progress(
             thread_id, "chapter_assign", "settling", delay_s = params.SETTLE_DELAY_S,
         )
-        await asyncio.sleep(params.SETTLE_DELAY_S)
+        # SETTLE_DELAY_S is now the CAP: proceeds as soon as the Rotator pool has
+        # recovered (<=25% of arms cooling, min 10s), full wait if it can't tell.
+        settled = await domains.settings.chat.service.wait_for_rotator_settle(params.SETTLE_DELAY_S)
+        logger.info(f"[chapter_assign] settle done: {settled}")
 
     # Bulk prefetch bodies only for docs lacking distillate summary (fallback path)
     # SOTA: single read_many chunked (shared S3 client, BoundedSemaphore per chunk)

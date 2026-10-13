@@ -88,6 +88,34 @@ def extract_structural_seeds(
     }
 
 
+def build_source_structure(entries: list[dict]) -> str:
+    """The docs' own structure as a prompt block: parent pages in navigation order
+    (manifest `idx`) with their sub-page counts — the strongest free prior for
+    chapter grouping and order. "" unless the corpus has multi-page families
+    (a flat site or a single-URL dump has no kinship to report). Capped at
+    SOURCE_STRUCTURE_MAX_LINES lines (largest families kept, order preserved)."""
+    fams: dict[str, dict] = {}
+    for e in entries or []:
+        url = (e.get("url") or "").split("#", 1)[0]
+        if not url or not e.get("key"):
+            continue
+        f = fams.setdefault(url, {"idx": e.get("idx", 0), "n": 0, "title": ""})
+        f["n"] += 1
+        f["idx"] = min(f["idx"], e.get("idx", 0))
+        if not f["title"]:
+            f["title"] = (e.get("title") or "").split(" — ")[0].strip()
+    multi = [f for f in fams.values() if f["n"] >= 2]
+    if not multi or len(fams) <= 1:
+        return ""
+    keep = sorted(multi, key = lambda f: -f["n"])[:params.SOURCE_STRUCTURE_MAX_LINES]
+    keep.sort(key = lambda f: f["idx"])
+    lines = [f"  {i}. {f['title'] or '(untitled)'} ({f['n']} pages)" for i, f in enumerate(keep, 1)]
+    n_single = sum(1 for f in fams.values() if f["n"] == 1)
+    if n_single:
+        lines.append(f"  (+ {n_single} single-page docs not listed)")
+    return "\n".join(lines)
+
+
 def build_fallback_proposals(
     framework: str, seeds: dict, target_chapters: int, n_docs: int,
 ) -> schemas.ChapterProposalList:

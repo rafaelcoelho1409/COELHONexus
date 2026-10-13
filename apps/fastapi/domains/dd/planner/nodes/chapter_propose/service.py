@@ -72,7 +72,7 @@ async def load_bodies(
 
 
 async def draft_one(
-    prompt: str, sample_idx: int,
+    prompt: str, sample_idx: int, failures: Optional[list] = None,
 ) -> Optional[schemas.ChapterProposalList]:
     """One LLM call, decoded via LangChain's `.with_structured_output()`
     (same pattern as chapter_assign's `_score_call`). A parse/validation
@@ -82,7 +82,18 @@ async def draft_one(
     specific correction; a network/provider failure on the first call
     returns None immediately — same split as before, now driven by
     `chat_structured_async`'s own exception taxonomy (ValidationError/
-    ValueError = reask-eligible, anything else = not)."""
+    ValueError = reask-eligible, anything else = not).
+
+    `failures` (optional) collects one {sample, stage, kind, msg} per failed
+    attempt — a bare `None` return used to hide WHY samples died (asyncio ran
+    with 1 valid of 5 and nothing recorded why)."""
+    def _note(stage: str, e: Exception) -> None:
+        if failures is not None:
+            failures.append({
+                "sample": sample_idx, "stage": stage,
+                "kind": type(e).__name__, "msg": " ".join(str(e).split())[:160],
+            })
+
     try:
         payload, _meta = await domains.settings.chat.service.chat_structured_async(
             prompt,
@@ -94,7 +105,9 @@ async def draft_one(
         return payload
     except (ValidationError, ValueError) as e:
         err = str(e)[:300]
+        _note("draft", e)
     except Exception as e:
+        _note("draft", e)
         logger.warning(
             f"[chapter_propose] sample {sample_idx} LLM failed: "
             f"{type(e).__name__}: {e}"
@@ -116,7 +129,9 @@ async def draft_one(
             return payload2
         except (ValidationError, ValueError) as e:
             err = str(e)[:300]
+            _note(f"repair{repair_attempt + 1}", e)
         except Exception as e:
+            _note(f"repair{repair_attempt + 1}", e)
             logger.warning(
                 f"[chapter_propose] sample {sample_idx} repair "
                 f"{repair_attempt + 1}/{params.MAX_REPAIR_ATTEMPTS} "
@@ -248,7 +263,10 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
         await domains.dd.planner.runtime.progress.service.emit_progress(
             thread_id, "chapter_propose", "settling", delay_s = params.SETTLE_DELAY_S,
         )
-        await asyncio.sleep(params.SETTLE_DELAY_S)
+        # SETTLE_DELAY_S is now the CAP: proceeds as soon as the Rotator pool has
+        # recovered (<=25% of arms cooling, min 10s), full wait if it can't tell.
+        settled = await domains.settings.chat.service.wait_for_rotator_settle(params.SETTLE_DELAY_S)
+        logger.info(f"[chapter_propose] settle done: {settled}")
 
     distillates_map = None
     if distill_ref:
@@ -262,6 +280,15 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
     seeds = domain.extract_structural_seeds(
         source_keys = relevant_files, bodies_by_key = bodies_by_key,
     )
+
+    # The docs' own structure (parent pages in navigation order, with page counts) —
+    # best-effort; "" when the manifest is missing or the corpus has no multi-page families.
+    source_structure = ""
+    try:
+        _m = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)
+        source_structure = domain.build_source_structure((_m or {}).get("entries") or [])
+    except Exception as e:
+        logger.info(f"[chapter_propose] {slug}: source structure unavailable ({type(e).__name__})")
 
     # Adaptive target; raise stop-floor to ~0.7× so big corpora don't early-stop.
     target_chapters = domain.target_chapters_for_n_docs(len(relevant_files))
@@ -278,6 +305,7 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
         seeds = seeds,
         body_chars_per_doc = params.BODY_CHARS_PER_DOC,
         target_chapters = target_chapters,
+        source_structure = source_structure,
     )
 
     await domains.dd.planner.runtime.progress.service.emit_progress(
@@ -290,9 +318,10 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
     )
 
     # Optimal-Stopping (CGES): if sample 0 parses cleanly AND ≥ stop_floor proposals, ship.
+    sample_failures: list[dict] = []
     samples: list[schemas.ChapterProposalList | None]
     if params.OPTIMAL_STOPPING_ENABLED and params.N_SAMPLES >= 2:
-        s0 = await draft_one(prompt, 0)
+        s0 = await draft_one(prompt, 0, sample_failures)
         samples = [s0]
         if s0 is not None and len(s0.proposals) >= stop_floor:
             logger.info(
@@ -303,14 +332,19 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
             )
         else:
             remaining = await asyncio.gather(*[
-                draft_one(prompt, i) for i in range(1, params.N_SAMPLES)
+                draft_one(prompt, i, sample_failures) for i in range(1, params.N_SAMPLES)
             ])
             samples.extend(remaining)
     else:
         samples = list(await asyncio.gather(*[
-            draft_one(prompt, i) for i in range(params.N_SAMPLES)
+            draft_one(prompt, i, sample_failures) for i in range(params.N_SAMPLES)
         ]))
     valid: list[schemas.ChapterProposalList] = [s for s in samples if s is not None]
+    if sample_failures:
+        logger.warning(
+            f"[chapter_propose] {slug}: {len(valid)}/{len(samples)} samples valid; "
+            f"failures: {sample_failures[:8]}"
+        )
 
     fallback_used = False
     if not valid:
@@ -324,7 +358,7 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
         await asyncio.sleep(2.0)
         # Quick retry: one more parallel sample batch
         retry_samples = list(await asyncio.gather(*[
-            draft_one(prompt, i + 10) for i in range(params.N_SAMPLES)
+            draft_one(prompt, i + 10, sample_failures) for i in range(params.N_SAMPLES)
         ]))
         valid = [s for s in retry_samples if s is not None]
         if not valid:
@@ -347,6 +381,8 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
         "manifest_hash":   manifest,
         "n_samples_valid": len(valid),
         "n_samples_total": params.N_SAMPLES,
+        "sample_failures": sample_failures[:20],
+        "source_structure": source_structure,
         "chosen_idx":      chosen_idx,
         "fallback_used":   fallback_used,
         "seeds":           seeds,
@@ -361,6 +397,9 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
         "n_files": n,
         "n_proposals": len(chosen.proposals),
         "n_samples_valid": len(valid),
+        "n_samples_total": params.N_SAMPLES,
+        "sample_failures": sample_failures[:20],
+        "has_source_structure": bool(source_structure),
         "chosen_idx": chosen_idx,
         "cache_hit": False,
         "wall_ms": wall_ms,

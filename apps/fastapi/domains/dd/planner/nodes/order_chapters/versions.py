@@ -16,4 +16,7 @@ from __future__ import annotations
 # doc_distill/chapter_assign; 20s was far shorter than the Rotator's own
 # cooldown_time=120 and never reliably outlasted chapter_assign's tail-end
 # cooldowns.
-PROMPT_VERSION = "v5-settle-130s-2026-09-09"
+# v6 (2026-10-13): the docs' own navigation order votes in the Borda aggregation
+# (params.SOURCE_ORDER_WEIGHT extra rankings) and is the fallback order when every
+# LLM sample fails; the Foundations chapter (role == "foundations") is pinned first.
+PROMPT_VERSION = "v6-source-order-2026-10-13"

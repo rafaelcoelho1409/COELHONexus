@@ -92,6 +92,8 @@ OPTIMAL_STOPPING_ENABLED = (
 # Gemini 1M.
 BODY_CHARS_PER_DOC = 2_000
 
+# SOURCE STRUCTURE prompt block (parent pages in navigation order) line cap.
+SOURCE_STRUCTURE_MAX_LINES = 60
 # Structural seed extraction tuning.
 SEED_MAX_HEADINGS = 60
 SEED_MAX_NAMESPACES = 30
