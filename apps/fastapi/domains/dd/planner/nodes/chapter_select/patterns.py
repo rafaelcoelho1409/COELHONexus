@@ -12,5 +12,10 @@ MIGRATION_PAGE_RE = re.compile(
     r"\b(migrat\w*|upgrad\w*|changelog|release notes|deprecat\w*|breaking changes|what s new|whats new)\b",
     re.IGNORECASE,
 )
+# A chapter title that names orientation / support material (quickstart, foundations, troubleshooting, FAQ ...).
+FRONT_MATTER_TITLE_RE = re.compile(
+    r"\b(foundations?|quick ?start|getting started|introduction|overview|basics|troubleshoot\w*|faq|diagnostics|setup|installation)\b",
+    re.IGNORECASE,
+)
 # `ingestion/<slug>/pages/0336-<url-slug>.md` → `<url-slug>`
 KEY_STEM_RE = re.compile(r"(?:^|/)(?:\d+-)?([^/]+?)(?:\.md)?$")

@@ -71,6 +71,11 @@ TEMPERATURE_VOTE    = 0.0
 # Fewer valid samples than this → one top-up round for the failed indices (best-of-5 with 2-3 left
 # is thin: fastmcp lost 2 of 5 to Rotator wall-cap timeouts on 30-chapter outputs).
 MIN_VALID_SAMPLES = 4
+# Weak batch: the best candidate's evidence score is under WEAK_BEST_SCORE -> draw WEAK_RETRY_SAMPLES
+# more (angles WEAK_RETRY_ANGLES) and let the pick choose among all of them.
+WEAK_BEST_SCORE = 0.8
+WEAK_RETRY_SAMPLES = 3
+WEAK_RETRY_ANGLES = (1, 2, 3, 4)
 # Targets this large mean 20+ chapters x (description + concepts) and long reasoning preambles; the
 # prompt then asks for compact entries (fewer concepts, short descriptions) — less to generate, fewer
 # 240 s timeouts, and the assigner only ever shows 10 concepts per chapter.
@@ -166,6 +171,13 @@ SOURCE_STRUCTURE_MAX_LINES = 60
 SECTION_MIN_DOCS  = 6
 SECTION_MAX_SHARE = 0.35
 SECTION_MAX_LINES = 12
+# A directory over SECTION_MAX_SHARE of the corpus is listed with its pages grouped by slug prefix
+# (see domain._trunk_lines): groups above TRUNK_SPLIT_ABOVE pages split by the next word.
+TRUNK_MIN_DOCS    = 20
+TRUNK_MIN_GROUP   = 4
+TRUNK_SPLIT_ABOVE = 14
+TRUNK_MAX_LINES   = 18
+TRUNK_MIN_COVER   = 0.5      # share of the directory its listed groups must cover, else it is not listed
 # Structural seed extraction tuning.
 SEED_MAX_HEADINGS = 60
 SEED_MAX_NAMESPACES = 30

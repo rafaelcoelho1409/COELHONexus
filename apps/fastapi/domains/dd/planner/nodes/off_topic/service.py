@@ -83,6 +83,32 @@ async def judge_one(
     return True, last_response, last_error, last_meta
 
 
+async def recheck_drops(
+    sem: asyncio.Semaphore, framework_name: str, framework_category: str,
+    keys: list[str], verdicts: list, summary: str = "",
+) -> tuple[list, list[int], int]:
+    """Second opinion on confident DROPs of substantial pages: one free-tier judge call is noisy
+    (fastmcp: 4 drops one run, 15 the next, one a real OAuth guide), and a dropped guide is
+    silently missing from the book. Both calls must say DROP; KEEP wins (a judge error already
+    means KEEP). Returns (verdicts, indices re-judged, how many flipped to KEEP)."""
+    verdicts = list(verdicts)
+    recheck = [
+        i for i, (key, res) in enumerate(zip(keys, verdicts))
+        if res[0] is False and res[2] is None and len(key) >= params.RECHECK_MIN_CHARS
+    ]
+    n_rescued = 0
+    if recheck:
+        again = await asyncio.gather(*[
+            judge_one(sem, framework_name, framework_category, keys[i], summary = summary)
+            for i in recheck
+        ])
+        for i, res in zip(recheck, again):
+            if res[0] is True:
+                verdicts[i] = res
+                n_rescued += 1
+    return verdicts, recheck, n_rescued
+
+
 async def off_topic_run(state: domains.dd.planner.state.PlannerState) -> dict:
     """LLM-judge every doc (sem-bounded) → aggregate KEEP set. No embeddings."""
     slug = state.get("framework_slug")
@@ -168,7 +194,11 @@ async def off_topic_run(state: domains.dd.planner.state.PlannerState) -> dict:
         )
         for key in unique_keys
     ]
-    unique_verdicts = await asyncio.gather(*tasks)
+    unique_verdicts = list(await asyncio.gather(*tasks))
+
+    unique_verdicts, recheck, n_rescued = await recheck_drops(
+        sem, framework_name, framework_category, unique_keys, unique_verdicts, index_summary,
+    )
 
     # Fan unique verdicts back out to the original doc order. Duplicates inherit
     # the same verdict + meta (deployment usage counted once on the unique call).
@@ -205,6 +235,8 @@ async def off_topic_run(state: domains.dd.planner.state.PlannerState) -> dict:
         "llm_kept":            llm_kept,
         "llm_dropped":         llm_dropped,
         "llm_errors":          len(judge_errors),
+        "llm_rechecked":       len(recheck),
+        "llm_recheck_kept":    n_rescued,
         "llm_error_breakdown": error_breakdown,
         "domain_coherence":    0.0,
         "per_file_margins":    per_file,
@@ -236,6 +268,7 @@ async def off_topic_run(state: domains.dd.planner.state.PlannerState) -> dict:
         f"(dropped {stats['dropped']}); "
         f"llm judged={n_to_judge} (deduped {n_deduped}, "
         f"auto-kept reference pages {len(auto_keep_idx)}) "
+        f"(second opinion on {len(recheck)} drops of >={params.RECHECK_MIN_CHARS} chars: {n_rescued} kept) "
         f"(keep={llm_kept} drop={llm_dropped}, "
         f"errors={len(judge_errors)} = "
         f"{dict(sorted(error_breakdown.items()))}); "

@@ -48,15 +48,15 @@ print("1 slug-aware clustering ok:", [len(g) for g in groups])
 app = lambda n: [chap("Big", 60), chap("A", 40), chap("B", 40), chap("Additional Topics", n, origin="gap", role="appendix")]
 assert dict(SEL.plan_splits(app(47)))[3] == 5, SEL.plan_splits(app(47))
 assert dict(SEL.plan_splits(app(30)))[3] == 3
-assert dict(SEL.plan_splits(app(100))).get(3) == 6, SEL.plan_splits(app(100))
+assert dict(SEL.plan_splits(app(100))).get(3) == 8, SEL.plan_splits(app(100))      # 2026-10-14: up to 8 parts
 assert 3 not in dict(SEL.plan_splits([chap("Big", 200), chap("Additional Topics", 14, origin="gap", role="appendix")]))
 crowded = [chap("Big", 40)] + [chap(f"C{i}", 8) for i in range(27)] + [chap("Additional Topics", 47, origin="gap", role="appendix")]   # 29 chapters
 assert dict(SEL.plan_splits(crowded)).get(len(crowded) - 1) == 2, SEL.plan_splits(crowded)        # only 2 parts fit under the 30-chapter cap
 # validate_split accepts more parts than SPLIT_MAX_PARTS only when told to
-u5 = [{"id": i, "keys": [f"x{i}"], "label": f"u{i}", "summary": ""} for i in range(50)]
-parts5 = [{"title": f"Topic {'ABCDE'[j]} Pages", "description": "d", "unit_ids": list(range(10 * j, 10 * j + 10))} for j in range(5)]
+u5 = [{"id": i, "keys": [f"x{i}"], "label": f"u{i}", "summary": ""} for i in range(90)]
+parts5 = [{"title": f"Topic {'ABCDEFGHI'[j]} Pages", "description": "d", "unit_ids": list(range(10 * j, 10 * j + 10))} for j in range(9)]
 assert not SEL.validate_split(parts5, u5, set())[0]
-assert SEL.validate_split(parts5, u5, set(), max_parts=5)[0]
+assert SEL.validate_split(parts5, u5, set(), max_parts=9)[0]
 print("2 appendix split sizing ok:", SEL.plan_splits(app(47)))
 
 # 3) migration pages are pulled into one chapter
@@ -173,6 +173,7 @@ async def run_propose(fail_idx):
     state = {"framework_slug": "fw", "thread_id": "t", "relevant_files": [f"k{i}" for i in range(30)], "doc_distill_ref": "x"}
     out = await PR.service.chapter_propose_run(state)
     return called, out["propose_stats"]
+PR.params.WEAK_RETRY_SAMPLES = 0                                                                  # (weak-batch retry is covered by test_planner_fixes_6)
 called, stats = asyncio.run(run_propose({1, 3, 4}))
 assert sorted(called[:5]) == [0, 1, 2, 3, 4] and sorted(called[5:]) == [11, 13, 14], called       # 2 valid -> top up the failed ones (+1 spare)
 assert stats["n_samples_valid"] == 5, stats

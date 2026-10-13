@@ -9,6 +9,7 @@ from . import params, patterns, schemas, versions
 import json
 import math
 import os
+import re
 from collections import Counter
 from hashlib import sha256
 from typing import Optional
@@ -112,7 +113,8 @@ def build_source_structure(entries: list[dict]) -> str:
             f["title"] = (e.get("title") or "").split(" — ")[0].strip()
     multi = [f for f in fams.values() if f["n"] >= 2]
     sections = _site_sections(fams)
-    if (not multi and not sections) or len(fams) <= 1:
+    trunk = _trunk_lines(fams)
+    if (not multi and not sections and not trunk) or len(fams) <= 1:
         return ""
     keep = sorted(multi, key = lambda f: -f["n"])[:params.SOURCE_STRUCTURE_MAX_LINES]
     keep.sort(key = lambda f: f["idx"])
@@ -120,9 +122,10 @@ def build_source_structure(entries: list[dict]) -> str:
     n_single = sum(1 for f in fams.values() if f["n"] == 1)
     if n_single:
         lines.append(f"  (+ {n_single} single-page docs not listed)")
-    if sections:
+    if sections or trunk:
         lines.append(SECTIONS_HEADER)
         lines += [f"  - {label} ({n} pages)" for label, n in sections]
+        lines += trunk
     return "\n".join(lines)
 
 
@@ -158,6 +161,79 @@ def _site_sections(fams: dict[str, dict]) -> list[tuple[str, int]]:
             out.append((g["idx"], label, g["n"]))
     out.sort()
     return [(label, n) for _i, label, n in out[:params.SECTION_MAX_LINES]]
+
+
+def _module_groups(slugs: list[str]) -> list[tuple[str, int]]:
+    """[(slug prefix, n pages)] — the pages of one big directory grouped by the leading words of
+    their slugs (`fastmcp-server-auth-providers-github` -> `fastmcp-server-auth-providers`): a
+    group is split by the next word while it holds more than TRUNK_SPLIT_ABOVE pages and at least
+    two of its sub-groups reach TRUNK_MIN_GROUP; the rest of a split stays as `<prefix> (other)`."""
+    toks = [sl.split("-") for sl in slugs if sl]
+    if not toks:
+        return []
+    common = 0
+    while all(len(t) > common for t in toks) and len({t[common] for t in toks}) == 1:
+        common += 1
+    out: list[tuple[str, int]] = []
+
+    def split(items: list[list[str]], depth: int) -> None:
+        groups: dict[tuple, list[list[str]]] = {}
+        for t in items:
+            groups.setdefault(tuple(t[:depth]), []).append(t)
+        for key, its in groups.items():
+            if len(its) > params.TRUNK_SPLIT_ABOVE and depth < 6:
+                sub: dict[tuple, list[list[str]]] = {}
+                for t in its:
+                    sub.setdefault(tuple(t[:depth + 1]), []).append(t)
+                if sum(1 for v in sub.values() if len(v) >= params.TRUNK_MIN_GROUP) >= 2:
+                    rest = 0
+                    for v in sub.values():
+                        if len(v) >= params.TRUNK_MIN_GROUP:
+                            split(v, depth + 1)
+                        else:
+                            rest += len(v)
+                    if rest:
+                        out.append(("-".join(key) + " (other)", rest))
+                    continue
+            out.append(("-".join(key), len(its)))
+
+    split(toks, min(common + 1, 6))
+    return sorted(out, key = lambda x: -x[1])
+
+
+def _trunk_lines(fams: dict[str, dict]) -> list[str]:
+    """SOURCE STRUCTURE lines for a directory too big to be a `section` (> SECTION_MAX_SHARE of the
+    corpus) when the site has other directories: it is listed with its pages grouped by slug prefix.
+    fastmcp: the python-sdk API reference was 204 of 340 pages and was left OUT of the structure —
+    the proposer then mirrored the 10 listed sections (8-11 chapters against a target of 24) and 114
+    reference pages became a gap chapter. Listing it (ablation: 25-30 chapters, 4-8% unmatched
+    pages vs 8-13 chapters, 17-34% without) tells the proposer the corpus is mostly this."""
+    total = sum(f["n"] for f in fams.values())
+    by_dir: dict[str, list[str]] = {}
+    for url in fams:
+        body = url.split("://", 1)[-1]
+        if "/" not in body:
+            continue
+        d, slug = url.rsplit("/", 1)
+        by_dir.setdefault(d, []).extend([re.sub(r"\.(html?|md)$", "", slug)] * fams[url]["n"])
+    if len(by_dir) < 2 or not total:
+        return []
+    root = os.path.commonprefix(list(by_dir))
+    root = root[: root.rfind("/") + 1] if "/" in root else ""
+    lines: list[str] = []
+    for d, slugs in sorted(by_dir.items(), key = lambda kv: -len(kv[1])):
+        n = len(slugs)
+        if n <= params.SECTION_MAX_SHARE * total or n < params.TRUNK_MIN_DOCS:
+            continue
+        label = d[len(root):].strip("/")
+        if "." in label.split("/", 1)[0]:
+            label = label.split("/", 1)[1] if "/" in label else ""
+        groups = [g for g in _module_groups(slugs) if g[1] >= params.TRUNK_MIN_GROUP]
+        if sum(c for _g, c in groups) < params.TRUNK_MIN_COVER * n:
+            continue            # slugs are topic words, not module paths: the prefixes say nothing
+        lines.append(f"  - {label or d.rsplit('/', 1)[-1]} ({n} pages, grouped by name prefix):")
+        lines += [f"      · {g} ({c} pages)" for g, c in groups[:params.TRUNK_MAX_LINES]]
+    return lines
 
 
 def build_fallback_proposals(

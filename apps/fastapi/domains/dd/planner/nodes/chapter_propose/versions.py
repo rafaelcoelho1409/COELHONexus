@@ -60,4 +60,7 @@ from __future__ import annotations
 # only — a single-URL dump (llms-full.txt) gave the proposer NO structure at all and counted pages
 # the off-topic filter had dropped (fastmcp: a 112-page changelog family); targets >= 16 chapters
 # ask for compact entries; fewer than 4 valid samples get one top-up round.
-PROMPT_VERSION = "v16-source-path-structure-2026-10-13"
+# v17 (2026-10-14): SOURCE STRUCTURE also lists a directory over SECTION_MAX_SHARE (fastmcp's python-sdk,
+# 204 of 340 pages) with its pages grouped by slug prefix, when the prefixes are real module paths;
+# weak batches (best evidence score < 0.8) draw 3 more samples.
+PROMPT_VERSION = "v17-trunk-breakdown-weak-retry-2026-10-14"

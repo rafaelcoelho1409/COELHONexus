@@ -61,3 +61,7 @@ NEGATIVE_DESCRIPTOR = (
 # judge dropped on elasticsearch-python (7: Exceptions & Warnings, Autoscaling)
 # and asyncio (1: asyncio.wrap_future) was one of these.
 REFERENCE_MIN_SIBLINGS = 4
+
+# A DROP verdict on a page at least this long (judge-input chars) needs a second DROP from another
+# call before the page leaves the corpus; shorter pages (stubs, redirects) keep the single verdict.
+RECHECK_MIN_CHARS = 2000

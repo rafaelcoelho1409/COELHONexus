@@ -15,4 +15,8 @@ from __future__ import annotations
 # appendix splits into groups of ~10 pages (up to 6) with names judged from all listed pages;
 # migration / upgrade / changelog PAGES are pulled out of topical chapters into one migration
 # chapter (an existing one, else a new one from 3+ pages).
-PROMPT_VERSION = "v8-slug-cluster-migration-2026-10-13"
+# v9 (2026-10-14): oversize / catch-all splits use one part per ~20 / ~10 pages (up to 8) with a floor of
+# 60% of the average part, and cluster on the page's URL directory too (langfuse 115 integration pages:
+# [86, 29] mixed -> six coherent groups; fastmcp 114 leftovers: [49, 19, 27, 19] -> eight); orientation-
+# titled chapters under 5 pages are folded into Foundations.
+PROMPT_VERSION = "v9-dir-split-micro-fold-2026-10-14"

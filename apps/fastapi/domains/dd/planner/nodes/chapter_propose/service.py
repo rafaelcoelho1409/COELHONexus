@@ -380,6 +380,28 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
             f"failures: {sample_failures[:8]}"
         )
 
+    if len(valid) >= 2 and params.WEAK_RETRY_SAMPLES > 0:
+        # Weak batch: when even the best draft explains the corpus poorly (fastmcp: all five from one
+        # model gave 8-11 chapters at target 24, best score 0.78; langfuse 0.55), more drafts from
+        # other arms are cheap next to a plan that is lopsided or a catch-all chapter downstream.
+        try:
+            _texts = [
+                domain.doc_match_text(k, (distillates_map or {}).get(k), (bodies_by_key or {}).get(k, ""))
+                for k in relevant_files
+            ]
+            _best = max(sc["score"] for sc in domain.score_candidates(
+                [[p.model_dump() for p in v.proposals] for v in valid], _texts, target_chapters))
+            if _best < params.WEAK_BEST_SCORE:
+                logger.info(f"[chapter_propose] {slug}: best draft scores {_best} < {params.WEAK_BEST_SCORE} — "
+                            f"drawing {params.WEAK_RETRY_SAMPLES} more")
+                _more = await asyncio.gather(*[
+                    draft_one(domain.with_angle(prompt, 20 + a), 20 + a, sample_failures, draft_tokens)
+                    for a in params.WEAK_RETRY_ANGLES[:params.WEAK_RETRY_SAMPLES]
+                ])
+                valid += [s_ for s_ in _more if s_ is not None]
+        except Exception as e:
+            logger.warning(f"[chapter_propose] {slug}: weak-batch retry skipped ({type(e).__name__}: {e})")
+
     fallback_used = False
     if not valid:
         # SOTA fix: never return 0 chapters with success status (silent fail).

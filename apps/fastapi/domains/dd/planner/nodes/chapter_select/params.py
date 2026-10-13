@@ -39,7 +39,13 @@ SPLIT_MAX_SHARE      = 0.30
 SPLIT_MEDIAN_RATIO   = 2.0   # … AND bigger than this × the median chapter (a 5-chapter plan at 30.3% is not lopsided)
 SPLIT_MIN_TOTAL_DOCS = 24    # tiny corpora legitimately have one big chapter
 SPLIT_MIN_CHAPTER_DOCS = 12
-SPLIT_MAX_PARTS      = 4
+SPLIT_MAX_PARTS      = 8
+# Parts of an oversize chapter: at least one per OVERSIZE_DOCS_PER_PART pages as well as the share cap
+# (langfuse: 115 integration pages at k=2 -> 86 + 29 pages mixing frameworks, providers and gateways).
+OVERSIZE_DOCS_PER_PART = 20
+# A split group must hold at least this share of the average part (a 15%-of-the-chapter floor merged
+# fastmcp's 114 leftover pages into [49, 19, 27, 19] — 49 of them unrelated).
+SPLIT_FLOOR_PART_SHARE = 0.6
 GENERIC_TITLES = frozenset({   # same one-word generics chapter_propose refuses
     "introduction", "intro", "overview", "conclusion", "background", "about", "summary",
     "references", "reference", "foundations", "foundation", "miscellaneous", "misc",
@@ -105,7 +111,7 @@ GAP_SPLIT_MIN_DOCS    = 16
 # named after their first pages (fastmcp: ChatGPT/Goose/Pydantic AI guides under "File Upload and
 # Skill Sharing"); 8-11 page groups of like pages can be named truthfully.
 GAP_SPLIT_DOCS_PER_PART = 10
-GAP_SPLIT_MAX_PARTS     = 6
+GAP_SPLIT_MAX_PARTS     = 8
 
 # Clustering similarity of two pages = weighted sum of (a) cosine of their slug words (the module /
 # URL path: `fastmcp-utilities-openapi-models` sits next to `fastmcp-utilities-json-schema`), (b)
@@ -114,6 +120,12 @@ GAP_SPLIT_MAX_PARTS     = 6
 SPLIT_SIM_SLUG_WEIGHT = 0.50
 SPLIT_SIM_TEXT_WEIGHT = 0.35
 SPLIT_SIM_ROLE_WEIGHT = 0.15
+# (d) URL directory: pages under the same site directory belong together (langfuse integrations/frameworks
+# vs integrations/model-providers). Shared leading path segments / the longer path, times this weight;
+# constant — so harmless — when every page sits in one directory.
+SPLIT_SIM_DIR_WEIGHT  = 0.80
+# Chapters of fewer than this many pages whose title is front-matter-like are folded into Foundations.
+MICRO_MAX_DOCS = 5
 SPLIT_NAME_SUMMARIES  = 3        # page summaries quoted per group in the naming prompt
 SPLIT_NAME_SUMMARY_CHARS = 170
 

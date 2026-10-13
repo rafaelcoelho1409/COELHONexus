@@ -602,6 +602,22 @@ def consolidate_placements(
     }
 
 
+def page_dirs(entries: list[dict]) -> dict[str, tuple]:
+    """key -> the page's URL directory as path segments (`integrations/frameworks/langchain` ->
+    ('integrations', 'frameworks')). `source_path` (the real page URL of a single-URL dump) wins
+    over `url`; () when the manifest has neither."""
+    out: dict[str, tuple] = {}
+    for e in entries or []:
+        k = e.get("key")
+        if not k:
+            continue
+        u = (e.get("source_path") or e.get("url") or "").split("#", 1)[0].split("?", 1)[0]
+        path = re.sub(r"^[a-z][a-z0-9+.-]*://[^/]*/?", "", u.strip()).strip("/")
+        segs = [p for p in path.split("/") if p]
+        out[k] = tuple(segs[:-1])
+    return out
+
+
 def anchored_family_map(entries: list[dict]) -> dict[str, str]:
     """key → parent-page URL for every entry under a URL that was split into
     virtual sub-pages (at least one entry carries anchors) — the page's own intro
@@ -697,6 +713,31 @@ def apply_foundations(
     return _renumber([foundations] + new_chapters), stats
 
 
+def fold_micro_chapters(chapters: list[dict]) -> tuple[list[dict], dict]:
+    """Chapters of fewer than MICRO_MAX_DOCS pages whose title names orientation / support material
+    (a proposed "Foundations", "Quickstart", "Troubleshooting and FAQ" ...) belong in the Foundations
+    chapter that collects exactly such pages — langfuse ended with "Langfuse Foundations" (3 pages)
+    beside the automatic "Foundations and Diagnostics", plus a 4-page Quickstart and a 3-page FAQ.
+    No-op without a Foundations chapter. Returns (chapters, {"n_micro_folded": n})."""
+    target = next((i for i, c in enumerate(chapters) if c.get("origin") == "foundations"), None)
+    if target is None:
+        return chapters, {"n_micro_folded": 0}
+    fold = [
+        i for i, c in enumerate(chapters)
+        if i != target and c.get("origin") not in ("foundations", "migration")
+        and len(c["member_doc_keys"]) < params.MICRO_MAX_DOCS
+        and patterns.FRONT_MATTER_TITLE_RE.search(c.get("title") or "")
+        and not patterns.MIGRATION_PAGE_RE.search(c.get("title") or "")
+    ]
+    if not fold:
+        return chapters, {"n_micro_folded": 0}
+    out = [dict(c) for c in chapters]
+    for i in fold:
+        out[target]["member_doc_keys"] = out[target]["member_doc_keys"] + out[i]["member_doc_keys"]
+    out = [c for i, c in enumerate(out) if i not in set(fold)]
+    return _renumber(out), {"n_micro_folded": len(fold)}
+
+
 def is_migration_page(key: str, title: str | None = None) -> bool:
     """True when a page's slug or title says it is a migration / upgrade / changelog page."""
     text = re.sub(r"[-_./]+", " ", f"{key_stem(key)} {title or ''}")
@@ -757,9 +798,14 @@ def pull_migration_pages(
     return _renumber(chapters), stats
 
 
-def split_floor(n_docs: int) -> int:
-    """Smallest group a split may produce: MIN_DOCS_PER_CHAPTER, or 15% of the chapter."""
-    return max(params.MIN_DOCS_PER_CHAPTER, math.ceil(0.15 * n_docs))
+def split_floor(n_docs: int, n_parts: int | None = None) -> int:
+    """Smallest group a split may produce: MIN_DOCS_PER_CHAPTER, or 15% of the chapter — and, when the
+    number of parts is known, never more than SPLIT_FLOOR_PART_SHARE of the average part (so k parts
+    can exist: 6 parts of a 115-page chapter need a floor of 11, not 18)."""
+    base = max(params.MIN_DOCS_PER_CHAPTER, math.ceil(0.15 * n_docs))
+    if n_parts and n_parts >= 2:
+        return max(params.MIN_DOCS_PER_CHAPTER, min(base, int(params.SPLIT_FLOOR_PART_SHARE * n_docs / n_parts)))
+    return base
 
 
 def plan_splits(out_chapters: list[dict], max_chapters: int = 30) -> list[tuple[int, int]]:
@@ -792,10 +838,11 @@ def plan_splits(out_chapters: list[dict], max_chapters: int = 30) -> list[tuple[
             continue
         k = min(
             params.SPLIT_MAX_PARTS,
-            max(2, math.ceil(share / params.SPLIT_MAX_SHARE)),
+            max(2, math.ceil(share / params.SPLIT_MAX_SHARE), round(n / params.OVERSIZE_DOCS_PER_PART)),
             n // params.MIN_DOCS_PER_CHAPTER,
+            max_chapters - n_chapters + 1,
         )
-        if k >= 2 and n_chapters + (k - 1) <= max_chapters:
+        if k >= 2:
             out.append((i, k))
             n_chapters += k - 1
     return out
@@ -829,6 +876,7 @@ def build_split_units(
     doc_title: dict[str, str],
     distillates: dict[str, dict],
     key_idx: dict[str, int],
+    key_dir: dict[str, tuple] | None = None,
 ) -> list[dict]:
     """The items an oversize chapter is partitioned over: anchored sibling
     sub-pages of one page are ONE unit (so a split can never tear a family);
@@ -850,6 +898,7 @@ def build_split_units(
             "summary": summ[:params.SPLIT_UNIT_SUMMARY_CHARS],
             "slug":    key_stem(keys[0]),
             "role":    roles.most_common(1)[0][0] if roles else None,
+            "dir":     tuple((key_dir or {}).get(keys[0]) or ()),
         })
     units.sort(key = lambda u: (key_idx.get(u["keys"][0], 1 << 30), u["keys"][0]))
     for i, u in enumerate(units):
@@ -877,7 +926,7 @@ def validate_split(
         return False, f"unknown unit ids {sorted(seen - all_ids)[:10]}"
     if all_ids - seen:
         return False, f"units not placed in any group: {sorted(all_ids - seen)[:10]}"
-    floor = split_floor(n_docs)
+    floor = split_floor(n_docs, len(parts))
     titles: set[str] = set()
     for p in parts:
         size = sum(len(units[u]["keys"]) for u in p["unit_ids"])
@@ -956,6 +1005,8 @@ def unit_similarity(units: list[dict], texts: list[str]) -> list[list[float]]:
         s_ws = _slug_words([u["slug"] for u in units])
         s_idf, s_unseen = _word_idf(s_ws)
         s_vecs = [_word_vec(w, s_idf, s_unseen) for w in s_ws]
+    use_dir = sum(1 for u in units if u.get("dir")) >= 0.5 * n
+    dirs = [u.get("dir") or () for u in units]
     w_s = params.SPLIT_SIM_SLUG_WEIGHT if use_slug else 0.0
     w_t = params.SPLIT_SIM_TEXT_WEIGHT if use_slug else 1.0 - params.SPLIT_SIM_ROLE_WEIGHT
     w_r = params.SPLIT_SIM_ROLE_WEIGHT
@@ -965,6 +1016,14 @@ def unit_similarity(units: list[dict], texts: list[str]) -> list[list[float]]:
             s = w_t * _cosine(t_vecs[i], t_vecs[j])
             if use_slug:
                 s += w_s * _cosine(s_vecs[i], s_vecs[j])
+            if use_dir:
+                a, b = dirs[i], dirs[j]
+                common = 0
+                for x, y in zip(a, b):
+                    if x != y:
+                        break
+                    common += 1
+                s += params.SPLIT_SIM_DIR_WEIGHT * common / max(len(a), len(b), 1)
             if units[i].get("role") and units[i].get("role") == units[j].get("role"):
                 s += w_r
             sim[i][j] = sim[j][i] = s
@@ -1111,8 +1170,9 @@ def select_pipeline(
         out_chapters = cons["out_chapters"], doc_role = doc_role,
         doc_family = doc_family, key_idx = key_idx,
     )
+    chapters, mf_stats = fold_micro_chapters(chapters)
     chapters, m_stats = pull_migration_pages(chapters, doc_title)
-    stats = {**cons["stats"], **f_stats, **m_stats}
+    stats = {**cons["stats"], **f_stats, **mf_stats, **m_stats}
     return {
         "kept":             cons["kept"],
         "pruned":           final["pruned"],

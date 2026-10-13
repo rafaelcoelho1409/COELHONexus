@@ -67,7 +67,7 @@ async def _split_by_clusters(
     """Computed partition (domain.cluster_units) + one LLM call that only NAMES the groups
     (deterministic word-based titles when the model cannot). None when the pages do not
     cluster into 2+ groups of at least the size floor."""
-    floor = domain.split_floor(sum(len(u["keys"]) for u in units))
+    floor = domain.split_floor(sum(len(u["keys"]) for u in units), n_parts)
     texts = [domain.unit_text(u, distillates) for u in units]
     groups = domain.cluster_units(units, texts, n_parts, floor)
     if not groups:
@@ -137,6 +137,7 @@ async def split_oversize_chapters(
     doc_title: dict[str, str],
     distillates: dict[str, dict],
     key_idx: dict[str, int],
+    key_dir: dict[str, tuple] | None = None,
 ) -> tuple[list[dict], dict]:
     """Split every chapter over the share cap (see domain.plan_splits). Fail-soft
     per chapter; splits run concurrently after one Rotator-recovery wait (the
@@ -155,7 +156,7 @@ async def split_oversize_chapters(
         ch = out_chapters[pos]
         units = domain.build_split_units(
             ch["member_doc_keys"], anchored_family = anchored_family, doc_title = doc_title,
-            distillates = distillates, key_idx = key_idx,
+            distillates = distillates, key_idx = key_idx, key_dir = key_dir,
         )
         if len(units) < 2:
             return pos, None
@@ -319,7 +320,7 @@ async def chapter_select_run(state: domains.dd.planner.state.PlannerState) -> di
     try:
         out_chapters, split_stats = await split_oversize_chapters(
             slug, out_chapters, anchored_family = anchored_family, doc_title = doc_title,
-            distillates = distillates, key_idx = key_idx,
+            distillates = distillates, key_idx = key_idx, key_dir = domain.page_dirs(entries),
         )
     except Exception as e:
         logger.warning(f"[chapter_select] {slug}: oversize split skipped ({type(e).__name__}: {e})")
