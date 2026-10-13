@@ -270,6 +270,7 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
         elapsed = int((time.monotonic() - t0) * 1000)
         identity = list(source_ranking) if source_ranking else list(range(n_chapters))
         identity, _ = domain.pin_foundations_first(identity, chapters)
+        identity, _ = domain.pin_appendix_last(identity, chapters)
         sample_errors = [
             (m or {}).get("error", "unknown") for m in sample_metas
         ]
@@ -318,6 +319,7 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
     # The Foundations chapter (overview + cross-cutting pages) opens the book, ahead
     # of install/setup chapters.
     final_order, foundations_idx = domain.pin_foundations_first(final_order, chapters)
+    final_order, _appendix_idx = domain.pin_appendix_last(final_order, chapters)
 
     dep_usage: dict[str, int] = {}
     for m in sample_metas:

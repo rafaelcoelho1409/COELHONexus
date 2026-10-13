@@ -26,4 +26,7 @@ from __future__ import annotations
 # tutorial / how_to / reference / explanation) — chapter_select collects single-page
 # overview + cross-cutting docs into a Foundations chapter. Cached v8 distillates
 # have no role (treated as reference), so this bump re-distills once.
-PROMPT_VERSION = "v9-doc-role-2026-10-13"
+# v10 (2026-10-13): `overview` narrowed to pages that introduce the framework as a
+# whole — landing/catalog pages of ONE sub-area (provider/integration lists) were
+# labelled overview and filled deepagents'/langgraph's Foundations chapter.
+PROMPT_VERSION = "v10-doc-role-narrow-2026-10-13"

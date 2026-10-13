@@ -226,3 +226,10 @@ def manifest_hash(
         h.update(b"|distill_content=")
         h.update(distill_fp.encode())
     return h.hexdigest()[:16]
+
+
+def is_length_error(exc: Exception) -> bool:
+    """True when the model's output was cut at max_tokens (OpenAI SDK
+    LengthFinishReasonError, wrapped by chat_structured_async into ChatError)."""
+    text = f"{type(exc).__name__} {exc}"
+    return "LengthFinishReason" in text or "length limit was reached" in text

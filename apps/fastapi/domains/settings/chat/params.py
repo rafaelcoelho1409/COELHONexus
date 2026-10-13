@@ -28,6 +28,15 @@ POOL_TIMEOUT_S: float = 5.0
 # Hard wall-clock backstop = (timeout_s or DEFAULT_TIMEOUT_S) + margin.
 BACKSTOP_MARGIN_S: float = 15.0
 
+# COELHO LLM Rotator only: every request tells the Rotator how long this caller will
+# actually wait (`max_wall_s` = timeout_s - margin), so its cascade budget matches the
+# caller's own tuned timeout instead of its fixed 180s default — DD's 240s proposer
+# drafts were cut at 180s (504) while the client was still waiting, and 30s callers
+# left the cascade burning arms for 150s after the client had given up. The margin
+# lets the Rotator answer (a clean 504 JSON) just before the client's own timeout.
+ROTATOR_WALL_MARGIN_S: float = 3.0
+ROTATOR_WALL_MIN_S: float = 2.5
+
 # Rotator settle wait (service.wait_for_rotator_settle): never proceed sooner
 # than MIN, re-check the Rotator's active cooldowns every POLL, and stop at the
 # caller's cap regardless. HEALTH_TIMEOUT bounds each routing-health request.

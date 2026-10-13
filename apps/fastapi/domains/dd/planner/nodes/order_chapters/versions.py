@@ -19,4 +19,7 @@ from __future__ import annotations
 # v6 (2026-10-13): the docs' own navigation order votes in the Borda aggregation
 # (params.SOURCE_ORDER_WEIGHT extra rankings) and is the fallback order when every
 # LLM sample fails; the Foundations chapter (role == "foundations") is pinned first.
-PROMPT_VERSION = "v6-source-order-2026-10-13"
+# v7 (2026-10-13): the foundational-title rule skips Foundations/appendix/gap chapters
+# and no longer matches "cli" (fastmcp: "FastMCP CLI Tooling" and a gap chapter named
+# `…-quickstart` were both pinned to the front); the generic appendix chapter closes the book.
+PROMPT_VERSION = "v7-appendix-last-2026-10-13"

@@ -108,11 +108,13 @@ async def draft_one(
         _note("draft", e)
     except Exception as e:
         _note("draft", e)
-        logger.warning(
-            f"[chapter_propose] sample {sample_idx} LLM failed: "
-            f"{type(e).__name__}: {e}"
-        )
-        return None
+        if not domain.is_length_error(e):
+            logger.warning(
+                f"[chapter_propose] sample {sample_idx} LLM failed: "
+                f"{type(e).__name__}: {e}"
+            )
+            return None
+        err = params.LENGTH_REASK_HINT      # output hit max_tokens: ask for a shorter one
 
     for repair_attempt in range(params.MAX_REPAIR_ATTEMPTS):
         repair_prompt = (
@@ -132,6 +134,9 @@ async def draft_one(
             _note(f"repair{repair_attempt + 1}", e)
         except Exception as e:
             _note(f"repair{repair_attempt + 1}", e)
+            if domain.is_length_error(e):
+                err = params.LENGTH_REASK_HINT
+                continue
             logger.warning(
                 f"[chapter_propose] sample {sample_idx} repair "
                 f"{repair_attempt + 1}/{params.MAX_REPAIR_ATTEMPTS} "

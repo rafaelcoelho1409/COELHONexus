@@ -255,6 +255,11 @@ def build_chat_model(
         kwargs["max_tokens"] = max_tokens
     if response_format is not None:
         kwargs["model_kwargs"] = {"response_format": response_format}
+    extra = domain.rotator_wall_extra(
+        ENDPOINT.base_url, timeout_s, params.ROTATOR_WALL_MARGIN_S, params.ROTATOR_WALL_MIN_S,
+    )
+    if extra:
+        kwargs["extra_body"] = extra
     return ChatOpenAI(**kwargs)
 
 

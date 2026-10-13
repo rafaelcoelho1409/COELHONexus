@@ -42,4 +42,7 @@ from __future__ import annotations
 # v11 (2026-10-13): SOURCE STRUCTURE signal (the docs' own parent pages in
 # navigation order) + family-cohesion and no-overview-chapter rules; the
 # "split a chapter" rule tightened >40% → >30% to match chapter_select's cap.
-PROMPT_VERSION = "v11-source-structure-2026-10-13"
+# v12 (2026-10-13): a draft cut at max_tokens (LengthFinishReasonError) is re-asked with
+# a "be concise" hint instead of being lost; Nexus now sends the Rotator its own
+# timeout as the cascade budget (max_wall_s), so 504s at the Rotator's 180s default stop.
+PROMPT_VERSION = "v12-length-reask-2026-10-13"

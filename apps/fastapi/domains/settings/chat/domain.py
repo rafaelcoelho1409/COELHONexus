@@ -37,6 +37,16 @@ def rotator_health_url(base_url: str) -> str:
     return u[: i] + "/llm/routing/health"
 
 
+def rotator_wall_extra(base_url: str, timeout_s: float | None, margin_s: float, min_s: float) -> dict:
+    """`extra_body` carrying the per-request cascade budget for a COELHO LLM Rotator
+    endpoint (`max_wall_s`, see params.ROTATOR_WALL_MARGIN_S); {} for any other
+    OpenAI-compatible endpoint (an unknown body field would be rejected there) or when
+    the caller set no timeout."""
+    if not timeout_s or timeout_s <= 0 or not rotator_health_url(base_url):
+        return {}
+    return {"max_wall_s": round(max(float(timeout_s) - margin_s, min_s), 1)}
+
+
 def pool_recovered(cooling: int, pool: int, max_frac: float) -> bool:
     """True when at most `max_frac` of the pool's arms are in cooldown. An
     unknown/empty pool (pool <= 0) is never "recovered" — keep waiting."""

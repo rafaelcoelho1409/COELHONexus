@@ -3,6 +3,7 @@ from __future__ import annotations
 from . import params, versions
 
 import math
+import os
 import re
 from collections import Counter, defaultdict
 from hashlib import sha256
@@ -242,6 +243,31 @@ def _slot_tokens(slot: dict) -> set[str]:
     ]))
 
 
+def _page_title(title: str | None) -> str:
+    return (title or "").split(" — ")[0].strip()
+
+
+def _is_page_family(f: str, docs: list[str], doc_title: dict[str, str]) -> bool:
+    """True when the family's docs are sub-pages of ONE page (their titles share a
+    page title). False for a single-URL dump, where every doc has its own title."""
+    titles = [_page_title(doc_title.get(k)) for k in docs if doc_title.get(k)]
+    if not titles:
+        return True          # nothing to judge by: keep the URL-derived name
+    top = Counter(titles).most_common(1)[0][1]
+    return top / len(docs) >= params.GAP_FAMILY_TITLE_SHARE
+
+
+def _appendix_description(docs: list[str], doc_title: dict[str, str]) -> str:
+    """"Pages that fit no other chapter (N): a, b, c, …" — quoting titles with the
+    prefix common to the whole dump (the site slug) stripped."""
+    titles = [_page_title(doc_title.get(k)) or k for k in sorted(docs)]
+    pre = os.path.commonprefix(titles)
+    cut = pre.rfind("-") + 1 if "-" in pre else 0
+    shown = [re.sub(r"[-_]+", " ", t[cut:]).strip() or t for t in titles][:params.GAP_APPENDIX_LISTED]
+    more = f", +{len(titles) - len(shown)} more" if len(titles) > len(shown) else ""
+    return f"Pages that fit no other chapter ({len(titles)}): {', '.join(shown)}{more}."
+
+
 def consolidate_placements(
     *,
     kept: list[int],
@@ -414,12 +440,20 @@ def consolidate_placements(
         docs = gap_fams[f]
         if len(docs) < min_docs:
             continue
-        title = family_title(f)
-        _open_slot(next_gap, {
-            "title": title,
-            "description": f"Reference documentation for {title} ({len(docs)} pages).",
-            "key_concepts": [],
-        }, "gap")
+        if _is_page_family(f, docs, doc_title):
+            title = family_title(f)
+            _open_slot(next_gap, {
+                "title": title,
+                "description": f"Reference documentation for {title} ({len(docs)} pages).",
+                "key_concepts": [],
+            }, "gap")
+        else:
+            _open_slot(next_gap, {
+                "title": params.GAP_APPENDIX_TITLE,
+                "description": _appendix_description(docs, doc_title),
+                "key_concepts": [],
+            }, "gap")
+            slots[next_gap]["role"] = "appendix"
         for k in docs:
             place[k] = next_gap
             cands.discard(k)
@@ -491,6 +525,7 @@ def consolidate_placements(
             "order":               i,
             "source_proposal_idx": sl["proposal_idx"],
             "origin":              sl["origin"],
+            **({"role": sl["role"]} if sl.get("role") else {}),
             "pinned":              False,
         })
     return {
@@ -542,7 +577,22 @@ def apply_foundations(
         for k in c["member_doc_keys"]
         if doc_role.get(k) in params.FOUNDATIONS_ROLES and fam_size[doc_family.get(k) or k] == 1
     ]
-    stats = {"n_foundations": 0, "foundations_candidates": len(cands)}
+    # Catalog guard: candidates piled up under one URL directory are a list of like
+    # pages (providers, integrations, loaders), not orientation material.
+    dir_of = lambda k: (doc_family.get(k) or k).rsplit("/", 1)[0]
+    dir_docs = Counter(dir_of(k) for c in out_chapters for k in c["member_doc_keys"])
+    dir_cands = Counter(dir_of(k) for _, k in cands)
+    catalog_dirs = {
+        d for d, n in dir_cands.items()
+        if n >= params.FOUNDATIONS_CATALOG_MIN
+        and dir_docs[d] <= params.FOUNDATIONS_CATALOG_MAX_SHARE * total
+    }
+    n_catalog = sum(1 for _, k in cands if dir_of(k) in catalog_dirs)
+    cands = [(c_i, k) for c_i, k in cands if dir_of(k) not in catalog_dirs]
+    stats = {
+        "n_foundations": 0, "foundations_candidates": len(cands),
+        "foundations_catalog_excluded": n_catalog,
+    }
     if len(cands) < params.FOUNDATIONS_MIN_DOCS:
         return out_chapters, stats
     cap = max(params.FOUNDATIONS_MIN_DOCS, int(params.FOUNDATIONS_MAX_SHARE * total))

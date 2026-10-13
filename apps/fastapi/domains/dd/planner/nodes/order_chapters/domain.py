@@ -90,15 +90,29 @@ def pin_foundations_first(order: list[int], chapters: list[dict]) -> tuple[list[
     return pinned + [i for i in order if i not in set(pinned)], pinned
 
 
+def pin_appendix_last(order: list[int], chapters: list[dict]) -> tuple[list[int], list[int]]:
+    """The generic catch-all chapter (role == "appendix", built by chapter_select for
+    pages that fit nowhere and share no page title) closes the book.
+    Returns (order, pinned)."""
+    pinned = [i for i in order if (chapters[i] or {}).get("role") == "appendix"]
+    if not pinned:
+        return list(order), []
+    return [i for i in order if i not in set(pinned)] + pinned, pinned
+
+
 def apply_foundational_prefix_rule(
     order: list[int],
     chapters: list[dict],
 ) -> tuple[list[int], list[int]]:
     """Pin foundational chapters to the FRONT, preserving their relative
     Borda order. Returns (new_order, promoted_indices) for telemetry."""
+    # Foundations / appendix chapters are placed by their own pins; a "gap" chapter
+    # named after an arbitrary page title (fastmcp: `…-quickstart`) is not a quickstart.
     foundational_indices = [
         i for i, ch in enumerate(chapters)
-        if is_foundational(ch.get("title", ""))
+        if ch.get("origin") not in ("gap", "foundations")
+        and ch.get("role") not in ("foundations", "appendix")
+        and is_foundational(ch.get("title", ""))
     ]
     if not foundational_indices:
         return list(order), []

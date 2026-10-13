@@ -72,6 +72,14 @@ SETTLE_DELAY_S = 130.0
 # 2026-09-27: 1 -> 2. Cheap, low-risk: gives a malformed-schema draft one
 # more chance at temp=0 before the sample is discarded outright.
 MAX_REPAIR_ATTEMPTS = 2
+# A draft that ends at the token limit (LengthFinishReasonError — fastmcp lost 2 of 5
+# samples at MAX_TOKENS_PROPOSE=10000) is a runaway, not a malformed answer: the repair
+# re-ask says so instead of repeating the same prompt.
+LENGTH_REASK_HINT = (
+    "the output hit the token limit and was cut off. Answer far more concisely: every "
+    "description at most 25 words, at most 6 key_concepts per chapter, no commentary, "
+    "no reasoning text, JSON only"
+)
 
 # Optimal-stopping (CGES 2511.02603): node scales floor to ~0.7×adaptive_target so large corpora don't early-stop on a small sample-0.
 # SOTA Sept 2026: with the rotator pooled http2 (200/100) 3×6000 tok drafts

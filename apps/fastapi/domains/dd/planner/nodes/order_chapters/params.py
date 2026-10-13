@@ -58,13 +58,12 @@ SETTLE_DELAY_S = 130.0
 # every LLM sample fails (instead of arbitrary chapter-index order).
 SOURCE_ORDER_WEIGHT = 2
 # Foundational-prefix rule: these patterns pin the chapter to position 0 regardless of LLM ordering; only the FIRST match anchors.
+# (2026-10-13: "cli"/"command line" removed — a CLI *tooling* chapter is reference material, not setup; fastmcp's "FastMCP CLI Tooling" opened the book.)
 FOUNDATIONAL_KEYWORDS = (
     "install",
     "installation",
     "setup",
     "getting started",
     "quickstart",
-    "cli",
-    "command line",
     "first steps",
 )

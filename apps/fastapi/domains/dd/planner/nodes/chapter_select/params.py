@@ -53,6 +53,13 @@ SPLIT_SETTLE_CAP_S   = 130.0   # cap of the Rotator-recovery wait before the spl
 FOUNDATIONS_ROLES      = ("overview", "cross_cutting")
 FOUNDATIONS_MIN_DOCS   = 4      # fewer than this → no chapter (docs stay where they are)
 FOUNDATIONS_MAX_SHARE  = 0.15   # never more than this share of the corpus (keeps role over-labelling harmless)
+# Catalog guard: ≥ this many Foundations candidates under ONE URL directory are a list of
+# like pages (provider/integration/loader landing pages — deepagents/langgraph put 7-9
+# of them into Foundations), not orientation material. Skipped for a directory holding
+# more than the share of the corpus below: on a flat site (every page in /library/) the
+# directory says nothing about kinship.
+FOUNDATIONS_CATALOG_MIN       = 3
+FOUNDATIONS_CATALOG_MAX_SHARE = 0.35
 FOUNDATIONS_TITLE      = "Foundations and Diagnostics"
 FOUNDATIONS_DESCRIPTION = (
     "Orientation and cross-cutting material: framework overview, platform "
@@ -66,3 +73,10 @@ FOUNDATIONS_DESCRIPTION = (
 # rescue: replayed on stored plans it added a chapter to deepagents, langchain and
 # langgraph, whose plans were fine.
 PREFER_MIN_CONF  = 0.70
+
+# Gap chapter whose pages share no common page title (a single-URL dump, e.g. an
+# llms-full.txt split per heading) is not "about" any one page: it becomes a generic
+# appendix, ordered last, instead of a chapter named after one arbitrary page title.
+GAP_FAMILY_TITLE_SHARE = 0.50   # the commonest page title must cover ≥ this share of the family
+GAP_APPENDIX_TITLE     = "Additional Topics"
+GAP_APPENDIX_LISTED    = 8      # member titles quoted in the appendix description
