@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from . import params
 
+from collections import Counter
+
 
 def build_split_prompt(
     *,
@@ -79,7 +81,14 @@ def build_name_prompt(
         # spread the quoted summaries over the group instead of taking its first pages only
         step = max(1, len(summs) // params.SPLIT_NAME_SUMMARIES)
         quoted = " | ".join(summs[::step][:params.SPLIT_NAME_SUMMARIES])
-        blocks.append(f"[{gi}] {n_pages} pages: {shown}{more}" + (f"\n    summaries: {quoted}" if quoted else ""))
+        secs = Counter("/".join(units[i].get("dir") or ()) for i in g for _ in units[i]["keys"])
+        secs.pop("", None)
+        sec_line = "; ".join(f"{d} x{c}" for d, c in secs.most_common(3))
+        blocks.append(
+            f"[{gi}] {n_pages} pages: {shown}{more}"
+            + (f"\n    URL sections: {sec_line}" if sec_line else "")
+            + (f"\n    summaries: {quoted}" if quoted else "")
+        )
     return (
         f"A {framework} learning book has an oversize chapter, '{title}', that was split into "
         f"{len(groups)} groups of related documentation pages. Name each group as a chapter.\n\n"
@@ -90,6 +99,8 @@ def build_name_prompt(
         f"names listed, not from the first ones. Pages named like module paths "
         f"(`pkg-subpkg-module`) share a subsystem: name that subsystem. Two groups must not share "
         f"a title idea.\n"
+        f"   When most pages of a group sit in one URL section, name what that section IS "
+        f"(`integrations/frameworks` -> the framework integrations), not a topic of its first pages.\n"
         f"3. Each description is ONE sentence about what the reader learns from the group as a whole.\n"
         f"4. Return one entry per group id, ids exactly as shown.\n\n"
         f'OUTPUT - STRICT JSON: {{"groups": [{{"id": 0, "title": "...", "description": "..."}}, ...]}}\n\n'

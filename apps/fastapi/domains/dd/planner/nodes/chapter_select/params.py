@@ -126,6 +126,14 @@ SPLIT_SIM_ROLE_WEIGHT = 0.15
 SPLIT_SIM_DIR_WEIGHT  = 0.80
 # Chapters of fewer than this many pages whose title is front-matter-like are folded into Foundations.
 MICRO_MAX_DOCS = 5
+# Catalog directories (see patterns.CATALOG_DIR_RE): a directory of at least CATALOG_MIN_PAGES pages whose
+# plurality chapter holds >= CATALOG_MAJORITY of them pulls the stragglers in — langfuse's 134 integration
+# pages ended 66% in the four integration chapters and 34% scattered over topical ones. A chapter never
+# gives up more than CATALOG_MAX_GIVE of its pages nor drops below MIN_DOCS_PER_CHAPTER.
+CATALOG_MIN_PAGES = 8
+CATALOG_MAJORITY  = 0.5
+CATALOG_MAX_GIVE  = 0.4
+CATALOG_STRAY_CONF = 0.5     # only pages assigned to their current chapter below this move
 SPLIT_NAME_SUMMARIES  = 3        # page summaries quoted per group in the naming prompt
 SPLIT_NAME_SUMMARY_CHARS = 170
 

@@ -63,4 +63,5 @@ from __future__ import annotations
 # v17 (2026-10-14): SOURCE STRUCTURE also lists a directory over SECTION_MAX_SHARE (fastmcp's python-sdk,
 # 204 of 340 pages) with its pages grouped by slug prefix, when the prefixes are real module paths;
 # weak batches (best evidence score < 0.8) draw 3 more samples.
-PROMPT_VERSION = "v17-trunk-breakdown-weak-retry-2026-10-14"
+# v18 (2026-10-14): top-up and weak-batch retry are ONE parallel extra round; no weak retry when the first round lost > 2 drafts.
+PROMPT_VERSION = "v18-one-extra-round-2026-10-14"

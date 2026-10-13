@@ -713,6 +713,61 @@ def apply_foundations(
     return _renumber([foundations] + new_chapters), stats
 
 
+def harmonize_catalog_dirs(
+    chapters: list[dict], key_dir: dict[str, tuple], assignments: dict[str, list[dict]],
+) -> tuple[list[dict], dict]:
+    """Pull the pages of a catalog directory (integrations/, providers/ ...) that sit in other chapters
+    into the chapter that already holds most of that directory — but only pages the assigner was NOT
+    sure about for their current chapter (confidence < CATALOG_STRAY_CONF: leftover / rescued
+    placements; langfuse: 0.28-0.35 mean in the chapters they were dumped in vs 0.7-0.9 for the pages
+    that really belong there, e.g. a checkpointer integration inside Memory). Split parts, Foundations,
+    migration and appendix chapters neither give nor take.
+    Returns (chapters, {"n_catalog_rehomed": n, "catalog_dirs": [...]})."""
+    locked = lambda c: c.get("origin") in ("foundations", "migration") or c.get("role") in ("foundations", "appendix")
+    by_dir: dict[tuple, list[tuple[int, str]]] = defaultdict(list)
+    for ci, c in enumerate(chapters):
+        for k in c["member_doc_keys"]:
+            d = tuple(key_dir.get(k) or ())
+            if d and patterns.CATALOG_DIR_RE.search("/".join(d)):
+                by_dir[d].append((ci, k))
+    size = [len(c["member_doc_keys"]) for c in chapters]
+    gave = [0] * len(chapters)
+    move: dict[str, int] = {}
+    dirs_done = []
+    for d, pages in sorted(by_dir.items(), key = lambda kv: -len(kv[1])):
+        if len(pages) < params.CATALOG_MIN_PAGES:
+            continue
+        per = Counter(ci for ci, _ in pages)
+        home, n_home = max(((ci, n) for ci, n in per.items() if not locked(chapters[ci])), key = lambda x: x[1], default = (None, 0))
+        if home is None or n_home < params.CATALOG_MAJORITY * len(pages) or n_home == len(pages):
+            continue
+        n_moved = 0
+        for ci, k in pages:
+            if ci == home or locked(chapters[ci]) or k in move or chapters[ci].get("origin") == "split":
+                continue
+            conf = {a.get("chapter_idx"): a.get("confidence", 0.0) for a in (assignments.get(k) or [])}.get(
+                chapters[ci].get("source_proposal_idx"), 0.0)
+            if conf >= params.CATALOG_STRAY_CONF:
+                continue
+            if size[ci] - 1 < params.MIN_DOCS_PER_CHAPTER or gave[ci] + 1 > params.CATALOG_MAX_GIVE * len(chapters[ci]["member_doc_keys"]):
+                continue
+            move[k] = home
+            size[ci] -= 1
+            size[home] += 1
+            gave[ci] += 1
+            n_moved += 1
+        if n_moved:
+            dirs_done.append("/".join(d))
+    if not move:
+        return chapters, {"n_catalog_rehomed": 0, "catalog_dirs": []}
+    out = []
+    for ci, c in enumerate(chapters):
+        keep = [k for k in c["member_doc_keys"] if k not in move]
+        add = [k for k, h in move.items() if h == ci]
+        out.append({**c, "member_doc_keys": keep + add})
+    return _renumber(out), {"n_catalog_rehomed": len(move), "catalog_dirs": dirs_done}
+
+
 def fold_micro_chapters(chapters: list[dict]) -> tuple[list[dict], dict]:
     """Chapters of fewer than MICRO_MAX_DOCS pages whose title names orientation / support material
     (a proposed "Foundations", "Quickstart", "Troubleshooting and FAQ" ...) belong in the Foundations

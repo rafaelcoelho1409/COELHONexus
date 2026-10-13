@@ -329,6 +329,9 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
     final_order, foundational_idx = domain.apply_foundational_prefix_rule(
         aggregated, chapters,
     )
+    final_order, n_sibling_moved = domain.group_siblings(final_order, chapters)
+    if n_sibling_moved:
+        logger.info(f"[order_chapters] {slug}: kept sibling chapters (`Family: part`) together ({n_sibling_moved} moved)")
     # The Foundations chapter (overview + cross-cutting pages) opens the book, ahead
     # of install/setup chapters.
     final_order, foundations_idx = domain.pin_foundations_first(final_order, chapters)

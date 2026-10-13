@@ -209,6 +209,44 @@ def apply_foundational_prefix_rule(
     return fnd_in_order + rest, fnd_in_order
 
 
+def group_siblings(order: list[int], chapters: list[dict]) -> tuple[list[int], int]:
+    """Chapters titled `<Family>: <part>` ("Prompt Management: Core Concepts", "Prompt Management:
+    SDK ...") are parts of one family and stay contiguous, at the position of the family's earliest
+    chapter and in their own relative order (langfuse: the three Prompt Management chapters sat at
+    3, 6 and 19). Foundations / appendix / gap / migration chapters keep their own pins. Returns
+    (order, number of chapters that moved)."""
+    def family(i: int) -> str | None:
+        ch = chapters[i] or {}
+        if ch.get("role") in ("foundations", "appendix") or ch.get("origin") in ("foundations", "gap", "migration"):
+            return None
+        t = ch.get("title") or ""
+        if ":" not in t or patterns.TRAILING_RE.search(t):
+            return None
+        head = t.split(":", 1)[0].strip().casefold()
+        return head or None
+
+    members: dict[str, list[int]] = {}
+    for i in order:
+        f = family(i)
+        if f:
+            members.setdefault(f, []).append(i)
+    members = {f: ms for f, ms in members.items() if len(ms) >= 2}
+    if not members:
+        return list(order), 0
+    out: list[int] = []
+    done: set[str] = set()
+    for i in order:
+        f = family(i)
+        if f in members:
+            if f not in done:
+                out.extend(members[f])
+                done.add(f)
+        else:
+            out.append(i)
+    moved = sum(1 for a, b in zip(order, out) if a != b)
+    return out, moved
+
+
 def load_chapter_order(text: str) -> list[int] | None:
     """Convenience loader for plan_write. None on malformed blob."""
     try:

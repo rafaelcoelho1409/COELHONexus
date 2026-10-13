@@ -29,4 +29,5 @@ from __future__ import annotations
 # sample sees the chapters in its own shuffled arrangement, rationale first, 5-stage rubric;
 # migration / upgrade / changelog chapters are pinned ahead of the appendix. Live test on the
 # round-4 plans: per-sample constraint satisfaction 11.4/12, 10.8/13, 26.2/28 vs 10.0, 8.4, 26.4.
-PROMPT_VERSION = "v9-title-order-2026-10-13"
+# v10 (2026-10-14): chapters titled `Family: part` are kept contiguous after the Borda vote (before the pins).
+PROMPT_VERSION = "v10-sibling-families-2026-10-14"

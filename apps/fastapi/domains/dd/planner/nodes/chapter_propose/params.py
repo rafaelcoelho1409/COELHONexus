@@ -76,6 +76,7 @@ MIN_VALID_SAMPLES = 4
 WEAK_BEST_SCORE = 0.8
 WEAK_RETRY_SAMPLES = 3
 WEAK_RETRY_ANGLES = (1, 2, 3, 4)
+WEAK_MAX_FIRST_FAILED = 2   # no weak retry when the first round lost more drafts than this (Rotator struggling)
 # Targets this large mean 20+ chapters x (description + concepts) and long reasoning preambles; the
 # prompt then asks for compact entries (fewer concepts, short descriptions) — less to generate, fewer
 # 240 s timeouts, and the assigner only ever shows 10 concepts per chapter.

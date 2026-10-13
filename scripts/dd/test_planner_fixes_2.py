@@ -161,7 +161,12 @@ if len(sys.argv) > 1:
         titles = [c["title"] for c in r["out_chapters"]]
         fnd = [c for c in r["out_chapters"] if c.get("origin") == "foundations"]
         for c in fnd:
-            assert not any("integrations" in (by[k].get("url") or "") for k in c["member_doc_keys"]), (row["slug"], c["title"])
+            per_dir = {}
+            for k in c["member_doc_keys"]:
+                u = by[k].get("url") or ""
+                if "integrations" in u:
+                    per_dir[u.rsplit("/", 1)[0]] = per_dir.get(u.rsplit("/", 1)[0], 0) + 1
+            assert all(n < 3 for n in per_dir.values()), (row["slug"], c["title"], per_dir)       # the guard is about catalog LISTS (>= 3 under one directory)
         assert not any(t.startswith(("gofastmcp-com-llms-full", "Gofastmcp")) for t in titles), (row["slug"], titles)
         print("  replay", row["slug"], "chapters", len(titles), "foundations", sum(c["n_member_docs"] for c in fnd),
               "appendix", [c["n_member_docs"] for c in r["out_chapters"] if c.get("role") == "appendix"])

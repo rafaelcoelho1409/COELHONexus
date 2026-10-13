@@ -325,6 +325,13 @@ async def chapter_select_run(state: domains.dd.planner.state.PlannerState) -> di
     except Exception as e:
         logger.warning(f"[chapter_select] {slug}: oversize split skipped ({type(e).__name__}: {e})")
     consolidation = {**consolidation, **{k: v for k, v in split_stats.items() if k != "splits"}}
+    try:
+        out_chapters, cat_stats = domain.harmonize_catalog_dirs(out_chapters, domain.page_dirs(entries), assignments)
+        consolidation = {**consolidation, **cat_stats}
+        if cat_stats["n_catalog_rehomed"]:
+            logger.info(f"[chapter_select] {slug}: catalog directories pulled together {cat_stats}")
+    except Exception as e:
+        logger.warning(f"[chapter_select] {slug}: catalog harmonization skipped ({type(e).__name__}: {e})")
     if split_stats["splits"]:
         logger.info(f"[chapter_select] {slug}: oversize split {split_stats['splits']}")
     doc_to_chapter = {k: i for i, c in enumerate(out_chapters) for k in c["member_doc_keys"]}

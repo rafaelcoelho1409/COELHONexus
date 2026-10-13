@@ -104,6 +104,10 @@ called, stats = asyncio.run(run_propose(lambda idx: strong))
 assert len(called) == 1 or sorted(called) == [0, 1, 2, 3, 4], called                                 # strong batch: no retry round
 called, stats = asyncio.run(run_propose(lambda idx: weak if idx < 10 else None))
 assert sorted(called[5:]) == [21, 22, 23] and stats["n_samples_valid"] == 5, (called, stats)        # failed retries do not break the run
+called, stats = asyncio.run(run_propose(lambda idx: None if idx in (1, 3) else (weak if idx < 10 else strong)))
+assert sorted(called[:5]) == [0, 1, 2, 3, 4] and sorted(called[5:]) == [11, 13, 21, 22, 23], called   # top-up + weak retry = ONE round (5 drafts)
+called, stats = asyncio.run(run_propose(lambda idx: None if idx in (1, 2, 3) else (weak if idx < 10 else strong)))
+assert sorted(called[5:]) == [11, 12, 13], called                                                      # 3 of 5 lost: top up only, no weak retry on a struggling Rotator
 print("2 weak-batch retry ok")
 
 # 3) off_topic second opinion ----------------------------------------------------------------------------------
@@ -161,6 +165,45 @@ assert st["n_micro_folded"] == 3 and [c["title"] for c in out] == ["Foundations 
 assert out[0]["n_member_docs"] == 19 and len(out[0]["member_doc_keys"]) == 19
 assert SEL.fold_micro_chapters(body)[1]["n_micro_folded"] == 0               # no Foundations chapter: nothing moves
 print("6 micro-chapter fold ok")
+
+# 6b) catalog directories pull their low-confidence strays; confident pages, split siblings and locked chapters stay -------
+def keyp(i, d): return f"ingestion/fw/pages/{i:04d}-{d.replace('/', '-')}-{i}.md"
+ks = {f"{n}": [keyp(100 * j + i, d) for i in range(cnt)] for j, (n, d, cnt) in enumerate(
+    [("A", "integrations/frameworks", 12), ("B", "integrations/frameworks", 4), ("topic", "docs/observability", 10), ("memory", "docs/memory", 6)])}
+home = {"title": "Framework Integrations", "origin": "split", "member_doc_keys": ks["A"], "n_member_docs": 12}
+sib = {"title": "Framework Integrations 2", "origin": "split", "member_doc_keys": ks["B"], "n_member_docs": 4}
+topical = {"title": "Tracing", "origin": "proposal", "source_proposal_idx": 0, "member_doc_keys": ks["topic"] + [keyp(900 + i, "integrations/frameworks") for i in range(3)], "n_member_docs": 13}
+mem = {"title": "Memory", "origin": "proposal", "source_proposal_idx": 1, "member_doc_keys": ks["memory"] + [keyp(950, "integrations/frameworks")], "n_member_docs": 7}
+kd6 = {k: tuple(k.split("-")[1:-1][:0]) or () for c in (home, sib, topical, mem) for k in c["member_doc_keys"]}
+for c in (home, sib, topical, mem):
+    for k in c["member_doc_keys"]:
+        d = k.split("/")[-1].split("-", 1)[1].rsplit("-", 1)[0]
+        kd6[k] = tuple(d.replace("integrations-frameworks", "integrations/frameworks").replace("docs-observability", "docs/observability").replace("docs-memory", "docs/memory").split("/"))
+asg = {}
+for k in topical["member_doc_keys"]:
+    asg[k] = [{"chapter_idx": 0, "confidence": 0.9 if "docs" in k else 0.3}]       # the 3 integration strays: low confidence
+asg[mem["member_doc_keys"][-1]] = [{"chapter_idx": 1, "confidence": 0.9}]          # a confident memory integration page stays
+out, st = SEL.harmonize_catalog_dirs([home, sib, topical, mem], kd6, asg)
+assert st["n_catalog_rehomed"] == 3 and len(out[0]["member_doc_keys"]) == 15 and len(out[1]["member_doc_keys"]) == 4, (st, [len(c["member_doc_keys"]) for c in out])
+assert len(out[2]["member_doc_keys"]) == 10 and len(out[3]["member_doc_keys"]) == 7
+print("6b catalog directory harmonization ok:", st)
+
+# 6c) sibling `Family: part` chapters stay contiguous; pins untouched ---------------------------------------------------------
+OC = nodes.order_chapters.domain
+chs6 = [{"title": t, **kw} for t, kw in [
+    ("Foundations and Diagnostics", {"origin": "foundations", "role": "foundations"}), ("Prompt Management: Core", {}), ("Evaluation: Scores", {}),
+    ("Tracing", {}), ("Prompt Management: SDK", {}), ("Evaluation: Datasets", {}), ("Prompt Management: Automation", {}), ("Migration and Upgrade Guides", {"origin": "migration"})]]
+new, moved = OC.group_siblings([0, 1, 2, 3, 4, 5, 6, 7], chs6)
+assert new == [0, 1, 4, 6, 2, 5, 3, 7] and moved > 0, new
+assert OC.group_siblings([0, 3, 7], chs6) == ([0, 3, 7], 0)
+print("6c sibling chapters contiguous ok:", new)
+
+# 6d) the naming prompt carries each group's URL sections -------------------------------------------------------------------------
+gunits = [{"id": 0, "keys": ["a", "b", "c"], "label": "Trace A with Langfuse", "summary": "s", "dir": ("integrations", "frameworks")},
+          {"id": 1, "keys": ["d"], "label": "Trace B with Langfuse", "summary": "s", "dir": ("integrations", "gateways")}]
+pp = SEL.__class__ and nodes.chapter_select.prompts.build_name_prompt(framework="fw", title="Integrations", groups=[[0], [1]], units=gunits, other_titles=[])
+assert "URL sections: integrations/frameworks x3" in pp and "URL sections: integrations/gateways x1" in pp and "name what that section IS" in pp, pp
+print("6d naming prompt ok")
 
 # 7) replay on stored frameworks --------------------------------------------------------------------------------------
 import replay_select as R  # noqa: E402

@@ -365,13 +365,37 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
             draft_one(domain.with_angle(prompt, i), i, sample_failures, draft_tokens) for i in range(params.N_SAMPLES)
         ]))
     valid: list[schemas.ChapterProposalList] = [s for s in samples if s is not None]
+    n_first_failed = sum(1 for s_ in samples if s_ is None)
+    # ONE extra round, drawn in parallel (two sequential rounds cost ~4 min each on a loaded Rotator):
+    #  * top-up — thin best-of-N (fastmcp: 3 of 5, the rest hit the Rotator's wall cap): the evidence pick
+    #    needs candidates, so the failed indices are redone (same angles);
+    #  * weak batch — even the best draft explains the corpus poorly (fastmcp: all five from one model gave
+    #    8-11 chapters at target 24, best score 0.78; langfuse 0.55 / 0.68): more drafts from other arms are
+    #    cheap next to a lopsided plan. Skipped when the first round already lost more than
+    #    WEAK_MAX_FIRST_FAILED drafts to timeouts — the Rotator is struggling and more big prompts only queue.
+    extra_idx: list[int] = []
     if 0 < len(valid) < params.MIN_VALID_SAMPLES and len(samples) == params.N_SAMPLES:
-        # Thin best-of-N (fastmcp: 3 of 5 — the other drafts hit the Rotator's wall cap): the evidence
-        # pick needs candidates. One more attempt for the failed indices only, same angles.
-        redo = [i for i, s_ in enumerate(samples) if s_ is None][:params.MIN_VALID_SAMPLES - len(valid) + 1]
-        logger.info(f"[chapter_propose] {slug}: only {len(valid)}/{len(samples)} valid — topping up samples {redo}")
+        extra_idx += [i + 10 for i, s_ in enumerate(samples) if s_ is None][:params.MIN_VALID_SAMPLES - len(valid) + 1]
+    best_score = None
+    if len(valid) >= 2 and params.WEAK_RETRY_SAMPLES > 0 and n_first_failed <= params.WEAK_MAX_FIRST_FAILED:
+        try:
+            _texts = [
+                domain.doc_match_text(k, (distillates_map or {}).get(k), (bodies_by_key or {}).get(k, ""))
+                for k in relevant_files
+            ]
+            best_score = max(sc["score"] for sc in domain.score_candidates(
+                [[p.model_dump() for p in v.proposals] for v in valid], _texts, target_chapters))
+            if best_score < params.WEAK_BEST_SCORE:
+                extra_idx += [20 + a for a in params.WEAK_RETRY_ANGLES[:params.WEAK_RETRY_SAMPLES]]
+        except Exception as e:
+            logger.warning(f"[chapter_propose] {slug}: weak-batch check skipped ({type(e).__name__}: {e})")
+    if extra_idx:
+        logger.info(
+            f"[chapter_propose] {slug}: {len(valid)}/{len(samples)} valid, best draft score {best_score} "
+            f"(weak < {params.WEAK_BEST_SCORE}) — one extra round, drafts {extra_idx}"
+        )
         extra = await asyncio.gather(*[
-            draft_one(domain.with_angle(prompt, i + 10), i + 10, sample_failures, draft_tokens) for i in redo
+            draft_one(domain.with_angle(prompt, i), i, sample_failures, draft_tokens) for i in extra_idx
         ])
         valid += [s_ for s_ in extra if s_ is not None]
     if sample_failures:
@@ -379,28 +403,6 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
             f"[chapter_propose] {slug}: {len(valid)}/{len(samples)} samples valid; "
             f"failures: {sample_failures[:8]}"
         )
-
-    if len(valid) >= 2 and params.WEAK_RETRY_SAMPLES > 0:
-        # Weak batch: when even the best draft explains the corpus poorly (fastmcp: all five from one
-        # model gave 8-11 chapters at target 24, best score 0.78; langfuse 0.55), more drafts from
-        # other arms are cheap next to a plan that is lopsided or a catch-all chapter downstream.
-        try:
-            _texts = [
-                domain.doc_match_text(k, (distillates_map or {}).get(k), (bodies_by_key or {}).get(k, ""))
-                for k in relevant_files
-            ]
-            _best = max(sc["score"] for sc in domain.score_candidates(
-                [[p.model_dump() for p in v.proposals] for v in valid], _texts, target_chapters))
-            if _best < params.WEAK_BEST_SCORE:
-                logger.info(f"[chapter_propose] {slug}: best draft scores {_best} < {params.WEAK_BEST_SCORE} — "
-                            f"drawing {params.WEAK_RETRY_SAMPLES} more")
-                _more = await asyncio.gather(*[
-                    draft_one(domain.with_angle(prompt, 20 + a), 20 + a, sample_failures, draft_tokens)
-                    for a in params.WEAK_RETRY_ANGLES[:params.WEAK_RETRY_SAMPLES]
-                ])
-                valid += [s_ for s_ in _more if s_ is not None]
-        except Exception as e:
-            logger.warning(f"[chapter_propose] {slug}: weak-batch retry skipped ({type(e).__name__}: {e})")
 
     fallback_used = False
     if not valid:
