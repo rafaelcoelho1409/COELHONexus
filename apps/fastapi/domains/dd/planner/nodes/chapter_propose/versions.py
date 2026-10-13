@@ -45,4 +45,7 @@ from __future__ import annotations
 # v12 (2026-10-13): a draft cut at max_tokens (LengthFinishReasonError) is re-asked with
 # a "be concise" hint instead of being lost; Nexus now sends the Rotator its own
 # timeout as the cascade budget (max_wall_s), so 504s at the Rotator's 180s default stop.
-PROMPT_VERSION = "v12-length-reask-2026-10-13"
+# v13 (2026-10-13): SOURCE STRUCTURE also lists URL-directory "site sections" (≥6 direct
+# pages, not the site trunk) + a rule giving a section of like catalog pages its own
+# chapter — deepagents' 12 provider pages were scattered over 4 topical chapters.
+PROMPT_VERSION = "v13-site-sections-2026-10-13"

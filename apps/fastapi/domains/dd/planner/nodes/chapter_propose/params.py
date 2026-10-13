@@ -102,6 +102,13 @@ BODY_CHARS_PER_DOC = 2_000
 
 # SOURCE STRUCTURE prompt block (parent pages in navigation order) line cap.
 SOURCE_STRUCTURE_MAX_LINES = 60
+# Site sections: URL directories holding many direct pages (deepagents: integrations/providers/
+# = 12 provider pages, which the assigner then scattered over 4 topical chapters because no
+# chapter was proposed for them). Listed in SOURCE STRUCTURE so the proposer sees them as a
+# unit. A directory holding more than the share below is the site's trunk, not a section.
+SECTION_MIN_DOCS  = 6
+SECTION_MAX_SHARE = 0.35
+SECTION_MAX_LINES = 12
 # Structural seed extraction tuning.
 SEED_MAX_HEADINGS = 60
 SEED_MAX_NAMESPACES = 30

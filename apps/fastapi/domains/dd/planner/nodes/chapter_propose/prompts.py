@@ -45,15 +45,23 @@ def _structure_signal(source_structure: str) -> str:
         return ""
     return (
         "SOURCE STRUCTURE (the documentation's own navigation order; pages that "
-        "share a parent page are ONE family):\n"
+        "share a parent page are ONE family; site sections are URL directories):\n"
         f"{source_structure}\n"
     )
+
+
+SECTION_RULE = (
+    "a site section (URL directory) listed under SOURCE STRUCTURE whose pages are all the "
+    "same kind of page — one page per provider, integration, plugin, loader or model — "
+    "gets its OWN chapter named after the section; do not scatter such catalog pages "
+    "across topical chapters."
+)
 
 
 def _structure_rules(source_structure: str) -> str:
     if not source_structure:
         return ""
-    return (
+    out = (
         "8. Keep every family (parent page, see SOURCE STRUCTURE) whole inside ONE chapter; "
         "never scatter a family's pages across chapters. Prefer chapters that follow the "
         "source structure's own grouping and order.\n"
@@ -61,6 +69,13 @@ def _structure_rules(source_structure: str) -> str:
         "or diagnostics notes — those cross-cutting pages are collected into a separate "
         "Foundations chapter automatically.\n"
     )
+    if domain_sections_listed(source_structure):
+        out += f"10. Also: {SECTION_RULE}\n"
+    return out
+
+
+def domain_sections_listed(source_structure: str) -> bool:
+    return "Site sections" in (source_structure or "")
 
 
 def _extra_signal_block(source_structure: str) -> str:
@@ -87,6 +102,8 @@ def _extra_signal_block(source_structure: str) -> str:
             "or diagnostics notes — those cross-cutting pages are collected into a separate "
             "Foundations chapter automatically."
         )
+        if domain_sections_listed(source_structure):
+            out += f"\n- Also: {SECTION_RULE}"
     return out + "\n\nRespond ONLY with valid JSON. No prose, no markdown wrap."
 
 

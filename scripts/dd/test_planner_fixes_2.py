@@ -87,6 +87,69 @@ pr = nodes.doc_distill.prompts.build_prompt("deepagents", "k", "body")
 assert "is NOT an overview" in pr and "AS A WHOLE" in pr
 print("6 role prompt ok")
 
+# 8) site sections in SOURCE STRUCTURE + the section rule
+def _entries(spec):
+    es, i = [], 0
+    for d, n in spec:
+        for j in range(n):
+            es.append({"key": f"k{i}", "idx": i, "url": f"https://x.dev/{d}/page{j}", "title": f"{d} {j}"}); i += 1
+    return es
+St = nodes.chapter_propose.domain.build_source_structure
+blk = St(_entries([("guide", 30), ("integrations/providers", 12), ("integrations", 10), ("misc", 3)]))
+assert "Site sections" in blk and "- integrations/providers (12 pages)" in blk and "- integrations (10 pages)" in blk, blk
+assert "guide (" not in blk, blk                  # 30/55 = 55% of the corpus: the trunk, not a section
+assert St(_entries([("library", 60)])) == ""      # flat site: one directory, no signal
+PR = nodes.chapter_propose.prompts
+assert "OWN chapter" in PR._structure_rules(blk) and "OWN chapter" not in PR._structure_rules("  1. A (3 pages)")
+assert "OWN chapter" in PR._extra_signal_block(blk)
+print("8 site sections + rule ok")
+
+# 9) chat_structured_async: schema-validation failure is NOT wrapped in ChatError
+import asyncio
+from pydantic import ValidationError
+Sch = nodes.chapter_propose.schemas.ChapterProposalList
+try:
+    Sch(proposals=[]); raise SystemExit("schema should reject an empty list")
+except ValidationError as ve:
+    boom = ve
+class _FakeStructured:
+    async def ainvoke(self, msgs): raise boom
+class _FakeModel:
+    def with_structured_output(self, *a, **k): return _FakeStructured()
+chat.service._apply_endpoint = lambda *a, **k: None
+chat.service.build_chat_model = lambda **k: _FakeModel()
+try:
+    asyncio.run(chat.service.chat_structured_async("p", Sch, max_tokens=10, timeout_s=5.0))
+    raise SystemExit("expected ValidationError")
+except ValidationError:
+    pass
+except chat.errors.ChatError:
+    raise SystemExit("ValidationError was wrapped in ChatError (repair path unreachable)")
+print("9 ValidationError reaches the callers' repair path ok")
+
+# 10) chapter_assign: one transient retry recovers a 504 before the lexical fallback
+CA = nodes.chapter_assign
+calls = {"n": 0}
+async def _flaky(prompt):
+    calls["n"] += 1
+    if calls["n"] == 1:
+        raise chat.errors.ChatError("InternalServerError: Error code: 504 - {'error': {'message': 'TimeoutError: '}}")
+    return CA.schemas.DocAssignment(scores=[CA.schemas.ChapterScore(chapter_idx=0, confidence=0.9),
+                                            CA.schemas.ChapterScore(chapter_idx=1, confidence=0.1)])
+CA.service._score_call = _flaky
+CA.params.TRANSIENT_RETRY_PAUSE_S = 0.0
+props = [{"title": "A", "description": "a", "key_concepts": ["a"]}, {"title": "B", "description": "b", "key_concepts": ["b"]}]
+out = asyncio.run(CA.service.assign_one(asyncio.Semaphore(1), "fw", "k.md", {"summary": "about A", "key_terms": ["a"]}, props))
+assert calls["n"] == 2 and out[3] is False and out[1][0]["confidence"] == 0.9, (calls, out)
+calls["n"] = 0
+async def _always504(prompt):
+    calls["n"] += 1
+    raise chat.errors.ChatError("InternalServerError: Error code: 504 - TimeoutError")
+CA.service._score_call = _always504
+out = asyncio.run(CA.service.assign_one(asyncio.Semaphore(1), "fw", "k.md", {"summary": "about A", "key_terms": ["a"]}, props))
+assert calls["n"] == 2 and out[3] is True, (calls, out)      # one retry only, then the lexical fallback
+print("10 chapter_assign transient retry ok")
+
 # 7) optional replay on stored artifacts
 if len(sys.argv) > 1:
     sys.path.insert(0, str(Path(__file__).resolve().parent))

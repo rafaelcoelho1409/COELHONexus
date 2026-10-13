@@ -37,7 +37,7 @@ from typing import TypeVar
 import httpx
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 
 logger = logging.getLogger(__name__)
@@ -457,6 +457,13 @@ async def chat_structured_async(
                     f"chat_structured_async hard backstop fired after "
                     f"{backstop_s:.0f}s (requested timeout_s={timeout_s})"
                 ) from e
+            except ValidationError:
+                # The model answered; the answer failed the schema's own validators
+                # (e.g. an empty proposals list). That is the reask-eligible failure
+                # every caller's repair path is built on (see the docstring) — wrapping
+                # it in ChatError sent it down the "provider outage" branch, so the
+                # repair never ran (deepagents lost 2 of 5 proposer samples that way).
+                raise
             except Exception as e:
                 raise errors.ChatError(f"{type(e).__name__}: {e}") from e
 

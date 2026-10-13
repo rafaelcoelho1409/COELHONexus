@@ -6,6 +6,7 @@ from __future__ import annotations
 from . import params, patterns, schemas, versions
 
 import json
+import os
 from collections import Counter
 from hashlib import sha256
 from typing import Optional
@@ -105,7 +106,8 @@ def build_source_structure(entries: list[dict]) -> str:
         if not f["title"]:
             f["title"] = (e.get("title") or "").split(" — ")[0].strip()
     multi = [f for f in fams.values() if f["n"] >= 2]
-    if not multi or len(fams) <= 1:
+    sections = _site_sections(fams)
+    if (not multi and not sections) or len(fams) <= 1:
         return ""
     keep = sorted(multi, key = lambda f: -f["n"])[:params.SOURCE_STRUCTURE_MAX_LINES]
     keep.sort(key = lambda f: f["idx"])
@@ -113,7 +115,42 @@ def build_source_structure(entries: list[dict]) -> str:
     n_single = sum(1 for f in fams.values() if f["n"] == 1)
     if n_single:
         lines.append(f"  (+ {n_single} single-page docs not listed)")
+    if sections:
+        lines.append(SECTIONS_HEADER)
+        lines += [f"  - {label} ({n} pages)" for label, n in sections]
     return "\n".join(lines)
+
+
+SECTIONS_HEADER = "  Site sections (URL directories holding many pages):"
+
+
+def _site_sections(fams: dict[str, dict]) -> list[tuple[str, int]]:
+    """[(directory label, n docs)] for URL directories with ≥ SECTION_MIN_DOCS direct
+    docs that are not the site's trunk (≤ SECTION_MAX_SHARE of the corpus), in
+    navigation order. Directories count their OWN pages only, so nested sections
+    (integrations/ vs integrations/providers/) never overlap."""
+    total = sum(f["n"] for f in fams.values())
+    by_dir: dict[str, dict] = {}
+    for url, f in fams.items():
+        d = url.rsplit("/", 1)[0] if "/" in url.split("://", 1)[-1] else ""
+        if not d:
+            continue
+        g = by_dir.setdefault(d, {"n": 0, "idx": f["idx"]})
+        g["n"] += f["n"]
+        g["idx"] = min(g["idx"], f["idx"])
+    if len(by_dir) < 2:
+        return []
+    root = os.path.commonprefix(list(by_dir))
+    root = root[: root.rfind("/") + 1] if "/" in root else ""
+    out = []
+    for d, g in by_dir.items():
+        if g["n"] < params.SECTION_MIN_DOCS or g["n"] > params.SECTION_MAX_SHARE * total:
+            continue
+        label = d[len(root):].strip("/")
+        if label:
+            out.append((g["idx"], label, g["n"]))
+    out.sort()
+    return [(label, n) for _i, label, n in out[:params.SECTION_MAX_LINES]]
 
 
 def build_fallback_proposals(

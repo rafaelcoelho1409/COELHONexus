@@ -133,6 +133,20 @@ async def assign_one(
                 f"[chapter_assign] LLM/parse/validate failed for "
                 f"{source_key}: {type(e).__name__}: {e}"
             )
+            for _retry in range(params.TRANSIENT_RETRIES):
+                if domains.settings.chat.domain.classify_error(e) not in params.TRANSIENT_KINDS:
+                    break
+                await asyncio.sleep(params.TRANSIENT_RETRY_PAUSE_S)
+                try:
+                    assignment = await _score_call(prompt)
+                    logger.info(f"[chapter_assign] {source_key}: transient retry recovered")
+                    break
+                except Exception as e2:
+                    e = e2
+                    logger.warning(
+                        f"[chapter_assign] {source_key}: transient retry failed: "
+                        f"{type(e2).__name__}: {e2}"
+                    )
 
         if assignment is not None:
             n_proposals = len(proposals)

@@ -46,6 +46,13 @@ TEMPERATURE = 0.0
 # default.
 TIMEOUT_S = 120.0
 MAX_REPAIR_ATTEMPTS = 1
+# One more try after a transient failure (Rotator 504 / timeout / 5xx / 429) before the
+# lexical fallback: 6 of the 8 fallbacks in the 2026-10-13 deepagents + asyncio runs were
+# 504s from a hung arm that the Rotator had benched by the time of the retry. A fallback
+# misplaces its doc (asyncio `timeout_at` → Event Loop), a retry costs one more call.
+TRANSIENT_RETRIES = 1
+TRANSIENT_RETRY_PAUSE_S = 4.0
+TRANSIENT_KINDS = ("timeout", "server_error", "rate_limit")
 
 BODY_CHARS = 4_000
 
