@@ -67,23 +67,30 @@ def build_name_prompt(
     other_titles: list[str],
     repair: str = "",
 ) -> str:
-    """Name groups of pages that were already partitioned (the partition is computed)."""
+    """Name groups of pages that were already partitioned (the partition is computed). Every
+    group lists its page names (up to SPLIT_NAME_LISTED) and the summaries of its first pages."""
     labels = _strip_common_prefix([u["label"] for u in units])
     blocks = []
     for gi, g in enumerate(groups):
         n_pages = sum(len(units[i]["keys"]) for i in g)
         shown = "; ".join(labels[i] for i in g[:params.SPLIT_NAME_LISTED])
         more = f" (+{len(g) - params.SPLIT_NAME_LISTED} more)" if len(g) > params.SPLIT_NAME_LISTED else ""
-        summ = " ".join(units[i]["summary"] for i in g[:2] if units[i]["summary"])[:2 * params.SPLIT_UNIT_SUMMARY_CHARS]
-        blocks.append(f"[{gi}] {n_pages} pages: {shown}{more}" + (f"\n    e.g. {summ}" if summ else ""))
+        summs = [units[i]["summary"][:params.SPLIT_NAME_SUMMARY_CHARS] for i in g if units[i]["summary"]]
+        # spread the quoted summaries over the group instead of taking its first pages only
+        step = max(1, len(summs) // params.SPLIT_NAME_SUMMARIES)
+        quoted = " | ".join(summs[::step][:params.SPLIT_NAME_SUMMARIES])
+        blocks.append(f"[{gi}] {n_pages} pages: {shown}{more}" + (f"\n    summaries: {quoted}" if quoted else ""))
     return (
         f"A {framework} learning book has an oversize chapter, '{title}', that was split into "
         f"{len(groups)} groups of related documentation pages. Name each group as a chapter.\n\n"
         f"RULES:\n"
         f"1. Titles: concrete, 1-8 words, unique, and different from every existing chapter title: "
         f"{other_titles}. Never 'Overview', 'Introduction' or 'Miscellaneous'.\n"
-        f"2. A title says what the group's pages have in common; two groups must not share a title idea.\n"
-        f"3. Each description is ONE sentence about what the reader learns.\n"
+        f"2. A title names what MOST of the group's pages have in common, judged from ALL the page "
+        f"names listed, not from the first ones. Pages named like module paths "
+        f"(`pkg-subpkg-module`) share a subsystem: name that subsystem. Two groups must not share "
+        f"a title idea.\n"
+        f"3. Each description is ONE sentence about what the reader learns from the group as a whole.\n"
         f"4. Return one entry per group id, ids exactly as shown.\n\n"
         f'OUTPUT - STRICT JSON: {{"groups": [{{"id": 0, "title": "...", "description": "..."}}, ...]}}\n\n'
         f"== GROUPS ==\n" + "\n".join(blocks) + "\n== END GROUPS =="

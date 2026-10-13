@@ -56,4 +56,8 @@ from __future__ import annotations
 # v15 (2026-10-13): each sample after the first gets its own organizing angle (tasks / components /
 # learning path / doc sections) — the 5 prompts were byte-identical and deepagents' 4 codestral
 # samples were one and the same 7-chapter set.
-PROMPT_VERSION = "v15-sample-angles-2026-10-13"
+# v16 (2026-10-13): SOURCE STRUCTURE is built from each page's `source_path` over the RELEVANT pages
+# only — a single-URL dump (llms-full.txt) gave the proposer NO structure at all and counted pages
+# the off-topic filter had dropped (fastmcp: a 112-page changelog family); targets >= 16 chapters
+# ask for compact entries; fewer than 4 valid samples get one top-up round.
+PROMPT_VERSION = "v16-source-path-structure-2026-10-13"

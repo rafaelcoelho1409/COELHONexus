@@ -20,8 +20,8 @@ block = nodes.chapter_propose.domain.build_source_structure(entries)
 print(block[:600])
 assert "Coroutines and tasks (21 pages)" in block and block.splitlines()[0].startswith("  1. ")
 assert "(+ " in block and "single-page docs" in block
-assert nodes.chapter_propose.domain.build_source_structure([{**e, "url": "https://x/one.txt"} for e in entries]) == ""      # single-URL dump
-assert nodes.chapter_propose.domain.build_source_structure([{**e, "url": f"https://x/{i}"} for i, e in enumerate(entries)]) == ""  # flat site
+assert nodes.chapter_propose.domain.build_source_structure([{**e, "url": "https://x/one.txt", "source_path": "https://x/one.txt"} for e in entries]) == ""      # single-URL dump, no page paths
+assert nodes.chapter_propose.domain.build_source_structure([{**e, "url": f"https://x/{i}", "source_path": f"https://x/{i}"} for i, e in enumerate(entries)]) == ""  # flat site
 pos = [block.index(t) for t in ("Coroutines and tasks", "Streams", "Event loop", "Extending")]
 assert pos == sorted(pos), "families must be listed in navigation (idx) order"
 

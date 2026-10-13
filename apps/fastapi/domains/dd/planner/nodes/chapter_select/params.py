@@ -101,7 +101,31 @@ SPLIT_NAME_FALLBACK_TERMS = 3    # words of a deterministic title when the model
 # chapters (fastmcp: 43 pages = 12% of the corpus — integration guides, API modules, FAQ, settings).
 GAP_SPLIT_MIN_SHARE   = 0.08
 GAP_SPLIT_MIN_DOCS    = 16
-GAP_SPLIT_DOCS_PER_PART = 15
+# 15 -> 10 pages per part and up to 6 parts: three 12-23 page groups of leftovers were grab-bags
+# named after their first pages (fastmcp: ChatGPT/Goose/Pydantic AI guides under "File Upload and
+# Skill Sharing"); 8-11 page groups of like pages can be named truthfully.
+GAP_SPLIT_DOCS_PER_PART = 10
+GAP_SPLIT_MAX_PARTS     = 6
+
+# Clustering similarity of two pages = weighted sum of (a) cosine of their slug words (the module /
+# URL path: `fastmcp-utilities-openapi-models` sits next to `fastmcp-utilities-json-schema`), (b)
+# cosine of their summary + key-term words, (c) same doc_distill role. Summary words alone were noise
+# on leftover pages (mean intra-group similarity 0.05): every group looked like every other.
+SPLIT_SIM_SLUG_WEIGHT = 0.50
+SPLIT_SIM_TEXT_WEIGHT = 0.35
+SPLIT_SIM_ROLE_WEIGHT = 0.15
+SPLIT_NAME_SUMMARIES  = 3        # page summaries quoted per group in the naming prompt
+SPLIT_NAME_SUMMARY_CHARS = 170
+
+# Migration / upgrade / changelog pages are for readers who already know an older version: they
+# close the book. Pages whose slug or title says so are pulled out of the topical chapters they were
+# scattered into (deepagents: v1-migration guides inside chapter 1) into the plan's migration chapter
+# (an existing one, else a new one when at least MIGRATION_MIN_DOCS such pages exist). A corpus that
+# is mostly about upgrading (more than MIGRATION_MAX_SHARE of its pages) keeps them in place.
+MIGRATION_MIN_DOCS    = 3
+MIGRATION_MAX_SHARE   = 0.15
+MIGRATION_TITLE       = "Migration and Upgrade Guides"
+MIGRATION_DESCRIPTION = "Moving from earlier versions or other libraries: migration paths, upgrade steps and breaking changes."
 
 # Placement ties: the assigner scores in coarse steps (0.0/0.3/0.7/1.0), so two chapters often tie.
 # Equal scores (to this many decimals) are broken by the page's word overlap with the chapter,

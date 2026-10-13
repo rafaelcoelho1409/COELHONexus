@@ -165,9 +165,10 @@ async def assign_one(
             scores = _valid_scores(assignment, n_proposals)
             missing = domain.missing_chapter_idxs(scores, n_proposals)
             if missing:
-                # The model scored only some chapters. Reask once (complete
-                # vectors — the norm — never reach this branch); keep the
-                # original if the second answer is no more complete.
+                # The model scored only some chapters (~10% of docs on a 24-chapter plan; always a
+                # short prefix-like list). Complete vectors — the norm — never reach this branch.
+                # Reask for the MISSING chapters only (a third of the output of a full reask) and
+                # merge; a failed reask keeps the partial vector.
                 logger.info(
                     f"[chapter_assign] {source_key}: scored {n_proposals - len(missing)}"
                     f"/{n_proposals} chapters — reasking for the rest"
@@ -175,14 +176,17 @@ async def assign_one(
                 try:
                     again = await _score_call(
                         f"{prompt}\n\nYour previous response scored only "
-                        f"{n_proposals - len(missing)} of the {n_proposals} chapters "
-                        f"(missing chapter_idx: {missing[:30]}). Return ONE entry for "
-                        f"EVERY chapter 0..{n_proposals - 1}, with confidence 0.0 where "
-                        f"the doc does not apply."
+                        f"{n_proposals - len(missing)} of the {n_proposals} chapters. Now return ONE "
+                        f"entry for EACH of these chapter_idx values and no others: {missing}, with "
+                        f"confidence 0.0 where the doc does not apply."
                     )
-                    again_scores = _valid_scores(again, n_proposals)
-                    if len(domain.missing_chapter_idxs(again_scores, n_proposals)) < len(missing):
-                        scores = again_scores
+                    have = {s_["chapter_idx"] for s_ in scores}
+                    extra = [
+                        s_ for s_ in _valid_scores(again, n_proposals)
+                        if s_["chapter_idx"] in missing and s_["chapter_idx"] not in have
+                    ]
+                    if extra:
+                        scores = scores + extra
                 except Exception as e:
                     logger.info(
                         f"[chapter_assign] {source_key}: completeness reask failed "

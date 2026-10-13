@@ -96,10 +96,13 @@ def build_source_structure(entries: list[dict]) -> str:
     (manifest `idx`) with their sub-page counts — the strongest free prior for
     chapter grouping and order. "" unless the corpus has multi-page families
     (a flat site or a single-URL dump has no kinship to report). Capped at
-    SOURCE_STRUCTURE_MAX_LINES lines (largest families kept, order preserved)."""
+    SOURCE_STRUCTURE_MAX_LINES lines (largest families kept, order preserved). A family is a
+    page (`source_path`, else `url`)."""
     fams: dict[str, dict] = {}
     for e in entries or []:
-        url = (e.get("url") or "").split("#", 1)[0]
+        # `source_path` is the page's own URL — for a single-URL dump (llms-full.txt, one `url` for
+        # every page) it is the only trace of the site's real hierarchy; elsewhere it equals `url`.
+        url = (e.get("source_path") or e.get("url") or "").split("#", 1)[0]
         if not url or not e.get("key"):
             continue
         f = fams.setdefault(url, {"idx": e.get("idx", 0), "n": 0, "title": ""})
@@ -149,6 +152,8 @@ def _site_sections(fams: dict[str, dict]) -> list[tuple[str, int]]:
         if g["n"] < params.SECTION_MIN_DOCS or g["n"] > params.SECTION_MAX_SHARE * total:
             continue
         label = d[len(root):].strip("/")
+        if "." in label.split("/", 1)[0]:        # a bare host (`gofastmcp.com/apps`): keep the path only
+            label = label.split("/", 1)[1] if "/" in label else ""
         if label:
             out.append((g["idx"], label, g["n"]))
     out.sort()

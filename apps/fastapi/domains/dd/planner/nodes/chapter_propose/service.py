@@ -306,7 +306,10 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
     source_structure = ""
     try:
         _m = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)
-        source_structure = domain.build_source_structure((_m or {}).get("entries") or [])
+        _rel = set(relevant_files)
+        source_structure = domain.build_source_structure(
+            [e for e in (_m or {}).get("entries") or [] if e.get("key") in _rel]
+        )
     except Exception as e:
         logger.info(f"[chapter_propose] {slug}: source structure unavailable ({type(e).__name__})")
 
@@ -362,6 +365,15 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
             draft_one(domain.with_angle(prompt, i), i, sample_failures, draft_tokens) for i in range(params.N_SAMPLES)
         ]))
     valid: list[schemas.ChapterProposalList] = [s for s in samples if s is not None]
+    if 0 < len(valid) < params.MIN_VALID_SAMPLES and len(samples) == params.N_SAMPLES:
+        # Thin best-of-N (fastmcp: 3 of 5 — the other drafts hit the Rotator's wall cap): the evidence
+        # pick needs candidates. One more attempt for the failed indices only, same angles.
+        redo = [i for i, s_ in enumerate(samples) if s_ is None][:params.MIN_VALID_SAMPLES - len(valid) + 1]
+        logger.info(f"[chapter_propose] {slug}: only {len(valid)}/{len(samples)} valid — topping up samples {redo}")
+        extra = await asyncio.gather(*[
+            draft_one(domain.with_angle(prompt, i + 10), i + 10, sample_failures, draft_tokens) for i in redo
+        ])
+        valid += [s_ for s_ in extra if s_ is not None]
     if sample_failures:
         logger.warning(
             f"[chapter_propose] {slug}: {len(valid)}/{len(samples)} samples valid; "

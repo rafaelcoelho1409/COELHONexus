@@ -1,7 +1,7 @@
 """chapter_select — pure algorithm (greedy coverage + manifest hash)."""
 from __future__ import annotations
 import domains
-from . import params, versions
+from . import params, patterns, versions
 
 import math
 import os
@@ -697,6 +697,66 @@ def apply_foundations(
     return _renumber([foundations] + new_chapters), stats
 
 
+def is_migration_page(key: str, title: str | None = None) -> bool:
+    """True when a page's slug or title says it is a migration / upgrade / changelog page."""
+    text = re.sub(r"[-_./]+", " ", f"{key_stem(key)} {title or ''}")
+    return bool(patterns.MIGRATION_PAGE_RE.search(text))
+
+
+def pull_migration_pages(
+    out_chapters: list[dict], doc_title: dict[str, str],
+) -> tuple[list[dict], dict]:
+    """Collect migration / upgrade / changelog pages scattered over topical chapters into ONE
+    migration chapter (order_chapters pins it last by its title). The target is the plan's existing
+    migration chapter (largest, when several); without one, a new chapter is made when at least
+    MIGRATION_MIN_DOCS such pages exist and they are at most MIGRATION_MAX_SHARE of the corpus.
+    Chapters emptied by the move vanish. Pure + deterministic. Returns (chapters, stats)."""
+    stats = {"n_migration_pulled": 0, "migration_chapter": None}
+    trailing = domains.dd.planner.nodes.order_chapters.patterns.TRAILING_RE
+    total = sum(len(c["member_doc_keys"]) for c in out_chapters)
+    if not total:
+        return out_chapters, stats
+    existing = [
+        i for i, c in enumerate(out_chapters)
+        if c.get("origin") != "foundations" and c.get("role") not in ("foundations", "appendix")
+        and trailing.search(c.get("title") or "")
+    ]
+    target = max(existing, key = lambda i: (len(out_chapters[i]["member_doc_keys"]), -i)) if existing else None
+    pulled = {
+        k: ci for ci, c in enumerate(out_chapters) if ci not in existing
+        for k in c["member_doc_keys"] if is_migration_page(k, doc_title.get(k))
+    }
+    if not pulled:
+        return out_chapters, stats
+    if target is None and not (
+        params.MIGRATION_MIN_DOCS <= len(pulled) <= params.MIGRATION_MAX_SHARE * total
+    ):
+        return out_chapters, stats
+    chapters = [dict(c, member_doc_keys = list(c["member_doc_keys"])) for c in out_chapters]
+    for k, ci in pulled.items():
+        chapters[ci]["member_doc_keys"].remove(k)
+    if target is None:
+        taken = {(c.get("title") or "").casefold() for c in chapters}
+        title = params.MIGRATION_TITLE
+        chapters.append({
+            "title":               title if title.casefold() not in taken else f"{title} ({len(taken)})",
+            "description":         params.MIGRATION_DESCRIPTION,
+            "key_concepts":        [],
+            "member_doc_keys":     [],
+            "n_member_docs":       0,
+            "order":               len(chapters) + 1,
+            "source_proposal_idx": None,
+            "origin":              "migration",
+            "pinned":              False,
+        })
+        target = len(chapters) - 1
+    chapters[target]["member_doc_keys"] = sorted(set(chapters[target]["member_doc_keys"]) | set(pulled))
+    chapters = [c for c in chapters if c["member_doc_keys"]]
+    stats["n_migration_pulled"] = len(pulled)
+    stats["migration_chapter"] = out_chapters[target]["title"] if target < len(out_chapters) else params.MIGRATION_TITLE
+    return _renumber(chapters), stats
+
+
 def split_floor(n_docs: int) -> int:
     """Smallest group a split may produce: MIN_DOCS_PER_CHAPTER, or 15% of the chapter."""
     return max(params.MIN_DOCS_PER_CHAPTER, math.ceil(0.15 * n_docs))
@@ -719,8 +779,12 @@ def plan_splits(out_chapters: list[dict], max_chapters: int = 30) -> list[tuple[
         share = n / total
         if c.get("role") == "appendix":
             if n >= params.GAP_SPLIT_MIN_DOCS and share > params.GAP_SPLIT_MIN_SHARE:
-                k = min(params.SPLIT_MAX_PARTS, max(2, round(n / params.GAP_SPLIT_DOCS_PER_PART)))
-                if n_chapters + (k - 1) <= max_chapters:
+                # as many parts as fit under the chapter cap (the appendix itself is one chapter already)
+                k = min(
+                    params.GAP_SPLIT_MAX_PARTS, max(2, round(n / params.GAP_SPLIT_DOCS_PER_PART)),
+                    max_chapters - n_chapters + 1,
+                )
+                if k >= 2:
                     out.append((i, k))
                     n_chapters += k - 1
             continue
@@ -735,6 +799,23 @@ def plan_splits(out_chapters: list[dict], max_chapters: int = 30) -> list[tuple[
             out.append((i, k))
             n_chapters += k - 1
     return out
+
+
+def key_stem(key: str) -> str:
+    """The URL slug inside a corpus key: `ingestion/<fw>/pages/0336-<slug>.md` -> `<slug>`."""
+    m = patterns.KEY_STEM_RE.search(key or "")
+    return m.group(1) if m else (key or "")
+
+
+def _slug_words(stems: list[str]) -> list[set[str]]:
+    """Words of each slug with the prefix shared by ALL of them (the dump's host/slug) removed;
+    digits and one-letter tokens dropped."""
+    pre = os.path.commonprefix(stems) if len(stems) > 1 else ""
+    cut = pre.rfind("-") + 1 if "-" in pre else 0
+    return [
+        {w for w in re.split(r"[-_./]+", s[cut:].lower()) if len(w) > 1 and not w.isdigit()}
+        for s in stems
+    ]
 
 
 def _unit_label(title: str) -> str:
@@ -761,10 +842,14 @@ def build_split_units(
         summ = " ".join(
             ((distillates.get(k) or {}).get("summary") or "").strip() for k in keys[:3]
         ).strip()
+        roles = Counter((distillates.get(k) or {}).get("role") for k in keys)
+        roles.pop(None, None)
         units.append({
             "keys":    keys,
             "label":   _unit_label(doc_title.get(keys[0], "")),
             "summary": summ[:params.SPLIT_UNIT_SUMMARY_CHARS],
+            "slug":    key_stem(keys[0]),
+            "role":    roles.most_common(1)[0][0] if roles else None,
         })
     units.sort(key = lambda u: (key_idx.get(u["keys"][0], 1 << 30), u["keys"][0]))
     for i, u in enumerate(units):
@@ -773,13 +858,14 @@ def build_split_units(
 
 
 def validate_split(
-    parts: list[dict], units: list[dict], other_titles: set[str],
+    parts: list[dict], units: list[dict], other_titles: set[str], max_parts: int | None = None,
 ) -> tuple[bool, str]:
     """Check an LLM split proposal: parts = [{title, description, unit_ids}].
     Pure. Returns (ok, reason) — the reason is fed back to the model on repair."""
     n_docs = sum(len(u["keys"]) for u in units)
-    if not (2 <= len(parts) <= params.SPLIT_MAX_PARTS):
-        return False, f"need between 2 and {params.SPLIT_MAX_PARTS} groups, got {len(parts)}"
+    limit = max_parts or params.SPLIT_MAX_PARTS
+    if not (2 <= len(parts) <= limit):
+        return False, f"need between 2 and {limit} groups, got {len(parts)}"
     seen: set[int] = set()
     for p in parts:
         for u in p.get("unit_ids") or []:
@@ -857,11 +943,39 @@ def unit_text(unit: dict, distillates: dict[str, dict]) -> str:
     return " ".join([unit.get("label") or "", *texts.values()])
 
 
+def unit_similarity(units: list[dict], texts: list[str]) -> list[list[float]]:
+    """Pairwise page similarity for clustering: SPLIT_SIM_* weighted slug-word cosine + summary/term
+    cosine + same-role bonus. Units without a slug (hand-built ones) fall back to the text cosine."""
+    n = len(units)
+    words = domains.dd.planner.nodes.chapter_propose.domain.match_words
+    t_ws = [words(t) for t in texts]
+    t_idf, t_unseen = _word_idf(t_ws)
+    t_vecs = [_word_vec(w, t_idf, t_unseen) for w in t_ws]
+    use_slug = all(u.get("slug") for u in units)
+    if use_slug:
+        s_ws = _slug_words([u["slug"] for u in units])
+        s_idf, s_unseen = _word_idf(s_ws)
+        s_vecs = [_word_vec(w, s_idf, s_unseen) for w in s_ws]
+    w_s = params.SPLIT_SIM_SLUG_WEIGHT if use_slug else 0.0
+    w_t = params.SPLIT_SIM_TEXT_WEIGHT if use_slug else 1.0 - params.SPLIT_SIM_ROLE_WEIGHT
+    w_r = params.SPLIT_SIM_ROLE_WEIGHT
+    sim = [[1.0] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(i + 1, n):
+            s = w_t * _cosine(t_vecs[i], t_vecs[j])
+            if use_slug:
+                s += w_s * _cosine(s_vecs[i], s_vecs[j])
+            if units[i].get("role") and units[i].get("role") == units[j].get("role"):
+                s += w_r
+            sim[i][j] = sim[j][i] = s
+    return sim
+
+
 def cluster_units(
     units: list[dict], texts: list[str], max_parts: int, floor: int,
 ) -> list[list[int]] | None:
     """Partition `units` into 2..max_parts groups of at least `floor` pages each, by
-    average-linkage clustering of their IDF word vectors. The smallest group below the floor
+    average-linkage clustering (similarity: unit_similarity). The smallest group below the floor
     always merges into its most similar neighbour first (so no tiny straggler group exists and
     no early blob swallows everything); once all reach the floor, the most similar pair merges
     until max_parts remain. No merge may create a group above SPLIT_CLUSTER_MAX_SHARE of the
@@ -870,17 +984,11 @@ def cluster_units(
     n = len(units)
     if n < 2 or len(texts) != n:
         return None
-    words = domains.dd.planner.nodes.chapter_propose.domain.match_words
-    ws = [words(t) for t in texts]
-    idf, unseen = _word_idf(ws)
-    vecs = [_word_vec(w, idf, unseen) for w in ws]
+    base = unit_similarity(units, texts)
     size = {i: len(units[i]["keys"]) for i in range(n)}
     weight = {i: 1 for i in range(n)}
     members = {i: [i] for i in range(n)}
-    sim: dict[int, dict[int, float]] = {i: {} for i in range(n)}
-    for i in range(n):
-        for j in range(i + 1, n):
-            sim[i][j] = sim[j][i] = _cosine(vecs[i], vecs[j])
+    sim: dict[int, dict[int, float]] = {i: {j: base[i][j] for j in range(n) if j != i} for i in range(n)}
     cap = math.ceil(params.SPLIT_CLUSTER_MAX_SHARE * sum(size.values()))
 
     def merge(a: int, b: int) -> None:
@@ -1003,7 +1111,8 @@ def select_pipeline(
         out_chapters = cons["out_chapters"], doc_role = doc_role,
         doc_family = doc_family, key_idx = key_idx,
     )
-    stats = {**cons["stats"], **f_stats}
+    chapters, m_stats = pull_migration_pages(chapters, doc_title)
+    stats = {**cons["stats"], **f_stats, **m_stats}
     return {
         "kept":             cons["kept"],
         "pruned":           final["pruned"],

@@ -68,6 +68,18 @@ SAMPLE_ANGLES = (
     "sub-topics its own chapters.",
 )
 TEMPERATURE_VOTE    = 0.0
+# Fewer valid samples than this → one top-up round for the failed indices (best-of-5 with 2-3 left
+# is thin: fastmcp lost 2 of 5 to Rotator wall-cap timeouts on 30-chapter outputs).
+MIN_VALID_SAMPLES = 4
+# Targets this large mean 20+ chapters x (description + concepts) and long reasoning preambles; the
+# prompt then asks for compact entries (fewer concepts, short descriptions) — less to generate, fewer
+# 240 s timeouts, and the assigner only ever shows 10 concepts per chapter.
+CONCISE_MIN_TARGET = 16
+CONCISE_BLOCK = (
+    "\n\nOUTPUT SIZE (this corpus needs many chapters): keep every entry compact — each description "
+    "ONE sentence of at most 25 words, at most 6 key_concepts per chapter, no commentary and no "
+    "reasoning text before the JSON."
+)
 
 # 2026-09-08: raised 90s -> 120s. The one node in this cluster still below
 # 120s — every other Planner node (off_topic/doc_distill/chapter_assign/

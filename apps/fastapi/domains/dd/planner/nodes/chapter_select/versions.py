@@ -10,4 +10,9 @@ from __future__ import annotations
 # the page overlaps most, not to the lowest proposal index (deepagents: 42-page catch-all); an
 # oversize chapter is partitioned by average-linkage clustering of the pages' word vectors and the
 # LLM only names the groups; the catch-all appendix over 8% of the corpus is split the same way.
-PROMPT_VERSION = "v7-cluster-split-2026-10-13"
+# v8 (2026-10-13): clustering similarity mixes slug words (module path) + summary words + role
+# (leftover pages: intra-group similarity 0.05 on summaries alone → grab-bag groups); the catch-all
+# appendix splits into groups of ~10 pages (up to 6) with names judged from all listed pages;
+# migration / upgrade / changelog PAGES are pulled out of topical chapters into one migration
+# chapter (an existing one, else a new one from 3+ pages).
+PROMPT_VERSION = "v8-slug-cluster-migration-2026-10-13"

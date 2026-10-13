@@ -78,6 +78,10 @@ def domain_sections_listed(source_structure: str) -> bool:
     return "Site sections" in (source_structure or "")
 
 
+def _concise_block(target_chapters: int) -> str:
+    return params.CONCISE_BLOCK if target_chapters >= params.CONCISE_MIN_TARGET else ""
+
+
 def _extra_signal_block(source_structure: str) -> str:
     """Appended to a LangFuse-rendered prompt: the deployed template predates this
     node's local rules (it still says "split above 40%"), and LangFuse wins when
@@ -154,7 +158,7 @@ def build_propose_prompt(
         if _rendered:
             # The deployed template predates the SOURCE STRUCTURE signal and the
             # family/foundations rules — append them so they apply on this path too.
-            return _rendered + _extra_signal_block(source_structure)
+            return _rendered + _extra_signal_block(source_structure) + _concise_block(target_chapters)
     except Exception:
         pass
 
@@ -222,6 +226,7 @@ def build_propose_prompt(
         f"adjacent chapter happens to mention extensibility.\n"
         f"{_structure_rules(source_structure)}"
         f"\nRespond ONLY with valid JSON. No prose, no markdown wrap."
+        f"{_concise_block(target_chapters)}"
     )
 
 
