@@ -3,9 +3,11 @@ extraction, summary helper, manifest hash). Prompt builders live in
 prompts.py; Pydantic schemas in schemas.py. LLM output decoding is
 `chat_structured_async` — no manual JSON parse needed here anymore."""
 from __future__ import annotations
+import domains
 from . import params, patterns, schemas, versions
 
 import json
+import math
 import os
 from collections import Counter
 from hashlib import sha256
@@ -221,9 +223,9 @@ def build_fallback_proposals(
     return schemas.ChapterProposalList(proposals = proposals)
 
 
-def summarize_proposal(props: list[schemas.ChapterProposal]) -> dict:
-    """Compact summary for the USC vote picker."""
-    return {
+def summarize_proposal(props: list[schemas.ChapterProposal], score: Optional[dict] = None) -> dict:
+    """Compact summary for the USC vote picker (+ the evidence score when known)."""
+    out = {
         "n_chapters":         len(props),
         "titles":             [p.title for p in props],
         "max_concept_count":  max(
@@ -231,6 +233,106 @@ def summarize_proposal(props: list[schemas.ChapterProposal]) -> dict:
         ),
         "total_concepts":     sum(len(p.key_concepts) for p in props),
     }
+    if score:
+        out["unmatched_pct"] = score["unmatched_pct"]
+        out["largest_share_pct"] = score["largest_share_pct"]
+    return out
+
+
+def propose_max_tokens(target_chapters: int) -> int:
+    """First-draft token budget: scales with the chapter target, never below the floor."""
+    return max(
+        params.MAX_TOKENS_PROPOSE,
+        min(params.MAX_TOKENS_PROPOSE_MAX, params.MAX_TOKENS_BASE + params.MAX_TOKENS_PER_CHAPTER * target_chapters),
+    )
+
+
+def retry_max_tokens(max_tokens: int) -> int:
+    """Budget for re-asking a draft that was cut at max_tokens."""
+    return min(params.MAX_TOKENS_RETRY_CAP, max(max_tokens, int(max_tokens * params.LENGTH_RETRY_FACTOR)))
+
+
+def _words(text: str) -> set[str]:
+    return {
+        w for w in patterns.SCORE_WORD_RE.findall((text or "").lower())
+        if w not in params.SCORE_STOP
+    }
+
+
+def doc_match_text(key: str, distillate: Optional[dict], body: str = "") -> str:
+    """What a doc is matched on: page slug + distillate summary and terms (or the body head)."""
+    slug = patterns.KEY_PREFIX_RE.sub("", os.path.basename(key or "").rsplit(".", 1)[0])
+    d = distillate or {}
+    text = " ".join([slug, d.get("summary") or "", " ".join(d.get("key_terms") or [])]).strip()
+    if not (d.get("summary") or "").strip():
+        text = f"{slug} {body or ''}"
+    return text[:params.SCORE_DOC_CHARS]
+
+
+def score_candidates(
+    candidates: list[list[dict]], doc_texts: list[str], target_chapters: int,
+) -> list[dict]:
+    """Evidence score per proposal sample (higher = better), no LLM. Every doc is matched to
+    its best chapter by IDF-weighted cosine over title + description + key concepts; a
+    sample loses points for docs matching no chapter, for a chapter that would hold more than
+    SCORE_SHARE_CAP of the docs, and for a chapter count far from the target. Returns, per
+    candidate: {n, unmatched_pct, largest_share_pct, score}."""
+    docs = [_words(t) for t in doc_texts]
+    n_docs = len(docs)
+    df = Counter(w for ws in docs for w in ws)
+    idf = {w: math.log(1.0 + n_docs / c) for w, c in df.items()}
+    doc_norm = [math.sqrt(sum(idf[w] ** 2 for w in ws)) or 1.0 for ws in docs]
+    out = []
+    for props in candidates:
+        chapters = []
+        for p in props:
+            ws = _words(" ".join([p.get("title") or "", p.get("description") or "", " ".join(p.get("key_concepts") or [])]))
+            chapters.append((ws, math.sqrt(sum(idf.get(w, math.log(1.0 + n_docs)) ** 2 for w in ws)) or 1.0))
+        counts = [0] * len(chapters)
+        unmatched = 0
+        for ws, dn in zip(docs, doc_norm):
+            best, best_i = 0.0, -1
+            for i, (cw, cn) in enumerate(chapters):
+                shared = ws & cw
+                if not shared:
+                    continue
+                cos = sum(idf[w] ** 2 for w in shared) / (dn * cn)
+                if cos > best:
+                    best, best_i = cos, i
+            if best_i < 0 or best < params.SCORE_MIN_MATCH:
+                unmatched += 1
+            else:
+                counts[best_i] += 1
+        n = len(chapters)
+        unmatched_frac = unmatched / n_docs if n_docs else 0.0
+        share = (max(counts) / n_docs) if n_docs and counts else 0.0
+        t = max(1, target_chapters)
+        gap = (t - n) / t if n < t else 0.5 * (n - t) / t
+        score = (
+            (1.0 - unmatched_frac)
+            - params.SCORE_SHARE_WEIGHT * max(0.0, share - params.SCORE_SHARE_CAP)
+            - params.SCORE_COUNT_WEIGHT * gap
+        )
+        out.append({
+            "n": n,
+            "unmatched_pct": round(100 * unmatched_frac, 1),
+            "largest_share_pct": round(100 * share, 1),
+            "score": round(score, 4),
+        })
+    return out
+
+
+def shortlist(scores: list[dict], target_chapters: int) -> list[int]:
+    """Candidate indices that go on to the tie-break: those within SCORE_TIE_MARGIN of the
+    best score, after dropping samples far below the target chapter count (when at least one
+    sample reaches it). Best-first; a single index means the evidence decided."""
+    if not scores:
+        return []
+    floor = params.SCORE_MIN_COUNT_FRAC * target_chapters
+    pool = [i for i, s in enumerate(scores) if s["n"] >= floor] or list(range(len(scores)))
+    best = max(scores[i]["score"] for i in pool)
+    near = [i for i in pool if best - scores[i]["score"] <= params.SCORE_TIE_MARGIN]
+    return sorted(near, key = lambda i: -scores[i]["score"])
 
 
 
@@ -266,7 +368,5 @@ def manifest_hash(
 
 
 def is_length_error(exc: Exception) -> bool:
-    """True when the model's output was cut at max_tokens (OpenAI SDK
-    LengthFinishReasonError, wrapped by chat_structured_async into ChatError)."""
-    text = f"{type(exc).__name__} {exc}"
-    return "LengthFinishReason" in text or "length limit was reached" in text
+    """True when the model's output was cut at max_tokens."""
+    return domains.settings.chat.domain.is_length_error(exc)

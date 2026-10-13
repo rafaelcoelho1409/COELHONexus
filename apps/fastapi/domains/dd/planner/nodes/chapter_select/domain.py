@@ -719,12 +719,57 @@ def validate_split(
         if size < floor:
             return False, f"group {p.get('title')!r} has only {size} docs (minimum {floor})"
         t = " ".join((p.get("title") or "").split())
-        if not (2 <= len(t.split()) <= 8):
-            return False, f"title {t!r} must be 2-8 words"
+        if not (1 <= len(t.split()) <= 8):
+            return False, f"title {t!r} must be 1-8 words"
+        if t.casefold() in params.GENERIC_TITLES:
+            return False, f"title {t!r} is a generic name — use a concrete topic"
         if t.casefold() in titles or t.casefold() in other_titles:
             return False, f"title {t!r} is not unique among chapters"
         titles.add(t.casefold())
     return True, ""
+
+
+def normalize_split(parts: list[dict], units: list[dict]) -> list[dict]:
+    """Repair an LLM split instead of rejecting it (deepagents: a 41-doc catch-all chapter
+    shipped unsplit after two rejections "units not placed in any group" / "group has only 3
+    docs"): duplicate and unknown unit ids are dropped, empty groups vanish, units the model
+    forgot join the group of their nearest placed unit (units are in source order, so
+    neighbours are related), and groups under the size floor merge into the group with the
+    nearest centre. Two groups are never merged away — those, and bad titles, still go back to
+    the model through validate_split."""
+    ids = {u["id"] for u in units}
+    placed: set[int] = set()
+    out: list[dict] = []
+    for p in parts:
+        uids = []
+        for u in p.get("unit_ids") or []:
+            if u in ids and u not in placed:
+                placed.add(u)
+                uids.append(u)
+        if uids:
+            out.append({**p, "unit_ids": uids})
+    if len(out) < 2:
+        return out
+    owner = {u: gi for gi, p in enumerate(out) for u in p["unit_ids"]}
+    for u in sorted(ids - placed):
+        nearest = min(owner, key = lambda x: (abs(x - u), x))
+        owner[u] = owner[nearest]
+        out[owner[u]]["unit_ids"].append(u)
+    n_docs = sum(len(u["keys"]) for u in units)
+    floor = max(params.MIN_DOCS_PER_CHAPTER, math.ceil(0.15 * n_docs))
+    size = lambda p: sum(len(units[u]["keys"]) for u in p["unit_ids"])
+    centre = lambda p: sum(p["unit_ids"]) / len(p["unit_ids"])
+    while len(out) > 2:
+        small = min(out, key = size)
+        if size(small) >= floor:
+            break
+        others = [p for p in out if p is not small]
+        target = min(others, key = lambda p: abs(centre(p) - centre(small)))
+        target["unit_ids"] = target["unit_ids"] + small["unit_ids"]
+        out.remove(small)
+    for p in out:
+        p["unit_ids"] = sorted(p["unit_ids"])
+    return out
 
 
 def apply_split(chapter: dict, parts: list[dict], units: list[dict]) -> list[dict]:

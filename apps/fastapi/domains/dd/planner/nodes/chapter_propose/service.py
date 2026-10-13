@@ -73,6 +73,7 @@ async def load_bodies(
 
 async def draft_one(
     prompt: str, sample_idx: int, failures: Optional[list] = None,
+    max_tokens: Optional[int] = None,
 ) -> Optional[schemas.ChapterProposalList]:
     """One LLM call, decoded via LangChain's `.with_structured_output()`
     (same pattern as chapter_assign's `_score_call`). A parse/validation
@@ -94,11 +95,12 @@ async def draft_one(
                 "kind": type(e).__name__, "msg": " ".join(str(e).split())[:160],
             })
 
+    budget = max_tokens or params.MAX_TOKENS_PROPOSE
     try:
         payload, _meta = await domains.settings.chat.service.chat_structured_async(
             prompt,
             schemas.ChapterProposalList,
-            max_tokens = params.MAX_TOKENS_PROPOSE,
+            max_tokens = budget,
             temperature = params.TEMPERATURE_PROPOSE,
             timeout_s = params.DRAFT_TIMEOUT_S,
         )
@@ -114,7 +116,8 @@ async def draft_one(
                 f"{type(e).__name__}: {e}"
             )
             return None
-        err = params.LENGTH_REASK_HINT      # output hit max_tokens: ask for a shorter one
+        err = params.LENGTH_REASK_HINT      # output hit max_tokens: ask for a shorter one …
+        budget = domain.retry_max_tokens(budget)   # … and allow a longer one (the budget was wrong)
 
     for repair_attempt in range(params.MAX_REPAIR_ATTEMPTS):
         repair_prompt = (
@@ -124,7 +127,7 @@ async def draft_one(
             payload2, _ = await domains.settings.chat.service.chat_structured_async(
                 repair_prompt,
                 schemas.ChapterProposalList,
-                max_tokens = params.MAX_TOKENS_PROPOSE,
+                max_tokens = budget,
                 temperature = 0.0,
                 timeout_s = params.DRAFT_TIMEOUT_S,
             )
@@ -136,6 +139,7 @@ async def draft_one(
             _note(f"repair{repair_attempt + 1}", e)
             if domain.is_length_error(e):
                 err = params.LENGTH_REASK_HINT
+                budget = domain.retry_max_tokens(budget)
                 continue
             logger.warning(
                 f"[chapter_propose] sample {sample_idx} repair "
@@ -148,12 +152,21 @@ async def draft_one(
 
 async def usc_pick(
     framework: str, candidates: list[schemas.ChapterProposalList],
+    scores: Optional[list[dict]] = None, target_chapters: int = 0,
 ) -> int:
+    """Pick the best sample. With `scores` (domain.score_candidates) the evidence decides;
+    the LLM vote (Universal Self-Consistency) only breaks near-ties among the shortlist."""
     if len(candidates) <= 1:
         return 0
-    summaries = [domain.summarize_proposal(c.proposals) for c in candidates]
+    short = domain.shortlist(scores, target_chapters) if scores else list(range(len(candidates)))
+    if len(short) == 1:
+        return short[0]
+    summaries = [
+        domain.summarize_proposal(candidates[i].proposals, scores[i] if scores else None)
+        for i in short
+    ]
     prompt = prompts.build_usc_vote_prompt(
-        framework = framework, candidates_summary = summaries,
+        framework = framework, candidates_summary = summaries, target_chapters = target_chapters,
     )
     try:
         vote, _ = await domains.settings.chat.service.chat_structured_async(
@@ -163,13 +176,15 @@ async def usc_pick(
             temperature = params.TEMPERATURE_VOTE,
             timeout_s = 20.0,
         )
-        if 0 <= vote.chosen_index < len(candidates):
-            return vote.chosen_index
+        if 0 <= vote.chosen_index < len(short):
+            return short[vote.chosen_index]
     except Exception as e:
         logger.warning(
             f"[chapter_propose] USC pick failed: {type(e).__name__}: {e}"
         )
-    # Fallback: max-chapters (coverage > picker silence).
+    # Fallback: best evidence score, else max-chapters (coverage > picker silence).
+    if scores:
+        return short[0]
     return max(
         range(len(candidates)),
         key = lambda i: len(candidates[i].proposals),
@@ -322,11 +337,13 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
         n_namespace_seeds = len(seeds.get("namespaces") or []),
     )
 
+    draft_tokens = domain.propose_max_tokens(target_chapters)
+
     # Optimal-Stopping (CGES): if sample 0 parses cleanly AND ≥ stop_floor proposals, ship.
     sample_failures: list[dict] = []
     samples: list[schemas.ChapterProposalList | None]
     if params.OPTIMAL_STOPPING_ENABLED and params.N_SAMPLES >= 2:
-        s0 = await draft_one(prompt, 0, sample_failures)
+        s0 = await draft_one(prompt, 0, sample_failures, draft_tokens)
         samples = [s0]
         if s0 is not None and len(s0.proposals) >= stop_floor:
             logger.info(
@@ -337,12 +354,12 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
             )
         else:
             remaining = await asyncio.gather(*[
-                draft_one(prompt, i, sample_failures) for i in range(1, params.N_SAMPLES)
+                draft_one(prompt, i, sample_failures, draft_tokens) for i in range(1, params.N_SAMPLES)
             ])
             samples.extend(remaining)
     else:
         samples = list(await asyncio.gather(*[
-            draft_one(prompt, i, sample_failures) for i in range(params.N_SAMPLES)
+            draft_one(prompt, i, sample_failures, draft_tokens) for i in range(params.N_SAMPLES)
         ]))
     valid: list[schemas.ChapterProposalList] = [s for s in samples if s is not None]
     if sample_failures:
@@ -363,7 +380,7 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
         await asyncio.sleep(2.0)
         # Quick retry: one more parallel sample batch
         retry_samples = list(await asyncio.gather(*[
-            draft_one(prompt, i + 10, sample_failures) for i in range(params.N_SAMPLES)
+            draft_one(prompt, i + 10, sample_failures, draft_tokens) for i in range(params.N_SAMPLES)
         ]))
         valid = [s for s in retry_samples if s is not None]
         if not valid:
@@ -377,7 +394,22 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
         else:
             logger.info(f"[chapter_propose] retry recovered {len(valid)}/{params.N_SAMPLES} samples")
 
-    chosen_idx = await usc_pick(slug, valid) if not fallback_used else 0
+    cand_scores: list[dict] = []
+    if len(valid) > 1 and not fallback_used:
+        try:
+            texts = [
+                domain.doc_match_text(k, (distillates_map or {}).get(k), (bodies_by_key or {}).get(k, ""))
+                for k in relevant_files
+            ]
+            cand_scores = domain.score_candidates(
+                [[p.model_dump() for p in v.proposals] for v in valid], texts, target_chapters,
+            )
+            logger.info(f"[chapter_propose] {slug}: candidate scores {cand_scores}")
+        except Exception as e:
+            logger.warning(f"[chapter_propose] {slug}: candidate scoring skipped ({type(e).__name__}: {e})")
+    chosen_idx = (
+        await usc_pick(slug, valid, cand_scores or None, target_chapters) if not fallback_used else 0
+    )
     chosen = valid[chosen_idx]
 
     payload = {
@@ -389,6 +421,7 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
         "sample_failures": sample_failures[:20],
         "source_structure": source_structure,
         "chosen_idx":      chosen_idx,
+        "candidate_scores": cand_scores,
         "fallback_used":   fallback_used,
         "seeds":           seeds,
         "proposals":       [p.model_dump() for p in chosen.proposals],
@@ -406,6 +439,7 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
         "sample_failures": sample_failures[:20],
         "has_source_structure": bool(source_structure),
         "chosen_idx": chosen_idx,
+        "candidate_scores": cand_scores,
         "cache_hit": False,
         "wall_ms": wall_ms,
         "manifest_hash": manifest,

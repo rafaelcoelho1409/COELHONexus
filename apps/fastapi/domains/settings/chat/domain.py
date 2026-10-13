@@ -69,6 +69,13 @@ def classify_error(exc: Exception) -> str:
     return "unknown"
 
 
+def is_length_error(exc: Exception) -> bool:
+    """True when the model's output was cut at max_tokens (OpenAI SDK LengthFinishReasonError,
+    wrapped by chat_structured_async into ChatError) — the budget was wrong, not the input."""
+    text = f"{type(exc).__name__} {exc}"
+    return "LengthFinishReason" in text or "length limit was reached" in text
+
+
 def build_pool_limits(
     *,
     max_connections: int,

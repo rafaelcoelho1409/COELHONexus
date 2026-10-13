@@ -26,6 +26,16 @@ PROPOSALS_TARGET_CEILING = 24
 # 2026-10-02: 6000 -> 10000. elasticsearch-python (685 docs, 66k-token prompt)
 # hit LengthFinishReasonError at 6000 on 3/10 samples, then fell back to seeds.
 MAX_TOKENS_PROPOSE = 10000
+# Large corpora ask for ~24 chapters x (description + up to 15 concepts) and reasoning arms
+# add a <think> preamble: the first token budget scales with the target (never below
+# MAX_TOKENS_PROPOSE), and a draft cut at the limit is re-asked with a BIGGER budget —
+# the input was fine, the budget was wrong (fastmcp: draft + 2 repairs all hit 10000,
+# 263 s lost per sample, 2 of 5 samples gone).
+MAX_TOKENS_BASE        = 2500
+MAX_TOKENS_PER_CHAPTER = 330
+MAX_TOKENS_PROPOSE_MAX = 12000
+LENGTH_RETRY_FACTOR    = 1.6
+MAX_TOKENS_RETRY_CAP   = 16000
 
 # Sample N parallel proposals to mitigate single-arm variance, then
 # USC-vote pick the best (matches reduce node's pattern).
@@ -81,6 +91,25 @@ LENGTH_REASK_HINT = (
     "no reasoning text, JSON only"
 )
 
+# Candidate scoring (chapter_propose picks among the valid samples by evidence, the LLM
+# vote only breaks near-ties): each doc is matched to its best chapter by IDF-weighted
+# word overlap; a sample is penalized for docs that match no chapter, for a chapter
+# holding more than SCORE_SHARE_CAP of the docs, and for a chapter count far from target
+# (under-target counts in full, over-target at half weight).
+SCORE_MIN_MATCH     = 0.05   # cosine below this = the doc matches no chapter
+SCORE_SHARE_CAP     = 0.30
+SCORE_SHARE_WEIGHT  = 1.2
+SCORE_COUNT_WEIGHT  = 0.6
+SCORE_MIN_COUNT_FRAC = 0.6   # candidates below this x target are dropped when others reach it
+SCORE_TIE_MARGIN    = 0.03   # candidates within this of the best go to the LLM vote
+SCORE_DOC_CHARS     = 600    # per-doc text used for matching (summary + terms + page slug)
+SCORE_STOP = frozenset({
+    "the", "and", "for", "this", "with", "that", "from", "your", "into", "via", "are",
+    "use", "how", "you", "can", "will", "not", "but", "its", "has", "using", "guide",
+    "overview", "reference", "documentation", "covering", "usage", "concepts", "chapter",
+    "page", "docs", "describes", "explains", "provides", "learn", "includes", "section",
+})
+
 # Optimal-stopping (CGES 2511.02603): node scales floor to ~0.7×adaptive_target so large corpora don't early-stop on a small sample-0.
 # SOTA Sept 2026: with the rotator pooled http2 (200/100) 3×6000 tok drafts
 # run concurrently ~1× latency vs 2× sequential s0→remaining. Old default true
@@ -115,9 +144,17 @@ SEED_MAX_NAMESPACES = 30
 
 BLOB_PREFIX = "planner"
 
-# Chapter title bounds.
-TITLE_MIN_WORDS = 2
+# Chapter title bounds. 2026-10-13: min 2 -> 1. The schema silently DROPPED one-word
+# chapters (Streams, Queues, Subprocesses, Futures, Middleware …): 4 of 5 asyncio
+# samples shrank from 9-13 chapters to 4-5 and the vote then picked a 5-chapter plan.
+# Generic one-word titles stay rejected (GENERIC_TITLES).
+TITLE_MIN_WORDS = 1
 TITLE_MAX_WORDS = 8
+GENERIC_TITLES = frozenset({
+    "introduction", "intro", "overview", "conclusion", "background", "about", "summary",
+    "references", "reference", "foundations", "foundation", "miscellaneous", "misc",
+    "other", "others", "general", "appendix", "index", "preface", "epilogue",
+})
 
 # Description bounds.
 DESCRIPTION_CHARS_MIN = 20
@@ -125,6 +162,9 @@ DESCRIPTION_CHARS_MAX = 400
 
 # Key-concepts bounds per chapter.
 CONCEPTS_MIN = 3
+# The prompt asks for CONCEPTS_MIN, the schema accepts one fewer: a small topic (asyncio "Queues":
+# Queue, QueueShutDown) has two identifiers, and rejecting it dropped the whole chapter.
+CONCEPTS_MIN_ACCEPT = 2
 CONCEPTS_MAX = 15
 CONCEPT_CHARS_MIN = 2
 CONCEPT_CHARS_MAX = 80

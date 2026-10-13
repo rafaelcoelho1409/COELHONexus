@@ -58,6 +58,7 @@ async def distill_one(
         last_deployment = "?"
 
         # Retry only transient errors — pooled rotator rotates arm, jitter avoids herd.
+        max_tokens = params.MAX_TOKENS
         for attempt in range(params.MAX_TRANSIENT_RETRIES + 1):
             # Shrink the body on a retry (same shape as
             # synth/nodes/digest's `_MAX_SOURCE_CHARS // 2` on retry) — a
@@ -71,7 +72,7 @@ async def distill_one(
                 raw, meta = await domains.settings.chat.service.chat_structured_async(
                     prompt,
                     schemas.DocDistillateRaw,
-                    max_tokens = params.MAX_TOKENS,
+                    max_tokens = max_tokens,
                     temperature = params.TEMPERATURE,
                     timeout_s = params.TIMEOUT_S,
                 )
@@ -100,7 +101,7 @@ async def distill_one(
                         raw2, meta2 = await domains.settings.chat.service.chat_structured_async(
                             repair_prompt,
                             schemas.DocDistillateRaw,
-                            max_tokens = params.MAX_TOKENS,
+                            max_tokens = max_tokens,
                             temperature = 0.0,
                             timeout_s = params.TIMEOUT_S,
                         )
@@ -122,6 +123,12 @@ async def distill_one(
                     f"[doc_distill] {source_key} attempt {attempt + 1}: "
                     f"{failure_reason} ({type(e).__name__}: {e})"
                 )
+                if (
+                    can_retry and max_tokens == params.MAX_TOKENS
+                    and domains.settings.chat.domain.is_length_error(e)
+                ):
+                    max_tokens = min(params.MAX_TOKENS_RETRY_CAP, int(params.MAX_TOKENS * params.LENGTH_RETRY_FACTOR))
+                    continue
                 if is_transient and can_retry:
                     backoff = params.RETRY_BACKOFF_S[
                         min(attempt, len(params.RETRY_BACKOFF_S) - 1)

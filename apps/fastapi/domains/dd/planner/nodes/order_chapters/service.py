@@ -204,8 +204,12 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
     source_ranking: list[int] | None = None
     try:
         _m = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)
-        _idx = {e["key"]: int(e.get("idx") or 0) for e in (_m or {}).get("entries") or [] if e.get("key")}
-        source_ranking = domain.source_order_ranking(chapters, _idx)
+        _entries = (_m or {}).get("entries") or []
+        if domain.source_order_informative(_entries):
+            _idx = {e["key"]: int(e.get("idx") or 0) for e in _entries if e.get("key")}
+            source_ranking = domain.source_order_ranking(chapters, _idx)
+        else:
+            logger.info(f"[order_chapters] {slug}: source order not informative (single URL or alphabetical) — LLM votes only")
     except Exception as e:
         logger.info(f"[order_chapters] {slug}: source order unavailable ({type(e).__name__})")
 
@@ -220,7 +224,13 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
         settled = await domains.settings.chat.service.wait_for_rotator_settle(params.SETTLE_DELAY_S)
         logger.info(f"[order_chapters] settle done: {settled}")
 
-    prompt = prompts.build_order_prompt(chapters)
+    composition = None
+    try:
+        _dist = await domains.dd.planner.nodes.doc_distill.service.load_distillates(minio, slug)
+        composition = domain.chapter_composition(chapters, _dist or {})
+    except Exception as e:
+        logger.info(f"[order_chapters] {slug}: chapter composition unavailable ({type(e).__name__})")
+    prompt = prompts.build_order_prompt(chapters, composition)
     sem = asyncio.Semaphore(params.SAMPLE_CONCURRENCY)
     sample_results = await asyncio.gather(*[
         sample_one_ordering(sem, prompt, n_chapters)
@@ -337,6 +347,7 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
         "foundational_idx": foundational_idx,
         "foundations_idx":  foundations_idx,
         "source_order":     source_ranking,
+        "composition":      composition,
         "n_chapters":       n_chapters,
         "prompt_version":   versions.PROMPT_VERSION,
         "deployment_usage": deployment_summary,

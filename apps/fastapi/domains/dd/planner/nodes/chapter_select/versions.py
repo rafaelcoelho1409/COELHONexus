@@ -4,4 +4,6 @@ from __future__ import annotations
 
 # v5 (2026-10-13): anchored-family harmonization, Foundations chapter (doc_distill
 # `role`), and the LLM oversize split (chapters > 30% of the corpus).
-PROMPT_VERSION = "v5-family-split-foundations-2026-10-13"
+# v6 (2026-10-13): an LLM oversize split is repaired (forgotten units attach to their nearest
+# neighbour, tiny groups merge, duplicates dropped) instead of rejected; one-word titles allowed.
+PROMPT_VERSION = "v6-split-repair-2026-10-13"

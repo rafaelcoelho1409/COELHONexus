@@ -12,11 +12,18 @@ def _normalize_description(desc: str) -> str:
     return s
 
 
-def build_order_prompt(chapters: list[dict]) -> str:
+def _composition(comp: dict | None) -> str:
+    if not comp:
+        return ""
+    return f" ({comp['n_docs']} pages, {comp['reference_pct']}% API/reference)"
+
+
+def build_order_prompt(chapters: list[dict], composition: list[dict | None] | None = None) -> str:
     """Build the pedagogical-ordering prompt; asks the LLM to return a permutation of chapter indices in prerequisite order."""
     chapter_block = "\n".join(
         f"[{i}] {ch.get('title', '?')!r} — "
         f"{_normalize_description(ch.get('description', ''))}"
+        f"{_composition(composition[i]) if composition else ''}"
         for i, ch in enumerate(chapters)
     )
     n = len(chapters)
@@ -29,6 +36,9 @@ def build_order_prompt(chapters: list[dict]) -> str:
         f"- Installation, setup, CLI/quickstart chapters always come FIRST.\n"
         f"- Foundational concepts before composite/advanced ones.\n"
         f"- Concrete usage before abstract internals.\n"
+        f"- A chapter made mostly of API/reference pages comes after the chapters that "
+        f"teach the same area with guides; operations topics (deployment, observability, "
+        f"testing, command-line tooling) come after the core usage chapters.\n"
         f"- A chapter should be readable AFTER all earlier chapters but "
         f"not depend on later ones.\n"
         f"- If two chapters are siblings (no prerequisite relation), "

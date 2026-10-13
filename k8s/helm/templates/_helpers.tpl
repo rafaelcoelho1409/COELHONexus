@@ -65,10 +65,11 @@ LITELLM_OTEL_V2: "true"
 # resource builder skips them.
 GIT_SHA: {{ .Values.otel.git_sha | default "" | quote }}
 HELM_CHART_VERSION: {{ .Chart.Version | quote }}
-# chapter_propose Optimal-Stopping feature flag. Diverges from the code's own
-# default ("false") — kept live here rather than in values.yaml/params.py so
-# rolling it back doesn't need a rebuild.
-DD_PROPOSE_OPTIMAL_STOPPING: "true"
+# chapter_propose Optimal-Stopping feature flag. 2026-10-13: "true" -> "false" — it shipped
+# ONE sample for deepagents (a 41-doc catch-all chapter), i.e. no best-of-N; quality over the
+# ~1 min it saved. Kept live here rather than in values.yaml/params.py so flipping it
+# doesn't need a rebuild.
+DD_PROPOSE_OPTIMAL_STOPPING: "false"
 # Per-study chapter concurrency semaphore. Roll back to "1" if 429 cascades
 # resume. Kept live here (not values.yaml/params.py) as a fast rollback lever.
 DD_STUDY_SEM: "2"

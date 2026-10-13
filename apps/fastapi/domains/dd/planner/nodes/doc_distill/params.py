@@ -65,6 +65,10 @@ TEMPERATURE = 0.2
 MAX_REPAIR_ATTEMPTS = 1
 
 MAX_TRANSIENT_RETRIES = 2
+# A distill cut at MAX_TOKENS (LengthFinishReasonError — fastmcp lost a doc to a stub summary) is
+# re-asked once with a doubled budget: the page was fine, the budget was wrong.
+LENGTH_RETRY_FACTOR = 2.0
+MAX_TOKENS_RETRY_CAP = 4_000
 RETRY_BACKOFF_S = (2.0, 5.0)
 
 # 2026-09-08: 60s -> 120s -> 70s. First raised to 120s using Synth's own

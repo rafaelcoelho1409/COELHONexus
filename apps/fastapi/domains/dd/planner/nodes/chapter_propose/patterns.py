@@ -38,3 +38,7 @@ LEADING_MD_LINK_RE = re.compile(r"^\s*\[[^\]]*\]\(#[^)]*\)\s*")
 # doc are each stripped individually rather than everything between the
 # first and last fence).
 FENCED_CODE_RE = re.compile(r"```.*?```", re.DOTALL)
+
+# Words for the candidate-scoring overlap (identifiers split on `.`/`_`/`-`: `asyncio.create_task` → asyncio, create, task).
+SCORE_WORD_RE = re.compile(r"[a-z0-9]{3,}")
+KEY_PREFIX_RE = re.compile(r"^\d+-")

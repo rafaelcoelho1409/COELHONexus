@@ -48,4 +48,9 @@ from __future__ import annotations
 # v13 (2026-10-13): SOURCE STRUCTURE also lists URL-directory "site sections" (≥6 direct
 # pages, not the site trunk) + a rule giving a section of like catalog pages its own
 # chapter — deepagents' 12 provider pages were scattered over 4 topical chapters.
-PROMPT_VERSION = "v13-site-sections-2026-10-13"
+# v14 (2026-10-13): one-word chapter titles are valid (the schema silently dropped Streams/
+# Queues/Subprocesses/Futures … — asyncio samples shrank 9-13 -> 4-5 chapters); the sample is
+# picked by an evidence score (docs matching no chapter, largest share, distance from target),
+# the LLM vote only breaks near-ties; first-draft token budget scales with the target and a
+# length-truncated draft is re-asked with a bigger budget.
+PROMPT_VERSION = "v14-evidence-pick-2026-10-13"

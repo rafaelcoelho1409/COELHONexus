@@ -10,7 +10,7 @@ class SplitGroup(BaseModel):
     # Groq strict json_schema mode needs additionalProperties:false on every object.
     model_config = ConfigDict(extra = "forbid")
 
-    title: str = Field(description = "Concrete 2-8 word chapter title, unique among all chapters.")
+    title: str = Field(description = "Concrete 1-8 word chapter title, unique among all chapters.")
     description: str = Field(description = "ONE sentence: what the reader learns in this chapter.")
     unit_ids: list[int] = Field(description = "Ids of the units (from the list shown) that belong to this chapter.")
 

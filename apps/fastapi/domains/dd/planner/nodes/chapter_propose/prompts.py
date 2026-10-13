@@ -230,16 +230,25 @@ def build_usc_vote_prompt(
     *,
     framework: str,
     candidates_summary: list[dict],
+    target_chapters: int = 0,
 ) -> str:
-    """Pick the best of N proposal samples by balance + coverage rubric."""
+    """Tie-break between proposal samples whose evidence scores are close (the score —
+    docs matching no chapter, largest chapter share, distance from target — already
+    ruled out the clearly worse ones)."""
     lines: list[str] = []
     for i, c in enumerate(candidates_summary):
         n_chapters = c.get("n_chapters", 0)
         titles = c.get("titles") or []
         max_concept_count = c.get("max_concept_count", 0)
+        evidence = ""
+        if "unmatched_pct" in c:
+            evidence = (
+                f"; {c['unmatched_pct']}% of docs match no chapter, largest chapter "
+                f"holds {c['largest_share_pct']}% of docs"
+            )
         lines.append(
             f"CANDIDATE {i}: {n_chapters} chapters, max concepts in any "
-            f"chapter = {max_concept_count}"
+            f"chapter = {max_concept_count}{evidence}"
         )
         lines.append("  Titles: " + ", ".join(titles[:params.PROPOSALS_MAX]))
     block = "\n".join(lines)
@@ -248,9 +257,10 @@ def build_usc_vote_prompt(
         f"of {len(candidates_summary)} chapter proposal sets for "
         f"{framework}.\n\n"
         f"== CANDIDATES ==\n{block}\n\n"
-        f"Pick by:\n"
-        f"  1. Balance (no single chapter dominates concepts)\n"
-        f"  2. Coverage (more chapters = more coverage, up to {params.PROPOSALS_MAX})\n"
+        + (f"The target is about {target_chapters} chapters.\n" if target_chapters else "")
+        + f"Pick by:\n"
+        f"  1. Coverage (every topic of the framework has its own chapter; few docs match no chapter)\n"
+        f"  2. Balance (no single chapter dominates; a chapter count near the target)\n"
         f"  3. Specificity (concrete titles, not 'Overview'/'Introduction')\n\n"
         f"OUTPUT — STRICT JSON:\n"
         f'{{"chosen_index": <int>, "reason": "<short>"}}'

@@ -48,7 +48,7 @@ async def _split_one(
             )
             repair = f"output could not be parsed ({type(e).__name__}); return strictly valid JSON"
             continue
-        parts = [g.model_dump() for g in plan.groups]
+        parts = domain.normalize_split([g.model_dump() for g in plan.groups], units)
         ok, reason = domain.validate_split(parts, units, {t.casefold() for t in other_titles})
         if ok:
             return domain.apply_split(chapter, parts, units)

@@ -2,8 +2,12 @@
 from __future__ import annotations
 from . import params
 
+import logging
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+
+logger = logging.getLogger(__name__)
 
 
 class ChapterProposal(BaseModel):
@@ -43,6 +47,8 @@ class ChapterProposal(BaseModel):
                 f"title must be {params.TITLE_MIN_WORDS}-{params.TITLE_MAX_WORDS} "
                 f"words; got {n}"
             )
+        if s.casefold() in params.GENERIC_TITLES:
+            raise ValueError(f"title {s!r} is a generic content-type name")
         return s
 
     @field_validator("description")
@@ -74,10 +80,10 @@ class ChapterProposal(BaseModel):
             out.append(s)
             if len(out) >= params.CONCEPTS_MAX:
                 break
-        if len(out) < params.CONCEPTS_MIN:
+        if len(out) < params.CONCEPTS_MIN_ACCEPT:
             raise ValueError(
                 f"only {len(out)} usable key_concepts "
-                f"(minimum {params.CONCEPTS_MIN})"
+                f"(minimum {params.CONCEPTS_MIN_ACCEPT})"
             )
         return out
 
@@ -108,10 +114,14 @@ class ChapterProposalList(BaseModel):
         for item in v:
             try:
                 p = item if isinstance(item, ChapterProposal) else ChapterProposal.model_validate(item)
-            except Exception:
+            except Exception as e:
+                # Never silent: a dropped chapter is a topic the corpus loses.
+                t = item.get("title") if isinstance(item, dict) else item
+                logger.info(f"[chapter_propose] dropped proposal {t!r}: {' '.join(str(e).split())[:140]}")
                 continue
             k = p.title.casefold()
             if k in seen:
+                logger.info(f"[chapter_propose] dropped duplicate proposal title {p.title!r}")
                 continue
             seen.add(k)
             out.append(p)

@@ -33,7 +33,7 @@ def build_split_prompt(
         f"3. Group units that teach the same sub-topic; each chapter must be "
         f"cohesive on its own and have at least {params.MIN_DOCS_PER_CHAPTER} pages and "
         f"roughly 15% or more of the chapter's pages.\n"
-        f"4. Titles: concrete, 2-8 words, unique, and different from every "
+        f"4. Titles: concrete, 1-8 words, unique, and different from every "
         f"existing chapter title: {other_titles}. Never 'Overview', 'Introduction' "
         f"or 'Miscellaneous'.\n"
         f"5. Each description is ONE sentence about what the reader learns.\n\n"

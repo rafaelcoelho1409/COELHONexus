@@ -3,7 +3,7 @@ foundational prefix rule, outline loader). Prompt builder lives in
 prompts.py; Pydantic schema in schemas.py. LLM output decoding is
 `chat_structured_async` — no manual JSON parse needed here anymore."""
 from __future__ import annotations
-from . import patterns
+from . import params, patterns
 
 import json
 
@@ -79,6 +79,37 @@ def source_order_ranking(chapters: list[dict], key_idx: dict[str, int]) -> list[
         range(len(chapters)),
         key = lambda i: (means[i] is None, means[i] if means[i] is not None else 0.0, i),
     )
+
+
+def source_order_informative(entries: list[dict]) -> bool:
+    """True when the manifest's `idx` order is the docs' own sequence. False for one page
+    (single-URL dump) and for an alphabetical listing: the share of neighbouring pages whose
+    URL path ascends is ≥ params.SOURCE_ORDER_ALPHA_MAX."""
+    ents = sorted((e for e in entries or [] if e.get("key")), key = lambda e: int(e.get("idx") or 0))
+    paths = [(e.get("source_path") or e.get("url") or "").split("#", 1)[0].casefold() for e in ents]
+    changes = [(a, b) for a, b in zip(paths, paths[1:]) if a != b]
+    if len(set(paths)) < params.SOURCE_ORDER_MIN_PATHS or not changes:
+        return False
+    ascending = sum(1 for a, b in changes if b >= a)
+    return ascending / len(changes) < params.SOURCE_ORDER_ALPHA_MAX
+
+
+def chapter_composition(chapters: list[dict], distillates: dict[str, dict]) -> list[dict | None]:
+    """Per chapter: {n_docs, reference_pct} from doc_distill `role` (API/reference pages vs
+    guides, tutorials and explanations) — what the orderer needs to tell a reference chapter
+    from a teaching one. None where no member has a distillate."""
+    out: list[dict | None] = []
+    for ch in chapters:
+        keys = ch.get("member_doc_keys") or []
+        roles = [(distillates.get(k) or {}).get("role") for k in keys if k in distillates]
+        if not roles:
+            out.append(None)
+            continue
+        out.append({
+            "n_docs": len(keys),
+            "reference_pct": round(100 * sum(1 for r in roles if r == "reference") / len(roles)),
+        })
+    return out
 
 
 def pin_foundations_first(order: list[int], chapters: list[dict]) -> tuple[list[int], list[int]]:

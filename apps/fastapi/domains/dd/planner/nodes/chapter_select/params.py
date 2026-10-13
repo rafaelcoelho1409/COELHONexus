@@ -40,6 +40,11 @@ SPLIT_MEDIAN_RATIO   = 2.0   # … AND bigger than this × the median chapter (a
 SPLIT_MIN_TOTAL_DOCS = 24    # tiny corpora legitimately have one big chapter
 SPLIT_MIN_CHAPTER_DOCS = 12
 SPLIT_MAX_PARTS      = 4
+GENERIC_TITLES = frozenset({   # same one-word generics chapter_propose refuses
+    "introduction", "intro", "overview", "conclusion", "background", "about", "summary",
+    "references", "reference", "foundations", "foundation", "miscellaneous", "misc",
+    "other", "others", "general", "appendix", "index", "preface", "epilogue",
+})
 SPLIT_MAX_TOKENS     = 3000
 SPLIT_TIMEOUT_S      = 120.0
 SPLIT_UNIT_SUMMARY_CHARS = 220

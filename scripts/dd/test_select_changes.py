@@ -129,7 +129,8 @@ assert not sel.validate_split([{"title": "Alpha Part", "unit_ids": list(range(0,
 assert not sel.validate_split([{"title": "Alpha Part", "unit_ids": list(range(0, 17))}, {"title": "Beta Part", "unit_ids": list(range(17, 32))}], units, set())[0]   # missing unit
 assert not sel.validate_split([{"title": "Alpha Part", "unit_ids": list(range(0, 31))}, {"title": "Beta Part", "unit_ids": [31, 32]}], units, set())[0]           # lopsided / too small
 assert not sel.validate_split([{"title": "Alpha Part", "unit_ids": list(range(0, 17))}, {"title": "alpha part", "unit_ids": list(range(17, 33))}], units, set())[0]  # duplicate title
-assert not sel.validate_split([{"title": "Alpha", "unit_ids": list(range(0, 17))}, {"title": "Beta Part", "unit_ids": list(range(17, 33))}], units, set())[0]       # 1-word title
+assert sel.validate_split([{"title": "Alpha", "unit_ids": list(range(0, 17))}, {"title": "Beta Part", "unit_ids": list(range(17, 33))}], units, set())[0]           # 1-word title is fine now
+assert not sel.validate_split([{"title": "Overview", "unit_ids": list(range(0, 17))}, {"title": "Beta Part", "unit_ids": list(range(17, 33))}], units, set())[0]    # generic 1-word title
 parts = [{"title": "Alpha Part", "description": "a", "unit_ids": list(range(0, 17))}, {"title": "Beta Part", "description": "b", "unit_ids": list(range(17, 33))}]
 new = sel.apply_split(big[0], parts, units)
 assert [c["n_member_docs"] for c in new] == [22, 16] and new[0]["source_proposal_idx"] == 1 and new[1]["source_proposal_idx"] is None
