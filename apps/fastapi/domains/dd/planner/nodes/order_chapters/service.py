@@ -24,29 +24,33 @@ logger = logging.getLogger(__name__)
 
 async def sample_one_ordering(
     sem: asyncio.Semaphore,
-    prompt: str,
-    n_chapters: int,
+    chapters: list[dict],
+    composition: list[dict | None] | None,
+    framework: str,
+    sample_idx: int,
 ) -> tuple[list[int] | None, dict]:
-    """One LLM call + one reask-on-failure. Returns (parsed_order_or_None, meta).
-    Pooled rotator handles parallel sample calls via Borda; json_object for
-    strict parse. Previously this node had no retry at all — one bad sample
-    was just a lost sample; now mirrors the reask pattern already proven for
-    doc_distill/chapter_propose/chapter_assign."""
+    """One LLM call + one reask-on-failure. The model returns chapter TITLES in reading order
+    (mapped back to indices by domain.titles_to_order); each sample sees the chapters in its
+    own shuffled arrangement. Returns (parsed_order_or_None, meta)."""
+    labels = domain.chapter_labels(chapters)
+    prompt = prompts.build_order_prompt(chapters, composition, framework, sample_idx)
+    order, bad = None, None
+    meta: dict = {}
     async with sem:
         try:
             result, meta = await domains.settings.chat.service.chat_structured_async(
                 prompt,
-                schemas.ChapterOrder,
+                schemas.ChapterTitleOrder,
                 max_tokens = params.MAX_TOKENS,
                 temperature = params.TEMPERATURE,
                 timeout_s = params.TIMEOUT_S,
             )
-            order = result.order if domain.is_valid_permutation(result.order, n_chapters) else None
-            bad_order = None if order is not None else result.order
+            order = domain.titles_to_order(result.order, labels)
+            bad = None if order is not None else result.order
         except ValueError:
             # Didn't even parse into the schema — same reask-eligible
-            # bucket as a schema-valid-but-bad-permutation response.
-            order, bad_order, meta = None, None, {}
+            # bucket as a schema-valid-but-unusable response.
+            order, bad, meta = None, None, {}
         except Exception as e:
             return None, {"error": f"{type(e).__name__}: {str(e)[:120]}"}
     if order is not None:
@@ -54,22 +58,21 @@ async def sample_one_ordering(
 
     repair_prompt = (
         prompt
-        + f"\n\nPRIOR OUTPUT was invalid/unparseable "
-        f"(raw={str(bad_order)[:200]!r}). Emit valid JSON exactly per "
-        f"the schema above."
+        + f"\n\nPRIOR OUTPUT was invalid/unparseable (raw={str(bad)[:200]!r}). Return ALL {len(labels)} "
+        f"chapter titles exactly as listed above, each once, as valid JSON per the schema."
     )
     async with sem:
         try:
             result2, meta2 = await domains.settings.chat.service.chat_structured_async(
                 repair_prompt,
-                schemas.ChapterOrder,
+                schemas.ChapterTitleOrder,
                 max_tokens = params.MAX_TOKENS,
                 temperature = 0.0,
                 timeout_s = params.TIMEOUT_S,
             )
         except Exception as e:
             return None, {"error": f"reask {type(e).__name__}: {str(e)[:120]}"}
-    order2 = result2.order if domain.is_valid_permutation(result2.order, n_chapters) else None
+    order2 = domain.titles_to_order(result2.order, labels)
     if order2 is not None:
         return order2, meta2
     return None, {
@@ -230,11 +233,10 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
         composition = domain.chapter_composition(chapters, _dist or {})
     except Exception as e:
         logger.info(f"[order_chapters] {slug}: chapter composition unavailable ({type(e).__name__})")
-    prompt = prompts.build_order_prompt(chapters, composition)
     sem = asyncio.Semaphore(params.SAMPLE_CONCURRENCY)
     sample_results = await asyncio.gather(*[
-        sample_one_ordering(sem, prompt, n_chapters)
-        for _ in range(params.N_SAMPLES)
+        sample_one_ordering(sem, chapters, composition, slug, i)
+        for i in range(params.N_SAMPLES)
     ])
     valid_orderings = [r[0] for r in sample_results if r[0] is not None]
     sample_metas = [r[1] for r in sample_results]
@@ -260,8 +262,8 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
         )
         await asyncio.sleep(2.0 + random.random() * 2.0)
         retry_results = await asyncio.gather(*[
-            sample_one_ordering(sem, prompt, n_chapters)
-            for _ in range(params.N_SAMPLES)
+            sample_one_ordering(sem, chapters, composition, slug, i + params.N_SAMPLES)
+            for i in range(params.N_SAMPLES)
         ])
         valid_orderings = [r[0] for r in retry_results if r[0] is not None]
         sample_metas = [r[1] for r in retry_results]
@@ -280,6 +282,7 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
         elapsed = int((time.monotonic() - t0) * 1000)
         identity = list(source_ranking) if source_ranking else list(range(n_chapters))
         identity, _ = domain.pin_foundations_first(identity, chapters)
+        identity, _ = domain.pin_trailing_last(identity, chapters)
         identity, _ = domain.pin_appendix_last(identity, chapters)
         sample_errors = [
             (m or {}).get("error", "unknown") for m in sample_metas
@@ -329,6 +332,8 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
     # The Foundations chapter (overview + cross-cutting pages) opens the book, ahead
     # of install/setup chapters.
     final_order, foundations_idx = domain.pin_foundations_first(final_order, chapters)
+    # Migration / upgrade chapters close the book, ahead of the generic appendix.
+    final_order, trailing_idx = domain.pin_trailing_last(final_order, chapters)
     final_order, _appendix_idx = domain.pin_appendix_last(final_order, chapters)
 
     dep_usage: dict[str, int] = {}
@@ -346,6 +351,7 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
         "aggregated":       aggregated,
         "foundational_idx": foundational_idx,
         "foundations_idx":  foundations_idx,
+        "trailing_idx":     trailing_idx,
         "source_order":     source_ranking,
         "composition":      composition,
         "n_chapters":       n_chapters,

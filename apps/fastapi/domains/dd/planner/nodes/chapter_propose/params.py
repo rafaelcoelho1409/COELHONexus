@@ -51,6 +51,22 @@ MAX_TOKENS_VOTE = 350   # 2026-09-27: 200 -> 350. Same reasoning-preamble
 # insurance ahead of the same failure mode, not a reaction to one.
 
 TEMPERATURE_PROPOSE = 0.4   # diversity across samples
+# The N prompts were byte-identical, so diversity came from temperature and arm choice only:
+# deepagents' 4 codestral samples were the same 7-chapter set (the one good sample came from
+# another arm). Each sample after the first organizes the book from a different ANGLE; the
+# evidence score (SCORE_*) then picks among them. Sample 0 keeps the plain prompt.
+SAMPLE_ANGLES = (
+    "",
+    "ANGLE FOR THIS DRAFT: organize the chapters around what a reader wants to DO (tasks and "
+    "workflows), not around the framework's internal modules.",
+    "ANGLE FOR THIS DRAFT: organize the chapters around the framework's COMPONENTS and API "
+    "surface: one chapter per major component, namespace or concept family.",
+    "ANGLE FOR THIS DRAFT: organize the chapters along a LEARNING PATH: setup, core concepts, "
+    "everyday features, advanced features, operations and integrations.",
+    "ANGLE FOR THIS DRAFT: organize the chapters around the documentation's OWN sections and "
+    "page families (see SOURCE STRUCTURE when present); give every section with distinct "
+    "sub-topics its own chapters.",
+)
 TEMPERATURE_VOTE    = 0.0
 
 # 2026-09-08: raised 90s -> 120s. The one node in this cluster still below

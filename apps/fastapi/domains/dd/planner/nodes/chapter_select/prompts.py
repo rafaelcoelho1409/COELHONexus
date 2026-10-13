@@ -1,5 +1,6 @@
 """chapter_select — prompt builder for the oversize-chapter split."""
 from __future__ import annotations
+import os
 from . import params
 
 
@@ -43,5 +44,48 @@ def build_split_prompt(
         f"title: {title}\n"
         f"description: {description}\n"
         f"== UNITS ==\n{unit_block}\n== END UNITS =="
+        + (f"\n\nPRIOR OUTPUT WAS REJECTED: {repair}\nFix exactly that and return valid JSON." if repair else "")
+    )
+
+
+def _strip_common_prefix(labels: list[str]) -> list[str]:
+    """Drop the slug prefix shared by every label (a single-URL dump titles its pages
+    'site-com-llms-full-<page>')."""
+    if len(labels) < 3:
+        return labels
+    pre = os.path.commonprefix(labels)
+    cut = pre.rfind("-") + 1 if "-" in pre else 0
+    return [l[cut:] or l for l in labels]
+
+
+def build_name_prompt(
+    *,
+    framework: str,
+    title: str,
+    groups: list[list[int]],
+    units: list[dict],
+    other_titles: list[str],
+    repair: str = "",
+) -> str:
+    """Name groups of pages that were already partitioned (the partition is computed)."""
+    labels = _strip_common_prefix([u["label"] for u in units])
+    blocks = []
+    for gi, g in enumerate(groups):
+        n_pages = sum(len(units[i]["keys"]) for i in g)
+        shown = "; ".join(labels[i] for i in g[:params.SPLIT_NAME_LISTED])
+        more = f" (+{len(g) - params.SPLIT_NAME_LISTED} more)" if len(g) > params.SPLIT_NAME_LISTED else ""
+        summ = " ".join(units[i]["summary"] for i in g[:2] if units[i]["summary"])[:2 * params.SPLIT_UNIT_SUMMARY_CHARS]
+        blocks.append(f"[{gi}] {n_pages} pages: {shown}{more}" + (f"\n    e.g. {summ}" if summ else ""))
+    return (
+        f"A {framework} learning book has an oversize chapter, '{title}', that was split into "
+        f"{len(groups)} groups of related documentation pages. Name each group as a chapter.\n\n"
+        f"RULES:\n"
+        f"1. Titles: concrete, 1-8 words, unique, and different from every existing chapter title: "
+        f"{other_titles}. Never 'Overview', 'Introduction' or 'Miscellaneous'.\n"
+        f"2. A title says what the group's pages have in common; two groups must not share a title idea.\n"
+        f"3. Each description is ONE sentence about what the reader learns.\n"
+        f"4. Return one entry per group id, ids exactly as shown.\n\n"
+        f'OUTPUT - STRICT JSON: {{"groups": [{{"id": 0, "title": "...", "description": "..."}}, ...]}}\n\n'
+        f"== GROUPS ==\n" + "\n".join(blocks) + "\n== END GROUPS =="
         + (f"\n\nPRIOR OUTPUT WAS REJECTED: {repair}\nFix exactly that and return valid JSON." if repair else "")
     )

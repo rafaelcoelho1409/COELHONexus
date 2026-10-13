@@ -11,7 +11,10 @@ from __future__ import annotations
 # reason (i.e. genuine upstream provider RPM exhaustion, not litellm's own
 # circuit breaker overreacting to transient blips). Smaller bursts reduce
 # how hard each per-minute quota window gets hit.
-CONCURRENCY = 8
+CONCURRENCY = 12
+# 2026-10-13: 8 -> 12. The Rotator is far healthier than in September (pool ~70 arms, 1658 OK vs
+# 20 wall-cap 504s in a 130-min window) and chapter_assign was 14.5 of fastmcp's 34.5 minutes
+# (350 docs / 8 slots); the transient retry below covers the odd benched arm.
 
 # 2026-09-08: 20.0 -> 130.0. Same fix as doc_distill's SETTLE_DELAY_S — the
 # original 20s was far shorter than the Rotator Router's own
@@ -22,6 +25,9 @@ CONCURRENCY = 8
 # triggered. Skipped entirely on a cache hit.
 SETTLE_DELAY_S = 130.0
 
+# A completion cut at MAX_TOKENS is retried once with LENGTH_RETRY_FACTOR x the budget (cap below).
+LENGTH_RETRY_FACTOR = 2.0
+MAX_TOKENS_RETRY_CAP = 4000
 MAX_TOKENS = 1200   # was 600 — scores needs one entry per chapter proposal,
 # and PROPOSALS_MAX=30 alone eats ~450-600 tokens of pure JSON in the worst
 # case, leaving zero headroom for a reasoning model's <think> preamble (same

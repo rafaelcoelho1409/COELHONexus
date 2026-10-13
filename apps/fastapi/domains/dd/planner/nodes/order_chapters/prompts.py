@@ -1,6 +1,6 @@
 """Pedagogical-ordering prompt; domain-agnostic rubric to avoid baking in framework-specific biases."""
 from __future__ import annotations
-from . import params
+from . import domain, params
 
 
 
@@ -18,37 +18,39 @@ def _composition(comp: dict | None) -> str:
     return f" ({comp['n_docs']} pages, {comp['reference_pct']}% API/reference)"
 
 
-def build_order_prompt(chapters: list[dict], composition: list[dict | None] | None = None) -> str:
-    """Build the pedagogical-ordering prompt; asks the LLM to return a permutation of chapter indices in prerequisite order."""
+def build_order_prompt(
+    chapters: list[dict],
+    composition: list[dict | None] | None = None,
+    framework: str = "",
+    sample_idx: int = 0,
+) -> str:
+    """Pedagogical-ordering prompt: the model returns chapter TITLES (not positions) in reading
+    order. Chapters are shown in a per-sample shuffled arrangement; domain-agnostic rubric."""
+    labels = domain.chapter_labels(chapters)
     chapter_block = "\n".join(
-        f"[{i}] {ch.get('title', '?')!r} — "
-        f"{_normalize_description(ch.get('description', ''))}"
+        f"- {labels[i]} \u2014 {_normalize_description(chapters[i].get('description', ''))}"
         f"{_composition(composition[i]) if composition else ''}"
-        for i, ch in enumerate(chapters)
+        for i in domain.shuffled_indices(len(chapters), sample_idx)
     )
     n = len(chapters)
+    about = f" about {framework}" if framework else ""
     return (
-        f"You are a curriculum designer ordering chapters of a technical "
-        f"learning book so the reader builds knowledge progressively. The "
-        f"chapters are already written; your job is to pick the ORDER "
-        f"that maximizes learning efficiency. Apply general pedagogical "
-        f"principles:\n\n"
-        f"- Installation, setup, CLI/quickstart chapters always come FIRST.\n"
-        f"- Foundational concepts before composite/advanced ones.\n"
-        f"- Concrete usage before abstract internals.\n"
-        f"- A chapter made mostly of API/reference pages comes after the chapters that "
-        f"teach the same area with guides; operations topics (deployment, observability, "
-        f"testing, command-line tooling) come after the core usage chapters.\n"
-        f"- A chapter should be readable AFTER all earlier chapters but "
-        f"not depend on later ones.\n"
-        f"- If two chapters are siblings (no prerequisite relation), "
-        f"order them simple-to-complex.\n\n"
-        f"CHAPTERS (numbered [0..{n-1}], each shown as title + summary):\n"
-        f"{chapter_block}\n\n"
-        f'Respond ONLY with valid JSON: {{"order": [<list of all {n} '
-        f'chapter indices as integers, each appearing exactly once, in '
-        f'pedagogical order>], "rationale": "<1-2 sentences why>"}}\n\n'
-        f'Example for 3 chapters: {{"order": [2, 0, 1], "rationale": '
-        f'"Chapter 2 introduces installation; chapter 0 is the core API; '
-        f'chapter 1 covers advanced patterns."}}'
+        f"You are a curriculum designer ordering the chapters of a technical learning book{about}. "
+        f"A reader goes through it front to back, so every chapter must be understandable from "
+        f"the ones before it.\n\n"
+        f"Think in reading stages:\n"
+        f"1. Orientation: what the framework is, installation, setup, quickstart, the core mental model.\n"
+        f"2. Core usage: the building blocks nearly every application uses.\n"
+        f"3. Extended features: optional capabilities that build on the core.\n"
+        f"4. Production and operations: security and auth, deployment, observability, testing, "
+        f"performance, command-line tooling.\n"
+        f"5. Reference and maintenance: API listings, migration or upgrade guides, changelogs, FAQ, "
+        f"miscellany.\n"
+        f"Migration and upgrade chapters are for readers who already know an older version: stage 5, "
+        f"never first. A chapter made mostly of API/reference pages comes after the chapters that "
+        f"teach the same area with guides. Within a stage, concrete usage comes before abstract "
+        f"internals and simple topics before complex ones.\n\n"
+        f"CHAPTERS ({n}, shown in no particular order):\n{chapter_block}\n\n"
+        f'Respond ONLY with valid JSON: {{"rationale": "<2-3 sentences>", "order": ["<chapter title '
+        f'exactly as given>", ... all {n} titles, each exactly once, in reading order]}}'
     )

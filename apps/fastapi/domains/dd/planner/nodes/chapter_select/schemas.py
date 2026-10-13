@@ -22,3 +22,19 @@ class SplitPlan(BaseModel):
     groups: list[SplitGroup] = Field(
         description = "The new chapters. Every unit id appears in exactly one group.",
     )
+
+
+class GroupName(BaseModel):
+    """Title + description for one already-computed group of pages."""
+    model_config = ConfigDict(extra = "forbid")
+
+    id: int = Field(description = "The group id exactly as shown.")
+    title: str = Field(description = "Concrete 1-8 word chapter title, unique among all chapters.")
+    description: str = Field(description = "ONE sentence: what the reader learns in this chapter.")
+
+
+class GroupNames(BaseModel):
+    """LLM output: one name per group (the partition itself is computed, not asked for)."""
+    model_config = ConfigDict(extra = "forbid")
+
+    groups: list[GroupName] = Field(description = "Exactly one entry per group id shown.")

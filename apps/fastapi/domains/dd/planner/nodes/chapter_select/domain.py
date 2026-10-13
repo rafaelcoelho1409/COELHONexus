@@ -1,5 +1,6 @@
 """chapter_select — pure algorithm (greedy coverage + manifest hash)."""
 from __future__ import annotations
+import domains
 from . import params, versions
 
 import math
@@ -10,13 +11,71 @@ from hashlib import sha256
 
 
 
+# ---------------------------------------------------------------------------
+# Word-overlap evidence (IDF-weighted cosine) — breaks assigner ties and drives the
+# cluster-based split. Same word model as chapter_propose's candidate scoring.
+# ---------------------------------------------------------------------------
+
+def _word_idf(word_sets: list[set[str]]) -> tuple[dict[str, float], float]:
+    n = max(1, len(word_sets))
+    df = Counter(w for ws in word_sets for w in ws)
+    return {w: math.log(1.0 + n / c) for w, c in df.items()}, math.log(1.0 + n)
+
+
+def _word_vec(ws: set[str], idf: dict[str, float], unseen: float) -> dict[str, float]:
+    v = {w: idf.get(w, unseen) for w in ws}
+    norm = math.sqrt(sum(x * x for x in v.values())) or 1.0
+    return {w: x / norm for w, x in v.items()}
+
+
+def _cosine(u: dict[str, float], v: dict[str, float]) -> float:
+    if len(u) > len(v):
+        u, v = v, u
+    return sum(x * v[w] for w, x in u.items() if w in v)
+
+
+def doc_match_texts(keys: list[str], distillates: dict[str, dict]) -> dict[str, str]:
+    """key → the text a page is matched on (slug + distillate summary and terms)."""
+    dom = domains.dd.planner.nodes.chapter_propose.domain
+    return {k: dom.doc_match_text(k, (distillates or {}).get(k)) for k in keys}
+
+
+def doc_affinity(
+    proposals: list[dict], doc_texts: dict[str, str],
+) -> dict[str, list[float]]:
+    """key → cosine of the page with every proposal (title + description + key concepts)."""
+    if not doc_texts or not proposals:
+        return {}
+    words = domains.dd.planner.nodes.chapter_propose.domain.match_words
+    doc_ws = {k: words(t) for k, t in doc_texts.items()}
+    idf, unseen = _word_idf(list(doc_ws.values()))
+    chap = [
+        _word_vec(words(" ".join([
+            p.get("title") or "", p.get("description") or "", " ".join(p.get("key_concepts") or []),
+        ])), idf, unseen)
+        for p in proposals
+    ]
+    return {
+        k: [round(_cosine(_word_vec(ws, idf, unseen), cv), 4) for cv in chap]
+        for k, ws in doc_ws.items()
+    }
+
+
+def _tie_key(conf: float, aff: float, slot: int) -> tuple:
+    """Sort key picking the best chapter: confidence (ties to TIE_DECIMALS), then word
+    overlap, then lower index."""
+    return (-round(conf, params.TIE_DECIMALS), -aff, slot)
+
+
 def greedy_select(
     *,
     proposals: list[dict],
     assignments: dict[str, list[dict]],
     pinned_indices: set[int],
+    affinity: dict[str, list[float]] | None = None,
 ) -> tuple[list[int], dict[str, int]]:
-    """Greedy coverage: returns (selected_indices, doc_to_chapter) where doc_to_chapter maps to highest-confidence selected chapter."""
+    """Greedy coverage: returns (selected_indices, doc_to_chapter) where doc_to_chapter maps to
+    the highest-confidence selected chapter (equal confidences: the larger word overlap)."""
     n_proposals = len(proposals)
     doc_confidences: dict[str, dict[int, float]] = {}
     for k, scores in assignments.items():
@@ -97,7 +156,8 @@ def greedy_select(
         sel_scores = [(ci, cv.get(ci, 0.0)) for ci in selected_set]
         if not sel_scores:
             continue
-        sel_scores.sort(key = lambda p: p[1], reverse = True)
+        aff = (affinity or {}).get(k) or []
+        sel_scores.sort(key = lambda p: _tie_key(p[1], aff[p[0]] if p[0] < len(aff) else 0.0, p[0]))
         best_ci, best_c = sel_scores[0]
         if best_c <= 0.0 and k not in assignable:
             # Doc had no signal anywhere; skip assignment.
@@ -120,6 +180,7 @@ def prune_and_finalize_selection(
     assignments: dict[str, list[dict]],
     pinned: set[int],
     proposals: list[dict],
+    affinity: dict[str, list[float]] | None = None,
 ) -> dict:
     """Orphan-protected pruning of small/unpinned chapters (a member doc is
     at risk if removing its only <MIN_DOCS_PER_CHAPTER chapter leaves it
@@ -185,13 +246,16 @@ def prune_and_finalize_selection(
             if ci not in kept_set:
                 scores = assignments.get(k) or []
                 best_ci = None
-                best_c = -1.0
+                best_key = None
+                aff = (affinity or {}).get(k) or []
                 for s in scores:
                     si = s.get("chapter_idx")
                     sc = float(s.get("confidence") or 0.0)
-                    if si in kept_set and sc > best_c:
-                        best_c = sc
-                        best_ci = si
+                    if si in kept_set:
+                        key = _tie_key(sc, aff[si] if si < len(aff) else 0.0, si)
+                        if best_key is None or key < best_key:
+                            best_key = key
+                            best_ci = si
                 if best_ci is not None:
                     doc_to_chapter[k] = best_ci
                 else:
@@ -277,6 +341,7 @@ def consolidate_placements(
     doc_family: dict[str, str],
     doc_title: dict[str, str],
     anchored_family: dict[str, str] | None = None,
+    affinity: dict[str, list[float]] | None = None,
 ) -> dict:
     """Make the plan place EVERY doc, and place it sensibly.
 
@@ -318,7 +383,8 @@ def consolidate_placements(
         sc = scores.get(k) or {}
         if not sc:
             return -1, 0.0
-        ci = min(sc, key = lambda c: (-sc[c], c))
+        aff = (affinity or {}).get(k) or []
+        ci = min(sc, key = lambda c: _tie_key(sc[c], aff[c] if 0 <= c < len(aff) else 0.0, c))
         return ci, sc[ci]
 
     slots: dict[int, dict] = {}
@@ -631,8 +697,14 @@ def apply_foundations(
     return _renumber([foundations] + new_chapters), stats
 
 
+def split_floor(n_docs: int) -> int:
+    """Smallest group a split may produce: MIN_DOCS_PER_CHAPTER, or 15% of the chapter."""
+    return max(params.MIN_DOCS_PER_CHAPTER, math.ceil(0.15 * n_docs))
+
+
 def plan_splits(out_chapters: list[dict], max_chapters: int = 30) -> list[tuple[int, int]]:
-    """[(chapter position, n_parts)] for chapters over SPLIT_MAX_SHARE of the corpus."""
+    """[(chapter position, n_parts)] for chapters over SPLIT_MAX_SHARE of the corpus, and for
+    a catch-all appendix over GAP_SPLIT_MIN_SHARE (its parts become ordinary chapters)."""
     total = sum(len(c["member_doc_keys"]) for c in out_chapters)
     if total < params.SPLIT_MIN_TOTAL_DOCS:
         return []
@@ -645,6 +717,13 @@ def plan_splits(out_chapters: list[dict], max_chapters: int = 30) -> list[tuple[
         if c.get("origin") == "foundations" or n < params.SPLIT_MIN_CHAPTER_DOCS:
             continue
         share = n / total
+        if c.get("role") == "appendix":
+            if n >= params.GAP_SPLIT_MIN_DOCS and share > params.GAP_SPLIT_MIN_SHARE:
+                k = min(params.SPLIT_MAX_PARTS, max(2, round(n / params.GAP_SPLIT_DOCS_PER_PART)))
+                if n_chapters + (k - 1) <= max_chapters:
+                    out.append((i, k))
+                    n_chapters += k - 1
+            continue
         if share <= params.SPLIT_MAX_SHARE or n <= params.SPLIT_MEDIAN_RATIO * median:
             continue
         k = min(
@@ -712,7 +791,7 @@ def validate_split(
         return False, f"unknown unit ids {sorted(seen - all_ids)[:10]}"
     if all_ids - seen:
         return False, f"units not placed in any group: {sorted(all_ids - seen)[:10]}"
-    floor = max(params.MIN_DOCS_PER_CHAPTER, math.ceil(0.15 * n_docs))
+    floor = split_floor(n_docs)
     titles: set[str] = set()
     for p in parts:
         size = sum(len(units[u]["keys"]) for u in p["unit_ids"])
@@ -756,7 +835,7 @@ def normalize_split(parts: list[dict], units: list[dict]) -> list[dict]:
         owner[u] = owner[nearest]
         out[owner[u]]["unit_ids"].append(u)
     n_docs = sum(len(u["keys"]) for u in units)
-    floor = max(params.MIN_DOCS_PER_CHAPTER, math.ceil(0.15 * n_docs))
+    floor = split_floor(n_docs)
     size = lambda p: sum(len(units[u]["keys"]) for u in p["unit_ids"])
     centre = lambda p: sum(p["unit_ids"]) / len(p["unit_ids"])
     while len(out) > 2:
@@ -772,13 +851,108 @@ def normalize_split(parts: list[dict], units: list[dict]) -> list[dict]:
     return out
 
 
+def unit_text(unit: dict, distillates: dict[str, dict]) -> str:
+    """What a unit is clustered on: its label plus the match text of its first pages."""
+    texts = doc_match_texts(unit["keys"][:3], distillates)
+    return " ".join([unit.get("label") or "", *texts.values()])
+
+
+def cluster_units(
+    units: list[dict], texts: list[str], max_parts: int, floor: int,
+) -> list[list[int]] | None:
+    """Partition `units` into 2..max_parts groups of at least `floor` pages each, by
+    average-linkage clustering of their IDF word vectors. The smallest group below the floor
+    always merges into its most similar neighbour first (so no tiny straggler group exists and
+    no early blob swallows everything); once all reach the floor, the most similar pair merges
+    until max_parts remain. No merge may create a group above SPLIT_CLUSTER_MAX_SHARE of the
+    chapter unless nothing else is possible. Deterministic. None when fewer than 2 groups
+    survive (the caller falls back to asking the model)."""
+    n = len(units)
+    if n < 2 or len(texts) != n:
+        return None
+    words = domains.dd.planner.nodes.chapter_propose.domain.match_words
+    ws = [words(t) for t in texts]
+    idf, unseen = _word_idf(ws)
+    vecs = [_word_vec(w, idf, unseen) for w in ws]
+    size = {i: len(units[i]["keys"]) for i in range(n)}
+    weight = {i: 1 for i in range(n)}
+    members = {i: [i] for i in range(n)}
+    sim: dict[int, dict[int, float]] = {i: {} for i in range(n)}
+    for i in range(n):
+        for j in range(i + 1, n):
+            sim[i][j] = sim[j][i] = _cosine(vecs[i], vecs[j])
+    cap = math.ceil(params.SPLIT_CLUSTER_MAX_SHARE * sum(size.values()))
+
+    def merge(a: int, b: int) -> None:
+        wa, wb = weight[a], weight[b]
+        for c in members:
+            if c in (a, b):
+                continue
+            s = (wa * sim[a][c] + wb * sim[b][c]) / (wa + wb)
+            sim[a][c] = sim[c][a] = s
+            del sim[c][b]
+        del sim[a][b]
+        del sim[b]
+        members[a] += members.pop(b)
+        size[a] += size.pop(b)
+        weight[a] = wa + wb
+        del weight[b]
+
+    while len(members) > 1:
+        small = [c for c in members if size[c] < floor]
+        if small:
+            c = min(small, key = lambda x: (size[x], x))
+            others = [o for o in members if o != c]
+            fit = [o for o in others if size[c] + size[o] <= cap] or others
+            o = max(fit, key = lambda x: (sim[c][x], -size[x], -x))
+            a, b = min(c, o), max(c, o)
+        elif len(members) > max_parts:
+            ids = sorted(members)
+            pairs = [(x, y) for ix, x in enumerate(ids) for y in ids[ix + 1:]]
+            fit = [p for p in pairs if size[p[0]] + size[p[1]] <= cap] or pairs
+            a, b = max(fit, key = lambda p: (sim[p[0]][p[1]], -(size[p[0]] + size[p[1]]), -p[0]))
+        else:
+            break
+        merge(a, b)
+    if len(members) < 2:
+        return None
+    return sorted((sorted(m) for m in members.values()), key = lambda m: m[0])
+
+
+def fallback_group_titles(
+    groups: list[list[int]], texts: list[str], taken: set[str],
+) -> list[dict]:
+    """Deterministic {title, description} per group from its most distinctive words, used when
+    the model cannot name a group (a split must still apply)."""
+    words = domains.dd.planner.nodes.chapter_propose.domain.match_words
+    ws = [words(t) for t in texts]
+    idf, unseen = _word_idf(ws)
+    used = {t.casefold() for t in taken}
+    out = []
+    for g in groups:
+        cnt = Counter(w for i in g for w in ws[i])
+        ranked = sorted(cnt, key = lambda w: (-cnt[w] * idf.get(w, unseen), w))
+        top = ranked[:max(params.SPLIT_NAME_FALLBACK_TERMS + 3, 6)]
+        n_words = params.SPLIT_NAME_FALLBACK_TERMS
+        title = " ".join(w.title() for w in top[:n_words])
+        while title.casefold() in used and n_words < len(top):
+            n_words += 1
+            title = " ".join(w.title() for w in top[:n_words])
+        used.add(title.casefold())
+        out.append({
+            "title": title or "Additional Topics",
+            "description": f"Pages covering {', '.join(top[:5])}." if top else "Related pages.",
+        })
+    return out
+
+
 def apply_split(chapter: dict, parts: list[dict], units: list[dict]) -> list[dict]:
     """Replace one chapter by its validated parts (order within the chapter by source position)."""
     out = []
     for j, p in enumerate(parts):
         keys = sorted(k for u in p["unit_ids"] for k in units[u]["keys"])
         out.append({
-            **chapter,
+            **{k: v for k, v in chapter.items() if k != "role"},   # a split-off part is no appendix
             "title":               " ".join(p["title"].split()),
             "description":         (p.get("description") or chapter.get("description") or "").strip(),
             "key_concepts":        [],
@@ -806,17 +980,23 @@ def select_pipeline(
     node and the offline replay (scripts/dd/replay_select.py), so what is
     measured is what ships. The LLM oversize-split runs after this, in the node."""
     pinned = detect_pinned_indices(proposals, seeds)
+    try:
+        affinity = doc_affinity(proposals, doc_match_texts(list(assignments), distillates))
+    except Exception:
+        affinity = {}        # ties then fall back to proposal order, as before
     selected, doc_to_chapter = greedy_select(
         proposals = proposals, assignments = assignments, pinned_indices = pinned,
+        affinity = affinity,
     )
     final = prune_and_finalize_selection(
         selected = selected, doc_to_chapter = doc_to_chapter, assignments = assignments,
-        pinned = pinned, proposals = proposals,
+        pinned = pinned, proposals = proposals, affinity = affinity,
     )
     cons = consolidate_placements(
         kept = final["kept"], doc_to_chapter = final["doc_to_chapter"],
         assignments = assignments, proposals = proposals,
         doc_family = doc_family, doc_title = doc_title, anchored_family = anchored_family,
+        affinity = affinity,
     )
     doc_role = {k: (d or {}).get("role") for k, d in (distillates or {}).items()}
     chapters, f_stats = apply_foundations(

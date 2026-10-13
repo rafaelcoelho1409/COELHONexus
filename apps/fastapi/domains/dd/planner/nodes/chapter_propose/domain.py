@@ -239,6 +239,14 @@ def summarize_proposal(props: list[schemas.ChapterProposal], score: Optional[dic
     return out
 
 
+def with_angle(prompt: str, sample_idx: int) -> str:
+    """The sample's prompt: the shared prompt plus its organizing angle (sample 0: unchanged).
+    Retry batches (index >= 10) reuse the angle of `index % 10`."""
+    angles = params.SAMPLE_ANGLES
+    angle = angles[(sample_idx % 10) % len(angles)] if angles else ""
+    return f"{prompt}\n\n{angle}" if angle else prompt
+
+
 def propose_max_tokens(target_chapters: int) -> int:
     """First-draft token budget: scales with the chapter target, never below the floor."""
     return max(
@@ -257,6 +265,11 @@ def _words(text: str) -> set[str]:
         w for w in patterns.SCORE_WORD_RE.findall((text or "").lower())
         if w not in params.SCORE_STOP
     }
+
+
+def match_words(text: str) -> set[str]:
+    """Words of `text` as used by every evidence match in the Planner (no stop words, 3+ chars)."""
+    return _words(text)
 
 
 def doc_match_text(key: str, distillate: Optional[dict], body: str = "") -> str:

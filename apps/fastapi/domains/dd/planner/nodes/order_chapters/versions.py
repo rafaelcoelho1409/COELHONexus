@@ -25,4 +25,8 @@ from __future__ import annotations
 # v8 (2026-10-13): source-order votes only when the manifest order is the docs' own sequence
 # (not a single-URL dump or an alphabetical sitemap); the prompt shows each chapter's page count
 # and API/reference share and puts reference/operations chapters after core usage.
-PROMPT_VERSION = "v8-composition-2026-10-13"
+# v9 (2026-10-13): the model returns chapter TITLES in reading order (not position numbers), each
+# sample sees the chapters in its own shuffled arrangement, rationale first, 5-stage rubric;
+# migration / upgrade / changelog chapters are pinned ahead of the appendix. Live test on the
+# round-4 plans: per-sample constraint satisfaction 11.4/12, 10.8/13, 26.2/28 vs 10.0, 8.4, 26.4.
+PROMPT_VERSION = "v9-title-order-2026-10-13"

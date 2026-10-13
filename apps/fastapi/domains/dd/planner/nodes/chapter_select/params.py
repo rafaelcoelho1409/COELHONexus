@@ -85,3 +85,26 @@ PREFER_MIN_CONF  = 0.70
 GAP_FAMILY_TITLE_SHARE = 0.50   # the commonest page title must cover ≥ this share of the family
 GAP_APPENDIX_TITLE     = "Additional Topics"
 GAP_APPENDIX_LISTED    = 8      # member titles quoted in the appendix description
+
+# Cluster-based split. An LLM asked to PARTITION 40+ units returns one huge group and a few
+# stragglers (deepagents: 40 + 2 pages, rejected twice, the 42-page chapter shipped). The
+# partition is computed instead — average-linkage clustering of the pages' IDF word vectors,
+# small clusters merged into their nearest neighbour until every group reaches the size floor,
+# no group above this share of the chapter — and the LLM only NAMES the groups.
+SPLIT_CLUSTER_MAX_SHARE = 0.60
+SPLIT_NAME_MAX_TOKENS   = 1500
+SPLIT_NAME_LISTED       = 14     # member titles shown per group in the naming prompt
+SPLIT_NAME_FALLBACK_TERMS = 3    # words of a deterministic title when the model cannot name a group
+
+# The catch-all "Additional Topics" chapter (gap pages that fit no proposal) is not a topic: above
+# this share of the corpus it is partitioned like an oversize chapter, the parts becoming ordinary
+# chapters (fastmcp: 43 pages = 12% of the corpus — integration guides, API modules, FAQ, settings).
+GAP_SPLIT_MIN_SHARE   = 0.08
+GAP_SPLIT_MIN_DOCS    = 16
+GAP_SPLIT_DOCS_PER_PART = 15
+
+# Placement ties: the assigner scores in coarse steps (0.0/0.3/0.7/1.0), so two chapters often tie.
+# Equal scores (to this many decimals) are broken by the page's word overlap with the chapter,
+# never by proposal order (deepagents: 17 provider pages tied 0.7 between "Customizing…" and
+# "Model and Tool Integrations" and all went to the lower index — a 42-page catch-all).
+TIE_DECIMALS = 2

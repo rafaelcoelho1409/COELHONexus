@@ -15,4 +15,6 @@ from __future__ import annotations
 # v7 (2026-10-13): one transient retry (504/timeout/5xx/429) before the lexical
 # fallback; schema-validation failures now reach the reask path (chat_structured_async
 # no longer wraps pydantic ValidationError in ChatError).
-PROMPT_VERSION = "v7-transient-retry-2026-10-13"
+# v8 (2026-10-13): a score list cut at max_tokens is retried once at 2x the budget instead of
+# falling back to the lexical assignment; CONCURRENCY 8 -> 12 (fastmcp assign was 14.5 min).
+PROMPT_VERSION = "v8-length-retry-2026-10-13"

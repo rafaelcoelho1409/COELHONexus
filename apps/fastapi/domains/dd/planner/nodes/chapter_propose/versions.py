@@ -53,4 +53,7 @@ from __future__ import annotations
 # picked by an evidence score (docs matching no chapter, largest share, distance from target),
 # the LLM vote only breaks near-ties; first-draft token budget scales with the target and a
 # length-truncated draft is re-asked with a bigger budget.
-PROMPT_VERSION = "v14-evidence-pick-2026-10-13"
+# v15 (2026-10-13): each sample after the first gets its own organizing angle (tasks / components /
+# learning path / doc sections) — the 5 prompts were byte-identical and deepagents' 4 codestral
+# samples were one and the same 7-chapter set.
+PROMPT_VERSION = "v15-sample-angles-2026-10-13"

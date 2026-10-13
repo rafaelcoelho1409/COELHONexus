@@ -343,7 +343,7 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
     sample_failures: list[dict] = []
     samples: list[schemas.ChapterProposalList | None]
     if params.OPTIMAL_STOPPING_ENABLED and params.N_SAMPLES >= 2:
-        s0 = await draft_one(prompt, 0, sample_failures, draft_tokens)
+        s0 = await draft_one(domain.with_angle(prompt, 0), 0, sample_failures, draft_tokens)
         samples = [s0]
         if s0 is not None and len(s0.proposals) >= stop_floor:
             logger.info(
@@ -354,12 +354,12 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
             )
         else:
             remaining = await asyncio.gather(*[
-                draft_one(prompt, i, sample_failures, draft_tokens) for i in range(1, params.N_SAMPLES)
+                draft_one(domain.with_angle(prompt, i), i, sample_failures, draft_tokens) for i in range(1, params.N_SAMPLES)
             ])
             samples.extend(remaining)
     else:
         samples = list(await asyncio.gather(*[
-            draft_one(prompt, i, sample_failures, draft_tokens) for i in range(params.N_SAMPLES)
+            draft_one(domain.with_angle(prompt, i), i, sample_failures, draft_tokens) for i in range(params.N_SAMPLES)
         ]))
     valid: list[schemas.ChapterProposalList] = [s for s in samples if s is not None]
     if sample_failures:
@@ -380,7 +380,7 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
         await asyncio.sleep(2.0)
         # Quick retry: one more parallel sample batch
         retry_samples = list(await asyncio.gather(*[
-            draft_one(prompt, i + 10, sample_failures, draft_tokens) for i in range(params.N_SAMPLES)
+            draft_one(domain.with_angle(prompt, i + 10), i + 10, sample_failures, draft_tokens) for i in range(params.N_SAMPLES)
         ]))
         valid = [s for s in retry_samples if s is not None]
         if not valid:

@@ -28,14 +28,26 @@ async def _score_call(prompt: str) -> schemas.DocAssignment:
     Raises ValueError (unparseable) or pydantic ValidationError (schema
     mismatch) for reask-eligible failures; anything else (timeout,
     provider outage) propagates as-is."""
-    assignment, _ = await domains.settings.chat.service.chat_structured_async(
-        prompt,
-        schemas.DocAssignment,
-        max_tokens = params.MAX_TOKENS,
-        temperature = params.TEMPERATURE,
-        timeout_s = params.TIMEOUT_S,
-    )
-    return assignment
+    budget = params.MAX_TOKENS
+    for attempt in range(2):
+        try:
+            assignment, _ = await domains.settings.chat.service.chat_structured_async(
+                prompt,
+                schemas.DocAssignment,
+                max_tokens = budget,
+                temperature = params.TEMPERATURE,
+                timeout_s = params.TIMEOUT_S,
+            )
+            return assignment
+        except Exception as e:
+            # Cut at max_tokens (a reasoning arm's preamble + a 24-entry score list on a huge
+            # page): the budget was wrong, not the doc — one retry with a bigger one beats
+            # the lexical fallback (fastmcp: 2 of 350 docs).
+            if attempt == 0 and domains.settings.chat.domain.is_length_error(e):
+                budget = min(params.MAX_TOKENS_RETRY_CAP, int(budget * params.LENGTH_RETRY_FACTOR))
+                continue
+            raise
+    raise RuntimeError("unreachable")
 
 
 def _valid_scores(assignment: schemas.DocAssignment, n_proposals: int) -> list[dict]:

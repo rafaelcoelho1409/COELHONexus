@@ -21,7 +21,7 @@ TEMPERATURE = 0.3
 # still hand this node more, and 800 leaves ~0 headroom for a reasoning
 # model's <think> preamble — same failure class confirmed in off_topic/
 # doc_distill/chapter_assign).
-MAX_TOKENS = 1200
+MAX_TOKENS = 2500
 # How many characters of each chapter description to include in the
 # prompt. Two sentences is enough context for ordering; longer wastes
 # tokens.
@@ -72,3 +72,8 @@ FOUNDATIONAL_KEYWORDS = (
     "quickstart",
     "first steps",
 )
+
+# A title-order sample is accepted when it names at least this share of the chapters (the rest are
+# appended in their current order); fewer is noise and goes to the re-ask.
+TITLE_MATCH_MIN_SHARE = 0.8
+TITLE_MATCH_CUTOFF    = 0.82   # difflib similarity for a title the model altered slightly

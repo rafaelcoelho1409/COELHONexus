@@ -5,7 +5,12 @@ prompts.py; Pydantic schema in schemas.py. LLM output decoding is
 from __future__ import annotations
 from . import params, patterns
 
+import difflib
 import json
+import math
+import random
+import re
+from collections import Counter
 
 
 def load_outline(text: str) -> dict:
@@ -29,18 +34,6 @@ def is_foundational(title: str) -> bool:
     if not title:
         return False
     return bool(patterns.FOUNDATIONAL_RE.search(title))
-
-
-def is_valid_permutation(order: list[int], n_chapters: int) -> bool:
-    """True iff `order` is exactly a permutation of [0, n_chapters).
-    The Pydantic schema (`schemas.ChapterOrder`) only constrains the JSON
-    shape (a list of ints); this checks the semantic property strict
-    JSON schema mode can't express — any duplicate or out-of-range
-    index fails it."""
-    return (
-        len(order) == n_chapters
-        and sorted(order) == list(range(n_chapters))
-    )
 
 
 def borda_aggregate(
@@ -110,6 +103,69 @@ def chapter_composition(chapters: list[dict], distillates: dict[str, dict]) -> l
             "reference_pct": round(100 * sum(1 for r in roles if r == "reference") / len(roles)),
         })
     return out
+
+
+def chapter_labels(chapters: list[dict]) -> list[str]:
+    """One unique display label per chapter (its title; a repeated title gets " (2)" …)."""
+    seen: Counter = Counter()
+    out = []
+    for i, ch in enumerate(chapters):
+        t = " ".join(str(ch.get("title") or f"Chapter {i}").split())
+        seen[t.casefold()] += 1
+        out.append(t if seen[t.casefold()] == 1 else f"{t} ({seen[t.casefold()]})")
+    return out
+
+
+def _norm_title(s: str) -> str:
+    s = re.sub(r"^\s*(\[\d+\]|\d+[.)])\s*", "", str(s))
+    return " ".join(s.strip().strip("'\"*`").casefold().split())
+
+
+def titles_to_order(raw: list, labels: list[str]) -> list[int] | None:
+    """Map the titles a model returned back to chapter indices: exact (case-insensitive) match,
+    else the closest label above params.TITLE_MATCH_CUTOFF; unknown and repeated titles are
+    skipped. Chapters the model left out follow in their current order — but only when it
+    named at least params.TITLE_MATCH_MIN_SHARE of them, else None (a sample that dropped half
+    the chapters carries no ordering information)."""
+    by = {_norm_title(l): i for i, l in enumerate(labels)}
+    seen: set[int] = set()
+    order: list[int] = []
+    for r in raw or []:
+        k = _norm_title(r)
+        i = by.get(k)
+        if i is None:
+            m = difflib.get_close_matches(k, list(by), n = 1, cutoff = params.TITLE_MATCH_CUTOFF)
+            i = by[m[0]] if m else None
+        if i is not None and i not in seen:
+            seen.add(i)
+            order.append(i)
+    if len(order) < math.ceil(params.TITLE_MATCH_MIN_SHARE * len(labels)):
+        return None
+    return order + [i for i in range(len(labels)) if i not in seen]
+
+
+def shuffled_indices(n: int, seed: int) -> list[int]:
+    """Presentation order of the chapters for one sample (deterministic per sample): a model
+    leans on list position, so each of the N samples sees a different arrangement and the
+    Borda aggregate cancels that lean."""
+    idx = list(range(n))
+    random.Random(1009 * (seed + 1) + n).shuffle(idx)
+    return idx
+
+
+def pin_trailing_last(order: list[int], chapters: list[dict]) -> tuple[list[int], list[int]]:
+    """Migration / upgrade / changelog chapters are for readers who know an older version: they
+    close the book, ahead of the appendix. Foundations, appendix and gap chapters are left to
+    their own pins. Returns (order, pinned)."""
+    pinned = [
+        i for i in order
+        if (chapters[i] or {}).get("role") not in ("foundations", "appendix")
+        and (chapters[i] or {}).get("origin") not in ("foundations", "gap")
+        and patterns.TRAILING_RE.search((chapters[i] or {}).get("title") or "")
+    ]
+    if not pinned:
+        return list(order), []
+    return [i for i in order if i not in set(pinned)] + pinned, pinned
 
 
 def pin_foundations_first(order: list[int], chapters: list[dict]) -> tuple[list[int], list[int]]:

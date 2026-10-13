@@ -23,10 +23,10 @@ import time
 logger = logging.getLogger(__name__)
 
 
-async def _split_one(
+async def _split_by_llm(
     framework: str, chapter: dict, units: list[dict], n_parts: int, other_titles: list[str],
 ) -> list[dict] | None:
-    """One structured LLM call (+ one repair) partitioning `units` into
+    """Fallback partition: one structured LLM call (+ one repair) partitioning `units` into
     `n_parts` cohesive chapters. None on any failure → caller keeps the chapter."""
     repair = ""
     for attempt in range(2):
@@ -55,6 +55,75 @@ async def _split_one(
         logger.info(f"[chapter_select] split of {chapter['title']!r} rejected: {reason}")
         repair = reason
     return None
+
+
+async def _split_by_clusters(
+    framework: str, chapter: dict, units: list[dict], n_parts: int, other_titles: list[str],
+    distillates: dict[str, dict],
+) -> list[dict] | None:
+    """Computed partition (domain.cluster_units) + one LLM call that only NAMES the groups
+    (deterministic word-based titles when the model cannot). None when the pages do not
+    cluster into 2+ groups of at least the size floor."""
+    floor = domain.split_floor(sum(len(u["keys"]) for u in units))
+    texts = [domain.unit_text(u, distillates) for u in units]
+    groups = domain.cluster_units(units, texts, n_parts, floor)
+    if not groups:
+        return None
+    taken = {t.casefold() for t in other_titles}
+    repair = ""
+    for attempt in range(2):
+        prompt = prompts.build_name_prompt(
+            framework = framework, title = chapter["title"], groups = groups, units = units,
+            other_titles = other_titles, repair = repair,
+        )
+        try:
+            named, _meta = await domains.settings.chat.service.chat_structured_async(
+                prompt, schemas.GroupNames,
+                max_tokens = params.SPLIT_NAME_MAX_TOKENS, temperature = 0.2 if attempt == 0 else 0.0,
+                timeout_s = params.SPLIT_TIMEOUT_S,
+            )
+        except Exception as e:
+            logger.warning(
+                f"[chapter_select] naming {len(groups)} groups of {chapter['title']!r} "
+                f"attempt {attempt + 1}: {type(e).__name__}: {str(e)[:160]}"
+            )
+            repair = f"output could not be parsed ({type(e).__name__}); return strictly valid JSON"
+            continue
+        by_id = {g.id: g for g in named.groups}
+        if set(by_id) != set(range(len(groups))) or len(named.groups) != len(groups):
+            repair = f"return exactly one entry for each group id 0..{len(groups) - 1}"
+            continue
+        parts = [
+            {"title": by_id[i].title, "description": by_id[i].description, "unit_ids": g}
+            for i, g in enumerate(groups)
+        ]
+        ok, reason = domain.validate_split(parts, units, taken)
+        if ok:
+            return domain.apply_split(chapter, parts, units)
+        logger.info(f"[chapter_select] names for {chapter['title']!r} rejected: {reason}")
+        repair = reason
+    parts = [
+        {**name, "unit_ids": g}
+        for name, g in zip(domain.fallback_group_titles(groups, texts, taken), groups)
+    ]
+    ok, reason = domain.validate_split(parts, units, taken)
+    if not ok:
+        logger.info(f"[chapter_select] fallback names for {chapter['title']!r} rejected: {reason}")
+        return None
+    logger.info(f"[chapter_select] {chapter['title']!r}: groups named from their words (model could not)")
+    return domain.apply_split(chapter, parts, units)
+
+
+async def _split_one(
+    framework: str, chapter: dict, units: list[dict], n_parts: int, other_titles: list[str],
+    distillates: dict[str, dict],
+) -> list[dict] | None:
+    """Split one chapter: computed clusters named by the LLM; the model-proposed partition
+    (with repair) only when the pages do not cluster."""
+    parts = await _split_by_clusters(framework, chapter, units, n_parts, other_titles, distillates)
+    if parts:
+        return parts
+    return await _split_by_llm(framework, chapter, units, n_parts, other_titles)
 
 
 async def split_oversize_chapters(
@@ -88,7 +157,7 @@ async def split_oversize_chapters(
         if len(units) < 2:
             return pos, None
         return pos, await _split_one(
-            framework, ch, units, k, [t for t in titles if t != ch["title"]],
+            framework, ch, units, k, [t for t in titles if t != ch["title"]], distillates,
         )
 
     results = await asyncio.gather(*[_one(pos, k) for pos, k in plans], return_exceptions = True)
