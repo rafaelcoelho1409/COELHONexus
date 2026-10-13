@@ -28,6 +28,14 @@ POOL_TIMEOUT_S: float = 5.0
 # Hard wall-clock backstop = (timeout_s or DEFAULT_TIMEOUT_S) + margin.
 BACKSTOP_MARGIN_S: float = 15.0
 
+# Rotator settle wait (service.wait_for_rotator_settle): never proceed sooner
+# than MIN, re-check the Rotator's active cooldowns every POLL, and stop at the
+# caller's cap regardless. HEALTH_TIMEOUT bounds each routing-health request.
+SETTLE_MIN_S: float = 10.0
+SETTLE_POLL_S: float = 5.0
+SETTLE_MAX_COOLING_FRAC: float = 0.25   # proceed once ≤25% of arms are cooling
+SETTLE_HEALTH_TIMEOUT_S: float = 8.0
+
 # Env fallback, read at import.
 URL_ENVS: tuple[str, ...] = ("LLM_ENDPOINT_URL",)
 MODEL_ENVS: tuple[str, ...] = ("LLM_MODEL",)

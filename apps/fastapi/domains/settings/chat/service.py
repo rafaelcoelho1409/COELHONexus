@@ -116,6 +116,51 @@ def _apply_endpoint(*, force: bool = False) -> bool:
 _apply_endpoint(force=True)
 
 
+async def wait_for_rotator_settle(cap_s: float) -> dict:
+    """Wait until the Rotator pool has recovered from the previous node's burst
+    — at most SETTLE_MAX_COOLING_FRAC of its arms in active Router cooldown —
+    up to `cap_s` (the old fixed sleep: cooldown_time=120 + buffer). Replaces
+    an unconditional `asyncio.sleep(cap_s)`: a healthy Rotator is ready in
+    ~10s, a mostly-cooling one is awaited exactly as long as before. The
+    criterion is a FRACTION, not "zero cooldowns": one arm can sit in a 600s
+    cooldown (a provider's daily-quota retry-after) and must not hold every
+    run for the full cap; what the wait protects against is the WHOLE pool
+    cooling (observed: 96% fallback when doc_distill's first call found it all
+    benched). Falls back to the full remaining wait when the endpoint isn't a
+    Rotator or its health is unreachable, so it can only be faster, never less
+    safe.
+
+    Returns {"waited_s", "reason", "cooling", "pool"} with reason in
+    pool_recovered | cap_reached | no_health_url | health_unreachable."""
+    _apply_endpoint()
+    t0 = time.monotonic()
+    remaining = lambda: max(0.0, cap_s - (time.monotonic() - t0))
+    await asyncio.sleep(min(params.SETTLE_MIN_S, cap_s))
+    url = domain.rotator_health_url(ENDPOINT.base_url)
+    if not url:
+        await asyncio.sleep(remaining())
+        return {"waited_s": round(time.monotonic() - t0, 1), "reason": "no_health_url"}
+    cooling = pool = None
+    async with httpx.AsyncClient(timeout=params.SETTLE_HEALTH_TIMEOUT_S) as client:
+        while remaining() > 0:
+            try:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                h = resp.json()
+                cooling, pool = len(h.get("cooldowns") or []), int(h.get("pool_size") or 0)
+                if domain.pool_recovered(cooling, pool, params.SETTLE_MAX_COOLING_FRAC):
+                    return {"waited_s": round(time.monotonic() - t0, 1), "reason": "pool_recovered",
+                            "cooling": cooling, "pool": pool}
+            except Exception as e:
+                logger.info(f"[settle] rotator health unreachable ({type(e).__name__}: {e}) — waiting full cap")
+                await asyncio.sleep(remaining())
+                return {"waited_s": round(time.monotonic() - t0, 1), "reason": "health_unreachable",
+                        "cooling": cooling, "pool": pool}
+            await asyncio.sleep(min(params.SETTLE_POLL_S, remaining()))
+    return {"waited_s": round(time.monotonic() - t0, 1), "reason": "cap_reached",
+            "cooling": cooling, "pool": pool}
+
+
 # ---------------------------------------------------------------------------
 # Pooled httpx transport shared by every ChatOpenAI instance
 # ---------------------------------------------------------------------------

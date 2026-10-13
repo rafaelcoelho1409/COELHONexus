@@ -25,6 +25,24 @@ def normalize_base_url(url: str) -> str:
     return u
 
 
+def rotator_health_url(base_url: str) -> str:
+    """Rotator routing-health URL derived from the OpenAI-compat base_url
+    (`<root>/api/v1/llm/openai/v1` → `<root>/api/v1/llm/routing/health`).
+    "" when the endpoint isn't a COELHO LLM Rotator."""
+    marker = "/llm/openai/"
+    u = (base_url or "").strip().rstrip("/")
+    i = u.find(marker)
+    if i < 0:
+        return ""
+    return u[: i] + "/llm/routing/health"
+
+
+def pool_recovered(cooling: int, pool: int, max_frac: float) -> bool:
+    """True when at most `max_frac` of the pool's arms are in cooldown. An
+    unknown/empty pool (pool <= 0) is never "recovered" — keep waiting."""
+    return pool > 0 and cooling <= max_frac * pool
+
+
 def classify_error(exc: Exception) -> str:
     name = type(exc).__name__.lower()
     msg = str(exc).lower()

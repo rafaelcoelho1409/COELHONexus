@@ -229,7 +229,10 @@ async def doc_distill_run(state: domains.dd.planner.state.PlannerState) -> dict:
         await domains.dd.planner.runtime.progress.service.emit_progress(
             thread_id, "doc_distill", "settling", delay_s = params.SETTLE_DELAY_S,
         )
-        await asyncio.sleep(params.SETTLE_DELAY_S)
+        # SETTLE_DELAY_S is now the CAP: proceeds as soon as the Rotator pool has
+        # recovered (<=25% of arms cooling, min 10s), full wait if it can't tell.
+        settled = await domains.settings.chat.service.wait_for_rotator_settle(params.SETTLE_DELAY_S)
+        logger.info(f"[doc_distill] settle done: {settled}")
 
     # Bulk MinIO read BEFORE semaphore — keep LLM concurrency pure.
     await domains.dd.planner.runtime.progress.service.emit_progress(thread_id, "doc_distill", "loading_bodies", n_files = n)
