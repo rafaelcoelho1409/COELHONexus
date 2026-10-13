@@ -10,6 +10,8 @@ from urllib.parse import urlparse
 
 import psycopg
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 
 
 
@@ -17,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 _saver: Optional[AsyncPostgresSaver] = None
-_saver_ctx = None
+_pool: Optional[AsyncConnectionPool] = None
 _saver_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
@@ -42,8 +44,16 @@ async def _create_target_database(url: str) -> None:
 
 async def init_checkpointer() -> AsyncPostgresSaver:
     """Open the pool and run `.setup()`. Idempotent within an event loop;
-    re-opens when the running loop changes (Celery tasks)."""
-    global _saver, _saver_ctx, _saver_loop
+    re-opens when the running loop changes (Celery tasks).
+
+    Backed by an `AsyncConnectionPool` with `check_connection` on checkout,
+    NOT `AsyncPostgresSaver.from_conn_string` (one long-lived
+    `AsyncConnection`): in the long-lived FastAPI process that single
+    connection died after a Postgres/network drop and was never reopened, so
+    every `aget_state` raised "the connection is closed" (planner `/state`
+    polling 500'd for the whole pod lifetime). The pool discards dead
+    connections and reconnects transparently."""
+    global _saver, _pool, _saver_loop
     current_loop = asyncio.get_running_loop()
     if _saver is not None and _saver_loop is current_loop:
         return _saver
@@ -54,22 +64,34 @@ async def init_checkpointer() -> AsyncPostgresSaver:
             "and re-opening on the current loop"
         )
         _saver = None
-        _saver_ctx = None
+        _pool = None
         _saver_loop = None
 
     url = domains.dd.planner.keys.postgres_url()
     logger.info(f"[checkpointer] connecting to {url.split('@')[-1]}")
 
-    # Bootstrap missing DB on first connect; recovery path is no-op in steady state.
+    # Bootstrap missing DB on first connect; recovery path is no-op in steady
+    # state. Probed with a throwaway connection because a pool's open() times
+    # out (PoolTimeout) instead of surfacing "database does not exist".
     try:
-        _saver_ctx = AsyncPostgresSaver.from_conn_string(url)
-        _saver = await _saver_ctx.__aenter__()
+        async with await psycopg.AsyncConnection.connect(url):
+            pass
     except psycopg.OperationalError as e:
         if "does not exist" not in str(e):
             raise
         await _create_target_database(url)
-        _saver_ctx = AsyncPostgresSaver.from_conn_string(url)
-        _saver = await _saver_ctx.__aenter__()
+
+    # Same connection kwargs `AsyncPostgresSaver.from_conn_string` uses.
+    _pool = AsyncConnectionPool(
+        conninfo = url,
+        min_size = 1,
+        max_size = 4,
+        kwargs = {"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+        check = AsyncConnectionPool.check_connection,
+        open = False,
+    )
+    await _pool.open(wait = True, timeout = 30.0)
+    _saver = AsyncPostgresSaver(_pool)
 
     await _saver.setup()
     _saver_loop = current_loop
@@ -79,15 +101,15 @@ async def init_checkpointer() -> AsyncPostgresSaver:
 
 async def close_checkpointer() -> None:
     """Tear down the pool. Called from lifespan shutdown."""
-    global _saver, _saver_ctx, _saver_loop
-    if _saver_ctx is None:
+    global _saver, _pool, _saver_loop
+    if _pool is None:
         return
     try:
-        await _saver_ctx.__aexit__(None, None, None)
+        await _pool.close()
     except Exception as e:
         logger.warning(f"[checkpointer] shutdown error (non-fatal): {e}")
     _saver = None
-    _saver_ctx = None
+    _pool = None
     _saver_loop = None
 
 
