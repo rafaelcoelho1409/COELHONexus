@@ -35,7 +35,10 @@ HARMONIZE_MAX_GAP          = 0.40   # … and its current chapter beats that sco
 # Oversize split — a chapter holding more than SPLIT_MAX_SHARE of the corpus is
 # split by ONE LLM call over family/doc units (see schemas.SplitPlan). The prompt
 # rule "split above 40%" is only a request; this is the guarantee.
-SPLIT_MAX_SHARE      = 0.30
+# 0.30 -> 0.25 (2026-10-14): langfuse's "Tracing LLM Applications" took 83 pages (27%: every integration page
+# its sibling chapters lost to pruning) and escaped the split; at 0.25 it splits into directory-aligned parts
+# (model providers 23, frameworks 13, other integrations 11, observability 31). asyncio (21%) / fastmcp (17%) untouched.
+SPLIT_MAX_SHARE      = 0.25
 SPLIT_MEDIAN_RATIO   = 2.0   # … AND bigger than this × the median chapter (a 5-chapter plan at 30.3% is not lopsided)
 SPLIT_MIN_TOTAL_DOCS = 24    # tiny corpora legitimately have one big chapter
 SPLIT_MIN_CHAPTER_DOCS = 12
