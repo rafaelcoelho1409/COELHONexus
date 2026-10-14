@@ -928,6 +928,16 @@ def summarize_candidate(
     }
 
 
+def hashes_claimed_elsewhere(per_section_index: dict[str, list[dict]], section_id: str) -> set[str]:
+    """Vault hashes routed (after dedupe_vault_hashes_across_sections) to any section other than `section_id`."""
+    return {
+        h
+        for sid, contribs in per_section_index.items() if sid != section_id
+        for c in contribs
+        for h in (c.get("code_refs") or [])
+    }
+
+
 def dedupe_vault_hashes_across_sections(
     per_section_index: dict[str, list[dict]],
 ) -> tuple[int, int]:

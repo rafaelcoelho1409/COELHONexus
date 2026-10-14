@@ -6,6 +6,7 @@ from . import params, patterns, prompts, schemas, versions
 import ast
 import hashlib
 import re
+import textwrap
 from typing import Optional
 
 
@@ -74,7 +75,10 @@ def build_section_context(
         elif h:
             if h in vault:
                 fence_text = vault[h]
-                code_block = fence_text
+                # A block lifted from a page where it sat inside a list item keeps that indentation on the fence AND the
+                # code (asyncio ch-01: three snippets printed 2 spaces in): show it flush left. The drift check below
+                # still hashes the stored text.
+                code_block = textwrap.dedent(fence_text)
                 if normalized_hashes and h in normalized_hashes:
                     # Intentional LLM-normalizer rewrite — rehash will differ but it's not drift.
                     byte_drift = False

@@ -1167,9 +1167,13 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
             # Chapter-wide blocks the digest never routed here but whose
             # vocabulary this section's own text covers — keeps a section of a
             # multi-topic code page out of prose mode (see params.RELEVANT_PAD_*).
+            # Blocks the digest routed to ANOTHER section (after the cross-section dedup) are not padding for this one:
+            # asyncio ch-01 padded "Awaitable Objects and Futures" with the cancel / timeout / shield snippets of
+            # "Task Cancellation and Error Handling", so both sections printed the same three blocks.
+            claimed_elsewhere = domain.hashes_claimed_elsewhere(per_section_index, sid)
             if vault_rich and n_routed_hashes < _MIN_BANK_SIZE:
                 scored = domains.dd.synth.nodes.vault.domain.rank_hashes_by_relevance(
-                    [h for h in vault_rich if h not in allowed_hashes_set],
+                    [h for h in vault_rich if h not in allowed_hashes_set and h not in claimed_elsewhere],
                     vault_rich,
                     domain.section_relevance_query(outline_sec, contributions),
                 )
@@ -1192,8 +1196,13 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
                 needed = _BANK_PAD_TO - len(allowed_hashes_set)
                 pads = [
                     h for h in ranked_chapter
-                    if h not in allowed_hashes_set
+                    if h not in allowed_hashes_set and h not in claimed_elsewhere
                 ][:needed]
+                if len(allowed_hashes_set) + len(pads) < _MIN_BANK_SIZE:       # nothing unclaimed left: share rather than starve
+                    pads += [
+                        h for h in ranked_chapter
+                        if h not in allowed_hashes_set and h not in pads
+                    ][:needed - len(pads)]
                 if pads:
                     allowed_hashes_set.update(pads)
                     logger.info(
