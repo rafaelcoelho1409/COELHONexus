@@ -405,7 +405,7 @@ def consolidate_placements(
     stats = {
         "n_family_consolidated": 0, "n_family_harmonized": 0, "n_rehomed_to_family": 0,
         "n_rescued_chapters": 0, "n_rescue_pulled": 0, "n_gap_chapters": 0,
-        "n_leftover_placed": 0, "n_unplaced_final": 0,
+        "n_leftover_placed": 0, "n_leftover_appendix": 0, "n_unplaced_final": 0,
     }
 
     families: dict[str, list[str]] = defaultdict(list)
@@ -525,6 +525,30 @@ def consolidate_placements(
             cands.discard(k)
         next_gap -= 1
         stats["n_gap_chapters"] += 1
+
+    # (3b) a big pool of docs NO proposal fits (best score under the threshold everywhere) is not
+    # a handful of strays: lexical placement scatters it into whichever chapter shares a title word
+    # (langfuse: 51 of 306 docs — prompt-management features, experiments — landed in "Public API",
+    # "Alerts" and "Self-Hosted Deployment"). It becomes the catch-all appendix instead, which the
+    # split pass partitions by page directory into named chapters.
+    nofit = sorted(k for k in cands if (best_proposal(k)[1] < thr) and k in assignments)
+    if (len(nofit) >= params.LEFTOVER_APPENDIX_MIN_DOCS
+            and len(nofit) >= params.LEFTOVER_APPENDIX_MIN_SHARE * len(assignments)):
+        app = next((sid for sid, sl in slots.items() if sl.get("role") == "appendix"), None)
+        if app is None:
+            app = next_gap
+            _open_slot(app, {
+                "title": params.GAP_APPENDIX_TITLE,
+                "description": _appendix_description(nofit, doc_title),
+                "key_concepts": [],
+            }, "gap")
+            slots[app]["role"] = "appendix"
+            next_gap -= 1
+            stats["n_gap_chapters"] += 1
+        for k in nofit:
+            place[k] = app
+            cands.discard(k)
+        stats["n_leftover_appendix"] = len(nofit)
 
     # (4) leftovers → lexically nearest chapter; no overlap anywhere → the largest (catch-all) chapter.
     sizes = Counter(place.values())

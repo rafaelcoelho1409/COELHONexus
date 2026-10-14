@@ -311,7 +311,7 @@ async def chapter_select_run(state: domains.dd.planner.state.PlannerState) -> di
         )
     if any(consolidation.get(k) for k in (
         "n_family_consolidated", "n_family_harmonized", "n_rehomed_to_family",
-        "n_rescued_chapters", "n_gap_chapters", "n_leftover_placed", "n_foundations",
+        "n_rescued_chapters", "n_gap_chapters", "n_leftover_placed", "n_leftover_appendix", "n_foundations",
     )):
         logger.info(f"[chapter_select] {slug}: placement consolidation {consolidation}")
 

@@ -23,4 +23,7 @@ from __future__ import annotations
 # chapters move to the chapter holding most of that directory; split groups are named with their URL sections.
 # v11 (2026-10-14): chapters under 4 pages join the chapter that owns their URL directory (description gains "Also covers: ...").
 # v12 (2026-10-14): oversize split cap 30% -> 25% of the corpus (still needs > 2x the median chapter).
-PROMPT_VERSION = "v12-split-cap-25-2026-10-14"
+# v13 (2026-10-14): docs NO proposal fits (best score < 0.5 everywhere) form the catch-all appendix when they
+# are >= 16 docs and >= 8% of the corpus (langfuse: 51 of 306 were scattered by title words into "Public API",
+# "Alerts", "Self-Hosted Deployment"); the appendix split then partitions them by page directory.
+PROMPT_VERSION = "v13-nofit-appendix-2026-10-14"

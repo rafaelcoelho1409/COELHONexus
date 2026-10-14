@@ -115,6 +115,11 @@ GAP_SPLIT_MIN_DOCS    = 16
 # Skill Sharing"); 8-11 page groups of like pages can be named truthfully.
 GAP_SPLIT_DOCS_PER_PART = 10
 GAP_SPLIT_MAX_PARTS     = 8
+# Docs no proposal fits (best assigner score under CONFIDENCE_THRESHOLD for every chapter): a pool of at
+# least this many docs AND this share of the corpus becomes the appendix chapter (then split by
+# directory) instead of being scattered by title-word overlap. Same bar as the appendix split itself.
+LEFTOVER_APPENDIX_MIN_DOCS  = 16
+LEFTOVER_APPENDIX_MIN_SHARE = 0.08
 
 # Clustering similarity of two pages = weighted sum of (a) cosine of their slug words (the module /
 # URL path: `fastmcp-utilities-openapi-models` sits next to `fastmcp-utilities-json-schema`), (b)
