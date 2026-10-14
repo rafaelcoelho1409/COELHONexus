@@ -124,4 +124,9 @@ assert n7 == 1 and fx7.subtopics[0].code_source == "derived" and fx7.subtopics[1
 assert fx7.subtopics[1].explanation == d7.subtopics[1].explanation and fx7.subtopics[2].code_ref_hash == "5" * 16
 assert SW.strip_invalid_derived(SCH.LLMSectionDraft(heading="Q", intro="x" * 70, subtopics=[sub("1" * 16, "a"), sub("2" * 16, "b"), sub("3" * 16, "c")], citations=cites))[1] == 0
 print("7 invalid writer-derived code stripped ok")
+# 8) a misrouted block is omitted as an invisible HTML comment, not a visible note -------------------------------------------
+ctx8 = [{"subtopics": [{"subheading": "Bounded queues", "explanation": "put() blocks when the queue is full.", "code_block": "```python\nb = asyncio.Barrier(3)\nawait b.wait()\nprint(b)\nbarrier_done = True\n```"}]}]
+st8 = RD.dedupe_and_align_sections(ctx8)
+assert st8["n_mismatch"] == 1 and ctx8[0]["subtopics"][0]["code_block"].startswith("<!--") and "Code example omitted" not in ctx8[0]["subtopics"][0]["code_block"]
+print("8 misrouted block hidden in an HTML comment ok")
 print("ALL OK")

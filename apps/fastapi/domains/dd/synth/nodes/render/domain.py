@@ -245,9 +245,11 @@ def dedupe_and_align_sections(
                         subheading + " " + (sub.get("explanation") or ""),
                     )
                     if not (ci & ti):
+                        # An HTML comment: the reader sees the subtopic's prose, the file keeps the audit trail
+                        # (asyncio ch-03 printed four visible "Code example omitted" lines in one section).
                         sub["code_block"] = (
-                            "> _(Code example omitted — it did not match "
-                            "this subtopic and was likely misrouted.)_"
+                            "<!-- code example omitted: it did not match "
+                            "this subtopic and was likely misrouted -->"
                         )
                         sub["derived_caption"] = ""
                         n_mismatch += 1
