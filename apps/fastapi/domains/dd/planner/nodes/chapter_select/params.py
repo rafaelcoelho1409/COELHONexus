@@ -112,7 +112,9 @@ SPLIT_NAME_FALLBACK_TERMS = 3    # words of a deterministic title when the model
 # The catch-all "Additional Topics" chapter (gap pages that fit no proposal) is not a topic: above
 # this share of the corpus it is partitioned like an oversize chapter, the parts becoming ordinary
 # chapters (fastmcp: 43 pages = 12% of the corpus — integration guides, API modules, FAQ, settings).
-GAP_SPLIT_MIN_SHARE   = 0.08
+# 0.08 -> 0.04 (2026-10-14): fastmcp's 17-page appendix (4.9%) mixed six feature guides (sampling, composing servers,
+# icons, testing ...) with eleven API modules; it now splits 6 + 11. The 16-page floor below keeps small corpora whole.
+GAP_SPLIT_MIN_SHARE   = 0.04
 GAP_SPLIT_MIN_DOCS    = 16
 # 15 -> 10 pages per part and up to 6 parts: three 12-23 page groups of leftovers were grab-bags
 # named after their first pages (fastmcp: ChatGPT/Goose/Pydantic AI guides under "File Upload and

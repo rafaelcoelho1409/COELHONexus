@@ -195,11 +195,17 @@ def apply_foundational_prefix_rule(
     Borda order. Returns (new_order, promoted_indices) for telemetry."""
     # Foundations / appendix chapters are placed by their own pins; a "gap" chapter
     # named after an arbitrary page title (fastmcp: `…-quickstart`) is not a quickstart.
+    # ... and only when the vote does not contradict the keyword: fastmcp's "CLI Installation" (installing servers into
+    # Claude Desktop & co with `fastmcp install`) took the first place although the three samples ranked it 2, 8 and 21
+    # (Borda: 10th of 25). A chapter the vote put beyond the first FOUNDATIONAL_MAX_POS_SHARE of the book stays there.
+    limit = max(3, math.ceil(params.FOUNDATIONAL_MAX_POS_SHARE * len(order)))
+    early = set(order[:limit])
     foundational_indices = [
         i for i, ch in enumerate(chapters)
         if ch.get("origin") not in ("gap", "foundations")
         and ch.get("role") not in ("foundations", "appendix")
         and is_foundational(ch.get("title", ""))
+        and (i in early or any(k in (ch.get("title") or "").casefold() for k in params.FOUNDATIONAL_ALWAYS))
     ]
     if not foundational_indices:
         return list(order), []

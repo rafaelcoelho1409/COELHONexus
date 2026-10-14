@@ -37,4 +37,5 @@ from __future__ import annotations
 # v14 (2026-10-14): a vector with every score below 0.3 is asked again, up to 2 times, with a line asking for the closest chapter
 # (langfuse run 14: 54 of 310 pages all-zero, every one from nvidia/ising-calibration; a re-ask recovered 33 of 54, the rest
 # stay genuine no-fit pages; 22 of 23 control pages kept their best chapter under the new line).
-PROMPT_VERSION = "v14-zero-reask-2026-10-14"
+# v15 (2026-10-14): up to 4 zero re-asks (was 2) — fastmcp run 18: 10 of the 17 pages still all-zero flipped within 4 more asks.
+PROMPT_VERSION = "v15-zero-reask-4-2026-10-14"

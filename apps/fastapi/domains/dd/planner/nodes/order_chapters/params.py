@@ -75,6 +75,11 @@ FOUNDATIONAL_KEYWORDS = (
     "first steps",
 )
 
+# ... the ambiguous ones (install / installation / setup) only for chapters the vote placed within this share of the
+# book (at least the first 3 places); "getting started" / "quickstart" / "first steps" always pin.
+FOUNDATIONAL_MAX_POS_SHARE = 0.34
+FOUNDATIONAL_ALWAYS = ("getting started", "quickstart", "first steps")
+
 # A title-order sample is accepted when it names at least this share of the chapters (the rest are
 # appended in their current order); fewer is noise and goes to the re-ask.
 TITLE_MATCH_MIN_SHARE = 0.8

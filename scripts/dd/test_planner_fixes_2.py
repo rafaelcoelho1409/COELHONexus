@@ -63,7 +63,7 @@ chs = [
     {"title": "Installation and Setup", "origin": "proposal"},
     {"title": "Server", "origin": "proposal"},
 ]
-o, pinned = order.apply_foundational_prefix_rule([0, 1, 2, 3, 4], chs)
+o, pinned = order.apply_foundational_prefix_rule([0, 3, 1, 2, 4], chs)      # the vote has the install chapter 2nd (a chapter it put late is left there)
 assert pinned == [3], pinned          # only the real install chapter; not CLI tooling, not gap/appendix
 o2, ap = order.pin_appendix_last([1, 0, 3, 4, 2], chs)
 assert o2[-1] == 1 and ap == [1], (o2, ap)

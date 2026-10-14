@@ -110,8 +110,8 @@ async def run7(answers, props):
 res = asyncio.run(run7([0.0, 0.8], props28))                                          # zero, then a real answer
 assert len(seen7) == 2 and {x["chapter_idx"]: x["confidence"] for x in res[1]}[4] == 0.8, len(seen7)
 assert "give the closest chapter at least 0.5" not in seen7[0][1] and "give the closest chapter at least 0.5" in seen7[1][1] and seen7[1][0] == "fixed"
-res = asyncio.run(run7([0.0, 0.0, 0.0], props28))                                     # a genuine no-fit page: 1 + 2 asks, stays zero
-assert len(seen7) == 3 and max(x["confidence"] for x in res[1]) == 0.0 and not res[3]
+res = asyncio.run(run7([0.0] * (1 + P.ZERO_REASKS), props28))                         # a genuine no-fit page: 1 + ZERO_REASKS asks, stays zero
+assert len(seen7) == 1 + P.ZERO_REASKS and max(x["confidence"] for x in res[1]) == 0.0 and not res[3]
 res = asyncio.run(run7([0.9], props28))                                               # a confident answer: no extra call
 assert len(seen7) == 1
 res = asyncio.run(run7([0.2, 0.9], props28))                                          # 0.2 < RESCUE_FLOOR: asked again, the better vector wins
@@ -120,7 +120,7 @@ res = asyncio.run(run7([0.0, 0.7], props8))                                     
 assert len(seen7) == 2 and seen7[1][0] == "list" and "give the closest chapter at least 0.5" in seen7[1][1], seen7[1][1][-200:]
 P.ZERO_REASKS = 0
 asyncio.run(run7([0.0], props28)); assert len(seen7) == 1
-P.ZERO_REASKS = 2
+P.ZERO_REASKS = 4
 assert CA.prompts.closest_chapter("a template without the line").endswith(CA.prompts.CLOSEST_CHAPTER)
 print("7 all-zero vector re-ask ok")
 # 8) select: absolute size cap + directory-seeded split clustering ----------------------------------------------------------
@@ -154,4 +154,21 @@ assert homes9[1] == homes9[2] == homes9[4] == ("integrations",), homes9
 new9, _ = OC.group_by_home_dir([0, 1, 2, 3, 4, 5], chs9, homes9)
 assert new9 == [0, 1, 2, 4, 3, 5], new9                                            # Gateways pulled next to Providers (one chapter between used to be left alone)
 print("9 catalog family adjacent ok:", new9)
+# 10) order: an ambiguous install/setup chapter the vote put late is not yanked to the front ---------------------------------
+chs10 = [{"title": t} for t in ["Server Core", "Tools", "Client", "Auth", "Middleware", "CLI Installation", "Deploy", "Quickstart", "x", "y"]]
+assert OC.apply_foundational_prefix_rule([7, 0, 1, 2, 3, 4, 5, 6, 8, 9], chs10) == ([7, 0, 1, 2, 3, 4, 5, 6, 8, 9], [7])
+assert OC.apply_foundational_prefix_rule([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], chs10) == ([7, 0, 1, 2, 3, 4, 5, 6, 8, 9], [7])   # "Quickstart" always pins
+chs10[7]["title"] = "Server Setup"
+assert OC.apply_foundational_prefix_rule([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], chs10) == ([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [])  # ... "setup" at 8th of 10 stays
+assert OC.apply_foundational_prefix_rule([0, 1, 7, 2, 3, 4, 5, 6, 8, 9], chs10)[1] == [7]                                # ... but at 3rd it pins
+print("10 foundational pin follows the vote ok")
+
+# 11) select: a 17-page catch-all (5% of a 344-page corpus) is split ----------------------------------------------------------
+chs11 = [{"title": f"C{i}", "member_doc_keys": [f"k{i}-{j}" for j in range(n)], "origin": "proposal"} for i, n in enumerate([30, 26, 24, 22, 20, 18, 18, 18] + [15] * 11)]
+chs11.append({"title": "Additional Topics", "member_doc_keys": [f"a{j}" for j in range(17)], "origin": "gap", "role": "appendix"})
+sp = SEL.plan_splits(chs11)
+assert sp and sp[-1][0] == len(chs11) - 1 and sp[-1][1] == 2, sp
+chs11[-1]["member_doc_keys"] = chs11[-1]["member_doc_keys"][:14]
+assert not [x for x in SEL.plan_splits(chs11) if x[0] == len(chs11) - 1]                                                   # 14 pages: below the 16-page floor
+print("11 mid-size catch-all split ok:", sp[-1])
 print("ALL OK")

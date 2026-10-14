@@ -70,7 +70,10 @@ URL_PATH_MAX_CHARS = 160
 TRANSIENT_RETRIES = 1
 TRANSIENT_RETRY_PAUSE_S = 4.0
 # A page whose whole vector came back below RESCUE_FLOOR is asked again up to this many times (see prompts.CLOSEST_CHAPTER).
-ZERO_REASKS = 2
+# 2 -> 4 (fastmcp run 18: after 2 re-asks 17 of 344 pages were still all-zero; asked 4 more times each, 10 of the 17 flipped. Every
+# one of the 51 ising-calibration answers was zero but 10 of the 11 answers from other arms were not, and each re-ask lands on
+# ising ~60% of the time: 4 asks leave ~13% of an ising-only zero page, 2 asks left ~36%).
+ZERO_REASKS = 4
 TRANSIENT_KINDS = ("timeout", "server_error", "rate_limit")
 # Final sweep: docs that still ended on the lexical fallback get ONE more pass after the main one, at low
 # concurrency and after a Rotator settle. langfuse 2026-10-14: NIM answered ~6x slower for 40 minutes, 30 of 310 docs
