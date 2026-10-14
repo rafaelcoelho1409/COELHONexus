@@ -39,6 +39,10 @@ HARMONIZE_MAX_GAP          = 0.40   # … and its current chapter beats that sco
 # its sibling chapters lost to pruning) and escaped the split; at 0.25 it splits into directory-aligned parts
 # (model providers 23, frameworks 13, other integrations 11, observability 31). asyncio (21%) / fastmcp (17%) untouched.
 SPLIT_MAX_SHARE      = 0.25
+# ... or more than SPLIT_MAX_DOCS pages, whatever its share: Synth caps a chapter at 10 sections (outline.params
+# OUTLINE_ADAPTIVE_CEILING x _DIVISOR = 40 pages at 4 per section); langfuse run 16's "Framework Integrations" took 64
+# pages (21% of 308, under the share cap) and 10 sections would have to carry 6+ pages each.
+SPLIT_MAX_DOCS       = 40
 SPLIT_MEDIAN_RATIO   = 2.0   # … AND bigger than this × the median chapter (a 5-chapter plan at 30.3% is not lopsided)
 SPLIT_MIN_TOTAL_DOCS = 24    # tiny corpora legitimately have one big chapter
 SPLIT_MIN_CHAPTER_DOCS = 12
@@ -138,6 +142,11 @@ SPLIT_SIM_ROLE_WEIGHT = 0.15
 # vs integrations/model-providers). Shared leading path segments / the longer path, times this weight;
 # constant — so harmless — when every page sits in one directory.
 SPLIT_SIM_DIR_WEIGHT  = 0.80
+# The pages of one URL directory (SPLIT_SEED_DIR_DEPTH segments) start the clustering already merged when there are at
+# least SPLIT_SEED_DIR_MIN of them and they fit one part: smallest-group-first merging otherwise cut langfuse's 39
+# `integrations/frameworks` pages into 17 + 22, each glued to a different set of no-code / other integrations.
+SPLIT_SEED_DIR_DEPTH = 2
+SPLIT_SEED_DIR_MIN   = 6
 # Chapters of fewer than this many pages whose title is front-matter-like are folded into Foundations.
 MICRO_MAX_DOCS = 5
 # Catalog directories (see patterns.CATALOG_DIR_RE): a directory of at least CATALOG_MIN_PAGES pages whose

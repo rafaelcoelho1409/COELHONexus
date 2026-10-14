@@ -1019,11 +1019,12 @@ def plan_splits(out_chapters: list[dict], max_chapters: int = 30) -> list[tuple[
                     out.append((i, k))
                     n_chapters += k - 1
             continue
-        if share <= params.SPLIT_MAX_SHARE or n <= params.SPLIT_MEDIAN_RATIO * median:
+        if (share <= params.SPLIT_MAX_SHARE and n <= params.SPLIT_MAX_DOCS) or n <= params.SPLIT_MEDIAN_RATIO * median:
             continue
         k = min(
             params.SPLIT_MAX_PARTS,
-            max(2, math.ceil(share / params.SPLIT_MAX_SHARE), round(n / params.OVERSIZE_DOCS_PER_PART)),
+            max(2, math.ceil(share / params.SPLIT_MAX_SHARE), round(n / params.OVERSIZE_DOCS_PER_PART),
+                math.ceil(n / params.SPLIT_MAX_DOCS)),
             n // params.MIN_DOCS_PER_CHAPTER,
             max_chapters - n_chapters + 1,
         )
@@ -1093,6 +1094,7 @@ def build_split_units(
 
 def validate_split(
     parts: list[dict], units: list[dict], other_titles: set[str], max_parts: int | None = None,
+    floor: int | None = None,
 ) -> tuple[bool, str]:
     """Check an LLM split proposal: parts = [{title, description, unit_ids}].
     Pure. Returns (ok, reason) — the reason is fed back to the model on repair."""
@@ -1111,7 +1113,7 @@ def validate_split(
         return False, f"unknown unit ids {sorted(seen - all_ids)[:10]}"
     if all_ids - seen:
         return False, f"units not placed in any group: {sorted(all_ids - seen)[:10]}"
-    floor = split_floor(n_docs, len(parts))
+    floor = floor if floor is not None else split_floor(n_docs, len(parts))   # the clustering's own floor when it made the groups
     titles: set[str] = set()
     for p in parts:
         size = sum(len(units[u]["keys"]) for u in p["unit_ids"])
@@ -1233,7 +1235,10 @@ def cluster_units(
     weight = {i: 1 for i in range(n)}
     members = {i: [i] for i in range(n)}
     sim: dict[int, dict[int, float]] = {i: {j: base[i][j] for j in range(n) if j != i} for i in range(n)}
-    cap = math.ceil(params.SPLIT_CLUSTER_MAX_SHARE * sum(size.values()))
+    total = sum(size.values())
+    # a group may be as big as one Synth chapter can carry (SPLIT_MAX_DOCS) up to 65% of the chapter: langfuse's 39
+    # `integrations/frameworks` pages stay in one part (a 60% cap of 64 pages cut them in two: 17 + 22 pages)
+    cap = max(math.ceil(params.SPLIT_CLUSTER_MAX_SHARE * total), min(params.SPLIT_MAX_DOCS, math.ceil(0.65 * total)))
 
     def merge(a: int, b: int) -> None:
         wa, wb = weight[a], weight[b]
@@ -1249,6 +1254,16 @@ def cluster_units(
         size[a] += size.pop(b)
         weight[a] = wa + wb
         del weight[b]
+
+    by_dir: dict[tuple, list[int]] = {}
+    for i, u in enumerate(units):
+        d = tuple((u.get("dir") or ())[:params.SPLIT_SEED_DIR_DEPTH])
+        if len(d) == params.SPLIT_SEED_DIR_DEPTH:
+            by_dir.setdefault(d, []).append(i)
+    for ids in by_dir.values():
+        if len(ids) >= params.SPLIT_SEED_DIR_MIN and sum(size[i] for i in ids) <= cap:
+            for j in ids[1:]:
+                merge(ids[0], j)
 
     while len(members) > 1:
         small = [c for c in members if size[c] < floor]

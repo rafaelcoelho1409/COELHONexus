@@ -224,8 +224,9 @@ for path in sys.argv[1:]:
                                        key_idx={kk: v.get("idx", 0) for kk, v in by.items()}, key_dir=kd_)
             tx = [SEL.unit_text(u, row["distillates"]) for u in us]
             gr = SEL.cluster_units(us, tx, k, SEL.split_floor(n, k))
-            sizes = sorted((sum(len(us[j]["keys"]) for j in g) for g in gr), reverse=True)
-            assert gr and len(gr) >= 2 and sizes[0] <= (0.6 if k == 2 else 0.45) * n + 2, (row["slug"], ch["title"], n, k, sizes)
+            sizes = sorted((sum(len(us[j]["keys"]) for j in g) for g in gr), reverse=True)   # a whole URL directory may fill one part (up to SPLIT_MAX_DOCS)
+            assert gr and len(gr) >= 2 and sizes[0] <= max((0.6 if k == 2 else 0.45) * n + 2, SEL.params.SPLIT_MAX_DOCS), \
+                     (row["slug"], ch["title"], n, k, sizes)
             print(f"   {row['slug']}: {ch['title']!r} {n} pages k={k} -> {sizes}")
         n_rows += 1
 if n_rows:

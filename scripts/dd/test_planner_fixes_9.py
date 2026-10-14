@@ -123,4 +123,25 @@ asyncio.run(run7([0.0], props28)); assert len(seen7) == 1
 P.ZERO_REASKS = 2
 assert CA.prompts.closest_chapter("a template without the line").endswith(CA.prompts.CLOSEST_CHAPTER)
 print("7 all-zero vector re-ask ok")
+# 8) select: absolute size cap + directory-seeded split clustering ----------------------------------------------------------
+def mk_units(spec):
+    units, texts, i = [], [], 0
+    for d, n in spec:
+        for j in range(n):
+            units.append({"id": i, "keys": [f"ingestion/fw/pages/{i:04d}-{d[-1]}-{j}-name{i}.md"], "slug": f"{d[-1]}-{j}-name{i}", "dir": d, "role": None})
+            texts.append(f"integration {d[-1]} page {j} tracing langfuse")
+            i += 1
+    return units, texts
+units, texts = mk_units([(("integrations", "frameworks"), 39), (("integrations", "no-code"), 9), (("integrations", "other"), 8), (("integrations", "analytics"), 3), (("guides", "cookbook"), 3)])
+groups = SEL.cluster_units(units, texts, 3, SEL.split_floor(len(units), 3))
+fw = {u["id"] for u in units if u["dir"] == ("integrations", "frameworks")}
+assert groups and any(fw <= set(g) for g in groups), [len(g) for g in groups]      # the 39 framework pages stay together
+assert all(len(g) >= SEL.split_floor(len(units), 3) for g in groups)
+parts = [{"title": f"Part {i}", "description": "d", "unit_ids": g} for i, g in enumerate(groups)]
+assert SEL.validate_split(parts, units, set(), max_parts = len(groups), floor = SEL.split_floor(len(units), 3))[0]
+chs = [{"title": f"C{i}", "member_doc_keys": [f"k{i}-{j}" for j in range(n)], "origin": "proposal"} for i, n in enumerate([64, 30, 28, 26, 24, 22, 20, 18, 16, 14])]
+assert SEL.plan_splits(chs) and SEL.plan_splits(chs)[0][0] == 0 and SEL.plan_splits(chs)[0][1] >= 2    # 64 pages: over SPLIT_MAX_DOCS, though only 23% of the corpus
+chs[0]["member_doc_keys"] = chs[0]["member_doc_keys"][:38]
+assert not [p for p in SEL.plan_splits(chs) if p[0] == 0]                           # 38 pages, 14%: untouched
+print("8 absolute chapter cap + directory-seeded split ok:", [len(g) for g in groups])
 print("ALL OK")

@@ -100,7 +100,7 @@ async def _split_by_clusters(
             {"title": by_id[i].title, "description": by_id[i].description, "unit_ids": g}
             for i, g in enumerate(groups)
         ]
-        ok, reason = domain.validate_split(parts, units, taken, max_parts = len(groups))
+        ok, reason = domain.validate_split(parts, units, taken, max_parts = len(groups), floor = floor)
         if ok:
             return domain.apply_split(chapter, parts, units)
         logger.info(f"[chapter_select] names for {chapter['title']!r} rejected: {reason}")
@@ -109,7 +109,7 @@ async def _split_by_clusters(
         {**name, "unit_ids": g}
         for name, g in zip(domain.fallback_group_titles(groups, texts, taken), groups)
     ]
-    ok, reason = domain.validate_split(parts, units, taken, max_parts = len(groups))
+    ok, reason = domain.validate_split(parts, units, taken, max_parts = len(groups), floor = floor)
     if not ok:
         logger.info(f"[chapter_select] fallback names for {chapter['title']!r} rejected: {reason}")
         return None
