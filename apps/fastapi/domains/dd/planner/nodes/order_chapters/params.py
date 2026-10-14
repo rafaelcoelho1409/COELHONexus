@@ -85,5 +85,6 @@ TITLE_MATCH_CUTOFF    = 0.82   # difflib similarity for a title the model altere
 HOME_DIR_MIN_PAGES = 3
 HOME_DIR_MIN_SHARE = 0.4
 HOME_DIR_MAX_CORPUS_SHARE = 0.5   # a directory holding more of the corpus than this is the site's trunk, not a home
+HOME_CATALOG_MAX_GAP = 1   # members of a catalog family (the integrations block) must be adjacent: no other chapter between them (langfuse run 17: 'Dashboards, Metrics, and Alerts' sat inside the integrations)
 HOME_DIR_MAX_GAP = 2   # chapters of one directory this many positions apart or fewer are left where the vote put them
 HOME_CATALOG_MIN_SHARE = 0.75   # share of a chapter's pages under ONE catalog directory (integrations/) that makes it a member of that catalog family (0.6 -> 0.75: langfuse's real catalog chapters sit at 0.78-1.0, while 'SDK Instrumentation' (0.63) and 'Data Export' (0.67) are topical chapters that were dragged into the integrations block)

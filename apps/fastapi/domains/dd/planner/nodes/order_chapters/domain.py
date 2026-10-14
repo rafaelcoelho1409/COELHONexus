@@ -278,7 +278,7 @@ def group_by_home_dir(order: list[int], chapters: list[dict], homes: list[tuple 
         prev = ms[0]
         for m in ms[1:]:
             a, b = out.index(prev), out.index(m)
-            if b - a > params.HOME_DIR_MAX_GAP:
+            if b - a > (params.HOME_CATALOG_MAX_GAP if len(h) == 1 else params.HOME_DIR_MAX_GAP):
                 out.insert(a + 1, out.pop(b))
             prev = m
     return out, sum(1 for a, b in zip(order, out) if a != b)
