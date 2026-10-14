@@ -34,4 +34,7 @@ from __future__ import annotations
 # the generic "Observability Features" chapter).
 # v13 (2026-10-14): docs that still ended on the lexical fallback get one more pass after a Rotator settle, at 4 slots
 # (langfuse run 14: NIM ~6x slower for 40 min, 30 of 310 docs hit the 237 s wall cap twice and were placed by title words).
-PROMPT_VERSION = "v13-fallback-sweep-2026-10-14"
+# v14 (2026-10-14): a vector with every score below 0.3 is asked again, up to 2 times, with a line asking for the closest chapter
+# (langfuse run 14: 54 of 310 pages all-zero, every one from nvidia/ising-calibration; a re-ask recovered 33 of 54, the rest
+# stay genuine no-fit pages; 22 of 23 control pages kept their best chapter under the new line).
+PROMPT_VERSION = "v14-zero-reask-2026-10-14"

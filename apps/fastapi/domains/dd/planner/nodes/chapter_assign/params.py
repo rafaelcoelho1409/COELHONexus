@@ -69,6 +69,8 @@ URL_PATH_MAX_CHARS = 160
 # misplaces its doc (asyncio `timeout_at` → Event Loop), a retry costs one more call.
 TRANSIENT_RETRIES = 1
 TRANSIENT_RETRY_PAUSE_S = 4.0
+# A page whose whole vector came back below RESCUE_FLOOR is asked again up to this many times (see prompts.CLOSEST_CHAPTER).
+ZERO_REASKS = 2
 TRANSIENT_KINDS = ("timeout", "server_error", "rate_limit")
 # Final sweep: docs that still ended on the lexical fallback get ONE more pass after the main one, at low
 # concurrency and after a Rotator settle. langfuse 2026-10-14: NIM answered ~6x slower for 40 minutes, 30 of 310 docs

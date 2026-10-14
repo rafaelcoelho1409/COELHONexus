@@ -72,4 +72,55 @@ print("4 budget cuts a stuck sweep ok")
 P.SWEEP_ENABLED = False
 assert asyncio.run(S.sweep_failed(first_pass(3), t, 20))[1:] == (0, 0)
 print("5 kill switch ok")
+# 6) select: pages filed under a migrate / upgrade / changelog URL directory go to the migration chapter ------------------
+SEL = domains.dd.planner.nodes.chapter_select.domain
+def doc(i): return f"ingestion/fw/pages/{i:04d}-page-{i}.md"
+sdk = [doc(i) for i in range(4)]                                                   # `docs/sdk/upgrade-path/<version pair>` pages
+rest = [doc(i) for i in range(4, 40)]
+kd = {k: ("docs", "sdk", "upgrade-path") for k in sdk} | {k: ("docs", "tracing") for k in rest}
+chs = [{"title": "SDK Basics", "member_doc_keys": sdk[:2] + rest[:12], "origin": "proposal"},
+       {"title": "Tracing", "member_doc_keys": sdk[2:] + rest[12:], "origin": "proposal"}]
+titles = {k: f"Python v{i} to v{i + 1}" for i, k in enumerate(sdk)}               # no migration word in the titles
+out, st = SEL.pull_migration_pages(chs, titles, kd)
+mig = [c for c in out if c.get("origin") == "migration"]
+assert st["n_migration_pulled"] == 4 and len(mig) == 1 and set(mig[0]["member_doc_keys"]) == set(sdk), st
+assert SEL.pull_migration_pages(chs, titles)[1]["n_migration_pulled"] == 0          # without directories nothing says so
+big = {k: ("docs", "upgrade-guide") for k in rest[:20]} | {k: ("docs", "tracing") for k in rest[20:]} | {k: ("docs", "x") for k in sdk}
+assert SEL.pull_migration_pages(chs, titles, big)[1]["n_migration_pulled"] == 0     # a directory with > 15% of the corpus stays put
+print("6 migration by URL directory ok:", st)
+# 7) assign: an all-zero vector is asked again with the "closest chapter" line ------------------------------------------------
+P.SWEEP_ENABLED = True
+props28 = [{"title": f"C{i}", "description": "d", "key_concepts": []} for i in range(28)]
+props8 = props28[:8]
+dist = {"summary": "s", "key_terms": ["t"]}
+seen7 = []
+def make_score(answers):
+    it = iter(answers)
+    async def _s(prompt, schema=None):
+        seen7.append((("fixed" if schema is not None else "list"), prompt))
+        best = next(it)
+        if schema is not None:
+            return schema(**{f"c{i}": (best if i == 4 else 0.0) for i in range(28)})
+        return CA.schemas.DocAssignment(scores=[CA.schemas.ChapterScore(chapter_idx=i, confidence=(best if i == 3 else 0.0)) for i in range(8)])
+    return _s
+async def run7(answers, props):
+    seen7.clear()
+    S._score_call = make_score(answers)
+    return await S.assign_one(asyncio.Semaphore(1), "fw", "k", dist, props)
+res = asyncio.run(run7([0.0, 0.8], props28))                                          # zero, then a real answer
+assert len(seen7) == 2 and {x["chapter_idx"]: x["confidence"] for x in res[1]}[4] == 0.8, len(seen7)
+assert "give the closest chapter at least 0.5" not in seen7[0][1] and "give the closest chapter at least 0.5" in seen7[1][1] and seen7[1][0] == "fixed"
+res = asyncio.run(run7([0.0, 0.0, 0.0], props28))                                     # a genuine no-fit page: 1 + 2 asks, stays zero
+assert len(seen7) == 3 and max(x["confidence"] for x in res[1]) == 0.0 and not res[3]
+res = asyncio.run(run7([0.9], props28))                                               # a confident answer: no extra call
+assert len(seen7) == 1
+res = asyncio.run(run7([0.2, 0.9], props28))                                          # 0.2 < RESCUE_FLOOR: asked again, the better vector wins
+assert len(seen7) == 2 and max(x["confidence"] for x in res[1]) == 0.9
+res = asyncio.run(run7([0.0, 0.7], props8))                                           # short plan: the score list gets the line appended / swapped
+assert len(seen7) == 2 and seen7[1][0] == "list" and "give the closest chapter at least 0.5" in seen7[1][1], seen7[1][1][-200:]
+P.ZERO_REASKS = 0
+asyncio.run(run7([0.0], props28)); assert len(seen7) == 1
+P.ZERO_REASKS = 2
+assert CA.prompts.closest_chapter("a template without the line").endswith(CA.prompts.CLOSEST_CHAPTER)
+print("7 all-zero vector re-ask ok")
 print("ALL OK")

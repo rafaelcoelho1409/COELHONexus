@@ -117,6 +117,20 @@ async def run_one(row):
     print(f"  order  {slug}: {len(blob['samples'])}/5 samples, trailing pinned {blob.get('trailing_idx')}, first -> last: "
           f"{titles[order[0]]!r} ... {titles[order[-1]]!r}")
 
+    if slug == "langfuse":                                    # 4 of 5 samples 504 (slow NIM): the top-up asks for the missing ones again
+        minio.store.pop(res["chapter_order_ref"])
+        calls = []
+        async def _flaky(prompt, schema, **kw):
+            calls.append(1)
+            if len(calls) <= 4:
+                raise RuntimeError("504 TimeoutError")
+            return await _order(prompt, schema, **kw)
+        chat.service.chat_structured_async = _flaky
+        res2 = await nodes.order_chapters.service.order_chapters_run({"framework_slug": slug, "thread_id": "t", "chapter_plan_ref": plan_ref})
+        blob2 = json.loads(minio.store[res2["chapter_order_ref"]])
+        assert len(blob2["samples"]) == 5 and len(calls) == 9 and sorted(blob2["order"]) == list(range(len(chapters))), (len(blob2["samples"]), len(calls))
+        print(f"  order  {slug}: top-up after 4 failed samples -> {len(blob2['samples'])}/5 valid ok")
+
 
 async def main(path):
     for line in open(path):

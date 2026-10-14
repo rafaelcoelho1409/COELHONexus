@@ -13,6 +13,8 @@ BLOB_PREFIX = "planner"
 # how much any one sample's idiosyncratic ranking skews the result), a
 # well-established property of aggregation methods generally.
 N_SAMPLES = 5
+# Fewer valid samples than this -> one more call for each missing one (the source order votes SOURCE_ORDER_WEIGHT times).
+MIN_VALID_SAMPLES = 3
 # Temperature for sampling. Slightly diversified to capture different
 # valid orderings.
 TEMPERATURE = 0.3
@@ -84,4 +86,4 @@ HOME_DIR_MIN_PAGES = 3
 HOME_DIR_MIN_SHARE = 0.4
 HOME_DIR_MAX_CORPUS_SHARE = 0.5   # a directory holding more of the corpus than this is the site's trunk, not a home
 HOME_DIR_MAX_GAP = 2   # chapters of one directory this many positions apart or fewer are left where the vote put them
-HOME_CATALOG_MIN_SHARE = 0.6   # share of a chapter's pages under ONE catalog directory (integrations/) that makes it a member of that catalog family
+HOME_CATALOG_MIN_SHARE = 0.75   # share of a chapter's pages under ONE catalog directory (integrations/) that makes it a member of that catalog family (0.6 -> 0.75: langfuse's real catalog chapters sit at 0.78-1.0, while 'SDK Instrumentation' (0.63) and 'Data Export' (0.67) are topical chapters that were dragged into the integrations block)

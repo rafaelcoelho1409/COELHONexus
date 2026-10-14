@@ -14,9 +14,24 @@ def to_fixed_key_prompt(base: str, n: int) -> str:
         f"OUTPUT — STRICT JSON with EXACTLY {n} keys, one per chapter index: c0, c1, ..., c{n - 1} "
         f"(every key, 0.0 for unrelated chapters):\n"
         '{"c0": <float>, "c1": <float>, ..., "c' + str(n - 1) + '": <float>}\n\n'
-        "Be honest — most docs only belong to 1-3 chapters.\n\n"
+        f"{HONEST}\n\n"
     )
     return base[:a] + new + base[b:]
+
+
+HONEST = "Be honest — most docs only belong to 1-3 chapters."
+# The re-ask for a page whose whole score vector came back 0.0 (langfuse 2026-10-14: 54 of 310 pages, ALL from
+# nvidia/ising-calibration — a calibrated model that abstains; on the same pages gemma-4-31b never returned a zero
+# vector and 33 of 54 flipped on a re-ask, 18 of the 54 even from ising once it was told to name the closest chapter).
+CLOSEST_CHAPTER = (
+    "Be honest — most docs only belong to 1-3 chapters. Every page was written for some topic: unless NO chapter "
+    "shares its topic at all, give the closest chapter at least 0.5."
+)
+
+
+def closest_chapter(prompt: str) -> str:
+    """The prompt with the honesty line replaced by CLOSEST_CHAPTER (appended when a template lacks the line)."""
+    return prompt.replace(HONEST, CLOSEST_CHAPTER) if HONEST in prompt else f"{prompt}\n\n{CLOSEST_CHAPTER}"
 
 
 # Shown only when the page's URL path is known: where the site's own authors filed the page is

@@ -50,9 +50,11 @@ async def _score_call(prompt: str, schema = None):
     raise RuntimeError("unreachable")
 
 
-async def _score_primary(prompt: str, n_proposals: int) -> schemas.DocAssignment:
+async def _score_primary(prompt: str, n_proposals: int, closest: bool = False) -> schemas.DocAssignment:
     """The first scoring call: one required key per chapter when the plan is big enough (see
-    params.FIXED_KEY_OUTPUT), else — or when that answer is malformed — the score list."""
+    params.FIXED_KEY_OUTPUT), else — or when that answer is malformed — the score list. `closest` swaps the
+    honesty line for the "name the closest chapter" one (the re-ask of an all-zero answer)."""
+    asked = prompts.closest_chapter if closest else (lambda p: p)
     if params.FIXED_KEY_OUTPUT and n_proposals >= params.FIXED_KEY_MIN_CHAPTERS:
         try:
             fixed_prompt = prompts.to_fixed_key_prompt(prompt, n_proposals)
@@ -60,11 +62,11 @@ async def _score_primary(prompt: str, n_proposals: int) -> schemas.DocAssignment
             fixed_prompt = None                              # a template without the expected OUTPUT block
         if fixed_prompt:
             try:
-                obj = await _score_call(fixed_prompt, schemas.fixed_key_model(n_proposals))
+                obj = await _score_call(asked(fixed_prompt), schemas.fixed_key_model(n_proposals))
                 return schemas.scores_from_fixed(obj, n_proposals)
             except (ValidationError, ValueError) as e:
                 logger.info(f"[chapter_assign] fixed-key answer rejected ({type(e).__name__}) — score list instead")
-    return await _score_call(prompt)
+    return await _score_call(asked(prompt))
 
 
 def _valid_scores(assignment: schemas.DocAssignment, n_proposals: int) -> list[dict]:
@@ -212,6 +214,20 @@ async def assign_one(
                         f"[chapter_assign] {source_key}: completeness reask failed "
                         f"({type(e).__name__}) — keeping the partial vector"
                     )
+
+        # An all-zero vector is an answer without content, not a verdict: re-ask (the Rotator may hand the call to another
+        # arm) with the "name the closest chapter" line; a genuine no-fit page stays zero and goes on to the leftover rules.
+        n_proposals = len(proposals)
+        for _z in range(params.ZERO_REASKS if scores is not None else 0):
+            if max((s_["confidence"] for s_ in scores), default = 0.0) >= params.RESCUE_FLOOR:
+                break
+            try:
+                again = _valid_scores(await _score_primary(prompt, n_proposals, closest = True), n_proposals)
+            except Exception as e:
+                logger.info(f"[chapter_assign] {source_key}: all-zero reask failed ({type(e).__name__})")
+                break
+            if max((s_["confidence"] for s_ in again), default = 0.0) > max((s_["confidence"] for s_ in scores), default = 0.0):
+                scores = again
 
         # Failed LLM (None) → lexical fallback so doc reaches chapter_select.
         # Successful but empty (LLM judged irrelevant) is left as-is.

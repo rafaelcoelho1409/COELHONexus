@@ -914,8 +914,22 @@ def is_migration_page(key: str, title: str | None = None) -> bool:
     return bool(patterns.MIGRATION_PAGE_RE.search(text))
 
 
+def migration_dir_keys(key_dir: dict[str, tuple] | None, total: int) -> set[str]:
+    """Pages filed under a URL directory that says migrate / upgrade / changelog (`.../sdk/upgrade-path/python-v2-to-v3`:
+    langfuse's four SDK upgrade pages have version pairs for titles and went to topical chapters), when that
+    directory holds at most MIGRATION_MAX_SHARE of the corpus (a site that is mostly about upgrading keeps them)."""
+    members: dict[tuple, list[str]] = {}
+    for k, d in (key_dir or {}).items():
+        for i, seg in enumerate(d or ()):
+            if patterns.MIGRATION_PAGE_RE.search(re.sub(r"[-_]+", " ", seg)):
+                members.setdefault(tuple(d[:i + 1]), []).append(k)
+    return {
+        k for ks in members.values() if len(ks) <= params.MIGRATION_MAX_SHARE * max(total, 1) for k in ks
+    }
+
+
 def pull_migration_pages(
-    out_chapters: list[dict], doc_title: dict[str, str],
+    out_chapters: list[dict], doc_title: dict[str, str], key_dir: dict[str, tuple] | None = None,
 ) -> tuple[list[dict], dict]:
     """Collect migration / upgrade / changelog pages scattered over topical chapters into ONE
     migration chapter (order_chapters pins it last by its title). The target is the plan's existing
@@ -933,9 +947,10 @@ def pull_migration_pages(
         and trailing.search(c.get("title") or "")
     ]
     target = max(existing, key = lambda i: (len(out_chapters[i]["member_doc_keys"]), -i)) if existing else None
+    in_dir = migration_dir_keys(key_dir, total)
     pulled = {
         k: ci for ci, c in enumerate(out_chapters) if ci not in existing
-        for k in c["member_doc_keys"] if is_migration_page(k, doc_title.get(k))
+        for k in c["member_doc_keys"] if k in in_dir or is_migration_page(k, doc_title.get(k))
     }
     if not pulled:
         return out_chapters, stats
@@ -1342,7 +1357,7 @@ def select_pipeline(
         doc_family = doc_family, key_idx = key_idx,
     )
     chapters, mf_stats = fold_micro_chapters(chapters)
-    chapters, m_stats = pull_migration_pages(chapters, doc_title)
+    chapters, m_stats = pull_migration_pages(chapters, doc_title, key_dir)
     stats = {**cons["stats"], **f_stats, **mf_stats, **m_stats}
     return {
         "kept":             cons["kept"],

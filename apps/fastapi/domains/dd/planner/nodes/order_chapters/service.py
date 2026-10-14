@@ -249,27 +249,27 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
         n_failed = params.N_SAMPLES - len(valid_orderings),
     )
 
-    if not valid_orderings:
-        # All samples failed — retry the whole batch once after a jittered
-        # backoff before giving up. Mirrors chapter_propose's outer retry;
-        # sample_one_ordering's own inner reask already fired per-sample and
-        # wasn't enough during a sustained provider-wide bad patch (2026-09-04
-        # Claude Code docs run: all 3 samples hit parse_failed_after_reask).
-        # Jitter (not a flat delay) avoids all N_SAMPLES calls re-hammering
-        # the same still-recovering deployment in lockstep.
+    if len(valid_orderings) < params.MIN_VALID_SAMPLES:
+        # Too few samples to aggregate (none: retry the whole batch; langfuse 2026-10-14, NIM slow for an hour: 1 of 5
+        # valid, so the source order outvoted it 2:1): ask once more for the missing ones after a jittered backoff.
+        # Mirrors chapter_propose's outer retry; sample_one_ordering's own inner reask already fired per-sample and
+        # wasn't enough during a sustained provider-wide bad patch (2026-09-04 Claude Code docs run: all 3 samples hit
+        # parse_failed_after_reask). Jitter (not a flat delay) avoids all the calls re-hammering the same
+        # still-recovering deployment in lockstep.
         logger.warning(
-            f"[order_chapters] {slug}: all {params.N_SAMPLES} samples failed "
-            f"({[(m or {}).get('error', 'unknown') for m in sample_metas]}) — "
-            f"retrying once after backoff"
+            f"[order_chapters] {slug}: {len(valid_orderings)}/{params.N_SAMPLES} samples valid "
+            f"({[(m or {}).get('error', 'unknown') for m in sample_metas if (m or {}).get('error')]}) — "
+            f"retrying the missing ones once after backoff"
         )
         await asyncio.sleep(2.0 + random.random() * 2.0)
         retry_results = await asyncio.gather(*[
             sample_one_ordering(sem, chapters, composition, slug, i + params.N_SAMPLES)
-            for i in range(params.N_SAMPLES)
+            for i in range(params.N_SAMPLES - len(valid_orderings))
         ])
-        valid_orderings = [r[0] for r in retry_results if r[0] is not None]
-        sample_metas = [r[1] for r in retry_results]
-        if valid_orderings:
+        n_before = len(valid_orderings)
+        valid_orderings = valid_orderings + [r[0] for r in retry_results if r[0] is not None]
+        sample_metas = [m for m in sample_metas if not (m or {}).get("error")] + [r[1] for r in retry_results]
+        if len(valid_orderings) > n_before:
             logger.info(
                 f"[order_chapters] {slug}: retry recovered "
                 f"{len(valid_orderings)}/{params.N_SAMPLES} samples"
