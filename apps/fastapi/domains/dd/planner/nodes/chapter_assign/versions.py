@@ -32,4 +32,6 @@ from __future__ import annotations
 # weigh it as evidence of the topic (A/B on 166 langfuse pages: page-directory -> top-chapter purity 56% -> 67%; the
 # frameworks / model-providers / developer-tools / cookbook sections went to their own chapters 2x more often, not to
 # the generic "Observability Features" chapter).
-PROMPT_VERSION = "v12-url-path-2026-10-14"
+# v13 (2026-10-14): docs that still ended on the lexical fallback get one more pass after a Rotator settle, at 4 slots
+# (langfuse run 14: NIM ~6x slower for 40 min, 30 of 310 docs hit the 237 s wall cap twice and were placed by title words).
+PROMPT_VERSION = "v13-fallback-sweep-2026-10-14"

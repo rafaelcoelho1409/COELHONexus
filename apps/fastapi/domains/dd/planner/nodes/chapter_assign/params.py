@@ -70,6 +70,15 @@ URL_PATH_MAX_CHARS = 160
 TRANSIENT_RETRIES = 1
 TRANSIENT_RETRY_PAUSE_S = 4.0
 TRANSIENT_KINDS = ("timeout", "server_error", "rate_limit")
+# Final sweep: docs that still ended on the lexical fallback get ONE more pass after the main one, at low
+# concurrency and after a Rotator settle. langfuse 2026-10-14: NIM answered ~6x slower for 40 minutes, 30 of 310 docs
+# (10%) hit the Rotator's 237 s wall cap twice in a row and were placed by title-word overlap (SDK upgrade pages
+# into the integration chapters); a sweep runs when the pool is calm, so it recovers them. Skipped when more than
+# SWEEP_MAX_SHARE of the docs failed (Rotator down: a sweep would only burn the time) and cut at SWEEP_BUDGET_S.
+SWEEP_ENABLED = True
+SWEEP_CONCURRENCY = 4
+SWEEP_MAX_SHARE = 0.3
+SWEEP_BUDGET_S = 600.0
 
 BODY_CHARS = 4_000
 

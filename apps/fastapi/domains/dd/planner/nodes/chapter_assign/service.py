@@ -234,6 +234,33 @@ async def assign_one(
         )
 
 
+async def sweep_failed(results: list, make_task, n_docs: int, settle = None) -> tuple[list, int, int]:
+    """One more pass over the docs that ended on the lexical fallback: `make_task(key, sem)` builds the
+    assign_one coroutine. Returns (results with the recovered docs swapped in, n swept, n recovered); a doc that
+    fails again keeps its first fallback result. Skipped when too many docs failed (Rotator down) and cut at
+    SWEEP_BUDGET_S; `settle()` (awaitable factory) waits for the Rotator pool first."""
+    keys_ = [r[0] for r in results if r[3]]
+    if not params.SWEEP_ENABLED or not keys_ or len(keys_) > params.SWEEP_MAX_SHARE * max(n_docs, 1):
+        return results, 0, 0
+    if settle is not None:
+        await settle()
+    sem = asyncio.Semaphore(params.SWEEP_CONCURRENCY)
+    tasks = [asyncio.ensure_future(make_task(k, sem)) for k in keys_]
+    done, pending = await asyncio.wait(tasks, timeout = params.SWEEP_BUDGET_S)
+    for t in pending:
+        t.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions = True)
+    redo = {}
+    for t in done:
+        if t.cancelled() or t.exception() is not None:
+            continue
+        r = t.result()
+        if r[1] and not r[3]:
+            redo[r[0]] = r
+    return [redo.get(r[0], r) for r in results], len(keys_), len(redo)
+
+
 async def load_assignments(minio, slug: str) -> dict:
     """Returns {source_key: [{chapter_idx, confidence}, ...]}."""
     try:
@@ -355,17 +382,22 @@ async def chapter_assign_run(state: domains.dd.planner.state.PlannerState) -> di
         except Exception as e:
             logger.info(f"[chapter_assign] {slug}: manifest unavailable, no URL paths in the prompt ({type(e).__name__})")
 
-    sem = asyncio.Semaphore(params.CONCURRENCY)
-    tasks = [
-        assign_one(
-            sem, slug, k,
+    def _task(k: str, sem_: asyncio.Semaphore):
+        return assign_one(
+            sem_, slug, k,
             distillates.get(k), proposals_dicts,
             doc_body = body_map.get(k, ""),
             doc_path = doc_path.get(k, ""),
         )
-        for k in relevant_files
-    ]
-    results = await asyncio.gather(*tasks, return_exceptions = False)
+
+    sem = asyncio.Semaphore(params.CONCURRENCY)
+    results = await asyncio.gather(*[_task(k, sem) for k in relevant_files], return_exceptions = False)
+    results, n_swept, n_sweep_recovered = await sweep_failed(
+        results, _task, len(relevant_files),
+        settle = lambda: domains.settings.chat.service.wait_for_rotator_settle(params.SETTLE_DELAY_S),
+    )
+    if n_swept:
+        logger.info(f"[chapter_assign] {slug}: fallback sweep recovered {n_sweep_recovered}/{n_swept} doc(s)")
 
     assignments: dict[str, list[dict]] = {}
     n_failed = 0
@@ -417,6 +449,8 @@ async def chapter_assign_run(state: domains.dd.planner.state.PlannerState) -> di
         "n_failed":           n_failed,
         "n_fallback":         len(fallbacks),
         "fallbacks":          fallbacks[:20],
+        "n_swept":            n_swept,
+        "n_sweep_recovered":  n_sweep_recovered,
         "n_rescued":          len(rescued),
         "rescued":            rescued[:20],
         "n_proposals":        len(proposals_dicts),
@@ -434,6 +468,8 @@ async def chapter_assign_run(state: domains.dd.planner.state.PlannerState) -> di
         "n_assigned": len(assignments),
         "n_failed": n_failed,
         "n_fallback": len(fallbacks),
+        "n_swept": n_swept,
+        "n_sweep_recovered": n_sweep_recovered,
         "n_rescued": len(rescued),
         "n_proposals": len(proposals_dicts),
         "coverage_count": coverage_count,
