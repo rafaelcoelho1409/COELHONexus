@@ -260,6 +260,49 @@ def realign_api_subheadings(
     return (draft.model_copy(update = {"subtopics": subs}), n) if n else (draft, 0)
 
 
+def realign_code_by_overlap(
+    draft: schemas.LLMSectionDraft, vault_rich: dict | None, allowed_hashes: set[str],
+) -> tuple[schemas.LLMSectionDraft, int]:
+    """Swap the code block of a subtopic whose prose barely mentions it for the unused allowed block it describes
+    (see params.REALIGN_*). Deterministic; leaves a subtopic alone when no block fits clearly better.
+    Returns (draft, n_swapped)."""
+    bank = [h for h in sorted(allowed_hashes) if vault_rich and h in vault_rich]
+    if not vault_rich or len(bank) < params.REALIGN_MIN_BANK:
+        return draft, 0
+    ids = {h: ast_identifiers(_fence_body(vault_rich[h])) for h in bank}
+    df: dict[str, int] = {}
+    for s_ in ids.values():
+        for w in s_:
+            df[w] = df.get(w, 0) + 1
+    generic = {w for w, c in df.items() if c >= params.REALIGN_GENERIC_DF * len(bank)}
+
+    def specific(prose: str, h: str) -> int:
+        return len(identifier_overlap(prose, _fence_body(vault_rich[h]))[0] - generic)
+
+    used = {st.code_ref_hash for st in draft.subtopics if st.code_ref_hash}
+    subs, n = list(draft.subtopics), 0
+    for i, st in enumerate(subs):
+        if not st.code_ref_hash or getattr(st, "code_source", "verbatim") == "derived" or st.code_ref_hash not in vault_rich:
+            continue
+        prose = f"{st.subheading} {st.explanation}"
+        cur = specific(prose, st.code_ref_hash)
+        if cur > params.REALIGN_MAX_CUR:
+            continue
+        best, best_n = None, 0
+        for h in bank:
+            if h in used:
+                continue
+            k = specific(prose, h)
+            if k > best_n:
+                best, best_n = h, k
+        if best and best_n >= params.REALIGN_MIN_ALT and best_n >= cur + params.REALIGN_MIN_GAIN:
+            used.discard(st.code_ref_hash)
+            used.add(best)
+            subs[i] = st.model_copy(update = {"code_ref_hash": best})
+            n += 1
+    return (draft.model_copy(update = {"subtopics": subs}), n) if n else (draft, 0)
+
+
 def drop_unknown_code_refs(
     draft: schemas.LLMSectionDraft, allowed_hashes: set[str],
 ) -> tuple[schemas.LLMSectionDraft, int]:
@@ -982,32 +1025,49 @@ def summarize_candidate(
 
 
 def drop_repeated_code_blocks(
-    sections: list[schemas.Section],
+    sections: list[schemas.Section], vault_rich: dict | None = None,
 ) -> tuple[list[schemas.Section], int]:
-    """Chapter-level last guard: a verbatim code block printed in an earlier section is not printed again. Later
-    subtopics repeating it are dropped while the section keeps SUBTOPICS_MIN of them (asyncio ch-01 third run: the
-    gather + to_thread snippet in s3 and s5, the wait_for snippet in s3 and s4 — the writer picks from a bank
-    that may share blocks when it is thin, and the cross-stage hint is only a prompt line). Returns (sections, n_dropped)."""
-    seen: set[str] = set()
+    """Chapter-level last guard: a verbatim code block is printed ONCE. Among the subtopics that picked the same
+    block the one whose prose shares the most identifiers with it keeps it (ties: the earliest); the others lose
+    their subtopic while the section keeps SUBTOPICS_MIN of them, else just the block (a prose subtopic). asyncio
+    ch-01: gather + to_thread snippet in s3 and s5; ch-03: the queue section printed the Event and Barrier examples
+    of the previous section under "Bounded Queues" and "Graceful Shutdown" (overlap 2 vs 10 and 7), so the copies
+    that DESCRIBE the block stay. Returns (sections, n_changed)."""
+    occ: dict[str, list[tuple[int, int, int]]] = {}
+    for si, sec in enumerate(sections):
+        for ti, st in enumerate(sec.subtopics):
+            h = st.code_ref_hash
+            if not h or getattr(st, "code_source", "verbatim") == "derived":
+                continue
+            body = _fence_body(vault_rich.get(h)) if vault_rich else ""
+            score = len(identifier_overlap(f"{st.subheading} {st.explanation}", body)[0]) if body else 0
+            occ.setdefault(h, []).append((si, ti, score))
+    lose: dict[int, set[int]] = {}
+    for h, os_ in occ.items():
+        if len(os_) < 2:
+            continue
+        keep = max(os_, key = lambda o: (o[2], -o[0], -o[1]))
+        for o in os_:
+            if o != keep:
+                lose.setdefault(o[0], set()).add(o[1])
     out: list[schemas.Section] = []
     n = 0
-    for sec in sections:
-        flagged = []
-        for st in sec.subtopics:
-            h = st.code_ref_hash
-            dup = bool(h) and getattr(st, "code_source", "verbatim") != "derived" and h in seen
-            flagged.append(dup)
-            if h and not dup:
-                seen.add(h)
+    for si, sec in enumerate(sections):
+        bad = lose.get(si)
+        if not bad:
+            out.append(sec)
+            continue
         budget = len(sec.subtopics) - params.SUBTOPICS_MIN
         subs = []
-        for st, dup in zip(sec.subtopics, flagged):
-            if dup and budget > 0:
-                budget -= 1
+        for ti, st in enumerate(sec.subtopics):
+            if ti in bad:
                 n += 1
-                continue
+                if budget > 0:
+                    budget -= 1
+                    continue
+                st = st.model_copy(update = {"code_ref_hash": "", "code_source": "verbatim", "derived_code": None})
             subs.append(st)
-        out.append(sec.model_copy(update = {"subtopics": subs}) if len(subs) != len(sec.subtopics) else sec)
+        out.append(sec.model_copy(update = {"subtopics": subs}))
     return out, n
 
 

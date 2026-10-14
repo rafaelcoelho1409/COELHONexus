@@ -51,3 +51,14 @@ RELEVANT_PAD_MIN_SCORE  = 0.35
 # the section stays prose rather than being handed loosely related code).
 RELEVANT_PAD_MIN_BLOCKS = 3
 RELEVANCE_QUERY_MAX_CHARS = 30000
+
+# A subtopic whose prose (subheading + explanation) shares at most REALIGN_MAX_CUR identifiers SPECIFIC to the chapter
+# (not found in >= REALIGN_GENERIC_DF of its code bank: asyncio, await, tasks ...) with its code block got the wrong hash
+# (asyncio ch-03: "Bounded Queues for Back-Pressure" over the Event example). It is swapped for the unused allowed block
+# sharing at least REALIGN_MIN_ALT specific identifiers and REALIGN_MIN_GAIN more than the current one. The filter needs a
+# bank of REALIGN_MIN_BANK blocks; smaller banks never swap. (Dry run on 3 stored chapters: only the ch-03 pair swaps.)
+REALIGN_MAX_CUR = 1
+REALIGN_MIN_ALT = 4
+REALIGN_MIN_GAIN = 4
+REALIGN_GENERIC_DF = 0.35
+REALIGN_MIN_BANK = 8

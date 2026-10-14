@@ -644,6 +644,10 @@ async def _draft_one_section(
             break
 
     draft, n_realigned = domain.realign_api_subheadings(draft, vault_rich, allowed_hash_set)
+    draft, n_by_overlap = domain.realign_code_by_overlap(draft, vault_rich, allowed_hash_set)
+    if n_by_overlap:
+        logger.info(f"[sawc_write] {section_id} draft {draft_idx}: {n_by_overlap} subtopic(s) whose prose barely mentioned their code block got the block they describe")
+    n_realigned += n_by_overlap
     if n_realigned:
         logger.info(f"[sawc_write] {section_id} draft {draft_idx}: {n_realigned} subheading(s) named an API absent from their block — swapped in the block that has it")
     # Last resort after the repair loops: never ship an invented code hash.
@@ -1338,7 +1342,7 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
         completed_sections[sid] for sid in section_order
         if sid in completed_sections
     ]
-    final_sections, n_repeated = domain.drop_repeated_code_blocks(final_sections)
+    final_sections, n_repeated = domain.drop_repeated_code_blocks(final_sections, vault_rich)
     if n_repeated:
         logger.info(f"[sawc_write] {slug}/{chapter_id}: {n_repeated} subtopic(s) repeating a code block printed in an earlier section dropped")
 

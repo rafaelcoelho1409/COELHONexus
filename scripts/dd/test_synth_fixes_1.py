@@ -71,6 +71,47 @@ assert all(st.code_ref_hash != "a" * 16 for st in out[1].subtopics) and all(st.c
 tight = [sec("s1", "abc"), sec("s2", "789")]
 tight[1].subtopics[0] = tight[1].subtopics[0].model_copy(update={"code_ref_hash": "a" * 16})
 out2, n2 = SW.drop_repeated_code_blocks(tight)
-assert n2 == 0 and len(out2[1].subtopics) == 3                                                # would leave < 3: kept
+assert n2 == 1 and len(out2[1].subtopics) == 3 and out2[1].subtopics[0].code_ref_hash == ""   # would leave < 3: becomes a prose subtopic
 print("4 repeated code blocks dropped ok")
+# 5) a subtopic whose prose barely mentions its code block gets the block it describes (asyncio ch-03) ----------------------
+evt = "```python\nasync def waiter(event):\n    await event.wait()\n\nasync def main():\n    event = asyncio.Event()\n    waiter_task = asyncio.create_task(waiter(event))\n    event.set()\n```"
+bar = "```python\nb = asyncio.Barrier(3)\nasyncio.create_task(b.wait())\nawait b.wait()\n```"
+qbd = "```python\nqueue = asyncio.Queue(maxsize=2)\ntry:\n    queue.put_nowait(item)\nexcept asyncio.QueueFull:\n    await queue.put(item)\n```"
+qsd = "```python\nqueue = asyncio.Queue()\nqueue.shutdown()\ntry:\n    await queue.get()\nexcept asyncio.QueueShutDown:\n    pass\n```"
+wrk = "```python\nqueue = asyncio.Queue()\nawait queue.get()\nqueue.task_done()\nawait queue.join()\n```"
+fill = {c * 16: {"fence_text": f"```python\nasync def {nm}():\n    await asyncio.sleep(0)\n```"} for c, nm in zip("6789abc", ["alpha", "beta", "gamma", "delta", "omega", "sigma", "theta"])}
+H = {c * 16: {"fence_text": t} for c, t in {"1": evt, "2": bar, "3": qbd, "4": qsd, "5": wrk}.items()} | fill   # 12 blocks: `asyncio` / `await` are generic
+expl = {
+    "1": "The waiter coroutine blocks at await event.wait() until main calls event.set().",
+    "2": "asyncio.Barrier(3) needs three wait() calls before it releases the tasks.",
+    "3": "Setting maxsize on asyncio.Queue creates a bounded queue; put_nowait() raises QueueFull while await queue.put() applies back-pressure.",
+    "4": "After queue.shutdown(), a get() on the asyncio Queue raises QueueShutDown so workers can stop.",
+}
+def sub2(h, head, e): return SCH.Subtopic(code_ref_hash=h * 16, subheading=head, explanation=e)
+d5 = SCH.LLMSectionDraft(heading="Queues", intro="x" * 70, subtopics=[
+    sub2("5", "Workload Distribution with asyncio.Queue", "Workers call await queue.get(), queue.task_done() and the main coroutine awaits queue.join()."),
+    sub2("1", "Bounded Queues for Back-Pressure", expl["3"]),
+    sub2("2", "Graceful Shutdown with QueueShutDown", expl["4"]),
+], citations=cites)
+fx, n5 = SW.realign_code_by_overlap(d5, H, set(H))
+assert SW.realign_code_by_overlap(d5, {k: H[k] for k in list(H)[:5]}, set(list(H)[:5]))[1] == 0      # bank under REALIGN_MIN_BANK: never swaps
+assert n5 == 2 and [st.code_ref_hash[0] for st in fx.subtopics] == ["5", "3", "4"], (n5, [st.code_ref_hash[0] for st in fx.subtopics])
+ok5 = SCH.LLMSectionDraft(heading="Queues", intro="x" * 70, subtopics=[
+    sub2("1", "Event wait and set", expl["1"]), sub2("2", "Barrier with three parties", expl["2"]), sub2("3", "Bounded queues", expl["3"])], citations=cites)
+assert SW.realign_code_by_overlap(ok5, H, set(H))[1] == 0                      # well-aligned prose: untouched
+print("5 code realigned by prose overlap ok")
+
+# 6) the copy whose prose DESCRIBES the block keeps it, wherever it is (asyncio ch-03) ----------------------------------------
+evt6 = "```python\nasync def waiter(event):\n    await event.wait()\n    event.set()\n```"
+vq = {"a" * 16: {"fence_text": evt6}}
+early = SCH.Subtopic(code_ref_hash="a" * 16, subheading="Event wait and set", explanation="The waiter awaits event.wait() until event.set() is called.")
+late = SCH.Subtopic(code_ref_hash="a" * 16, subheading="Bounded queues", explanation="Setting maxsize on a Queue blocks put() when it is full.")
+def mk(sid, first, rest): return SCH.Section(section_id=sid, heading=sid, intro="x" * 70, subtopics=[first] + [sub(h * 16, f"{sid} {h}") for h in rest], citations=cites)
+secs6 = [mk("s1", early, "bcd"), mk("s2", late, "ef")]
+out6, n6 = SW.drop_repeated_code_blocks(secs6, vq)
+assert n6 == 1 and out6[0].subtopics[0].code_ref_hash == "a" * 16 and out6[1].subtopics[0].code_ref_hash == "" and len(out6[1].subtopics) == 3
+secs6b = [mk("s1", late, "bcd"), mk("s2", early, "ef")]                                           # the describing copy is the LATER one
+out6b, n6b = SW.drop_repeated_code_blocks(secs6b, vq)
+assert n6b == 1 and len(out6b[0].subtopics) == 3 and all(st.code_ref_hash != "a" * 16 for st in out6b[0].subtopics) and out6b[1].subtopics[0].code_ref_hash == "a" * 16
+print("6 the copy that describes the block keeps it ok")
 print("ALL OK")
