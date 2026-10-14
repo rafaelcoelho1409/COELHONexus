@@ -297,6 +297,7 @@ async def chapter_select_run(state: domains.dd.planner.state.PlannerState) -> di
         proposals = proposals, assignments = assignments, seeds = seeds,
         doc_family = doc_family, doc_title = doc_title, distillates = distillates,
         key_idx = key_idx, anchored_family = anchored_family,
+        key_dir = domain.page_dirs(entries),
     )
     pinned = result["pinned"]
     pruned = result["pruned"]
@@ -311,7 +312,7 @@ async def chapter_select_run(state: domains.dd.planner.state.PlannerState) -> di
         )
     if any(consolidation.get(k) for k in (
         "n_family_consolidated", "n_family_harmonized", "n_rehomed_to_family",
-        "n_rescued_chapters", "n_gap_chapters", "n_leftover_placed", "n_leftover_appendix", "n_foundations",
+        "n_rescued_chapters", "n_gap_chapters", "n_leftover_placed", "n_leftover_appendix", "n_leftover_dir_owned", "n_foundations",
     )):
         logger.info(f"[chapter_select] {slug}: placement consolidation {consolidation}")
 

@@ -84,3 +84,4 @@ HOME_DIR_MIN_PAGES = 3
 HOME_DIR_MIN_SHARE = 0.4
 HOME_DIR_MAX_CORPUS_SHARE = 0.5   # a directory holding more of the corpus than this is the site's trunk, not a home
 HOME_DIR_MAX_GAP = 2   # chapters of one directory this many positions apart or fewer are left where the vote put them
+HOME_CATALOG_MIN_SHARE = 0.6   # share of a chapter's pages under ONE catalog directory (integrations/) that makes it a member of that catalog family

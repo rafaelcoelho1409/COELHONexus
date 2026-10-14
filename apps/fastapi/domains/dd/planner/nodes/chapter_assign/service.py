@@ -130,6 +130,7 @@ async def assign_one(
             doc_terms = doc_terms,
             doc_body = doc_body,
             proposals = proposals,
+            doc_path = (kwargs.get("doc_path") or "") if params.URL_PATH_IN_PROMPT else "",
         )
 
         scores: Optional[list[dict]] = None
@@ -346,12 +347,21 @@ async def chapter_assign_run(state: domains.dd.planner.state.PlannerState) -> di
             results_one = await asyncio.gather(*[_read_one(k) for k in need_body_keys])
             body_map = dict(results_one)
 
+    doc_path: dict[str, str] = {}
+    if params.URL_PATH_IN_PROMPT:
+        try:
+            manifest_obj = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)
+            doc_path = domain.url_paths((manifest_obj or {}).get("entries") or [])
+        except Exception as e:
+            logger.info(f"[chapter_assign] {slug}: manifest unavailable, no URL paths in the prompt ({type(e).__name__})")
+
     sem = asyncio.Semaphore(params.CONCURRENCY)
     tasks = [
         assign_one(
             sem, slug, k,
             distillates.get(k), proposals_dicts,
             doc_body = body_map.get(k, ""),
+            doc_path = doc_path.get(k, ""),
         )
         for k in relevant_files
     ]

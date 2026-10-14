@@ -28,4 +28,8 @@ from __future__ import annotations
 # v11 (2026-10-14): plans of >= 12 chapters are scored with ONE required key per chapter (c0..cN-1) instead of a score
 # list (A/B, 28 chapters: list complete for 30% of pages, fixed keys 100%; 36% faster; agreement with the shipped
 # vectors within the task's own run-to-run noise). The list stays as the fallback.
-PROMPT_VERSION = "v11-fixed-key-scores-2026-10-14"
+# v12 (2026-10-14): the prompt shows the page's URL path ("PAGE URL PATH: integrations/frameworks/agno-agents") and says to
+# weigh it as evidence of the topic (A/B on 166 langfuse pages: page-directory -> top-chapter purity 56% -> 67%; the
+# frameworks / model-providers / developer-tools / cookbook sections went to their own chapters 2x more often, not to
+# the generic "Observability Features" chapter).
+PROMPT_VERSION = "v12-url-path-2026-10-14"

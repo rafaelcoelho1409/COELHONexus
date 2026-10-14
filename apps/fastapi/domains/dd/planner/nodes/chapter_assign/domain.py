@@ -5,6 +5,7 @@ JSON parse needed here anymore."""
 from __future__ import annotations
 from . import params, patterns, versions
 
+import re
 from hashlib import sha256
 
 
@@ -134,3 +135,19 @@ def manifest_hash(
         h.update(b"|content=")
         h.update(content_fp.encode())
     return h.hexdigest()[:16]
+
+
+def url_paths(entries: list[dict]) -> dict[str, str]:
+    """key -> the page's URL path without host, query, fragment or file extension
+    (`https://langfuse.com/integrations/frameworks/agno-agents` -> `integrations/frameworks/agno-agents`).
+    `source_path` (the real page URL of a single-URL dump) wins over `url`; the key is absent when the
+    manifest has neither or the path is empty."""
+    out: dict[str, str] = {}
+    for e in entries or []:
+        k = e.get("key")
+        u = (e.get("source_path") or e.get("url") or "").split("#", 1)[0].split("?", 1)[0]
+        path = re.sub(r"^[a-z][a-z0-9+.-]*://[^/]*/?", "", u.strip()).strip("/")
+        path = re.sub(r"\.(html?|md|mdx|php|aspx?)$", "", path)
+        if k and path:
+            out[k] = path[:params.URL_PATH_MAX_CHARS]
+    return out

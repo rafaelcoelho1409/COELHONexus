@@ -35,7 +35,7 @@ def run_pipeline(row: dict) -> dict:
             proposals=proposals, assignments=assignments, seeds={},
             doc_family=doc_family, doc_title=doc_title,
             distillates=row.get("distillates") or {}, key_idx=key_idx,
-            anchored_family=sel.anchored_family_map(entries),
+            anchored_family=sel.anchored_family_map(entries), key_dir=sel.page_dirs(entries),
         ) | {"doc_family": doc_family}
     selected, d2c = sel.greedy_select(proposals=proposals, assignments=assignments, pinned_indices=set())
     final = sel.prune_and_finalize_selection(

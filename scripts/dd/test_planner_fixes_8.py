@@ -31,11 +31,12 @@ def build(n_fit_per, n_nofit):
     return proposals, assignments, titles
 
 
-def run(n_fit_per, n_nofit):
+def run(n_fit_per, n_nofit, key_dir=None):
     proposals, assignments, titles = build(n_fit_per, n_nofit)
     return SEL.select_pipeline(
         proposals=proposals, assignments=assignments, seeds={}, doc_family={k: k for k in assignments},
         doc_title=titles, distillates={}, key_idx={k: i for i, k in enumerate(sorted(assignments))}, anchored_family={},
+        key_dir=key_dir,
     )
 
 
@@ -58,6 +59,61 @@ out = run(71, 16)
 assert out["stats"]["n_leftover_appendix"] == 0 and out["stats"]["n_leftover_placed"] == 16
 print("3 pool under the share bar -> unchanged ok")
 
+# 3b) a small pool whose directory is owned by one chapter joins it (title words say nothing) ---------------------------
+proposals, assignments, titles = build(10, 5)
+kd = {k: ("docs", "storage") if ("beta" in k or "stray" in k) else ("docs", "other-" + k.split("-")[1]) for k in assignments}
+res = SEL.select_pipeline(
+    proposals=proposals, assignments=assignments, seeds={}, doc_family={k: k for k in assignments}, doc_title=titles,
+    distillates={}, key_idx={k: i for i, k in enumerate(sorted(assignments))}, anchored_family={}, key_dir=kd,
+)
+beta = next(c for c in res["out_chapters"] if c["title"] == "Beta Storage")
+assert sum("stray" in k for k in beta["member_doc_keys"]) == 5 and res["stats"]["n_leftover_dir_owned"] == 5, res["stats"]
+assert res["stats"]["n_leftover_placed"] == 0
+res = run(10, 5)
+assert res["stats"]["n_leftover_dir_owned"] == 0 and res["stats"]["n_leftover_placed"] == 5          # no directories known -> as before
+print("3b directory-owned strays ok")
+
+# 3c) assign prompt: the page's URL path is shown when known, the static prefix is unchanged otherwise -------------------
+CA = domains.dd.planner.nodes.chapter_assign
+props = [{"title": f"C{i}", "description": "d", "key_concepts": []} for i in range(14)]
+kw = dict(framework="fw", source_key="ingestion/fw/pages/0001-x-fw.md", doc_summary="s", doc_terms=["t"], doc_body="", proposals=props)
+with_path = CA.prompts.build_prompt(**kw, doc_path="integrations/frameworks/agno-agents")
+without = CA.prompts.build_prompt(**kw)
+assert "PAGE URL PATH: integrations/frameworks/agno-agents" in with_path and "PAGE URL PATH" not in without
+assert with_path.rindex("PAGE URL PATH") > with_path.index("== FILE:") and CA.prompts.PATH_RUBRIC in with_path
+assert "EXACTLY 14 keys" in CA.prompts.to_fixed_key_prompt(with_path, 14)
+up = CA.domain.url_paths([
+    {"key": "a", "url": "https://langfuse.com/integrations/frameworks/agno-agents#sec"},
+    {"key": "b", "url": "https://docs.python.org/3/library/asyncio-task.html?x=1"},
+    {"key": "c", "source_path": "https://x.dev/docs/api/", "url": ""},
+    {"key": "d", "url": "https://x.dev/"}, {"url": "https://x.dev/z"},
+])
+assert up == {"a": "integrations/frameworks/agno-agents", "b": "3/library/asyncio-task", "c": "docs/api"}, up
+print("3c assign prompt carries the URL path ok")
+
+# 3d) order: chapters made of a catalog directory's sub-directories share one home and end up adjacent ----------------------
+OC = domains.dd.planner.nodes.order_chapters.domain
+def mk(title, dirs, **kw):
+    return {"title": title, "member_doc_keys": [f"k/{title}/{i}" for i in range(len(dirs))], **kw}, {f"k/{title}/{i}": d for i, d in enumerate(dirs)}
+parts = [
+    mk("Frameworks", [("integrations", "frameworks")] * 6),
+    mk("Evaluation", [("docs", "evaluation")] * 6),
+    mk("Providers", [("integrations", "model-providers")] * 5 + [("docs", "x")]),
+    mk("Tracing", [("docs", "observability")] * 6),
+    mk("Gateways", [("integrations", "gateways")] * 4),
+    mk("Admin", [("docs", "administration")] * 5),
+    mk("Mixed integrations", [("integrations", "other")] * 3 + [("integrations", "analytics")] * 3 + [("docs", "y")]),
+    mk("Mostly docs", [("integrations", "frameworks")] * 2 + [("docs", "observability")] * 4),
+]
+chs_, kd_ = [c for c, _ in parts], {k: v for _, d in parts for k, v in d.items()}
+homes = OC.chapter_home_dirs(chs_, kd_)
+assert [homes[i] for i in (0, 2, 4, 6)] == [("integrations",)] * 4 and homes[7] != ("integrations",), homes
+scattered = [0, 1, 3, 5, 7, 2, 4, 6]                       # integration chapters at positions 0, 5, 6, 7 -> gaps > 2 pulled up
+new_order, moved = OC.group_by_home_dir(scattered, chs_, homes)
+pos = [new_order.index(i) for i in (0, 2, 4, 6)]
+assert max(pos) - min(pos) <= 4 and sorted(new_order) == list(range(8)) and moved > 0, new_order
+print("3d catalog-family chapters stay together ok:", new_order)
+
 # 4) replay on stored plans ----------------------------------------------------------------------------------------------
 n_rows = 0
 for path in sys.argv[1:]:
@@ -69,11 +125,11 @@ for path in sys.argv[1:]:
             doc_family={e["key"]: (e.get("url") or "").split("#", 1)[0] for e in ents if e.get("key")},
             doc_title={e["key"]: e.get("title") or "" for e in ents if e.get("key")},
             distillates=row.get("distillates") or {}, key_idx={e["key"]: int(e.get("idx") or 0) for e in ents if e.get("key")},
-            anchored_family=SEL.anchored_family_map(ents),
+            anchored_family=SEL.anchored_family_map(ents), key_dir=SEL.page_dirs(ents),
         )
         n = sum(len(c["member_doc_keys"]) for c in res["out_chapters"])
         assert n == len(row["assignments"]) and res["stats"]["n_unplaced_final"] == 0, row["slug"]
-        print(f"   {row['slug']}: {len(res['out_chapters'])} chapters, appendix pool {res['stats']['n_leftover_appendix']}, lexical leftovers {res['stats']['n_leftover_placed']}")
+        print(f"   {row['slug']}: {len(res['out_chapters'])} chapters, appendix pool {res['stats']['n_leftover_appendix']}, directory-owned {res['stats']['n_leftover_dir_owned']}, lexical leftovers {res['stats']['n_leftover_placed']}")
         n_rows += 1
 if n_rows:
     print(f"4 replay ok on {n_rows} stored plans")

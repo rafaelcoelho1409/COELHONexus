@@ -342,6 +342,7 @@ def consolidate_placements(
     doc_title: dict[str, str],
     anchored_family: dict[str, str] | None = None,
     affinity: dict[str, list[float]] | None = None,
+    key_dir: dict[str, tuple] | None = None,
 ) -> dict:
     """Make the plan place EVERY doc, and place it sensibly.
 
@@ -526,14 +527,47 @@ def consolidate_placements(
         next_gap -= 1
         stats["n_gap_chapters"] += 1
 
+    # (3a) a doc no proposal fits, whose URL directory is mostly confidently placed in ONE chapter,
+    # joins that chapter (langfuse: self-hosting/configuration/observability went to "Framework and
+    # Model Provider Integrations" on the title word "observability"; its 8 siblings were in "Administration").
+    hold: dict[tuple, Counter] = defaultdict(Counter)
+    if key_dir:
+        for k, sid in place.items():
+            if k in cands or slots[sid].get("role") == "appendix":
+                continue
+            d = key_dir.get(k) or ()
+            for depth in range(params.DIR_OWNER_MIN_DEPTH, len(d) + 1):
+                hold[d[:depth]][sid] += 1
+
+    def dir_owner(k: str) -> int | None:
+        d = key_dir.get(k) or () if key_dir else ()
+        for depth in range(len(d), params.DIR_OWNER_MIN_DEPTH - 1, -1):
+            c = hold.get(d[:depth])
+            if not c:
+                continue
+            n = sum(c.values())
+            sid, top = c.most_common(1)[0]
+            if n >= params.DIR_OWNER_MIN_DOCS and top / n >= params.DIR_OWNER_MIN_SHARE:
+                return sid
+        return None
+
+    stats["n_leftover_dir_owned"] = 0
+    nofit = sorted(k for k in cands if k in assignments and best_proposal(k)[1] < thr)
+    big_pool = (len(nofit) >= params.LEFTOVER_APPENDIX_MIN_DOCS
+                and len(nofit) >= params.LEFTOVER_APPENDIX_MIN_SHARE * len(assignments))
+    for k in ([] if big_pool else nofit):        # a big pool is a topic of its own (3b), not a set of strays
+        sid = dir_owner(k)
+        if sid is not None:
+            place[k] = sid
+            cands.discard(k)
+            stats["n_leftover_dir_owned"] += 1
+
     # (3b) a big pool of docs NO proposal fits (best score under the threshold everywhere) is not
     # a handful of strays: lexical placement scatters it into whichever chapter shares a title word
     # (langfuse: 51 of 306 docs — prompt-management features, experiments — landed in "Public API",
     # "Alerts" and "Self-Hosted Deployment"). It becomes the catch-all appendix instead, which the
     # split pass partitions by page directory into named chapters.
-    nofit = sorted(k for k in cands if (best_proposal(k)[1] < thr) and k in assignments)
-    if (len(nofit) >= params.LEFTOVER_APPENDIX_MIN_DOCS
-            and len(nofit) >= params.LEFTOVER_APPENDIX_MIN_SHARE * len(assignments)):
+    if big_pool:
         app = next((sid for sid, sl in slots.items() if sl.get("role") == "appendix"), None)
         if app is None:
             app = next_gap
@@ -554,6 +588,12 @@ def consolidate_placements(
     sizes = Counter(place.values())
     slot_toks = {sid: _slot_tokens(sl) for sid, sl in slots.items()}
     for k in sorted(k for k in cands if k not in place):
+        owner = dir_owner(k)
+        if owner is not None:
+            place[k] = owner
+            sizes[owner] += 1
+            stats["n_leftover_dir_owned"] += 1
+            continue
         dt = _tokens(f"{doc_title.get(k) or ''} {doc_family.get(k) or ''}")
         best = max(
             slots,
@@ -1271,6 +1311,7 @@ def select_pipeline(
     distillates: dict[str, dict],
     key_idx: dict[str, int],
     anchored_family: dict[str, str] | None = None,
+    key_dir: dict[str, tuple] | None = None,
 ) -> dict:
     """The whole deterministic selection: greedy coverage → prune → consolidate
     (incl. anchored-family harmonization) → Foundations chapter. Shared by the
@@ -1293,7 +1334,7 @@ def select_pipeline(
         kept = final["kept"], doc_to_chapter = final["doc_to_chapter"],
         assignments = assignments, proposals = proposals,
         doc_family = doc_family, doc_title = doc_title, anchored_family = anchored_family,
-        affinity = affinity,
+        affinity = affinity, key_dir = key_dir,
     )
     doc_role = {k: (d or {}).get("role") for k, d in (distillates or {}).items()}
     chapters, f_stats = apply_foundations(

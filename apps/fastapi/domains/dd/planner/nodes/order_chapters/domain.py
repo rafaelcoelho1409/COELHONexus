@@ -221,6 +221,12 @@ def chapter_home_dirs(chapters: list[dict], key_dir: dict[str, tuple]) -> list[t
             if len(d) == 2:
                 corpus[d] = corpus.get(d, 0) + 1
     n_all = sum(len((ch or {}).get("member_doc_keys") or []) for ch in chapters) or 1
+    cat_corpus: dict[str, int] = {}
+    for ch in chapters:
+        for k in (ch or {}).get("member_doc_keys") or []:
+            d1 = key_dir.get(k) or ()
+            if d1 and patterns.CATALOG_SEGMENT_RE.match(d1[0]):
+                cat_corpus[d1[0]] = cat_corpus.get(d1[0], 0) + 1
     out: list[tuple | None] = []
     for ch in chapters:
         ch = ch or {}
@@ -238,7 +244,20 @@ def chapter_home_dirs(chapters: list[dict], key_dir: dict[str, tuple]) -> list[t
             continue
         d, n = max(cnt.items(), key = lambda kv: kv[1])
         informative = corpus.get(d, 0) <= params.HOME_DIR_MAX_CORPUS_SHARE * n_all     # a directory holding most of the site says nothing
-        out.append(d if informative and n >= params.HOME_DIR_MIN_PAGES and n >= params.HOME_DIR_MIN_SHARE * len(keys) else None)
+        home = d if informative and n >= params.HOME_DIR_MIN_PAGES and n >= params.HOME_DIR_MIN_SHARE * len(keys) else None
+        # chapters made of a catalog directory's sub-directories (integrations/frameworks, /model-providers, /gateways ...)
+        # share ONE home: the catalog (langfuse: six integration chapters at positions 4, 8, 10, 11, 12, 14)
+        seg_cnt: dict[str, int] = {}
+        for k in keys:
+            d1 = key_dir.get(k) or ()
+            if d1 and patterns.CATALOG_SEGMENT_RE.match(d1[0]):
+                seg_cnt[d1[0]] = seg_cnt.get(d1[0], 0) + 1
+        if seg_cnt:
+            seg, m = max(seg_cnt.items(), key = lambda kv: kv[1])
+            if (m >= params.HOME_DIR_MIN_PAGES and m >= params.HOME_CATALOG_MIN_SHARE * len(keys)
+                    and cat_corpus.get(seg, 0) <= params.HOME_DIR_MAX_CORPUS_SHARE * n_all):
+                home = (seg,)
+        out.append(home)
     return out
 
 

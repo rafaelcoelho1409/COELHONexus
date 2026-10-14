@@ -60,6 +60,9 @@ SKIP_REASK_MIN_BEST = 0.7
 # best chapter vs the shipped list+reask vectors 66-68% vs 65% for a fresh list answer; run-to-run 72%).
 FIXED_KEY_OUTPUT = True
 FIXED_KEY_MIN_CHAPTERS = 12
+# The page's URL path (without host) goes into the prompt as evidence of its topic.
+URL_PATH_IN_PROMPT = True
+URL_PATH_MAX_CHARS = 160
 # One more try after a transient failure (Rotator 504 / timeout / 5xx / 429) before the
 # lexical fallback: 6 of the 8 fallbacks in the 2026-10-13 deepagents + asyncio runs were
 # 504s from a hung arm that the Rotator had benched by the time of the retry. A fallback

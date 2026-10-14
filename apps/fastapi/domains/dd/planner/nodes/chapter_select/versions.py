@@ -26,4 +26,6 @@ from __future__ import annotations
 # v13 (2026-10-14): docs NO proposal fits (best score < 0.5 everywhere) form the catch-all appendix when they
 # are >= 16 docs and >= 8% of the corpus (langfuse: 51 of 306 were scattered by title words into "Public API",
 # "Alerts", "Self-Hosted Deployment"); the appendix split then partitions them by page directory.
-PROMPT_VERSION = "v13-nofit-appendix-2026-10-14"
+# v14 (2026-10-14): a small no-fit pool joins the chapter that holds most of its URL directory (>= 3 confidently placed docs
+# under the directory, >= 50% in one chapter) before title-word overlap decides (langfuse: self-hosting/configuration/observability).
+PROMPT_VERSION = "v14-dir-owned-leftovers-2026-10-14"

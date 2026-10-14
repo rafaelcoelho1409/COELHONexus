@@ -120,6 +120,12 @@ GAP_SPLIT_MAX_PARTS     = 8
 # directory) instead of being scattered by title-word overlap. Same bar as the appendix split itself.
 LEFTOVER_APPENDIX_MIN_DOCS  = 16
 LEFTOVER_APPENDIX_MIN_SHARE = 0.08
+# A leftover doc joins the chapter that holds most of its URL directory when at least DIR_OWNER_MIN_DOCS
+# confidently placed docs sit under the (deepest) directory prefix of >= DIR_OWNER_MIN_DEPTH segments and one
+# chapter holds DIR_OWNER_MIN_SHARE of them; otherwise title-word overlap decides, as before.
+DIR_OWNER_MIN_DEPTH = 2
+DIR_OWNER_MIN_DOCS  = 3
+DIR_OWNER_MIN_SHARE = 0.5
 
 # Clustering similarity of two pages = weighted sum of (a) cosine of their slug words (the module /
 # URL path: `fastmcp-utilities-openapi-models` sits next to `fastmcp-utilities-json-schema`), (b)

@@ -31,4 +31,6 @@ from __future__ import annotations
 # round-4 plans: per-sample constraint satisfaction 11.4/12, 10.8/13, 26.2/28 vs 10.0, 8.4, 26.4.
 # v10 (2026-10-14): chapters titled `Family: part` are kept contiguous after the Borda vote (before the pins).
 # v11 (2026-10-14): chapters whose pages sit mostly in the same URL directory (2 segments) are kept contiguous after the Borda vote.
-PROMPT_VERSION = "v11-home-dir-siblings-2026-10-14"
+# v12 (2026-10-14): chapters made of a catalog directory's sub-directories (integrations/frameworks, /model-providers ...) share one
+# home (the catalog), so all integration chapters stay together (langfuse: six of them sat at positions 4, 8, 10, 11, 12, 14).
+PROMPT_VERSION = "v12-catalog-family-order-2026-10-14"

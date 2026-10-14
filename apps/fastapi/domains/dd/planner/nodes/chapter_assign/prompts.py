@@ -19,6 +19,15 @@ def to_fixed_key_prompt(base: str, n: int) -> str:
     return base[:a] + new + base[b:]
 
 
+# Shown only when the page's URL path is known: where the site's own authors filed the page is
+# strong evidence of its topic (langfuse: `integrations/frameworks/*` pages scored 0.0 for the
+# "Frameworks Integrations" chapter and 1.0 for a generic "Observability Features" one).
+PATH_RUBRIC = (
+    "Each file shows its PAGE URL PATH, the section of the documentation site where its authors filed "
+    "it. Weigh it as evidence of the page's topic: pages of one section usually belong to the same chapter.\n\n"
+)
+
+
 @with_langfuse_override("dd.planner.chapter_assign")
 def build_prompt(
     *,
@@ -28,6 +37,7 @@ def build_prompt(
     doc_terms: list[str],
     doc_body: str,
     proposals: list[dict],
+    doc_path: str = "",
 ) -> str:
     chapters_block = "\n".join([
         f"[{i}] {p.get('title')!r}\n"
@@ -57,6 +67,7 @@ def build_prompt(
         f"  0.3 → tangential mention\n"
         f"  0.7 → primary supporting doc\n"
         f"  1.0 → canonical reference for this chapter\n\n"
+        f"{PATH_RUBRIC if doc_path else ''}"
         f"OUTPUT — STRICT JSON:\n"
         f'{{"scores": [{{"chapter_idx": 0, "confidence": <float>}}, '
         f'{{"chapter_idx": 1, "confidence": <float>}}, ...]}}\n\n'
@@ -65,5 +76,6 @@ def build_prompt(
         f"chapters.\n\n"
         # Dynamic suffix — only thing that varies per call.
         f"== FILE: {source_key} ==\n"
+        f"{f'PAGE URL PATH: {doc_path}' + chr(10) if doc_path else ''}"
         f"{doc_block}"
     )
