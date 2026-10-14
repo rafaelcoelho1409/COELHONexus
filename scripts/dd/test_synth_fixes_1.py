@@ -114,4 +114,14 @@ secs6b = [mk("s1", late, "bcd"), mk("s2", early, "ef")]                         
 out6b, n6b = SW.drop_repeated_code_blocks(secs6b, vq)
 assert n6b == 1 and len(out6b[0].subtopics) == 3 and all(st.code_ref_hash != "a" * 16 for st in out6b[0].subtopics) and out6b[1].subtopics[0].code_ref_hash == "a" * 16
 print("6 the copy that describes the block keeps it ok")
+# 7) writer-authored derived code that does not parse is not shipped (asyncio ch-03 RETHINK iteration) ----------------------
+good_code = "import asyncio\n\nasync def main():\n    q = asyncio.Queue(maxsize=2)\n    await q.put(1)\n\nasyncio.run(main())"
+flat_code = "import asyncio async def main(): q = asyncio.Queue(maxsize=2) await q.put(1) asyncio.run(main())"
+def dsub(head, code): return SCH.Subtopic(code_ref_hash="", subheading=head, explanation="A bounded asyncio.Queue blocks put() when it is full until a consumer calls get().", code_source="derived", derived_code=code)
+d7 = SCH.LLMSectionDraft(heading="Queues", intro="x" * 70, subtopics=[dsub("Valid derived example", good_code), dsub("Collapsed derived example", flat_code), sub("5" * 16, "Verbatim block")], citations=cites)
+fx7, n7 = SW.strip_invalid_derived(d7)
+assert n7 == 1 and fx7.subtopics[0].code_source == "derived" and fx7.subtopics[1].code_source == "verbatim" and fx7.subtopics[1].derived_code is None and fx7.subtopics[1].code_ref_hash == ""
+assert fx7.subtopics[1].explanation == d7.subtopics[1].explanation and fx7.subtopics[2].code_ref_hash == "5" * 16
+assert SW.strip_invalid_derived(SCH.LLMSectionDraft(heading="Q", intro="x" * 70, subtopics=[sub("1" * 16, "a"), sub("2" * 16, "b"), sub("3" * 16, "c")], citations=cites))[1] == 0
+print("7 invalid writer-derived code stripped ok")
 print("ALL OK")

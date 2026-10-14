@@ -644,6 +644,9 @@ async def _draft_one_section(
             break
 
     draft, n_realigned = domain.realign_api_subheadings(draft, vault_rich, allowed_hash_set)
+    draft, n_bad_derived = domain.strip_invalid_derived(draft)
+    if n_bad_derived:
+        logger.warning(f"[sawc_write] {section_id} draft {draft_idx}: {n_bad_derived} writer-authored derived code block(s) that do not parse as Python stripped (prose kept)")
     draft, n_by_overlap = domain.realign_code_by_overlap(draft, vault_rich, allowed_hash_set)
     if n_by_overlap:
         logger.info(f"[sawc_write] {section_id} draft {draft_idx}: {n_by_overlap} subtopic(s) whose prose barely mentioned their code block got the block they describe")

@@ -303,6 +303,25 @@ def realign_code_by_overlap(
     return (draft.model_copy(update = {"subtopics": subs}), n) if n else (draft, 0)
 
 
+def strip_invalid_derived(draft: schemas.LLMSectionDraft) -> tuple[schemas.LLMSectionDraft, int]:
+    """The writer may fill `code_source='derived'` + `derived_code` itself when its bank has no block for a topic
+    (asyncio ch-03, RETHINK iteration: five "derived" queue examples, every one collapsed onto a single line —
+    SyntaxError, audit failed, five broken blocks rendered). Derived code that does not parse as Python is not
+    shipped: the subtopic keeps its prose and loses the block. Returns (draft, n_stripped)."""
+    ast_valid = domains.dd.synth.nodes.sawc_derive.domain.python_ast_valid
+    bad = {
+        i for i, st in enumerate(draft.subtopics)
+        if getattr(st, "code_source", "verbatim") == "derived" and not ast_valid(st.derived_code or "")
+    }
+    if not bad:
+        return draft, 0
+    subs = [
+        st.model_copy(update = {"code_ref_hash": "", "code_source": "verbatim", "derived_code": None}) if i in bad else st
+        for i, st in enumerate(draft.subtopics)
+    ]
+    return draft.model_copy(update = {"subtopics": subs}), len(bad)
+
+
 def drop_unknown_code_refs(
     draft: schemas.LLMSectionDraft, allowed_hashes: set[str],
 ) -> tuple[schemas.LLMSectionDraft, int]:
