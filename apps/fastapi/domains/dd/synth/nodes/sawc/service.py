@@ -643,6 +643,9 @@ async def _draft_one_section(
             )
             break
 
+    draft, n_realigned = domain.realign_api_subheadings(draft, vault_rich, allowed_hash_set)
+    if n_realigned:
+        logger.info(f"[sawc_write] {section_id} draft {draft_idx}: {n_realigned} subheading(s) named an API absent from their block — swapped in the block that has it")
     # Last resort after the repair loops: never ship an invented code hash.
     draft, n_invented = domain.drop_unknown_code_refs(draft, allowed_hash_set)
     if n_invented:

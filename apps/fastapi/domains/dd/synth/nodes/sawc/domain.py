@@ -218,6 +218,48 @@ def section_relevance_query(outline_sec: dict, contributions: list[dict]) -> str
     return " ".join(parts)[:params.RELEVANCE_QUERY_MAX_CHARS]
 
 
+def _fence_body(entry) -> str:
+    return (entry.get("fence_text") if isinstance(entry, dict) else getattr(entry, "fence_text", "")) or ""
+
+
+def realign_api_subheadings(
+    draft: schemas.LLMSectionDraft, vault_rich: dict | None, allowed_hashes: set[str],
+) -> tuple[schemas.LLMSectionDraft, int]:
+    """A subheading that puts an API in backticks ("Scheduling Coroutines with `asyncio.gather()`") over a block that
+    does not contain it got the wrong hash (asyncio ch-01: the sequential `await say_after()` example sat under
+    that heading and the prose described concurrency). Swap in the allowed block that does contain the API, when
+    this draft does not use it yet; otherwise leave the subtopic alone. Returns (draft, n_swapped)."""
+    if not vault_rich:
+        return draft, 0
+    used = {st.code_ref_hash for st in draft.subtopics if st.code_ref_hash}
+    subs, n = list(draft.subtopics), 0
+    for i, st in enumerate(subs):
+        if not st.code_ref_hash or getattr(st, "code_source", "verbatim") == "derived":
+            continue
+        body = _fence_body(vault_rich.get(st.code_ref_hash))
+        if not body:
+            continue
+        apis = [
+            last for tk in re.findall(r"`([^`]+)`", st.subheading or "")
+            for last in [(re.findall(r"[A-Za-z_][A-Za-z_0-9]*", tk) or [""])[-1]]
+            if len(last) >= 3 and last.lower() not in IDENT_STOPWORDS
+        ]
+        if not apis or all(re.search(rf"\b{re.escape(a)}\b", body) for a in apis):
+            continue
+        cands = [
+            h for h in sorted(allowed_hashes)
+            if h not in used and h in vault_rich
+            and all(re.search(rf"\b{re.escape(a)}\b", _fence_body(vault_rich[h])) for a in apis)
+        ]
+        if cands:
+            best = max(cands, key = lambda h: (sum(len(re.findall(rf"\b{re.escape(a)}\b", _fence_body(vault_rich[h]))) for a in apis), h))
+            used.discard(st.code_ref_hash)
+            used.add(best)
+            subs[i] = st.model_copy(update = {"code_ref_hash": best})
+            n += 1
+    return (draft.model_copy(update = {"subtopics": subs}), n) if n else (draft, 0)
+
+
 def drop_unknown_code_refs(
     draft: schemas.LLMSectionDraft, allowed_hashes: set[str],
 ) -> tuple[schemas.LLMSectionDraft, int]:
@@ -341,6 +383,17 @@ def validate_section_against_inputs(
             # subheading↔code. Strict-AST overlap first; if zero,
             # fall back to first-3-lines word overlap (catches less
             # tightly-named patterns like 'Minimal Tool Definition').
+            # A subheading that puts an API in backticks ("... with `asyncio.gather()`") must find it in the block: asyncio ch-01
+            # printed the sequential `await say_after()` example under that heading (the shared `asyncio` / `say_after`
+            # words passed the overlap test below).
+            absent_api = [
+                last for tk in re.findall(r"`([^`]+)`", s.subheading or "")
+                for last in [(re.findall(r"[A-Za-z_][A-Za-z_0-9]*", tk) or [""])[-1]]
+                if len(last) >= 3 and last.lower() not in IDENT_STOPWORDS and not re.search(rf"\b{re.escape(last)}\b", body)
+            ]
+            if absent_api:
+                misaligned_sub.append(s.subheading)
+                continue
             sub_overlap = prose_tokens(s.subheading) & code_idents
             if not sub_overlap:
                 head_words = first_lines_word_set(body, n_lines = 3)

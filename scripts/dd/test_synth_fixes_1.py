@@ -41,4 +41,22 @@ ctx2 = RD.build_section_context(
 )
 assert ctx2["subtopics"][0]["code_block"] == flush                # already flush left: untouched
 print("2 vault code blocks render flush left ok")
+# 3) a subheading naming `asyncio.gather()` over a block without it gets the block that has it -------------------------------
+SCH = domains.dd.synth.nodes.sawc.schemas
+seq = "```python\nasync def main():\n    await say_after(1, 'hello')\n    await say_after(2, 'world')\n```"
+gat = "```python\nasync def main():\n    L = await asyncio.gather(factorial('A', 2), factorial('B', 3))\n```"
+oth = "```python\nasync with asyncio.TaskGroup() as tg:\n    tg.create_task(job())\n```"
+oth2 = "```python\nasync with asyncio.timeout(10):\n    await long_running_task()\n```"
+vh = {x: {"fence_text": t} for x, t in {"a" * 16: seq, "b" * 16: gat, "c" * 16: oth, "d" * 16: oth2}.items()}
+def sub(h, head): return SCH.Subtopic(code_ref_hash=h, subheading=head, explanation="The block runs the calls in order and prints each result when it finishes.")
+cites = [SCH.Citation(source_key="k", claim="a claim about gather that is long enough")]
+d = SCH.LLMSectionDraft(heading="H", intro="x" * 70, subtopics=[sub("a" * 16, "Scheduling Coroutines with `asyncio.gather()`"), sub("c" * 16, "Task groups"), sub("d" * 16, "Timeouts")], citations=cites)
+fixed, n = SW.realign_api_subheadings(d, vh, set(vh))
+assert n == 1 and fixed.subtopics[0].code_ref_hash == "b" * 16 and fixed.subtopics[1].code_ref_hash == "c" * 16, (n, [s.code_ref_hash[:1] for s in fixed.subtopics])
+d2 = SCH.LLMSectionDraft(heading="H", intro="x" * 70, subtopics=[sub("b" * 16, "Scheduling with `asyncio.gather()`"), sub("c" * 16, "Groups"), sub("a" * 16, "Sequential")], citations=cites)
+assert SW.realign_api_subheadings(d2, vh, set(vh))[1] == 0                                  # block already has the API
+d3 = SCH.LLMSectionDraft(heading="H", intro="x" * 70, subtopics=[sub("a" * 16, "Scheduling with `asyncio.gather()`"), sub("b" * 16, "Gather again"), sub("c" * 16, "Groups")], citations=cites)
+assert SW.realign_api_subheadings(d3, vh, set(vh))[1] == 0                                  # the block with the API is already used: left alone
+assert SW.realign_api_subheadings(d, None, set())[1] == 0
+print("3 API subheading realigned to its block ok")
 print("ALL OK")
