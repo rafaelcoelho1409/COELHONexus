@@ -55,6 +55,11 @@ MAX_REPAIR_ATTEMPTS = 1
 # A vector missing at most this many chapters whose best score is >= SKIP_REASK_MIN_BEST is accepted as is.
 SKIP_REASK_MAX_MISSING = 1
 SKIP_REASK_MIN_BEST = 0.7
+# One required key per chapter (schemas.fixed_key_model) instead of a score list, from this many chapters up
+# (A/B on 40 langfuse pages, 28 chapters: list complete 11/37, fixed keys 38/38; 16.8 s -> 10.8 s per call;
+# best chapter vs the shipped list+reask vectors 66-68% vs 65% for a fresh list answer; run-to-run 72%).
+FIXED_KEY_OUTPUT = True
+FIXED_KEY_MIN_CHAPTERS = 12
 # One more try after a transient failure (Rotator 504 / timeout / 5xx / 429) before the
 # lexical fallback: 6 of the 8 fallbacks in the 2026-10-13 deepagents + asyncio runs were
 # 504s from a hung arm that the Rotator had benched by the time of the retry. A fallback

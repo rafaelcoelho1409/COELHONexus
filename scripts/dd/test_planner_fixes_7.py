@@ -18,6 +18,7 @@ CA, SEL, OC = nodes.chapter_assign, nodes.chapter_select.domain, nodes.order_cha
 
 # 1) assign: a vector missing ONE chapter whose best score is confident needs no reask --------------------------
 S = CA.schemas
+CA.params.FIXED_KEY_OUTPUT = False                                             # (the fixed-key path has its own test below)
 props = [{"title": f"C{i}", "description": "d", "key_concepts": []} for i in range(28)]
 sent = []
 def vec(idxs, best_idx=3, best=0.9):
@@ -45,6 +46,40 @@ res = asyncio.run(run(vec([i for i in range(28) if i not in (5, 27)])))        #
 assert len(sent) == 2
 assert CA.domain.can_skip_reask([{"chapter_idx": 0, "confidence": 0.7}], [27]) and not CA.domain.can_skip_reask([], [27])
 print("1 assign reask skip ok")
+
+# 1b) fixed-key scoring: one required key per chapter; malformed -> the score list; short plans keep the list ----------------
+CA.params.FIXED_KEY_OUTPUT = True
+calls = []
+async def _fixed_stub(prompt, schema=None):
+    calls.append(("fixed" if schema is not None else "list", prompt))
+    if schema is not None:
+        return schema(**{f"c{i}": (0.9 if i == 4 else 0.0) for i in range(28)})
+    return vec(range(28), best_idx=1, best=0.8)
+CA.service._score_call = _fixed_stub
+res = asyncio.run(CA.service.assign_one(asyncio.Semaphore(1), "fw", "k", {"summary": "s", "key_terms": ["t"]}, props))
+sc = {x["chapter_idx"]: x["confidence"] for x in res[1]}
+assert [c[0] for c in calls] == ["fixed"] and len(sc) == 28 and sc[4] == 0.9, (calls[:1], len(sc))
+assert "EXACTLY 28 keys" in calls[0][1] and '"c27"' in calls[0][1] and "chapter_idx\": 0" not in calls[0][1].split("OUTPUT")[1].split("== FILE")[0]
+calls.clear()
+async def _bad_then_list(prompt, schema=None):
+    calls.append("fixed" if schema is not None else "list")
+    if schema is not None:
+        schema(**{f"c{i}": 0.0 for i in range(27)})                              # a missing key -> pydantic ValidationError
+    return vec(range(28), best_idx=1, best=0.8)
+CA.service._score_call = _bad_then_list
+res = asyncio.run(CA.service.assign_one(asyncio.Semaphore(1), "fw", "k", {"summary": "s", "key_terms": ["t"]}, props))
+assert calls == ["fixed", "list"] and {x["chapter_idx"]: x["confidence"] for x in res[1]}[1] == 0.8, calls
+calls.clear()
+CA.service._score_call = _fixed_stub
+short = [{"title": f"C{i}", "description": "d", "key_concepts": []} for i in range(8)]
+asyncio.run(CA.service.assign_one(asyncio.Semaphore(1), "fw", "k", {"summary": "s", "key_terms": ["t"]}, short))
+assert calls[0][0] == "list", calls                                              # < 12 chapters: unchanged
+assert CA.prompts.to_fixed_key_prompt("x OUTPUT — STRICT JSON: y == FILE: z", 3).count("c2") >= 1
+try:
+    CA.prompts.to_fixed_key_prompt("a template without anchors", 3); raise SystemExit("expected ValueError")
+except ValueError:
+    pass
+print("1b fixed-key scoring ok")
 
 # 2) order: chapters whose pages sit mostly in the same URL directory stay together ------------------------------
 def ck(d, i): return f"ingestion/fw/pages/{i:04d}-{d.replace('/', '-')}-{i}.md"

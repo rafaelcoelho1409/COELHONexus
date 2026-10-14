@@ -25,4 +25,7 @@ from __future__ import annotations
 # batches ran 20.8/23.3/29.0/38.3 docs/min at 4/8/6/12 slots on an idle Rotator.
 # v10 (2026-10-14): no reask when a vector misses only ONE chapter and its best score is >= 0.7 (langfuse, 28
 # chapters: 47 of 47 last-chapter reasks returned 0.0; the 64 reasks for a cut-off tail 16-27 stay: 76% found >= 0.3).
-PROMPT_VERSION = "v10-skip-last-chapter-reask-2026-10-14"
+# v11 (2026-10-14): plans of >= 12 chapters are scored with ONE required key per chapter (c0..cN-1) instead of a score
+# list (A/B, 28 chapters: list complete for 30% of pages, fixed keys 100%; 36% faster; agreement with the shipped
+# vectors within the task's own run-to-run noise). The list stays as the fallback.
+PROMPT_VERSION = "v11-fixed-key-scores-2026-10-14"

@@ -5,6 +5,20 @@ from . import params
 
 
 
+def to_fixed_key_prompt(base: str, n: int) -> str:
+    """The same prompt with the OUTPUT block asking for `{"c0": .., "c1": .., ..., "c{n-1}": ..}`.
+    ValueError when `base` (e.g. a LangFuse template) lacks the expected anchors."""
+    a = base.index("OUTPUT — STRICT JSON:")
+    b = base.index("== FILE:")
+    new = (
+        f"OUTPUT — STRICT JSON with EXACTLY {n} keys, one per chapter index: c0, c1, ..., c{n - 1} "
+        f"(every key, 0.0 for unrelated chapters):\n"
+        '{"c0": <float>, "c1": <float>, ..., "c' + str(n - 1) + '": <float>}\n\n'
+        "Be honest — most docs only belong to 1-3 chapters.\n\n"
+    )
+    return base[:a] + new + base[b:]
+
+
 @with_langfuse_override("dd.planner.chapter_assign")
 def build_prompt(
     *,

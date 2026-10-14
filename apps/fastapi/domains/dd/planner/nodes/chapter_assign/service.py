@@ -23,7 +23,7 @@ from pydantic import ValidationError
 logger = logging.getLogger(__name__)
 
 
-async def _score_call(prompt: str) -> schemas.DocAssignment:
+async def _score_call(prompt: str, schema = None):
     """One LLM call, decoded via LangChain's `.with_structured_output()`.
     Raises ValueError (unparseable) or pydantic ValidationError (schema
     mismatch) for reask-eligible failures; anything else (timeout,
@@ -33,7 +33,7 @@ async def _score_call(prompt: str) -> schemas.DocAssignment:
         try:
             assignment, _ = await domains.settings.chat.service.chat_structured_async(
                 prompt,
-                schemas.DocAssignment,
+                schema or schemas.DocAssignment,
                 max_tokens = budget,
                 temperature = params.TEMPERATURE,
                 timeout_s = params.TIMEOUT_S,
@@ -48,6 +48,23 @@ async def _score_call(prompt: str) -> schemas.DocAssignment:
                 continue
             raise
     raise RuntimeError("unreachable")
+
+
+async def _score_primary(prompt: str, n_proposals: int) -> schemas.DocAssignment:
+    """The first scoring call: one required key per chapter when the plan is big enough (see
+    params.FIXED_KEY_OUTPUT), else — or when that answer is malformed — the score list."""
+    if params.FIXED_KEY_OUTPUT and n_proposals >= params.FIXED_KEY_MIN_CHAPTERS:
+        try:
+            fixed_prompt = prompts.to_fixed_key_prompt(prompt, n_proposals)
+        except ValueError:
+            fixed_prompt = None                              # a template without the expected OUTPUT block
+        if fixed_prompt:
+            try:
+                obj = await _score_call(fixed_prompt, schemas.fixed_key_model(n_proposals))
+                return schemas.scores_from_fixed(obj, n_proposals)
+            except (ValidationError, ValueError) as e:
+                logger.info(f"[chapter_assign] fixed-key answer rejected ({type(e).__name__}) — score list instead")
+    return await _score_call(prompt)
 
 
 def _valid_scores(assignment: schemas.DocAssignment, n_proposals: int) -> list[dict]:
@@ -119,7 +136,7 @@ async def assign_one(
         assignment: Optional[schemas.DocAssignment] = None
         try:
             # dd-reduce-label = non-reasoning pool; <think> blocks waste 10-25s on JSON scoring.
-            assignment = await _score_call(prompt)
+            assignment = await _score_primary(prompt, len(proposals))
         except (ValidationError, ValueError) as e:
             # Reask once: the model responded but the output was malformed/invalid —
             # cheap self-repair by feeding the error back verbatim. Deliberately NOT

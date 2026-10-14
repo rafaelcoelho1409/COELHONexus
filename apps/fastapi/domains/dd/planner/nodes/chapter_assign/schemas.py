@@ -3,7 +3,9 @@
 response_format dict needed."""
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from functools import lru_cache
+
+from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator
 
 
 class ChapterScore(BaseModel):
@@ -42,3 +44,18 @@ class DocAssignment(BaseModel):
             "the chapters list shown in the prompt)."
         ),
     )
+
+
+@lru_cache(maxsize = 32)
+def fixed_key_model(n: int) -> type[BaseModel]:
+    """ONE required float per chapter (`c0` .. `c{n-1}`) instead of a list of {chapter_idx, confidence}.
+    On the 28-chapter langfuse plan the list came back cut short for 70% of pages (usually after 16 entries;
+    only 30% complete) while this form was complete for 100% of pages, 36% faster per call (10.8 s vs 16.8 s):
+    a missing key is a validation error the model cannot silently commit."""
+    fields = {f"c{i}": (float, Field(description = f"confidence 0.0-1.0 for chapter {i}")) for i in range(n)}
+    return create_model("FixedKeyAssignment", __config__ = ConfigDict(extra = "forbid"), **fields)
+
+
+def scores_from_fixed(obj: BaseModel, n: int) -> DocAssignment:
+    """The fixed-key answer as the usual DocAssignment (clamped by ChapterScore)."""
+    return DocAssignment(scores = [ChapterScore(chapter_idx = i, confidence = float(getattr(obj, f"c{i}"))) for i in range(n)])
