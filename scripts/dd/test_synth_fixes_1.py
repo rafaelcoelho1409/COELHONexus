@@ -59,4 +59,18 @@ d3 = SCH.LLMSectionDraft(heading="H", intro="x" * 70, subtopics=[sub("a" * 16, "
 assert SW.realign_api_subheadings(d3, vh, set(vh))[1] == 0                                  # the block with the API is already used: left alone
 assert SW.realign_api_subheadings(d, None, set())[1] == 0
 print("3 API subheading realigned to its block ok")
+# 4) a block printed in an earlier section is not printed again (while the section keeps 3 subtopics) -------------------------
+def sec(sid, hashes):
+    return SCH.Section(section_id=sid, heading=sid, intro="x" * 70, subtopics=[sub(h * 16, f"{sid} {h}") for h in hashes], citations=cites)
+secs = [sec("s3", "abcd"), sec("s4", "0123"), sec("s5", "4567")]
+secs[1].subtopics[0] = secs[1].subtopics[0].model_copy(update={"code_ref_hash": "a" * 16})       # s4 repeats a block of s3
+secs[2].subtopics[3] = secs[2].subtopics[3].model_copy(update={"code_ref_hash": "b" * 16})       # s5 repeats another
+out, n = SW.drop_repeated_code_blocks(secs)
+assert n == 2 and [len(x.subtopics) for x in out] == [4, 3, 3], (n, [len(x.subtopics) for x in out])
+assert all(st.code_ref_hash != "a" * 16 for st in out[1].subtopics) and all(st.code_ref_hash != "b" * 16 for st in out[2].subtopics)
+tight = [sec("s1", "abc"), sec("s2", "789")]
+tight[1].subtopics[0] = tight[1].subtopics[0].model_copy(update={"code_ref_hash": "a" * 16})
+out2, n2 = SW.drop_repeated_code_blocks(tight)
+assert n2 == 0 and len(out2[1].subtopics) == 3                                                # would leave < 3: kept
+print("4 repeated code blocks dropped ok")
 print("ALL OK")

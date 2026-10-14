@@ -981,6 +981,36 @@ def summarize_candidate(
     }
 
 
+def drop_repeated_code_blocks(
+    sections: list[schemas.Section],
+) -> tuple[list[schemas.Section], int]:
+    """Chapter-level last guard: a verbatim code block printed in an earlier section is not printed again. Later
+    subtopics repeating it are dropped while the section keeps SUBTOPICS_MIN of them (asyncio ch-01 third run: the
+    gather + to_thread snippet in s3 and s5, the wait_for snippet in s3 and s4 — the writer picks from a bank
+    that may share blocks when it is thin, and the cross-stage hint is only a prompt line). Returns (sections, n_dropped)."""
+    seen: set[str] = set()
+    out: list[schemas.Section] = []
+    n = 0
+    for sec in sections:
+        flagged = []
+        for st in sec.subtopics:
+            h = st.code_ref_hash
+            dup = bool(h) and getattr(st, "code_source", "verbatim") != "derived" and h in seen
+            flagged.append(dup)
+            if h and not dup:
+                seen.add(h)
+        budget = len(sec.subtopics) - params.SUBTOPICS_MIN
+        subs = []
+        for st, dup in zip(sec.subtopics, flagged):
+            if dup and budget > 0:
+                budget -= 1
+                n += 1
+                continue
+            subs.append(st)
+        out.append(sec.model_copy(update = {"subtopics": subs}) if len(subs) != len(sec.subtopics) else sec)
+    return out, n
+
+
 def hashes_claimed_elsewhere(per_section_index: dict[str, list[dict]], section_id: str) -> set[str]:
     """Vault hashes routed (after dedupe_vault_hashes_across_sections) to any section other than `section_id`."""
     return {

@@ -1338,6 +1338,9 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
         completed_sections[sid] for sid in section_order
         if sid in completed_sections
     ]
+    final_sections, n_repeated = domain.drop_repeated_code_blocks(final_sections)
+    if n_repeated:
+        logger.info(f"[sawc_write] {slug}/{chapter_id}: {n_repeated} subtopic(s) repeating a code block printed in an earlier section dropped")
 
     coverage = domain.compute_sawc_stats(
         sections = final_sections,
