@@ -209,6 +209,62 @@ def apply_foundational_prefix_rule(
     return fnd_in_order + rest, fnd_in_order
 
 
+def chapter_home_dirs(chapters: list[dict], key_dir: dict[str, tuple]) -> list[tuple | None]:
+    """The URL directory (first two path segments) holding the plurality of each chapter's pages, when it
+    holds >= HOME_DIR_MIN_PAGES of them and >= HOME_DIR_MIN_SHARE of the chapter; None for pinned
+    chapters (Foundations / appendix / gap / migration) and for chapters with no clear home. Chapters of
+    one home directory (langfuse: five evaluation chapters at positions 6, 9, 12, 13, 19) are siblings."""
+    corpus: dict[tuple, int] = {}
+    for ch in chapters:
+        for k in (ch or {}).get("member_doc_keys") or []:
+            d = tuple((key_dir.get(k) or ())[:2])
+            if len(d) == 2:
+                corpus[d] = corpus.get(d, 0) + 1
+    n_all = sum(len((ch or {}).get("member_doc_keys") or []) for ch in chapters) or 1
+    out: list[tuple | None] = []
+    for ch in chapters:
+        ch = ch or {}
+        if ch.get("role") in ("foundations", "appendix") or ch.get("origin") in ("foundations", "gap", "migration"):
+            out.append(None)
+            continue
+        keys = ch.get("member_doc_keys") or []
+        cnt: dict[tuple, int] = {}
+        for k in keys:
+            d = tuple((key_dir.get(k) or ())[:2])
+            if len(d) == 2:
+                cnt[d] = cnt.get(d, 0) + 1
+        if not cnt or not keys:
+            out.append(None)
+            continue
+        d, n = max(cnt.items(), key = lambda kv: kv[1])
+        informative = corpus.get(d, 0) <= params.HOME_DIR_MAX_CORPUS_SHARE * n_all     # a directory holding most of the site says nothing
+        out.append(d if informative and n >= params.HOME_DIR_MIN_PAGES and n >= params.HOME_DIR_MIN_SHARE * len(keys) else None)
+    return out
+
+
+def group_by_home_dir(order: list[int], chapters: list[dict], homes: list[tuple | None]) -> tuple[list[int], int]:
+    """Pull straggling siblings forward: for each home directory, a chapter that sits more than
+    HOME_DIR_MAX_GAP positions behind the previous chapter of the same directory moves to just after it.
+    Chapters that are already close, and every chapter without a home, keep the LLM's order (a hard
+    grouping reordered langfuse's learning path: SDK instrumentation ended up after 'debugging traces').
+    Returns (order, number of chapters whose position changed)."""
+    out = list(order)
+    fams: dict[tuple, list[int]] = {}
+    for i in order:
+        if homes[i]:
+            fams.setdefault(homes[i], []).append(i)
+    for h, ms in sorted(fams.items(), key = lambda kv: order.index(kv[1][0])):
+        if len(ms) < 2:
+            continue
+        prev = ms[0]
+        for m in ms[1:]:
+            a, b = out.index(prev), out.index(m)
+            if b - a > params.HOME_DIR_MAX_GAP:
+                out.insert(a + 1, out.pop(b))
+            prev = m
+    return out, sum(1 for a, b in zip(order, out) if a != b)
+
+
 def group_siblings(order: list[int], chapters: list[dict]) -> tuple[list[int], int]:
     """Chapters titled `<Family>: <part>` ("Prompt Management: Core Concepts", "Prompt Management:
     SDK ...") are parts of one family and stay contiguous, at the position of the family's earliest

@@ -164,6 +164,8 @@ async def assign_one(
             n_proposals = len(proposals)
             scores = _valid_scores(assignment, n_proposals)
             missing = domain.missing_chapter_idxs(scores, n_proposals)
+            if missing and domain.can_skip_reask(scores, missing):
+                missing = []                    # the model dropped one chapter; its best home is already confident
             if missing:
                 # The model scored only some chapters (~10% of docs on a 24-chapter plan; always a
                 # short prefix-like list). Complete vectors — the norm — never reach this branch.

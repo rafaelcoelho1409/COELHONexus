@@ -23,4 +23,6 @@ from __future__ import annotations
 # gave 0.0 everywhere (5 of 7), starving the gap/appendix handling; dense and sparse agreed on the best
 # chapter for only ~55% of pages while each agreed with itself ~90%. CONCURRENCY 12 kept: 48-doc
 # batches ran 20.8/23.3/29.0/38.3 docs/min at 4/8/6/12 slots on an idle Rotator.
-PROMPT_VERSION = "v9-partial-reask-2026-10-13"
+# v10 (2026-10-14): no reask when a vector misses only ONE chapter and its best score is >= 0.7 (langfuse, 28
+# chapters: 47 of 47 last-chapter reasks returned 0.0; the 64 reasks for a cut-off tail 16-27 stay: 76% found >= 0.3).
+PROMPT_VERSION = "v10-skip-last-chapter-reask-2026-10-14"

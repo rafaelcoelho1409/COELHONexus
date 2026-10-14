@@ -30,4 +30,5 @@ from __future__ import annotations
 # migration / upgrade / changelog chapters are pinned ahead of the appendix. Live test on the
 # round-4 plans: per-sample constraint satisfaction 11.4/12, 10.8/13, 26.2/28 vs 10.0, 8.4, 26.4.
 # v10 (2026-10-14): chapters titled `Family: part` are kept contiguous after the Borda vote (before the pins).
-PROMPT_VERSION = "v10-sibling-families-2026-10-14"
+# v11 (2026-10-14): chapters whose pages sit mostly in the same URL directory (2 segments) are kept contiguous after the Borda vote.
+PROMPT_VERSION = "v11-home-dir-siblings-2026-10-14"

@@ -134,6 +134,14 @@ CATALOG_MIN_PAGES = 8
 CATALOG_MAJORITY  = 0.5
 CATALOG_MAX_GIVE  = 0.4
 CATALOG_STRAY_CONF = 0.5     # only pages assigned to their current chapter below this move
+# Micro-chapters (< MICRO_MERGE_MAX_DOCS pages) join the chapter that owns their URL directory: at least
+# MICRO_MERGE_DIR_SHARE of their pages sit in that chapter's home directory (its plurality 2-segment
+# directory, >= 3 pages) and the result stays under MICRO_MERGE_MAX_SHARE of the corpus. The target's
+# description gains "Also covers: <micro title>" so its title never misdescribes the pages.
+MICRO_MERGE_MAX_DOCS = 4
+MICRO_MERGE_DIR_SHARE = 0.6
+MICRO_MERGE_MAX_SHARE = 0.30
+MICRO_MERGE_TRUNK_SHARE = 0.5     # a directory holding more of the corpus than this (asyncio: all of library/) is no 'home'
 SPLIT_NAME_SUMMARIES  = 3        # page summaries quoted per group in the naming prompt
 SPLIT_NAME_SUMMARY_CHARS = 170
 

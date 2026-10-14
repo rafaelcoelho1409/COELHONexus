@@ -52,6 +52,9 @@ TEMPERATURE = 0.0
 # default.
 TIMEOUT_S = 120.0
 MAX_REPAIR_ATTEMPTS = 1
+# A vector missing at most this many chapters whose best score is >= SKIP_REASK_MIN_BEST is accepted as is.
+SKIP_REASK_MAX_MISSING = 1
+SKIP_REASK_MIN_BEST = 0.7
 # One more try after a transient failure (Rotator 504 / timeout / 5xx / 429) before the
 # lexical fallback: 6 of the 8 fallbacks in the 2026-10-13 deepagents + asyncio runs were
 # 504s from a hung arm that the Rotator had benched by the time of the retry. A fallback

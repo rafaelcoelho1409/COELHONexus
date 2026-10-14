@@ -21,4 +21,5 @@ from __future__ import annotations
 # titled chapters under 5 pages are folded into Foundations.
 # v10 (2026-10-14): after the split, pages of a catalog directory (integrations/, providers/ ...) that sit in other
 # chapters move to the chapter holding most of that directory; split groups are named with their URL sections.
-PROMPT_VERSION = "v10-catalog-harmonize-2026-10-14"
+# v11 (2026-10-14): chapters under 4 pages join the chapter that owns their URL directory (description gains "Also covers: ...").
+PROMPT_VERSION = "v11-micro-merge-2026-10-14"

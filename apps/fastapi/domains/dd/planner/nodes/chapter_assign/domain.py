@@ -15,6 +15,16 @@ def missing_chapter_idxs(scores: list[dict], n_proposals: int) -> list[int]:
     return [i for i in range(n_proposals) if i not in seen]
 
 
+def can_skip_reask(scores: list[dict], missing: list[int]) -> bool:
+    """A vector missing only a chapter or two whose best score is already confident needs no reask:
+    on the 28-chapter langfuse plan 47 of 47 reasks for the single LAST chapter came back 0.0 (15% of
+    all assign calls), while the 64 reasks for a cut-off tail (chapters 16-27) found a >= 0.3 score
+    76% of the time and stay."""
+    if not scores or len(missing) > params.SKIP_REASK_MAX_MISSING:
+        return False
+    return max(float(s.get("confidence") or 0.0) for s in scores) >= params.SKIP_REASK_MIN_BEST
+
+
 def fallback_assign_scores(
     doc_summary: str, doc_terms: list[str], proposals: list[dict],
     source_key: str = "",

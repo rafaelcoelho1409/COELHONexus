@@ -332,6 +332,13 @@ async def chapter_select_run(state: domains.dd.planner.state.PlannerState) -> di
             logger.info(f"[chapter_select] {slug}: catalog directories pulled together {cat_stats}")
     except Exception as e:
         logger.warning(f"[chapter_select] {slug}: catalog harmonization skipped ({type(e).__name__}: {e})")
+    try:
+        out_chapters, mm_stats = domain.merge_micro_chapters(out_chapters, domain.page_dirs(entries))
+        consolidation = {**consolidation, **mm_stats}
+        if mm_stats["n_micro_merged"]:
+            logger.info(f"[chapter_select] {slug}: micro-chapters merged into their directory's chapter {mm_stats}")
+    except Exception as e:
+        logger.warning(f"[chapter_select] {slug}: micro-chapter merge skipped ({type(e).__name__}: {e})")
     if split_stats["splits"]:
         logger.info(f"[chapter_select] {slug}: oversize split {split_stats['splits']}")
     doc_to_chapter = {k: i for i, c in enumerate(out_chapters) for k in c["member_doc_keys"]}

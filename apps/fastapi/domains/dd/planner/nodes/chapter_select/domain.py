@@ -768,6 +768,57 @@ def harmonize_catalog_dirs(
     return _renumber(out), {"n_catalog_rehomed": len(move), "catalog_dirs": dirs_done}
 
 
+def _home_dir(chapter: dict, key_dir: dict[str, tuple]) -> tuple | None:
+    cnt = Counter(tuple((key_dir.get(k) or ())[:2]) for k in chapter["member_doc_keys"])
+    cnt.pop((), None)
+    cnt = Counter({d: n for d, n in cnt.items() if len(d) == 2})
+    if not cnt:
+        return None
+    d, n = cnt.most_common(1)[0]
+    return d if n >= 3 else None
+
+
+def merge_micro_chapters(chapters: list[dict], key_dir: dict[str, tuple]) -> tuple[list[dict], dict]:
+    """Merge a chapter of fewer than MICRO_MERGE_MAX_DOCS pages into the chapter that owns the directory
+    most of its pages live in (never Foundations / migration / appendix / gap, never a split part).
+    Pages that fit no chapter's directory stay in their own small chapter. Returns
+    (chapters, {"n_micro_merged": n, "micro_merged": [titles]})."""
+    total = sum(len(c["member_doc_keys"]) for c in chapters)
+    locked = lambda c: c.get("origin") in ("foundations", "migration", "gap", "split") or c.get("role") in ("foundations", "appendix")
+    corpus_dirs = Counter(tuple((key_dir.get(k) or ())[:2]) for c in chapters for k in c["member_doc_keys"])
+    trunk = {d for d, n in corpus_dirs.items() if n > params.MICRO_MERGE_TRUNK_SHARE * total}      # the site's trunk says nothing
+    homes = [None if locked(c) else _home_dir(c, key_dir) for c in chapters]
+    homes = [None if h in trunk else h for h in homes]
+    merged: dict[int, int] = {}
+    size = [len(c["member_doc_keys"]) for c in chapters]
+    for i, c in enumerate(chapters):
+        if locked(c) or size[i] >= params.MICRO_MERGE_MAX_DOCS or not c["member_doc_keys"]:
+            continue
+        cnt = Counter(tuple((key_dir.get(k) or ())[:2]) for k in c["member_doc_keys"])
+        best, best_n = None, 0
+        for j, h in enumerate(homes):
+            if j == i or h is None or j in merged or size[j] < params.MICRO_MERGE_MAX_DOCS:
+                continue
+            if cnt.get(h, 0) > best_n and size[j] + size[i] <= params.MICRO_MERGE_MAX_SHARE * total:
+                best, best_n = j, cnt[h]
+        if best is not None and best_n >= params.MICRO_MERGE_DIR_SHARE * len(c["member_doc_keys"]):
+            merged[i] = best
+            size[best] += size[i]
+    if not merged:
+        return chapters, {"n_micro_merged": 0, "micro_merged": []}
+    out = []
+    for i, c in enumerate(chapters):
+        if i in merged:
+            continue
+        extra = [k for m, t in merged.items() if t == i for k in chapters[m]["member_doc_keys"]]
+        titles = [chapters[m]["title"] for m, t in merged.items() if t == i]
+        c2 = {**c, "member_doc_keys": c["member_doc_keys"] + extra}
+        if titles:
+            c2["description"] = ((c.get("description") or "").rstrip() + " Also covers: " + "; ".join(titles) + ".").strip()
+        out.append(c2)
+    return _renumber(out), {"n_micro_merged": len(merged), "micro_merged": [chapters[m]["title"] for m in merged]}
+
+
 def fold_micro_chapters(chapters: list[dict]) -> tuple[list[dict], dict]:
     """Chapters of fewer than MICRO_MAX_DOCS pages whose title names orientation / support material
     (a proposed "Foundations", "Quickstart", "Troubleshooting and FAQ" ...) belong in the Foundations

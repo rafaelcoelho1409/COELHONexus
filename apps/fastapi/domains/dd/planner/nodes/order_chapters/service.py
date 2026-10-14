@@ -205,9 +205,11 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
 
     # Source order: where each chapter's pages sit in the docs' own navigation.
     source_ranking: list[int] | None = None
+    key_dir: dict[str, tuple] = {}
     try:
         _m = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)
         _entries = (_m or {}).get("entries") or []
+        key_dir = domains.dd.planner.nodes.chapter_select.domain.page_dirs(_entries)
         if domain.source_order_informative(_entries):
             _idx = {e["key"]: int(e.get("idx") or 0) for e in _entries if e.get("key")}
             source_ranking = domain.source_order_ranking(chapters, _idx)
@@ -332,6 +334,10 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
     final_order, n_sibling_moved = domain.group_siblings(final_order, chapters)
     if n_sibling_moved:
         logger.info(f"[order_chapters] {slug}: kept sibling chapters (`Family: part`) together ({n_sibling_moved} moved)")
+    if key_dir:
+        final_order, n_home_moved = domain.group_by_home_dir(final_order, chapters, domain.chapter_home_dirs(chapters, key_dir))
+        if n_home_moved:
+            logger.info(f"[order_chapters] {slug}: kept chapters of the same page directory together ({n_home_moved} moved)")
     # The Foundations chapter (overview + cross-cutting pages) opens the book, ahead
     # of install/setup chapters.
     final_order, foundations_idx = domain.pin_foundations_first(final_order, chapters)

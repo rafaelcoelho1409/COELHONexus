@@ -77,3 +77,10 @@ FOUNDATIONAL_KEYWORDS = (
 # appended in their current order); fewer is noise and goes to the re-ask.
 TITLE_MATCH_MIN_SHARE = 0.8
 TITLE_MATCH_CUTOFF    = 0.82   # difflib similarity for a title the model altered slightly
+
+# A chapter's "home directory" (see domain.chapter_home_dirs): the plurality URL directory (2 segments)
+# of its pages, with at least this many pages and this share of the chapter.
+HOME_DIR_MIN_PAGES = 3
+HOME_DIR_MIN_SHARE = 0.4
+HOME_DIR_MAX_CORPUS_SHARE = 0.5   # a directory holding more of the corpus than this is the site's trunk, not a home
+HOME_DIR_MAX_GAP = 2   # chapters of one directory this many positions apart or fewer are left where the vote put them
