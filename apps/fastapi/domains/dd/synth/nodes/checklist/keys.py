@@ -12,6 +12,11 @@ def latest_blob_key(slug: str, chapter_id: str) -> str:
     return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/checklist-latest.json"
 
 
+def best_blob_key(slug: str, chapter_id: str) -> str:
+    """The evaluation of the best-seen iteration (the one render ships); checklist-latest.json is whatever ran last."""
+    return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/checklist-best.json"
+
+
 def sawc_latest_key(slug: str, chapter_id: str) -> str:
     return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/sawc-latest.json"
 

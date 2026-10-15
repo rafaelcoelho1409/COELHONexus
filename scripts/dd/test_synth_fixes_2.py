@@ -284,4 +284,22 @@ sub14, _ = SW.parse_source_topup({"subtopics": [{"subheading": "Platform\u2011Sp
                                   sources=[("k_two", "get_event_loop returns the current loop", ["asyncio.get_event_loop() returns the current event loop for the thread"])], existing_subheads=set(), max_new=2)
 assert sub14 and sub14[0].subheading == "Platform-Specific Limitations" and "non-blocking" in sub14[0].explanation        # the top-up path too
 print("14 typography normalized ok")
+
+# 15) the saved evaluation is the shipped iteration's --------------------------------------------------------------------------------------------------
+RS = domains.dd.synth.nodes.render.service
+CKK = domains.dd.synth.nodes.checklist.keys
+class FakeMinio:
+    def __init__(self, files): self.files = dict(files)
+    async def exists(self, k): return k in self.files
+    async def read_text(self, k): return self.files[k]
+    async def write(self, k, v, content_type=None): self.files[k] = v
+mn = FakeMinio({CKK.latest_blob_key("a", "c"): "LAST ITERATION", CKK.best_blob_key("a", "c"): "BEST ITERATION"})
+assert asyncio.run(RS._publish_best_checklist(mn, "a", "c")) is True and mn.files[CKK.latest_blob_key("a", "c")] == "BEST ITERATION"
+mn2 = FakeMinio({CKK.latest_blob_key("a", "c"): "LAST ITERATION"})
+assert asyncio.run(RS._publish_best_checklist(mn2, "a", "c")) is False and mn2.files[CKK.latest_blob_key("a", "c")] == "LAST ITERATION"   # no best blob: untouched
+class Broken(FakeMinio):
+    async def write(self, k, v, content_type=None): raise RuntimeError("minio down")
+assert asyncio.run(RS._publish_best_checklist(Broken({CKK.best_blob_key("a", "c"): "B"}), "a", "c")) is False                              # fail-soft
+assert CKK.best_blob_key("a", "c").endswith("a/c/checklist-best.json")
+print("15 shipped evaluation published ok")
 print("ALL OK")

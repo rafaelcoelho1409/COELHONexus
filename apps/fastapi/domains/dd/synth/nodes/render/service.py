@@ -259,6 +259,22 @@ async def _verify_cache_hit_artifacts(
     return True
 
 
+async def _publish_best_checklist(minio, slug: str, chapter_id: str) -> bool:
+    """checklist-latest.json is the evaluation of whatever iteration ran LAST, but render ships the best-seen one (asyncio ch-05: the page
+    showed 15/17 with "all sections present" failing for a README that has all four). Once the chapter is rendered nothing re-reads the
+    pointer for feedback, so it is replaced by the shipped iteration's evaluation. Fail-soft."""
+    ck = domains.dd.synth.nodes.checklist.keys
+    try:
+        best_key = ck.best_blob_key(slug, chapter_id)
+        if not await minio.exists(best_key):
+            return False
+        await minio.write(ck.latest_blob_key(slug, chapter_id), await minio.read_text(best_key), content_type = "application/json")
+        return True
+    except Exception as e:
+        logger.warning(f"[render_audit_write] {slug}/{chapter_id}: could not publish the best-seen evaluation: {type(e).__name__}: {e}")
+        return False
+
+
 async def render_audit_write_run(state: domains.dd.synth.state.SynthState) -> dict:
     """Render + audit + persist for one chapter. The render/audit/persist
     path itself is deterministic (zero LLM calls); the vault-normalize
@@ -647,6 +663,8 @@ async def render_audit_write_run(state: domains.dd.synth.state.SynthState) -> di
         f"({sum(a.size_bytes for a in artifacts)} bytes); "
         f"{elapsed} ms"
     )
+    if best_seen_path:
+        await _publish_best_checklist(minio, slug, chapter_id)
     state_status = "audit_failed" if not audit.audit_passed else None
     state_patch = {"chapter_path": readme_key, "chapter_stats": stats}
     if state_status:

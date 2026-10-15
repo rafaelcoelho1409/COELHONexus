@@ -1268,6 +1268,13 @@ async def checklist_eval_run(state: domains.dd.synth.state.SynthState) -> dict:
             ),
             timeout = params.TIMEOUT_S_PERSIST_WRITE,
         )
+        if is_better:
+            await asyncio.wait_for(
+                minio.write(
+                    keys.best_blob_key(slug, chapter_id), blob_bytes, content_type = "application/json",
+                ),
+                timeout = params.TIMEOUT_S_PERSIST_WRITE,
+            )
     except asyncio.TimeoutError:
         logger.warning(
             f"[checklist_eval] {slug}/{chapter_id}: evaluation persist "
