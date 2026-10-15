@@ -158,6 +158,56 @@ def merge_overlapping_sections(
     return retagged, merged_map
 
 
+_WORD_RE = re.compile(r"[a-z][a-z0-9_]{2,}")
+
+
+def _words(text: str) -> set[str]:
+    return set(_WORD_RE.findall((text or "").lower()))
+
+
+def route_unrouted_sources(
+    per_source: list[schemas.SourceDigest],
+    outline_sections: list[dict],
+    bodies: dict[str, str],
+) -> tuple[list[schemas.SourceDigest], list[str]]:
+    """Give every source the digest routed to NO section a contribution to the outline section its own title and summary
+    resemble most (words weighted by how few sections use them; earliest on a tie), with all of its code blocks. The planner placed the page in this chapter, so dropping it
+    here silently loses its facts and code (asyncio ch-05: a weak digest model returned `contributes_to: []` for the "Developing
+    with asyncio" page; its 22 code blocks never reached a section and the chapter printed 13 of 35). Returns (per_source,
+    source_keys that were routed)."""
+    if not outline_sections:
+        return per_source, []
+    sec_words = [(s.get("section_id"), _words(f"{s.get('heading', '')} {s.get('description', '')}")) for s in outline_sections]
+    out: list[schemas.SourceDigest] = []
+    routed: list[str] = []
+    for src in per_source:
+        if src.contributes_to:
+            out.append(src)
+            continue
+        src_words = _words(f"{src.source_title} {src.overall_summary}")
+        # a word in few sections tells them apart (blocking, executor), one in every section does not (event, loop)
+        best = max(range(len(sec_words)), key = lambda i: (
+            sum(1 / sum(w in ws for _, ws in sec_words) for w in src_words & sec_words[i][1]), -i,
+        ))
+        summary = " ".join(src.overall_summary.split())
+        facts = [
+            f.strip() for f in re.split(r"(?<=[.!?])\s+", summary)
+            if params.KEY_FACT_MIN_CHARS <= len(f.strip()) <= params.KEY_FACT_MAX_CHARS
+        ][:params.MAX_KEY_FACTS_PER_CONTRIB] or [summary[:params.KEY_FACT_MAX_CHARS]]
+        try:
+            contrib = schemas.SectionContribution(
+                section_id = str(sec_words[best][0]), source_key = src.source_key, relevance = "supporting",
+                summary = summary[:params.SUMMARY_MAX_CHARS], key_facts = facts,
+                code_refs = extract_vault_hashes(bodies.get(src.source_key) or ""),
+            )
+        except ValidationError:
+            out.append(src)
+            continue
+        out.append(src.model_copy(update = {"contributes_to": [contrib], "unassigned_code_refs": []}))
+        routed.append(src.source_key)
+    return out, routed
+
+
 def compute_coverage_stats(
     per_source: list[schemas.SourceDigest],
     per_section: dict[str, list[schemas.SectionContribution]],

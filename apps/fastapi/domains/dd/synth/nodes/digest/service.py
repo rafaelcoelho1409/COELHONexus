@@ -605,6 +605,13 @@ async def digest_construct_run(state: domains.dd.synth.state.SynthState) -> dict
 
     section_ids = [s["section_id"] for s in outline_sections]
 
+    per_source, rerouted = domain.route_unrouted_sources(per_source, outline_sections, dict(pairs))
+    if rerouted:
+        logger.info(
+            f"[digest_construct] {slug}/{chapter_id}: {len(rerouted)} source(s) the digest routed to no section were "
+            f"placed by title/summary overlap: {[k.rsplit('/', 1)[-1][:40] for k in rerouted]}"
+        )
+
     per_source, merged_sections = domain.merge_overlapping_sections(
         per_source, outline_sections,
     )

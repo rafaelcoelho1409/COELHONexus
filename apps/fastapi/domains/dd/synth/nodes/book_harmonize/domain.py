@@ -1,10 +1,11 @@
 """book_harmonize — pure helpers (manifest hash, sibling-claim selection,
 canonical-term formatter, LLM-response JSON extraction)."""
 from __future__ import annotations
-from . import patterns, versions
+from . import params, patterns, versions
 
 import hashlib
 import json
+import re
 from collections import Counter
 from typing import Optional
 
@@ -17,6 +18,67 @@ def code_blocks_preserved(original: str, patched: str) -> bool:
     before = Counter(m.group(0) for m in patterns.FENCED_BLOCK_RE.finditer(original or ""))
     after = Counter(m.group(0) for m in patterns.FENCED_BLOCK_RE.finditer(patched or ""))
     return not (before - after)
+
+
+def _norm(text: object) -> str:
+    return " ".join(re.findall(r"[a-z0-9_]+", str(text or "").lower()))
+
+
+def validate_violations(
+    violations: list, *, this_id: str, this_prose: str, claims_by_id: dict[str, list[str]], canonical_terms: list[dict],
+) -> tuple[list[dict], list[str]]:
+    """Keep only violations that are grounded: they quote this chapter verbatim and either name a sibling chapter whose extracted
+    claims contain the conflicting claim, or (definition drift / terminology) name a canonical term. Returns (kept, why dropped)."""
+    prose = _norm(this_prose)
+    terms = [t for t in (_norm(x.get("term")) for x in canonical_terms or []) if t]
+    kept: list[dict] = []
+    dropped: list[str] = []
+    for v in violations or []:
+        if not isinstance(v, dict):
+            continue
+        kind = str(v.get("kind") or "issue").lower()
+        quote = _norm(v.get("this_chapter_says"))
+        if len(quote.split()) < params.MIN_QUOTE_WORDS or quote not in prose:
+            dropped.append(f"{kind}: the quoted words are not in the chapter")
+            continue
+        sib = str(v.get("sibling_chapter") or "").strip()
+        sib_id = next((c for c in claims_by_id if c != this_id and len(sib) >= 3 and (c == sib or c.startswith(sib) or sib in c)), None)
+        claim = set(_norm(v.get("sibling_claim")).split())
+        grounded = False
+        if sib_id and len(claim) >= 3:
+            known = set(_norm(" ".join(claims_by_id.get(sib_id) or [])).split())
+            grounded = len(claim & known) >= params.CLAIM_MATCH_SHARE * len(claim)
+        if not grounded and kind in ("definition_drift", "terminology_divergence"):
+            blob = f" {_norm(str(v.get('sibling_claim') or '') + ' ' + str(v.get('should_say') or ''))} "
+            grounded = any(f" {t} " in blob for t in terms)
+        if not grounded:
+            dropped.append(f"{kind}: no sibling claim or canonical term backs it")
+            continue
+        kept.append(v)
+    return kept, dropped
+
+
+def editable_paragraph(par: str) -> bool:
+    """A prose paragraph (not a heading, list, table, fence or comment)."""
+    p = par.strip()
+    return bool(p) and not p.startswith(("```", "~~~", "#", "- ", "* ", "|", ">", "<!--", "!["))
+
+
+def paragraph_for_quote(paragraphs: list[str], quote: str) -> Optional[int]:
+    """Index of the first editable paragraph that contains the quoted words."""
+    q = _norm(quote)
+    for i, par in enumerate(paragraphs):
+        if editable_paragraph(par) and q and q in _norm(par):
+            return i
+    return None
+
+
+def paragraph_patch_ok(original: str, edited: Optional[str]) -> bool:
+    """The edited paragraph is non-empty prose of about the original's length with no code fence."""
+    if not edited or not edited.strip() or "```" in edited or "~~~" in edited:
+        return False
+    ratio = len(edited.strip()) / max(1, len(original.strip()))
+    return params.PATCH_PARAGRAPH_MIN_RATIO <= ratio <= params.PATCH_PARAGRAPH_MAX_RATIO
 
 
 def compute_harmonize_manifest_hash(chapters: list[dict]) -> str:

@@ -28,7 +28,9 @@ CHECKLIST_SCHEMA_VERSION = "1.0"
 # main-call-failure path a few lines above it.
 # v9 (2026-10-15): two more deterministic gates (code_coverage, code_prose_alignment); best-seen prefers an iteration whose
 # deterministic gates all pass.
-CHECKLIST_PROMPT_VERSION = "v9-coverage-alignment-gates-2026-10-15"
+# v10 (2026-10-15): code_density_appropriate scales its per-section floor to the routed blocks the chapter has (asyncio ch-04 / ch-09:
+# 4 and 1 blocks, 1.5 / 0.33 per section against a fixed 2.0).
+CHECKLIST_PROMPT_VERSION = "v10-density-scaled-2026-10-15"
 
 # CoCoA two-stage alignment check + atomic-claim grounding — independently
 # versioned from CHECKLIST_PROMPT_VERSION (own MinIO cache keys, see keys.py).

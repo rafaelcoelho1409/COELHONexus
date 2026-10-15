@@ -31,4 +31,7 @@ BOOK_HARMONIZE_SCHEMA_VERSION = "1.0"
 # a single bare {"name": ..., "definition": ...} term object. Recovered
 # as one term instead of discarded, same "recover what you can" spirit
 # as v4/v5's fixes.
-BOOK_HARMONIZE_PROMPT_VERSION = "v6-bare-term-recovery-2026-09-08"
+# v7 (2026-10-15): a violation must quote the chapter verbatim and name a real sibling claim or canonical term, or it is dropped; a kept
+# one is fixed by editing only the paragraph that holds the quote (asyncio study: 2 of 2 patches were ungrounded corrections from the
+# model's own knowledge, each applied by rewriting the whole chapter).
+BOOK_HARMONIZE_PROMPT_VERSION = "v7-grounded-paragraph-patch-2026-10-15"

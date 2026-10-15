@@ -284,6 +284,14 @@ def check_code_density_appropriate(sawc: dict) -> schemas.CriterionResult:
             feedback = "",
         )
 
+    # A chapter whose sources hold only a handful of code blocks cannot reach the per-section floor however well it is
+    # written (asyncio "Subprocess": 4 blocks over 2 sections, 3 printed; "Policies": 1 block over 3 sections). The floor
+    # scales to the share of the routed blocks the chapter is expected to print; absent the signal it stays as is.
+    routed = sawc.get("_routed_hashes")
+    floor = params.MIN_AVG_CODE_REFS_PER_SECTION
+    if routed is not None:
+        floor = min(floor, params.COVERAGE_MIN_CODE * len(set(routed)) / len(sections))
+
     n_refs_per_section: list[tuple[str, int]] = []
     thin_coverage: list[str] = []
     n_total_refs = 0
@@ -300,7 +308,7 @@ def check_code_density_appropriate(sawc: dict) -> schemas.CriterionResult:
                 thin_coverage.append(f"{sid}({n_refs}/{n_allowed})")
     avg = n_total_refs / len(sections)
     passed = (
-        avg >= params.MIN_AVG_CODE_REFS_PER_SECTION
+        avg >= floor
         and len(thin_coverage) <= len(sections) // 2   # tolerate 50% thin
     )
     if passed:
@@ -309,7 +317,7 @@ def check_code_density_appropriate(sawc: dict) -> schemas.CriterionResult:
         zeros = [sid for sid, n in n_refs_per_section if n == 0]
         feedback = (
             f"code density too low: avg {avg:.2f} subtopics/section "
-            f"(floor {params.MIN_AVG_CODE_REFS_PER_SECTION}); "
+            f"(floor {floor:.2f}); "
             f"{len(zeros)} sections with 0 code subtopics"
         )
         if zeros[:5]:

@@ -6,6 +6,7 @@ from . import domain, params, prompts
 import asyncio
 import logging
 import random
+import re
 import time
 from typing import Optional
 
@@ -110,11 +111,19 @@ async def harmonize_book(
     n_patched = 0
     patch_tasks = []
     for ch, det in zip(chapters, detections):
-        violations = (det or {}).get("violations", []) or []
+        raw_violations = (det or {}).get("violations", []) or []
+        violations, dropped = domain.validate_violations(
+            raw_violations, this_id = ch["chapter_id"], this_prose = ch["prose"],
+            claims_by_id = claims_by_id, canonical_terms = canonical_terms,
+        )
+        if dropped:
+            logger.info(f"[book_harmonize] {ch['chapter_id']}: dropped {len(dropped)} ungrounded violation(s): {dropped}")
         if not violations:
             patches.append({
                 "chapter_id": ch["chapter_id"],
                 "n_violations": 0,
+                "n_violations_raw": len(raw_violations),
+                "dropped": dropped,
                 "patched": False,
                 "new_prose": None,
                 "summary": (det or {}).get("summary", ""),
@@ -137,7 +146,7 @@ async def harmonize_book(
         ])
         for (ch, det, violations), patched_prose in zip(patch_tasks, patched_results):
             original = domains.dd.synth.nodes.render.domain.strip_outer_wrapper_fences(ch["prose"])
-            ok = bool(patched_prose and len(patched_prose) > 0.5 * len(ch["prose"]))
+            ok = bool(patched_prose and len(patched_prose) > 0.9 * len(original))
             if ok and not domain.code_blocks_preserved(original, patched_prose):
                 logger.info(
                     f"[book_harmonize] {ch['chapter_id']}: patch rejected — it "
@@ -151,6 +160,7 @@ async def harmonize_book(
                 "new_prose": patched_prose if ok else None,
                 "summary": (det or {}).get("summary", ""),
                 "violations": violations,
+                "n_violations_raw": len((det or {}).get("violations") or []),
             })
             if ok:
                 n_patched += 1
@@ -329,39 +339,44 @@ async def _patch_chapter(
     violations: list[dict],
     canonical_terms: list[dict],
 ) -> Optional[str]:
-    """Run the patch LLM call. Returns None on failure or empty output."""
-    async with sem:
-        try:
-            violations_lines = []
-            for v in violations[:12]:
-                kind = v.get("kind", "issue")
-                says = (v.get("this_chapter_says") or "")[:200]
-                should = (v.get("should_say") or "")[:200]
-                violations_lines.append(
-                    f"  - [{kind}] this chapter: {says!r} → should: {should!r}"
+    """Fix each violation by editing only the paragraph that holds its quote. Returns the chapter with the edited paragraphs, or
+    None when nothing was changed."""
+    original = domains.dd.synth.nodes.render.domain.strip_outer_wrapper_fences(original_prose)
+    parts = re.split(r"(\n[ \t]*\n)", original)          # paragraphs at even indexes, separators at odd ones
+    paragraphs = parts[0::2]
+    by_par: dict[int, list[dict]] = {}
+    for v in violations[:12]:
+        i = domain.paragraph_for_quote(paragraphs, v.get("this_chapter_says") or "")
+        if i is not None:
+            by_par.setdefault(i, []).append(v)
+    canonical = domain.format_canonical_terms(canonical_terms)
+
+    async def _edit(i: int, vs: list[dict]) -> tuple[int, Optional[str]]:
+        async with sem:
+            try:
+                block = "\n".join(
+                    f"  - [{v.get('kind', 'issue')}] this paragraph: {str(v.get('this_chapter_says') or '')[:200]!r} "
+                    f"-> should: {str(v.get('should_say') or '')[:200]!r}" for v in vs
                 )
-            prompt = prompts.build_patch_prompt(
-                chapter_id=chapter_id,
-                framework=framework_name,
-                violations_block="\n".join(violations_lines),
-                canonical_terms=domain.format_canonical_terms(canonical_terms),
-                original_prose=original_prose[:params.PROSE_CHARS_FOR_PATCH],
-            )
-            raw, err = await _call_with_retry(
-                prompt, max_tokens=params.PATCH_MAX_TOKENS, temperature=0.1,
-                timeout_s=params.PATCH_TIMEOUT_S,
-            )
-            if err is not None:
-                raise err
-            # The patch LLM often returns the chapter wrapped in ```markdown;
-            # left in, the whole README renders as one code block.
-            patched = domains.dd.synth.nodes.render.domain.strip_outer_wrapper_fences(
-                (raw or "").strip(),
-            )
-            return patched.strip() or None
-        except Exception as e:
-            logger.warning(
-                f"[book_harmonize] patch failed for {chapter_id}: "
-                f"{type(e).__name__}: {e}"
-            )
-            return None
+                raw, err = await _call_with_retry(
+                    prompts.build_patch_paragraph_prompt(
+                        chapter_id = chapter_id, framework = framework_name, paragraph = paragraphs[i],
+                        violations_block = block, canonical_terms = canonical,
+                    ),
+                    max_tokens = params.PATCH_PARAGRAPH_MAX_TOKENS, temperature = 0.0, timeout_s = params.PATCH_PARAGRAPH_TIMEOUT_S,
+                )
+                if err is not None:
+                    raise err
+                edited = (raw or "").strip()
+                return i, edited if domain.paragraph_patch_ok(paragraphs[i], edited) else None
+            except Exception as e:
+                logger.warning(f"[book_harmonize] patch failed for {chapter_id} paragraph {i}: {type(e).__name__}: {e}")
+                return i, None
+
+    edits = dict(await asyncio.gather(*[_edit(i, vs) for i, vs in by_par.items()]))
+    changed = {i: e for i, e in edits.items() if e and e != paragraphs[i].strip()}
+    if not changed:
+        return None
+    for i, e in changed.items():
+        parts[2 * i] = e
+    return "".join(parts)

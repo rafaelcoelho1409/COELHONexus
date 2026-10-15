@@ -100,7 +100,9 @@ def build_digest_prompt(
         f"section gets 'primary' and others may not appear at all.\n"
         f"- If the source is a reference / catalog covering multiple "
         f"sections, expect 3-5 'supporting' contributions.\n"
-        f"- 'tangential' should be rare.\n\n"
+        f"- 'tangential' should be rare.\n"
+        f"- Every source in this chapter was placed here by the planner: never return an empty contributes_to. When the "
+        f"fit is loose, route the source to the closest section as 'supporting' together with its code blocks.\n\n"
 
         f"Respond ONLY with valid JSON matching the schema above. NO "
         f"prose commentary, NO markdown wrapping, NO explanation."

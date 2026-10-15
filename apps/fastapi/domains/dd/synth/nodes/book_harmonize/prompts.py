@@ -82,9 +82,14 @@ _DETECT_PROMPT = """You are auditing chapter {chapter_id} of a distilled technic
 {framework} for cross-chapter consistency issues.
 
 Inspect for THREE classes of violations:
-  1. CONTRADICTION — a claim in this chapter directly contradicts a claim in a sibling chapter
-  2. DEFINITION_DRIFT — this chapter uses a term differently than the canonical definition
-  3. TERMINOLOGY_DIVERGENCE — this chapter uses one name for a concept that sibling chapters call something else
+  1. CONTRADICTION — a claim in this chapter CANNOT be true together with a claim in a sibling chapter
+  2. DEFINITION_DRIFT — this chapter defines a term from the canonical terminology bank differently from its canonical definition
+  3. TERMINOLOGY_DIVERGENCE — this chapter uses one name for a concept that the canonical terminology bank or the sibling chapters call something else
+
+Report ONLY conflicts with the sibling claims and the canonical terminology listed below. Do NOT correct this chapter from
+anything you know outside those lists: the chapter is written from the documentation, and a statement the documentation
+makes is not an error. A difference in level of detail, scope or emphasis is NOT a contradiction — both statements can be true.
+When in doubt, report nothing.
 
 --- THIS CHAPTER'S PROSE (truncated) ---
 {this_prose}
@@ -106,14 +111,52 @@ Return strict JSON:
   "has_violations": true | false,
   "violations": [
     {{"kind": "contradiction" | "definition_drift" | "terminology_divergence",
-      "this_chapter_says": "short quote or paraphrase",
+      "this_chapter_says": "EXACT words copied from this chapter's prose (a verbatim phrase or sentence)",
       "should_say": "the canonical or sibling-chapter version",
-      "evidence": "short pointer to where in this chapter"}}
+      "sibling_chapter": "the chapter id shown in brackets in the sibling claims above (empty for a canonical-term issue)",
+      "sibling_claim": "the sibling claim, or the canonical term, this conflicts with — copied from the lists above"}}
   ],
   "summary": "1-sentence overall verdict"
 }}
 
 If no violations found, return {{"has_violations": false, "violations": [], "summary": "..."}}."""
+
+
+_PATCH_PARAGRAPH_PROMPT = """You are making a minimal edit to ONE paragraph of chapter {chapter_id} of a distilled technical
+book about {framework}, to resolve the cross-chapter consistency violations flagged below.
+
+Change only the flagged wording. Keep every other word, identifier, file name and number exactly as written; add no new
+facts and no new sentences beyond what the fix needs.
+
+VIOLATIONS TO FIX:
+{violations_block}
+
+CANONICAL TERMINOLOGY (use these definitions/names):
+{canonical_terms}
+
+--- PARAGRAPH ---
+{paragraph}
+--- END ---
+
+Output: the edited paragraph only. NO commentary, NO quotes around it, NO markdown fences."""
+
+
+@with_langfuse_override("dd.synth.book_harmonize.patch-paragraph")
+def build_patch_paragraph_prompt(
+    *,
+    canonical_terms: str,
+    chapter_id: str,
+    framework: str,
+    paragraph: str,
+    violations_block: str,
+) -> str:
+    return _PATCH_PARAGRAPH_PROMPT.format(
+        canonical_terms = canonical_terms,
+        chapter_id = chapter_id,
+        framework = framework,
+        paragraph = paragraph,
+        violations_block = violations_block,
+    )
 
 
 @with_langfuse_override("dd.synth.book_harmonize.detect")

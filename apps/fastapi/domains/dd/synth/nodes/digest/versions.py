@@ -3,4 +3,6 @@ from __future__ import annotations
 
 
 DIGEST_SCHEMA_VERSION = "1.1"
-DIGEST_PROMPT_VERSION = "v6-contribution-source-key-2026-09-05"
+# v7 (2026-10-15): the prompt says never to return an empty contributes_to, and a source still routed to no section is placed by
+# title/summary overlap with all of its code blocks (asyncio ch-05: 3 sources and 22 code blocks lost to a weak digest model).
+DIGEST_PROMPT_VERSION = "v7-route-every-source-2026-10-15"

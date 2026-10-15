@@ -493,11 +493,12 @@ def build_source_topup_prompt(
         f"'{section_heading}'). {section_description}\n\n"
         f"== ALREADY COVERED (do not repeat these topics) ==\n{covered}\n\n"
         f"== DOC PAGES THE SECTION HAS NOT USED YET (no code is available for them) ==\n{blocks}\n\n"
-        f"Write at most {max_new} prose subtopics that teach what these pages say. One subtopic may combine closely related "
-        f"pages. For each:\n"
+        f"Write at most {max_new} prose subtopics that teach what these pages say. Give each page ONE subtopic holding all of "
+        f"its facts (never several short ones for the same page); one subtopic may combine pages that cover the same API. For "
+        f"each:\n"
         f"  - subheading: 2-10 words naming the topic\n"
-        f"  - explanation: 20-80 words stating the concrete facts (function names, parameters, behaviour, version notes) taken "
-        f"ONLY from the facts above — no invented details, no code\n"
+        f"  - explanation: {params.TOPUP_SRC_MIN_WORDS}-80 words of connected sentences stating the concrete facts (function "
+        f"names, parameters, behaviour, version notes) taken ONLY from the facts above — no invented details, no code\n"
         f"  - sources: the page keys (exactly as in the brackets) you used\n"
         f"Then add citations (source_key from the brackets, claim 6-400 chars) for every page you used.\n\n"
         f'OUTPUT — STRICT JSON, no preamble: {{"subtopics": [{{"subheading": "...", "explanation": "...", "sources": ["..."]}}], '
@@ -513,33 +514,53 @@ def parse_source_topup(
     facts_by_src = {k: " ".join([sm] + facts) for k, sm, facts in sources}
     toks_by_src = {k: prose_tokens(t) for k, t in facts_by_src.items()}
     first_fact = {k: facts[0] for k, _, facts in sources}
-    subs: list[schemas.Subtopic] = []
-    cites: dict[tuple[str, str], schemas.Citation] = {}
+    # (subtopic, sources it used, sources to cite); a page gets ONE subtopic — a second one led by the same page is folded into
+    # it (asyncio ch-07: three 10-19 word fragments of one SubprocessTransport page, which the judge failed as "thin,
+    # disconnected reference cards"), and a subtopic still under TOPUP_SRC_MIN_WORDS is dropped.
+    entries: list[list] = []
+    lead_idx: dict[str, int] = {}
     seen = {x.casefold() for x in existing_subheads}
     for raw in (parsed or {}).get("subtopics") or []:
-        if len(subs) >= max_new or not isinstance(raw, dict):
-            break
+        if not isinstance(raw, dict):
+            continue
         try:
             st = schemas.Subtopic(
                 code_ref_hash = "", subheading = str(raw.get("subheading") or ""), explanation = str(raw.get("explanation") or ""),
             )
         except Exception:
             continue
-        if st.subheading.casefold() in seen:
-            continue
         et = prose_tokens(st.explanation)
         used = [k for k in toks_by_src if len(et & toks_by_src[k]) >= params.TOPUP_SRC_GROUND_TOKENS]
         if not used:
             continue
-        subs.append(st)
+        cite = [k for k in used if len(et & toks_by_src[k]) >= params.TOPUP_SRC_CITE_TOKENS or k in (raw.get("sources") or [])]
+        lead = max(used, key = lambda k: len(et & toks_by_src[k]))
+        if lead in lead_idx:
+            ent = entries[lead_idx[lead]]
+            try:
+                ent[0] = schemas.Subtopic(code_ref_hash = "", subheading = ent[0].subheading, explanation = f"{ent[0].explanation} {st.explanation}")
+            except Exception:
+                continue
+            ent[1] = list(dict.fromkeys(ent[1] + used))
+            ent[2] = list(dict.fromkeys(ent[2] + cite))
+            continue
+        if st.subheading.casefold() in seen:
+            continue
         seen.add(st.subheading.casefold())
-        for k in used:
-            if len(et & toks_by_src[k]) >= params.TOPUP_SRC_CITE_TOKENS or k in (raw.get("sources") or []):
-                try:
-                    c = schemas.Citation(source_key = k, claim = first_fact[k][:400])
-                    cites[(c.source_key, c.claim)] = c
-                except Exception:
-                    pass
+        lead_idx[lead] = len(entries)
+        entries.append([st, used, cite])
+    subs: list[schemas.Subtopic] = []
+    cites: dict[tuple[str, str], schemas.Citation] = {}
+    for st, _, cite in entries:
+        if len(subs) >= max_new or len(st.explanation.split()) < params.TOPUP_SRC_MIN_WORDS:
+            continue
+        subs.append(st)
+        for k in cite:
+            try:
+                c = schemas.Citation(source_key = k, claim = first_fact[k][:400])
+                cites[(c.source_key, c.claim)] = c
+            except Exception:
+                pass
     for raw in (parsed or {}).get("citations") or []:
         if isinstance(raw, dict) and raw.get("source_key") in facts_by_src and subs:
             try:

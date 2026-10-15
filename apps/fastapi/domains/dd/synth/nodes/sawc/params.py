@@ -87,6 +87,7 @@ TOPUP_SECTION_MAX = 16         # a topped-up section never grows past this many 
 TOPUP_SRC_MIN_FACTS = 1        # a source needs at least this many key facts to be offered
 TOPUP_SRC_GROUND_TOKENS = 2    # prose must share this many words with the facts it covers
 TOPUP_SRC_CITE_TOKENS = 3      # shared words that make an uncited-but-used source count as cited
+TOPUP_SRC_MIN_WORDS = 18       # a topped-up subtopic shorter than this is dropped (asyncio ch-07: 10-19 word fragments of one page)
 # Citations of a topped-up section may exceed the writer's CITATIONS_MAX (asyncio ch-05: s1 had 12 and the 4 new sources
 # were dropped by the cap, so the coverage gate kept failing); the persisted Section has no such limit.
 TOPUP_CITATIONS_MAX = 30

@@ -5,7 +5,7 @@ from __future__ import annotations
 MAX_CLAIMS_PER_CHAPTER = 20
 PROSE_CHARS_FOR_CLAIMS = 10000
 PROSE_CHARS_FOR_PATCH = 16000
-DETECT_MAX_TOKENS = 800
+DETECT_MAX_TOKENS = 1200   # 800 -> 1200 (2026-10-15): each violation now also carries its sibling evidence
 PATCH_MAX_TOKENS = 14000
 # was 1000 (issue #16, 2026-09-06/07): confirmed live that some Rotator-
 # pool models spend their whole budget restating/reasoning through the
@@ -30,3 +30,16 @@ CANONICALIZE_TIMEOUT_S = 60.0
 
 # A call cut at its token budget is retried once with double the budget, up to this cap.
 LENGTH_RETRY_CAP = 8000
+
+# A violation is patched only when it quotes this chapter verbatim (at least MIN_QUOTE_WORDS words) and points at a sibling claim or
+# a canonical term that exists (asyncio study: both "corrections" came from the model's own knowledge — a documented
+# "subclass of AbstractEventLoop" rewritten, a true InvalidStateError condition replaced). A sibling claim must share
+# CLAIM_MATCH_SHARE of its words with that sibling chapter's extracted claims.
+MIN_QUOTE_WORDS = 3
+CLAIM_MATCH_SHARE = 0.6
+# The edit is made on the paragraph that holds the quote, never on the whole chapter (the whole-chapter rewrite changed
+# unrelated words and added an ungrounded sentence); the edited paragraph must stay within this length ratio.
+PATCH_PARAGRAPH_MIN_RATIO = 0.6
+PATCH_PARAGRAPH_MAX_RATIO = 1.6
+PATCH_PARAGRAPH_MAX_TOKENS = 1500
+PATCH_PARAGRAPH_TIMEOUT_S = 90.0
