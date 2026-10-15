@@ -130,7 +130,7 @@ print("9 ValidationError reaches the callers' repair path ok")
 # 10) chapter_assign: one transient retry recovers a 504 before the lexical fallback
 CA = nodes.chapter_assign
 calls = {"n": 0}
-async def _flaky(prompt):
+async def _flaky(prompt, **kw):
     calls["n"] += 1
     if calls["n"] == 1:
         raise chat.errors.ChatError("InternalServerError: Error code: 504 - {'error': {'message': 'TimeoutError: '}}")
@@ -142,7 +142,7 @@ props = [{"title": "A", "description": "a", "key_concepts": ["a"]}, {"title": "B
 out = asyncio.run(CA.service.assign_one(asyncio.Semaphore(1), "fw", "k.md", {"summary": "about A", "key_terms": ["a"]}, props))
 assert calls["n"] == 2 and out[3] is False and out[1][0]["confidence"] == 0.9, (calls, out)
 calls["n"] = 0
-async def _always504(prompt):
+async def _always504(prompt, **kw):
     calls["n"] += 1
     raise chat.errors.ChatError("InternalServerError: Error code: 504 - TimeoutError")
 CA.service._score_call = _always504

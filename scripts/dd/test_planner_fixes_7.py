@@ -25,11 +25,11 @@ def vec(idxs, best_idx=3, best=0.9):
     return S.DocAssignment(scores=[S.ChapterScore(chapter_idx=i, confidence=best if i == best_idx else 0.0) for i in idxs])
 async def run(first):
     sent.clear()
-    async def _score(prompt):
+    async def _score(prompt, **kw):
         sent.append(prompt)
         return vec(range(16, 28), best_idx=20, best=0.8)
     CA.service._score_call = _score
-    async def _first(prompt):
+    async def _first(prompt, **kw):
         if not sent:
             sent.append(prompt)
             return first
@@ -50,7 +50,7 @@ print("1 assign reask skip ok")
 # 1b) fixed-key scoring: one required key per chapter; malformed -> the score list; short plans keep the list ----------------
 CA.params.FIXED_KEY_OUTPUT = True
 calls = []
-async def _fixed_stub(prompt, schema=None):
+async def _fixed_stub(prompt, schema=None, **kw):
     calls.append(("fixed" if schema is not None else "list", prompt))
     if schema is not None:
         return schema(**{f"c{i}": (0.9 if i == 4 else 0.0) for i in range(28)})
@@ -61,7 +61,7 @@ sc = {x["chapter_idx"]: x["confidence"] for x in res[1]}
 assert [c[0] for c in calls] == ["fixed"] and len(sc) == 28 and sc[4] == 0.9, (calls[:1], len(sc))
 assert "EXACTLY 28 keys" in calls[0][1] and '"c27"' in calls[0][1] and "chapter_idx\": 0" not in calls[0][1].split("OUTPUT")[1].split("== FILE")[0]
 calls.clear()
-async def _bad_then_list(prompt, schema=None):
+async def _bad_then_list(prompt, schema=None, **kw):
     calls.append("fixed" if schema is not None else "list")
     if schema is not None:
         schema(**{f"c{i}": 0.0 for i in range(27)})                              # a missing key -> pydantic ValidationError

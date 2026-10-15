@@ -96,7 +96,7 @@ dist = {"summary": "s", "key_terms": ["t"]}
 seen7 = []
 def make_score(answers):
     it = iter(answers)
-    async def _s(prompt, schema=None):
+    async def _s(prompt, schema=None, **kw):
         seen7.append((("fixed" if schema is not None else "list"), prompt))
         best = next(it)
         if schema is not None:

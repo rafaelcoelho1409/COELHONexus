@@ -74,6 +74,11 @@ TRANSIENT_RETRY_PAUSE_S = 4.0
 # one of the 51 ising-calibration answers was zero but 10 of the 11 answers from other arms were not, and each re-ask lands on
 # ising ~60% of the time: 4 asks leave ~13% of an ising-only zero page, 2 asks left ~36%).
 ZERO_REASKS = 4
+# Quality reported to the Rotator's feedback endpoint: an all-below-RESCUE_FLOOR vector, and a re-ask that found a chapter.
+# The Rotator keeps one bandit cell per (arm, task): scoring calls get their own, so the feedback below only demotes an arm here.
+ROTATOR_TASK = "dd.assign"
+FEEDBACK_EMPTY_QUALITY = 0.1
+FEEDBACK_RESCUE_QUALITY = 0.9
 TRANSIENT_KINDS = ("timeout", "server_error", "rate_limit")
 # Final sweep: docs that still ended on the lexical fallback get ONE more pass after the main one, at low
 # concurrency and after a Rotator settle. langfuse 2026-10-14: NIM answered ~6x slower for 40 minutes, 30 of 310 docs

@@ -4,9 +4,11 @@ manifest hashing, and the CoCoA/atomic-claim-grounding shared helpers (JSON
 extraction, identifier overlap, prompt-block rendering, fence stripping,
 cache-key hashing)."""
 from __future__ import annotations
+import domains
 from . import params, patterns, prompts, schemas, versions
 
 import ast
+import re
 import random
 from collections import Counter
 from hashlib import sha256
@@ -474,6 +476,53 @@ def check_code_snippet_sanity(sawc: dict) -> schemas.CriterionResult:
     )
 
 
+def check_code_coverage(sawc: dict) -> schemas.CriterionResult:
+    """The chapter prints most of the code blocks the digest routed to its sections and cites most of its sources.
+    Inputs injected by the service (not persisted): `_routed_hashes`, `_digest_sources`."""
+    routed = set(sawc.get("_routed_hashes") or [])
+    sources = list(sawc.get("_digest_sources") or [])
+    sections = sawc.get("sections") or []
+    used = {st.get("code_ref_hash") for s in sections for st in (s.get("subtopics") or []) if (st or {}).get("code_ref_hash")}
+    cited = {c.get("source_key") for s in sections for c in (s.get("citations") or []) if (c or {}).get("source_key")}
+    problems: list[str] = []
+    if len(routed) >= params.COVERAGE_MIN_ROUTED:
+        n_used = len(routed & used)
+        if n_used < params.COVERAGE_MIN_CODE * len(routed):
+            problems.append(f"only {n_used} of {len(routed)} routed code blocks are printed")
+    if len(sources) >= params.COVERAGE_MIN_SOURCE_COUNT:
+        missing = [k for k in sources if k not in cited]
+        if len(sources) - len(missing) < params.COVERAGE_MIN_SOURCES * len(sources):
+            names = [re.sub(r"^.*(?:/pages/\d+-|documentation--)", "", k).removesuffix(".md")[:40] for k in missing[:6]]
+            problems.append(f"only {len(sources) - len(missing)} of {len(sources)} sources are cited (never cited: {', '.join(names)})")
+    passed = not problems
+    return schemas.CriterionResult(
+        name = "code_coverage", passed = passed, kind = "deterministic",
+        feedback = "" if passed else "; ".join(problems) + ". Add subtopics for the unused code blocks and cover the uncited sources.",
+    )
+
+
+def check_code_prose_alignment(sawc: dict) -> schemas.CriterionResult:
+    """Every verbatim code block shares at least one identifier with the prose written for it (the render step's own
+    misroute rule). Input injected by the service: `_vault_bodies` (hash -> fence text); vacuous without it."""
+    bodies = sawc.get("_vault_bodies") or {}
+    if not bodies:
+        return schemas.CriterionResult(name = "code_prose_alignment", passed = True, kind = "deterministic", feedback = "")
+    match = domains.dd.synth.nodes.sawc.domain.prose_matches_code
+    bad: list[str] = []
+    for s in sawc.get("sections") or []:
+        for st in (s.get("subtopics") or []):
+            st = st or {}
+            body = bodies.get(st.get("code_ref_hash") or "")
+            if body and st.get("code_source") != "derived" and not match(f"{st.get('subheading', '')} {st.get('explanation', '')}", body):
+                bad.append(f"{s.get('section_id', '?')}/{st.get('subheading', '?')}")
+    passed = not bad
+    return schemas.CriterionResult(
+        name = "code_prose_alignment", passed = passed, kind = "deterministic",
+        feedback = "" if passed else "code block shares no identifier with its prose in: " + "; ".join(bad[:4])
+                   + (f" (+{len(bad) - 4} more)" if len(bad) > 4 else "") + ". Pick the block the prose describes, or write prose only.",
+    )
+
+
 # Ordered list — stable iteration = stable pass-rate denominators.
 DETERMINISTIC_CHECKS = (
     check_all_sections_present,
@@ -486,7 +535,16 @@ DETERMINISTIC_CHECKS = (
     check_code_density_appropriate,
     check_code_uniqueness_ratio,
     check_code_snippet_sanity,
+    check_code_coverage,
+    check_code_prose_alignment,
 )
+
+
+def best_seen_key(pass_rate: float, n_pre_passed: int) -> tuple:
+    """Ordering of iterations for best-seen: every deterministic gate passing first (a RETHINK iteration with a higher judge score
+    but a failed gate — asyncio ch-03: five unparseable derived blocks — must not displace a clean one), then the score, then the
+    gate count."""
+    return (n_pre_passed >= len(DETERMINISTIC_CHECKS), pass_rate, n_pre_passed)
 
 
 def aggregate_pass_rate(

@@ -23,7 +23,7 @@ from pydantic import ValidationError
 logger = logging.getLogger(__name__)
 
 
-async def _score_call(prompt: str, schema = None):
+async def _score_call(prompt: str, schema = None, meta_out: dict | None = None):
     """One LLM call, decoded via LangChain's `.with_structured_output()`.
     Raises ValueError (unparseable) or pydantic ValidationError (schema
     mismatch) for reask-eligible failures; anything else (timeout,
@@ -31,13 +31,16 @@ async def _score_call(prompt: str, schema = None):
     budget = params.MAX_TOKENS
     for attempt in range(2):
         try:
-            assignment, _ = await domains.settings.chat.service.chat_structured_async(
+            assignment, meta = await domains.settings.chat.service.chat_structured_async(
                 prompt,
                 schema or schemas.DocAssignment,
                 max_tokens = budget,
                 temperature = params.TEMPERATURE,
                 timeout_s = params.TIMEOUT_S,
+                rotator_task = params.ROTATOR_TASK,
             )
+            if meta_out is not None:
+                meta_out.update(meta or {})
             return assignment
         except Exception as e:
             # Cut at max_tokens (a reasoning arm's preamble + a 24-entry score list on a huge
@@ -62,11 +65,30 @@ async def _score_primary(prompt: str, n_proposals: int, closest: bool = False) -
             fixed_prompt = None                              # a template without the expected OUTPUT block
         if fixed_prompt:
             try:
-                obj = await _score_call(asked(fixed_prompt), schemas.fixed_key_model(n_proposals))
-                return schemas.scores_from_fixed(obj, n_proposals)
+                meta: dict = {}
+                obj = await _score_call(asked(fixed_prompt), schemas.fixed_key_model(n_proposals), meta_out = meta)
+                out = schemas.scores_from_fixed(obj, n_proposals)
+                _report_vector_quality(meta, out, closest)
+                return out
             except (ValidationError, ValueError) as e:
                 logger.info(f"[chapter_assign] fixed-key answer rejected ({type(e).__name__}) — score list instead")
-    return await _score_call(asked(prompt))
+    meta = {}
+    out = await _score_call(asked(prompt), meta_out = meta)
+    _report_vector_quality(meta, out, closest)
+    return out
+
+
+def _report_vector_quality(meta: dict, assignment: schemas.DocAssignment, closest: bool) -> None:
+    """Tell the Rotator which arm gave an empty answer (every score below RESCUE_FLOOR: langfuse run 14, all 54 came from
+    nvidia/ising-calibration) and which one rescued it on the re-ask, so its bandit stops sending this task there."""
+    try:
+        best = max((sc.confidence for sc in assignment.scores), default = 0.0)
+        if best < params.RESCUE_FLOOR:
+            domains.settings.chat.service.report_quality(meta, params.FEEDBACK_EMPTY_QUALITY)
+        elif closest and best >= params.CONFIDENCE_THRESHOLD:
+            domains.settings.chat.service.report_quality(meta, params.FEEDBACK_RESCUE_QUALITY)
+    except Exception:
+        pass
 
 
 def _valid_scores(assignment: schemas.DocAssignment, n_proposals: int) -> list[dict]:

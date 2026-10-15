@@ -648,6 +648,13 @@ async def _draft_one_section(
     if n_bad_derived:
         logger.warning(f"[sawc_write] {section_id} draft {draft_idx}: {n_bad_derived} writer-authored derived code block(s) that do not parse as Python stripped (prose kept)")
     draft, n_by_overlap = domain.realign_code_by_overlap(draft, vault_rich, allowed_hash_set)
+    draft, n_misaligned = domain.strip_misaligned_code(draft, vault_rich)
+    if n_misaligned:
+        logger.info(f"[sawc_write] {section_id} draft {draft_idx}: {n_misaligned} code block(s) sharing no identifier with their prose turned into prose subtopics")
+    if prose_mode:
+        draft, n_capped = domain.cap_prose_subtopics(draft, sum(len(c.get("key_facts") or []) for c in contributions))
+        if n_capped:
+            logger.info(f"[sawc_write] {section_id} draft {draft_idx}: {n_capped} padded prose subtopic(s) beyond the section's key facts dropped")
     if n_by_overlap:
         logger.info(f"[sawc_write] {section_id} draft {draft_idx}: {n_by_overlap} subtopic(s) whose prose barely mentioned their code block got the block they describe")
     n_realigned += n_by_overlap
@@ -858,6 +865,58 @@ expected primary source contributions: {n_primary_contribs}
 Answer in JSON: {{"winner": "A" | "B", "reason": "one short sentence"}}"""
 
 _TEMPERATURE_CRITIC    = 0.0
+
+
+async def _topup_coverage(
+    *, final_sections: list[schemas.Section], per_section_index: dict[str, list[dict]], vault_rich: dict,
+    sections_by_id: dict[str, dict], framework: str, chapter_id: str, chapter_title: str,
+) -> tuple[list[schemas.Section], int, int]:
+    """One extra call per section that has routed-but-unused code blocks: ask for subtopics covering them and merge what
+    validates (see domain.parse_topup). Returns (sections, n_subtopics_added, n_sections_topped_up). Fail-soft: a failed
+    call leaves the section as written."""
+    unused = domain.unused_routed_hashes(per_section_index, final_sections)
+    sem = asyncio.Semaphore(params.TOPUP_CONCURRENCY)
+
+    async def _one(sec: schemas.Section) -> tuple[schemas.Section, int]:
+        un = unused.get(sec.section_id) or []
+        n_new = min(len(un), params.SUBTOPICS_MAX - len(sec.subtopics), params.TOPUP_MAX_NEW)
+        if len(un) < params.TOPUP_MIN_UNUSED or n_new < 1:
+            return sec, 0
+        contribs = per_section_index.get(sec.section_id) or []
+        facts = [f for c in contribs for f in (c.get("key_facts") or [])]
+        sources = list({c["source_key"]: (c["source_key"], c.get("summary") or "") for c in contribs if c.get("source_key")}.values())
+        outline_sec = sections_by_id.get(sec.section_id) or {}
+        prompt = domain.build_topup_prompt(
+            framework = framework, chapter_title = chapter_title, section_heading = sec.heading,
+            section_description = outline_sec.get("description") or "",
+            existing_subheadings = [st.subheading for st in sec.subtopics],
+            blocks = [(h, domain._fence_body(vault_rich.get(h))) for h in un if domain._fence_body(vault_rich.get(h))],
+            facts = facts, sources = sources, max_new = n_new,
+        )
+        async with sem:
+            try:
+                raw, _meta = await domains.settings.chat.service.chat_text_async(
+                    prompt, max_tokens = params.TOPUP_MAX_TOKENS, temperature = 0.3,
+                    response_format = {"type": "json_object"}, timeout_s = params.TOPUP_TIMEOUT_S,
+                )
+            except Exception as e:
+                logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: coverage top-up call failed ({type(e).__name__})")
+                return sec, 0
+        subs, cites = domain.parse_topup(
+            domain.parse_json_response(raw), unused = set(un), vault_rich = vault_rich,
+            valid_source_keys = {x[0] for x in sources} | {c.source_key for c in sec.citations},
+            existing_subheads = {st.subheading for st in sec.subtopics}, max_new = n_new,
+        )
+        if not subs:
+            return sec, 0
+        have = {(c.source_key, c.claim) for c in sec.citations}
+        merged = list(sec.citations) + [c for c in cites if (c.source_key, c.claim) not in have]
+        return sec.model_copy(update = {
+            "subtopics": list(sec.subtopics) + subs, "citations": merged[:params.CITATIONS_MAX],
+        }), len(subs)
+
+    done = await asyncio.gather(*[_one(sec) for sec in final_sections])
+    return [d[0] for d in done], sum(d[1] for d in done), sum(1 for d in done if d[1])
 
 
 async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
@@ -1345,6 +1404,13 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
         completed_sections[sid] for sid in section_order
         if sid in completed_sections
     ]
+    if params.TOPUP_ENABLED and vault_rich:
+        final_sections, n_topup, n_topped = await _topup_coverage(
+            final_sections = final_sections, per_section_index = per_section_index, vault_rich = vault_rich,
+            sections_by_id = sections_by_id, framework = slug, chapter_id = chapter_id, chapter_title = chapter_title,
+        )
+        if n_topup:
+            logger.info(f"[sawc_write] {slug}/{chapter_id}: coverage top-up added {n_topup} subtopic(s) to {n_topped} section(s)")
     final_sections, n_repeated = domain.drop_repeated_code_blocks(final_sections, vault_rich)
     if n_repeated:
         logger.info(f"[sawc_write] {slug}/{chapter_id}: {n_repeated} subtopic(s) repeating a code block printed in an earlier section dropped")

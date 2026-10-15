@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # runs once at the END of a potentially multi-hour Study run, so a cheap
 # retry against a transient Rotator hiccup is worth it. Same idiom as
 # every other synth node.
-_MAX_CALL_ATTEMPTS = 2
+_MAX_CALL_ATTEMPTS = 3   # 2 -> 3 (2026-10-15): one of them is the doubled-budget retry after a length cut
 
 
 async def _call_with_retry(
@@ -38,6 +38,10 @@ async def _call_with_retry(
             return raw, None
         except Exception as e:
             last_error = e
+            # Cut at max_tokens (asyncio study: extract hit 2000 on ch-03/ch-05, canonicalize 1500): the budget was wrong, not
+            # the chapter — retry with double, up to LENGTH_RETRY_CAP, instead of leaving the chapter unharmonized.
+            if domains.settings.chat.domain.is_length_error(e) and kwargs.get("max_tokens"):
+                kwargs["max_tokens"] = min(params.LENGTH_RETRY_CAP, int(kwargs["max_tokens"]) * 2)
             if attempt < _MAX_CALL_ATTEMPTS - 1:
                 await asyncio.sleep(1.0 + random.random())
     return None, last_error

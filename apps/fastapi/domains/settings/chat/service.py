@@ -223,6 +223,7 @@ def build_chat_model(
     temperature:     float | None = None,
     response_format: dict | None  = None,
     max_retries:     int          = 0,
+    rotator_task:    str | None   = None,
 ):
     """Shared LangChain `ChatOpenAI` over the configured endpoint — one
     place to keep `max_retries=0` applied consistently BY DEFAULT. The
@@ -248,6 +249,7 @@ def build_chat_model(
         "temperature":       temperature if temperature is not None else params.DEFAULT_TEMPERATURE,
         "max_retries":       max_retries,
         "http_async_client": _get_shared_http_client(),
+        "include_response_headers": True,   # response_metadata["headers"]: x-rotator-request-id for quality feedback
     }
     if timeout_s is not None:
         kwargs["timeout"] = timeout_s
@@ -258,6 +260,11 @@ def build_chat_model(
     extra = domain.rotator_wall_extra(
         ENDPOINT.base_url, timeout_s, params.ROTATOR_WALL_MARGIN_S, params.ROTATOR_WALL_MIN_S,
     )
+    # The Rotator's bandit keeps one cell per (arm, task): a named task lets a bad arm be demoted for THAT task only
+    # (assign / judge) without touching the shared "general" statistics. Rotator endpoints only (an unknown body field
+    # would be rejected elsewhere).
+    if rotator_task and domain.rotator_health_url(ENDPOINT.base_url):
+        extra = {**extra, "rotator_task": rotator_task}
     if extra:
         kwargs["extra_body"] = extra
     return ChatOpenAI(**kwargs)
@@ -284,6 +291,7 @@ async def chat_text_async(
     timeout_s: float = params.DEFAULT_TIMEOUT_S,
     expected_pattern: str | None = None,
     response_format: dict | None = None,
+    rotator_task: str | None = None,
 ) -> tuple[str, dict]:
     # Pick up a Settings-page endpoint change (throttled store re-read).
     # `_get_async_openai` used to own this call; `build_chat_model` reads
@@ -296,6 +304,7 @@ async def chat_text_async(
         max_tokens       = max_tokens,
         temperature      = temperature,
         response_format  = response_format,
+        rotator_task     = rotator_task,
     )
 
     t0 = time.monotonic()
@@ -369,6 +378,7 @@ async def chat_text_async(
         "deployment": resp_model,  # compat alias — DD/RR/YCS counter + log call sites read `deployment`
         "attempts": 1,
         "latency_s": round(latency_s, 3),
+        "rotator_request_id": ((rm.get("headers") or {}).get("x-rotator-request-id") if isinstance(rm, dict) else None),
     }
 
     if expected_pattern:
@@ -397,6 +407,7 @@ async def chat_structured_async(
     temperature: float = params.DEFAULT_TEMPERATURE,
     timeout_s: float = params.DEFAULT_TIMEOUT_S,
     strict: bool = True,
+    rotator_task: str | None = None,
 ) -> tuple[_SchemaT, dict]:
     """Structured-output counterpart to `chat_text_async` — same endpoint
     resolution/pooling/backstop/spans/counter, decoded via LangChain's
@@ -430,9 +441,10 @@ async def chat_structured_async(
     _apply_endpoint()
 
     structured_model = build_chat_model(
-        timeout_s   = timeout_s,
-        max_tokens  = max_tokens,
-        temperature = temperature,
+        timeout_s    = timeout_s,
+        max_tokens   = max_tokens,
+        temperature  = temperature,
+        rotator_task = rotator_task,
     ).with_structured_output(schema, method="json_schema", strict=strict, include_raw=True)
 
     t0 = time.monotonic()
@@ -518,8 +530,43 @@ async def chat_structured_async(
         "deployment": resp_model,
         "attempts": 1,
         "latency_s": round(latency_s, 3),
+        "rotator_request_id": ((rm.get("headers") or {}).get("x-rotator-request-id") if isinstance(rm, dict) else None),
     }
     return parsed, meta
+
+
+_FEEDBACK_TASKS: set = set()
+
+
+async def _post_quality_feedback(rid: str, quality: float) -> bool:
+    base = ENDPOINT.base_url or ""
+    if "/openai" not in base:
+        return False
+    url = base.rsplit("/openai", 1)[0] + "/routing/feedback"
+    try:
+        r = await _get_shared_http_client().post(
+            url, json = {"request_id": rid, "quality": max(0.0, min(1.0, float(quality)))},
+            headers = {"Authorization": f"Bearer {ENDPOINT.api_key}"}, timeout = 5.0,
+        )
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def report_quality(meta: dict | None, quality: float) -> bool:
+    """Fire-and-forget: tell the Rotator how good the answer behind `meta` was (0-1), so its bandit learns which arm to
+    avoid for this task (all-zero assign vectors from nvidia/ising-calibration; an instant all-pass judge on a chapter
+    the deterministic gates reject). Returns False when there is nothing to report (no request id / no running loop)."""
+    rid = (meta or {}).get("rotator_request_id")
+    if not rid:
+        return False
+    try:
+        t = asyncio.get_running_loop().create_task(_post_quality_feedback(str(rid), quality))
+    except RuntimeError:
+        return False
+    _FEEDBACK_TASKS.add(t)
+    t.add_done_callback(_FEEDBACK_TASKS.discard)
+    return True
 
 
 def _bump_dd_llm_counter(response, model: str | None = None) -> dict | None:

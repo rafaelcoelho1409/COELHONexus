@@ -62,3 +62,19 @@ REALIGN_MIN_ALT = 4
 REALIGN_MIN_GAIN = 4
 REALIGN_GENERIC_DF = 0.35
 REALIGN_MIN_BANK = 8
+
+# Coverage top-up (sawc_write): after the sections are written, each section whose digest-routed code blocks went unused
+# gets ONE extra call that adds subtopics for them (asyncio ch-01 used 14 of 35 routed blocks, ch-05 19 of 35: a 3-4
+# section outline x 4-5 subtopics caps what the writer reaches). Verbatim blocks only; every guard still runs after it.
+TOPUP_ENABLED = True
+TOPUP_MIN_UNUSED = 2          # fewer unused routed blocks than this: not worth a call
+TOPUP_MAX_NEW = 6             # subtopics added per section per call
+TOPUP_CONCURRENCY = 3
+TOPUP_MAX_TOKENS = 4000
+TOPUP_TIMEOUT_S = 150.0
+TOPUP_MAX_BLOCK_CHARS = 1500  # of each block shown to the model
+TOPUP_MAX_FACTS = 14
+# A section written without any code (prose mode): at most ceil(key facts / this) subtopics, never fewer than
+# SUBTOPICS_MIN (asyncio ch-08: 5 subtopics out of 4 key facts restated the same sentence).
+PROSE_FACTS_PER_SUBTOPIC = 1.5
+

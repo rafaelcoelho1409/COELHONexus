@@ -9,6 +9,7 @@ from . import params, schemas, versions
 
 import ast
 import json
+import math
 import re
 from collections import defaultdict
 from hashlib import sha256
@@ -320,6 +321,134 @@ def strip_invalid_derived(draft: schemas.LLMSectionDraft) -> tuple[schemas.LLMSe
         for i, st in enumerate(draft.subtopics)
     ]
     return draft.model_copy(update = {"subtopics": subs}), len(bad)
+
+
+def prose_matches_code(prose: str, body: str) -> bool:
+    """The render step's own misroute rule: a block with at least MISMATCH_MIN_CODE_IDENTS identifiers that shares
+    none with the prose is not what the prose describes. (0 false positives over ~100 asyncio subtopics.)"""
+    rd = domains.dd.synth.nodes.render
+    ci = rd.domain._idents(body)
+    if len(ci) < rd.params.MISMATCH_MIN_CODE_IDENTS:
+        return True
+    return bool(ci & rd.domain._idents(prose))
+
+
+def strip_misaligned_code(
+    draft: schemas.LLMSectionDraft, vault_rich: dict | None,
+) -> tuple[schemas.LLMSectionDraft, int]:
+    """Turn a subtopic whose code block shares no identifier with its own prose into a prose subtopic — the same call the
+    render step makes later (it printed a visible 'omitted' note), made here so the checklist and the judge see the
+    final state (asyncio ch-03: Barrier / Condition / Semaphore blocks under queue subtopics). Returns (draft, n)."""
+    if not vault_rich:
+        return draft, 0
+    bad = set()
+    for i, st in enumerate(draft.subtopics):
+        if not st.code_ref_hash or getattr(st, "code_source", "verbatim") == "derived":
+            continue
+        body = _fence_body(vault_rich.get(st.code_ref_hash))
+        if body and not prose_matches_code(f"{st.subheading} {st.explanation}", body):
+            bad.add(i)
+    if not bad:
+        return draft, 0
+    subs = [
+        st.model_copy(update = {"code_ref_hash": "", "code_source": "verbatim", "derived_code": None}) if i in bad else st
+        for i, st in enumerate(draft.subtopics)
+    ]
+    return draft.model_copy(update = {"subtopics": subs}), len(bad)
+
+
+def cap_prose_subtopics(draft: schemas.LLMSectionDraft, n_facts: int) -> tuple[schemas.LLMSectionDraft, int]:
+    """A section with no code at all keeps at most ceil(n_facts / PROSE_FACTS_PER_SUBTOPIC) subtopics (floor SUBTOPICS_MIN):
+    the later ones are the padded restatements. Returns (draft, n_dropped)."""
+    if any(st.code_ref_hash or getattr(st, "code_source", "verbatim") == "derived" for st in draft.subtopics):
+        return draft, 0
+    cap = max(params.SUBTOPICS_MIN, math.ceil(max(n_facts, 0) / params.PROSE_FACTS_PER_SUBTOPIC))
+    if len(draft.subtopics) <= cap:
+        return draft, 0
+    return draft.model_copy(update = {"subtopics": list(draft.subtopics)[:cap]}), len(draft.subtopics) - cap
+
+
+def unused_routed_hashes(
+    per_section_index: dict[str, list[dict]], sections: list[schemas.Section],
+) -> dict[str, list[str]]:
+    """section_id -> the code blocks the digest routed to it that no section of the chapter prints (sorted, stable)."""
+    used = {st.code_ref_hash for sec in sections for st in sec.subtopics if st.code_ref_hash}
+    out: dict[str, list[str]] = {}
+    for sec in sections:
+        routed = sorted({h for c in per_section_index.get(sec.section_id) or [] for h in (c.get("code_refs") or [])})
+        un = [h for h in routed if h not in used]
+        if un:
+            out[sec.section_id] = un
+    return out
+
+
+def build_topup_prompt(
+    *, framework: str, chapter_title: str, section_heading: str, section_description: str,
+    existing_subheadings: list[str], blocks: list[tuple[str, str]], facts: list[str],
+    sources: list[tuple[str, str]], max_new: int,
+) -> str:
+    """Prompt for the coverage top-up: extra subtopics for code blocks routed to a section but not printed yet."""
+    shown = "\n".join(
+        f"[{h}]\n{body[:params.TOPUP_MAX_BLOCK_CHARS]}" for h, body in blocks
+    )
+    covered = "\n".join(f"- {x}" for x in existing_subheadings) or "- (none)"
+    fact_lines = "\n".join(f"- {f}" for f in facts[:params.TOPUP_MAX_FACTS]) or "- (none)"
+    src_lines = "\n".join(f"- {k}: {sm[:160]}" for k, sm in sources)
+    return (
+        f"You are extending ONE section of a {framework} learning book (chapter '{chapter_title}', section "
+        f"'{section_heading}'). {section_description}\n\n"
+        f"== ALREADY COVERED (do not repeat these topics) ==\n{covered}\n\n"
+        f"== CODE BLOCKS ROUTED TO THIS SECTION BUT NOT USED YET (verbatim from the docs) ==\n{shown}\n\n"
+        f"== FACTS FROM THE DOCS ==\n{fact_lines}\n\n"
+        f"== SOURCES YOU MAY CITE ==\n{src_lines}\n\n"
+        f"For each block that teaches something the section does not cover yet, write ONE subtopic (at most {max_new}):\n"
+        f"  - code_ref_hash: exactly one hash from the bracketed list above\n"
+        f"  - subheading: 2-10 words naming what THAT block demonstrates\n"
+        f"  - explanation: 8-80 words of prose that comes BEFORE the code; it MUST name at least one identifier "
+        f"(function, class, method, parameter) that appears in the block and describe what the block shows\n"
+        f"Skip a block that only repeats a covered topic. Do not write code. Add citations (source_key from the list, "
+        f"claim 6-400 chars) for the facts you use.\n\n"
+        f'OUTPUT — STRICT JSON, no preamble: {{"subtopics": [{{"code_ref_hash": "...", "subheading": "...", '
+        f'"explanation": "..."}}], "citations": [{{"source_key": "...", "claim": "..."}}]}}'
+    )
+
+
+def parse_topup(
+    parsed: dict | None, *, unused: set[str], vault_rich: dict | None, valid_source_keys: set[str],
+    existing_subheads: set[str], max_new: int,
+) -> tuple[list[schemas.Subtopic], list[schemas.Citation]]:
+    """Validate a top-up answer: only unused routed hashes, no repeated hash or subheading, prose that matches its block."""
+    subs: list[schemas.Subtopic] = []
+    seen_h: set[str] = set()
+    seen_s = {x.casefold() for x in existing_subheads}
+    for raw in (parsed or {}).get("subtopics") or []:
+        if len(subs) >= max_new or not isinstance(raw, dict):
+            break
+        try:
+            st = schemas.Subtopic(
+                code_ref_hash = str(raw.get("code_ref_hash") or ""), subheading = str(raw.get("subheading") or ""),
+                explanation = str(raw.get("explanation") or ""),
+            )
+        except Exception:
+            continue
+        h = st.code_ref_hash
+        if not h or h not in unused or h in seen_h or st.subheading.casefold() in seen_s:
+            continue
+        body = _fence_body(vault_rich.get(h)) if vault_rich else ""
+        if body and not prose_matches_code(f"{st.subheading} {st.explanation}", body):
+            continue
+        subs.append(st)
+        seen_h.add(h)
+        seen_s.add(st.subheading.casefold())
+    cites: list[schemas.Citation] = []
+    for raw in (parsed or {}).get("citations") or []:
+        if not isinstance(raw, dict) or str(raw.get("source_key") or "") not in valid_source_keys:
+            continue
+        try:
+            cites.append(schemas.Citation(source_key = str(raw["source_key"]), claim = str(raw.get("claim") or "")))
+        except Exception:
+            continue
+    return subs, cites
 
 
 def drop_unknown_code_refs(

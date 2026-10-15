@@ -3,4 +3,6 @@ from __future__ import annotations
 
 
 SAWC_SCHEMA_VERSION = "2.0-cookbook"
-SAWC_PROMPT_VERSION = "v12-rethink-feedback-loop-2026-09-05"
+# v13 (2026-10-15): coverage top-up (extra subtopics for routed-but-unused code blocks), misaligned code -> prose, prose-only
+# section capped by key facts, repeated blocks printed once (asyncio full study: 77 of 118 blocks used, ch-01 14 of 35).
+SAWC_PROMPT_VERSION = "v13-coverage-topup-2026-10-15"

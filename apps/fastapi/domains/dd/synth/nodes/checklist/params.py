@@ -166,3 +166,19 @@ TIMEOUT_S_PERSIST_WRITE = 60.0
 # verdict (which triggers a full mgsr_replan cycle) — same idiom as
 # outline_sdp/digest_construct/sawc_write's context-overflow retry.
 MAX_CALL_ATTEMPTS = 2
+
+# check_code_coverage: a chapter that routes at least COVERAGE_MIN_ROUTED code blocks must print at least COVERAGE_MIN_CODE of
+# them, and a chapter of at least COVERAGE_MIN_SOURCE_COUNT sources must cite at least COVERAGE_MIN_SOURCES of them (asyncio
+# ch-01 printed 14 of 35 blocks and cited 13 of 23 sources while passing 14/15).
+COVERAGE_MIN_ROUTED = 6
+COVERAGE_MIN_CODE = 0.60
+COVERAGE_MIN_SOURCE_COUNT = 6
+COVERAGE_MIN_SOURCES = 0.70
+
+# Quality reported to the Rotator for a judge that passed every LLM criterion while one of these deterministic gates failed.
+JUDGE_CONTRADICTED_BY = ("code_prose_alignment", "code_coverage", "code_uniqueness_ratio", "code_snippet_sanity")
+FEEDBACK_LENIENT_JUDGE_QUALITY = 0.2
+
+# The batched LLM judge asks the Rotator for its own bandit cell (see FEEDBACK_LENIENT_JUDGE_QUALITY above).
+ROTATOR_TASK = "dd.judge"
+

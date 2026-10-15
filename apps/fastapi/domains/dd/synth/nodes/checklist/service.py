@@ -49,6 +49,7 @@ async def _run_llm_judge(
     rendered_chapter: str,
     rendered_digest: str,
     truncated: bool,
+    meta_out: dict | None = None,
 ) -> tuple[list[schemas.CriterionResult], Optional[str], bool, int]:
     """Fire batched judge → parse → repair if needed; hard failure → conservative FAILED fallback."""
     t0 = time.monotonic()
@@ -78,8 +79,11 @@ async def _run_llm_judge(
                 temperature=_TEMPERATURE_JUDGE,
                 timeout_s=_TIMEOUT_S_JUDGE,
                 strict=False,
+                rotator_task=params.ROTATOR_TASK,
             )
             deployment = (meta or {}).get("deployment")
+            if meta_out is not None:
+                meta_out.update(meta or {})
             infra_failed = False
             break
         except (ValidationError, ValueError) as e:
@@ -910,7 +914,7 @@ async def checklist_eval_run(state: domains.dd.synth.state.SynthState) -> dict:
             )
             _is_better = (
                 _incoming_best_score is None
-                or (stats["pass_rate"], _n_pregate_passed) > (
+                or domain.best_seen_key(stats["pass_rate"], _n_pregate_passed) > domain.best_seen_key(
                     _incoming_best_score, _incoming_best_pregate or 0,
                 )
             )
@@ -939,9 +943,27 @@ async def checklist_eval_run(state: domains.dd.synth.state.SynthState) -> dict:
     # Signal for the checks only (not persisted): does this chapter's source
     # material contain ANY code block? None when the digest predates the field.
     _n_vault = digest.get("n_total_vault_hashes")
+    _used_hashes = {
+        st.get("code_ref_hash") for s_ in (sawc.get("sections") or []) for st in (s_.get("subtopics") or [])
+        if (st or {}).get("code_ref_hash")
+    }
+    _vault_bodies: dict[str, str] = {}
+    if _used_hashes:
+        try:
+            _rich, _, _ = await domains.dd.synth.nodes.sawc.service._load_chapter_vault_rich(
+                minio, slug, list(digest.get("source_keys") or []),
+            )
+            _vault_bodies = {h: e.fence_text for h, e in _rich.items() if h in _used_hashes and getattr(e, "fence_text", "")}
+        except Exception as e:
+            logger.info(f"[checklist_eval] {slug}/{chapter_id}: vault bodies unavailable for the alignment gate ({type(e).__name__})")
     sawc_for_checks = {
         **sawc,
         "_chapter_has_code": (int(_n_vault) > 0) if isinstance(_n_vault, (int, float)) else None,
+        "_routed_hashes": sorted({
+            h for cs in (digest.get("per_section") or {}).values() for c in cs for h in (c.get("code_refs") or [])
+        }),
+        "_digest_sources": list(digest.get("source_keys") or []),
+        "_vault_bodies": _vault_bodies,
     }
     pre_results: list[schemas.CriterionResult] = []
     for fn in domain.DETERMINISTIC_CHECKS:
@@ -978,7 +1000,9 @@ async def checklist_eval_run(state: domains.dd.synth.state.SynthState) -> dict:
         truncated = truncated,
     )
 
+    judge_meta: dict = {}
     llm_results, deployment, repaired, judge_wall_ms = await _run_llm_judge(
+        meta_out = judge_meta,
         thread_id = thread_id,
         chapter_id = chapter_id,
         chapter_title = chapter_title,
@@ -992,6 +1016,15 @@ async def checklist_eval_run(state: domains.dd.synth.state.SynthState) -> dict:
 
     llm_failed = [r.name for r in llm_results if not r.passed]
     n_llm_passed = sum(1 for r in llm_results if r.passed)
+    # An all-pass judge on a chapter the deterministic gates reject (asyncio: ising-calibration passed 15/15 in 5 s over wrong
+    # code and repeated blocks) is a lenient judge — say so to the Rotator so the bandit demotes that arm for judging.
+    try:
+        if llm_results and not llm_failed and any(
+            not r.passed and r.name in params.JUDGE_CONTRADICTED_BY for r in pre_results
+        ):
+            domains.settings.chat.service.report_quality(judge_meta, params.FEEDBACK_LENIENT_JUDGE_QUALITY)
+    except Exception:
+        pass
     await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "checklist_eval", "judge_done",
         n_llm = len(llm_results),
@@ -1155,7 +1188,7 @@ async def checklist_eval_run(state: domains.dd.synth.state.SynthState) -> dict:
     best_seen_sawc_path = state.get("best_seen_sawc_path")
     is_better = (
         incoming_best_score is None
-        or (pass_rate, n_pre_passed) > (
+        or domain.best_seen_key(pass_rate, n_pre_passed) > domain.best_seen_key(
             incoming_best_score, incoming_best_pregate or 0,
         )
     )

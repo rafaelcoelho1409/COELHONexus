@@ -26,7 +26,9 @@ CHECKLIST_SCHEMA_VERSION = "1.0"
 # that failure shape — a pure infra failure got recorded as a genuine
 # content judgment. Now reset to None in that except block, matching the
 # main-call-failure path a few lines above it.
-CHECKLIST_PROMPT_VERSION = "v8-repair-timeout-deployment-reset-2026-09-08"
+# v9 (2026-10-15): two more deterministic gates (code_coverage, code_prose_alignment); best-seen prefers an iteration whose
+# deterministic gates all pass.
+CHECKLIST_PROMPT_VERSION = "v9-coverage-alignment-gates-2026-10-15"
 
 # CoCoA two-stage alignment check + atomic-claim grounding — independently
 # versioned from CHECKLIST_PROMPT_VERSION (own MinIO cache keys, see keys.py).

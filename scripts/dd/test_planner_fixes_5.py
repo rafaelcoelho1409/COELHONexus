@@ -185,7 +185,7 @@ print("7 sample top-up ok")
 
 # 8) assign: a partial vector is completed by a reask for the MISSING chapters only
 sent = []
-async def _score(prompt):
+async def _score(prompt, **kw):
     sent.append(prompt)
     if len(sent) == 1:
         return CA.schemas.DocAssignment(scores=[CA.schemas.ChapterScore(chapter_idx=i, confidence=0.3) for i in range(0, 6)])
