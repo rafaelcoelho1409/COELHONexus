@@ -418,6 +418,7 @@ def parse_topup(
     existing_subheads: set[str], max_new: int,
 ) -> tuple[list[schemas.Subtopic], list[schemas.Citation]]:
     """Validate a top-up answer: only unused routed hashes, no repeated hash or subheading, prose that matches its block."""
+    parsed = normalize_typography(parsed)
     subs: list[schemas.Subtopic] = []
     seen_h: set[str] = set()
     seen_s = {x.casefold() for x in existing_subheads}
@@ -511,6 +512,7 @@ def parse_source_topup(
 ) -> tuple[list[schemas.Subtopic], list[schemas.Citation]]:
     """Validate a source top-up: prose only, new heading, text that shares words with the facts it claims to cover; an
     offered source whose facts the prose clearly uses is cited even when the model forgot to."""
+    parsed = normalize_typography(parsed)
     facts_by_src = {k: " ".join([sm] + facts) for k, sm, facts in sources}
     toks_by_src = {k: prose_tokens(t) for k, t in facts_by_src.items()}
     first_fact = {k: facts[0] for k, _, facts in sources}
@@ -1477,6 +1479,21 @@ def parse_json_response(text: str) -> Optional[dict]:
         return None
 
 
+_TYPOGRAPHY = str.maketrans({"\u2010": "-", "\u2011": "-", "\u2012": "-", "\u00a0": " ", "\u202f": " ", "\u2009": " "})
+
+
+def normalize_typography(obj):
+    """Writer output with the non-breaking hyphen (U+2011) and no-break spaces the model likes ("low‑level", "top‑level") swapped for the
+    plain characters: they break heading anchors, text search and identifier matching in the book. Strings in nested dicts / lists only."""
+    if isinstance(obj, str):
+        return obj.translate(_TYPOGRAPHY)
+    if isinstance(obj, dict):
+        return {k: normalize_typography(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [normalize_typography(v) for v in obj]
+    return obj
+
+
 def trim_intro(intro: str) -> str:
     """An intro over INTRO_CHARS_MAX is cut at its last sentence end that fits (asyncio ch-05: 401 chars cost a writer draft two
     repair round-trips and the draft); text without a usable sentence end is cut at a word."""
@@ -1503,6 +1520,8 @@ def try_parse_draft(
     sink an otherwise good draft or burn repair round-trips on it."""
     if expected_heading and isinstance(raw, dict):
         raw = {**raw, "heading": expected_heading}
+    if isinstance(raw, dict):
+        raw = normalize_typography(raw)
     if isinstance(raw, dict) and isinstance(raw.get("intro"), str):
         raw = {**raw, "intro": trim_intro(raw["intro"])}
     try:

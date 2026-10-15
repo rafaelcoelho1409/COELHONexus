@@ -10,4 +10,5 @@ SAWC_SCHEMA_VERSION = "2.0-cookbook"
 # other sections' blocks only when it would hold < 3; an over-long intro is trimmed instead of rejecting the draft.
 # v16 (2026-10-15): the intro field asks for substance, not "what this section covers" (asyncio study: 15 of 24 intros opened "This section
 # covers/explores/explains...", failed prose_code_first_not_meta_framing on ch-03).
-SAWC_PROMPT_VERSION = "v16-intro-substance-2026-10-15"
+# v17 (2026-10-15): writer output is typography-normalized (U+2011 non-breaking hyphens in 8 of 28 ch-05 headings/explanations).
+SAWC_PROMPT_VERSION = "v17-typography-2026-10-15"

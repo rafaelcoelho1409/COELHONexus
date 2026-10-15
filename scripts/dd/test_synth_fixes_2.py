@@ -271,4 +271,17 @@ import inspect
 src = inspect.getsource(SW)
 assert "NEVER open with" in src and "framing what this section covers" not in src
 print("13 picker ceiling and intro prompt ok")
+
+# 14) writer output loses U+2011 / no-break spaces -----------------------------------------------------------------------------------------------
+raw14 = {"heading": "H", "intro": "Low\u2011level APIs for top\u2011level code in the loop, written for readers of asyncio.", "subtopics": [
+    {"code_ref_hash": "", "subheading": f"Low\u2011Level Socket {i}", "explanation": "Uses the\u00a0loop and a non\u2011blocking socket to read data from peers."} for i in range(3)],
+    "citations": [{"source_key": "k", "claim": "a claim that is long enough"}]}
+d14, err14 = SW.try_parse_draft(raw14, expected_heading="H")
+assert d14 is not None, err14
+assert "\u2011" not in d14.intro and d14.intro.startswith("Low-level APIs") and d14.subtopics[0].subheading == "Low-Level Socket 0"
+assert "\u00a0" not in d14.subtopics[0].explanation and "non-blocking" in d14.subtopics[0].explanation
+sub14, _ = SW.parse_source_topup({"subtopics": [{"subheading": "Platform\u2011Specific Limitations", "explanation": "asyncio.get_event_loop() returns the current event loop for the thread, with a non\u2011blocking default policy for callers.", "sources": ["k_two"]}]},
+                                  sources=[("k_two", "get_event_loop returns the current loop", ["asyncio.get_event_loop() returns the current event loop for the thread"])], existing_subheads=set(), max_new=2)
+assert sub14 and sub14[0].subheading == "Platform-Specific Limitations" and "non-blocking" in sub14[0].explanation        # the top-up path too
+print("14 typography normalized ok")
 print("ALL OK")
