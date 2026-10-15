@@ -810,12 +810,14 @@ async def _wipe_one_chapter(slug: str, chapter_id: str) -> dict:
         )
         try:
             running = await r.get(domains.dd.synth.keys.active_study_key(slug))
+            # A single-chapter run (the strip's ▶ button) holds only the slug's synth lock, no study registry entry.
+            held = await r.get(domains.dd.synth.keys.lock_key(slug)) if not running else None
         finally:
             await r.aclose()
-        if running:
+        if running or held:
             raise HTTPException(
                 status_code=409,
-                detail=f"a study for {slug!r} is running — cancel it before wiping a chapter",
+                detail=f"a synth run for {slug!r} is in flight — cancel it before wiping a chapter",
             )
     except HTTPException:
         raise

@@ -331,4 +331,26 @@ assert one == {"active": True, "chapter_thread_id": "docs-distiller/synth/asynci
 held_by_study = active_with({KEYS.lock_key("asyncio"): "docs-distiller/study/asyncio/S1"})
 assert held_by_study == {"active": False}, held_by_study       # a study's own lock without a registry entry is not a chapter run
 print("16 /active reports a single-chapter run ok")
+
+# 17) a chapter wipe (the ▶ re-run of a done chapter) refuses while ANY synth run holds the slug's lock ------------------------------------------------------
+from fastapi import HTTPException
+class FakeStore:
+    def __init__(self): self.deleted = []
+    async def delete_prefix(self, p): self.deleted.append(p); return 3
+    async def read_text(self, k): raise KeyError(k)
+store17 = FakeStore()
+domains.dd.ingestion.storage.service.get_storage = lambda: store17
+def wipe_with(kv):
+    R.redis_aio.from_url = lambda *a, **k: FakeRedis(kv)
+    return asyncio.run(R._wipe_one_chapter("asyncio", "ch-01-a"))
+for kv in ({KEYS.lock_key("asyncio"): b"docs-distiller/synth/asyncio/T1"},                                     # a single-chapter run in another tab
+           {KEYS.active_study_key("asyncio"): '{"study_thread_id": "docs-distiller/study/asyncio/S1"}'}):      # a study
+    try:
+        wipe_with(kv)
+        raise AssertionError("wipe must be refused")
+    except HTTPException as e:
+        assert e.status_code == 409, e.status_code
+assert store17.deleted == []                                                                                    # nothing was deleted
+assert wipe_with({})["minio_deleted"] == 3 and store17.deleted == ["synth/asyncio/ch-01-a/"]                    # idle: wipes just that chapter
+print("17 chapter wipe refused while a run holds the lock ok")
 print("ALL OK")

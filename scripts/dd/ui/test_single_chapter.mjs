@@ -169,5 +169,91 @@ assert.equal(Sy.synthThreadId, 'docs-distiller/synth/asyncio/T9');
 assert.equal(status('ch-03-c'), 'running');
 assert.equal(document.querySelector('#fw-synth-start').textContent, 'Stop');
 console.log('9 page refresh re-attaches to the running chapter ok');
+
+// ---- run-button gating: every way a synth can be running (or about to) greys out ALL the ▶ buttons -------------------------------
+const allRunDisabled = () => [...document.querySelectorAll('.fw-chstrip-run')].every(b => b.disabled);
+const allRunEnabled = () => [...document.querySelectorAll('.fw-chstrip-run')].every(b => !b.disabled);
+// settle: finish the recovered run from check 9 so we start from idle
+await sources.at(-1).onmessage({ data: JSON.stringify({ step: 'synth', kind: 'terminal', status: 'cancelled', ts: Date.now() / 1000 }) });
+await tick(120);
+routes['GET /api/v1/docs-distiller/synth/asyncio/active'] = { active: false };
+await S._refreshSynthPlanGate('asyncio');   // _tryResumeActiveSynth clears the plan flag; main.js re-gates it on every page load
+await L._pollServerBusy();
+assert.ok(allRunEnabled(), 'idle again');
+
+// 10) the moment ▶ is pressed ALL buttons (and Start) are disabled, before any request returns — a second press cannot start a second run or wipe
+let release;
+routes['POST /api/v1/docs-distiller/synth/asyncio?chapter_id=ch-01-a&mode=quality'] = () => new Promise(() => {});   // placeholder, replaced below
+const gate = new Promise(r => { release = r; });
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (url, opts = {}) => {
+  if ((opts.method || 'GET') === 'POST' && String(url).includes('chapter_id=ch-01-a')) { calls.push('POST ' + url); await gate; return { ok: true, status: 200, json: async () => ({ thread_id: 'docs-distiller/synth/asyncio/T10', status: 'queued' }), text: async () => '{}' }; }
+  return realFetch(url, opts);
+};
+routes['GET /api/v1/docs-distiller/synth/debug/graph/docs-distiller/synth/asyncio/T10/state'] = { values: {}, next: [] };
+const nPost10 = calls.filter(c => c.startsWith('POST') && c.includes('chapter_id')).length;
+runBtn('ch-01-a').click();
+assert.ok(allRunDisabled(), '▶ disabled synchronously on the click');
+assert.ok(document.querySelector('#fw-synth-start').disabled, 'Start disabled while a run is starting');
+assert.match(runBtn('ch-02-b').title, /Starting/);
+runBtn('ch-02-b').click(); runBtn('ch-01-a').click(); await L.startSingleChapter('ch-03-c'); await L.startSynth();
+await tick(60);
+release();
+await tick(120);
+assert.equal(calls.filter(c => c.startsWith('POST') && c.includes('chapter_id')).length, nPost10 + 1, 'exactly one run was requested');
+assert.equal(Sy.synthThreadId, 'docs-distiller/synth/asyncio/T10');
+assert.ok(allRunDisabled());
+globalThis.fetch = realFetch;
+await sources.at(-1).onmessage({ data: JSON.stringify({ step: 'synth', kind: 'terminal', status: 'cancelled', ts: Date.now() / 1000 }) });
+await tick(120);
+assert.ok(allRunEnabled(), 'enabled again after the run ends');
+console.log('10 double / cross presses cannot start a second run ok');
+
+// 11) a FULL synth (study) in flight disables every ▶; they come back when it ends
+routes['GET /api/v1/docs-distiller/synth/asyncio/active'] = { active: true, study_thread_id: 'docs-distiller/study/asyncio/S1', started_ts: Date.now() / 1000 };
+localStorage.clear();
+await L._tryResumeActiveSynth('asyncio');
+await tick(60);
+assert.equal(Sy.studyThreadId, 'docs-distiller/study/asyncio/S1');
+// the study's SSE replay re-renders the strip (study_start): rows built DURING a study must come up disabled
+sources.at(-1).onmessage({ data: JSON.stringify({ step: 'study', kind: 'study_start', chapter_ids: chapters.map(c => c.id), ts: Date.now() / 1000 }) });
+await tick(60);
+assert.equal(document.querySelectorAll('.fw-chstrip-run').length, 3);
+assert.ok(allRunDisabled(), '▶ disabled during a full synth');
+assert.match(runBtn('ch-01-a').title, /in flight/);
+const nPost11 = calls.filter(c => c.startsWith('POST')).length;
+runBtn('ch-01-a').click(); await tick(40);
+assert.equal(calls.filter(c => c.startsWith('POST')).length, nPost11, 'a disabled ▶ does nothing');
+Sy.setStudyThreadId(null); await S._refreshSynthPlanGate('asyncio');
+routes['GET /api/v1/docs-distiller/synth/asyncio/active'] = { active: false };
+await L._pollServerBusy();
+assert.ok(allRunEnabled(), 'enabled once the study is over');
+console.log('11 a full synth disables every ▶ ok');
+
+// 12) a run started from ANOTHER tab / session (this page only sees the server lock) also disables them, and releases them
+routes['GET /api/v1/docs-distiller/synth/asyncio/active'] = { active: true, chapter_thread_id: 'docs-distiller/synth/asyncio/OTHER' };
+await L._pollServerBusy();
+assert.ok(allRunDisabled(), '▶ disabled while another session runs');
+assert.match(runBtn('ch-02-b').title, /another tab/);
+routes['GET /api/v1/docs-distiller/synth/asyncio/active'] = { active: false };
+await L._pollServerBusy();
+assert.ok(allRunEnabled(), 'enabled again when the lock is gone');
+console.log('12 a run started elsewhere disables every ▶ ok');
+
+// 13) a full synth Start in its request window disables every ▶ too
+const gate13 = new Promise(r => { globalThis.__rel13 = r; });
+const rf = globalThis.fetch;
+globalThis.fetch = async (url, opts = {}) => {
+  if ((opts.method || 'GET') === 'POST' && String(url).endsWith('/synth/asyncio?mode=quality&budget=5')) { await gate13; return { ok: true, status: 200, json: async () => ({ study_thread_id: 'docs-distiller/study/asyncio/S13', chapter_ids: chapters.map(c => c.id) }), text: async () => '{}' }; }
+  return rf(url, opts);
+};
+const p13 = L.startSynth();
+await tick(40);
+assert.ok(allRunDisabled(), '▶ disabled while Start Synth is in its request window');
+globalThis.__rel13();
+await p13; await tick(60);
+assert.ok(allRunDisabled(), 'and while the study runs');
+globalThis.fetch = rf;
+console.log('13 Start Synth request window disables every ▶ ok');
 console.log('ALL OK');
 process.exit(0);

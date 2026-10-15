@@ -157,6 +157,18 @@ export function resetSynthCards() {
   if (!Sy.synthThreadId && !Sy.studyThreadId) _setSynthStagePill('idle');
 }
 
+// A run is "starting" from the click until the server answers (a study
+// Start, or a chapter's ▶ incl. its confirm + wipe + POST). During that gap
+// no thread id is set yet, so without this flag a second click could slip in:
+// two ▶ presses, ▶ then Start, or a re-run wiping a chapter another click is
+// about to run. All run buttons are disabled for the whole window.
+let _starting = false;
+// Another tab / browser / session holds the slug's synth lock (polled by
+// `_pollServerBusy`, since this page only learns of its OWN runs from events).
+let _serverBusy = false;
+const _TIP_STARTING = 'Starting a synth run…';
+const _TIP_BUSY = 'A synth run is in flight for this framework (started from another tab or session).';
+
 export function refreshSynthStartState() {
   if (!Sy.synthStartBtn) return;
   // States for the Start/Resume/Stop button:
@@ -188,7 +200,7 @@ export function refreshSynthStartState() {
     // The server enforces this too via POST /synth's locked-response.
     const blocker = crossStageBlockerFor('synth');
     const ready = Si.activeSlug && Si.activeRunId === null
-                  && hasNodes && Sy.synthHasPlan && !blocker;
+                  && hasNodes && Sy.synthHasPlan && !blocker && !_starting;
     if (ready) {
       Sy.synthStartBtn.removeAttribute('disabled');
       Sy.synthStartBtn.removeAttribute('title');
@@ -208,10 +220,17 @@ export function refreshSynthStartState() {
         );
       } else if (blocker) {
         Sy.synthStartBtn.setAttribute('title', blocker.title);
+      } else if (_starting) {
+        Sy.synthStartBtn.setAttribute('title', _TIP_STARTING);
       }
     }
     // The per-chapter ▶ buttons follow the same gate as Start Synth.
-    _setChStripRunState(!!ready, ready ? '' : (Sy.synthStartBtn.getAttribute('title') || 'Synth is not ready.'));
+    _setChStripRunState(
+      !!ready && !_serverBusy,
+      _starting ? _TIP_STARTING
+        : (_serverBusy ? _TIP_BUSY
+          : (ready ? '' : (Sy.synthStartBtn.getAttribute('title') || 'Synth is not ready.'))),
+    );
     Sy.synthStartBtn.classList.add('btn-primary');
     Sy.synthStartBtn.classList.remove('btn-outline');
     // Start vs Resume: when SOME (but not all) chapters are already
@@ -232,7 +251,7 @@ export function refreshSynthStartState() {
     }
   }
   if (Sy.synthWipeBtn) {
-    if (Si.activeSlug && !running && Sy.synthImplemented.size > 0) {
+    if (Si.activeSlug && !running && !_starting && Sy.synthImplemented.size > 0) {
       Sy.synthWipeBtn.removeAttribute('disabled');
       Sy.synthWipeBtn.setAttribute('title',
         "Delete this framework's synth cache " +
@@ -494,6 +513,18 @@ export async function recoverActiveSynth() {
 }
 
 export async function startSynth() {
+  if (_starting || !Si.activeSlug || Sy.synthThreadId || Sy.studyThreadId) return;
+  _starting = true;
+  refreshSynthStartState();
+  try {
+    await _startSynthInner();
+  } finally {
+    _starting = false;
+    refreshSynthStartState();
+  }
+}
+
+async function _startSynthInner() {
   if (!Si.activeSlug || Sy.synthThreadId || Sy.studyThreadId) return;
   if (!Sy.synthImplemented || !Sy.synthImplemented.size) {
     showToast('Synth pipeline not yet implemented. UI is ready; ' +
@@ -626,6 +657,18 @@ function _attachSingleChapter(slug, cid, tid, startedMs) {
 }
 
 export async function startSingleChapter(chapterId) {
+  if (_starting || !chapterId || !Si.activeSlug || Sy.synthThreadId || Sy.studyThreadId) return;
+  _starting = true;
+  refreshSynthStartState();   // every ▶ and Start go grey at once, before any await
+  try {
+    await _startSingleChapterInner(chapterId);
+  } finally {
+    _starting = false;
+    refreshSynthStartState();
+  }
+}
+
+async function _startSingleChapterInner(chapterId) {
   if (!chapterId || !Si.activeSlug || Sy.synthThreadId || Sy.studyThreadId) return;
   if (!Sy.synthImplemented || !Sy.synthImplemented.size) {
     showToast('Synth pipeline not yet implemented.');
@@ -636,7 +679,6 @@ export async function startSingleChapter(chapterId) {
   const preBlocker = crossStageBlockerFor('synth');
   if (preBlocker) {
     showNotice(preBlocker.notice);
-    refreshSynthStartState();
     return;
   }
   // Another tab / a study may already hold the slug's synth lock — find out
@@ -714,6 +756,27 @@ export async function startSingleChapter(chapterId) {
   }
   _attachSingleChapter(slug, chapterId, data.thread_id, Date.now());
 }
+
+// Does ANOTHER tab / session hold this framework's synth lock? Polled while
+// this page is idle so the ▶ buttons are not left clickable (and a done
+// chapter is never wiped) under a run this page did not start. The server
+// lock is the single-flight authority; this just mirrors it into the UI.
+export async function _pollServerBusy() {
+  if (typeof document !== 'undefined' && document.hidden) return;
+  const slug = Si.activeSlug;
+  let busy = false;
+  if (slug && !_starting && !Sy.synthThreadId && !Sy.studyThreadId) {
+    try {
+      const r = await fetch(Sa.API + '/synth/' + slug + '/active');
+      if (r.ok) busy = !!(((await r.json()) || {}).active);
+    } catch (_) { return; }   // offline: keep the last known state
+  }
+  if (busy !== _serverBusy) {
+    _serverBusy = busy;
+    refreshSynthStartState();
+  }
+}
+if (typeof window !== 'undefined') setInterval(_pollServerBusy, 10000);
 
 // The chapter's thread ended (pollSynthState dispatches this for a LIVE
 // terminal event of a run that is not part of a study): settle the row, the
