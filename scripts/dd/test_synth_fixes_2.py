@@ -218,4 +218,57 @@ asyncio.run(SV._topup_coverage(final_sections=[sec10], per_section_index=idx10, 
 SW.build_topup_prompt = _orig_prompt
 assert seen10 == [5], seen10                          # 16 - 11 = 5 (was 12 - 11 = 1, so a section routed many blocks could not print them)
 print("10 coverage top-up capacity ok")
+
+# 11) a judge outage is retried with a cool-off, and a chapter whose judge never answers is scored on its gates, not rewritten -----------------
+CKS = domains.dd.synth.nodes.checklist.service
+CKP = domains.dd.synth.nodes.checklist.params
+CKSC = domains.dd.synth.nodes.checklist.schemas
+calls11 = []
+sleeps11 = []
+async def _down(prompt, schema, **kw):
+    calls11.append(1)
+    raise RuntimeError("503 Service Unavailable")
+real_sleep = asyncio.sleep
+async def _sleep(t, *a, **k):
+    sleeps11.append(t)
+domains.settings.chat.service.chat_structured_async = _down
+CKS.asyncio.sleep = _sleep
+res11, dep11, _, _ = asyncio.run(CKS._run_llm_judge(thread_id="t", chapter_id="c", chapter_title="T", framework="asyncio", sawc={"sections": []}, digest={},
+                                                    rendered_chapter="x", rendered_digest="y", truncated=False))
+CKS.asyncio.sleep = real_sleep
+assert len(calls11) == CKP.MAX_CALL_ATTEMPTS + CKP.JUDGE_EXTRA_ATTEMPTS == 4, calls11
+assert CKP.JUDGE_COOLOFF_S in sleeps11 and dep11 is None and all(r.feedback.startswith("judge_unavailable") and not r.passed for r in res11) and len(res11) == 5
+print("11 judge outage retried with a cool-off ok")
+
+# 12) an unexplained FAIL ("some feedback") is asked again, then counted as passed ----------------------------------------------------------------
+assert CK.is_placeholder_feedback("some feedback") and CK.is_placeholder_feedback("") and CK.is_placeholder_feedback("N/A.") and not CK.is_placeholder_feedback("s1 intro is meta-framing")
+def payload12(fb):
+    v = {n: {"passed": True, "feedback": ""} for n in CKP.LLM_CRITERIA}
+    v["chapter_reads_coherently"] = {"passed": False, "feedback": fb}
+    return CKSC.LLMJudgePayload.model_validate(v)
+seq12 = [payload12("some feedback"), payload12("some feedback")]
+async def _ask(prompt, schema, **kw):
+    return seq12.pop(0), {"deployment": "x/y"}
+domains.settings.chat.service.chat_structured_async = _ask
+res12, _, _, _ = asyncio.run(CKS._run_llm_judge(thread_id="t", chapter_id="c", chapter_title="T", framework="asyncio", sawc={"sections": []}, digest={},
+                                                rendered_chapter="x", rendered_digest="y", truncated=False))
+assert all(r.passed for r in res12) and not seq12, ([r.name for r in res12 if not r.passed], len(seq12))   # asked twice, still unexplained -> pass
+seq12 = [payload12("some feedback"), payload12("s1 and s2 are disconnected fragments with no linking prose")]
+res12b = asyncio.run(CKS._run_llm_judge(thread_id="t", chapter_id="c", chapter_title="T", framework="asyncio", sawc={"sections": []}, digest={},
+                                        rendered_chapter="x", rendered_digest="y", truncated=False))[0]
+assert [r.name for r in res12b if not r.passed] == ["chapter_reads_coherently"] and "disconnected" in res12b[0].feedback, res12b[0]   # the second answer explains it
+seq12 = [payload12("s1 repeats s2 almost word for word")]
+res12c = asyncio.run(CKS._run_llm_judge(thread_id="t", chapter_id="c", chapter_title="T", framework="asyncio", sawc={"sections": []}, digest={},
+                                        rendered_chapter="x", rendered_digest="y", truncated=False))[0]
+assert [r.name for r in res12c if not r.passed] == ["chapter_reads_coherently"] and not seq12   # a real reason: one call, kept
+print("12 unexplained FAIL asked again ok")
+
+# 13) the picker ceiling is inclusive; the intro field asks for substance -----------------------------------------------------------------------------
+assert CK.check_picker_fallback_rate_low({"coverage_stats": {"n_picker_fallbacks": 1, "n_critic_picks": 2}}).passed
+assert not CK.check_picker_fallback_rate_low({"coverage_stats": {"n_picker_fallbacks": 2, "n_critic_picks": 3}}).passed
+wp = SW.build_writer_prompt.__wrapped__ if hasattr(SW.build_writer_prompt, "__wrapped__") else SW.build_writer_prompt
+import inspect
+src = inspect.getsource(SW)
+assert "NEVER open with" in src and "framing what this section covers" not in src
+print("13 picker ceiling and intro prompt ok")
 print("ALL OK")

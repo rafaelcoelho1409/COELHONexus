@@ -166,6 +166,10 @@ TIMEOUT_S_PERSIST_WRITE = 60.0
 # verdict (which triggers a full mgsr_replan cycle) — same idiom as
 # outline_sdp/digest_construct/sawc_write's context-overflow retry.
 MAX_CALL_ATTEMPTS = 2
+# A judge that stays unreachable after MAX_CALL_ATTEMPTS gets one cool-off and JUDGE_EXTRA_ATTEMPTS more tries before the chapter is
+# judged without it (asyncio ch-05: a Rotator outage failed all 5 judge criteria after 177 s and a perfectly gated chapter was rewritten).
+JUDGE_COOLOFF_S = 45.0
+JUDGE_EXTRA_ATTEMPTS = 2
 
 # check_code_coverage: a chapter that routes at least COVERAGE_MIN_ROUTED code blocks must print at least COVERAGE_MIN_CODE of
 # them, and a chapter of at least COVERAGE_MIN_SOURCE_COUNT sources must cite at least COVERAGE_MIN_SOURCES of them (asyncio

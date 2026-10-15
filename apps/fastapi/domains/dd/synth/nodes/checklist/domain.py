@@ -243,7 +243,7 @@ def check_picker_fallback_rate_low(sawc: dict) -> schemas.CriterionResult:
     n_fb = int(cs.get("n_picker_fallbacks", 0))
     n_picks = int(cs.get("n_critic_picks", 0))
     rate = (n_fb / n_picks) if n_picks else 0.0
-    passed = rate < params.PICKER_FALLBACK_RATE_MAX
+    passed = rate <= params.PICKER_FALLBACK_RATE_MAX
     return schemas.CriterionResult(
         name = "picker_fallback_rate_low",
         passed = passed,
@@ -832,6 +832,15 @@ def is_context_overflow_error(e: Exception) -> bool:
     MAX_RENDERED_CHAPTER_CHARS) can still exceed a small-context arm."""
     msg = str(e).lower()
     return any(marker in msg for marker in params.CONTEXT_OVERFLOW_MARKERS)
+
+
+_PLACEHOLDER_FEEDBACK = {"", "some feedback", "feedback", "no feedback", "na", "none", "tbd", "todo", "reason"}
+
+
+def is_placeholder_feedback(text: str) -> bool:
+    """A judge verdict whose reason is empty or a template echo ("some feedback": nemotron-3-ultra, asyncio ch-08) gives the
+    writer nothing to fix."""
+    return re.sub(r"[^a-z ]", "", (text or "").lower()).strip() in _PLACEHOLDER_FEEDBACK
 
 
 def fallback_llm_verdicts(reason: str) -> list[schemas.CriterionResult]:

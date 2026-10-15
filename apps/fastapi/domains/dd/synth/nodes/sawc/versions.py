@@ -8,4 +8,6 @@ SAWC_SCHEMA_VERSION = "2.0-cookbook"
 # v14 (2026-10-15): the source top-up writes ONE connected subtopic per page (>= 18 words); fragments of one page are folded together.
 # v15 (2026-10-15): the coverage top-up grows a section to TOPUP_SECTION_MAX (not 12) with 8 new per call; a bank below the writer minimum borrows
 # other sections' blocks only when it would hold < 3; an over-long intro is trimmed instead of rejecting the draft.
-SAWC_PROMPT_VERSION = "v15-capacity-share-trim-2026-10-15"
+# v16 (2026-10-15): the intro field asks for substance, not "what this section covers" (asyncio study: 15 of 24 intros opened "This section
+# covers/explores/explains...", failed prose_code_first_not_meta_framing on ch-03).
+SAWC_PROMPT_VERSION = "v16-intro-substance-2026-10-15"

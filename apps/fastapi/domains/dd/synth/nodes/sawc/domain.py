@@ -1143,8 +1143,10 @@ def build_writer_prompt(
         f"== OUTPUT — strict JSON (cookbook v2 schema, code-first order) ==\n"
         f"{{\n"
         f'  "heading":  "{section_heading}",  /* ECHO verbatim, no "# " */\n'
-        f'  "intro":    "1-2 sentences (20-400 chars) framing what this '
-        f'section covers and why the reader should care. NO code fences.",\n'
+        f'  "intro":    "1-2 sentences (20-400 chars) of substance: name the '
+        f"section's core APIs and the problem they solve, opening with the subject itself "
+        f"(e.g. 'asyncio.Lock serializes access to shared state...'). NEVER open with "
+        f"'This section covers/explores/explains/shows' or 'Learn how to'. NO code fences.\",\n"
         f'  "subtopics": [\n'
         f'    {{\n'
         f'      "code_ref_hash": "16-hex hash — PICK THIS FIRST from the '

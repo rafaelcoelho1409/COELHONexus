@@ -40,6 +40,7 @@ class ChecklistEvaluation(BaseModel):
     chapter_passed: bool                    # pass_rate >= PASS_THRESHOLD
     failed_feedback: list[str]              # extracted for mgsr_replan
     n_llm_judge_repairs: int = 0
+    judge_unavailable:   bool = False        # the judge never answered; criteria are the deterministic gates only
     deployment_judge:    Optional[str] = None
     wall_ms:             Optional[int] = None
 

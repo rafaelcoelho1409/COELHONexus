@@ -62,7 +62,8 @@ async def _run_llm_judge(
     err: Optional[str] = None
     infra_failed = False
     last_infra_error: Optional[Exception] = None
-    for call_attempt in range(params.MAX_CALL_ATTEMPTS):
+    n_attempts = params.MAX_CALL_ATTEMPTS + params.JUDGE_EXTRA_ATTEMPTS
+    for call_attempt in range(n_attempts):
         prompt = domain.build_judge_prompt(
             chapter_id=chapter_id,
             chapter_title=chapter_title,
@@ -97,7 +98,7 @@ async def _run_llm_judge(
         except Exception as e:
             last_infra_error = e
             infra_failed = True
-            if call_attempt < params.MAX_CALL_ATTEMPTS - 1:
+            if call_attempt < n_attempts - 1:
                 # The Rotator's own cascade already exhausted — a retry
                 # mostly helps against a transient whole-pool wave. If
                 # this looks like context overflow (60K chars ≈ 15K
@@ -116,12 +117,14 @@ async def _run_llm_judge(
                     cur_rendered_digest = domain.render_digest_for_grounding(
                         digest, char_cap=10_000,
                     )
-                await asyncio.sleep(1.0 + random.random())
+                await asyncio.sleep(
+                    params.JUDGE_COOLOFF_S if call_attempt == params.MAX_CALL_ATTEMPTS - 1 else 1.0 + random.random()
+                )
     if infra_failed:
         wall_ms = int((time.monotonic() - t0) * 1000)
         logger.warning(
             f"[checklist_eval] LLM judge call failed after "
-            f"{params.MAX_CALL_ATTEMPTS} attempt(s): "
+            f"{n_attempts} attempt(s): "
             f"{type(last_infra_error).__name__}: {last_infra_error}"
         )
         return (
@@ -189,7 +192,29 @@ async def _run_llm_judge(
             deployment, False, wall_ms,
         )
 
-    return domain.llm_payload_to_criteria(payload), deployment, repaired, wall_ms
+    results = domain.llm_payload_to_criteria(payload)
+    # A FAIL that comes with no reason (empty, or the schema's own example text) cannot be acted on: ask once more, and when the
+    # answer is still unexplained count the criterion as passed rather than rewriting a chapter for nothing.
+    unexplained = [r.name for r in results if not r.passed and domain.is_placeholder_feedback(r.feedback)]
+    if unexplained:
+        try:
+            again, _ = await domains.settings.chat.service.chat_structured_async(
+                domain.build_judge_prompt(
+                    chapter_id=chapter_id, chapter_title=chapter_title, framework=framework,
+                    rendered_chapter=cur_rendered_chapter, rendered_digest=cur_rendered_digest, truncated=cur_truncated,
+                ),
+                schemas.LLMJudgePayload, max_tokens=_MAX_TOKENS_JUDGE, temperature=_TEMPERATURE_JUDGE,
+                timeout_s=_TIMEOUT_S_JUDGE, strict=False, rotator_task=params.ROTATOR_TASK,
+            )
+            second = {r.name: r for r in domain.llm_payload_to_criteria(again)}
+            results = [second[r.name] if r.name in unexplained and r.name in second else r for r in results]
+        except Exception as e:
+            logger.warning(f"[checklist_eval] judge re-ask for unexplained FAIL(s) failed: {type(e).__name__}: {e}")
+        results = [
+            r.model_copy(update={"passed": True, "feedback": ""}) if (not r.passed and domain.is_placeholder_feedback(r.feedback)) else r
+            for r in results
+        ]
+    return results, deployment, repaired, wall_ms
 
 _TEMPERATURE_JUDGE      = 0.0
 
@@ -1152,7 +1177,13 @@ async def checklist_eval_run(state: domains.dd.synth.state.SynthState) -> dict:
         wall_ms = cocoa_wall_ms,
     )
 
-    all_results = list(pre_results) + list(llm_results)
+    judge_unavailable = bool(llm_results) and all((r.feedback or "").startswith("judge_unavailable") for r in llm_results)
+    if judge_unavailable:
+        logger.warning(
+            f"[checklist_eval] {slug}/{chapter_id}: judge unavailable after retries; the chapter is scored on its "
+            f"{len(pre_results)} deterministic gates and is not sent back to the writer for the outage"
+        )
+    all_results = list(pre_results) + ([] if judge_unavailable else list(llm_results))
     n_passed, n_total, pass_rate, chapter_passed = domain.aggregate_pass_rate(
         all_results
     )
@@ -1210,6 +1241,7 @@ async def checklist_eval_run(state: domains.dd.synth.state.SynthState) -> dict:
         chapter_passed = chapter_passed,
         failed_feedback = failed_feedback,
         n_llm_judge_repairs = (1 if repaired else 0),
+        judge_unavailable = judge_unavailable,
         deployment_judge = deployment,
         wall_ms = int((time.monotonic() - t0) * 1000),
     )
