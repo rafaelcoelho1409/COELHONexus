@@ -11,6 +11,10 @@ MERGE_JACCARD = 0.60
 MERGE_CONTAINMENT = 0.80
 # Sections with fewer than this many distinct primaries are folded under containment-merge.
 MERGE_MIN_PRIMARY_TO_DEFEND = 2
+# Two sections are never folded into one that would hold more routed code blocks than a section can print (sawc caps a topped-up
+# section at TOPUP_SECTION_MAX subtopics): asyncio ch-05 folded "Network Servers" into a section already routed 24 of the chapter's
+# 35 blocks, and the chapter printed 17.
+MERGE_MAX_BLOCKS = 14
 
 SUMMARY_MIN_CHARS = 20
 SUMMARY_MAX_CHARS = 600

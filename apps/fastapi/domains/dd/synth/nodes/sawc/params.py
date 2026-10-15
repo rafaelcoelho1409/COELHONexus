@@ -68,7 +68,7 @@ REALIGN_MIN_BANK = 8
 # section outline x 4-5 subtopics caps what the writer reaches). Verbatim blocks only; every guard still runs after it.
 TOPUP_ENABLED = True
 TOPUP_MIN_UNUSED = 2          # fewer unused routed blocks than this: not worth a call
-TOPUP_MAX_NEW = 6             # subtopics added per section per call
+TOPUP_MAX_NEW = 8             # subtopics added per section per call (6 -> 8: a section routed 24 blocks, asyncio ch-05)
 TOPUP_CONCURRENCY = 3
 TOPUP_MAX_TOKENS = 4000
 TOPUP_TIMEOUT_S = 150.0
@@ -92,3 +92,8 @@ TOPUP_SRC_MIN_WORDS = 18       # a topped-up subtopic shorter than this is dropp
 # were dropped by the cap, so the coverage gate kept failing); the persisted Section has no such limit.
 TOPUP_CITATIONS_MAX = 30
 
+
+# A section whose digest-routed bank is smaller than the writer minimum borrows blocks routed to OTHER sections only when it would
+# otherwise hold fewer than this many (asyncio ch-05: a 5-block section borrowed 15 blocks from the 24-block one, printed them first,
+# and the owner's copies were dropped as repeats).
+BANK_SHARE_BELOW = 3

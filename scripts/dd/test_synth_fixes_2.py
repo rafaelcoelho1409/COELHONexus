@@ -164,4 +164,58 @@ assert "EXACT words" in dp and "sibling_chapter" in dp and "Do NOT correct this 
 pp = BH.prompts.build_patch_paragraph_prompt(canonical_terms="t", chapter_id="ch-1", framework="asyncio", paragraph="PARA", violations_block="V")
 assert "PARA" in pp and "ONE paragraph" in pp
 print("7 prompts ok")
+
+# 8) sections are not merged when the result would hold more routed code blocks than a section can print ------------------------------
+def src_with(key, sid_hashes):
+    return DS.SourceDigest(source_key=key, source_title=key, overall_summary="x" * 40, contributes_to=[
+        DS.SectionContribution(section_id=sid, source_key=key, relevance="primary", summary="y" * 30, key_facts=["a fact long enough"], code_refs=hs)
+        for sid, hs in sid_hashes.items()])
+hx = [f"{i:016x}" for i in range(40)]
+outline2 = [{"section_id": "s1", "heading": "A", "description": ""}, {"section_id": "s2", "heading": "B", "description": ""}]
+def merge_case(n_big, n_small):
+    ps = [src_with("p1", {"s1": hx[:n_big]}), src_with("p2", {"s1": [], "s2": hx[n_big:n_big + n_small]})]
+    ps.append(src_with("p3", {"s2": []}))
+    # s2's whole primary pool {p2, p3}: p2 is also in s1, p3 only in s2 -> force containment by giving p3 to s1 as well
+    ps[2] = src_with("p3", {"s1": [], "s2": []})
+    return DG.merge_overlapping_sections(ps, outline2)[1]
+assert merge_case(6, 4) == {"s2": "s1"} or merge_case(6, 4) == {}      # small chapters may still fold (existing behaviour)
+heavy = [src_with("p1", {"s1": hx[:20]}), src_with("p2", {"s1": hx[20:22], "s2": hx[22:28]}), src_with("p3", {"s1": [], "s2": []})]
+assert DG.merge_overlapping_sections(heavy, outline2)[1] == {}, "20+8 blocks must stay two sections"
+light = [src_with("p1", {"s1": hx[:5]}), src_with("p2", {"s1": hx[5:6], "s2": hx[6:8]}), src_with("p3", {"s1": [], "s2": []})]
+assert DG.merge_overlapping_sections(light, outline2)[1] == {"s2": "s1"}, "a light pair still folds"
+print("8 merge is capped by routed blocks ok")
+
+# 9) an over-long intro is trimmed, not rejected ---------------------------------------------------------------------------------------
+long_intro = ("This section walks through the loop. " * 11).strip()          # 405 chars of whole sentences
+assert len(long_intro) > SW.params.INTRO_CHARS_MAX
+t = SW.trim_intro(long_intro)
+assert SW.params.INTRO_CHARS_MIN <= len(t) <= SW.params.INTRO_CHARS_MAX and t.endswith("."), (len(t), t[-30:])
+noend = "word " * 90
+t2 = SW.trim_intro(noend)
+assert len(t2) <= SW.params.INTRO_CHARS_MAX and t2.endswith(".")
+assert SW.trim_intro("Short intro that is fine and long enough to pass.") == "Short intro that is fine and long enough to pass."
+SCH2 = domains.dd.synth.nodes.sawc.schemas
+raw = {"heading": "H", "intro": long_intro, "subtopics": [{"code_ref_hash": "", "subheading": f"Topic {i}", "explanation": "word " * 10} for i in range(3)],
+       "citations": [{"source_key": "k", "claim": "a claim that is long enough"}]}
+d, err = SW.try_parse_draft(raw, expected_heading="H")
+assert d is not None and err is None, err
+print("9 over-long intro trimmed ok")
+
+# 10) the coverage top-up may grow a section past the writer's 12 --------------------------------------------------------------------
+import json as _json
+subs10 = [SCH2.Subtopic(code_ref_hash=f"{i:016x}", subheading=f"Topic {i}", explanation="word " * 10) for i in range(11)]
+sec10 = SCH2.Section(section_id="s1", heading="Sec s1", intro="x" * 70, subtopics=subs10, citations=[SCH2.Citation(source_key="k", claim="a claim that is long enough")])
+idx10 = {"s1": [{"source_key": "k", "relevance": "primary", "summary": "s", "key_facts": ["a fact long enough"], "code_refs": [f"{100 + i:016x}" for i in range(9)]}]}
+vault10 = {f"{100 + i:016x}": {"fence_text": f"```python\nawait thing_{i}()\n```"} for i in range(9)}
+seen10 = []
+_orig_prompt = SW.build_topup_prompt
+SW.build_topup_prompt = lambda **kw: (seen10.append(kw["max_new"]), "p")[1]
+SV = domains.dd.synth.nodes.sawc.service
+async def _chat10(prompt, **kw):
+    return _json.dumps({"subtopics": []}), {}
+domains.settings.chat.service.chat_text_async = _chat10
+asyncio.run(SV._topup_coverage(final_sections=[sec10], per_section_index=idx10, vault_rich=vault10, sections_by_id={}, framework="a", chapter_id="c", chapter_title="t"))
+SW.build_topup_prompt = _orig_prompt
+assert seen10 == [5], seen10                          # 16 - 11 = 5 (was 12 - 11 = 1, so a section routed many blocks could not print them)
+print("10 coverage top-up capacity ok")
 print("ALL OK")

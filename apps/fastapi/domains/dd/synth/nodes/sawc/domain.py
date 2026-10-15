@@ -1475,6 +1475,20 @@ def parse_json_response(text: str) -> Optional[dict]:
         return None
 
 
+def trim_intro(intro: str) -> str:
+    """An intro over INTRO_CHARS_MAX is cut at its last sentence end that fits (asyncio ch-05: 401 chars cost a writer draft two
+    repair round-trips and the draft); text without a usable sentence end is cut at a word."""
+    s = " ".join(intro.split())
+    if len(s) <= params.INTRO_CHARS_MAX:
+        return s
+    cut = s[:params.INTRO_CHARS_MAX]
+    end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "), cut.rfind(".") if cut.endswith(".") else -1)
+    if end + 1 >= params.INTRO_CHARS_MIN:
+        return cut[:end + 1]
+    cut = cut[:cut.rfind(" ")].rstrip(" ,;:-") if " " in cut else cut
+    return cut.rstrip(".") + "."
+
+
 def try_parse_draft(
     raw: dict,
     *,
@@ -1487,6 +1501,8 @@ def try_parse_draft(
     sink an otherwise good draft or burn repair round-trips on it."""
     if expected_heading and isinstance(raw, dict):
         raw = {**raw, "heading": expected_heading}
+    if isinstance(raw, dict) and isinstance(raw.get("intro"), str):
+        raw = {**raw, "intro": trim_intro(raw["intro"])}
     try:
         return schemas.LLMSectionDraft.model_validate(raw), None
     except ValidationError as e:

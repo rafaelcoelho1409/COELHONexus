@@ -879,7 +879,7 @@ async def _topup_coverage(
 
     async def _one(sec: schemas.Section) -> tuple[schemas.Section, int]:
         un = unused.get(sec.section_id) or []
-        n_new = min(len(un), params.SUBTOPICS_MAX - len(sec.subtopics), params.TOPUP_MAX_NEW)
+        n_new = min(len(un), params.TOPUP_SECTION_MAX - len(sec.subtopics), params.TOPUP_MAX_NEW)
         if len(un) < params.TOPUP_MIN_UNUSED or n_new < 1:
             return sec, 0
         contribs = per_section_index.get(sec.section_id) or []
@@ -1308,7 +1308,7 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
                     h for h in ranked_chapter
                     if h not in allowed_hashes_set and h not in claimed_elsewhere
                 ][:needed]
-                if len(allowed_hashes_set) + len(pads) < _MIN_BANK_SIZE:       # nothing unclaimed left: share rather than starve
+                if len(allowed_hashes_set) + len(pads) < params.BANK_SHARE_BELOW:       # nothing unclaimed left: share rather than starve
                     pads += [
                         h for h in ranked_chapter
                         if h not in allowed_hashes_set and h not in pads

@@ -79,8 +79,16 @@ def merge_overlapping_sections(
         for src in per_source for c in src.contributes_to
     }
 
+    def blocks(merged: dict[str, str]) -> dict[str, set[str]]:
+        out: dict[str, set[str]] = defaultdict(set)
+        for src in per_source:
+            for c in src.contributes_to:
+                out[_resolve_merge(merged, c.section_id)].update(c.code_refs)
+        return out
+
     while True:
         prim = pools(merged_map)
+        blk = blocks(merged_map)
         live = sorted(
             (sid for sid in live_ids if sid not in merged_map),
             key = lambda s: order.get(s, 9_999),
@@ -104,10 +112,10 @@ def merge_overlapping_sections(
                 jac = (len(inter) / len(union)) if union else 0.0
                 contain = (len(inter) / len(psmall)) if psmall else 1.0
                 unique_small = len(psmall - pbig)
-                if jac >= jaccard or (
+                if (jac >= jaccard or (
                     contain >= containment
                     and unique_small < min_primary_to_defend
-                ):
+                )) and len(blk.get(big, set()) | blk.get(small, set())) <= params.MERGE_MAX_BLOCKS:
                     chosen = (small, big)  # (loser, winner)
                     break
             if chosen:
