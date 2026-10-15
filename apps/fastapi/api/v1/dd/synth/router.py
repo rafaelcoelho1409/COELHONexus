@@ -137,18 +137,28 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
 @router.get("/{slug}/active")
 async def synth_active(slug: str, response: Response) -> dict:
     """Page-refresh recovery: returns the study orchestrator's thread_id
-    so the UI can reconnect to its SSE without browser localStorage."""
+    so the UI can reconnect to its SSE without browser localStorage. A single-chapter run (the per-chapter ▶ button on the
+    chapter list) has no study registry entry; its thread is the value of the slug's synth lock, returned as `chapter_thread_id`."""
     response.headers["Cache-Control"] = "no-store"
+    chapter_tid = None
     try:
         r = redis_aio.from_url(
             domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
         )
         try:
             sid = await r.get(domains.dd.synth.keys.active_study_key(slug))
+            if not sid:
+                held = await r.get(domains.dd.synth.keys.lock_key(slug))
+                if isinstance(held, (bytes, bytearray)):
+                    held = held.decode("utf-8", "replace")
+                if held and not str(held).startswith("docs-distiller/study/"):
+                    chapter_tid = str(held)
         finally:
             await r.aclose()
     except Exception:
         return {"active": False}
+    if chapter_tid:
+        return {"active": True, "chapter_thread_id": chapter_tid, "study_thread_id": None, "started_ts": None}
     if not sid:
         return {"active": False}
     if isinstance(sid, (bytes, bytearray)):

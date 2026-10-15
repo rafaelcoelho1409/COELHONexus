@@ -188,6 +188,37 @@
   border-color: var(--ingested-border);
   color: var(--ingested-text);
 }
+/* Per-cell "run only this chapter" button — same compact icon-button as
+   "Open in Study", to its left. Enabled by lifecycle.js
+   `refreshSynthStartState` via chstrip.js `_setChStripRunState`; the
+   tooltip carries the reason when disabled. */
+.fw-chstrip-cell .fw-chstrip-run {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  padding: 3px 7px;
+  font-size: 0.78rem;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s,
+              opacity 0.12s;
+}
+.fw-chstrip-cell .fw-chstrip-run:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.fw-chstrip-cell .fw-chstrip-run:not(:disabled):hover {
+  background: var(--running-bg);
+  border-color: var(--running-border);
+  color: var(--running-text);
+}
+.fw-chstrip-cell[data-status="running"] .fw-chstrip-run {
+  border-color: var(--running-border);
+  color: var(--running-text);
+}
 .fw-chstrip-cell[data-status="done"] .fw-chstrip-open {
   border-color: var(--ingested-border);
   color: var(--ingested-text);

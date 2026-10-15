@@ -73,6 +73,14 @@ export function _renderChStrip(items) {
       '  <span class="num">' + (i + 1) + '</span>' +
       '  <span class="label">' + escapeHtml(title) + '</span>' +
       '  <span class="time"></span>' +
+      // "Run only this chapter" button — same single-chapter run the
+      // study orchestrator does per chapter, started on its own; the
+      // graph attaches to that chapter's thread and updates live.
+      // Enabled/disabled by `_setChStripRunState` (a run is in flight,
+      // no plan, planner running ...).
+      '  <button type="button" class="fw-chstrip-run" ' +
+      '          data-chapter-id="' + c.id.replace(/"/g, '&quot;') + '" ' +
+      '          title="Synthesize only this chapter">▶</button>' +
       // "Open in Study" button — disabled until the chapter renders.
       // Enabled by `_markChStripCell(id, "done")`. Click navigates to
       // the Study page with the chapter pre-selected.
@@ -83,7 +91,35 @@ export function _renderChStrip(items) {
       '</div>'
     );
   }).join('');
+  _applyChStripRunState();
   _updateChStripCounter();
+}
+
+// ▶ "run only this chapter" buttons — one shared enabled/disabled state,
+// pushed by lifecycle.js `refreshSynthStartState` (which already knows
+// whether a run is live, whether a plan exists and whether the planner
+// holds the cross-stage lock). Re-applied after every strip render so
+// freshly built rows never start out clickable during a run.
+let _runState = { enabled: false, title: 'Synthesize only this chapter' };
+export function _setChStripRunState(enabled, title) {
+  _runState = { enabled: !!enabled, title: title || '' };
+  _applyChStripRunState();
+}
+function _applyChStripRunState() {
+  if (!Sy.chstripCellsEl) return;
+  Sy.chstripCellsEl.querySelectorAll('.fw-chstrip-run').forEach(btn => {
+    const cell = btn.closest('.fw-chstrip-cell');
+    const done = cell && cell.dataset.status === 'done';
+    if (_runState.enabled) {
+      btn.removeAttribute('disabled');
+      btn.title = done
+        ? 'Re-synthesize only this chapter (its current output is replaced)'
+        : 'Synthesize only this chapter';
+    } else {
+      btn.setAttribute('disabled', 'disabled');
+      btn.title = _runState.title || 'Synthesize only this chapter';
+    }
+  });
 }
 
 // Upgrade the checklist labels from id-derived fallbacks to the exact
@@ -119,6 +155,7 @@ export function _markChStripCell(chapterId, status) {
     // Sync the "Open in Study" button: enable on done, disable on
     // any non-done transition (failed/cancelled/back-to-pending so a
     // re-Synth doesn't leave a dead-link enabled).
+    _applyChStripRunState();   // "Re-synthesize" wording follows the status
     const openBtn = cell.querySelector('.fw-chstrip-open');
     if (openBtn) {
       if (status === 'done') {
@@ -334,6 +371,16 @@ export function _onStripCellClick(cellEl) {
 
 if (Sy.chstripCellsEl) {
   Sy.chstripCellsEl.addEventListener('click', ev => {
+    // "Run only this chapter" button — intercept FIRST (before the
+    // cell's click-to-view-graph handler) and hand off to lifecycle.js.
+    const runBtn = ev.target.closest('.fw-chstrip-run');
+    if (runBtn) {
+      ev.stopPropagation();
+      if (runBtn.hasAttribute('disabled')) return;
+      const cid = runBtn.dataset.chapterId;
+      if (cid) deps.startSingleChapter?.(cid);
+      return;
+    }
     // "Open in Study" button — intercept FIRST so the cell's
     // click-to-focus-subgraph handler doesn't also fire. Navigates
     // to the Study page with `?chapter=cid` so it deep-links to that

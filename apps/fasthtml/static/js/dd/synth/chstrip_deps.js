@@ -20,6 +20,8 @@ export const deps = {
   _resetSynthEventBuffer:   null,
   renderSynthCards:         null,
   pollSynthState:           null,
+  // Per-chapter ▶ button: runs ONLY that chapter (lifecycle.js startSingleChapter).
+  startSingleChapter:       null,
   // _nodeDrawerRef is module-private inside synth.js (mutated by
   // _setNodeDrawerRef). chstrip.js calls a getter so synth.js can keep
   // the variable's identity.

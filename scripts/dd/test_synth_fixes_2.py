@@ -302,4 +302,33 @@ class Broken(FakeMinio):
 assert asyncio.run(RS._publish_best_checklist(Broken({CKK.best_blob_key("a", "c"): "B"}), "a", "c")) is False                              # fail-soft
 assert CKK.best_blob_key("a", "c").endswith("a/c/checklist-best.json")
 print("15 shipped evaluation published ok")
+
+# 16) /active reports a single-chapter run (the strip's per-chapter ▶ button) so a page refresh can re-attach ---------------------------------------------
+import importlib
+from fastapi import Response
+import os
+for _ in range(30):                 # the router's module-level config reads env vars the cluster sets; give missing ones a dummy
+    try:
+        R = importlib.import_module("api.v1.dd.synth.router")
+        break
+    except KeyError as e:
+        os.environ.setdefault(str(e.args[0]), "localhost")
+        for m in [m for m in sys.modules if m.startswith("api.")]:
+            del sys.modules[m]
+class FakeRedis:
+    def __init__(self, kv): self.kv = kv
+    async def get(self, k): return self.kv.get(k)
+    async def aclose(self): pass
+def active_with(kv):
+    R.redis_aio.from_url = lambda *a, **k: FakeRedis(kv)
+    return asyncio.run(R.synth_active("asyncio", Response()))
+KEYS = domains.dd.synth.keys
+assert active_with({}) == {"active": False}
+study = active_with({KEYS.active_study_key("asyncio"): '{"study_thread_id": "docs-distiller/study/asyncio/S1", "started_ts": 12.5}'})
+assert study["active"] and study["study_thread_id"] == "docs-distiller/study/asyncio/S1" and study["started_ts"] == 12.5 and "chapter_thread_id" not in study
+one = active_with({KEYS.lock_key("asyncio"): b"docs-distiller/synth/asyncio/T1"})
+assert one == {"active": True, "chapter_thread_id": "docs-distiller/synth/asyncio/T1", "study_thread_id": None, "started_ts": None}, one
+held_by_study = active_with({KEYS.lock_key("asyncio"): "docs-distiller/study/asyncio/S1"})
+assert held_by_study == {"active": False}, held_by_study       # a study's own lock without a registry entry is not a chapter run
+print("16 /active reports a single-chapter run ok")
 print("ALL OK")

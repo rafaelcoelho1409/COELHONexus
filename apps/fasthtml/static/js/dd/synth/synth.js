@@ -115,9 +115,11 @@ export {
   _hydrateChStripFromChapters,
   _highlightStripCell,
   _onStripCellClick,
+  _setChStripRunState,
 } from './chstrip.js';
 import { registerChstripDeps } from './chstrip_deps.js';
 registerChstripDeps({
+  startSingleChapter,
   _resizeSynthCanvas,
   refreshSynthStartState,
   resetSynthCards,
@@ -338,6 +340,7 @@ import {
   // click handler body (~line 192) referenced `_forgetActiveStudy` /
   // `_forgetActiveSynth` — same.
   startSynth,
+  startSingleChapter,
   cancelSynth,
   _forgetActiveStudy,
   _forgetActiveSynth,
@@ -366,5 +369,5 @@ export {
   _studyStorageKey, _rememberActiveStudy, _forgetActiveStudy,
   _getActiveStudy,
   _tryResumeActiveSynth, recoverActiveSynth,
-  startSynth, cancelSynth, wipeSynth, loadSynthInfo,
+  startSynth, startSingleChapter, cancelSynth, wipeSynth, loadSynthInfo,
 } from './lifecycle.js';

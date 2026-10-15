@@ -1,0 +1,8 @@
+{
+  "name": "dd-ui-tests",
+  "private": true,
+  "type": "module",
+  "description": "Offline checks of the Docs Distiller page scripts (jsdom + the real ES modules)",
+  "scripts": { "test": "node --import ./register.mjs test_single_chapter.mjs" },
+  "devDependencies": { "jsdom": "^27.0.0" }
+}

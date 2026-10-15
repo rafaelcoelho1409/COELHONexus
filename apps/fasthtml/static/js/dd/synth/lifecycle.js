@@ -20,7 +20,7 @@ import { $activePipeline } from '@nx/stores/pipeline.js';
 import { _setSynthStagePill, _renderSynthGraph, _kpiForSynthNode } from './graph.js';
 import { _resizeSynthCanvas, _resetSynthEventBuffer, _refreshOpenSynthDrawer, _updateCoRefineChip } from './canvas.js';
 import { synthCardEl, _synthAllImplementedComplete, _genSynthThreadId, pollSynthState, pollStudyState } from './polling.js';
-import { _showChStrip, _renderChStrip, _applyChStripTitles, _markChStripCell, _markChStripCellTime, _hydrateChStripFromChapters, _resetStudyState } from './chstrip.js';
+import { _showChStrip, _renderChStrip, _applyChStripTitles, _markChStripCell, _markChStripCellTime, _hydrateChStripFromChapters, _resetStudyState, _setChStripRunState, _highlightStripCell } from './chstrip.js';
 import {
   _synthFieldPresent,
   setSynthRunStartMs,
@@ -175,6 +175,7 @@ export function refreshSynthStartState() {
     Sy.synthStartBtn.classList.add('btn-outline');
     Sy.synthStartBtn.classList.remove('btn-primary');
     Sy.synthStartBtn.innerHTML = 'Stop';
+    _setChStripRunState(false, 'A synth run is in flight — stop it first.');
   } else {
     const hasNodes = Sy.synthImplemented && Sy.synthImplemented.size > 0;
     // Synth REQUIRES a planner plan — block Start until one exists for
@@ -209,6 +210,8 @@ export function refreshSynthStartState() {
         Sy.synthStartBtn.setAttribute('title', blocker.title);
       }
     }
+    // The per-chapter ▶ buttons follow the same gate as Start Synth.
+    _setChStripRunState(!!ready, ready ? '' : (Sy.synthStartBtn.getAttribute('title') || 'Synth is not ready.'));
     Sy.synthStartBtn.classList.add('btn-primary');
     Sy.synthStartBtn.classList.remove('btn-outline');
     // Start vs Resume: when SOME (but not all) chapters are already
@@ -343,6 +346,7 @@ export async function _tryResumeActiveSynth(slug) {
   // 200-event SSE snapshot on a long book, so the registry is the durable seed.
   let sid = _getActiveStudy(slug);
   let startedTs = null;
+  let chapterTid = null;   // a single-chapter run started from a strip row's ▶ button
   try {
     const ar = await fetch(Sa.API + '/synth/' + slug + '/active');
     if (ar.ok) {
@@ -350,6 +354,8 @@ export async function _tryResumeActiveSynth(slug) {
       if (ad && ad.active && ad.study_thread_id) {
         if (!sid) { sid = ad.study_thread_id; _rememberActiveStudy(slug, sid); }
         startedTs = ad.started_ts || null;
+      } else if (ad && ad.active && ad.chapter_thread_id) {
+        chapterTid = ad.chapter_thread_id;
       }
     }
   } catch (_) { /* offline / no live run → fall through to hydrate */ }
@@ -384,6 +390,22 @@ export async function _tryResumeActiveSynth(slug) {
       }
     }, 5000);
     return true;
+  }
+
+  // A single chapter is being synthesized (▶ on a chapter row): rebuild the
+  // strip, then re-attach the live graph to that chapter's thread.
+  if (chapterTid) {
+    _resetStudyState();
+    await _hydrateChStripFromChapters(slug).catch(() => false);
+    let cid = null;
+    try {
+      const sr = await fetch(Sa.API + '/synth/debug/graph/' + chapterTid + '/state');
+      if (sr.ok) cid = ((await sr.json()).values || {}).chapter_id || null;
+    } catch (_) { /* no checkpoint yet */ }
+    if (cid) {
+      _attachSingleChapter(slug, cid, chapterTid, Date.now());
+      return true;
+    }
   }
 
   // No in-flight study → rebuild strip from durable MinIO render status.
@@ -546,6 +568,182 @@ export async function startSynth() {
   }
 }
 
+// ────────────────────────────────────────────────────────────────────
+// Single-chapter run — the ▶ button on a chapter row of the strip.
+//
+// Runs ONLY that chapter through the same per-chapter pipeline the study
+// orchestrator uses (POST /synth/{slug}?chapter_id=…). From the page's
+// point of view it is a study run of one chapter: the row turns "running",
+// the graph canvas attaches to the chapter's thread and streams its events
+// (pollSynthState — the very consumer the study path hands each chapter
+// to), the Start button becomes Stop, and the row flips to done / failed /
+// cancelled on the thread's terminal event. A done chapter is wiped first
+// (after a confirmation) so the run rebuilds it instead of replaying caches.
+// ────────────────────────────────────────────────────────────────────
+let _single = null;   // {slug, cid, tid} while a chapter run started from the strip is live
+
+function _stripCell(cid) {
+  return Sy.chstripCellsEl && Sy.chstripCellsEl.querySelector(
+    '.fw-chstrip-cell[data-chapter-id="' + String(cid).replace(/"/g, '\\"') + '"]'
+  );
+}
+
+function _attachSingleChapter(slug, cid, tid, startedMs) {
+  _single = { slug, cid, tid };
+  resetSynthCards();
+  _resetSynthEventBuffer();
+  Sy.setSynthThreadId(tid);
+  Sy.setStudyPinnedChapterId(null);
+  Sy.studyChapterThreads.set(cid, tid);
+  const cell = _stripCell(cid);
+  if (cell) {
+    cell.dataset.chapterThreadId = tid;
+    const t = cell.querySelector('.time');
+    if (t) t.textContent = '';
+  }
+  _rememberActiveSynth(slug, tid);
+  $activePipeline.set({ stage: 'synth', slug, run_id: null });
+  setSynthRunStartMs(startedMs);
+  startElapsed('synth', Math.max(0, Date.now() - startedMs));
+  _markChStripCell(cid, 'running');
+  _highlightStripCell(cid);
+  _showChStrip(true);
+  Sy.set_synthLiveEventReceived(false);
+  _setSynthStagePill('working', null);
+  refreshSynthStartState();           // Start → Stop, ▶ buttons disabled
+  // Paint the chapter's current node progress from its checkpoint (a
+  // recovered run is mid-node), then stream live events.
+  (async () => {
+    try {
+      const r = await fetch(Sa.API + '/synth/debug/graph/' + tid + '/state');
+      if (r.ok && Sy.synthThreadId === tid) {
+        const data = await r.json();
+        renderSynthCards(data.values || {}, Array.isArray(data.next) ? data.next : null);
+      }
+    } catch (_) { /* live events paint it */ }
+    if (Sy.synthThreadId === tid) pollSynthState(tid);
+  })();
+}
+
+export async function startSingleChapter(chapterId) {
+  if (!chapterId || !Si.activeSlug || Sy.synthThreadId || Sy.studyThreadId) return;
+  if (!Sy.synthImplemented || !Sy.synthImplemented.size) {
+    showToast('Synth pipeline not yet implemented.');
+    return;
+  }
+  const slug = Si.activeSlug;
+  try { await refreshCrossStageBlocker(); } catch (_) {}
+  const preBlocker = crossStageBlockerFor('synth');
+  if (preBlocker) {
+    showNotice(preBlocker.notice);
+    refreshSynthStartState();
+    return;
+  }
+  // Another tab / a study may already hold the slug's synth lock — find out
+  // BEFORE wiping anything.
+  try {
+    const ar = await fetch(Sa.API + '/synth/' + slug + '/active');
+    if (ar.ok) {
+      const ad = await ar.json();
+      if (ad && ad.active) {
+        showToast('A synth run is already in flight for this framework.');
+        refreshSynthStartState();
+        return;
+      }
+    }
+  } catch (_) { /* the POST below is the authoritative lock check */ }
+
+  const cell = _stripCell(chapterId);
+  const label = cell && cell.querySelector('.label') ? cell.querySelector('.label').textContent : chapterId;
+  if (cell && cell.dataset.status === 'done') {
+    const ok = await showConfirm(
+      'Re-synthesize this chapter?',
+      '"' + label + '" is already synthesized. Running it again deletes its current output and builds it from scratch.',
+      'Re-synthesize',
+    );
+    if (!ok) return;
+    try {
+      const w = await fetch(
+        Sa.API + '/synth/' + slug + '/wipe?chapter_id=' + encodeURIComponent(chapterId),
+        { method: 'DELETE' },
+      );
+      if (!w.ok) {
+        showToast('Could not clear the old output (HTTP ' + w.status + '); the chapter was not re-run.');
+        return;
+      }
+    } catch (e) {
+      showToast('Could not clear the old output: ' + String(e));
+      return;
+    }
+    _markChStripCell(chapterId, 'pending');
+  }
+
+  $activePipeline.set({ stage: 'synth', slug, run_id: null });
+  let data;
+  try {
+    const r = await fetch(
+      Sa.API + '/synth/' + slug + '?chapter_id=' + encodeURIComponent(chapterId) + '&mode=quality',
+      { method: 'POST' },
+    );
+    if (!r.ok) {
+      $activePipeline.set(null);
+      showToast('Could not start the chapter: HTTP ' + r.status + ' ' + (await r.text()).slice(0, 200));
+      refreshSynthStartState();
+      return;
+    }
+    data = await r.json();
+  } catch (e) {
+    $activePipeline.set(null);
+    showToast('Could not start the chapter: ' + String(e));
+    refreshSynthStartState();
+    return;
+  }
+  if (data && data.status === 'locked') {
+    $activePipeline.set(null);
+    try { await refreshCrossStageBlocker(); } catch (_) {}
+    refreshSynthStartState();
+    showNotice(data.message ||
+      ('Synth blocked: another ' + (data.stage || 'pipeline') + ' run is in flight (' + (data.slug || '?') + ').'));
+    return;
+  }
+  if (!data || !data.thread_id) {
+    $activePipeline.set(null);
+    showToast('The server did not return a thread id for this chapter.');
+    refreshSynthStartState();
+    return;
+  }
+  _attachSingleChapter(slug, chapterId, data.thread_id, Date.now());
+}
+
+// The chapter's thread ended (pollSynthState dispatches this for a LIVE
+// terminal event of a run that is not part of a study): settle the row, the
+// timers, the Start/Stop button and re-sync the strip from durable render
+// status (exact wall time, "Open in Study", thread id for re-viewing).
+async function _finishSingleChapter(status) {
+  const s = _single;
+  if (!s) return;
+  _single = null;
+  $activePipeline.set(null);
+  stopElapsed('synth');
+  setSynthRunStartMs(0);
+  _forgetActiveSynth(s.slug);
+  const final = status === 'done' ? 'done' : (status === 'cancelled' ? 'cancelled' : 'failed');
+  _markChStripCell(s.cid, final);
+  Sy.setSynthThreadId(null);
+  refreshSynthStartState();
+  try { await _hydrateChStripFromChapters(s.slug); } catch (_) {}
+  // hydrate rebuilds every row as pending/done from MinIO; a chapter that
+  // did not render keeps the outcome we saw.
+  if (final !== 'done') _markChStripCell(s.cid, final);
+  _highlightStripCell(s.cid);
+  if (final === 'failed') showToast('Chapter synthesis failed — see the graph for the node that stopped.');
+  try { await refreshCrossStageBlocker(); } catch (_) {}
+}
+document.addEventListener('dd:synth:terminal', (ev) => {
+  const d = (ev && ev.detail) || {};
+  if (_single && d.thread_id === _single.tid) _finishSingleChapter(d.status || 'done');
+});
+
 // Safety-net timeout (ms) — if no SSE `terminal` arrives within this
 // window the button auto-resets so the user is never stuck waiting.
 // Cancel watchers poll every ~1s; 5s = one watcher tick + a couple
@@ -591,6 +789,8 @@ export async function cancelSynth() {
         try { _forgetActiveStudy(Si.activeSlug); } catch (_) {}
         try { _forgetActiveSynth(Si.activeSlug); } catch (_) {}
       }
+      // A chapter run started from a strip row's ▶ button ends here too.
+      if (_single) _finishSingleChapter('cancelled');
       // Now flip the visuals — refreshSynthStartState will see no
       // running threads → enable Wipe + reset the Start button cleanly.
       refreshSynthStartState();
