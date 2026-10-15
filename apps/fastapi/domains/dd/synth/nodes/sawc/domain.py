@@ -451,6 +451,105 @@ def parse_topup(
     return subs, cites
 
 
+_REL_RANK = {"primary": 0, "supporting": 1}
+
+
+def uncited_routed_sources(
+    per_section_index: dict[str, list[dict]], sections: list[schemas.Section],
+) -> dict[str, list[tuple[str, str, list[str]]]]:
+    """section_id -> [(source_key, summary, key_facts)] for sources routed to the chapter that no section cites. Each source
+    goes to the section where its contribution ranks best (primary, then supporting, then the earliest section)."""
+    cited = {c.source_key for sec in sections for c in sec.citations}
+    order = {sec.section_id: i for i, sec in enumerate(sections)}
+    best: dict[str, tuple[tuple, str, str, list[str]]] = {}
+    for sid, contribs in per_section_index.items():
+        if sid not in order:
+            continue
+        for c in contribs:
+            k = c.get("source_key")
+            facts = [f for f in (c.get("key_facts") or []) if isinstance(f, str) and f.strip()]
+            if not k or k in cited or len(facts) < params.TOPUP_SRC_MIN_FACTS:
+                continue
+            rank = (_REL_RANK.get(c.get("relevance"), 2), order[sid])
+            if k not in best or rank < best[k][0]:
+                best[k] = (rank, sid, c.get("summary") or "", facts)
+    out: dict[str, list[tuple[str, str, list[str]]]] = {}
+    for k, (_, sid, summary, facts) in sorted(best.items(), key = lambda kv: kv[1][0]):
+        out.setdefault(sid, []).append((k, summary, facts))
+    return out
+
+
+def build_source_topup_prompt(
+    *, framework: str, chapter_title: str, section_heading: str, section_description: str,
+    existing_subheadings: list[str], sources: list[tuple[str, str, list[str]]], max_new: int,
+) -> str:
+    """Prompt for the source top-up: prose subtopics for routed sources the section never covered."""
+    covered = "\n".join(f"- {x}" for x in existing_subheadings) or "- (none)"
+    blocks = "\n\n".join(
+        f"[{k}]\n{sm[:300]}\nFacts:\n" + "\n".join(f"- {f}" for f in facts[:10]) for k, sm, facts in sources
+    )
+    return (
+        f"You are extending ONE section of a {framework} learning book (chapter '{chapter_title}', section "
+        f"'{section_heading}'). {section_description}\n\n"
+        f"== ALREADY COVERED (do not repeat these topics) ==\n{covered}\n\n"
+        f"== DOC PAGES THE SECTION HAS NOT USED YET (no code is available for them) ==\n{blocks}\n\n"
+        f"Write at most {max_new} prose subtopics that teach what these pages say. One subtopic may combine closely related "
+        f"pages. For each:\n"
+        f"  - subheading: 2-10 words naming the topic\n"
+        f"  - explanation: 20-80 words stating the concrete facts (function names, parameters, behaviour, version notes) taken "
+        f"ONLY from the facts above — no invented details, no code\n"
+        f"  - sources: the page keys (exactly as in the brackets) you used\n"
+        f"Then add citations (source_key from the brackets, claim 6-400 chars) for every page you used.\n\n"
+        f'OUTPUT — STRICT JSON, no preamble: {{"subtopics": [{{"subheading": "...", "explanation": "...", "sources": ["..."]}}], '
+        f'"citations": [{{"source_key": "...", "claim": "..."}}]}}'
+    )
+
+
+def parse_source_topup(
+    parsed: dict | None, *, sources: list[tuple[str, str, list[str]]], existing_subheads: set[str], max_new: int,
+) -> tuple[list[schemas.Subtopic], list[schemas.Citation]]:
+    """Validate a source top-up: prose only, new heading, text that shares words with the facts it claims to cover; an
+    offered source whose facts the prose clearly uses is cited even when the model forgot to."""
+    facts_by_src = {k: " ".join([sm] + facts) for k, sm, facts in sources}
+    toks_by_src = {k: prose_tokens(t) for k, t in facts_by_src.items()}
+    first_fact = {k: facts[0] for k, _, facts in sources}
+    subs: list[schemas.Subtopic] = []
+    cites: dict[tuple[str, str], schemas.Citation] = {}
+    seen = {x.casefold() for x in existing_subheads}
+    for raw in (parsed or {}).get("subtopics") or []:
+        if len(subs) >= max_new or not isinstance(raw, dict):
+            break
+        try:
+            st = schemas.Subtopic(
+                code_ref_hash = "", subheading = str(raw.get("subheading") or ""), explanation = str(raw.get("explanation") or ""),
+            )
+        except Exception:
+            continue
+        if st.subheading.casefold() in seen:
+            continue
+        et = prose_tokens(st.explanation)
+        used = [k for k in toks_by_src if len(et & toks_by_src[k]) >= params.TOPUP_SRC_GROUND_TOKENS]
+        if not used:
+            continue
+        subs.append(st)
+        seen.add(st.subheading.casefold())
+        for k in used:
+            if len(et & toks_by_src[k]) >= params.TOPUP_SRC_CITE_TOKENS or k in (raw.get("sources") or []):
+                try:
+                    c = schemas.Citation(source_key = k, claim = first_fact[k][:400])
+                    cites[(c.source_key, c.claim)] = c
+                except Exception:
+                    pass
+    for raw in (parsed or {}).get("citations") or []:
+        if isinstance(raw, dict) and raw.get("source_key") in facts_by_src and subs:
+            try:
+                c = schemas.Citation(source_key = str(raw["source_key"]), claim = str(raw.get("claim") or ""))
+                cites.setdefault((c.source_key, c.claim), c)
+            except Exception:
+                continue
+    return subs, list(cites.values())
+
+
 def drop_unknown_code_refs(
     draft: schemas.LLMSectionDraft, allowed_hashes: set[str],
 ) -> tuple[schemas.LLMSectionDraft, int]:

@@ -78,3 +78,16 @@ TOPUP_MAX_FACTS = 14
 # SUBTOPICS_MIN (asyncio ch-08: 5 subtopics out of 4 key facts restated the same sentence).
 PROSE_FACTS_PER_SUBTOPIC = 1.5
 
+# Source top-up (after the code top-up): sources the digest routed to a section but the chapter never cites — API pages whose
+# facts have no code (asyncio ch-05: get_running_loop, get_event_loop, EventLoop, loop implementations; ch-01: current_task,
+# all_tasks, eager task factory) — get prose subtopics grounded in their key facts.
+TOPUP_SRC_ENABLED = True
+TOPUP_SRC_MAX_NEW = 4          # prose subtopics added per section per call (one may cover several sources)
+TOPUP_SECTION_MAX = 16         # a topped-up section never grows past this many subtopics
+TOPUP_SRC_MIN_FACTS = 1        # a source needs at least this many key facts to be offered
+TOPUP_SRC_GROUND_TOKENS = 2    # prose must share this many words with the facts it covers
+TOPUP_SRC_CITE_TOKENS = 3      # shared words that make an uncited-but-used source count as cited
+# Citations of a topped-up section may exceed the writer's CITATIONS_MAX (asyncio ch-05: s1 had 12 and the 4 new sources
+# were dropped by the cap, so the coverage gate kept failing); the persisted Section has no such limit.
+TOPUP_CITATIONS_MAX = 30
+

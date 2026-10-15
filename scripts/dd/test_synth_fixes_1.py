@@ -256,4 +256,44 @@ try:
 finally:
     CS.ENDPOINT = orig_ep
 print("14 rotator_task reaches the request body ok")
+# 15) source top-up: routed sources nobody cites get grounded prose subtopics ----------------------------------------------------
+idx15 = {
+    "s1": [
+        {"source_key": "k_get", "relevance": "primary", "summary": "get_running_loop returns the running event loop", "key_facts": ["asyncio.get_running_loop() returns the running event loop of the current OS thread", "It raises RuntimeError when there is no running loop"], "code_refs": []},
+        {"source_key": "k_cited", "relevance": "primary", "summary": "s", "key_facts": ["a fact"], "code_refs": []},
+        {"source_key": "k_nofacts", "relevance": "primary", "summary": "s", "key_facts": [], "code_refs": []},
+    ],
+    "s2": [{"source_key": "k_get", "relevance": "supporting", "summary": "x", "key_facts": ["dup routed"], "code_refs": []},
+           {"source_key": "k_cur", "relevance": "supporting", "summary": "current_task returns the running Task", "key_facts": ["asyncio.current_task() returns the Task being run, or None when no task is running"], "code_refs": []}],
+}
+secs15 = [SCH.Section(section_id=sid, heading=f"Sec {sid}", intro="x" * 70, subtopics=[sub(c * 16, f"{sid} {c}") for c in "abc"],
+                      citations=[SCH.Citation(source_key="k_cited", claim="a claim that is long enough")]) for sid in ("s1", "s2")]
+pend = SW.uncited_routed_sources(idx15, secs15)
+assert [x[0] for x in pend["s1"]] == ["k_get"] and [x[0] for x in pend["s2"]] == ["k_cur"], pend       # primary wins; cited / fact-less sources skipped
+good15 = {"subtopics": [
+    {"subheading": "Getting the running loop", "explanation": "asyncio.get_running_loop() returns the running event loop of the current OS thread and raises RuntimeError when no loop is running.", "sources": ["k_get"]},
+    {"subheading": "Invented topic", "explanation": "Kubernetes operators reconcile desired state with cluster state on every watch event they receive.", "sources": ["k_get"]},
+    {"subheading": "Getting the running loop", "explanation": "asyncio.get_running_loop() again returns the running event loop of the current thread for callers.", "sources": ["k_get"]},
+]}
+subs15, cites15 = SW.parse_source_topup(good15, sources=pend["s1"], existing_subheads=set(), max_new=4)
+assert [x.subheading for x in subs15] == ["Getting the running loop"] and [c.source_key for c in cites15] == ["k_get"] and not subs15[0].code_ref_hash, (subs15, cites15)
+calls15 = []
+async def _chat15(prompt, **kw):
+    calls15.append(prompt)
+    return _json.dumps(good15 if "get_running_loop" in prompt else {"subtopics": []}), {}
+domains.settings.chat.service.chat_text_async = _chat15
+out15, n15, k15 = asyncio.run(SV._topup_sources(final_sections=secs15, per_section_index=idx15, sections_by_id={}, framework="asyncio", chapter_id="ch", chapter_title="Loops"))
+assert (n15, k15) == (1, 1) and len(out15[0].subtopics) == 4 and len(out15[1].subtopics) == 3 and len(calls15) == 2
+assert any(c.source_key == "k_get" for c in out15[0].citations) and len(out15[0].citations) == 2
+SV.params.TOPUP_SECTION_MAX = 3
+assert asyncio.run(SV._topup_sources(final_sections=secs15, per_section_index=idx15, sections_by_id={}, framework="a", chapter_id="c", chapter_title="t"))[1] == 0   # full sections are not grown
+SV.params.TOPUP_SECTION_MAX = 16
+print("15 source top-up ok")
+# 16) a section already at the writer's citation cap still gets the new sources cited ----------------------------------------
+full_c = SCH.Section(section_id="s1", heading="Sec s1", intro="x" * 70, subtopics=[sub(c * 16, f"s1 {c}") for c in "abc"],
+                     citations=[SCH.Citation(source_key=f"old{i}", claim="a claim that is long enough") for i in range(SW.params.CITATIONS_MAX)])
+idx16 = {"s1": [{"source_key": "k_get", "relevance": "primary", "summary": "get_running_loop returns the running event loop", "key_facts": ["asyncio.get_running_loop() returns the running event loop of the current OS thread"], "code_refs": []}]}
+out16, n16, _ = asyncio.run(SV._topup_sources(final_sections=[full_c], per_section_index=idx16, sections_by_id={}, framework="asyncio", chapter_id="ch", chapter_title="Loops"))
+assert n16 == 1 and "k_get" in {c.source_key for c in out16[0].citations} and len(out16[0].citations) == SW.params.CITATIONS_MAX + 1
+print("16 new sources are cited past the writer cap ok")
 print("ALL OK")

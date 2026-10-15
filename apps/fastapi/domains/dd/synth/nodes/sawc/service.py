@@ -912,8 +912,49 @@ async def _topup_coverage(
         have = {(c.source_key, c.claim) for c in sec.citations}
         merged = list(sec.citations) + [c for c in cites if (c.source_key, c.claim) not in have]
         return sec.model_copy(update = {
-            "subtopics": list(sec.subtopics) + subs, "citations": merged[:params.CITATIONS_MAX],
+            "subtopics": list(sec.subtopics) + subs, "citations": merged[:params.TOPUP_CITATIONS_MAX],
         }), len(subs)
+
+    done = await asyncio.gather(*[_one(sec) for sec in final_sections])
+    return [d[0] for d in done], sum(d[1] for d in done), sum(1 for d in done if d[1])
+
+
+async def _topup_sources(
+    *, final_sections: list[schemas.Section], per_section_index: dict[str, list[dict]],
+    sections_by_id: dict[str, dict], framework: str, chapter_id: str, chapter_title: str,
+) -> tuple[list[schemas.Section], int, int]:
+    """One call per section that was routed sources the chapter never cites: prose subtopics grounded in their key facts
+    (see domain.parse_source_topup). Returns (sections, n_subtopics_added, n_sections_topped_up). Fail-soft."""
+    pending = domain.uncited_routed_sources(per_section_index, final_sections)
+    sem = asyncio.Semaphore(params.TOPUP_CONCURRENCY)
+
+    async def _one(sec: schemas.Section) -> tuple[schemas.Section, int]:
+        srcs = pending.get(sec.section_id) or []
+        n_new = min(params.TOPUP_SRC_MAX_NEW, params.TOPUP_SECTION_MAX - len(sec.subtopics))
+        if not srcs or n_new < 1:
+            return sec, 0
+        prompt = domain.build_source_topup_prompt(
+            framework = framework, chapter_title = chapter_title, section_heading = sec.heading,
+            section_description = (sections_by_id.get(sec.section_id) or {}).get("description") or "",
+            existing_subheadings = [st.subheading for st in sec.subtopics], sources = srcs, max_new = n_new,
+        )
+        async with sem:
+            try:
+                raw, _meta = await domains.settings.chat.service.chat_text_async(
+                    prompt, max_tokens = params.TOPUP_MAX_TOKENS, temperature = 0.3,
+                    response_format = {"type": "json_object"}, timeout_s = params.TOPUP_TIMEOUT_S,
+                )
+            except Exception as e:
+                logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: source top-up call failed ({type(e).__name__})")
+                return sec, 0
+        subs, cites = domain.parse_source_topup(
+            domain.parse_json_response(raw), sources = srcs, existing_subheads = {st.subheading for st in sec.subtopics}, max_new = n_new,
+        )
+        if not subs:
+            return sec, 0
+        have = {(c.source_key, c.claim) for c in sec.citations}
+        merged = list(sec.citations) + [c for c in cites if (c.source_key, c.claim) not in have]
+        return sec.model_copy(update = {"subtopics": list(sec.subtopics) + subs, "citations": merged[:params.TOPUP_CITATIONS_MAX]}), len(subs)
 
     done = await asyncio.gather(*[_one(sec) for sec in final_sections])
     return [d[0] for d in done], sum(d[1] for d in done), sum(1 for d in done if d[1])
@@ -1411,6 +1452,13 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
         )
         if n_topup:
             logger.info(f"[sawc_write] {slug}/{chapter_id}: coverage top-up added {n_topup} subtopic(s) to {n_topped} section(s)")
+    if params.TOPUP_SRC_ENABLED:
+        final_sections, n_src, n_src_secs = await _topup_sources(
+            final_sections = final_sections, per_section_index = per_section_index, sections_by_id = sections_by_id,
+            framework = slug, chapter_id = chapter_id, chapter_title = chapter_title,
+        )
+        if n_src:
+            logger.info(f"[sawc_write] {slug}/{chapter_id}: source top-up added {n_src} prose subtopic(s) to {n_src_secs} section(s)")
     final_sections, n_repeated = domain.drop_repeated_code_blocks(final_sections, vault_rich)
     if n_repeated:
         logger.info(f"[sawc_write] {slug}/{chapter_id}: {n_repeated} subtopic(s) repeating a code block printed in an earlier section dropped")
