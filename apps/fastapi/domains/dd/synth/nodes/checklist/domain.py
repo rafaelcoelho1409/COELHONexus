@@ -495,7 +495,10 @@ def check_code_coverage(sawc: dict) -> schemas.CriterionResult:
     problems: list[str] = []
     if len(routed) >= params.COVERAGE_MIN_ROUTED:
         n_used = len(routed & used)
-        if n_used < params.COVERAGE_MIN_CODE * len(routed):
+        need = params.COVERAGE_MIN_CODE * len(routed)
+        if sections:
+            need = min(need, params.COVERAGE_CAPACITY_SHARE * len(sections) * domains.dd.synth.nodes.sawc.params.TOPUP_SECTION_MAX)
+        if n_used < need:
             problems.append(f"only {n_used} of {len(routed)} routed code blocks are printed")
     if len(sources) >= params.COVERAGE_MIN_SOURCE_COUNT:
         missing = [k for k in sources if k not in cited]

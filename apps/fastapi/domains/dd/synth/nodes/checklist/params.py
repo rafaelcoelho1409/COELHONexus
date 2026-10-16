@@ -176,6 +176,9 @@ JUDGE_EXTRA_ATTEMPTS = 2
 # ch-01 printed 14 of 35 blocks and cited 13 of 23 sources while passing 14/15).
 COVERAGE_MIN_ROUTED = 6
 COVERAGE_MIN_CODE = 0.60
+# ... but never more than this share of what the chapter's sections can print at all (sections x TOPUP_SECTION_MAX subtopics, one block
+# each): fastmcp ch-01 routed 133 blocks to 4 sections (64 subtopic slots), so 60% of 133 = 80 was unreachable and every iteration failed.
+COVERAGE_CAPACITY_SHARE = 0.75
 COVERAGE_MIN_SOURCE_COUNT = 6
 COVERAGE_MIN_SOURCES = 0.70
 

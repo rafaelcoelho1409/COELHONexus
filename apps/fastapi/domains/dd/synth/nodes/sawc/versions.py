@@ -11,4 +11,5 @@ SAWC_SCHEMA_VERSION = "2.0-cookbook"
 # v16 (2026-10-15): the intro field asks for substance, not "what this section covers" (asyncio study: 15 of 24 intros opened "This section
 # covers/explores/explains...", failed prose_code_first_not_meta_framing on ch-03).
 # v17 (2026-10-15): writer output is typography-normalized (U+2011 non-breaking hyphens in 8 of 28 ch-05 headings/explanations).
-SAWC_PROMPT_VERSION = "v17-typography-2026-10-15"
+# v18 (2026-10-16): a draft over the citation / subtopic caps is trimmed, not rejected (fastmcp ch-01: 16-citation drafts failed the 12 cap, repairs timed out, placeholder).
+SAWC_PROMPT_VERSION = "v18-trim-lists-2026-10-16"

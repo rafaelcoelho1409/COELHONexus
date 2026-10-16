@@ -1508,6 +1508,28 @@ def trim_intro(intro: str) -> str:
     return cut.rstrip(".") + "."
 
 
+def trim_lists(raw: dict) -> dict:
+    """A draft whose lists run over their caps is trimmed, not rejected (fastmcp ch-01, 133 routed blocks: drafts with 16 citations
+    failed the 12-citation validator, the repair round-trips timed out and the section shipped as a placeholder). Citations keep
+    their first mention per source; sources the cut drops are re-cited by the coverage / source top-ups that follow. Subtopics keep
+    the writer's order."""
+    out = dict(raw)
+    cits = out.get("citations")
+    if isinstance(cits, list) and len(cits) > params.CITATIONS_MAX:
+        seen, uniq = set(), []
+        for c in cits:
+            key = c.get("source_key") if isinstance(c, dict) else None
+            if key is not None and key in seen:
+                continue
+            seen.add(key)
+            uniq.append(c)
+        out["citations"] = uniq[:params.CITATIONS_MAX]
+    subs = out.get("subtopics")
+    if isinstance(subs, list) and len(subs) > params.SUBTOPICS_MAX:
+        out["subtopics"] = subs[:params.SUBTOPICS_MAX]
+    return out
+
+
 def try_parse_draft(
     raw: dict,
     *,
@@ -1524,6 +1546,8 @@ def try_parse_draft(
         raw = normalize_typography(raw)
     if isinstance(raw, dict) and isinstance(raw.get("intro"), str):
         raw = {**raw, "intro": trim_intro(raw["intro"])}
+    if isinstance(raw, dict):
+        raw = trim_lists(raw)
     try:
         return schemas.LLMSectionDraft.model_validate(raw), None
     except ValidationError as e:
