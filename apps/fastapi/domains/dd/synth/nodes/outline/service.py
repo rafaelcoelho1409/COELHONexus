@@ -345,7 +345,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
             "error":  "all source bodies came back empty",
         }
     sources_concat_md, truncated = domain.concat_sources(bodies)
-    n_vault_hashes = domain.count_vault_sentinels(sources_concat_md)
+    n_vault_hashes = domain.count_code_blocks(bodies)
 
     await domains.dd.synth.runtime.progress.service.emit_progress(
         thread_id, "outline_sdp", "sources_loaded",
@@ -475,7 +475,6 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
             sources_concat_md, truncated = domain.concat_sources(
                 bodies, max_chars = retry_budget,
             )
-            n_vault_hashes = domain.count_vault_sentinels(sources_concat_md)
             retry_prompt = prompts.build_outline_prompt(
                 framework = slug,
                 chapter_id = chapter_id,

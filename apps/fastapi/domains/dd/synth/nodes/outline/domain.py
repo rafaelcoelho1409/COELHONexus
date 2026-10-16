@@ -4,6 +4,7 @@ No I/O, no LLM calls, no logging — see service.py for the orchestration
 (LLM sampling, USC voting, semantic dedup, MinIO persistence) that calls
 these."""
 from __future__ import annotations
+import domains
 from . import params, patterns, schemas, versions
 
 import json
@@ -299,9 +300,25 @@ def summarize_candidate(
     }
 
 
-def count_vault_sentinels(md_text: str) -> int:
-    """Cheap vault-size estimate for the prompt context hint."""
-    return md_text.count("<code-ref hash = ")
+def count_code_blocks(bodies: list[str]) -> int:
+    """Distinct code blocks across the chapter's source bodies: the vault the digest will build. Raw bodies are vaulted the way the digest does it; already-sentinelized bodies count their sentinels."""
+    hashes: set[str] = set()
+    for body in bodies:
+        if not body:
+            continue
+        found = [
+            m.group("hash")
+            for m in domains.dd.synth.nodes.vault.patterns.SENTINEL_RE.finditer(body)
+        ]
+        if found:
+            hashes.update(found)
+            continue
+        try:
+            _, entries = domains.dd.synth.nodes.vault.domain.sentinelize_doc(body)
+        except Exception:
+            continue
+        hashes.update(entries)
+    return len(hashes)
 
 
 _OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR = 5
