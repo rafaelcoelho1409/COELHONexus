@@ -924,8 +924,9 @@ async def _topup_sources(
     sections_by_id: dict[str, dict], framework: str, chapter_id: str, chapter_title: str,
 ) -> tuple[list[schemas.Section], int, int]:
     """One call per section that was routed sources the chapter never cites: prose subtopics grounded in their key facts
-    (see domain.parse_source_topup). Returns (sections, n_subtopics_added, n_sections_topped_up). Fail-soft."""
-    pending = domain.uncited_routed_sources(per_section_index, final_sections)
+    (see domain.parse_source_topup), and for cited sources the chapter prose leaves unsaid (key facts with no words in the
+    chapter). Returns (sections, n_subtopics_added, n_sections_topped_up). Fail-soft."""
+    pending = domain.source_gaps(per_section_index, final_sections, domain.chapter_prose_tokens(final_sections))
     sem = asyncio.Semaphore(params.TOPUP_CONCURRENCY)
 
     async def _one(sec: schemas.Section) -> tuple[schemas.Section, int]:
@@ -1445,6 +1446,11 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
         completed_sections[sid] for sid in section_order
         if sid in completed_sections
     ]
+    # Copies of a block another section prints go BEFORE the top-ups: the freed room is refilled from blocks and facts nobody
+    # states yet instead of staying as a prose echo (asyncio ch-04).
+    final_sections, n_repeated = domain.drop_repeated_code_blocks(final_sections, vault_rich)
+    if n_repeated:
+        logger.info(f"[sawc_write] {slug}/{chapter_id}: {n_repeated} subtopic(s) repeating a code block printed in an earlier section dropped or stripped")
     if params.TOPUP_ENABLED and vault_rich:
         final_sections, n_topup, n_topped = await _topup_coverage(
             final_sections = final_sections, per_section_index = per_section_index, vault_rich = vault_rich,
@@ -1459,9 +1465,9 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
         )
         if n_src:
             logger.info(f"[sawc_write] {slug}/{chapter_id}: source top-up added {n_src} prose subtopic(s) to {n_src_secs} section(s)")
-    final_sections, n_repeated = domain.drop_repeated_code_blocks(final_sections, vault_rich)
-    if n_repeated:
-        logger.info(f"[sawc_write] {slug}/{chapter_id}: {n_repeated} subtopic(s) repeating a code block printed in an earlier section dropped")
+    final_sections, n_echo = domain.drop_prose_echoes(final_sections)
+    if n_echo:
+        logger.info(f"[sawc_write] {slug}/{chapter_id}: {n_echo} prose subtopic(s) repeating another subtopic of the chapter dropped")
 
     coverage = domain.compute_sawc_stats(
         sections = final_sections,

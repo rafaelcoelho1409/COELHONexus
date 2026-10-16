@@ -88,10 +88,24 @@ TOPUP_SRC_MIN_FACTS = 1        # a source needs at least this many key facts to 
 TOPUP_SRC_GROUND_TOKENS = 2    # prose must share this many words with the facts it covers
 TOPUP_SRC_CITE_TOKENS = 3      # shared words that make an uncited-but-used source count as cited
 TOPUP_SRC_MIN_WORDS = 18       # a topped-up subtopic shorter than this is dropped (asyncio ch-07: 10-19 word fragments of one page)
+# A source the chapter cites can still be left unsaid: asyncio ch-04 cited 7 of 7 pages with one-line claims while 10 of 31 key
+# facts (the shell-injection warning, the garbage-collection kill, `limit`, `send_signal`) appeared nowhere. A key fact counts as
+# covered when at least TOPUP_FACT_COVERED of its words occur in the chapter prose (code excluded); a cited source with at least
+# TOPUP_FACT_MIN_GAP uncovered facts goes through the source top-up with just those facts. Stored asyncio chapters: 4-32% of facts.
+TOPUP_FACT_COVERED = 0.5
+TOPUP_FACT_MIN_TOKENS = 3      # a shorter fact is too small to judge
+TOPUP_FACT_MIN_GAP = 2
 # Citations of a topped-up section may exceed the writer's CITATIONS_MAX (asyncio ch-05: s1 had 12 and the 4 new sources
 # were dropped by the cap, so the coverage gate kept failing); the persisted Section has no such limit.
 TOPUP_CITATIONS_MAX = 30
 
+
+# Prose echoes. A copy of a code block that loses it to the subtopic describing it is dropped when its explanation shares at least
+# ECHO_JACCARD of the winner's words (stored asyncio pairs: copies 0.26-0.96, a prose-only mismatch 0.04). A prose subtopic that
+# repeats ANY other subtopic of the chapter is dropped only when it is near-verbatim, PROSE_ECHO_JACCARD (a verbatim restatement
+# scored 0.96; two one-word-apart reference entries, WindowsSelector/WindowsProactor policy, 0.64 and both teach something).
+ECHO_JACCARD = 0.25
+PROSE_ECHO_JACCARD = 0.7
 
 # A section whose digest-routed bank is smaller than the writer minimum borrows blocks routed to OTHER sections only when it would
 # otherwise hold fewer than this many (asyncio ch-05: a 5-block section borrowed 15 blocks from the 24-block one, printed them first,

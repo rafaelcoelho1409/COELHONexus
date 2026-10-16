@@ -455,11 +455,30 @@ def parse_topup(
 _REL_RANK = {"primary": 0, "supporting": 1}
 
 
-def uncited_routed_sources(
-    per_section_index: dict[str, list[dict]], sections: list[schemas.Section],
+def chapter_prose_tokens(sections: list[schemas.Section]) -> set[str]:
+    """Words of everything the chapter says in prose (intros, subheadings, explanations; code excluded)."""
+    return prose_tokens(" ".join(
+        part for sec in sections for part in [sec.intro] + [f"{st.subheading} {st.explanation}" for st in sec.subtopics]
+    ))
+
+
+def uncovered_facts(facts: list[str], covered_tokens: set[str]) -> list[str]:
+    """The key facts (long enough to judge) of which fewer than TOPUP_FACT_COVERED of the words occur in `covered_tokens`."""
+    out = []
+    for f in facts:
+        ft = prose_tokens(f)
+        if len(ft) >= params.TOPUP_FACT_MIN_TOKENS and len(ft & covered_tokens) / len(ft) < params.TOPUP_FACT_COVERED:
+            out.append(f)
+    return out
+
+
+def source_gaps(
+    per_section_index: dict[str, list[dict]], sections: list[schemas.Section], covered_tokens: set[str] | None = None,
 ) -> dict[str, list[tuple[str, str, list[str]]]]:
-    """section_id -> [(source_key, summary, key_facts)] for sources routed to the chapter that no section cites. Each source
-    goes to the section where its contribution ranks best (primary, then supporting, then the earliest section)."""
+    """section_id -> [(source_key, summary, facts to teach)] for sources routed to the chapter that the prose leaves unsaid: a
+    source no section cites (all its key facts), and, when `covered_tokens` is given, a cited source with at least
+    TOPUP_FACT_MIN_GAP key facts the chapter prose does not state (those facts). Each source goes to the section where its
+    contribution ranks best (primary, then supporting, then the earliest section)."""
     cited = {c.source_key for sec in sections for c in sec.citations}
     order = {sec.section_id: i for i, sec in enumerate(sections)}
     best: dict[str, tuple[tuple, str, str, list[str]]] = {}
@@ -469,8 +488,14 @@ def uncited_routed_sources(
         for c in contribs:
             k = c.get("source_key")
             facts = [f for f in (c.get("key_facts") or []) if isinstance(f, str) and f.strip()]
-            if not k or k in cited or len(facts) < params.TOPUP_SRC_MIN_FACTS:
+            if not k or len(facts) < params.TOPUP_SRC_MIN_FACTS:
                 continue
+            if k in cited:
+                if covered_tokens is None:
+                    continue
+                facts = uncovered_facts(facts, covered_tokens)
+                if len(facts) < params.TOPUP_FACT_MIN_GAP:
+                    continue
             rank = (_REL_RANK.get(c.get("relevance"), 2), order[sid])
             if k not in best or rank < best[k][0]:
                 best[k] = (rank, sid, c.get("summary") or "", facts)
@@ -478,6 +503,13 @@ def uncited_routed_sources(
     for k, (_, sid, summary, facts) in sorted(best.items(), key = lambda kv: kv[1][0]):
         out.setdefault(sid, []).append((k, summary, facts))
     return out
+
+
+def uncited_routed_sources(
+    per_section_index: dict[str, list[dict]], sections: list[schemas.Section],
+) -> dict[str, list[tuple[str, str, list[str]]]]:
+    """section_id -> [(source_key, summary, key_facts)] for sources routed to the chapter that no section cites."""
+    return source_gaps(per_section_index, sections)
 
 
 def build_source_topup_prompt(
@@ -493,10 +525,10 @@ def build_source_topup_prompt(
         f"You are extending ONE section of a {framework} learning book (chapter '{chapter_title}', section "
         f"'{section_heading}'). {section_description}\n\n"
         f"== ALREADY COVERED (do not repeat these topics) ==\n{covered}\n\n"
-        f"== DOC PAGES THE SECTION HAS NOT USED YET (no code is available for them) ==\n{blocks}\n\n"
-        f"Write at most {max_new} prose subtopics that teach what these pages say. Give each page ONE subtopic holding all of "
-        f"its facts (never several short ones for the same page); one subtopic may combine pages that cover the same API. For "
-        f"each:\n"
+        f"== DOC FACTS THE SECTION DOES NOT STATE YET (no code is available for them) ==\n{blocks}\n\n"
+        f"Write at most {max_new} prose subtopics that teach what these facts say. Give each page ONE subtopic holding all of "
+        f"its facts listed here (never several short ones for the same page); one subtopic may combine pages that cover the same "
+        f"API. For each:\n"
         f"  - subheading: 2-10 words naming the topic\n"
         f"  - explanation: {params.TOPUP_SRC_MIN_WORDS}-80 words of connected sentences stating the concrete facts (function "
         f"names, parameters, behaviour, version notes) taken ONLY from the facts above — no invented details, no code\n"
@@ -1304,7 +1336,9 @@ def drop_repeated_code_blocks(
     their subtopic while the section keeps SUBTOPICS_MIN of them, else just the block (a prose subtopic). asyncio
     ch-01: gather + to_thread snippet in s3 and s5; ch-03: the queue section printed the Event and Barrier examples
     of the previous section under "Bounded Queues" and "Graceful Shutdown" (overlap 2 vs 10 and 7), so the copies
-    that DESCRIBE the block stay. Returns (sections, n_changed)."""
+    that DESCRIBE the block stay. A losing copy whose prose repeats the winner's (token Jaccard >= ECHO_JACCARD) is dropped even
+    below the floor, never kept as a prose echo (asyncio ch-04: "Shell subprocess with communicate" restated "Shell Command with
+    PIPE Streams" word for word, 0.96); the top-ups refill the section from facts nobody states yet. Returns (sections, n_changed)."""
     occ: dict[str, list[tuple[int, int, int]]] = {}
     for si, sec in enumerate(sections):
         for ti, st in enumerate(sec.subtopics):
@@ -1315,13 +1349,17 @@ def drop_repeated_code_blocks(
             score = len(identifier_overlap(f"{st.subheading} {st.explanation}", body)[0]) if body else 0
             occ.setdefault(h, []).append((si, ti, score))
     lose: dict[int, set[int]] = {}
+    echo: dict[int, set[int]] = {}
     for h, os_ in occ.items():
         if len(os_) < 2:
             continue
         keep = max(os_, key = lambda o: (o[2], -o[0], -o[1]))
+        kept_prose = sections[keep[0]].subtopics[keep[1]].explanation
         for o in os_:
             if o != keep:
                 lose.setdefault(o[0], set()).add(o[1])
+                if prose_similarity(sections[o[0]].subtopics[o[1]].explanation, kept_prose) >= params.ECHO_JACCARD:
+                    echo.setdefault(o[0], set()).add(o[1])
     out: list[schemas.Section] = []
     n = 0
     for si, sec in enumerate(sections):
@@ -1330,10 +1368,13 @@ def drop_repeated_code_blocks(
             out.append(sec)
             continue
         budget = len(sec.subtopics) - params.SUBTOPICS_MIN
+        echoes = sorted(echo.get(si, ()))[:max(len(sec.subtopics) - 1, 0)]      # a section never loses its last subtopic
         subs = []
         for ti, st in enumerate(sec.subtopics):
             if ti in bad:
                 n += 1
+                if ti in echoes:
+                    continue
                 if budget > 0:
                     budget -= 1
                     continue
@@ -1341,6 +1382,40 @@ def drop_repeated_code_blocks(
             subs.append(st)
         out.append(sec.model_copy(update = {"subtopics": subs}))
     return out, n
+
+
+def prose_similarity(a: str, b: str) -> float:
+    """Jaccard overlap of the identifier-like word sets of two texts (0 when both are empty)."""
+    ta, tb = prose_tokens(a), prose_tokens(b)
+    return len(ta & tb) / (len(ta | tb) or 1)
+
+
+def drop_prose_echoes(sections: list[schemas.Section]) -> tuple[list[schemas.Section], int]:
+    """A prose subtopic (no code block) whose explanation repeats another subtopic of the chapter (token Jaccard >=
+    PROSE_ECHO_JACCARD, near-verbatim) is dropped; the earlier one, or the one with code, stays. Returns (sections, n_dropped)."""
+    seq = [(si, ti, st) for si, sec in enumerate(sections) for ti, st in enumerate(sec.subtopics)]
+    toks = [prose_tokens(st.explanation) for _, _, st in seq]
+    drop: set[tuple[int, int]] = set()
+    left = {si: len(sec.subtopics) for si, sec in enumerate(sections)}
+    for i, (si, ti, st) in enumerate(seq):
+        if st.code_ref_hash or getattr(st, "code_source", "verbatim") == "derived" or left[si] <= 1:
+            continue
+        for j, (sj, tj, other) in enumerate(seq):
+            if j == i or (sj, tj) in drop:
+                continue
+            if j > i and not (other.code_ref_hash or getattr(other, "code_source", "verbatim") == "derived"):
+                continue
+            if len(toks[i] & toks[j]) / (len(toks[i] | toks[j]) or 1) >= params.PROSE_ECHO_JACCARD:
+                drop.add((si, ti))
+                left[si] -= 1
+                break
+    if not drop:
+        return sections, 0
+    out = [
+        sec.model_copy(update = {"subtopics": [st for ti, st in enumerate(sec.subtopics) if (si, ti) not in drop]})
+        for si, sec in enumerate(sections)
+    ]
+    return out, len(drop)
 
 
 def hashes_claimed_elsewhere(per_section_index: dict[str, list[dict]], section_id: str) -> set[str]:

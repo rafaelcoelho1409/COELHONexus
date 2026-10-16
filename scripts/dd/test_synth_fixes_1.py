@@ -61,7 +61,8 @@ assert SW.realign_api_subheadings(d, None, set())[1] == 0
 print("3 API subheading realigned to its block ok")
 # 4) a block printed in an earlier section is not printed again (while the section keeps 3 subtopics) -------------------------
 def sec(sid, hashes):
-    return SCH.Section(section_id=sid, heading=sid, intro="x" * 70, subtopics=[sub(h * 16, f"{sid} {h}") for h in hashes], citations=cites)
+    uniq = lambda h: " ".join(f"w{sid}{h}{i}x" for i in range(9))                                   # distinct prose: a copy that restates its winner is dropped
+    return SCH.Section(section_id=sid, heading=sid, intro="x" * 70, subtopics=[SCH.Subtopic(code_ref_hash=h * 16, subheading=f"{sid} {h}", explanation=uniq(h)) for h in hashes], citations=cites)
 secs = [sec("s3", "abcd"), sec("s4", "0123"), sec("s5", "4567")]
 secs[1].subtopics[0] = secs[1].subtopics[0].model_copy(update={"code_ref_hash": "a" * 16})       # s4 repeats a block of s3
 secs[2].subtopics[3] = secs[2].subtopics[3].model_copy(update={"code_ref_hash": "b" * 16})       # s5 repeats another

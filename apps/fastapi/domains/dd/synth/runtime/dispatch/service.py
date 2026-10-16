@@ -214,6 +214,7 @@ async def run_single_chapter_async(
             # planner/runtime/dispatch/service.py::run_planner_async for
             # the full rationale (crash-window risk vs. LLM-call-
             # dominated node runtime making sync overhead immaterial).
+            chapter_t0 = time.monotonic()
             main_task = asyncio.create_task(
                 graph.ainvoke(initial_state, config, durability = "sync"),
             )
@@ -221,6 +222,8 @@ async def run_single_chapter_async(
             result = await _await_with_watcher(
                 graph, config, main_task, watcher_task, thread_id,
             )
+            if result.get("status") == "done":
+                await _persist_chapter_timing(slug, chapter_id, int((time.monotonic() - chapter_t0) * 1000))
             infra.langfuse.spans.set_current_span_langfuse_io(output_data = {
                 "status": result.get("status", "unknown"),
                 "error": result.get("error"),
@@ -617,6 +620,32 @@ async def _persist_study_timing(
             f"[study-orchestrator] {slug}: timing persist failed "
             f"({type(e).__name__}: {e})"
         )
+
+
+async def _persist_chapter_timing(slug: str, chapter_id: str, wall_ms: int) -> None:
+    """Best-effort merge of one finished chapter's wall time into the study timing blob (a single-chapter ▶ run leaves the
+    other chapters' times, the harmonize time and the session fields as they were)."""
+    storage = domains.dd.ingestion.storage.service.get_storage()
+    key = domains.dd.synth.keys.study_timing_key(slug)
+    try:
+        prior = json.loads(await storage.read_text(key))
+    except Exception:
+        prior = {}
+    per_chapter_ms = {str(k): int(v) for k, v in (prior.get("per_chapter_ms") or {}).items()}
+    per_chapter_ms[chapter_id] = int(wall_ms)
+    harmonize_ms = int(prior.get("harmonize_ms") or 0)
+    payload = {
+        "slug":            slug,
+        "total_wall_ms":   sum(per_chapter_ms.values()) + harmonize_ms,
+        "per_chapter_ms":  per_chapter_ms,
+        "harmonize_ms":    harmonize_ms,
+        "session_wall_ms": int(prior.get("session_wall_ms") or wall_ms),
+        "finished_ts":     time.time(),
+    }
+    try:
+        await storage.write(key, json.dumps(payload, indent = 2), content_type = "application/json")
+    except Exception as e:
+        logger.warning(f"[synth] {slug}/{chapter_id}: chapter timing persist failed ({type(e).__name__}: {e})")
 
 
 async def run_study_async(
