@@ -18,7 +18,7 @@ import {
 import { startElapsed, stopElapsed, showElapsed, isElapsedRunning, fmtMs } from '../shared/timing.js';
 import { $activePipeline } from '@nx/stores/pipeline.js';
 import { _setSynthStagePill, _renderSynthGraph, _kpiForSynthNode } from './graph.js';
-import { _resizeSynthCanvas, _resetSynthEventBuffer, _refreshOpenSynthDrawer, _updateCoRefineChip } from './canvas.js';
+import { _resizeSynthCanvas, _resetSynthEventBuffer, _refreshOpenSynthDrawer, _updateCoRefineChip, _getNodeDrawerRef } from './canvas.js';
 import { synthCardEl, _synthAllImplementedComplete, _genSynthThreadId, pollSynthState, pollStudyState } from './polling.js';
 import { _showChStrip, _renderChStrip, _applyChStripTitles, _markChStripCell, _markChStripCellTime, _hydrateChStripFromChapters, _resetStudyState, _setChStripRunState, _setChStripWipeState, _highlightStripCell } from './chstrip.js';
 import {
@@ -813,13 +813,20 @@ export async function wipeSingleChapter(chapterId) {
       const t = cell.querySelector('.time');
       if (t) t.textContent = '';
     }
+    // Is the graph canvas showing THIS chapter? Its row is the highlighted one (set on a click, on a ▶ run and on the
+    // live chapter of a study — the thread id is already null once a run has ended, so it cannot tell), or it is pinned.
+    const showsIt = !!(cell && cell.classList.contains('selected')) || Sy.studyPinnedChapterId === chapterId;
     _markChStripCell(chapterId, 'pending');
-    if (Sy.studyPinnedChapterId === chapterId) {
-      // The canvas was showing this chapter's graph — it no longer exists.
+    if (showsIt) {
+      // Same clean-up Wipe Synth does for the whole book: node cards, Cytoscape graph, stage pill, event buffer, node drawer.
       Sy.setStudyPinnedChapterId(null);
+      Sy.setSynthThreadId(null);
       _highlightStripCell(null);
       resetSynthCards();
       _resetSynthEventBuffer();
+      const drawer = _getNodeDrawerRef();
+      if (drawer && drawer.reset) drawer.reset();
+      try { renderSynthCards({}); } catch (_) { /* the reset above already emptied the cards */ }
     }
     // The navbar Synth total is the persisted sum of the chapters left.
     try {
