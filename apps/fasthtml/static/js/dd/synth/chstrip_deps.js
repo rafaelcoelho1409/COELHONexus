@@ -22,6 +22,8 @@ export const deps = {
   pollSynthState:           null,
   // Per-chapter ▶ button: runs ONLY that chapter (lifecycle.js startSingleChapter).
   startSingleChapter:       null,
+  // Per-chapter 🗑 button: wipes ONLY that chapter (lifecycle.js wipeSingleChapter).
+  wipeSingleChapter:        null,
   // _nodeDrawerRef is module-private inside synth.js (mutated by
   // _setNodeDrawerRef). chstrip.js calls a getter so synth.js can keep
   // the variable's identity.

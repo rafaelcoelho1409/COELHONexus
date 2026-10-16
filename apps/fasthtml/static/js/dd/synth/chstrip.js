@@ -50,6 +50,13 @@ function _humanizeChapterId(id) {
 // hydrate path, exact titles). Vertical task-list layout: status glyph
 // + ordinal + chapter title, one row per chapter (DD-CHAPTERS-SOTA
 // 2026-05-28 — the agent/pipeline task-list pattern).
+// Trash icon as inline SVG (currentColor): the 🗑 emoji is missing from several
+// platform emoji fonts and renders as a tofu box there.
+const _TRASH_SVG =
+  '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="none" ' +
+  'stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M2.5 4h11M6 4V2.5h4V4M4 4l.6 9h6.8l.6-9M6.5 6.5v4M9.5 6.5v4"/></svg>';
+
 export function _renderChStrip(items) {
   if (!Sy.chstripCellsEl) return;
   const norm = (items || []).map(it =>
@@ -65,33 +72,50 @@ export function _renderChStrip(items) {
     const title = c.title || _humanizeChapterId(c.id);
     // title="" → full chapter name on hover when the row ellipsis-
     // truncates it (single-line rows; SOTA truncate+tooltip pattern).
+    const cid = c.id.replace(/"/g, '&quot;');
+    // Two rows per chapter: the full title (wraps, never clipped) on top;
+    // below it the synth time on the left and the actions on the right —
+    // wipe only this chapter, ▶ synthesize only this chapter, 📖 read it.
     return (
       '<div class="fw-chstrip-cell" data-status="pending" ' +
-      'data-chapter-id="' + c.id.replace(/"/g, '&quot;') + '" ' +
+      'data-chapter-id="' + cid + '" ' +
       'title="' + escapeHtml(title) + '">' +
-      '  <span class="icon"></span>' +
-      '  <span class="num">' + (i + 1) + '</span>' +
-      '  <span class="label">' + escapeHtml(title) + '</span>' +
-      '  <span class="time"></span>' +
+      '  <div class="fw-chstrip-row fw-chstrip-row1">' +
+      '    <span class="icon"></span>' +
+      '    <span class="num">' + (i + 1) + '</span>' +
+      '    <span class="label">' + escapeHtml(title) + '</span>' +
+      '  </div>' +
+      '  <div class="fw-chstrip-row fw-chstrip-row2">' +
+      '    <span class="time"></span>' +
+      '    <span class="fw-chstrip-actions">' +
+      // "Wipe this chapter" — the Wipe Synth button for ONE chapter
+      // (DELETE /synth/{slug}/wipe?chapter_id=…). Enabled/disabled by
+      // `_setChStripWipeState` under the same gate as Wipe Synth.
+      '      <button type="button" class="fw-chstrip-wipe" ' +
+      '              data-chapter-id="' + cid + '" ' +
+      '              title="Wipe only this chapter">' + _TRASH_SVG + '</button>' +
       // "Run only this chapter" button — same single-chapter run the
       // study orchestrator does per chapter, started on its own; the
       // graph attaches to that chapter's thread and updates live.
       // Enabled/disabled by `_setChStripRunState` (a run is in flight,
       // no plan, planner running ...).
-      '  <button type="button" class="fw-chstrip-run" ' +
-      '          data-chapter-id="' + c.id.replace(/"/g, '&quot;') + '" ' +
-      '          title="Synthesize only this chapter">▶</button>' +
+      '      <button type="button" class="fw-chstrip-run" ' +
+      '              data-chapter-id="' + cid + '" ' +
+      '              title="Synthesize only this chapter">▶</button>' +
       // "Open in Study" button — disabled until the chapter renders.
       // Enabled by `_markChStripCell(id, "done")`. Click navigates to
       // the Study page with the chapter pre-selected.
-      '  <button type="button" class="fw-chstrip-open" ' +
-      '          data-chapter-id="' + c.id.replace(/"/g, '&quot;') + '" ' +
-      '          disabled ' +
-      '          title="Synthesize this chapter first">📖</button>' +
+      '      <button type="button" class="fw-chstrip-open" ' +
+      '              data-chapter-id="' + cid + '" ' +
+      '              disabled ' +
+      '              title="Synthesize this chapter first">📖</button>' +
+      '    </span>' +
+      '  </div>' +
       '</div>'
     );
   }).join('');
   _applyChStripRunState();
+  _applyChStripWipeState();
   _updateChStripCounter();
 }
 
@@ -118,6 +142,28 @@ function _applyChStripRunState() {
     } else {
       btn.setAttribute('disabled', 'disabled');
       btn.title = _runState.title || 'Synthesize only this chapter';
+    }
+  });
+}
+
+// 🗑 "wipe only this chapter" buttons — one shared enabled/disabled state,
+// pushed by lifecycle.js `refreshSynthStartState` with the SAME gate as the
+// Wipe Synth button (a framework is picked, no run is live or starting, and no
+// other tab holds the synth lock). Re-applied after every strip render.
+let _wipeState = { enabled: false, title: 'Wipe only this chapter' };
+export function _setChStripWipeState(enabled, title) {
+  _wipeState = { enabled: !!enabled, title: title || '' };
+  _applyChStripWipeState();
+}
+function _applyChStripWipeState() {
+  if (!Sy.chstripCellsEl) return;
+  Sy.chstripCellsEl.querySelectorAll('.fw-chstrip-wipe').forEach(btn => {
+    if (_wipeState.enabled) {
+      btn.removeAttribute('disabled');
+      btn.title = 'Wipe only this chapter (its output and cached stages are deleted)';
+    } else {
+      btn.setAttribute('disabled', 'disabled');
+      btn.title = _wipeState.title || 'Wipe only this chapter';
     }
   });
 }
@@ -373,6 +419,16 @@ if (Sy.chstripCellsEl) {
   Sy.chstripCellsEl.addEventListener('click', ev => {
     // "Run only this chapter" button — intercept FIRST (before the
     // cell's click-to-view-graph handler) and hand off to lifecycle.js.
+    // "Wipe this chapter" button — same interception order; lifecycle.js
+    // `wipeSingleChapter` confirms, deletes the chapter's artifacts, resets the row.
+    const wipeBtn = ev.target.closest('.fw-chstrip-wipe');
+    if (wipeBtn) {
+      ev.stopPropagation();
+      if (wipeBtn.hasAttribute('disabled')) return;
+      const cid = wipeBtn.dataset.chapterId;
+      if (cid) deps.wipeSingleChapter?.(cid);
+      return;
+    }
     const runBtn = ev.target.closest('.fw-chstrip-run');
     if (runBtn) {
       ev.stopPropagation();

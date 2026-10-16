@@ -20,7 +20,7 @@ import { $activePipeline } from '@nx/stores/pipeline.js';
 import { _setSynthStagePill, _renderSynthGraph, _kpiForSynthNode } from './graph.js';
 import { _resizeSynthCanvas, _resetSynthEventBuffer, _refreshOpenSynthDrawer, _updateCoRefineChip } from './canvas.js';
 import { synthCardEl, _synthAllImplementedComplete, _genSynthThreadId, pollSynthState, pollStudyState } from './polling.js';
-import { _showChStrip, _renderChStrip, _applyChStripTitles, _markChStripCell, _markChStripCellTime, _hydrateChStripFromChapters, _resetStudyState, _setChStripRunState, _highlightStripCell } from './chstrip.js';
+import { _showChStrip, _renderChStrip, _applyChStripTitles, _markChStripCell, _markChStripCellTime, _hydrateChStripFromChapters, _resetStudyState, _setChStripRunState, _setChStripWipeState, _highlightStripCell } from './chstrip.js';
 import {
   _synthFieldPresent,
   setSynthRunStartMs,
@@ -265,6 +265,14 @@ export function refreshSynthStartState() {
             : 'Pick a framework first.'));
     }
   }
+  // The per-chapter 🗑 buttons follow the Wipe Synth gate, plus "no other tab holds the lock".
+  _setChStripWipeState(
+    !!(Si.activeSlug && !running && !_starting && !_serverBusy && Sy.synthImplemented.size > 0),
+    running ? 'A synth run is in flight — stop it first.'
+      : (_starting ? _TIP_STARTING
+        : (_serverBusy ? _TIP_BUSY
+          : (Si.activeSlug ? 'Wipe only this chapter' : 'Pick a framework first.'))),
+  );
   // Framework chip + stage-pill aggregate state.
   setSynthFramework(Si.activeSlug);
   if (!running) {
@@ -755,6 +763,74 @@ async function _startSingleChapterInner(chapterId) {
     return;
   }
   _attachSingleChapter(slug, chapterId, data.thread_id, Date.now());
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Per-chapter wipe — the 🗑 button on a chapter row of the strip.
+//
+// The Wipe Synth button for ONE chapter: DELETE /synth/{slug}/wipe?chapter_id=…
+// removes that chapter's artifacts and cached stages (MinIO) and its share of
+// the persisted timing; the server refuses (409) while a run holds the lock.
+// The row goes back to "pending" (time cleared, 📖 disabled); the other
+// chapters, the planner cache and the study total of the rest stay as they are.
+// ────────────────────────────────────────────────────────────────────
+export async function wipeSingleChapter(chapterId) {
+  if (_starting || !chapterId || !Si.activeSlug || Sy.synthThreadId || Sy.studyThreadId) return;
+  const slug = Si.activeSlug;
+  const cell = _stripCell(chapterId);
+  const labelEl = cell && cell.querySelector('.label');
+  const label = labelEl ? labelEl.textContent : chapterId;
+  const ok = await showConfirm(
+    'Wipe this chapter?',
+    '"' + label + '": deletes its synthesized output and cached stages (MinIO). ' +
+    'The other chapters and the planner cache are untouched. This cannot be undone.',
+    'Wipe',
+  );
+  if (!ok) return;
+  _starting = true;
+  refreshSynthStartState();   // every run / wipe button goes grey while the DELETE is in flight
+  try {
+    let data = {};
+    try {
+      const r = await fetch(
+        Sa.API + '/synth/' + slug + '/wipe?chapter_id=' + encodeURIComponent(chapterId),
+        { method: 'DELETE' },
+      );
+      if (!r.ok) {
+        showToast(r.status === 409
+          ? 'A synth run is in flight for this framework — cancel it before wiping a chapter.'
+          : 'Wipe failed: HTTP ' + r.status);
+        return;
+      }
+      data = await r.json();
+    } catch (e) {
+      showToast('Wipe failed: ' + String(e));
+      return;
+    }
+    Sy.studyChapterThreads.delete(chapterId);
+    if (cell) {
+      delete cell.dataset.chapterThreadId;
+      const t = cell.querySelector('.time');
+      if (t) t.textContent = '';
+    }
+    _markChStripCell(chapterId, 'pending');
+    if (Sy.studyPinnedChapterId === chapterId) {
+      // The canvas was showing this chapter's graph — it no longer exists.
+      Sy.setStudyPinnedChapterId(null);
+      _highlightStripCell(null);
+      resetSynthCards();
+      _resetSynthEventBuffer();
+    }
+    // The navbar Synth total is the persisted sum of the chapters left.
+    try {
+      const rr = await fetch(Sa.API + '/synth/' + slug + '/study/chapters');
+      if (rr.ok) showElapsed('synth', Number(((await rr.json()) || {}).study_total_wall_ms || 0));
+    } catch (_) { /* keep the old total */ }
+    showToast('Chapter wiped (' + (data && data.minio_deleted >= 0 ? data.minio_deleted : '?') + ' files).');
+  } finally {
+    _starting = false;
+    refreshSynthStartState();
+  }
 }
 
 // Does ANOTHER tab / session hold this framework's synth lock? Polled while

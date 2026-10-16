@@ -112,9 +112,11 @@
   overflow-y: auto;
 }
 .fw-chstrip-cell {
+  /* Two rows: the full title on top; time + actions (🗑 ▶ 📖) below. */
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   width: 100%;
   padding: 8px 10px;
   border: 1px solid var(--border);
@@ -146,12 +148,34 @@
 }
 .fw-chstrip-cell .label {
   flex: 1 1 auto;
-  min-width: 0;            /* required for ellipsis inside a flex child */
-  white-space: nowrap;     /* one clean line per chapter… */
-  overflow: hidden;
-  text-overflow: ellipsis; /* …long titles truncate with “…” */
+  min-width: 0;
+  white-space: normal;     /* the whole title is shown, wrapping over as many lines as it needs */
+  overflow-wrap: anywhere;
+  line-height: 1.3;
   color: var(--text);
 }
+.fw-chstrip-cell .icon,
+.fw-chstrip-cell .num { line-height: 1.3; }
+.fw-chstrip-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.fw-chstrip-row1 { align-items: flex-start; }
+/* Row 2 sits under the title text: icon (14px) + num (18px) + two 10px gaps. */
+.fw-chstrip-row2 {
+  padding-left: 52px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+.fw-chstrip-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+.fw-chstrip-actions > button { margin-left: 0 !important; }
 /* Per-chapter synth wall-clock badge, right-aligned in the cell. Set live
    on chapter_done and on durable hydrate (timing.js / synth.js). */
 .fw-chstrip-cell .time {
@@ -215,6 +239,30 @@
   border-color: var(--running-border);
   color: var(--running-text);
 }
+/* Per-cell "wipe only this chapter" button — same compact icon-button, error-tinted on hover. */
+.fw-chstrip-cell .fw-chstrip-wipe {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  font-size: 0.78rem;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s,
+              opacity 0.12s;
+}
+.fw-chstrip-cell .fw-chstrip-wipe svg { display: block; }
+.fw-chstrip-cell .fw-chstrip-wipe:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.fw-chstrip-cell .fw-chstrip-wipe:not(:disabled):hover {
+  background: var(--error-bg);
+  border-color: var(--error-border);
+  color: var(--error-text);
+}
 .fw-chstrip-cell[data-status="running"] .fw-chstrip-run {
   border-color: var(--running-border);
   color: var(--running-text);
@@ -247,6 +295,14 @@
   background: var(--error-bg);
 }
 .fw-chstrip-cell[data-status="failed"] .icon { color: var(--error-text); }
+/* The running / failed rows sit on pale --running-bg / --error-bg fills: their text uses the matching dark token
+   (the default ivory title was close to invisible on them). */
+.fw-chstrip-cell[data-status="running"] .label,
+.fw-chstrip-cell[data-status="running"] .num,
+.fw-chstrip-cell[data-status="running"] .time { color: var(--running-text); }
+.fw-chstrip-cell[data-status="failed"] .label,
+.fw-chstrip-cell[data-status="failed"] .num,
+.fw-chstrip-cell[data-status="failed"] .time { color: var(--error-text); }
 .fw-chstrip-cell[data-status="cancelled"] {
   border-left-color: var(--text-muted);
   opacity: 0.7;
