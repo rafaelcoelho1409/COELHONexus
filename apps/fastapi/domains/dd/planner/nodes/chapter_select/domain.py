@@ -706,12 +706,16 @@ def apply_foundations(
     doc_role: dict[str, str],
     doc_family: dict[str, str],
     key_idx: dict[str, int],
+    key_dir: dict[str, tuple] | None = None,
 ) -> tuple[list[dict], dict]:
     """Collect cross-cutting single pages into one front-matter chapter.
 
     A doc qualifies when doc_distill labelled its role in FOUNDATIONS_ROLES AND it
     stands alone on its page (no siblings under the same parent URL) — reference
-    sub-pages come in families, overview/platform/debugging pages do not. At most
+    sub-pages come in families, overview/platform/debugging pages do not. A page
+    inside a catalog directory (integrations/, providers/ ...) never qualifies: its
+    "overview" label describes one integration, and the page belongs with its siblings
+    (langchain: Hugging Face / Microsoft / Embedding model integrations). At most
     FOUNDATIONS_MAX_SHARE of the corpus is moved (overview first, then source
     order), never from a chapter that would drop below MIN_DOCS_PER_CHAPTER, and
     nothing happens below FOUNDATIONS_MIN_DOCS. Returns (chapters, stats)."""
@@ -733,8 +737,10 @@ def apply_foundations(
         if n >= params.FOUNDATIONS_CATALOG_MIN
         and dir_docs[d] <= params.FOUNDATIONS_CATALOG_MAX_SHARE * total
     }
-    n_catalog = sum(1 for _, k in cands if dir_of(k) in catalog_dirs)
-    cands = [(c_i, k) for c_i, k in cands if dir_of(k) not in catalog_dirs]
+    in_catalog = lambda k: dir_of(k) in catalog_dirs or bool(
+        key_dir and patterns.CATALOG_DIR_RE.search("/".join(key_dir.get(k) or ())))
+    n_catalog = sum(1 for _, k in cands if in_catalog(k))
+    cands = [(c_i, k) for c_i, k in cands if not in_catalog(k)]
     stats = {
         "n_foundations": 0, "foundations_candidates": len(cands),
         "foundations_catalog_excluded": n_catalog,
@@ -1369,7 +1375,7 @@ def select_pipeline(
     doc_role = {k: (d or {}).get("role") for k, d in (distillates or {}).items()}
     chapters, f_stats = apply_foundations(
         out_chapters = cons["out_chapters"], doc_role = doc_role,
-        doc_family = doc_family, key_idx = key_idx,
+        doc_family = doc_family, key_idx = key_idx, key_dir = key_dir,
     )
     chapters, mf_stats = fold_micro_chapters(chapters)
     chapters, m_stats = pull_migration_pages(chapters, doc_title, key_dir)

@@ -28,4 +28,7 @@ from __future__ import annotations
 # "Alerts", "Self-Hosted Deployment"); the appendix split then partitions them by page directory.
 # v14 (2026-10-14): a small no-fit pool joins the chapter that holds most of its URL directory (>= 3 confidently placed docs
 # under the directory, >= 50% in one chapter) before title-word overlap decides (langfuse: self-hosting/configuration/observability).
-PROMPT_VERSION = "v14-dir-owned-leftovers-2026-10-14"
+# v15 (2026-10-16): a page inside a catalog directory (integrations/, providers/ ...) never joins Foundations, whatever its role label
+# (langchain: three provider / embedding integration pages labelled "overview" by doc_distill landed in Foundations, two catalog dirs
+# holding fewer than FOUNDATIONS_CATALOG_MIN candidates each; replay of 12 stored frameworks: only that run changes).
+PROMPT_VERSION = "v15-foundations-not-catalog-2026-10-16"
