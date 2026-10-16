@@ -216,6 +216,34 @@ def route_unrouted_sources(
     return out, routed
 
 
+def _plain_excerpt(md_text: str, limit: int) -> str:
+    """The page's prose with code-block sentinels, heading marks and markdown punctuation removed, cut at `limit` characters on a word boundary."""
+    t = re.sub(r"<code-ref[^>]*>", " ", md_text or "")
+    t = re.sub(r"^#{1,6}\s*", "", t, flags = re.M)
+    t = re.sub(r"[`*_>|]+", " ", t)
+    t = " ".join(t.split())
+    if len(t) <= limit:
+        return t
+    return t[:limit].rsplit(" ", 1)[0]
+
+
+def stub_digest_for_failed(source_key: str, md_text: str) -> Optional[schemas.SourceDigest]:
+    """A source whose digest call failed every attempt keeps its place: its title and the opening of its text stand in for the LLM
+    summary, with no contribution yet, so `route_unrouted_sources` gives it to the section it resembles most together with ALL of its
+    code blocks (fastmcp ch-01: the one failed page, mcp-json-configuration, took ~30 blocks out of the chapter in every run). None
+    when the page has no usable text."""
+    summary = _plain_excerpt(md_text, params.OVERALL_SUMMARY_MAX_CHARS - 20)
+    if len(summary) < params.OVERALL_SUMMARY_MIN_CHARS:
+        return None
+    try:
+        return schemas.SourceDigest(
+            source_key = source_key, source_title = derive_source_title_fallback(md_text, source_key),
+            overall_summary = summary, contributes_to = [], unassigned_code_refs = extract_vault_hashes(md_text),
+        )
+    except ValidationError:
+        return None
+
+
 def compute_coverage_stats(
     per_source: list[schemas.SourceDigest],
     per_section: dict[str, list[schemas.SectionContribution]],

@@ -150,7 +150,7 @@ async def _usc_pick(
     chapter_title: str,
     adaptive_cap: int,
 ) -> int:
-    """Run USC picker over candidates. adaptive_cap = per-chapter section ceiling; picker rewards candidates at or just under it. Falls back to index 0 on failure."""
+    """Run USC picker over candidates. adaptive_cap = per-chapter section ceiling; picker rewards candidates at or just under it. Falls back to the best-validated candidate on failure."""
     if len(candidates) <= 1:
         return 0
     summaries = [
@@ -174,11 +174,13 @@ async def _usc_pick(
         if 0 <= vote.chosen_index < len(candidates):
             return vote.chosen_index
     except Exception as e:
+        best = domain.fallback_candidate_index(candidates, adaptive_cap)
         logger.warning(
             f"[outline_sdp] USC picker failed: "
-            f"{type(e).__name__}: {e} — falling back to first candidate"
+            f"{type(e).__name__}: {e} — falling back to candidate {best} (fewest issues, most sections up to the cap)"
         )
-    return 0
+        return best
+    return domain.fallback_candidate_index(candidates, adaptive_cap)
 
 
 async def _draft_one_outline(

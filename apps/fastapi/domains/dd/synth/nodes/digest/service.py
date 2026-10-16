@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 # cap at 16 — none of Planner's nodes exceed the shared Rotator's total
 # capacity the way this one did).
 _CONCURRENCY        = 16    # max concurrent per-source LLM calls.
+# Pause before the second wave: the arms that just stalled are ejected for tens of seconds to minutes, and an immediate retry meets the same
+# ones (fastmcp ch-01: second wave recovered 1/1, 4/7, 0/4 and 0/1 sources over four runs).
+_WAVE_PAUSE_S       = 45.0
 # Expected ~7-9 min realistic (repair attempts + outliers); quality unchanged, pure throughput.
 _TEMPERATURE_DRAFT  = 0.1   # routing decisions should be ~deterministic
 _TEMPERATURE_REPAIR = 0.0
@@ -559,7 +562,7 @@ async def digest_construct_run(state: domains.dd.synth.state.SynthState) -> dict
             f"{len(failed_idx)}/{len(pairs)} failed source(s) as a "
             f"second wave before finalizing"
         )
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(_WAVE_PAUSE_S)
         retry_tasks = [
             _digest_one_source(
                 sem = sem,
@@ -588,7 +591,18 @@ async def digest_construct_run(state: domains.dd.synth.state.SynthState) -> dict
                 f"recovered {n_recovered}/{len(failed_idx)} source(s)"
             )
 
-    per_source: list[schemas.SourceDigest] = [d for d, _ in results if d is not None]
+    n_llm_ok = sum(1 for d, _ in results if d is not None)
+    # A source that failed both waves is not dropped: a stub (title + opening text, all its code blocks) goes through the same
+    # title/summary routing as a source the digest left unrouted.
+    stubs = {i: st for i, (d, _) in enumerate(results) if d is None
+             for st in [domain.stub_digest_for_failed(pairs[i][0], pairs[i][1])] if st is not None}
+    per_source: list[schemas.SourceDigest] = [d if d is not None else stubs.get(i) for i, (d, _) in enumerate(results)]
+    per_source = [d for d in per_source if d is not None]
+    if stubs:
+        logger.info(
+            f"[digest_construct] {slug}/{chapter_id}: {len(stubs)} source(s) the digest could not summarize kept as "
+            f"heuristic stubs (page opening + every code block): {[pairs[i][0].rsplit('/', 1)[-1][:40] for i in stubs]}"
+        )
     failure_reasons = [err for d, err in results if d is None]
     n_pydantic_fail = len(failure_reasons)
     error_breakdown: dict[str, int] = {}
@@ -692,8 +706,8 @@ async def digest_construct_run(state: domains.dd.synth.state.SynthState) -> dict
     )
     logger.info(
         f"[digest_construct] {slug}/{chapter_id}: "
-        f"{stats['n_sources']}/{len(pairs)} sources digested "
-        f"(failed = {dict(sorted(error_breakdown.items()))}), "
+        f"{n_llm_ok}/{len(pairs)} sources digested "
+        f"(failed = {dict(sorted(error_breakdown.items()))}, {len(stubs)} kept as stubs), "
         f"{stats['n_sections_covered']}/{stats['n_sections']} sections "
         f"with primary, {stats['n_empty_sections']} empty, "
         f"{stats['n_orphan_code_refs']} orphan refs, {elapsed} ms"

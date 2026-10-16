@@ -354,13 +354,15 @@ async def chat_text_async(
                 input_tokens  = usage.get("input_tokens"),
                 output_tokens = usage.get("output_tokens"),
             )
-    except errors.ChatTimeoutError:
+    except errors.ChatTimeoutError as _exc:
+        _note_dd_failure(_exc)
         domains.settings.runtime.observability.metrics.record_gen_ai_call(
             operation = "chat", model = ENDPOINT.model, outcome = "timeout",
             duration_s = time.monotonic() - t0,
         )
         raise
-    except Exception:
+    except Exception as _exc:
+        _note_dd_failure(_exc)
         domains.settings.runtime.observability.metrics.record_gen_ai_call(
             operation = "chat", model = ENDPOINT.model, outcome = "error",
             duration_s = time.monotonic() - t0,
@@ -494,13 +496,15 @@ async def chat_structured_async(
                 input_tokens  = usage.get("input_tokens"),
                 output_tokens = usage.get("output_tokens"),
             )
-    except errors.ChatTimeoutError:
+    except errors.ChatTimeoutError as _exc:
+        _note_dd_failure(_exc)
         domains.settings.runtime.observability.metrics.record_gen_ai_call(
             operation = "chat", model = ENDPOINT.model, outcome = "timeout",
             duration_s = time.monotonic() - t0,
         )
         raise
-    except Exception:
+    except Exception as _exc:
+        _note_dd_failure(_exc)
         domains.settings.runtime.observability.metrics.record_gen_ai_call(
             operation = "chat", model = ENDPOINT.model, outcome = "error",
             duration_s = time.monotonic() - t0,
@@ -567,6 +571,14 @@ def report_quality(meta: dict | None, quality: float) -> bool:
     _FEEDBACK_TASKS.add(t)
     t.add_done_callback(_FEEDBACK_TASKS.discard)
     return True
+
+
+def _note_dd_failure(exc: BaseException) -> None:
+    """Count a failed call (504 / timeout / other) on the current DD thread + node, so a run's error rate shows next to its call count."""
+    try:
+        domains.dd.runtime.service.bump_current_failure(exc)
+    except Exception as e:
+        logger.debug(f"[chat-endpoint] failure bump failed: {e}")
 
 
 def _bump_dd_llm_counter(response, model: str | None = None) -> dict | None:

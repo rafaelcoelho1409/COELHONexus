@@ -77,6 +77,49 @@ def bump_current_call(
     }
 
 
+def failure_kind(exc: BaseException) -> str:
+    """Short label of a failed LLM call for the error counters: '504' (Rotator cascade cap), 'timeout' (client backstop), 'rate_limit', or the exception class."""
+    msg = str(exc)
+    if "Error code: 504" in msg or "504" in msg[:80]:
+        return "504"
+    if type(exc).__name__ == "ChatTimeoutError" or "backstop" in msg:
+        return "timeout"
+    if "429" in msg[:80] or "rate" in msg[:80].lower():
+        return "rate_limit"
+    return type(exc).__name__
+
+
+def bump_current_failure(exc: BaseException) -> None:
+    """Count one failed LLM call for the current DD context (no-op outside one)."""
+    stage, thread_id, node_id = get_context()
+    if not stage or not thread_id or not node_id:
+        return
+    try:
+        r = redis_sync.from_url(
+            domains.dd.planner.keys.redis_url(),
+            socket_connect_timeout=domains.dd.planner.params.REDIS_CONNECT_TIMEOUT_S,
+            socket_timeout=domains.dd.planner.params.REDIS_OP_TIMEOUT_S,
+        )
+    except Exception:
+        return
+    try:
+        counters_k = keys.counters_key(thread_id)
+        pipe = r.pipeline(transaction=False)
+        pipe.hset(counters_k, "stage", stage)
+        pipe.hincrby(counters_k, f"node:{node_id}:errors", 1)
+        pipe.hincrby(counters_k, "total:errors", 1)
+        pipe.hincrby(counters_k, f"errkind:{failure_kind(exc)}", 1)
+        pipe.expire(counters_k, params.COUNTER_TTL_S)
+        pipe.execute()
+    except Exception as e:
+        logger.debug(f"[dd-llm-counter] failure bump failed: {e}")
+    finally:
+        try:
+            r.close()
+        except Exception:
+            pass
+
+
 def _bump_sync(
     *,
     stage: str,
@@ -153,7 +196,9 @@ async def read_counters(thread_id: str) -> dict[str, Any]:
             "tokens_in": 0,
             "tokens_out": 0,
             "reasoning_tokens": 0,
+            "errors": 0,
         },
+        "error_kinds": {},
         "by_node": {},
     }
     if not thread_id:
@@ -188,6 +233,10 @@ async def read_counters(thread_id: str) -> dict[str, Any]:
                 "reasoning_tokens": int(
                     counters.get("total:reasoning_tokens", 0) or 0,
                 ),
+                "errors": int(counters.get("total:errors", 0) or 0),
+            },
+            "error_kinds": {
+                k.split(":", 1)[1]: int(v or 0) for k, v in counters.items() if k.startswith("errkind:")
             },
             "by_node": {},
         }
@@ -208,6 +257,7 @@ async def read_counters(thread_id: str) -> dict[str, Any]:
                 "tokens_in": int(fields.get("tokens_in", 0)),
                 "tokens_out": int(fields.get("tokens_out", 0)),
                 "reasoning_tokens": int(fields.get("reasoning_tokens", 0)),
+                "errors": int(fields.get("errors", 0)),
                 "by_model": by_model,
             }
         return out
@@ -274,7 +324,9 @@ async def snapshot(thread_id: str) -> bool:
         )
         logger.info(
             f"[dd-llm-counter] snapshot persisted thread_id={thread_id} "
-            f"calls={calls}"
+            f"calls={calls} errors={int(((payload or {}).get('total') or {}).get('errors') or 0)} "
+            f"by_node_errors={ {n: v.get('errors', 0) for n, v in ((payload or {}).get('by_node') or {}).items() if v.get('errors')} } "
+            f"kinds={(payload or {}).get('error_kinds') or {}}"
         )
         return True
     except Exception as e:

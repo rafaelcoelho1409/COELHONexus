@@ -170,6 +170,9 @@ MAX_CALL_ATTEMPTS = 2
 # judged without it (asyncio ch-05: a Rotator outage failed all 5 judge criteria after 177 s and a perfectly gated chapter was rewritten).
 JUDGE_COOLOFF_S = 45.0
 JUDGE_EXTRA_ATTEMPTS = 2
+# …but the judge never waits longer than this in total (attempt time + cool-offs): fastmcp ch-01 spent 400 s on four timed-out attempts and still
+# shipped without an LLM review. A retry that cannot finish inside the budget is not started, and the first failure re-renders a lighter prompt.
+JUDGE_TOTAL_BUDGET_S = 330.0
 
 # check_code_coverage: a chapter that routes at least COVERAGE_MIN_ROUTED code blocks must print at least COVERAGE_MIN_CODE of
 # them, and a chapter of at least COVERAGE_MIN_SOURCE_COUNT sources must cite at least COVERAGE_MIN_SOURCES of them (asyncio

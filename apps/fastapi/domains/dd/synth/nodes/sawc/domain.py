@@ -520,11 +520,19 @@ def build_topup_prompt(
     )
 
 
+def _reject(rejects: dict[str, int] | None, why: str) -> None:
+    if rejects is not None:
+        rejects[why] = rejects.get(why, 0) + 1
+
+
 def parse_topup(
     parsed: dict | None, *, unused: set[str], vault_rich: dict | None, valid_source_keys: set[str],
-    existing_subheads: set[str], max_new: int,
+    existing_subheads: set[str], max_new: int, rejects: dict[str, int] | None = None,
 ) -> tuple[list[schemas.Subtopic], list[schemas.Citation]]:
-    """Validate a top-up answer: only unused routed hashes, no repeated hash or subheading, prose that matches its block."""
+    """Validate a top-up answer: only unused routed hashes, no repeated hash or subheading, prose that matches its block. `rejects`
+    (optional) collects why candidates were dropped, for the log."""
+    if not parsed:
+        _reject(rejects, "unparseable_json")
     parsed = normalize_typography(parsed)
     subs: list[schemas.Subtopic] = []
     seen_h: set[str] = set()
@@ -538,12 +546,18 @@ def parse_topup(
                 explanation = str(raw.get("explanation") or ""),
             )
         except Exception:
+            _reject(rejects, "schema")
             continue
         h = st.code_ref_hash
-        if not h or h not in unused or h in seen_h or st.subheading.casefold() in seen_s:
+        if not h or h not in unused:
+            _reject(rejects, "hash_not_unused")
+            continue
+        if h in seen_h or st.subheading.casefold() in seen_s:
+            _reject(rejects, "duplicate")
             continue
         body = _fence_body(vault_rich.get(h)) if vault_rich else ""
         if body and not prose_matches_code(f"{st.subheading} {st.explanation}", body):
+            _reject(rejects, "prose_not_about_block")
             continue
         subs.append(st)
         seen_h.add(h)
@@ -656,9 +670,12 @@ def build_source_topup_prompt(
 
 def parse_source_topup(
     parsed: dict | None, *, sources: list[tuple[str, str, list[str]]], existing_subheads: set[str], max_new: int,
+    rejects: dict[str, int] | None = None,
 ) -> tuple[list[schemas.Subtopic], list[schemas.Citation]]:
     """Validate a source top-up: prose only, new heading, text that shares words with the facts it claims to cover; an
     offered source whose facts the prose clearly uses is cited even when the model forgot to."""
+    if not parsed:
+        _reject(rejects, "unparseable_json")
     parsed = normalize_typography(parsed)
     facts_by_src = {k: " ".join([sm] + facts) for k, sm, facts in sources}
     toks_by_src = {k: prose_tokens(t) for k, t in facts_by_src.items()}
@@ -677,12 +694,15 @@ def parse_source_topup(
                 code_ref_hash = "", subheading = str(raw.get("subheading") or ""), explanation = str(raw.get("explanation") or ""),
             )
         except Exception:
+            _reject(rejects, "schema")
             continue
         if META_FRAMING_RE.search(st.explanation):
+            _reject(rejects, "meta_framing")
             continue
         et = prose_tokens(st.explanation)
         used = [k for k in toks_by_src if len(et & toks_by_src[k]) >= params.TOPUP_SRC_GROUND_TOKENS]
         if not used:
+            _reject(rejects, "not_grounded_in_facts")
             continue
         cite = [k for k in used if len(et & toks_by_src[k]) >= params.TOPUP_SRC_CITE_TOKENS or k in (raw.get("sources") or [])]
         lead = max(used, key = lambda k: len(et & toks_by_src[k]))
@@ -696,6 +716,7 @@ def parse_source_topup(
             ent[2] = list(dict.fromkeys(ent[2] + cite))
             continue
         if st.subheading.casefold() in seen:
+            _reject(rejects, "duplicate_heading")
             continue
         seen.add(st.subheading.casefold())
         lead_idx[lead] = len(entries)
@@ -704,6 +725,7 @@ def parse_source_topup(
     cites: dict[tuple[str, str], schemas.Citation] = {}
     for st, _, cite in entries:
         if len(subs) >= max_new or len(st.explanation.split()) < params.TOPUP_SRC_MIN_WORDS:
+            _reject(rejects, "too_short" if len(subs) < max_new else "over_max_new")
             continue
         subs.append(st)
         for k in cite:
@@ -749,6 +771,30 @@ def hard_issues(issues: list[str]) -> list[str]:
     ]
 
 
+def code_density_floor(n_allowed: int) -> int:
+    """Fewest subtopics a code-first section must have for a bank of `n_allowed` blocks (the validator's CODE-FIRST rule)."""
+    if n_allowed >= 20:
+        return 6
+    if n_allowed >= 10:
+        return 4
+    if n_allowed >= 6:
+        return 3
+    if n_allowed >= 3:
+        return max(params.SUBTOPICS_MIN, 3)
+    return params.SUBTOPICS_MIN
+
+
+def writer_subtopic_range(n_allowed: int) -> tuple[str, str, str]:
+    """(pick range, repeat range, aim range) the writer prompt names for a bank of `n_allowed` blocks. A bank of 10+ blocks asks for at least the
+    validator's floor (fastmcp ch-01: the prompt said "4-6" while the validator wanted 6+ for banks of 20+, so most drafts were sent to a repair
+    call for the very thing the prompt told them to do)."""
+    if n_allowed < 10:
+        return "3-8", "4-6", "4-6"
+    lo = max(4, code_density_floor(n_allowed))
+    hi = min(params.SUBTOPICS_MAX, lo + 3)
+    return f"{lo}-{hi}", f"{lo}-{hi}", f"{lo}-{hi}"
+
+
 def validate_section_against_inputs(
     draft: schemas.LLMSectionDraft,
     *,
@@ -782,16 +828,7 @@ def validate_section_against_inputs(
     # so the floor IS the subtopic count.
     n_allowed = len(allowed_hashes)
     n_used = len(draft.subtopics)
-    if n_allowed >= 20:
-        floor = 6
-    elif n_allowed >= 10:
-        floor = 4
-    elif n_allowed >= 6:
-        floor = 3
-    elif n_allowed >= 3:
-        floor = max(params.SUBTOPICS_MIN, 3)
-    else:
-        floor = params.SUBTOPICS_MIN
+    floor = code_density_floor(n_allowed)
     if n_used < floor:
         sorted_bank = sorted(allowed_hashes)[:30]
         bank_listing = ", ".join(sorted_bank)
@@ -1118,6 +1155,7 @@ def build_writer_prompt(
     mixed = bool(mixed_mode) and bool(allowed_hashes) and not prose_mode
     prose = (prose_mode or not allowed_hashes) and not mixed
 
+    rng_pick, rng_repeat, rng_aim = writer_subtopic_range(len(allowed_hashes))
     already_shown_hashes = already_shown_hashes or set()
     shown_here = sorted(h for h in (already_shown_hashes or set()) if h)
     already_shown_block = ""
@@ -1243,7 +1281,7 @@ def build_writer_prompt(
             f"== ALLOWED CODE BANK ({len(allowed_hashes)} entries) — these "
             f"are the actual code blocks available for THIS section. "
             f"Each `<code id = ...>` envelope shows the FULL code body. PICK "
-            f"3-8 BEST ONES — each becomes one subtopic. Reason about each "
+            f"{rng_pick} BEST ONES — each becomes one subtopic. Reason about each "
             f"block fully; the explanation must reference specific lines / "
             f"decorators / arguments. ==\n"
             f"{hash_list}"
@@ -1259,7 +1297,7 @@ def build_writer_prompt(
         f"The reader is here to learn {framework} FAST by reading "
         f"production-quality code with focused explanations. Structure "
         f"is: TOPIC (H2) → SUBTOPIC (H3) → 1-2 sentence explanation → "
-        f"code block. Repeat the subtopic pattern 4-6 times per "
+        f"code block. Repeat the subtopic pattern {rng_repeat} times per "
         f"section. Each code block teaches ONE pedagogically valuable "
         f"thing.\n\n"
 
@@ -1311,7 +1349,7 @@ def build_writer_prompt(
         f'type, parameter) that is visible in the code body. NO code '
         f'fences inside."\n'
         f'    }},\n'
-        f'    ... 3-12 subtopics, aim for 4-6 ...\n'
+        f'    ... 3-12 subtopics, aim for {rng_aim} ...\n'
         f'  ],\n'
         f'  "citations": [\n'
         f'    {{"source_key": "ingestion/.../0024-foo.md", '

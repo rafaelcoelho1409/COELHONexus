@@ -99,6 +99,12 @@ async def _run_llm_judge(
             last_infra_error = e
             infra_failed = True
             if call_attempt < n_attempts - 1:
+                if (time.monotonic() - t0) + params.JUDGE_COOLOFF_S + _TIMEOUT_S_JUDGE > params.JUDGE_TOTAL_BUDGET_S:
+                    logger.warning(
+                        f"[checklist_eval] LLM judge: {int(time.monotonic() - t0)} s spent over {call_attempt + 1} attempt(s) — "
+                        f"the next one cannot finish inside the {params.JUDGE_TOTAL_BUDGET_S:.0f} s budget; giving up"
+                    )
+                    break
                 # The Rotator's own cascade already exhausted — a retry
                 # mostly helps against a transient whole-pool wave. If
                 # this looks like context overflow (60K chars ≈ 15K
@@ -107,7 +113,8 @@ async def _run_llm_judge(
                 # the retry doesn't just reproduce the same failure —
                 # cheap insurance against triggering a full mgsr_replan
                 # cycle for what was really an infra hiccup.
-                if domain.is_context_overflow_error(e):
+                if domain.is_context_overflow_error(e) or call_attempt == 0:
+                    # (the first failure of any kind also re-renders lighter: a smaller prompt finishes more often on a congested pool)
                     cur_rendered_chapter, cur_truncated = (
                         domain.render_chapter_for_judge(
                             sawc,

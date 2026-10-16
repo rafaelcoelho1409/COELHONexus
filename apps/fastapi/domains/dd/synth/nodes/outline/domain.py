@@ -161,6 +161,13 @@ def validate_outline_structure(
     if n_sources is not None:
         adaptive_cap = params.max_h2_for_n_sources(n_sources, n_blocks)
         n_h2 = len(outline.sections)
+        floor = params.min_h2_for_n_blocks(n_blocks, adaptive_cap)
+        if floor and n_h2 < floor:
+            issues.append(
+                f"Outline has only {n_h2} H2 sections but the chapter's sources hold {n_blocks} code blocks, and one section can show "
+                f"at most {params.SECTION_SUBTOPIC_MAX}. Split it into AT LEAST {floor} sections (at most "
+                f"{adaptive_cap}), each a sharply distinct capability or client, so the code can actually be shown."
+            )
         if n_h2 > adaptive_cap:
             issues.append(
                 f"Outline has {n_h2} H2 sections but only {n_sources} "
@@ -259,6 +266,18 @@ def validate_outline_structure(
         )
 
     return (len(issues) == 0, issues)
+
+
+def fallback_candidate_index(
+    candidates: list[tuple[schemas.ChapterOutline, schemas.OutlineDAG, list[str]]], adaptive_cap: int,
+) -> int:
+    """The candidate to ship when the USC picker is unavailable: fewest validation issues, then the most sections up to the cap
+    (a short outline of a code-heavy chapter loses blocks), then the earliest. The picker 504'd in five runs in a row and the old
+    fallback always took candidate 0."""
+    return min(
+        range(len(candidates)),
+        key = lambda i: (len(candidates[i][2]), -min(len(candidates[i][0].sections), adaptive_cap), i),
+    )
 
 
 def summarize_candidate(

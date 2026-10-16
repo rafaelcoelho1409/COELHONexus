@@ -215,6 +215,7 @@ async def _write_section_best_of_n(
     already_shown_hashes: set[str] | None = None,
     citation_fallback: bool = False,
     prior_feedback: list[str] | None = None,
+    vault_char_budget: int | None = None,
 ) -> schemas.Section:
     """N drafts → critic-pick → Section. Optimal-Stopping BoN (arXiv 2510.01394): fire draft 1 first; ship directly if it passes zero-violations gate, else parallel fan-out + tournament. Disabled via KD_SAWC_OPTIMAL_STOPPING=false."""
     async with sem:
@@ -242,6 +243,7 @@ async def _write_section_best_of_n(
                 mixed_mode=mixed_mode,
                 already_shown_hashes=already_shown_hashes,
                 prior_feedback=prior_feedback,
+                vault_char_budget=vault_char_budget,
             )
 
         if _OPTIMAL_STOPPING_ENABLED and params.N_DRAFTS >= 2:
@@ -428,6 +430,7 @@ async def _draft_one_section(
     mixed_mode: bool = False,
     already_shown_hashes: set[str] | None = None,
     prior_feedback: list[str] | None = None,
+    vault_char_budget: int | None = None,
 ) -> tuple[Optional[schemas.LLMSectionDraft], Optional[str], int, int, Optional[str]]:
     """One writer call → parse → Pydantic → cross-ref → repair. Returns
     (draft, deployment, wall_ms, n_repairs, error_reason); draft=None on
@@ -460,7 +463,7 @@ async def _draft_one_section(
             prior_feedback=prior_feedback,
         )
 
-    prompt = _build_prompt(None)
+    prompt = _build_prompt(vault_char_budget)
 
     deployment: Optional[str] = None
     response: Optional[str] = None
@@ -487,7 +490,7 @@ async def _draft_one_section(
                 # -length-aware arm filtering, so retry at half the
                 # vault budget rather than just reproducing the failure.
                 if domain.is_context_overflow_error(e):
-                    prompt = _build_prompt(domain.MAX_VAULT_CHARS_TOTAL // 2)
+                    prompt = _build_prompt((vault_char_budget or domain.MAX_VAULT_CHARS_TOTAL) // 2)
                 await asyncio.sleep(1.0 + random.random())
     if last_error is not None:
         wall_ms = int((time.monotonic() - t0) * 1000)
@@ -905,13 +908,15 @@ async def _topup_coverage(
                 except Exception as e:
                     logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: coverage top-up call {attempt}/{params.TOPUP_ATTEMPTS} failed ({type(e).__name__})")
                     continue
+            rejects: dict[str, int] = {}
             subs, cites = domain.parse_topup(
                 domain.parse_json_response(raw), unused = set(un), vault_rich = vault_rich,
                 valid_source_keys = {x[0] for x in sources} | {c.source_key for c in sec.citations},
-                existing_subheads = {st.subheading for st in sec.subtopics}, max_new = n_new,
+                existing_subheads = {st.subheading for st in sec.subtopics}, max_new = n_new, rejects = rejects,
             )
             if not subs:
-                logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: coverage top-up call {attempt}/{params.TOPUP_ATTEMPTS} held no valid subtopic")
+                logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: coverage top-up call {attempt}/{params.TOPUP_ATTEMPTS} held no valid subtopic "
+                            f"(rejected: {rejects or 'nothing proposed'})")
                 continue
             have = {(c.source_key, c.claim) for c in sec.citations}
             merged = list(sec.citations) + [c for c in cites if (c.source_key, c.claim) not in have]
@@ -967,11 +972,14 @@ async def _topup_sources(
                 except Exception as e:
                     logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: source top-up call {attempt}/{params.TOPUP_ATTEMPTS} failed ({type(e).__name__})")
                     continue
+            rejects: dict[str, int] = {}
             subs, cites = domain.parse_source_topup(
                 domain.parse_json_response(raw), sources = srcs, existing_subheads = {st.subheading for st in sec.subtopics}, max_new = n_new,
+                rejects = rejects,
             )
             if not subs:
-                logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: source top-up call {attempt}/{params.TOPUP_ATTEMPTS} held no valid subtopic")
+                logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: source top-up call {attempt}/{params.TOPUP_ATTEMPTS} held no valid subtopic "
+                            f"(rejected: {rejects or 'nothing proposed'})")
                 continue
             have = {(c.source_key, c.claim) for c in sec.citations}
             merged = list(sec.citations) + [c for c in cites if (c.source_key, c.claim) not in have]
@@ -980,6 +988,39 @@ async def _topup_sources(
 
     done = await asyncio.gather(*[_one(sec) for sec in final_sections])
     return [d[0] for d in done], sum(d[1] for d in done), sum(1 for d in done if d[1])
+
+
+async def _late_retry_sections(
+    *, section_ids: list[str], run_section, completed_sections: dict[str, schemas.Section], memory_ledger: list[schemas.MemoryEntry],
+    chapter_used_hashes: set[str], per_section_index: dict[str, list[dict]], known_section_ids: set[str], label: str,
+) -> list[str]:
+    """One more writer pass, at a lighter vault budget, for every section that shipped as a placeholder because all its drafts failed. A section
+    that comes back with content replaces the placeholder (and its memory entry); one that fails again stays as it was. Returns the recovered ids."""
+    lost = [
+        sid for sid in section_ids
+        if sid in completed_sections and sid in known_section_ids and "placeholder" in (completed_sections[sid].issues or [])
+    ]
+    if not lost:
+        return []
+    logger.info(f"[sawc_write] {label}: {len(lost)} section(s) lost every draft {lost} — one late retry at a "
+                f"{params.LATE_RETRY_VAULT_CHARS}-char vault budget")
+    retried = await asyncio.gather(*(run_section(sid, vault_char_budget = params.LATE_RETRY_VAULT_CHARS) for sid in lost), return_exceptions = True)
+    recovered: list[str] = []
+    for sid, res in zip(lost, retried):
+        if isinstance(res, BaseException) or "placeholder" in (res.issues or []):
+            continue
+        completed_sections[sid] = res
+        try:
+            entry = domain.extract_memory_entry(res, section_contributions = per_section_index.get(sid) or [], section_heading = res.heading)
+            memory_ledger[:] = [m for m in memory_ledger if m.section_id != sid] + [entry]
+        except Exception as e:
+            logger.warning(f"[sawc_write] late-retry memory extract failed for {sid}: {type(e).__name__}: {e}")
+        for st in (res.subtopics or []):
+            if st.code_ref_hash:
+                chapter_used_hashes.add(st.code_ref_hash)
+        recovered.append(sid)
+        logger.info(f"[sawc_write] {sid}: recovered by the late retry ({len(res.subtopics)} subtopics)")
+    return recovered
 
 
 async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
@@ -1274,7 +1315,7 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
         # SurveyGen-I §3.2.2: memory accumulates between stages, not within — all sections in this stage see the same snapshot.
         memory_snapshot = [m.model_dump() for m in memory_ledger]
 
-        async def _run_section(sid: str) -> schemas.Section:
+        async def _run_section(sid: str, vault_char_budget: int | None = None) -> schemas.Section:
             outline_sec = sections_by_id.get(sid)
             if not outline_sec:
                 logger.warning(
@@ -1397,6 +1438,7 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
                 already_shown_hashes = set(chapter_used_hashes),
                 citation_fallback = citation_fallback,
                 prior_feedback = prior_feedback,
+                vault_char_budget = vault_char_budget,
             )
 
         section_results = await asyncio.gather(
@@ -1458,6 +1500,17 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
             n_completed = n_stage_completed,
             n_failed = n_stage_failed,
             wall_ms = stage_ms,
+        )
+
+    # Late retry: a section whose drafts ALL failed (a 504 storm while its stage ran) gets one more go now that the other sections are done and the
+    # pool has had time to recover, with a lighter prompt (fastmcp ch-01: s1 lost both drafts and shipped as a placeholder; the same pool answered
+    # the other sections' calls minutes later).
+    if params.LATE_RETRY_ENABLED and sorted_stage_indices:
+        memory_snapshot = [m.model_dump() for m in memory_ledger]       # what the last stage's `_run_section` closure reads
+        await _late_retry_sections(
+            section_ids = [s_["section_id"] for s_ in outline_sections], run_section = _run_section, completed_sections = completed_sections,
+            memory_ledger = memory_ledger, chapter_used_hashes = chapter_used_hashes, per_section_index = per_section_index,
+            known_section_ids = set(sections_by_id), label = f"{slug}/{chapter_id}",
         )
 
     # Preserve outline order so downstream consumers can iterate sections

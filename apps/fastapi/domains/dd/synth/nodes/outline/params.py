@@ -50,6 +50,18 @@ BANNED_LIST_HUMAN = ", ".join(
 # 75% of that, so the ceiling follows the block count too (fastmcp ch-01: 135 blocks and 18 sources -> 4 sections, 29 blocks printed).
 OUTLINE_BLOCKS_PER_SECTION = 12
 OUTLINE_BLOCK_CEILING      = 12
+# …and a FLOOR: the model ignores the target (fastmcp ch-01: 4 sections for 135 blocks in 3 runs), so an outline with fewer sections than
+# ceil(blocks / OUTLINE_BLOCKS_PER_SECTION_FLOOR) (at most the cap) is a validation issue the repair loop sends back.
+OUTLINE_BLOCKS_PER_SECTION_FLOOR = 20
+SECTION_SUBTOPIC_MAX = 16     # what one section can show (mirrors sawc TOPUP_SECTION_MAX); named in the floor issue so the model sees why
+
+
+def min_h2_for_n_blocks(n_blocks: int, cap: int) -> int:
+    """Fewest sections a code-heavy chapter may have (0 = no floor); never above the cap."""
+    if n_blocks <= 0:
+        return 0
+    need = math.ceil(n_blocks / OUTLINE_BLOCKS_PER_SECTION_FLOOR)
+    return min(cap, need) if need > SECTIONS_MIN else 0
 
 
 def max_h2_for_n_sources(n_sources: int, n_blocks: int = 0) -> int:

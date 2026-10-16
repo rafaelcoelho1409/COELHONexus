@@ -19,4 +19,5 @@ SAWC_SCHEMA_VERSION = "2.0-cookbook"
 # REQUIRED in the coverage top-up and printed before its callers (asyncio ch-04: gather(run(...)) shown without run()), and the source top-up sees the
 # covered text, states only new facts and drops "the documentation provides ..." filler.
 # v21 (2026-10-16): the coverage top-up runs up to 2 rounds (a section that gained subtopics and still has unused routed blocks and room is asked again).
-SAWC_PROMPT_VERSION = "v21-top-up-rounds-2026-10-16"
+# v22 (2026-10-16): a section that lost every draft gets one late retry (after the other sections, 24k-char vault); the writer prompt asks for a subtopic count that scales with the bank.
+SAWC_PROMPT_VERSION = "v22-late-retry-2026-10-16"

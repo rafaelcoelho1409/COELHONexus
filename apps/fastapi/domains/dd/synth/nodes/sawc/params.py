@@ -79,6 +79,9 @@ TOPUP_MAX_FACTS = 14
 TOPUP_ATTEMPTS = 2
 # Rounds of the coverage top-up (each section that gained subtopics and still has unused routed blocks and room is asked again).
 TOPUP_ROUNDS = 2
+# A section that lost every draft is written once more after the other sections finish, with a lighter vault in the prompt.
+LATE_RETRY_ENABLED = True
+LATE_RETRY_VAULT_CHARS = 24_000
 # A section written without any code (prose mode): at most ceil(key facts / this) subtopics, never fewer than
 # SUBTOPICS_MIN (asyncio ch-08: 5 subtopics out of 4 key facts restated the same sentence).
 PROSE_FACTS_PER_SUBTOPIC = 1.5
