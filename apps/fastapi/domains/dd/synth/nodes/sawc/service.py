@@ -875,12 +875,14 @@ async def _topup_coverage(
     validates (see domain.parse_topup). Returns (sections, n_subtopics_added, n_sections_topped_up). Fail-soft: a failed
     call leaves the section as written."""
     unused = domain.unused_routed_hashes(per_section_index, final_sections)
+    required = domain.dependency_blocks(final_sections, unused, vault_rich)
     sem = asyncio.Semaphore(params.TOPUP_CONCURRENCY)
 
     async def _one(sec: schemas.Section) -> tuple[schemas.Section, int]:
-        un = unused.get(sec.section_id) or []
+        need = required.get(sec.section_id) or []
+        un = need + [h for h in unused.get(sec.section_id) or [] if h not in need]
         n_new = min(len(un), params.TOPUP_SECTION_MAX - len(sec.subtopics), params.TOPUP_MAX_NEW)
-        if len(un) < params.TOPUP_MIN_UNUSED or n_new < 1:
+        if (len(un) < params.TOPUP_MIN_UNUSED and not need) or n_new < 1:
             return sec, 0
         contribs = per_section_index.get(sec.section_id) or []
         facts = [f for c in contribs for f in (c.get("key_facts") or [])]
@@ -891,29 +893,32 @@ async def _topup_coverage(
             section_description = outline_sec.get("description") or "",
             existing_subheadings = [st.subheading for st in sec.subtopics],
             blocks = [(h, domain._fence_body(vault_rich.get(h))) for h in un if domain._fence_body(vault_rich.get(h))],
-            facts = facts, sources = sources, max_new = n_new,
+            facts = facts, sources = sources, max_new = n_new, required = set(need),
         )
-        async with sem:
-            try:
-                raw, _meta = await domains.settings.chat.service.chat_text_async(
-                    prompt, max_tokens = params.TOPUP_MAX_TOKENS, temperature = 0.3,
-                    response_format = {"type": "json_object"}, timeout_s = params.TOPUP_TIMEOUT_S,
-                )
-            except Exception as e:
-                logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: coverage top-up call failed ({type(e).__name__})")
-                return sec, 0
-        subs, cites = domain.parse_topup(
-            domain.parse_json_response(raw), unused = set(un), vault_rich = vault_rich,
-            valid_source_keys = {x[0] for x in sources} | {c.source_key for c in sec.citations},
-            existing_subheads = {st.subheading for st in sec.subtopics}, max_new = n_new,
-        )
-        if not subs:
-            return sec, 0
-        have = {(c.source_key, c.claim) for c in sec.citations}
-        merged = list(sec.citations) + [c for c in cites if (c.source_key, c.claim) not in have]
-        return sec.model_copy(update = {
-            "subtopics": list(sec.subtopics) + subs, "citations": merged[:params.TOPUP_CITATIONS_MAX],
-        }), len(subs)
+        for attempt in range(1, params.TOPUP_ATTEMPTS + 1):
+            async with sem:
+                try:
+                    raw, _meta = await domains.settings.chat.service.chat_text_async(
+                        prompt, max_tokens = params.TOPUP_MAX_TOKENS, temperature = 0.3,
+                        response_format = {"type": "json_object"}, timeout_s = params.TOPUP_TIMEOUT_S,
+                    )
+                except Exception as e:
+                    logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: coverage top-up call {attempt}/{params.TOPUP_ATTEMPTS} failed ({type(e).__name__})")
+                    continue
+            subs, cites = domain.parse_topup(
+                domain.parse_json_response(raw), unused = set(un), vault_rich = vault_rich,
+                valid_source_keys = {x[0] for x in sources} | {c.source_key for c in sec.citations},
+                existing_subheads = {st.subheading for st in sec.subtopics}, max_new = n_new,
+            )
+            if not subs:
+                logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: coverage top-up call {attempt}/{params.TOPUP_ATTEMPTS} held no valid subtopic")
+                continue
+            have = {(c.source_key, c.claim) for c in sec.citations}
+            merged = list(sec.citations) + [c for c in cites if (c.source_key, c.claim) not in have]
+            return sec.model_copy(update = {
+                "subtopics": list(sec.subtopics) + subs, "citations": merged[:params.TOPUP_CITATIONS_MAX],
+            }), len(subs)
+        return sec, 0
 
     done = await asyncio.gather(*[_one(sec) for sec in final_sections])
     return [d[0] for d in done], sum(d[1] for d in done), sum(1 for d in done if d[1])
@@ -937,25 +942,28 @@ async def _topup_sources(
         prompt = domain.build_source_topup_prompt(
             framework = framework, chapter_title = chapter_title, section_heading = sec.heading,
             section_description = (sections_by_id.get(sec.section_id) or {}).get("description") or "",
-            existing_subheadings = [st.subheading for st in sec.subtopics], sources = srcs, max_new = n_new,
+            existing_subheadings = [f"{st.subheading} — {st.explanation[:160]}" for st in sec.subtopics], sources = srcs, max_new = n_new,
         )
-        async with sem:
-            try:
-                raw, _meta = await domains.settings.chat.service.chat_text_async(
-                    prompt, max_tokens = params.TOPUP_MAX_TOKENS, temperature = 0.3,
-                    response_format = {"type": "json_object"}, timeout_s = params.TOPUP_TIMEOUT_S,
-                )
-            except Exception as e:
-                logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: source top-up call failed ({type(e).__name__})")
-                return sec, 0
-        subs, cites = domain.parse_source_topup(
-            domain.parse_json_response(raw), sources = srcs, existing_subheads = {st.subheading for st in sec.subtopics}, max_new = n_new,
-        )
-        if not subs:
-            return sec, 0
-        have = {(c.source_key, c.claim) for c in sec.citations}
-        merged = list(sec.citations) + [c for c in cites if (c.source_key, c.claim) not in have]
-        return sec.model_copy(update = {"subtopics": list(sec.subtopics) + subs, "citations": merged[:params.TOPUP_CITATIONS_MAX]}), len(subs)
+        for attempt in range(1, params.TOPUP_ATTEMPTS + 1):
+            async with sem:
+                try:
+                    raw, _meta = await domains.settings.chat.service.chat_text_async(
+                        prompt, max_tokens = params.TOPUP_MAX_TOKENS, temperature = 0.3,
+                        response_format = {"type": "json_object"}, timeout_s = params.TOPUP_TIMEOUT_S,
+                    )
+                except Exception as e:
+                    logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: source top-up call {attempt}/{params.TOPUP_ATTEMPTS} failed ({type(e).__name__})")
+                    continue
+            subs, cites = domain.parse_source_topup(
+                domain.parse_json_response(raw), sources = srcs, existing_subheads = {st.subheading for st in sec.subtopics}, max_new = n_new,
+            )
+            if not subs:
+                logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: source top-up call {attempt}/{params.TOPUP_ATTEMPTS} held no valid subtopic")
+                continue
+            have = {(c.source_key, c.claim) for c in sec.citations}
+            merged = list(sec.citations) + [c for c in cites if (c.source_key, c.claim) not in have]
+            return sec.model_copy(update = {"subtopics": list(sec.subtopics) + subs, "citations": merged[:params.TOPUP_CITATIONS_MAX]}), len(subs)
+        return sec, 0
 
     done = await asyncio.gather(*[_one(sec) for sec in final_sections])
     return [d[0] for d in done], sum(d[1] for d in done), sum(1 for d in done if d[1])
@@ -1465,6 +1473,9 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
         )
         if n_src:
             logger.info(f"[sawc_write] {slug}/{chapter_id}: source top-up added {n_src} prose subtopic(s) to {n_src_secs} section(s)")
+    final_sections, n_ordered = domain.order_by_code_dependencies(final_sections, vault_rich)
+    if n_ordered:
+        logger.info(f"[sawc_write] {slug}/{chapter_id}: {n_ordered} section(s) reordered so a block that defines a helper comes before the blocks that call it")
     final_sections, n_echo = domain.drop_prose_echoes(final_sections)
     if n_echo:
         logger.info(f"[sawc_write] {slug}/{chapter_id}: {n_echo} prose subtopic(s) repeating another subtopic of the chapter dropped")

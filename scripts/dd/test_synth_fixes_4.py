@@ -119,4 +119,78 @@ prior = json.dumps({"slug": "asyncio", "per_chapter_ms": {"ch-01": 600000, "ch-0
 w = persist(prior)
 assert w["per_chapter_ms"] == {"ch-01": 600000, "ch-04": 2040000} and w["total_wall_ms"] == 600000 + 2040000 + 5000 and w["harmonize_ms"] == 5000 and w["session_wall_ms"] == 9999, w
 print("4 single-chapter wall time merged ok")
+
+# 5) define before use: a block calling run() follows the block that defines it; a helper only an UNUSED block defines is REQUIRED ---------------------------
+RUN_DEF = "```python\nimport asyncio\n\nasync def run(cmd):\n    proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE)\n    out, _ = await proc.communicate()\n    print(out)\n\nasyncio.run(run('ls /zzz'))\n```"
+GATHER = "```python\nasync def main():\n    await asyncio.gather(run('ls /zzz'), run('sleep 1; echo hi'))\n\nasyncio.run(main())\n```"
+DATE = "```python\nimport asyncio, sys\n\nasync def get_date():\n    proc = await asyncio.create_subprocess_exec(sys.executable, '-c', 'print(1)')\n    await proc.wait()\n\nasyncio.run(get_date())\n```"
+vr = {H1: {"fence_text": DATE}, H2: {"fence_text": RUN_DEF}, H3: {"fence_text": GATHER}}
+assert SW.code_dependencies(RUN_DEF) == ({"run"}, set()), SW.code_dependencies(RUN_DEF)
+assert SW.code_dependencies(GATHER) == ({"main"}, {"run"}), SW.code_dependencies(GATHER)
+assert SW.code_dependencies(DATE) == ({"get_date"}, set()) and SW.code_dependencies("```python\nthis is ( not python\n```") == (set(), set())
+ordered, n = SW.order_by_code_dependencies([sec("s1", [st("Date", "The get_date coroutine reads the interpreter output from a pipe.", H1),
+                                                        st("Gather", "asyncio.gather runs two run() calls concurrently and waits for both.", H3),
+                                                        st("Shell", "The run helper wraps create_subprocess_shell and then awaits communicate() for output.", H2)])], vr)
+assert n == 1 and [x.subheading for x in ordered[0].subtopics] == ["Date", "Shell", "Gather"], [x.subheading for x in ordered[0].subtopics]
+same, n0 = SW.order_by_code_dependencies([sec("s1", [st("Shell", "The run helper wraps create_subprocess_shell and then awaits communicate() for output.", H2),
+                                                      st("Gather", "asyncio.gather runs two run() calls concurrently and waits for both.", H3),
+                                                      st("Date", "The get_date coroutine reads the interpreter output from a pipe.", H1)])], vr)
+assert n0 == 0 and [x.subheading for x in same[0].subtopics] == ["Shell", "Gather", "Date"], "already define-before-use: untouched"
+printed = [sec("s1", [st("Date", "The get_date coroutine reads the interpreter output from a pipe.", H1), st("Gather", "asyncio.gather runs two run() calls concurrently and waits for both.", H3), st("Plain", "A prose subtopic that stands alone in this section here.")])]
+assert SW.dependency_blocks(printed, {"s1": [H2]}, vr) == {"s1": [H2]}                       # the unused block defines run(), which the printed gather calls
+assert SW.dependency_blocks(printed, {"s1": [H4]}, {**vr, H4: {"fence_text": DATE.replace("get_date", "other")}}) == {}
+assert SW.order_by_code_dependencies(printed, None)[1] == 0
+req_prompt = SW.build_topup_prompt(framework="asyncio", chapter_title="c", section_heading="h", section_description="d", existing_subheadings=[],
+                                   blocks=[(H2, RUN_DEF)], facts=[], sources=[], max_new=2, required={H2})
+assert "REQUIRED" in req_prompt and f"[{H2}] (REQUIRED" in req_prompt
+assert "(REQUIRED" not in SW.build_topup_prompt(framework="asyncio", chapter_title="c", section_heading="h", section_description="d", existing_subheadings=[],
+                                               blocks=[(H2, RUN_DEF)], facts=[], sources=[], max_new=2)
+print("5 define-before-use ordering and required blocks ok")
+
+# 6) "the documentation provides ..." filler is dropped from the source top-up -------------------------------------------------------------------------
+src6 = [("k1", "exec reference", ["asyncio.create_subprocess_exec accepts a limit argument for the StreamReader buffers."])]
+good = {"subtopics": [{"subheading": "The limit argument", "explanation": "asyncio.create_subprocess_exec accepts a limit argument that sets the buffer size of the StreamReader wrappers around stdout and stderr."}], "citations": []}
+filler = {"subtopics": [{"subheading": "Subprocess examples", "explanation": "The documentation provides examples of how to use the asyncio create_subprocess_exec limit argument with StreamReader buffers for subprocesses."}], "citations": []}
+assert len(SW.parse_source_topup(good, sources=src6, existing_subheads=set(), max_new=2)[0]) == 1
+assert SW.parse_source_topup(filler, sources=src6, existing_subheads=set(), max_new=2)[0] == []
+assert SW.META_FRAMING_RE.search("This page describes the limit argument") and not SW.META_FRAMING_RE.search("The loop parameter was removed in Python 3.10 and the page below shows")
+print("6 filler dropped ok")
+
+# 7) a top-up call that fails, or answers nothing valid, is asked again --------------------------------------------------------------------------------
+SV = domains.dd.synth.nodes.sawc.service
+chat = domains.settings.chat.service
+
+
+def run_topup(answers):
+    calls = []
+
+    async def fake(prompt, **kw):
+        calls.append(prompt)
+        a = answers[min(len(calls) - 1, len(answers) - 1)]
+        if isinstance(a, Exception):
+            raise a
+        return json.dumps(a), {}
+
+    orig = chat.chat_text_async
+    chat.chat_text_async = fake
+    try:
+        sections = [sec("s1", [st("Date", "The get_date coroutine reads the interpreter output from a pipe.", H1), st("Gather", "asyncio.gather runs two run() calls concurrently and waits for both.", H3), st("Plain", "A prose subtopic that stands alone in this section here.")])]
+        idx = {"s1": [{"section_id": "s1", "source_key": "k1", "relevance": "primary", "summary": "s", "key_facts": ["a fact"], "code_refs": [H1, H2, H3]}]}
+        out = asyncio.run(SV._topup_coverage(final_sections=sections, per_section_index=idx, vault_rich=vr, sections_by_id={"s1": {"description": "d"}},
+                                             framework="asyncio", chapter_id="ch-04", chapter_title="Subprocess"))
+    finally:
+        chat.chat_text_async = orig
+    return out, len(calls)
+
+
+valid = {"subtopics": [{"code_ref_hash": H2, "subheading": "The run helper", "explanation": "The run coroutine wraps create_subprocess_shell and awaits communicate() to collect the output of the command."}], "citations": []}
+(secs7, n7, _), calls7 = run_topup([RuntimeError("504"), valid])
+assert calls7 == 2 and n7 == 1 and secs7[0].subtopics[-1].code_ref_hash == H2, (calls7, n7)         # one unused block is enough when it is REQUIRED
+(secs7, n7, _), calls7 = run_topup([{"subtopics": [], "citations": []}, valid])
+assert calls7 == 2 and n7 == 1
+(secs7, n7, _), calls7 = run_topup([valid])
+assert calls7 == 1 and n7 == 1
+(secs7, n7, _), calls7 = run_topup([RuntimeError("504"), RuntimeError("504"), valid])
+assert calls7 == P.TOPUP_ATTEMPTS == 2 and n7 == 0                                                   # bounded: fail-soft after the attempts
+print("7 top-up retried, bounded ok")
 print("ALL OK")

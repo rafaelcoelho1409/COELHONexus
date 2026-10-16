@@ -8,6 +8,7 @@ import domains
 from . import params, schemas, versions
 
 import ast
+import builtins
 import json
 import math
 import re
@@ -368,6 +369,108 @@ def cap_prose_subtopics(draft: schemas.LLMSectionDraft, n_facts: int) -> tuple[s
     return draft.model_copy(update = {"subtopics": list(draft.subtopics)[:cap]}), len(draft.subtopics) - cap
 
 
+_BUILTIN_NAMES = frozenset(dir(builtins))
+
+
+def strip_fence(text: str) -> str:
+    """The code inside a ```lang fence (the text itself when it is not fenced)."""
+    t = (text or "").strip()
+    m = re.match(r"^```[^\n]*\n(.*?)\n?```\s*$", t, re.S)
+    return m.group(1) if m else t
+
+
+def code_dependencies(block: str) -> tuple[set[str], set[str]]:
+    """(defs, free_calls) of one Python block: the functions/classes it defines at top level, and the plain names it calls
+    that it neither defines, binds, imports nor takes from the builtins. A block that does not parse gives two empty sets."""
+    try:
+        tree = ast.parse(strip_fence(block))
+    except (SyntaxError, ValueError):
+        return set(), set()
+    defs = {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+    bound, called = set(defs), set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            bound.add(n.id)
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(n.name)
+        elif isinstance(n, ast.arg):
+            bound.add(n.arg)
+        elif isinstance(n, ast.alias):
+            bound.add((n.asname or n.name).split(".")[0])
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            bound.add(n.name)
+        elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+            called.add(n.func.id)
+    return defs, called - bound - _BUILTIN_NAMES
+
+
+def _verbatim_hash(st) -> str:
+    return st.code_ref_hash if st.code_ref_hash and getattr(st, "code_source", "verbatim") != "derived" else ""
+
+
+def dependency_blocks(
+    sections: list[schemas.Section], unused: dict[str, list[str]], vault_rich: dict | None,
+) -> dict[str, list[str]]:
+    """section_id -> the unused routed blocks that define a helper some block printed in that section calls (asyncio ch-04: the
+    gather example calls run(), which the unused shell example defines). The coverage top-up must print them."""
+    if not vault_rich:
+        return {}
+    out: dict[str, list[str]] = {}
+    for sec in sections:
+        un = unused.get(sec.section_id) or []
+        free: set[str] = set()
+        for st in sec.subtopics:
+            h = _verbatim_hash(st)
+            if h:
+                free |= code_dependencies(_fence_body(vault_rich.get(h)))[1]
+        need = [h for h in un if free & code_dependencies(_fence_body(vault_rich.get(h)))[0]]
+        if need:
+            out[sec.section_id] = need
+    return out
+
+
+def order_by_code_dependencies(
+    sections: list[schemas.Section], vault_rich: dict | None,
+) -> tuple[list[schemas.Section], int]:
+    """Define before use: inside a section, the subtopic whose block defines a function another block of the section calls comes
+    first (asyncio ch-04: `asyncio.gather(run(...), run(...))` was printed before the shell example that defines run()). Otherwise
+    the order is the writer's. Returns (sections, n_sections_reordered)."""
+    if not vault_rich:
+        return sections, 0
+    deps: dict[str, tuple[set[str], set[str]]] = {}
+    out, n = [], 0
+    for sec in sections:
+        subs = list(sec.subtopics)
+        for st in subs:
+            h = _verbatim_hash(st)
+            if h and h not in deps:
+                deps[h] = code_dependencies(_fence_body(vault_rich.get(h)))
+        by_def: dict[str, int] = {}
+        for i, st in enumerate(subs):
+            for d in deps.get(_verbatim_hash(st), (set(), set()))[0]:
+                by_def.setdefault(d, i)
+        order: list[int] = []
+        placed: set[int] = set()
+
+        def place(i: int, stack: tuple[int, ...] = ()) -> None:
+            if i in placed or i in stack:
+                return
+            for f in sorted(deps.get(_verbatim_hash(subs[i]), (set(), set()))[1]):
+                j = by_def.get(f)
+                if j is not None and j != i:
+                    place(j, stack + (i,))
+            placed.add(i)
+            order.append(i)
+
+        for i in range(len(subs)):
+            place(i)
+        if order != list(range(len(subs))):
+            n += 1
+            sec = sec.model_copy(update = {"subtopics": [subs[i] for i in order]})
+        out.append(sec)
+    return out, n
+
+
 def unused_routed_hashes(
     per_section_index: dict[str, list[dict]], sections: list[schemas.Section],
 ) -> dict[str, list[str]]:
@@ -385,11 +488,14 @@ def unused_routed_hashes(
 def build_topup_prompt(
     *, framework: str, chapter_title: str, section_heading: str, section_description: str,
     existing_subheadings: list[str], blocks: list[tuple[str, str]], facts: list[str],
-    sources: list[tuple[str, str]], max_new: int,
+    sources: list[tuple[str, str]], max_new: int, required: set[str] | None = None,
 ) -> str:
-    """Prompt for the coverage top-up: extra subtopics for code blocks routed to a section but not printed yet."""
+    """Prompt for the coverage top-up: extra subtopics for code blocks routed to a section but not printed yet. `required`
+    marks the blocks that define a helper other printed examples call; each of them must get a subtopic."""
+    required = required or set()
     shown = "\n".join(
-        f"[{h}]\n{body[:params.TOPUP_MAX_BLOCK_CHARS]}" for h, body in blocks
+        f"[{h}]{' (REQUIRED: the examples already in this section call a function it defines)' if h in required else ''}\n"
+        f"{body[:params.TOPUP_MAX_BLOCK_CHARS]}" for h, body in blocks
     )
     covered = "\n".join(f"- {x}" for x in existing_subheadings) or "- (none)"
     fact_lines = "\n".join(f"- {f}" for f in facts[:params.TOPUP_MAX_FACTS]) or "- (none)"
@@ -406,7 +512,7 @@ def build_topup_prompt(
         f"  - subheading: 2-10 words naming what THAT block demonstrates\n"
         f"  - explanation: 8-80 words of prose that comes BEFORE the code; it MUST name at least one identifier "
         f"(function, class, method, parameter) that appears in the block and describe what the block shows\n"
-        f"Skip a block that only repeats a covered topic. Do not write code. Add citations (source_key from the list, "
+        f"Skip a block that only repeats a covered topic, except a REQUIRED one: write a subtopic for it. Do not write code. Add citations (source_key from the list, "
         f"claim 6-400 chars) for the facts you use.\n\n"
         f'OUTPUT — STRICT JSON, no preamble: {{"subtopics": [{{"code_ref_hash": "...", "subheading": "...", '
         f'"explanation": "..."}}], "citations": [{{"source_key": "...", "claim": "..."}}]}}'
@@ -453,6 +559,13 @@ def parse_topup(
 
 
 _REL_RANK = {"primary": 0, "supporting": 1}
+# A top-up subtopic that talks ABOUT the docs instead of stating their facts (asyncio ch-04: "The documentation provides examples of how to
+# modify single-command scripts ..."): dropped.
+META_FRAMING_RE = re.compile(
+    r"^\s*(?:the|this)\s+(?:\w+\s+)?(?:documentation|docs|page|source|text|guide)\s+"
+    r"(?:provides|shows|explains|describes|demonstrates|states|notes|mentions|covers|includes|contains|gives)\b",
+    re.I,
+)
 
 
 def chapter_prose_tokens(sections: list[schemas.Section]) -> set[str]:
@@ -528,7 +641,8 @@ def build_source_topup_prompt(
         f"== DOC FACTS THE SECTION DOES NOT STATE YET (no code is available for them) ==\n{blocks}\n\n"
         f"Write at most {max_new} prose subtopics that teach what these facts say. Give each page ONE subtopic holding all of "
         f"its facts listed here (never several short ones for the same page); one subtopic may combine pages that cover the same "
-        f"API. For each:\n"
+        f"API. State only what the covered text above does not already say, and state it directly: never restate a covered topic, "
+        f"never open with 'the documentation/page/source ...'. For each:\n"
         f"  - subheading: 2-10 words naming the topic\n"
         f"  - explanation: {params.TOPUP_SRC_MIN_WORDS}-80 words of connected sentences stating the concrete facts (function "
         f"names, parameters, behaviour, version notes) taken ONLY from the facts above — no invented details, no code\n"
@@ -562,6 +676,8 @@ def parse_source_topup(
                 code_ref_hash = "", subheading = str(raw.get("subheading") or ""), explanation = str(raw.get("explanation") or ""),
             )
         except Exception:
+            continue
+        if META_FRAMING_RE.search(st.explanation):
             continue
         et = prose_tokens(st.explanation)
         used = [k for k in toks_by_src if len(et & toks_by_src[k]) >= params.TOPUP_SRC_GROUND_TOKENS]

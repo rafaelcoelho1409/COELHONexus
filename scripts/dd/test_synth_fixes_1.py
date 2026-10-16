@@ -284,7 +284,7 @@ async def _chat15(prompt, **kw):
     return _json.dumps(good15 if "get_running_loop" in prompt else {"subtopics": []}), {}
 domains.settings.chat.service.chat_text_async = _chat15
 out15, n15, k15 = asyncio.run(SV._topup_sources(final_sections=secs15, per_section_index=idx15, sections_by_id={}, framework="asyncio", chapter_id="ch", chapter_title="Loops"))
-assert (n15, k15) == (1, 1) and len(out15[0].subtopics) == 4 and len(out15[1].subtopics) == 3 and len(calls15) == 2
+assert (n15, k15) == (1, 1) and len(out15[0].subtopics) == 4 and len(out15[1].subtopics) == 3 and len(calls15) == 3     # s2's empty answer is asked once more (TOPUP_ATTEMPTS)
 assert any(c.source_key == "k_get" for c in out15[0].citations) and len(out15[0].citations) == 2
 SV.params.TOPUP_SECTION_MAX = 3
 assert asyncio.run(SV._topup_sources(final_sections=secs15, per_section_index=idx15, sections_by_id={}, framework="a", chapter_id="c", chapter_title="t"))[1] == 0   # full sections are not grown
