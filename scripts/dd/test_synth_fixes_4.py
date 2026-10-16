@@ -212,4 +212,23 @@ try:
 except ValueError:
     pass
 print("8 stringified judge verdicts accepted ok")
+
+# 9) a digest contribution with too many / out-of-bounds key facts is trimmed, not rejected ----------------------------------------------------------
+DGD = domains.dd.synth.nodes.digest.domain
+DGP = domains.dd.synth.nodes.digest.params
+def payload(facts):
+    return {"source_title": "MCP JSON configuration", "overall_summary": "How the mcp.json configuration file is structured and generated for the supported clients.",
+            "contributes_to": [{"section_id": "s1", "source_key": "k", "relevance": "primary", "summary": "The page shows the mcp.json shape used by clients.", "key_facts": facts, "code_refs": []}],
+            "unassigned_code_refs": []}
+six = [f"fact number {i} about the configuration file format" for i in range(6)]
+pl, err = DGD.try_parse_payload(payload(six))
+assert pl is not None and err is None and pl.contributes_to[0].key_facts == six[:DGP.MAX_KEY_FACTS_PER_CONTRIB], err
+messy = ["tiny", "a duplicated fact about the config file", "a duplicated fact about the config file", "x" * 20 + " " + "word " * 80]
+pl, err = DGD.try_parse_payload(payload(messy))
+kf = pl.contributes_to[0].key_facts
+assert err is None and len(kf) == 2 and kf[0] == "a duplicated fact about the config file" and len(kf[1]) <= DGP.KEY_FACT_MAX_CHARS, (err, kf)
+good = payload(six[:3])
+assert DGD.trim_key_facts(good) == good                                                    # valid input is unchanged
+assert DGD.try_parse_payload(payload(["no", "x"]))[0] is None                                 # nothing usable left: still rejected for the repair loop
+print("9 digest key facts trimmed ok")
 print("ALL OK")

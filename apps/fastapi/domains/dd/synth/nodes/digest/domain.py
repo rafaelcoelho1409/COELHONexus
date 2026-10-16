@@ -408,11 +408,36 @@ def shorten_pydantic_error(e: ValidationError) -> str:
     return "; ".join(lines) + suffix
 
 
+def trim_key_facts(raw: dict) -> dict:
+    """Bring each contribution's key_facts inside the schema bounds instead of rejecting the whole source: duplicates collapse, a
+    fact under KEY_FACT_MIN_CHARS is dropped, one over KEY_FACT_MAX_CHARS is cut at a word boundary, and a list over
+    MAX_KEY_FACTS_PER_CONTRIB keeps its first entries (fastmcp ch-01: 'key_facts count must be 1-5; got 6' failed two repairs and the
+    source was lost). A list that would end up empty is left for the validator to reject. Returns a copy; valid input is unchanged."""
+    contribs = raw.get("contributes_to") if isinstance(raw, dict) else None
+    if not isinstance(contribs, list):
+        return raw
+    out = []
+    for c in contribs:
+        facts = c.get("key_facts") if isinstance(c, dict) else None
+        if isinstance(facts, list) and all(isinstance(f, str) for f in facts):
+            kept: list[str] = []
+            for f in facts:
+                t = " ".join(f.split())
+                if len(t) > params.KEY_FACT_MAX_CHARS:
+                    t = t[:params.KEY_FACT_MAX_CHARS].rsplit(" ", 1)[0].rstrip(",;:") or t[:params.KEY_FACT_MAX_CHARS]
+                if len(t) >= params.KEY_FACT_MIN_CHARS and t not in kept:
+                    kept.append(t)
+            if kept:
+                c = {**c, "key_facts": kept[:params.MAX_KEY_FACTS_PER_CONTRIB]}
+        out.append(c)
+    return {**raw, "contributes_to": out}
+
+
 def try_parse_payload(
     raw: dict,
 ) -> tuple[Optional[schemas.LLMDigestPayload], Optional[str]]:
     try:
-        return schemas.LLMDigestPayload.model_validate(raw), None
+        return schemas.LLMDigestPayload.model_validate(trim_key_facts(raw)), None
     except ValidationError as e:
         return None, shorten_pydantic_error(e)
     except Exception as e:
