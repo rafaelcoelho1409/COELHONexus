@@ -14,7 +14,7 @@ import * as Sy from '@dd/shared/state/synth.js';
 import { escapeHtml } from '../shared/utils.js';
 import { fmtMs, showElapsed } from '../shared/timing.js';
 import { showToast } from '../shared/ui.js';
-import { _setSynthStagePill } from './graph.js';
+import { _setSynthStagePill, _setSettledStripPill } from './graph.js';
 import { deps } from './chstrip_deps.js';
 
 
@@ -312,14 +312,16 @@ export async function _hydrateChStripFromChapters(slug) {
     // Pill reflects the persisted study state on refresh (no active
     // run → no pollStudyState → no live update would land otherwise).
     // All chapters rendered → green 'Done'. Some rendered → blue
-    // 'Working · X/N' to indicate a partial / resumable state. None
+    // 'Completed · X/N' (partial / resumable; 'Working' only while a run is in flight). None
     // rendered → leave the default 'Idle'.
     const _nDone = chapters.filter(c => c && c.rendered).length;
     const _nTot  = chapters.length;
-    if (_nDone > 0 && _nDone === _nTot) {
-      _setSynthStagePill('done');
-    } else if (_nDone > 0) {
-      _setSynthStagePill('working', 'Working · ' + _nDone + '/' + _nTot);
+    if (Sy.studyThreadId || Sy.synthThreadId) {
+      // A run is in flight (re-attach / study resume): the live count is Working.
+      if (_nDone > 0 && _nDone < _nTot) _setSynthStagePill('working', 'Working · ' + _nDone + '/' + _nTot);
+      else _setSettledStripPill(_nDone, _nTot);
+    } else {
+      _setSettledStripPill(_nDone, _nTot);
     }
     // Strip now reflects server render status → update Start/Resume label
     // (partial render → "Resume Synth", all/none → "Start Synth").

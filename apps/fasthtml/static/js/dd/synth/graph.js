@@ -38,6 +38,14 @@ export function _setSynthStagePill(status, labelOverride) {
   text.textContent = labelOverride || labels[status] || status;
 }
 
+// Pill for a strip with no run in flight: nothing is working, so a partly rendered study reads as Completed with its count (resumable via Resume
+// Synth), never as Working. Returns false when no chapter has rendered (the caller decides: idle).
+export function _setSettledStripPill(nDone, nTotal) {
+  if (!(nDone > 0)) return false;
+  _setSynthStagePill('done', nDone >= nTotal ? null : 'Completed · ' + nDone + '/' + nTotal);
+  return true;
+}
+
 // KPI extraction per synth node. Currently every field is empty
 // because no synth nodes ship state yet — populated as each lands.
 // Format mirrors _kpiForNode (planner side): returns 'k=v' string or

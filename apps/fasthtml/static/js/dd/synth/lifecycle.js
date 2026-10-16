@@ -17,7 +17,7 @@ import {
 } from '../shared/ui.js';
 import { startElapsed, stopElapsed, showElapsed, isElapsedRunning, fmtMs } from '../shared/timing.js';
 import { $activePipeline } from '@nx/stores/pipeline.js';
-import { _setSynthStagePill, _renderSynthGraph, _kpiForSynthNode } from './graph.js';
+import { _setSynthStagePill, _setSettledStripPill, _renderSynthGraph, _kpiForSynthNode } from './graph.js';
 import { _resizeSynthCanvas, _resetSynthEventBuffer, _refreshOpenSynthDrawer, _updateCoRefineChip, _getNodeDrawerRef } from './canvas.js';
 import { synthCardEl, _synthAllImplementedComplete, _genSynthThreadId, pollSynthState, pollStudyState } from './polling.js';
 import { _showChStrip, _renderChStrip, _applyChStripTitles, _markChStripCell, _markChStripCellTime, _hydrateChStripFromChapters, _resetStudyState, _setChStripRunState, _setChStripWipeState, _highlightStripCell } from './chstrip.js';
@@ -279,8 +279,8 @@ export function refreshSynthStartState() {
     // Pill reflects "have any synth output for this slug?".
     // Read the chstrip the durable hydrate (_hydrateChStripFromChapters)
     // just painted: count cells with data-status='done'. All N/N done →
-    // green 'Done'. Some K/N done → blue 'Working · K/N' (resumable
-    // partial). Zero → genuinely idle.
+    // green 'Completed'. Some K/N done → green 'Completed · K/N' (resumable
+    // partial; no run is in flight here, so never 'Working'). Zero → idle.
     // Without this read, refreshSynthStartState would always force
     // 'idle' here AFTER _hydrateChStripFromChapters set 'done', and
     // the pill would flip to Idle on every page refresh of a
@@ -289,14 +289,7 @@ export function refreshSynthStartState() {
       ? Sy.chstripCellsEl.querySelectorAll('.fw-chstrip-cell') : [];
     let _nDone = 0;
     _cells.forEach((c) => { if (c.dataset.status === 'done') _nDone++; });
-    if (_cells.length > 0 && _nDone === _cells.length) {
-      _setSynthStagePill('done');
-    } else if (_cells.length > 0 && _nDone > 0) {
-      _setSynthStagePill('working',
-        'Working · ' + _nDone + '/' + _cells.length);
-    } else {
-      _setSynthStagePill('idle');
-    }
+    if (!_setSettledStripPill(_nDone, _cells.length)) _setSynthStagePill('idle');
   }
   // Empty-state placeholder — hide the cards/canvas when no slug
   // is active so the panel doesn't show an inert pipeline UI.
