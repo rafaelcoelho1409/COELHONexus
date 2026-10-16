@@ -411,19 +411,20 @@ def _verbatim_hash(st) -> str:
 def dependency_blocks(
     sections: list[schemas.Section], unused: dict[str, list[str]], vault_rich: dict | None,
 ) -> dict[str, list[str]]:
-    """section_id -> the unused routed blocks that define a helper some block printed in that section calls (asyncio ch-04: the
-    gather example calls run(), which the unused shell example defines). The coverage top-up must print them."""
+    """section_id -> the unused routed blocks that define a helper some other block of the section calls, whether that block is already
+    printed or is itself still unused (asyncio ch-04: the gather example calls run(), which the unused shell example defines; the
+    top-up printed the gather block and left run() out). The coverage top-up must print them."""
     if not vault_rich:
         return {}
     out: dict[str, list[str]] = {}
     for sec in sections:
         un = unused.get(sec.section_id) or []
-        free: set[str] = set()
-        for st in sec.subtopics:
-            h = _verbatim_hash(st)
-            if h:
-                free |= code_dependencies(_fence_body(vault_rich.get(h)))[1]
-        need = [h for h in un if free & code_dependencies(_fence_body(vault_rich.get(h)))[0]]
+        callers = [_verbatim_hash(st) for st in sec.subtopics if _verbatim_hash(st)] + list(un)
+        free: dict[str, set[str]] = {h: code_dependencies(_fence_body(vault_rich.get(h)))[1] for h in dict.fromkeys(callers)}
+        need = [
+            h for h in un
+            if any(code_dependencies(_fence_body(vault_rich.get(h)))[0] & f for c, f in free.items() if c != h)
+        ]
         if need:
             out[sec.section_id] = need
     return out

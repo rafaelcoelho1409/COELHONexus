@@ -2,9 +2,10 @@
 from __future__ import annotations
 from . import params, versions
 
+import json
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 
@@ -68,6 +69,25 @@ class LLMJudgePayload(BaseModel):
     terminology_consistent:             LLMVerdict
     prose_code_first_not_meta_framing:  LLMVerdict
     code_refs_introduced_in_prose:      LLMVerdict
+
+    @model_validator(mode = "before")
+    @classmethod
+    def _unwrap_stringified_verdicts(cls, data):
+        """Some judge models double-encode each verdict as a JSON string ('{"passed": true, "feedback": ""}'); asyncio ch-04 lost its whole
+        LLM review to 5 validation errors of this kind. A string value that parses to an object is used as that object."""
+        if not isinstance(data, dict):
+            return data
+        out = {}
+        for k, v in data.items():
+            if isinstance(v, str):
+                try:
+                    j = json.loads(v)
+                except ValueError:
+                    j = None
+                if isinstance(j, dict):
+                    v = j
+            out[k] = v
+        return out
 
 
 class CocoaAbstraction(BaseModel):

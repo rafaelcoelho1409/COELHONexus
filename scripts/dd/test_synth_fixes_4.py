@@ -139,6 +139,10 @@ assert n0 == 0 and [x.subheading for x in same[0].subtopics] == ["Shell", "Gathe
 printed = [sec("s1", [st("Date", "The get_date coroutine reads the interpreter output from a pipe.", H1), st("Gather", "asyncio.gather runs two run() calls concurrently and waits for both.", H3), st("Plain", "A prose subtopic that stands alone in this section here.")])]
 assert SW.dependency_blocks(printed, {"s1": [H2]}, vr) == {"s1": [H2]}                       # the unused block defines run(), which the printed gather calls
 assert SW.dependency_blocks(printed, {"s1": [H4]}, {**vr, H4: {"fence_text": DATE.replace("get_date", "other")}}) == {}
+nogather = [sec("s1", [st("Date", "The get_date coroutine reads the interpreter output from a pipe.", H1), st("Plain", "A prose subtopic that stands alone in this section here.")])]
+assert SW.dependency_blocks(nogather, {"s1": [H2, H3]}, vr) == {"s1": [H2]}                   # the gather block is still unused, but it will call run(): the shell block is required
+assert SW.dependency_blocks(nogather, {"s1": [H2]}, vr) == {}                                 # nothing calls it
+assert SW.dependency_blocks(nogather, {"s1": [H3]}, vr) == {}                                 # a caller alone requires nothing
 assert SW.order_by_code_dependencies(printed, None)[1] == 0
 req_prompt = SW.build_topup_prompt(framework="asyncio", chapter_title="c", section_heading="h", section_description="d", existing_subheadings=[],
                                    blocks=[(H2, RUN_DEF)], facts=[], sources=[], max_new=2, required={H2})
@@ -193,4 +197,19 @@ assert calls7 == 1 and n7 == 1
 (secs7, n7, _), calls7 = run_topup([RuntimeError("504"), RuntimeError("504"), valid])
 assert calls7 == P.TOPUP_ATTEMPTS == 2 and n7 == 0                                                   # bounded: fail-soft after the attempts
 print("7 top-up retried, bounded ok")
+
+# 8) a judge reply whose verdicts are JSON strings is accepted --------------------------------------------------------------------------------------
+CKS = domains.dd.synth.nodes.checklist.schemas
+names = ["chapter_reads_coherently", "claims_grounded_in_sources", "terminology_consistent", "prose_code_first_not_meta_framing", "code_refs_introduced_in_prose"]
+wrapped = {n: '{"passed": true, "feedback": ""}' for n in names}
+wrapped["terminology_consistent"] = '{"passed": false, "feedback": "Mixes Process and process object across the section."}'
+pl = CKS.LLMJudgePayload.model_validate(wrapped)
+assert pl.chapter_reads_coherently.passed and not pl.terminology_consistent.passed and "Mixes" in pl.terminology_consistent.feedback
+assert CKS.LLMJudgePayload.model_validate({n: {"passed": True, "feedback": ""} for n in names}).code_refs_introduced_in_prose.passed
+try:
+    CKS.LLMJudgePayload.model_validate({**wrapped, "claims_grounded_in_sources": "not json"})
+    raise SystemExit("a non-JSON string verdict must still be rejected")
+except ValueError:
+    pass
+print("8 stringified judge verdicts accepted ok")
 print("ALL OK")
