@@ -18,4 +18,5 @@ SAWC_SCHEMA_VERSION = "2.0-cookbook"
 # v20 (2026-10-16): the top-ups ask again once when a call fails or holds nothing valid, a block that defines a helper a printed block calls is
 # REQUIRED in the coverage top-up and printed before its callers (asyncio ch-04: gather(run(...)) shown without run()), and the source top-up sees the
 # covered text, states only new facts and drops "the documentation provides ..." filler.
-SAWC_PROMPT_VERSION = "v20-top-up-retry-define-before-use-2026-10-16"
+# v21 (2026-10-16): the coverage top-up runs up to 2 rounds (a section that gained subtopics and still has unused routed blocks and room is asked again).
+SAWC_PROMPT_VERSION = "v21-top-up-rounds-2026-10-16"

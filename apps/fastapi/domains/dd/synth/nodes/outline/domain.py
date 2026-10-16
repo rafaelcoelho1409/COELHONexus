@@ -149,6 +149,7 @@ def validate_outline_structure(
     dag: schemas.OutlineDAG,
     *,
     n_sources: Optional[int] = None,
+    n_blocks: int = 0,
 ) -> tuple[bool, list[str]]:
     """(ok, issues): cross-section checks Pydantic can't handle (unique ids/headings, banned headings, valid prereqs, DAG depth cap, fuzzy-dup H2, adaptive section count)."""
     issues: list[str] = []
@@ -158,7 +159,7 @@ def validate_outline_structure(
     # Adaptive cap from source pool size; falls back to SECTIONS_MAX
     # ceiling when n_sources is None.
     if n_sources is not None:
-        adaptive_cap = params.max_h2_for_n_sources(n_sources)
+        adaptive_cap = params.max_h2_for_n_sources(n_sources, n_blocks)
         n_h2 = len(outline.sections)
         if n_h2 > adaptive_cap:
             issues.append(
@@ -289,11 +290,11 @@ _OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR = 5
 _OUTLINE_OPTIMAL_STOPPING_RATIO_OF_CAP = 0.7
 
 
-def outline_optimal_stopping_min(n_sources: int | None) -> int:
+def outline_optimal_stopping_min(n_sources: int | None, n_blocks: int = 0) -> int:
     """Minimum section count for Optimal-Stopping early-exit, coupled to adaptive cap so large corpora demand more sections before short-circuiting."""
     if n_sources is None:
         return _OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR
-    cap = params.max_h2_for_n_sources(n_sources)
+    cap = params.max_h2_for_n_sources(n_sources, n_blocks)
     return max(
         _OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR,
         int(cap * _OUTLINE_OPTIMAL_STOPPING_RATIO_OF_CAP),

@@ -77,6 +77,8 @@ TOPUP_MAX_FACTS = 14
 # A top-up call that fails or whose answer holds nothing valid is asked again (asyncio ch-04: a 147 s Rotator 504 on the source top-up, and an answer
 # the replay shows is fine on a second ask, left the `run()` helper block the printed gather example calls out of the chapter).
 TOPUP_ATTEMPTS = 2
+# Rounds of the coverage top-up (each section that gained subtopics and still has unused routed blocks and room is asked again).
+TOPUP_ROUNDS = 2
 # A section written without any code (prose mode): at most ceil(key facts / this) subtopics, never fewer than
 # SUBTOPICS_MIN (asyncio ch-08: 5 subtopics out of 4 key facts restated the same sentence).
 PROSE_FACTS_PER_SUBTOPIC = 1.5

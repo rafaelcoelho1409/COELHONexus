@@ -871,14 +871,14 @@ async def _topup_coverage(
     *, final_sections: list[schemas.Section], per_section_index: dict[str, list[dict]], vault_rich: dict,
     sections_by_id: dict[str, dict], framework: str, chapter_id: str, chapter_title: str,
 ) -> tuple[list[schemas.Section], int, int]:
-    """One extra call per section that has routed-but-unused code blocks: ask for subtopics covering them and merge what
-    validates (see domain.parse_topup). Returns (sections, n_subtopics_added, n_sections_topped_up). Fail-soft: a failed
-    call leaves the section as written."""
-    unused = domain.unused_routed_hashes(per_section_index, final_sections)
-    required = domain.dependency_blocks(final_sections, unused, vault_rich)
+    """Extra calls for sections that have routed-but-unused code blocks: ask for subtopics covering them and merge what validates
+    (see domain.parse_topup). A section that gained subtopics and still has unused blocks and room is asked again, up to TOPUP_ROUNDS
+    rounds (fastmcp ch-01: one round of 8 left sections of 22-46 blocks at 5-13 subtopics); a section whose calls failed is not asked
+    again. Returns (sections, n_subtopics_added, n_sections_topped_up). Fail-soft: a failed call leaves the section as written."""
     sem = asyncio.Semaphore(params.TOPUP_CONCURRENCY)
+    sections, total_added, touched, failed = list(final_sections), 0, set(), set()
 
-    async def _one(sec: schemas.Section) -> tuple[schemas.Section, int]:
+    async def _one(sec: schemas.Section, unused: dict, required: dict) -> tuple[schemas.Section, int]:
         need = required.get(sec.section_id) or []
         un = need + [h for h in unused.get(sec.section_id) or [] if h not in need]
         n_new = min(len(un), params.TOPUP_SECTION_MAX - len(sec.subtopics), params.TOPUP_MAX_NEW)
@@ -918,10 +918,23 @@ async def _topup_coverage(
             return sec.model_copy(update = {
                 "subtopics": list(sec.subtopics) + subs, "citations": merged[:params.TOPUP_CITATIONS_MAX],
             }), len(subs)
+        failed.add(sec.section_id)
         return sec, 0
 
-    done = await asyncio.gather(*[_one(sec) for sec in final_sections])
-    return [d[0] for d in done], sum(d[1] for d in done), sum(1 for d in done if d[1])
+    for rnd in range(1, params.TOPUP_ROUNDS + 1):
+        unused = domain.unused_routed_hashes(per_section_index, sections)
+        required = domain.dependency_blocks(sections, unused, vault_rich)
+        todo = [s for s in sections if s.section_id not in failed]
+        done = {d[0].section_id: d for d in await asyncio.gather(*[_one(s, unused, required) for s in todo])}
+        sections = [done[s.section_id][0] if s.section_id in done else s for s in sections]
+        added = sum(d[1] for d in done.values())
+        touched |= {sid for sid, d in done.items() if d[1]}
+        total_added += added
+        if rnd > 1 and added:
+            logger.info(f"[sawc_write] {chapter_id}: coverage top-up round {rnd} added {added} subtopic(s)")
+        if not added:
+            break
+    return sections, total_added, len(touched)
 
 
 async def _topup_sources(

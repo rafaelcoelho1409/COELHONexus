@@ -90,6 +90,7 @@ async def _generate_samples(
     prompt: str, n: int, thread_id: str,
     *,
     n_sources: int | None = None,
+    n_blocks: int = 0,
 ) -> list[tuple[dict, dict]]:
     """Fire N drafts with Optimal-Stopping (arXiv 2510.01394): sample 1 checked first; if clean + valid + ≥ min sections, skip remaining N-1. Else fan out concurrently, then USC vote. Disabled via KD_OUTLINE_OPTIMAL_STOPPING=false."""
     if params.OPTIMAL_STOPPING_ENABLED and n >= 2:
@@ -103,12 +104,12 @@ async def _generate_samples(
             if outline0 is not None:
                 dag0 = domain.derive_dag(outline0.sections)
                 _, issues0 = domain.validate_outline_structure(
-                    outline0, dag0, n_sources=n_sources,
+                    outline0, dag0, n_sources=n_sources, n_blocks=n_blocks,
                 )
                 if (
                     not issues0
                     and len(outline0.sections)
-                        >= domain.outline_optimal_stopping_min(n_sources)
+                        >= domain.outline_optimal_stopping_min(n_sources, n_blocks)
                 ):
                     logger.info(
                         f"[outline_sdp] Optimal-Stopping fired — sample 0 "
@@ -410,7 +411,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
             )
 
     # Adaptive cap (not fixed 8): old fixed-8 pushed LLM to over-section small chapters (then hard-trimmed or deadlocked). Correct count up front → winner rarely needs trimming.
-    adaptive_target = params.max_h2_for_n_sources(len(sources))
+    adaptive_target = params.max_h2_for_n_sources(len(sources), n_vault_hashes)
     prompt = prompts.build_outline_prompt(
         framework = slug,
         chapter_id = chapter_id,
@@ -421,7 +422,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
         target_sections_hint = adaptive_target,
     )
     raw_samples = await _generate_samples(
-        prompt, params.N_SAMPLES, thread_id, n_sources = len(sources),
+        prompt, params.N_SAMPLES, thread_id, n_sources = len(sources), n_blocks = n_vault_hashes,
     )
 
     await domains.dd.synth.runtime.progress.service.emit_progress(
@@ -441,7 +442,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
             continue
         dag = domain.derive_dag(outline.sections)
         _, issues = domain.validate_outline_structure(
-            outline, dag, n_sources = len(sources),
+            outline, dag, n_sources = len(sources), n_blocks = n_vault_hashes,
         )
         candidates.append((outline, dag, issues))
 
@@ -491,7 +492,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
                     continue
                 dag = domain.derive_dag(outline.sections)
                 _, issues = domain.validate_outline_structure(
-                    outline, dag, n_sources = len(sources),
+                    outline, dag, n_sources = len(sources), n_blocks = n_vault_hashes,
                 )
                 candidates.append((outline, dag, issues))
 
@@ -569,7 +570,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
                 continue
             new_dag = domain.derive_dag(new_outline.sections)
             _, new_issues = domain.validate_outline_structure(
-                new_outline, new_dag, n_sources = len(sources),
+                new_outline, new_dag, n_sources = len(sources), n_blocks = n_vault_hashes,
             )
             # Re-check semantic H2 dedup on repaired outline so repair loop credits the LLM's response to feedback.
             new_semantic = await _detect_semantic_h2_duplicates(new_outline)
@@ -588,7 +589,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
             continue
 
     # HARD-TRIM: LLM ignores soft cap signal (BU ch-02 shipped 30 H2 at cap 12; CC ch-01 shipped 20 at cap 14). Trim to adaptive_cap directly — old max(SECTIONS_MIN, cap) floor caused NO-OP for 4-section outlines below cap 4.
-    adaptive_cap = params.max_h2_for_n_sources(len(sources))
+    adaptive_cap = params.max_h2_for_n_sources(len(sources), n_vault_hashes)
     if len(outline.sections) > adaptive_cap:
         n_before = len(outline.sections)
         # Topological order: lower stage_index first.
@@ -623,7 +624,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
         )
         # Re-validate post-trim so downstream sees actual remaining violations (not pre-trim ones including the now-resolved cap-exceeded).
         _, issues = domain.validate_outline_structure(
-            outline, dag, n_sources = len(sources),
+            outline, dag, n_sources = len(sources), n_blocks = n_vault_hashes,
         )
         # Re-check semantic dedup post-trim (trimming may have removed near-duplicate H2s).
         post_trim_semantic = await _detect_semantic_h2_duplicates(outline)

@@ -231,4 +231,57 @@ good = payload(six[:3])
 assert DGD.trim_key_facts(good) == good                                                    # valid input is unchanged
 assert DGD.try_parse_payload(payload(["no", "x"]))[0] is None                                 # nothing usable left: still rejected for the repair loop
 print("9 digest key facts trimmed ok")
+
+# 10) the outline's section cap follows the chapter's code-block count ----------------------------------------------------------------------------------
+OL = domains.dd.synth.nodes.outline
+assert OL.params.max_h2_for_n_sources(18) == 4 and OL.params.max_h2_for_n_sources(18, 0) == 4         # unchanged without a block count
+assert OL.params.max_h2_for_n_sources(18, 135) == 12                                                    # fastmcp ch-01: 135 blocks -> 12 sections, not 4
+assert OL.params.max_h2_for_n_sources(18, 30) == 4 and OL.params.max_h2_for_n_sources(23, 35) == 5     # asyncio ch-01 (23 sources, 35 blocks): the source cap still wins
+assert OL.params.max_h2_for_n_sources(40, 60) == 10 and OL.params.max_h2_for_n_sources(0, 50) == 5
+assert OL.params.max_h2_for_n_sources(4, 200) == OL.params.OUTLINE_BLOCK_CEILING == 12                  # never above the block ceiling
+assert OL.domain.outline_optimal_stopping_min(18, 135) == 8 and OL.domain.outline_optimal_stopping_min(18) == 5
+secs10 = [OL.schemas.OutlineSection(section_id=f"s{i + 1}", heading=f"Install for client number {chr(65 + i)}", description="Installing the server for one specific client and its configuration file.", prerequisites=[]) for i in range(8)]
+ol10 = OL.schemas.ChapterOutline(sections=secs10)
+dag10 = OL.domain.derive_dag(ol10.sections)
+assert any("adaptive cap is 4" in x for x in OL.domain.validate_outline_structure(ol10, dag10, n_sources=18)[1])
+assert not any("adaptive cap" in x for x in OL.domain.validate_outline_structure(ol10, dag10, n_sources=18, n_blocks=135)[1])
+print("10 outline cap follows block count ok")
+
+# 11) the coverage top-up runs a second round for sections that gained subtopics, never re-asks a section whose calls failed ------------------------------
+def run_rounds(answer_for, n_blocks=20, subs_per_section=3):
+    hs = [f"{i:016x}" for i in range(n_blocks)]
+    vr11 = {h: {"fence_text": f"```python\nresult_{i} = widget_{i}.compute_{i}(value_{i})\n```"} for i, h in enumerate(hs)}
+    sections11 = [sec(f"s{k}", [st(f"Topic {k} {j}", f"widget_{k}{j} compute_{k}{j} explanation words here for {k} {j} only.") for j in range(subs_per_section)]) for k in (1, 2)]
+    idx11 = {f"s{k}": [{"section_id": f"s{k}", "source_key": "k1", "relevance": "primary", "summary": "s", "key_facts": ["a fact"], "code_refs": hs[(k - 1) * 10: k * 10]}] for k in (1, 2)}
+    calls = []
+
+    async def fake(prompt, **kw):
+        calls.append(prompt)
+        sid = "s1" if "'Heading s1'" in prompt else "s2"
+        return json.dumps(answer_for(sid, prompt, len(calls))), {}
+
+    orig = chat.chat_text_async
+    chat.chat_text_async = fake
+    try:
+        out = asyncio.run(SV._topup_coverage(final_sections=sections11, per_section_index=idx11, vault_rich=vr11, sections_by_id={}, framework="a", chapter_id="c", chapter_title="t"))
+    finally:
+        chat.chat_text_async = orig
+    return out, calls, vr11
+
+
+def answer(sid, prompt, n):
+    import re as _re
+    shown = _re.findall(r"^\[([0-9a-f]{16})\]", prompt, _re.M)[:4]
+    return {"subtopics": [{"code_ref_hash": h, "subheading": f"New topic {sid} {h[-3:]}", "explanation": f"The widget_{int(h, 16)} object runs compute_{int(h, 16)} on value_{int(h, 16)} and returns result_{int(h, 16)} here."} for h in shown], "citations": []}
+
+
+(out11, calls11, _), = [run_rounds(answer)[:3]]
+assert len(calls11) == 4, len(calls11)                                                     # 2 sections x 2 rounds
+assert [len(x.subtopics) for x in out11[0]] == [11, 11] and out11[1] == 16 and out11[2] == 2, (out11[0], out11[1], out11[2])   # 4 per call, 2 rounds
+failing = lambda sid, prompt, n: (_ for _ in ()).throw(RuntimeError("504")) if sid == "s1" else answer(sid, prompt, n)
+out11b, calls11b, _ = run_rounds(failing)
+s1_calls = [c for c in calls11b if "'Heading s1'" in c]
+assert len(s1_calls) == P.TOPUP_ATTEMPTS == 2, len(s1_calls)                               # s1 failed both attempts: not asked again in round 2
+assert len(out11b[0][0].subtopics) == 3 and len(out11b[0][1].subtopics) > 3
+print("11 coverage top-up rounds ok")
 print("ALL OK")

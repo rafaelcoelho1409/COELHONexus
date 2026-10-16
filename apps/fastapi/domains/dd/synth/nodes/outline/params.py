@@ -2,6 +2,7 @@
 headings, USC vote tuning, LLM call budgets."""
 from __future__ import annotations
 
+import math
 import os
 
 
@@ -45,17 +46,27 @@ BANNED_LIST_HUMAN = ", ".join(
 )
 
 
-def max_h2_for_n_sources(n_sources: int) -> int:
-    """Adaptive ceiling for outline section count."""
+# A chapter whose code the sections could not print: each section prints at most TOPUP_SECTION_MAX (16) blocks and the coverage gate asks for
+# 75% of that, so the ceiling follows the block count too (fastmcp ch-01: 135 blocks and 18 sources -> 4 sections, 29 blocks printed).
+OUTLINE_BLOCKS_PER_SECTION = 12
+OUTLINE_BLOCK_CEILING      = 12
+
+
+def max_h2_for_n_sources(n_sources: int, n_blocks: int = 0) -> int:
+    """Adaptive ceiling for outline section count: from the source pool, and, for a code-heavy chapter, from its code-block count."""
     if n_sources <= 0:
-        return OUTLINE_ADAPTIVE_FLOOR
-    return min(
-        OUTLINE_ADAPTIVE_CEILING,
-        max(
-            OUTLINE_ADAPTIVE_FLOOR,
-            n_sources // OUTLINE_ADAPTIVE_DIVISOR,
-        ),
-    )
+        base = OUTLINE_ADAPTIVE_FLOOR
+    else:
+        base = min(
+            OUTLINE_ADAPTIVE_CEILING,
+            max(
+                OUTLINE_ADAPTIVE_FLOOR,
+                n_sources // OUTLINE_ADAPTIVE_DIVISOR,
+            ),
+        )
+    if n_blocks <= 0:
+        return base
+    return max(base, min(OUTLINE_BLOCK_CEILING, math.ceil(n_blocks / OUTLINE_BLOCKS_PER_SECTION)))
 
 
 BLOB_PREFIX = "synth"
