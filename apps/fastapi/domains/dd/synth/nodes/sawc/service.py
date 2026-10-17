@@ -876,10 +876,10 @@ async def _topup_coverage(
 ) -> tuple[list[schemas.Section], int, int]:
     """Extra calls for sections that have routed-but-unused code blocks: ask for subtopics covering them and merge what validates
     (see domain.parse_topup). A section that gained subtopics and still has unused blocks and room is asked again, up to TOPUP_ROUNDS
-    rounds (fastmcp ch-01: one round of 8 left sections of 22-46 blocks at 5-13 subtopics); a section whose calls failed is not asked
-    again. Returns (sections, n_subtopics_added, n_sections_topped_up). Fail-soft: a failed call leaves the section as written."""
+    rounds (fastmcp ch-01: one round of 8 left sections of 22-46 blocks at 5-13 subtopics); a section whose calls failed is asked once more
+    in a final salvage pass (fastmcp ch-01: two 504s left a 21-block section at 5 subtopics). Returns (sections, n_subtopics_added, n_sections_topped_up). Fail-soft: a failed call leaves the section as written."""
     sem = asyncio.Semaphore(params.TOPUP_CONCURRENCY)
-    sections, total_added, touched, failed = list(final_sections), 0, set(), set()
+    sections, total_added, touched, failed, empty = list(final_sections), 0, set(), set(), set()
 
     async def _one(sec: schemas.Section, unused: dict, required: dict) -> tuple[schemas.Section, int]:
         need = required.get(sec.section_id) or []
@@ -898,6 +898,7 @@ async def _topup_coverage(
             blocks = [(h, domain._fence_body(vault_rich.get(h))) for h in un if domain._fence_body(vault_rich.get(h))],
             facts = facts, sources = sources, max_new = n_new, required = set(need),
         )
+        raised = 0
         for attempt in range(1, params.TOPUP_ATTEMPTS + 1):
             async with sem:
                 try:
@@ -906,6 +907,7 @@ async def _topup_coverage(
                         response_format = {"type": "json_object"}, timeout_s = params.TOPUP_TIMEOUT_S,
                     )
                 except Exception as e:
+                    raised += 1
                     logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: coverage top-up call {attempt}/{params.TOPUP_ATTEMPTS} failed ({type(e).__name__})")
                     continue
             rejects: dict[str, int] = {}
@@ -923,22 +925,42 @@ async def _topup_coverage(
             return sec.model_copy(update = {
                 "subtopics": list(sec.subtopics) + subs, "citations": merged[:params.TOPUP_CITATIONS_MAX],
             }), len(subs)
-        failed.add(sec.section_id)
+        # Every call raising (capacity, 504s) is salvageable later; a model that answered without a valid subtopic is not asked again.
+        (failed if raised == params.TOPUP_ATTEMPTS else empty).add(sec.section_id)
         return sec, 0
 
-    for rnd in range(1, params.TOPUP_ROUNDS + 1):
+    exhausted, gained_late = False, set()
+    for rnd in list(range(1, params.TOPUP_ROUNDS + 1)) + ["salvage", "after-salvage"]:
+        salvage = rnd == "salvage"
+        if rnd == "after-salvage":
+            # A salvaged section usually still has most of its bank unused (one call adds at most TOPUP_MAX_NEW): one more round for those.
+            if not gained_late:
+                break
+            ids = set(gained_late)
+        elif salvage:
+            # A section whose calls all failed (capacity, 504s) is not a verdict on the section: ask again once the other sections are done.
+            if not failed:
+                break
+            ids, failed = set(failed), set()
+        elif exhausted:
+            continue
+        else:
+            ids = {s.section_id for s in sections} - failed - empty
         unused = domain.unused_routed_hashes(per_section_index, sections)
         required = domain.dependency_blocks(sections, unused, vault_rich)
-        todo = [s for s in sections if s.section_id not in failed]
+        todo = [s for s in sections if s.section_id in ids]
         done = {d[0].section_id: d for d in await asyncio.gather(*[_one(s, unused, required) for s in todo])}
         sections = [done[s.section_id][0] if s.section_id in done else s for s in sections]
         added = sum(d[1] for d in done.values())
         touched |= {sid for sid, d in done.items() if d[1]}
         total_added += added
-        if rnd > 1 and added:
+        if salvage:
+            gained_late = {sid for sid, d in done.items() if d[1]}
+            logger.info(f"[sawc_write] {chapter_id}: coverage top-up salvage pass over {len(ids)} section(s) that had failed: +{added} subtopic(s)")
+        elif isinstance(rnd, int) and rnd > 1 and added:
             logger.info(f"[sawc_write] {chapter_id}: coverage top-up round {rnd} added {added} subtopic(s)")
-        if not added:
-            break
+        if not added and rnd not in ("salvage", "after-salvage"):
+            exhausted = True
     return sections, total_added, len(touched)
 
 

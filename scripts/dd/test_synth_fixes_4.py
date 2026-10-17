@@ -195,7 +195,11 @@ assert calls7 == 2 and n7 == 1
 (secs7, n7, _), calls7 = run_topup([valid])
 assert calls7 == 1 and n7 == 1
 (secs7, n7, _), calls7 = run_topup([RuntimeError("504"), RuntimeError("504"), valid])
-assert calls7 == P.TOPUP_ATTEMPTS == 2 and n7 == 0                                                   # bounded: fail-soft after the attempts
+assert calls7 == P.TOPUP_ATTEMPTS + 1 == 3 and n7 == 1                                               # every call raised: one salvage call recovers it
+(secs7, n7, _), calls7 = run_topup([RuntimeError("504")] * 4 + [valid])
+assert calls7 == 2 * P.TOPUP_ATTEMPTS == 4 and n7 == 0                                               # bounded: fail-soft after the salvage attempts
+(secs7, n7, _), calls7 = run_topup([{"subtopics": [], "citations": []}] * 4 + [valid])
+assert calls7 == P.TOPUP_ATTEMPTS == 2 and n7 == 0                                                   # answered but nothing valid: not salvaged
 print("7 top-up retried, bounded ok")
 
 # 8) a judge reply whose verdicts are JSON strings is accepted --------------------------------------------------------------------------------------
@@ -281,7 +285,7 @@ assert [len(x.subtopics) for x in out11[0]] == [11, 11] and out11[1] == 16 and o
 failing = lambda sid, prompt, n: (_ for _ in ()).throw(RuntimeError("504")) if sid == "s1" else answer(sid, prompt, n)
 out11b, calls11b, _ = run_rounds(failing)
 s1_calls = [c for c in calls11b if "'Heading s1'" in c]
-assert len(s1_calls) == P.TOPUP_ATTEMPTS == 2, len(s1_calls)                               # s1 failed both attempts: not asked again in round 2
+assert len(s1_calls) == 2 * P.TOPUP_ATTEMPTS == 4, len(s1_calls)                         # s1 raised on both attempts: skipped in round 2, asked once more in the salvage pass
 assert len(out11b[0][0].subtopics) == 3 and len(out11b[0][1].subtopics) > 3
 print("11 coverage top-up rounds ok")
 print("ALL OK")

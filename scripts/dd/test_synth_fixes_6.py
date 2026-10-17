@@ -120,4 +120,34 @@ async def run():
         assert "504" in str(e) and slept == []
 asyncio.run(run())
 chat.asyncio.sleep = real_sleep
+
+
+# 6) a section whose coverage top-up calls all failed is asked once more in a salvage pass --------------------------------------------------------
+import json as _json  # noqa: E402
+
+SV, SCH = domains.dd.synth.nodes.sawc.service, domains.dd.synth.nodes.sawc.schemas
+CODE = {c: f"```python\nvalue_{c} = compute_{c}({c!r})\nprint(value_{c})\n```" for c in "abc"}
+vault = {c * 16: {"hash": c * 16, "fence_text": CODE[c], "lang": "python", "info_string": "python"} for c in "abc"}
+sec = SCH.Section(section_id="s1", heading="Compute things", intro="x" * 70,
+                  subtopics=[SCH.Subtopic(code_ref_hash="", subheading=f"Prose {i}", explanation="The compute helper wraps a value so the caller can print it after the call returns normally.") for i in range(2)],
+                  citations=[SCH.Citation(source_key="k1", claim="compute wraps values")])
+index = {"s1": [{"source_key": "k1", "summary": "compute", "key_facts": [], "code_refs": [c * 16 for c in "abc"]}]}
+reply = {"subtopics": [{"code_ref_hash": c * 16, "subheading": f"Compute {c}", "explanation": f"value_{c} = compute_{c}({c!r}) builds the value and print(value_{c}) shows it to the caller."} for c in "abc"],
+         "citations": [{"source_key": "k1", "claim": "compute prints values"}]}
+state = {"n": 0}
+
+
+async def flaky_chat(prompt, **kw):
+    state["n"] += 1
+    if state["n"] <= SV.params.TOPUP_ATTEMPTS:            # every call of the first round fails
+        raise RuntimeError("Error code: 504 - TimeoutError")
+    return _json.dumps(reply), {}
+
+real_chat = domains.settings.chat.service.chat_text_async
+domains.settings.chat.service.chat_text_async = flaky_chat
+out, added, touched = asyncio.run(SV._topup_coverage(final_sections=[sec], per_section_index=index, vault_rich=vault, sections_by_id={"s1": {"description": "d"}},
+                                                      framework="f", chapter_id="c", chapter_title="t"))
+domains.settings.chat.service.chat_text_async = real_chat
+assert (added, touched) == (3, 1) and len(out[0].subtopics) == 5, (added, touched, len(out[0].subtopics))   # recovered by the salvage pass
+assert state["n"] == SV.params.TOPUP_ATTEMPTS + 1                                                               # first call of the salvage pass succeeded
 print("ALL OK")
