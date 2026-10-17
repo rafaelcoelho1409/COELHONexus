@@ -529,8 +529,11 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
     )
 
     n_repairs = 0
-    for attempt in range(params.MAX_REPAIR_RETRIES):
-        if not issues:
+    attempt = -1
+    while True:
+        attempt += 1
+        floor_open = any(domain.is_floor_issue(x) for x in issues)
+        if not issues or attempt >= params.MAX_REPAIR_RETRIES + (params.FLOOR_REPAIR_EXTRA if floor_open else 0):
             break
         n_repairs += 1
         await domains.dd.synth.runtime.progress.service.emit_progress(
@@ -544,7 +547,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
             chapter_title = chapter_title,
             chapter_description = chapter_description,
             current_outline_json = json.dumps(outline.model_dump(), indent = 2),
-            issues = issues,
+            issues = [x + domain.floor_repair_hint(bodies) if domain.is_floor_issue(x) else x for x in issues],
             sources_concat_md = sources_concat_md,
         )
         try:
@@ -578,7 +581,14 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
             if new_semantic:
                 new_issues = list(new_issues) + new_semantic
             # Only accept if it ACTUALLY improves things.
-            if len(new_issues) <= len(issues):
+            accepted = len(new_issues) <= len(issues)
+            logger.info(
+                f"[outline_sdp] {slug}/{chapter_id}: repair attempt {attempt + 1}: "
+                f"{len(new_outline.sections)} sections, {len(new_issues)} issue(s) "
+                f"(was {len(outline.sections)} sections, {len(issues)}) — "
+                f"{'accepted' if accepted else 'rejected'}"
+            )
+            if accepted:
                 outline = new_outline
                 dag = new_dag
                 issues = new_issues

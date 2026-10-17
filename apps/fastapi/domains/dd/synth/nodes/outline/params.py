@@ -90,6 +90,7 @@ TEMPERATURE_DRAFT  = 0.4
 TEMPERATURE_VOTE   = 0.0
 TEMPERATURE_REPAIR = 0.2
 MAX_REPAIR_RETRIES = 2
+FLOOR_REPAIR_EXTRA = 2          # extra repair attempts while the code-block section floor is still unmet
 MAX_TOKENS_DRAFT   = 8000
 MAX_TOKENS_VOTE    = 200
 MAX_TOKENS_REPAIR  = 8000

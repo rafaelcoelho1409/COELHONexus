@@ -165,7 +165,7 @@ def validate_outline_structure(
         floor = params.min_h2_for_n_blocks(n_blocks, adaptive_cap)
         if floor and n_h2 < floor:
             issues.append(
-                f"Outline has only {n_h2} H2 sections but the chapter's sources hold {n_blocks} code blocks, and one section can show "
+                f"{FLOOR_ISSUE_PREFIX}{n_h2} H2 sections but the chapter's sources hold {n_blocks} code blocks, and one section can show "
                 f"at most {params.SECTION_SUBTOPIC_MAX}. Split it into AT LEAST {floor} sections (at most "
                 f"{adaptive_cap}), each a sharply distinct capability or client, so the code can actually be shown."
             )
@@ -298,6 +298,37 @@ def summarize_candidate(
         "headings":        headings,
         "violations":      issues,
     }
+
+
+FLOOR_ISSUE_PREFIX = "Outline has only "
+
+
+def is_floor_issue(issue: str) -> bool:
+    """True for the validation issue raised when a code-heavy chapter has fewer sections than its block floor."""
+    return issue.startswith(FLOOR_ISSUE_PREFIX)
+
+
+def source_titles(bodies: list[str], limit: int = 30) -> list[str]:
+    """First H1 of each source body (clipped), in source order: the natural seams to split an under-sectioned outline along."""
+    titles: list[str] = []
+    for body in bodies:
+        for line in (body or "").splitlines():
+            if line.startswith("# "):
+                title = line[2:].strip()[:70]
+                if title and title not in titles:
+                    titles.append(title)
+                break
+        if len(titles) >= limit:
+            break
+    return titles
+
+
+def floor_repair_hint(bodies: list[str]) -> str:
+    """Extra repair-prompt text for an unmet section floor: the source titles, so the split follows the material."""
+    titles = source_titles(bodies)
+    if not titles:
+        return ""
+    return " The chapter's sources are titled: " + "; ".join(titles) + ". Give each distinct client, tool or capability among them its own section."
 
 
 def count_code_blocks(bodies: list[str]) -> int:

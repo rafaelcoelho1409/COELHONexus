@@ -7,4 +7,6 @@ OUTLINE_SCHEMA_VERSION = "1.0"
 # 135 blocks and 18 sources gave 4 sections that could print 29 blocks).
 # v8 (2026-10-16): a code-heavy chapter needs at least ceil(blocks / 20) sections (validation issue -> repair loop), and the USC picker's failure
 # fallback is the best-validated candidate, not always the first.
-OUTLINE_PROMPT_VERSION = "v8-section-floor-2026-10-16"
+# v9 (2026-10-17): an unmet section floor gets up to 2 extra repair attempts, and its repair issue names the source titles to split along (fastmcp ch-01:
+# two repairs left 4 sections against a floor of 7 and the outline shipped with the violation).
+OUTLINE_PROMPT_VERSION = "v9-floor-repair-2026-10-17"
