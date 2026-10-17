@@ -283,6 +283,26 @@ async def chat_judge_async(
     return text
 
 
+async def _call_with_capacity_wait(make_call, backstop_s: float):
+    """One LLM call under the hard wall-clock backstop; when the Rotator reports no usable arm right now, wait out its Retry-After (bounded) and call again. The
+    wait sits outside the backstop, so a short-timeout caller is not cut off by it."""
+    waited = 0.0
+    for n in range(params.CAPACITY_WAIT_ATTEMPTS + 1):
+        try:
+            return await asyncio.wait_for(make_call(), timeout = backstop_s)
+        except asyncio.TimeoutError:
+            raise
+        except Exception as e:
+            wait = domain.capacity_wait_s(
+                e, default_s = params.CAPACITY_WAIT_DEFAULT_S, min_s = params.CAPACITY_WAIT_MIN_S, cap_s = params.CAPACITY_WAIT_CAP_S,
+            )
+            if wait is None or n >= params.CAPACITY_WAIT_ATTEMPTS or waited + wait > params.CAPACITY_WAIT_TOTAL_S:
+                raise
+            logger.info(f"[chat] rotator has no usable arm ({type(e).__name__}) — waiting {wait:.0f}s, then retrying ({n + 1}/{params.CAPACITY_WAIT_ATTEMPTS})")
+            await asyncio.sleep(wait)
+            waited += wait
+
+
 async def chat_text_async(
     prompt: str,
     *,
@@ -328,7 +348,7 @@ async def chat_text_async(
             model = ENDPOINT.model, temperature = temperature, max_tokens = max_tokens,
         ) as span:
             try:
-                ai_message = await asyncio.wait_for(_do_call(), timeout = backstop_s)
+                ai_message = await _call_with_capacity_wait(_do_call, backstop_s)
             except asyncio.TimeoutError as e:
                 raise errors.ChatTimeoutError(
                     f"chat_text_async hard backstop fired after "
@@ -465,7 +485,7 @@ async def chat_structured_async(
             model = ENDPOINT.model, temperature = temperature, max_tokens = max_tokens,
         ) as span:
             try:
-                result = await asyncio.wait_for(_do_call(), timeout = backstop_s)
+                result = await _call_with_capacity_wait(_do_call, backstop_s)
             except asyncio.TimeoutError as e:
                 raise errors.ChatTimeoutError(
                     f"chat_structured_async hard backstop fired after "

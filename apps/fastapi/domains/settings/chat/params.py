@@ -28,6 +28,14 @@ POOL_TIMEOUT_S: float = 5.0
 # Hard wall-clock backstop = (timeout_s or DEFAULT_TIMEOUT_S) + margin.
 BACKSTOP_MARGIN_S: float = 15.0
 
+# The Rotator answers 429 `pool_exhausted` (Retry-After = soonest cooldown) or litellm's 500 "No deployments available" when no arm is usable right
+# now. That is capacity, not a bad request: wait it out (bounded) and call again instead of failing the node's attempt within a second.
+CAPACITY_WAIT_ATTEMPTS: int = 2
+CAPACITY_WAIT_DEFAULT_S: float = 20.0
+CAPACITY_WAIT_MIN_S: float = 3.0
+CAPACITY_WAIT_CAP_S: float = 60.0
+CAPACITY_WAIT_TOTAL_S: float = 120.0
+
 # COELHO LLM Rotator only: every request tells the Rotator how long this caller will
 # actually wait (`max_wall_s` = timeout_s - margin), so its cascade budget matches the
 # caller's own tuned timeout instead of its fixed 180s default — DD's 240s proposer

@@ -31,7 +31,6 @@ P = OL.params
 cap = P.max_h2_for_n_sources(18, 135)
 assert (cap, P.min_h2_for_n_blocks(135, cap)) == (12, 7), (cap, P.min_h2_for_n_blocks(135, cap))
 assert P.min_h2_for_n_blocks(count([page(a)]), P.max_h2_for_n_sources(1, 1)) == 0        # a prose-light chapter has no floor
-print("test_synth_fixes_6: 3/3 checks ok")
 
 # 4) an unmet section floor is recognised, gets a source-title hint, and earns extra repair attempts ---------------------------------------------
 D = OL.domain
@@ -55,4 +54,70 @@ bodies = ["# Claude Code integration\n\ntext", "no title here", "# Goose\n\n```p
 assert D.source_titles(bodies) == ["Claude Code integration", "Goose"]
 assert "Claude Code integration; Goose" in D.floor_repair_hint(bodies) and D.floor_repair_hint(["no title"]) == ""
 assert OL.params.FLOOR_REPAIR_EXTRA >= 1
-print("test_synth_fixes_6: 4/4 checks ok")
+
+# 5) the chat client waits out a Rotator capacity answer (Retry-After, bounded) instead of failing the attempt at once -----------------------------
+import asyncio  # noqa: E402
+
+chat = domains.settings.chat.service
+CD, CP = domains.settings.chat.domain, domains.settings.chat.params
+
+
+class FakeResp:
+    def __init__(self, headers):
+        self.headers = headers
+
+
+class PoolExhausted(Exception):
+    def __init__(self, msg="Error code: 429 - rotator pool exhausted: no healthy deployments available, retry after cooldown", headers=None):
+        super().__init__(msg)
+        self.response = FakeResp(headers or {})
+
+
+kw = dict(default_s=20.0, min_s=3.0, cap_s=60.0)
+assert CD.capacity_wait_s(PoolExhausted(headers={"retry-after": "45"}), **kw) == 45.0
+assert CD.capacity_wait_s(PoolExhausted(headers={"retry-after": "600"}), **kw) == 60.0           # capped
+assert CD.capacity_wait_s(PoolExhausted(headers={"retry-after": "1"}), **kw) == 3.0              # floored
+assert CD.capacity_wait_s(PoolExhausted(), **kw) == 20.0                                          # no header -> default
+assert CD.capacity_wait_s(Exception("No deployments available for selected model, Try again in 600.0 seconds."), **kw) == 60.0
+assert CD.capacity_wait_s(Exception("Error code: 504 - TimeoutError"), **kw) is None              # a stall is not a capacity answer
+assert CD.capacity_wait_s(Exception("Error code: 400 - bad schema"), **kw) is None
+
+slept, calls = [], []
+real_sleep = asyncio.sleep
+
+
+async def fake_sleep(s):
+    slept.append(s)
+
+chat.asyncio.sleep = fake_sleep
+
+
+async def flaky(n_fail, exc_factory):
+    state = {"n": 0}
+
+    async def call():
+        state["n"] += 1
+        if state["n"] <= n_fail:
+            raise exc_factory()
+        return "ok"
+    return state, await chat._call_with_capacity_wait(call, 5.0)
+
+
+async def run():
+    st, out = await flaky(2, lambda: PoolExhausted(headers={"retry-after": "10"}))
+    assert (out, st["n"], slept) == ("ok", 3, [10.0, 10.0]), (out, st, slept)
+    slept.clear()
+    try:
+        await flaky(3, lambda: PoolExhausted(headers={"retry-after": "10"}))
+        raise SystemExit("expected the third capacity answer to be raised")
+    except PoolExhausted:
+        assert slept == [10.0, 10.0]                                                                # attempts are bounded
+    slept.clear()
+    try:
+        await flaky(1, lambda: Exception("Error code: 504 - TimeoutError"))
+        raise SystemExit("a non-capacity error must not be retried here")
+    except Exception as e:
+        assert "504" in str(e) and slept == []
+asyncio.run(run())
+chat.asyncio.sleep = real_sleep
+print("ALL OK")

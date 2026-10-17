@@ -1,6 +1,8 @@
 """chat — pure helpers (no I/O, no network, deterministic)."""
 from __future__ import annotations
 
+import re
+
 import httpx
 
 
@@ -67,6 +69,28 @@ def classify_error(exc: Exception) -> str:
     if "5" in msg and ("server" in msg or "internal" in msg or "bad gateway" in msg):
         return "server_error"
     return "unknown"
+
+
+_CAPACITY_MARKERS = ("pool exhausted", "pool_exhausted", "no deployments available", "no healthy deployments")
+
+
+def capacity_wait_s(exc: BaseException, *, default_s: float, min_s: float, cap_s: float) -> float | None:
+    """Seconds to wait before retrying when the Rotator has no usable arm right now (429 pool_exhausted, litellm's "No deployments available" 500); None for any other
+    error. Honors the Retry-After header, else the "try again in N seconds" text, else `default_s`; clipped to [min_s, cap_s]."""
+    text = f"{type(exc).__name__} {exc}".lower()
+    if not any(m in text for m in _CAPACITY_MARKERS):
+        return None
+    wait = None
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    try:
+        if headers is not None and headers.get("retry-after") is not None:
+            wait = float(headers.get("retry-after"))
+    except (TypeError, ValueError):
+        wait = None
+    if wait is None:
+        m = re.search(r"try again in ([0-9.]+) second", text)
+        wait = float(m.group(1)) if m else default_s
+    return max(min_s, min(cap_s, wait))
 
 
 def is_length_error(exc: Exception) -> bool:
