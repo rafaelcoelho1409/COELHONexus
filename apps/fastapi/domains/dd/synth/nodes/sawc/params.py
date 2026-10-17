@@ -105,6 +105,12 @@ TOPUP_FACT_MIN_TOKENS = 3      # a shorter fact is too small to judge
 TOPUP_FACT_MIN_GAP = 2
 # Citations of a topped-up section may exceed the writer's CITATIONS_MAX (asyncio ch-05: s1 had 12 and the 4 new sources
 # were dropped by the cap, so the coverage gate kept failing); the persisted Section has no such limit.
+# A routed block that is a near-copy of a printed one (same command with another flag, same snippet for another client) counts as covered, in the coverage
+# gate and in the top-up (fastmcp ch-01: 36 of the 60 unprinted routed blocks overlapped a printed block by >= 0.6, so the 60% bar was unreachable and the model
+# rejected the rest as duplicates).
+NEARDUP_JACCARD = 0.7
+NEARDUP_MIN_TOKENS = 5
+
 TOPUP_CITATIONS_MAX = 30
 
 

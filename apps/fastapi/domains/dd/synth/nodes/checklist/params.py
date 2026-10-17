@@ -174,6 +174,11 @@ JUDGE_EXTRA_ATTEMPTS = 2
 # shipped without an LLM review. A retry that cannot finish inside the budget is not started, and the first failure re-renders a lighter prompt.
 JUDGE_TOTAL_BUDGET_S = 330.0
 
+# A judge that fails (almost) every LLM criterion on a chapter the gates mostly accept is checked before a rewrite: two more judge runs, per-criterion majority
+# (fastmcp ch-01: one judge model failed 5/5 on prose other judges passed 5/5, and the rewrite it triggered cost 15 min and changed nothing).
+JUDGE_HARSH_FAILS = 4
+JUDGE_SECOND_OPINIONS = 2
+
 # check_code_coverage: a chapter that routes at least COVERAGE_MIN_ROUTED code blocks must print at least COVERAGE_MIN_CODE of
 # them, and a chapter of at least COVERAGE_MIN_SOURCE_COUNT sources must cite at least COVERAGE_MIN_SOURCES of them (asyncio
 # ch-01 printed 14 of 35 blocks and cited 13 of 23 sources while passing 14/15).

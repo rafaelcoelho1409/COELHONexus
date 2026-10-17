@@ -472,6 +472,31 @@ def order_by_code_dependencies(
     return out, n
 
 
+_BLOCK_TOKEN_RE = re.compile(r"--[a-z][a-z0-9\-]*|[A-Za-z_][A-Za-z0-9_\.\-]+")
+
+
+def block_tokens(text: str) -> frozenset[str]:
+    """Identifiers, flags and words of a code block: what two copies of one example have in common."""
+    return frozenset(_BLOCK_TOKEN_RE.findall(text or ""))
+
+
+def near_duplicate_hashes(
+    candidates: list[str], printed: list[str], bodies: dict[str, str], *,
+    jaccard: float = params.NEARDUP_JACCARD, min_tokens: int = params.NEARDUP_MIN_TOKENS,
+) -> set[str]:
+    """The candidate blocks that are near-copies (token Jaccard >= `jaccard`) of a printed block: printing them again adds nothing the chapter lacks. A block with
+    fewer than `min_tokens` tokens is too small to judge and never counts."""
+    ptoks = [t for t in (block_tokens(bodies.get(h, "")) for h in printed) if len(t) >= min_tokens]
+    out: set[str] = set()
+    for h in candidates:
+        t = block_tokens(bodies.get(h, ""))
+        if len(t) < min_tokens:
+            continue
+        if any(len(t & p) / len(t | p) >= jaccard for p in ptoks):
+            out.add(h)
+    return out
+
+
 def unused_routed_hashes(
     per_section_index: dict[str, list[dict]], sections: list[schemas.Section],
 ) -> dict[str, list[str]]:

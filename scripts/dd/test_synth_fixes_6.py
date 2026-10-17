@@ -201,4 +201,48 @@ assert sorted(out8) == ["s3", "s4"] and out8["s4"] == "s2" and out8["s3"] in ("s
 assert DG.domain.drop_empty_sections(per, outline8, {"s4": "s2"}) == {"s4": "s2", "s3": out8["s3"]}      # an already merged section is kept as is
 assert DG.domain.drop_empty_sections([src("a", "s1"), src("b", "s2"), src("c", "s3"), src("d", "s4")], outline8, {}) == {}   # nothing empty -> nothing dropped
 assert DG.domain.drop_empty_sections([], outline8, {}) == {}                                              # no source at all: keep everything (nothing to fold into)
+
+
+# 9) near-copies of a printed block count as covered; a harsh judge gets a second opinion --------------------------------------------------------------
+SWD, CK = domains.dd.synth.nodes.sawc.domain, domains.dd.synth.nodes.checklist
+base = "fastmcp install claude-code server.py --server-name Demo --with pandas --python 3.12"
+bodies9 = {"a" * 16: base, "b" * 16: base.replace("pandas", "numpy"), "c" * 16: "import asyncio\nasync def main():\n    await asyncio.sleep(1)\nasyncio.run(main())",
+           "d" * 16: "x = 1", "e" * 16: base.replace("claude-code", "cursor")}
+dups9 = SWD.near_duplicate_hashes(["b" * 16, "c" * 16, "d" * 16, "e" * 16], ["a" * 16], bodies9)
+assert dups9 == {"b" * 16, "e" * 16}, dups9                                  # the other client's variant and the --with variant; not the asyncio snippet, not the 1-token block
+
+routed9 = [f"{i:016x}" for i in range(7)]
+b9 = {routed9[0]: base}
+b9.update({h: base.replace("pandas", f"lib{i}") for i, h in enumerate(routed9[1:6])})
+b9[routed9[6]] = "import asyncio\nasync def main():\n    await asyncio.sleep(1)\nasyncio.run(main())"
+sawc9 = {"sections": [{"section_id": "s1", "subtopics": [{"code_ref_hash": routed9[0], "subheading": "Install", "explanation": "x"}], "citations": [{"source_key": "k"}]}],
+         "_routed_hashes": routed9, "_digest_sources": ["k"]}
+assert not CK.domain.check_code_coverage(sawc9).passed                       # 1 of 7 printed, no bodies to compare
+assert CK.domain.check_code_coverage({**sawc9, "_vault_bodies": b9}).passed  # 6 of 7 printed or repeated by a printed near-copy
+
+R = CK.schemas.CriterionResult
+names = ["c1", "c2", "c3", "c4", "c5"]
+run = lambda *flags: [R(name=n, passed=f, kind="llm_judge", feedback="" if f else f"{n} is bad") for n, f in zip(names, flags)]
+mj = CK.domain.majority_verdicts([run(False, False, False, False, False), run(True, True, True, False, True), run(True, False, True, False, True)])
+assert [r.passed for r in mj] == [True, False, True, False, True] and mj[1].feedback == "c2 is bad" and mj[0].feedback == "", mj
+assert [r.passed for r in CK.domain.majority_verdicts([run(False, False, False, False, False), run(True, True, True, True, True)])] == [False] * 5   # a tie is not a pass
+
+calls9 = []
+real_judge = CK.service._run_llm_judge
+answers9 = [(run(True, True, True, True, False), "m2", False, 5), (run(True, True, False, True, True), "m3", False, 5)]
+
+
+async def fake_judge(**kw):
+    calls9.append(kw)
+    return answers9[len(calls9) - 1]
+CK.service._run_llm_judge = fake_judge
+jk = dict(thread_id="t", chapter_id="c", chapter_title="t", framework="f", sawc={}, digest={}, rendered_chapter="x", rendered_digest="y", truncated=False)
+out9 = asyncio.run(CK.service._judge_second_opinion(run(False, False, False, False, False), judge_kwargs=jk, label="f/c"))
+assert len(calls9) == 2 and [r.passed for r in out9] == [True, True, False, True, False], ([r.passed for r in out9], len(calls9))   # 2 of 3 runs decide each criterion
+calls9.clear()
+mild = run(True, True, False, False, False)                                    # 3 failures: not harsh enough to ask again
+assert asyncio.run(CK.service._judge_second_opinion(mild, judge_kwargs=jk, label="f/c")) is mild and not calls9
+down = [R(name=n, passed=False, kind="llm_judge", feedback="judge_unavailable: x") for n in names]
+assert asyncio.run(CK.service._judge_second_opinion(down, judge_kwargs=jk, label="f/c")) is down and not calls9
+CK.service._run_llm_judge = real_judge
 print("ALL OK")

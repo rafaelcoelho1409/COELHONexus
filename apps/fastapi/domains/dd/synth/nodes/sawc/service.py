@@ -947,6 +947,13 @@ async def _topup_coverage(
         else:
             ids = {s.section_id for s in sections} - failed - empty
         unused = domain.unused_routed_hashes(per_section_index, sections)
+        printed = sorted({st.code_ref_hash for sec in sections for st in sec.subtopics if st.code_ref_hash})
+        dups = domain.near_duplicate_hashes(
+            sorted({h for hs in unused.values() for h in hs}), printed, {h: domain._fence_body(vault_rich.get(h)) for h in vault_rich},
+        )
+        if dups:
+            unused = {sid: [h for h in hs if h not in dups] for sid, hs in unused.items()}
+            unused = {sid: hs for sid, hs in unused.items() if hs}
         required = domain.dependency_blocks(sections, unused, vault_rich)
         todo = [s for s in sections if s.section_id in ids]
         done = {d[0].section_id: d for d in await asyncio.gather(*[_one(s, unused, required) for s in todo])}

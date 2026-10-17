@@ -38,6 +38,24 @@ def _emit_criterion_scores(framework: str, criteria: list[dict | schemas.Criteri
         )
 
 
+async def _judge_second_opinion(first: list[schemas.CriterionResult], *, judge_kwargs: dict, label: str) -> list[schemas.CriterionResult]:
+    """When the first judge failed (almost) every LLM criterion, ask JUDGE_SECOND_OPINIONS more judge runs (the Rotator may route them to other models) and take the
+    per-criterion majority; the first verdict stands when too few of them answer."""
+    unavailable = lambda rs: any((r.feedback or "").startswith("judge_unavailable") for r in rs)
+    n_failed = sum(1 for r in first if not r.passed)
+    if not first or n_failed < params.JUDGE_HARSH_FAILS or unavailable(first):
+        return first
+    others = await asyncio.gather(
+        *[_run_llm_judge(meta_out = {}, **judge_kwargs) for _ in range(params.JUDGE_SECOND_OPINIONS)], return_exceptions = True,
+    )
+    runs = [first] + [o[0] for o in others if not isinstance(o, BaseException) and o[0] and not unavailable(o[0])]
+    if len(runs) < 2:
+        return first
+    merged = domain.majority_verdicts(runs)
+    logger.info(f"[checklist_eval] {label}: first judge failed {n_failed}/{len(first)}; majority of {len(runs)} judge runs fails {sum(1 for r in merged if not r.passed)}")
+    return merged
+
+
 async def _run_llm_judge(
     *,
     thread_id: str,
@@ -979,13 +997,14 @@ async def checklist_eval_run(state: domains.dd.synth.state.SynthState) -> dict:
         st.get("code_ref_hash") for s_ in (sawc.get("sections") or []) for st in (s_.get("subtopics") or [])
         if (st or {}).get("code_ref_hash")
     }
+    _routed_for_bodies = {h for cs in (digest.get("per_section") or {}).values() for c in cs for h in (c.get("code_refs") or [])}
     _vault_bodies: dict[str, str] = {}
     if _used_hashes:
         try:
             _rich, _, _ = await domains.dd.synth.nodes.sawc.service._load_chapter_vault_rich(
                 minio, slug, list(digest.get("source_keys") or []),
             )
-            _vault_bodies = {h: e.fence_text for h, e in _rich.items() if h in _used_hashes and getattr(e, "fence_text", "")}
+            _vault_bodies = {h: e.fence_text for h, e in _rich.items() if h in (_used_hashes | _routed_for_bodies) and getattr(e, "fence_text", "")}
         except Exception as e:
             logger.info(f"[checklist_eval] {slug}/{chapter_id}: vault bodies unavailable for the alignment gate ({type(e).__name__})")
     sawc_for_checks = {
@@ -1046,6 +1065,13 @@ async def checklist_eval_run(state: domains.dd.synth.state.SynthState) -> dict:
         truncated = truncated,
     )
 
+    llm_results = await _judge_second_opinion(
+        llm_results, label = f"{slug}/{chapter_id}",
+        judge_kwargs = dict(
+            thread_id = thread_id, chapter_id = chapter_id, chapter_title = chapter_title, framework = slug, sawc = sawc, digest = digest,
+            rendered_chapter = rendered_chapter, rendered_digest = rendered_digest, truncated = truncated,
+        ),
+    )
     llm_failed = [r.name for r in llm_results if not r.passed]
     n_llm_passed = sum(1 for r in llm_results if r.passed)
     # An all-pass judge on a chapter the deterministic gates reject (asyncio: ising-calibration passed 15/15 in 5 s over wrong

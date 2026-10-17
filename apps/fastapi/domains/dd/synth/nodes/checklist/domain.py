@@ -484,6 +484,20 @@ def check_code_snippet_sanity(sawc: dict) -> schemas.CriterionResult:
     )
 
 
+def majority_verdicts(runs: list[list[schemas.CriterionResult]]) -> list[schemas.CriterionResult]:
+    """Per-criterion majority over several judge runs (criteria in the first run's order): a criterion passes when MORE than half of the runs pass it; the feedback of
+    a failing criterion comes from the first run that failed it."""
+    out: list[schemas.CriterionResult] = []
+    for r0 in runs[0]:
+        same = [r for run in runs for r in run if r.name == r0.name]
+        n_pass = sum(1 for r in same if r.passed)
+        if 2 * n_pass > len(same):
+            out.append(r0.model_copy(update = {"passed": True, "feedback": ""}) if not r0.passed else r0)
+        else:
+            out.append(r0 if not r0.passed else next(r for r in same if not r.passed))
+    return out
+
+
 def check_code_coverage(sawc: dict) -> schemas.CriterionResult:
     """The chapter prints most of the code blocks the digest routed to its sections and cites most of its sources.
     Inputs injected by the service (not persisted): `_routed_hashes`, `_digest_sources`."""
@@ -494,12 +508,16 @@ def check_code_coverage(sawc: dict) -> schemas.CriterionResult:
     cited = {c.get("source_key") for s in sections for c in (s.get("citations") or []) if (c or {}).get("source_key")}
     problems: list[str] = []
     if len(routed) >= params.COVERAGE_MIN_ROUTED:
-        n_used = len(routed & used)
+        covered = routed & used
+        bodies = sawc.get("_vault_bodies") or {}
+        if bodies:
+            covered |= domains.dd.synth.nodes.sawc.domain.near_duplicate_hashes(sorted(routed - used), sorted(used), bodies)
+        n_used = len(covered)
         need = params.COVERAGE_MIN_CODE * len(routed)
         if sections:
             need = min(need, params.COVERAGE_CAPACITY_SHARE * len(sections) * domains.dd.synth.nodes.sawc.params.TOPUP_SECTION_MAX)
         if n_used < need:
-            problems.append(f"only {n_used} of {len(routed)} routed code blocks are printed")
+            problems.append(f"only {n_used} of {len(routed)} routed code blocks are printed (or repeated by a printed near-copy)")
     if len(sources) >= params.COVERAGE_MIN_SOURCE_COUNT:
         missing = [k for k in sources if k not in cited]
         if len(sources) - len(missing) < params.COVERAGE_MIN_SOURCES * len(sources):

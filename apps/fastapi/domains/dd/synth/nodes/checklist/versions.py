@@ -36,7 +36,9 @@ CHECKLIST_SCHEMA_VERSION = "1.0"
 # v12 (2026-10-16): check_code_coverage needs at most 75% of what the sections can print (sections x 16 subtopic slots); fastmcp ch-01: 133 blocks -> 4 sections made the 60% bar unreachable.
 # v13 (2026-10-16): the judge payload accepts verdicts a model double-encoded as JSON strings (asyncio ch-04: 5 validation errors, judge unavailable, the chapter shipped on the deterministic gates alone).
 # v14 (2026-10-16): the LLM judge waits at most JUDGE_TOTAL_BUDGET_S (330 s) in total and re-renders a lighter prompt after its first failed attempt.
-CHECKLIST_PROMPT_VERSION = "v14-judge-budget-2026-10-16"
+# v15 (2026-10-17): the code_coverage gate counts a routed block repeated by a printed near-copy as covered, and a judge that fails >= 4 of 5 LLM criteria is
+# checked by two more runs (per-criterion majority) before the chapter is sent back to the writer.
+CHECKLIST_PROMPT_VERSION = "v15-second-opinion-2026-10-17"
 
 # CoCoA two-stage alignment check + atomic-claim grounding — independently
 # versioned from CHECKLIST_PROMPT_VERSION (own MinIO cache keys, see keys.py).
