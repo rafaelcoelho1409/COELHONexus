@@ -150,4 +150,31 @@ out, added, touched = asyncio.run(SV._topup_coverage(final_sections=[sec], per_s
 domains.settings.chat.service.chat_text_async = real_chat
 assert (added, touched) == (3, 1) and len(out[0].subtopics) == 5, (added, touched, len(out[0].subtopics))   # recovered by the salvage pass
 assert state["n"] == SV.params.TOPUP_ATTEMPTS + 1                                                               # first call of the salvage pass succeeded
+
+
+# 7) an over-deep prerequisite chain is flattened deterministically -----------------------------------------------------------------------------------
+HEAD = ["Claude Code setup", "Cursor workspace files", "Goose deeplinks", "Gemini command line", "Stdio transport flags", "Environment variable handling",
+        "Remote server auth", "Dependency flags", "JSON configuration output", "Workspace scoped installs", "Deeplink generation", "Client registry"]
+
+
+def chain(n):
+    return schemas.ChapterOutline(sections=[
+        schemas.OutlineSection(section_id=f"s{i + 1}", heading=HEAD[i], description=f"Topic {HEAD[i]} of the installation chapter, with its own commands and files.",
+                               prerequisites=[f"s{i}"] if i else [])
+        for i in range(n)])
+
+
+oc = chain(12)
+dc = D.derive_dag(oc.sections)
+assert dc.max_stage == 11 and OL.params.MAX_STAGE_DEPTH == 4
+flat = D.flatten_prerequisites(oc, dc, OL.params.MAX_STAGE_DEPTH)
+df = D.derive_dag(flat.sections)
+assert df.max_stage <= OL.params.MAX_STAGE_DEPTH, df.max_stage
+assert [x.section_id for x in flat.sections] == [x.section_id for x in oc.sections] and [x.heading for x in flat.sections] == [x.heading for x in oc.sections]
+assert all(len(x.prerequisites) <= 3 for x in flat.sections)
+assert max(len(v) for v in df.stages.values()) >= 6                                  # the tail now runs side by side
+_, issues_flat = D.validate_outline_structure(flat, df, n_sources=18, n_blocks=135)
+assert not any("DAG depth" in x for x in issues_flat), issues_flat
+shallow = chain(4)
+assert D.flatten_prerequisites(shallow, D.derive_dag(shallow.sections), OL.params.MAX_STAGE_DEPTH) == shallow   # within the cap: untouched
 print("ALL OK")

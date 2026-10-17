@@ -9,4 +9,6 @@ OUTLINE_SCHEMA_VERSION = "1.0"
 # fallback is the best-validated candidate, not always the first.
 # v9 (2026-10-17): an unmet section floor gets up to 2 extra repair attempts, and its repair issue names the source titles to split along (fastmcp ch-01:
 # two repairs left 4 sections against a floor of 7 and the outline shipped with the violation).
-OUTLINE_PROMPT_VERSION = "v9-floor-repair-2026-10-17"
+# v10 (2026-10-17): a prerequisite chain deeper than MAX_STAGE_DEPTH is flattened deterministically, before and after the repair loop (fastmcp ch-01: a 12-section
+# chain, depth 11, made the writer 25 min).
+OUTLINE_PROMPT_VERSION = "v10-flatten-chain-2026-10-17"

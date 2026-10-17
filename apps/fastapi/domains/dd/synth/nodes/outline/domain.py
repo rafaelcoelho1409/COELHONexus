@@ -145,6 +145,32 @@ def derive_dag(sections: list[schemas.OutlineSection]) -> schemas.OutlineDAG:
     )
 
 
+def flatten_prerequisites(outline: schemas.ChapterOutline, dag: schemas.OutlineDAG, max_stage: int) -> schemas.ChapterOutline:
+    """Deterministic repair for a prerequisite chain deeper than `max_stage` (fastmcp ch-01: s1→s2→…→s12, DAG depth 11, so the writer ran its stages one section at
+    a time: 25 min against 10). A section deeper than the cap keeps its prerequisites but lifted to their nearest ancestor that sits above the last stage; sections
+    within the cap are untouched. Section ids, headings and order never change."""
+    stage = dag.stage_index
+    by_id = {sec.section_id: sec for sec in outline.sections}
+
+    def lift(pid: str) -> str:
+        seen: set[str] = set()
+        while stage.get(pid, 0) > max_stage - 1 and pid not in seen:
+            seen.add(pid)
+            parents = [q for q in by_id[pid].prerequisites if q in by_id and q != pid]
+            if not parents:
+                break
+            pid = max(parents, key=lambda q: stage.get(q, 0))
+        return pid
+
+    sections = []
+    for sec in outline.sections:
+        if stage.get(sec.section_id, 0) > max_stage:
+            lifted = list(dict.fromkeys(lift(p) for p in sec.prerequisites if p in by_id))
+            sec = sec.model_copy(update={"prerequisites": lifted})
+        sections.append(sec)
+    return outline.model_copy(update={"sections": sections})
+
+
 def validate_outline_structure(
     outline: schemas.ChapterOutline,
     dag: schemas.OutlineDAG,

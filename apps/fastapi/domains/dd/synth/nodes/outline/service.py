@@ -528,6 +528,24 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
         chosen_index = chosen_idx, n_initial_violations = len(issues),
     )
 
+    async def _flatten_if_deep(outline_, dag_, issues_):
+        """Over-deep prerequisite chain → deterministic flatten (the repair model rarely does it); kept when it leaves no more issues."""
+        if dag_.max_stage <= params.MAX_STAGE_DEPTH:
+            return outline_, dag_, issues_
+        flat = domain.flatten_prerequisites(outline_, dag_, params.MAX_STAGE_DEPTH)
+        flat_dag = domain.derive_dag(flat.sections)
+        _, flat_issues = domain.validate_outline_structure(flat, flat_dag, n_sources = len(sources), n_blocks = n_vault_hashes)
+        flat_issues = list(flat_issues) + await _detect_semantic_h2_duplicates(flat)
+        if len(flat_issues) > len(issues_):
+            return outline_, dag_, issues_
+        logger.info(
+            f"[outline_sdp] {slug}/{chapter_id}: flattened the prerequisite chain "
+            f"(depth {dag_.max_stage} → {flat_dag.max_stage}, {len(issues_)} → {len(flat_issues)} issue(s))"
+        )
+        return flat, flat_dag, flat_issues
+
+    outline, dag, issues = await _flatten_if_deep(outline, dag, issues)
+
     n_repairs = 0
     attempt = -1
     while True:
@@ -598,6 +616,8 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
                 f"{attempt + 1} failed: {type(e).__name__}: {e}"
             )
             continue
+
+    outline, dag, issues = await _flatten_if_deep(outline, dag, issues)
 
     # HARD-TRIM: LLM ignores soft cap signal (BU ch-02 shipped 30 H2 at cap 12; CC ch-01 shipped 20 at cap 14). Trim to adaptive_cap directly — old max(SECTIONS_MIN, cap) floor caused NO-OP for 4-section outlines below cap 4.
     adaptive_cap = params.max_h2_for_n_sources(len(sources), n_vault_hashes)
