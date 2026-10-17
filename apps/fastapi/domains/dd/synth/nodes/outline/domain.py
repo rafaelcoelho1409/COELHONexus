@@ -193,7 +193,7 @@ def validate_outline_structure(
             issues.append(
                 f"{FLOOR_ISSUE_PREFIX}{n_h2} H2 sections but the chapter's sources hold {n_blocks} code blocks, and one section can show "
                 f"at most {params.SECTION_SUBTOPIC_MAX}. Split it into AT LEAST {floor} sections (at most "
-                f"{adaptive_cap}), each a sharply distinct capability or client, so the code can actually be shown."
+                f"{adaptive_cap}), each a sharply distinct capability or client that the sources actually cover (never add a topic they do not), so the code can actually be shown."
             )
         if n_h2 > adaptive_cap:
             issues.append(
@@ -354,7 +354,7 @@ def floor_repair_hint(bodies: list[str]) -> str:
     titles = source_titles(bodies)
     if not titles:
         return ""
-    return " The chapter's sources are titled: " + "; ".join(titles) + ". Give each distinct client, tool or capability among them its own section."
+    return " The chapter's sources are titled: " + "; ".join(titles) + ". Give each distinct client, tool or capability among them its own section, and add no section on a topic none of them covers."
 
 
 def count_code_blocks(bodies: list[str]) -> int:

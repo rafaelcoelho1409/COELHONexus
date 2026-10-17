@@ -177,4 +177,28 @@ _, issues_flat = D.validate_outline_structure(flat, df, n_sources=18, n_blocks=1
 assert not any("DAG depth" in x for x in issues_flat), issues_flat
 shallow = chain(4)
 assert D.flatten_prerequisites(shallow, D.derive_dag(shallow.sections), OL.params.MAX_STAGE_DEPTH) == shallow   # within the cap: untouched
+
+
+# 8) outline sections no source was routed to are folded away, not written from the whole chapter ------------------------------------------------------
+DG = domains.dd.synth.nodes.digest
+DS = DG.schemas
+
+
+def src(key, sid, rel="primary"):
+    return DS.SourceDigest(source_key=key, source_title=key, overall_summary="s" * 40,
+                           contributes_to=[DS.SectionContribution(section_id=sid, source_key=key, relevance=rel, summary="y" * 30, key_facts=["a fact long enough"], code_refs=[])])
+
+
+outline8 = [
+    {"section_id": "s1", "heading": "Claude Desktop install", "description": "install the server into Claude Desktop"},
+    {"section_id": "s2", "heading": "Cursor workspace install", "description": "install the server into a Cursor workspace"},
+    {"section_id": "s3", "heading": "Streaming responses", "description": "stream partial results back from the server to the client"},
+    {"section_id": "s4", "heading": "Install into Cursor deeplinks", "description": "generate a Cursor deeplink for the install"},
+]
+per = [src("a", "s1"), src("b", "s2")]
+out8 = DG.domain.drop_empty_sections(per, outline8, {})
+assert sorted(out8) == ["s3", "s4"] and out8["s4"] == "s2" and out8["s3"] in ("s1", "s2"), out8      # s4 resembles s2 (Cursor install) most
+assert DG.domain.drop_empty_sections(per, outline8, {"s4": "s2"}) == {"s4": "s2", "s3": out8["s3"]}      # an already merged section is kept as is
+assert DG.domain.drop_empty_sections([src("a", "s1"), src("b", "s2"), src("c", "s3"), src("d", "s4")], outline8, {}) == {}   # nothing empty -> nothing dropped
+assert DG.domain.drop_empty_sections([], outline8, {}) == {}                                              # no source at all: keep everything (nothing to fold into)
 print("ALL OK")

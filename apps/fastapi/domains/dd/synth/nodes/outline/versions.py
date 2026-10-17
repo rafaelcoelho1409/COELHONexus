@@ -11,4 +11,5 @@ OUTLINE_SCHEMA_VERSION = "1.0"
 # two repairs left 4 sections against a floor of 7 and the outline shipped with the violation).
 # v10 (2026-10-17): a prerequisite chain deeper than MAX_STAGE_DEPTH is flattened deterministically, before and after the repair loop (fastmcp ch-01: a 12-section
 # chain, depth 11, made the writer 25 min).
-OUTLINE_PROMPT_VERSION = "v10-flatten-chain-2026-10-17"
+# v11 (2026-10-17): the floor issue and its hint say a section must be backed by the sources (fastmcp ch-01: 12 sections for 18 client pages, 4 invented).
+OUTLINE_PROMPT_VERSION = "v11-grounded-floor-2026-10-17"

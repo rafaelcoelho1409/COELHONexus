@@ -637,6 +637,15 @@ async def digest_construct_run(state: domains.dd.synth.state.SynthState) -> dict
             f"(losers: {sorted(merged_sections)})"
         )
 
+    n_merged = len(merged_sections)
+    merged_sections = domain.drop_empty_sections(per_source, outline_sections, merged_sections)
+    if len(merged_sections) > n_merged:
+        dropped = sorted(list(merged_sections)[n_merged:])
+        logger.info(
+            f"[digest_construct] {slug}/{chapter_id}: {len(merged_sections) - n_merged} section(s) no source was routed to are not written "
+            f"(the writer would invent them): {dropped}"
+        )
+
     per_section = domain.build_per_section_index(per_source, section_ids)
     coverage = domain.compute_coverage_stats(
         per_source = per_source,

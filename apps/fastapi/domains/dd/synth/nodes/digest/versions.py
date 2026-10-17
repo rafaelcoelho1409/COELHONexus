@@ -9,4 +9,5 @@ DIGEST_SCHEMA_VERSION = "1.1"
 # v9 (2026-10-16): a contribution with more than 5 key facts (or one over/under the length bounds) is trimmed, not rejected (fastmcp ch-01: a source lost to "got 6").
 # v10 (2026-10-16): a source whose digest failed every attempt is kept as a stub (title + opening text) and routed with all its code blocks; a 45 s pause before
 # the second wave.
-DIGEST_PROMPT_VERSION = "v10-failed-source-stubs-2026-10-16"
+# v11 (2026-10-17): an outline section no source was routed to is folded away (the writer skips it) instead of being written from the whole chapter.
+DIGEST_PROMPT_VERSION = "v11-drop-empty-sections-2026-10-17"

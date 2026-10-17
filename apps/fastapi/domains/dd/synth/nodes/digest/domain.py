@@ -216,6 +216,25 @@ def route_unrouted_sources(
     return out, routed
 
 
+def drop_empty_sections(per_source: list[schemas.SourceDigest], outline_sections: list[dict], merged: dict[str, str]) -> dict[str, str]:
+    """Outline sections no source was routed to, even after the pool merge, have nothing to be written from: the writer fell back to the whole chapter's sources
+    and invented generic topics (fastmcp ch-01, outline of 12 for 18 client pages: 'Streaming Responses', 'Error Handling'... with 3 prose-only subtopics each). They are
+    folded like merged sections (loser → the live section whose heading and description they resemble most, earliest on a tie) so the writer skips them. At least one
+    section stays. Returns the merge map extended with them."""
+    ids = [s.get("section_id") for s in outline_sections]
+    used = {_resolve_merge(merged, c.section_id) for src in per_source for c in src.contributes_to}
+    live = [sid for sid in ids if sid not in merged]
+    empty = [sid for sid in live if sid not in used]
+    kept = [sid for sid in live if sid in used]
+    if not empty or not kept:
+        return merged
+    words = {s.get("section_id"): _words(f"{s.get('heading', '')} {s.get('description', '')}") for s in outline_sections}
+    out = dict(merged)
+    for sid in empty:
+        out[sid] = max(kept, key = lambda k: (len(words.get(sid, set()) & words.get(k, set())), -ids.index(k)))
+    return out
+
+
 def _plain_excerpt(md_text: str, limit: int) -> str:
     """The page's prose with code-block sentinels, heading marks and markdown punctuation removed, cut at `limit` characters on a word boundary."""
     t = re.sub(r"<code-ref[^>]*>", " ", md_text or "")
