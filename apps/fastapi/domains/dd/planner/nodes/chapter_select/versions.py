@@ -31,4 +31,6 @@ from __future__ import annotations
 # v15 (2026-10-16): a page inside a catalog directory (integrations/, providers/ ...) never joins Foundations, whatever its role label
 # (langchain: three provider / embedding integration pages labelled "overview" by doc_distill landed in Foundations, two catalog dirs
 # holding fewer than FOUNDATIONS_CATALOG_MIN candidates each; replay of 12 stored frameworks: only that run changes).
-PROMPT_VERSION = "v15-foundations-not-catalog-2026-10-16"
+# v16 (2026-10-18): a chapter above SPLIT_MAX_BLOCKS (200) code blocks is split by the oversize-split machinery whatever its page count (13 of 70 chapters of
+# fastmcp/deepagents/langchain/langfuse held 200+, up to 303 in 8 pages; Synth sections print at most 12 x 16 = 192).
+PROMPT_VERSION = "v16-split-by-code-blocks-2026-10-18"

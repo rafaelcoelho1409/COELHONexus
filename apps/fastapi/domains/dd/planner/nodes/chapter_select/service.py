@@ -138,11 +138,12 @@ async def split_oversize_chapters(
     distillates: dict[str, dict],
     key_idx: dict[str, int],
     key_dir: dict[str, tuple] | None = None,
+    doc_blocks: dict[str, int] | None = None,
 ) -> tuple[list[dict], dict]:
-    """Split every chapter over the share cap (see domain.plan_splits). Fail-soft
+    """Split every chapter over the share cap or the code-block cap (see domain.plan_splits). Fail-soft
     per chapter; splits run concurrently after one Rotator-recovery wait (the
     preceding node, chapter_assign, just burst the pool)."""
-    plans = domain.plan_splits(out_chapters)
+    plans = domain.plan_splits(out_chapters, doc_blocks = doc_blocks)
     stats = {"n_split_planned": len(plans), "n_split_applied": 0, "splits": []}
     if not plans:
         return out_chapters, stats
@@ -318,10 +319,17 @@ async def chapter_select_run(state: domains.dd.planner.state.PlannerState) -> di
 
     # Oversize split — the one LLM step; fail-soft (chapter kept as-is on any error).
     split_stats = {"n_split_planned": 0, "n_split_applied": 0, "splits": []}
+    doc_blocks: dict[str, int] = {}
+    try:
+        member_keys = [k for c in out_chapters for k in c["member_doc_keys"]]
+        bodies = await minio.read_many(member_keys)
+        doc_blocks = {k: domain.code_block_count(b) for k, b in zip(member_keys, bodies) if b}
+    except Exception as e:
+        logger.info(f"[chapter_select] {slug}: code-block counts unavailable, pages decide the split alone ({type(e).__name__}: {e})")
     try:
         out_chapters, split_stats = await split_oversize_chapters(
             slug, out_chapters, anchored_family = anchored_family, doc_title = doc_title,
-            distillates = distillates, key_idx = key_idx, key_dir = domain.page_dirs(entries),
+            distillates = distillates, key_idx = key_idx, key_dir = domain.page_dirs(entries), doc_blocks = doc_blocks,
         )
     except Exception as e:
         logger.warning(f"[chapter_select] {slug}: oversize split skipped ({type(e).__name__}: {e})")

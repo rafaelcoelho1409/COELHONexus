@@ -999,7 +999,15 @@ def split_floor(n_docs: int, n_parts: int | None = None) -> int:
     return base
 
 
-def plan_splits(out_chapters: list[dict], max_chapters: int = 30) -> list[tuple[int, int]]:
+_FENCE_LINE_RE = re.compile(r"^ {0,3}(?:```|~~~)", re.M)
+
+
+def code_block_count(text: str) -> int:
+    """Fenced code blocks of a page (pairs of fence lines); cheap enough to run over every page of a corpus."""
+    return len(_FENCE_LINE_RE.findall(text or "")) // 2
+
+
+def plan_splits(out_chapters: list[dict], max_chapters: int = 30, doc_blocks: dict[str, int] | None = None) -> list[tuple[int, int]]:
     """[(chapter position, n_parts)] for chapters over SPLIT_MAX_SHARE of the corpus, and for
     a catch-all appendix over GAP_SPLIT_MIN_SHARE (its parts become ordinary chapters)."""
     total = sum(len(c["member_doc_keys"]) for c in out_chapters)
@@ -1011,6 +1019,17 @@ def plan_splits(out_chapters: list[dict], max_chapters: int = 30) -> list[tuple[
     median = sizes[len(sizes) // 2] if sizes else 0
     for i, c in enumerate(out_chapters):
         n = len(c["member_doc_keys"])
+        if doc_blocks and c.get("origin") != "foundations" and c.get("role") != "appendix" and n >= params.SPLIT_BLOCKS_MIN_DOCS:
+            blocks = sum(doc_blocks.get(k, 0) for k in c["member_doc_keys"])
+            if blocks > params.SPLIT_MAX_BLOCKS:
+                k = min(
+                    params.SPLIT_MAX_PARTS, math.ceil(blocks / params.SPLIT_BLOCKS_PER_PART),
+                    n // params.MIN_DOCS_PER_CHAPTER, max_chapters - n_chapters + 1,
+                )
+                if k >= 2:
+                    out.append((i, k))
+                    n_chapters += k - 1
+                    continue
         if c.get("origin") == "foundations" or n < params.SPLIT_MIN_CHAPTER_DOCS:
             continue
         share = n / total

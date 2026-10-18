@@ -58,6 +58,12 @@ GENERIC_TITLES = frozenset({   # same one-word generics chapter_propose refuses
     "references", "reference", "foundations", "foundation", "miscellaneous", "misc",
     "other", "others", "general", "appendix", "index", "preface", "epilogue",
 })
+# A chapter's sections print at most OUTLINE_BLOCK_CEILING x SECTION_SUBTOPIC_MAX = 12 x 16 = 192 code blocks, and the digest routes only part of the blocks of a page that
+# holds dozens (deepagents ch-05: 303 blocks in 8 pages, 65 printed; 13 of 70 chapters of fastmcp/deepagents/langchain/langfuse held 200+). Above SPLIT_MAX_BLOCKS blocks a
+# chapter is split, whatever its page count, into parts of about SPLIT_BLOCKS_PER_PART blocks (at least SPLIT_BLOCKS_MIN_DOCS pages to split).
+SPLIT_MAX_BLOCKS     = 200
+SPLIT_BLOCKS_PER_PART = 140
+SPLIT_BLOCKS_MIN_DOCS = 6
 SPLIT_MAX_TOKENS     = 3000
 SPLIT_TIMEOUT_S      = 120.0
 SPLIT_UNIT_SUMMARY_CHARS = 220
