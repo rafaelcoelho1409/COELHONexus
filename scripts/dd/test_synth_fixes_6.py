@@ -263,4 +263,11 @@ assert asyncio.run(CK.service._judge_second_opinion(three_fail, judge_kwargs=jk,
 out11 = asyncio.run(CK.service._judge_second_opinion(three_fail, judge_kwargs=jk, label="f/c", pre_passed=11, pre_total=12))
 assert len(calls11) == 2 and [r.passed for r in out11] == [True] * 5, [r.passed for r in out11]   # each of c3..c5 passes in 2 of the 3 runs -> the chapter clears the bar
 CK.service._run_llm_judge = real_judge
+
+
+# 12) a cached verdict without the LLM judge is not reused -----------------------------------------------------------------------------------------------
+import inspect  # noqa: E402
+
+src12 = inspect.getsource(CK.service.checklist_eval_run)
+assert 'get("judge_unavailable")' in src12 and "cache_usable = False" in src12 and "if cache_usable:" in src12   # the cache branch checks the flag before reusing
 print("ALL OK")

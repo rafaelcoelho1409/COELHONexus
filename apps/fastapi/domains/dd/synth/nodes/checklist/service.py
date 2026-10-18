@@ -920,7 +920,17 @@ async def checklist_eval_run(state: domains.dd.synth.state.SynthState) -> dict:
     versioned_key = keys.versioned_blob_key(slug, chapter_id, manifest_hash)
     latest_key    = keys.latest_blob_key(slug, chapter_id)
 
-    if await minio.exists(versioned_key) and await minio.exists(latest_key):
+    cache_usable = await minio.exists(versioned_key) and await minio.exists(latest_key)
+    if cache_usable:
+        # A verdict scored on the gates alone because the judge was down is not final: judging again is the only way to ever get the LLM review (fastmcp
+        # ch-01: a rerun returned the cached "judge unavailable" verdict three times).
+        try:
+            if json.loads(await minio.read_text(versioned_key)).get("judge_unavailable"):
+                logger.info(f"[checklist_eval] {slug}/{chapter_id}: the cached verdict has no LLM judge (outage) — judging again")
+                cache_usable = False
+        except Exception:
+            pass
+    if cache_usable:
         try:
             cached_text = await minio.read_text(versioned_key)
             cached = json.loads(cached_text)
