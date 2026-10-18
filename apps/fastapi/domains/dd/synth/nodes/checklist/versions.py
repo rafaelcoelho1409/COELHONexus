@@ -40,7 +40,9 @@ CHECKLIST_SCHEMA_VERSION = "1.0"
 # checked by two more runs (per-criterion majority) before the chapter is sent back to the writer.
 # v16 (2026-10-18): the judge also gets a second opinion whenever its verdict alone would send the chapter back to the writer; the coverage bar is 50% (not 75%) of
 # section capacity; the judge reads at most 40k chars of chapter + 12k of digest (the two biggest chapters lost the judge to 310 s of 504s).
-CHECKLIST_PROMPT_VERSION = "v16-rewrite-second-opinion-2026-10-18"
+# v17 (2026-10-18): judge calls get 150 s (was 90 s) and the judge's total budget is 420 s (was 330 s): the Rotator cascade wall follows the call's timeout, and 87 s fitted
+# about two arm attempts when NIM arms stall at 36 s (the two biggest chapters lost the judge three times in a row).
+CHECKLIST_PROMPT_VERSION = "v17-judge-timeout-2026-10-18"
 
 # CoCoA two-stage alignment check + atomic-claim grounding — independently
 # versioned from CHECKLIST_PROMPT_VERSION (own MinIO cache keys, see keys.py).

@@ -262,7 +262,7 @@ _MAX_TOKENS_REPAIR      = 3000
 # here directly feeds `infra_degraded` (issues #10/#14), so a timeout
 # that would have succeeded with more headroom was actively corrupting
 # the sustained-outage signal, not just costing one bad iteration.
-_TIMEOUT_S_JUDGE        = 90.0
+_TIMEOUT_S_JUDGE        = 150.0   # was 90 s: the Rotator's cascade wall is timeout - 3 s, which left room for ~2 arm tries when NIM arms stall at 36 s (fastmcp ch-01 and langfuse ch-11 judges, 87.5 s 504s)
 _TIMEOUT_S_REPAIR       = 90.0
 
 _MAX_REPAIR_ATTEMPTS    = 1

@@ -173,7 +173,7 @@ JUDGE_COOLOFF_S = 45.0
 JUDGE_EXTRA_ATTEMPTS = 2
 # …but the judge never waits longer than this in total (attempt time + cool-offs): fastmcp ch-01 spent 400 s on four timed-out attempts and still
 # shipped without an LLM review. A retry that cannot finish inside the budget is not started, and the first failure re-renders a lighter prompt.
-JUDGE_TOTAL_BUDGET_S = 330.0
+JUDGE_TOTAL_BUDGET_S = 420.0
 
 # A judge that fails (almost) every LLM criterion on a chapter the gates mostly accept is checked before a rewrite: two more judge runs, per-criterion majority
 # (fastmcp ch-01: one judge model failed 5/5 on prose other judges passed 5/5, and the rewrite it triggered cost 15 min and changed nothing).
