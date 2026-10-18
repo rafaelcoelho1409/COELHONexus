@@ -47,13 +47,15 @@ def chapter(n_routed, n_sections, per_section_used):
     return {"_routed_hashes": routed, "_digest_sources": ["s0"], "sections": secs}
 
 
-big_ok = CK.check_code_coverage(chapter(133, 4, 16))                                              # 64 printed of 133: 48 needed (75% of 64 slots)
+big_ok = CK.check_code_coverage(chapter(133, 4, 16))                                              # 64 printed of 133: 32 needed (50% of 64 slots)
 assert big_ok.passed, big_ok.feedback
-big_low = CK.check_code_coverage(chapter(133, 4, 10))                                             # 40 printed < 48
-assert not big_low.passed and "40 of 133" in big_low.feedback
+big_mid = CK.check_code_coverage(chapter(133, 4, 10))                                             # 40 printed >= 32: passes (was 48 needed at 75%)
+assert big_mid.passed, big_mid.feedback
+big_low = CK.check_code_coverage(chapter(133, 4, 6))                                              # 24 printed < 32
+assert not big_low.passed and "24 of 133" in big_low.feedback
 small = CK.check_code_coverage(chapter(10, 3, 2))                                                 # 6 printed of 10 = 60% -> still the plain bar
 assert small.passed
 small_low = CK.check_code_coverage(chapter(10, 3, 1))                                             # 3 of 10
 assert not small_low.passed
-print("3 coverage gate is capacity-aware: 133 blocks / 4 sections need 48, 10 blocks still need 6 ok")
+print("3 coverage gate is capacity-aware: 133 blocks / 4 sections need 32, 10 blocks still need 6 ok")
 print("ALL OK")

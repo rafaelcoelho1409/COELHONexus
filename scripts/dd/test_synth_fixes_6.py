@@ -245,4 +245,22 @@ assert asyncio.run(CK.service._judge_second_opinion(mild, judge_kwargs=jk, label
 down = [R(name=n, passed=False, kind="llm_judge", feedback="judge_unavailable: x") for n in names]
 assert asyncio.run(CK.service._judge_second_opinion(down, judge_kwargs=jk, label="f/c")) is down and not calls9
 CK.service._run_llm_judge = real_judge
+
+
+# 11) a judge verdict that alone sends the chapter to a rewrite gets a second opinion, even with only 3 of 5 failures ------------------------------------
+calls11 = []
+answers11 = [(run(True, True, True, True, True), "m2", False, 5), (run(True, False, True, True, True), "m3", False, 5)]
+
+
+async def fake_judge11(**kw):
+    calls11.append(kw)
+    return answers11[len(calls11) - 1]
+CK.service._run_llm_judge = fake_judge11
+three_fail = run(True, True, False, False, False)                                      # 2/5 pass
+# gates 12/12 + 2/5 judge = 14/17 = 82% >= 80%: this verdict does not cause a rewrite -> no second opinion
+assert asyncio.run(CK.service._judge_second_opinion(three_fail, judge_kwargs=jk, label="f/c", pre_passed=12, pre_total=12)) is three_fail and not calls11
+# gates 11/12 + 2/5 judge = 13/17 = 76% < 80% (langchain ch-04): rewrite -> two more judge runs, majority decides
+out11 = asyncio.run(CK.service._judge_second_opinion(three_fail, judge_kwargs=jk, label="f/c", pre_passed=11, pre_total=12))
+assert len(calls11) == 2 and [r.passed for r in out11] == [True] * 5, [r.passed for r in out11]   # each of c3..c5 passes in 2 of the 3 runs -> the chapter clears the bar
+CK.service._run_llm_judge = real_judge
 print("ALL OK")

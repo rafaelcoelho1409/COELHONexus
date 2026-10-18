@@ -681,7 +681,7 @@ def render_chapter_for_judge(
 def render_digest_for_grounding(
     digest: dict,
     *,
-    char_cap: int = 20_000,
+    char_cap: int = params.MAX_RENDERED_DIGEST_CHARS,
 ) -> str:
     """Render compressed per-section digest contributions for the grounding judge."""
     per_section = digest.get("per_section") or {}

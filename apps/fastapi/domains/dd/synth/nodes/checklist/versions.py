@@ -38,7 +38,9 @@ CHECKLIST_SCHEMA_VERSION = "1.0"
 # v14 (2026-10-16): the LLM judge waits at most JUDGE_TOTAL_BUDGET_S (330 s) in total and re-renders a lighter prompt after its first failed attempt.
 # v15 (2026-10-17): the code_coverage gate counts a routed block repeated by a printed near-copy as covered, and a judge that fails >= 4 of 5 LLM criteria is
 # checked by two more runs (per-criterion majority) before the chapter is sent back to the writer.
-CHECKLIST_PROMPT_VERSION = "v15-second-opinion-2026-10-17"
+# v16 (2026-10-18): the judge also gets a second opinion whenever its verdict alone would send the chapter back to the writer; the coverage bar is 50% (not 75%) of
+# section capacity; the judge reads at most 40k chars of chapter + 12k of digest (the two biggest chapters lost the judge to 310 s of 504s).
+CHECKLIST_PROMPT_VERSION = "v16-rewrite-second-opinion-2026-10-18"
 
 # CoCoA two-stage alignment check + atomic-claim grounding — independently
 # versioned from CHECKLIST_PROMPT_VERSION (own MinIO cache keys, see keys.py).

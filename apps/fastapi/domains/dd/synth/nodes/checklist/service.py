@@ -38,12 +38,20 @@ def _emit_criterion_scores(framework: str, criteria: list[dict | schemas.Criteri
         )
 
 
-async def _judge_second_opinion(first: list[schemas.CriterionResult], *, judge_kwargs: dict, label: str) -> list[schemas.CriterionResult]:
+async def _judge_second_opinion(
+    first: list[schemas.CriterionResult], *, judge_kwargs: dict, label: str, pre_passed: int | None = None, pre_total: int = 0,
+) -> list[schemas.CriterionResult]:
     """When the first judge failed (almost) every LLM criterion, ask JUDGE_SECOND_OPINIONS more judge runs (the Rotator may route them to other models) and take the
     per-criterion majority; the first verdict stands when too few of them answer."""
     unavailable = lambda rs: any((r.feedback or "").startswith("judge_unavailable") for r in rs)
     n_failed = sum(1 for r in first if not r.passed)
-    if not first or n_failed < params.JUDGE_HARSH_FAILS or unavailable(first):
+    # Also whenever this verdict alone sends the chapter back to the writer (a rewrite costs 15+ min; langchain ch-04 repeated its 76% exactly): the gates'
+    # result is known, so the chapter-wide pass rate with this judge is too.
+    sends_rewrite = (
+        pre_passed is not None and n_failed >= 1
+        and (pre_passed + len(first) - n_failed) / max(1, pre_total + len(first)) < params.PASS_THRESHOLD
+    )
+    if not first or unavailable(first) or (n_failed < params.JUDGE_HARSH_FAILS and not sends_rewrite):
         return first
     others = await asyncio.gather(
         *[_run_llm_judge(meta_out = {}, **judge_kwargs) for _ in range(params.JUDGE_SECOND_OPINIONS)], return_exceptions = True,
@@ -1066,7 +1074,7 @@ async def checklist_eval_run(state: domains.dd.synth.state.SynthState) -> dict:
     )
 
     llm_results = await _judge_second_opinion(
-        llm_results, label = f"{slug}/{chapter_id}",
+        llm_results, label = f"{slug}/{chapter_id}", pre_passed = n_pre_passed, pre_total = len(pre_results),
         judge_kwargs = dict(
             thread_id = thread_id, chapter_id = chapter_id, chapter_title = chapter_title, framework = slug, sawc = sawc, digest = digest,
             rendered_chapter = rendered_chapter, rendered_digest = rendered_digest, truncated = truncated,

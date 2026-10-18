@@ -16,7 +16,8 @@ DENSITY_MAX_AVG_EXPLANATION_WORDS = 70.0
 REPAIR_RATE_MAX = 0.50
 PICKER_FALLBACK_RATE_MAX = 0.50
 MIN_CITATIONS_PER_SECTION = 1
-MAX_RENDERED_CHAPTER_CHARS = 60_000
+MAX_RENDERED_CHAPTER_CHARS = 40_000   # 60k -> 40k chars (+ the digest at MAX_RENDERED_DIGEST_CHARS): the judge of the two biggest chapters timed out on 310 s of 504s
+MAX_RENDERED_DIGEST_CHARS = 12_000
 FEEDBACK_MIN_CHARS = 4
 FEEDBACK_MAX_CHARS = 600
 
@@ -186,7 +187,7 @@ COVERAGE_MIN_ROUTED = 6
 COVERAGE_MIN_CODE = 0.60
 # ... but never more than this share of what the chapter's sections can print at all (sections x TOPUP_SECTION_MAX subtopics, one block
 # each): fastmcp ch-01 routed 133 blocks to 4 sections (64 subtopic slots), so 60% of 133 = 80 was unreachable and every iteration failed.
-COVERAGE_CAPACITY_SHARE = 0.75
+COVERAGE_CAPACITY_SHARE = 0.5     # 0.75 -> 0.5: langchain ch-04 routed 234 blocks to 11 sections (capacity 176); 99 printed (56%) could never reach 132 and the rewrite it triggered changed nothing
 COVERAGE_MIN_SOURCE_COUNT = 6
 COVERAGE_MIN_SOURCES = 0.70
 
