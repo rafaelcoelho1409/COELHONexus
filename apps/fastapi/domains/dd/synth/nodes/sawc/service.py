@@ -983,7 +983,7 @@ async def _topup_sources(
 
     async def _one(sec: schemas.Section) -> tuple[schemas.Section, int]:
         srcs = pending.get(sec.section_id) or []
-        n_new = min(params.TOPUP_SRC_MAX_NEW, params.TOPUP_SECTION_MAX - len(sec.subtopics))
+        n_new = min(params.TOPUP_SRC_MAX_NEW, params.TOPUP_SECTION_MAX + params.TOPUP_SRC_EXTRA - len(sec.subtopics))
         if not srcs or n_new < 1:
             return sec, 0
         prompt = domain.build_source_topup_prompt(

@@ -20,4 +20,5 @@ SAWC_SCHEMA_VERSION = "2.0-cookbook"
 # covered text, states only new facts and drops "the documentation provides ..." filler.
 # v21 (2026-10-16): the coverage top-up runs up to 2 rounds (a section that gained subtopics and still has unused routed blocks and room is asked again).
 # v22 (2026-10-16): a section that lost every draft gets one late retry (after the other sections, 24k-char vault); the writer prompt asks for a subtopic count that scales with the bank.
-SAWC_PROMPT_VERSION = "v22-late-retry-2026-10-16"
+# v23 (2026-10-19): the source top-up may take a section 3 subtopics past the 16 cap, so a section that absorbed many sources still cites the code-less ones (langgraph ch-07: 5 provider pages never cited).
+SAWC_PROMPT_VERSION = "v23-source-topup-extra-2026-10-19"

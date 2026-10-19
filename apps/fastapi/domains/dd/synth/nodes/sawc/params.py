@@ -92,6 +92,8 @@ PROSE_FACTS_PER_SUBTOPIC = 1.5
 TOPUP_SRC_ENABLED = True
 TOPUP_SRC_MAX_NEW = 4          # prose subtopics added per section per call (one may cover several sources)
 TOPUP_SECTION_MAX = 16         # a topped-up section never grows past this many subtopics
+TOPUP_SRC_EXTRA = 3            # the source top-up may take a section this many subtopics past TOPUP_SECTION_MAX: one prose subtopic may cover several uncited sources, and a section
+                               # that absorbed many sources (langgraph ch-07: s1 held 11 provider pages at 16 subtopics) would otherwise never cite the code-less ones
 TOPUP_SRC_MIN_FACTS = 1        # a source needs at least this many key facts to be offered
 TOPUP_SRC_GROUND_TOKENS = 2    # prose must share this many words with the facts it covers
 TOPUP_SRC_CITE_TOKENS = 3      # shared words that make an uncited-but-used source count as cited

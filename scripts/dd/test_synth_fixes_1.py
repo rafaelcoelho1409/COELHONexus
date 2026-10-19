@@ -286,9 +286,12 @@ domains.settings.chat.service.chat_text_async = _chat15
 out15, n15, k15 = asyncio.run(SV._topup_sources(final_sections=secs15, per_section_index=idx15, sections_by_id={}, framework="asyncio", chapter_id="ch", chapter_title="Loops"))
 assert (n15, k15) == (1, 1) and len(out15[0].subtopics) == 4 and len(out15[1].subtopics) == 3 and len(calls15) == 3     # s2's empty answer is asked once more (TOPUP_ATTEMPTS)
 assert any(c.source_key == "k_get" for c in out15[0].citations) and len(out15[0].citations) == 2
-SV.params.TOPUP_SECTION_MAX = 3
+SV.params.TOPUP_SECTION_MAX, SV.params.TOPUP_SRC_EXTRA = 3, 0
 assert asyncio.run(SV._topup_sources(final_sections=secs15, per_section_index=idx15, sections_by_id={}, framework="a", chapter_id="c", chapter_title="t"))[1] == 0   # full sections are not grown
-SV.params.TOPUP_SECTION_MAX = 16
+SV.params.TOPUP_SRC_EXTRA = 2
+out15x, n15x, _ = asyncio.run(SV._topup_sources(final_sections=secs15, per_section_index=idx15, sections_by_id={}, framework="a", chapter_id="c", chapter_title="t"))
+assert n15x == 1 and len(out15x[0].subtopics) == 4                                       # a section at the cap still takes the source top-up's extra slots (so its uncited sources get cited)
+SV.params.TOPUP_SECTION_MAX, SV.params.TOPUP_SRC_EXTRA = 16, 3
 print("15 source top-up ok")
 # 16) a section already at the writer's citation cap still gets the new sources cited ----------------------------------------
 full_c = SCH.Section(section_id="s1", heading="Sec s1", intro="x" * 70, subtopics=[sub(c * 16, f"s1 {c}") for c in "abc"],
