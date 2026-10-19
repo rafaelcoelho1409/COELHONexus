@@ -1,7 +1,7 @@
 """digest_construct — per-source parallel LLM routing (one call per source, content-addressed cache)."""
 from __future__ import annotations
 import domains
-from . import domain, keys, prompts, schemas, versions
+from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio
 import json
@@ -68,6 +68,20 @@ _DIGEST_RESPONSE_FORMAT = {
         "strict": False,
     },
 }
+
+
+async def _digest_source(*, source_md: str, source_key: str, **kw) -> tuple[Optional[schemas.SourceDigest], Optional[str]]:
+    """Digest one source; a page with more than params.CHUNK_MAX_BLOCKS code blocks is digested in chunks (each routed by its own call) and merged. A chunk that fails is
+    skipped (its blocks stay unrouted and the later leftover handling sees them); the source fails only when every chunk does."""
+    chunks = domain.split_source_by_blocks(source_md, params.CHUNK_MAX_BLOCKS)
+    if len(chunks) == 1:
+        return await _digest_one_source(source_md = source_md, source_key = source_key, **kw)
+    results = await asyncio.gather(*[_digest_one_source(source_md = c, source_key = source_key, **kw) for c in chunks])
+    ok = [d for d, _ in results if d is not None]
+    if not ok:
+        return None, next((e for _, e in results if e), "chunks_failed")
+    logger.info(f"[digest_construct] {source_key}: {len(chunks)} chunks of ~{params.CHUNK_MAX_BLOCKS} blocks, {len(ok)} digested")
+    return domain.merge_chunk_digests(source_key, ok), None
 
 
 async def _digest_one_source(
@@ -531,7 +545,7 @@ async def digest_construct_run(state: domains.dd.synth.state.SynthState) -> dict
 
     sem = asyncio.Semaphore(_CONCURRENCY)
     tasks = [
-        _digest_one_source(
+        _digest_source(
             sem = sem,
             sample_idx = i,
             n_total = len(pairs),
@@ -564,7 +578,7 @@ async def digest_construct_run(state: domains.dd.synth.state.SynthState) -> dict
         )
         await asyncio.sleep(_WAVE_PAUSE_S)
         retry_tasks = [
-            _digest_one_source(
+            _digest_source(
                 sem = sem,
                 sample_idx = i,
                 n_total = len(pairs),

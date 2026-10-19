@@ -3,6 +3,7 @@ from __future__ import annotations
 from . import params, patterns, schemas, versions
 
 import json
+import math
 import re
 from hashlib import sha256
 from typing import Optional
@@ -171,6 +172,73 @@ _WORD_RE = re.compile(r"[a-z][a-z0-9_]{2,}")
 
 def _words(text: str) -> set[str]:
     return set(_WORD_RE.findall((text or "").lower()))
+
+
+_HEADING_LINE_RE = re.compile(r"^#{1,6} ", re.M)
+_RELEVANCE_RANK = {"primary": 0, "supporting": 1, "tangential": 2}
+
+
+def split_source_by_blocks(md_text: str, max_blocks: int) -> list[str]:
+    """A page with more than `max_blocks` code blocks is cut into about equal chunks of whole blocks (each within a third of the target size). A cut falls on the last heading in the
+    third of a chunk before the ideal cut (else on a blank line between two blocks), so a chunk keeps a topic's prose with its code; later chunks start with the page's own title
+    line. A page with fewer blocks comes back whole."""
+    hashes = extract_vault_hashes(md_text)
+    if max_blocks < 1 or len(hashes) <= max_blocks:
+        return [md_text]
+    first_pos: dict[str, int] = {}
+    for m in patterns.VAULT_HASH_IN_TEXT_RE.finditer(md_text):
+        first_pos.setdefault(m.group(1), m.start())
+    k = math.ceil(len(hashes) / max_blocks)
+    per = math.ceil(len(hashes) / k)
+    slack = per // 3
+    cuts: list[int] = []
+    for i in range(1, k):
+        idx = i * per
+        if idx >= len(hashes):
+            break
+        lo, hi = first_pos[hashes[idx - 1]], first_pos[hashes[idx]]
+        lo_wide = first_pos[hashes[max(idx - slack, 1) - 1]]
+        window = md_text[lo:hi]
+        heads = [lo_wide + m.start() for m in _HEADING_LINE_RE.finditer(md_text[lo_wide:hi])]
+        if heads:
+            cut = heads[-1]
+        elif "\n\n" in window:
+            cut = lo + window.rfind("\n\n") + 2
+        else:
+            cut = md_text.rfind("\n", lo, hi) + 1
+        if cut <= (cuts[-1] if cuts else 0):
+            continue
+        cuts.append(cut)
+    title = next((ln for ln in md_text.splitlines() if ln.startswith("# ")), "")
+    bounds = [0] + cuts + [len(md_text)]
+    chunks = [md_text[a:b] for a, b in zip(bounds, bounds[1:]) if md_text[a:b].strip()]
+    return [chunks[0]] + [f"{title} (continued)\n\n{c}" if title else c for c in chunks[1:]]
+
+
+def merge_chunk_digests(source_key: str, parts: list[schemas.SourceDigest]) -> schemas.SourceDigest:
+    """One SourceDigest from the digests of a page's chunks: contributions to the same section are merged (code refs and key facts united, the better relevance kept), and a block
+    one chunk could not place stays unassigned only if no other chunk placed it."""
+    first = parts[0]
+    merged: dict[str, schemas.SectionContribution] = {}
+    for part in parts:
+        for c in part.contributes_to:
+            cur = merged.get(c.section_id)
+            if cur is None:
+                merged[c.section_id] = c.model_copy(deep = True)
+                continue
+            rel = min(cur.relevance, c.relevance, key = lambda r: _RELEVANCE_RANK.get(r, 9))
+            merged[c.section_id] = cur.model_copy(update = {
+                "code_refs": list(dict.fromkeys(list(cur.code_refs) + list(c.code_refs))),
+                "key_facts": list(dict.fromkeys(list(cur.key_facts) + list(c.key_facts)))[:params.MAX_KEY_FACTS_PER_CONTRIB],
+                "relevance": rel,
+            })
+    routed = {h for c in merged.values() for h in c.code_refs}
+    unassigned = list(dict.fromkeys(h for p in parts for h in p.unassigned_code_refs if h not in routed))
+    return schemas.SourceDigest(
+        source_key = source_key, source_title = first.source_title, overall_summary = first.overall_summary,
+        contributes_to = list(merged.values()), unassigned_code_refs = unassigned, deployment = first.deployment,
+        wall_ms = max((p.wall_ms or 0) for p in parts) or None,
+    )
 
 
 def route_unrouted_sources(

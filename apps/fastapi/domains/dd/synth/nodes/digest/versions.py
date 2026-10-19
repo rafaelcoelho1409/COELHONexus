@@ -10,4 +10,5 @@ DIGEST_SCHEMA_VERSION = "1.1"
 # v10 (2026-10-16): a source whose digest failed every attempt is kept as a stub (title + opening text) and routed with all its code blocks; a 45 s pause before
 # the second wave.
 # v11 (2026-10-17): an outline section no source was routed to is folded away (the writer skips it) instead of being written from the whole chapter.
-DIGEST_PROMPT_VERSION = "v11-drop-empty-sections-2026-10-17"
+# v12 (2026-10-19): a source with more than CHUNK_MAX_BLOCKS (30) code blocks is digested in chunks of whole blocks and merged (langgraph ch-05: 28 of 149 blocks printed).
+DIGEST_PROMPT_VERSION = "v12-chunked-dense-pages-2026-10-19"

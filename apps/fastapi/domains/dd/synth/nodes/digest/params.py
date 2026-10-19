@@ -37,3 +37,7 @@ CONTEXT_OVERFLOW_MARKERS = (
     "context_window_exceeded", "reduce the length", "too many tokens",
     "context length exceeded", "prompt is too long",
 )
+
+# A source holding more than CHUNK_MAX_BLOCKS code blocks is digested in chunks of about that many, each routed by its own call, and the results are merged: the model names
+# only a few of the hashes of a page with dozens (deepagents ch-05 'subagents': 6 of 86 routed; langgraph ch-05: 28 of 149 blocks printed).
+CHUNK_MAX_BLOCKS = 30
