@@ -71,12 +71,20 @@ _DIGEST_RESPONSE_FORMAT = {
 
 
 async def _digest_source(*, source_md: str, source_key: str, **kw) -> tuple[Optional[schemas.SourceDigest], Optional[str]]:
-    """Digest one source; a page with more than params.CHUNK_MAX_BLOCKS code blocks is digested in chunks (each routed by its own call) and merged. A chunk that fails is
-    skipped (its blocks stay unrouted and the later leftover handling sees them); the source fails only when every chunk does."""
+    """Digest one source; a page with more than params.CHUNK_MAX_BLOCKS code blocks is digested in chunks (each routed by its own call) and merged. When some chunks fail under
+    load they get one more try after the pause the page-level second wave uses (langgraph ch-05: 2 of 5 chunks failed and 63 blocks stayed unrouted); a chunk that still fails is
+    skipped (its blocks stay unrouted and the later leftover handling sees them); the source fails only when every chunk does, and the page-level second wave then retries it."""
     chunks = domain.split_source_by_blocks(source_md, params.CHUNK_MAX_BLOCKS)
     if len(chunks) == 1:
         return await _digest_one_source(source_md = source_md, source_key = source_key, **kw)
-    results = await asyncio.gather(*[_digest_one_source(source_md = c, source_key = source_key, **kw) for c in chunks])
+    results = list(await asyncio.gather(*[_digest_one_source(source_md = c, source_key = source_key, **kw) for c in chunks]))
+    failed = [i for i, (d, _) in enumerate(results) if d is None]
+    if failed and len(failed) < len(chunks):
+        await asyncio.sleep(_WAVE_PAUSE_S)
+        again = await asyncio.gather(*[_digest_one_source(source_md = chunks[i], source_key = source_key, **kw) for i in failed])
+        for i, r in zip(failed, again):
+            if r[0] is not None:
+                results[i] = r
     ok = [d for d, _ in results if d is not None]
     if not ok:
         return None, next((e for _, e in results if e), "chunks_failed")

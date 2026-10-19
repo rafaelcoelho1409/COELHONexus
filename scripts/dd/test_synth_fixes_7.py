@@ -83,14 +83,19 @@ kw = dict(sem=asyncio.Semaphore(4), sample_idx=0, n_total=1, thread_id="t", chap
 SV._digest_one_source = fake_factory()
 d, err = asyncio.run(SV._digest_source(source_key="k", source_md=big, **kw))
 assert err is None and len(calls) == 3 and len(d.contributes_to) == 1 and len(d.contributes_to[0].code_refs) == 86       # 3 calls, one merged digest holding all 86 blocks
+SV._WAVE_PAUSE_S = 0
 calls.clear()
 SV._digest_one_source = fake_factory(fail_idx=(1,))
 d, err = asyncio.run(SV._digest_source(source_key="k", source_md=big, **kw))
-assert err is None and 40 <= len(d.contributes_to[0].code_refs) < 86                                                            # one chunk lost: the other two still count
+assert err is None and len(calls) == 4 and len(d.contributes_to[0].code_refs) == 86                                            # the failed chunk is retried once and recovers
+calls.clear()
+SV._digest_one_source = fake_factory(fail_idx=(1, 3))
+d, err = asyncio.run(SV._digest_source(source_key="k", source_md=big, **kw))
+assert err is None and len(calls) == 4 and 40 <= len(d.contributes_to[0].code_refs) < 86                                        # still failing after the retry: skipped, the other two chunks count
 calls.clear()
 SV._digest_one_source = fake_factory(fail_idx=(0, 1, 2))
 d, err = asyncio.run(SV._digest_source(source_key="k", source_md=big, **kw))
-assert d is None and err == "ChatError: boom"
+assert d is None and err == "ChatError: boom" and len(calls) == 3                                                                # every chunk failed: no chunk-level retry, the page-level wave handles it
 calls.clear()
 SV._digest_one_source = fake_factory()
 d, err = asyncio.run(SV._digest_source(source_key="k", source_md=small, **kw))
