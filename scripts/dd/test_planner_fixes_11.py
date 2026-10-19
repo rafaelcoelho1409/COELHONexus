@@ -66,4 +66,49 @@ assert [p for p in SEL.plan_splits(others[:3] + [app] + others[3:], doc_blocks={
 crowded = others[:3] + [heavy] + others[3:]
 assert SEL.plan_splits(crowded, max_chapters=len(crowded), doc_blocks=db) == []     # no room for another chapter
 assert P.SPLIT_MAX_BLOCKS == 200 and P.SPLIT_BLOCKS_PER_PART == 140
+
+
+# 5) the parts of a split are re-checked for the block cap (langfuse: 102 pages -> 7 parts, one with 35 pages and 376 blocks stayed whole) ----------------------------
+import asyncio  # noqa: E402
+
+SERV = domains.dd.planner.nodes.chapter_select.service
+only = SEL.plan_splits([chap("Part", 40, origin="proposal")] + [chap(f"Small {i}", 6) for i in range(8)],
+                       doc_blocks={k: 7 for k in chap("Part", 40)["member_doc_keys"]}, blocks_only=True)
+assert only == [(0, 2)], only                                                        # 280 blocks -> 2 parts
+share_only = SEL.plan_splits([chap("Wide", 60)] + [chap(f"Small {i}", 6) for i in range(8)], blocks_only=True)
+assert share_only == []                                                               # blocks_only never applies the page-count rules
+assert SEL.plan_splits([chap("Wide", 60)] + [chap(f"Small {i}", 6) for i in range(8)]) != []   # ... which would have split this one
+
+calls5 = []
+
+
+async def fake_split_one(framework, chapter, units, n_parts, other_titles, distillates):
+    calls5.append((len(chapter["member_doc_keys"]), n_parts))
+    keys = chapter["member_doc_keys"]
+    cut = int(len(keys) * 0.7) if len(keys) >= 80 else len(keys) // 2                # first round: 70/30 (the big part stays heavy); later: halves
+    return [dict(chapter, title=f"{chapter['title']} {i + 1}", member_doc_keys=part, n_member_docs=len(part), origin="split")
+            for i, part in enumerate([keys[:cut], keys[cut:]])]
+
+
+async def fake_settle(cap):
+    return {}
+
+real_split, real_settle = SERV._split_one, domains.settings.chat.service.wait_for_rotator_settle
+SERV._split_one, domains.settings.chat.service.wait_for_rotator_settle = fake_split_one, fake_settle
+big5 = chap("Instrumentation", 100)
+others5 = [chap(f"Other {i}", 6) for i in range(8)]
+db5 = {}
+for c in others5:
+    db5.update(blocks(c, 3))
+db5.update(blocks(big5, 4))                                                           # 400 blocks, 100 pages
+all_keys = [k for c in [big5] + others5 for k in c["member_doc_keys"]]
+out5, st5 = asyncio.run(SERV.split_oversize_chapters(
+    "fw", [big5] + others5, anchored_family={}, doc_title={k: k for k in all_keys}, distillates={}, key_idx={k: i for i, k in enumerate(all_keys)},
+    key_dir=None, doc_blocks=db5,
+))
+SERV._split_one, domains.settings.chat.service.wait_for_rotator_settle = real_split, real_settle
+sizes5 = sorted(sum(db5.get(k, 0) for k in c["member_doc_keys"]) for c in out5)
+assert max(sizes5) <= P.SPLIT_MAX_BLOCKS, sizes5                                      # round 1 left a 280-block part; round 2 split it
+assert st5["n_split_applied"] >= 2 and len(calls5) >= 2 and sum(len(c["member_doc_keys"]) for c in out5) == 148   # every page still placed, split more than once
+assert len(out5) <= 30 and P.SPLIT_MAX_ROUNDS == 3
 print("ALL OK")

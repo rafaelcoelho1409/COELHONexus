@@ -1007,7 +1007,7 @@ def code_block_count(text: str) -> int:
     return len(_FENCE_LINE_RE.findall(text or "")) // 2
 
 
-def plan_splits(out_chapters: list[dict], max_chapters: int = 30, doc_blocks: dict[str, int] | None = None) -> list[tuple[int, int]]:
+def plan_splits(out_chapters: list[dict], max_chapters: int = 30, doc_blocks: dict[str, int] | None = None, blocks_only: bool = False) -> list[tuple[int, int]]:
     """[(chapter position, n_parts)] for chapters over SPLIT_MAX_SHARE of the corpus, and for
     a catch-all appendix over GAP_SPLIT_MIN_SHARE (its parts become ordinary chapters)."""
     total = sum(len(c["member_doc_keys"]) for c in out_chapters)
@@ -1030,6 +1030,8 @@ def plan_splits(out_chapters: list[dict], max_chapters: int = 30, doc_blocks: di
                     out.append((i, k))
                     n_chapters += k - 1
                     continue
+        if blocks_only:
+            continue          # a part of an earlier split is re-checked for code blocks only (the page rules already had their say)
         if c.get("origin") == "foundations" or n < params.SPLIT_MIN_CHAPTER_DOCS:
             continue
         share = n / total

@@ -33,4 +33,6 @@ from __future__ import annotations
 # holding fewer than FOUNDATIONS_CATALOG_MIN candidates each; replay of 12 stored frameworks: only that run changes).
 # v16 (2026-10-18): a chapter above SPLIT_MAX_BLOCKS (200) code blocks is split by the oversize-split machinery whatever its page count (13 of 70 chapters of
 # fastmcp/deepagents/langchain/langfuse held 200+, up to 303 in 8 pages; Synth sections print at most 12 x 16 = 192).
-PROMPT_VERSION = "v16-split-by-code-blocks-2026-10-18"
+# v17 (2026-10-19): the parts of a split are re-checked for the code-block cap, up to 3 rounds (langfuse: a 102-page chapter split into 7 parts, one with 35 pages and
+# 376 blocks that was never split again).
+PROMPT_VERSION = "v17-resplit-heavy-parts-2026-10-19"

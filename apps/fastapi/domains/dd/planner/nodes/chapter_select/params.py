@@ -64,6 +64,7 @@ GENERIC_TITLES = frozenset({   # same one-word generics chapter_propose refuses
 SPLIT_MAX_BLOCKS     = 200
 SPLIT_BLOCKS_PER_PART = 140
 SPLIT_BLOCKS_MIN_DOCS = 6
+SPLIT_MAX_ROUNDS     = 3       # a part of a split can itself be over the block cap (langfuse: one of 7 parts held 35 pages and 376 blocks): parts are re-checked
 SPLIT_MAX_TOKENS     = 3000
 SPLIT_TIMEOUT_S      = 120.0
 SPLIT_UNIT_SUMMARY_CHARS = 220

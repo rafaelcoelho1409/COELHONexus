@@ -151,37 +151,45 @@ async def split_oversize_chapters(
         await domains.settings.chat.service.wait_for_rotator_settle(params.SPLIT_SETTLE_CAP_S)
     except Exception as e:
         logger.info(f"[chapter_select] settle wait skipped ({type(e).__name__}: {e})")
-    titles = [c["title"] for c in out_chapters]
 
-    async def _one(pos: int, k: int):
-        ch = out_chapters[pos]
-        units = domain.build_split_units(
-            ch["member_doc_keys"], anchored_family = anchored_family, doc_title = doc_title,
-            distillates = distillates, key_idx = key_idx, key_dir = key_dir,
-        )
-        if len(units) < 2:
-            return pos, None
-        return pos, await _split_one(
-            framework, ch, units, k, [t for t in titles if t != ch["title"]], distillates,
-        )
+    for _round in range(params.SPLIT_MAX_ROUNDS):
+        titles = [c["title"] for c in out_chapters]
+        chapters_now = out_chapters
 
-    results = await asyncio.gather(*[_one(pos, k) for pos, k in plans], return_exceptions = True)
-    replaced: dict[int, list[dict]] = {}
-    for (pos, k), res in zip(plans, results):
-        parts = None if isinstance(res, Exception) else res[1]
-        stats["splits"].append({
-            "title": out_chapters[pos]["title"], "n_docs": len(out_chapters[pos]["member_doc_keys"]),
-            "n_parts": k, "applied": bool(parts),
-        })
-        if parts:
-            replaced[pos] = parts
-    if not replaced:
-        return out_chapters, stats
-    new_chapters: list[dict] = []
-    for i, c in enumerate(out_chapters):
-        new_chapters.extend(replaced.get(i, [c]))
-    stats["n_split_applied"] = len(replaced)
-    return domain._renumber(new_chapters), stats
+        async def _one(pos: int, k: int):
+            ch = chapters_now[pos]
+            units = domain.build_split_units(
+                ch["member_doc_keys"], anchored_family = anchored_family, doc_title = doc_title,
+                distillates = distillates, key_idx = key_idx, key_dir = key_dir,
+            )
+            if len(units) < 2:
+                return pos, None
+            return pos, await _split_one(
+                framework, ch, units, k, [t for t in titles if t != ch["title"]], distillates,
+            )
+
+        results = await asyncio.gather(*[_one(pos, k) for pos, k in plans], return_exceptions = True)
+        replaced: dict[int, list[dict]] = {}
+        for (pos, k), res in zip(plans, results):
+            parts = None if isinstance(res, Exception) else res[1]
+            stats["splits"].append({
+                "title": chapters_now[pos]["title"], "n_docs": len(chapters_now[pos]["member_doc_keys"]),
+                "n_parts": k, "applied": bool(parts),
+            })
+            if parts:
+                replaced[pos] = parts
+        if not replaced:
+            break
+        new_chapters: list[dict] = []
+        for i, c in enumerate(chapters_now):
+            new_chapters.extend(replaced.get(i, [c]))
+        stats["n_split_applied"] += len(replaced)
+        out_chapters = domain._renumber(new_chapters)
+        # parts of this split that are still over the code-block cap are split again (the page rules do not apply to them)
+        plans = domain.plan_splits(out_chapters, doc_blocks = doc_blocks, blocks_only = True)
+        if not plans:
+            break
+    return out_chapters, stats
 
 
 async def persist_select_outputs(
