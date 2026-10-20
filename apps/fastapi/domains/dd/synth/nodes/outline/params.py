@@ -91,6 +91,7 @@ TEMPERATURE_VOTE   = 0.0
 TEMPERATURE_REPAIR = 0.2
 MAX_REPAIR_RETRIES = 2
 FLOOR_REPAIR_EXTRA = 2          # extra repair attempts while the code-block section floor is still unmet
+REPAIR_FLOOR_SLACK = 2        # a repair that clears the section floor is kept even with up to this many more issues than before (see domain.accept_repair)
 MAX_TOKENS_DRAFT   = 8000
 MAX_TOKENS_VOTE    = 200
 MAX_TOKENS_REPAIR  = 8000

@@ -12,4 +12,5 @@ OUTLINE_SCHEMA_VERSION = "1.0"
 # v10 (2026-10-17): a prerequisite chain deeper than MAX_STAGE_DEPTH is flattened deterministically, before and after the repair loop (fastmcp ch-01: a 12-section
 # chain, depth 11, made the writer 25 min).
 # v11 (2026-10-17): the floor issue and its hint say a section must be backed by the sources (fastmcp ch-01: 12 sections for 18 client pages, 4 invented).
-OUTLINE_PROMPT_VERSION = "v11-grounded-floor-2026-10-17"
+# v12 (2026-10-20): a repair that clears the section floor is kept even when it overshoots the cap (qdrant ch-10 shipped 5 sections for 160 blocks after four rejected/identical repairs).
+OUTLINE_PROMPT_VERSION = "v12-floor-overshoot-2026-10-20"

@@ -349,6 +349,16 @@ def source_titles(bodies: list[str], limit: int = 30) -> list[str]:
     return titles
 
 
+def accept_repair(issues: list[str], new_issues: list[str], slack: int) -> bool:
+    """A repaired outline replaces the current one when it leaves no more issues than before, or when it clears the section-count floor at the cost of at most `slack` extra
+    issues: the repair model usually overshoots (qdrant ch-10: 5 sections for 160 blocks -> 20 sections with 2 issues, rejected, and the same 5-section outline came back on every
+    later attempt), and a too-long outline is something the next repair can merge down while a too-short one never grew."""
+    if len(new_issues) <= len(issues):
+        return True
+    cleared = any(is_floor_issue(x) for x in issues) and not any(is_floor_issue(x) for x in new_issues)
+    return cleared and len(new_issues) <= len(issues) + slack
+
+
 def floor_repair_hint(bodies: list[str]) -> str:
     """Extra repair-prompt text for an unmet section floor: the source titles, so the split follows the material."""
     titles = source_titles(bodies)

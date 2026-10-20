@@ -598,8 +598,8 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
             new_semantic = await _detect_semantic_h2_duplicates(new_outline)
             if new_semantic:
                 new_issues = list(new_issues) + new_semantic
-            # Only accept if it ACTUALLY improves things.
-            accepted = len(new_issues) <= len(issues)
+            # Only accept if it improves things (or clears the section floor, see domain.accept_repair).
+            accepted = domain.accept_repair(issues, new_issues, params.REPAIR_FLOOR_SLACK)
             logger.info(
                 f"[outline_sdp] {slug}/{chapter_id}: repair attempt {attempt + 1}: "
                 f"{len(new_outline.sections)} sections, {len(new_issues)} issue(s) "

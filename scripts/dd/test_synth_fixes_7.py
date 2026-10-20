@@ -101,4 +101,16 @@ SV._digest_one_source = fake_factory()
 d, err = asyncio.run(SV._digest_source(source_key="k", source_md=small, **kw))
 assert err is None and len(calls) == 1                                                                                           # a small page: a single call as before
 SV._digest_one_source = real
+
+# 4) outline repair acceptance: a repair that clears the section floor is kept even with a few more issues --------------------------------------
+OL = domains.dd.synth.nodes.outline
+FLOOR = OL.domain.FLOOR_ISSUE_PREFIX + " 5 H2 sections for 160 blocks"
+assert OL.domain.is_floor_issue(FLOOR)
+assert OL.domain.accept_repair([FLOOR], ["a", "b"], 2)                       # floor cleared, one more issue than before: kept (qdrant ch-10: 20 sections, 2 issues)
+assert OL.domain.accept_repair([FLOOR], ["a", "b", "c"], 2)                  # exactly slack more: kept
+assert not OL.domain.accept_repair([FLOOR], ["a", "b", "c", "d"], 2)         # more than slack: rejected
+assert not OL.domain.accept_repair([FLOOR], [FLOOR, "a"], 2)                 # floor still open and worse: rejected
+assert OL.domain.accept_repair([FLOOR, "x"], [FLOOR], 2)                     # fewer issues: kept as before
+assert OL.domain.accept_repair(["x"], ["y"], 2) and not OL.domain.accept_repair(["x"], ["y", "z"], 2)   # no floor issue involved: the old strict rule
+assert OL.params.REPAIR_FLOOR_SLACK == 2
 print("ALL OK")
