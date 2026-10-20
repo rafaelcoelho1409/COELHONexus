@@ -191,7 +191,7 @@ def validate_outline_structure(
         floor = params.min_h2_for_n_blocks(n_blocks, adaptive_cap)
         if floor and n_h2 < floor:
             issues.append(
-                f"{FLOOR_ISSUE_PREFIX}{n_h2} H2 sections but the chapter's sources hold {n_blocks} code blocks, and one section can show "
+                f"{params.FLOOR_ISSUE_PREFIX}{n_h2} H2 sections but the chapter's sources hold {n_blocks} code blocks, and one section can show "
                 f"at most {params.SECTION_SUBTOPIC_MAX}. Split it into AT LEAST {floor} sections (at most "
                 f"{adaptive_cap}), each a sharply distinct capability or client that the sources actually cover (never add a topic they do not), so the code can actually be shown."
             )
@@ -326,12 +326,9 @@ def summarize_candidate(
     }
 
 
-FLOOR_ISSUE_PREFIX = "Outline has only "
-
-
 def is_floor_issue(issue: str) -> bool:
     """True for the validation issue raised when a code-heavy chapter has fewer sections than its block floor."""
-    return issue.startswith(FLOOR_ISSUE_PREFIX)
+    return issue.startswith(params.FLOOR_ISSUE_PREFIX)
 
 
 def source_titles(bodies: list[str], limit: int = 30) -> list[str]:
@@ -388,23 +385,15 @@ def count_code_blocks(bodies: list[str]) -> int:
     return len(hashes)
 
 
-_OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR = 5
-
-_OUTLINE_OPTIMAL_STOPPING_RATIO_OF_CAP = 0.7
-
-
 def outline_optimal_stopping_min(n_sources: int | None, n_blocks: int = 0) -> int:
     """Minimum section count for Optimal-Stopping early-exit, coupled to adaptive cap so large corpora demand more sections before short-circuiting."""
     if n_sources is None:
-        return _OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR
+        return params.OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR
     cap = params.max_h2_for_n_sources(n_sources, n_blocks)
     return max(
-        _OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR,
-        int(cap * _OUTLINE_OPTIMAL_STOPPING_RATIO_OF_CAP),
+        params.OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR,
+        int(cap * params.OUTLINE_OPTIMAL_STOPPING_RATIO_OF_CAP),
     )
-
-
-_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 def parse_json_response(text: str) -> Optional[dict]:
@@ -420,7 +409,7 @@ def parse_json_response(text: str) -> Optional[dict]:
         return json.loads(cleaned)
     except Exception:
         pass
-    m = _JSON_RE.search(text)
+    m = patterns.JSON_RE.search(text)
     if not m:
         return None
     try:
@@ -532,15 +521,8 @@ def shorten_pydantic_error(e: ValidationError) -> str:
     return "; ".join(lines) + suffix
 
 
-# Public: service.py's overflow-retry path also reads this (halves the
-# budget on a context-overflow batch before re-drafting).
-MAX_SOURCE_CHARS = 180_000
-
-_SOURCE_CONCAT_SEPARATOR = "\n\n---\n\n"
-
-
 def concat_sources(
-    bodies: list[str], *, max_chars: int = MAX_SOURCE_CHARS,
+    bodies: list[str], *, max_chars: int = params.MAX_SOURCE_CHARS,
 ) -> tuple[str, bool]:
     """Concatenate source markdown bodies with separators, capped at
     `max_chars`, via max-min water-filling instead of sequential fill.
@@ -575,16 +557,7 @@ def concat_sources(
         pending = still_pending
     truncated = any(alloc[i] < len(non_empty[i]) for i in range(n))
     parts = [non_empty[i][: alloc[i]] for i in range(n) if alloc[i] > 0]
-    return _SOURCE_CONCAT_SEPARATOR.join(parts), truncated
-
-
-_SCOPE_STOPWORDS = frozenset({
-    "the", "and", "for", "this", "with", "that", "from", "section", "show",
-    "how", "use", "using", "via", "your", "each", "into", "onto", "claude",
-    "code", "example", "demonstrate", "learn", "cover", "when", "what",
-    "where", "which", "while", "they", "them", "then", "here", "run",
-    "creat", "make", "field", "valu", "option", "config", "setup", "set",
-})
+    return params.SOURCE_CONCAT_SEPARATOR.join(parts), truncated
 
 
 def scope_words(text: str) -> set[str]:
@@ -598,7 +571,7 @@ def scope_words(text: str) -> set[str]:
                 t = t[: -len(suf)]
                 break
         out.add(t)
-    return out - _SCOPE_STOPWORDS
+    return out - params.SCOPE_STOPWORDS
 
 
 def _source_headings(md_text: str) -> list[str]:
@@ -609,7 +582,7 @@ def _source_headings(md_text: str) -> list[str]:
     ('Overview', ...) and empty-after-cleaning ones are skipped."""
     out: list[str] = []
     seen: set[str] = set()
-    for body in (md_text or "").split(_SOURCE_CONCAT_SEPARATOR):
+    for body in (md_text or "").split(params.SOURCE_CONCAT_SEPARATOR):
         in_fence = False
         for line in body.split("\n"):
             if patterns.FENCE_LINE_RE.match(line):
@@ -716,13 +689,6 @@ def find_chapter(plan: dict, chapter_id: str) -> Optional[dict]:
     return None
 
 
-_CONTEXT_OVERFLOW_MARKERS = (
-    "context_length", "context window", "maximum context length",
-    "context_window_exceeded", "reduce the length", "too many tokens",
-    "context length exceeded", "prompt is too long",
-)
-
-
 def is_context_overflow_error(e: Exception) -> bool:
     """Heuristic substring match — same idiom the openai-compat retry
     classifier already uses for payment/rate-limit errors. The Rotator is
@@ -732,4 +698,4 @@ def is_context_overflow_error(e: Exception) -> bool:
     heterogeneous pool; the failure surfaces here as a generic exception
     indistinguishable from any other unless we pattern-match the message."""
     msg = str(e).lower()
-    return any(marker in msg for marker in _CONTEXT_OVERFLOW_MARKERS)
+    return any(marker in msg for marker in params.CONTEXT_OVERFLOW_MARKERS)

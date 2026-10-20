@@ -10,31 +10,15 @@ SOTA Sept 2026 on the rotator pooled:
 """
 from __future__ import annotations
 import domains
-from . import domain, keys, params, prompts, schemas, versions
+from . import domain, errors, keys, params, prompts, schemas, versions
 
 import asyncio
 import json
 import logging
-import os
 import time
 from typing import Optional
 
 from pydantic import ValidationError
-
-
-class PlannerDegradedAbort(RuntimeError):
-    """Raised (opt-in, DD_PLANNER_ABORT_ON_DEGRADE) when chapter_propose fell back
-    on a large corpus — surfaces as a normal terminal 'failed' with a clear
-    reason instead of grinding chapter_assign for an unusable plan."""
-
-
-_ABORT_MIN_DOCS = 50
-
-
-def _abort_on_degrade_enabled() -> bool:
-    return os.environ.get("DD_PLANNER_ABORT_ON_DEGRADE", "").strip().lower() in (
-        "1", "true", "yes", "on",
-    )
 
 
 logger = logging.getLogger(__name__)
@@ -495,8 +479,8 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
     # catch-all bucket). The artifact is persisted above, so /resume still works
     # once the rotator pool recovers — but don't burn chapter_assign's ~18 min
     # grinding out a plan the caller can't use.
-    if fallback_used and _abort_on_degrade_enabled() and n >= _ABORT_MIN_DOCS:
-        raise PlannerDegradedAbort(
+    if fallback_used and params.ABORT_ON_DEGRADE_ENABLED and n >= params.ABORT_MIN_DOCS:
+        raise errors.PlannerDegradedAbort(
             f"chapter_propose fell back to deterministic seed titles on {n} docs "
             f"— aborting before chapter_assign (DD_PLANNER_ABORT_ON_DEGRADE). "
             f"Retry when the LLM pool recovers; proposals artifact is saved."

@@ -14,6 +14,7 @@ import domains  # noqa: E402
 SW = domains.dd.synth.nodes.sawc.domain
 SS = domains.dd.synth.nodes.sawc.schemas
 P = domains.dd.synth.nodes.sawc.params
+SWP = domains.dd.synth.nodes.sawc.patterns
 DSP = domains.dd.synth.runtime.dispatch.service
 
 H1, H2, H3, H4 = "1" * 16, "2" * 16, "3" * 16, "4" * 16
@@ -157,7 +158,7 @@ good = {"subtopics": [{"subheading": "The limit argument", "explanation": "async
 filler = {"subtopics": [{"subheading": "Subprocess examples", "explanation": "The documentation provides examples of how to use the asyncio create_subprocess_exec limit argument with StreamReader buffers for subprocesses."}], "citations": []}
 assert len(SW.parse_source_topup(good, sources=src6, existing_subheads=set(), max_new=2)[0]) == 1
 assert SW.parse_source_topup(filler, sources=src6, existing_subheads=set(), max_new=2)[0] == []
-assert SW.META_FRAMING_RE.search("This page describes the limit argument") and not SW.META_FRAMING_RE.search("The loop parameter was removed in Python 3.10 and the page below shows")
+assert SWP.META_FRAMING_RE.search("This page describes the limit argument") and not SWP.META_FRAMING_RE.search("The loop parameter was removed in Python 3.10 and the page below shows")
 print("6 filler dropped ok")
 
 # 7) a top-up call that fails, or answers nothing valid, is asked again --------------------------------------------------------------------------------

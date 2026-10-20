@@ -96,9 +96,6 @@ def _fallback_heading(body: str) -> str:
     return ""
 
 
-_HEADING_LOOKAHEAD_LINES = 6
-
-
 def _resolve_display_heading(lines: list[str], h1_idx: int, fallback_title: str) -> str:
     """Prefer a SECOND H1 appearing shortly after `h1_idx` (past the `Source:`
     line and any blank lines) over the one at h1_idx itself. Some llms-full.txt
@@ -115,7 +112,7 @@ def _resolve_display_heading(lines: list[str], h1_idx: int, fallback_title: str)
     alone) and is a worse slug/title than the real heading three lines down.
     Stops looking the moment real prose appears with no second heading —
     the ordinary single-H1 case is untouched."""
-    for cursor in range(h1_idx + 1, min(h1_idx + 1 + _HEADING_LOOKAHEAD_LINES, len(lines))):
+    for cursor in range(h1_idx + 1, min(h1_idx + 1 + params.HEADING_LOOKAHEAD_LINES, len(lines))):
         stripped = lines[cursor].strip()
         if not stripped or stripped.startswith("Source:"):
             continue

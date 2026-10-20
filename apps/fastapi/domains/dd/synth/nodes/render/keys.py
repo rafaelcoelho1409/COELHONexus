@@ -1,5 +1,6 @@
 """render — MinIO key builders."""
 from __future__ import annotations
+import domains
 from . import params, versions
 
 
@@ -29,7 +30,9 @@ def mgsr_latest_key(slug: str, chapter_id: str) -> str:
 
 
 def planner_latest_key(slug: str) -> str:
-    return f"planner/{slug}/plan-latest.json"
+    """The planner's latest plan blob — same key the planner writes and the
+    synth/api read (canonical builder: domains.dd.planner.keys)."""
+    return domains.dd.planner.keys.plan_latest_key(slug)
 
 
 def source_key_to_vault_key(source_key: str, framework_slug: str) -> str:

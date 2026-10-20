@@ -14,3 +14,9 @@ VAULT_HASH_IN_TEXT_RE = re.compile(r'<code-ref hash="([0-9a-f]{16})"')
 
 
 JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+# Identifier-ish word (a "word" for Jaccard/containment merges).
+WORD_RE = re.compile(r"[a-z][a-z0-9_]{2,}")
+
+# A markdown heading line (any level) — the cut points of a block split.
+HEADING_LINE_RE = re.compile(r"^#{1,6} ", re.M)

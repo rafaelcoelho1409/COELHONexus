@@ -63,7 +63,7 @@ outline_secs = [{"section_id": "s1", "heading": "Install basics", "description":
                 {"section_id": "s2", "heading": "Generating MCP JSON", "description": "mcp.json configuration for each client"}]
 placed, routed = DG.domain.route_unrouted_sources([stub], outline_secs, {stub.source_key: md})
 assert routed == [stub.source_key] and placed[0].contributes_to[0].section_id == "s2" and placed[0].contributes_to[0].code_refs == ["aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"], placed
-assert DG.service._WAVE_PAUSE_S >= 30
+assert DG.params.WAVE_PAUSE_S >= 30
 print("2 failed digest sources kept as stubs ok")
 
 # 3) judge: its total wait is bounded, and the first failure re-renders a lighter prompt ---------------------------------------------------------------------

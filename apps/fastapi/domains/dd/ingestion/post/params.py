@@ -8,7 +8,7 @@ MONOLITH_SPLIT_THRESHOLD_BYTES = 50_000
 # corpora (the monolith path above only fires for single-page corpora, so
 # without this Tier 3's giants sailed through dedup untouched). Sized to the
 # downstream consumers that motivated it — doc_distill BODY_CHARS_MAX and
-# synth digest _MAX_SOURCE_CHARS are both 100_000 — so nothing Planner/Synth
+# synth digest MAX_SOURCE_CHARS are both 100_000 — so nothing Planner/Synth
 # reads ever truncates silently again. Proven splitter, same
 # _size_aware_recursive_split the monolith path uses (atomic fences/tables,
 # parent-H1 prepended); pages with no clean split come back intact.
@@ -23,6 +23,11 @@ SPLIT_MIN_SECTION_BYTES = 300
 SPLIT_MAX_SECTION_BYTES = 150_000
 
 SOURCE_MIN_MARKERS = 3
+
+# Lines scanned after a section's H1 looking for a SECOND H1 to use as the
+# display title (llms-full.txt generators sometimes wrap the real title in a
+# throwaway filename-derived heading). See domain._resolve_display_heading.
+HEADING_LOOKAHEAD_LINES = 6
 
 # 32 amortizes latency without overwhelming the MinIO pool (serial was 75s/1500 pages).
 READ_CONCURRENCY = 32

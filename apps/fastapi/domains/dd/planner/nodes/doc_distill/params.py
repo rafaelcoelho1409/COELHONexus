@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 BODY_CHARS_MAX = 100_000   # 2026-09-27: 8000 -> 100000, matching
-# `synth/nodes/digest/service.py::_MAX_SOURCE_CHARS` — that node reads whole
+# `synth/nodes/digest/params.py::MAX_SOURCE_CHARS` — that node reads whole
 # source pages at this same cap ("generous... most pages are <30K chars; cap
 # at 100K to be safe") and is the right reference here: unlike off_topic's
 # head+tail truncation (a cited ACCURACY optimization for binary
@@ -85,7 +85,7 @@ RETRY_BACKOFF_S = (2.0, 5.0)
 # 8000-char body cap; raising BODY_CHARS_MAX to 100000 invalidates that
 # baseline — prefill time scales with input tokens regardless of Rotator
 # throughput. 120s matches `synth/nodes/digest`'s own timeout for
-# processing input at this same size (its `_MAX_SOURCE_CHARS` is the same
+# processing input at this same size (its `MAX_SOURCE_CHARS` is the same
 # 100000), which is real measured data for this input-size regime rather
 # than a guess.
 TIMEOUT_S = 120.0

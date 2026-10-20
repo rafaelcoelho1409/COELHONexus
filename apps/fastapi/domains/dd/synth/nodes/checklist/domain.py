@@ -855,13 +855,10 @@ def is_context_overflow_error(e: Exception) -> bool:
     return any(marker in msg for marker in params.CONTEXT_OVERFLOW_MARKERS)
 
 
-_PLACEHOLDER_FEEDBACK = {"", "some feedback", "feedback", "no feedback", "na", "none", "tbd", "todo", "reason"}
-
-
 def is_placeholder_feedback(text: str) -> bool:
     """A judge verdict whose reason is empty or a template echo ("some feedback": nemotron-3-ultra, asyncio ch-08) gives the
     writer nothing to fix."""
-    return re.sub(r"[^a-z ]", "", (text or "").lower()).strip() in _PLACEHOLDER_FEEDBACK
+    return re.sub(r"[^a-z ]", "", (text or "").lower()).strip() in params.PLACEHOLDER_FEEDBACK
 
 
 def fallback_llm_verdicts(reason: str) -> list[schemas.CriterionResult]:

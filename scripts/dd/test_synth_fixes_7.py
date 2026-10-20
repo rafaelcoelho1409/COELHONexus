@@ -83,7 +83,7 @@ kw = dict(sem=asyncio.Semaphore(4), sample_idx=0, n_total=1, thread_id="t", chap
 SV._digest_one_source = fake_factory()
 d, err = asyncio.run(SV._digest_source(source_key="k", source_md=big, **kw))
 assert err is None and len(calls) == 3 and len(d.contributes_to) == 1 and len(d.contributes_to[0].code_refs) == 86       # 3 calls, one merged digest holding all 86 blocks
-SV._WAVE_PAUSE_S = 0
+SV.params.WAVE_PAUSE_S = 0
 calls.clear()
 SV._digest_one_source = fake_factory(fail_idx=(1,))
 d, err = asyncio.run(SV._digest_source(source_key="k", source_md=big, **kw))
@@ -104,7 +104,7 @@ SV._digest_one_source = real
 
 # 4) outline repair acceptance: a repair that clears the section floor is kept even with a few more issues --------------------------------------
 OL = domains.dd.synth.nodes.outline
-FLOOR = OL.domain.FLOOR_ISSUE_PREFIX + " 5 H2 sections for 160 blocks"
+FLOOR = OL.params.FLOOR_ISSUE_PREFIX + " 5 H2 sections for 160 blocks"
 assert OL.domain.is_floor_issue(FLOOR)
 assert OL.domain.accept_repair([FLOOR], ["a", "b"], 2)                       # floor cleared, one more issue than before: kept (qdrant ch-10: 20 sections, 2 issues)
 assert OL.domain.accept_repair([FLOOR], ["a", "b", "c"], 2)                  # exactly slack more: kept

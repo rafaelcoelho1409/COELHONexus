@@ -213,6 +213,17 @@ class SourceDigest(BaseModel):
     wall_ms: Optional[int] = None
 
 
+# NIM + Mistral honor response_format=json_schema server-side; Gemini slips through to the Pydantic repair loop.
+DIGEST_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name":   "source_digest",
+        "schema": LLMDigestPayload.model_json_schema(),
+        "strict": False,
+    },
+}
+
+
 class CoverageStats(BaseModel):
     """Aggregate coverage metrics over the chapter digest."""
     n_sources:                int

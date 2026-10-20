@@ -11,13 +11,6 @@ import redis as redis_sync
 logger = logging.getLogger(__name__)
 
 
-# CAD-release: avoids a slow finally clearing a lock held by a racing later start.
-_CAD_RELEASE_LUA = (
-    "if redis.call('GET', KEYS[1]) == ARGV[1] then "
-    "return redis.call('DEL', KEYS[1]) end return 0"
-)
-
-
 def _release_synth_lock(slug: str, thread_id: str) -> None:
     """Best-effort sync CAD release of `dd:synth:lock:{slug}` from the task's finally block.
     Failure → stuck lock until TTL expiry; never raised."""
@@ -30,7 +23,10 @@ def _release_synth_lock(slug: str, thread_id: str) -> None:
             socket_timeout = params.REDIS_OP_TIMEOUT_S,
         )
         try:
-            r.eval(_CAD_RELEASE_LUA, 1, keys.lock_key(slug), thread_id)
+            r.eval(
+                domains.dd.runtime.params.CAD_RELEASE_LUA,
+                1, keys.lock_key(slug), thread_id,
+            )
         finally:
             r.close()
     except Exception as e:

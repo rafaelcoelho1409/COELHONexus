@@ -123,13 +123,10 @@ def build_source_structure(entries: list[dict]) -> str:
     if n_single:
         lines.append(f"  (+ {n_single} single-page docs not listed)")
     if sections or trunk:
-        lines.append(SECTIONS_HEADER)
+        lines.append(params.SECTIONS_HEADER)
         lines += [f"  - {label} ({n} pages)" for label, n in sections]
         lines += trunk
     return "\n".join(lines)
-
-
-SECTIONS_HEADER = "  Site sections (URL directories holding many pages):"
 
 
 def _site_sections(fams: dict[str, dict]) -> list[tuple[str, int]]:

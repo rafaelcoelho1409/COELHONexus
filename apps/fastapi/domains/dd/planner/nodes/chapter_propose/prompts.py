@@ -75,7 +75,9 @@ def _structure_rules(source_structure: str) -> str:
 
 
 def domain_sections_listed(source_structure: str) -> bool:
-    return "Site sections" in (source_structure or "")
+    # Matched on the header's label, not the whole line — the block is rebuilt
+    # per run, but a cached corpus blob may carry an older header wording.
+    return params.SECTIONS_HEADER.strip().split("(")[0] in (source_structure or "")
 
 
 def _concise_block(target_chapters: int) -> str:

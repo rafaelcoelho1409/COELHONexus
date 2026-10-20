@@ -16,24 +16,16 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Call-retry budget before giving up on a single LLM step (extract /
-# canonicalize / detect / patch each fail-soft already — a chapter with
-# no harmonization pass keeps its original, still-valid prose — but this
-# runs once at the END of a potentially multi-hour Study run, so a cheap
-# retry against a transient Rotator hiccup is worth it. Same idiom as
-# every other synth node.
-_MAX_CALL_ATTEMPTS = 3   # 2 -> 3 (2026-10-15): one of them is the doubled-budget retry after a length cut
-
 
 async def _call_with_retry(
     prompt: str, **kwargs,
 ) -> tuple[Optional[str], Optional[Exception]]:
     """chat_text_async wrapper with a plain retry-with-backoff.
     Returns (raw_text, None) on success or (None, last_error) once
-    _MAX_CALL_ATTEMPTS is exhausted — caller logs + applies its own
+    params.MAX_CALL_ATTEMPTS is exhausted — caller logs + applies its own
     fail-soft fallback, unchanged from before this wrapper existed."""
     last_error: Optional[Exception] = None
-    for attempt in range(_MAX_CALL_ATTEMPTS):
+    for attempt in range(params.MAX_CALL_ATTEMPTS):
         try:
             raw, _meta = await domains.settings.chat.service.chat_text_async(prompt, **kwargs)
             return raw, None
@@ -43,7 +35,7 @@ async def _call_with_retry(
             # the chapter — retry with double, up to LENGTH_RETRY_CAP, instead of leaving the chapter unharmonized.
             if domains.settings.chat.domain.is_length_error(e) and kwargs.get("max_tokens"):
                 kwargs["max_tokens"] = min(params.LENGTH_RETRY_CAP, int(kwargs["max_tokens"]) * 2)
-            if attempt < _MAX_CALL_ATTEMPTS - 1:
+            if attempt < params.MAX_CALL_ATTEMPTS - 1:
                 await asyncio.sleep(1.0 + random.random())
     return None, last_error
 

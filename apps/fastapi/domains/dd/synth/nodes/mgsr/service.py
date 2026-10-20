@@ -428,7 +428,7 @@ async def mgsr_replan_run(state: domains.dd.synth.state.SynthState) -> dict:
     # from checklist_stats alone, never from mgsr_stats, and the only
     # other reader (runtime/dispatch/service.py) pulls just the
     # `halt_reason` string for a telemetry label. This call could cost
-    # up to TIMEOUT_S_REPLAN(90s) x _MAX_CALL_ATTEMPTS(2) plus real
+    # up to TIMEOUT_S_REPLAN(90s) x params.MAX_CALL_ATTEMPTS(2) plus real
     # generation time — observed as long as 210,770ms (3.5 min) in one
     # logged run — analyzing content that then gets thrown away every
     # time. Reusing the existing "LLM unavailable" fallback path

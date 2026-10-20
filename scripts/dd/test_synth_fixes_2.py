@@ -310,6 +310,7 @@ import os
 for _ in range(30):                 # the router's module-level config reads env vars the cluster sets; give missing ones a dummy
     try:
         R = importlib.import_module("api.v1.dd.synth.router")
+        S = importlib.import_module("api.v1.dd.synth.service")
         break
     except KeyError as e:
         os.environ.setdefault(str(e.args[0]), "localhost")
@@ -342,7 +343,7 @@ store17 = FakeStore()
 domains.dd.ingestion.storage.service.get_storage = lambda: store17
 def wipe_with(kv):
     R.redis_aio.from_url = lambda *a, **k: FakeRedis(kv)
-    return asyncio.run(R._wipe_one_chapter("asyncio", "ch-01-a"))
+    return asyncio.run(S.wipe_one_chapter("asyncio", "ch-01-a"))
 for kv in ({KEYS.lock_key("asyncio"): b"docs-distiller/synth/asyncio/T1"},                                     # a single-chapter run in another tab
            {KEYS.active_study_key("asyncio"): '{"study_thread_id": "docs-distiller/study/asyncio/S1"}'}):      # a study
     try:

@@ -121,6 +121,39 @@ OPTIMAL_STOPPING_ENABLED = os.environ.get(
     "KD_OUTLINE_OPTIMAL_STOPPING", "true",
 ).lower() in ("true", "1", "yes", "on")
 
+# Minimum section count for Optimal-Stopping early-exit — absolute floor and
+# the share of the adaptive cap it must reach (domain.outline_optimal_stopping_min).
+OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR = 5
+OUTLINE_OPTIMAL_STOPPING_RATIO_OF_CAP = 0.7
+
+# Prefix of the validation issue raised when a code-heavy chapter has fewer
+# sections than its block floor (domain.is_floor_issue).
+FLOOR_ISSUE_PREFIX = "Outline has only "
+
+# Per-source body cap for the concatenated prompt context. service.py's
+# overflow-retry path also reads this (halves the budget on a context-overflow
+# batch before re-drafting).
+MAX_SOURCE_CHARS = 180_000
+
+# Separator between concatenated source bodies.
+SOURCE_CONCAT_SEPARATOR = "\n\n---\n\n"
+
+# Stop words dropped when measuring lexical scope overlap between a section
+# and a source (domain.scope_words) — lightly stemmed, so the stems are here.
+SCOPE_STOPWORDS = frozenset({
+    "the", "and", "for", "this", "with", "that", "from", "section", "show",
+    "how", "use", "using", "via", "your", "each", "into", "onto", "claude",
+    "code", "example", "demonstrate", "learn", "cover", "when", "what",
+    "where", "which", "while", "they", "them", "then", "here", "run",
+    "creat", "make", "field", "valu", "option", "config", "setup", "set",
+})
+
+CONTEXT_OVERFLOW_MARKERS = (
+    "context_length", "context window", "maximum context length",
+    "context_window_exceeded", "reduce the length", "too many tokens",
+    "context length exceeded", "prompt is too long",
+)
+
 SCOPE_LEXICAL_JACCARD = 0.40
 
 # Threshold for service._detect_semantic_h2_duplicates (used as a default

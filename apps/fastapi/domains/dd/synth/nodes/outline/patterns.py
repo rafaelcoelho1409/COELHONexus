@@ -18,3 +18,6 @@ HEADING_MD_ESCAPE_RE = re.compile(r"\\([\\`*_{}\[\]()#+\-.!])")
 ATX_HEADING_RE = re.compile(r"^#{1,3}[ \t]+(.+?)[ \t]*$")
 # Code-fence delimiter line (``` or ~~~).
 FENCE_LINE_RE = re.compile(r"^[ \t]*(?:```|~~~)")
+
+# Greedy JSON blob (best-effort extraction from a fenced/prose response).
+JSON_RE = re.compile(r"\{.*\}", re.DOTALL)

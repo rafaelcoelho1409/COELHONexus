@@ -1,5 +1,6 @@
 """Per-run progress, per-framework single-flight lock, and cancel flag."""
 from __future__ import annotations
+import domains
 from . import errors, keys, params
 
 import json
@@ -12,15 +13,6 @@ import redis.asyncio as redis_aio
 
 
 logger = logging.getLogger(__name__)
-
-
-# Lua compare-and-delete — never release someone else's lock.
-RELEASE_SCRIPT = """
-if redis.call('get', KEYS[1]) == ARGV[1] then
-  return redis.call('del', KEYS[1])
-else
-  return 0
-end"""
 
 
 async def acquire_lock(
@@ -56,7 +48,10 @@ async def release_lock(
 ) -> bool:
     """Release iff this run_id is the holder."""
     try:
-        n = await r.eval(RELEASE_SCRIPT, 1, keys.lock_key(framework_slug), run_id)
+        n = await r.eval(
+            domains.dd.runtime.params.CAD_RELEASE_LUA,
+            1, keys.lock_key(framework_slug), run_id,
+        )
     except Exception as e:
         logger.warning(f"[lock] release failed: {e}")
         return False

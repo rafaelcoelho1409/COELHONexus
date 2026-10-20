@@ -1,6 +1,92 @@
 """sawc — tunable scalars (v2 cookbook schema limits + draft-of-N + memory)."""
 from __future__ import annotations
 
+import builtins
+import os
+
+
+# Identifiers that carry no signal in a code block or its prose.
+IDENT_STOPWORDS = frozenset({
+    "self", "cls", "str", "int", "bool", "list", "dict", "set", "tuple",
+    "none", "true", "false", "return", "import", "from", "async", "def",
+    "class", "yield", "raise", "with", "for", "while", "else", "elif",
+    "try", "except", "finally", "not", "and", "the", "this", "that",
+    "data", "key", "val", "value", "result", "item", "items", "args",
+    "kwargs", "name", "type", "obj", "object", "func", "function",
+    "arg", "params", "ctx", "context", "request", "response", "main",
+})
+
+# Python builtins — a code block that uses one defines nothing of its own.
+BUILTIN_NAMES = frozenset(dir(builtins))
+
+# Validation issues that are advisory (the writer may keep the draft).
+SOFT_ISSUE_PREFIXES = (
+    "subheading↔code mismatch",
+    "explanation↔code mismatch",
+    "subtopics has only ",
+)
+
+# Relevance rank of a routed source (lower wins).
+REL_RANK = {"primary": 0, "supporting": 1}
+RELEVANCE_RANK = {"primary": 0, "supporting": 1, "tangential": 2}
+
+# Visible-Vault budget: per vault entry and per chapter.
+MAX_VAULT_CHARS_PER_ENTRY = 6_000
+MAX_VAULT_CHARS_TOTAL     = 60_000
+
+CONTEXT_OVERFLOW_MARKERS = (
+    "context_length", "context window", "maximum context length",
+    "context_window_exceeded", "reduce the length", "too many tokens",
+    "context length exceeded", "prompt is too long",
+)
+
+# Non-breaking hyphen (U+2011) and no-break spaces the model likes
+# ("low‑level", "top‑level") swapped for plain characters: they break
+# heading anchors, text search and identifier matching in the book.
+TYPOGRAPHY = str.maketrans({
+    "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u00a0": " ", "\u202f": " ", "\u2009": " ",
+})
+
+# LLM call budgets (writer drafts, repair, critic/pairwise picker).
+DRAFT_TEMPERATURE  = 0.5
+REPAIR_TEMPERATURE = 0.2
+DRAFT_MAX_TOKENS   = 8000
+REPAIR_MAX_TOKENS  = 8000
+CRITIC_TEMPERATURE = 0.0
+CRITIC_MAX_TOKENS  = 300
+CRITIC_TIMEOUT_S   = 45.0
+# chat_text_async's own default (30s) was undersized — confirmed
+# live across 5 study runs (2026-09-05/07): sawc_write's per-section
+# drafting is the single heaviest generation task in the whole pipeline
+# and was by far the worst-hit, routinely losing entire sections to
+# APITimeoutError and driving most of the sustained-outage halts tracked
+# in the Synth known-issues doc. Same fix as outline/digest.
+#   2026-09-08: raised 120s -> 150s. Percentile analysis (14-day Langfuse
+#   trace data): successful-call max=118.9s, p99=106.8s — real successes
+#   were stacking right up against the old 120s ceiling. Only ~8% of
+#   failures are actually at-ceiling (rescuable by this change); the
+#   other ~90%+ fail at a fixed ~30s Rotator-side ReadTimeout this
+#   timeout can't reach — see SYNTH-PERFORMANCE-ANALYSIS-2026-09-07.md.
+DRAFT_TIMEOUT_S  = 150.0
+REPAIR_TIMEOUT_S = 150.0
+
+# Draft-call attempts before permanently losing this draft slot (best-of-N
+# still covers a single bad draw, but N_DRAFTS=2 shares the SAME prompt —
+# a systematic context overflow fails every draft identically, so this
+# retry is not redundant with best-of-N).
+MAX_CALL_ATTEMPTS = 2
+
+# Max concurrent per-section LLM calls.
+CONCURRENCY = 8
+
+# Optimal-stopping early-exit (a draft that already covers enough subtopics
+# / citations is good enough — the pairwise picker only breaks close calls).
+OPTIMAL_STOPPING_MIN_SUBTOPICS = 4
+OPTIMAL_STOPPING_MIN_CITATIONS = 2
+OPTIMAL_STOPPING_ENABLED = os.environ.get(
+    "KD_SAWC_OPTIMAL_STOPPING", "true",
+).lower() in ("true", "1", "yes", "on")
+
 
 # v2 schema : cookbook-style nested structure where
 # each Subtopic is a 1:1 pair of (explanation, code block).

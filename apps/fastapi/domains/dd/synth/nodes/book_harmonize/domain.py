@@ -174,19 +174,19 @@ def extract_first_json_object(text: str, start_from: int = 0) -> Optional[str]:
 # a newline and the REAL object's opening '{'). Starting the balanced
 # scan only from the first '{' in the text can never recover this — that
 # outer brace has no matching close anywhere in the response. Bounded to
-# a handful of attempts so a pathological response can't blow up cost.
-_MAX_BRACE_START_ATTEMPTS = 5
+# a handful of attempts (params.MAX_BRACE_START_ATTEMPTS) so a pathological
+# response can't blow up cost.
 
 
 def all_balanced_json_candidates(text: str) -> list[str]:
     """Every balanced {...} substring found by retrying the scan from
-    each successive '{' in text, up to `_MAX_BRACE_START_ATTEMPTS`
+    each successive '{' in text, up to `MAX_BRACE_START_ATTEMPTS`
     distinct starting positions. Handles a duplicated/stray leading
     brace (issue #16): the first '{' fails to close, but the very next
     one opens a perfectly valid, parseable object."""
     candidates: list[str] = []
     search_from = 0
-    for _ in range(_MAX_BRACE_START_ATTEMPTS):
+    for _ in range(params.MAX_BRACE_START_ATTEMPTS):
         start = text.find("{", search_from)
         if start == -1:
             break

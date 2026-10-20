@@ -102,9 +102,9 @@ async def _run_llm_judge(
             payload, meta = await domains.settings.chat.service.chat_structured_async(
                 prompt,
                 schemas.LLMJudgePayload,
-                max_tokens=_MAX_TOKENS_JUDGE,
-                temperature=_TEMPERATURE_JUDGE,
-                timeout_s=_TIMEOUT_S_JUDGE,
+                max_tokens=params.JUDGE_MAX_TOKENS,
+                temperature=params.JUDGE_TEMPERATURE,
+                timeout_s=params.JUDGE_TIMEOUT_S,
                 strict=False,
                 rotator_task=params.ROTATOR_TASK,
             )
@@ -125,7 +125,7 @@ async def _run_llm_judge(
             last_infra_error = e
             infra_failed = True
             if call_attempt < n_attempts - 1:
-                if (time.monotonic() - t0) + params.JUDGE_COOLOFF_S + _TIMEOUT_S_JUDGE > params.JUDGE_TOTAL_BUDGET_S:
+                if (time.monotonic() - t0) + params.JUDGE_COOLOFF_S + params.JUDGE_TIMEOUT_S > params.JUDGE_TOTAL_BUDGET_S:
                     logger.warning(
                         f"[checklist_eval] LLM judge: {int(time.monotonic() - t0)} s spent over {call_attempt + 1} attempt(s) — "
                         f"the next one cannot finish inside the {params.JUDGE_TOTAL_BUDGET_S:.0f} s budget; giving up"
@@ -168,7 +168,7 @@ async def _run_llm_judge(
     repaired = False
 
     # One repair attempt if parse OR Pydantic failed
-    if payload is None and _MAX_REPAIR_ATTEMPTS > 0:
+    if payload is None and params.MAX_REPAIR_ATTEMPTS > 0:
         repair_issues = [
             err if err else "previous response was not parseable JSON"
         ]
@@ -187,9 +187,9 @@ async def _run_llm_judge(
             payload, rm = await domains.settings.chat.service.chat_structured_async(
                 repair_prompt,
                 schemas.LLMJudgePayload,
-                max_tokens=_MAX_TOKENS_REPAIR,
-                temperature=_TEMPERATURE_REPAIR,
-                timeout_s=_TIMEOUT_S_REPAIR,
+                max_tokens=params.REPAIR_MAX_TOKENS,
+                temperature=params.REPAIR_TEMPERATURE,
+                timeout_s=params.REPAIR_TIMEOUT_S,
                 strict=False,
             )
             deployment = (rm or {}).get("deployment") or deployment
@@ -236,8 +236,8 @@ async def _run_llm_judge(
                     chapter_id=chapter_id, chapter_title=chapter_title, framework=framework,
                     rendered_chapter=cur_rendered_chapter, rendered_digest=cur_rendered_digest, truncated=cur_truncated,
                 ),
-                schemas.LLMJudgePayload, max_tokens=_MAX_TOKENS_JUDGE, temperature=_TEMPERATURE_JUDGE,
-                timeout_s=_TIMEOUT_S_JUDGE, strict=False, rotator_task=params.ROTATOR_TASK,
+                schemas.LLMJudgePayload, max_tokens=params.JUDGE_MAX_TOKENS, temperature=params.JUDGE_TEMPERATURE,
+                timeout_s=params.JUDGE_TIMEOUT_S, strict=False, rotator_task=params.ROTATOR_TASK,
             )
             second = {r.name: r for r in domain.llm_payload_to_criteria(again)}
             results = [second[r.name] if r.name in unexplained and r.name in second else r for r in results]
@@ -248,27 +248,6 @@ async def _run_llm_judge(
             for r in results
         ]
     return results, deployment, repaired, wall_ms
-
-_TEMPERATURE_JUDGE      = 0.0
-
-_TEMPERATURE_REPAIR     = 0.0
-
-_MAX_TOKENS_JUDGE       = 3000
-
-_MAX_TOKENS_REPAIR      = 3000
-
-# chat_text_async's own default (30s) was undersized — same fix
-# as outline/digest/sawc (2026-09-06/07). A failed bundled-judge call
-# here directly feeds `infra_degraded` (issues #10/#14), so a timeout
-# that would have succeeded with more headroom was actively corrupting
-# the sustained-outage signal, not just costing one bad iteration.
-_TIMEOUT_S_JUDGE        = 150.0   # was 90 s: the Rotator's cascade wall is timeout - 3 s, which left room for ~2 arm tries when NIM arms stall at 36 s (fastmcp ch-01 and langfuse ch-11 judges, 87.5 s 504s)
-_TIMEOUT_S_REPAIR       = 90.0
-
-_MAX_REPAIR_ATTEMPTS    = 1
-
-# Issue #22 (2026-09-08): the two result-persistence writes below have no
-# bounded timeout and no log line either side — during the ch-05 retest,
 
 
 # ---------------------------------------------------------------------------

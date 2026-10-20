@@ -167,15 +167,8 @@ def merge_overlapping_sections(
     return retagged, merged_map
 
 
-_WORD_RE = re.compile(r"[a-z][a-z0-9_]{2,}")
-
-
 def _words(text: str) -> set[str]:
-    return set(_WORD_RE.findall((text or "").lower()))
-
-
-_HEADING_LINE_RE = re.compile(r"^#{1,6} ", re.M)
-_RELEVANCE_RANK = {"primary": 0, "supporting": 1, "tangential": 2}
+    return set(patterns.WORD_RE.findall((text or "").lower()))
 
 
 def split_source_by_blocks(md_text: str, max_blocks: int) -> list[str]:
@@ -199,7 +192,7 @@ def split_source_by_blocks(md_text: str, max_blocks: int) -> list[str]:
         lo, hi = first_pos[hashes[idx - 1]], first_pos[hashes[idx]]
         lo_wide = first_pos[hashes[max(idx - slack, 1) - 1]]
         window = md_text[lo:hi]
-        heads = [lo_wide + m.start() for m in _HEADING_LINE_RE.finditer(md_text[lo_wide:hi])]
+        heads = [lo_wide + m.start() for m in patterns.HEADING_LINE_RE.finditer(md_text[lo_wide:hi])]
         if heads:
             cut = heads[-1]
         elif "\n\n" in window:
@@ -226,7 +219,7 @@ def merge_chunk_digests(source_key: str, parts: list[schemas.SourceDigest]) -> s
             if cur is None:
                 merged[c.section_id] = c.model_copy(deep = True)
                 continue
-            rel = min(cur.relevance, c.relevance, key = lambda r: _RELEVANCE_RANK.get(r, 9))
+            rel = min(cur.relevance, c.relevance, key = lambda r: params.RELEVANCE_RANK.get(r, 9))
             merged[c.section_id] = cur.model_copy(update = {
                 "code_refs": list(dict.fromkeys(list(cur.code_refs) + list(c.code_refs))),
                 "key_facts": list(dict.fromkeys(list(cur.key_facts) + list(c.key_facts)))[:params.MAX_KEY_FACTS_PER_CONTRIB],

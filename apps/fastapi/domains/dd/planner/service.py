@@ -1,8 +1,9 @@
-"""Planner orchestration glue shared by the Celery task shell — lock release + checkpointer bootstrap."""
+"""Planner orchestration glue shared by the Celery task shell — lock release + checkpointer bootstrap + the plan blob reader."""
 from __future__ import annotations
 import domains
 from . import keys, params
 
+import json
 import logging
 
 import redis as redis_sync
@@ -11,12 +12,18 @@ import redis as redis_sync
 logger = logging.getLogger(__name__)
 
 
-# Compare-and-delete — release only if the lock still holds OUR thread_id.
-# Stops a slow finally from clearing a lock a racing start has taken.
-_CAD_RELEASE_LUA = (
-    "if redis.call('GET', KEYS[1]) == ARGV[1] then "
-    "return redis.call('DEL', KEYS[1]) end return 0"
-)
+async def load_plan(slug: str) -> dict | None:
+    """The latest finalized plan blob (chapter outline + sources) for `slug`,
+    or None when it does not exist yet. Raises when the blob exists but is
+    unreadable/corrupt — the caller maps that onto its own error surface.
+
+    Single reader for `planner/{slug}/plan-latest.json`: the planner writes
+    it (plan_write node), the synth router and the outline node read it."""
+    minio = domains.dd.ingestion.storage.service.get_storage()
+    key = keys.plan_latest_key(slug)
+    if not await minio.exists(key):
+        return None
+    return json.loads(await minio.read_text(key)) or {}
 
 
 def _release_planner_lock(slug: str, thread_id: str) -> None:
@@ -31,7 +38,10 @@ def _release_planner_lock(slug: str, thread_id: str) -> None:
             socket_timeout = params.REDIS_OP_TIMEOUT_S,
         )
         try:
-            r.eval(_CAD_RELEASE_LUA, 1, keys.lock_key(slug), thread_id)
+            r.eval(
+                domains.dd.runtime.params.CAD_RELEASE_LUA,
+                1, keys.lock_key(slug), thread_id,
+            )
         finally:
             r.close()
     except Exception as e:

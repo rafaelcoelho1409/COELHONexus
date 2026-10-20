@@ -287,16 +287,10 @@ def prune_and_finalize_selection(
     }
 
 
-_STOP_TOKENS = frozenset({
-    "api", "apis", "the", "of", "and", "for", "an", "to", "in", "on", "with",
-    "client", "python", "documentation", "docs", "guide", "reference",
-})
-
-
 def _tokens(text: str) -> set[str]:
     return {
         t for t in re.findall(r"[a-z0-9]+", (text or "").lower())
-        if len(t) > 1 and t not in _STOP_TOKENS
+        if len(t) > 1 and t not in params.STOP_TOKENS
     }
 
 
@@ -999,12 +993,9 @@ def split_floor(n_docs: int, n_parts: int | None = None) -> int:
     return base
 
 
-_FENCE_LINE_RE = re.compile(r"^ {0,3}(?:```|~~~)", re.M)
-
-
 def code_block_count(text: str) -> int:
     """Fenced code blocks of a page (pairs of fence lines); cheap enough to run over every page of a corpus."""
-    return len(_FENCE_LINE_RE.findall(text or "")) // 2
+    return len(patterns.FENCE_LINE_RE.findall(text or "")) // 2
 
 
 def plan_splits(out_chapters: list[dict], max_chapters: int = 30, doc_blocks: dict[str, int] | None = None, blocks_only: bool = False) -> list[tuple[int, int]]:

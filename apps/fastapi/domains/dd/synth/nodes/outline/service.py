@@ -269,22 +269,9 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
     t0 = time.monotonic()
     minio = domains.dd.ingestion.storage.service.get_storage()
 
-    plan_key = domains.dd.synth.nodes.render.keys.planner_latest_key(slug)
-    if not await minio.exists(plan_key):
-        return {
-            "outline_path":  "",
-            "outline_stats": {
-                "skipped": "plan_not_found",
-                "plan_key": plan_key,
-                "wall_ms": int((time.monotonic() - t0) * 1000),
-            },
-            "status": "failed",
-            "error":  f"planner plan {plan_key!r} not in MinIO; run planner first",
-        }
-
-    plan_text = await minio.read_text(plan_key)
+    plan_key = domains.dd.planner.keys.plan_latest_key(slug)
     try:
-        plan = json.loads(plan_text)
+        plan = await domains.dd.planner.service.load_plan(slug)
     except Exception as e:
         return {
             "outline_path":  "",
@@ -294,6 +281,17 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
             },
             "status": "failed",
             "error":  f"plan-latest.json unreadable: {type(e).__name__}: {e}",
+        }
+    if plan is None:
+        return {
+            "outline_path":  "",
+            "outline_stats": {
+                "skipped": "plan_not_found",
+                "plan_key": plan_key,
+                "wall_ms": int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"planner plan {plan_key!r} not in MinIO; run planner first",
         }
 
     chapter = domain.find_chapter(plan, chapter_id)
@@ -465,7 +463,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
             # sample batch likely landed on a small-context arm. Retry
             # once at half the source budget before giving up to the
             # heuristic fallback.
-            retry_budget = max(domain.MAX_SOURCE_CHARS // 2, 20_000)
+            retry_budget = max(params.MAX_SOURCE_CHARS // 2, 20_000)
             logger.warning(
                 f"[outline_sdp] {slug}/{chapter_id}: {overflow_count}/"
                 f"{len(raw_samples)} samples hit context overflow — "

@@ -16,7 +16,20 @@ PATCH_MAX_TOKENS = 14000
 # in EXTRACT_CLAIMS_PROMPT (prompts.py).
 EXTRACT_MAX_TOKENS = 3000   # 2000 -> 3000 (2026-10-15: ch-03 / ch-05 of the asyncio study hit 2000)
 CANONICALIZE_MAX_TOKENS = 3000   # 1500 -> 3000 (2026-10-15: hit 1500 on the asyncio study)
-PER_CHAPTER_CONCURRENCY = 2   # 4 -> 2 (2026-10-15: detect calls timed out / 504'd under load on a slow Rotator)
+PER_CHAPTER_CONCURRENCY = 2   # 4 -> 2 (2026-10-15): detect calls timed out / 504'd under load on a slow Rotator)
+
+# Bounded retries of the balanced-JSON scan (domain.all_balanced_json_candidates):
+# the first '{' in a response can be a stray, never-closed brace (issue #16) —
+# retry the scan from each successive '{', up to this many starting positions.
+MAX_BRACE_START_ATTEMPTS = 5
+
+# Call-retry budget before giving up on a single LLM step (extract /
+# canonicalize / detect / patch each fail-soft already — a chapter with
+# no harmonization pass keeps its original, still-valid prose — but this
+# runs once at the END of a potentially multi-hour Study run, so a cheap
+# retry against a transient Rotator hiccup is worth it. Same idiom as
+# every other synth node.
+MAX_CALL_ATTEMPTS = 3   # 2 -> 3 (2026-10-15): one of them is the doubled-budget retry after a length cut
 
 # chat_text_async's own default (30s) was undersized — same fix
 # applied across the rest of Synth (2026-09-06/07). book_harmonize's

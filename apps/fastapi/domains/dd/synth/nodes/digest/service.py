@@ -16,60 +16,6 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-# Tunables (quality > speed)
-# was 24 (issue #18, 2026-09-07): the comment below ("FGTS-VA bandit
-# absorbs 429s") predates the Sept 4 migration to the standalone Rotator
-# microservice — that in-process bandit no longer exists here. The
-# Rotator's own _PROVIDER_CAPS sum to ~19 concurrent slots across every
-# provider combined; 24 alone already exceeds total system capacity
-# before any other node's calls compete for the same slots. Lowered to
-# match Planner's own ceiling (doc_distill/off_topic/chapter_propose all
-# cap at 16 — none of Planner's nodes exceed the shared Rotator's total
-# capacity the way this one did).
-_CONCURRENCY        = 16    # max concurrent per-source LLM calls.
-# Pause before the second wave: the arms that just stalled are ejected for tens of seconds to minutes, and an immediate retry meets the same
-# ones (fastmcp ch-01: second wave recovered 1/1, 4/7, 0/4 and 0/1 sources over four runs).
-_WAVE_PAUSE_S       = 45.0
-# Expected ~7-9 min realistic (repair attempts + outliers); quality unchanged, pure throughput.
-_TEMPERATURE_DRAFT  = 0.1   # routing decisions should be ~deterministic
-_TEMPERATURE_REPAIR = 0.0
-_MAX_TOKENS_DRAFT   = 6000
-_MAX_TOKENS_REPAIR  = 6000
-# chat_text_async's own default (30s) was undersized — confirmed
-# live across 5 study runs (2026-09-05/07): digest_construct's per-source
-# digestion routinely lost 40-60% of sources to APITimeoutError, driving
-# a mandatory second wave nearly every chapter. Same fix as outline/sawc.
-#   2026-09-08: raised 90s -> 120s. Percentile analysis (14-day Langfuse
-#   trace data): successful-call max=89.3s, p99=81.9s — real successes
-#   were stacking right up against the old 90s ceiling. Only ~10% of
-#   failures are actually at-ceiling (rescuable by this change); the
-#   other ~90% fail at a fixed ~30s Rotator-side ReadTimeout this
-#   timeout can't reach — see SYNTH-PERFORMANCE-ANALYSIS-2026-09-07.md.
-_TIMEOUT_S_DRAFT    = 120.0
-_TIMEOUT_S_REPAIR   = 120.0
-_MAX_REPAIR_ATTEMPTS = 2
-# Draft-call attempts before permanently losing this source's content (its
-# key_facts/code_refs never reach any section — silent, not retried
-# downstream). The Rotator's own ~40-arm cascade already exhausted by the
-# time an exception surfaces here, so this only helps against a transient
-# whole-pool wave (e.g. simultaneous cooldowns), not a deterministic failure.
-_MAX_CALL_ATTEMPTS  = 2
-
-# Per-source body cap — generous since each LLM sees ONLY one source.
-# Most pages are <30K chars; cap at 100K to be safe.
-_MAX_SOURCE_CHARS = 100_000
-
-# NIM + Mistral honor response_format=json_schema server-side; Gemini slips through to the Pydantic repair loop.
-_DIGEST_RESPONSE_FORMAT = {
-    "type": "json_schema",
-    "json_schema": {
-        "name":   "source_digest",
-        "schema": schemas.LLMDigestPayload.model_json_schema(),
-        "strict": False,
-    },
-}
-
-
 async def _digest_source(*, source_md: str, source_key: str, **kw) -> tuple[Optional[schemas.SourceDigest], Optional[str]]:
     """Digest one source; a page with more than params.CHUNK_MAX_BLOCKS code blocks is digested in chunks (each routed by its own call) and merged. When some chunks fail under
     load they get one more try after the pause the page-level second wave uses (langgraph ch-05: 2 of 5 chunks failed and 63 blocks stayed unrouted); a chunk that still fails is
@@ -80,7 +26,7 @@ async def _digest_source(*, source_md: str, source_key: str, **kw) -> tuple[Opti
     results = list(await asyncio.gather(*[_digest_one_source(source_md = c, source_key = source_key, **kw) for c in chunks]))
     failed = [i for i, (d, _) in enumerate(results) if d is None]
     if failed and len(failed) < len(chunks):
-        await asyncio.sleep(_WAVE_PAUSE_S)
+        await asyncio.sleep(params.WAVE_PAUSE_S)
         again = await asyncio.gather(*[_digest_one_source(source_md = chunks[i], source_key = source_key, **kw) for i in failed])
         for i, r in zip(failed, again):
             if r[0] is not None:
@@ -125,32 +71,32 @@ async def _digest_one_source(
                 source_vault_hashes = source_vault_hashes,
             )
 
-        prompt = _build_draft_prompt(_MAX_SOURCE_CHARS)
+        prompt = _build_draft_prompt(params.MAX_SOURCE_CHARS)
 
         deployment: Optional[str] = None
         response: Optional[str] = None
         last_error: Optional[Exception] = None
-        for call_attempt in range(_MAX_CALL_ATTEMPTS):
+        for call_attempt in range(params.MAX_CALL_ATTEMPTS):
             try:
                 response, meta = await domains.settings.chat.service.chat_text_async(
                     prompt,
-                    max_tokens = _MAX_TOKENS_DRAFT,
-                    temperature = _TEMPERATURE_DRAFT,
-                    response_format = _DIGEST_RESPONSE_FORMAT,
-                    timeout_s = _TIMEOUT_S_DRAFT,
+                    max_tokens = params.DRAFT_MAX_TOKENS,
+                    temperature = params.DRAFT_TEMPERATURE,
+                    response_format = schemas.DIGEST_RESPONSE_FORMAT,
+                    timeout_s = params.DRAFT_TIMEOUT_S,
                 )
                 deployment = (meta or {}).get("deployment")
                 last_error = None
                 break
             except Exception as e:
                 last_error = e
-                if call_attempt < _MAX_CALL_ATTEMPTS - 1:
+                if call_attempt < params.MAX_CALL_ATTEMPTS - 1:
                     # Rotator's own cascade already exhausted — a retry
                     # only helps against a transient whole-pool wave.
                     # Shrink first if this looks like context overflow so
                     # the retry doesn't just reproduce the same failure.
                     if domain.is_context_overflow_error(e):
-                        prompt = _build_draft_prompt(_MAX_SOURCE_CHARS // 2)
+                        prompt = _build_draft_prompt(params.MAX_SOURCE_CHARS // 2)
                     await asyncio.sleep(1.0 + random.random())
 
         if last_error is not None:
@@ -168,7 +114,7 @@ async def _digest_one_source(
             )
             logger.warning(
                 f"[digest_construct] {source_key}: LLM call failed after "
-                f"{_MAX_CALL_ATTEMPTS} attempt(s): "
+                f"{params.MAX_CALL_ATTEMPTS} attempt(s): "
                 f"{type(last_error).__name__}: {last_error}"
             )
             return None, error_tag
@@ -192,7 +138,7 @@ async def _digest_one_source(
         if payload is None:
             attempt = 0
             current = parsed
-            while attempt < _MAX_REPAIR_ATTEMPTS and payload is None:
+            while attempt < params.MAX_REPAIR_ATTEMPTS and payload is None:
                 attempt += 1
                 issues = [f"Pydantic schema rejected the previous output: {err}"]
                 repair_prompt = prompts.build_repair_prompt(
@@ -201,7 +147,7 @@ async def _digest_one_source(
                     framework = framework,
                     outline_sections = outline_sections,
                     source_key = source_key,
-                    source_md = source_md[:_MAX_SOURCE_CHARS],
+                    source_md = source_md[:params.MAX_SOURCE_CHARS],
                     source_vault_hashes = source_vault_hashes,
                     current_json = json.dumps(current, indent = 2),
                     issues = issues,
@@ -209,10 +155,10 @@ async def _digest_one_source(
                 try:
                     rr, rm = await domains.settings.chat.service.chat_text_async(
                         repair_prompt,
-                        max_tokens = _MAX_TOKENS_REPAIR,
-                        temperature = _TEMPERATURE_REPAIR,
-                        response_format = _DIGEST_RESPONSE_FORMAT,
-                        timeout_s = _TIMEOUT_S_REPAIR,
+                        max_tokens = params.REPAIR_MAX_TOKENS,
+                        temperature = params.REPAIR_TEMPERATURE,
+                        response_format = schemas.DIGEST_RESPONSE_FORMAT,
+                        timeout_s = params.REPAIR_TIMEOUT_S,
                     )
                     deployment = (rm or {}).get("deployment") or deployment
                     rp = domain.parse_json_response(rr)
@@ -238,7 +184,7 @@ async def _digest_one_source(
                 )
                 logger.info(
                     f"[digest_construct] {source_key}: pydantic-reject "
-                    f"after {_MAX_REPAIR_ATTEMPTS} repairs: {err}"
+                    f"after {params.MAX_REPAIR_ATTEMPTS} repairs: {err}"
                 )
                 return None, "pydantic_fail"
 
@@ -251,7 +197,7 @@ async def _digest_one_source(
         if issues:
             attempt = 0
             current = payload.model_dump()
-            while attempt < _MAX_REPAIR_ATTEMPTS and issues:
+            while attempt < params.MAX_REPAIR_ATTEMPTS and issues:
                 attempt += 1
                 repair_prompt = prompts.build_repair_prompt(
                     chapter_id = chapter_id,
@@ -259,7 +205,7 @@ async def _digest_one_source(
                     framework = framework,
                     outline_sections = outline_sections,
                     source_key = source_key,
-                    source_md = source_md[:_MAX_SOURCE_CHARS],
+                    source_md = source_md[:params.MAX_SOURCE_CHARS],
                     source_vault_hashes = source_vault_hashes,
                     current_json = json.dumps(current, indent = 2),
                     issues = issues,
@@ -267,10 +213,10 @@ async def _digest_one_source(
                 try:
                     rr, rm = await domains.settings.chat.service.chat_text_async(
                         repair_prompt,
-                        max_tokens = _MAX_TOKENS_REPAIR,
-                        temperature = _TEMPERATURE_REPAIR,
-                        response_format = _DIGEST_RESPONSE_FORMAT,
-                        timeout_s = _TIMEOUT_S_REPAIR,
+                        max_tokens = params.REPAIR_MAX_TOKENS,
+                        temperature = params.REPAIR_TEMPERATURE,
+                        response_format = schemas.DIGEST_RESPONSE_FORMAT,
+                        timeout_s = params.REPAIR_TIMEOUT_S,
                     )
                     deployment = (rm or {}).get("deployment") or deployment
                     rp = domain.parse_json_response(rr)
@@ -551,7 +497,7 @@ async def digest_construct_run(state: domains.dd.synth.state.SynthState) -> dict
                 f"recomputing"
             )
 
-    sem = asyncio.Semaphore(_CONCURRENCY)
+    sem = asyncio.Semaphore(params.CONCURRENCY)
     tasks = [
         _digest_source(
             sem = sem,
@@ -572,7 +518,7 @@ async def digest_construct_run(state: domains.dd.synth.state.SynthState) -> dict
 
     # Bulkhead: retry ONLY the sources that failed, once, as a second wave
     # — not a whole-chapter retry. Each source in the first wave already
-    # burned _MAX_CALL_ATTEMPTS against the Rotator's own ~40-arm cascade,
+    # burned params.MAX_CALL_ATTEMPTS against the Rotator's own ~40-arm cascade,
     # so this only pays off against a wave-shaped outage (many arms
     # simultaneously cooling down) that may have cleared in the time the
     # rest of the chapter's sources took to run — not a deterministic
@@ -584,7 +530,7 @@ async def digest_construct_run(state: domains.dd.synth.state.SynthState) -> dict
             f"{len(failed_idx)}/{len(pairs)} failed source(s) as a "
             f"second wave before finalizing"
         )
-        await asyncio.sleep(_WAVE_PAUSE_S)
+        await asyncio.sleep(params.WAVE_PAUSE_S)
         retry_tasks = [
             _digest_source(
                 sem = sem,

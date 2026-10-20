@@ -22,3 +22,7 @@ FRONT_MATTER_TITLE_RE = re.compile(
 )
 # `ingestion/<slug>/pages/0336-<url-slug>.md` → `<url-slug>`
 KEY_STEM_RE = re.compile(r"(?:^|/)(?:\d+-)?([^/]+?)(?:\.md)?$")
+
+# A fenced-code fence line (``` or ~~~, up to 3 leading spaces). Pairs of them
+# delimit a code block — see domain.code_block_count.
+FENCE_LINE_RE = re.compile(r"^ {0,3}(?:```|~~~)", re.M)

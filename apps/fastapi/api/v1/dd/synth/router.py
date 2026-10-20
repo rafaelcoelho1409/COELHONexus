@@ -4,7 +4,7 @@ chapter_id lives in SynthState, not the thread_id."""
 from __future__ import annotations
 import domains
 import domains.dd.synth.task
-from . import params
+from . import params, service
 
 import asyncio
 import json
@@ -22,29 +22,6 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
-
-
-async def _load_plan(slug: str) -> dict:
-    """Latest planner plan blob for this slug (MinIO + JSON parse + HTTP
-    error mapping). Private — the only caller is this router."""
-    minio = domains.dd.ingestion.storage.service.get_storage()
-    key = domains.dd.planner.keys.plan_latest_key(slug)
-    if not await minio.exists(key):
-        raise HTTPException(
-            status_code = 404,
-            detail = (
-                f"no planner plan for {slug!r} — run the planner first "
-                f"(POST /planner/{slug})"
-            ),
-        )
-    try:
-        text = await minio.read_text(key)
-        return json.loads(text) or {}
-    except Exception as e:
-        raise HTTPException(
-            status_code = 500,
-            detail = f"plan {key!r} unreadable: {type(e).__name__}: {e}",
-        )
 
 
 @router.get("/info")
@@ -65,7 +42,7 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
     """Drives the Study sidebar. `rendered` flags MUST NOT be cached —
     a stale 200 after a wipe would show phantom synthesized chapters."""
     response.headers["Cache-Control"] = "no-store"
-    plan = await _load_plan(slug)
+    plan = await service.load_plan(slug)
     chapters_in: list[dict] = plan.get("chapters") or []
     if not chapters_in:
         return {"framework_slug": slug, "chapters": []}
@@ -274,7 +251,7 @@ async def start_synth(
             detail=f"invalid mode {mode!r}; expected one of {sorted(params.VALID_MODES)}",
         )
 
-    plan = await _load_plan(slug)
+    plan = await service.load_plan(slug)
     plan_chapter_ids: list[str] = sorted(
         c["id"] for c in (plan.get("chapters") or [])
         if (c or {}).get("id")
@@ -789,77 +766,20 @@ async def synth_history(thread_id: str) -> dict:
     return {"thread_id": thread_id, "history": history}
 
 
-async def _wipe_one_chapter(slug: str, chapter_id: str) -> dict:
-    """Delete ONE chapter's MinIO outputs + caches (synth/{slug}/{chapter_id}/) so a
-    single-chapter run recomputes it from scratch — without it a rerun just hits
-    the chapter's cached outline/digest/sawc blobs, and a full wipe means redoing
-    every chapter. MinIO only: Postgres checkpoints / Redis snapshots belong to
-    run threads, not chapters, and the rest of the study stays intact."""
-    if (
-        not chapter_id or "/" in chapter_id or ".." in chapter_id
-        or not chapter_id.startswith("ch-")
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=f"invalid chapter_id {chapter_id!r}; expected 'ch-…' without slashes",
-        )
-    # Never delete outputs a running study is still writing.
-    try:
-        r = redis_aio.from_url(
-            domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-        )
-        try:
-            running = await r.get(domains.dd.synth.keys.active_study_key(slug))
-            # A single-chapter run (the strip's ▶ button) holds only the slug's synth lock, no study registry entry.
-            held = await r.get(domains.dd.synth.keys.lock_key(slug)) if not running else None
-        finally:
-            await r.aclose()
-        if running or held:
-            raise HTTPException(
-                status_code=409,
-                detail=f"a synth run for {slug!r} is in flight — cancel it before wiping a chapter",
-            )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.warning(f"[synth-wipe] {slug}/{chapter_id}: active-study check skipped ({type(e).__name__})")
-
-    minio = domains.dd.ingestion.storage.service.get_storage()
-    try:
-        n_minio = await minio.delete_prefix(f"synth/{slug}/{chapter_id}/")
-    except Exception as e:
-        logger.warning(f"[synth-wipe] MinIO delete failed for {slug}/{chapter_id}: {e}")
-        n_minio = -1
-
-    # Keep the persisted timing roll-up consistent with the chapter being gone.
-    try:
-        tkey = domains.dd.synth.keys.study_timing_key(slug)
-        t = json.loads(await minio.read_text(tkey))
-        gone = int((t.get("per_chapter_ms") or {}).pop(chapter_id, 0) or 0)
-        if gone:
-            t["total_wall_ms"] = max(int(t.get("total_wall_ms") or 0) - gone, 0)
-            await minio.write(tkey, json.dumps(t, indent = 2), content_type = "application/json")
-    except Exception:
-        pass
-
-    logger.info(f"[synth-wipe] {slug}/{chapter_id}: minio={n_minio} blobs")
-    return {"slug": slug, "chapter_id": chapter_id, "minio_deleted": n_minio}
-
-
 @router.delete("/{slug}/wipe")
 async def wipe_synth(slug: str, chapter_id: str | None = Query(default=None)) -> dict:
     """Wipes MinIO synth/{slug}/, Postgres checkpoints for synth+study
     threads, Redis SSE snapshots + lock. Without the Redis sweep a wiped
     slug "comes back from the dead" via the cached study SSE snapshot.
     With `chapter_id`, wipes only that chapter's MinIO outputs (see
-    `_wipe_one_chapter`)."""
+    `service.wipe_one_chapter`)."""
     if not slug or "/" in slug:
         raise HTTPException(
             status_code=400,
             detail=f"invalid slug {slug!r}; slashes not allowed",
         )
     if chapter_id is not None:
-        return await _wipe_one_chapter(slug, chapter_id)
+        return await service.wipe_one_chapter(slug, chapter_id)
 
     minio = domains.dd.ingestion.storage.service.get_storage()
     try:

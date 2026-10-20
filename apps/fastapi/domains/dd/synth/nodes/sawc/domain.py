@@ -5,10 +5,9 @@ service.py for the orchestration (LLM drafting, critic pick, pairwise
 judge, MinIO persistence) that calls these."""
 from __future__ import annotations
 import domains
-from . import params, schemas, versions
+from . import params, patterns, schemas, versions
 
 import ast
-import builtins
 import json
 import math
 import re
@@ -17,17 +16,6 @@ from hashlib import sha256
 from typing import Optional
 
 from pydantic import ValidationError
-
-
-IDENT_STOPWORDS = frozenset({
-    "self", "cls", "str", "int", "bool", "list", "dict", "set", "tuple",
-    "none", "true", "false", "return", "import", "from", "async", "def",
-    "class", "yield", "raise", "with", "for", "while", "else", "elif",
-    "try", "except", "finally", "not", "and", "the", "this", "that",
-    "data", "key", "val", "value", "result", "item", "items", "args",
-    "kwargs", "name", "type", "obj", "object", "func", "function",
-    "arg", "params", "ctx", "context", "request", "response", "main",
-})
 
 
 def ast_identifiers(code: str) -> set[str]:
@@ -80,7 +68,7 @@ def ast_identifiers(code: str) -> set[str]:
     # Drop stopwords + ultra-short tokens.
     return {
         i for i in idents
-        if len(i) >= 3 and i.lower() not in IDENT_STOPWORDS
+        if len(i) >= 3 and i.lower() not in params.IDENT_STOPWORDS
     }
 
 
@@ -98,7 +86,7 @@ def prose_tokens(text: str) -> set[str]:
     # Bare alphanumeric tokens.
     for w in re.findall(r"[A-Za-z_][A-Za-z_0-9]{2,}", text):
         out.add(w)
-    return {w for w in out if w.lower() not in IDENT_STOPWORDS and len(w) >= 3}
+    return {w for w in out if w.lower() not in params.IDENT_STOPWORDS and len(w) >= 3}
 
 
 def first_lines_word_set(code: str, n_lines: int = 3) -> set[str]:
@@ -113,7 +101,7 @@ def first_lines_word_set(code: str, n_lines: int = 3) -> set[str]:
             continue
         for w in re.findall(r"[A-Za-z_][A-Za-z_0-9]{2,}", line):
             wl = w.lower()
-            if wl in IDENT_STOPWORDS:
+            if wl in params.IDENT_STOPWORDS:
                 continue
             out.add(wl)
         n += 1
@@ -204,13 +192,6 @@ def extract_memory_entry(
     )
 
 
-SOFT_ISSUE_PREFIXES = (
-    "subheading↔code mismatch",
-    "explanation↔code mismatch",
-    "subtopics has only ",
-)
-
-
 def section_relevance_query(outline_sec: dict, contributions: list[dict]) -> str:
     """Text describing what a section is about, for matching chapter code blocks to it: outline heading + description + the routed sources' summaries and key facts."""
     parts = [outline_sec.get("heading") or "", outline_sec.get("description") or ""]
@@ -244,7 +225,7 @@ def realign_api_subheadings(
         apis = [
             last for tk in re.findall(r"`([^`]+)`", st.subheading or "")
             for last in [(re.findall(r"[A-Za-z_][A-Za-z_0-9]*", tk) or [""])[-1]]
-            if len(last) >= 3 and last.lower() not in IDENT_STOPWORDS
+            if len(last) >= 3 and last.lower() not in params.IDENT_STOPWORDS
         ]
         if not apis or all(re.search(rf"\b{re.escape(a)}\b", body) for a in apis):
             continue
@@ -369,9 +350,6 @@ def cap_prose_subtopics(draft: schemas.LLMSectionDraft, n_facts: int) -> tuple[s
     return draft.model_copy(update = {"subtopics": list(draft.subtopics)[:cap]}), len(draft.subtopics) - cap
 
 
-_BUILTIN_NAMES = frozenset(dir(builtins))
-
-
 def strip_fence(text: str) -> str:
     """The code inside a ```lang fence (the text itself when it is not fenced)."""
     t = (text or "").strip()
@@ -401,7 +379,7 @@ def code_dependencies(block: str) -> tuple[set[str], set[str]]:
             bound.add(n.name)
         elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
             called.add(n.func.id)
-    return defs, called - bound - _BUILTIN_NAMES
+    return defs, called - bound - params.BUILTIN_NAMES
 
 
 def _verbatim_hash(st) -> str:
@@ -472,12 +450,9 @@ def order_by_code_dependencies(
     return out, n
 
 
-_BLOCK_TOKEN_RE = re.compile(r"--[a-z][a-z0-9\-]*|[A-Za-z_][A-Za-z0-9_\.\-]+")
-
-
 def block_tokens(text: str) -> frozenset[str]:
     """Identifiers, flags and words of a code block: what two copies of one example have in common."""
-    return frozenset(_BLOCK_TOKEN_RE.findall(text or ""))
+    return frozenset(patterns.BLOCK_TOKEN_RE.findall(text or ""))
 
 
 def near_duplicate_hashes(
@@ -598,16 +573,6 @@ def parse_topup(
     return subs, cites
 
 
-_REL_RANK = {"primary": 0, "supporting": 1}
-# A top-up subtopic that talks ABOUT the docs instead of stating their facts (asyncio ch-04: "The documentation provides examples of how to
-# modify single-command scripts ..."): dropped.
-META_FRAMING_RE = re.compile(
-    r"^\s*(?:the|this)\s+(?:\w+\s+)?(?:documentation|docs|page|source|text|guide)\s+"
-    r"(?:provides|shows|explains|describes|demonstrates|states|notes|mentions|covers|includes|contains|gives)\b",
-    re.I,
-)
-
-
 def chapter_prose_tokens(sections: list[schemas.Section]) -> set[str]:
     """Words of everything the chapter says in prose (intros, subheadings, explanations; code excluded)."""
     return prose_tokens(" ".join(
@@ -649,7 +614,7 @@ def source_gaps(
                 facts = uncovered_facts(facts, covered_tokens)
                 if len(facts) < params.TOPUP_FACT_MIN_GAP:
                     continue
-            rank = (_REL_RANK.get(c.get("relevance"), 2), order[sid])
+            rank = (params.REL_RANK.get(c.get("relevance"), 2), order[sid])
             if k not in best or rank < best[k][0]:
                 best[k] = (rank, sid, c.get("summary") or "", facts)
     out: dict[str, list[tuple[str, str, list[str]]]] = {}
@@ -721,7 +686,7 @@ def parse_source_topup(
         except Exception:
             _reject(rejects, "schema")
             continue
-        if META_FRAMING_RE.search(st.explanation):
+        if patterns.META_FRAMING_RE.search(st.explanation):
             _reject(rejects, "meta_framing")
             continue
         et = prose_tokens(st.explanation)
@@ -792,7 +757,7 @@ def hard_issues(issues: list[str]) -> list[str]:
     """Filter to issues that trigger writer repair. Soft issues still ship in .issues for visibility but skip repair — writer can't reliably close them."""
     return [
         i for i in issues
-        if not any(i.startswith(p) for p in SOFT_ISSUE_PREFIXES)
+        if not any(i.startswith(p) for p in params.SOFT_ISSUE_PREFIXES)
     ]
 
 
@@ -913,7 +878,7 @@ def validate_section_against_inputs(
             absent_api = [
                 last for tk in re.findall(r"`([^`]+)`", s.subheading or "")
                 for last in [(re.findall(r"[A-Za-z_][A-Za-z_0-9]*", tk) or [""])[-1]]
-                if len(last) >= 3 and last.lower() not in IDENT_STOPWORDS and not re.search(rf"\b{re.escape(last)}\b", body)
+                if len(last) >= 3 and last.lower() not in params.IDENT_STOPWORDS and not re.search(rf"\b{re.escape(last)}\b", body)
             ]
             if absent_api:
                 misaligned_sub.append(s.subheading)
@@ -931,7 +896,7 @@ def validate_section_against_inputs(
             inline_prose = set()
             for tk in re.findall(r"`([^`]+)`", s.explanation):
                 for w in re.findall(r"[A-Za-z_][A-Za-z_0-9]{2,}", tk):
-                    if w.lower() not in IDENT_STOPWORDS and len(w) >= 3:
+                    if w.lower() not in params.IDENT_STOPWORDS and len(w) >= 3:
                         inline_prose.add(w)
             inline_match = inline_prose & code_idents
             if inline_match:
@@ -1117,25 +1082,12 @@ def format_memory_block(memory: list[dict]) -> str:
     return "\n".join(lines)
 
 
-MAX_VAULT_CHARS_PER_ENTRY = 6_000
-
-
-MAX_VAULT_CHARS_TOTAL     = 60_000
-
-
-_CONTEXT_OVERFLOW_MARKERS = (
-    "context_length", "context window", "maximum context length",
-    "context_window_exceeded", "reduce the length", "too many tokens",
-    "context length exceeded", "prompt is too long",
-)
-
-
 def is_context_overflow_error(e: Exception) -> bool:
     """Heuristic substring match — same idiom as outline_sdp/digest_construct's
     classifiers. The Rotator is a universal gateway with no context-length
     -aware arm filtering."""
     msg = str(e).lower()
-    return any(marker in msg for marker in _CONTEXT_OVERFLOW_MARKERS)
+    return any(marker in msg for marker in params.CONTEXT_OVERFLOW_MARKERS)
 
 
 def build_writer_prompt(
@@ -1159,7 +1111,7 @@ def build_writer_prompt(
     vault_char_budget: int | None = None,
     prior_feedback: list[str] | None = None,
 ) -> str:
-    """Build the per-section writer prompt. mixed_mode=True when the code bank holds only 1-2 blocks (fewer than SUBTOPICS_MIN): the writer anchors one subtopic to each block and fills the rest with prose, instead of the section going fully prose and dropping the only examples there are. Original notes follow. vault_rich enables Visible Vault (LLM sees code bodies; hash-only listing otherwise). prose_mode=True when bank is empty (prose subtopics instead of placeholder). already_shown_hashes suppresses cross-section hash recycling. vault_char_budget overrides MAX_VAULT_CHARS_TOTAL — used to retry at a smaller budget after a context-overflow failure. prior_feedback: checklist's failed-criteria feedback strings from the PREVIOUS RETHINK iteration — closes the self-refine loop (arXiv 2303.17651 requires critique to inform regeneration; before this, a RETHINK iteration reran blind with zero signal about what was actually wrong, which is why some iterations regressed instead of improving)."""
+    """Build the per-section writer prompt. mixed_mode=True when the code bank holds only 1-2 blocks (fewer than SUBTOPICS_MIN): the writer anchors one subtopic to each block and fills the rest with prose, instead of the section going fully prose and dropping the only examples there are. Original notes follow. vault_rich enables Visible Vault (LLM sees code bodies; hash-only listing otherwise). prose_mode=True when bank is empty (prose subtopics instead of placeholder). already_shown_hashes suppresses cross-section hash recycling. vault_char_budget overrides params.MAX_VAULT_CHARS_TOTAL — used to retry at a smaller budget after a context-overflow failure. prior_feedback: checklist's failed-criteria feedback strings from the PREVIOUS RETHINK iteration — closes the self-refine loop (arXiv 2303.17651 requires critique to inform regeneration; before this, a RETHINK iteration reran blind with zero signal about what was actually wrong, which is why some iterations regressed instead of improving)."""
     prior_feedback_block = ""
     if prior_feedback:
         feedback_lines = "\n".join(f"  - {fb}" for fb in prior_feedback[:8])
@@ -1227,8 +1179,8 @@ def build_writer_prompt(
             coerced_vault[h] = entry
         hash_list = domains.dd.synth.nodes.vault.domain.format_entries_for_prompt(
             coerced_vault, hashes = allowed_hashes,
-            max_chars_per_entry = MAX_VAULT_CHARS_PER_ENTRY,
-            max_total_chars = vault_char_budget or MAX_VAULT_CHARS_TOTAL,
+            max_chars_per_entry = params.MAX_VAULT_CHARS_PER_ENTRY,
+            max_total_chars = vault_char_budget or params.MAX_VAULT_CHARS_TOTAL,
         )
     else:
         hash_list = (
@@ -1621,7 +1573,7 @@ def dedupe_vault_hashes_across_sections(
             for h in (c.get("code_refs") or []):
                 key = (h, sid)
                 cur = hash_section_best_rel.get(key)
-                if cur is None or _RELEVANCE_RANK.get(rel, 9) < _RELEVANCE_RANK.get(cur, 9):
+                if cur is None or params.RELEVANCE_RANK.get(rel, 9) < params.RELEVANCE_RANK.get(cur, 9):
                     hash_section_best_rel[key] = rel
 
     # Pass 2: group by hash; only hashes claimed by ≥2 distinct sections
@@ -1646,7 +1598,7 @@ def dedupe_vault_hashes_across_sections(
         # Pick: strongest relevance, then smallest pool, then sorted sid
         # (final tiebreak deterministic).
         best_sid = min(options, key=lambda x: (
-            _RELEVANCE_RANK.get(x[1], 9),
+            params.RELEVANCE_RANK.get(x[1], 9),
             section_pool_sizes.get(x[0], 0),
             x[0],
         ))[0]
@@ -1711,9 +1663,6 @@ def compute_manifest_hash(
     return sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-_RELEVANCE_RANK = {"primary": 0, "supporting": 1, "tangential": 2}
-
-
 def parse_json_response(text: str) -> Optional[dict]:
     if not text:
         return None
@@ -1725,7 +1674,7 @@ def parse_json_response(text: str) -> Optional[dict]:
         return json.loads(cleaned)
     except Exception:
         pass
-    m = _JSON_RE.search(text)
+    m = patterns.JSON_RE.search(text)
     if not m:
         return None
     try:
@@ -1734,14 +1683,11 @@ def parse_json_response(text: str) -> Optional[dict]:
         return None
 
 
-_TYPOGRAPHY = str.maketrans({"\u2010": "-", "\u2011": "-", "\u2012": "-", "\u00a0": " ", "\u202f": " ", "\u2009": " "})
-
-
 def normalize_typography(obj):
     """Writer output with the non-breaking hyphen (U+2011) and no-break spaces the model likes ("low‑level", "top‑level") swapped for the
     plain characters: they break heading anchors, text search and identifier matching in the book. Strings in nested dicts / lists only."""
     if isinstance(obj, str):
-        return obj.translate(_TYPOGRAPHY)
+        return obj.translate(params.TYPOGRAPHY)
     if isinstance(obj, dict):
         return {k: normalize_typography(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -1809,9 +1755,6 @@ def try_parse_draft(
         return None, shorten_pydantic_error(e)
     except Exception as e:
         return None, f"{type(e).__name__}: {str(e)[:200]}"
-
-
-_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 def shorten_pydantic_error(e: ValidationError) -> str:

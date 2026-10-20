@@ -155,6 +155,13 @@ CONTEXT_OVERFLOW_MARKERS = (
     "context length exceeded", "prompt is too long",
 )
 
+# Judge reasons that carry no actionable feedback (empty or a template echo) —
+# the writer has nothing to fix. Lowercase, punctuation-stripped.
+PLACEHOLDER_FEEDBACK = {
+    "", "some feedback", "feedback", "no feedback", "na", "none",
+    "tbd", "todo", "reason",
+}
+
 
 # checklist_eval went silent for 20+ minutes with no trace of where it was
 # stuck, coinciding with a real MinIO/network degradation window (Langfuse
@@ -167,6 +174,19 @@ TIMEOUT_S_PERSIST_WRITE = 60.0
 # verdict (which triggers a full mgsr_replan cycle) — same idiom as
 # outline_sdp/digest_construct/sawc_write's context-overflow retry.
 MAX_CALL_ATTEMPTS = 2
+# The bundled judge and the repair call that follows it.
+JUDGE_TEMPERATURE  = 0.0
+REPAIR_TEMPERATURE = 0.0
+JUDGE_MAX_TOKENS   = 3000
+REPAIR_MAX_TOKENS  = 3000
+# chat_text_async's own default (30s) was undersized — same fix
+# as outline/digest/sawc (2026-09-06/07). A failed bundled-judge call
+# here directly feeds `infra_degraded` (issues #10/#14), so a timeout
+# that would have succeeded with more headroom was actively corrupting
+# the sustained-outage signal, not just costing one bad iteration.
+JUDGE_TIMEOUT_S = 150.0   # was 90 s: the Rotator's cascade wall is timeout - 3 s, which left room for ~2 arm tries when NIM arms stall at 36 s (fastmcp ch-01 and langfuse ch-11 judges, 87.5 s 504s)
+REPAIR_TIMEOUT_S = 90.0
+MAX_REPAIR_ATTEMPTS = 1
 # A judge that stays unreachable after MAX_CALL_ATTEMPTS gets one cool-off and JUDGE_EXTRA_ATTEMPTS more tries before the chapter is
 # judged without it (asyncio ch-05: a Rotator outage failed all 5 judge criteria after 177 s and a perfectly gated chapter was rewritten).
 JUDGE_COOLOFF_S = 45.0

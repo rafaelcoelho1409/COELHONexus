@@ -2,13 +2,11 @@
 Best-of-N writer drafts + critic-picker (MAMM-Refine arXiv 2503.15272); 2-attempt repair loop for alignment violations."""
 from __future__ import annotations
 import domains
-from infra.langfuse.prompts import with_langfuse_override
-from . import domain, keys, params, schemas, versions
+from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio
 import json
 import logging
-import os
 import random
 import time
 from typing import Optional
@@ -16,110 +14,6 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-
-# Draft-call attempts before permanently losing this draft slot (best-of-N
-# still covers a single bad draw, but N_DRAFTS=2 shares the SAME prompt —
-# a systematic context overflow fails every draft identically, so this
-# retry is not redundant with best-of-N).
-_MAX_CALL_ATTEMPTS = 2
-
-
-@with_langfuse_override("dd.synth.sawc.repair")
-def build_repair_prompt(
-    *,
-    framework: str,
-    chapter_id: str,
-    chapter_title: str,
-    section_id: str,
-    section_heading: str,
-    section_description: str,
-    section_prerequisites: list[str],
-    contributions: list[dict],
-    allowed_hashes: list[str],
-    valid_source_keys: list[str],
-    memory: list[dict],
-    current_json: str,
-    issues: list[str],
-    prose_mode: bool = False,
-    mixed_mode: bool = False,
-) -> str:
-    """Repair prompt: same context as writer + issue list, requesting a corrected output. Wrapped in a LangFuse-managed-override layer (falls back to this local body when no template is published)."""
-    mixed = bool(mixed_mode) and bool(allowed_hashes) and not prose_mode
-    prose = (prose_mode or not allowed_hashes) and not mixed
-    prereqs_str = (
-        ", ".join(section_prerequisites)
-        if section_prerequisites else "(none)"
-    )
-    hash_list = (
-        "PROSE MODE — this section has NO code. Set EVERY subtopic's "
-        "code_ref_hash to \"\" (empty) and write substantial source-grounded "
-        "conceptual prose (3-6 distinct subtopics, 40-80 word explanations)."
-        if prose
-        else (
-            "\n".join(f"  - {h}" for h in allowed_hashes)
-            if allowed_hashes else "  (none)"
-        ) + (
-            "\n  MIXED MODE: use each hash above in exactly ONE subtopic; every "
-            "other subtopic is prose — code_ref_hash \"\" (empty). Keep ≥3 "
-            "subtopics in total."
-            if mixed else ""
-        )
-    )
-    source_list = (
-        "\n".join(f"  - {k}" for k in valid_source_keys)
-        if valid_source_keys else "  (none)"
-    )
-    issues_block = "\n".join(f"- {x}" for x in issues)
-    if prose:
-        code_hash_hint = ""
-    elif mixed:
-        code_hash_hint = '16-hex, or "" for a prose subtopic'
-    else:
-        code_hash_hint = "16-hex"
-    return (
-        f"Fix structural issues in this cookbook-schema section draft. "
-        f"Keep the same v2 schema (heading + intro + subtopics + citations). "
-        f"Preserve good subtopics and citations; ONLY change what's "
-        f"needed to clear the issues below.\n\n"
-
-        f"FRAMEWORK: {framework}\n"
-        f"CHAPTER: {chapter_id} — {chapter_title}\n"
-        f"SECTION: {section_id} — {section_heading}\n"
-        f"GOAL: {section_description}\n"
-        f"PREREQUISITES: {prereqs_str}\n\n"
-
-        f"ALLOWED VAULT HASHES (use ONLY these for subtopics[*].code_ref_hash):\n"
-        f"{hash_list}\n\n"
-
-        f"VALID CITATION SOURCE_KEYS (use ONLY these for citations):\n"
-        f"{source_list}\n\n"
-
-        f"CONTRIBUTIONS (for grounding):\n"
-        f"{domain.format_contributions_block(contributions)}\n\n"
-
-        f"MEMORY:\n{domain.format_memory_block(memory)}\n\n"
-
-        f"CURRENT DRAFT:\n{current_json}\n\n"
-
-        f"ISSUES TO FIX:\n{issues_block}\n\n"
-
-        f"Schema reminder: {{\n"
-        f'  "heading": "...",\n'
-        f'  "intro": "1-2 sentence section framing",\n'
-        f'  "subtopics": [\n'
-        f'    {{"subheading": "2-10 words", "explanation": "8-80 words", '
-        f'"code_ref_hash": "{code_hash_hint}"}},\n'
-        f'    ... 3-12 entries ...\n'
-        f'  ],\n'
-        f'  "citations": [{{"source_key": "...", "claim": "..."}}, ...]\n'
-        f"}}\n\n"
-
-        f"Respond ONLY with valid JSON matching the v2 schema. "
-        f"NO commentary, NO markdown wrapping."
-    )
-
-
-_CONCURRENCY           = 8
 
 async def _load_chapter_vault_rich(
     minio,
@@ -246,7 +140,7 @@ async def _write_section_best_of_n(
                 vault_char_budget=vault_char_budget,
             )
 
-        if _OPTIMAL_STOPPING_ENABLED and params.N_DRAFTS >= 2:
+        if params.OPTIMAL_STOPPING_ENABLED and params.N_DRAFTS >= 2:
             # Fire draft 1 first, decide whether to fire the rest
             r0 = await _make_draft_coro(0)
             results = [r0]
@@ -262,8 +156,8 @@ async def _write_section_best_of_n(
                 )
                 if (
                     len(issues_1) == 0
-                    and len(draft1.subtopics) >= _OPTIMAL_STOPPING_MIN_SUBTOPICS
-                    and len(draft1.citations) >= _OPTIMAL_STOPPING_MIN_CITATIONS
+                    and len(draft1.subtopics) >= params.OPTIMAL_STOPPING_MIN_SUBTOPICS
+                    and len(draft1.citations) >= params.OPTIMAL_STOPPING_MIN_CITATIONS
                 ):
                     good_enough = True
             if not good_enough:
@@ -399,15 +293,6 @@ async def _write_section_best_of_n(
         return section
 
 
-_OPTIMAL_STOPPING_MIN_SUBTOPICS = 4
-
-_OPTIMAL_STOPPING_MIN_CITATIONS = 2
-
-_OPTIMAL_STOPPING_ENABLED = os.environ.get(
-    "KD_SAWC_OPTIMAL_STOPPING", "true",
-).lower() in ("true", "1", "yes", "on")
-
-
 async def _draft_one_section(
     *,
     draft_idx: int,
@@ -468,29 +353,29 @@ async def _draft_one_section(
     deployment: Optional[str] = None
     response: Optional[str] = None
     last_error: Optional[Exception] = None
-    for call_attempt in range(_MAX_CALL_ATTEMPTS):
+    for call_attempt in range(params.MAX_CALL_ATTEMPTS):
         try:
             # NIM/Mistral accept response_format=json_schema server-side; Gemini handled by repair loop.
             response, meta = await domains.settings.chat.service.chat_text_async(
                 prompt,
-                max_tokens=_MAX_TOKENS_DRAFT,
-                temperature=_TEMPERATURE_DRAFT,
-                response_format=_SAWC_DRAFT_RESPONSE_FORMAT,
-                timeout_s=_TIMEOUT_S_DRAFT,
+                max_tokens=params.DRAFT_MAX_TOKENS,
+                temperature=params.DRAFT_TEMPERATURE,
+                response_format=schemas.SAWC_DRAFT_RESPONSE_FORMAT,
+                timeout_s=params.DRAFT_TIMEOUT_S,
             )
             deployment = (meta or {}).get("deployment")
             last_error = None
             break
         except Exception as e:
             last_error = e
-            if call_attempt < _MAX_CALL_ATTEMPTS - 1:
+            if call_attempt < params.MAX_CALL_ATTEMPTS - 1:
                 # The vault-bank cap above should keep this rare, but a
                 # content-heavy section (many allowed_hashes, each
                 # capped) can still add up — the Rotator has no context
                 # -length-aware arm filtering, so retry at half the
                 # vault budget rather than just reproducing the failure.
                 if domain.is_context_overflow_error(e):
-                    prompt = _build_prompt((vault_char_budget or domain.MAX_VAULT_CHARS_TOTAL) // 2)
+                    prompt = _build_prompt((vault_char_budget or params.MAX_VAULT_CHARS_TOTAL) // 2)
                 await asyncio.sleep(1.0 + random.random())
     if last_error is not None:
         wall_ms = int((time.monotonic() - t0) * 1000)
@@ -506,7 +391,7 @@ async def _draft_one_section(
         )
         logger.warning(
             f"[sawc_write] {section_id} draft {draft_idx}: LLM call "
-            f"failed after {_MAX_CALL_ATTEMPTS} attempt(s): "
+            f"failed after {params.MAX_CALL_ATTEMPTS} attempt(s): "
             f"{type(last_error).__name__}: {last_error}"
         )
         return None, None, wall_ms, 0, error_tag
@@ -531,10 +416,10 @@ async def _draft_one_section(
     current = parsed
 
     # Pydantic-fail repair loop
-    while draft is None and n_repairs < _MAX_REPAIR_ATTEMPTS:
+    while draft is None and n_repairs < params.MAX_REPAIR_ATTEMPTS:
         n_repairs += 1
         issues = [f"Pydantic schema rejected the previous output: {err}"]
-        repair_prompt = build_repair_prompt(
+        repair_prompt = prompts.build_repair_prompt(
             framework=framework,
             chapter_id=chapter_id,
             chapter_title=chapter_title,
@@ -554,9 +439,9 @@ async def _draft_one_section(
         try:
             rr, rm = await domains.settings.chat.service.chat_text_async(
                 repair_prompt,
-                max_tokens=_MAX_TOKENS_REPAIR,
-                temperature=_TEMPERATURE_REPAIR,
-                timeout_s=_TIMEOUT_S_REPAIR,
+                max_tokens=params.REPAIR_MAX_TOKENS,
+                temperature=params.REPAIR_TEMPERATURE,
+                timeout_s=params.REPAIR_TIMEOUT_S,
             )
             deployment = (rm or {}).get("deployment") or deployment
             rp = domain.parse_json_response(rr)
@@ -593,9 +478,9 @@ async def _draft_one_section(
         vault_rich=vault_rich,
     )
     # Repair on HARD issues only; soft issues (subheading/explanation↔code mismatch) still ship in .issues but skip repair — LLM can't close them reliably.
-    while domain.hard_issues(issues) and n_repairs < _MAX_REPAIR_ATTEMPTS:
+    while domain.hard_issues(issues) and n_repairs < params.MAX_REPAIR_ATTEMPTS:
         n_repairs += 1
-        repair_prompt = build_repair_prompt(
+        repair_prompt = prompts.build_repair_prompt(
             framework=framework,
             chapter_id=chapter_id,
             chapter_title=chapter_title,
@@ -615,9 +500,9 @@ async def _draft_one_section(
         try:
             rr, rm = await domains.settings.chat.service.chat_text_async(
                 repair_prompt,
-                max_tokens=_MAX_TOKENS_REPAIR,
-                temperature=_TEMPERATURE_REPAIR,
-                timeout_s=_TIMEOUT_S_REPAIR,
+                max_tokens=params.REPAIR_MAX_TOKENS,
+                temperature=params.REPAIR_TEMPERATURE,
+                timeout_s=params.REPAIR_TIMEOUT_S,
             )
             deployment = (rm or {}).get("deployment") or deployment
             rp = domain.parse_json_response(rr)
@@ -753,41 +638,6 @@ async def _critic_pick_best(
     )
 
 
-_TEMPERATURE_DRAFT     = 0.5
-
-_TEMPERATURE_REPAIR    = 0.2
-
-_MAX_TOKENS_DRAFT      = 8000
-
-_MAX_TOKENS_REPAIR     = 8000
-
-# chat_text_async's own default (30s) was undersized — confirmed
-# live across 5 study runs (2026-09-05/07): sawc_write's per-section
-# drafting is the single heaviest generation task in the whole pipeline
-# and was by far the worst-hit, routinely losing entire sections to
-# APITimeoutError and driving most of the sustained-outage halts tracked
-# in the Synth known-issues doc. Same fix as outline/digest.
-#   2026-09-08: raised 120s -> 150s. Percentile analysis (14-day Langfuse
-#   trace data): successful-call max=118.9s, p99=106.8s — real successes
-#   were stacking right up against the old 120s ceiling. Only ~8% of
-#   failures are actually at-ceiling (rescuable by this change); the
-#   other ~90%+ fail at a fixed ~30s Rotator-side ReadTimeout this
-#   timeout can't reach — see SYNTH-PERFORMANCE-ANALYSIS-2026-09-07.md.
-_TIMEOUT_S_DRAFT       = 150.0
-_TIMEOUT_S_REPAIR      = 150.0
-
-_MAX_REPAIR_ATTEMPTS   = 2
-
-_SAWC_DRAFT_RESPONSE_FORMAT = {
-    "type": "json_schema",
-    "json_schema": {
-        "name":   "section_draft",
-        "schema": schemas.LLMSectionDraft.model_json_schema(),
-        "strict": False,
-    },
-}
-
-
 async def _pairwise_judge_match(
     *,
     section_id: str,
@@ -813,7 +663,7 @@ async def _pairwise_judge_match(
             indent=2,
         )
 
-    prompt = _PAIRWISE_PICKER_PROMPT.format(
+    prompt = prompts.PAIRWISE_PICKER_PROMPT.format(
         section_heading=section_heading,
         n_primary_contribs=n_primary_contribs,
         summary_a=_fmt_summary(summary_a),
@@ -824,9 +674,9 @@ async def _pairwise_judge_match(
         result, meta = await domains.settings.chat.service.chat_structured_async(
             prompt,
             schemas.PairwiseWinner,
-            max_tokens=_MAX_TOKENS_CRITIC,
-            temperature=_TEMPERATURE_CRITIC,
-            timeout_s=_TIMEOUT_S_CRITIC,
+            max_tokens=params.CRITIC_MAX_TOKENS,
+            temperature=params.CRITIC_TEMPERATURE,
+            timeout_s=params.CRITIC_TIMEOUT_S,
         )
         return result.winner, (meta or {}).get("deployment")
     except Exception as e:
@@ -839,35 +689,6 @@ async def _pairwise_judge_match(
     s_a = summary_a.get("structural_score", 0.0)
     s_b = summary_b.get("structural_score", 0.0)
     return ("A" if s_a >= s_b else "B"), None
-
-
-_MAX_TOKENS_CRITIC     = 300
-_TIMEOUT_S_CRITIC      = 45.0
-
-_PAIRWISE_PICKER_PROMPT = """You are picking the BETTER of two technical-documentation
-drafts for the same section. The section is part of a larger distilled book.
-
-Choose by these criteria in order:
-1. Checklist coverage (does the draft address every outline point named?)
-2. Citation density (does it cite/reference the source documentation it claims?)
-3. Structural completeness (no truncations, no orphan code-refs, no placeholder text)
-4. Clarity and concision (well-organized, no rambling)
-
-You MUST choose A or B. Ties are NOT allowed.
-
-=== SECTION ===
-heading: {section_heading}
-expected primary source contributions: {n_primary_contribs}
-
-=== DRAFT A — structural summary ===
-{summary_a}
-
-=== DRAFT B — structural summary ===
-{summary_b}
-
-Answer in JSON: {{"winner": "A" | "B", "reason": "one short sentence"}}"""
-
-_TEMPERATURE_CRITIC    = 0.0
 
 
 async def _topup_coverage(
@@ -1323,7 +1144,7 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
         f"(skipped {n_vaults_skipped})"
     )
 
-    sem = asyncio.Semaphore(_CONCURRENCY)
+    sem = asyncio.Semaphore(params.CONCURRENCY)
     memory_ledger: list[schemas.MemoryEntry] = []
     completed_sections: dict[str, schemas.Section] = {}
     chapter_used_hashes: set[str] = set()

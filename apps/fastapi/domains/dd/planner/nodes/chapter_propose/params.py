@@ -125,6 +125,11 @@ LENGTH_REASK_HINT = (
     "no reasoning text, JSON only"
 )
 
+# DD_PLANNER_ABORT_ON_DEGRADE gate: a chapter_propose fallback on a corpus this
+# large is a near-certain predictor of a throwaway plan (generic titles,
+# lopsided catch-all bucket) — abort before chapter_assign grinds ~18 min on it.
+ABORT_MIN_DOCS = 50
+
 # Candidate scoring (chapter_propose picks among the valid samples by evidence, the LLM
 # vote only breaks near-ties): each doc is matched to its best chapter by IDF-weighted
 # word overlap; a sample is penalized for docs that match no chapter, for a chapter
@@ -156,6 +161,14 @@ OPTIMAL_STOPPING_ENABLED = (
     in ("true", "1", "yes", "on")
 )
 
+# Opt-in incident-response toggle (Helm: "0" = off): abort a degraded
+# chapter_propose on a corpus of ABORT_MIN_DOCS+ docs instead of grinding
+# chapter_assign. Deployment-level env — fixed for the process lifetime.
+ABORT_ON_DEGRADE_ENABLED = (
+    os.environ.get("DD_PLANNER_ABORT_ON_DEGRADE", "").strip().lower()
+    in ("1", "true", "yes", "on")
+)
+
 # Per-doc body cap when feeding raw bodies. 2026-09-27: no longer a
 # "small-N pass-through" path — doc_distill now always produces a ref, so
 # this only fires as a fallback when the distillates map fails to load.
@@ -172,6 +185,10 @@ SOURCE_STRUCTURE_MAX_LINES = 60
 SECTION_MIN_DOCS  = 6
 SECTION_MAX_SHARE = 0.35
 SECTION_MAX_LINES = 12
+# Header of the site-sections list inside the SOURCE STRUCTURE prompt block
+# (see domain.build_source_structure). prompts.domain_sections_listed sniffs it
+# to decide whether rule 10 (SECTION_RULE) applies.
+SECTIONS_HEADER = "  Site sections (URL directories holding many pages):"
 # A directory over SECTION_MAX_SHARE of the corpus is listed with its pages grouped by slug prefix
 # (see domain._trunk_lines): groups above TRUNK_SPLIT_ABOVE pages split by the next word.
 TRUNK_MIN_DOCS    = 20

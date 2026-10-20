@@ -58,6 +58,12 @@ GENERIC_TITLES = frozenset({   # same one-word generics chapter_propose refuses
     "references", "reference", "foundations", "foundation", "miscellaneous", "misc",
     "other", "others", "general", "appendix", "index", "preface", "epilogue",
 })
+# Stop words dropped when tokenizing a slot/page title for word overlap
+# (see domain._tokens) — noise words that match every page of a corpus.
+STOP_TOKENS = frozenset({
+    "api", "apis", "the", "of", "and", "for", "an", "to", "in", "on", "with",
+    "client", "python", "documentation", "docs", "guide", "reference",
+})
 # A chapter's sections print at most OUTLINE_BLOCK_CEILING x SECTION_SUBTOPIC_MAX = 12 x 16 = 192 code blocks, and the digest routes only part of the blocks of a page that
 # holds dozens (deepagents ch-05: 303 blocks in 8 pages, 65 printed; 13 of 70 chapters of fastmcp/deepagents/langchain/langfuse held 200+). Above SPLIT_MAX_BLOCKS blocks a
 # chapter is split, whatever its page count, into parts of about SPLIT_BLOCKS_PER_PART blocks (at least SPLIT_BLOCKS_MIN_DOCS pages to split).

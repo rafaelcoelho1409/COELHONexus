@@ -242,6 +242,18 @@ class LLMSectionDraft(BaseModel):
         return v
 
 
+# NIM + Mistral honor response_format=json_schema server-side; Gemini slips
+# through to the Pydantic repair loop.
+SAWC_DRAFT_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name":   "section_draft",
+        "schema": LLMSectionDraft.model_json_schema(),
+        "strict": False,
+    },
+}
+
+
 class Section(BaseModel):
     """Persisted section (v2 cookbook). LLM fields + node-injected
     observability/meta."""

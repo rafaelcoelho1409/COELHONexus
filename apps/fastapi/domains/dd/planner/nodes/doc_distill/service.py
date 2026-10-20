@@ -61,7 +61,7 @@ async def distill_one(
         max_tokens = params.MAX_TOKENS
         for attempt in range(params.MAX_TRANSIENT_RETRIES + 1):
             # Shrink the body on a retry (same shape as
-            # synth/nodes/digest's `_MAX_SOURCE_CHARS // 2` on retry) — a
+            # synth/nodes/digest's `MAX_SOURCE_CHARS // 2` on retry) — a
             # smaller prompt improves the odds a retry actually finishes
             # inside TIMEOUT_S instead of reproducing the same timeout.
             max_chars = params.BODY_CHARS_MAX
