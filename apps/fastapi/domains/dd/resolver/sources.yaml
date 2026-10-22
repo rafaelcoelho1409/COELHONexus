@@ -525,6 +525,28 @@ frameworks:
   github: https://github.com/ourownstory/neural_prophet
   category: Python
 
+- name: Next.js
+  logo: https://cdn.simpleicons.org/nextdotjs
+  docs: https://nextjs.org/docs
+  llms_full: https://nextjs.org/docs/llms-full.txt
+  llms_txt: https://nextjs.org/docs/llms.txt
+  sitemap: https://nextjs.org/sitemap.xml
+  github: https://github.com/vercel/next.js
+  category: Web
+  path_filter:
+    include:
+      - "/docs/"
+
+- name: NGINX
+  logo: https://cdn.simpleicons.org/nginx
+  docs: https://nginx.org/en/docs/
+  sitemap: https://nginx.org/sitemap.xml
+  github: https://github.com/nginx/nginx
+  category: Infrastructure
+  path_filter:
+    include:
+      - "/en/docs/"
+
 - name: NMAP
   logo: https://nmap.org/images/sitelogo-2x.png
   docs: https://nmap.org/book/toc.html
@@ -807,6 +829,13 @@ frameworks:
       - "/ray-contribute/"
       - "/ray-governance/"
 
+- name: React
+  logo: https://cdn.simpleicons.org/react
+  docs: https://react.dev/
+  llms_txt: https://react.dev/llms.txt
+  github: https://github.com/reactjs/react.dev
+  category: Web
+
 - name: RecBole
   logo: https://recbole.io/docs/_images/logo.png
   docs: https://recbole.io/docs/
@@ -1067,6 +1096,18 @@ frameworks:
   llms_txt: https://huggingface.co/docs/trl/llms.txt
   github: https://github.com/huggingface/trl
   category: Python
+
+- name: TypeScript
+  logo: https://cdn.simpleicons.org/typescript
+  docs: https://www.typescriptlang.org/docs/
+  github: https://github.com/microsoft/TypeScript-Website
+  category: Programming Language
+  path_filter:
+    include:
+      - "/docs/"
+      - "/tsconfig"
+    exclude:
+      - "/docs/handbook/release-notes/"
 
 - name: Ultralytics
   logo: https://cdn.prod.website-files.com/680a070c3b99253410dd3dcf/68e4eb1e9893320b26cc02c3_Ultralytics%20Logo.png.svg
