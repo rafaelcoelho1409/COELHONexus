@@ -14,9 +14,6 @@ CDP_HEADED = os.environ.get(
     "http://playwright.playwright.svc.cluster.local:9222",
 )
 
-# Proxy for the local-Chromium fallback only.
-PROXY_URL = os.environ.get("BROWSER_PROXY_URL", "").strip()
-
 CDP_PROBE_TIMEOUT_S = 10   # /json/version, /json/list
 CDP_CLOSE_TIMEOUT_S = 5    # /json/close/<id>
 

@@ -1,10 +1,10 @@
 """Playwright browser-service helpers: CDP endpoint resolution, stale-target cleanup, driver start.
 
-The only module (with `crawler.py`) that imports `playwright` / `crawl4ai` or reads the
-`PLAYWRIGHT_*` / `BROWSER_*` env vars. Domains reach the browsers dotted through here:
-`resolve_ws_url()` (HTTP CDP endpoint -> WebSocket URL), `close_stale_targets()`,
-`start_playwright()` (the Playwright driver, on which the caller calls
-`chromium.connect_over_cdp(ws_url)`), and the endpoints in `params`."""
+The only module that imports `playwright` or reads the `PLAYWRIGHT_*` env vars (the Crawl4AI
+library, which sits on top of these browsers, lives in the `crawl4ai/` submodule). Domains
+reach the browsers dotted through here: `resolve_ws_url()` (HTTP CDP endpoint -> WebSocket
+URL), `close_stale_targets()`, `start_playwright()` (the Playwright driver, on which the
+caller calls `chromium.connect_over_cdp(ws_url)`), and the endpoints in `params`."""
 from __future__ import annotations
 from . import domain, params
 

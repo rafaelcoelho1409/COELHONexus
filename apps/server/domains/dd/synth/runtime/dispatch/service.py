@@ -160,13 +160,13 @@ async def run_single_chapter_async(
                 infra.langfuse.keys.OBS_META_WORKFLOW: "dd_synth",
             },
         ):
-            infra.langfuse.spans.set_current_span_langfuse_io(input_data = {
+            infra.langfuse.service.set_current_span_langfuse_io(input_data = {
                 "framework_slug": slug,
                 "chapter_id": chapter_id,
                 "mode": mode,
                 "thread_id": thread_id,
             })
-            infra.langfuse.spans.set_current_span_langfuse_trace_metadata({
+            infra.langfuse.service.set_current_span_langfuse_trace_metadata({
                 "pipeline": "dd_synth",
                 "run_kind": "chapter",
                 "framework_slug": slug,
@@ -174,7 +174,7 @@ async def run_single_chapter_async(
                 "mode": mode,
                 "thread_id": thread_id,
             })
-            infra.langfuse.spans.set_current_span_langfuse_observation_metadata({
+            infra.langfuse.service.set_current_span_langfuse_observation_metadata({
                 "framework_slug": slug,
                 "chapter_id": chapter_id,
                 "mode": mode,
@@ -218,7 +218,7 @@ async def run_single_chapter_async(
             )
             if result.get("status") == "done":
                 await _persist_chapter_timing(slug, chapter_id, int((time.monotonic() - chapter_t0) * 1000))
-            infra.langfuse.spans.set_current_span_langfuse_io(output_data = {
+            infra.langfuse.service.set_current_span_langfuse_io(output_data = {
                 "status": result.get("status", "unknown"),
                 "error": result.get("error"),
                 "framework_slug": slug,
@@ -663,14 +663,14 @@ async def run_study_async(
                 infra.langfuse.keys.OBS_META_WORKFLOW: "dd_synth",
             },
         ):
-            infra.langfuse.spans.set_current_span_langfuse_io(input_data = {
+            infra.langfuse.service.set_current_span_langfuse_io(input_data = {
                 "framework_slug": slug,
                 "mode": mode,
                 "requested_chapter_count": len(chapter_ids),
                 "chapter_ids_preview": chapter_ids[:5],
                 "thread_id": study_thread_id,
             })
-            infra.langfuse.spans.set_current_span_langfuse_trace_metadata({
+            infra.langfuse.service.set_current_span_langfuse_trace_metadata({
                 "pipeline": "dd_synth",
                 "run_kind": "study",
                 "framework_slug": slug,
@@ -678,7 +678,7 @@ async def run_study_async(
                 "thread_id": study_thread_id,
                 "requested_chapter_count": len(chapter_ids),
             })
-            infra.langfuse.spans.set_current_span_langfuse_observation_metadata({
+            infra.langfuse.service.set_current_span_langfuse_observation_metadata({
                 "framework_slug": slug,
                 "mode": mode,
                 "requested_chapter_count": len(chapter_ids),
@@ -686,7 +686,7 @@ async def run_study_async(
             result = await _run_study_async_inner(
                 study_thread_id, slug, chapter_ids, mode,
             )
-            infra.langfuse.spans.set_current_span_langfuse_io(output_data = {
+            infra.langfuse.service.set_current_span_langfuse_io(output_data = {
                 "status": result.get("final_status", "unknown"),
                 "framework_slug": slug,
                 "mode": mode,

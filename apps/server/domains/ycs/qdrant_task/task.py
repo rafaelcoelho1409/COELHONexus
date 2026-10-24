@@ -55,7 +55,7 @@ def ingest_to_qdrant(
                     "ycs.video_count": len(video_ids or []),
                 },
             ):
-                infra.langfuse.spans.set_current_span_langfuse_io(input_data = {
+                infra.langfuse.service.set_current_span_langfuse_io(input_data = {
                     "kind": "qdrant",
                     "video_ids_preview": list(video_ids or [])[:10],
                     "video_count": len(video_ids or []),
@@ -63,13 +63,13 @@ def ingest_to_qdrant(
                     "chunk_overlap": chunk_overlap,
                     "task_id": self.request.id or "",
                 })
-                infra.langfuse.spans.set_current_span_langfuse_trace_metadata({
+                infra.langfuse.service.set_current_span_langfuse_trace_metadata({
                     "pipeline": "ycs_ingest",
                     "kind": "qdrant",
                     "task_id": self.request.id or "",
                     "video_count": len(video_ids or []),
                 })
-                infra.langfuse.spans.set_current_span_langfuse_observation_metadata({
+                infra.langfuse.service.set_current_span_langfuse_observation_metadata({
                     "kind": "qdrant",
                     "video_count": len(video_ids or []),
                 })
@@ -89,14 +89,14 @@ def ingest_to_qdrant(
                             _kwargs["collection_name"] = collection_name
                         result = await domains.ycs.ingestion.service.ingest_to_qdrant(**_kwargs)
                     except Exception as e:
-                        infra.langfuse.spans.set_current_span_langfuse_io(output_data = {
+                        infra.langfuse.service.set_current_span_langfuse_io(output_data = {
                             "status": "failed",
                             "kind": "qdrant",
                             "task_id": self.request.id or "",
                             "error": f"{type(e).__name__}: {e}",
                         })
                         raise
-                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = {
+                    infra.langfuse.service.set_current_span_langfuse_io(output_data = {
                         "status": "done",
                         "kind": "qdrant",
                         "task_id": self.request.id or "",

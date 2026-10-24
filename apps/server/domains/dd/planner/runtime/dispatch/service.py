@@ -241,24 +241,24 @@ async def run_planner_async(
                 infra.langfuse.keys.OBS_META_WORKFLOW: "dd_planner",
             },
         ):
-            infra.langfuse.spans.set_current_span_langfuse_io(input_data = {
+            infra.langfuse.service.set_current_span_langfuse_io(input_data = {
                 "framework_slug": slug,
                 "mode": mode,
                 "thread_id": thread_id,
             })
-            infra.langfuse.spans.set_current_span_langfuse_trace_metadata({
+            infra.langfuse.service.set_current_span_langfuse_trace_metadata({
                 "pipeline": "dd_planner",
                 "run_kind": "planner",
                 "framework_slug": slug,
                 "mode": mode,
                 "thread_id": thread_id,
             })
-            infra.langfuse.spans.set_current_span_langfuse_observation_metadata({
+            infra.langfuse.service.set_current_span_langfuse_observation_metadata({
                 "framework_slug": slug,
                 "mode": mode,
             })
             result = await _run_planner_async_inner(thread_id, slug, mode)
-            infra.langfuse.spans.set_current_span_langfuse_io(
+            infra.langfuse.service.set_current_span_langfuse_io(
                 output_data = result.get("langfuse_output") or {
                     "status": result.get("status", "unknown"),
                     "error": result.get("error"),

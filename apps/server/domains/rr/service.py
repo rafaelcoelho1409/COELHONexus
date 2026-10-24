@@ -277,21 +277,21 @@ async def run_scan_async(
                 infra.langfuse.keys.OBS_META_WORKFLOW: "rr_scan",
             },
         ):
-            infra.langfuse.spans.set_current_span_langfuse_io(input_data = {
+            infra.langfuse.service.set_current_span_langfuse_io(input_data = {
                 "topic": topic,
                 "verticals": list(verticals or []),
                 "top_n": top_n,
                 "scan_id": scan_id,
                 "profile_id": profile_id,
             })
-            infra.langfuse.spans.set_current_span_langfuse_trace_metadata({
+            infra.langfuse.service.set_current_span_langfuse_trace_metadata({
                 "pipeline": "rr_scan",
                 "scan_id": scan_id,
                 "profile_id": profile_id,
                 "vertical_count": len(verticals),
                 "top_n": top_n,
             })
-            infra.langfuse.spans.set_current_span_langfuse_observation_metadata({
+            infra.langfuse.service.set_current_span_langfuse_observation_metadata({
                 "topic": topic[:200],
                 "vertical_count": len(verticals),
             })
@@ -304,7 +304,7 @@ async def run_scan_async(
                     top_n = top_n,
                 )
             except Exception as e:
-                infra.langfuse.spans.set_current_span_langfuse_io(output_data = {
+                infra.langfuse.service.set_current_span_langfuse_io(output_data = {
                     "status": "failed",
                     "error": f"{type(e).__name__}: {e}",
                     "n_findings": 0,
@@ -313,7 +313,7 @@ async def run_scan_async(
                     "degraded": True,
                 })
                 raise
-            infra.langfuse.spans.set_current_span_langfuse_io(output_data = {
+            infra.langfuse.service.set_current_span_langfuse_io(output_data = {
                 "status": result.get("status", "unknown"),
                 "n_findings": int(result.get("n_findings", 0) or 0),
                 "total_candidates": int(

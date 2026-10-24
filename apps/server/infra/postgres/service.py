@@ -27,13 +27,13 @@ from psycopg_pool import AsyncConnectionPool
 logger = logging.getLogger(__name__)
 
 
-def check_configured(database: str | None = None) -> None:
-    """Raise one error naming every missing Postgres env var (`database` defaults to `POSTGRES_DATABASE`)."""
+def check_configured() -> None:
+    """Raise one error naming every missing Postgres env var."""
     missing = [
         name for name, value in (
             ("POSTGRES_HOST", params.HOST),
             ("POSTGRES_USER", params.USER),
-            ("POSTGRES_DATABASE", database or params.DATABASE),
+            ("POSTGRES_DATABASE", params.DATABASE),
         ) if not value
     ]
     if missing:
@@ -45,11 +45,11 @@ def is_configured() -> bool:
     return bool(params.HOST and params.USER and params.DATABASE)
 
 
-def url(*, database: str | None = None) -> str:
-    """Connection URL built from the `POSTGRES_*` env vars (`database` overrides the default one)."""
-    check_configured(database)
+def url() -> str:
+    """Connection URL built from the `POSTGRES_*` env vars."""
+    check_configured()
     return domain.build_url(
-        params.USER, params.PASSWORD, params.HOST, params.PORT, database or params.DATABASE,
+        params.USER, params.PASSWORD, params.HOST, params.PORT, params.DATABASE,
     )
 
 

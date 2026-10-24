@@ -1,13 +1,15 @@
 """LangFuse I/O shell — every SDK / OTel-mutating entry point, fail-soft.
 
-Owns the imperative side; pure encoders live in `domain.py`, span-attribute
-shell in `spans.py`, prompt management in `prompts.py`:
+Owns the imperative side; pure encoders live in `domain.py`, prompt management
+in `prompts.py`:
 
   client     — lazy `Langfuse` singleton (`get_client`, `is_available`)
   sessions   — `session(...)`: stamp session_id + user_id into OTel baggage
                (DD one study run, YCS one Ask conversation, RR one digest)
   scores     — `record_score(...)` onto the active trace
   annotation — `flag_for_review(...)`: span markers + review score
+  span attrs — `set_current_span_langfuse_io / _trace_metadata /
+               _observation_metadata`: LangFuse attributes on the active span
   callbacks  — `build_langchain_callback(...)` for LangChain agents
   exporter   — `add_exporter(...)`: OTLP/HTTP trace export behind the span gate
                (called by `infra.opentelemetry.service.init_otel`)
@@ -27,7 +29,7 @@ import logging
 import os
 import re
 import threading
-from typing import Iterator, Literal
+from typing import Any, Iterator, Literal, Mapping
 
 from langfuse import Langfuse
 from langfuse.langchain import CallbackHandler
@@ -234,10 +236,7 @@ def flag_for_review(
     """Tag the active trace as needing review. Set span attributes +
     optionally record a `review.required` score."""
     try:
-        span = infra.opentelemetry.service.get_current_span()
-        is_recording = getattr(span, "is_recording", None)
-        if callable(is_recording) and not is_recording():
-            span = None
+        span = _current_span()
         if span is not None:
             span.set_attribute(keys.REVIEW_REQUIRED_ATTR, True)
             span.set_attribute(keys.REVIEW_REASON_ATTR,   reason[:240])
@@ -258,6 +257,90 @@ def flag_for_review(
                 f"[langfuse-annotation] score write failed: "
                 f"{type(e).__name__}: {e}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Span attributes — LangFuse-recognized I/O + filterable metadata on the CURRENT
+# active span (typically the workflow-root span for DD, YCS and RR). Keeps COELHO
+# Nexus on a single OpenTelemetry tracing plane while still setting the
+# LangFuse-specific attributes needed for rich trace previews, filtering and
+# evaluations. All fail-soft: no recording span, or any error, is a no-op.
+# ---------------------------------------------------------------------------
+
+def _current_span():
+    span = infra.opentelemetry.service.get_current_span()
+    if hasattr(span, "is_recording") and not span.is_recording():
+        return None
+    return span
+
+
+def set_current_span_langfuse_io(
+    *,
+    input_data: Any | None = None,
+    output_data: Any | None = None,
+) -> None:
+    """Attach LangFuse-recognized I/O attributes to the active span.
+
+    We stamp BOTH observation-level and trace-level forms on workflow-root
+    spans. LangFuse can derive trace previews from the root observation, but
+    setting the trace fields directly makes the behavior explicit and stable.
+    """
+    span = _current_span()
+    if span is None:
+        return
+    try:
+        if input_data is not None:
+            encoded = domain.json_attr(input_data)
+            span.set_attribute(keys.OBS_INPUT, encoded)
+            span.set_attribute(keys.TRACE_INPUT, encoded)
+        if output_data is not None:
+            encoded = domain.json_attr(output_data)
+            span.set_attribute(keys.OBS_OUTPUT, encoded)
+            span.set_attribute(keys.TRACE_OUTPUT, encoded)
+    except Exception:
+        pass
+
+
+def set_current_span_langfuse_trace_metadata(
+    metadata: Mapping[str, Any] | None,
+) -> None:
+    """Promote selected workflow fields to filterable LangFuse trace metadata."""
+    if not metadata:
+        return
+    span = _current_span()
+    if span is None:
+        return
+    try:
+        for key, value in metadata.items():
+            if value is None:
+                continue
+            span.set_attribute(
+                f"{keys.TRACE_META_PREFIX}{domain.metadata_key(key)}",
+                domain.metadata_value(value),
+            )
+    except Exception:
+        pass
+
+
+def set_current_span_langfuse_observation_metadata(
+    metadata: Mapping[str, Any] | None,
+) -> None:
+    """Promote selected fields to filterable LangFuse observation metadata."""
+    if not metadata:
+        return
+    span = _current_span()
+    if span is None:
+        return
+    try:
+        for key, value in metadata.items():
+            if value is None:
+                continue
+            span.set_attribute(
+                f"{keys.OBS_META_PREFIX}{domain.metadata_key(key)}",
+                domain.metadata_value(value),
+            )
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 
 # I/O attributes — stamped at BOTH observation and trace level on
-# workflow-root spans (see `spans.set_current_span_langfuse_io`).
+# workflow-root spans (see `service.set_current_span_langfuse_io`).
 TRACE_INPUT  = "langfuse.trace.input"
 TRACE_OUTPUT = "langfuse.trace.output"
 OBS_INPUT    = "langfuse.observation.input"

@@ -41,21 +41,21 @@ async def ingest_async(
                 "ycs.video_count": len(video_ids or []),
             },
         ):
-            infra.langfuse.spans.set_current_span_langfuse_io(input_data = {
+            infra.langfuse.service.set_current_span_langfuse_io(input_data = {
                 "kind": "neo4j",
                 "video_ids_preview": list(video_ids or [])[:10],
                 "video_count": len(video_ids or []),
                 "batch_size": batch_size,
                 "task_id": task_id or "",
             })
-            infra.langfuse.spans.set_current_span_langfuse_trace_metadata({
+            infra.langfuse.service.set_current_span_langfuse_trace_metadata({
                 "pipeline": "ycs_ingest",
                 "kind": "neo4j",
                 "task_id": task_id or "",
                 "video_count": len(video_ids or []),
                 "batch_size": batch_size,
             })
-            infra.langfuse.spans.set_current_span_langfuse_observation_metadata({
+            infra.langfuse.service.set_current_span_langfuse_observation_metadata({
                 "kind": "neo4j",
                 "video_count": len(video_ids or []),
             })
@@ -65,14 +65,14 @@ async def ingest_async(
             progress_cb = progress_cb,
         )
             except Exception as e:
-                infra.langfuse.spans.set_current_span_langfuse_io(output_data = {
+                infra.langfuse.service.set_current_span_langfuse_io(output_data = {
                     "status": "failed",
                     "kind": "neo4j",
                     "task_id": task_id or "",
                     "error": f"{type(e).__name__}: {e}",
                 })
                 raise
-            infra.langfuse.spans.set_current_span_langfuse_io(output_data = {
+            infra.langfuse.service.set_current_span_langfuse_io(output_data = {
                 "status": "done" if not result.get("error") else "failed",
                 "kind": "neo4j",
                 "task_id": task_id or "",

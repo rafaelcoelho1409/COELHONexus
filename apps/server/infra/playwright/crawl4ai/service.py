@@ -1,11 +1,11 @@
 """Crawl4AI building blocks bound to the Playwright browser service.
 
-Import explicitly (`import infra.playwright.crawler`): it pulls in crawl4ai, which tiers
-that never crawl should not pay for. `build_browser_config()` points Crawl4AI at the
+The only module that imports `crawl4ai`. `build_browser_config()` points Crawl4AI at the
 headless CDP sidecar (or a local Chromium); the Crawl4AI classes are re-exported so
 domains never import `crawl4ai` themselves."""
 from __future__ import annotations
-from . import params, service
+import infra
+from . import params
 
 import logging
 
@@ -28,7 +28,8 @@ logger = logging.getLogger(__name__)
 
 def build_browser_config() -> BrowserConfig:
     """BrowserConfig using the remote headless CDP browser if it resolves, else a local Chromium."""
-    cdp_ws = service.resolve_ws_url(params.CDP_HEADLESS, cache = True) if params.CDP_HEADLESS else None
+    cdp_headless = infra.playwright.params.CDP_HEADLESS
+    cdp_ws = infra.playwright.service.resolve_ws_url(cdp_headless, cache = True) if cdp_headless else None
     if cdp_ws:
         logger.info(f"[playwright] using remote CDP {cdp_ws[:80]}…")
         return BrowserConfig(

@@ -130,7 +130,7 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        app.state.pg_url = infra.postgres.service.url(database = infra.postgres.params.YCS_DATABASE)
+        app.state.pg_url = infra.postgres.service.url()
         await domains.ycs.conversation.service.ensure_conversation_table(
             app.state.pg_url)
     except Exception as e:

@@ -5,9 +5,9 @@ exporter built by `service.add_exporter` here, behind the span gate in
 `domain.should_keep_span`. This package owns the SDK-only features:
 
   service.py    — I/O shell: client singleton, sessions, scores,
-                  review flags, LangChain callbacks (all fail-soft)
-  spans.py      — current-span LangFuse attribute setters
-  domain.py     — pure span-attribute encoders
+                  review flags, current-span attribute setters,
+                  LangChain callbacks (all fail-soft)
+  domain.py    — pure span-attribute encoders
   keys.py       — `langfuse.*` attribute namespace
   prompts.py    — get_prompt(name, label, vars) cached + bulletproof fallback
   evals/        — offline evaluation suite: datasets/ (gold corpora) +
@@ -18,7 +18,7 @@ credentials are absent, callers get a graceful no-op + a debug log line,
 never an exception. The pipeline must never break because LangFuse is down.
 """
 from __future__ import annotations
-from . import domain, evals, keys, params, patterns, prompts, service, spans
+from . import domain, evals, keys, params, patterns, prompts, service
 
 
 __all__ = [
@@ -29,5 +29,4 @@ __all__ = [
     "patterns",
     "prompts",
     "service",
-    "spans",
 ]

@@ -5,7 +5,6 @@ gate, 4a parallel httpx, 4b Playwright on SPA/high-fail. Pure helpers
 domain.py."""
 from __future__ import annotations
 import domains, infra
-import infra.playwright.crawler
 from . import domain, params
 
 import asyncio
@@ -47,8 +46,8 @@ async def _install_resource_blocker(crawler) -> None:
 
 def _build_md_generator():
     """PruningContentFilter + DefaultMarkdownGenerator."""
-    return infra.playwright.crawler.DefaultMarkdownGenerator(
-        content_filter = infra.playwright.crawler.PruningContentFilter(
+    return infra.playwright.crawl4ai.service.DefaultMarkdownGenerator(
+        content_filter = infra.playwright.crawl4ai.service.PruningContentFilter(
             threshold = 0.45,
             threshold_type = "dynamic",
             min_word_threshold = 5,
@@ -68,32 +67,32 @@ async def crawl_urls(
     if not urls:
         return 0, []
 
-    browser_cfg = infra.playwright.crawler.build_browser_config()
+    browser_cfg = infra.playwright.crawl4ai.service.build_browser_config()
     md_generator = _build_md_generator()
     primary_cfg, retry_cfg = domain.build_run_configs(
-        infra.playwright.crawler.CrawlerRunConfig,
-        infra.playwright.crawler.CacheMode,
-        infra.playwright.crawler.LXMLWebScrapingStrategy(),
+        infra.playwright.crawl4ai.service.CrawlerRunConfig,
+        infra.playwright.crawl4ai.service.CacheMode,
+        infra.playwright.crawl4ai.service.LXMLWebScrapingStrategy(),
         md_generator,
     )
 
-    dispatcher_primary = infra.playwright.crawler.MemoryAdaptiveDispatcher(
+    dispatcher_primary = infra.playwright.crawl4ai.service.MemoryAdaptiveDispatcher(
         max_session_permit = params.MAX_SESSION_PERMIT,
         memory_threshold_percent = 85.0,
         recovery_threshold_percent = 75.0,
         check_interval = 1.0,
-        rate_limiter = infra.playwright.crawler.RateLimiter(
+        rate_limiter = infra.playwright.crawl4ai.service.RateLimiter(
             base_delay = (0.5, 1.5),
             max_delay = 20.0,
             max_retries = 3,
         ),
     )
-    dispatcher_retry = infra.playwright.crawler.MemoryAdaptiveDispatcher(
+    dispatcher_retry = infra.playwright.crawl4ai.service.MemoryAdaptiveDispatcher(
         max_session_permit = 1,
         memory_threshold_percent = 85.0,
         recovery_threshold_percent = 75.0,
         check_interval = 1.0,
-        rate_limiter = infra.playwright.crawler.RateLimiter(
+        rate_limiter = infra.playwright.crawl4ai.service.RateLimiter(
             base_delay = (1.0, 3.0),
             max_delay = 30.0,
             max_retries = 3,
@@ -160,7 +159,7 @@ async def crawl_urls(
             )
             await progress.update(current = written, last_url = url)
     await progress.start(tier = "playwright", total = len(urls))
-    async with infra.playwright.crawler.AsyncWebCrawler(config = browser_cfg) as crawler:
+    async with infra.playwright.crawl4ai.service.AsyncWebCrawler(config = browser_cfg) as crawler:
         await _install_resource_blocker(crawler)
         if hasattr(primary_cfg, "clone"):
             per_url_configs = [
@@ -227,14 +226,14 @@ async def _seeder_discover(
 ) -> list[str]:
     """Crawl4AI seeder URL list. [] on any failure — caller falls back to BFS.
     Import is deferred so tiers 1/2/3 don't pay the crawl4ai load cost."""
-    cfg = infra.playwright.crawler.SeedingConfig(
+    cfg = infra.playwright.crawl4ai.service.SeedingConfig(
         source="sitemap+cc",
         pattern=domain.seed_pattern_for(docs_path),
         max_urls=max_urls,
         extract_head=False,
     )
     try:
-        async with infra.playwright.crawler.AsyncUrlSeeder() as seeder:
+        async with infra.playwright.crawl4ai.service.AsyncUrlSeeder() as seeder:
             results = await seeder.urls(host, cfg)
     except Exception as e:
         logger.warning(f"[seeder] {host} discovery failed: {e}")

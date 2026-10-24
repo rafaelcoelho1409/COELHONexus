@@ -224,21 +224,21 @@ async def rag_search(
                     infra.langfuse.keys.OBS_META_WORKFLOW: "ycs_ask",
                 },
             ):
-                infra.langfuse.spans.set_current_span_langfuse_io(input_data = domains.ycs.runtime.observability.domain.langfuse_ycs_input(
+                infra.langfuse.service.set_current_span_langfuse_io(input_data = domains.ycs.runtime.observability.domain.langfuse_ycs_input(
                     question = payload.question,
                     route = "search",
                     force_mode = payload.force_mode or "",
                     channel_ids = list(payload.channel_ids or []),
                     thread_id = _sess_id,
                 ))
-                infra.langfuse.spans.set_current_span_langfuse_trace_metadata({
+                infra.langfuse.service.set_current_span_langfuse_trace_metadata({
                     "pipeline": "ycs_ask",
                     "route": "search",
                     "thread_id": _sess_id,
                     "channel_id": _user_id,
                     "force_mode": payload.force_mode or "",
                 })
-                infra.langfuse.spans.set_current_span_langfuse_observation_metadata({
+                infra.langfuse.service.set_current_span_langfuse_observation_metadata({
                     "route": "search",
                     "channel_count": len(payload.channel_ids or []),
                 })
@@ -276,7 +276,7 @@ async def rag_search(
                             "_deadline_hit":     True,
                         }
                 except Exception as e:
-                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
+                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
                         status = "error",
                         answer = "",
                         mode = payload.force_mode or "unknown",
@@ -285,7 +285,7 @@ async def rag_search(
                         error = str(e),
                     ))
                     raise
-                infra.langfuse.spans.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
+                infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
                     status = "done",
                     answer = str(result.get("generation") or ""),
                     mode = str(result.get("mode") or payload.force_mode or "standard"),
@@ -682,21 +682,21 @@ async def rag_search_stream(
             },
         )
         _span_cm.__enter__()
-        infra.langfuse.spans.set_current_span_langfuse_io(input_data = domains.ycs.runtime.observability.domain.langfuse_ycs_input(
+        infra.langfuse.service.set_current_span_langfuse_io(input_data = domains.ycs.runtime.observability.domain.langfuse_ycs_input(
             question = payload.question,
             route = "search_stream",
             force_mode = payload.force_mode or "",
             channel_ids = list(effective_channel_ids or []),
             thread_id = _sess_id,
         ))
-        infra.langfuse.spans.set_current_span_langfuse_trace_metadata({
+        infra.langfuse.service.set_current_span_langfuse_trace_metadata({
             "pipeline": "ycs_ask",
             "route": "search_stream",
             "thread_id": _sess_id,
             "channel_id": _user_id,
             "force_mode": payload.force_mode or "",
         })
-        infra.langfuse.spans.set_current_span_langfuse_observation_metadata({
+        infra.langfuse.service.set_current_span_langfuse_observation_metadata({
             "route": "search_stream",
             "channel_count": len(effective_channel_ids or []),
         })
@@ -990,7 +990,7 @@ async def rag_search_stream(
                         duration_s = max(time.monotonic() - t_run_start, 0.0),
                         citation_count = len(last_citations),
                     )
-                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
+                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
                         status = "cancelled",
                         answer = last_generation,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1076,7 +1076,7 @@ async def rag_search_stream(
                         duration_s = max(time.monotonic() - t_run_start, 0.0),
                         citation_count = len(last_citations),
                     )
-                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
+                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
                         status = "done",
                         answer = last_generation,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1140,7 +1140,7 @@ async def rag_search_stream(
                         duration_s = max(time.monotonic() - t_run_start, 0.0),
                         citation_count = len(last_citations),
                     )
-                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
+                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
                         status = "stalled",
                         answer = sentinel,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1237,7 +1237,7 @@ async def rag_search_stream(
                         if last_generation else
                         "(no response — see Thinking for pipeline status)"
                     )
-                    infra.langfuse.spans.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
+                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
                         status = "done",
                         answer = final_answer,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1286,7 +1286,7 @@ async def rag_search_stream(
                 duration_s = max(time.monotonic() - t_run_start, 0.0),
                 citation_count = len(last_citations),
             )
-            infra.langfuse.spans.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
+            infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
                 status = "client_disconnect",
                 answer = last_generation,
                 mode = last_mode or payload.force_mode or "unknown",
@@ -1361,7 +1361,7 @@ async def rag_search_stream(
                 duration_s = max(time.monotonic() - t_run_start, 0.0),
                 citation_count = len(last_citations),
             )
-            infra.langfuse.spans.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
+            infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
                 status = "error",
                 answer = last_generation,
                 mode = last_mode or payload.force_mode or "unknown",
