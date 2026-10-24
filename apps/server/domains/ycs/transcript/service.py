@@ -43,7 +43,6 @@ from datetime import datetime
 from typing import Any, Callable
 
 import httpx
-from elasticsearch import AsyncElasticsearch
 from playwright.async_api import async_playwright
 
 
@@ -1406,12 +1405,12 @@ async def close_transcript_service() -> None:
 
 # ES cache check + batch driver (helpers.py:L556-741)
 async def _check_existing_transcriptions(
-    es_client: AsyncElasticsearch | None,
+    es_client: infra.elasticsearch.service.AsyncElasticsearch | None,
     video_ids: list[str],
     languages: list[str] | None = None,
 ) -> dict[str, set[str]]:
-    """Query ES `coelhonexus-youtube-transcriptions` for already-indexed
-    docs and return `{video_id: {lang, ...}}`."""
+    """Query the transcriptions index (`infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS`)
+    for already-indexed docs and return `{video_id: {lang, ...}}`."""
     if not es_client or not video_ids:
         return {}
     try:
@@ -1462,7 +1461,7 @@ def _needs_transcription(
 async def fetch_transcriptions_batch(
     video_ids:          list[str],
     transcript_service: PlaywrightTranscriptService | None = None,
-    es_client:          AsyncElasticsearch | None         = None,
+    es_client:          infra.elasticsearch.service.AsyncElasticsearch | None         = None,
     languages:          list[str] | None                  = None,
     chunk_size:         int                               = params.DEFAULT_CHUNK_SIZE,
     video_metadata:     dict[str, dict[str, Any]] | None  = None,

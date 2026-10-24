@@ -8,7 +8,6 @@ import os
 from typing import Any
 
 import redis.asyncio as redis_aio
-from elasticsearch import AsyncElasticsearch
 from qdrant_client import AsyncQdrantClient
 
 logger = infra.celery.service.get_task_logger(__name__)
@@ -78,14 +77,7 @@ def ingest_to_qdrant(
                     "kind": "qdrant",
                     "video_count": len(video_ids or []),
                 })
-                es = AsyncElasticsearch(
-                    hosts      = [os.environ["ELASTICSEARCH_HOST"]],
-                    basic_auth = (
-                        os.environ["ELASTICSEARCH_USERNAME"],
-                        os.environ.get("ELASTICSEARCH_PASSWORD", ""),
-                    ),
-                    verify_certs = False,
-                )
+                es = infra.elasticsearch.service.new_es()
                 qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:6333")
                 qdrant_port = int(os.environ.get("QDRANT_PORT", "6333"))
                 qdrant_api_key = os.environ.get("QDRANT_API_KEY")
@@ -155,14 +147,7 @@ def stream_video_to_qdrant(
     logger.info(f"[stream_video_to_qdrant] {extract_id}: {video_id}")
 
     async def _run() -> dict[str, Any]:
-        es = AsyncElasticsearch(
-            hosts      = [os.environ["ELASTICSEARCH_HOST"]],
-            basic_auth = (
-                os.environ["ELASTICSEARCH_USERNAME"],
-                os.environ.get("ELASTICSEARCH_PASSWORD", ""),
-            ),
-            verify_certs = False,
-        )
+        es = infra.elasticsearch.service.new_es()
         qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:6333")
         qdrant_port = int(os.environ.get("QDRANT_PORT", "6333"))
         qdrant_api_key = os.environ.get("QDRANT_API_KEY")

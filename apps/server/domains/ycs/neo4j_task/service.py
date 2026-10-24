@@ -13,7 +13,6 @@ import random
 from collections.abc import Callable
 from typing import Any
 
-from elasticsearch import AsyncElasticsearch
 from langchain_neo4j import Neo4jGraph
 
 
@@ -93,14 +92,7 @@ async def ingest_pipeline(
     *,
     progress_cb:     Callable[[dict[str, Any]], None],
 ) -> dict[str, Any]:
-    es = AsyncElasticsearch(
-        hosts      = [os.environ["ELASTICSEARCH_HOST"]],
-        basic_auth = (
-            os.environ["ELASTICSEARCH_USERNAME"],
-            os.environ.get("ELASTICSEARCH_PASSWORD", ""),
-        ),
-        verify_certs = False,
-    )
+    es = infra.elasticsearch.service.new_es()
     # Deprecated did NOT pass refresh_schema=False here — port-fidelity.
     neo4j_graph = Neo4jGraph(
         url      = os.environ.get("NEO4J_URI", "bolt://localhost:7687"),

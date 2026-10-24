@@ -19,7 +19,6 @@ import logging
 import time
 from typing import Any, Awaitable
 
-from elasticsearch import AsyncElasticsearch
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_neo4j import Neo4jGraph
@@ -48,7 +47,7 @@ class ElasticsearchRetriever:
 
     def __init__(
         self,
-        es_client: AsyncElasticsearch,
+        es_client: infra.elasticsearch.service.AsyncElasticsearch,
         top_k: int = params.ES_DEFAULT_TOP_K,
     ) -> None:
         self.es = es_client
@@ -167,7 +166,7 @@ class QdrantHybridRetriever:
         dense_embeddings: Embeddings,
         sparse_embeddings: FastEmbedSparse,
         top_k: int = params.QDRANT_DEFAULT_TOP_K,
-        es_client: AsyncElasticsearch | None = None,
+        es_client: infra.elasticsearch.service.AsyncElasticsearch | None = None,
     ) -> None:
         self.qdrant = qdrant
         self.dense_embeddings = dense_embeddings

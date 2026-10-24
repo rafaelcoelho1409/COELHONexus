@@ -18,14 +18,12 @@ import logging
 import time
 from typing import Any
 
-from elasticsearch import AsyncElasticsearch
-
 
 logger = logging.getLogger(__name__)
 
 
 async def index_videos_to_elasticsearch(
-    es_client: AsyncElasticsearch,
+    es_client: infra.elasticsearch.service.AsyncElasticsearch,
     videos: list[dict[str, Any]],
     index: str = infra.elasticsearch.keys.INDEX_METADATA,
 ) -> dict[str, Any]:
@@ -85,7 +83,7 @@ async def index_videos_to_elasticsearch(
 
 
 async def index_transcriptions_to_elasticsearch(
-    es_client: AsyncElasticsearch,
+    es_client: infra.elasticsearch.service.AsyncElasticsearch,
     transcriptions: list[dict[str, Any]],
     index: str = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
 ) -> dict[str, Any]:
@@ -151,7 +149,7 @@ async def index_transcriptions_to_elasticsearch(
 
 
 async def delete_videos_from_es(
-    es:        AsyncElasticsearch,
+    es:        infra.elasticsearch.service.AsyncElasticsearch,
     video_ids: list[str],
 ) -> dict[str, Any]:
     """Best-effort delete of the supplied video_ids from BOTH

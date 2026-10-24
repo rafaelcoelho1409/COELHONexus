@@ -14,7 +14,6 @@ import json
 import logging
 from typing import Any, AsyncIterator, Callable
 
-from elasticsearch import AsyncElasticsearch
 from langchain_core.documents import Document
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http.models import (
@@ -201,7 +200,7 @@ async def ensure_collection(
 
 
 async def _scroll_transcripts(
-    es: AsyncElasticsearch,
+    es: infra.elasticsearch.service.AsyncElasticsearch,
     video_ids: list[str] | None = None,
     batch_size: int = params.SCROLL_BATCH_SIZE,
 ) -> AsyncIterator[dict]:
@@ -252,7 +251,7 @@ async def _scroll_transcripts(
 
 
 async def fetch_metadata_from_es(
-    es: AsyncElasticsearch, video_ids: list[str],
+    es: infra.elasticsearch.service.AsyncElasticsearch, video_ids: list[str],
 ) -> dict:
     """Bulk-fetch metadata for the supplied ids. Returns
     `{video_id: metadata_dict}` — keyed by whatever id was PASSED IN,
@@ -288,7 +287,7 @@ async def fetch_metadata_from_es(
 
 
 async def fetch_transcripts_from_es(
-    es: AsyncElasticsearch,
+    es: infra.elasticsearch.service.AsyncElasticsearch,
     video_ids: list[str] | None = None,
     batch_size: int = params.FETCH_BATCH_SIZE,
 ) -> list[dict]:
@@ -301,7 +300,7 @@ async def fetch_transcripts_from_es(
 
 
 async def ingest_to_qdrant(
-    es: AsyncElasticsearch,
+    es: infra.elasticsearch.service.AsyncElasticsearch,
     qdrant: AsyncQdrantClient,
     video_ids: list[str] | None = None,
     chunk_size: int = params.DEFAULT_CHUNK_SIZE,
@@ -555,7 +554,7 @@ async def ingest_to_qdrant(
 
 
 async def expand_with_partition_ids(
-    es: AsyncElasticsearch, video_ids: list[str],
+    es: infra.elasticsearch.service.AsyncElasticsearch, video_ids: list[str],
 ) -> list[str]:
     """`video_ids` plus every known partition id (`"{vid}#p{n}"`) whose
     `parent_video_id` is one of them — looked up from
@@ -898,7 +897,7 @@ async def _flush_buffer(
 
 
 async def stream_video_to_qdrant(
-    es:            AsyncElasticsearch,
+    es:            infra.elasticsearch.service.AsyncElasticsearch,
     qdrant:        AsyncQdrantClient,
     redis:         Redis,
     video_id:      str,

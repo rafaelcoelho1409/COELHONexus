@@ -46,7 +46,6 @@ import os
 from typing import Any
 
 import redis.asyncio as redis_aio
-from elasticsearch import AsyncElasticsearch
 from qdrant_client import AsyncQdrantClient
 
 from . import keys, params
@@ -147,14 +146,7 @@ async def wipe_videos_data(
 
     summary: dict[str, Any] = {"video_ids": list(video_ids)}
 
-    es = AsyncElasticsearch(
-        hosts      = [os.environ["ELASTICSEARCH_HOST"]],
-        basic_auth = (
-            os.environ["ELASTICSEARCH_USERNAME"],
-            os.environ.get("ELASTICSEARCH_PASSWORD", ""),
-        ),
-        verify_certs = False,
-    )
+    es = infra.elasticsearch.service.new_es()
     qdrant_api_key = os.environ.get("QDRANT_API_KEY")
     qdrant = AsyncQdrantClient(
         url     = os.environ.get("QDRANT_URL", "http://localhost:6333"),

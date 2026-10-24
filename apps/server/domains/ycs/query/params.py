@@ -10,6 +10,7 @@ unsupported in every backend — endpoints return an empty result + the
 unsupported flag rather than 404, so the UI can keep the tab visible
 and grey-out the chip."""
 from __future__ import annotations
+import infra.elasticsearch
 
 from . import entities
 
@@ -52,7 +53,7 @@ APP_BACKENDS: dict[str, dict[str, entities.AppNamespace]] = {
         BACKEND_ES: entities.AppNamespace(
             available = True,
             label     = "YCS · metadata + transcripts",
-            target    = "coelhonexus-youtube-metadata,coelhonexus-youtube-transcriptions",
+            target    = f"{infra.elasticsearch.keys.INDEX_METADATA},{infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS}",
         ),
         BACKEND_QDRANT: entities.AppNamespace(
             available = True,

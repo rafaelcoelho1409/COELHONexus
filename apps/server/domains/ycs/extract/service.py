@@ -15,7 +15,7 @@ NO PERSISTENCE in this layer — Celery tasks (Wave 4) wrap these calls +
 write to Elasticsearch + dispatch the Playwright transcript fetch.
 """
 from __future__ import annotations
-import domains
+import domains, infra
 import domains.ycs.qdrant_task.task
 import domains.ycs.neo4j_task.task
 from . import domain, params, schemas
@@ -27,7 +27,6 @@ import os
 import time
 from typing import Any, Callable
 
-from elasticsearch import AsyncElasticsearch
 from langchain_neo4j import Neo4jGraph
 from qdrant_client import AsyncQdrantClient
 
@@ -203,22 +202,6 @@ def get_extractor() -> YtDlpExtractor:
 # the async impl passes per-stage dicts so the FastHTML poller can show
 # the current video metadata + phase counters.
 ProgressCb = Callable[[dict[str, Any]], None]
-
-# Fresh client factory (Celery worker process)
-def get_es_client() -> AsyncElasticsearch:
-    """Build a fresh ES client owned by the running Celery task. The infra
-    `get_es()` singleton lives in the FastAPI process; the Celery worker
-    is a separate process and needs its own connection pool — deprecated
-    pattern (`tasks/youtube/crawler.py:L27-38`)."""
-    return AsyncElasticsearch(
-        hosts      = [os.environ["ELASTICSEARCH_HOST"]],
-        basic_auth = (
-            os.environ["ELASTICSEARCH_USERNAME"],
-            os.environ.get("ELASTICSEARCH_PASSWORD", ""),
-        ),
-        verify_certs = False,
-    )
-
 
 async def dispatch_streaming_totals(
     extract_id: str,
@@ -408,7 +391,7 @@ async def extract_videos_async(
     progress_cb:           ProgressCb | None = None,
     extract_id:            str | None        = None,
 ) -> dict[str, Any]:
-    es = get_es_client()
+    es = infra.elasticsearch.service.new_es()
     extractor = get_extractor()
     try:
         if progress_cb:
@@ -739,7 +722,7 @@ async def extract_channel_async(
     include_transcription: bool,
     languages:             list[str] | None,
 ) -> dict[str, Any]:
-    es = get_es_client()
+    es = infra.elasticsearch.service.new_es()
     extractor = get_extractor()
     try:
         result = await extractor.extract_channel(channel_id, max_results)
@@ -810,7 +793,7 @@ async def extract_playlist_async(
     include_transcription: bool,
     languages:             list[str] | None,
 ) -> dict[str, Any]:
-    es = get_es_client()
+    es = infra.elasticsearch.service.new_es()
     extractor = get_extractor()
     try:
         result = await extractor.extract_playlist(playlist_id, max_results)

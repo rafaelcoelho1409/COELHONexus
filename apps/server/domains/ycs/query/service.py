@@ -26,7 +26,6 @@ import uuid
 from typing import Any
 
 import psycopg
-from elasticsearch import AsyncElasticsearch
 from fastapi import Request
 
 
@@ -104,7 +103,7 @@ async def _query_es_inner(
     if not domain.is_supported(app, params.BACKEND_ES):
         return _unsupported(params.BACKEND_ES, app, q)
 
-    es: AsyncElasticsearch = infra.elasticsearch.service.get_es()
+    es = infra.elasticsearch.service.get_es()
     indexes = f"{infra.elasticsearch.keys.INDEX_METADATA},{infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS}"
     if q.strip():
         query: dict[str, Any] = {
@@ -349,7 +348,7 @@ async def _raw_es_inner(
     except errors.QueryNotAllowed as e:
         return _raw_disallowed(params.BACKEND_ES, app, str(e))
 
-    es: AsyncElasticsearch = infra.elasticsearch.service.get_es()
+    es = infra.elasticsearch.service.get_es()
     indexes = f"{infra.elasticsearch.keys.INDEX_METADATA},{infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS}"
     t0 = time.monotonic()
     notes: list[str] = []

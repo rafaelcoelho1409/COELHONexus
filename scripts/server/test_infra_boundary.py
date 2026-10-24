@@ -3,7 +3,7 @@ module; everything else reaches the service dotted through `infra.<service>.serv
 
     cd apps/server && .venv/bin/python ../../scripts/server/test_infra_boundary.py
 
-Add a service to RULES once its `infra/` module owns the library (so far: celery)."""
+Add a service to RULES once its `infra/` module owns the library (so far: celery, elasticsearch)."""
 import ast
 import sys
 from pathlib import Path
@@ -13,6 +13,11 @@ SERVER = Path(__file__).resolve().parents[2] / "apps" / "server"
 # service -> (top-level library names only its infra module may import, text only its infra module may contain)
 RULES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "celery": (("celery",), (".service.app.control",)),
+    "elasticsearch": (
+        ("elasticsearch", "elastic_transport"),
+        ('environ["ELASTICSEARCH_', 'environ.get("ELASTICSEARCH_', 'getenv("ELASTICSEARCH_',
+         "coelhonexus-youtube-metadata", "coelhonexus-youtube-transcriptions"),
+    ),
 }
 
 SKIP_DIRS = {".venv", "__pycache__", ".ruff_cache"}

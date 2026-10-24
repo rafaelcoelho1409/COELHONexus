@@ -5,16 +5,15 @@ from . import domain
 
 from typing import Any
 
-from elasticsearch import AsyncElasticsearch
 from fastapi import HTTPException
 
 
-def _es() -> AsyncElasticsearch:
+def _es() -> infra.elasticsearch.service.AsyncElasticsearch:
     return infra.elasticsearch.service.get_es()
 
 
 async def _terms_facet(
-    es:           AsyncElasticsearch,
+    es:           infra.elasticsearch.service.AsyncElasticsearch,
     facet_field:  str,
     label_field:  str,
     extra_field:  str | None = None,
@@ -80,7 +79,7 @@ async def _terms_facet(
 
 
 async def _compute_video_statuses(
-    es: AsyncElasticsearch, neo4j_graph: Any | None, video_ids: list[str],
+    es: infra.elasticsearch.service.AsyncElasticsearch, neo4j_graph: Any | None, video_ids: list[str],
 ) -> dict[str, dict[str, Any]]:
     """Per-video `{status, transcript_langs, transcript_length,
     entity_count}` for `video_ids` — partition-aware (a split video's
