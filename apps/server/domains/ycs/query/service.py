@@ -277,11 +277,10 @@ async def _query_neo4j_inner(
 
     t0 = time.monotonic()
     try:
-        driver = infra.neo4j.service.get_driver()
         with domains.ycs.runtime.observability.spans.neo4j_query_span(
             operation = "search" if raw_q else "browse",
         ):
-            async with driver.session(database = infra.neo4j.params.NEO4J_DATABASE) as session:
+            async with infra.neo4j.service.session() as session:
                 result = await session.run(cypher, cypher_params)
                 records = [dict(record) async for record in result]
     except Exception as e:
@@ -534,13 +533,10 @@ async def _raw_neo4j_inner(
 
     t0 = time.monotonic()
     try:
-        driver = infra.neo4j.service.get_driver()
         with domains.ycs.runtime.observability.spans.neo4j_query_span(
             operation = "raw_cypher",
         ):
-            async with driver.session(
-                database = infra.neo4j.params.NEO4J_DATABASE, default_access_mode = "READ",
-            ) as session:
+            async with infra.neo4j.service.session(default_access_mode = "READ") as session:
                 result = await session.run(body_text)
                 records = [dict(r) async for r in result]
     except Exception as e:
@@ -1144,7 +1140,6 @@ async def _build_neo4j_schema_live() -> dict[str, Any]:
     are data-derived), which is exactly the case the declared floor
     is there to cover. Read-only — uses `default_access_mode="READ"`
     defense in depth."""
-    driver = infra.neo4j.service.get_driver()
     out: dict[str, Any] = {
         "labels": [],
         "relationship_types": [],
@@ -1156,9 +1151,7 @@ async def _build_neo4j_schema_live() -> dict[str, Any]:
         with domains.ycs.runtime.observability.spans.neo4j_query_span(
             operation = "schema_introspect",
         ):
-            async with driver.session(
-                database = infra.neo4j.params.NEO4J_DATABASE, default_access_mode = "READ",
-            ) as session:
+            async with infra.neo4j.service.session(default_access_mode = "READ") as session:
                 r = await session.run(prompts.SCHEMA_CYPHER_LABELS)
                 row = await r.single()
                 out["labels"] = list(row["labels"]) if row else []

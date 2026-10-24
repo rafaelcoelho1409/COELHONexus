@@ -8,12 +8,9 @@ from . import params
 
 import asyncio
 import logging
-import os
 import random
 from collections.abc import Callable
 from typing import Any
-
-from langchain_neo4j import Neo4jGraph
 
 
 logger = logging.getLogger(__name__)
@@ -94,11 +91,7 @@ async def ingest_pipeline(
 ) -> dict[str, Any]:
     es = infra.elasticsearch.service.new_es()
     # Deprecated did NOT pass refresh_schema=False here — port-fidelity.
-    neo4j_graph = Neo4jGraph(
-        url      = os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
-        username = os.environ.get("NEO4J_USERNAME", "neo4j"),
-        password = os.environ.get("NEO4J_PASSWORD", ""),
-    )
+    neo4j_graph = infra.neo4j.service.new_graph(refresh_schema = True)
     # 2026-09-14: initialized up here (not where the client is
     # created below) so the `finally` can always reference them,
     # including the early `return {"error": ...}` path.

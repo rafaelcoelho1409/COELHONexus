@@ -21,7 +21,6 @@ from typing import Any, Awaitable
 
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
-from langchain_neo4j import Neo4jGraph
 from langchain_qdrant import FastEmbedSparse
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http.models import (
@@ -325,7 +324,7 @@ class _Neo4jExtractionError(Exception):
 _inventory_cache: dict = {"ts": 0.0, "items": []}
 
 
-def fetch_entity_inventory(graph: Neo4jGraph) -> list[str]:
+def fetch_entity_inventory(graph: infra.neo4j.service.Neo4jGraph) -> list[str]:
     """Distinct `__Entity__` surface forms in this YCS graph, for the
     extraction prompt's prefer-exact-spellings hint (2026-09-16).
 
@@ -370,7 +369,7 @@ _TEXT_INDEX_NAME = "ycs_entity_id_text"
 _text_index_ready = False
 
 
-def _ensure_entity_text_index(graph: Neo4jGraph) -> None:
+def _ensure_entity_text_index(graph: infra.neo4j.service.Neo4jGraph) -> None:
     """Best-effort `CREATE TEXT INDEX ... IF NOT EXISTS` on `:__Entity__(id)`.
 
     2026-09-16: the CONTAINS fallback tier is correct without any index
@@ -423,7 +422,7 @@ class Neo4jRetriever:
 
     def __init__(
         self,
-        neo4j_graph: Neo4jGraph,
+        neo4j_graph: infra.neo4j.service.Neo4jGraph,
         llm: Any,
         top_k: int = params.NEO4J_DEFAULT_TOP_K,
     ) -> None:

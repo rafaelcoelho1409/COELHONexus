@@ -24,7 +24,13 @@ PER-LOOP CACHING — load-bearing for Celery prefork:
 (`app.py:L161-167`): APOC's `apoc.meta.data()` schema reflection
 stalls 25-45s on every instantiation. Schema introspection isn't
 needed for ingestion or retrieval queries we ship. `Neo4jGraph` wraps
-a SYNC driver, so it does NOT need per-loop caching."""
+a SYNC driver, so it does NOT need per-loop caching.
+
+The only module that imports `neo4j` / `langchain_neo4j` or reads
+`NEO4J_*` env vars. Everything else reaches Neo4j dotted through here:
+`get_driver()` / `session()` (async Cypher), `get_graph()` (shared
+LangChain graph), `new_graph()` (a graph the caller owns, for Celery tasks),
+and the `AsyncDriver`, `Neo4jGraph`, `Node`, `Relationship`, `Path` types."""
 from __future__ import annotations
 from . import domain, params
 
@@ -35,6 +41,7 @@ from typing import Any, Optional
 
 from langchain_neo4j import Neo4jGraph
 from neo4j import AsyncDriver, AsyncGraphDatabase
+from neo4j.graph import Node, Path, Relationship
 
 
 logger = logging.getLogger(__name__)
@@ -82,6 +89,27 @@ def get_driver() -> AsyncDriver:
     return driver
 
 
+def session(**kwargs) -> Any:
+    """`async with infra.neo4j.service.session() as s:` — an `AsyncSession` on
+    this loop's driver against the configured database. Extra kwargs (e.g.
+    `default_access_mode="READ"`) go to `driver.session`."""
+    return get_driver().session(database=params.NEO4J_DATABASE, **kwargs)
+
+
+def new_graph(*, refresh_schema: bool = False) -> Neo4jGraph:
+    """Fresh LangChain `Neo4jGraph` owned by the caller (Celery tasks build
+    one per run). `refresh_schema=True` runs APOC's schema reflection at
+    construction — the 25-45s stall in the module docstring — so pass it only
+    where the task has always done so."""
+    return Neo4jGraph(
+        url            = params.NEO4J_URI,
+        username       = params.NEO4J_USERNAME or "neo4j",
+        password       = params.NEO4J_PASSWORD or "",
+        database       = params.NEO4J_DATABASE,
+        refresh_schema = refresh_schema,
+    )
+
+
 def get_graph() -> Neo4jGraph:
     """LangChain `Neo4jGraph` wrapper for `LLMGraphTransformer` + the
     deprecated entity retriever. `refresh_schema=False` is mandatory
@@ -89,13 +117,7 @@ def get_graph() -> Neo4jGraph:
     is fine."""
     global _graph
     if _graph is None:
-        _graph = Neo4jGraph(
-            url            = params.NEO4J_URI,
-            username       = params.NEO4J_USERNAME or "neo4j",
-            password       = params.NEO4J_PASSWORD or "",
-            database       = params.NEO4J_DATABASE,
-            refresh_schema = False,
-        )
+        _graph = new_graph(refresh_schema=False)
         logger.info(f"[neo4j] Neo4jGraph init {params.NEO4J_URI} db={params.NEO4J_DATABASE}")
     return _graph
 
@@ -129,3 +151,10 @@ async def close_neo4j() -> None:
     # `Neo4jGraph` wraps a sync driver internally; releasing the reference is
     # the cleanup. There's no public close() on it.
     _graph = None
+
+
+# Public surface for the rest of the code (the type re-exports are intentional).
+__all__ = [
+    "AsyncDriver", "Neo4jGraph", "Node", "Path", "Relationship",
+    "close_neo4j", "get_driver", "get_graph", "new_graph", "session", "verify_connectivity",
+]

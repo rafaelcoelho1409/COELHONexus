@@ -11,7 +11,7 @@ Public API:
   build_video_metadata_graph(neo4j_graph, videos)
 """
 from __future__ import annotations
-import domains
+import domains, infra
 from . import domain, params, prompts, schemas
 
 import asyncio
@@ -25,7 +25,6 @@ from typing import Any, AsyncIterator, Callable
 
 from langchain_core.documents import Document
 from langchain_experimental.graph_transformers import LLMGraphTransformer
-from langchain_neo4j import Neo4jGraph
 from rapidfuzz import fuzz
 
 
@@ -168,7 +167,7 @@ async def extract_and_store_graph(
     transcripts: list[dict],
     metadata_map: dict,
     llm: Any,
-    neo4j_graph: Neo4jGraph,
+    neo4j_graph: infra.neo4j.service.Neo4jGraph,
     batch_size: int = params.DEFAULT_BATCH_SIZE,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
     run_resolution: bool = True,
@@ -737,7 +736,7 @@ async def extract_and_store_graph(
 
 
 
-async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
+async def resolve_entities(neo4j_graph: infra.neo4j.service.Neo4jGraph) -> int:
     """Three-pass deduplication of `__Entity__` nodes:
 
       1. Lowercase + trim every id.
@@ -1027,7 +1026,7 @@ async def discover_schema(
 
 
 
-async def get_graph_stats(neo4j_graph: Neo4jGraph) -> dict:
+async def get_graph_stats(neo4j_graph: infra.neo4j.service.Neo4jGraph) -> dict:
     """Cypher counts grouped by label / type. Scoped to params.SOURCE_LABEL —
     this is surfaced as YCS's own graph-size stats (entrypoints/api/v1/ycs/agents),
     not a whole-instance admin view, so it must not count a future
@@ -1054,7 +1053,7 @@ async def get_graph_stats(neo4j_graph: Neo4jGraph) -> dict:
 
 
 def build_video_metadata_graph(
-    neo4j_graph: Neo4jGraph,
+    neo4j_graph: infra.neo4j.service.Neo4jGraph,
     videos: list[dict],
 ) -> None:
     """`MERGE Video {id}` + `MERGE Channel {id}` + `(Video)-[:BELONGS_TO]->(Channel)`.
@@ -1094,7 +1093,7 @@ def build_video_metadata_graph(
 
 
 def delete_documents_for_videos(
-    neo4j_graph: Neo4jGraph,
+    neo4j_graph: infra.neo4j.service.Neo4jGraph,
     video_ids:   list[str],
 ) -> dict[str, int]:
     """Best-effort delete of Phase-3 Document nodes (per-video transcript

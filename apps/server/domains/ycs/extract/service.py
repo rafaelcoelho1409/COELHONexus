@@ -27,7 +27,6 @@ import os
 import time
 from typing import Any, Callable
 
-from langchain_neo4j import Neo4jGraph
 from qdrant_client import AsyncQdrantClient
 
 
@@ -357,11 +356,7 @@ async def dispatch_streaming_totals(
             # — same class of risk the Qdrant drain above already
             # guards against, just missed here on the first pass.
             try:
-                neo4j_graph = Neo4jGraph(
-                    url      = os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
-                    username = os.environ.get("NEO4J_USERNAME", "neo4j"),
-                    password = os.environ.get("NEO4J_PASSWORD", ""),
-                )
+                neo4j_graph = infra.neo4j.service.new_graph(refresh_schema = True)
                 merged = await domains.ycs.graph_builder.service.resolve_entities(neo4j_graph)
                 logger.info(
                     f"[extract_videos] {extract_id}: totals-correction "

@@ -13,8 +13,6 @@ import json
 import re
 from typing import Any
 
-from neo4j.graph import Node, Path, Relationship
-
 
 def _snippet(text: str | None) -> str:
     """Cap free-text fields so a single hit can't bloat the response."""
@@ -905,7 +903,12 @@ def neo4j_jsonify(row: dict) -> dict:
     keys so the frontend can build a Cytoscape graph view from them."""
     out: dict = {}
     for k, v in row.items():
-        out[k] = neo4j_value(v, Node = Node, Rel = Relationship, Path = Path)
+        out[k] = neo4j_value(
+            v,
+            Node = infra.neo4j.service.Node,
+            Rel  = infra.neo4j.service.Relationship,
+            Path = infra.neo4j.service.Path,
+        )
     return out
 
 

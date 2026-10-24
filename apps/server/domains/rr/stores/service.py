@@ -30,7 +30,6 @@ import aioboto3
 import infra
 import psycopg
 from botocore.exceptions import ClientError
-from neo4j import AsyncDriver
 from psycopg.types.json import Jsonb
 from qdrant_client.http.models import (
     Distance,
@@ -269,8 +268,7 @@ _NEO4J_BOOTSTRAP_STMTS: tuple[str, ...] = (
 async def bootstrap_neo4j() -> None:
     """Create constraints + indexes if missing. Idempotent."""
     with domains.rr.runtime.observability.spans.neo4j_span("bootstrap"):
-        driver: AsyncDriver = infra.neo4j.service.get_driver()
-        async with driver.session(database=infra.neo4j.params.NEO4J_DATABASE) as session:
+        async with infra.neo4j.service.session() as session:
             for stmt in _NEO4J_BOOTSTRAP_STMTS:
                 await session.run(stmt)
     logger.info(
@@ -314,8 +312,7 @@ async def upsert_paper(
     with domains.rr.runtime.observability.spans.neo4j_span(
         "upsert_paper", **{"db.neo4j.arxiv_id": paper.arxiv_id},
     ):
-        driver: AsyncDriver = infra.neo4j.service.get_driver()
-        async with driver.session(database=infra.neo4j.params.NEO4J_DATABASE) as session:
+        async with infra.neo4j.service.session() as session:
             result = await session.run(prompts.UPSERT_PAPER_CYPHER, cypher_params)
             record = await result.single()
     return record["paper_id"] if record else paper.arxiv_id
@@ -326,8 +323,7 @@ async def upsert_paper(
 async def get_paper_count() -> int:
     """Total :Paper nodes. Cheap sanity check for the bootstrap smoke test."""
     with domains.rr.runtime.observability.spans.neo4j_span("count"):
-        driver: AsyncDriver = infra.neo4j.service.get_driver()
-        async with driver.session(database=infra.neo4j.params.NEO4J_DATABASE) as session:
+        async with infra.neo4j.service.session() as session:
             result = await session.run(f"MATCH (p:{rr_keys.NEO4J_LABEL_PAPER}) RETURN count(p) AS n")
             record = await result.single()
     return int(record["n"]) if record else 0
