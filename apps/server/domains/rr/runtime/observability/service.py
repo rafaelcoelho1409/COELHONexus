@@ -20,7 +20,6 @@ import infra
 import asyncio
 import functools
 
-from opentelemetry import trace
 
 
 def _span_attrs(tool_name: str) -> dict:
@@ -41,9 +40,9 @@ def traced_tool(fn):
     if asyncio.iscoroutinefunction(fn):
         @functools.wraps(fn)
         async def _async_wrapper(*args, **kwargs):
-            with infra.otel.service.get_tracer().start_as_current_span(
+            with infra.opentelemetry.service.get_tracer().start_as_current_span(
                 f"execute_tool {tool_name}",
-                kind       = trace.SpanKind.INTERNAL,
+                kind       = infra.opentelemetry.service.SpanKind.INTERNAL,
                 attributes = _span_attrs(tool_name),
             ) as span:
                 try:
@@ -56,9 +55,9 @@ def traced_tool(fn):
 
     @functools.wraps(fn)
     def _sync_wrapper(*args, **kwargs):
-        with infra.otel.service.get_tracer().start_as_current_span(
+        with infra.opentelemetry.service.get_tracer().start_as_current_span(
             f"execute_tool {tool_name}",
-            kind       = trace.SpanKind.INTERNAL,
+            kind       = infra.opentelemetry.service.SpanKind.INTERNAL,
             attributes = _span_attrs(tool_name),
         ) as span:
             try:

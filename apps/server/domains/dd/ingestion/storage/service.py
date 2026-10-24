@@ -19,7 +19,6 @@ import httpx
 import redis.asyncio as redis_aio
 from botocore.config import Config
 from botocore.exceptions import ClientError
-from opentelemetry import trace
 
 
 logger = logging.getLogger(__name__)
@@ -39,7 +38,7 @@ def _s3_span(
     `key` is optional — batch operations (write_many, copy_prefix, ...) span
     many different keys at once, so there's no single one to report; those
     call sites instead set a `*_count` attribute on the yielded span."""
-    tracer = infra.otel.service.get_tracer()
+    tracer = infra.opentelemetry.service.get_tracer()
     if tracer is None:
         yield None
         return
@@ -48,7 +47,7 @@ def _s3_span(
         attrs["aws.s3.key"] = key
     with tracer.start_as_current_span(
         f"aws.s3.{operation}",
-        kind       = trace.SpanKind.CLIENT,
+        kind       = infra.opentelemetry.service.SpanKind.CLIENT,
         attributes = attrs,
     ) as span:
         try:

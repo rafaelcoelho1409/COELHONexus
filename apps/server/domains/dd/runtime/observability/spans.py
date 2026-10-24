@@ -12,12 +12,11 @@ import infra
 import contextlib
 from typing import Iterator
 
-from opentelemetry import trace
 
 
 @contextlib.contextmanager
 def postgres_span(operation: str, **attrs) -> Iterator[object | None]:
-    tracer = infra.otel.service.get_tracer()
+    tracer = infra.opentelemetry.service.get_tracer()
     if tracer is None:
         yield None
         return
@@ -27,7 +26,7 @@ def postgres_span(operation: str, **attrs) -> Iterator[object | None]:
             span_attrs[k] = v
     with tracer.start_as_current_span(
         f"db.postgresql.{operation}",
-        kind       = trace.SpanKind.CLIENT,
+        kind       = infra.opentelemetry.service.SpanKind.CLIENT,
         attributes = span_attrs,
     ) as span:
         try:

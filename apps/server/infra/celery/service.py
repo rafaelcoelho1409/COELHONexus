@@ -100,7 +100,7 @@ def revoke(task_id: str, **kwargs) -> None:
 def _worker_process_init(**_kwargs) -> None:
     # OTel MUST run first: each fork needs its own provider (parent SDK state doesn't survive fork()).
     try:
-        infra.otel.service.init_otel_for_celery_worker()
+        infra.opentelemetry.service.init_otel_for_celery_worker()
     except Exception as e:
         logger.warning(
             f"[worker-init] OTel init failed "

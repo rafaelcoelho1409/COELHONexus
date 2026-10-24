@@ -49,7 +49,7 @@ def extract_videos(
     async def _run() -> dict[str, Any]:
         with infra.langfuse.service.session(
             "ycs-extract", session_id = self.request.id or "(no-request-id)",
-        ), infra.otel.service.get_tracer().start_as_current_span(
+        ), infra.opentelemetry.service.get_tracer().start_as_current_span(
             "ycs.extract.videos",
             attributes = {
                 infra.langfuse.keys.KEEP:        True,
@@ -106,7 +106,7 @@ def extract_channel(
             "ycs-extract",
             session_id = self.request.id or "(no-request-id)",
             channel_id = channel_id,
-        ), infra.otel.service.get_tracer().start_as_current_span(
+        ), infra.opentelemetry.service.get_tracer().start_as_current_span(
             "ycs.extract.channel",
             attributes = {
                 infra.langfuse.keys.KEEP:      True,
@@ -162,7 +162,7 @@ def extract_playlist(
     async def _run() -> dict[str, Any]:
         with infra.langfuse.service.session(
             "ycs-extract", session_id = self.request.id or "(no-request-id)",
-        ), infra.otel.service.get_tracer().start_as_current_span(
+        ), infra.opentelemetry.service.get_tracer().start_as_current_span(
             "ycs.extract.playlist",
             attributes = {
                 infra.langfuse.keys.KEEP:      True,

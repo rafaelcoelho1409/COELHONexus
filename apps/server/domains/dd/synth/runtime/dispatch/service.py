@@ -147,7 +147,7 @@ async def run_single_chapter_async(
         chapter_id = chapter_id,
         framework  = slug,
     ):
-        with infra.otel.service.get_tracer().start_as_current_span(
+        with infra.opentelemetry.service.get_tracer().start_as_current_span(
             "dd.synth.chapter.run",
             attributes = {
                 infra.langfuse.keys.KEEP:  True,
@@ -390,7 +390,7 @@ async def _run_book_harmonize(
     """Post-study cross-chapter coherence pass. Loads each README.md,
     runs harmonize_book(), overwrites validated patches. Content-addressed
     cache skips work on identical inputs. Returns telemetry dict."""
-    tracer = infra.otel.service.get_tracer()
+    tracer = infra.opentelemetry.service.get_tracer()
     span_attrs = {
         infra.langfuse.keys.KEEP: True,
         infra.langfuse.keys.KIND: "workflow_node",
@@ -662,7 +662,7 @@ async def run_study_async(
         study_id   = study_thread_id,
         framework  = slug,
     ):
-        with infra.otel.service.get_tracer().start_as_current_span(
+        with infra.opentelemetry.service.get_tracer().start_as_current_span(
             "dd.synth.study.run",
             attributes = {
                 infra.langfuse.keys.KEEP:  True,

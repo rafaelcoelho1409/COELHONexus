@@ -233,7 +233,7 @@ async def run_planner_async(
         study_id   = thread_id,
         framework  = slug,
     ):
-        with infra.otel.service.get_tracer().start_as_current_span(
+        with infra.opentelemetry.service.get_tracer().start_as_current_span(
             "dd.planner.run",
             attributes = {
                 infra.langfuse.keys.KEEP:  True,

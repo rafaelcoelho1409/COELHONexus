@@ -46,7 +46,7 @@ def full_channel_pipeline(
     own `session(...)` under its own task id (see extract/qdrant_task/
     neo4j_task's task.py), so this span is a dispatcher-side record of
     "which steps were chosen for this run", not a parent of their traces."""
-    with infra.otel.service.get_tracer().start_as_current_span(
+    with infra.opentelemetry.service.get_tracer().start_as_current_span(
         "ycs.pipeline.full_channel.dispatch",
         attributes = {
             infra.langfuse.keys.KEEP:  True,

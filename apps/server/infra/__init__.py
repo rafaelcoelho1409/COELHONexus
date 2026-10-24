@@ -9,7 +9,7 @@ domains, infra` and call through the full dotted path
 (`infra.qdrant.service.get_qdrant()`, ...) without `import infra`
 alone paying for all five subpackages every time. Before this, a
 caller that only ever touches `infra.qdrant` still imported
-elasticsearch/langfuse/neo4j/otel too — verified live at ~27s for
+elasticsearch/langfuse/neo4j/opentelemetry too — verified live at ~27s for
 `import infra` cold, ~10-16s for ANY single `infra.X`, because
 Python must fully run this file (which eagerly imported all five)
 before it can reach `infra.X` at all. Each name below now only
@@ -29,14 +29,14 @@ import importlib
 
 
 if TYPE_CHECKING:
-    from . import elasticsearch, langfuse, neo4j, otel, qdrant
+    from . import elasticsearch, langfuse, neo4j, opentelemetry, qdrant
 
 
 __all__ = [
     "elasticsearch",
     "langfuse",
     "neo4j",
-    "otel",
+    "opentelemetry",
     "qdrant",
 ]
 

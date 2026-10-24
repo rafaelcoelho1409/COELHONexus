@@ -88,6 +88,6 @@ async def main() -> int:
 
 if __name__ == "__main__":
     # Initialize OTel so any spans we emit during the runner land in LangFuse.
-    from infra.otel import init_otel
-    init_otel()
+    import infra
+    infra.opentelemetry.service.init_otel()
     raise SystemExit(asyncio.run(main()))

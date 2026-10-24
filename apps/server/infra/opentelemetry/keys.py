@@ -1,10 +1,15 @@
-"""otel keys — the baggage key allow-list.
+"""opentelemetry keys — the baggage key allow-list and span attribute names.
 
-Consumed by domain.py's baggage predicate, not by service.py directly —
-that's what puts it here instead of params.py. Pure lookup data. (The
-LangFuse span-gate tables live in `infra.langfuse.keys`.)
+The allow-list is consumed by domain.py's baggage predicate, not by service.py
+directly — that's what puts it here instead of params.py. Pure lookup data.
+(The LangFuse span-gate tables live in `infra.langfuse.keys`.)
 """
 from __future__ import annotations
+
+
+# Span attribute set on the request span that enqueued a Celery task
+# (`service.tag_celery_task`).
+CELERY_TASK_ID = "celery.task_id"
 
 
 # BaggageSpanProcessor allow-list — keeps high-cardinality values from

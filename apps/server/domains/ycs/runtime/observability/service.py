@@ -10,7 +10,6 @@ import functools
 import logging
 from typing import Awaitable, Callable
 
-from opentelemetry import trace
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +19,7 @@ def traced(name: str) -> Callable:
     def decorator(fn: Callable[..., Awaitable[dict]]):
         @functools.wraps(fn)
         async def wrapper(state: dict, *args, **kwargs) -> dict:
-            tracer = infra.otel.service.get_tracer()
+            tracer = infra.opentelemetry.service.get_tracer()
             if tracer is None:
                 return await fn(state, *args, **kwargs)
             attrs = {
@@ -53,7 +52,7 @@ def traced(name: str) -> Callable:
 def attach_span_attrs(prefix: str, attrs: dict) -> None:
     """Set namespaced attributes on the current OTel span; no-op if uninitialized; None values skipped."""
     try:
-        span = trace.get_current_span()
+        span = infra.opentelemetry.service.get_current_span()
         for k, v in attrs.items():
             if v is None:
                 continue

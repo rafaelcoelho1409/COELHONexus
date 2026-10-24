@@ -1,6 +1,6 @@
 # LangFuse SOTA + rollout plan — 2026-09-22 (reorg landed same day, §§2/4/5 current)
 
-Scope: `apps/server/` — `infra/langfuse/`, `infra/otel/` (export path),
+Scope: `apps/server/` — `infra/langfuse/`, `infra/opentelemetry/` (export path),
 `api/v1/` + `domains/{dd,ycs,rr,settings}` (consumers). SDK: `langfuse>=3,<4`
 (OTel-native v3). SOTA sourced directly from current Langfuse docs (v3/v4
 SDK, prompt-management-at-scale, evaluation core concepts).
@@ -10,7 +10,7 @@ SDK, prompt-management-at-scale, evaluation core concepts).
 Two planes, one rule (**fail-soft, never raise**):
 
 - **Trace plane (OTel):** spans → `infra/langfuse/service.py:add_exporter`
-  (attached by `infra.otel.service.init_otel`) → HTTP OTLP to LangFuse v3
+  (attached by `infra.opentelemetry.service.init_otel`) → HTTP OTLP to LangFuse v3
   `/api/public/otel`. `coelho.langfuse.keep` gates export
   (`infra/langfuse/domain.py:should_keep_span`). No SDK involved.
 - **SDK plane (`infra/langfuse/`):** everything OTel can't do — sessions,

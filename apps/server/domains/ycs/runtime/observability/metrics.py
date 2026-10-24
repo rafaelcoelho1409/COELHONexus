@@ -13,9 +13,9 @@ def record_ycs_ingest_run(
     embedding_migration}; `outcome` ∈ {ok, error}."""
     try:
         attrs = {"kind": kind, "outcome": outcome}
-        if (inst := infra.otel.service.get_instrument("ycs_ingest_run_total")) is not None:
+        if (inst := infra.opentelemetry.service.get_instrument("ycs_ingest_run_total")) is not None:
             inst.add(1, attributes = attrs)
-        if (inst := infra.otel.service.get_instrument("ycs_ingest_run_duration")) is not None:
+        if (inst := infra.opentelemetry.service.get_instrument("ycs_ingest_run_duration")) is not None:
             inst.record(duration_s, attributes = attrs)
     except Exception:
         pass
@@ -36,17 +36,17 @@ def record_ask_run(
         "outcome": outcome or "unknown",
     }
     try:
-        if (inst := infra.otel.service.get_instrument("ycs_ask_run_total")) is not None:
+        if (inst := infra.opentelemetry.service.get_instrument("ycs_ask_run_total")) is not None:
             inst.add(1, attributes = attrs)
         if duration_s is not None and (
-            inst := infra.otel.service.get_instrument("ycs_ask_run_duration")
+            inst := infra.opentelemetry.service.get_instrument("ycs_ask_run_duration")
         ) is not None:
             inst.record(max(duration_s, 0.0), attributes = attrs)
         if citation_count is not None and (
-            inst := infra.otel.service.get_instrument("ycs_citation_count")
+            inst := infra.opentelemetry.service.get_instrument("ycs_citation_count")
         ) is not None:
             inst.record(max(citation_count, 0), attributes = attrs)
-        if grounded and (inst := infra.otel.service.get_instrument("ycs_grounded_total")) is not None:
+        if grounded and (inst := infra.opentelemetry.service.get_instrument("ycs_grounded_total")) is not None:
             inst.add(1, attributes = attrs)
     except Exception:
         pass
@@ -54,7 +54,7 @@ def record_ask_run(
 
 def record_retrieved_docs(*, route: str, mode: str, count: int) -> None:
     try:
-        if (inst := infra.otel.service.get_instrument("ycs_retrieved_docs")) is not None:
+        if (inst := infra.opentelemetry.service.get_instrument("ycs_retrieved_docs")) is not None:
             inst.record(
                 max(count, 0),
                 attributes = {"route": route or "unknown", "mode": mode or "unknown"},
@@ -65,7 +65,7 @@ def record_retrieved_docs(*, route: str, mode: str, count: int) -> None:
 
 def record_graded_docs(*, route: str, mode: str, count: int) -> None:
     try:
-        if (inst := infra.otel.service.get_instrument("ycs_graded_docs")) is not None:
+        if (inst := infra.opentelemetry.service.get_instrument("ycs_graded_docs")) is not None:
             inst.record(
                 max(count, 0),
                 attributes = {"route": route or "unknown", "mode": mode or "unknown"},
@@ -76,7 +76,7 @@ def record_graded_docs(*, route: str, mode: str, count: int) -> None:
 
 def record_rewrite(*, route: str, mode: str) -> None:
     try:
-        if (inst := infra.otel.service.get_instrument("ycs_rewrite_total")) is not None:
+        if (inst := infra.opentelemetry.service.get_instrument("ycs_rewrite_total")) is not None:
             inst.add(
                 1,
                 attributes = {"route": route or "unknown", "mode": mode or "unknown"},
@@ -87,7 +87,7 @@ def record_rewrite(*, route: str, mode: str) -> None:
 
 def record_subquestion(*, route: str, outcome: str) -> None:
     try:
-        if (inst := infra.otel.service.get_instrument("ycs_subquestion_total")) is not None:
+        if (inst := infra.opentelemetry.service.get_instrument("ycs_subquestion_total")) is not None:
             inst.add(
                 1,
                 attributes = {

@@ -38,7 +38,7 @@ mcp_app = mcp.http_app(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
-        infra.otel.service.init_otel(also_instrument_fastapi_app=app)
+        infra.opentelemetry.service.init_otel(also_instrument_fastapi_app=app)
     except Exception as e:
         logger.warning(
             f"[lifespan] OTel setup failed: {type(e).__name__}: {e}. "

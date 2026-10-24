@@ -2,7 +2,7 @@
 is the HTTP/SSE layer. SSE via Redis pub/sub, cancel via Redis flag,
 checkpoints in Postgres."""
 from __future__ import annotations
-import domains
+import domains, infra
 import domains.dd.planner.task
 from . import params
 
@@ -14,7 +14,6 @@ import time
 import psycopg
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException, Response
-from opentelemetry import trace
 from starlette.responses import StreamingResponse
 
 
@@ -187,9 +186,7 @@ async def start_planner(
 
         try:
             async_result = domains.dd.planner.task.run_planner.delay(thread_id, slug, mode)
-            trace.get_current_span().set_attribute(
-                "celery.task_id", async_result.id,
-            )
+            infra.opentelemetry.service.tag_celery_task(async_result.id)
         except Exception as e:
             try:
                 await r.delete(domains.dd.planner.keys.lock_key(slug))
@@ -275,7 +272,7 @@ async def resume_planner(thread_id: str) -> dict:
 
     try:
         async_result = domains.dd.planner.task.resume_planner.delay(thread_id)
-        trace.get_current_span().set_attribute("celery.task_id", async_result.id)
+        infra.opentelemetry.service.tag_celery_task(async_result.id)
     except Exception as e:
         logger.exception(
             f"[planner] {thread_id}: celery resume dispatch failed: "

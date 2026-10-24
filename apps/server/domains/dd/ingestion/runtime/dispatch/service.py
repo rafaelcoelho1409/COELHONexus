@@ -82,7 +82,7 @@ async def run(run_id: str, slug: str) -> dict:
         session_id = f"docs-distiller/{slug}/{run_id}",
         user_id    = slug,
         framework  = slug,
-    ), infra.otel.service.get_tracer().start_as_current_span(
+    ), infra.opentelemetry.service.get_tracer().start_as_current_span(
         "dd.ingestion.run",
         attributes = {
             "dd.domain":                "ingestion",

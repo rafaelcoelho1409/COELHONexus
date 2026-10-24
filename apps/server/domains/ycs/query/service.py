@@ -68,7 +68,7 @@ def _query_span(operation: str, *, backend: str, app: str):
     session_id = f"ycs-query-{backend}-{uuid.uuid4().hex[:12]}"
     with infra.langfuse.service.session(
         "ycs-query", session_id = session_id, user_id = app or "default",
-    ), infra.otel.service.get_tracer().start_as_current_span(
+    ), infra.opentelemetry.service.get_tracer().start_as_current_span(
         f"ycs.query.{operation}",
         attributes = {
             infra.langfuse.keys.KEEP:                   True,
@@ -610,7 +610,7 @@ async def ai_generate_stream(
         "ycs-query", session_id = session_id, user_id = app or "default",
     )
     session_cm.__enter__()
-    span_cm = infra.otel.service.get_tracer().start_as_current_span(
+    span_cm = infra.opentelemetry.service.get_tracer().start_as_current_span(
         "ycs.query.ai.generate",
         attributes = {
             infra.langfuse.keys.KEEP:                    True,

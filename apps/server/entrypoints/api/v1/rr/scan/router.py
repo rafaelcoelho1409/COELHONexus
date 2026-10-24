@@ -1,6 +1,6 @@
 """Scan endpoints — Celery dispatch, Postgres status reads, Redis SSE relay."""
 from __future__ import annotations
-import domains
+import domains, infra
 import domains.rr.task
 
 import json
@@ -11,7 +11,6 @@ from uuid import UUID, uuid4
 
 import psycopg
 from fastapi import APIRouter, HTTPException, Request
-from opentelemetry import trace
 from starlette.responses import StreamingResponse
 
 
@@ -82,7 +81,7 @@ async def create_scan(body: domains.rr.schemas.ScanRequest) -> domains.rr.schema
         body.verticals,
         body.top_n,
     )
-    trace.get_current_span().set_attribute("celery.task_id", task.id)
+    infra.opentelemetry.service.tag_celery_task(task.id)
 
     # Best-effort: store_task_id swallows Redis errors; cancel returns "not found" but scan still runs.
     await domains.rr.runtime.service.store_task_id(str(scan_id), task.id)
@@ -324,7 +323,7 @@ async def generate_finding_code(scan_id: UUID, arxiv_id: str) -> dict:
         )
 
     task = domains.rr.task.run_code_synth.delay(str(scan_id), arxiv_id, domains.rr.agent.tools.code_synth.params.CODE_SYNTH_PROMPT_VERSION)
-    trace.get_current_span().set_attribute("celery.task_id", task.id)
+    infra.opentelemetry.service.tag_celery_task(task.id)
     await domains.rr.runtime.service.set_code_synth_running(
         str(scan_id), arxiv_id, domains.rr.agent.tools.code_synth.params.CODE_SYNTH_PROMPT_VERSION, task_id=task.id,
     )

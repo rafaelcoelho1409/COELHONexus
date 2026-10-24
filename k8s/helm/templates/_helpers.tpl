@@ -59,7 +59,7 @@ OTEL_SEMCONV_STABILITY_OPT_IN: "gen_ai_latest_experimental"
 # in both Tempo and LangFuse.
 LITELLM_OTEL_V2: "true"
 # Deploy-identity attrs propagated to every span/metric via the OTel
-# Resource (build_resource in infra/otel/exporters.py). `GIT_SHA` lets
+# Resource (build_resource in infra/opentelemetry/service.py). `GIT_SHA` lets
 # Grafana annotations diff "which deploy regressed?"; the chart version
 # carries forward image-tag context. Both are optional — when unset the
 # resource builder skips them.

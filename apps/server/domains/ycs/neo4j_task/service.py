@@ -29,7 +29,7 @@ async def ingest_async(
         "ycs-ingest-neo4j",
         session_id = task_id or "(no-request-id)",
     ):
-        with infra.otel.service.get_tracer().start_as_current_span(
+        with infra.opentelemetry.service.get_tracer().start_as_current_span(
             "ycs.ingest.neo4j.run",
             attributes = {
                 infra.langfuse.keys.KEEP: True,

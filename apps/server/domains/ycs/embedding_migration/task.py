@@ -62,7 +62,7 @@ def finalize_embedding_migration(self, physical_collection: str) -> dict:
         with infra.langfuse.service.session(
             "ycs-embedding-migration",
             session_id = self.request.id or "(no-request-id)",
-        ), infra.otel.service.get_tracer().start_as_current_span(
+        ), infra.opentelemetry.service.get_tracer().start_as_current_span(
             "ycs.embedding_migration.finalize",
             attributes = {
                 infra.langfuse.keys.KEEP:          True,

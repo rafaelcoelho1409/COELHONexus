@@ -1,6 +1,6 @@
 """LangFuse SDK surface — features OTel doesn't cover.
 
-Trace ingestion is OTLP/HTTP: `infra.otel.service.init_otel` attaches the
+Trace ingestion is OTLP/HTTP: `infra.opentelemetry.service.init_otel` attaches the
 exporter built by `service.add_exporter` here, behind the span gate in
 `domain.should_keep_span`. This package owns the SDK-only features:
 

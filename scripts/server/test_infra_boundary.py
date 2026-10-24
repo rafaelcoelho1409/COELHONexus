@@ -3,7 +3,8 @@ module; everything else reaches the service dotted through `infra.<service>.serv
 
     cd apps/server && .venv/bin/python ../../scripts/server/test_infra_boundary.py
 
-Add a service to RULES once its `infra/` module owns the library (so far: celery, elasticsearch, langfuse, neo4j)."""
+Add a service to RULES once its `infra/` module owns the library (so far: celery, elasticsearch, langfuse, neo4j,
+opentelemetry)."""
 import ast
 import sys
 from pathlib import Path
@@ -27,6 +28,10 @@ RULES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
         ("neo4j", "langchain_neo4j"),
         ('environ["NEO4J_', 'environ.get("NEO4J_', 'getenv("NEO4J_', "bolt://",
          "database=infra.neo4j.params", "database = infra.neo4j.params"),
+    ),
+    "opentelemetry": (
+        ("opentelemetry",),
+        ('environ["OTEL_', 'environ.get("OTEL_', 'getenv("OTEL_', '"celery.task_id"'),
     ),
 }
 

@@ -27,7 +27,6 @@ import logging
 import time
 from typing import Any
 
-from opentelemetry import context as _otel_ctx
 try:
     from langchain.agents.middleware import AgentMiddleware
 except ImportError:                                                       # pragma: no cover
@@ -405,7 +404,7 @@ class PhaseEventsMiddleware(AgentMiddleware):
         scan_id: str, phase: str, start_ns: int, end_ns: int, ctx: Any
     ) -> None:
         try:
-            span = infra.otel.service.get_tracer().start_span(
+            span = infra.opentelemetry.service.get_tracer().start_span(
                 f"rr.node.{phase}",
                 context=ctx,
                 start_time=start_ns,
@@ -422,7 +421,7 @@ class PhaseEventsMiddleware(AgentMiddleware):
 
     def _transition_phase(self, scan_id: str, new_phase: str) -> None:
         now_ns = time.time_ns()
-        ctx = _otel_ctx.get_current()
+        ctx = infra.opentelemetry.service.get_current_context()
         existing = self._phase_timing.pop(scan_id, None)
         if existing:
             prev_phase, start_ns, prev_ctx = existing

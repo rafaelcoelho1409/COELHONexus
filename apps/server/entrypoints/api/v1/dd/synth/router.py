@@ -2,7 +2,7 @@
 (queue `synth-{env}`). thread_id = `docs-distiller/synth/{slug}/{uuid}`;
 chapter_id lives in SynthState, not the thread_id."""
 from __future__ import annotations
-import domains
+import domains, infra
 import domains.dd.synth.task
 from . import params, service
 
@@ -14,7 +14,6 @@ import time
 import psycopg
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException, Query, Response
-from opentelemetry import trace
 from starlette.responses import StreamingResponse
 
 
@@ -358,9 +357,7 @@ async def start_synth(
                 async_result = domains.dd.synth.task.run_study.delay(
                     study_thread_id, slug, plan_chapter_ids, mode,
                 )
-                trace.get_current_span().set_attribute(
-                    "celery.task_id", async_result.id,
-                )
+                infra.opentelemetry.service.tag_celery_task(async_result.id)
             except Exception as e:
                 try:
                     await r.delete(domains.dd.synth.keys.lock_key(slug))
@@ -518,9 +515,7 @@ async def start_synth(
             async_result = domains.dd.synth.task.run_single_chapter.delay(
                 thread_id, slug, chapter_id, mode,
             )
-            trace.get_current_span().set_attribute(
-                "celery.task_id", async_result.id,
-            )
+            infra.opentelemetry.service.tag_celery_task(async_result.id)
         except Exception as e:
             try:
                 await r.delete(domains.dd.synth.keys.lock_key(slug))
@@ -560,7 +555,7 @@ async def resume_synth(thread_id: str) -> dict:
 
     try:
         async_result = domains.dd.synth.task.resume_synth.delay(thread_id)
-        trace.get_current_span().set_attribute("celery.task_id", async_result.id)
+        infra.opentelemetry.service.tag_celery_task(async_result.id)
     except Exception as e:
         logger.exception(
             f"[synth] {thread_id}: celery resume dispatch failed: "

@@ -21,7 +21,6 @@ import infra
 import contextlib
 from typing import Iterator
 
-from opentelemetry import trace
 
 
 @contextlib.contextmanager
@@ -31,7 +30,7 @@ def _db_span(
     **attrs,
 ) -> Iterator[object | None]:
     """Common shell — gen_ai- and db.* spans share this skeleton."""
-    tracer = infra.otel.service.get_tracer()
+    tracer = infra.opentelemetry.service.get_tracer()
     if tracer is None:
         yield None
         return
@@ -44,7 +43,7 @@ def _db_span(
             span_attrs[k] = v
     with tracer.start_as_current_span(
         f"db.{system}.{operation}",
-        kind        = trace.SpanKind.CLIENT,
+        kind        = infra.opentelemetry.service.SpanKind.CLIENT,
         attributes  = span_attrs,
     ) as span:
         try:
@@ -171,13 +170,13 @@ def postgres_span(
 def ycs_retriever_fanout_span(*, top_k: int) -> Iterator[object | None]:
     """Parent span over the multi-retriever fan-out — qdrant + neo4j + es +
     reranker all become child spans under this one in Tempo / LangFuse."""
-    tracer = infra.otel.service.get_tracer()
+    tracer = infra.opentelemetry.service.get_tracer()
     if tracer is None:
         yield None
         return
     with tracer.start_as_current_span(
         "ycs.retriever.smart_fanout",
-        kind        = trace.SpanKind.INTERNAL,
+        kind        = infra.opentelemetry.service.SpanKind.INTERNAL,
         attributes  = {"ycs.top_k": top_k},
     ) as span:
         try:
@@ -196,13 +195,13 @@ def reranker_span(
     top_k:     int,
 ) -> Iterator[object | None]:
     """Cross-encoder rerank — gen_ai.* semconv since this is an LM workload."""
-    tracer = infra.otel.service.get_tracer()
+    tracer = infra.opentelemetry.service.get_tracer()
     if tracer is None:
         yield None
         return
     with tracer.start_as_current_span(
         "gen_ai.rerank",
-        kind = trace.SpanKind.CLIENT,
+        kind = infra.opentelemetry.service.SpanKind.CLIENT,
         attributes = {
             "gen_ai.system":           "flashrank",
             "gen_ai.operation.name":   "rerank",

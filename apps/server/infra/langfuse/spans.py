@@ -8,15 +8,14 @@ Use on the CURRENT active span, typically the workflow-root span for DD,
 YCS, and RR.
 """
 from __future__ import annotations
+import infra
 from . import domain, keys
 
 from typing import Any, Mapping
 
-from opentelemetry import trace
-
 
 def _current_span():
-    span = trace.get_current_span()
+    span = infra.opentelemetry.service.get_current_span()
     if hasattr(span, "is_recording") and not span.is_recording():
         return None
     return span

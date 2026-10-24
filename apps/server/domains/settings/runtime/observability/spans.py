@@ -2,7 +2,7 @@
 — the ONLY connection Nexus makes to an external LLM. Before this, every
 outbound call showed up as a generic `httpx` POST span with no model/
 token/latency data and no `gen_ai.*` attributes, so it never passed
-`infra.otel.domain.should_keep_span`'s LangFuse allow-list either.
+`infra.opentelemetry.domain.should_keep_span`'s LangFuse allow-list either.
 
 Usage — attributes known only after the response arrives are set on the
 yielded span inside the `with` block:
@@ -19,7 +19,6 @@ from . import keys
 import contextlib
 from collections.abc import Iterator
 
-from opentelemetry import trace
 
 
 @contextlib.contextmanager
@@ -29,7 +28,7 @@ def chat_completion_span(
     temperature: float | None = None,
     max_tokens:  int | None   = None,
 ) -> Iterator[object | None]:
-    tracer = infra.otel.service.get_tracer()
+    tracer = infra.opentelemetry.service.get_tracer()
     if tracer is None:
         yield None
         return
@@ -46,7 +45,7 @@ def chat_completion_span(
         attrs[keys.GEN_AI_REQUEST_MAX_TOKENS] = max_tokens
     with tracer.start_as_current_span(
         keys.SPAN_NAME_CHAT,
-        kind       = trace.SpanKind.CLIENT,
+        kind       = infra.opentelemetry.service.SpanKind.CLIENT,
         attributes = attrs,
     ) as span:
         try:
@@ -96,7 +95,7 @@ def start_chat_span(
     ambient context, so the caller is responsible for its own
     correlation (e.g. keying it by LangChain's `run_id`) and must pair
     every call with `end_chat_span`."""
-    tracer = infra.otel.service.get_tracer()
+    tracer = infra.opentelemetry.service.get_tracer()
     if tracer is None:
         return None
     attrs: dict = {
@@ -111,7 +110,7 @@ def start_chat_span(
     if max_tokens is not None:
         attrs[keys.GEN_AI_REQUEST_MAX_TOKENS] = max_tokens
     return tracer.start_span(
-        keys.SPAN_NAME_CHAT, kind = trace.SpanKind.CLIENT, attributes = attrs,
+        keys.SPAN_NAME_CHAT, kind = infra.opentelemetry.service.SpanKind.CLIENT, attributes = attrs,
     )
 
 
@@ -126,7 +125,9 @@ def end_chat_span(span: object | None, *, error: BaseException | None = None) ->
         if error is not None:
             span.set_attribute("error.type", type(error).__name__)
             span.record_exception(error)
-            span.set_status(trace.Status(trace.StatusCode.ERROR, str(error)))
+            span.set_status(infra.opentelemetry.service.Status(
+                infra.opentelemetry.service.StatusCode.ERROR, str(error),
+            ))
         span.end()
     except Exception:
         pass
@@ -138,13 +139,13 @@ def embedding_span(
     model:      str,
     input_count: int,
 ) -> Iterator[object | None]:
-    tracer = infra.otel.service.get_tracer()
+    tracer = infra.opentelemetry.service.get_tracer()
     if tracer is None:
         yield None
         return
     with tracer.start_as_current_span(
         keys.SPAN_NAME_EMBED,
-        kind       = trace.SpanKind.CLIENT,
+        kind       = infra.opentelemetry.service.SpanKind.CLIENT,
         attributes = {
             keys.GEN_AI_SYSTEM:              keys.SYSTEM_NEXUS_EMBEDDING_ENDPOINT,
             keys.GEN_AI_OPERATION_NAME:      keys.OP_EMBEDDING,

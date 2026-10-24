@@ -10,7 +10,7 @@ shell in `spans.py`, prompt management in `prompts.py`:
   annotation — `flag_for_review(...)`: span markers + review score
   callbacks  — `build_langchain_callback(...)` for LangChain agents
   exporter   — `add_exporter(...)`: OTLP/HTTP trace export behind the span gate
-               (called by `infra.otel.service.init_otel`)
+               (called by `infra.opentelemetry.service.init_otel`)
 
 Every entry point fails soft: missing package, network, or credentials
 yield a graceful no-op + a debug log line, never an exception.
@@ -31,16 +31,6 @@ from typing import Iterator, Literal
 
 from langfuse import Langfuse
 from langfuse.langchain import CallbackHandler
-from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-    OTLPSpanExporter as HTTPOTLPSpanExporter,
-)
-from opentelemetry.sdk.trace import SpanProcessor
-from opentelemetry.sdk.trace.export import (
-    BatchSpanProcessor,
-    SpanExporter,
-    SpanExportResult,
-)
 
 
 logger = logging.getLogger(__name__)
@@ -162,7 +152,7 @@ def session(
         lf_kwargs[keys.USER_ID] = user_id
     base_kwargs.update(extra)
     base_kwargs.update(lf_kwargs)
-    with infra.otel.service.bag_context(**base_kwargs):
+    with infra.opentelemetry.service.bag_context(**base_kwargs):
         yield
 
 
@@ -244,7 +234,7 @@ def flag_for_review(
     """Tag the active trace as needing review. Set span attributes +
     optionally record a `review.required` score."""
     try:
-        span = trace.get_current_span()
+        span = infra.opentelemetry.service.get_current_span()
         is_recording = getattr(span, "is_recording", None)
         if callable(is_recording) and not is_recording():
             span = None
@@ -307,62 +297,13 @@ def build_langchain_callback():
 
 # ---------------------------------------------------------------------------
 # Trace export — OTLP/HTTP to LangFuse v3 `/api/public/otel`, behind the span
-# gate. These two wrap real network I/O (`on_end`/`export` ship spans over
-# HTTP), so they stay here rather than in an entities file; only their pure
-# gate decision lives in `domain.should_keep_span`.
+# gate (`domain.should_keep_span`). This module owns the endpoint, credentials
+# and gate policy; the exporter mechanics live in `infra.opentelemetry`.
 # ---------------------------------------------------------------------------
 
-class LangFuseFilterProcessor(SpanProcessor):
-    """Processor-side gate; reduces queue pressure before the authoritative
-    LangFuseFilterExporter. Decision logic lives in `domain.should_keep_span`."""
-
-    def __init__(self, inner: SpanProcessor) -> None:
-        self._inner = inner
-
-    def on_start(self, span, parent_context=None):
-        self._inner.on_start(span, parent_context)
-
-    def on_end(self, span) -> None:
-        if domain.should_keep_span(span.name or "", dict(span.attributes or {})):
-            self._inner.on_end(span)
-
-    def shutdown(self) -> None:
-        self._inner.shutdown()
-
-    def force_flush(self, timeout_millis: int = 30000) -> bool:
-        return self._inner.force_flush(timeout_millis)
-
-
-class LangFuseFilterExporter(SpanExporter):
-    """Last gate before OTLP/HTTP export; spans not matching the allow-list
-    are dropped here. Decision logic lives in `domain.should_keep_span`."""
-
-    def __init__(self, inner: SpanExporter) -> None:
-        self._inner = inner
-
-    def export(self, spans) -> SpanExportResult:
-        kept = tuple(
-            span for span in spans
-            if domain.should_keep_span(span.name or "", dict(span.attributes or {}))
-        )
-        if not kept:
-            return SpanExportResult.SUCCESS
-        return self._inner.export(kept)
-
-    def shutdown(self) -> None:
-        self._inner.shutdown()
-
-    def force_flush(self, timeout_millis: int = 30000) -> bool:
-        inner_flush = getattr(self._inner, "force_flush", None)
-        if callable(inner_flush):
-            return bool(inner_flush(timeout_millis))
-        return True
-
-
-def add_exporter(tracer_provider, bsp_kwargs: dict) -> bool:
+def add_exporter(tracer_provider) -> bool:
     """HTTP OTLP → LangFuse v3 /api/public/otel. Skipped silently when
-    endpoint OR public/secret keys absent. `bsp_kwargs` are the shared
-    BatchSpanProcessor settings (owned by `infra.otel`)."""
+    endpoint OR public/secret keys absent."""
     endpoint = os.environ.get("LANGFUSE_OTLP_ENDPOINT")
     if not endpoint:
         logger.info(
@@ -381,21 +322,15 @@ def add_exporter(tracer_provider, bsp_kwargs: dict) -> bool:
     try:
         basic = domain.basic_auth_header(pk, sk)
         traces_endpoint = domain.normalize_traces_endpoint(endpoint)
-        raw_exporter = HTTPOTLPSpanExporter(
-            endpoint=traces_endpoint,
-            headers={"Authorization": f"Basic {basic}"},
+        infra.opentelemetry.service.add_filtered_http_exporter(
+            tracer_provider,
+            endpoint = traces_endpoint,
+            headers  = {"Authorization": f"Basic {basic}"},
             # 10s default timed out under heavy LLM volume; rich batches are slow to ingest.
-            timeout=int(os.environ.get(
+            timeout_s = int(os.environ.get(
                 "LANGFUSE_OTLP_TIMEOUT", str(params.OTLP_TIMEOUT_DEFAULT_S),
             )),
-        )
-        tracer_provider.add_span_processor(
-            LangFuseFilterProcessor(
-                BatchSpanProcessor(
-                    LangFuseFilterExporter(raw_exporter),
-                    **bsp_kwargs,
-                )
-            )
+            keep = domain.should_keep_span,
         )
         logger.info(
             f"[otel] LangFuse HTTP OTLP exporter attached → {traces_endpoint}"

@@ -57,7 +57,7 @@ pointed at `domains.llm.rotator.chain` (retired 2026-09-21 per
 sites anywhere outside its own definition.
 
 **P1 — FastHTML is a trace dead-end.** Zero OTel/Langfuse dependency, no
-`infra/otel`, no trace-context propagation on its calls into the server
+`infra/opentelemetry`, no trace-context propagation on its calls into the server
 backend. Every FastHTML→server hop starts a brand-new trace; a user click
 can't be followed through to the backend spans it triggered.
 
@@ -69,14 +69,14 @@ the token/cost data the (currently dark) `gen_ai.usage.*` spans were meant to
 carry. Once P0 is fixed, decide whether these should dual-write an OTel
 metric too, or stay separate by design.
 
-**P2 — not a bug.** `infra/otel/` in `apps/server` and `apps/fastmcp`
+**P2 — not a bug.** `infra/otel/` (now `infra/opentelemetry/`) in `apps/server` and `apps/fastmcp`
 duplicate the LangFuse allow-list logic — deliberate per the fastmcp port
 comment, since the two are independently deployed apps. **Update
-2026-09-22:** `apps/server/infra/otel/` was reorganized to the
+2026-09-22:** `apps/server/infra/opentelemetry/` was reorganized to the
 `domain.py`/`service.py`/`params.py`/`entities.py` shape (§2 below) — the
 old `_LangFuseSpanGate` class is now free functions in `domain.py`
 (`should_keep_span`), so the two apps' copies are no longer byte-identical,
-just logically equivalent. `apps/fastmcp/infra/otel/` was intentionally left
+just logically equivalent. `apps/fastmcp/infra/otel/` (since removed) was intentionally left
 untouched (out of scope for this pass) — mirror the same file split there
 when it's next touched, or accept the drift; either is fine, just don't
 "fix" it into a cross-app shared import (`docs/CODE-CONVENTIONS.md` §8's
@@ -169,7 +169,7 @@ starts small enough to need it again.
 | File | Trigger (create iff) | What goes in it |
 |---|---|---|
 | `__init__.py` | REQUIRED CORE | re-export whichever files below are present |
-| `metrics.py` | REQUIRED CORE the moment this feature records ≥1 metric | `record_*` functions calling `infra.otel.service.get_instrument(key)` |
+| `metrics.py` | REQUIRED CORE the moment this feature records ≥1 metric | `record_*` functions calling `infra.opentelemetry.service.get_instrument(key)` |
 | `service.py` | ≥2 call sites need the SAME span-wrapping shape (e.g. a `@traced` decorator applied across several LangGraph node files) | The decorator/wrapper — the "one span per node" idiom |
 | `spans.py` | the feature wraps ≥1 external I/O call (a `db.*` or `gen_ai.*` span) that is its OWN dedicated context manager, distinct from the generic node decorator above | One context-manager span helper per backend/operation (`qdrant_search_span`, `chat_completion_span`, ...) |
 | `keys.py` | ≥3 attribute/span-name string constants are shared across `spans.py`, especially when they mirror an external semantic convention (`gen_ai.*`, `aws.s3.*`) | Attribute-name constants, span-name constants, operation-value constants |
@@ -184,8 +184,8 @@ above applies to it too.
 Plus the two cross-cutting locations touched regardless of which files
 above you add:
 
-- `apps/server/infra/otel/entities.py` — append a `MetricSpec` for each new instrument.
-- `apps/server/infra/otel/keys.py` — add `foo_id` to `ALLOWED_BAGGAGE_KEYS` if it needs propagating onto every child span (moved here from `params.py` in the 2026-09-22 `infra/otel/` reorg — see the file index below).
+- `apps/server/infra/opentelemetry/entities.py` — append a `MetricSpec` for each new instrument.
+- `apps/server/infra/opentelemetry/keys.py` — add `foo_id` to `ALLOWED_BAGGAGE_KEYS` if it needs propagating onto every child span (moved here from `params.py` in the 2026-09-22 `infra/opentelemetry/` reorg — see the file index below).
 
 **Audit against these triggers (2026-09-22)** — every existing domain
 already matches, with one real exception:
@@ -212,7 +212,7 @@ import functools
 from typing import Awaitable, Callable
 
 from opentelemetry import trace as _otel_trace
-import infra.otel
+import infra.opentelemetry
 
 
 def traced(name: str) -> Callable:
@@ -220,7 +220,7 @@ def traced(name: str) -> Callable:
     def decorator(fn: Callable[..., Awaitable[dict]]):
         @functools.wraps(fn)
         async def wrapper(state: dict, *args, **kwargs) -> dict:
-            tracer = infra.otel.service.get_tracer()
+            tracer = infra.opentelemetry.service.get_tracer()
             with tracer.start_as_current_span(
                 f"foo/{name}",
                 attributes = {"foo.node": name, "foo.thread_id": state.get("thread_id", "")},
@@ -261,7 +261,7 @@ from typing import Iterator
 def foo_backend_span(
     *, operation: str, item_count: int,
 ) -> Iterator[object | None]:
-    tracer = infra.otel.service.get_tracer()
+    tracer = infra.opentelemetry.service.get_tracer()
     if tracer is None:
         yield None; return
     with tracer.start_as_current_span(
@@ -299,7 +299,7 @@ This renders as a `db.foo.bulk_write` span in Tempo, with attributes `db.system=
 ### 3a. Define it once in the central registry
 
 ```python
-# apps/server/infra/otel/entities.py
+# apps/server/infra/opentelemetry/entities.py
 INSTRUMENTS: tuple[MetricSpec, ...] = (
     ...,  # existing
     MetricSpec(
@@ -315,13 +315,13 @@ INSTRUMENTS: tuple[MetricSpec, ...] = (
 
 ```python
 # domains/foo/runtime/observability/metrics.py
-import infra.otel
+import infra.opentelemetry
 
 
 def record_foo_write(*, tenant: str, status: str) -> None:
     """Increment when a Foo write completes."""
     try:
-        if (inst := infra.otel.service.get_instrument("foo_writes")) is not None:
+        if (inst := infra.opentelemetry.service.get_instrument("foo_writes")) is not None:
             inst.add(1, attributes = {"tenant": tenant, "status": status})
     except Exception:
         pass
@@ -461,7 +461,7 @@ Reference shipped: `rotator-red.json`, `dd-pipeline.json`, `rr-digests.json`, `y
 
 ## 9. Loki ↔ Tempo correlation — jump from a log to its trace
 
-Already wired: `LoggingInstrumentor` in `apps/server/infra/otel/service.py:_instrument_libraries` injects `trace_id` + `span_id` into every Python log record. Both fields flow through stdout/stderr → Alloy → Loki, and the same `trace_id` is on the Tempo span.
+Already wired: `LoggingInstrumentor` in `apps/server/infra/opentelemetry/service.py:_instrument_libraries` injects `trace_id` + `span_id` into every Python log record. Both fields flow through stdout/stderr → Alloy → Loki, and the same `trace_id` is on the Tempo span.
 
 In Grafana:
 1. **Log → Trace:** open a Loki query for `{namespace="coelhonexus-dev"}`. Click a log line — the right pane shows `trace_id: <hex>`. Click the `Tempo` icon next to it to jump straight to that span tree.
@@ -500,8 +500,8 @@ the `None`-filter line keeps the existing path intact regardless of caller.
 ## What you should NOT do
 
 - **Don't** import the LangFuse SDK at module load. Use `infra.langfuse.service.get_client()`; it's lazy + fail-soft.
-- **Don't** put domain concepts in `infra/otel/` or `infra/langfuse/`. Those are vendor folders; domain enrichment goes under `domains/<feature>/runtime/observability/`.
-- **Don't** create a new TracerProvider. `infra/otel/service.py:init_otel()` owns it; calling it again is idempotent.
+- **Don't** put domain concepts in `infra/opentelemetry/` or `infra/langfuse/`. Those are vendor folders; domain enrichment goes under `domains/<feature>/runtime/observability/`.
+- **Don't** create a new TracerProvider. `infra/opentelemetry/service.py:init_otel()` owns it; calling it again is idempotent.
 - **Don't** emit span events with unbounded data (prompts, full responses) without the env-controlled `RECORD_CONTENT` gate (TODO — captured in §9 of the SOTA doc).
 - **Don't** raise from observability code. Every helper in `infra/langfuse/` returns `None` or silently drops on failure. The pipeline must never break because LangFuse is down.
 
@@ -512,7 +512,7 @@ the `None`-filter line keeps the existing path intact regardless of caller.
 A project-agnostic version of what COELHONexus already gets right (plus the
 one gap it has, #8), to carry into any new Python + LLM project:
 
-1. **Two vendor folders, never mixed with domain code.** `infra/otel/` =
+1. **Two vendor folders, never mixed with domain code.** `infra/opentelemetry/` =
    transport only (TracerProvider, exporters, resource attrs, library
    auto-instrumentation, metric registry). `infra/langfuse/` = SDK features
    only (sessions, scores, prompts, evals, callbacks). Domain-specific
@@ -562,11 +562,11 @@ one gap it has, #8), to carry into any new Python + LLM project:
 
 | File | What it owns |
 |---|---|
-| `infra/otel/service.py` | SDK init, exporter builders (Alloy + LangFuse OTLP + Mimir), `BaggageSpanProcessor` + `bag_context()`, `get_instrument(key)` factory, library auto-instrumentation |
-| `infra/otel/domain.py` | Pure predicates — baggage-key allow check (`is_allowed_baggage_key`) + string transforms. The LangFuse span gate (`should_keep_span`) moved to `infra/langfuse/domain.py` 2026-10-24 |
-| `infra/otel/entities.py` | Central `INSTRUMENTS` list (`MetricSpec` registry) + `DedupeRateLimitFilter` (stateful log-dedup entity) |
-| `infra/otel/keys.py` | `ALLOWED_BAGGAGE_KEYS` — consumed by `domain.py`, not `service.py` (moved out of `params.py` 2026-09-22; the span-gate tables moved to `infra/langfuse/keys.py` 2026-10-24) |
-| `infra/otel/params.py` | Tunables consumed only by `service.py` itself (service identity, BSP/OTLP timeouts, `FASTAPI_EXCLUDED_URLS`, `OTEL_NOISY_LOGGERS`) |
+| `infra/opentelemetry/service.py` | SDK init, exporter builders (Alloy + generic `add_filtered_http_exporter` used by `infra.langfuse` + Mimir), `BaggageSpanProcessor` + `bag_context()`, `get_instrument(key)` factory, library auto-instrumentation. The only module that imports `opentelemetry`: the rest of the code uses its tracing API (`get_tracer`, `get_current_span`, `SpanKind`, `Status`, `StatusCode`, `get_current_context`, `tag_celery_task`, `current_trace_id`) |
+| `infra/opentelemetry/domain.py` | Pure predicates — baggage-key allow check (`is_allowed_baggage_key`) + string transforms. The LangFuse span gate (`should_keep_span`) moved to `infra/langfuse/domain.py` 2026-10-24 |
+| `infra/opentelemetry/entities.py` | Central `INSTRUMENTS` list (`MetricSpec` registry) + `DedupeRateLimitFilter` (stateful log-dedup entity) |
+| `infra/opentelemetry/keys.py` | `ALLOWED_BAGGAGE_KEYS` — consumed by `domain.py`, not `service.py` (moved out of `params.py` 2026-09-22; the span-gate tables moved to `infra/langfuse/keys.py` 2026-10-24) |
+| `infra/opentelemetry/params.py` | Tunables consumed only by `service.py` itself (service identity, BSP/OTLP timeouts, `FASTAPI_EXCLUDED_URLS`, `OTEL_NOISY_LOGGERS`) |
 | `infra/langfuse/service.py` | I/O shell — client singleton, `session(...)`, `record_score(...)`, `flag_for_review(...)`, `build_langchain_callback(...)` (consolidated from separate `sessions.py`/`scores.py`/`callbacks.py`/`annotation.py` files sometime before 2026-09-22 — confirmed via a live repo check, not a change made in this doc's own edit history) |
 | `infra/langfuse/spans.py` | current-span LangFuse attribute setters |
 | `infra/langfuse/domain.py` | pure span-attribute encoders |

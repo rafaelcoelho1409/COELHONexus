@@ -19,12 +19,11 @@ import contextlib
 import uuid
 from collections.abc import Iterator
 
-from opentelemetry import trace
 
 
 @contextlib.contextmanager
 def _db_span(system: str, operation: str, **attrs) -> Iterator[object | None]:
-    tracer = infra.otel.service.get_tracer()
+    tracer = infra.opentelemetry.service.get_tracer()
     if tracer is None:
         yield None
         return
@@ -34,7 +33,7 @@ def _db_span(system: str, operation: str, **attrs) -> Iterator[object | None]:
             span_attrs[k] = v
     with tracer.start_as_current_span(
         f"db.{system}.{operation}",
-        kind       = trace.SpanKind.CLIENT,
+        kind       = infra.opentelemetry.service.SpanKind.CLIENT,
         attributes = span_attrs,
     ) as span:
         try:
@@ -79,7 +78,7 @@ def scan_read_span(operation: str, *, scan_id: str) -> Iterator[None]:
     session_id = f"rr-scan-read-{scan_id}-{uuid.uuid4().hex[:8]}"
     with infra.langfuse.service.session(
         "rr-scan-read", session_id = session_id, user_id = "default",
-    ), infra.otel.service.get_tracer().start_as_current_span(
+    ), infra.opentelemetry.service.get_tracer().start_as_current_span(
         f"rr.scan.{operation}",
         attributes = {
             infra.langfuse.keys.KEEP:                   True,
@@ -99,7 +98,7 @@ def minio_span(
     """`aws.s3.*` semconv — kept separate from `_db_span` (not a thin
     wrapper over it) since S3-shaped storage uses its own attribute
     namespace, not `db.*`."""
-    tracer = infra.otel.service.get_tracer()
+    tracer = infra.opentelemetry.service.get_tracer()
     if tracer is None:
         yield None
         return
@@ -108,7 +107,7 @@ def minio_span(
         attrs["aws.s3.key"] = key
     with tracer.start_as_current_span(
         f"aws.s3.{operation}",
-        kind       = trace.SpanKind.CLIENT,
+        kind       = infra.opentelemetry.service.SpanKind.CLIENT,
         attributes = attrs,
     ) as span:
         try:

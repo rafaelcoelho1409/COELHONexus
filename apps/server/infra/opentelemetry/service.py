@@ -18,12 +18,12 @@ Env vars (init no-ops when OTEL_EXPORTER_OTLP_ENDPOINT is unset):
 """
 from __future__ import annotations
 import infra
-from . import domain, entities, params
+from . import domain, entities, keys, params
 
 import contextlib
 import logging
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
 
 from opentelemetry import baggage, context, metrics, trace
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
@@ -32,11 +32,18 @@ from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
     OTLPSpanExporter as GRPCOTLPSpanExporter,
 )
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+    OTLPSpanExporter as HTTPOTLPSpanExporter,
+)
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace.export import (
+    BatchSpanProcessor,
+    SpanExporter,
+    SpanExportResult,
+)
 from opentelemetry.instrumentation.celery import CeleryInstrumentor
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.logging import LoggingInstrumentor
@@ -156,6 +163,75 @@ def add_alloy_exporter(tracer_provider) -> bool:
             f"({type(e).__name__}: {e}); continuing without it"
         )
         return False
+
+
+class FilterSpanProcessor(SpanProcessor):
+    """Processor-side gate: forwards only spans `keep(name, attributes)` accepts.
+    Reduces queue pressure before the authoritative `FilterSpanExporter`."""
+
+    def __init__(self, inner: SpanProcessor, keep: Callable[[str, Mapping], bool]) -> None:
+        self._inner = inner
+        self._keep = keep
+
+    def on_start(self, span, parent_context=None):
+        self._inner.on_start(span, parent_context)
+
+    def on_end(self, span) -> None:
+        if self._keep(span.name or "", dict(span.attributes or {})):
+            self._inner.on_end(span)
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._inner.force_flush(timeout_millis)
+
+
+class FilterSpanExporter(SpanExporter):
+    """Last gate before export; spans `keep(name, attributes)` rejects are
+    dropped here."""
+
+    def __init__(self, inner: SpanExporter, keep: Callable[[str, Mapping], bool]) -> None:
+        self._inner = inner
+        self._keep = keep
+
+    def export(self, spans) -> SpanExportResult:
+        kept = tuple(
+            span for span in spans
+            if self._keep(span.name or "", dict(span.attributes or {}))
+        )
+        if not kept:
+            return SpanExportResult.SUCCESS
+        return self._inner.export(kept)
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        inner_flush = getattr(self._inner, "force_flush", None)
+        if callable(inner_flush):
+            return bool(inner_flush(timeout_millis))
+        return True
+
+
+def add_filtered_http_exporter(
+    tracer_provider,
+    *,
+    endpoint: str,
+    headers: dict[str, str],
+    timeout_s: int,
+    keep: Callable[[str, Mapping], bool],
+) -> None:
+    """OTLP/HTTP export of only the spans `keep` accepts, batched with the shared
+    BatchSpanProcessor settings. The backend adapter (e.g. `infra.langfuse`)
+    owns the endpoint, credentials and the keep policy; this owns the mechanics."""
+    raw_exporter = HTTPOTLPSpanExporter(endpoint=endpoint, headers=headers, timeout=timeout_s)
+    tracer_provider.add_span_processor(
+        FilterSpanProcessor(
+            BatchSpanProcessor(FilterSpanExporter(raw_exporter, keep), **_bsp_kwargs()),
+            keep,
+        )
+    )
 
 
 def add_metric_exporter() -> None:
@@ -318,7 +394,7 @@ def init_otel(also_instrument_fastapi_app=None) -> bool:
             logger.info("[otel] BaggageSpanProcessor attached")
 
         alloy_ok = add_alloy_exporter(tracer_provider)
-        langfuse_ok = infra.langfuse.service.add_exporter(tracer_provider, _bsp_kwargs())
+        langfuse_ok = infra.langfuse.service.add_exporter(tracer_provider)
 
         trace.set_tracer_provider(tracer_provider)
         _tracer = trace.get_tracer(
@@ -365,6 +441,32 @@ def get_meter():
     if _meter is not None:
         return _meter
     return metrics.get_meter(params.INSTRUMENTATION_SCOPE_NOOP_NAME)
+
+
+# ---------------------------------------------------------------------------
+# Tracing API for the rest of the code — the only module that imports
+# `opentelemetry`, so domains and routers reach spans dotted through here.
+# ---------------------------------------------------------------------------
+
+SpanKind = trace.SpanKind
+Status = trace.Status
+StatusCode = trace.StatusCode
+get_current_span = trace.get_current_span
+get_current_context = context.get_current
+
+
+def tag_celery_task(task_id: str) -> None:
+    """Stamp the active (request) span with the id of the Celery task it enqueued."""
+    trace.get_current_span().set_attribute(keys.CELERY_TASK_ID, task_id)
+
+
+def current_trace_id() -> str | None:
+    """32-hex id of the active trace (all zeros when no span is active), or None
+    when it cannot be read."""
+    try:
+        return format(trace.get_current_span().get_span_context().trace_id, "032x")
+    except Exception:
+        return None
 
 
 def init_otel_for_celery_worker() -> bool:

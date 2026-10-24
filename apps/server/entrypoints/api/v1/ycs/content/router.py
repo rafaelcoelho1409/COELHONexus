@@ -1,12 +1,11 @@
 """ycs/content — sync yt-dlp search + Celery dispatchers for video/channel/playlist ingestion.
 yt-dlp errors translate to 502 (subprocess failure) / 504 (timeout)."""
 from __future__ import annotations
-import domains
+import domains, infra
 import domains.ycs.extract.task
 from . import service
 
 from fastapi import APIRouter, HTTPException, Request
-from opentelemetry import trace
 
 
 router = APIRouter()
@@ -51,7 +50,7 @@ async def get_videos(payload: domains.ycs.extract.schemas.VideosRequest) -> dict
         payload.include_transcription,
         payload.transcription_languages,
     )
-    trace.get_current_span().set_attribute("celery.task_id", task.id)
+    infra.opentelemetry.service.tag_celery_task(task.id)
     return {
         "task_id":  task.id,
         "status":   "queued",
@@ -426,7 +425,7 @@ async def get_channel_videos(payload: domains.ycs.extract.schemas.ChannelRequest
         payload.include_transcription,
         payload.transcription_languages,
     )
-    trace.get_current_span().set_attribute("celery.task_id", task.id)
+    infra.opentelemetry.service.tag_celery_task(task.id)
     return {
         "task_id":  task.id,
         "status":   "queued",
@@ -443,7 +442,7 @@ async def get_playlist_videos(payload: domains.ycs.extract.schemas.PlaylistReque
         payload.include_transcription,
         payload.transcription_languages,
     )
-    trace.get_current_span().set_attribute("celery.task_id", task.id)
+    infra.opentelemetry.service.tag_celery_task(task.id)
     return {
         "task_id":  task.id,
         "status":   "queued",

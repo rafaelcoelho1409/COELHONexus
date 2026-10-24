@@ -14,7 +14,6 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from opentelemetry import trace
 
 
 router = APIRouter()
@@ -211,7 +210,7 @@ async def rag_search(
             user_id    = _user_id,
             channel_id = _user_id,
         ):
-            with infra.otel.service.get_tracer().start_as_current_span(
+            with infra.opentelemetry.service.get_tracer().start_as_current_span(
                 "ycs.ask.run",
                 attributes = {
                     infra.langfuse.keys.KEEP: True,
@@ -243,12 +242,7 @@ async def rag_search(
                     "route": "search",
                     "channel_count": len(payload.channel_ids or []),
                 })
-                try:
-                    _trace_id = format(
-                        trace.get_current_span().get_span_context().trace_id, "032x",
-                    )
-                except Exception:
-                    _trace_id = None
+                _trace_id = infra.opentelemetry.service.current_trace_id()
                 try:
                     _deadline = params.ASK_DEADLINE_S.get(
                         (payload.force_mode or "").lower(),
@@ -673,7 +667,7 @@ async def rag_search_stream(
             channel_id = _user_id,
         )
         _session_cm.__enter__()
-        _span_cm = infra.otel.service.get_tracer().start_as_current_span(
+        _span_cm = infra.opentelemetry.service.get_tracer().start_as_current_span(
             "ycs.ask.stream.run",
             attributes = {
                 infra.langfuse.keys.KEEP: True,
@@ -1415,7 +1409,7 @@ async def ingest_to_qdrant(payload: schemas.IngestRequest) -> dict:
         payload.chunk_size,
         payload.chunk_overlap,
     )
-    trace.get_current_span().set_attribute("celery.task_id", task.id)
+    infra.opentelemetry.service.tag_celery_task(task.id)
     return {
         "task_id":  task.id,
         "status":   "queued",
@@ -1427,7 +1421,7 @@ async def ingest_to_qdrant(payload: schemas.IngestRequest) -> dict:
 async def ingest_to_neo4j(payload: schemas.GraphIngestRequest) -> dict:
     """Queue entity extraction → Neo4j (Celery); 1 LLM call per transcript."""
     task = domains.ycs.neo4j_task.task.ingest_to_neo4j.delay(payload.video_ids, payload.batch_size)
-    trace.get_current_span().set_attribute("celery.task_id", task.id)
+    infra.opentelemetry.service.tag_celery_task(task.id)
     return {
         "task_id":  task.id,
         "status":   "queued",
@@ -1460,7 +1454,7 @@ async def full_pipeline(payload: schemas.PipelineRequest) -> dict:
         payload.include_qdrant,
         payload.include_graph,
     )
-    trace.get_current_span().set_attribute("celery.task_id", task.id)
+    infra.opentelemetry.service.tag_celery_task(task.id)
     return {
         "task_id":  task.id,
         "status":   "queued",

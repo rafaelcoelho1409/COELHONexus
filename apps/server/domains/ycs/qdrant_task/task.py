@@ -46,7 +46,7 @@ def ingest_to_qdrant(
             "ycs-ingest-qdrant",
             session_id = self.request.id or "(no-request-id)",
         ):
-            with infra.otel.service.get_tracer().start_as_current_span(
+            with infra.opentelemetry.service.get_tracer().start_as_current_span(
                 "ycs.ingest.qdrant.run",
                 attributes = {
                     infra.langfuse.keys.KEEP: True,

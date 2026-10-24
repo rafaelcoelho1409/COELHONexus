@@ -263,7 +263,7 @@ async def run_scan_async(
         user_id    = profile_id,
         digest_id  = scan_id,
     ):
-        with infra.otel.service.get_tracer().start_as_current_span(
+        with infra.opentelemetry.service.get_tracer().start_as_current_span(
             "rr.scan.run",
             attributes = {
                 infra.langfuse.keys.KEEP: True,
@@ -398,7 +398,7 @@ async def run_scan_pipeline(
                     "top_n": top_n,
                 })
 
-        with infra.otel.service.get_tracer().start_as_current_span(
+        with infra.opentelemetry.service.get_tracer().start_as_current_span(
             "rr.node.backfill",
             attributes={infra.langfuse.keys.KEEP: True, "rr.scan_id": scan_id},
         ):
@@ -410,7 +410,7 @@ async def run_scan_pipeline(
                     f"{type(e).__name__}: {e}"
                 )
 
-        with infra.otel.service.get_tracer().start_as_current_span(
+        with infra.opentelemetry.service.get_tracer().start_as_current_span(
             "rr.node.digest_assemble",
             attributes={infra.langfuse.keys.KEEP: True, "rr.scan_id": scan_id},
         ):
