@@ -191,10 +191,10 @@ assert rej3 == {"meta_framing": 1, "not_grounded_in_facts": 1}, rej3
 print("6 top-up reject reasons ok")
 
 # 7) failed LLM calls are classified for the per-thread error counters -------------------------------------------------------------------------------------
-RS = domains.dd.llm_counter.service
+RS = domains.settings.llm_counter.domain
 assert RS.failure_kind(RuntimeError("InternalServerError: Error code: 504 - {'error': ...}")) == "504"
 assert RS.failure_kind(domains.settings.chat.errors.ChatTimeoutError("chat_text_async hard backstop fired after 160s")) == "timeout"
 assert RS.failure_kind(RuntimeError("RateLimitError: Error code: 429 - slow down")) == "rate_limit" and RS.failure_kind(ValueError("bad")) == "ValueError"
-assert RS.bump_current_failure(RuntimeError("504")) is None                       # outside a DD context: a no-op, no Redis touched
+assert asyncio.run(domains.settings.llm_counter.service.bump_current_failure(RuntimeError("504"))) is None   # outside a context: a no-op, no Redis touched
 print("7 failure counters ok")
 print("ALL OK")

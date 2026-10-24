@@ -172,7 +172,7 @@ async def _rephrase_subquestion(
         return None
     chain = service.resolve_prompt(prompts.REPHRASE_PROMPT, "ycs.rag.subagent") | llm
     try:
-        domains.ycs.llm_counter.service.set_node(node = "subagent_rephrase")
+        domains.settings.llm_counter.service.set_node(node = "subagent_rephrase")
         response = await asyncio.wait_for(
             chain.ainvoke({
                 "sub_question":    sub_q,

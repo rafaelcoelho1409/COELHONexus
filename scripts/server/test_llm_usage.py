@@ -1,4 +1,4 @@
-"""Offline check of the shared LLM-usage parser (`domains.settings.llm_usage.domain.extract_usage`).
+"""Offline check of the shared LLM-usage parser (`domains.settings.llm_counter.domain.extract_usage`).
 
     cd apps/server && .venv/bin/python ../../scripts/server/test_llm_usage.py
 
@@ -17,8 +17,8 @@ from langchain_core.outputs import ChatGeneration, LLMResult  # noqa: E402
 
 import domains  # noqa: E402
 
-extract = domains.settings.llm_usage.domain.extract_usage
-Usage = domains.settings.llm_usage.entities.Usage
+extract = domains.settings.llm_counter.domain.extract_usage
+Usage = domains.settings.llm_counter.entities.Usage
 
 
 def llm(llm_output, **message):
@@ -63,6 +63,14 @@ check("reasoning tokens from usage_metadata.output_token_details",
       llm({}, usage_metadata = {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3, "output_token_details": {"reasoning": 5}}),
       None, 1, 2, 5)
 check("empty llm_output", llm({}), None, 0, 0)
+
+# ---- bare AIMessage (what `ChatOpenAI.ainvoke` returns; the DD adapter used to rebuild a fake dict from it) ---------
+check("bare AIMessage: usage_metadata + model from response_metadata",
+      AIMessage(content = "x", usage_metadata = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15,
+                                                  "output_token_details": {"reasoning": 2}},
+                response_metadata = {"model_name": "m-bare"}),
+      "m-bare", 10, 5, 2)
+check("bare AIMessage without usage", AIMessage(content = "x"), None, 0, 0, 0)
 
 # ---- raw provider / LiteLLM response (DD) -------------------------------------------------------------------------
 check("raw dict response with reasoning details (DD)",

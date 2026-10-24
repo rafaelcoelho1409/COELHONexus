@@ -121,7 +121,7 @@ class RRLlmCounterCallback(BaseCallbackHandler):
             if not scan_id:
                 return
             phase = get_phase()
-            usage = domains.settings.llm_usage.domain.extract_usage(response)
+            usage = domains.settings.llm_counter.domain.extract_usage(response)
             model, tokens_in, tokens_out = usage.model, usage.tokens_in, usage.tokens_out
             logger.info(
                 f"[rr-llm-timing] scan_id={scan_id} phase={phase} "

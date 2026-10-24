@@ -6,7 +6,6 @@ from . import schemas
 from .. import resolver
 
 import logging
-import uuid
 
 from fastapi import APIRouter, HTTPException
 
@@ -23,154 +22,42 @@ async def start_run(body: schemas.StartRunBody) -> dict:
     acquired, Celery dispatched) / locked (another in flight)."""
     await resolver.service.get_catalog_entry(body.slug)
 
-    r = infra.redis.service.new_redis()
+    gate = await domains.dd.ingestion.runtime.dispatch.service.reserve_run(body.slug, body.refresh)
+    if gate["status"] != "reserved":
+        return gate
+
+    run_id = gate["run_id"]
     try:
-        cursor = 0
-        running_slug = None
-        running_run_id = None
-        while True:
-            cursor, keys = await r.scan(cursor=cursor, match="coelhonexus:dd:lock:*", count=100)
-            for k in keys:
-                ks = k.decode() if isinstance(k, bytes) else k
-                other_slug = ks.split("dd:lock:", 1)[-1]
-                if other_slug == body.slug:
-                    continue
-                val = await r.get(ks)
-                if val is None:
-                    continue
-                running_slug = other_slug
-                running_run_id = val.decode() if isinstance(val, bytes) else val
-                break
-            if running_slug is not None or cursor == 0:
-                break
-        if running_slug is not None:
-            return {
-                "status": "locked",
-                "slug": running_slug,
-                "run_id": running_run_id,
-                "message": (
-                    f"Another ingestion is running ({running_slug!r}, "
-                    f"run_id={running_run_id}). Wait for it to finish or "
-                    f"cancel it before starting {body.slug!r}."
-                ),
-            }
-        active = await domains.dd.ingestion.runtime.progress.service.read_lock(r, body.slug)
-        if active:
-            return {
-                "status": "locked",
-                "slug": body.slug,
-                "run_id": active,
-                "message": (
-                    f"An ingestion of {body.slug!r} is already running "
-                    f"(run_id={active}). Wait for it to finish or cancel "
-                    f"it before triggering another."
-                ),
-            }
+        task = domains.dd.ingestion.task.run_ingestion.delay(run_id, body.slug)
+        # Nice-to-have cross-reference (Tempo/Langfuse UI ↔ task_id in
+        # logs) — CeleryInstrumentor already links this HTTP span to the
+        # task's own root span via injected trace-context headers, this
+        # doesn't replace that.
+        infra.opentelemetry.service.tag_celery_task(task.id)
+    except Exception:
+        await domains.dd.ingestion.runtime.dispatch.service.release_run(body.slug, run_id)
+        raise
 
-        minio = infra.minio.service.get_storage()
-        if not body.refresh:
-            cached = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, body.slug)
-            if cached:
-                return {
-                    "status": "cached",
-                    "slug": body.slug,
-                    "run_id": None,
-                    "manifest": cached,
-                }
-        else:
-            for prefix in (
-                domains.dd.ingestion.storage.keys.framework_prefix(body.slug),
-                f"ingestion-raw/{body.slug}/",
-                f"synth-vault/{body.slug}/",
-            ):
-                try:
-                    n = await minio.delete_prefix(prefix)
-                    if n:
-                        logger.info(
-                            f"[runs] refresh wipe: deleted {n} stale objects "
-                            f"from {prefix!r} before re-ingestion"
-                        )
-                except Exception as e:
-                    logger.warning(
-                        f"[runs] refresh wipe failed for {prefix!r}: {e}"
-                    )
-
-        run_id = uuid.uuid4().hex
-        if not await domains.dd.ingestion.runtime.progress.service.acquire_lock(r, body.slug, run_id):
-            active = await domains.dd.ingestion.runtime.progress.service.read_lock(r, body.slug)
-            return {
-                "status": "locked",
-                "slug": body.slug,
-                "run_id": active or "?",
-                "message": "Concurrent acquire race; try again.",
-            }
-
-        await domains.dd.ingestion.runtime.cancel.service.clear_cancel(r, run_id)
-
-        try:
-            task = domains.dd.ingestion.task.run_ingestion.delay(run_id, body.slug)
-            # Nice-to-have cross-reference (Tempo/Langfuse UI ↔ task_id in
-            # logs) — CeleryInstrumentor already links this HTTP span to the
-            # task's own root span via injected trace-context headers, this
-            # doesn't replace that.
-            infra.opentelemetry.service.tag_celery_task(task.id)
-        except Exception:
-            try:
-                await domains.dd.ingestion.runtime.progress.service.release_lock(r, body.slug, run_id)
-            except Exception:
-                pass
-            raise
-
-        return {
-            "status": "queued",
-            "slug": body.slug,
-            "run_id": run_id,
-        }
-    finally:
-        await r.aclose()
+    return {
+        "status": "queued",
+        "slug": body.slug,
+        "run_id": run_id,
+    }
 
 
 @router.get("/active")
 async def list_active_runs() -> dict:
     """Lock-held runs with progress; cross-checked so locks without a
     written progress record (rare race) aren't surfaced."""
-    r = infra.redis.service.new_redis()
-    active: list[dict] = []
-    try:
-        cursor = 0
-        while True:
-            cursor, keys = await r.scan(cursor=cursor, match="coelhonexus:dd:lock:*", count=100)
-            for k in keys:
-                ks = k.decode() if isinstance(k, bytes) else k
-                slug = ks.split("dd:lock:", 1)[-1]
-                run_id_raw = await r.get(k)
-                if not run_id_raw:
-                    continue
-                run_id = (
-                    run_id_raw.decode()
-                    if isinstance(run_id_raw, bytes) else run_id_raw
-                )
-                progress = await domains.dd.ingestion.runtime.progress.service.read_progress(r, run_id)
-                if progress and progress.get("status") in ("running", "idle"):
-                    active.append({
-                        "slug": slug,
-                        "run_id": run_id,
-                        "progress": progress,
-                    })
-            if cursor == 0:
-                break
-    finally:
-        await r.aclose()
+    async with infra.redis.service.client() as r:
+        active = await domains.dd.ingestion.runtime.progress.service.list_active(r)
     return {"active": active}
 
 
 @router.post("/{run_id}/cancel")
 async def cancel_run(run_id: str) -> dict:
-    r = infra.redis.service.new_redis()
-    try:
+    async with infra.redis.service.client() as r:
         await domains.dd.ingestion.runtime.cancel.service.request_cancel(r, run_id)
-    finally:
-        await r.aclose()
     return {"run_id": run_id, "status": "cancel_requested"}
 
 
@@ -178,13 +65,10 @@ async def cancel_run(run_id: str) -> dict:
 async def get_run(run_id: str) -> dict:
     """In-flight snapshot from Redis (canonical post-finalize manifest
     lives in MinIO under /ingestion/{slug})."""
-    r = infra.redis.service.new_redis()
-    try:
+    async with infra.redis.service.client() as r:
         progress = await domains.dd.ingestion.runtime.progress.service.read_progress(r, run_id)
         manifest = await domains.dd.ingestion.storage.service.read_live_manifest(r, run_id)
         post = await domains.dd.ingestion.runtime.progress.service.read_post(r, run_id)
-    finally:
-        await r.aclose()
 
     if progress is None and not manifest:
         raise HTTPException(status_code=404, detail=f"run {run_id!r} not found")
@@ -199,20 +83,14 @@ async def get_run(run_id: str) -> dict:
 
 @router.get("/{run_id}/url-records")
 async def get_url_records(run_id: str) -> list[dict]:
-    r = infra.redis.service.new_redis()
-    try:
+    async with infra.redis.service.client() as r:
         return await domains.dd.ingestion.runtime.progress.service.read_url_records(r, run_id)
-    finally:
-        await r.aclose()
 
 
 @router.get("/{run_id}/pages/{idx}")
 async def get_page(run_id: str, idx: int) -> dict:
-    r = infra.redis.service.new_redis()
-    try:
+    async with infra.redis.service.client() as r:
         manifest = await domains.dd.ingestion.storage.service.read_live_manifest(r, run_id)
-    finally:
-        await r.aclose()
     if not manifest or idx < 0 or idx >= len(manifest):
         raise HTTPException(
             status_code=404,

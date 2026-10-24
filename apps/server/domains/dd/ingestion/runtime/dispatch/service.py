@@ -6,6 +6,7 @@ from ... import tiers
 
 import asyncio
 import logging
+import uuid
 from dataclasses import asdict
 
 
@@ -56,6 +57,83 @@ async def _cleanup_framework(minio, framework_slug: str) -> int:
     except Exception as e:
         logger.warning(f"[dispatch] cleanup {framework_slug} failed: {e}")
         return 0
+
+
+async def reserve_run(slug: str, refresh: bool) -> dict:
+    """Single-flight gate for starting an ingestion of `slug`. Returns a terminal response — `locked` (another
+    ingestion is running, this slug's lock is held, or a concurrent start won the lock) or `cached` (a manifest
+    exists and no refresh was asked) — or `{"status": "reserved", "run_id": ...}` with the slug's lock held and the
+    cancel flag cleared: the caller enqueues the run and calls `release_run` if that fails. A refresh first wipes the
+    slug's stale MinIO prefixes."""
+    progress = domains.dd.ingestion.runtime.progress.service
+    async with infra.redis.service.client() as r:
+        other = await progress.find_other_running(r, slug)
+        if other is not None:
+            running_slug, running_run_id = other
+            return {
+                "status": "locked",
+                "slug": running_slug,
+                "run_id": running_run_id,
+                "message": (
+                    f"Another ingestion is running ({running_slug!r}, "
+                    f"run_id={running_run_id}). Wait for it to finish or "
+                    f"cancel it before starting {slug!r}."
+                ),
+            }
+        active = await progress.read_lock(r, slug)
+        if active:
+            return {
+                "status": "locked",
+                "slug": slug,
+                "run_id": active,
+                "message": (
+                    f"An ingestion of {slug!r} is already running "
+                    f"(run_id={active}). Wait for it to finish or cancel "
+                    f"it before triggering another."
+                ),
+            }
+
+        minio = infra.minio.service.get_storage()
+        if not refresh:
+            cached = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)
+            if cached:
+                return {"status": "cached", "slug": slug, "run_id": None, "manifest": cached}
+        else:
+            for prefix in (
+                domains.dd.ingestion.storage.keys.framework_prefix(slug),
+                f"ingestion-raw/{slug}/",
+                f"synth-vault/{slug}/",
+            ):
+                try:
+                    n = await minio.delete_prefix(prefix)
+                    if n:
+                        logger.info(
+                            f"[runs] refresh wipe: deleted {n} stale objects "
+                            f"from {prefix!r} before re-ingestion"
+                        )
+                except Exception as e:
+                    logger.warning(f"[runs] refresh wipe failed for {prefix!r}: {e}")
+
+        run_id = uuid.uuid4().hex
+        if not await progress.acquire_lock(r, slug, run_id):
+            held = await progress.read_lock(r, slug)
+            return {
+                "status": "locked",
+                "slug": slug,
+                "run_id": held or "?",
+                "message": "Concurrent acquire race; try again.",
+            }
+        await domains.dd.ingestion.runtime.cancel.service.clear_cancel(r, run_id)
+    return {"status": "reserved", "slug": slug, "run_id": run_id}
+
+
+async def release_run(slug: str, run_id: str) -> None:
+    """Give the slug's lock back after a failed enqueue (best-effort: never raised, so it cannot mask the failure)."""
+    try:
+        async with infra.redis.service.client() as r:
+            await domains.dd.ingestion.runtime.progress.service.release_lock(r, slug, run_id)
+    except Exception:
+        pass
 
 
 async def run(run_id: str, slug: str) -> dict:

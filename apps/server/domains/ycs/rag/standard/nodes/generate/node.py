@@ -31,7 +31,7 @@ async def generate(state: state.YouTubeRAGState, llm) -> dict:
 
     chain = service.resolve_prompt(prompts.GENERATE_PROMPT, "ycs.rag.generate") | llm
     try:
-        domains.ycs.llm_counter.service.set_node(node = "generate")
+        domains.settings.llm_counter.service.set_node(node = "generate")
         response = await service.resilient_ainvoke(
             chain,
             {

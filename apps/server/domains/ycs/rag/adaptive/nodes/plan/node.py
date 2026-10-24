@@ -51,7 +51,7 @@ async def plan_research(state: state.AdaptiveRAGState, llm) -> dict:
     last_exc: BaseException | None = None
     for attempt in range(1, _PLAN_MAX_ATTEMPTS + 1):
         try:
-            domains.ycs.llm_counter.service.set_node(node = "plan")
+            domains.settings.llm_counter.service.set_node(node = "plan")
             response = await asyncio.wait_for(
                 chain.ainvoke({"question": state["question"]}),
                 timeout = _PLAN_TIMEOUT_S,

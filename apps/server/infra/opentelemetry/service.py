@@ -1,9 +1,9 @@
 """OTel SDK bootstrap, exporters, and cross-cutting runtime helpers — the
 Imperative Shell for this package. Pure decision logic (the baggage-key allow
 check, string transforms) lives in `domain.py`; everything here has a side
-effect: building resources/exporters, wiring SDK processors, reading env
-vars, touching global SDK state, logging. The LangFuse exporter and its span
-gate live in `infra.langfuse`; `init_otel` only attaches it.
+effect: building resources/exporters, wiring SDK processors, touching global
+SDK state, logging. The env vars are read once in `params.py`. The LangFuse
+exporter and its span gate live in `infra.langfuse`; `init_otel` only attaches it.
 
 `init_otel()` is idempotent. Call once from FastAPI lifespan + once from
 Celery `worker_process_init` — each forked worker needs its own provider
@@ -23,7 +23,6 @@ from . import domain, entities, keys, params
 import contextlib
 import functools
 import logging
-import os
 from collections.abc import Callable, Iterator, Mapping
 
 from opentelemetry import baggage, context, metrics, trace
@@ -84,62 +83,33 @@ def quiet_otel_export_logs() -> None:
 
 def build_resource() -> Resource:
     attrs: dict = {
-        "service.name": os.environ.get(
-            "OTEL_SERVICE_NAME", params.SERVICE_NAME_DEFAULT,
-        ),
-        "service.version": os.environ.get(
-            "OTEL_SERVICE_VERSION", params.SERVICE_VERSION_DEFAULT,
-        ),
-        "deployment.environment": os.environ.get(
-            "DEPLOYMENT_ENVIRONMENT", params.DEPLOYMENT_ENVIRONMENT_DEFAULT,
-        ),
+        "service.name": params.SERVICE_NAME,
+        "service.version": params.SERVICE_VERSION,
+        "deployment.environment": params.DEPLOYMENT_ENVIRONMENT,
         "service.namespace": params.SERVICE_NAMESPACE,
     }
-    git_sha = os.environ.get("GIT_SHA") or os.environ.get("OTEL_GIT_SHA")
-    if git_sha:
-        attrs["service.git_sha"] = git_sha
-    chart_ver = (
-        os.environ.get("HELM_CHART_VERSION")
-        or os.environ.get("OTEL_HELM_CHART_VERSION")
-    )
-    if chart_ver:
-        attrs["service.helm_chart_version"] = chart_ver
-    extra = os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "")
-    if extra:
-        attrs.update(domain.parse_resource_attributes(extra))
+    if params.GIT_SHA:
+        attrs["service.git_sha"] = params.GIT_SHA
+    if params.HELM_CHART_VERSION:
+        attrs["service.helm_chart_version"] = params.HELM_CHART_VERSION
+    if params.RESOURCE_ATTRIBUTES:
+        attrs.update(domain.parse_resource_attributes(params.RESOURCE_ATTRIBUTES))
     return Resource.create(attrs)
 
 
 def _bsp_kwargs() -> dict:
-    """Shared BatchSpanProcessor settings from env overrides."""
+    """Shared BatchSpanProcessor settings (env overrides applied in `params`)."""
     return {
-        "max_queue_size": int(
-            os.environ.get(
-                "OTEL_BSP_MAX_QUEUE_SIZE", str(params.BSP_MAX_QUEUE_SIZE_DEFAULT),
-            )
-        ),
-        "max_export_batch_size": int(
-            os.environ.get(
-                "OTEL_BSP_MAX_EXPORT_BATCH_SIZE",
-                str(params.BSP_MAX_EXPORT_BATCH_SIZE_DEFAULT),
-            )
-        ),
-        "schedule_delay_millis": int(
-            os.environ.get(
-                "OTEL_BSP_SCHEDULE_DELAY", str(params.BSP_SCHEDULE_DELAY_MS_DEFAULT),
-            )
-        ),
-        "export_timeout_millis": int(
-            os.environ.get(
-                "OTEL_BSP_EXPORT_TIMEOUT", str(params.BSP_EXPORT_TIMEOUT_MS_DEFAULT),
-            )
-        ),
+        "max_queue_size": params.BSP_MAX_QUEUE_SIZE,
+        "max_export_batch_size": params.BSP_MAX_EXPORT_BATCH_SIZE,
+        "schedule_delay_millis": params.BSP_SCHEDULE_DELAY_MS,
+        "export_timeout_millis": params.BSP_EXPORT_TIMEOUT_MS,
     }
 
 
 def add_alloy_exporter(tracer_provider) -> bool:
     """gRPC OTLP → Alloy → LGTM."""
-    endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    endpoint = params.OTLP_ENDPOINT
     if not endpoint:
         logger.info(
             "[otel] OTEL_EXPORTER_OTLP_ENDPOINT unset — Alloy export disabled"
@@ -149,9 +119,7 @@ def add_alloy_exporter(tracer_provider) -> bool:
         exporter = GRPCOTLPSpanExporter(
             endpoint=endpoint,
             insecure=domain.is_insecure_endpoint(endpoint),
-            timeout=int(os.environ.get(
-                "OTEL_EXPORTER_OTLP_TIMEOUT", str(params.OTLP_TIMEOUT_DEFAULT_S),
-            )),
+            timeout=params.OTLP_TIMEOUT_S,
         )
         tracer_provider.add_span_processor(
             BatchSpanProcessor(exporter, **_bsp_kwargs())
@@ -237,7 +205,7 @@ def add_filtered_http_exporter(
 
 def add_metric_exporter() -> None:
     """gRPC OTLP metrics → Alloy. LangFuse doesn't ingest metrics."""
-    endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    endpoint = params.OTLP_ENDPOINT
     if not endpoint:
         return
     try:

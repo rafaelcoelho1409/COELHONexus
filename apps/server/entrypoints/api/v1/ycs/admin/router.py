@@ -101,12 +101,11 @@ async def pipeline_stream_status(
 async def pipeline_llm_counters(extract_id: str) -> dict:
     """LLM-usage drawer for the Neo4j box — same contract as DD's
     `/planner|synth/debug/graph/{thread_id}/llm-counters`
-    (`domains.dd.llm_counter.service.read_counters`), backed by YCS's
-    own counter store (`domains.ycs.llm_counter`) since YCS's
-    extraction isn't a LangGraph graph with a thread_id to key off —
-    keyed by extract_id instead, "node" is the video_id being
-    extracted rather than a workflow node."""
-    return await domains.ycs.llm_counter.service.read_counters(extract_id)
+    (`domains.settings.llm_counter.service.read_counters`), under the
+    `ycs` namespace since YCS's extraction isn't a LangGraph graph with
+    a thread_id to key off — keyed by extract_id instead, "node" is the
+    video_id being extracted rather than a workflow node."""
+    return await domains.settings.llm_counter.service.read_counters("ycs", extract_id)
 
 
 @router.get("/videos")

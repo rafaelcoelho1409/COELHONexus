@@ -9,7 +9,6 @@ from . import params, service
 import asyncio
 import json
 import logging
-import time
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from starlette.responses import StreamingResponse
@@ -114,36 +113,7 @@ async def synth_active(slug: str, response: Response) -> dict:
     so the UI can reconnect to its SSE without browser localStorage. A single-chapter run (the per-chapter ▶ button on the
     chapter list) has no study registry entry; its thread is the value of the slug's synth lock, returned as `chapter_thread_id`."""
     response.headers["Cache-Control"] = "no-store"
-    chapter_tid = None
-    try:
-        r = infra.redis.service.new_redis()
-        try:
-            sid = await r.get(domains.dd.synth.keys.active_study_key(slug))
-            if not sid:
-                held = await r.get(domains.dd.synth.keys.lock_key(slug))
-                if isinstance(held, (bytes, bytearray)):
-                    held = held.decode("utf-8", "replace")
-                if held and not str(held).startswith("docs-distiller/study/"):
-                    chapter_tid = str(held)
-        finally:
-            await r.aclose()
-    except Exception:
-        return {"active": False}
-    if chapter_tid:
-        return {"active": True, "chapter_thread_id": chapter_tid, "study_thread_id": None, "started_ts": None}
-    if not sid:
-        return {"active": False}
-    if isinstance(sid, (bytes, bytearray)):
-        sid = sid.decode("utf-8", "replace")
-    try:
-        data = json.loads(sid)
-        return {
-            "active": True,
-            "study_thread_id": data.get("study_thread_id"),
-            "started_ts": data.get("started_ts"),
-        }
-    except Exception:
-        return {"active": True, "study_thread_id": str(sid), "started_ts": None}
+    return await domains.dd.synth.runtime.dispatch.service.read_active(slug)
 
 
 @router.get("/{slug}/study/{chapter_id}/artifact/{artifact_name}")
@@ -258,135 +228,30 @@ async def start_synth(
     if chapter_id is None:
         study_thread_id = thread_id or domains.dd.synth.runtime.dispatch.keys.make_study_thread_id(slug)
 
-        r = infra.redis.service.new_redis()
+        gate = await domains.dd.synth.runtime.dispatch.service.reserve_start(slug, study_thread_id)
+        if gate is not None:
+            return gate
+
         try:
-            cursor = 0
-            while True:
-                cursor, keys = await r.scan(
-                    cursor=cursor, match=f"{domains.dd.planner.keys.lock_prefix()}*", count=100,
-                )
-                for k in keys:
-                    ks = k.decode() if isinstance(k, bytes) else k
-                    planner_slug = ks.split("dd:planner:lock:", 1)[-1]
-                    val = await r.get(ks)
-                    if val is None:
-                        continue
-                    planner_thread = (
-                        val.decode() if isinstance(val, bytes) else val
-                    )
-                    return {
-                        "status": "locked",
-                        "slug": planner_slug,
-                        "thread_id": planner_thread,
-                        "stage": "planner",
-                        "message": (
-                            f"A planner is running ({planner_slug!r}, "
-                            f"thread_id={planner_thread}). Planner and "
-                            f"Synth share the same LLM resources — "
-                            f"running both at once degrades quality on "
-                            f"each. Wait for the planner to finish or "
-                            f"cancel it before starting a synth."
-                        ),
-                    }
-                if cursor == 0:
-                    break
-
-            cursor = 0
-            while True:
-                cursor, keys = await r.scan(
-                    cursor=cursor, match=f"{domains.dd.synth.keys.lock_prefix()}*", count=100,
-                )
-                for k in keys:
-                    ks = k.decode() if isinstance(k, bytes) else k
-                    other_slug = ks.split("dd:synth:lock:", 1)[-1]
-                    if other_slug == slug:
-                        continue
-                    val = await r.get(ks)
-                    if val is None:
-                        continue
-                    other_thread = (
-                        val.decode() if isinstance(val, bytes) else val
-                    )
-                    return {
-                        "status": "locked",
-                        "slug": other_slug,
-                        "thread_id": other_thread,
-                        "stage": "synth",
-                        "message": (
-                            f"Another synth is running ({other_slug!r}, "
-                            f"thread_id={other_thread}). Wait for it to "
-                            f"finish or cancel it before starting {slug!r}."
-                        ),
-                    }
-                if cursor == 0:
-                    break
-
-            acquired = await r.set(
-                domains.dd.synth.keys.lock_key(slug), study_thread_id,
-                nx=True, ex=params.SYNTH_LOCK_TTL_S,
+            async_result = domains.dd.synth.task.run_study.delay(
+                study_thread_id, slug, plan_chapter_ids, mode,
             )
-            if not acquired:
-                existing = await r.get(domains.dd.synth.keys.lock_key(slug))
-                existing_tid = (
-                    existing.decode() if isinstance(existing, bytes)
-                    else existing
-                ) if existing else None
-                return {
-                    "status": "locked",
-                    "slug": slug,
-                    "thread_id": existing_tid,
-                    "stage": "synth",
-                    "message": (
-                        f"A synth of {slug!r} is already running "
-                        f"(thread_id={existing_tid}). Wait for it to "
-                        f"finish or cancel it before retrying."
-                    ),
-                }
-
-            await domains.dd.synth.runtime.cancel.service.clear_cancel(r, study_thread_id)
-
-            try:
-                async_result = domains.dd.synth.task.run_study.delay(
-                    study_thread_id, slug, plan_chapter_ids, mode,
-                )
-                infra.opentelemetry.service.tag_celery_task(async_result.id)
-            except Exception as e:
-                try:
-                    await r.delete(domains.dd.synth.keys.lock_key(slug))
-                except Exception:
-                    pass
-                logger.exception(
-                    f"[synth-study] {study_thread_id}: celery dispatch "
-                    f"failed: {type(e).__name__}: {e}"
-                )
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        f"celery dispatch failed: "
-                        f"{type(e).__name__}: {e}"
-                    ),
-                )
-        finally:
-            await r.aclose()
-
-        try:
-            r2 = infra.redis.service.new_redis()
-            try:
-                await r2.set(
-                    domains.dd.synth.keys.active_study_key(slug),
-                    json.dumps({
-                        "study_thread_id": study_thread_id,
-                        "started_ts": time.time(),
-                    }),
-                    ex=14400,
-                )
-            finally:
-                await r2.aclose()
+            infra.opentelemetry.service.tag_celery_task(async_result.id)
         except Exception as e:
-            logger.warning(
-                f"[synth-study] {slug}: active-run register failed: "
-                f"{type(e).__name__}: {e}"
+            await domains.dd.synth.runtime.dispatch.service.release_start(slug)
+            logger.exception(
+                f"[synth-study] {study_thread_id}: celery dispatch "
+                f"failed: {type(e).__name__}: {e}"
             )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"celery dispatch failed: "
+                    f"{type(e).__name__}: {e}"
+                ),
+            )
+
+        await domains.dd.synth.runtime.dispatch.service.register_active_study(slug, study_thread_id)
 
         return {
             "study_thread_id": study_thread_id,
@@ -412,113 +277,25 @@ async def start_synth(
     if not thread_id:
         thread_id = domains.dd.synth.runtime.dispatch.keys.make_thread_id(slug)
 
-    r = infra.redis.service.new_redis()
+    gate = await domains.dd.synth.runtime.dispatch.service.reserve_start(slug, thread_id)
+    if gate is not None:
+        return gate
+
     try:
-        cursor = 0
-        while True:
-            cursor, keys = await r.scan(
-                cursor=cursor, match=f"{domains.dd.planner.keys.lock_prefix()}*", count=100,
-            )
-            for k in keys:
-                ks = k.decode() if isinstance(k, bytes) else k
-                planner_slug = ks.split("dd:planner:lock:", 1)[-1]
-                val = await r.get(ks)
-                if val is None:
-                    continue
-                planner_thread = (
-                    val.decode() if isinstance(val, bytes) else val
-                )
-                return {
-                    "status": "locked",
-                    "slug": planner_slug,
-                    "thread_id": planner_thread,
-                    "stage": "planner",
-                    "message": (
-                        f"A planner is running ({planner_slug!r}, "
-                        f"thread_id={planner_thread}). Planner and "
-                        f"Synth share the same LLM resources — running "
-                        f"both at once degrades quality on each. Wait "
-                        f"for the planner to finish or cancel it before "
-                        f"starting a synth."
-                    ),
-                }
-            if cursor == 0:
-                break
-
-        cursor = 0
-        while True:
-            cursor, keys = await r.scan(
-                cursor=cursor, match=f"{domains.dd.synth.keys.lock_prefix()}*", count=100,
-            )
-            for k in keys:
-                ks = k.decode() if isinstance(k, bytes) else k
-                other_slug = ks.split("dd:synth:lock:", 1)[-1]
-                if other_slug == slug:
-                    continue
-                val = await r.get(ks)
-                if val is None:
-                    continue
-                other_thread = (
-                    val.decode() if isinstance(val, bytes) else val
-                )
-                return {
-                    "status": "locked",
-                    "slug": other_slug,
-                    "thread_id": other_thread,
-                    "stage": "synth",
-                    "message": (
-                        f"Another synth is running ({other_slug!r}, "
-                        f"thread_id={other_thread}). Wait for it to "
-                        f"finish or cancel it before starting {slug!r}."
-                    ),
-                }
-            if cursor == 0:
-                break
-
-        acquired = await r.set(
-            domains.dd.synth.keys.lock_key(slug), thread_id,
-            nx=True, ex=params.SYNTH_LOCK_TTL_S,
+        async_result = domains.dd.synth.task.run_single_chapter.delay(
+            thread_id, slug, chapter_id, mode,
         )
-        if not acquired:
-            existing = await r.get(domains.dd.synth.keys.lock_key(slug))
-            existing_tid = (
-                existing.decode() if isinstance(existing, bytes)
-                else existing
-            ) if existing else None
-            return {
-                "status": "locked",
-                "slug": slug,
-                "thread_id": existing_tid,
-                "stage": "synth",
-                "message": (
-                    f"A synth of {slug!r} is already running "
-                    f"(thread_id={existing_tid}). Wait for it to finish "
-                    f"or cancel it before retrying."
-                ),
-            }
-
-        await domains.dd.synth.runtime.cancel.service.clear_cancel(r, thread_id)
-
-        try:
-            async_result = domains.dd.synth.task.run_single_chapter.delay(
-                thread_id, slug, chapter_id, mode,
-            )
-            infra.opentelemetry.service.tag_celery_task(async_result.id)
-        except Exception as e:
-            try:
-                await r.delete(domains.dd.synth.keys.lock_key(slug))
-            except Exception:
-                pass
-            logger.exception(
-                f"[synth] {thread_id}: celery dispatch failed: "
-                f"{type(e).__name__}: {e}"
-            )
-            raise HTTPException(
-                status_code=503,
-                detail=f"celery dispatch failed: {type(e).__name__}: {e}",
-            )
-    finally:
-        await r.aclose()
+        infra.opentelemetry.service.tag_celery_task(async_result.id)
+    except Exception as e:
+        await domains.dd.synth.runtime.dispatch.service.release_start(slug)
+        logger.exception(
+            f"[synth] {thread_id}: celery dispatch failed: "
+            f"{type(e).__name__}: {e}"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"celery dispatch failed: {type(e).__name__}: {e}",
+        )
 
     return {
         "thread_id":      thread_id,
@@ -533,11 +310,8 @@ async def start_synth(
 
 @router.post("/{thread_id:path}/resume")
 async def resume_synth(thread_id: str) -> dict:
-    r = infra.redis.service.new_redis()
-    try:
+    async with infra.redis.service.client() as r:
         await domains.dd.synth.runtime.cancel.service.clear_cancel(r, thread_id)
-    finally:
-        await r.aclose()
 
     try:
         async_result = domains.dd.synth.task.resume_synth.delay(thread_id)
@@ -565,66 +339,7 @@ async def cancel_synth(thread_id: str) -> dict:
     thread — chapter watchers poll their own flag, not the study flag.
     Without propagation only the NEXT chapter is blocked; the in-flight
     one keeps firing LLM calls."""
-    r = infra.redis.service.new_redis()
-    propagated_to: list[str] = []
-    try:
-        await domains.dd.synth.runtime.cancel.service.request_cancel(r, thread_id)
-        parts = thread_id.split("/")
-        if len(parts) >= 4 and parts[1] == "study":
-            slug = parts[2]
-            seen: set[str] = set()
-            # SADDs before spawn → catches chapters that just started but haven't emitted a progress event yet (invisible to snapshot scan).
-            try:
-                members = await r.smembers(
-                    domains.dd.synth.keys.active_chapters_key(thread_id),
-                )
-                for raw in members or []:
-                    ch_tid = raw.decode() if isinstance(raw, bytes) else raw
-                    if ch_tid and ch_tid not in seen:
-                        await domains.dd.synth.runtime.cancel.service.request_cancel(r, ch_tid)
-                        propagated_to.append(ch_tid)
-                        seen.add(ch_tid)
-            except Exception as e:
-                logger.warning(
-                    f"[cancel_synth] active_chapters read failed for "
-                    f"{thread_id!r}: {type(e).__name__}: {e}"
-                )
-            # BELT-AND-SUSPENDERS — scan progress snapshots. Covers any
-            # chapter that emitted progress but never landed in the set
-            # (e.g., upgraded mid-run from an older dispatch that didn't
-            # SADD). Idempotent: we de-dupe via `seen`.
-            chapter_prefix = f"docs-distiller/synth/{slug}/"
-            scan_pattern = (
-                f"coelhonexus:dd:synth:{chapter_prefix}*:events:snapshot"
-            )
-            try:
-                async for key in r.scan_iter(match=scan_pattern, count=200):
-                    if isinstance(key, bytes):
-                        key = key.decode()
-                    ch_tid = key[len("coelhonexus:dd:synth:"):-len(":events:snapshot")]
-                    if ch_tid in seen:
-                        continue
-                    await domains.dd.synth.runtime.cancel.service.request_cancel(r, ch_tid)
-                    propagated_to.append(ch_tid)
-                    seen.add(ch_tid)
-            except Exception as e:
-                logger.warning(
-                    f"[cancel_synth] scan/propagate failed for {thread_id!r}: "
-                    f"{type(e).__name__}: {e}"
-                )
-    finally:
-        await r.aclose()
-
-    await domains.dd.synth.runtime.progress.service.emit_progress(thread_id, "synth", "cancel_requested")
-    for ch_tid in propagated_to:
-        try:
-            await domains.dd.synth.runtime.progress.service.emit_progress(ch_tid, "synth", "cancel_requested")
-        except Exception:
-            pass
-    logger.info(
-        f"[cancel_synth] {thread_id}: flag set; "
-        f"propagated to {len(propagated_to)} chapter thread(s)"
-    )
+    propagated_to = await domains.dd.synth.runtime.dispatch.service.cancel_run(thread_id)
     return {
         "thread_id":     thread_id,
         "status":        "cancel_requested",
@@ -721,7 +436,7 @@ async def synth_state(thread_id: str) -> dict:
 
 @router.get("/debug/graph/{thread_id:path}/llm-counters")
 async def synth_llm_counters(thread_id: str) -> dict:
-    return await domains.dd.llm_counter.service.read_counters(thread_id)
+    return await domains.settings.llm_counter.service.read_counters("dd", thread_id)
 
 
 @router.get("/debug/graph/{thread_id:path}/history")
@@ -794,29 +509,7 @@ async def wipe_synth(slug: str, chapter_id: str | None = Query(default=None)) ->
         logger.warning(f"[synth-wipe] Postgres delete failed for {slug!r}: {e}")
         counts["error"] = f"{type(e).__name__}: {e}"
 
-    n_redis = 0
-    try:
-        r = infra.redis.service.new_redis()
-        try:
-            for kind in ("synth", "study"):
-                match = f"coelhonexus:dd:synth:docs-distiller/{kind}/{slug}/*"
-                batch: list = []
-                async for k in r.scan_iter(match=match, count=500):
-                    batch.append(k)
-                    if len(batch) >= 500:
-                        n_redis += await r.delete(*batch)
-                        batch = []
-                if batch:
-                    n_redis += await r.delete(*batch)
-            n_redis += await r.delete(
-                domains.dd.synth.keys.active_study_key(slug),
-                domains.dd.synth.keys.lock_key(slug),
-            )
-        finally:
-            await r.aclose()
-    except Exception as e:
-        logger.warning(f"[synth-wipe] Redis delete failed for {slug!r}: {e}")
-        n_redis = -1
+    n_redis = await domains.dd.synth.runtime.dispatch.service.wipe_redis(slug)
 
     logger.info(
         f"[synth-wipe] {slug}: minio={n_minio} blobs, postgres={counts}, "

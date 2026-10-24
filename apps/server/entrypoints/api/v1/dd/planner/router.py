@@ -9,7 +9,6 @@ from . import params
 import asyncio
 import json
 import logging
-import time
 
 from fastapi import APIRouter, HTTPException, Response
 from starlette.responses import StreamingResponse
@@ -93,127 +92,25 @@ async def start_planner(
     if not thread_id:
         thread_id = domains.dd.planner.runtime.dispatch.keys.make_thread_id(slug)
 
-    r = infra.redis.service.new_redis()
-    try:
-        cursor = 0
-        while True:
-            cursor, keys = await r.scan(
-                cursor=cursor, match=f"{domains.dd.synth.keys.lock_prefix()}*", count=100,
-            )
-            for k in keys:
-                ks = k.decode() if isinstance(k, bytes) else k
-                synth_slug = ks.split("dd:synth:lock:", 1)[-1]
-                val = await r.get(ks)
-                if val is None:
-                    continue
-                synth_thread = (
-                    val.decode() if isinstance(val, bytes) else val
-                )
-                return {
-                    "status": "locked",
-                    "slug": synth_slug,
-                    "thread_id": synth_thread,
-                    "stage": "synth",
-                    "message": (
-                        f"A synth is running ({synth_slug!r}, "
-                        f"thread_id={synth_thread}). Planner and Synth "
-                        f"share the same LLM resources — running both "
-                        f"at once degrades quality on each. Wait for "
-                        f"the synth to finish or cancel it before "
-                        f"starting a planner."
-                    ),
-                }
-            if cursor == 0:
-                break
-
-        cursor = 0
-        while True:
-            cursor, keys = await r.scan(
-                cursor=cursor, match=f"{domains.dd.planner.keys.lock_prefix()}*", count=100,
-            )
-            for k in keys:
-                ks = k.decode() if isinstance(k, bytes) else k
-                other_slug = ks.split("dd:planner:lock:", 1)[-1]
-                if other_slug == slug:
-                    continue
-                val = await r.get(ks)
-                if val is None:
-                    continue
-                other_thread = (
-                    val.decode() if isinstance(val, bytes) else val
-                )
-                return {
-                    "status": "locked",
-                    "slug": other_slug,
-                    "thread_id": other_thread,
-                    "stage": "planner",
-                    "message": (
-                        f"Another planner is running ({other_slug!r}, "
-                        f"thread_id={other_thread}). Wait for it to "
-                        f"finish or cancel it before starting {slug!r}."
-                    ),
-                }
-            if cursor == 0:
-                break
-
-        acquired = await r.set(
-            domains.dd.planner.keys.lock_key(slug), thread_id,
-            nx=True, ex=params.PLANNER_LOCK_TTL_S,
-        )
-        if not acquired:
-            existing = await r.get(domains.dd.planner.keys.lock_key(slug))
-            existing_tid = (
-                existing.decode() if isinstance(existing, bytes)
-                else existing
-            ) if existing else None
-            return {
-                "status": "locked",
-                "slug": slug,
-                "thread_id": existing_tid,
-                "stage": "planner",
-                "message": (
-                    f"A planner of {slug!r} is already running "
-                    f"(thread_id={existing_tid}). Wait for it to finish "
-                    f"or cancel it before retrying."
-                ),
-            }
-
-        await domains.dd.planner.runtime.cancel.service.clear_cancel(r, thread_id)
-
-        try:
-            async_result = domains.dd.planner.task.run_planner.delay(thread_id, slug, mode)
-            infra.opentelemetry.service.tag_celery_task(async_result.id)
-        except Exception as e:
-            try:
-                await r.delete(domains.dd.planner.keys.lock_key(slug))
-            except Exception:
-                pass
-            logger.exception(
-                f"[planner] {thread_id}: celery dispatch failed: "
-                f"{type(e).__name__}: {e}"
-            )
-            raise HTTPException(
-                status_code=503,
-                detail=f"celery dispatch failed: {type(e).__name__}: {e}",
-            )
-    finally:
-        await r.aclose()
+    gate = await domains.dd.planner.runtime.dispatch.service.reserve_start(slug, thread_id)
+    if gate is not None:
+        return gate
 
     try:
-        r2 = infra.redis.service.new_redis()
-        try:
-            await r2.set(
-                domains.dd.planner.keys.active_run_key(slug),
-                json.dumps({"thread_id": thread_id, "started_ts": time.time()}),
-                ex=3600,
-            )
-        finally:
-            await r2.aclose()
+        async_result = domains.dd.planner.task.run_planner.delay(thread_id, slug, mode)
+        infra.opentelemetry.service.tag_celery_task(async_result.id)
     except Exception as e:
-        logger.warning(
-            f"[planner] {slug}: active-run register failed: "
+        await domains.dd.planner.runtime.dispatch.service.release_start(slug)
+        logger.exception(
+            f"[planner] {thread_id}: celery dispatch failed: "
             f"{type(e).__name__}: {e}"
         )
+        raise HTTPException(
+            status_code=503,
+            detail=f"celery dispatch failed: {type(e).__name__}: {e}",
+        )
+
+    await domains.dd.planner.runtime.dispatch.service.register_active_run(slug, thread_id)
 
     return {
         "thread_id":      thread_id,
@@ -229,36 +126,13 @@ async def start_planner(
 async def planner_active(slug: str, response: Response) -> dict:
     """Page-refresh recovery without browser localStorage."""
     response.headers["Cache-Control"] = "no-store"
-    try:
-        r = infra.redis.service.new_redis()
-        try:
-            raw = await r.get(domains.dd.planner.keys.active_run_key(slug))
-        finally:
-            await r.aclose()
-    except Exception:
-        return {"active": False}
-    if not raw:
-        return {"active": False}
-    if isinstance(raw, (bytes, bytearray)):
-        raw = raw.decode("utf-8", "replace")
-    try:
-        data = json.loads(raw)
-        return {
-            "active": True,
-            "thread_id": data.get("thread_id"),
-            "started_ts": data.get("started_ts"),
-        }
-    except Exception:
-        return {"active": True, "thread_id": str(raw), "started_ts": None}
+    return await domains.dd.planner.runtime.dispatch.service.read_active_run(slug)
 
 
 @router.post("/{thread_id:path}/resume")
 async def resume_planner(thread_id: str) -> dict:
-    r = infra.redis.service.new_redis()
-    try:
+    async with infra.redis.service.client() as r:
         await domains.dd.planner.runtime.cancel.service.clear_cancel(r, thread_id)
-    finally:
-        await r.aclose()
 
     try:
         async_result = domains.dd.planner.task.resume_planner.delay(thread_id)
@@ -360,18 +234,7 @@ async def wipe_planner(slug: str) -> dict:
         logger.warning(f"[planner-wipe] Postgres delete failed for {slug!r}: {e}")
         counts["error"] = f"{type(e).__name__}: {e}"
 
-    n_redis = 0
-    try:
-        rc = infra.redis.service.new_redis()
-        try:
-            n_redis = await rc.delete(
-                domains.dd.planner.keys.active_run_key(slug),
-                domains.dd.planner.keys.lock_key(slug),
-            )
-        finally:
-            await rc.aclose()
-    except Exception as e:
-        logger.warning(f"[planner-wipe] Redis delete failed for {slug!r}: {e}")
+    n_redis = await domains.dd.planner.runtime.dispatch.service.wipe_redis(slug)
 
     logger.info(
         f"[planner-wipe] {slug}: minio={n_minio} blobs, postgres={counts}, "
@@ -475,13 +338,7 @@ async def planner_events(thread_id: str) -> StreamingResponse:
 
 @router.post("/{thread_id:path}/cancel")
 async def cancel_planner(thread_id: str) -> dict:
-    r = infra.redis.service.new_redis()
-    try:
-        await domains.dd.planner.runtime.cancel.service.request_cancel(r, thread_id)
-        if thread_id.count("/") >= 2:
-            await r.delete(domains.dd.planner.keys.active_run_key(thread_id.split('/')[1]))
-    finally:
-        await r.aclose()
+    await domains.dd.planner.runtime.dispatch.service.cancel_run(thread_id)
     return {"thread_id": thread_id, "status": "cancel_requested"}
 
 
@@ -510,7 +367,7 @@ async def get_graph_state(thread_id: str) -> dict:
 
 @router.get("/debug/graph/{thread_id:path}/llm-counters")
 async def get_graph_llm_counters(thread_id: str) -> dict:
-    return await domains.dd.llm_counter.service.read_counters(thread_id)
+    return await domains.settings.llm_counter.service.read_counters("dd", thread_id)
 
 
 @router.get("/debug/graph/{thread_id:path}/history")

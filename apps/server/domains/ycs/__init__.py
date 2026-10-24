@@ -4,7 +4,7 @@ Wave 5 Ask (rag/retriever/reranker/grader/query/conversation) +
 their Celery task packages, re-exported here for cross-package
 refs (docs/CODE-CONVENTIONS.md §8 rollout).
 
-The 21 subpackages below are re-exported LAZILY (PEP 562 module
+The 20 subpackages below are re-exported LAZILY (PEP 562 module
 `__getattr__`, 2026-09-24) — see `infra/__init__.py`'s docstring for
 the full rationale/measurements. Same fix, same reason: reaching
 `domains.ycs.embeddings` alone used to import all of them (graph_builder's
@@ -29,7 +29,6 @@ if TYPE_CHECKING:
         grader,
         graph_builder,
         ingestion,
-        llm_counter,
         neo4j_task,
         observability,
         pipeline_task,
@@ -54,7 +53,6 @@ __all__ = [
     "grader",
     "graph_builder",
     "ingestion",
-    "llm_counter",
     "neo4j_task",
     "observability",
     "pipeline_task",

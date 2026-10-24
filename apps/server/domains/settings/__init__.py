@@ -8,7 +8,7 @@ user-configured external endpoints — the ONLY connections Nexus makes to
 external LLMs / embedding models. No bundled gateway, no provider fan-out.
 """
 from __future__ import annotations
-from . import chat, credentials, embeddings, llm_usage, observability
+from . import chat, credentials, embeddings, llm_counter, observability
 
 
-__all__ = ["chat", "credentials", "embeddings", "llm_usage", "observability"]
+__all__ = ["chat", "credentials", "embeddings", "llm_counter", "observability"]

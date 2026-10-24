@@ -76,32 +76,21 @@ async def capture_llm_usage(response: object, *, duration_s: float | None = None
     `duration_s` is optional (omitted call sites just skip the duration
     histogram point) so this stays a additive, non-breaking change for
     any other caller of this function."""
-    model = "unknown"
     try:
-        meta = getattr(response, "response_metadata", None) or {}
-        model = meta.get("model_name") or meta.get("model") or "unknown"
-        usage = getattr(response, "usage_metadata", None) or {}
-        tokens_in  = int(usage.get("input_tokens") or 0)
-        tokens_out = int(usage.get("output_tokens") or 0)
+        usage = domains.settings.llm_counter.domain.extract_usage(response)
+        model = usage.model or "unknown"
         if duration_s is not None:
             domains.settings.observability.service.record_gen_ai_call(
                 operation     = "chat",
                 model         = model,
                 outcome       = "ok",
                 duration_s    = duration_s,
-                input_tokens  = tokens_in or None,
-                output_tokens = tokens_out or None,
+                input_tokens  = usage.tokens_in or None,
+                output_tokens = usage.tokens_out or None,
             )
-        if not (tokens_in or tokens_out):
+        if not (usage.tokens_in or usage.tokens_out):
             return
-        details = usage.get("output_token_details") or {}
-        reasoning = int(
-            (details.get("reasoning") if isinstance(details, dict) else 0) or 0
-        )
-        await domains.ycs.llm_counter.service.bump_current_call(
-            tokens_in = tokens_in, tokens_out = tokens_out,
-            reasoning_tokens = reasoning, model = model,
-        )
+        await domains.settings.llm_counter.service.bump_current_call(usage = usage, model = model)
     except Exception as e:
         logger.warning(
             f"[ycs:rag:usage] capture failed: {type(e).__name__}: {e}"

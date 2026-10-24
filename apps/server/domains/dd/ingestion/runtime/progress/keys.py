@@ -19,3 +19,8 @@ def cancel_key(run_id: str) -> str:
 
 def lock_key(framework_slug: str) -> str:
     return f"coelhonexus:dd:lock:{framework_slug}"
+
+
+def lock_prefix() -> str:
+    """Scan-match prefix for `lock_key` — must stay an exact prefix of it, or active-run scans silently miss."""
+    return "coelhonexus:dd:lock:"

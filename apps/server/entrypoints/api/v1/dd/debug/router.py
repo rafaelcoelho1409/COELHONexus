@@ -60,53 +60,49 @@ async def debug_ingest_one_tier(
 
     debug_run_id = f"debug-tier{tier}-{slug}-{int(time.time())}"
     progress = domains.dd.ingestion.runtime.progress.service.Progress(debug_run_id)
-    r = infra.redis.service.new_redis(op_timeout_s = 10.0)
     minio = infra.minio.service.get_storage()
-    store = domains.dd.ingestion.storage.service.Store(
-        debug_run_id, 
-        slug, 
-        r, 
-        minio)
-    try:
-        mod = params.TIER_BY_KIND[kind][1]
-        kwargs: dict = {
-            "url": url, 
-            "framework_slug": slug,
-            "progress": progress, 
-            "store": store,
-        }
-        if mod in (
-            domains.dd.ingestion.tiers.tier3, 
-            domains.dd.ingestion.tiers.tier4):
-            kwargs["framework_name"] = entry["name"]
-        if mod is domains.dd.ingestion.tiers.tier4 and language is not None:
-            kwargs["language"] = language
+    async with infra.redis.service.client(op_timeout_s = 10.0) as r:
+        store = domains.dd.ingestion.storage.service.Store(
+            debug_run_id,
+            slug,
+            r,
+            minio)
         try:
-            await mod.service.run(**kwargs)
-        except domains.dd.ingestion.tiers.errors.ManifestDetected as e:
-            return {
-                "status": "manifest_detected",
-                "slug": slug, "tier": kind,
-                "debug_run_id": debug_run_id,
-                "hint": "use tier=2 next; the body looks like a llms.txt index",
-                "details": str(e),
+            mod = params.TIER_BY_KIND[kind][1]
+            kwargs: dict = {
+                "url": url,
+                "framework_slug": slug,
+                "progress": progress,
+                "store": store,
             }
-        return {
-            "status": "done",
-            "slug": slug, "tier": kind, "url": url,
-            "debug_run_id": debug_run_id,
-            "pages_written": len(store.manifest),
-            "total_bytes": sum(e.bytes for e in store.manifest),
-        }
-    finally:
-        try:
-            await progress.close()
-        except Exception:
-            pass
-        try:
-            await r.aclose()
-        except Exception:
-            pass
+            if mod in (
+                domains.dd.ingestion.tiers.tier3,
+                domains.dd.ingestion.tiers.tier4):
+                kwargs["framework_name"] = entry["name"]
+            if mod is domains.dd.ingestion.tiers.tier4 and language is not None:
+                kwargs["language"] = language
+            try:
+                await mod.service.run(**kwargs)
+            except domains.dd.ingestion.tiers.errors.ManifestDetected as e:
+                return {
+                    "status": "manifest_detected",
+                    "slug": slug, "tier": kind,
+                    "debug_run_id": debug_run_id,
+                    "hint": "use tier=2 next; the body looks like a llms.txt index",
+                    "details": str(e),
+                }
+            return {
+                "status": "done",
+                "slug": slug, "tier": kind, "url": url,
+                "debug_run_id": debug_run_id,
+                "pages_written": len(store.manifest),
+                "total_bytes": sum(e.bytes for e in store.manifest),
+            }
+        finally:
+            try:
+                await progress.close()
+            except Exception:
+                pass
 
 
 @router.post("/post/{slug}")
@@ -117,48 +113,44 @@ async def debug_post(
     tuning SPLIT_MIN_SECTION_BYTES without re-downloading)."""
     debug_run_id = f"debug-post-{slug}-{int(time.time())}"
     progress = domains.dd.ingestion.runtime.progress.service.Progress(debug_run_id)
-    r = infra.redis.service.new_redis(op_timeout_s = 10.0)
     minio = infra.minio.service.get_storage()
-    try:
-        store = await domains.dd.ingestion.storage.service.Store.from_existing(
-            debug_run_id, 
-            slug, 
-            r, 
-            minio,
-        )
-        if not store.manifest:
-            raise HTTPException(
-                status_code=404,
-                detail=f"no MinIO manifest for {slug!r} — run ingest first",
+    async with infra.redis.service.client(op_timeout_s = 10.0) as r:
+        try:
+            store = await domains.dd.ingestion.storage.service.Store.from_existing(
+                debug_run_id,
+                slug,
+                r,
+                minio,
             )
-        before = len(store.manifest)
-        summary = await domains.dd.ingestion.post.service.apply_to_store(store)
-        await progress.record_post(
-            input_files=summary["input_files"],
-            input_bytes=summary["input_bytes"],
-            output_files=summary["output_files"],
-            output_bytes=summary["output_bytes"],
-            was_split=summary["was_split"],
-            stubs_dropped=summary["stubs_dropped"],
-            duplicates_dropped=summary["duplicates_dropped"],
-            notes="debug-post",
-        )
-        return {
-            "slug": slug,
-            "debug_run_id": debug_run_id,
-            "before_pages": before,
-            "after_pages": len(store.manifest),
-            "summary": summary,
-        }
-    finally:
-        try:
-            await progress.close()
-        except Exception:
-            pass
-        try:
-            await r.aclose()
-        except Exception:
-            pass
+            if not store.manifest:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"no MinIO manifest for {slug!r} — run ingest first",
+                )
+            before = len(store.manifest)
+            summary = await domains.dd.ingestion.post.service.apply_to_store(store)
+            await progress.record_post(
+                input_files=summary["input_files"],
+                input_bytes=summary["input_bytes"],
+                output_files=summary["output_files"],
+                output_bytes=summary["output_bytes"],
+                was_split=summary["was_split"],
+                stubs_dropped=summary["stubs_dropped"],
+                duplicates_dropped=summary["duplicates_dropped"],
+                notes="debug-post",
+            )
+            return {
+                "slug": slug,
+                "debug_run_id": debug_run_id,
+                "before_pages": before,
+                "after_pages": len(store.manifest),
+                "summary": summary,
+            }
+        finally:
+            try:
+                await progress.close()
+            except Exception:
+                pass
 
 
 @router.post("/finalize/{slug}")
@@ -168,13 +160,12 @@ async def debug_finalize(
     """Re-writes the canonical manifest from prior in-memory state.
     Useful when the manifest payload shape changes."""
     debug_run_id = f"debug-finalize-{slug}-{int(time.time())}"
-    r = infra.redis.service.new_redis(op_timeout_s = 10.0)
     minio = infra.minio.service.get_storage()
-    try:
+    async with infra.redis.service.client(op_timeout_s = 10.0) as r:
         store = await domains.dd.ingestion.storage.service.Store.from_existing(
-            debug_run_id, 
-            slug, 
-            r, 
+            debug_run_id,
+            slug,
+            r,
             minio)
         if not store.manifest:
             raise HTTPException(
@@ -193,11 +184,6 @@ async def debug_finalize(
             "pages": len(store.manifest),
             "total_bytes": sum(e.bytes for e in store.manifest),
         }
-    finally:
-        try:
-            await r.aclose()
-        except Exception:
-            pass
 
 
 @router.post("/snapshot/{slug}")

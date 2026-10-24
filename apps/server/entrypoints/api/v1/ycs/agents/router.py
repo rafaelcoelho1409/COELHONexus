@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 async def get_thread_usage(thread_id: str) -> dict:
     """Aggregate LLM usage for one Ask conversation (models + tokens per
     node, and totals) — mirrors Ingestion's per-video LLM drawer."""
-    return await domains.ycs.llm_counter.service.read_counters(thread_id)
+    return await domains.settings.llm_counter.service.read_counters("ycs", thread_id)
 
 
 @router.post("/endpoint/ping")
@@ -192,13 +192,12 @@ async def rag_search(
         # per-conversation LLM-usage counter accumulates across nodes.
         # Sync + stream both set it; ingestion's extract_id path is
         # unchanged (different context altogether).
-        domains.ycs.llm_counter.service.set_thread(thread_id = _sess_id)
-        domains.ycs.llm_counter.service.set_node(node = None)  # nodes tag themselves before calling
+        domains.settings.llm_counter.service.set_context(ns = "ycs", run_id = _sess_id)  # nodes tag themselves (set_node) before calling
         # 2026-09-16: pre-turn snapshot for the per-response usage badge
         # (see `_llm_diff_usage` below, mirroring the stream endpoint's
         # `_usage_before`/`_stamp_usage`).
         try:
-            _usage_before = await domains.ycs.llm_counter.service.read_counters(_sess_id)
+            _usage_before = await domains.settings.llm_counter.service.read_counters("ycs", _sess_id)
         except Exception:
             _usage_before = None
         _user_id  = (payload.channel_ids or ["default"])[0]
@@ -317,8 +316,8 @@ async def rag_search(
     usage: dict = {"total": {}, "by_model": {}}
     if _usage_before is not None:
         try:
-            usage = domains.ycs.llm_counter.domain.diff_usage(
-                _usage_before, await domains.ycs.llm_counter.service.read_counters(_sess_id),
+            usage = domains.settings.llm_counter.domain.diff_usage(
+                _usage_before, await domains.settings.llm_counter.service.read_counters("ycs", _sess_id),
             )
         except Exception:
             pass
@@ -637,8 +636,8 @@ async def rag_search_stream(
         if before is None:
             return
         try:
-            after = await domains.ycs.llm_counter.service.read_counters(thread_id)
-            state["usage"] = domains.ycs.llm_counter.domain.diff_usage(before, after)
+            after = await domains.settings.llm_counter.service.read_counters("ycs", thread_id)
+            state["usage"] = domains.settings.llm_counter.domain.diff_usage(before, after)
         except Exception as e:
             logger.warning(
                 f"[ycs:stream] usage stamp failed thread_id={thread_id}: "
@@ -650,14 +649,13 @@ async def rag_search_stream(
         _user_id = (effective_channel_ids or ["default"])[0]
         # 2026-09-15: same thread-tagging as sync `/search` so the
         # conversation-level usage counter captures this stream too.
-        domains.ycs.llm_counter.service.set_thread(thread_id = _sess_id)
-        domains.ycs.llm_counter.service.set_node(node = None)
+        domains.settings.llm_counter.service.set_context(ns = "ycs", run_id = _sess_id)
         # 2026-09-16: pre-turn snapshot for the per-response usage badge
         # (`_stamp_usage` diffs against this at every terminal branch).
         # `None` on failure — `_stamp_usage` no-ops rather than stamping
         # a misleading delta off a missing baseline.
         try:
-            _usage_before = await domains.ycs.llm_counter.service.read_counters(_sess_id)
+            _usage_before = await domains.settings.llm_counter.service.read_counters("ycs", _sess_id)
         except Exception:
             _usage_before = None
         _session_cm = infra.langfuse.service.session(

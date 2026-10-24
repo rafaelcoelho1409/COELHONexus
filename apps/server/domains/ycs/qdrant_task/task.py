@@ -311,10 +311,7 @@ def invalidate_cache(self) -> dict[str, Any]:
     """Clear all RAG search cache after new data ingestion.
 """
     async def _run() -> None:
-        r = infra.redis.service.new_redis()
-        try:
+        async with infra.redis.service.client() as r:
             await domains.ycs.cache.service.invalidate_cache(r)
-        finally:
-            await r.close()
     asyncio.run(_run())
     return {"status": "cache_cleared"}

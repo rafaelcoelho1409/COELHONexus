@@ -30,7 +30,7 @@ async def critic(state: state.AdaptiveRAGState, llm) -> dict:
         schemas.CriticAssessment,
     )
     try:
-        domains.ycs.llm_counter.service.set_node(node = "critic")
+        domains.settings.llm_counter.service.set_node(node = "critic")
         result = await service.resilient_ainvoke(
             chain,
             {

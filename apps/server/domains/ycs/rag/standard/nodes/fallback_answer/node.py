@@ -130,7 +130,7 @@ async def fallback_answer(state: state.YouTubeRAGState, llm) -> dict:
 
     chain = service.resolve_prompt(prompts.FALLBACK_PROMPT, "ycs.rag.fallback_answer") | llm
     try:
-        domains.ycs.llm_counter.service.set_node(node = "fallback_answer")
+        domains.settings.llm_counter.service.set_node(node = "fallback_answer")
         response = await service.resilient_ainvoke(
             chain,
             {

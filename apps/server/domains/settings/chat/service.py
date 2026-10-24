@@ -375,18 +375,18 @@ async def chat_text_async(
                 output_tokens = usage.get("output_tokens"),
             )
     except errors.ChatTimeoutError as _exc:
-        _note_dd_failure(_exc)
         domains.settings.observability.service.record_gen_ai_call(
             operation = "chat", model = ENDPOINT.model, outcome = "timeout",
             duration_s = time.monotonic() - t0,
         )
+        await domains.settings.llm_counter.service.bump_current_failure(_exc)
         raise
     except Exception as _exc:
-        _note_dd_failure(_exc)
         domains.settings.observability.service.record_gen_ai_call(
             operation = "chat", model = ENDPOINT.model, outcome = "error",
             duration_s = time.monotonic() - t0,
         )
+        await domains.settings.llm_counter.service.bump_current_failure(_exc)
         raise
 
     domains.settings.observability.service.record_gen_ai_call(
@@ -410,13 +410,11 @@ async def chat_text_async(
         except Exception:
             pass
 
-    # Usage extraction for the DD per-run LLM counter (best-effort, never
-    # raises). `ai_message` is a real `AIMessage` — no fake shim needed,
-    # `_bump_dd_llm_counter` already reads `.content`/`.usage_metadata`.
+    # Per-run LLM counter (best-effort, never raises); no-op outside a counting context.
     try:
-        _bump_dd_llm_counter(ai_message, model=resp_model)
-    except Exception:
-        pass
+        await domains.settings.llm_counter.service.bump_response(ai_message, deployment=resp_model)
+    except Exception as e:
+        logger.debug(f"[chat-endpoint] counter bump failed: {e}")
 
     return text, meta
 
@@ -517,18 +515,18 @@ async def chat_structured_async(
                 output_tokens = usage.get("output_tokens"),
             )
     except errors.ChatTimeoutError as _exc:
-        _note_dd_failure(_exc)
         domains.settings.observability.service.record_gen_ai_call(
             operation = "chat", model = ENDPOINT.model, outcome = "timeout",
             duration_s = time.monotonic() - t0,
         )
+        await domains.settings.llm_counter.service.bump_current_failure(_exc)
         raise
     except Exception as _exc:
-        _note_dd_failure(_exc)
         domains.settings.observability.service.record_gen_ai_call(
             operation = "chat", model = ENDPOINT.model, outcome = "error",
             duration_s = time.monotonic() - t0,
         )
+        await domains.settings.llm_counter.service.bump_current_failure(_exc)
         raise
 
     domains.settings.observability.service.record_gen_ai_call(
@@ -538,9 +536,9 @@ async def chat_structured_async(
     )
 
     try:
-        _bump_dd_llm_counter(ai_message, model=resp_model)
-    except Exception:
-        pass
+        await domains.settings.llm_counter.service.bump_response(ai_message, deployment=resp_model)
+    except Exception as e:
+        logger.debug(f"[chat-endpoint] counter bump failed: {e}")
 
     if parsing_error is not None or parsed is None:
         raw_text = getattr(ai_message, "content", "") or ""
@@ -591,30 +589,6 @@ def report_quality(meta: dict | None, quality: float) -> bool:
     _FEEDBACK_TASKS.add(t)
     t.add_done_callback(_FEEDBACK_TASKS.discard)
     return True
-
-
-def _note_dd_failure(exc: BaseException) -> None:
-    """Count a failed call (504 / timeout / other) on the current DD thread + node, so a run's error rate shows next to its call count."""
-    try:
-        domains.dd.llm_counter.service.bump_current_failure(exc)
-    except Exception as e:
-        logger.debug(f"[chat-endpoint] failure bump failed: {e}")
-
-
-def _bump_dd_llm_counter(response, model: str | None = None) -> dict | None:
-    try:
-        # Adapt to bump_current_call expected shape
-        fake_resp = {
-            "model": model or ENDPOINT.model,
-            "usage": getattr(response, "usage_metadata", None) or {},
-            "choices": [{"message": {"content": getattr(response, "content", "")}}],
-        }
-        return domains.dd.llm_counter.service.bump_current_call(
-            response=fake_resp, deployment=model or ENDPOINT.model,
-        )
-    except Exception as e:
-        logger.debug(f"[chat-endpoint] bump failed: {e}")
-        return None
 
 
 def reset_chat_client(*args, **kwargs) -> None:

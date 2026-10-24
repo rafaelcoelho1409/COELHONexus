@@ -5,7 +5,9 @@ import domains, infra
 
 def _llm_context(state: dict, node_name: str):
     """Attribute the LLM calls inside this node to (synth, thread, node)."""
-    return domains.dd.llm_counter.service.llm_context("synth", state.get("thread_id") or "", node_name)
+    return domains.settings.llm_counter.service.llm_context(
+        ns = "dd", run_id = state.get("thread_id") or "", node_id = node_name, stage = "synth",
+    )
 
 
 traced = infra.opentelemetry.service.node_tracer(

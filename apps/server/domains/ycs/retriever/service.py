@@ -457,7 +457,7 @@ class Neo4jRetriever:
             schemas.ExtractedEntities,
         )
         try:
-            domains.ycs.llm_counter.service.set_node(node = "neo4j_entity_extract")
+            domains.settings.llm_counter.service.set_node(node = "neo4j_entity_extract")
             # Prefer-exact-spellings hint (2026-09-16): real surface forms
             # from the graph so the LLM emits names that exist. Best
             # effort — empty when the graph is unreachable/empty, and

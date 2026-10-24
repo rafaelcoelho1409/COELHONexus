@@ -3,8 +3,8 @@ and the doc_distill_run orchestration.
 
 SOTA Sept 2026 — fully on the rotator pooled client:
 - I/O decoupled from LLM semaphore (MinIO reads bulk-fetched before LLM fan-out).
-- Pooled AsyncOpenAI (http2, 200/100 limits) replaces per-call ChatOpenAI construction
-  → eliminates per-call TLS + client alloc, reuses keep-alive across 135+ docs.
+- One pooled httpx client (http2, 200/100 limits) under every ChatOpenAI (`settings.chat`)
+  → eliminates per-call TLS, reuses keep-alive across 135+ docs.
 - CONCURRENCY 24 (was 8) — rotator's simple-shuffle + allowed_fails absorbs 429s,
   off_topic already proved 20-way saturates without the old 36% blowup.
 - Jittered backoff on transient retries to avoid thundering-herd on shared arms.
@@ -171,7 +171,7 @@ async def doc_distill_run(state: domains.dd.planner.state.PlannerState) -> dict:
     distillation, persist as MinIO JSON, write the latest pointer.
 
     SOTA: bulk MinIO read decoupled from LLM semaphore → semaphore gates only
-    the network-bound LLM hop. LLM calls ride the pooled AsyncOpenAI keep-alive
+    the network-bound LLM hop. LLM calls ride the pooled httpx keep-alive
     path, so 24 concurrent saturate the rotator without pool exhaustion.
     """
     slug = state.get("framework_slug")

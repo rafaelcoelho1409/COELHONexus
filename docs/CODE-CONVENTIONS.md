@@ -477,11 +477,11 @@ route through the global root) — import the sibling *module*, not names
 out of it:
 
 ```python
-# domains/dd/llm_counter/service.py
-from . import domain, keys, params
+# domains/settings/llm_counter/service.py
+from . import domain, entities, keys, params
 
 domain.extract_usage(response)
-keys.counters_key(thread_id)
+keys.counters_key(ns, run_id)
 params.COUNTER_TTL_S
 ```
 
@@ -517,7 +517,7 @@ internals change:
 from . import dd, rr, settings, ycs
 
 # domains/dd/__init__.py
-from . import ingestion, llm_counter, planner, resolver, synth
+from . import ingestion, planner, resolver, synth
 
 # domains/dd/ingestion/__init__.py
 from . import artifacts, dispatch, filters, post, progress, storage, tiers
@@ -705,13 +705,12 @@ apps/server/
 │   │   │   ├── dispatch.py  # async runners
 │   │   │   ├── task.py      # Celery wrappers
 │   │   │   └── ...
-│   │   ├── synth/           # LangGraph synth — same shape as planner
-│   │   └── llm_counter/     # per-thread LLM call/token counters (Redis + MinIO snapshot)
+│   │   └── synth/           # LangGraph synth — same shape as planner
 │   └── settings/            # external endpoints + credential store
 │       ├── chat/{domain,service,params}.py        # chat endpoint adapter
 │       ├── embeddings/{domain,service,params}.py  # embedding endpoint adapter
 │       ├── credentials/     # MinIO Fernet store + endpoint settings blobs
-│       ├── llm_usage/       # shared pure parser of LLM-response token usage
+│       ├── llm_counter/     # LLM-usage accounting for every context: parser, Redis counters (dd, ycs), drawer payloads, DD snapshot, LangChain callback
 │       └── observability/   # gen_ai.* spans + metrics for the endpoint adapters
 ├── infra/                   # one module per COELHO Cloud service (§10)
 ├── main.py                  # FastAPI + FastMCP bootstrap (REST under /api, MCP at /mcp)
@@ -722,14 +721,21 @@ apps/server/
 
 Each leaf module follows the **5–10 file convention** from §5.
 
-**`runtime/`, `observability/` and `llm_counter/` are siblings** inside a bounded context
+**`runtime/` and `observability/` are siblings** inside a bounded context
 (`domains/<ctx>/…`), not nested: `runtime/` is the machinery that runs a pipeline (dispatch,
 progress events, cancel flags, checkpoint pruning), `observability/` is the context's span and
 metric vocabulary (`service.py`, plus `domain.py` / `keys.py` where they have a trigger — never a
-separate `spans.py` / `metrics.py`), `llm_counter/` is usage accounting. There is deliberately **no
+separate `spans.py` / `metrics.py`). There is deliberately **no
 top-level `apps/server/runtime/`**: these folders and their domain call each other in both
 directions (nodes emit progress and spans; dispatch calls graphs and nodes), so pulling them into
 one shared layer would make `domains` and that layer import each other.
+
+**LLM-usage accounting is not per context.** One `domains/settings/llm_counter/` counts the calls of
+every context, because the counting is identical and only the attribution differs: a context sets
+it (`service.llm_context(ns=…, run_id=…, node_id=…)`, or `set_context` + `set_node`) and the
+namespace (`dd`, `ycs`, listed in `params.NAMESPACES`) picks the Redis keys and the usage payload
+shape. Calls made outside any context are not counted. A new context adds one `Namespace` entry, not
+a folder; `settings/chat` calls the counter without importing any context.
 
 ---
 
@@ -752,15 +758,30 @@ the re-exported types and the service's own attribute/key names.
 | `playwright` (+ `crawl4ai/`) | CDP endpoint resolution, driver start, the Crawl4AI library bound to the browsers |
 | `postgres` | `connect()`, URL builder, shared LangGraph checkpointer |
 | `qdrant` | async client, request models, sparse-embedding class |
-| `redis` | client factories, URL, event stream + cancel flags + lock release |
+| `redis` | client lifecycle (`client()` / `client_sync()`), URL, event stream, cancel flags, locks (`try_lock`, `release_if_owner`), prefix scans (`iter_held`, `first_held`, `delete_matching`) |
 
-Rules, enforced offline by `scripts/server/test_infra_boundary.py` (one rule per service, plus a
-`client-spans` rule that bans hand-built `db.*` / `aws.s3.*` span attributes outside `infra/`):
+Rules, enforced offline by `scripts/server/test_infra_boundary.py` (one rule per service, plus
+`client-spans`, which bans hand-built `db.*` / `aws.s3.*` span attributes outside `infra/`;
+`env-params`, which bans env reads in `infra/` outside `params.py`; `entrypoint-redis`, which keeps
+Redis clients and key layouts out of routers; and `llm-counter`, which keeps usage accounting in
+`domains/settings/llm_counter/`):
 
 - `infra` never imports `domains` (two known exceptions: the celery worker-init credential warm-up
   and the langfuse judges).
-- Env reads live in `params.py`; pure helpers (URL builders, config objects) in `domain.py`; I/O in
-  `service.py`. The file-taxonomy triggers of §2 apply unchanged — no placeholder files.
+- Env reads live in `params.py` (read once at import, so a pod's env must be set before the process
+  starts); pure helpers (URL builders, config objects, regex-based string transforms) in
+  `domain.py`; I/O in `service.py`. The file-taxonomy triggers of §2 apply unchanged — no
+  placeholder files.
+- A client is opened for the length of a block — `async with infra.redis.service.client() as r:` —
+  never with a hand-written `try` / `finally: aclose()`. The exceptions are clients that outlive one
+  function on purpose (the app-state client, an ingestion run's client shared with its watcher and
+  store, the `Progress` object's own).
+- Routers (`entrypoints/`) call domain services; they do not open Redis clients or know key layouts.
+  Whatever a router needs from Redis — the cross-stage single-flight gate, the live-run registry,
+  cancel propagation, the wipe — is a function in the stage's `runtime/dispatch/service.py`
+  (`reserve_start` / `release_start`, `read_active`, `cancel_run`, `wipe_redis`, …); the router keeps
+  only HTTP concerns and the Celery enqueue. `scripts/server/test_dd_routers.py` pins those endpoints
+  against a golden transcript (responses + Redis state) on a throwaway Redis.
 - Every service module exposes a `span(operation, **attrs)` helper where the service is called
   over the wire, built on `infra.opentelemetry.service.client_span`; domain-specific span wrappers
   (e.g. YCS's `qdrant_search_span`) stay in the domain's `observability/service.py` and only add

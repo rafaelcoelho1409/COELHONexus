@@ -62,6 +62,11 @@ def basic_auth_header(public_key: str, secret_key: str) -> str:
     return base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
 
 
+def host_from_otlp_endpoint(endpoint: str) -> str:
+    """The LangFuse base URL behind an OTLP endpoint: `endpoint` without its `/api/public/otel*` path."""
+    return patterns.OTLP_PATH_RE.sub("", endpoint.rstrip("/"))
+
+
 def normalize_traces_endpoint(endpoint: str) -> str:
     """Ensure `endpoint` ends with `/v1/traces` (LangFuse's OTLP traces path)."""
     stripped = endpoint.rstrip("/")

@@ -19,7 +19,7 @@ async def direct_answer(state: state.AdaptiveRAGState, llm) -> dict:
     """FAST path: direct LLM answer without retrieval."""
     chain = service.resolve_prompt(prompts.DIRECT_ANSWER_PROMPT, "ycs.rag.direct_answer") | llm
     try:
-        domains.ycs.llm_counter.service.set_node(node = "direct_answer")
+        domains.settings.llm_counter.service.set_node(node = "direct_answer")
         # 2026-09-15: hedged racer (Tail-at-Scale) instead of plain
         # retry — primary + one duplicate fired at +20s, first wins.
         # Healthy path pays zero extra; slow tail gets raced, not

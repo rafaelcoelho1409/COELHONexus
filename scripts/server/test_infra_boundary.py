@@ -97,6 +97,56 @@ def violations(service: str, libs: tuple[str, ...], texts: tuple[str, ...]) -> l
     return found
 
 
+def lines_with(root: Path, texts: tuple[str, ...], *, skip_names: tuple[str, ...] = (), hint: str) -> list[str]:
+    """Every non-comment line under `root` containing one of `texts` (files named in `skip_names` are exempt)."""
+    found = []
+    for path in python_files():
+        if root not in path.parents or path.name in skip_names:
+            continue
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            for text in texts:
+                if text in line and not line.lstrip().startswith("#"):
+                    found.append(f"{path.relative_to(SERVER)}:{number}: uses `{text}` ({hint})")
+    return found
+
+
+def env_outside_params() -> list[str]:
+    """Env vars are read once, in a module's `params.py`; the rest of `infra/` reads `params.X`."""
+    return lines_with(
+        SERVER / "infra", ("os.environ", "os.getenv", "environ.get(", "from os import environ"), skip_names = ("params.py",),
+        hint = "read it in this module's params.py",
+    )
+
+
+def entrypoint_redis() -> list[str]:
+    """Entrypoints (routers) never open Redis clients or know key layouts: they call the domain services."""
+    return lines_with(
+        SERVER / "entrypoints",
+        ("new_redis", '"coelhonexus:', "'coelhonexus:", ".scan_iter(", ".smembers(", ".sadd(", ".srem(", ".hgetall(", ".lrange("),
+        hint = "a function in the domain's runtime/dispatch service",
+    )
+
+
+def llm_counter_homes() -> list[str]:
+    """LLM-usage accounting lives in `domains/settings/llm_counter/` only. (`rr` keeps its own until rr is removed.)"""
+    found = [
+        f"{path.relative_to(SERVER)}: a per-context llm_counter (use domains.settings.llm_counter)"
+        for path in sorted((SERVER / "domains").glob("*/llm_counter"))
+        if path.parent.name not in ("settings", "rr")
+    ]
+    found += lines_with(
+        SERVER, ("domains.dd.llm_counter", "domains.ycs.llm_counter"), skip_names = (), hint = "domains.settings.llm_counter",
+    )
+    return found
+
+
+EXTRA_CHECKS = {
+    "env-params": env_outside_params,
+    "entrypoint-redis": entrypoint_redis,
+    "llm-counter": llm_counter_homes,
+}
+
+
 def main() -> None:
     failed = False
     for service, (libs, texts) in RULES.items():
@@ -105,6 +155,12 @@ def main() -> None:
             print(f"[{service}] {line}")
         failed = failed or bool(found)
         print(f"{service}: {'FAIL' if found else 'ok'} ({len(found)} violation(s))")
+    for name, check in EXTRA_CHECKS.items():
+        found = check()
+        for line in found:
+            print(f"[{name}] {line}")
+        failed = failed or bool(found)
+        print(f"{name}: {'FAIL' if found else 'ok'} ({len(found)} violation(s))")
     if failed:
         sys.exit(1)
     print("OK")

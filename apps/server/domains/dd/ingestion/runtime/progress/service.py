@@ -51,6 +51,24 @@ async def release_lock(
         return False
 
 
+async def find_other_running(r: infra.redis.service.Redis, framework_slug: str) -> Optional[tuple[str, str]]:
+    """`(slug, run_id)` of an ingestion running for ANOTHER framework (one ingestion at a time), else None."""
+    return await infra.redis.service.first_held(r, keys.lock_prefix(), skip=framework_slug)
+
+
+async def list_active(r: infra.redis.service.Redis) -> list[dict]:
+    """In-flight ingestions: the lock is held AND a progress record says running / idle. A lock with no
+    progress record (a rare race) is not surfaced."""
+    active: list[dict] = []
+    async for slug, run_id in infra.redis.service.iter_held(r, keys.lock_prefix()):
+        if not run_id:
+            continue
+        progress = await read_progress(r, run_id)
+        if progress and progress.get("status") in ("running", "idle"):
+            active.append({"slug": slug, "run_id": run_id, "progress": progress})
+    return active
+
+
 class Progress:
     def __init__(self, run_id: str) -> None:
         self.run_id = run_id

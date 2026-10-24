@@ -220,7 +220,7 @@ async def extract_and_store_graph(
     # rather than erroring).
     if extract_id:
         llm = llm.with_config(
-            callbacks=[domains.ycs.llm_counter.service.YCSLLMUsageCallback()],
+            callbacks=[domains.settings.llm_counter.service.LLMCounterCallback()],
         )
     transformer = create_graph_transformer(llm)
     concurrency = (
@@ -418,8 +418,8 @@ async def extract_and_store_graph(
         loop keeps video attribution in completion order."""
         vid = doc.metadata.get("video_id", "") if isinstance(doc.metadata, dict) else ""
         if extract_id:
-            domains.ycs.llm_counter.service.set_context(
-                extract_id = extract_id, video_id = vid,
+            domains.settings.llm_counter.service.set_context(
+                ns = "ycs", run_id = extract_id, node_id = vid,
             )
         try:
             # Watchdog: hard wall-clock ceiling per transcript. The

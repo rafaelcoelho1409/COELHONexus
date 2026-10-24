@@ -2,16 +2,35 @@
 from __future__ import annotations
 
 
+_THREAD_STATE_PREFIX = "coelhonexus:dd:synth:"
+_SNAPSHOT_SUFFIX = ":events:snapshot"
+
+
 def cancel_key(thread_id: str) -> str:
-    return f"coelhonexus:dd:synth:{thread_id}:cancel"
+    return f"{_THREAD_STATE_PREFIX}{thread_id}:cancel"
 
 
 def event_channel(thread_id: str) -> str:
-    return f"coelhonexus:dd:synth:{thread_id}:events"
+    return f"{_THREAD_STATE_PREFIX}{thread_id}:events"
 
 
 def snapshot_key(thread_id: str) -> str:
-    return f"coelhonexus:dd:synth:{thread_id}:events:snapshot"
+    return f"{_THREAD_STATE_PREFIX}{thread_id}{_SNAPSHOT_SUFFIX}"
+
+
+def snapshot_pattern(thread_prefix: str) -> str:
+    """Scan-match for the snapshot keys of every thread under `thread_prefix` (e.g. `docs-distiller/synth/<slug>/`)."""
+    return snapshot_key(f"{thread_prefix}*")
+
+
+def thread_id_from_snapshot_key(key: str) -> str:
+    """Inverse of `snapshot_key`."""
+    return key[len(_THREAD_STATE_PREFIX):-len(_SNAPSHOT_SUFFIX)]
+
+
+def thread_state_pattern(thread_prefix: str) -> str:
+    """Scan-match for EVERY redis key (cancel flag, event state, snapshot) of the threads under `thread_prefix`."""
+    return f"{_THREAD_STATE_PREFIX}{thread_prefix}*"
 
 
 def lock_key(slug: str) -> str:

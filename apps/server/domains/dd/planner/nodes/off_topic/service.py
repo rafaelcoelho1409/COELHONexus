@@ -1,7 +1,7 @@
 """off_topic I/O shell — LLM-only KEEP/DROP per doc (embed_corpus removed).
 
 SOTA Sept 2026 on the rotator pooled client:
-- Pooled AsyncOpenAI (http2, 200/100) replaces per-call ChatOpenAI alloc.
+- One pooled httpx client (http2, 200/100) under every ChatOpenAI (`settings.chat`).
 - CONCURRENCY 24 saturates pool, no embedding work.
 - Dedupe via head_tail_truncate collapses mirrored dumps → single LLM call.
 - Jittered backoff, short 15s timeout for 1-token verdict.

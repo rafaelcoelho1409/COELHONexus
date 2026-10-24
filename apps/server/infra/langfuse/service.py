@@ -17,8 +17,8 @@ in `prompts.py`:
 Every entry point fails soft: missing package, network, or credentials
 yield a graceful no-op + a debug log line, never an exception.
 
-The only module that imports the `langfuse` library or reads `LANGFUSE_*`
-env vars.
+The only module that imports the `langfuse` library; `params.py` owns the
+`LANGFUSE_*` env vars.
 """
 from __future__ import annotations
 import infra
@@ -26,8 +26,6 @@ from . import domain, keys, params
 
 import contextlib
 import logging
-import os
-import re
 import threading
 from typing import Any, Iterator, Literal, Mapping
 
@@ -39,13 +37,8 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Client — lazy singleton, env-driven.
-#
-# Env vars (in priority order):
-#   LANGFUSE_HOST          base URL (e.g.
-#                          http://langfuse-web.langfuse.svc.cluster.local:3000)
-#   LANGFUSE_PUBLIC_KEY    project public key (HTTP Basic user)
-#   LANGFUSE_SECRET_KEY    project secret key (HTTP Basic password)
+# Client — lazy singleton, env-driven (`params.HOST` / `PUBLIC_KEY` /
+# `SECRET_KEY`).
 #
 # If `LANGFUSE_HOST` is unset, falls back to deriving it from
 # `LANGFUSE_OTLP_ENDPOINT` by stripping `/api/public/otel*` — one env var
@@ -58,22 +51,16 @@ _init_attempted = False
 
 
 def _resolve_host() -> str | None:
-    host = os.environ.get("LANGFUSE_HOST")
-    if host:
-        return host.rstrip("/")
-    otlp = os.environ.get("LANGFUSE_OTLP_ENDPOINT")
-    if otlp:
-        return re.sub(r"/api/public/otel.*$", "", otlp.rstrip("/"))
+    if params.HOST:
+        return params.HOST.rstrip("/")
+    if params.OTLP_ENDPOINT:
+        return domain.host_from_otlp_endpoint(params.OTLP_ENDPOINT)
     return None
 
 
 def is_available() -> bool:
     """True iff host + both credentials are present (does not import the SDK)."""
-    return bool(
-        _resolve_host()
-        and os.environ.get("LANGFUSE_PUBLIC_KEY")
-        and os.environ.get("LANGFUSE_SECRET_KEY")
-    )
+    return bool(_resolve_host() and params.PUBLIC_KEY and params.SECRET_KEY)
 
 
 def get_client():
@@ -92,8 +79,8 @@ def get_client():
             return _client
         _init_attempted = True
         host = _resolve_host()
-        pk = os.environ.get("LANGFUSE_PUBLIC_KEY")
-        sk = os.environ.get("LANGFUSE_SECRET_KEY")
+        pk = params.PUBLIC_KEY
+        sk = params.SECRET_KEY
         if not (host and pk and sk):
             logger.info(
                 "[langfuse] SDK init skipped — host/public_key/secret_key not "
@@ -387,15 +374,15 @@ def build_langchain_callback():
 def add_exporter(tracer_provider) -> bool:
     """HTTP OTLP → LangFuse v3 /api/public/otel. Skipped silently when
     endpoint OR public/secret keys absent."""
-    endpoint = os.environ.get("LANGFUSE_OTLP_ENDPOINT")
+    endpoint = params.OTLP_ENDPOINT
     if not endpoint:
         logger.info(
             "[otel] LANGFUSE_OTLP_ENDPOINT unset — LangFuse export disabled "
             "(LGTM-only mode)"
         )
         return False
-    pk = os.environ.get("LANGFUSE_PUBLIC_KEY")
-    sk = os.environ.get("LANGFUSE_SECRET_KEY")
+    pk = params.PUBLIC_KEY
+    sk = params.SECRET_KEY
     if not (pk and sk):
         logger.warning(
             "[otel] LANGFUSE_OTLP_ENDPOINT set but LANGFUSE_PUBLIC_KEY / "
@@ -409,10 +396,7 @@ def add_exporter(tracer_provider) -> bool:
             tracer_provider,
             endpoint = traces_endpoint,
             headers  = {"Authorization": f"Basic {basic}"},
-            # 10s default timed out under heavy LLM volume; rich batches are slow to ingest.
-            timeout_s = int(os.environ.get(
-                "LANGFUSE_OTLP_TIMEOUT", str(params.OTLP_TIMEOUT_DEFAULT_S),
-            )),
+            timeout_s = params.OTLP_TIMEOUT_S,
             keep = domain.should_keep_span,
         )
         logger.info(

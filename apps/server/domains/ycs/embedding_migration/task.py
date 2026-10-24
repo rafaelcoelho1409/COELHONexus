@@ -41,26 +41,25 @@ def finalize_embedding_migration(self, physical_collection: str) -> dict:
     logger.info(f"[finalize_embedding_migration] cutover -> {physical_collection!r}")
 
     async def _run() -> dict:
-        redis = infra.redis.service.new_redis()
-        qdrant = infra.qdrant.service.new_qdrant()
-        with infra.langfuse.service.session(
-            "ycs-embedding-migration",
-            session_id = self.request.id or "(no-request-id)",
-        ), infra.opentelemetry.service.get_tracer().start_as_current_span(
-            "ycs.embedding_migration.finalize",
-            attributes = {
-                infra.langfuse.keys.KEEP:          True,
-                infra.langfuse.keys.KIND:          "workflow_root",
-                infra.langfuse.keys.TRACE_NAME:           "ycs.embedding_migration.finalize",
-                "ycs.embedding_migration.target": physical_collection,
-            },
-        ):
-            try:
-                await service.cutover(redis, qdrant, physical_collection)
-                return {"status": "done", "collection": physical_collection}
-            finally:
-                await qdrant.close()
-                await redis.aclose()
+        async with infra.redis.service.client() as redis:
+            qdrant = infra.qdrant.service.new_qdrant()
+            with infra.langfuse.service.session(
+                "ycs-embedding-migration",
+                session_id = self.request.id or "(no-request-id)",
+            ), infra.opentelemetry.service.get_tracer().start_as_current_span(
+                "ycs.embedding_migration.finalize",
+                attributes = {
+                    infra.langfuse.keys.KEEP:          True,
+                    infra.langfuse.keys.KIND:          "workflow_root",
+                    infra.langfuse.keys.TRACE_NAME:           "ycs.embedding_migration.finalize",
+                    "ycs.embedding_migration.target": physical_collection,
+                },
+            ):
+                try:
+                    await service.cutover(redis, qdrant, physical_collection)
+                    return {"status": "done", "collection": physical_collection}
+                finally:
+                    await qdrant.close()
 
     t0 = time.monotonic()
     try:

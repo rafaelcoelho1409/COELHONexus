@@ -2,7 +2,7 @@
 order_chapters_run orchestration.
 
 SOTA Sept 2026 on the rotator pooled:
-- Pooled AsyncOpenAI http2 200/100 handles N_SAMPLES parallel 800 tok
+- Pooled httpx http2 200/100 handles N_SAMPLES parallel 800 tok
   via Borda (old bandit 5-way serialized). N=3 USC sweet spot.
 - JSON response_format for strict parsing (vs regex fallback).
 - Static prefix (pedagogical rubric) before dynamic chapter block → KV-cache.

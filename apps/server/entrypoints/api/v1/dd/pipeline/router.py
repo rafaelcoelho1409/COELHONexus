@@ -15,36 +15,10 @@ router = APIRouter()
 async def pipeline_active() -> dict:
     """Drives the cross-stage proactive gate. Ingestion omitted — it's
     orthogonal to the Planner/Synth lock block."""
-    r = infra.redis.service.new_redis()
-    async def _first_lock(prefix: str) -> dict | None:
-        cursor = 0
-        while True:
-            cursor, keys = await r.scan(
-                cursor=cursor, 
-                match=f"{prefix}*", 
-                count=100,
-            )
-            for k in keys:
-                ks = k.decode() if isinstance(k, bytes) else k
-                slug = ks.split(prefix, 1)[-1]
-                val = await r.get(ks)
-                if val is None:
-                    continue
-                return {
-                    "slug": slug,
-                    "thread_id": (
-                        val.decode() if isinstance(val, bytes) else val
-                    ),
-                }
-            if cursor == 0:
-                return None
-    try:
-        return {
-            "planner": await _first_lock(domains.dd.planner.keys.lock_prefix()),
-            "synth":   await _first_lock(domains.dd.synth.keys.lock_prefix()),
-        }
-    finally:
-        await r.aclose()
+    return {
+        "planner": await domains.dd.planner.runtime.dispatch.service.active_lock(),
+        "synth":   await domains.dd.synth.runtime.dispatch.service.active_lock(),
+    }
 
 
 @router.get("/{slug}/state")

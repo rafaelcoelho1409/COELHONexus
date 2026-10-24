@@ -127,24 +127,22 @@ async def delete_framework(slug: str) -> dict:
                 f"{type(e).__name__}: {e}"
             )
             failed.append(prefix)
-    r = infra.redis.service.new_redis()
     lock_released = False
-    try:
-        held_run_id = await domains.dd.ingestion.runtime.progress.service.read_lock(
-            r, 
-            slug)
-        if held_run_id:
-            lock_released = await domains.dd.ingestion.runtime.progress.service.release_lock(
-                r, 
-                slug, 
-                held_run_id)
-    except Exception as e:
-        logger.warning(
-            f"[delete] Redis lock cleanup failed for {slug!r}: "
-            f"{type(e).__name__}: {e}"
-        )
-    finally:
-        await r.aclose()
+    async with infra.redis.service.client() as r:
+        try:
+            held_run_id = await domains.dd.ingestion.runtime.progress.service.read_lock(
+                r,
+                slug)
+            if held_run_id:
+                lock_released = await domains.dd.ingestion.runtime.progress.service.release_lock(
+                    r,
+                    slug,
+                    held_run_id)
+        except Exception as e:
+            logger.warning(
+                f"[delete] Redis lock cleanup failed for {slug!r}: "
+                f"{type(e).__name__}: {e}"
+            )
     return {
         "slug":           slug,
         "deleted":        deleted,

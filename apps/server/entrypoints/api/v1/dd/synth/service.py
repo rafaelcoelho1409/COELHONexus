@@ -57,14 +57,8 @@ async def wipe_one_chapter(slug: str, chapter_id: str) -> dict:
         )
     # Never delete outputs a running study is still writing.
     try:
-        r = infra.redis.service.new_redis()
-        try:
-            running = await r.get(domains.dd.synth.keys.active_study_key(slug))
-            # A single-chapter run (the strip's ▶ button) holds only the slug's synth lock, no study registry entry.
-            held = await r.get(domains.dd.synth.keys.lock_key(slug)) if not running else None
-        finally:
-            await r.aclose()
-        if running or held:
+        # A single-chapter run (the strip's ▶ button) holds only the slug's synth lock, no study registry entry.
+        if await domains.dd.synth.runtime.dispatch.service.run_in_flight(slug):
             raise HTTPException(
                 status_code=409,
                 detail=f"a synth run for {slug!r} is in flight — cancel it before wiping a chapter",

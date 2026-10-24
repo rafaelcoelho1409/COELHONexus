@@ -77,7 +77,7 @@ class DocumentGrader:
                 # 2026-09-15: tag every graded doc with the retrieval
                 # node so the conversation-level usage counter splits
                 # retrieval.grade from retrieval.generate.
-                domains.ycs.llm_counter.service.set_node(node = "grader")
+                domains.settings.llm_counter.service.set_node(node = "grader")
                 # Per-call timeout prevents a single slow / hung model
                 # from blocking a semaphore slot indefinitely.
                 result = await asyncio.wait_for(

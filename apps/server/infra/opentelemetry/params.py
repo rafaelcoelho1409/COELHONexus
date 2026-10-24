@@ -1,10 +1,26 @@
-"""OTel SDK tunables — backpressure, intervals, defaults, noisy loggers."""
+"""OTel SDK env and tunables — endpoint, resource identity, backpressure, intervals, defaults, noisy loggers.
+
+Soft env reads: with `OTLP_ENDPOINT` unset the exporters and `init_otel` no-op."""
 from __future__ import annotations
+
+import os
 
 SERVICE_NAME_DEFAULT = "coelhonexus-server"
 SERVICE_VERSION_DEFAULT = "1.0.0"
 DEPLOYMENT_ENVIRONMENT_DEFAULT = "dev"
 SERVICE_NAMESPACE = "coelhonexus"
+
+
+# Alloy gRPC endpoint (e.g. http://alloy:4317) — unset disables export.
+OTLP_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+
+# Resource identity of this process (Tempo / Mimir labels).
+SERVICE_NAME = os.environ.get("OTEL_SERVICE_NAME", SERVICE_NAME_DEFAULT)
+SERVICE_VERSION = os.environ.get("OTEL_SERVICE_VERSION", SERVICE_VERSION_DEFAULT)
+DEPLOYMENT_ENVIRONMENT = os.environ.get("DEPLOYMENT_ENVIRONMENT", DEPLOYMENT_ENVIRONMENT_DEFAULT)
+GIT_SHA = os.environ.get("GIT_SHA") or os.environ.get("OTEL_GIT_SHA") or ""
+HELM_CHART_VERSION = os.environ.get("HELM_CHART_VERSION") or os.environ.get("OTEL_HELM_CHART_VERSION") or ""
+RESOURCE_ATTRIBUTES = os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "")   # comma-separated `k=v` extras
 
 
 # Identity for this app's OWN tracer/meter (`get_tracer(name, version)` /
@@ -18,15 +34,21 @@ INSTRUMENTATION_SCOPE_VERSION = "1.0.0"
 
 
 OTLP_TIMEOUT_DEFAULT_S = 30
+OTLP_TIMEOUT_S = int(os.environ.get("OTEL_EXPORTER_OTLP_TIMEOUT", str(OTLP_TIMEOUT_DEFAULT_S)))
 
 
 # Phase E : SDK defaults (q=2048, b=512, d=5s) caused Alloy
 # RESOURCE_EXHAUSTED under heavy LangChain Planner volume. Triple queue +
 # halve batch + double delay so bursts buffer locally and drain in chunks.
+# The `OTEL_BSP_*` env vars override each.
 BSP_MAX_QUEUE_SIZE_DEFAULT = 6144
 BSP_MAX_EXPORT_BATCH_SIZE_DEFAULT = 256
 BSP_SCHEDULE_DELAY_MS_DEFAULT = 10_000
 BSP_EXPORT_TIMEOUT_MS_DEFAULT = 30_000
+BSP_MAX_QUEUE_SIZE = int(os.environ.get("OTEL_BSP_MAX_QUEUE_SIZE", str(BSP_MAX_QUEUE_SIZE_DEFAULT)))
+BSP_MAX_EXPORT_BATCH_SIZE = int(os.environ.get("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", str(BSP_MAX_EXPORT_BATCH_SIZE_DEFAULT)))
+BSP_SCHEDULE_DELAY_MS = int(os.environ.get("OTEL_BSP_SCHEDULE_DELAY", str(BSP_SCHEDULE_DELAY_MS_DEFAULT)))
+BSP_EXPORT_TIMEOUT_MS = int(os.environ.get("OTEL_BSP_EXPORT_TIMEOUT", str(BSP_EXPORT_TIMEOUT_MS_DEFAULT)))
 
 
 METRIC_EXPORT_INTERVAL_MS = 15_000

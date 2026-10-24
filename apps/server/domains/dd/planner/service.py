@@ -30,11 +30,8 @@ def _release_planner_lock(slug: str, thread_id: str) -> None:
     if not slug or not thread_id:
         return
     try:
-        r = infra.redis.service.new_redis_sync()
-        try:
+        with infra.redis.service.client_sync() as r:
             infra.redis.service.release_if_owner_sync(r, keys.lock_key(slug), thread_id)
-        finally:
-            r.close()
     except Exception as e:
         logger.warning(
             f"[task] planner lock release failed for slug={slug!r}: "

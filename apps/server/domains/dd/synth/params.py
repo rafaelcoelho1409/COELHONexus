@@ -8,6 +8,11 @@ CANCEL_TTL_S = 3600
 SNAPSHOT_TTL_S = 86400   # 24h — covers overnight reloads while a study run is in flight
 SNAPSHOT_MAX_EVENTS = 200
 
+# Per-slug single-flight lock: just above the Celery task time limit, so a crashed run self-releases.
+LOCK_TTL_S = 21900
+# Study registry (page-refresh recovery) — see `runtime.dispatch.service.register_active_study`.
+ACTIVE_STUDY_TTL_S = 14400
+
 
 CHECKLIST_THRESHOLD = 0.80
 MAX_REFINE_ITER = 5

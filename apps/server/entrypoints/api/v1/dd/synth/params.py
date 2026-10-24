@@ -8,6 +8,3 @@ VALID_ARTIFACTS = {
 
 
 VALID_MODES = {"quality", "fast"}
-
-
-SYNTH_LOCK_TTL_S = 21900

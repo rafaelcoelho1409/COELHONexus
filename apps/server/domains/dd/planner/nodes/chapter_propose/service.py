@@ -2,7 +2,7 @@
 loader, and the chapter_propose_run orchestration.
 
 SOTA Sept 2026 on the rotator pooled:
-- Pooled AsyncOpenAI http2 200/100 handles 3×6000 tok drafts concurrently ~1× latency
+- Pooled httpx http2 200/100 handles 3×6000 tok drafts concurrently ~1× latency
   (old bandit 5-way serialized). Optimal stopping default false for fastest.
 - Bulk read_many (shared S3 client) vs 16-way semaphore loop.
 - Prompt KV-cache: static rubric prefix before dynamic corpus block → prefix

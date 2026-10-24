@@ -1,0 +1,1288 @@
+[
+ {
+  "celery": [
+   [
+    "run_ingestion",
+    [
+     "<hex>",
+     "fw"
+    ]
+   ]
+  ],
+  "json": {
+   "run_id": "<hex>",
+   "slug": "fw",
+   "status": "queued"
+  },
+  "minio": [],
+  "redis": {
+   "coelhonexus:dd:lock:fw": {
+    "ttl_min": 65,
+    "type": "string",
+    "value": "<hex>"
+   }
+  },
+  "status": 200,
+  "step": "runs: start fw"
+ },
+ {
+  "celery": [],
+  "json": {
+   "message": "An ingestion of 'fw' is already running (run_id=<hex>). Wait for it to finish or cancel it before triggering another.",
+   "run_id": "<hex>",
+   "slug": "fw",
+   "status": "locked"
+  },
+  "minio": [],
+  "redis": {
+   "coelhonexus:dd:lock:fw": {
+    "ttl_min": 65,
+    "type": "string",
+    "value": "<hex>"
+   }
+  },
+  "status": 200,
+  "step": "runs: start fw again (same slug locked)"
+ },
+ {
+  "celery": [],
+  "json": {
+   "message": "Another ingestion is running ('fw', run_id=<hex>). Wait for it to finish or cancel it before starting 'fw2'.",
+   "run_id": "<hex>",
+   "slug": "fw",
+   "status": "locked"
+  },
+  "minio": [],
+  "redis": {
+   "coelhonexus:dd:lock:fw": {
+    "ttl_min": 65,
+    "type": "string",
+    "value": "<hex>"
+   }
+  },
+  "status": 200,
+  "step": "runs: start fw2 (other slug locked)"
+ },
+ {
+  "celery": [],
+  "json": {
+   "active": []
+  },
+  "minio": [],
+  "redis": {
+   "coelhonexus:dd:lock:fw": {
+    "ttl_min": 65,
+    "type": "string",
+    "value": "<hex>"
+   }
+  },
+  "status": 200,
+  "step": "runs: active without a progress record"
+ },
+ {
+  "celery": [],
+  "json": {
+   "active": [
+    {
+     "progress": {
+      "phase": "tier1",
+      "status": "running"
+     },
+     "run_id": "<hex>",
+     "slug": "fw"
+    }
+   ]
+  },
+  "minio": [],
+  "redis": {
+   "coelhonexus:dd:lock:fw": {
+    "ttl_min": 65,
+    "type": "string",
+    "value": "<hex>"
+   },
+   "coelhonexus:dd:runs:<hex>:progress": {
+    "ttl_min": null,
+    "type": "string",
+    "value": "{\"status\": \"running\", \"phase\": \"tier1\"}"
+   }
+  },
+  "status": 200,
+  "step": "runs: active with progress"
+ },
+ {
+  "celery": [],
+  "json": {
+   "manifest": [],
+   "post": null,
+   "progress": {
+    "phase": "tier1",
+    "status": "running"
+   },
+   "run_id": "<hex>"
+  },
+  "minio": [],
+  "redis": {
+   "coelhonexus:dd:lock:fw": {
+    "ttl_min": 65,
+    "type": "string",
+    "value": "<hex>"
+   },
+   "coelhonexus:dd:runs:<hex>:progress": {
+    "ttl_min": null,
+    "type": "string",
+    "value": "{\"status\": \"running\", \"phase\": \"tier1\"}"
+   }
+  },
+  "status": 200,
+  "step": "runs: get run"
+ },
+ {
+  "celery": [],
+  "json": {
+   "detail": "run 'nope' not found"
+  },
+  "minio": [],
+  "redis": {
+   "coelhonexus:dd:lock:fw": {
+    "ttl_min": 65,
+    "type": "string",
+    "value": "<hex>"
+   },
+   "coelhonexus:dd:runs:<hex>:progress": {
+    "ttl_min": null,
+    "type": "string",
+    "value": "{\"status\": \"running\", \"phase\": \"tier1\"}"
+   }
+  },
+  "status": 404,
+  "step": "runs: get unknown run"
+ },
+ {
+  "celery": [],
+  "json": [],
+  "minio": [],
+  "redis": {
+   "coelhonexus:dd:lock:fw": {
+    "ttl_min": 65,
+    "type": "string",
+    "value": "<hex>"
+   },
+   "coelhonexus:dd:runs:<hex>:progress": {
+    "ttl_min": null,
+    "type": "string",
+    "value": "{\"status\": \"running\", \"phase\": \"tier1\"}"
+   }
+  },
+  "status": 200,
+  "step": "runs: url records of unknown run"
+ },
+ {
+  "celery": [],
+  "json": {
+   "run_id": "<hex>",
+   "status": "cancel_requested"
+  },
+  "minio": [],
+  "redis": {
+   "coelhonexus:dd:lock:fw": {
+    "ttl_min": 65,
+    "type": "string",
+    "value": "<hex>"
+   },
+   "coelhonexus:dd:runs:<hex>:cancel": {
+    "ttl_min": 120,
+    "type": "string",
+    "value": "1"
+   },
+   "coelhonexus:dd:runs:<hex>:progress": {
+    "ttl_min": null,
+    "type": "string",
+    "value": "{\"status\": \"running\", \"phase\": \"tier1\"}"
+   }
+  },
+  "status": 200,
+  "step": "runs: cancel"
+ },
+ {
+  "celery": [],
+  "json": {
+   "deleted": 0,
+   "failed_prefixes": [],
+   "lock_released": true,
+   "slug": "fw"
+  },
+  "minio": [],
+  "redis": {
+   "coelhonexus:dd:runs:<hex>:cancel": {
+    "ttl_min": 120,
+    "type": "string",
+    "value": "1"
+   },
+   "coelhonexus:dd:runs:<hex>:progress": {
+    "ttl_min": null,
+    "type": "string",
+    "value": "{\"status\": \"running\", \"phase\": \"tier1\"}"
+   }
+  },
+  "status": 200,
+  "step": "ingestion: delete framework releases the lock"
+ },
+ {
+  "celery": [],
+  "json": {
+   "manifest": {
+    "entries": [],
+    "slug": "cachefw"
+   },
+   "run_id": null,
+   "slug": "cachefw",
+   "status": "cached"
+  },
+  "minio": [
+   "ingestion/cachefw/manifest.json"
+  ],
+  "redis": {},
+  "status": 200,
+  "step": "runs: cached manifest"
+ },
+ {
+  "celery": [
+   [
+    "run_ingestion",
+    [
+     "<hex>",
+     "rf"
+    ]
+   ]
+  ],
+  "json": {
+   "run_id": "<hex>",
+   "slug": "rf",
+   "status": "queued"
+  },
+  "minio": [
+   "ingestion/cachefw/manifest.json",
+   "keep/rf/c"
+  ],
+  "redis": {
+   "coelhonexus:dd:lock:rf": {
+    "ttl_min": 65,
+    "type": "string",
+    "value": "<hex>"
+   }
+  },
+  "status": 200,
+  "step": "runs: refresh wipes the stale prefixes then queues"
+ },
+ {
+  "celery": [],
+  "json": {
+   "detail": "no ingested corpus for 'nomf' — run ingestion first"
+  },
+  "minio": [
+   "ingestion/pf/manifest.json",
+   "ingestion/pg/manifest.json"
+  ],
+  "redis": {},
+  "status": 404,
+  "step": "planner: start without a manifest"
+ },
+ {
+  "celery": [],
+  "json": {
+   "detail": "invalid mode 'bogus'; expected one of ['classical', 'llm']"
+  },
+  "minio": [
+   "ingestion/pf/manifest.json",
+   "ingestion/pg/manifest.json"
+  ],
+  "redis": {},
+  "status": 400,
+  "step": "planner: invalid mode"
+ },
+ {
+  "celery": [
+   [
+    "run_planner",
+    [
+     "docs-distiller/pf/<uuid>",
+     "pf",
+     "llm"
+    ]
+   ]
+  ],
+  "json": {
+   "celery_task_id": "task-1",
+   "latency_ms": 0,
+   "mode": "llm",
+   "slug": "pf",
+   "status": "queued",
+   "thread_id": "docs-distiller/pf/<uuid>"
+  },
+  "minio": [
+   "ingestion/pf/manifest.json",
+   "ingestion/pg/manifest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:planner:current:pf": {
+    "ttl_min": 60,
+    "type": "string",
+    "value": "{\"thread_id\": \"docs-distiller/pf/<uuid>\", \"started_ts\": <ts>}"
+   },
+   "coelhonexus:dd:planner:lock:pf": {
+    "ttl_min": 61,
+    "type": "string",
+    "value": "docs-distiller/pf/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "planner: start pf"
+ },
+ {
+  "celery": [],
+  "json": {
+   "message": "A planner of 'pf' is already running (thread_id=docs-distiller/pf/<uuid>). Wait for it to finish or cancel it before retrying.",
+   "slug": "pf",
+   "stage": "planner",
+   "status": "locked",
+   "thread_id": "docs-distiller/pf/<uuid>"
+  },
+  "minio": [
+   "ingestion/pf/manifest.json",
+   "ingestion/pg/manifest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:planner:current:pf": {
+    "ttl_min": 60,
+    "type": "string",
+    "value": "{\"thread_id\": \"docs-distiller/pf/<uuid>\", \"started_ts\": <ts>}"
+   },
+   "coelhonexus:dd:planner:lock:pf": {
+    "ttl_min": 61,
+    "type": "string",
+    "value": "docs-distiller/pf/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "planner: start pf again (same slug locked)"
+ },
+ {
+  "celery": [],
+  "json": {
+   "message": "Another planner is running ('pf', thread_id=docs-distiller/pf/<uuid>). Wait for it to finish or cancel it before starting 'pg'.",
+   "slug": "pf",
+   "stage": "planner",
+   "status": "locked",
+   "thread_id": "docs-distiller/pf/<uuid>"
+  },
+  "minio": [
+   "ingestion/pf/manifest.json",
+   "ingestion/pg/manifest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:planner:current:pf": {
+    "ttl_min": 60,
+    "type": "string",
+    "value": "{\"thread_id\": \"docs-distiller/pf/<uuid>\", \"started_ts\": <ts>}"
+   },
+   "coelhonexus:dd:planner:lock:pf": {
+    "ttl_min": 61,
+    "type": "string",
+    "value": "docs-distiller/pf/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "planner: start pg (other planner locked)"
+ },
+ {
+  "celery": [],
+  "json": {
+   "active": true,
+   "started_ts": "<ts>",
+   "thread_id": "docs-distiller/pf/<uuid>"
+  },
+  "minio": [
+   "ingestion/pf/manifest.json",
+   "ingestion/pg/manifest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:planner:current:pf": {
+    "ttl_min": 60,
+    "type": "string",
+    "value": "{\"thread_id\": \"docs-distiller/pf/<uuid>\", \"started_ts\": <ts>}"
+   },
+   "coelhonexus:dd:planner:lock:pf": {
+    "ttl_min": 61,
+    "type": "string",
+    "value": "docs-distiller/pf/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "planner: active pf"
+ },
+ {
+  "celery": [],
+  "json": {
+   "active": false
+  },
+  "minio": [
+   "ingestion/pf/manifest.json",
+   "ingestion/pg/manifest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:planner:current:pf": {
+    "ttl_min": 60,
+    "type": "string",
+    "value": "{\"thread_id\": \"docs-distiller/pf/<uuid>\", \"started_ts\": <ts>}"
+   },
+   "coelhonexus:dd:planner:lock:pf": {
+    "ttl_min": 61,
+    "type": "string",
+    "value": "docs-distiller/pf/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "planner: active unknown slug"
+ },
+ {
+  "celery": [],
+  "json": {
+   "message": "A synth is running ('sx', thread_id=docs-distiller/study/sx/<uuid>). Planner and Synth share the same LLM resources — running both at once degrades quality on each. Wait for the synth to finish or cancel it before starting a planner.",
+   "slug": "sx",
+   "stage": "synth",
+   "status": "locked",
+   "thread_id": "docs-distiller/study/sx/<uuid>"
+  },
+  "minio": [
+   "ingestion/pf/manifest.json",
+   "ingestion/pg/manifest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:planner:current:pf": {
+    "ttl_min": 60,
+    "type": "string",
+    "value": "{\"thread_id\": \"docs-distiller/pf/<uuid>\", \"started_ts\": <ts>}"
+   },
+   "coelhonexus:dd:planner:lock:pf": {
+    "ttl_min": 61,
+    "type": "string",
+    "value": "docs-distiller/pf/<uuid>"
+   },
+   "coelhonexus:dd:synth:lock:sx": {
+    "ttl_min": 10,
+    "type": "string",
+    "value": "docs-distiller/study/sx/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "planner: start pg (synth running)"
+ },
+ {
+  "celery": [],
+  "json": {
+   "planner": {
+    "slug": "pf",
+    "thread_id": "docs-distiller/pf/<uuid>"
+   },
+   "synth": {
+    "slug": "sx",
+    "thread_id": "docs-distiller/study/sx/<uuid>"
+   }
+  },
+  "minio": [
+   "ingestion/pf/manifest.json",
+   "ingestion/pg/manifest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:planner:current:pf": {
+    "ttl_min": 60,
+    "type": "string",
+    "value": "{\"thread_id\": \"docs-distiller/pf/<uuid>\", \"started_ts\": <ts>}"
+   },
+   "coelhonexus:dd:planner:lock:pf": {
+    "ttl_min": 61,
+    "type": "string",
+    "value": "docs-distiller/pf/<uuid>"
+   },
+   "coelhonexus:dd:synth:lock:sx": {
+    "ttl_min": 10,
+    "type": "string",
+    "value": "docs-distiller/study/sx/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "pipeline: active locks"
+ },
+ {
+  "celery": [],
+  "json": {
+   "status": "cancel_requested",
+   "thread_id": "docs-distiller/pf/<uuid>"
+  },
+  "minio": [
+   "ingestion/pf/manifest.json",
+   "ingestion/pg/manifest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:planner:docs-distiller/pf/<uuid>:cancel": {
+    "ttl_min": 60,
+    "type": "string",
+    "value": "1"
+   },
+   "coelhonexus:dd:planner:lock:pf": {
+    "ttl_min": 61,
+    "type": "string",
+    "value": "docs-distiller/pf/<uuid>"
+   },
+   "coelhonexus:dd:synth:lock:sx": {
+    "ttl_min": 10,
+    "type": "string",
+    "value": "docs-distiller/study/sx/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "planner: cancel"
+ },
+ {
+  "celery": [
+   [
+    "resume_planner",
+    [
+     "docs-distiller/pf/<uuid>"
+    ]
+   ]
+  ],
+  "json": {
+   "celery_task_id": "task-1",
+   "status": "queued",
+   "thread_id": "docs-distiller/pf/<uuid>"
+  },
+  "minio": [
+   "ingestion/pf/manifest.json",
+   "ingestion/pg/manifest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:planner:lock:pf": {
+    "ttl_min": 61,
+    "type": "string",
+    "value": "docs-distiller/pf/<uuid>"
+   },
+   "coelhonexus:dd:synth:lock:sx": {
+    "ttl_min": 10,
+    "type": "string",
+    "value": "docs-distiller/study/sx/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "planner: resume"
+ },
+ {
+  "celery": [],
+  "json": {
+   "minio_blobs_deleted": 0,
+   "postgres_rows_deleted": {
+    "error": "RuntimeError: [postgres] missing env: POSTGRES_HOST, POSTGRES_USER, POSTGRES_DATABASE"
+   },
+   "redis_keys_deleted": 1,
+   "slug": "pf"
+  },
+  "minio": [
+   "ingestion/pf/manifest.json",
+   "ingestion/pg/manifest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:synth:lock:sx": {
+    "ttl_min": 10,
+    "type": "string",
+    "value": "docs-distiller/study/sx/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "planner: wipe"
+ },
+ {
+  "celery": [
+   [
+    "run_planner",
+    [
+     "docs-distiller/pg/fixed",
+     "pg",
+     "llm"
+    ]
+   ]
+  ],
+  "json": {
+   "celery_task_id": "task-1",
+   "latency_ms": 0,
+   "mode": "llm",
+   "slug": "pg",
+   "status": "queued",
+   "thread_id": "docs-distiller/pg/fixed"
+  },
+  "minio": [
+   "ingestion/pf/manifest.json",
+   "ingestion/pg/manifest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:planner:current:pg": {
+    "ttl_min": 60,
+    "type": "string",
+    "value": "{\"thread_id\": \"docs-distiller/pg/fixed\", \"started_ts\": <ts>}"
+   },
+   "coelhonexus:dd:planner:lock:pg": {
+    "ttl_min": 61,
+    "type": "string",
+    "value": "docs-distiller/pg/fixed"
+   }
+  },
+  "status": 200,
+  "step": "planner: start with a given thread id"
+ },
+ {
+  "celery": [],
+  "json": {
+   "minio_blobs_deleted": 0,
+   "postgres_rows_deleted": {
+    "error": "RuntimeError: [postgres] missing env: POSTGRES_HOST, POSTGRES_USER, POSTGRES_DATABASE"
+   },
+   "redis_keys_deleted": 2,
+   "slug": "pg"
+  },
+  "minio": [
+   "ingestion/pf/manifest.json",
+   "ingestion/pg/manifest.json"
+  ],
+  "redis": {},
+  "status": 200,
+  "step": "planner: wipe pg (frees the lock)"
+ },
+ {
+  "celery": [],
+  "json": {
+   "detail": "Not Found"
+  },
+  "minio": [
+   "ingestion/pf/manifest.json",
+   "ingestion/pg/manifest.json"
+  ],
+  "redis": {},
+  "status": 404,
+  "step": "planner: wipe with a slash"
+ },
+ {
+  "celery": [],
+  "json": {
+   "detail": "invalid mode 'bogus'; expected one of ['fast', 'quality']"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json",
+   "planner/sg/plan-latest.json"
+  ],
+  "redis": {},
+  "status": 400,
+  "step": "synth: invalid mode"
+ },
+ {
+  "celery": [],
+  "json": {
+   "detail": "no planner plan for 'nopl' — run the planner first (POST /planner/nopl)"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json",
+   "planner/sg/plan-latest.json"
+  ],
+  "redis": {},
+  "status": 404,
+  "step": "synth: study without a plan"
+ },
+ {
+  "celery": [
+   [
+    "run_study",
+    [
+     "docs-distiller/study/sf/<uuid>",
+     "sf",
+     [
+      "ch-1",
+      "ch-2"
+     ],
+     "quality"
+    ]
+   ]
+  ],
+  "json": {
+   "celery_task_id": "task-1",
+   "chapter_ids": [
+    "ch-1",
+    "ch-2"
+   ],
+   "concurrency": 2,
+   "latency_ms": 0,
+   "mode": "quality",
+   "n_chapters": 2,
+   "slug": "sf",
+   "status": "queued",
+   "study_thread_id": "docs-distiller/study/sf/<uuid>"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json",
+   "planner/sg/plan-latest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:study:current:sf": {
+    "ttl_min": 240,
+    "type": "string",
+    "value": "{\"study_thread_id\": \"docs-distiller/study/sf/<uuid>\", \"started_ts\": <ts>}"
+   },
+   "coelhonexus:dd:synth:lock:sf": {
+    "ttl_min": 365,
+    "type": "string",
+    "value": "docs-distiller/study/sf/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "synth: start study sf"
+ },
+ {
+  "celery": [],
+  "json": {
+   "message": "A synth of 'sf' is already running (thread_id=docs-distiller/study/sf/<uuid>). Wait for it to finish or cancel it before retrying.",
+   "slug": "sf",
+   "stage": "synth",
+   "status": "locked",
+   "thread_id": "docs-distiller/study/sf/<uuid>"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json",
+   "planner/sg/plan-latest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:study:current:sf": {
+    "ttl_min": 240,
+    "type": "string",
+    "value": "{\"study_thread_id\": \"docs-distiller/study/sf/<uuid>\", \"started_ts\": <ts>}"
+   },
+   "coelhonexus:dd:synth:lock:sf": {
+    "ttl_min": 365,
+    "type": "string",
+    "value": "docs-distiller/study/sf/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "synth: start study sf again (same slug locked)"
+ },
+ {
+  "celery": [],
+  "json": {
+   "message": "Another synth is running ('sf', thread_id=docs-distiller/study/sf/<uuid>). Wait for it to finish or cancel it before starting 'sg'.",
+   "slug": "sf",
+   "stage": "synth",
+   "status": "locked",
+   "thread_id": "docs-distiller/study/sf/<uuid>"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json",
+   "planner/sg/plan-latest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:study:current:sf": {
+    "ttl_min": 240,
+    "type": "string",
+    "value": "{\"study_thread_id\": \"docs-distiller/study/sf/<uuid>\", \"started_ts\": <ts>}"
+   },
+   "coelhonexus:dd:synth:lock:sf": {
+    "ttl_min": 365,
+    "type": "string",
+    "value": "docs-distiller/study/sf/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "synth: start study sg (other synth locked)"
+ },
+ {
+  "celery": [],
+  "json": {
+   "active": true,
+   "started_ts": "<ts>",
+   "study_thread_id": "docs-distiller/study/sf/<uuid>"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json",
+   "planner/sg/plan-latest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:study:current:sf": {
+    "ttl_min": 240,
+    "type": "string",
+    "value": "{\"study_thread_id\": \"docs-distiller/study/sf/<uuid>\", \"started_ts\": <ts>}"
+   },
+   "coelhonexus:dd:synth:lock:sf": {
+    "ttl_min": 365,
+    "type": "string",
+    "value": "docs-distiller/study/sf/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "synth: active sf (study)"
+ },
+ {
+  "celery": [],
+  "json": {
+   "active": false
+  },
+  "minio": [
+   "planner/sf/plan-latest.json",
+   "planner/sg/plan-latest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:study:current:sf": {
+    "ttl_min": 240,
+    "type": "string",
+    "value": "{\"study_thread_id\": \"docs-distiller/study/sf/<uuid>\", \"started_ts\": <ts>}"
+   },
+   "coelhonexus:dd:synth:lock:sf": {
+    "ttl_min": 365,
+    "type": "string",
+    "value": "docs-distiller/study/sf/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "synth: active unknown"
+ },
+ {
+  "celery": [],
+  "json": {
+   "detail": "a synth run for 'sf' is in flight — cancel it before wiping a chapter"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json",
+   "planner/sg/plan-latest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:study:current:sf": {
+    "ttl_min": 240,
+    "type": "string",
+    "value": "{\"study_thread_id\": \"docs-distiller/study/sf/<uuid>\", \"started_ts\": <ts>}"
+   },
+   "coelhonexus:dd:study:docs-distiller/study/sf/<uuid>:active_chapters": {
+    "members": [
+     "docs-distiller/synth/sf/<uuid>"
+    ],
+    "ttl_min": null,
+    "type": "set"
+   },
+   "coelhonexus:dd:synth:docs-distiller/synth/sf/<uuid>:events:snapshot": {
+    "items": [
+     "{}"
+    ],
+    "ttl_min": null,
+    "type": "list"
+   },
+   "coelhonexus:dd:synth:lock:sf": {
+    "ttl_min": 365,
+    "type": "string",
+    "value": "docs-distiller/study/sf/<uuid>"
+   }
+  },
+  "status": 409,
+  "step": "synth: wipe one chapter while a study runs"
+ },
+ {
+  "celery": [],
+  "json": {
+   "propagated_to": [
+    "docs-distiller/synth/sf/<uuid>",
+    "docs-distiller/synth/sf/<uuid>"
+   ],
+   "status": "cancel_requested",
+   "thread_id": "docs-distiller/study/sf/<uuid>"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json",
+   "planner/sg/plan-latest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:study:current:sf": {
+    "ttl_min": 240,
+    "type": "string",
+    "value": "{\"study_thread_id\": \"docs-distiller/study/sf/<uuid>\", \"started_ts\": <ts>}"
+   },
+   "coelhonexus:dd:study:docs-distiller/study/sf/<uuid>:active_chapters": {
+    "members": [
+     "docs-distiller/synth/sf/<uuid>"
+    ],
+    "ttl_min": null,
+    "type": "set"
+   },
+   "coelhonexus:dd:synth:docs-distiller/study/sf/<uuid>:cancel": {
+    "ttl_min": 60,
+    "type": "string",
+    "value": "1"
+   },
+   "coelhonexus:dd:synth:docs-distiller/study/sf/<uuid>:events:snapshot": {
+    "items": [
+     "{\"step\": \"synth\", \"kind\": \"cancel_requested\", \"ts\": <ts>}"
+    ],
+    "ttl_min": 1440,
+    "type": "list"
+   },
+   "coelhonexus:dd:synth:docs-distiller/synth/sf/<uuid>:cancel": {
+    "ttl_min": 60,
+    "type": "string",
+    "value": "1"
+   },
+   "coelhonexus:dd:synth:docs-distiller/synth/sf/<uuid>:events:snapshot": {
+    "items": [
+     "{}",
+     "{\"step\": \"synth\", \"kind\": \"cancel_requested\", \"ts\": <ts>}"
+    ],
+    "ttl_min": 1440,
+    "type": "list"
+   },
+   "coelhonexus:dd:synth:lock:sf": {
+    "ttl_min": 365,
+    "type": "string",
+    "value": "docs-distiller/study/sf/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "synth: cancel study (propagates)"
+ },
+ {
+  "celery": [
+   [
+    "resume_synth",
+    [
+     "docs-distiller/study/sf/<uuid>"
+    ]
+   ]
+  ],
+  "json": {
+   "celery_task_id": "task-1",
+   "status": "queued",
+   "thread_id": "docs-distiller/study/sf/<uuid>"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json",
+   "planner/sg/plan-latest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:study:current:sf": {
+    "ttl_min": 240,
+    "type": "string",
+    "value": "{\"study_thread_id\": \"docs-distiller/study/sf/<uuid>\", \"started_ts\": <ts>}"
+   },
+   "coelhonexus:dd:study:docs-distiller/study/sf/<uuid>:active_chapters": {
+    "members": [
+     "docs-distiller/synth/sf/<uuid>"
+    ],
+    "ttl_min": null,
+    "type": "set"
+   },
+   "coelhonexus:dd:synth:docs-distiller/study/sf/<uuid>:events:snapshot": {
+    "items": [
+     "{\"step\": \"synth\", \"kind\": \"cancel_requested\", \"ts\": <ts>}"
+    ],
+    "ttl_min": 1440,
+    "type": "list"
+   },
+   "coelhonexus:dd:synth:docs-distiller/synth/sf/<uuid>:cancel": {
+    "ttl_min": 60,
+    "type": "string",
+    "value": "1"
+   },
+   "coelhonexus:dd:synth:docs-distiller/synth/sf/<uuid>:events:snapshot": {
+    "items": [
+     "{}",
+     "{\"step\": \"synth\", \"kind\": \"cancel_requested\", \"ts\": <ts>}"
+    ],
+    "ttl_min": 1440,
+    "type": "list"
+   },
+   "coelhonexus:dd:synth:lock:sf": {
+    "ttl_min": 365,
+    "type": "string",
+    "value": "docs-distiller/study/sf/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "synth: resume"
+ },
+ {
+  "celery": [],
+  "json": {
+   "minio_blobs_deleted": 0,
+   "postgres_rows_deleted": {
+    "error": "RuntimeError: [postgres] missing env: POSTGRES_HOST, POSTGRES_USER, POSTGRES_DATABASE"
+   },
+   "redis_keys_deleted": 7,
+   "slug": "sf"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json",
+   "planner/sg/plan-latest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:study:docs-distiller/study/sf/<uuid>:active_chapters": {
+    "members": [
+     "docs-distiller/synth/sf/<uuid>"
+    ],
+    "ttl_min": null,
+    "type": "set"
+   }
+  },
+  "status": 200,
+  "step": "synth: wipe sf"
+ },
+ {
+  "celery": [],
+  "json": {
+   "message": "A planner is running ('pl', thread_id=docs-distiller/pl/<uuid>). Planner and Synth share the same LLM resources — running both at once degrades quality on each. Wait for the planner to finish or cancel it before starting a synth.",
+   "slug": "pl",
+   "stage": "planner",
+   "status": "locked",
+   "thread_id": "docs-distiller/pl/<uuid>"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json",
+   "planner/sg/plan-latest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:planner:lock:pl": {
+    "ttl_min": 10,
+    "type": "string",
+    "value": "docs-distiller/pl/<uuid>"
+   },
+   "coelhonexus:dd:study:docs-distiller/study/sf/<uuid>:active_chapters": {
+    "members": [
+     "docs-distiller/synth/sf/<uuid>"
+    ],
+    "ttl_min": null,
+    "type": "set"
+   }
+  },
+  "status": 200,
+  "step": "synth: start study sg (planner running)"
+ },
+ {
+  "celery": [],
+  "json": {
+   "message": "A planner is running ('pl', thread_id=docs-distiller/pl/<uuid>). Planner and Synth share the same LLM resources — running both at once degrades quality on each. Wait for the planner to finish or cancel it before starting a synth.",
+   "slug": "pl",
+   "stage": "planner",
+   "status": "locked",
+   "thread_id": "docs-distiller/pl/<uuid>"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json",
+   "planner/sg/plan-latest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:planner:lock:pl": {
+    "ttl_min": 10,
+    "type": "string",
+    "value": "docs-distiller/pl/<uuid>"
+   },
+   "coelhonexus:dd:study:docs-distiller/study/sf/<uuid>:active_chapters": {
+    "members": [
+     "docs-distiller/synth/sf/<uuid>"
+    ],
+    "ttl_min": null,
+    "type": "set"
+   }
+  },
+  "status": 200,
+  "step": "synth: start chapter sg ch-1 (planner running)"
+ },
+ {
+  "celery": [],
+  "json": {
+   "detail": "chapter 'ch-9' not in plan; known ids: ['ch-1', 'ch-2']"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json"
+  ],
+  "redis": {},
+  "status": 404,
+  "step": "synth: chapter not in plan"
+ },
+ {
+  "celery": [
+   [
+    "run_single_chapter",
+    [
+     "docs-distiller/synth/sf/<uuid>",
+     "sf",
+     "ch-1",
+     "quality"
+    ]
+   ]
+  ],
+  "json": {
+   "celery_task_id": "task-1",
+   "chapter_id": "ch-1",
+   "latency_ms": 0,
+   "mode": "quality",
+   "slug": "sf",
+   "status": "queued",
+   "thread_id": "docs-distiller/synth/sf/<uuid>"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:synth:lock:sf": {
+    "ttl_min": 365,
+    "type": "string",
+    "value": "docs-distiller/synth/sf/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "synth: start chapter ch-1"
+ },
+ {
+  "celery": [],
+  "json": {
+   "active": true,
+   "chapter_thread_id": "docs-distiller/synth/sf/<uuid>",
+   "started_ts": null,
+   "study_thread_id": null
+  },
+  "minio": [
+   "planner/sf/plan-latest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:synth:lock:sf": {
+    "ttl_min": 365,
+    "type": "string",
+    "value": "docs-distiller/synth/sf/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "synth: active sf (single chapter)"
+ },
+ {
+  "celery": [],
+  "json": {
+   "message": "A synth of 'sf' is already running (thread_id=docs-distiller/synth/sf/<uuid>). Wait for it to finish or cancel it before retrying.",
+   "slug": "sf",
+   "stage": "synth",
+   "status": "locked",
+   "thread_id": "docs-distiller/synth/sf/<uuid>"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:synth:lock:sf": {
+    "ttl_min": 365,
+    "type": "string",
+    "value": "docs-distiller/synth/sf/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "synth: start chapter ch-2 (slug locked)"
+ },
+ {
+  "celery": [],
+  "json": {
+   "detail": "a synth run for 'sf' is in flight — cancel it before wiping a chapter"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:synth:lock:sf": {
+    "ttl_min": 365,
+    "type": "string",
+    "value": "docs-distiller/synth/sf/<uuid>"
+   }
+  },
+  "status": 409,
+  "step": "synth: wipe one chapter while a chapter runs"
+ },
+ {
+  "celery": [],
+  "json": {
+   "propagated_to": [],
+   "status": "cancel_requested",
+   "thread_id": "docs-distiller/synth/sf/<uuid>"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:synth:docs-distiller/synth/sf/<uuid>:cancel": {
+    "ttl_min": 60,
+    "type": "string",
+    "value": "1"
+   },
+   "coelhonexus:dd:synth:docs-distiller/synth/sf/<uuid>:events:snapshot": {
+    "items": [
+     "{\"step\": \"synth\", \"kind\": \"cancel_requested\", \"ts\": <ts>}"
+    ],
+    "ttl_min": 1440,
+    "type": "list"
+   },
+   "coelhonexus:dd:synth:lock:sf": {
+    "ttl_min": 365,
+    "type": "string",
+    "value": "docs-distiller/synth/sf/<uuid>"
+   }
+  },
+  "status": 200,
+  "step": "synth: cancel chapter thread"
+ },
+ {
+  "celery": [],
+  "json": {
+   "chapter_id": "ch-1",
+   "minio_deleted": 1,
+   "slug": "sf"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:synth:docs-distiller/synth/sf/<uuid>:cancel": {
+    "ttl_min": 60,
+    "type": "string",
+    "value": "1"
+   },
+   "coelhonexus:dd:synth:docs-distiller/synth/sf/<uuid>:events:snapshot": {
+    "items": [
+     "{\"step\": \"synth\", \"kind\": \"cancel_requested\", \"ts\": <ts>}"
+    ],
+    "ttl_min": 1440,
+    "type": "list"
+   }
+  },
+  "status": 200,
+  "step": "synth: wipe one chapter when idle"
+ },
+ {
+  "celery": [],
+  "json": {
+   "detail": "invalid chapter_id 'x'; expected 'ch-…' without slashes"
+  },
+  "minio": [
+   "planner/sf/plan-latest.json"
+  ],
+  "redis": {
+   "coelhonexus:dd:synth:docs-distiller/synth/sf/<uuid>:cancel": {
+    "ttl_min": 60,
+    "type": "string",
+    "value": "1"
+   },
+   "coelhonexus:dd:synth:docs-distiller/synth/sf/<uuid>:events:snapshot": {
+    "items": [
+     "{\"step\": \"synth\", \"kind\": \"cancel_requested\", \"ts\": <ts>}"
+    ],
+    "ttl_min": 1440,
+    "type": "list"
+   }
+  },
+  "status": 400,
+  "step": "synth: wipe one chapter, bad id"
+ }
+]

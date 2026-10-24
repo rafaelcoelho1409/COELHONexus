@@ -110,7 +110,7 @@ async def classify_query(
     formatted_history = "\n---\n".join(parts)
     chain = service.resolve_prompt(prompts.CLASSIFY_PROMPT, "ycs.rag.classify") | llm
     try:
-        domains.ycs.llm_counter.service.set_node(node = "classify")
+        domains.settings.llm_counter.service.set_node(node = "classify")
         response = await service.resilient_ainvoke(
             chain,
             {"history": formatted_history, "question": state["question"]},

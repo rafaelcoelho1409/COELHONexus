@@ -46,7 +46,7 @@ async def corroborate_claim(state: state.YouTubeRAGState, llm) -> dict:
         schemas.CorroborationResult,
     )
     try:
-        domains.ycs.llm_counter.service.set_node(node = "corroborate")
+        domains.settings.llm_counter.service.set_node(node = "corroborate")
         result: schemas.CorroborationResult = await service.resilient_ainvoke(
             chain,
             {
