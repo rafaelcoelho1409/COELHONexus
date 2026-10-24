@@ -22,7 +22,8 @@ discovery outputs from the scan's virtual fs, runs the domain pipeline
   scan fd48309a).
 """
 from __future__ import annotations
-from domains.rr.runtime.observability.service import traced_tool
+import domains
+from domains.rr.observability.service import traced_tool
 from . import domain
 from .. import state
 from ... import keys
@@ -221,7 +222,7 @@ async def triage_candidates(
     # The next LLM calls (orchestrator dispatching deep_read fan-out)
     # attribute to "triage" until the first write_extraction lands.
     try:
-        runtime.llm_counter.service.set_phase("triage")
+        domains.rr.llm_counter.service.set_phase("triage")
     except Exception: pass
 
     # cross-scan extraction cache prefill.

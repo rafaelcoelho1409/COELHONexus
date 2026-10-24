@@ -12,7 +12,7 @@ this node and ~15 LOC of Cypher.
 """
 from __future__ import annotations
 import domains
-from domains.ycs.runtime.observability.service import traced
+from domains.ycs.observability.service import traced
 from . import prompts, schemas
 from ... import params, state
 from .... import domain, service
@@ -110,7 +110,7 @@ async def classify_query(
     formatted_history = "\n---\n".join(parts)
     chain = service.resolve_prompt(prompts.CLASSIFY_PROMPT, "ycs.rag.classify") | llm
     try:
-        domains.ycs.runtime.llm_counter.service.set_node(node = "classify")
+        domains.ycs.llm_counter.service.set_node(node = "classify")
         response = await service.resilient_ainvoke(
             chain,
             {"history": formatted_history, "question": state["question"]},

@@ -31,7 +31,7 @@ async def _cancel_watcher(
     try:
         while not main_task.done():
             try:
-                if await domains.dd.ingestion.runtime.progress.service.is_cancelled(redis_client, run_id):
+                if await domains.dd.ingestion.runtime.cancel.service.is_cancelled(redis_client, run_id):
                     logger.info(
                         f"[dispatch] {run_id}: cancel flag detected by "
                         f"watcher → cancelling main task"
@@ -92,7 +92,7 @@ async def run(run_id: str, slug: str) -> dict:
     ):
         result = await _run_inner(run_id, slug)
     post_summary = result.get("post") or {}
-    domains.dd.ingestion.runtime.observability.metrics.record_ingestion_run(
+    domains.dd.ingestion.observability.service.record_ingestion_run(
         framework = slug,
         tier_kind = str(result.get("tier_kind") or "unknown"),
         outcome = str(result.get("status") or "unknown"),

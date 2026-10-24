@@ -6,7 +6,7 @@ source, snippet}` row per unique source. The frontend renders these as
 clickable cards.
 """
 from __future__ import annotations
-from domains.ycs.runtime.observability.service import traced
+from domains.ycs.observability.service import traced
 from ... import params, state
 
 

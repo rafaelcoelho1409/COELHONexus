@@ -156,7 +156,7 @@ async def harmonize_book(
             })
             if ok:
                 n_patched += 1
-                domains.dd.synth.runtime.observability.metrics.record_classical_patch(
+                domains.dd.synth.observability.service.record_classical_patch(
                     dim = "cross_chapter_coherence",
                     framework = framework_slug,
                 )

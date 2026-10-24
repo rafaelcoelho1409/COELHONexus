@@ -647,7 +647,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
             f"soft cap signal after {n_repairs} repairs; programmatic "
             f"trim restores the bound."
         )
-        domains.dd.synth.runtime.observability.metrics.record_bucket_split_overflow(
+        domains.dd.synth.observability.service.record_bucket_split_overflow(
             framework = slug,
             sections_dropped = max(n_before - len(outline.sections), 0),
         )

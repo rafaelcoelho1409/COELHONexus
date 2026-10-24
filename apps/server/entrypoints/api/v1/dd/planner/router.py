@@ -287,7 +287,7 @@ async def list_recent_planners() -> dict:
     that died early over later threads that completed all nodes."""
     out: list[dict] = []
     try:
-        with domains.dd.runtime.observability.spans.postgres_span(
+        with infra.postgres.service.span(
             "select", **{"db.postgres.table": "checkpoints"},
         ):
             async with await infra.postgres.service.connect() as conn:
@@ -342,7 +342,7 @@ async def wipe_planner(slug: str) -> dict:
     counts: dict = {}
     pattern = f"docs-distiller/{slug}/%"
     try:
-        with domains.dd.runtime.observability.spans.postgres_span(
+        with infra.postgres.service.span(
             "delete", **{"db.postgres.table": "checkpoints,checkpoint_writes,checkpoint_blobs"},
         ):
             async with await infra.postgres.service.connect(autocommit=True) as conn:
@@ -510,7 +510,7 @@ async def get_graph_state(thread_id: str) -> dict:
 
 @router.get("/debug/graph/{thread_id:path}/llm-counters")
 async def get_graph_llm_counters(thread_id: str) -> dict:
-    return await domains.dd.runtime.service.read_counters(thread_id)
+    return await domains.dd.llm_counter.service.read_counters(thread_id)
 
 
 @router.get("/debug/graph/{thread_id:path}/history")

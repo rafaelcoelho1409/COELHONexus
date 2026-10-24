@@ -1,7 +1,8 @@
 """LangChain @tool wrappers around the module-level fs helpers in
 ../state.py — Imperative Shell."""
 from __future__ import annotations
-from domains.rr.runtime.observability.service import traced_tool
+import domains
+from domains.rr.observability.service import traced_tool
 from . import domain, params
 from .. import state as tools_state
 from ... import keys
@@ -147,7 +148,7 @@ def stash_discovery_result(
 
     tools_state.fs_write(scan_id, path, papers)
     _mirror(scan_id, path, papers)
-    try: runtime.llm_counter.service.set_phase("discovery")
+    try: domains.rr.llm_counter.service.set_phase("discovery")
     except Exception: pass
     logger.info(
         f"[fs-tool] stash_discovery_result scan_id={scan_id} "
@@ -208,11 +209,11 @@ def write_extraction(
     is_retry     = existing or is_off_topn
     tools_state.fs_write(scan_id, path, payload)
     _mirror(scan_id, path, payload)
-    try: runtime.llm_counter.service.set_phase("deep_read")
+    try: domains.rr.llm_counter.service.set_phase("deep_read")
     except Exception: pass
     if is_retry:
         try:
-            runtime.llm_counter.service.bump_retry_sync(scan_id, "deep_read")
+            domains.rr.llm_counter.service.bump_retry_sync(scan_id, "deep_read")
         except Exception as e:
             logger.warning(f"[fs-tool] retry bump failed for {arxiv_id}: {e}")
         try:
@@ -353,7 +354,7 @@ def write_synthesis_report(
     }
     tools_state.fs_write(scan_id, keys.FS_FILE_SYNTHESIS_REPORT, payload)
     _mirror(scan_id, keys.FS_FILE_SYNTHESIS_REPORT, payload)
-    try: runtime.llm_counter.service.set_phase("synthesis")
+    try: domains.rr.llm_counter.service.set_phase("synthesis")
     except Exception: pass
     logger.info(
         f"[fs-tool] write_synthesis_report scan_id={scan_id} "

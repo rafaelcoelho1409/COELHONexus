@@ -7,7 +7,7 @@ acceptable. On structured-output error we DEFAULT to grounded=True
 on a transient LLM hiccup; the graph still bails after MAX_RETRIES).
 """
 from __future__ import annotations
-from domains.ycs.runtime.observability.service import traced
+from domains.ycs.observability.service import traced
 from . import params, prompts, schemas
 from ... import state
 from .... import service

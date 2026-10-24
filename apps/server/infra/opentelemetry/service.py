@@ -21,6 +21,7 @@ import infra
 from . import domain, entities, keys, params
 
 import contextlib
+import functools
 import logging
 import os
 from collections.abc import Callable, Iterator, Mapping
@@ -467,6 +468,113 @@ def current_trace_id() -> str | None:
         return format(trace.get_current_span().get_span_context().trace_id, "032x")
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Shared span helpers — one implementation for every client span (`db.*`,
+# `aws.s3.*`, ...), the pipeline-node decorator and the attribute setter that
+# the domains and the other infra modules used to copy.
+# ---------------------------------------------------------------------------
+
+@contextlib.contextmanager
+def client_span(
+    name: str, attributes: Mapping[str, object] | None = None, *, kind = None,
+) -> Iterator[object | None]:
+    """Span `name` (CLIENT kind unless `kind` says otherwise) around a call to an
+    external system. None-valued attributes are dropped. On an exception the span
+    gets `error.type` + the recorded exception, and the exception propagates."""
+    tracer = get_tracer()
+    if tracer is None:
+        yield None
+        return
+    with tracer.start_as_current_span(
+        name,
+        kind       = kind if kind is not None else trace.SpanKind.CLIENT,
+        attributes = {k: v for k, v in (attributes or {}).items() if v is not None},
+    ) as span:
+        try:
+            yield span
+        except Exception as e:
+            span.set_attribute("error.type", type(e).__name__)
+            span.record_exception(e)
+            raise
+
+
+def db_span(system: str, operation: str, **attrs) -> contextlib.AbstractContextManager:
+    """`db.*` semconv client span `db.<system>.<operation>`; extra `attrs` are added
+    to `db.system` / `db.operation` (None values dropped)."""
+    return client_span(
+        f"db.{system}.{operation}",
+        {"db.system": system, "db.operation": operation, **attrs},
+    )
+
+
+def attach_span_attrs(prefix: str, attrs: Mapping[str, object]) -> None:
+    """Set `<prefix>.<key>` attributes on the current span; no-op without a recording
+    span; None values skipped; never raises."""
+    try:
+        span = trace.get_current_span()
+        if hasattr(span, "is_recording") and not span.is_recording():
+            return
+        for k, v in attrs.items():
+            if v is None:
+                continue
+            span.set_attribute(f"{prefix}.{k}", v)
+    except Exception:
+        pass
+
+
+def node_tracer(
+    *,
+    prefix: str,
+    workflow: str,
+    stage: str,
+    span_prefix: str,
+    state_attrs: Callable[[dict], Mapping[str, object]],
+    context: Callable[[dict, str], contextlib.AbstractContextManager] | None = None,
+) -> Callable[[str], Callable]:
+    """Build the `traced(name)` decorator for one pipeline's async LangGraph nodes.
+
+    Each call of a decorated node becomes a top-level span `<span_prefix>.<name>`
+    (workflow-node kind, kept by the LangFuse gate) carrying `<prefix>.node`, the
+    attributes `state_attrs(state)` returns (each prefixed `<prefix>.`), and
+    `<prefix>.ok` / `.error_type` / `.error_message` on completion. `context`, when
+    given, is a context-manager factory `(state, node_name)` entered around the whole
+    call, spans or not (DD uses it for its LLM-usage attribution)."""
+    def traced(name: str) -> Callable:
+        def decorator(fn: Callable) -> Callable:
+            @functools.wraps(fn)
+            async def wrapper(state: dict, *args, **kwargs):
+                with context(state, name) if context is not None else contextlib.nullcontext():
+                    tracer = get_tracer()
+                    if tracer is None:
+                        # OTel not initialized (local dev without env) — run node without tracing.
+                        return await fn(state, *args, **kwargs)
+                    attrs = {
+                        infra.langfuse.keys.KEEP: True,
+                        infra.langfuse.keys.KIND: "workflow_node",
+                        f"{prefix}.node": name,
+                        **{f"{prefix}.{k}": v for k, v in state_attrs(state).items()},
+                        infra.langfuse.keys.OBS_META_WORKFLOW: workflow,
+                        infra.langfuse.keys.OBS_META_NODE_NAME: name,
+                        infra.langfuse.keys.OBS_META_STAGE: stage,
+                    }
+                    with tracer.start_as_current_span(
+                        f"{span_prefix}.{name}", attributes = attrs,
+                    ) as span:
+                        try:
+                            result = await fn(state, *args, **kwargs)
+                            span.set_attribute(f"{prefix}.ok", True)
+                            return result
+                        except Exception as e:
+                            span.set_attribute(f"{prefix}.ok", False)
+                            span.set_attribute(f"{prefix}.error_type", type(e).__name__)
+                            span.set_attribute(f"{prefix}.error_message", str(e)[:200])
+                            span.record_exception(e)
+                            raise
+            return wrapper
+        return decorator
+    return traced
 
 
 def init_otel_for_celery_worker() -> bool:

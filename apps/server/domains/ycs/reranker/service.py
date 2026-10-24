@@ -39,7 +39,7 @@ def rerank_documents(
     only see precomputed vectors)."""
     if not documents:
         return []
-    with domains.ycs.runtime.observability.spans.reranker_span(
+    with domains.ycs.observability.service.reranker_span(
         model     = "flashrank-default",
         doc_count = len(documents),
         top_k     = top_k,

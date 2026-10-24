@@ -18,7 +18,7 @@ after every rewrite retry. Shares Parallel's rate-limit budget with
 `fallback_answer`, not a separate allowance."""
 from __future__ import annotations
 import domains
-from domains.ycs.runtime.observability.service import traced
+from domains.ycs.observability.service import traced
 from . import prompts, schemas
 from ... import params, state
 from .... import service
@@ -46,7 +46,7 @@ async def corroborate_claim(state: state.YouTubeRAGState, llm) -> dict:
         schemas.CorroborationResult,
     )
     try:
-        domains.ycs.runtime.llm_counter.service.set_node(node = "corroborate")
+        domains.ycs.llm_counter.service.set_node(node = "corroborate")
         result: schemas.CorroborationResult = await service.resilient_ainvoke(
             chain,
             {

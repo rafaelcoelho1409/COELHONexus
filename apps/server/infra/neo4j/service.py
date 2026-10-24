@@ -32,6 +32,7 @@ The only module that imports `neo4j` / `langchain_neo4j` or reads
 LangChain graph), `new_graph()` (a graph the caller owns, for Celery tasks),
 and the `AsyncDriver`, `Neo4jGraph`, `Node`, `Relationship`, `Path` types."""
 from __future__ import annotations
+import infra
 from . import domain, params
 
 import asyncio
@@ -153,8 +154,15 @@ async def close_neo4j() -> None:
     _graph = None
 
 
+def span(operation: str, **attrs):
+    """`db.neo4j.<operation>` client span around a Cypher call; a `db.statement` should
+    be a short summary, not the raw statement, to keep spans small and avoid leaking
+    parameter values."""
+    return infra.opentelemetry.service.db_span("neo4j", operation, **attrs)
+
+
 # Public surface for the rest of the code (the type re-exports are intentional).
 __all__ = [
     "AsyncDriver", "Neo4jGraph", "Node", "Path", "Relationship",
-    "close_neo4j", "get_driver", "get_graph", "new_graph", "session", "verify_connectivity",
+    "close_neo4j", "get_driver", "get_graph", "new_graph", "session", "span", "verify_connectivity",
 ]

@@ -31,7 +31,7 @@ def _emit_criterion_scores(framework: str, criteria: list[dict | schemas.Criteri
             passed = bool((criterion or {}).get("passed", False))
         if not name:
             continue
-        domains.dd.synth.runtime.observability.metrics.record_grader_dim_score(
+        domains.dd.synth.observability.service.record_grader_dim_score(
             framework = framework,
             dim = name,
             score = 1.0 if passed else 0.0,

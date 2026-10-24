@@ -477,7 +477,7 @@ route through the global root) — import the sibling *module*, not names
 out of it:
 
 ```python
-# domains/dd/runtime/service.py
+# domains/dd/llm_counter/service.py
 from . import domain, keys, params
 
 domain.extract_usage(response)
@@ -517,7 +517,7 @@ internals change:
 from . import dd, rr, settings, ycs
 
 # domains/dd/__init__.py
-from . import ingestion, planner, synth, resolver, runtime
+from . import ingestion, llm_counter, planner, resolver, synth
 
 # domains/dd/ingestion/__init__.py
 from . import artifacts, dispatch, filters, post, progress, storage, tiers
@@ -612,7 +612,7 @@ attribute 'dd'`:
 # BROKEN — decorator runs at import time, mid-bootstrap
 import domains
 
-@domains.dd.planner.runtime.observability.traced("corpus_load")
+@domains.dd.planner.observability.service.traced("corpus_load")
 async def corpus_load(state) -> dict: ...
 ```
 
@@ -624,7 +624,7 @@ the attribute chain at runtime):
 
 ```python
 import domains
-from domains.dd.planner.runtime.observability.service import traced
+from domains.dd.planner.observability.service import traced
 
 @traced("corpus_load")
 async def corpus_load(state: domains.dd.planner.state.PlannerState) -> dict: ...
@@ -698,17 +698,22 @@ apps/server/
 │   │   │   ├── chapter_select/
 │   │   │   ├── order_chapters/
 │   │   │   ├── plan_write/
-│   │   │   ├── observability/
+│   │   │   ├── observability/   # service.py: @traced + metric recorders (sibling of runtime/)
+│   │   │   ├── runtime/         # cancel/ checkpoint/ dispatch/ progress/ — thin wrappers over infra
 │   │   │   ├── graph.py     # node wiring — single file
 │   │   │   ├── state.py     # PlannerState TypedDict
 │   │   │   ├── dispatch.py  # async runners
 │   │   │   ├── task.py      # Celery wrappers
 │   │   │   └── ...
-│   │   └── synth/           # LangGraph synth — same shape as planner
+│   │   ├── synth/           # LangGraph synth — same shape as planner
+│   │   └── llm_counter/     # per-thread LLM call/token counters (Redis + MinIO snapshot)
 │   └── settings/            # external endpoints + credential store
 │       ├── chat/{domain,service,params}.py        # chat endpoint adapter
 │       ├── embeddings/{domain,service,params}.py  # embedding endpoint adapter
-│       └── credentials/     # MinIO Fernet store + endpoint settings blobs
+│       ├── credentials/     # MinIO Fernet store + endpoint settings blobs
+│       ├── llm_usage/       # shared pure parser of LLM-response token usage
+│       └── observability/   # gen_ai.* spans + metrics for the endpoint adapters
+├── infra/                   # one module per COELHO Cloud service (§10)
 ├── main.py                  # FastAPI + FastMCP bootstrap (REST under /api, MCP at /mcp)
 ├── celery_app.py            # Celery bootstrap
 ├── pyproject.toml
@@ -716,6 +721,54 @@ apps/server/
 ```
 
 Each leaf module follows the **5–10 file convention** from §5.
+
+**`runtime/`, `observability/` and `llm_counter/` are siblings** inside a bounded context
+(`domains/<ctx>/…`), not nested: `runtime/` is the machinery that runs a pipeline (dispatch,
+progress events, cancel flags, checkpoint pruning), `observability/` is the context's span and
+metric vocabulary (`service.py`, plus `domain.py` / `keys.py` where they have a trigger — never a
+separate `spans.py` / `metrics.py`), `llm_counter/` is usage accounting. There is deliberately **no
+top-level `apps/server/runtime/`**: these folders and their domain call each other in both
+directions (nodes emit progress and spans; dispatch calls graphs and nodes), so pulling them into
+one shared layer would make `domains` and that layer import each other.
+
+---
+
+## 10. The `infra/` layer — one module per COELHO Cloud service
+
+`apps/server/infra/<service>/` is the **only** place that imports a service's client library, reads
+its env vars, builds its connection string or hardcodes its names. Everything else reaches it
+dotted — `infra.<service>.service.X` — through `import infra`. Domains keep owning *what* they
+store or ask (SQL, key shapes, queries, prompts); infra owns the connection, the client lifecycle,
+the re-exported types and the service's own attribute/key names.
+
+| Module | Owns |
+|---|---|
+| `celery` | app + broker URL, queue routing, worker init |
+| `elasticsearch` | async client (`new_es` / `get_es`), index mappings and names |
+| `langfuse` | SDK client, sessions, scores, span-attribute setters, exporter, prompts, evals |
+| `minio` | `MinIOStorage` adapter, raw S3 clients, `MINIO_*` / `AWS_*` env |
+| `neo4j` | async driver, `Neo4jGraph`, connection tunables |
+| `opentelemetry` | SDK bootstrap, exporters, instruments, generic span helpers (`client_span`, `db_span`, `node_tracer`, `attach_span_attrs`) |
+| `playwright` (+ `crawl4ai/`) | CDP endpoint resolution, driver start, the Crawl4AI library bound to the browsers |
+| `postgres` | `connect()`, URL builder, shared LangGraph checkpointer |
+| `qdrant` | async client, request models, sparse-embedding class |
+| `redis` | client factories, URL, event stream + cancel flags + lock release |
+
+Rules, enforced offline by `scripts/server/test_infra_boundary.py` (one rule per service, plus a
+`client-spans` rule that bans hand-built `db.*` / `aws.s3.*` span attributes outside `infra/`):
+
+- `infra` never imports `domains` (two known exceptions: the celery worker-init credential warm-up
+  and the langfuse judges).
+- Env reads live in `params.py`; pure helpers (URL builders, config objects) in `domain.py`; I/O in
+  `service.py`. The file-taxonomy triggers of §2 apply unchanged — no placeholder files.
+- Every service module exposes a `span(operation, **attrs)` helper where the service is called
+  over the wire, built on `infra.opentelemetry.service.client_span`; domain-specific span wrappers
+  (e.g. YCS's `qdrant_search_span`) stay in the domain's `observability/service.py` and only add
+  their own attribute vocabulary.
+- A domain module that wraps an infra helper to bind its own keys / TTLs (e.g. the planner and
+  synth `runtime/progress` and `runtime/cancel`) stays: it holds domain knowledge infra must not.
+- Not an infra module: libraries that are not services (LangChain, pydantic), the private LLM
+  rotator and the embedding endpoint (`domains/settings/chat`, `domains/settings/embeddings`).
 
 ---
 

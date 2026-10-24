@@ -30,7 +30,7 @@ async def _record_terminal_metrics(graph, config: dict, status: str) -> None:
         halt_reason = str(mgsr_stats.get("halt_reason") or "")
         audit_passed = bool(chapter_stats.get("audit_passed", False))
         outcome = "accept" if halt_reason == "chapter_passed" else "debt_below"
-        domains.dd.synth.runtime.observability.metrics.record_chapter_outcome(
+        domains.dd.synth.observability.service.record_chapter_outcome(
             outcome = outcome,
             framework = slug,
             chapter_number = chapter_num,
@@ -44,7 +44,7 @@ async def _record_terminal_metrics(graph, config: dict, status: str) -> None:
             if n_code_refs > 0 else
             (1.0 if not audit_passed else 0.0)
         )
-        domains.dd.synth.runtime.observability.metrics.record_audit_missing(
+        domains.dd.synth.observability.service.record_audit_missing(
             framework = slug,
             chapter_number = chapter_num,
             iteration = max(refine_iter, 0),
@@ -99,7 +99,7 @@ async def _await_with_watcher(
     )
 
     try:
-        await domains.dd.runtime.service.snapshot(thread_id)
+        await domains.dd.llm_counter.service.snapshot(thread_id)
     except Exception as e:
         logger.warning(
             f"[synth] {thread_id}: llm-counter snapshot failed "
@@ -274,7 +274,7 @@ async def run_missing_nodes_async(
         )
 
     try:
-        await domains.dd.runtime.service.snapshot(thread_id)
+        await domains.dd.llm_counter.service.snapshot(thread_id)
     except Exception as e:
         logger.warning(
             f"[synth] {thread_id}: catch-up llm-counter snapshot failed "
@@ -934,7 +934,7 @@ async def _run_study_async_inner(
                 )
 
             try:
-                await domains.dd.runtime.service.snapshot(chapter_thread_id)
+                await domains.dd.llm_counter.service.snapshot(chapter_thread_id)
             except Exception as e:
                 logger.warning(
                     f"[study-orchestrator] {slug}/{chapter_id}: "
@@ -1076,7 +1076,7 @@ async def _run_study_async_inner(
         f"final_status = {final_status}"
     )
     try:
-        domains.dd.synth.runtime.observability.metrics.record_study_completion(
+        domains.dd.synth.observability.service.record_study_completion(
             framework = slug,
             duration_s = max(total_wall_ms / 1000.0, 0.0),
             n_accepted = n_completed,

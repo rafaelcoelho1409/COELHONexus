@@ -18,6 +18,7 @@ owns and closes, for Celery tasks that manage their own lifecycle), the
 `models` module (request / query value objects such as `models.Filter`),
 and the `AsyncQdrantClient` / `FastEmbedSparse` classes."""
 from __future__ import annotations
+import infra
 from . import params
 
 import asyncio
@@ -88,7 +89,13 @@ async def close_qdrant() -> None:
             logger.warning(f"[qdrant] close failed: {e}")
 
 
+def span(operation: str, **attrs):
+    """`db.qdrant.<operation>` client span around a Qdrant call; `attrs` are extra span
+    attributes (`db.qdrant.collection_name`, ...)."""
+    return infra.opentelemetry.service.db_span("qdrant", operation, **attrs)
+
+
 # Public surface for the rest of the code (the re-exports are intentional).
 __all__ = [
-    "AsyncQdrantClient", "FastEmbedSparse", "close_qdrant", "get_qdrant", "models", "new_qdrant",
+    "AsyncQdrantClient", "FastEmbedSparse", "close_qdrant", "get_qdrant", "models", "new_qdrant", "span",
 ]

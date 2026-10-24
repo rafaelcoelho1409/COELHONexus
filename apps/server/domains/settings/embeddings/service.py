@@ -182,7 +182,7 @@ async def embed_probe_async(
     kwargs: dict = {"model": ENDPOINT.model, "input": [text]}
     t0 = time.monotonic()
     try:
-        with domains.settings.runtime.observability.spans.embedding_span(
+        with domains.settings.observability.service.embedding_span(
             model = ENDPOINT.model, input_count = 1,
         ) as span:
             try:
@@ -196,23 +196,23 @@ async def embed_probe_async(
             latency_s = time.monotonic() - t0
             vector = list(resp.data[0].embedding) if resp.data else []
             model = getattr(resp, "model", None) or ENDPOINT.model
-            domains.settings.runtime.observability.spans.record_embedding_response(
+            domains.settings.observability.service.record_embedding_response(
                 span, model = model, vector_count = len(resp.data or []),
             )
     except errors.EmbeddingTimeoutError:
-        domains.settings.runtime.observability.metrics.record_gen_ai_call(
+        domains.settings.observability.service.record_gen_ai_call(
             operation = "embedding", model = ENDPOINT.model, outcome = "timeout",
             duration_s = time.monotonic() - t0,
         )
         raise
     except Exception:
-        domains.settings.runtime.observability.metrics.record_gen_ai_call(
+        domains.settings.observability.service.record_gen_ai_call(
             operation = "embedding", model = ENDPOINT.model, outcome = "error",
             duration_s = time.monotonic() - t0,
         )
         raise
 
-    domains.settings.runtime.observability.metrics.record_gen_ai_call(
+    domains.settings.observability.service.record_gen_ai_call(
         operation = "embedding", model = model, outcome = "ok", duration_s = latency_s,
     )
 
@@ -240,7 +240,7 @@ async def embed_texts_async(
     kwargs: dict = {"model": ENDPOINT.model, "input": texts}
     t0 = time.monotonic()
     try:
-        with domains.settings.runtime.observability.spans.embedding_span(
+        with domains.settings.observability.service.embedding_span(
             model = ENDPOINT.model, input_count = len(texts),
         ) as span:
             try:
@@ -249,17 +249,17 @@ async def embed_texts_async(
                 raise errors.EmbeddingError(f"{type(e).__name__}: {e}") from e
             data = sorted(resp.data, key=lambda d: d.index)
             model = getattr(resp, "model", None) or ENDPOINT.model
-            domains.settings.runtime.observability.spans.record_embedding_response(
+            domains.settings.observability.service.record_embedding_response(
                 span, model = model, vector_count = len(data),
             )
     except Exception:
-        domains.settings.runtime.observability.metrics.record_gen_ai_call(
+        domains.settings.observability.service.record_gen_ai_call(
             operation = "embedding", model = ENDPOINT.model, outcome = "error",
             duration_s = time.monotonic() - t0,
         )
         raise
 
-    domains.settings.runtime.observability.metrics.record_gen_ai_call(
+    domains.settings.observability.service.record_gen_ai_call(
         operation = "embedding", model = model, outcome = "ok",
         duration_s = time.monotonic() - t0,
     )

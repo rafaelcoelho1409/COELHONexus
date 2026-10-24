@@ -1,8 +1,8 @@
-"""Ingestion runtime — cross-cutting infra: dispatch, observability, progress.
+"""Ingestion runtime — cross-cutting infra: cancel, dispatch, progress.
 
 Mirrors `domains.dd.planner.runtime` / `domains.dd.synth.runtime`'s shape.
-No `cancel/`/`checkpoint/` here — ingestion isn't a resumable LangGraph
-checkpointed pipeline, so those two concepts don't apply; cancellation is
-folded into `progress/` instead (`raise_if_cancelled`)."""
+No `checkpoint/` here — ingestion isn't a resumable LangGraph checkpointed
+pipeline, so that concept doesn't apply. `Progress.raise_if_cancelled` reads
+the flag through `cancel/`."""
 from __future__ import annotations
-from . import dispatch, observability, progress
+from . import cancel, dispatch, progress

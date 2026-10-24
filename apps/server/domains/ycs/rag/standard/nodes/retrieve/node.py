@@ -10,7 +10,7 @@ only way to surface them later: `grade_documents` replaces
 candidates forever otherwise."""
 from __future__ import annotations
 import domains
-from domains.ycs.runtime.observability.service import traced
+from domains.ycs.observability.service import traced
 from ... import params, state
 
 from langchain_core.documents import Document
@@ -88,7 +88,7 @@ async def retrieve(
     sources = list({
         doc.metadata.get("source", "unknown") for doc in documents
     })
-    domains.ycs.runtime.observability.metrics.record_retrieved_docs(
+    domains.ycs.observability.service.record_retrieved_docs(
         route = str(state.get("route") or "unknown"),
         mode = str(state.get("mode") or "standard"),
         count = len(documents),

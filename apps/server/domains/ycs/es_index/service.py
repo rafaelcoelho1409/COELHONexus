@@ -50,7 +50,7 @@ async def index_videos_to_elasticsearch(
     )
     start_time = time.time()
     try:
-        with domains.ycs.runtime.observability.spans.es_search_span(
+        with domains.ycs.observability.service.es_search_span(
             index = index, top_k = len(operations) // 2, operation = "bulk_index",
         ):
             response = await es_client.bulk(
@@ -112,7 +112,7 @@ async def index_transcriptions_to_elasticsearch(
     )
     start_time = time.time()
     try:
-        with domains.ycs.runtime.observability.spans.es_search_span(
+        with domains.ycs.observability.service.es_search_span(
             index = index, top_k = len(operations) // 2, operation = "bulk_index",
         ):
             response = await es_client.bulk(
@@ -194,7 +194,7 @@ async def delete_videos_from_es(
     )
     for index_label, index_name, query in queries:
         try:
-            with domains.ycs.runtime.observability.spans.es_search_span(
+            with domains.ycs.observability.service.es_search_span(
                 index = index_name, top_k = len(video_ids), operation = "delete_by_query",
             ):
                 resp = await es.delete_by_query(

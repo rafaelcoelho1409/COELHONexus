@@ -324,7 +324,7 @@ async def run_scan_async(
                 "degradation_reasons": list(result.get("degradation_reasons") or [])[:10],
                 "error": result.get("error"),
             })
-    runtime.observability.metrics.record_scan_run(
+    domains.rr.observability.service.record_scan_run(
         degraded = bool(result.get("degraded", result.get("status") != "done")),
         outcome = str(result.get("status") or "unknown"),
         duration_s = max(asyncio.get_running_loop().time() - t0, 0.0),
@@ -352,7 +352,7 @@ async def run_scan_pipeline(
         top_n     = top_n,
     )
     agent.tools.state.init_scan_fs(scan_id)
-    runtime.llm_counter.service.set_scan(scan_id)
+    domains.rr.llm_counter.service.set_scan(scan_id)
     runtime.service.emit_event_sync(
         scan_id, "running",
         message = f"agent starting (topic={topic!r}, top_n={top_n})",
@@ -481,14 +481,14 @@ async def run_scan_pipeline(
     finally:
         # Snapshot counters to Postgres so they survive Redis TTL expiry.
         try:
-            await runtime.llm_counter.service.snapshot_to_postgres(scan_id)
+            await domains.rr.llm_counter.service.snapshot_to_postgres(scan_id)
         except Exception as e:
             logger.warning(
                 f"[rr-task] llm-counter snapshot failed scan_id={scan_id}: "
                 f"{type(e).__name__}: {e}"
             )
         try:
-            runtime.llm_counter.service.set_scan(None)
+            domains.rr.llm_counter.service.set_scan(None)
         except Exception:
             pass
         agent.tools.state.clear_scan_fs(scan_id)
@@ -671,7 +671,7 @@ async def backfill_missing_extractions(scan_id: str) -> None:
     }
 
     chain = domains.settings.chat.service.build_chat_model()
-    try: runtime.llm_counter.service.set_phase("deep_read")  # bucket backfill calls under deep_read in drawer KPIs
+    try: domains.rr.llm_counter.service.set_phase("deep_read")  # bucket backfill calls under deep_read in drawer KPIs
     except Exception: pass
 
     # 2026-09-17: was a sequential `for` loop — the one place in RR that
@@ -793,8 +793,8 @@ async def run_code_synth_async(scan_id: str, arxiv_id: str, prompt_version: str)
     # context, so the contextvars RRLlmCounterCallback reads wouldn't
     # otherwise be set).
     try:
-        runtime.llm_counter.service.set_scan(scan_id)
-        runtime.llm_counter.service.set_phase("build")
+        domains.rr.llm_counter.service.set_scan(scan_id)
+        domains.rr.llm_counter.service.set_phase("build")
     except Exception:
         pass
 

@@ -230,7 +230,7 @@ async def cutover(redis: Any, qdrant: infra.qdrant.service.AsyncQdrantClient, ph
     real_names = {c.name for c in (await qdrant.get_collections()).collections}
     if domains.ycs.ingestion.params.QDRANT_COLLECTION in real_names:
         await qdrant.delete_collection(domains.ycs.ingestion.params.QDRANT_COLLECTION)
-    with domains.ycs.runtime.observability.spans.qdrant_admin_span(
+    with domains.ycs.observability.service.qdrant_admin_span(
         operation = "update_collection_aliases",
         collection = domains.ycs.ingestion.params.QDRANT_COLLECTION,
     ):

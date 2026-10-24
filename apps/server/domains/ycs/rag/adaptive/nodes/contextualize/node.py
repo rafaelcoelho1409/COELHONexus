@@ -6,7 +6,7 @@ AGI"). Short-circuits with zero LLM cost when history is empty.
 """
 from __future__ import annotations
 import domains
-from domains.ycs.runtime.observability.service import traced
+from domains.ycs.observability.service import traced
 from . import prompts
 from ... import params, state
 from .... import domain, service
@@ -31,7 +31,7 @@ async def contextualize_question(state: state.AdaptiveRAGState, llm) -> dict:
 
     chain = service.resolve_prompt(prompts.CONTEXTUALIZE_PROMPT, "ycs.rag.contextualize") | llm
     try:
-        domains.ycs.runtime.llm_counter.service.set_node(node = "contextualize")
+        domains.ycs.llm_counter.service.set_node(node = "contextualize")
         response = await service.resilient_ainvoke(
             chain,
             {

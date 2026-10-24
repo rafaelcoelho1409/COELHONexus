@@ -66,11 +66,11 @@ def finalize_embedding_migration(self, physical_collection: str) -> dict:
     try:
         result = asyncio.run(_run())
     except Exception:
-        domains.ycs.runtime.observability.metrics.record_ycs_ingest_run(
+        domains.ycs.observability.service.record_ycs_ingest_run(
             kind = "embedding_migration", outcome = "error", duration_s = time.monotonic() - t0,
         )
         raise
-    domains.ycs.runtime.observability.metrics.record_ycs_ingest_run(
+    domains.ycs.observability.service.record_ycs_ingest_run(
         kind = "embedding_migration", outcome = "ok", duration_s = time.monotonic() - t0,
     )
     logger.info(f"[finalize_embedding_migration] Done: {result}")

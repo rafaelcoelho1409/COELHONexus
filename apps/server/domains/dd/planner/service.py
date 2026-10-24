@@ -1,6 +1,6 @@
 """Planner orchestration glue shared by the Celery task shell — lock release + checkpointer bootstrap + the plan blob reader."""
 from __future__ import annotations
-import domains, infra
+import infra
 from . import keys
 
 import json
@@ -32,10 +32,7 @@ def _release_planner_lock(slug: str, thread_id: str) -> None:
     try:
         r = infra.redis.service.new_redis_sync()
         try:
-            r.eval(
-                domains.dd.runtime.params.CAD_RELEASE_LUA,
-                1, keys.lock_key(slug), thread_id,
-            )
+            infra.redis.service.release_if_owner_sync(r, keys.lock_key(slug), thread_id)
         finally:
             r.close()
     except Exception as e:

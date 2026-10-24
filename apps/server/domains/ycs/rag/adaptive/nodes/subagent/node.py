@@ -15,7 +15,7 @@ Conventions: per `docs/CODE-CONVENTIONS.md` §2, prompts live in
 stays thin here."""
 from __future__ import annotations
 import domains
-from domains.ycs.runtime.observability.service import traced
+from domains.ycs.observability.service import traced
 from . import params, prompts
 from ... import params as _adaptive_params
 from .... import domain, service
@@ -172,7 +172,7 @@ async def _rephrase_subquestion(
         return None
     chain = service.resolve_prompt(prompts.REPHRASE_PROMPT, "ycs.rag.subagent") | llm
     try:
-        domains.ycs.runtime.llm_counter.service.set_node(node = "subagent_rephrase")
+        domains.ycs.llm_counter.service.set_node(node = "subagent_rephrase")
         response = await asyncio.wait_for(
             chain.ainvoke({
                 "sub_question":    sub_q,
@@ -257,7 +257,7 @@ async def run_subagent(
                 )
                 answer_text = answer_text2 + retry_note
 
-    domains.ycs.runtime.observability.metrics.record_subquestion(
+    domains.ycs.observability.service.record_subquestion(
         route = route,
         outcome = error_kind or "success",
     )
@@ -332,7 +332,7 @@ async def run_subagents_bounded(
                 f"[ycs:subagent] bounded fan-out: sub_q={q[:60]!r} "
                 f"raised {_ename}: {e}"
             )
-            domains.ycs.runtime.observability.metrics.record_subquestion(route = route, outcome = "hard_error")
+            domains.ycs.observability.service.record_subquestion(route = route, outcome = "hard_error")
             return {
                 "sub_question":      q,
                 "answer": (
@@ -384,7 +384,7 @@ async def run_subagents_bounded(
         )
         for t, q in list(remaining_tasks.items()):
             t.cancel()
-            domains.ycs.runtime.observability.metrics.record_subquestion(route = route, outcome = "deadline")
+            domains.ycs.observability.service.record_subquestion(route = route, outcome = "deadline")
             item = {
                 "sub_question": q,
                 "answer": (

@@ -14,7 +14,7 @@ operations.
   Qdrant    radar_papers vector collection + payload index ops
 """
 from __future__ import annotations
-import domains
+import infra
 from .. import entities
 from .. import keys as rr_keys
 from .. import params as rr_params
@@ -24,8 +24,6 @@ import json
 import logging
 from typing import Any
 from uuid import UUID
-
-import infra
 
 
 logger = logging.getLogger(__name__)
@@ -59,7 +57,7 @@ async def bootstrap_minio() -> None:
     """head_bucket; create_bucket on 404. Same pattern as the dd ingestion
     storage's ensure_bucket()."""
     bucket = _minio_bucket()
-    with domains.rr.runtime.observability.spans.minio_span("ensure_bucket", bucket = bucket):
+    with infra.minio.service.span("ensure_bucket", bucket = bucket):
         async with _minio_client() as s3:
             try:
                 await s3.head_bucket(Bucket=bucket)
@@ -80,7 +78,7 @@ async def put_digest_json(scan_id: str, payload: dict[str, Any]) -> str:
     """Write the scan's digest snapshot. Returns the MinIO key."""
     key  = rr_keys.digest_minio_key(scan_id)
     body = json.dumps(payload, default=str).encode("utf-8")
-    with domains.rr.runtime.observability.spans.minio_span(
+    with infra.minio.service.span(
         "put_object", bucket = _minio_bucket(), key = key,
     ):
         async with _minio_client() as s3:
@@ -96,7 +94,7 @@ async def put_digest_json(scan_id: str, payload: dict[str, Any]) -> str:
 async def get_digest_json(scan_id: str) -> dict[str, Any] | None:
     """Read the digest snapshot. Returns None on 404."""
     key = rr_keys.digest_minio_key(scan_id)
-    with domains.rr.runtime.observability.spans.minio_span(
+    with infra.minio.service.span(
         "get_object", bucket = _minio_bucket(), key = key,
     ):
         async with _minio_client() as s3:
@@ -118,7 +116,7 @@ async def delete_digest_json(scan_id: str) -> bool:
     Caller: `../service.py::delete_scan` (the per-row delete affordance in
     the Recent-scans dropdown)."""
     key = rr_keys.digest_minio_key(scan_id)
-    with domains.rr.runtime.observability.spans.minio_span(
+    with infra.minio.service.span(
         "delete_object", bucket = _minio_bucket(), key = key,
     ):
         async with _minio_client() as s3:
@@ -142,7 +140,7 @@ async def put_code_py(
     rendered as plain text instead of being treated as JSON."""
     key  = rr_keys.code_minio_key(scan_id, arxiv_id, prompt_version)
     body = code.encode("utf-8")
-    with domains.rr.runtime.observability.spans.minio_span(
+    with infra.minio.service.span(
         "put_object", bucket = _minio_bucket(), key = key,
     ):
         async with _minio_client() as s3:
@@ -162,7 +160,7 @@ async def get_code_py(
     tab has never been opened for this paper at this prompt version, or
     the cache was wiped)."""
     key = rr_keys.code_minio_key(scan_id, arxiv_id, prompt_version)
-    with domains.rr.runtime.observability.spans.minio_span(
+    with infra.minio.service.span(
         "get_object", bucket = _minio_bucket(), key = key,
     ):
         async with _minio_client() as s3:
@@ -184,7 +182,7 @@ async def delete_code_dir(scan_id: str) -> int:
     delete button doesn't leak code blobs."""
     prefix = f"{rr_keys.MINIO_PREFIX_SCANS}/{scan_id}/code/"
     deleted = 0
-    with domains.rr.runtime.observability.spans.minio_span(
+    with infra.minio.service.span(
         "delete_objects_batch", bucket = _minio_bucket(), key = prefix,
     ) as span:
         async with _minio_client() as s3:
@@ -235,7 +233,7 @@ _NEO4J_BOOTSTRAP_STMTS: tuple[str, ...] = (
 
 async def bootstrap_neo4j() -> None:
     """Create constraints + indexes if missing. Idempotent."""
-    with domains.rr.runtime.observability.spans.neo4j_span("bootstrap"):
+    with infra.neo4j.service.span("bootstrap"):
         async with infra.neo4j.service.session() as session:
             for stmt in _NEO4J_BOOTSTRAP_STMTS:
                 await session.run(stmt)
@@ -277,7 +275,7 @@ async def upsert_paper(
         "authors":               [a for a in paper.authors if a],
         "categories":            [c for c in paper.categories if c],
     }
-    with domains.rr.runtime.observability.spans.neo4j_span(
+    with infra.neo4j.service.span(
         "upsert_paper", **{"db.neo4j.arxiv_id": paper.arxiv_id},
     ):
         async with infra.neo4j.service.session() as session:
@@ -290,7 +288,7 @@ async def upsert_paper(
 # Kept minimal in step 3; expand as the synthesis subagent's needs solidify.
 async def get_paper_count() -> int:
     """Total :Paper nodes. Cheap sanity check for the bootstrap smoke test."""
-    with domains.rr.runtime.observability.spans.neo4j_span("count"):
+    with infra.neo4j.service.span("count"):
         async with infra.neo4j.service.session() as session:
             result = await session.run(f"MATCH (p:{rr_keys.NEO4J_LABEL_PAPER}) RETURN count(p) AS n")
             record = await result.single()
@@ -307,7 +305,7 @@ async def get_paper_count() -> int:
 async def bootstrap_postgres() -> None:
     """Create RR's tables + indexes if missing. Idempotent. Call once at
     FastAPI lifespan startup (or before the first scan)."""
-    with domains.rr.runtime.observability.spans.postgres_span("bootstrap"):
+    with infra.postgres.service.span("bootstrap"):
         async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(prompts.PG_DDL)
@@ -328,7 +326,7 @@ async def create_scan(
     it to `running` when work starts and `done`/`error` at the end. The
     request shape (topic + verticals + top_n) is persisted alongside so
     the Recent-scans dropdown can show what each scan was searching for."""
-    with domains.rr.runtime.observability.spans.postgres_span(
+    with infra.postgres.service.span(
         "insert", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
     ):
         async with await infra.postgres.service.connect() as conn:
@@ -347,7 +345,7 @@ async def create_scan(
 
 async def mark_scan_running(scan_id: UUID) -> None:
     """Flip pending → running. No-op if already past pending."""
-    with domains.rr.runtime.observability.spans.postgres_span(
+    with infra.postgres.service.span(
         "update", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
     ):
         async with await infra.postgres.service.connect() as conn:
@@ -367,7 +365,7 @@ async def mark_scan_done(
     total_in_digest: int,
 ) -> None:
     """Mark the scan complete + write the counts. Sets finished_at = NOW()."""
-    with domains.rr.runtime.observability.spans.postgres_span(
+    with infra.postgres.service.span(
         "update", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
     ):
         async with await infra.postgres.service.connect() as conn:
@@ -387,7 +385,7 @@ async def mark_scan_done(
 async def mark_scan_error(scan_id: UUID, *, status: str, error: str) -> None:
     """Mark the scan failed/cancelled with a short error string. Caller
     passes the terminal status (SCAN_STATUS_ERROR or SCAN_STATUS_CANCELLED)."""
-    with domains.rr.runtime.observability.spans.postgres_span(
+    with infra.postgres.service.span(
         "update", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
     ):
         async with await infra.postgres.service.connect() as conn:
@@ -417,7 +415,7 @@ async def record_findings(scan_id: UUID, findings: list[entities.Finding]) -> in
         )
         for f in findings
     ]
-    with domains.rr.runtime.observability.spans.postgres_span(
+    with infra.postgres.service.span(
         "insert_many",
         **{"db.postgres.table": rr_keys.PG_TABLE_FINDINGS, "db.postgres.row_count": len(rows)},
     ):
@@ -439,7 +437,7 @@ async def get_finding_digest_json(scan_id: UUID, arxiv_id: str) -> dict[str, Any
     `_finding_as_dict` writes. Used by the code-synth Celery task to
     recover a finding's extraction fields without a request-scoped
     payload (the task runs in the worker process, not the API request)."""
-    with domains.rr.runtime.observability.spans.postgres_span(
+    with infra.postgres.service.span(
         "select", **{"db.postgres.table": rr_keys.PG_TABLE_FINDINGS},
     ):
         async with await infra.postgres.service.connect() as conn:
@@ -495,7 +493,7 @@ async def mark_seen_batch(profile_id: str, arxiv_ids: list[str]) -> int:
     rows = [(profile_id, aid) for aid in arxiv_ids if aid]
     if not rows:
         return 0
-    with domains.rr.runtime.observability.spans.postgres_span(
+    with infra.postgres.service.span(
         "insert_many",
         **{"db.postgres.table": rr_keys.PG_TABLE_SEEN, "db.postgres.row_count": len(rows)},
     ):
@@ -513,7 +511,7 @@ async def mark_seen_batch(profile_id: str, arxiv_ids: list[str]) -> int:
 
 async def get_seen_ids(profile_id: str) -> frozenset[str]:
     """All arxiv_ids ever surfaced to the profile. Fed into diff_vs_seen."""
-    with domains.rr.runtime.observability.spans.postgres_span(
+    with infra.postgres.service.span(
         "select", **{"db.postgres.table": rr_keys.PG_TABLE_SEEN},
     ):
         async with await infra.postgres.service.connect() as conn:
@@ -536,7 +534,7 @@ async def write_synthesis_meta(
     Themes is the cross-paper theme list (3-7 names); summary is the
     executive paragraph. Both can be empty/None (degraded scans).
     Returns True if a row was updated."""
-    with domains.rr.runtime.observability.spans.postgres_span(
+    with infra.postgres.service.span(
         "update", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
     ):
         async with await infra.postgres.service.connect() as conn:
@@ -567,7 +565,7 @@ async def write_llm_counters(scan_id: UUID, payload: dict) -> bool:
 
     DELETE on the scan row removes the counters atomically — no separate
     cleanup needed in delete_scan_record."""
-    with domains.rr.runtime.observability.spans.postgres_span(
+    with infra.postgres.service.span(
         "update", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
     ):
         async with await infra.postgres.service.connect() as conn:
@@ -587,8 +585,8 @@ async def read_llm_counters(scan_id: UUID) -> dict | None:
     parsed dict on hit, None when (a) the scan_id doesn't exist,
     (b) the row exists but llm_counters is NULL (old row OR zero-LLM
     scan whose snapshot was skipped). Called as the Redis-TTL fallback
-    from `domains.rr.runtime.llm_counter.service.read_counters`."""
-    with domains.rr.runtime.observability.spans.postgres_span(
+    from `domains.rr.llm_counter.service.read_counters`."""
+    with infra.postgres.service.span(
         "select", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
     ):
         async with await infra.postgres.service.connect() as conn:
@@ -619,7 +617,7 @@ async def delete_scan_record(scan_id: UUID) -> bool:
 
     Per-scan LLM-counter snapshot (llm_counters JSONB column on the same
     row) is removed atomically with the row — no separate cleanup."""
-    with domains.rr.runtime.observability.spans.postgres_span(
+    with infra.postgres.service.span(
         "delete", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
     ):
         async with await infra.postgres.service.connect() as conn:
@@ -638,7 +636,7 @@ async def reset_seen(profile_id: str) -> int:
     scan reads as `is_new = True` again. Returns the row count that was
     deleted. Operator-triggered (POST /profile/{id}/reset-seen) — never
     called from the scan pipeline."""
-    with domains.rr.runtime.observability.spans.postgres_span(
+    with infra.postgres.service.span(
         "delete", **{"db.postgres.table": rr_keys.PG_TABLE_SEEN},
     ):
         async with await infra.postgres.service.connect() as conn:
@@ -655,7 +653,7 @@ async def reset_seen(profile_id: str) -> int:
 # Profiles — interest verticals + per-profile SignalWeights overrides
 async def get_profile(profile_id: str) -> dict[str, Any] | None:
     """Fetch a profile's interests + weights. Returns None if missing."""
-    with domains.rr.runtime.observability.spans.postgres_span(
+    with infra.postgres.service.span(
         "select", **{"db.postgres.table": rr_keys.PG_TABLE_PROFILES},
     ):
         async with await infra.postgres.service.connect() as conn:
@@ -685,7 +683,7 @@ async def upsert_profile(
 ) -> None:
     """INSERT a profile or UPDATE its interests/weights in place. updated_at
     is bumped on every call."""
-    with domains.rr.runtime.observability.spans.postgres_span(
+    with infra.postgres.service.span(
         "upsert", **{"db.postgres.table": rr_keys.PG_TABLE_PROFILES},
     ):
         async with await infra.postgres.service.connect() as conn:
@@ -709,7 +707,7 @@ async def upsert_profile(
 async def bootstrap_qdrant() -> None:
     """Ensure `radar_papers` collection exists with the right vector config
     + payload indexes. Safe to re-run."""
-    with domains.rr.runtime.observability.spans.qdrant_span("bootstrap"):
+    with infra.qdrant.service.span("bootstrap"):
         client = infra.qdrant.service.get_qdrant()
         exists = await client.collection_exists(collection_name=rr_keys.QDRANT_COLLECTION)
         if exists:
@@ -778,7 +776,7 @@ async def upsert_paper_vector(
             "hf_upvotes":                  int(paper.hf_upvotes),
         },
     )
-    with domains.rr.runtime.observability.spans.qdrant_span(
+    with infra.qdrant.service.span(
         "upsert", **{"db.qdrant.arxiv_id": paper.arxiv_id},
     ):
         client = infra.qdrant.service.get_qdrant()
@@ -811,7 +809,7 @@ async def search_by_embedding(
                 for aid in arxiv_ids
             ]
         )
-    with domains.rr.runtime.observability.spans.qdrant_span(
+    with infra.qdrant.service.span(
         "query_points", **{"db.qdrant.limit": limit},
     ) as span:
         client = infra.qdrant.service.get_qdrant()
@@ -836,7 +834,7 @@ async def search_by_embedding(
 
 async def count_points() -> int:
     """Total points in `radar_papers`. Cheap sanity check for bootstrap."""
-    with domains.rr.runtime.observability.spans.qdrant_span("count"):
+    with infra.qdrant.service.span("count"):
         client = infra.qdrant.service.get_qdrant()
         info = await client.get_collection(collection_name=rr_keys.QDRANT_COLLECTION)
     return int(getattr(info, "points_count", 0) or 0)

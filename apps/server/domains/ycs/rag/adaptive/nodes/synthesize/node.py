@@ -6,7 +6,7 @@ union'd.
 """
 from __future__ import annotations
 import domains
-from domains.ycs.runtime.observability.service import traced
+from domains.ycs.observability.service import traced
 from . import prompts
 from ... import params, state
 from .... import domain, service
@@ -42,7 +42,7 @@ async def synthesize(state: state.AdaptiveRAGState, llm) -> dict:
 
     chain = service.resolve_prompt(prompts.SYNTHESIZE_PROMPT, "ycs.rag.synthesize") | llm
     try:
-        domains.ycs.runtime.llm_counter.service.set_node(node = "synthesize")
+        domains.ycs.llm_counter.service.set_node(node = "synthesize")
         response = await service.resilient_ainvoke(
             chain,
             {

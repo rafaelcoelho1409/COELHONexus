@@ -31,8 +31,8 @@ sectioned below.
                      subagents do.
 """
 from __future__ import annotations
-import infra
-from . import domain, keys, llm_counter, observability, params
+import domains, infra
+from . import domain, keys, params
 from .. import agent
 
 import asyncio
@@ -61,7 +61,7 @@ def emit_event_sync(scan_id: str, phase: str, **fields) -> None:
         **fields,
     }
     payload = json.dumps(event, default=str)
-    observability.metrics.record_phase_event(phase = phase)
+    domains.rr.observability.service.record_phase_event(phase = phase)
     try:
         r = infra.redis.service.new_redis_sync()
         try:
@@ -90,7 +90,7 @@ async def emit_event(scan_id: str, phase: str, **fields) -> None:
         **fields,
     }
     payload = json.dumps(event, default=str)
-    observability.metrics.record_phase_event(phase = phase)
+    domains.rr.observability.service.record_phase_event(phase = phase)
     r = infra.redis.service.new_redis()
     try:
         await r.publish(keys.event_channel(scan_id), payload)
@@ -548,7 +548,7 @@ async def capture_llm_usage(response: object) -> None:
     code_synth's router endpoint, which doesn't set one) or when the
     response carries no usage block."""
     try:
-        scan_id = llm_counter.service.get_scan()
+        scan_id = domains.rr.llm_counter.service.get_scan()
         if not scan_id:
             return
         usage = getattr(response, "usage_metadata", None) or {}
@@ -558,9 +558,9 @@ async def capture_llm_usage(response: object) -> None:
             return
         meta = getattr(response, "response_metadata", None) or {}
         model = meta.get("model_name") or meta.get("model") or "unknown"
-        llm_counter.service.bump_llm_usage(
+        domains.rr.llm_counter.service.bump_llm_usage(
             scan_id    = scan_id,
-            phase      = llm_counter.service.get_phase(),
+            phase      = domains.rr.llm_counter.service.get_phase(),
             model      = model,
             tokens_in  = tokens_in,
             tokens_out = tokens_out,

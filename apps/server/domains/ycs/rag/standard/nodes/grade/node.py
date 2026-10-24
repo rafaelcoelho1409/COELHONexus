@@ -5,7 +5,7 @@ Calls into the deprecated `DocumentGrader` (per-doc parallel
 """
 from __future__ import annotations
 import domains
-from domains.ycs.runtime.observability.service import traced
+from domains.ycs.observability.service import traced
 from ... import state
 
 import logging
@@ -32,7 +32,7 @@ async def grade_documents(
             f"[ycs:ablation] grader BYPASSED — passing {len(docs)} "
             f"reranked doc(s) straight to generate"
         )
-        domains.ycs.runtime.observability.metrics.record_graded_docs(
+        domains.ycs.observability.service.record_graded_docs(
             route = str(state.get("route") or "unknown"),
             mode = str(state.get("mode") or "standard") + "+no-grade",
             count = len(docs),
@@ -41,7 +41,7 @@ async def grade_documents(
     relevant_docs = await grader.grade_documents(
         state["question"], state["documents"],
     )
-    domains.ycs.runtime.observability.metrics.record_graded_docs(
+    domains.ycs.observability.service.record_graded_docs(
         route = str(state.get("route") or "unknown"),
         mode = str(state.get("mode") or "standard"),
         count = len(relevant_docs),

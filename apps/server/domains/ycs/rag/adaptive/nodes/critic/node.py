@@ -7,7 +7,7 @@ graceful degradation over total failure for DEEP mode).
 """
 from __future__ import annotations
 import domains
-from domains.ycs.runtime.observability.service import traced
+from domains.ycs.observability.service import traced
 from . import prompts, schemas
 from ... import params, state
 from .... import service
@@ -30,7 +30,7 @@ async def critic(state: state.AdaptiveRAGState, llm) -> dict:
         schemas.CriticAssessment,
     )
     try:
-        domains.ycs.runtime.llm_counter.service.set_node(node = "critic")
+        domains.ycs.llm_counter.service.set_node(node = "critic")
         result = await service.resilient_ainvoke(
             chain,
             {

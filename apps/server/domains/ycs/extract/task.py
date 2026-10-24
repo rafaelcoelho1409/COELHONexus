@@ -70,11 +70,11 @@ def extract_videos(
     try:
         result = asyncio.run(_run())
     except Exception:
-        domains.ycs.runtime.observability.metrics.record_ycs_ingest_run(
+        domains.ycs.observability.service.record_ycs_ingest_run(
             kind = "extract_videos", outcome = "error", duration_s = time.monotonic() - t0,
         )
         raise
-    domains.ycs.runtime.observability.metrics.record_ycs_ingest_run(
+    domains.ycs.observability.service.record_ycs_ingest_run(
         kind = "extract_videos", outcome = "ok", duration_s = time.monotonic() - t0,
     )
     logger.info(f"[extract_videos] Done: {result}")
@@ -126,11 +126,11 @@ def extract_channel(
     try:
         result = asyncio.run(_run())
     except Exception:
-        domains.ycs.runtime.observability.metrics.record_ycs_ingest_run(
+        domains.ycs.observability.service.record_ycs_ingest_run(
             kind = "extract_channel", outcome = "error", duration_s = time.monotonic() - t0,
         )
         raise
-    domains.ycs.runtime.observability.metrics.record_ycs_ingest_run(
+    domains.ycs.observability.service.record_ycs_ingest_run(
         kind = "extract_channel", outcome = "ok", duration_s = time.monotonic() - t0,
     )
     logger.info(
@@ -182,11 +182,11 @@ def extract_playlist(
     try:
         result = asyncio.run(_run())
     except Exception:
-        domains.ycs.runtime.observability.metrics.record_ycs_ingest_run(
+        domains.ycs.observability.service.record_ycs_ingest_run(
             kind = "extract_playlist", outcome = "error", duration_s = time.monotonic() - t0,
         )
         raise
-    domains.ycs.runtime.observability.metrics.record_ycs_ingest_run(
+    domains.ycs.observability.service.record_ycs_ingest_run(
         kind = "extract_playlist", outcome = "ok", duration_s = time.monotonic() - t0,
     )
     logger.info(

@@ -101,12 +101,12 @@ async def pipeline_stream_status(
 async def pipeline_llm_counters(extract_id: str) -> dict:
     """LLM-usage drawer for the Neo4j box — same contract as DD's
     `/planner|synth/debug/graph/{thread_id}/llm-counters`
-    (`domains.dd.runtime.service.read_counters`), backed by YCS's
-    own counter store (`domains.ycs.runtime.llm_counter`) since YCS's
+    (`domains.dd.llm_counter.service.read_counters`), backed by YCS's
+    own counter store (`domains.ycs.llm_counter`) since YCS's
     extraction isn't a LangGraph graph with a thread_id to key off —
     keyed by extract_id instead, "node" is the video_id being
     extracted rather than a workflow node."""
-    return await domains.ycs.runtime.llm_counter.service.read_counters(extract_id)
+    return await domains.ycs.llm_counter.service.read_counters(extract_id)
 
 
 @router.get("/videos")
@@ -137,7 +137,7 @@ async def list_videos(
         })
     query: dict[str, Any] = {"bool": {"must": must}} if must else {"match_all": {}}
     try:
-        with domains.ycs.runtime.observability.spans.es_search_span(
+        with domains.ycs.observability.service.es_search_span(
             index = infra.elasticsearch.keys.INDEX_METADATA,
             top_k = max(1, min(int(limit), 500)),
         ):
@@ -249,7 +249,7 @@ async def videos_facets(request: Request) -> dict:
     }
 
     try:
-        with domains.ycs.runtime.observability.spans.es_search_span(
+        with domains.ycs.observability.service.es_search_span(
             index = infra.elasticsearch.keys.INDEX_METADATA, top_k = 0,
             operation = "facet_channels",
         ):
@@ -294,7 +294,7 @@ async def videos_facets(request: Request) -> dict:
         pass
 
     try:
-        with domains.ycs.runtime.observability.spans.es_search_span(
+        with domains.ycs.observability.service.es_search_span(
             index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS, top_k = 0,
             operation = "facet_languages",
         ):
@@ -318,7 +318,7 @@ async def videos_facets(request: Request) -> dict:
         # Bounded like `list_videos`'s own transcript lookup — fine at
         # this scale (10k id cap); a corpus past that needs a real
         # scroll, not a bigger constant.
-        with domains.ycs.runtime.observability.spans.es_search_span(
+        with domains.ycs.observability.service.es_search_span(
             index = infra.elasticsearch.keys.INDEX_METADATA, top_k = 10000,
             operation = "facet_status_ids",
         ):

@@ -11,6 +11,7 @@ need a DSN string), `init_checkpointer()` / `get_checkpointer()` /
 Connections are deliberately not cached: each operation opens one, uses it and
 closes it (the checkpointer owns its own pool)."""
 from __future__ import annotations
+import infra
 from . import domain, params
 
 import asyncio
@@ -60,6 +61,13 @@ def connect(dsn: str | None = None, **kwargs):
             await conn.execute(...)
     """
     return psycopg.AsyncConnection.connect(dsn or url(), **kwargs)
+
+
+def span(operation: str, **attrs):
+    """`db.postgresql.<operation>` client span around a query. `attrs` are extra span
+    attributes (`db.postgres.table`, ...); a `db.statement` should be a short summary,
+    never raw SQL with parameter values."""
+    return infra.opentelemetry.service.db_span("postgresql", operation, **attrs)
 
 
 # ---------------------------------------------------------------------------
@@ -169,5 +177,5 @@ def get_checkpointer() -> AsyncPostgresSaver:
 # Public surface for the rest of the code (the re-exports are intentional).
 __all__ = [
     "AsyncPostgresSaver", "Jsonb", "check_configured", "close_checkpointer", "connect",
-    "get_checkpointer", "init_checkpointer", "is_configured", "url",
+    "get_checkpointer", "init_checkpointer", "is_configured", "span", "url",
 ]

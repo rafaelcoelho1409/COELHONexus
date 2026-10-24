@@ -34,7 +34,7 @@ async def _terms_facet(
         },
     }
     try:
-        with domains.ycs.runtime.observability.spans.es_search_span(
+        with domains.ycs.observability.service.es_search_span(
             index = infra.elasticsearch.keys.INDEX_METADATA, top_k = 0,
             operation = "terms_facet",
         ):
@@ -95,7 +95,7 @@ async def _compute_video_statuses(
         return {}
     transcript_meta: dict[str, dict[str, Any]] = {}
     try:
-        with domains.ycs.runtime.observability.spans.es_search_span(
+        with domains.ycs.observability.service.es_search_span(
             index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
             top_k = min(10000, max(200, len(video_ids) * 10)),
             operation = "video_status_lookup",

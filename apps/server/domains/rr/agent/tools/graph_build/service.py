@@ -23,7 +23,7 @@ at 2048d, exactly matching the collection, so no resize/migration is
 needed, just this call-site fix."""
 from __future__ import annotations
 import domains
-from domains.rr.runtime.observability.service import traced_tool
+from domains.rr.observability.service import traced_tool
 from . import domain, params
 from .. import state
 from ... import keys
@@ -123,7 +123,7 @@ async def graph_build_papers(
     )
     # Phase contextvar for LLM-counter attribution (Path A).
     try:
-        domains.rr.runtime.llm_counter.service.set_phase("graph_build")
+        domains.rr.llm_counter.service.set_phase("graph_build")
     except Exception: pass
     if errors:
         # the tool's return string.

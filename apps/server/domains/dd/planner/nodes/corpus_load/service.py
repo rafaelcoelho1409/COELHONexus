@@ -78,7 +78,7 @@ async def corpus_load_run(state: domains.dd.planner.state.PlannerState) -> dict:
         excluded_blog = n_blog,
     )
 
-    domains.dd.planner.runtime.observability.service.attach_span_attrs("corpus", stats)
+    infra.opentelemetry.service.attach_span_attrs("corpus", stats)
 
     n = stats["total_files"]
     logger.info(

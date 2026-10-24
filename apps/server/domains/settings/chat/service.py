@@ -344,7 +344,7 @@ async def chat_text_async(
     resp_model = ENDPOINT.model
     usage: dict = {}
     try:
-        with domains.settings.runtime.observability.spans.chat_completion_span(
+        with domains.settings.observability.service.chat_completion_span(
             model = ENDPOINT.model, temperature = temperature, max_tokens = max_tokens,
         ) as span:
             try:
@@ -368,7 +368,7 @@ async def chat_text_async(
             resp_model = rm.get("model_name") or rm.get("model") or ENDPOINT.model
 
             usage = ai_message.usage_metadata or {}
-            domains.settings.runtime.observability.spans.record_chat_response(
+            domains.settings.observability.service.record_chat_response(
                 span,
                 model         = resp_model,
                 input_tokens  = usage.get("input_tokens"),
@@ -376,20 +376,20 @@ async def chat_text_async(
             )
     except errors.ChatTimeoutError as _exc:
         _note_dd_failure(_exc)
-        domains.settings.runtime.observability.metrics.record_gen_ai_call(
+        domains.settings.observability.service.record_gen_ai_call(
             operation = "chat", model = ENDPOINT.model, outcome = "timeout",
             duration_s = time.monotonic() - t0,
         )
         raise
     except Exception as _exc:
         _note_dd_failure(_exc)
-        domains.settings.runtime.observability.metrics.record_gen_ai_call(
+        domains.settings.observability.service.record_gen_ai_call(
             operation = "chat", model = ENDPOINT.model, outcome = "error",
             duration_s = time.monotonic() - t0,
         )
         raise
 
-    domains.settings.runtime.observability.metrics.record_gen_ai_call(
+    domains.settings.observability.service.record_gen_ai_call(
         operation = "chat", model = resp_model, outcome = "ok", duration_s = latency_s,
         input_tokens  = usage.get("input_tokens"),
         output_tokens = usage.get("output_tokens"),
@@ -481,7 +481,7 @@ async def chat_structured_async(
     parsed = None
     parsing_error = None
     try:
-        with domains.settings.runtime.observability.spans.chat_completion_span(
+        with domains.settings.observability.service.chat_completion_span(
             model = ENDPOINT.model, temperature = temperature, max_tokens = max_tokens,
         ) as span:
             try:
@@ -510,7 +510,7 @@ async def chat_structured_async(
             resp_model = rm.get("model_name") or rm.get("model") or ENDPOINT.model
 
             usage = ai_message.usage_metadata or {}
-            domains.settings.runtime.observability.spans.record_chat_response(
+            domains.settings.observability.service.record_chat_response(
                 span,
                 model         = resp_model,
                 input_tokens  = usage.get("input_tokens"),
@@ -518,20 +518,20 @@ async def chat_structured_async(
             )
     except errors.ChatTimeoutError as _exc:
         _note_dd_failure(_exc)
-        domains.settings.runtime.observability.metrics.record_gen_ai_call(
+        domains.settings.observability.service.record_gen_ai_call(
             operation = "chat", model = ENDPOINT.model, outcome = "timeout",
             duration_s = time.monotonic() - t0,
         )
         raise
     except Exception as _exc:
         _note_dd_failure(_exc)
-        domains.settings.runtime.observability.metrics.record_gen_ai_call(
+        domains.settings.observability.service.record_gen_ai_call(
             operation = "chat", model = ENDPOINT.model, outcome = "error",
             duration_s = time.monotonic() - t0,
         )
         raise
 
-    domains.settings.runtime.observability.metrics.record_gen_ai_call(
+    domains.settings.observability.service.record_gen_ai_call(
         operation = "chat", model = resp_model, outcome = "ok", duration_s = latency_s,
         input_tokens  = usage.get("input_tokens"),
         output_tokens = usage.get("output_tokens"),
@@ -596,7 +596,7 @@ def report_quality(meta: dict | None, quality: float) -> bool:
 def _note_dd_failure(exc: BaseException) -> None:
     """Count a failed call (504 / timeout / other) on the current DD thread + node, so a run's error rate shows next to its call count."""
     try:
-        domains.dd.runtime.service.bump_current_failure(exc)
+        domains.dd.llm_counter.service.bump_current_failure(exc)
     except Exception as e:
         logger.debug(f"[chat-endpoint] failure bump failed: {e}")
 
@@ -609,7 +609,7 @@ def _bump_dd_llm_counter(response, model: str | None = None) -> dict | None:
             "usage": getattr(response, "usage_metadata", None) or {},
             "choices": [{"message": {"content": getattr(response, "content", "")}}],
         }
-        return domains.dd.runtime.service.bump_current_call(
+        return domains.dd.llm_counter.service.bump_current_call(
             response=fake_resp, deployment=model or ENDPOINT.model,
         )
     except Exception as e:

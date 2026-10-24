@@ -84,7 +84,7 @@ async def capture_llm_usage(response: object, *, duration_s: float | None = None
         tokens_in  = int(usage.get("input_tokens") or 0)
         tokens_out = int(usage.get("output_tokens") or 0)
         if duration_s is not None:
-            domains.settings.runtime.observability.metrics.record_gen_ai_call(
+            domains.settings.observability.service.record_gen_ai_call(
                 operation     = "chat",
                 model         = model,
                 outcome       = "ok",
@@ -98,7 +98,7 @@ async def capture_llm_usage(response: object, *, duration_s: float | None = None
         reasoning = int(
             (details.get("reasoning") if isinstance(details, dict) else 0) or 0
         )
-        await domains.ycs.runtime.llm_counter.service.bump_current_call(
+        await domains.ycs.llm_counter.service.bump_current_call(
             tokens_in = tokens_in, tokens_out = tokens_out,
             reasoning_tokens = reasoning, model = model,
         )
@@ -170,7 +170,7 @@ async def resilient_ainvoke(
                 or "timeout" in (type(e).__name__ + str(e)).lower()
                 else "error"
             )
-            domains.settings.runtime.observability.metrics.record_gen_ai_call(
+            domains.settings.observability.service.record_gen_ai_call(
                 operation  = "chat",
                 model      = domains.settings.chat.service.ENDPOINT.model,
                 outcome    = outcome,

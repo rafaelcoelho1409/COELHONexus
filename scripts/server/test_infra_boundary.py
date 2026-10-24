@@ -11,8 +11,13 @@ from pathlib import Path
 
 SERVER = Path(__file__).resolve().parents[2] / "apps" / "server"
 
+# Rule name whose texts any module under `infra/` may contain (not one service's home): client spans are built by
+# `infra.opentelemetry.service.client_span` / `db_span` and the per-service `span` helpers, never by hand in a domain.
+SHARED_RULE = "client-spans"
+
 # service -> (top-level library names only its infra module may import, text only its infra module may contain)
 RULES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    SHARED_RULE: ((), ('"db.system"', '"db.operation"', '"aws.s3.bucket"', 'f"db.')),
     "celery": (("celery",), (".service.app.control",)),
     "elasticsearch": (
         ("elasticsearch", "elastic_transport"),
@@ -69,7 +74,8 @@ def python_files():
 
 
 def violations(service: str, libs: tuple[str, ...], texts: tuple[str, ...]) -> list[str]:
-    home = SERVER / "infra" / service
+    home = SERVER / "infra" / ("" if service == SHARED_RULE else service)
+    hint = "the infra span helpers" if service == SHARED_RULE else f"a helper in infra.{service}.service"
     found = []
     for path in python_files():
         if home in path.parents:
@@ -87,7 +93,7 @@ def violations(service: str, libs: tuple[str, ...], texts: tuple[str, ...]) -> l
         for number, line in enumerate(source.splitlines(), 1):
             for text in texts:
                 if text in line and not line.lstrip().startswith("#"):
-                    found.append(f"{path.relative_to(SERVER)}:{number}: uses `{text}` (use a helper in infra.{service}.service)")
+                    found.append(f"{path.relative_to(SERVER)}:{number}: uses `{text}` (use {hint})")
     return found
 
 

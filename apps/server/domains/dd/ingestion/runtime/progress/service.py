@@ -1,4 +1,4 @@
-"""Per-run progress, per-framework single-flight lock, and cancel flag."""
+"""Per-run progress and per-framework single-flight lock (the cancel flag lives in `../cancel/`)."""
 from __future__ import annotations
 import domains, infra
 from . import errors, keys, params
@@ -45,36 +45,10 @@ async def release_lock(
 ) -> bool:
     """Release iff this run_id is the holder."""
     try:
-        n = await r.eval(
-            domains.dd.runtime.params.CAD_RELEASE_LUA,
-            1, keys.lock_key(framework_slug), run_id,
-        )
+        return await infra.redis.service.release_if_owner(r, keys.lock_key(framework_slug), run_id)
     except Exception as e:
         logger.warning(f"[lock] release failed: {e}")
         return False
-    return bool(n)
-
-
-async def request_cancel(r: infra.redis.service.Redis, run_id: str) -> None:
-    try:
-        await r.set(keys.cancel_key(run_id), "1", ex=params.TTL_S)
-    except Exception as e:
-        logger.warning(f"[cancel] set failed: {e}")
-
-
-async def is_cancelled(r: infra.redis.service.Redis, run_id: str) -> bool:
-    try:
-        v = await r.get(keys.cancel_key(run_id))
-    except Exception:
-        return False
-    return bool(v)
-
-
-async def clear_cancel(r: infra.redis.service.Redis, run_id: str) -> None:
-    try:
-        await r.delete(keys.cancel_key(run_id))
-    except Exception:
-        pass
 
 
 class Progress:
@@ -149,7 +123,7 @@ class Progress:
         r = await self._client()
         if r is None:
             return False
-        return await is_cancelled(r, self.run_id)
+        return await domains.dd.ingestion.runtime.cancel.service.is_cancelled(r, self.run_id)
 
     async def raise_if_cancelled(self) -> None:
         if await self.check_cancelled():

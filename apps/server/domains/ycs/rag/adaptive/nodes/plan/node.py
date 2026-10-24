@@ -9,7 +9,7 @@ sub-questions). One explicit retry lets the rotator pick a fresh
 arm before we degrade the user's plan to a stub."""
 from __future__ import annotations
 import domains
-from domains.ycs.runtime.observability.service import traced
+from domains.ycs.observability.service import traced
 from . import prompts, schemas
 from ... import state
 from .... import domain, service
@@ -51,7 +51,7 @@ async def plan_research(state: state.AdaptiveRAGState, llm) -> dict:
     last_exc: BaseException | None = None
     for attempt in range(1, _PLAN_MAX_ATTEMPTS + 1):
         try:
-            domains.ycs.runtime.llm_counter.service.set_node(node = "plan")
+            domains.ycs.llm_counter.service.set_node(node = "plan")
             response = await asyncio.wait_for(
                 chain.ainvoke({"question": state["question"]}),
                 timeout = _PLAN_TIMEOUT_S,

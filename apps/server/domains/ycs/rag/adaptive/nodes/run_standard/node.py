@@ -15,7 +15,7 @@ hitting a stop condition` after ~5 min of work. We now ALSO thread
 override actually reaches the sub-graph's conditional edges instead
 of silently defaulting back to 3."""
 from __future__ import annotations
-from domains.ycs.runtime.observability.service import traced
+from domains.ycs.observability.service import traced
 from ... import state
 from .... import standard
 

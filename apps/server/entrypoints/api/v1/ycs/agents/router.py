@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 async def get_thread_usage(thread_id: str) -> dict:
     """Aggregate LLM usage for one Ask conversation (models + tokens per
     node, and totals) — mirrors Ingestion's per-video LLM drawer."""
-    return await domains.ycs.runtime.llm_counter.service.read_counters(thread_id)
+    return await domains.ycs.llm_counter.service.read_counters(thread_id)
 
 
 @router.post("/endpoint/ping")
@@ -192,13 +192,13 @@ async def rag_search(
         # per-conversation LLM-usage counter accumulates across nodes.
         # Sync + stream both set it; ingestion's extract_id path is
         # unchanged (different context altogether).
-        domains.ycs.runtime.llm_counter.service.set_thread(thread_id = _sess_id)
-        domains.ycs.runtime.llm_counter.service.set_node(node = None)  # nodes tag themselves before calling
+        domains.ycs.llm_counter.service.set_thread(thread_id = _sess_id)
+        domains.ycs.llm_counter.service.set_node(node = None)  # nodes tag themselves before calling
         # 2026-09-16: pre-turn snapshot for the per-response usage badge
         # (see `_llm_diff_usage` below, mirroring the stream endpoint's
         # `_usage_before`/`_stamp_usage`).
         try:
-            _usage_before = await domains.ycs.runtime.llm_counter.service.read_counters(_sess_id)
+            _usage_before = await domains.ycs.llm_counter.service.read_counters(_sess_id)
         except Exception:
             _usage_before = None
         _user_id  = (payload.channel_ids or ["default"])[0]
@@ -224,7 +224,7 @@ async def rag_search(
                     infra.langfuse.keys.OBS_META_WORKFLOW: "ycs_ask",
                 },
             ):
-                infra.langfuse.service.set_current_span_langfuse_io(input_data = domains.ycs.runtime.observability.domain.langfuse_ycs_input(
+                infra.langfuse.service.set_current_span_langfuse_io(input_data = domains.ycs.observability.domain.langfuse_ycs_input(
                     question = payload.question,
                     route = "search",
                     force_mode = payload.force_mode or "",
@@ -276,7 +276,7 @@ async def rag_search(
                             "_deadline_hit":     True,
                         }
                 except Exception as e:
-                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
+                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.observability.domain.langfuse_ycs_output(
                         status = "error",
                         answer = "",
                         mode = payload.force_mode or "unknown",
@@ -285,7 +285,7 @@ async def rag_search(
                         error = str(e),
                     ))
                     raise
-                infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
+                infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.observability.domain.langfuse_ycs_output(
                     status = "done",
                     answer = str(result.get("generation") or ""),
                     mode = str(result.get("mode") or payload.force_mode or "standard"),
@@ -294,7 +294,7 @@ async def rag_search(
                     sub_questions = result.get("sub_questions"),
                     confidence_score = result.get("confidence_score"),
                 ))
-        domains.ycs.runtime.observability.metrics.record_ask_run(
+        domains.ycs.observability.service.record_ask_run(
             route = "search",
             mode = str(result.get("mode") or payload.force_mode or "standard"),
             outcome = "deadline" if result.get("_deadline_hit") else "done",
@@ -303,7 +303,7 @@ async def rag_search(
             citation_count = len(result.get("citations") or []),
         )
     except Exception as e:
-        domains.ycs.runtime.observability.metrics.record_ask_run(
+        domains.ycs.observability.service.record_ask_run(
             route = "search",
             mode = payload.force_mode or "unknown",
             outcome = "error",
@@ -317,8 +317,8 @@ async def rag_search(
     usage: dict = {"total": {}, "by_model": {}}
     if _usage_before is not None:
         try:
-            usage = domains.ycs.runtime.llm_counter.domain.diff_usage(
-                _usage_before, await domains.ycs.runtime.llm_counter.service.read_counters(_sess_id),
+            usage = domains.ycs.llm_counter.domain.diff_usage(
+                _usage_before, await domains.ycs.llm_counter.service.read_counters(_sess_id),
             )
         except Exception:
             pass
@@ -637,8 +637,8 @@ async def rag_search_stream(
         if before is None:
             return
         try:
-            after = await domains.ycs.runtime.llm_counter.service.read_counters(thread_id)
-            state["usage"] = domains.ycs.runtime.llm_counter.domain.diff_usage(before, after)
+            after = await domains.ycs.llm_counter.service.read_counters(thread_id)
+            state["usage"] = domains.ycs.llm_counter.domain.diff_usage(before, after)
         except Exception as e:
             logger.warning(
                 f"[ycs:stream] usage stamp failed thread_id={thread_id}: "
@@ -650,14 +650,14 @@ async def rag_search_stream(
         _user_id = (effective_channel_ids or ["default"])[0]
         # 2026-09-15: same thread-tagging as sync `/search` so the
         # conversation-level usage counter captures this stream too.
-        domains.ycs.runtime.llm_counter.service.set_thread(thread_id = _sess_id)
-        domains.ycs.runtime.llm_counter.service.set_node(node = None)
+        domains.ycs.llm_counter.service.set_thread(thread_id = _sess_id)
+        domains.ycs.llm_counter.service.set_node(node = None)
         # 2026-09-16: pre-turn snapshot for the per-response usage badge
         # (`_stamp_usage` diffs against this at every terminal branch).
         # `None` on failure — `_stamp_usage` no-ops rather than stamping
         # a misleading delta off a missing baseline.
         try:
-            _usage_before = await domains.ycs.runtime.llm_counter.service.read_counters(_sess_id)
+            _usage_before = await domains.ycs.llm_counter.service.read_counters(_sess_id)
         except Exception:
             _usage_before = None
         _session_cm = infra.langfuse.service.session(
@@ -682,7 +682,7 @@ async def rag_search_stream(
             },
         )
         _span_cm.__enter__()
-        infra.langfuse.service.set_current_span_langfuse_io(input_data = domains.ycs.runtime.observability.domain.langfuse_ycs_input(
+        infra.langfuse.service.set_current_span_langfuse_io(input_data = domains.ycs.observability.domain.langfuse_ycs_input(
             question = payload.question,
             route = "search_stream",
             force_mode = payload.force_mode or "",
@@ -982,7 +982,7 @@ async def rag_search_stream(
                     logger.info(
                         f"[ycs:stream] cancelled mid-flight turn_id={turn_id}"
                     )
-                    domains.ycs.runtime.observability.metrics.record_ask_run(
+                    domains.ycs.observability.service.record_ask_run(
                         route = "search_stream",
                         mode = last_mode or payload.force_mode or "unknown",
                         outcome = "cancelled",
@@ -990,7 +990,7 @@ async def rag_search_stream(
                         duration_s = max(time.monotonic() - t_run_start, 0.0),
                         citation_count = len(last_citations),
                     )
-                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
+                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.observability.domain.langfuse_ycs_output(
                         status = "cancelled",
                         answer = last_generation,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1068,7 +1068,7 @@ async def rag_search_stream(
                                 f"[ycs:stream] deadline finalize failed: "
                                 f"{type(e).__name__}: {e}"
                             )
-                    domains.ycs.runtime.observability.metrics.record_ask_run(
+                    domains.ycs.observability.service.record_ask_run(
                         route = "search_stream",
                         mode = last_mode or payload.force_mode or "unknown",
                         outcome = "deadline",
@@ -1076,7 +1076,7 @@ async def rag_search_stream(
                         duration_s = max(time.monotonic() - t_run_start, 0.0),
                         citation_count = len(last_citations),
                     )
-                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
+                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.observability.domain.langfuse_ycs_output(
                         status = "done",
                         answer = last_generation,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1132,7 +1132,7 @@ async def rag_search_stream(
                                 f"[ycs:stream] watchdog finalize "
                                 f"failed: {type(e).__name__}: {e}"
                             )
-                    domains.ycs.runtime.observability.metrics.record_ask_run(
+                    domains.ycs.observability.service.record_ask_run(
                         route = "search_stream",
                         mode = last_mode or payload.force_mode or "unknown",
                         outcome = "stalled",
@@ -1140,7 +1140,7 @@ async def rag_search_stream(
                         duration_s = max(time.monotonic() - t_run_start, 0.0),
                         citation_count = len(last_citations),
                     )
-                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
+                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.observability.domain.langfuse_ycs_output(
                         status = "stalled",
                         answer = sentinel,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1202,7 +1202,7 @@ async def rag_search_stream(
                                 f"[ycs:stream] no-generation finalize "
                                 f"failed: {type(e).__name__}: {e}"
                             )
-                    domains.ycs.runtime.observability.metrics.record_ask_run(
+                    domains.ycs.observability.service.record_ask_run(
                         route = "search_stream",
                         mode = last_mode or payload.force_mode or "unknown",
                         outcome = "done",
@@ -1237,7 +1237,7 @@ async def rag_search_stream(
                         if last_generation else
                         "(no response — see Thinking for pipeline status)"
                     )
-                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
+                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.observability.domain.langfuse_ycs_output(
                         status = "done",
                         answer = final_answer,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1278,7 +1278,7 @@ async def rag_search_stream(
                 f"[ycs:stream] cancelled (client disconnect) "
                 f"turn_id={turn_id} — scheduling sentinel persist and re-raising"
             )
-            domains.ycs.runtime.observability.metrics.record_ask_run(
+            domains.ycs.observability.service.record_ask_run(
                 route = "search_stream",
                 mode = last_mode or payload.force_mode or "unknown",
                 outcome = "client_disconnect",
@@ -1286,7 +1286,7 @@ async def rag_search_stream(
                 duration_s = max(time.monotonic() - t_run_start, 0.0),
                 citation_count = len(last_citations),
             )
-            infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
+            infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.observability.domain.langfuse_ycs_output(
                 status = "client_disconnect",
                 answer = last_generation,
                 mode = last_mode or payload.force_mode or "unknown",
@@ -1353,7 +1353,7 @@ async def rag_search_stream(
                         )
                 except Exception:
                     pass
-            domains.ycs.runtime.observability.metrics.record_ask_run(
+            domains.ycs.observability.service.record_ask_run(
                 route = "search_stream",
                 mode = last_mode or payload.force_mode or "unknown",
                 outcome = "error",
@@ -1361,7 +1361,7 @@ async def rag_search_stream(
                 duration_s = max(time.monotonic() - t_run_start, 0.0),
                 citation_count = len(last_citations),
             )
-            infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.runtime.observability.domain.langfuse_ycs_output(
+            infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.observability.domain.langfuse_ycs_output(
                 status = "error",
                 answer = last_generation,
                 mode = last_mode or payload.force_mode or "unknown",

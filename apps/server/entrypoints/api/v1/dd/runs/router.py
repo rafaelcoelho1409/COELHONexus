@@ -105,7 +105,7 @@ async def start_run(body: schemas.StartRunBody) -> dict:
                 "message": "Concurrent acquire race; try again.",
             }
 
-        await domains.dd.ingestion.runtime.progress.service.clear_cancel(r, run_id)
+        await domains.dd.ingestion.runtime.cancel.service.clear_cancel(r, run_id)
 
         try:
             task = domains.dd.ingestion.task.run_ingestion.delay(run_id, body.slug)
@@ -168,7 +168,7 @@ async def list_active_runs() -> dict:
 async def cancel_run(run_id: str) -> dict:
     r = infra.redis.service.new_redis()
     try:
-        await domains.dd.ingestion.runtime.progress.service.request_cancel(r, run_id)
+        await domains.dd.ingestion.runtime.cancel.service.request_cancel(r, run_id)
     finally:
         await r.aclose()
     return {"run_id": run_id, "status": "cancel_requested"}

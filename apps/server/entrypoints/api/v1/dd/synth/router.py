@@ -195,7 +195,7 @@ async def list_recent_synth() -> dict:
     """Most-recent thread per slug for page-refresh recovery."""
     out: list[dict] = []
     try:
-        with domains.dd.runtime.observability.spans.postgres_span(
+        with infra.postgres.service.span(
             "select", **{"db.postgres.table": "checkpoints"},
         ):
             async with await infra.postgres.service.connect() as conn:
@@ -721,7 +721,7 @@ async def synth_state(thread_id: str) -> dict:
 
 @router.get("/debug/graph/{thread_id:path}/llm-counters")
 async def synth_llm_counters(thread_id: str) -> dict:
-    return await domains.dd.runtime.service.read_counters(thread_id)
+    return await domains.dd.llm_counter.service.read_counters(thread_id)
 
 
 @router.get("/debug/graph/{thread_id:path}/history")
@@ -773,7 +773,7 @@ async def wipe_synth(slug: str, chapter_id: str | None = Query(default=None)) ->
     ]
     counts: dict = {}
     try:
-        with domains.dd.runtime.observability.spans.postgres_span(
+        with infra.postgres.service.span(
             "delete", **{"db.postgres.table": "checkpoints,checkpoint_writes,checkpoint_blobs"},
         ):
             async with await infra.postgres.service.connect(autocommit=True) as conn:

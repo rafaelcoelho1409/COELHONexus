@@ -123,7 +123,7 @@ async def _query_es_inner(
 
     t0 = time.monotonic()
     try:
-        with domains.ycs.runtime.observability.spans.es_search_span(
+        with domains.ycs.observability.service.es_search_span(
             index = indexes, top_k = limit,
         ):
             response = await es.search(
@@ -205,7 +205,7 @@ async def _query_qdrant_inner(
             # tuple into its own `using=` kwarg, and the vector itself
             # goes bare into `query=`. Same shape `retriever/service.py`'s
             # `QdrantHybridRetriever` already uses for the RAG path.
-            with domains.ycs.runtime.observability.spans.qdrant_search_span(
+            with domains.ycs.observability.service.qdrant_search_span(
                 collection = collection, top_k = limit,
             ):
                 response = await client.query_points(
@@ -226,7 +226,7 @@ async def _query_qdrant_inner(
         return _envelope(params.BACKEND_QDRANT, app, q, hits, total = len(hits), t0 = t0)
 
     try:
-        with domains.ycs.runtime.observability.spans.qdrant_search_span(
+        with domains.ycs.observability.service.qdrant_search_span(
             collection = collection, top_k = limit, operation = "scroll",
         ):
             records, _next = await client.scroll(
@@ -276,7 +276,7 @@ async def _query_neo4j_inner(
 
     t0 = time.monotonic()
     try:
-        with domains.ycs.runtime.observability.spans.neo4j_query_span(
+        with domains.ycs.observability.service.neo4j_query_span(
             operation = "search" if raw_q else "browse",
         ):
             async with infra.neo4j.service.session() as session:
@@ -356,7 +356,7 @@ async def _raw_es_inner(
         )
 
     try:
-        with domains.ycs.runtime.observability.spans.es_search_span(
+        with domains.ycs.observability.service.es_search_span(
             index = indexes, top_k = parsed.body.get("size", 0), operation = "raw_search",
         ):
             response = await es.search(index = indexes, body = parsed.body)
@@ -432,7 +432,7 @@ async def _raw_qdrant_inner(
     body["collection_name"] = collection
 
     try:
-        with domains.ycs.runtime.observability.spans.qdrant_search_span(
+        with domains.ycs.observability.service.qdrant_search_span(
             collection = collection, top_k = 0, operation = f"raw_{op}",
         ):
             if op == "search":
@@ -532,7 +532,7 @@ async def _raw_neo4j_inner(
 
     t0 = time.monotonic()
     try:
-        with domains.ycs.runtime.observability.spans.neo4j_query_span(
+        with domains.ycs.observability.service.neo4j_query_span(
             operation = "raw_cypher",
         ):
             async with infra.neo4j.service.session(default_access_mode = "READ") as session:
@@ -933,7 +933,7 @@ async def _build_es_schema_live() -> dict[str, Any]:
     out: dict[str, Any] = {"indices": {}}
     for idx in indices:
         try:
-            with domains.ycs.runtime.observability.spans.es_search_span(
+            with domains.ycs.observability.service.es_search_span(
                 index = idx, top_k = 0, operation = "get_mapping",
             ):
                 mapping = await es.indices.get_mapping(index = idx)
@@ -950,7 +950,7 @@ async def _build_es_schema_live() -> dict[str, Any]:
 
         samples: list[dict[str, Any]] = []
         try:
-            with domains.ycs.runtime.observability.spans.es_search_span(
+            with domains.ycs.observability.service.es_search_span(
                 index = idx, top_k = 2, operation = "schema_sample",
             ):
                 s_resp = await es.search(
@@ -979,7 +979,7 @@ async def _build_es_schema_live() -> dict[str, Any]:
                 for i, name in enumerate(keyword_fields)
             }
             try:
-                with domains.ycs.runtime.observability.spans.es_search_span(
+                with domains.ycs.observability.service.es_search_span(
                     index = idx, top_k = 0, operation = "schema_aggs",
                 ):
                     a_resp = await es.search(
@@ -1037,7 +1037,7 @@ async def _build_qdrant_schema_live() -> dict[str, Any]:
     collection = params.APP_BACKENDS[params.APP_YCS][params.BACKEND_QDRANT].target
     client = infra.qdrant.service.get_qdrant()
     try:
-        with domains.ycs.runtime.observability.spans.qdrant_search_span(
+        with domains.ycs.observability.service.qdrant_search_span(
             collection = collection, top_k = 0, operation = "get_collection",
         ):
             info = await client.get_collection(collection_name = collection)
@@ -1061,7 +1061,7 @@ async def _build_qdrant_schema_live() -> dict[str, Any]:
     # Sample payloads: payload_schema only has indexed keys; scrolling catches additional unindexed ones.
     samples: list[dict[str, Any]] = []
     try:
-        with domains.ycs.runtime.observability.spans.qdrant_search_span(
+        with domains.ycs.observability.service.qdrant_search_span(
             collection = collection, top_k = 3, operation = "schema_scroll",
         ):
             records, _ = await client.scroll(
@@ -1147,7 +1147,7 @@ async def _build_neo4j_schema_live() -> dict[str, Any]:
         "node_samples": {},
     }
     try:
-        with domains.ycs.runtime.observability.spans.neo4j_query_span(
+        with domains.ycs.observability.service.neo4j_query_span(
             operation = "schema_introspect",
         ):
             async with infra.neo4j.service.session(default_access_mode = "READ") as session:
@@ -1256,7 +1256,7 @@ async def get_neo4j_schema(*, request: Request, refresh: bool = False) -> dict[s
 async def ensure_query_history_table(pg_url: str) -> None:
     """Idempotent table init. Called lazily on first read/write — keeps
     Query out of the lifespan hot path (cheap when already created)."""
-    with domains.ycs.runtime.observability.spans.postgres_span(
+    with domains.ycs.observability.service.postgres_span(
         operation = "bootstrap", table = keys.HISTORY_TABLE_NAME,
     ):
         async with await infra.postgres.service.connect(
@@ -1291,7 +1291,7 @@ async def save_query_history_entry(
     """Insert one row, return its id. Errors propagate up so the router
     can 5xx on Postgres outages instead of silently no-op'ing."""
     await ensure_query_history_table(pg_url)
-    with domains.ycs.runtime.observability.spans.postgres_span(
+    with domains.ycs.observability.service.postgres_span(
         operation = "insert", table = keys.HISTORY_TABLE_NAME,
     ):
         async with await infra.postgres.service.connect(pg_url) as conn:
@@ -1313,7 +1313,7 @@ async def list_query_history_entries(
     backend. Body is included so the UI can show a snippet without an
     extra round-trip."""
     await ensure_query_history_table(pg_url)
-    with domains.ycs.runtime.observability.spans.postgres_span(
+    with domains.ycs.observability.service.postgres_span(
         operation = "select", table = keys.HISTORY_TABLE_NAME,
     ):
         async with await infra.postgres.service.connect(pg_url) as conn:
@@ -1349,7 +1349,7 @@ async def list_query_history_entries(
 async def delete_query_history_entry(pg_url: str, entry_id: int) -> int:
     """DELETE one row by id. Returns 1 if removed, 0 if not found."""
     await ensure_query_history_table(pg_url)
-    with domains.ycs.runtime.observability.spans.postgres_span(
+    with domains.ycs.observability.service.postgres_span(
         operation = "delete", table = keys.HISTORY_TABLE_NAME,
     ):
         async with await infra.postgres.service.connect(pg_url) as conn:

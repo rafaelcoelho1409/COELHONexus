@@ -1413,7 +1413,7 @@ async def _check_existing_transcriptions(
     if not es_client or not video_ids:
         return {}
     try:
-        with domains.ycs.runtime.observability.spans.es_search_span(
+        with domains.ycs.observability.service.es_search_span(
             index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
             top_k = len(video_ids) * 10, operation = "cache_check",
         ):

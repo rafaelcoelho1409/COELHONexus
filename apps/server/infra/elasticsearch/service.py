@@ -12,6 +12,7 @@ singleton, Celery tasks open their own client with `new_es()`, and the
 Deprecated provenance: `app.py:L105-113` (client init) +
 `helpers.py:L1862-2000` (`create_youtube_indexes`)."""
 from __future__ import annotations
+import infra
 from . import domain, params
 
 import logging
@@ -91,3 +92,9 @@ async def ensure_indexes() -> dict:
                 f"[elasticsearch] ensure_index {index!r} failed: {e}"
             )
     return results
+
+
+def span(operation: str, **attrs):
+    """`db.elasticsearch.<operation>` client span around a search or index call; `attrs`
+    are extra span attributes (`db.elasticsearch.index`, ...)."""
+    return infra.opentelemetry.service.db_span("elasticsearch", operation, **attrs)

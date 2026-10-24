@@ -29,7 +29,7 @@ the rail's click-through UX expects) — they're prose context only,
 explicitly framed as external in the prompt's output rules."""
 from __future__ import annotations
 import domains
-from domains.ycs.runtime.observability.service import traced
+from domains.ycs.observability.service import traced
 from . import prompts
 from ... import params, state
 from .... import domain, service
@@ -130,7 +130,7 @@ async def fallback_answer(state: state.YouTubeRAGState, llm) -> dict:
 
     chain = service.resolve_prompt(prompts.FALLBACK_PROMPT, "ycs.rag.fallback_answer") | llm
     try:
-        domains.ycs.runtime.llm_counter.service.set_node(node = "fallback_answer")
+        domains.ycs.llm_counter.service.set_node(node = "fallback_answer")
         response = await service.resilient_ainvoke(
             chain,
             {

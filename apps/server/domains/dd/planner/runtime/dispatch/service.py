@@ -68,7 +68,7 @@ async def _record_terminal_metrics(
             plan_write_stats.get("n_chapters")
             or select_stats.get("n_chapters_out")
         )
-        domains.dd.planner.runtime.observability.metrics.record_planner_run(
+        domains.dd.planner.observability.service.record_planner_run(
             framework = framework,
             mode = mode,
             outcome = status,
@@ -157,7 +157,7 @@ async def _await_with_watcher(
         )
 
     try:
-        await domains.dd.runtime.service.snapshot(thread_id)
+        await domains.dd.llm_counter.service.snapshot(thread_id)
     except Exception as e:
         logger.warning(
             f"[planner] {thread_id}: llm-counter snapshot failed "
@@ -360,7 +360,7 @@ async def run_missing_nodes_async(
         )
 
     try:
-        await domains.dd.runtime.service.snapshot(thread_id)
+        await domains.dd.llm_counter.service.snapshot(thread_id)
     except Exception as e:
         logger.warning(
             f"[planner] {thread_id}: catch-up llm-counter snapshot failed "

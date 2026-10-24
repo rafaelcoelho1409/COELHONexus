@@ -17,7 +17,6 @@ from . import domain, params
 import asyncio
 import contextlib
 import logging
-from collections.abc import Iterator
 from typing import Optional
 
 import aioboto3
@@ -100,10 +99,9 @@ def new_sync_client(
     )
 
 
-@contextlib.contextmanager
-def _s3_span(
+def span(
     operation: str, *, bucket: str, key: str | None = None,
-) -> Iterator[object | None]:
+) -> contextlib.AbstractContextManager:
     """No dedicated OTel auto-instrumentation covers aioboto3/aiobotocore's
     async client (unlike sync botocore, which `opentelemetry-instrumentation-
     botocore` patches) — hand-rolled, mirroring the `aws.s3.*` semconv names
@@ -114,24 +112,9 @@ def _s3_span(
     `key` is optional — batch operations (write_many, copy_prefix, ...) span
     many different keys at once, so there's no single one to report; those
     call sites instead set a `*_count` attribute on the yielded span."""
-    tracer = infra.opentelemetry.service.get_tracer()
-    if tracer is None:
-        yield None
-        return
-    attrs: dict = {"aws.s3.bucket": bucket}
-    if key is not None:
-        attrs["aws.s3.key"] = key
-    with tracer.start_as_current_span(
-        f"aws.s3.{operation}",
-        kind       = infra.opentelemetry.service.SpanKind.CLIENT,
-        attributes = attrs,
-    ) as span:
-        try:
-            yield span
-        except Exception as e:
-            span.set_attribute("error.type", type(e).__name__)
-            span.record_exception(e)
-            raise
+    return infra.opentelemetry.service.client_span(
+        f"aws.s3.{operation}", {"aws.s3.bucket": bucket, "aws.s3.key": key},
+    )
 
 
 class MinIOStorage:
@@ -187,7 +170,7 @@ class MinIOStorage:
         content_type: str = "text/markdown",
     ) -> int:
         body = content.encode("utf-8") if isinstance(content, str) else content
-        with _s3_span("put_object", bucket = self.bucket, key = key) as span:
+        with span("put_object", bucket = self.bucket, key = key) as sp:
             for attempt in range(3):
                 try:
                     async with self._client() as s3:
@@ -197,8 +180,8 @@ class MinIOStorage:
                             Body = body,
                             ContentType = content_type,
                         )
-                    if span is not None:
-                        span.set_attribute("aws.s3.write_bytes", len(body))
+                    if sp is not None:
+                        sp.set_attribute("aws.s3.write_bytes", len(body))
                     return len(body)
                 except ClientError as e:
                     code = (e.response or {}).get("Error", {}).get("Code", "")
@@ -208,7 +191,7 @@ class MinIOStorage:
         return len(body)
 
     async def read_text(self, key: str, encoding: str = "utf-8") -> str:
-        with _s3_span("get_object", bucket = self.bucket, key = key):
+        with span("get_object", bucket = self.bucket, key = key):
             async with self._client() as s3:
                 resp = await s3.get_object(Bucket = self.bucket, Key = key)
                 async with resp["Body"] as stream:
@@ -217,14 +200,14 @@ class MinIOStorage:
 
     async def read_bytes(self, key: str) -> bytes:
         """Raw binary read (.npz embeddings, cluster matrices)."""
-        with _s3_span("get_object", bucket = self.bucket, key = key):
+        with span("get_object", bucket = self.bucket, key = key):
             async with self._client() as s3:
                 resp = await s3.get_object(Bucket = self.bucket, Key = key)
                 async with resp["Body"] as stream:
                     return await stream.read()
 
     async def delete(self, key: str) -> None:
-        with _s3_span("delete_object", bucket = self.bucket, key = key):
+        with span("delete_object", bucket = self.bucket, key = key):
             async with self._client() as s3:
                 await s3.delete_object(Bucket = self.bucket, Key = key)
 
@@ -241,21 +224,21 @@ class MinIOStorage:
 
     async def list(self, prefix: str) -> list[str]:
         out: list[str] = []
-        with _s3_span("list_objects_v2", bucket = self.bucket, key = prefix) as span:
+        with span("list_objects_v2", bucket = self.bucket, key = prefix) as sp:
             async with self._client() as s3:
                 paginator = s3.get_paginator("list_objects_v2")
                 async for page in paginator.paginate(Bucket = self.bucket, Prefix = prefix):
                     for obj in page.get("Contents") or []:
                         out.append(obj["Key"])
-            if span is not None:
-                span.set_attribute("aws.s3.list_count", len(out))
+            if sp is not None:
+                sp.set_attribute("aws.s3.list_count", len(out))
         return out
 
     async def list_subfolders(self, prefix: str) -> list[str]:
         """Immediate sub-prefix names (delimiter pagination, cheaper than recursive)."""
         prefix = prefix.rstrip("/") + "/"
         names: list[str] = []
-        with _s3_span("list_objects_v2_delimited", bucket = self.bucket, key = prefix) as span:
+        with span("list_objects_v2_delimited", bucket = self.bucket, key = prefix) as sp:
             async with self._client() as s3:
                 paginator = s3.get_paginator("list_objects_v2")
                 async for page in paginator.paginate(
@@ -265,15 +248,15 @@ class MinIOStorage:
                         p = cp.get("Prefix") or ""
                         if p.startswith(prefix) and p.endswith("/"):
                             names.append(p[len(prefix):-1])
-            if span is not None:
-                span.set_attribute("aws.s3.list_count", len(names))
+            if sp is not None:
+                sp.set_attribute("aws.s3.list_count", len(names))
         return names
 
     async def copy_object(self, src_key: str, dst_key: str) -> int:
         """Server-side copy within the same bucket; returns dst byte size."""
-        with _s3_span("copy_object", bucket = self.bucket, key = dst_key) as span:
-            if span is not None:
-                span.set_attribute("aws.s3.copy_source", f"{self.bucket}/{src_key}")
+        with span("copy_object", bucket = self.bucket, key = dst_key) as sp:
+            if sp is not None:
+                sp.set_attribute("aws.s3.copy_source", f"{self.bucket}/{src_key}")
             async with self._client() as s3:
                 await s3.copy_object(
                     Bucket = self.bucket,
@@ -290,14 +273,14 @@ class MinIOStorage:
     ) -> int:
         """Recursive server-side copy. `skip_substring` excludes paths
         (e.g. `/_snapshots/`). Shared client across the loop (see delete_prefix)."""
-        with _s3_span("copy_prefix_batch", bucket = self.bucket, key = dst_prefix) as span:
-            if span is not None:
-                span.set_attribute("aws.s3.copy_source", f"{self.bucket}/{src_prefix}")
+        with span("copy_prefix_batch", bucket = self.bucket, key = dst_prefix) as sp:
+            if sp is not None:
+                sp.set_attribute("aws.s3.copy_source", f"{self.bucket}/{src_prefix}")
             keys = await self.list(src_prefix)
             if skip_substring:
                 keys = [k for k in keys if skip_substring not in k]
-            if span is not None:
-                span.set_attribute("aws.s3.copy_count", len(keys))
+            if sp is not None:
+                sp.set_attribute("aws.s3.copy_count", len(keys))
             if not keys:
                 return 0
             sem = asyncio.BoundedSemaphore(max_concurrent)
@@ -318,10 +301,10 @@ class MinIOStorage:
         """Parallel per-object deletes (batched delete_objects needs Content-MD5
         which aiobotocore doesn't send → MinIO rejects MissingContentMD5).
         Shared client across the loop — ~30× faster than per-key sessions."""
-        with _s3_span("delete_objects_batch", bucket = self.bucket, key = prefix) as span:
+        with span("delete_objects_batch", bucket = self.bucket, key = prefix) as sp:
             keys = await self.list(prefix)
-            if span is not None:
-                span.set_attribute("aws.s3.delete_count", len(keys))
+            if sp is not None:
+                sp.set_attribute("aws.s3.delete_count", len(keys))
             if not keys:
                 return 0
             sem = asyncio.BoundedSemaphore(params.DELETE_MAX_CONCURRENT)
@@ -342,9 +325,9 @@ class MinIOStorage:
     ) -> list[int]:
         if not items:
             return []
-        with _s3_span("put_object_batch", bucket = self.bucket) as span:
-            if span is not None:
-                span.set_attribute("aws.s3.write_count", len(items))
+        with span("put_object_batch", bucket = self.bucket) as sp:
+            if sp is not None:
+                sp.set_attribute("aws.s3.write_count", len(items))
             results: list[int] = []
             for start in range(0, len(items), chunk_size):
                 chunk = items[start:start + chunk_size]
@@ -372,8 +355,8 @@ class MinIOStorage:
                         f"{max_chunk_retries} attempts; last error: "
                         f"{type(last_err).__name__}: {last_err}"
                     )
-            if span is not None:
-                span.set_attribute("aws.s3.write_bytes", sum(results))
+            if sp is not None:
+                sp.set_attribute("aws.s3.write_bytes", sum(results))
         return results
 
     async def _write_chunk(
@@ -407,9 +390,9 @@ class MinIOStorage:
         Returns bodies in input order."""
         if not keys:
             return []
-        with _s3_span("get_object_batch", bucket = self.bucket) as span:
-            if span is not None:
-                span.set_attribute("aws.s3.read_count", len(keys))
+        with span("get_object_batch", bucket = self.bucket) as sp:
+            if sp is not None:
+                sp.set_attribute("aws.s3.read_count", len(keys))
             results: list[str] = []
             for start in range(0, len(keys), chunk_size):
                 chunk = keys[start:start + chunk_size]
@@ -479,5 +462,6 @@ def get_storage() -> MinIOStorage:
 
 # Public surface for the rest of the code (the re-exports are intentional).
 __all__ = [
-    "ClientError", "MinIOStorage", "bucket", "check_configured", "get_storage", "new_client", "new_sync_client",
+    "ClientError", "MinIOStorage", "bucket", "check_configured", "get_storage", "new_client",
+    "new_sync_client", "span",
 ]

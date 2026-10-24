@@ -1,15 +1,9 @@
-"""Redis pub/sub progress for mid-node events — LangGraph checkpoints only fire between nodes, so this fills the gap for the UI."""
+"""Planner progress events — Redis pub/sub for mid-node events (LangGraph checkpoints only fire between nodes, so this fills the gap for the UI). The stream mechanics live in `infra.redis.service`; this binds them to the planner's keys."""
 from __future__ import annotations
 import domains, infra
 
-import asyncio
-import json
-import logging
 import time
-from typing import AsyncIterator
-
-
-logger = logging.getLogger(__name__)
+from collections.abc import AsyncIterator
 
 
 async def emit_progress(
@@ -19,53 +13,19 @@ async def emit_progress(
     **fields,
 ) -> None:
     """Publish a progress event and append to per-thread snapshot list so late SSE subscribers can replay catch-up history."""
-    event = {
-        "step": step,
-        "kind": kind,
-        "ts":   time.time(),
-        **fields,
-    }
-    payload = json.dumps(event, default = str)
-
-    r = infra.redis.service.new_redis()
-    try:
-        await r.publish(domains.dd.planner.keys.event_channel(thread_id), payload)
-        key = domains.dd.planner.keys.snapshot_key(thread_id)
-        pipe = r.pipeline(transaction = False)
-        pipe.rpush(key, payload)
-        pipe.ltrim(key, -domains.dd.planner.params.SNAPSHOT_MAX_EVENTS, -1)
-        pipe.expire(key, domains.dd.planner.params.SNAPSHOT_TTL_S)
-        await pipe.execute()
-    except Exception as e:
-        logger.warning(
-            f"[planner-progress] emit failed for {thread_id} step={step!r} "
-            f"kind={kind!r}: {type(e).__name__}: {e}"
-        )
-    finally:
-        try:
-            await r.aclose()
-        except Exception:
-            pass
+    await infra.redis.service.emit_event(
+        domains.dd.planner.keys.event_channel(thread_id),
+        domains.dd.planner.keys.snapshot_key(thread_id),
+        {"step": step, "kind": kind, "ts": time.time(), **fields},
+        snapshot_max_events = domains.dd.planner.params.SNAPSHOT_MAX_EVENTS,
+        snapshot_ttl_s      = domains.dd.planner.params.SNAPSHOT_TTL_S,
+        error_label         = (
+            f"[planner-progress] emit failed for {thread_id} step={step!r} kind={kind!r}"
+        ),
+    )
 
 
-async def _replay_snapshot(
-    r: infra.redis.service.Redis, thread_id: str,
-) -> list[dict]:
-    """Per-thread snapshot list for late SSE catch-up. Empty on no history."""
-    try:
-        raw = await r.lrange(domains.dd.planner.keys.snapshot_key(thread_id), 0, -1)
-    except Exception:
-        return []
-    events: list[dict] = []
-    for item in raw or []:
-        try:
-            events.append(json.loads(item))
-        except Exception:
-            continue
-    return events
-
-
-async def subscribe_progress(
+def subscribe_progress(
     thread_id: str,
     *,
     replay: bool = True,
@@ -73,36 +33,9 @@ async def subscribe_progress(
 ) -> AsyncIterator[dict]:
     """Async iterator over progress events. Yields catch-up replay first,
     then live events. Caller owns close (SSE cancel path)."""
-    r = infra.redis.service.new_redis()
-    pubsub = r.pubsub()
-    try:
-        await pubsub.subscribe(domains.dd.planner.keys.event_channel(thread_id))
-        if replay:
-            for event in await _replay_snapshot(r, thread_id):
-                yield event
-        while True:
-            msg = await pubsub.get_message(
-                ignore_subscribe_messages = True,
-                timeout = poll_interval_s,
-            )
-            if msg is None:
-                continue
-            data = msg.get("data")
-            if isinstance(data, bytes):
-                data = data.decode("utf-8")
-            try:
-                yield json.loads(data)
-            except Exception:
-                continue
-    except asyncio.CancelledError:
-        return
-    finally:
-        try:
-            await pubsub.unsubscribe(domains.dd.planner.keys.event_channel(thread_id))
-            await pubsub.aclose()
-        except Exception:
-            pass
-        try:
-            await r.aclose()
-        except Exception:
-            pass
+    return infra.redis.service.subscribe_events(
+        domains.dd.planner.keys.event_channel(thread_id),
+        domains.dd.planner.keys.snapshot_key(thread_id),
+        replay = replay,
+        poll_interval_s = poll_interval_s,
+    )

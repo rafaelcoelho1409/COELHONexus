@@ -7,7 +7,7 @@ with a domain.py (pure) / service.py (I/O) split, mirroring the dd/ycs
   state.py         module-level scan-keyed virtual filesystem + helpers
                    (`@traced_tool`, the shared `execute_tool` span decorator
                    applied to every `@tool` below, lives in
-                   `domains.rr.runtime.observability.service` — centralized
+                   `domains.rr.observability.service` — centralized
                    there like planner/synth's `@traced`, not here)
   fs/              @tool wrappers around the fs helpers — used by
                    LLM subagents (deep_read · synthesis · report) that

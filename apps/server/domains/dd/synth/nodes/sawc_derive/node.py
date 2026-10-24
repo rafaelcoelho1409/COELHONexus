@@ -1,7 +1,7 @@
 """sawc_derive — LangGraph node; all orchestration in service.sawc_derive_run."""
 from __future__ import annotations
 import domains
-from domains.dd.synth.runtime.observability.service import traced
+from domains.dd.synth.observability.service import traced
 from . import service
 
 

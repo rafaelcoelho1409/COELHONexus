@@ -6,7 +6,7 @@ Expands or rephrases the previous search query for a retry retrieval.
 """
 from __future__ import annotations
 import domains
-from domains.ycs.runtime.observability.service import traced
+from domains.ycs.observability.service import traced
 from . import prompts
 from ... import params, state
 from .... import domain, service
@@ -17,13 +17,13 @@ import asyncio
 @traced("rag.rewrite")
 async def rewrite_query(state: state.YouTubeRAGState, llm) -> dict:
     """Expand/rephrase the query for better retrieval."""
-    domains.ycs.runtime.observability.metrics.record_rewrite(
+    domains.ycs.observability.service.record_rewrite(
         route = str(state.get("route") or "unknown"),
         mode = str(state.get("mode") or "standard"),
     )
     chain = service.resolve_prompt(prompts.REWRITE_PROMPT, "ycs.rag.rewrite") | llm
     try:
-        domains.ycs.runtime.llm_counter.service.set_node(node = "rewrite")
+        domains.ycs.llm_counter.service.set_node(node = "rewrite")
         response = await service.resilient_ainvoke(
             chain,
             {

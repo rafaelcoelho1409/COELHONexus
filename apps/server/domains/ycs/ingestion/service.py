@@ -195,7 +195,7 @@ async def _scroll_transcripts(
         {"terms": {"video_id": video_ids}} if video_ids
         else {"match_all": {}}
     )
-    with domains.ycs.runtime.observability.spans.es_search_span(
+    with domains.ycs.observability.service.es_search_span(
         index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS, top_k = batch_size,
         operation = "scroll_open",
     ):
@@ -249,7 +249,7 @@ async def fetch_metadata_from_es(
     if not video_ids:
         return {}
     lookup_ids = {vid: domain.parent_video_id(vid) for vid in video_ids}
-    with domains.ycs.runtime.observability.spans.es_search_span(
+    with domains.ycs.observability.service.es_search_span(
         index = infra.elasticsearch.keys.INDEX_METADATA,
         top_k = len(set(lookup_ids.values())),
         operation = "mget_by_ids",
@@ -447,7 +447,7 @@ async def ingest_to_qdrant(
             )
             for i, doc in enumerate(buffer)
         ]
-        with domains.ycs.runtime.observability.spans.qdrant_upsert_span(
+        with domains.ycs.observability.service.qdrant_upsert_span(
             collection = collection_name, point_count = len(points),
         ):
             await qdrant.upsert(
@@ -555,7 +555,7 @@ async def expand_with_partition_ids(
     if not video_ids:
         return []
     try:
-        with domains.ycs.runtime.observability.spans.es_search_span(
+        with domains.ycs.observability.service.es_search_span(
             index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
             top_k = min(10000, max(200, len(video_ids) * 10)),
             operation = "partition_expand",
@@ -851,7 +851,7 @@ async def _flush_buffer(
             for i, doc in enumerate(docs)
         ]
         try:
-            with domains.ycs.runtime.observability.spans.qdrant_upsert_span(
+            with domains.ycs.observability.service.qdrant_upsert_span(
                 collection = params.QDRANT_COLLECTION, point_count = len(points),
             ):
                 await qdrant.upsert(collection_name = params.QDRANT_COLLECTION, points = points)

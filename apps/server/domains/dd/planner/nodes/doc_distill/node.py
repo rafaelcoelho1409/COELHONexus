@@ -1,7 +1,7 @@
 """doc_distill node shell — parallel distillation with deterministic fallback so no content-bearing doc is silently dropped."""
 from __future__ import annotations
 import domains
-from domains.dd.planner.runtime.observability.service import traced
+from domains.dd.planner.observability.service import traced
 from . import service
 
 

@@ -68,7 +68,7 @@ class ElasticsearchRetriever:
                 },
             }
 
-        with domains.ycs.runtime.observability.spans.es_search_span(
+        with domains.ycs.observability.service.es_search_span(
             index                = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
             top_k                = self.top_k,
             channel_filter_count = len(channel_ids) if channel_ids else 0,
@@ -126,7 +126,7 @@ class ElasticsearchRetriever:
         docstring)."""
         if not video_ids:
             return {}
-        with domains.ycs.runtime.observability.spans.es_search_span(
+        with domains.ycs.observability.service.es_search_span(
             index                = infra.elasticsearch.keys.INDEX_METADATA,
             top_k                = len(video_ids),
             operation            = "metadata_lookup",
@@ -208,7 +208,7 @@ class QdrantHybridRetriever:
                 ),
             )
 
-        with domains.ycs.runtime.observability.spans.qdrant_search_span(
+        with domains.ycs.observability.service.qdrant_search_span(
             collection           = domains.ycs.ingestion.params.QDRANT_COLLECTION,
             top_k                = self.top_k,
             channel_filter_count = len(channel_ids) if channel_ids else 0,
@@ -457,7 +457,7 @@ class Neo4jRetriever:
             schemas.ExtractedEntities,
         )
         try:
-            domains.ycs.runtime.llm_counter.service.set_node(node = "neo4j_entity_extract")
+            domains.ycs.llm_counter.service.set_node(node = "neo4j_entity_extract")
             # Prefer-exact-spellings hint (2026-09-16): real surface forms
             # from the graph so the LLM emits names that exist. Best
             # effort — empty when the graph is unreachable/empty, and
@@ -565,7 +565,7 @@ class Neo4jRetriever:
         )
 
         try:
-            with domains.ycs.runtime.observability.spans.neo4j_query_span(
+            with domains.ycs.observability.service.neo4j_query_span(
                 operation         = "entity_lookup",
                 statement_summary = "MATCH __Entity__ + Document/Video + UNION 1-hop",
             ):
@@ -678,7 +678,7 @@ class SmartRetriever:
         self, query: str, channel_ids: list[str] | None = None,
         extra_queries: list[str] | None = None,
     ) -> list[Document]:
-        with domains.ycs.runtime.observability.spans.ycs_retriever_fanout_span(top_k = self.top_k):
+        with domains.ycs.observability.service.ycs_retriever_fanout_span(top_k = self.top_k):
             docs, _ = await self._retrieve_inner(
                 query, channel_ids, extra_queries, frozenset(),
             )
@@ -694,7 +694,7 @@ class SmartRetriever:
         "ok" (docs found), "empty" (ran clean, nothing), "failed"
         (exception — provider-side), "skipped" (breaker). Neo4j reports
         its own "extraction_failed" distinctly (see its `retrieve`)."""
-        with domains.ycs.runtime.observability.spans.ycs_retriever_fanout_span(top_k = self.top_k):
+        with domains.ycs.observability.service.ycs_retriever_fanout_span(top_k = self.top_k):
             return await self._retrieve_inner(
                 query, channel_ids, extra_queries, skip_arms or frozenset(),
             )

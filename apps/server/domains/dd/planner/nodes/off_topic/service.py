@@ -249,7 +249,7 @@ async def off_topic_run(state: domains.dd.planner.state.PlannerState) -> dict:
         "judge_router":        "llm-rotator",
     }
 
-    domains.dd.planner.runtime.observability.service.attach_span_attrs("off_topic", {
+    infra.opentelemetry.service.attach_span_attrs("off_topic", {
         "kept":             stats["kept"],
         "dropped":          stats["dropped"],
         "llm_judged":       n_to_judge,

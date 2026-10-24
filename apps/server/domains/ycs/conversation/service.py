@@ -28,7 +28,7 @@ async def ensure_conversation_table(pg_url: str) -> None:
     the Thinking expander to its exact state — both mid-stream and
     after completion. `ADD COLUMN IF NOT EXISTS` is the safe migration
     path for existing deployments."""
-    with domains.ycs.runtime.observability.spans.postgres_span(
+    with domains.ycs.observability.service.postgres_span(
         operation = "bootstrap", table = params.TABLE_NAME,
     ):
         async with await infra.postgres.service.connect(
@@ -73,7 +73,7 @@ async def get_history(
     Shape: `[{"question": str, "answer": str}, ...]`."""
     if not thread_id or thread_id == params.DEFAULT_THREAD_ID:
         return []
-    with domains.ycs.runtime.observability.spans.postgres_span(
+    with domains.ycs.observability.service.postgres_span(
         operation = "select", table = params.TABLE_NAME,
     ):
         async with await infra.postgres.service.connect(pg_url) as conn:
@@ -100,7 +100,7 @@ async def list_threads(
 
     The `default` sentinel is excluded — stateless single-turn queries
     never land in the picker."""
-    with domains.ycs.runtime.observability.spans.postgres_span(
+    with domains.ycs.observability.service.postgres_span(
         operation = "select", table = params.TABLE_NAME,
     ):
         async with await infra.postgres.service.connect(pg_url) as conn:
@@ -147,7 +147,7 @@ async def list_thread_messages(
     Returns [] for the `default` sentinel."""
     if not thread_id or thread_id == params.DEFAULT_THREAD_ID:
         return []
-    with domains.ycs.runtime.observability.spans.postgres_span(
+    with domains.ycs.observability.service.postgres_span(
         operation = "select", table = params.TABLE_NAME,
     ):
         async with await infra.postgres.service.connect(pg_url) as conn:
@@ -201,7 +201,7 @@ async def get_thread_locked_scope(
         contain a `channel_ids` field (pre-2026-06-17 rows)."""
     if not thread_id or thread_id == params.DEFAULT_THREAD_ID:
         return None
-    with domains.ycs.runtime.observability.spans.postgres_span(
+    with domains.ycs.observability.service.postgres_span(
         operation = "select", table = params.TABLE_NAME,
     ):
         async with await infra.postgres.service.connect(pg_url) as conn:
@@ -247,7 +247,7 @@ async def branch_thread(
         return 0
     if not new_thread_id:
         return 0
-    with domains.ycs.runtime.observability.spans.postgres_span(
+    with domains.ycs.observability.service.postgres_span(
         operation = "insert", table = params.TABLE_NAME,
     ):
         async with await infra.postgres.service.connect(pg_url) as conn:
@@ -283,7 +283,7 @@ async def delete_thread(
     delete on `default` would otherwise be a no-op anyway."""
     if not thread_id or thread_id == params.DEFAULT_THREAD_ID:
         return 0
-    with domains.ycs.runtime.observability.spans.postgres_span(
+    with domains.ycs.observability.service.postgres_span(
         operation = "delete", table = params.TABLE_NAME,
     ):
         async with await infra.postgres.service.connect(pg_url) as conn:
@@ -309,7 +309,7 @@ async def save_turn(
     answered."""
     if not thread_id or thread_id == params.DEFAULT_THREAD_ID:
         return
-    with domains.ycs.runtime.observability.spans.postgres_span(
+    with domains.ycs.observability.service.postgres_span(
         operation = "insert", table = params.TABLE_NAME,
     ):
         async with await infra.postgres.service.connect(pg_url) as conn:
@@ -335,7 +335,7 @@ async def insert_turn(
     it. Returns `None` for the `default` sentinel."""
     if not thread_id or thread_id == params.DEFAULT_THREAD_ID:
         return None
-    with domains.ycs.runtime.observability.spans.postgres_span(
+    with domains.ycs.observability.service.postgres_span(
         operation = "insert", table = params.TABLE_NAME,
     ):
         async with await infra.postgres.service.connect(pg_url) as conn:
@@ -366,7 +366,7 @@ async def update_turn_answer(
     leaves the column untouched; pass `{}` to clear it explicitly."""
     if turn_id is None:
         return
-    with domains.ycs.runtime.observability.spans.postgres_span(
+    with domains.ycs.observability.service.postgres_span(
         operation = "update", table = params.TABLE_NAME,
     ):
         async with await infra.postgres.service.connect(pg_url) as conn:
@@ -400,7 +400,7 @@ async def delete_turn(pg_url: str, turn_id: int | None) -> None:
     empty answer haunting the picker forever)."""
     if turn_id is None:
         return
-    with domains.ycs.runtime.observability.spans.postgres_span(
+    with domains.ycs.observability.service.postgres_span(
         operation = "delete", table = params.TABLE_NAME,
     ):
         async with await infra.postgres.service.connect(pg_url) as conn:
