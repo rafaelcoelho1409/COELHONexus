@@ -1,5 +1,10 @@
 """Celery app instance + worker_process_init signal handler.
 
+The only module that imports the `celery` library: everything the rest of
+the code needs from it is reached dotted through here — `app` (task
+decorators), `chain` / `group` (canvas), `get_task_logger`, `AsyncResult`,
+`get_result(task_id)` and `revoke(task_id, ...)`.
+
 Per-worker init provisions the MinIO bucket + warms the endpoint
 credential store. Both steps are best-effort — failures degrade
 gracefully (env-key fallback / first-task bucket 404) without blocking
@@ -48,8 +53,10 @@ logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
 
 from . import keys, params
 
-from celery import Celery
+from celery import Celery, chain, group
+from celery.result import AsyncResult
 from celery.signals import worker_process_init
+from celery.utils.log import get_task_logger
 
 
 logger = logging.getLogger(__name__)
@@ -79,6 +86,16 @@ app.config_from_object({
 app.conf.include = keys.TASK_INCLUDE
 
 
+def get_result(task_id: str) -> AsyncResult:
+    """Result handle for a task id on this app's broker / result backend."""
+    return AsyncResult(task_id, app=app)
+
+
+def revoke(task_id: str, **kwargs) -> None:
+    """Revoke a task; pass `terminate=True, signal="SIGTERM"` to kill a running one."""
+    app.control.revoke(task_id, **kwargs)
+
+
 @worker_process_init.connect(weak=False)
 def _worker_process_init(**_kwargs) -> None:
     # OTel MUST run first: each fork needs its own provider (parent SDK state doesn't survive fork()).
@@ -105,3 +122,9 @@ def _worker_process_init(**_kwargs) -> None:
             f"[worker-init] LLM credential store warm failed "
             f"({type(e).__name__}: {e}); endpoint clients will use env keys only"
         )
+
+
+# Public surface for the rest of the code (the re-exports are intentional).
+__all__ = [
+    "AsyncResult", "app", "chain", "get_result", "get_task_logger", "group", "revoke",
+]

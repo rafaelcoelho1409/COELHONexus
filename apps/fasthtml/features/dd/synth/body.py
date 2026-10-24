@@ -53,7 +53,7 @@ _FALLBACK_CLICK = """\
     try {
       var budgetEl = document.getElementById('fw-synth-budget');
       var budget = (budgetEl && budgetEl.value) || '5';
-      var url = '/api/v1/docs-distiller/synth/' + slug +
+      var url = '/api/v1/dd/synth/' + slug +
                 '?mode=quality&budget=' + encodeURIComponent(budget);
       var r = await fetch(url, { method: 'POST' });
       if (!r.ok) {

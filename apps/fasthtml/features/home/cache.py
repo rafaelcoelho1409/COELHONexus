@@ -13,7 +13,7 @@ launched), so the hero stats strip reflects DD + YCS + RR — not just
 DD as it did pre-redesign.
 
 2026-06-18 second pass — first-paint stats fix:
-  Problem: `/api/v1/docs-distiller/ingestion` runs ~3.0-3.3s end-to-end
+  Problem: `/api/v1/dd/ingestion` runs ~3.0-3.3s end-to-end
   (MinIO bucket walk + Postgres join). The previous `timeout = 2.5`
   was below that floor, so EVERY cold call raised httpx.ReadTimeout
   → `_cached` returned None → both DD stats ("Frameworks ingested",
@@ -59,7 +59,7 @@ def fetch_library() -> list[dict]:
     """DD ingestion library. Empty list on cold-start failure."""
     def _go():
         r = httpx.get(
-            f"{SERVER_URL}/api/v1/docs-distiller/ingestion", timeout = _TIMEOUT,
+            f"{SERVER_URL}/api/v1/dd/ingestion", timeout = _TIMEOUT,
         )
         r.raise_for_status()
         return r.json() or []

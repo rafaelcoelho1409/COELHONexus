@@ -68,7 +68,7 @@ _PLANNER_FALLBACK_CLICK = """\
       try { _tid = localStorage.getItem('dd:planner:active:' + slug); } catch (_) {}
       if (!_tid) {
         try {
-          var _rr = await fetch('/api/v1/docs-distiller/planner/recent');
+          var _rr = await fetch('/api/v1/dd/planner/recent');
           if (_rr.ok) {
             var _rd = await _rr.json();
             var _f = ((_rd && _rd.recent) || []).find(function (it) { return it.slug === slug; });
@@ -80,7 +80,7 @@ _PLANNER_FALLBACK_CLICK = """\
       btn.setAttribute('disabled', 'disabled');
       btn.textContent = 'Cancelling…';
       try {
-        var _cr = await fetch('/api/v1/docs-distiller/planner/' + _tid + '/cancel', { method: 'POST' });
+        var _cr = await fetch('/api/v1/dd/planner/' + _tid + '/cancel', { method: 'POST' });
         if (!_cr.ok) {
           var _ct = await _cr.text();
           showFlash('Stop failed: HTTP ' + _cr.status + ' - ' + _ct.slice(0, 160), 'err');
@@ -106,7 +106,7 @@ _PLANNER_FALLBACK_CLICK = """\
       var tid = null;
       var isResume = false;
       try {
-        var rr = await fetch('/api/v1/docs-distiller/planner/recent');
+        var rr = await fetch('/api/v1/dd/planner/recent');
         if (rr.ok) {
           var rd = await rr.json();
           var found = ((rd && rd.recent) || []).find(function (it) { return it.slug === slug; });
@@ -115,8 +115,8 @@ _PLANNER_FALLBACK_CLICK = """\
       } catch (_) {}
       if (!tid) tid = 'docs-distiller/' + slug + '/' + uuid();
       var url = isResume
-        ? '/api/v1/docs-distiller/planner/' + encodeURIComponent(tid) + '/resume'
-        : '/api/v1/docs-distiller/planner/' + slug +
+        ? '/api/v1/dd/planner/' + encodeURIComponent(tid) + '/resume'
+        : '/api/v1/dd/planner/' + slug +
           '?mode=llm&thread_id=' + encodeURIComponent(tid);
       var r = await fetch(url, { method: 'POST' });
       if (!r.ok) {
@@ -188,14 +188,14 @@ _START_BUTTON_GATING = """\
 
   async function probePlannerDone(slug) {
     try {
-      var r = await fetch('/api/v1/docs-distiller/pipeline/' + slug + '/state');
+      var r = await fetch('/api/v1/dd/pipeline/' + slug + '/state');
       if (r.ok) return !!(await r.json()).planner;
     } catch (_) {}
     return false;
   }
   async function probeSynthAllDone(slug) {
     try {
-      var r = await fetch('/api/v1/docs-distiller/synth/' + slug +
+      var r = await fetch('/api/v1/dd/synth/' + slug +
                           '/study/chapters');
       if (r.ok) {
         var chs = ((await r.json()).chapters) || [];
@@ -473,7 +473,7 @@ _SYNTH_FALLBACK_CLICK = """\
     try {
       var budgetEl = document.getElementById('fw-synth-budget');
       var budget = (budgetEl && budgetEl.value) || '5';
-      var url = '/api/v1/docs-distiller/synth/' + slug +
+      var url = '/api/v1/dd/synth/' + slug +
                 '?mode=quality&budget=' + encodeURIComponent(budget);
       var r = await fetch(url, { method: 'POST' });
       if (!r.ok) {

@@ -253,7 +253,7 @@ async def extract_and_save_artifacts_from_md(
     payloads = domain.collect_md_payloads(md, source_url)
     payloads = {
         p: k for p, k in payloads.items()
-        if "/api/v1/docs-distiller/ingestion/" not in p
+        if not any(marker in p for marker in keys.OWN_ARTIFACT_URL_MARKERS)
         or "/artifacts/" not in p
     }
     if not payloads:

@@ -168,7 +168,7 @@ async def cancel_scan(scan_id: UUID, *, reason: str = "cancelled by user") -> bo
         return False
 
     try:
-        infra.celery.service.app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+        infra.celery.service.revoke(task_id, terminate=True, signal="SIGTERM")
         logger.info(f"[rr-service] cancel_scan {scan_id} revoked task_id={task_id}")
     except Exception as e:
         logger.warning(

@@ -61,7 +61,7 @@
        routes (see @view-transition rule above).
    B2: inactive items dim to opacity 0.85; hover lifts to ~1.0.
    B1: status-dot CSS for "running work" badge (filled by topbar.js
-       polling /api/v1/docs-distiller/runs/active).
+       polling /api/v1/dd/runs/active).
 */
 .nav-item {
   position: relative;            /* anchor for .nav-status-dot */

@@ -19,11 +19,8 @@ import infra.celery
 
 from typing import Any
 
-from celery import chain, group
-from celery.utils.log import get_task_logger
 
-
-logger = get_task_logger(__name__)
+logger = infra.celery.service.get_task_logger(__name__)
 
 
 @infra.celery.service.app.task(
@@ -68,11 +65,11 @@ def full_channel_pipeline(
             domains.ycs.extract.task.extract_channel.si(channel_id, max_results, include_transcription),
         ]
         if len(ingest_steps) > 1:
-            steps.append(group(*ingest_steps))
+            steps.append(infra.celery.service.group(*ingest_steps))
         else:
             steps.extend(ingest_steps)
         steps.append(domains.ycs.qdrant_task.task.invalidate_cache.si())
-        pipeline = chain(*steps)
+        pipeline = infra.celery.service.chain(*steps)
         result = pipeline.apply_async()
     return {
         "pipeline_id": result.id,

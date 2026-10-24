@@ -25,7 +25,7 @@ def fetch_catalog() -> list[dict]:
         return _catalog_cache["data"]
     try:
         r = httpx.get(
-            f"{SERVER_URL}/api/v1/docs-distiller/resolver", timeout = 2.5,
+            f"{SERVER_URL}/api/v1/dd/resolver", timeout = 2.5,
         )
         r.raise_for_status()
         data = r.json() or []

@@ -1,7 +1,7 @@
 /* DD-NAVBAR-SOTA topbar client behaviors.
  *
  * Wave B1 — running-work status dot:
- *   Polls /api/v1/docs-distiller/runs/active every 30s. When ANY
+ *   Polls /api/v1/dd/runs/active every 30s. When ANY
  *   active ingestion run is in flight, the matching nav-item gets
  *   .has-running which surfaces a pulsing sky-blue .nav-status-dot.
  *   Today: covers ingestion only. Synth/planner is a TODO.
@@ -33,7 +33,7 @@
 
   async function fetchActiveIngestion() {
     try {
-      const res = await fetch("/api/v1/docs-distiller/runs/active", {
+      const res = await fetch("/api/v1/dd/runs/active", {
         headers: { Accept: "application/json" },
       });
       if (!res.ok) return [];

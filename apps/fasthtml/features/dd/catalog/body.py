@@ -9,7 +9,7 @@ def CatalogBody(catalog: list[dict]):
         return Div(
             P(
                 "Could not load the framework catalog. "
-                "Make sure the server is reachable at /api/v1/docs-distiller/resolver.",
+                "Make sure the server is reachable at /api/v1/dd/resolver.",
                 cls = "fw-empty",
             ),
             cls = "fw-step-panel active",

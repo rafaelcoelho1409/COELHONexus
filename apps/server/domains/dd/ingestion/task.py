@@ -1,4 +1,4 @@
-"""Celery bridge for ingestion. Queued from POST /api/v1/docs-distiller/runs;
+"""Celery bridge for ingestion. Queued from POST /api/v1/dd/runs;
 progress + manifest flow back through Redis."""
 from __future__ import annotations
 import infra.celery

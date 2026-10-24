@@ -61,4 +61,13 @@ IMAGE_EXTS: frozenset[str] = frozenset({
 
 
 def public_artifact_path(slug: str, name: str) -> str:
-    return f"/api/v1/docs-distiller/ingestion/{slug}/artifacts/{name}"
+    return f"/api/v1/dd/ingestion/{slug}/artifacts/{name}"
+
+
+# Substrings of the artifact URLs this app writes into stored pages: the current
+# `/api/v1/dd/...` prefix and the `/api/v1/docs-distiller/...` one that already-
+# ingested corpora still carry. Either marks a URL as ours, never to be re-fetched.
+OWN_ARTIFACT_URL_MARKERS: tuple[str, ...] = (
+    "/api/v1/dd/ingestion/",
+    "/api/v1/docs-distiller/ingestion/",
+)

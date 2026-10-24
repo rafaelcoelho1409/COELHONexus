@@ -8,11 +8,10 @@ import os
 from typing import Any
 
 import redis.asyncio as redis_aio
-from celery.utils.log import get_task_logger
 from elasticsearch import AsyncElasticsearch
 from qdrant_client import AsyncQdrantClient
 
-logger = get_task_logger(__name__)
+logger = infra.celery.service.get_task_logger(__name__)
 
 
 @infra.celery.service.app.task(

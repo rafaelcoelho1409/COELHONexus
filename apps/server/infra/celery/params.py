@@ -5,10 +5,9 @@ must fail fast at import, not boot deaf. This is also why `celery/`
 stays out of `infra/__init__.py`'s eager chain.
 """
 from __future__ import annotations
+from . import domain
 
 import os
-
-from . import domain
 
 
 _REDIS_HOST = os.environ["REDIS_HOST"]

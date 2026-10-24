@@ -13,7 +13,7 @@ starts from a full picture instead of one symptom.
 
 All three runs used the same post-#17/#18 code, on the `claude-code`
 corpus, via the single-chapter escape hatch (`POST
-/api/v1/docs-distiller/synth/{slug}?chapter_id=<id>&mode=quality`)
+/api/v1/dd/synth/{slug}?chapter_id=<id>&mode=quality`)
 with the chapter's MinIO cache cleared first (so every run is a
 genuine from-scratch computation, not a cache hit).
 

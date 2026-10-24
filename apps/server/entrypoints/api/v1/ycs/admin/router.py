@@ -6,7 +6,6 @@ from . import domain, service
 
 from typing import Any
 
-from celery.result import AsyncResult
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
@@ -47,7 +46,7 @@ async def task_status(task_id: str) -> dict:
     if not task_id:
         raise HTTPException(status_code = 400, detail = "task_id required")
     try:
-        async_result = AsyncResult(task_id, app = infra.celery.service.app)
+        async_result = infra.celery.service.get_result(task_id)
         state = async_result.state
         info: Any = async_result.info
     except Exception as e:

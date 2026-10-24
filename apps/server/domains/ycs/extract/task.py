@@ -20,10 +20,9 @@ from . import service
 import asyncio
 import time
 from typing import Any
-from celery.utils.log import get_task_logger
 
 
-logger = get_task_logger(__name__)
+logger = infra.celery.service.get_task_logger(__name__)
 
 
 # Celery tasks (sync wrappers — Celery is sync by default)

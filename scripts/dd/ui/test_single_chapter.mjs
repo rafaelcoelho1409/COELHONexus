@@ -42,8 +42,8 @@ const { $activePipeline } = await import('@nx/stores/pipeline.js');
 Si.setActiveSlug('asyncio');
 Sy.setSynthImplemented(new Set(['outline_sdp']));
 Sy.setSynthHasPlan(true);
-routes['GET /api/v1/docs-distiller/pipeline/active'] = { planner: null, synth: null };
-routes['GET /api/v1/docs-distiller/synth/asyncio/active'] = { active: false };
+routes['GET /api/v1/dd/pipeline/active'] = { planner: null, synth: null };
+routes['GET /api/v1/dd/synth/asyncio/active'] = { active: false };
 
 const chapters = [{ id: 'ch-01-a', title: 'Alpha' }, { id: 'ch-02-b', title: 'Beta' }, { id: 'ch-03-c', title: 'Gamma' }];
 S._renderChStrip(chapters);
@@ -59,11 +59,11 @@ console.log('1 ▶ on every row, enabled when idle ok');
 
 // 2) click ▶ on chapter 2: POST with chapter_id, row running, graph attached to the chapter thread, Start -> Stop, ▶ disabled
 const T1 = 'docs-distiller/synth/asyncio/T1';
-routes['POST /api/v1/docs-distiller/synth/asyncio?chapter_id=ch-02-b&mode=quality'] = { thread_id: T1, slug: 'asyncio', chapter_id: 'ch-02-b', status: 'queued' };
-routes['GET /api/v1/docs-distiller/synth/debug/graph/' + T1 + '/state'] = { values: { chapter_id: 'ch-02-b' }, next: ['outline_sdp'] };
+routes['POST /api/v1/dd/synth/asyncio?chapter_id=ch-02-b&mode=quality'] = { thread_id: T1, slug: 'asyncio', chapter_id: 'ch-02-b', status: 'queued' };
+routes['GET /api/v1/dd/synth/debug/graph/' + T1 + '/state'] = { values: { chapter_id: 'ch-02-b' }, next: ['outline_sdp'] };
 runBtn('ch-02-b').click();
 await tick(80);
-assert.ok(calls.includes('POST /api/v1/docs-distiller/synth/asyncio?chapter_id=ch-02-b&mode=quality'), calls.join('\n'));
+assert.ok(calls.includes('POST /api/v1/dd/synth/asyncio?chapter_id=ch-02-b&mode=quality'), calls.join('\n'));
 assert.equal(Sy.synthThreadId, T1);
 assert.equal(status('ch-02-b'), 'running');
 assert.equal(status('ch-01-a'), 'pending');
@@ -85,7 +85,7 @@ console.log('3 no second run while one is live ok');
 // 4) live node events flow through the same SSE consumer, then the terminal event settles the row
 const now = Date.now() / 1000;
 sources[0].onmessage({ data: JSON.stringify({ step: 'outline_sdp', kind: 'start', ts: now }) });
-routes['GET /api/v1/docs-distiller/synth/asyncio/study/chapters'] = {
+routes['GET /api/v1/dd/synth/asyncio/study/chapters'] = {
   study_total_wall_ms: 5000,
   chapters: chapters.map((c, i) => ({ id: c.id, title: c.title, order: i, rendered: c.id === 'ch-02-b', wall_ms: c.id === 'ch-02-b' ? 91000 : 0, thread_id: c.id === 'ch-02-b' ? T1 : null })),
 };
@@ -104,8 +104,8 @@ assert.match(document.querySelector('#fw-synth-start').textContent, /Resume|Star
 console.log('4 terminal event settles the row, timers, buttons ok');
 
 // 5) a failed / cancelled chapter keeps its outcome on the row after the strip re-syncs from MinIO
-routes['POST /api/v1/docs-distiller/synth/asyncio?chapter_id=ch-03-c&mode=quality'] = { thread_id: 'docs-distiller/synth/asyncio/T2', status: 'queued' };
-routes['GET /api/v1/docs-distiller/synth/debug/graph/docs-distiller/synth/asyncio/T2/state'] = { values: {}, next: [] };
+routes['POST /api/v1/dd/synth/asyncio?chapter_id=ch-03-c&mode=quality'] = { thread_id: 'docs-distiller/synth/asyncio/T2', status: 'queued' };
+routes['GET /api/v1/dd/synth/debug/graph/docs-distiller/synth/asyncio/T2/state'] = { values: {}, next: [] };
 runBtn('ch-03-c').click();
 await tick(80);
 assert.equal(status('ch-03-c'), 'running');
@@ -124,9 +124,9 @@ assert.equal(calls.slice(before).filter(c => c.startsWith('DELETE')).length, 0, 
 document.querySelector('#fw-modal-cancel').click();
 await tick(40);
 assert.equal(calls.slice(before).filter(c => c.startsWith('POST') || c.startsWith('DELETE')).length, 0, 'cancel = nothing happens');
-routes['DELETE /api/v1/docs-distiller/synth/asyncio/wipe?chapter_id=ch-02-b'] = { minio_deleted: 14 };
-routes['POST /api/v1/docs-distiller/synth/asyncio?chapter_id=ch-02-b&mode=quality'] = { thread_id: 'docs-distiller/synth/asyncio/T3', status: 'queued' };
-routes['GET /api/v1/docs-distiller/synth/debug/graph/docs-distiller/synth/asyncio/T3/state'] = { values: {}, next: [] };
+routes['DELETE /api/v1/dd/synth/asyncio/wipe?chapter_id=ch-02-b'] = { minio_deleted: 14 };
+routes['POST /api/v1/dd/synth/asyncio?chapter_id=ch-02-b&mode=quality'] = { thread_id: 'docs-distiller/synth/asyncio/T3', status: 'queued' };
+routes['GET /api/v1/dd/synth/debug/graph/docs-distiller/synth/asyncio/T3/state'] = { values: {}, next: [] };
 runBtn('ch-02-b').click();
 await tick(60);
 document.querySelector('#fw-modal-confirm').click();
@@ -139,10 +139,10 @@ assert.equal(status('ch-02-b'), 'running');
 console.log('6 re-run of a done chapter confirms, wipes that chapter, runs it ok');
 
 // 7) Stop while a chapter runs cancels that chapter's thread
-routes['POST /api/v1/docs-distiller/synth/docs-distiller/synth/asyncio/T3/cancel'] = { status: 'cancel_requested', propagated_to: [] };
+routes['POST /api/v1/dd/synth/docs-distiller/synth/asyncio/T3/cancel'] = { status: 'cancel_requested', propagated_to: [] };
 document.querySelector('#fw-synth-start').click();
 await tick(60);
-assert.ok(calls.includes('POST /api/v1/docs-distiller/synth/docs-distiller/synth/asyncio/T3/cancel'), calls.slice(-5).join(' | '));
+assert.ok(calls.includes('POST /api/v1/dd/synth/docs-distiller/synth/asyncio/T3/cancel'), calls.slice(-5).join(' | '));
 await sources.at(-1).onmessage({ data: JSON.stringify({ step: 'synth', kind: 'terminal', status: 'cancelled', ts: Date.now() / 1000 }) });
 await tick(120);
 assert.equal(status('ch-02-b'), 'cancelled');
@@ -150,7 +150,7 @@ assert.equal(Sy.synthThreadId, null);
 console.log('7 Stop cancels the chapter run ok');
 
 // 8) a locked response (planner / another synth) starts nothing and leaves the buttons usable
-routes['POST /api/v1/docs-distiller/synth/asyncio?chapter_id=ch-01-a&mode=quality'] = { status: 'locked', stage: 'planner', slug: 'x', message: 'A planner is running' };
+routes['POST /api/v1/dd/synth/asyncio?chapter_id=ch-01-a&mode=quality'] = { status: 'locked', stage: 'planner', slug: 'x', message: 'A planner is running' };
 runBtn('ch-01-a').click();
 await tick(80);
 assert.equal(Sy.synthThreadId, null);
@@ -159,8 +159,8 @@ assert.equal($activePipeline.get(), null);
 console.log('8 locked response starts nothing ok');
 
 // 9) page refresh mid-run: /active reports the chapter thread -> the row and graph re-attach
-routes['GET /api/v1/docs-distiller/synth/asyncio/active'] = { active: true, chapter_thread_id: 'docs-distiller/synth/asyncio/T9', study_thread_id: null };
-routes['GET /api/v1/docs-distiller/synth/debug/graph/docs-distiller/synth/asyncio/T9/state'] = { values: { chapter_id: 'ch-03-c' }, next: ['sawc_write'] };
+routes['GET /api/v1/dd/synth/asyncio/active'] = { active: true, chapter_thread_id: 'docs-distiller/synth/asyncio/T9', study_thread_id: null };
+routes['GET /api/v1/dd/synth/debug/graph/docs-distiller/synth/asyncio/T9/state'] = { values: { chapter_id: 'ch-03-c' }, next: ['sawc_write'] };
 localStorage.clear();
 const resumed = await L._tryResumeActiveSynth('asyncio');
 await tick(80);
@@ -176,21 +176,21 @@ const allRunEnabled = () => [...document.querySelectorAll('.fw-chstrip-run')].ev
 // settle: finish the recovered run from check 9 so we start from idle
 await sources.at(-1).onmessage({ data: JSON.stringify({ step: 'synth', kind: 'terminal', status: 'cancelled', ts: Date.now() / 1000 }) });
 await tick(120);
-routes['GET /api/v1/docs-distiller/synth/asyncio/active'] = { active: false };
+routes['GET /api/v1/dd/synth/asyncio/active'] = { active: false };
 await S._refreshSynthPlanGate('asyncio');   // _tryResumeActiveSynth clears the plan flag; main.js re-gates it on every page load
 await L._pollServerBusy();
 assert.ok(allRunEnabled(), 'idle again');
 
 // 10) the moment ▶ is pressed ALL buttons (and Start) are disabled, before any request returns — a second press cannot start a second run or wipe
 let release;
-routes['POST /api/v1/docs-distiller/synth/asyncio?chapter_id=ch-01-a&mode=quality'] = () => new Promise(() => {});   // placeholder, replaced below
+routes['POST /api/v1/dd/synth/asyncio?chapter_id=ch-01-a&mode=quality'] = () => new Promise(() => {});   // placeholder, replaced below
 const gate = new Promise(r => { release = r; });
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, opts = {}) => {
   if ((opts.method || 'GET') === 'POST' && String(url).includes('chapter_id=ch-01-a')) { calls.push('POST ' + url); await gate; return { ok: true, status: 200, json: async () => ({ thread_id: 'docs-distiller/synth/asyncio/T10', status: 'queued' }), text: async () => '{}' }; }
   return realFetch(url, opts);
 };
-routes['GET /api/v1/docs-distiller/synth/debug/graph/docs-distiller/synth/asyncio/T10/state'] = { values: {}, next: [] };
+routes['GET /api/v1/dd/synth/debug/graph/docs-distiller/synth/asyncio/T10/state'] = { values: {}, next: [] };
 const nPost10 = calls.filter(c => c.startsWith('POST') && c.includes('chapter_id')).length;
 runBtn('ch-01-a').click();
 assert.ok(allRunDisabled(), '▶ disabled synchronously on the click');
@@ -210,7 +210,7 @@ assert.ok(allRunEnabled(), 'enabled again after the run ends');
 console.log('10 double / cross presses cannot start a second run ok');
 
 // 11) a FULL synth (study) in flight disables every ▶; they come back when it ends
-routes['GET /api/v1/docs-distiller/synth/asyncio/active'] = { active: true, study_thread_id: 'docs-distiller/study/asyncio/S1', started_ts: Date.now() / 1000 };
+routes['GET /api/v1/dd/synth/asyncio/active'] = { active: true, study_thread_id: 'docs-distiller/study/asyncio/S1', started_ts: Date.now() / 1000 };
 localStorage.clear();
 await L._tryResumeActiveSynth('asyncio');
 await tick(60);
@@ -225,17 +225,17 @@ const nPost11 = calls.filter(c => c.startsWith('POST')).length;
 runBtn('ch-01-a').click(); await tick(40);
 assert.equal(calls.filter(c => c.startsWith('POST')).length, nPost11, 'a disabled ▶ does nothing');
 Sy.setStudyThreadId(null); await S._refreshSynthPlanGate('asyncio');
-routes['GET /api/v1/docs-distiller/synth/asyncio/active'] = { active: false };
+routes['GET /api/v1/dd/synth/asyncio/active'] = { active: false };
 await L._pollServerBusy();
 assert.ok(allRunEnabled(), 'enabled once the study is over');
 console.log('11 a full synth disables every ▶ ok');
 
 // 12) a run started from ANOTHER tab / session (this page only sees the server lock) also disables them, and releases them
-routes['GET /api/v1/docs-distiller/synth/asyncio/active'] = { active: true, chapter_thread_id: 'docs-distiller/synth/asyncio/OTHER' };
+routes['GET /api/v1/dd/synth/asyncio/active'] = { active: true, chapter_thread_id: 'docs-distiller/synth/asyncio/OTHER' };
 await L._pollServerBusy();
 assert.ok(allRunDisabled(), '▶ disabled while another session runs');
 assert.match(runBtn('ch-02-b').title, /another tab/);
-routes['GET /api/v1/docs-distiller/synth/asyncio/active'] = { active: false };
+routes['GET /api/v1/dd/synth/asyncio/active'] = { active: false };
 await L._pollServerBusy();
 assert.ok(allRunEnabled(), 'enabled again when the lock is gone');
 console.log('12 a run started elsewhere disables every ▶ ok');

@@ -77,7 +77,7 @@ _FALLBACK_CLICK = """\
       try { _tid = localStorage.getItem('dd:planner:active:' + slug); } catch (_) {}
       if (!_tid) {
         try {
-          var _rr = await fetch('/api/v1/docs-distiller/planner/recent');
+          var _rr = await fetch('/api/v1/dd/planner/recent');
           if (_rr.ok) {
             var _rd = await _rr.json();
             var _f = ((_rd && _rd.recent) || []).find(function (it) { return it.slug === slug; });
@@ -89,7 +89,7 @@ _FALLBACK_CLICK = """\
       btn.setAttribute('disabled', 'disabled');
       btn.textContent = 'Cancelling…';
       try {
-        var _cr = await fetch('/api/v1/docs-distiller/planner/' + _tid + '/cancel', { method: 'POST' });
+        var _cr = await fetch('/api/v1/dd/planner/' + _tid + '/cancel', { method: 'POST' });
         if (!_cr.ok) {
           var _ct = await _cr.text();
           showFlash('Stop failed: HTTP ' + _cr.status + ' - ' + _ct.slice(0, 160), 'err');
@@ -116,7 +116,7 @@ _FALLBACK_CLICK = """\
       var tid = null;
       var isResume = false;
       try {
-        var rr = await fetch('/api/v1/docs-distiller/planner/recent');
+        var rr = await fetch('/api/v1/dd/planner/recent');
         if (rr.ok) {
           var rd = await rr.json();
           var found = ((rd && rd.recent) || []).find(function (it) { return it.slug === slug; });
@@ -125,8 +125,8 @@ _FALLBACK_CLICK = """\
       } catch (_) { /* fall through to fresh thread */ }
       if (!tid) tid = 'docs-distiller/' + slug + '/' + uuid();
       var url = isResume
-        ? '/api/v1/docs-distiller/planner/' + encodeURIComponent(tid) + '/resume'
-        : '/api/v1/docs-distiller/planner/' + slug +
+        ? '/api/v1/dd/planner/' + encodeURIComponent(tid) + '/resume'
+        : '/api/v1/dd/planner/' + slug +
           '?mode=llm&thread_id=' + encodeURIComponent(tid);
       var r = await fetch(url, { method: 'POST' });
       if (!r.ok) {

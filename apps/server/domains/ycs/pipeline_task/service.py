@@ -46,7 +46,6 @@ import os
 from typing import Any
 
 import redis.asyncio as redis_aio
-from celery.result import AsyncResult
 from elasticsearch import AsyncElasticsearch
 from qdrant_client import AsyncQdrantClient
 
@@ -73,7 +72,7 @@ def dispatch_videos_pipeline(
     streaming-aggregator lookup key (not real task ids — see docstring);
     `invalidate` is `""` (its real id is only known once the run's
     exactly-once finalize actually dispatches it)."""
-    result: AsyncResult = domains.ycs.extract.task.extract_videos.apply_async(
+    result: infra.celery.service.AsyncResult = domains.ycs.extract.task.extract_videos.apply_async(
         args = (video_ids, include_transcription, languages),
     )
     extract_id = result.id
@@ -242,7 +241,7 @@ def revoke_pipeline_phases(
             kwargs: dict[str, Any] = {"terminate": terminate}
             if terminate:
                 kwargs["signal"] = "SIGTERM"
-            infra.celery.service.app.control.revoke(tid, **kwargs)
+            infra.celery.service.revoke(tid, **kwargs)
             outcomes[tid] = "revoked"
         except Exception as e:
             outcomes[tid] = f"error: {type(e).__name__}: {e}"
