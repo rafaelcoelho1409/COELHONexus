@@ -34,31 +34,21 @@ exists (no separate delete needed) but 409s if the alias NAME collides
 with a REAL collection — so cutover only needs to pre-delete when
 `QDRANT_COLLECTION` is still a real (pre-migration) collection."""
 from __future__ import annotations
-import domains
+import domains, infra
 import domains.ycs.embedding_migration.task
 import domains.ycs.qdrant_task.task
 from . import domain, keys, params
 
 import json
 import logging
-import os
 import time
 from typing import Any
-
-from qdrant_client import AsyncQdrantClient
-from qdrant_client.http.models import CreateAlias, CreateAliasOperation
-
 
 logger = logging.getLogger(__name__)
 
 
-def _build_qdrant() -> AsyncQdrantClient:
-    qdrant_api_key = os.environ.get("QDRANT_API_KEY")
-    return AsyncQdrantClient(
-        url     = os.environ.get("QDRANT_URL", "http://localhost:6333"),
-        port    = int(os.environ.get("QDRANT_PORT", "6333")),
-        api_key = qdrant_api_key if qdrant_api_key else None,
-    )
+def _build_qdrant() -> infra.qdrant.service.AsyncQdrantClient:
+    return infra.qdrant.service.new_qdrant()
 
 
 async def check_migration_needed_now() -> dict[str, str] | None:
@@ -84,7 +74,7 @@ async def check_migration_needed_now() -> dict[str, str] | None:
         await qdrant.close()
 
 
-async def get_active_collection_name(qdrant: AsyncQdrantClient) -> str:
+async def get_active_collection_name(qdrant: infra.qdrant.service.AsyncQdrantClient) -> str:
     """The REAL physical collection `QDRANT_COLLECTION` currently
     resolves to — read-only, informational (Settings page "current
     collection" display). Returns the literal `QDRANT_COLLECTION` name
@@ -100,7 +90,7 @@ async def get_active_collection_name(qdrant: AsyncQdrantClient) -> str:
     return domains.ycs.ingestion.params.QDRANT_COLLECTION
 
 
-async def check_migration_needed(qdrant: AsyncQdrantClient, configured_pinned_id: str) -> dict[str, str] | None:
+async def check_migration_needed(qdrant: infra.qdrant.service.AsyncQdrantClient, configured_pinned_id: str) -> dict[str, str] | None:
     """None if nothing needs migrating (no active collection yet, its
     stored model already matches, or the user is in "auto" mode —
     explicitly opted OUT of the strict-consistency guarantee, so drift
@@ -148,7 +138,7 @@ async def get_migration_state(redis: Any) -> dict[str, Any] | None:
 
 async def start_migration(
     redis: Any,
-    qdrant: AsyncQdrantClient,
+    qdrant: infra.qdrant.service.AsyncQdrantClient,
     *,
     from_model: str,
     to_model: str,
@@ -197,7 +187,7 @@ async def set_migration_task_id(redis: Any, task_id: str) -> None:
 
 async def dispatch_migration(
     redis: Any,
-    qdrant: AsyncQdrantClient,
+    qdrant: infra.qdrant.service.AsyncQdrantClient,
     *,
     from_model: str,
     to_model: str,
@@ -230,7 +220,7 @@ async def dispatch_migration(
     return state
 
 
-async def cutover(redis: Any, qdrant: AsyncQdrantClient, physical_collection: str) -> None:
+async def cutover(redis: Any, qdrant: infra.qdrant.service.AsyncQdrantClient, physical_collection: str) -> None:
     """Atomically re-point the `QDRANT_COLLECTION` alias at the newly
     migrated physical collection, then clear migration state. Safe to
     call whether `QDRANT_COLLECTION` is currently a real (pre-migration)
@@ -246,7 +236,7 @@ async def cutover(redis: Any, qdrant: AsyncQdrantClient, physical_collection: st
     ):
         await qdrant.update_collection_aliases(
             change_aliases_operations = [
-                CreateAliasOperation(create_alias = CreateAlias(
+                infra.qdrant.service.models.CreateAliasOperation(create_alias = infra.qdrant.service.models.CreateAlias(
                     collection_name = physical_collection, alias_name = domains.ycs.ingestion.params.QDRANT_COLLECTION,
                 )),
             ],

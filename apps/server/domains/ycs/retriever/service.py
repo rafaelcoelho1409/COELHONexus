@@ -21,18 +21,6 @@ from typing import Any, Awaitable
 
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
-from langchain_qdrant import FastEmbedSparse
-from qdrant_client import AsyncQdrantClient
-from qdrant_client.http.models import (
-    FieldCondition,
-    Filter,
-    Fusion,
-    FusionQuery,
-    MatchAny,
-    Prefetch,
-    SearchParams,
-    SparseVector,
-)
 
 
 logger = logging.getLogger(__name__)
@@ -161,9 +149,9 @@ class QdrantHybridRetriever:
 
     def __init__(
         self,
-        qdrant: AsyncQdrantClient,
+        qdrant: infra.qdrant.service.AsyncQdrantClient,
         dense_embeddings: Embeddings,
-        sparse_embeddings: FastEmbedSparse,
+        sparse_embeddings: infra.qdrant.service.FastEmbedSparse,
         top_k: int = params.QDRANT_DEFAULT_TOP_K,
         es_client: infra.elasticsearch.service.AsyncElasticsearch | None = None,
     ) -> None:
@@ -188,19 +176,19 @@ class QdrantHybridRetriever:
 
         # PRE-filter (not post-filter) — applied during the vector
         # search itself per Qdrant best practice.
-        query_filter: Filter | None = None
+        query_filter: infra.qdrant.service.models.Filter | None = None
         if channel_ids:
-            query_filter = Filter(
+            query_filter = infra.qdrant.service.models.Filter(
                 must = [
-                    FieldCondition(
+                    infra.qdrant.service.models.FieldCondition(
                         key = "channel_id",
-                        match = MatchAny(any = channel_ids),
+                        match = infra.qdrant.service.models.MatchAny(any = channel_ids),
                     ),
                 ],
             )
 
-        prefetch: list[Prefetch] = [
-            Prefetch(
+        prefetch: list[infra.qdrant.service.models.Prefetch] = [
+            infra.qdrant.service.models.Prefetch(
                 query =  dense_vector,
                 using =  "dense",
                 limit =  self.top_k * 2,
@@ -209,8 +197,8 @@ class QdrantHybridRetriever:
         ]
         if sparse_vector is not None:
             prefetch.append(
-                Prefetch(
-                    query = SparseVector(
+                infra.qdrant.service.models.Prefetch(
+                    query = infra.qdrant.service.models.SparseVector(
                         indices = sparse_vector.indices,
                         values =  sparse_vector.values,
                     ),
@@ -228,7 +216,7 @@ class QdrantHybridRetriever:
             results = await self.qdrant.query_points(
                 collection_name = domains.ycs.ingestion.params.QDRANT_COLLECTION,
                 prefetch = prefetch,
-                query = FusionQuery(fusion = Fusion.RRF),
+                query = infra.qdrant.service.models.FusionQuery(fusion = infra.qdrant.service.models.Fusion.RRF),
                 limit = self.top_k,
                 with_payload = True,
                 # 2026-09-15 (SOTA follow-up): explicit search-time
@@ -240,7 +228,7 @@ class QdrantHybridRetriever:
                 # it takes effect automatically as the corpus grows
                 # past 10k points toward HNSW. (1.16.1 names this
                 # `search_params`; per-prefetch `params` left default.)
-                search_params = SearchParams(hnsw_ef = 128),
+                search_params = infra.qdrant.service.models.SearchParams(hnsw_ef = 128),
             )
 
         documents: list[Document] = []

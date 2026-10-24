@@ -46,7 +46,6 @@ import os
 from typing import Any
 
 import redis.asyncio as redis_aio
-from qdrant_client import AsyncQdrantClient
 
 from . import keys, params
 
@@ -147,12 +146,7 @@ async def wipe_videos_data(
     summary: dict[str, Any] = {"video_ids": list(video_ids)}
 
     es = infra.elasticsearch.service.new_es()
-    qdrant_api_key = os.environ.get("QDRANT_API_KEY")
-    qdrant = AsyncQdrantClient(
-        url     = os.environ.get("QDRANT_URL", "http://localhost:6333"),
-        port    = int(os.environ.get("QDRANT_PORT", "6333")),
-        api_key = qdrant_api_key if qdrant_api_key else None,
-    )
+    qdrant = infra.qdrant.service.new_qdrant()
     try:
         # 1. Expand to partition ids FIRST, while ES's transcripts index
         # still has the parent→partition mapping. 2026-09-26: this used

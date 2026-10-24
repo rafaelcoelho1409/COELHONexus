@@ -8,7 +8,6 @@ import os
 from typing import Any
 
 import redis.asyncio as redis_aio
-from qdrant_client import AsyncQdrantClient
 
 logger = infra.celery.service.get_task_logger(__name__)
 
@@ -78,14 +77,7 @@ def ingest_to_qdrant(
                     "video_count": len(video_ids or []),
                 })
                 es = infra.elasticsearch.service.new_es()
-                qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:6333")
-                qdrant_port = int(os.environ.get("QDRANT_PORT", "6333"))
-                qdrant_api_key = os.environ.get("QDRANT_API_KEY")
-                qdrant = AsyncQdrantClient(
-                    url     = qdrant_url,
-                    port    = qdrant_port,
-                    api_key = qdrant_api_key if qdrant_api_key else None,
-                )
+                qdrant = infra.qdrant.service.new_qdrant()
                 try:
                     try:
                         _kwargs: dict[str, Any] = {
@@ -148,14 +140,7 @@ def stream_video_to_qdrant(
 
     async def _run() -> dict[str, Any]:
         es = infra.elasticsearch.service.new_es()
-        qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:6333")
-        qdrant_port = int(os.environ.get("QDRANT_PORT", "6333"))
-        qdrant_api_key = os.environ.get("QDRANT_API_KEY")
-        qdrant = AsyncQdrantClient(
-            url     = qdrant_url,
-            port    = qdrant_port,
-            api_key = qdrant_api_key if qdrant_api_key else None,
-        )
+        qdrant = infra.qdrant.service.new_qdrant()
         redis = domains.ycs.pipeline_task.service.build_redis_client()
         try:
             result = await domains.ycs.ingestion.service.stream_video_to_qdrant(

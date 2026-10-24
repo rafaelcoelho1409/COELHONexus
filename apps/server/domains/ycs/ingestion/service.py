@@ -15,20 +15,6 @@ import logging
 from typing import Any, AsyncIterator, Callable
 
 from langchain_core.documents import Document
-from qdrant_client import AsyncQdrantClient
-from qdrant_client.http.models import (
-    Distance,
-    FieldCondition,
-    Filter,
-    FilterSelector,
-    HnswConfigDiff,
-    MatchAny,
-    PointStruct,
-    SparseIndexParams,
-    SparseVector,
-    SparseVectorParams,
-    VectorParams,
-)
 from redis.asyncio import Redis
 from redis.asyncio.lock import Lock
 
@@ -37,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 async def ensure_collection(
-    qdrant: AsyncQdrantClient, dense_dimensions: int, embedding_model: str = "",
+    qdrant: infra.qdrant.service.AsyncQdrantClient, dense_dimensions: int, embedding_model: str = "",
     collection_name: str = params.QDRANT_COLLECTION,
 ) -> bool:
     """Idempotent collection create. Returns True only on first
@@ -156,24 +142,24 @@ async def ensure_collection(
         await qdrant.create_collection(
             collection_name = collection_name,
             vectors_config = {
-                "dense": VectorParams(
+                "dense": infra.qdrant.service.models.VectorParams(
                     size = dense_dimensions,
-                    distance = Distance.COSINE,
+                    distance = infra.qdrant.service.models.Distance.COSINE,
                     # 2026-09-15: explicit HNSW (was server defaults
                     # m=16/ef_construct=100). ef_construct=200 is the
                     # canonical production default — one-time build cost
                     # for a permanently better graph; m=16 unchanged
                     # (32 buys <1% recall at 2× RAM). Applies to future
                     # collections; existing ones keep their graph.
-                    hnsw_config = HnswConfigDiff(
+                    hnsw_config = infra.qdrant.service.models.HnswConfigDiff(
                         m = 16,
                         ef_construct = 200,
                     ),
                 ),
             },
             sparse_vectors_config = {
-                "sparse": SparseVectorParams(
-                    index = SparseIndexParams(on_disk = False),
+                "sparse": infra.qdrant.service.models.SparseVectorParams(
+                    index = infra.qdrant.service.models.SparseIndexParams(on_disk = False),
                 ),
             },
         )
@@ -301,7 +287,7 @@ async def fetch_transcripts_from_es(
 
 async def ingest_to_qdrant(
     es: infra.elasticsearch.service.AsyncElasticsearch,
-    qdrant: AsyncQdrantClient,
+    qdrant: infra.qdrant.service.AsyncQdrantClient,
     video_ids: list[str] | None = None,
     chunk_size: int = params.DEFAULT_CHUNK_SIZE,
     chunk_overlap: int = params.DEFAULT_CHUNK_OVERLAP,
@@ -368,9 +354,9 @@ async def ingest_to_qdrant(
             try:
                 points, _ = await qdrant.scroll(
                     collection_name = collection_name,
-                    scroll_filter = Filter(must = [
-                        FieldCondition(
-                            key = "video_id", match = MatchAny(any = [vid]),
+                    scroll_filter = infra.qdrant.service.models.Filter(must = [
+                        infra.qdrant.service.models.FieldCondition(
+                            key = "video_id", match = infra.qdrant.service.models.MatchAny(any = [vid]),
                         ),
                     ]),
                     limit = 1,
@@ -447,14 +433,14 @@ async def ingest_to_qdrant(
         # SAME real calls above, not re-derived.
         model_used = dense_embeddings.last_model or ""
         points = [
-            PointStruct(
+            infra.qdrant.service.models.PointStruct(
                 id = keys.point_id(
                     doc.metadata["video_id"],
                     doc.metadata["chunk_index"],
                 ),
                 vector = {
                     "dense": dense_vectors[i],
-                    "sparse": SparseVector(
+                    "sparse": infra.qdrant.service.models.SparseVector(
                         indices = sparse_vectors[i].indices,
                         values =  sparse_vectors[i].values,
                     ),
@@ -514,11 +500,11 @@ async def ingest_to_qdrant(
             try:
                 await qdrant.delete(
                     collection_name = collection_name,
-                    points_selector = FilterSelector(
-                        filter = Filter(must = [
-                            FieldCondition(
+                    points_selector = infra.qdrant.service.models.FilterSelector(
+                        filter = infra.qdrant.service.models.Filter(must = [
+                            infra.qdrant.service.models.FieldCondition(
                                 key = "video_id",
-                                match = MatchAny(any = [vid]),
+                                match = infra.qdrant.service.models.MatchAny(any = [vid]),
                             ),
                         ]),
                     ),
@@ -603,7 +589,7 @@ async def expand_with_partition_ids(
     return list(set(video_ids) | partition_ids)
 
 
-async def _find_all_ycs_collections(qdrant: AsyncQdrantClient) -> list[str]:
+async def _find_all_ycs_collections(qdrant: infra.qdrant.service.AsyncQdrantClient) -> list[str]:
     """Every REAL Qdrant collection that could hold YCS video data —
     the bare `params.QDRANT_COLLECTION` name (if it's still a literal, pre-
     migration collection) plus every versioned physical collection any
@@ -632,7 +618,7 @@ async def _find_all_ycs_collections(qdrant: AsyncQdrantClient) -> list[str]:
 
 
 async def delete_points_for_videos(
-    qdrant:    AsyncQdrantClient,
+    qdrant:    infra.qdrant.service.AsyncQdrantClient,
     video_ids: list[str],
 ) -> dict[str, Any]:
     """Best-effort delete of every Qdrant point whose payload
@@ -670,12 +656,12 @@ async def delete_points_for_videos(
         try:
             result = await qdrant.delete(
                 collection_name = name,
-                points_selector = FilterSelector(
-                    filter = Filter(
+                points_selector = infra.qdrant.service.models.FilterSelector(
+                    filter = infra.qdrant.service.models.Filter(
                         must = [
-                            FieldCondition(
+                            infra.qdrant.service.models.FieldCondition(
                                 key = "video_id",
-                                match = MatchAny(any = list(video_ids)),
+                                match = infra.qdrant.service.models.MatchAny(any = list(video_ids)),
                             ),
                         ],
                     ),
@@ -720,7 +706,7 @@ async def delete_points_for_videos(
 
 
 async def _already_current(
-    qdrant: AsyncQdrantClient, video_id: str, content_hash: str,
+    qdrant: infra.qdrant.service.AsyncQdrantClient, video_id: str, content_hash: str,
 ) -> bool:
     """Same content-hash skip as the bulk path's pre-pass — a Rerun
     over an unchanged video shouldn't re-embed it. Best-effort: any
@@ -729,8 +715,8 @@ async def _already_current(
     try:
         points, _ = await qdrant.scroll(
             collection_name = params.QDRANT_COLLECTION,
-            scroll_filter = Filter(must = [
-                FieldCondition(key = "video_id", match = MatchAny(any = [video_id])),
+            scroll_filter = infra.qdrant.service.models.Filter(must = [
+                infra.qdrant.service.models.FieldCondition(key = "video_id", match = infra.qdrant.service.models.MatchAny(any = [video_id])),
             ]),
             limit = 1,
             with_payload = ["content_hash"],
@@ -744,7 +730,7 @@ async def _already_current(
 
 
 async def _flush_buffer(
-    redis: Redis, qdrant: AsyncQdrantClient, extract_id: str, *, drain_all: bool = False,
+    redis: Redis, qdrant: infra.qdrant.service.AsyncQdrantClient, extract_id: str, *, drain_all: bool = False,
 ) -> int:
     """Lock-guarded pop-and-upsert. Returns points upserted (0 if
     another caller was already flushing, or the buffer was empty).
@@ -853,11 +839,11 @@ async def _flush_buffer(
         sparse_vectors = list(sparse_embeddings.embed_documents(texts))
         model_used = dense_embeddings.last_model or ""
         points = [
-            PointStruct(
+            infra.qdrant.service.models.PointStruct(
                 id = keys.point_id(doc.metadata["video_id"], doc.metadata["chunk_index"]),
                 vector = {
                     "dense": dense_vectors[i],
-                    "sparse": SparseVector(
+                    "sparse": infra.qdrant.service.models.SparseVector(
                         indices = sparse_vectors[i].indices,
                         values =  sparse_vectors[i].values,
                     ),
@@ -898,7 +884,7 @@ async def _flush_buffer(
 
 async def stream_video_to_qdrant(
     es:            infra.elasticsearch.service.AsyncElasticsearch,
-    qdrant:        AsyncQdrantClient,
+    qdrant:        infra.qdrant.service.AsyncQdrantClient,
     redis:         Redis,
     video_id:      str,
     extract_id:    str,
@@ -959,9 +945,9 @@ async def stream_video_to_qdrant(
     try:
         await qdrant.delete(
             collection_name = params.QDRANT_COLLECTION,
-            points_selector = FilterSelector(
-                filter = Filter(must = [
-                    FieldCondition(key = "video_id", match = MatchAny(any = [video_id])),
+            points_selector = infra.qdrant.service.models.FilterSelector(
+                filter = infra.qdrant.service.models.Filter(must = [
+                    infra.qdrant.service.models.FieldCondition(key = "video_id", match = infra.qdrant.service.models.MatchAny(any = [video_id])),
                 ]),
             ),
         )
@@ -986,7 +972,7 @@ async def stream_video_to_qdrant(
 
 
 async def finalize_qdrant_buffer(
-    redis: Redis, qdrant: AsyncQdrantClient, extract_id: str,
+    redis: Redis, qdrant: infra.qdrant.service.AsyncQdrantClient, extract_id: str,
 ) -> int:
     """Called by whichever per-video task turns out to be the LAST one
     for the Qdrant phase (see `pipeline_task.service.mark_video_done`)

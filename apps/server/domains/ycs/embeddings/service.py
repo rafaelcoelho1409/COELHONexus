@@ -17,7 +17,7 @@ weeks after NIM retired the previously-hardcoded model on 2026-08-25.
 Dimension is learned from the real endpoint response, never hardcoded —
 no provider publishes it in a models listing."""
 from __future__ import annotations
-import domains
+import domains, infra
 from . import domain, errors, params
 
 import asyncio
@@ -26,7 +26,6 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from langchain_core.embeddings import Embeddings
-from langchain_qdrant import FastEmbedSparse
 
 
 logger = logging.getLogger(__name__)
@@ -163,10 +162,10 @@ async def get_embedding_info() -> tuple[int, str]:
     return await dense.probe()
 
 
-_sparse: Optional[FastEmbedSparse] = None
+_sparse: Optional[infra.qdrant.service.FastEmbedSparse] = None
 
 
-def create_sparse_embeddings() -> FastEmbedSparse:
+def create_sparse_embeddings() -> infra.qdrant.service.FastEmbedSparse:
     """BM25 sparse — local, deterministic, tiny CPU cost. Unrelated to the
     dense embedding endpoint above.
 
@@ -176,5 +175,5 @@ def create_sparse_embeddings() -> FastEmbedSparse:
     stateless across calls."""
     global _sparse
     if _sparse is None:
-        _sparse = FastEmbedSparse(model_name = params.SPARSE_MODEL_NAME)
+        _sparse = infra.qdrant.service.FastEmbedSparse(model_name = params.SPARSE_MODEL_NAME)
     return _sparse

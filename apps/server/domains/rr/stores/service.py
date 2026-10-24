@@ -31,16 +31,6 @@ import infra
 import psycopg
 from botocore.exceptions import ClientError
 from psycopg.types.json import Jsonb
-from qdrant_client.http.models import (
-    Distance,
-    FieldCondition,
-    Filter,
-    MatchValue,
-    OptimizersConfigDiff,
-    PayloadSchemaType,
-    PointStruct,
-    VectorParams,
-)
 
 
 logger = logging.getLogger(__name__)
@@ -781,11 +771,11 @@ async def bootstrap_qdrant() -> None:
         else:
             await client.create_collection(
                 collection_name = rr_keys.QDRANT_COLLECTION,
-                vectors_config  = VectorParams(
+                vectors_config  = infra.qdrant.service.models.VectorParams(
                     size     = rr_params.STORES_PARAMS.qdrant_vector_dim,
-                    distance = Distance.COSINE,
+                    distance = infra.qdrant.service.models.Distance.COSINE,
                 ),
-                optimizers_config = OptimizersConfigDiff(
+                optimizers_config = infra.qdrant.service.models.OptimizersConfigDiff(
                     default_segment_number = rr_params.STORES_PARAMS.qdrant_segment_count,
                 ),
             )
@@ -796,10 +786,10 @@ async def bootstrap_qdrant() -> None:
         # Payload indexes — idempotent (Qdrant ignores duplicates). These speed
         # up filter+search by 10-100× on the radar's typical queries.
         for field, schema in (
-            (rr_keys.QDRANT_PAYLOAD_ARXIV_ID,  PayloadSchemaType.KEYWORD),
-            (rr_keys.QDRANT_PAYLOAD_SIGNAL,    PayloadSchemaType.FLOAT),
-            (rr_keys.QDRANT_PAYLOAD_PUBLISHED, PayloadSchemaType.DATETIME),
-            (rr_keys.QDRANT_PAYLOAD_SOURCES,   PayloadSchemaType.KEYWORD),
+            (rr_keys.QDRANT_PAYLOAD_ARXIV_ID,  infra.qdrant.service.models.PayloadSchemaType.KEYWORD),
+            (rr_keys.QDRANT_PAYLOAD_SIGNAL,    infra.qdrant.service.models.PayloadSchemaType.FLOAT),
+            (rr_keys.QDRANT_PAYLOAD_PUBLISHED, infra.qdrant.service.models.PayloadSchemaType.DATETIME),
+            (rr_keys.QDRANT_PAYLOAD_SOURCES,   infra.qdrant.service.models.PayloadSchemaType.KEYWORD),
         ):
             try:
                 await client.create_payload_index(
@@ -826,7 +816,7 @@ async def upsert_paper_vector(
     don't pre-check here)."""
     if not paper.arxiv_id:
         raise ValueError("[rr-qdrant] upsert_paper_vector requires arxiv_id != None")
-    point = PointStruct(
+    point = infra.qdrant.service.models.PointStruct(
         id      = keys.point_id(paper.arxiv_id),
         vector  = list(embedding),
         payload = {
@@ -864,13 +854,13 @@ async def search_by_embedding(
     1.16 (same live-confirmed break YCS's retriever/query paths hit — see
     `domains/ycs/retriever/service.py`); `query_points()` is the
     replacement, returning `.points` instead of a bare list."""
-    flt: Filter | None = None
+    flt: infra.qdrant.service.models.Filter | None = None
     if arxiv_ids:
-        flt = Filter(
+        flt = infra.qdrant.service.models.Filter(
             must=[
-                FieldCondition(
+                infra.qdrant.service.models.FieldCondition(
                     key   = rr_keys.QDRANT_PAYLOAD_ARXIV_ID,
-                    match = MatchValue(value=aid),
+                    match = infra.qdrant.service.models.MatchValue(value=aid),
                 )
                 for aid in arxiv_ids
             ]

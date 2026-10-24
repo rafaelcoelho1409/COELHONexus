@@ -1,11 +1,8 @@
 """content service — ingestion guards + client factories shared by endpoints."""
 from __future__ import annotations
-import domains
-
-import os
+import domains, infra
 
 from fastapi import HTTPException
-from qdrant_client import AsyncQdrantClient
 
 
 async def _raise_if_embedding_migration_needed(include_transcription: bool) -> None:
@@ -49,9 +46,4 @@ async def _raise_if_embedding_migration_needed(include_transcription: bool) -> N
 
 
 def _build_qdrant():
-    qdrant_api_key = os.environ.get("QDRANT_API_KEY")
-    return AsyncQdrantClient(
-        url     = os.environ.get("QDRANT_URL", "http://localhost:6333"),
-        port    = int(os.environ.get("QDRANT_PORT", "6333")),
-        api_key = qdrant_api_key if qdrant_api_key else None,
-    )
+    return infra.qdrant.service.new_qdrant()

@@ -23,11 +23,8 @@ from . import domain, params, schemas
 import asyncio
 import json
 import logging
-import os
 import time
 from typing import Any, Callable
-
-from qdrant_client import AsyncQdrantClient
 
 
 logger = logging.getLogger(__name__)
@@ -294,14 +291,7 @@ async def dispatch_streaming_totals(
             neo4j_total > 0 and neo4j_finished >= neo4j_total
         )
         if qdrant_completed_here:
-            qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:6333")
-            qdrant_port = int(os.environ.get("QDRANT_PORT", "6333"))
-            qdrant_api_key = os.environ.get("QDRANT_API_KEY")
-            qdrant = AsyncQdrantClient(
-                url     = qdrant_url,
-                port    = qdrant_port,
-                api_key = qdrant_api_key if qdrant_api_key else None,
-            )
+            qdrant = infra.qdrant.service.new_qdrant()
             try:
                 # `finalize_qdrant_buffer` re-queues and RAISES on a
                 # transient embed/upsert failure (by design — see its

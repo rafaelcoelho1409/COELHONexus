@@ -28,7 +28,6 @@ import os
 import time
 
 import redis.asyncio as redis_aio
-from qdrant_client import AsyncQdrantClient
 
 
 logger = infra.celery.service.get_task_logger(__name__)
@@ -53,12 +52,7 @@ def finalize_embedding_migration(self, physical_collection: str) -> dict:
             if redis_password else f"redis://{redis_host}:{redis_port}"
         )
         redis = redis_aio.from_url(redis_url)
-        qdrant_api_key = os.environ.get("QDRANT_API_KEY")
-        qdrant = AsyncQdrantClient(
-            url     = os.environ.get("QDRANT_URL", "http://localhost:6333"),
-            port    = int(os.environ.get("QDRANT_PORT", "6333")),
-            api_key = qdrant_api_key if qdrant_api_key else None,
-        )
+        qdrant = infra.qdrant.service.new_qdrant()
         with infra.langfuse.service.session(
             "ycs-embedding-migration",
             session_id = self.request.id or "(no-request-id)",
