@@ -1,7 +1,7 @@
 """COELHO Nexus — FastMCP server. Registers all domain tools and exposes the Streamable-HTTP ASGI app.
 
 Deliberately a SIMPLE MCP server: no OpenTelemetry, no LangFuse. Those
-stay in apps/fastapi/ (which owns the observability stack); a future
+stay in apps/server/ (which owns the observability stack); a future
 FastMCP project can re-add per-tool spans following this repo's git
 history. What remains here is rate limiting + credential injection.
 

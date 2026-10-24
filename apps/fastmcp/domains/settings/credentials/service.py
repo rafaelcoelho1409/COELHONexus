@@ -1,13 +1,13 @@
 """Sync MinIO+Fernet credential reader — fastmcp peer app.
 
-Subset port of apps/fastapi/domains/llm/credentials/service.py — READ ONLY.
+Subset port of apps/server/domains/llm/credentials/service.py — READ ONLY.
 Same MinIO endpoint, same KEK resolution, same `llm/credentials.enc`
 ciphertext file. Decrypts to a `{env_var_name: api_key}` dict; the public
 helpers resolve a single key OR inject all known tool keys into os.environ.
 
 Why subset:
   - fastmcp doesn't write keys (the Settings UI in apps/fasthtml writes via
-    apps/fastapi/api/v1/rr/tool-credentials/).
+    apps/server/entrypoints/api/v1/rr/tool-credentials/).
   - No TTL cache / settings storage / hot-reload needed — fastmcp resolves
     once at startup; key changes require a pod restart.
 
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 def _minio_client():
-    """Build a sync S3 client. Reads the same env vars fastapi's store uses."""
+    """Build a sync S3 client. Reads the same env vars the server's store uses."""
     endpoint = os.environ.get("MINIO_ENDPOINT", "").strip()
     if not endpoint:
         raise RuntimeError("MINIO_ENDPOINT unset — cannot read credentials store")

@@ -34,7 +34,7 @@
 #   - ArgoCD reconciles → rolls the new image into the cluster
 #
 # Requires Application annotations on each managed app, e.g.:
-#   argocd-image-updater.argoproj.io/image-list: app=coelho-cloud-registry:5000/coelhonexus-fastapi
+#   argocd-image-updater.argoproj.io/image-list: app=coelho-cloud-registry:5000/coelhonexus-server
 #   argocd-image-updater.argoproj.io/app.update-strategy: digest
 #   argocd-image-updater.argoproj.io/write-back-method: argocd
 # =============================================================================

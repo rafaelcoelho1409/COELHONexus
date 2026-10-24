@@ -24,7 +24,7 @@ Three deploy mechanisms, three disjoint port ranges (kept deliberately non-overl
 
 | Service | URL | Login |
 |---|---|---|
-| **FastAPI** | http://localhost:23030 | — (no auth) |
+| **Server** | http://localhost:23030 | — (no auth) |
 | **Flower** (Celery) | http://localhost:23032 | — (only if `flower.basicAuth.enabled=true` in chart) |
 | **FastHTML** | http://localhost:23033 | — (no auth) |
 | **FastMCP** | http://localhost:23034 | — (no auth; internal MCP gateway) |
@@ -86,7 +86,7 @@ If Rancher misbehaves after you've previously used the URL on a different config
 | | Where it lives |
 |---|---|
 | **Cluster data layer** (postgres, redis, neo4j, elasticsearch, minio, qdrant, langfuse) | `infrastructure/env.hcl` `demo` block — the data modules are provisioned with these |
-| **App-side env vars** (read by FastAPI/Celery/FastHTML/FastMCP pods) | `.env` (gitignored; copy from `.env.example`) → uploaded as `coelhonexus-secret` K8s Secret via `python upload_env_to_k3d.py .env coelhonexus-dev` (cross-platform — Windows/macOS/Linux) |
+| **App-side env vars** (read by Server/Celery/FastHTML/FastMCP pods) | `.env` (gitignored; copy from `.env.example`) → uploaded as `coelhonexus-secret` K8s Secret via `python upload_env_to_k3d.py .env coelhonexus-dev` (cross-platform — Windows/macOS/Linux) |
 | **Rancher / Grafana / LangFuse admin passwords** | `infrastructure/env.hcl` `demo.*_password` entries |
 | **BYOK LLM API keys** | `.env` for one-time bootstrap, then via the `/settings` UI (Fernet-encrypted in MinIO) |
 
@@ -117,7 +117,7 @@ for svc in 23019:playwright-headed-cdp 23020:playwright-headless-cdp; do
 done
 
 # Apps — only respond while `skaffold dev` is running in the foreground
-for svc in 23030:fastapi 23032:flower 23033:fasthtml 23034:fastmcp; do
+for svc in 23030:server 23032:flower 23033:fasthtml 23034:fastmcp; do
   port=${svc%:*}; name=${svc#*:}
   code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://localhost:$port/" 2>/dev/null)
   echo "  $name (localhost:$port): HTTP $code"

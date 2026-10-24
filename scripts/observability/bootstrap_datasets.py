@@ -8,10 +8,10 @@ dataset names like `dd.reference_book.v1` and assume they exist in
 LangFuse. Without this bootstrap, the runners fail with "dataset not
 found" — even though the fixture files are sitting on disk.
 
-Run inside the FastAPI container (the only place `langfuse` Python SDK +
+Run inside the server container (the only place `langfuse` Python SDK +
 `langfuse.<host>` env vars are reliably available):
 
-    kubectl exec -i -n coelhonexus-dev <fastapi-pod> -c coelhonexus-fastapi -- \
+    kubectl exec -i -n coelhonexus-dev <server-pod> -c coelhonexus-server -- \
         bash -c "PYTHONPATH=/app python /app/scripts/observability/bootstrap_datasets.py"
 
 Idempotent: re-runs only add NEW items to existing datasets (LangFuse

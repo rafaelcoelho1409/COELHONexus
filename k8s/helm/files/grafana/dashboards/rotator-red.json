@@ -200,7 +200,7 @@
       "id": 7,
       "type": "logs",
       "title": "Recent rotator error logs",
-      "description": "Discovery, benchmark, and canonicalization issues from the FastAPI and Celery services.",
+      "description": "Discovery, benchmark, and canonicalization issues from the server and Celery services.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -217,7 +217,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-fastapi|coelhonexus-celery\"} |~ \"(?i)(rotator|benchmark|canonical|discovery|error|exception|traceback|failed)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\" | regexp \"(?P<provider>(?i)(nim|groq|gemini|cerebras|mistral|sambanova))\"",
+          "expr": "{namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-server|coelhonexus-celery\"} |~ \"(?i)(rotator|benchmark|canonical|discovery|error|exception|traceback|failed)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\" | regexp \"(?P<provider>(?i)(nim|groq|gemini|cerebras|mistral|sambanova))\"",
           "refId": "A"
         }
       ],
@@ -253,7 +253,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum by (detected_level) (count_over_time({namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-fastapi|coelhonexus-celery\"} |~ \"(?i)(rotator|benchmark|canonical|discovery)\" [5m]))",
+          "expr": "sum by (detected_level) (count_over_time({namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-server|coelhonexus-celery\"} |~ \"(?i)(rotator|benchmark|canonical|discovery)\" [5m]))",
           "legendFormat": "{{detected_level}}",
           "refId": "A"
         }

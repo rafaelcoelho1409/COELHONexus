@@ -5,8 +5,8 @@ For each dataset item, attempt a real YCS Ask via in-cluster httpx to
 ingested data (the answer will be ungrounded LLM output), the judge
 still scores relevance against the reference answer.
 
-Run inside the FastAPI container:
-    kubectl exec -i -n coelhonexus-dev <pod> -c coelhonexus-fastapi -- \\
+Run inside the server container:
+    kubectl exec -i -n coelhonexus-dev <pod> -c coelhonexus-server -- \\
         bash -c "PYTHONPATH=/app python /tmp/run_ragas_relevance_eval.py"
 """
 from __future__ import annotations

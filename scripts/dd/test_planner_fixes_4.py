@@ -2,7 +2,7 @@
 overlap, cluster-based split (+ naming), catch-all appendix split, title-based shuffled ordering,
 migration pin, sample angles, assign length retry.
 
-    cd apps/fastapi && .venv/bin/python ../../scripts/dd/test_planner_fixes_4.py [planner_artifacts.jsonl]
+    cd apps/server && .venv/bin/python ../../scripts/dd/test_planner_fixes_4.py [planner_artifacts.jsonl]
 
 With a dump from dump_planner_artifacts.py it also replays selection + the computed split on every
 stored framework."""
@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "fastapi"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
 nodes = domains.dd.planner.nodes

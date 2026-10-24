@@ -4,9 +4,9 @@ Usage (from repo root,two arms, no code changes between them):
   1. Deploy once (this script + the YCS_ABLATE_NO_GRADE gate in grade/node.py).
   2. Arm A (grader ON, default):  python3 scripts/ycs_grader_ablation.py --arm on
   3. Flip flag (fast restart, no rebuild):
-       kubectl set env -n coelhonexus-dev deploy/coelhonexus-fastapi YCS_ABLATE_NO_GRADE=1
+       kubectl set env -n coelhonexus-dev deploy/coelhonexus-server YCS_ABLATE_NO_GRADE=1
   4. Arm B (bypassed):            python3 scripts/ycs_grader_ablation.py --arm off
-  5. Clear flag: kubectl set env -n coelhonexus-dev deploy/coelhonexus-fastapi YCS_ABLATE_NO_GRADE-
+  5. Clear flag: kubectl set env -n coelhonexus-dev deploy/coelhonexus-server YCS_ABLATE_NO_GRADE-
   6. Compare /tmp/ycs_ablation_{on,off}.json blind (answers shuffled by --judge).
 
 Each arm asks the same 10 fixed questions on fresh threads (no cache),
@@ -37,7 +37,7 @@ QUESTIONS = [
 
 POD_CMD = [
     "kubectl", "exec", "-n", "coelhonexus-dev",
-    "deploy/coelhonexus-fastapi", "-c", "coelhonexus-fastapi", "--",
+    "deploy/coelhonexus-server", "-c", "coelhonexus-server", "--",
 ]
 
 PY_ASK = """

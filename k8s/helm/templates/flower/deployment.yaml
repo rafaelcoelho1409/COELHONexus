@@ -44,12 +44,12 @@ spec:
             {{- if .Values.flower.basicAuth.enabled }}
             - "--basic_auth=$(FLOWER_BASIC_AUTH)"
             {{- end }}
-          # Reuse the FastAPI ConfigMap to get REDIS_HOST + REDIS_PORT.
+          # Reuse the server ConfigMap to get REDIS_HOST + REDIS_PORT.
           # Extra env vars (NEO4J_URI, QDRANT_URL, etc.) are harmless to
           # Flower and avoid needing a flower-specific configmap.
           envFrom:
             - configMapRef:
-                name: coelhonexus-fastapi-configmap
+                name: coelhonexus-server-configmap
           env:
             # REDIS_PASSWORD comes from coelhonexus-secret via secretMappings.
             {{- include "coelhonexus.secretEnvVars" . | nindent 12 }}

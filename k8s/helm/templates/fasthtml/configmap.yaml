@@ -6,5 +6,5 @@ data:
   {{- include "coelhonexus.commonEnvVars" . | nindent 2 }}
   # FastHTML server configuration
   PORT: "3000"
-  # FastAPI backend URL (internal cluster DNS)
-  FASTAPI_URL: "http://coelhonexus-fastapi:8000"
+  # Server backend URL (internal cluster DNS)
+  SERVER_URL: "http://coelhonexus-server:8000"

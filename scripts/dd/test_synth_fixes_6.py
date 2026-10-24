@@ -1,11 +1,11 @@
 """Offline check for the outline block count (2026-10-16): the section floor and the block-aware cap read the chapter's code-block count, which was
 always 0 because it looked for a sentinel tag the raw bodies do not carry yet.
 
-    cd apps/fastapi && .venv/bin/python ../../scripts/dd/test_synth_fixes_6.py"""
+    cd apps/server && .venv/bin/python ../../scripts/dd/test_synth_fixes_6.py"""
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "fastapi"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
 OL = domains.dd.synth.nodes.outline

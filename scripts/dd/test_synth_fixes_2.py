@@ -2,12 +2,12 @@
 a source the digest routed nowhere is placed, the code-density floor follows the blocks the chapter has, the source top-up
 writes one subtopic per page, and book_harmonize only patches grounded violations, one paragraph at a time.
 
-    cd apps/fastapi && .venv/bin/python ../../scripts/dd/test_synth_fixes_2.py"""
+    cd apps/server && .venv/bin/python ../../scripts/dd/test_synth_fixes_2.py"""
 import asyncio
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "fastapi"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
 DG = domains.dd.synth.nodes.digest.domain
@@ -309,12 +309,12 @@ from fastapi import Response
 import os
 for _ in range(30):                 # the router's module-level config reads env vars the cluster sets; give missing ones a dummy
     try:
-        R = importlib.import_module("api.v1.dd.synth.router")
-        S = importlib.import_module("api.v1.dd.synth.service")
+        R = importlib.import_module("entrypoints.api.v1.dd.synth.router")
+        S = importlib.import_module("entrypoints.api.v1.dd.synth.service")
         break
     except KeyError as e:
         os.environ.setdefault(str(e.args[0]), "localhost")
-        for m in [m for m in sys.modules if m.startswith("api.")]:
+        for m in [m for m in sys.modules if m == "entrypoints" or m.startswith("entrypoints.")]:
             del sys.modules[m]
 class FakeRedis:
     def __init__(self, kv): self.kv = kv

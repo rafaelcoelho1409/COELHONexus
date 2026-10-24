@@ -1,7 +1,7 @@
 """One-shot uploader — publish `dd.planner.chapter_propose` to LangFuse.
 
 The template MIRRORS the local f-string in
-`apps/fastapi/domains/dd/planner/nodes/chapter_propose/prompts.py`. Keep
+`apps/server/domains/dd/planner/nodes/chapter_propose/prompts.py`. Keep
 them in sync: if the local builder changes, re-run this script to push
 the new shape with a fresh label.
 
@@ -14,8 +14,8 @@ Variables (must match the `variables=` dict passed by `get_prompt`):
     headings_block   namespaces_block
     corpus_label     corpus_block
 
-Run inside the FastAPI container:
-    kubectl exec -n coelhonexus-dev <fastapi-pod> -c coelhonexus-fastapi -- \\
+Run inside the server container:
+    kubectl exec -n coelhonexus-dev <server-pod> -c coelhonexus-server -- \\
         python /app/scripts/observability/publish_chapter_propose_prompt.py
 """
 from __future__ import annotations

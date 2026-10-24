@@ -1,5 +1,5 @@
 """Business domains. One sub-package per bounded context (rr, settings,
-future ycs, future dd). Mirrors `apps/fastapi/domains/`.
+future ycs, future dd). Mirrors `apps/server/domains/`.
 
 The MCP surface (tools/resources/prompts) lives in the feature domains;
 `settings` is the credential backing store with no MCP surface.

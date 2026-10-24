@@ -54,7 +54,7 @@ The point of this repo isn't just "three AI apps." It's a demonstration of what 
 </div>
 
 **Three microservices, one platform:**
-- **FastAPI** — the ML/agent backend. Owns the actual pipelines for all three features, plus Celery-orchestrated background task queues (one isolated queue per feature pipeline).
+- **Server** — the FastAPI ML/agent backend (with a FastMCP endpoint at `/mcp`). Owns the actual pipelines for all three features, plus Celery-orchestrated background task queues (one isolated queue per feature pipeline).
 - **FastHTML** — the frontend. Server-side rendered, HTMX-reactive, no separate JS build step. Streams live pipeline progress over SSE.
 - **FastMCP** — an internal Model Context Protocol tool surface. Exposes discovery/retrieval tools that the agent pipelines call into, with BYOK credential injection and rate-limited token buckets.
 
@@ -248,12 +248,12 @@ Two independent deploy paths — pick one. **Option A (ArgoCD) has been verified
 
 Build and push images to the registry first; ArgoCD's Image Updater (not you) detects the new image and triggers the deploy. Two interchangeable ways to build — pick either, both push to the same registry under the same name+tag, and Image Updater can't tell which tool produced the image.
 
-Host-facing `localhost:5001` (not the in-cluster `coelhonexus-registry:5000` DNS name) in both, because this runs from a plain host terminal, not a Docker-in-Docker CI runner on the registry's own Docker network. **Tag must be `latest`, not a git SHA** — `k8s/argocd/prod/image-updater.yaml` hardcodes `imageName: coelhonexus-registry:5000/coelhonexus-fastapi:latest` (and same for fasthtml/fastmcp) with `updateStrategy: digest`. Image Updater watches that one fixed `:latest` tag for digest changes; it does not scan for new SHA-tagged images.
+Host-facing `localhost:5001` (not the in-cluster `coelhonexus-registry:5000` DNS name) in both, because this runs from a plain host terminal, not a Docker-in-Docker CI runner on the registry's own Docker network. **Tag must be `latest`, not a git SHA** — `k8s/argocd/prod/image-updater.yaml` hardcodes `imageName: coelhonexus-registry:5000/coelhonexus-server:latest` (and same for fasthtml/fastmcp) with `updateStrategy: digest`. Image Updater watches that one fixed `:latest` tag for digest changes; it does not scan for new SHA-tagged images.
 
 **a. Via `docker buildx build`** (one command per service, no `skaffold.yaml` involved — `--push` builds and pushes in one step, no separate `docker push` needed):
 
 ```bash
-docker buildx build --push -t localhost:5001/coelhonexus-fastapi:latest  -f apps/fastapi/Dockerfile.fastapi  apps/fastapi
+docker buildx build --push -t localhost:5001/coelhonexus-server:latest   -f apps/server/Dockerfile.server   apps/server
 docker buildx build --push -t localhost:5001/coelhonexus-fasthtml:latest -f apps/fasthtml/Dockerfile.fasthtml apps/fasthtml
 docker buildx build --push -t localhost:5001/coelhonexus-fastmcp:latest  -f apps/fastmcp/Dockerfile.fastmcp  apps/fastmcp
 ```
@@ -272,11 +272,11 @@ kubectl apply -f k8s/argocd/prod/
 
 `k8s/argocd/prod/application.yaml` points at this public GitHub repo directly (no in-cluster Git server on the standalone cluster — kept out of the port to save ~3 GB RAM). Same build/push-then-Image-Updater-deploys split `.gitlab-ci.yml` uses elsewhere, just with GitHub as the source and a manual build/push instead of a CI pipeline.
 
-**Reach the deployed app** — no port-forward process needed. FastAPI/Flower/FastHTML/FastMCP are on the same native k3d NodePort mapping the infrastructure services already use (see [`docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md`](docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md)) — reachable immediately, whichever deployment (this one or `skaffold dev`) currently holds those Service NodePorts:
+**Reach the deployed app** — no port-forward process needed. Server/Flower/FastHTML/FastMCP are on the same native k3d NodePort mapping the infrastructure services already use (see [`docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md`](docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md)) — reachable immediately, whichever deployment (this one or `skaffold dev`) currently holds those Service NodePorts:
 
 | Service | URL |
 |---|---|
-| FastAPI | http://localhost:23024 |
+| Server | http://localhost:23024 |
 | Flower | http://localhost:23025 |
 | FastHTML | http://localhost:23026 |
 | FastMCP | http://localhost:23027 |
@@ -291,7 +291,7 @@ helm upgrade --install coelhonexus k8s/helm \
   --create-namespace \
   -f k8s/helm/values.yaml \
   -f k8s/helm/values-coelhonexus.yaml \
-  --set fastapi.image=localhost:5001/coelhonexus-fastapi:latest \
+  --set server.image=localhost:5001/coelhonexus-server:latest \
   --set fasthtml.image=localhost:5001/coelhonexus-fasthtml:latest \
   --set fastmcp.image=localhost:5001/coelhonexus-fastmcp:latest
 ```
@@ -340,7 +340,7 @@ rm -rf infrastructure/.tfstate/   # local Terragrunt state (empty after a clean 
 
 Two independent access mechanisms exist, and they use *different port numbers* — mixing them up is the most common "why won't this load" moment on a fresh install:
 
-- **Native k3d NodePorts** — baked into the cluster at creation time, work immediately after `terragrunt apply`, no extra process required. Covers every infrastructure service below *and* the app layer (FastAPI/Flower/FastHTML/FastMCP), reaching whichever deployment — ArgoCD or `skaffold dev` — currently holds those Service NodePorts.
+- **Native k3d NodePorts** — baked into the cluster at creation time, work immediately after `terragrunt apply`, no extra process required. Covers every infrastructure service below *and* the app layer (Server/Flower/FastHTML/FastMCP), reaching whichever deployment — ArgoCD or `skaffold dev` — currently holds those Service NodePorts.
 - **`skaffold dev`'s built-in `portForward:`** — a second, dev-loop-specific way to reach the app layer, guaranteed to target the `coelhonexus-dev` namespace specifically regardless of what else is running. Cross-platform (it's Skaffold itself doing the forwarding, not a wrapper script), but only active while `skaffold dev` is running in the foreground.
 
 Three deploy mechanisms, three disjoint port ranges — kept deliberately non-overlapping so none of them can ever collide with each other:
@@ -356,11 +356,11 @@ Full URL/credential table, quirks, and a connectivity smoke-test script live in 
 
 | Service | Default URL | Requires | Username | Password / Key |
 |---|---|---|---|---|
-| **FastAPI** | http://localhost:23024 | nothing — native NodePort | — | — (no auth) |
+| **Server** | http://localhost:23024 | nothing — native NodePort | — | — (no auth) |
 | **Flower** (Celery) | http://localhost:23025 | nothing — native NodePort | — | — (no auth) |
 | **FastHTML** | http://localhost:23026 | nothing — native NodePort | — | — (no auth) |
 | **FastMCP** | http://localhost:23027 | nothing — native NodePort | — | — (no auth) |
-| **FastAPI** (dev loop) | http://localhost:23030 | `skaffold dev` | — | — (no auth) |
+| **Server** (dev loop) | http://localhost:23030 | `skaffold dev` | — | — (no auth) |
 | **Flower** (dev loop) | http://localhost:23032 | `skaffold dev` | — | — (no auth) |
 | **FastHTML** (dev loop) | http://localhost:23033 | `skaffold dev` | — | — (no auth) |
 | **FastMCP** (dev loop) | http://localhost:23034 | `skaffold dev` | — | — (no auth) |
@@ -410,8 +410,8 @@ Both models deploy the exact same Helm chart (`k8s/helm/`) — only the registry
 ```
 COELHONexus/
 ├── apps/
-│   ├── fastapi/                # ML/agent backend
-│   │   ├── api/                 # HTTP route layer
+│   ├── server/                 # FastAPI + FastMCP backend
+│   │   ├── entrypoints/          # api/ (REST routes) + mcp/ (MCP tools)
 │   │   ├── domains/              # dd/ ycs/ rr/ llm/ — one folder per feature
 │   │   └── infra/                # otel/, langfuse/, db clients
 │   ├── fasthtml/                # Server-rendered frontend
@@ -421,7 +421,7 @@ COELHONexus/
 │   └── fastmcp/                  # Internal MCP tool gateway
 │       ├── domains/               # tool implementations per feature
 │       ├── middleware/            # telemetry, auth, rate limiting
-│       └── infra/                 # otel/ mirror of FastAPI's
+│       └── infra/                 # otel/ mirror of the server's
 │
 ├── infrastructure/               # Terraform + Terragrunt IaC
 │   ├── modules/                  # 18 reusable modules (one per service)

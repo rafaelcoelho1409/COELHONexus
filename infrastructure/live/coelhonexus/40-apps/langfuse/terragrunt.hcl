@@ -6,7 +6,7 @@
 #
 # OTLP endpoint after this leaf is green:
 #   http://langfuse-web.langfuse.svc.cluster.local:3000/api/public/otel
-#   (already what apps/fastapi/infra/otel/exporters.py points at)
+#   (already what apps/server/infra/otel/exporters.py points at)
 #
 # Initial login (post-apply):
 #   email:    admin@demo.local

@@ -1,6 +1,6 @@
 """Credential-store identifiers — per docs/CODE-CONVENTIONS.md §2.
 
-Key shapes agreed with the FastAPI writer (`apps/fastapi/domains/settings/`):
+Key shapes agreed with the server writer (`apps/server/domains/settings/`):
 both sides must name the same MinIO objects and env var or the store
 silently forks. Boto/deployment env names (MINIO_ENDPOINT, AWS_* keys)
 stay inline in `service.py` — standard SDK reads, not cross-app contract.

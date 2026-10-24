@@ -1,6 +1,6 @@
 {{/*
 Generate image name
-Usage: {{ include "coelhonexus.imageName" (dict "appName" "fastapi" "root" .) }}
+Usage: {{ include "coelhonexus.imageName" (dict "appName" "server" "root" .) }}
 Images are specified with full registry path in values.yaml
 */}}
 {{- define "coelhonexus.imageName" -}}
@@ -14,7 +14,7 @@ Credentials are loaded from secret via secretRef
 */}}
 {{- define "coelhonexus.commonEnvVars" -}}
 ENVIRONMENT: "{{ .Values.environment }}"
-FASTAPI_HOST: "coelhonexus-fastapi"
+SERVER_HOST: "coelhonexus-server"
 LLM_ENDPOINT_URL: "{{ .Values.llm.endpoint.url }}"
 LLM_API_KEY: "{{ .Values.llm.endpoint.apiKey }}"
 LLM_MODEL: "{{ .Values.llm.endpoint.model }}"
@@ -247,7 +247,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{/*
 Service ports settings - ClusterIP for local (Skaffold), full portsSettings for production (ArgoCD)
-Usage: {{ include "coelhonexus.ServicePortsSettings" (dict "appName" "fastapi" "root" .) }}
+Usage: {{ include "coelhonexus.ServicePortsSettings" (dict "appName" "server" "root" .) }}
 */}}
 {{- define "coelhonexus.ServicePortsSettings" -}}
 {{- if eq .root.Values.environment "local" }}
@@ -267,7 +267,7 @@ Usage: {{ include "coelhonexus.ServicePortsSettings" (dict "appName" "fastapi" "
 
 {{/*
 Probe settings - renders all probes (startup, liveness, readiness) for a container
-Usage: {{ include "coelhonexus.ProbeSettings" (dict "appName" "fastapi" "root" .) }}
+Usage: {{ include "coelhonexus.ProbeSettings" (dict "appName" "server" "root" .) }}
 
 Probe execution order:
 1. startupProbe  - Runs ONLY during startup, disables liveness/readiness until success

@@ -1,11 +1,11 @@
 """Offline checks for the 2026-10-16 batch (no LLM, no cluster): Foundations never takes catalog-directory pages.
 
-    cd apps/fastapi && .venv/bin/python ../../scripts/dd/test_planner_fixes_10.py"""
+    cd apps/server && .venv/bin/python ../../scripts/dd/test_planner_fixes_10.py"""
 import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "fastapi"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
 sel = domains.dd.planner.nodes.chapter_select.domain

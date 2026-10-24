@@ -1,6 +1,6 @@
 # DD Ingestion — per-tier smoke test picks
 
-Quick reference for validating the ingestion download pipeline end-to-end after any change to `apps/fastapi/domains/dd/ingestion/tiers/*`. Run in order; fail-fast on the cheapest first.
+Quick reference for validating the ingestion download pipeline end-to-end after any change to `apps/server/domains/dd/ingestion/tiers/*`. Run in order; fail-fast on the cheapest first.
 
 ---
 
@@ -70,12 +70,12 @@ At time of writing the catalog has:
 - **Tier 4** (Sphinx-only): 43 entries — ADTK, Ansible, Apache Airflow, Asyncio, Bash, Celery (Python), Delta Lake (Python), Go, Kafka (Python), Kubeflow, **NumPy**, Pandas, Scikit-Learn, PyTorch Lightning, …
 - **Tier 5** (github only): 0 entries
 
-The full catalog lives at `apps/fastapi/domains/dd/resolver/sources.yaml`. Run this Python one-liner to recompute the tier distribution after catalog edits:
+The full catalog lives at `apps/server/domains/dd/resolver/sources.yaml`. Run this Python one-liner to recompute the tier distribution after catalog edits:
 
 ```bash
 python3 -c "
 import yaml
-data = yaml.safe_load(open('apps/fastapi/domains/dd/resolver/sources.yaml'))['frameworks']
+data = yaml.safe_load(open('apps/server/domains/dd/resolver/sources.yaml'))['frameworks']
 tiers = {1:[], 2:[], 3:[], 4:[], 5:[]}
 for e in data:
     if   e.get('llms_full'): tiers[1].append(e['name'])

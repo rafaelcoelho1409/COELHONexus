@@ -4,7 +4,7 @@ Pattern mirrors features/dd/ + features/ycs/:
   - `routes.py` registers the route(s)
   - `body.py` composes the page body via FastHTML's Python DSL
 
-The page calls into FastAPI via the proxy:
+The page calls into the server via the proxy:
   POST /api/v1/rr/scan          → enqueue scan; returns {scan_id, task_id, ...}
   GET  /api/v1/rr/scan/{id}     → snapshot status + findings (when done)
   GET  /api/v1/rr/scan/{id}/events  → SSE phase stream

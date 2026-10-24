@@ -15,7 +15,7 @@ concurrency:
 
 env:
   REGISTRY: coelho-cloud-registry:5000
-  IMAGES: "coelhonexus-fastapi coelhonexus-fasthtml coelhonexus-fastmcp"
+  IMAGES: "coelhonexus-server coelhonexus-fasthtml coelhonexus-fastmcp"
   SKAFFOLD_VERSION: v2.18.1 # keep in sync with local dev pin (`skaffold version`)
   DOCKER_BUILDKIT: "1"
 jobs:
@@ -67,7 +67,7 @@ jobs:
           done
           docker info
 
-      - name: Skaffold build + push (fastapi, fasthtml, fastmcp)
+      - name: Skaffold build + push (server, fasthtml, fastmcp)
         run: |
           set -euo pipefail
           SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"

@@ -1,11 +1,11 @@
-# Single-stage Dockerfile for Skaffold file sync. Mirrors apps/fastapi/Dockerfile
+# Single-stage Dockerfile for Skaffold file sync. Mirrors apps/server/Dockerfile
 # pattern: uv for fast deps, python:3.13-slim base, uvicorn entrypoint.
 FROM python:3.13-slim
 
 # Copy uv binary from official image
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# UV optimization flags (same as fastapi)
+# UV optimization flags (same as server)
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never

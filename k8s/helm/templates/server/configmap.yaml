@@ -1,0 +1,9 @@
+{{- $appName := "server" -}}
+
+apiVersion: v1
+{{- include "coelhonexus.ConfigMapSettings" (dict "appName" $appName "root" .) | nindent 0}}
+data:
+  {{- include "coelhonexus.commonEnvVars" . | nindent 2 }}
+  # MinIO/S3 endpoint
+  AWS_DEFAULT_REGION: "us-east-1"
+  # Credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) loaded from secret

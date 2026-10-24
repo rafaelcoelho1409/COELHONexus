@@ -1,0 +1,122 @@
+[project]
+name = "coelhonexus-server"
+version = "1.0.0"
+description = "COELHO Nexus - FastAPI + FastMCP server"
+requires-python = ">=3.13"
+dependencies = [
+    # Web framework — cap major (1.0 will signal API stability changes)
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.32,<1.0",
+    "pydantic>=2.9,<3.0",              # v3 is a full rewrite
+    "httpx>=0.27,<1.0",
+    "celery[redis]>=5.4,<6.0",
+    "redis>=5.0,<7.0",                 # 5→6 was stable; cap before 7
+    "pyyaml>=6.0,<7.0",
+    # Ingestion stack
+    "beautifulsoup4>=4.12,<5.0",       # HTML parsing for sitemap + tier 4 fallback
+    "lxml>=5.0,<7.0",                  # fast XML parser for sitemap.xml
+    "markdownify>=0.13,<2.0",          # HTML → markdown (tier 3, tier 4 httpx path)
+    "markdown-it-py>=3.0,<4.0",        # token-aware monolith splitter (post-process)
+    "mdit-py-plugins>=0.4,<1.0",       # frontmatter / deflist / footnote tokens
+    "tenacity>=8.0,<10.0",             # exponential-backoff retry helper
+    "aioboto3>=13.0,<15.0",            # async S3 client for MinIO (page-body storage)
+    "crawl4ai>=0.8.0,<0.9",            # AsyncUrlSeeder + Playwright-CDP BFS fallback
+    "yt-dlp>=2026.02.21",              # floor patches CVE-2026-26331 (RCE via --netrc-cmd, unused here)
+    "bgutil-ytdlp-pot-provider>=1.3.0,<2.0",
+    "curl_cffi>=0.11,<0.15",           # Browser impersonation for yt-dlp (0.15 unsupported)
+    "playwright>=1.40,<2.0",           # client only — connects to in-cluster CDP sidecar
+    "qdrant-client>=1.10,<2.0",        # Qdrant vector DB client (services/youtube/store.py)
+    "langchain-text-splitters>=1.1,<2.0",   # 1.x needed for langchain-core 1.x compat
+    # YCS persistence: Elasticsearch (video metadata/transcripts), Neo4j (entity graph).
+    "elasticsearch[async]>=8,<9",
+    "neo4j>=5,<6",
+    "langchain_neo4j>=0.1,<1.0",
+    "flashrank>=0.2,<1.0",             # cross-encoder reranker
+    "langchain-qdrant>=1.1,<2.0",      # 1.x needed for langchain-core 1.x compat
+    "fastembed>=0.4,<1.0",             # BM25 sparse encoder behind FastEmbedSparse (CPU build; optional extra, pin explicitly)
+    "langchain-experimental>=0.3,<1.0", # LLMGraphTransformer for YCS graph_builder
+    "langchain-openai>=1.1,<2.0",      # ChatOpenAI client for the with_fallbacks LLM chain
+    # litellm PINNED EXACT: v1.82.7/v1.82.8 were supply-chain compromised
+    # (2026-03-24); v1.83.12/.14 ship a broken cost_calculator import. 1.83.13
+    # is the clean patch — do not bump without re-vetting.
+    "litellm==1.83.13",
+    # cryptography floor patches CVE-2026-39892 + CVE-2026-26007; cap <49 for OpenSSL 3.5.6.
+    "cryptography>=46.0.7,<49",
+    "numpy>=1.26,<2.2",                # LinUCB sufficient-statistics matrix algebra
+    "rapidfuzz>=3.0,<4.0",             # benchmarks L2 model-name canonicalization (token_set_ratio)
+    "json-repair>=0.30,<1.0",          # LangChain LLMGraphTransformer's ignore_tool_usage path needs this
+    # OpenTelemetry — emits LLM call spans to Alloy (gRPC) and LangFuse (HTTP/OTLP).
+    "opentelemetry-api>=1.30,<2.0",
+    "opentelemetry-sdk>=1.30,<2.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.30,<2.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.30,<2.0",
+    "opentelemetry-instrumentation-fastapi>=0.50b0,<1.0",
+    "opentelemetry-instrumentation-httpx>=0.50b0,<1.0",
+    "opentelemetry-instrumentation-redis>=0.50b0,<1.0",
+    "opentelemetry-instrumentation-celery>=0.50b0,<1.0",
+    "opentelemetry-instrumentation-logging>=0.50b0,<1.0",
+    "opentelemetry-processor-baggage>=0.50b0,<1.0",  # propagates baggage (study_id, channel_id, etc.) onto child spans
+    "langfuse>=3,<4",                  # SDK-only surface (prompts/sessions/scores); trace ingestion is via OTLP
+    "langgraph>=1.2,<2.0",             # floor bumped: needs langgraph-checkpoint>=4.1 + langchain-core>=1.4
+    "langgraph-checkpoint-postgres>=3.1,<4.0",   # 3.1.0 is the floor requiring/supplying checkpoint>=4.1 compat
+    "psycopg[binary]>=3.2,<4.0",       # async driver for AsyncPostgresSaver — binary wheel, no libpq needed
+    "langchain-core>=1.4,<2.0",        # floor bumped: deepagents 0.6 + langgraph 1.2 require >=1.4
+    # Research Radar agent stack: DeepAgents orchestrator + LangChain MCP adapter.
+    "deepagents>=0.6,<1.0",
+    "langchain-mcp-adapters>=0.3,<1.0",
+    # MCP server mounted into the FastAPI app (mcp_server/); same range as apps/fastmcp.
+    "fastmcp>=3.2,<4.0",
+    # Directly imported but only pulled in transitively — declared explicitly
+    # so an upstream version change can't silently break these imports (deptry DEP003).
+    "botocore>=1.37,<2.0",
+    "starlette>=1.2,<2.0",
+    "jinja2>=3.1,<4.0",
+    "langchain>=1.3,<2.0",
+    "openai>=2.24,<3.0",
+]
+
+[tool.deptry.per_rule_ignores]
+# Load-bearing but never `import`ed by name, so deptry can't see the usage.
+DEP002 = [
+    "uvicorn",                    # ASGI server run via entrypoint.sh CLI
+    "lxml",                       # BeautifulSoup(html, "lxml") parser backend, by string
+    "yt-dlp",                     # invoked as an external CLI binary via subprocess
+    "bgutil-ytdlp-pot-provider",  # yt-dlp plugin, self-registers by package name
+    "curl_cffi",                  # yt-dlp's own impersonation backend
+    "fastembed",                  # langchain-qdrant's FastEmbedSparse imports it internally
+    "litellm",                    # pinned to win resolution over crawl4ai's compromised fork (see override below)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# __init__.py's `from . import sibling_module` is a side-effecting namespace
+# populate for the dotted-path convention (domains.dd.planner.foo()) — not dead code.
+"__init__.py" = ["F401"]
+
+[tool.uv]
+# Application, not an installable library — no single dir matches the
+# project name for hatchling to ship as a wheel. package=false skips that
+# build so `uv add`/`uv run` work locally (Docker already uses --no-install-project).
+package = false
+
+# crawl4ai's transitive `unclecode-litellm` (a pre-compromise litellm fork)
+# collides with upstream litellm in the same `litellm/` namespace, causing a
+# nondeterministic ImportError. Override forces it out; crawl4ai's runtime
+# `import litellm` then resolves to the pinned upstream package instead.
+#
+# litellm 1.83.13 pins python-dotenv==1.0.1 but fastmcp needs >=1.1.0. litellm only
+# calls load_dotenv() (stable API), so the pin is lifted here instead of bumping
+# litellm (which is pinned exact on purpose).
+override-dependencies = [
+    "unclecode-litellm; python_version >= '99'",
+    "python-dotenv>=1.1.0,<2.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pyflakes>=3.2,<4.0",
+    "deptry>=0.25,<1.0",
+]

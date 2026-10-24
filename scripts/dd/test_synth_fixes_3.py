@@ -1,10 +1,10 @@
 """Offline checks for the 2026-10-16 synth batch (no LLM, no cluster): list trimming and the capacity-aware coverage gate.
 
-    cd apps/fastapi && .venv/bin/python ../../scripts/dd/test_synth_fixes_3.py"""
+    cd apps/server && .venv/bin/python ../../scripts/dd/test_synth_fixes_3.py"""
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "fastapi"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
 N = domains.dd.synth.nodes

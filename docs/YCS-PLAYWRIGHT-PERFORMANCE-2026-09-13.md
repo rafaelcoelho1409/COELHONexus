@@ -35,7 +35,7 @@ could replace Playwright+CDP for speed/RAM/captcha reasons. Findings:
 
 ## Shipped changes, in order applied
 
-All in `apps/fastapi/domains/ycs/transcript/{params,service}.py` unless
+All in `apps/server/domains/ycs/transcript/{params,service}.py` unless
 noted.
 
 ### 1. Resource blocklist expansion

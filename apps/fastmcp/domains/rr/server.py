@@ -3,7 +3,7 @@
 Pattern: each domain owns a `register(mcp)` function that registers all its
 MCP capabilities (tools, resources, prompts, domain-specific middleware) on
 the root FastMCP server. Mirrors the apps/fasthtml `features.X.register(rt)`
-convention so the three peer apps (fastapi · fasthtml · fastmcp) share a
+convention so the three peer apps (server · fasthtml · fastmcp) share a
 uniform "register feature on root app" idiom.
 
 Step-7 (2026-06-12): Resources + Prompts added (architecture-doc §2.2).

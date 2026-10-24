@@ -37,7 +37,7 @@ POST https://integrate.api.nvidia.com/v1/embeddings "HTTP/1.1 410 Gone"
 EmbeddingError: NIM embedding API HTTP 410: "The model 'nvidia/llama-nemotron-embed-1b-v2'
 has reached its end of life on 2026-08-25T09:00:00Z and is no longer available."
 ```
-`apps/fastapi/domains/ycs/embeddings/params.py:22-25` hardcodes this dead model as the default `EMBEDDING_MODEL`. Every `ingest_to_qdrant` Celery task has been failing outright since Aug 25 — unrelated to which channel or video is being ingested.
+`apps/server/domains/ycs/embeddings/params.py:22-25` hardcodes this dead model as the default `EMBEDDING_MODEL`. Every `ingest_to_qdrant` Celery task has been failing outright since Aug 25 — unrelated to which channel or video is being ingested.
 
 **Stopgap (5 min, ship immediately, does not depend on the rotator work below):** swap the default to `nvidia/llama-embed-nemotron-8b` — confirmed SOTA on the MMTEB benchmark (Oct 21 2025, #1 multilingual, 131 tasks, 250+ languages, purpose-built for cross-lingual retrieval) and already flagged as the target pick in an earlier DD-Synth SOTA note (2026-05-23). Add its entry to `MODEL_DIMENSIONS` (same file). Same base_url, no Qdrant schema break for new writes.
 
@@ -45,7 +45,7 @@ has reached its end of life on 2026-08-25T09:00:00Z and is no longer available."
 
 5/25 videos failed with `no INNERTUBE_CONTEXT` → fell through to the slow DOM-scrape path → burned ~100s of hydration/panel-wait budget → failed `Transcript button not found`, 3 retries, permanent loss. Other videos hit the *identical* failure and recovered on a later retry via `get_panel` once contention eased (45.5s/video worst case → 4.0s/video clear). This proved it was a **transient render-contention race, not a captcha or permanent block**: `_fetch_via_get_panel`/`_fetch_via_get_transcript` read `window.ytcfg.get('INNERTUBE_CONTEXT')` immediately after `domcontentloaded` with no readiness wait, unlike `_get_player_state`'s existing wait for `ytInitialPlayerResponse`.
 
-**Fix applied:** `apps/fastapi/domains/ycs/transcript/service.py` — added `_wait_for_innertube_context(page, timeout_ms=3000)`, called right before Path 1/2 fire. Best-effort (times out silently, existing fallback chain still applies). Compiles clean, not yet redeployed.
+**Fix applied:** `apps/server/domains/ycs/transcript/service.py` — added `_wait_for_innertube_context(page, timeout_ms=3000)`, called right before Path 1/2 fire. Best-effort (times out silently, existing fallback chain still applies). Compiles clean, not yet redeployed.
 
 ---
 

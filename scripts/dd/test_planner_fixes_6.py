@@ -2,7 +2,7 @@
 SOURCE STRUCTURE, weak-batch propose retry, off_topic second opinion, directory-aware part-count /
 clustering of oversize and catch-all splits, orientation micro-chapters folded into Foundations.
 
-    cd apps/fastapi && .venv/bin/python ../../scripts/dd/test_planner_fixes_6.py [planner_artifacts.jsonl ...]
+    cd apps/server && .venv/bin/python ../../scripts/dd/test_planner_fixes_6.py [planner_artifacts.jsonl ...]
 
 With dumps from dump_planner_artifacts.py (several files allowed) it also replays the selection on every
 stored framework and checks the split groups."""
@@ -12,7 +12,7 @@ import random
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "fastapi"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import domains  # noqa: E402
 

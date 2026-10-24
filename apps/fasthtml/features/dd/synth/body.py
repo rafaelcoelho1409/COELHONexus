@@ -8,7 +8,7 @@ and the chapter panel only in study mode (≥2 chapters), so a non-study
 run keeps the graph at full width (flex).
 
 A small inline `<script>` at the bottom wires a fallback click handler on
-`#fw-synth-start` that issues a direct `fetch` to FastAPI's
+`#fw-synth-start` that issues a direct `fetch` to the server's
 `/synth/{slug}?mode=quality&budget=5`. Mirrors what `body.py` does for
 the Planner. The ES-module path has many fragile gates
 (`synthHasPlan`, `synthImplemented.size`, `synthThreadId`/`studyThreadId`

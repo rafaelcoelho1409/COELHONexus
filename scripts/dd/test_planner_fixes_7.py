@@ -1,7 +1,7 @@
 """Offline checks for the 2026-10-14 batch-9 fixes (no LLM, no cluster): the assign re-ask skip rule,
 directory-based sibling chapters in the order, conservative micro-chapter merge.
 
-    cd apps/fastapi && .venv/bin/python ../../scripts/dd/test_planner_fixes_7.py [planner_artifacts.jsonl ...]
+    cd apps/server && .venv/bin/python ../../scripts/dd/test_planner_fixes_7.py [planner_artifacts.jsonl ...]
 
 With dumps from dump_planner_artifacts.py it also replays the new rules on every stored plan."""
 import asyncio
@@ -9,7 +9,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "fastapi"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
 nodes = domains.dd.planner.nodes

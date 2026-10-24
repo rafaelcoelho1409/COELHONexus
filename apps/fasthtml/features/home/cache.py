@@ -25,14 +25,14 @@ DD as it did pre-redesign.
     2. Background pre-warm: a daemon thread fires all three fetches
        at module import, concurrently, so the cache is populated by
        the time the first user request lands on `/`. The thread is a
-       no-op on failure (e.g., FastAPI sidecar not ready yet at boot);
+       no-op on failure (e.g., server not ready yet at boot);
        the request-time call will repopulate the cache on its own."""
 import threading
 import time
 
 import httpx
 
-from proxy import FASTAPI_URL
+from proxy import SERVER_URL
 
 
 _TTL_S    = 60.0
@@ -59,7 +59,7 @@ def fetch_library() -> list[dict]:
     """DD ingestion library. Empty list on cold-start failure."""
     def _go():
         r = httpx.get(
-            f"{FASTAPI_URL}/api/v1/docs-distiller/ingestion", timeout = _TIMEOUT,
+            f"{SERVER_URL}/api/v1/docs-distiller/ingestion", timeout = _TIMEOUT,
         )
         r.raise_for_status()
         return r.json() or []
@@ -74,7 +74,7 @@ def fetch_ycs_total() -> int | None:
     earlier revision used the user-facing prefix and hit 404."""
     def _go():
         r = httpx.get(
-            f"{FASTAPI_URL}/api/v1/ycs/admin/videos",
+            f"{SERVER_URL}/api/v1/ycs/admin/videos",
             params  = {"limit": 1, "offset": 0},
             timeout = _TIMEOUT,
         )
@@ -88,7 +88,7 @@ def fetch_rr_total() -> int | None:
     """RR launched-scans count (last 100). None on cold-start failure."""
     def _go():
         r = httpx.get(
-            f"{FASTAPI_URL}/api/v1/rr/scans/recent",
+            f"{SERVER_URL}/api/v1/rr/scans/recent",
             params  = {"limit": 100, "profile_id": "default"},
             timeout = _TIMEOUT,
         )
@@ -107,7 +107,7 @@ def _prewarm() -> None:
     are populated (3-second worst-case race with the user), so the
     stats strip renders real numbers on first paint instead of dashes.
 
-    If the FastAPI sidecar isn't reachable at boot (cold cluster),
+    If the server isn't reachable at boot (cold cluster),
     the warmup is a no-op and the first request will trigger the
     real fetches with the bumped 5s timeout."""
     for fn in (fetch_library, fetch_ycs_total, fetch_rr_total):

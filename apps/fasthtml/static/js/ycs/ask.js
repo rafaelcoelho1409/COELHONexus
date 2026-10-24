@@ -8,7 +8,7 @@
  * picker, PUT /agents/config) and its backing endpoints were removed —
  * dead since 2026-06-17 when the frontend control for it was already
  * pulled (routing always goes through the Settings-page-configured
- * external rotator; see `api/v1/ycs/agents/router.py` git history).
+ * external rotator; see `entrypoints/api/v1/ycs/agents/router.py` git history).
  *
  * SSE consumption: events arrive as `data: {json}\n\n`. Each event is one
  * LangGraph node update (classify / retrieve / grade / generate / ...).
@@ -570,7 +570,7 @@ function _fmtTokens(n) {
  * by_model:{model:{tokens_in,tokens_out,calls}}}` — the diff the
  * backend computes between counter snapshots taken right before and
  * right after this turn's graph run (`_llm_diff_usage` in
- * `api/v1/ycs/agents/router.py`). Stashes the raw object into
+ * `entrypoints/api/v1/ycs/agents/router.py`). Stashes the raw object into
  * `turnDataMap` (via `getTurnData`) so `toggleTurnUsagePanel` can
  * render it on click without a second fetch — the data is already
  * here, live turns get it off the SSE `end` frame, history turns off
@@ -619,7 +619,7 @@ function toggleTurnUsagePanel(turn) {
         // `by_model` — it was built for DD/Ingestion's node-keyed
         // counters. The per-turn diff this panel renders is flat
         // (`{total, by_model}`, see `_llm_diff_usage` in
-        // `api/v1/ycs/agents/router.py` — one turn has no "node"
+        // `entrypoints/api/v1/ycs/agents/router.py` — one turn has no "node"
         // breakdown to speak of), so `by_node` was always empty and
         // the model table silently rendered nothing. 2026-09-16 fix:
         // wrap it under one synthetic node key — `_aggregateByModel`
@@ -1708,7 +1708,7 @@ const NODE_ACTION_TEXT = {
 };
 
 /* Keys match the EXACT node names emitted by the LangGraph backend
- * (see `apps/fastapi/domains/ycs/rag/{standard,adaptive}/graph.py`).
+ * (see `apps/server/domains/ycs/rag/{standard,adaptive}/graph.py`).
  * Old short aliases (`grade`, `hallucination`, `rewrite`) silently
  * dropped because no node emits them; the long names are what arrive
  * over SSE. `STAGE_ORDER` lets `markStage` advance all prior stages

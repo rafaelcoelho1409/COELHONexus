@@ -13,7 +13,7 @@ dependency, so:
 
 ## Current integration (as of `51e20d2` rotator / this Nexus tree)
 
-- `apps/fastapi/domains/llm/rotator/chain/service.py` in **COELHONexus is already a
+- `apps/server/domains/llm/rotator/chain/service.py` in **COELHONexus is already a
   thin HTTP adapter** — `AsyncOpenAI(base_url=ROTATOR_URL)`, OpenAI SDK, no
   in-process routing. `mark_inaccessible`, `_get_router`, `_redis_for_bandit` etc. are
   no-op shims. All FGTS-VA / bandit / discovery logic runs **server-side** in the
@@ -42,7 +42,7 @@ Chart-only, no app-logic change. Unblocks the two-`skaffold dev` workflow immedi
   block (`url` / `apiKey` / `model`).
 - `k8s/helm/templates/_helpers.tpl` — `commonEnvVars` now renders `LLM_ROTATOR_URL`
   / `LLM_API_KEY` / `LLM_MODEL` from `llm.endpoint.*` into all three app
-  configmaps (fastapi, celery, fasthtml).
+  configmaps (server, celery, fasthtml).
 
 Verified: `helm template . --set llm-rotator.enabled=false` drops the rotator
 Deployment/Service/etc.; default still renders it.
@@ -76,7 +76,7 @@ Caveats:
 
 ## Phase 2 — Settings page endpoint field (runtime override)  ✅ DONE (2026-09-10)
 
-Storage: the **credential store** (MinIO-backed, shared across fastapi/celery/rotator
+Storage: the **credential store** (MinIO-backed, shared across server/celery/rotator
 deployments, already the settings-persistence layer) — not a new Redis key. URL + model
 live in `settings.json` under `llm_endpoint`; the API key goes through the encrypted
 credentials blob via the managed env name `LLM_API_KEY`.

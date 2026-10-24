@@ -3,7 +3,7 @@ stored artifacts — no LLM, no cluster, no redeploy. Used to measure changes to
 chapter_select / consolidation against every stored framework before shipping.
 
     # 1) dump (see dump_planner_artifacts.py), 2) replay with the app's venv:
-    cd apps/fastapi && .venv/bin/python ../../scripts/dd/replay_select.py planner_artifacts.jsonl
+    cd apps/server && .venv/bin/python ../../scripts/dd/replay_select.py planner_artifacts.jsonl
 
 Prints per-framework metrics. Compare runs before/after a change:
   n_ch / max% / gini        chapter count, largest chapter share, size inequality
@@ -18,7 +18,7 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "fastapi"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
 sel = domains.dd.planner.nodes.chapter_select.domain

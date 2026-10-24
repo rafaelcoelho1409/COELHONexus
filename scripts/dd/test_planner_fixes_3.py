@@ -2,7 +2,7 @@
 one-word chapter titles, evidence-based sample pick, split repair, source-order gate,
 chapter composition in the order prompt, token budgets, doc_distill length retry.
 
-    cd apps/fastapi && .venv/bin/python ../../scripts/dd/test_planner_fixes_3.py [planner_artifacts.jsonl [langfuse_gens.json]]
+    cd apps/server && .venv/bin/python ../../scripts/dd/test_planner_fixes_3.py [planner_artifacts.jsonl [langfuse_gens.json]]
 
 With a dump from dump_planner_artifacts.py (+ the LangFuse chapter_propose generations as a JSON
 list of {input, output}) it also replays the real samples."""
@@ -12,7 +12,7 @@ import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "fastapi"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
 nodes = domains.dd.planner.nodes

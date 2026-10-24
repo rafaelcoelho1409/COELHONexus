@@ -8,8 +8,8 @@ echoes `current_arxiv_ids` as the "actual" output; the judge computes
 Useful sanity for the judge wiring + dataset run linkage; the production
 hook would feed `current_arxiv_ids` from the live RR digest scan.
 
-Run inside the FastAPI container:
-    kubectl exec -i -n coelhonexus-dev <pod> -c coelhonexus-fastapi -- \\
+Run inside the server container:
+    kubectl exec -i -n coelhonexus-dev <pod> -c coelhonexus-server -- \\
         bash -c "PYTHONPATH=/app python /tmp/run_novelty_eval.py"
 """
 from __future__ import annotations

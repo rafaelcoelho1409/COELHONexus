@@ -22,7 +22,7 @@ preference field — YCS ingests videos in whatever language they're
 actually in, per-run, so a single Settings-page language wouldn't make
 sense.
 
-Raw keys go browser → FastAPI on save and are NEVER returned. Responses
+Raw keys go browser → server on save and are NEVER returned. Responses
 carry masked status only (has_key + source + last4)."""
 from fasthtml.common import Button, Div, H3, Input, Label, P, Script, Span
 

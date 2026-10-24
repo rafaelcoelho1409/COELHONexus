@@ -4,7 +4,7 @@ Assembly only: build the app, mount /static, register every feature
 router, then serve. Everything else lives in dedicated packages:
 
   layout/                — HEAD + topbar/_Shell page chrome
-  proxy.py               — /api/{path:path} → FastAPI reverse proxy
+  proxy.py               — /api/{path:path} → server reverse proxy
   features/<name>/       — one package per feature, exposing register(rt)
     home/                — / landing
     dd/                  — /docs-distiller wizard (5 stage pages)
@@ -58,7 +58,7 @@ app, rt = fast_app(
 # that catch-all only does harm — it intercepts ANY URL ending in a known
 # asset extension BEFORE the `/api/{path:path}` proxy gets to see it,
 # including artifact endpoints like `/api/v1/.../artifacts/{sha}.png`
-# which then 404 from FastHTML instead of being forwarded to FastAPI.
+# which then 404 from FastHTML instead of being forwarded to the server.
 app.router.routes = [
     r for r in app.router.routes
     if getattr(r, "path", "") != "/{fname:path}.{ext:static}"

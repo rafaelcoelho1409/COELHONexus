@@ -8,9 +8,9 @@ Checks per pipeline:
 
 Exit 0 = all pipelines pass. Exit 1 = at least one check failed.
 
-Run inside the FastAPI container (LangFuse credentials available):
+Run inside the server container (LangFuse credentials available):
 
-    kubectl exec -i -n coelhonexus-dev <fastapi-pod> -c coelhonexus-fastapi -- \\
+    kubectl exec -i -n coelhonexus-dev <server-pod> -c coelhonexus-server -- \\
         bash -c "PYTHONPATH=/app python /app/scripts/observability/smoke_check_traces.py"
 
 Or with a custom lookback:

@@ -307,14 +307,14 @@ sum(max_over_time(rr_findings_sum[24h]))
 **All errors across every COELHO Nexus service**
 ```logql
 {namespace=~"coelhonexus.*",
- service_name=~"coelhonexus-fastapi|coelhonexus-celery|coelhonexus-fastmcp|coelhonexus-fasthtml"}
+ service_name=~"coelhonexus-server|coelhonexus-celery|coelhonexus-fastmcp|coelhonexus-fasthtml"}
   |~ "(?i)(error|exception|traceback|critical|failed)"
 ```
 
-**All errors with OTel trace link (FastAPI-side only)**
+**All errors with OTel trace link (server-side only)**
 ```logql
 {namespace=~"coelhonexus.*",
- service_name=~"coelhonexus-fastapi|coelhonexus-celery|coelhonexus-fastmcp|coelhonexus-fasthtml"}
+ service_name=~"coelhonexus-server|coelhonexus-celery|coelhonexus-fastmcp|coelhonexus-fasthtml"}
   |~ "(?i)(error|exception|traceback|critical|failed)"
   | regexp "(?P<trace_id>(?i)trace_id=[0-9a-f]{32})"
 ```
@@ -331,7 +331,7 @@ sum(max_over_time(rr_findings_sum[24h]))
 sum by (service_name) (
   count_over_time(
     {namespace=~"coelhonexus.*",
-     service_name=~"coelhonexus-fastapi|coelhonexus-celery|coelhonexus-fastmcp"}
+     service_name=~"coelhonexus-server|coelhonexus-celery|coelhonexus-fastmcp"}
     |~ "(?i)(error|exception|traceback|critical)"
     [5m]
   )
@@ -408,7 +408,7 @@ sum by (detected_level) (
 **YCS ask completions**
 ```logql
 {namespace=~"coelhonexus.*",
- service_name=~"coelhonexus-fastapi|coelhonexus-celery"}
+ service_name=~"coelhonexus-server|coelhonexus-celery"}
   |~ "(?i)(ycs|youtube|ask)"
   |~ "(?i)(done|complete|answer)"
 ```
@@ -416,14 +416,14 @@ sum by (detected_level) (
 **YCS retrieval errors (Qdrant / Neo4j / Elasticsearch)**
 ```logql
 {namespace=~"coelhonexus.*",
- service_name=~"coelhonexus-fastapi|coelhonexus-celery"}
+ service_name=~"coelhonexus-server|coelhonexus-celery"}
   |~ "(?i)(qdrant|neo4j|elasticsearch)"
   |~ "(?i)(error|failed|exception|timeout)"
 ```
 
 **YCS ask with OTel trace link**
 ```logql
-{namespace=~"coelhonexus.*", service_name="coelhonexus-fastapi"}
+{namespace=~"coelhonexus.*", service_name="coelhonexus-server"}
   |~ "(?i)(ycs|ask)"
   | regexp "(?P<trace_id>trace_id=[0-9a-f]{32})"
 ```
@@ -433,7 +433,7 @@ sum by (detected_level) (
 sum (
   count_over_time(
     {namespace=~"coelhonexus.*",
-     service_name=~"coelhonexus-fastapi|coelhonexus-celery"}
+     service_name=~"coelhonexus-server|coelhonexus-celery"}
     |~ "(?i)(ycs|youtube|ask|qdrant|neo4j)"
     |~ "(?i)(error|failed|exception)"
     [5m]
@@ -513,7 +513,7 @@ sum (
 **Rotator discovery errors**
 ```logql
 {namespace=~"coelhonexus.*",
- service_name=~"coelhonexus-fastapi|coelhonexus-celery"}
+ service_name=~"coelhonexus-server|coelhonexus-celery"}
   |~ "(?i)(rotator|benchmark|canonical)"
   |~ "(?i)(error|failed|exception)"
 ```
@@ -529,7 +529,7 @@ sum (
 sum by (detected_level) (
   count_over_time(
     {namespace=~"coelhonexus.*",
-     service_name=~"coelhonexus-fastapi|coelhonexus-celery"}
+     service_name=~"coelhonexus-server|coelhonexus-celery"}
     |~ "(?i)(rotator|benchmark|canonical|discovery)"
     [5m]
   )
@@ -545,7 +545,7 @@ sum by (detected_level) (
 sum by (service_name, detected_level) (
   count_over_time(
     {namespace=~"coelhonexus.*",
-     service_name=~"coelhonexus-fastapi|coelhonexus-celery|coelhonexus-fastmcp"}
+     service_name=~"coelhonexus-server|coelhonexus-celery|coelhonexus-fastmcp"}
     [5m]
   )
 )
@@ -556,7 +556,7 @@ sum by (service_name, detected_level) (
 sum by (service_name) (
   count_over_time(
     {namespace=~"coelhonexus.*",
-     service_name=~"coelhonexus-fastapi|coelhonexus-celery|coelhonexus-fastmcp"}
+     service_name=~"coelhonexus-server|coelhonexus-celery|coelhonexus-fastmcp"}
     |~ "(?i)(error|exception|traceback|critical)"
     [1m]
   )

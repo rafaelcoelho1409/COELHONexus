@@ -1,11 +1,11 @@
 """Offline checks for the 2026-10-14 Synth fixes found on asyncio ch-01 (no LLM, no cluster):
 other sections' code blocks are not bank padding; vault blocks render flush left.
 
-    cd apps/fastapi && .venv/bin/python ../../scripts/dd/test_synth_fixes_1.py"""
+    cd apps/server && .venv/bin/python ../../scripts/dd/test_synth_fixes_1.py"""
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "fastapi"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
 SW = domains.dd.synth.nodes.sawc.domain

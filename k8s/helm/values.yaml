@@ -7,7 +7,7 @@ environment: production
 # No default endpoint is baked into the chart — set url/apiKey/model here, or
 # configure it at runtime from the Settings page (BYOK, takes precedence over
 # these chart defaults either way). Read by
-# apps/fastapi/domains/settings/chat/service.py as
+# apps/server/domains/settings/chat/service.py as
 # LLM_ENDPOINT_URL/LLM_API_KEY/LLM_MODEL.
 llm:
   endpoint:
@@ -20,11 +20,11 @@ observability:
   enabled: true
 
 # Dual-export OTel: Alloy gRPC (empty = disable) + LangFuse HTTP (empty = LGTM-only).
-# Celery overrides OTEL_SERVICE_NAME at pod level to avoid masquerading as fastapi.
+# Celery overrides OTEL_SERVICE_NAME at pod level to avoid masquerading as the server.
 otel:
   alloy_endpoint: "http://alloy.alloy.svc.cluster.local:4317"
   langfuse_otlp_endpoint: "http://langfuse-web.langfuse.svc.cluster.local:3000/api/public/otel"
-  service_name: "coelhonexus-fastapi"
+  service_name: "coelhonexus-server"
   service_version: "1.0.0"
   git_sha: ""
 
@@ -105,8 +105,8 @@ secretMappings:
 registry:
   imagePullSecret: ""
 
-fastapi:
-  image: coelho-cloud-registry:5000/coelhonexus-fastapi:latest
+server:
+  image: coelho-cloud-registry:5000/coelhonexus-server:latest
   imagePullPolicy: Always
   replicas: 1
   resources:
@@ -161,7 +161,7 @@ celery:
       memory: "6Gi"  # concurrency=2 + worker_max_memory=2GB + parent 1.8GB ≈ 5.8GB peak
       cpu: "2000m"
 
-# Flower uses mher/flower (NOT FastAPI image) — shelve storage, single-writer enforced.
+# Flower uses mher/flower (NOT the server image) — shelve storage, single-writer enforced.
 flower:
   enabled: true
   image: mher/flower:2.0.1
@@ -263,10 +263,10 @@ fastmcp:
       cpu: "500m"
   portsSettings:
     ports:
-      # Service port intentionally != targetPort (8001 vs 8000): fastapi's
+      # Service port intentionally != targetPort (8001 vs 8000): the server's
       # Service also declares port 8000, and k3d's svclb LoadBalancer
       # mechanism binds a hostPort matching this field on every node — two
-      # LoadBalancer Services sharing the same `port` collide there (fastapi
+      # LoadBalancer Services sharing the same `port` collide there (the server
       # already holds hostPort 8000 on all 3 nodes, so fastmcp's svclb pods
       # could never schedule). The container itself is untouched — it still
       # listens on 8000 (targetPort + the probes below).

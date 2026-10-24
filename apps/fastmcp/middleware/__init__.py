@@ -9,7 +9,7 @@ Today:
                    interval via ratelimit.register(name, seconds))
 
 Deliberately no telemetry middleware: observability (OpenTelemetry +
-LangFuse) lives in apps/fastapi/; this stays a simple MCP server (see
+LangFuse) lives in apps/server/; this stays a simple MCP server (see
 server.py). Installed on the root server via `mcp.add_middleware(...)`.
 """
 from __future__ import annotations

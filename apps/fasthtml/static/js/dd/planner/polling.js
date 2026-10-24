@@ -228,7 +228,7 @@ export function _setPlannerRunStartMs(ms) { _plannerRunStartMs = ms || 0; }
 
 export async function pollPlannerState(threadId) {
   // 2026-canonical pattern: Server-Sent Events instead of HTTP polling.
-  // Backend pub/sub channel (Redis) is bridged by the FastAPI
+  // Backend pub/sub channel (Redis) is bridged by the server's
   // /planner/{thread_id}/events endpoint which streams text/event-stream.
   // Each event carries {step, kind, ts, ...}; we route to the matching
   // substep card and render either a live progress sub-line or

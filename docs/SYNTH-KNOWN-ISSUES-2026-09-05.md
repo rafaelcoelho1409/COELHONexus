@@ -88,7 +88,7 @@ Study `60d29778-…` (2026-10-03): `ch-01-elasticsearch-api` (102 sources) → `
 
 **Fixed:** (a) `corpus_normalize` permalink regexes accept a single Private-Use-Area glyph as link text (`NORMALIZER_VERSION` 2→3); (b) `HEADING_MIN_WORDS` 2→1 in outline/sawc/mgsr; (c) `outline_sdp` draft call retries once (`MAX_CALL_ATTEMPTS=2`, skipped on context-overflow); (d) `heuristic_fallback_outline` cleans headings (`clean_heading`, also applied to LLM headings in `normalize_outline_dict`), skips fenced code, spreads picks across the corpus, emits flat prerequisites; (e) a cached outline whose sections all carry the fallback tag is ignored and re-drafted; (f) `sawc_write` forces the outline's heading onto the parsed draft (`try_parse_draft(expected_heading=…)`) instead of rejecting an echo mismatch.
 
-**To apply to the existing corpus:** redeploy, then either re-ingest or re-normalize in place — `kubectl -n coelhonexus exec deploy/coelhonexus-fastapi -c coelhonexus-fastapi -- python -c "import asyncio, domains; print(asyncio.run(domains.dd.synth.nodes.backfill.service.backfill_normalize_for_framework('elasticsearch-python')))"` — then Resume Synth (only `ch-01` re-runs; the other 18 passed their audit).
+**To apply to the existing corpus:** redeploy, then either re-ingest or re-normalize in place — `kubectl -n coelhonexus exec deploy/coelhonexus-server -c coelhonexus-server -- python -c "import asyncio, domains; print(asyncio.run(domains.dd.synth.nodes.backfill.service.backfill_normalize_for_framework('elasticsearch-python')))"` — then Resume Synth (only `ch-01` re-runs; the other 18 passed their audit).
 
 ---
 
@@ -632,7 +632,7 @@ throughout this doc for the full trace.
 ## ✅ Status: all 9 issues addressed (2026-09-05) — 3 confirmed live in production the same day
 
 8 of 9 got real code fixes, applied and syntax-verified across 12 files
-in `apps/fastapi/domains/dd/synth/`. A fresh `claude-code` study run
+in `apps/server/domains/dd/synth/`. A fresh `claude-code` study run
 (post-redeploy) directly confirmed 3 of them working as designed on
 chapter 1:
 

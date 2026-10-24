@@ -1,11 +1,11 @@
 """Offline checks for the 2026-10-19 digest change (no LLM, no cluster): a page with many code blocks is digested in chunks and the chunk digests are merged.
 
-    cd apps/fastapi && .venv/bin/python ../../scripts/dd/test_synth_fixes_7.py"""
+    cd apps/server && .venv/bin/python ../../scripts/dd/test_synth_fixes_7.py"""
 import asyncio
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "fastapi"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
 DG = domains.dd.synth.nodes.digest

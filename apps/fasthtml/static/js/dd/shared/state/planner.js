@@ -1,7 +1,7 @@
 // state/planner.js — Planner DOM + run state + node-order constants.
 //
 // Substep order MUST match `NODE_ORDER` in
-// apps/fastapi/domains/dd/planner/graph.py AND the field each node writes
+// apps/server/domains/dd/planner/graph.py AND the field each node writes
 // (`state.<field>`). LLM-first path canonical since 2026-05-27 (see
 // DD-PLANNER-LLM-FIRST-SOTA-2026-05-27.md); legacy 4-node middle
 // (cluster/refine/label/reduce) removed 2026-06-02.

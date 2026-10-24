@@ -1,10 +1,10 @@
 """arXiv subject taxonomy — verbatim mirror of
-`apps/fastapi/domains/rr/taxonomy.py`.
+`apps/server/domains/rr/taxonomy.py`.
 
 Lives in fasthtml so the verticals multi-select widget can embed the full
 codes set as inline JSON at page render time and validate the custom-add
-field client-side without a round-trip to fastapi. Keep in sync with the
-fastapi original; regenerate both together when arxiv adds new subject
+field client-side without a round-trip to the server. Keep in sync with the
+server original; regenerate both together when arxiv adds new subject
 codes (~once a year historically). Snapshot of
 https://arxiv.org/category_taxonomy as of 2026-06-14 (155 codes).
 
@@ -69,7 +69,7 @@ ARXIV_CATEGORIES: frozenset[str] = frozenset(
 
 
 # code → human subject name; used as hover tooltip for codes in the
-# browse-all modal. Mirror of `apps/fastapi/domains/rr/taxonomy.py`'s dict.
+# browse-all modal. Mirror of `apps/server/domains/rr/taxonomy.py`'s dict.
 ARXIV_DESCRIPTIONS: dict[str, str] = {
     'astro-ph.CO'           : 'Cosmology and Nongalactic Astrophysics',
     'astro-ph.EP'           : 'Earth and Planetary Astrophysics',

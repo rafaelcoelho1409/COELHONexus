@@ -298,7 +298,7 @@
       "id": 10,
       "type": "logs",
       "title": "Recent YCS ask error logs",
-      "description": "FastAPI and Celery log lines most likely to explain bad or stuck YCS asks.",
+      "description": "Server and Celery log lines most likely to explain bad or stuck YCS asks.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -315,7 +315,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-fastapi|coelhonexus-celery\"} |~ \"(?i)(ycs|youtube|ask|search|qdrant|neo4j|error|exception|traceback|failed)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\"",
+          "expr": "{namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-server|coelhonexus-celery\"} |~ \"(?i)(ycs|youtube|ask|search|qdrant|neo4j|error|exception|traceback|failed)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\"",
           "refId": "A"
         }
       ],
@@ -351,7 +351,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum by (detected_level) (count_over_time({namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-fastapi|coelhonexus-celery\"} |~ \"(?i)(ycs|ask|retrieval|qdrant|neo4j)\" [5m]))",
+          "expr": "sum by (detected_level) (count_over_time({namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-server|coelhonexus-celery\"} |~ \"(?i)(ycs|ask|retrieval|qdrant|neo4j)\" [5m]))",
           "legendFormat": "{{detected_level}}",
           "refId": "A"
         }
@@ -437,7 +437,7 @@
             "uid": "tempo"
           },
           "queryType": "traceql",
-          "query": "{ resource.service.name=~\"coelhonexus-fastapi|coelhonexus-celery\" && name =~ \"ycs.node..+\" }",
+          "query": "{ resource.service.name=~\"coelhonexus-server|coelhonexus-celery\" && name =~ \"ycs.node..+\" }",
           "limit": 30,
           "refId": "A",
           "tableType": "spans"
@@ -466,7 +466,7 @@
             "uid": "tempo"
           },
           "queryType": "traceql",
-          "query": "{ resource.service.name=~\"coelhonexus-fastapi|coelhonexus-celery\" && name =~ \"db.(qdrant|elasticsearch|neo4j|postgresql).+\" }",
+          "query": "{ resource.service.name=~\"coelhonexus-server|coelhonexus-celery\" && name =~ \"db.(qdrant|elasticsearch|neo4j|postgresql).+\" }",
           "limit": 30,
           "refId": "A",
           "tableType": "spans"
@@ -495,7 +495,7 @@
             "uid": "tempo"
           },
           "queryType": "traceql",
-          "query": "{ resource.service.name=~\"coelhonexus-fastapi|coelhonexus-celery\" && name =~ \"ycs.retriever.smart_fanout|gen_ai.rerank\" }",
+          "query": "{ resource.service.name=~\"coelhonexus-server|coelhonexus-celery\" && name =~ \"ycs.retriever.smart_fanout|gen_ai.rerank\" }",
           "limit": 30,
           "refId": "A",
           "tableType": "spans"

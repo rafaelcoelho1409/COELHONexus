@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 # Skill .md files live in TWO places:
-#   - apps/fastapi/domains/rr/agent/skills/  (the canonical source — loaded
+#   - apps/server/domains/rr/agent/skills/   (the canonical source — loaded
 #                                              by the DeepAgents skill loader)
 #   - apps/fasthtml/features/rr/skills/      (verbatim mirror — bundled in
 #                                              the fasthtml container so the
@@ -23,7 +23,7 @@ from pathlib import Path
 #                                              at request time)
 # Same duplication pattern as `taxonomy.py`. Keep both in sync; if you edit
 # a skill, copy it over with:
-#   cp apps/fastapi/domains/rr/agent/skills/*.md \
+#   cp apps/server/domains/rr/agent/skills/*.md \
 #      apps/fasthtml/features/rr/skills/
 def _resolve_skills_dir() -> Path | None:
     here = Path(__file__).resolve()
@@ -31,10 +31,10 @@ def _resolve_skills_dir() -> Path | None:
     local = here.parent / "skills"
     if local.is_dir():
         return local
-    # 2) Dev-time layout — sibling fastapi app's tree (when running from
+    # 2) Dev-time layout — sibling server app's tree (when running from
     #    a checkout that has both apps on disk).
     for ancestor in here.parents:
-        candidate = ancestor / "apps" / "fastapi" / "domains" / "rr" / "agent" / "skills"
+        candidate = ancestor / "apps" / "server" / "domains" / "rr" / "agent" / "skills"
         if candidate.is_dir():
             return candidate
     return None
@@ -126,7 +126,7 @@ def _build_node_details_inner() -> dict[str, dict]:
             "title":       "Orchestrator (DeepAgent)",
             "subtitle":    "Coordinates 7 subagents + 2 tools + 2 middlewares",
             "kind":        "agent",
-            "source":      "apps/fastapi/domains/rr/agent/graph.py",
+            "source":      "apps/server/domains/rr/agent/graph.py",
             "body": [
                 ("Role", (
                     "The root agent built via `create_deep_agent(...)`. Holds the "
@@ -151,7 +151,7 @@ def _build_node_details_inner() -> dict[str, dict]:
             "title":       "discovery_arxiv (subagent)",
             "subtitle":    "Fetches arXiv via FastMCP arxiv_search",
             "kind":        "subagent",
-            "source":      "apps/fastapi/domains/rr/agent/subagents/service.py::build_discovery_arxiv",
+            "source":      "apps/server/domains/rr/agent/subagents/service.py::build_discovery_arxiv",
             "body": [
                 ("Skill — arxiv_query_shaping.md",  arxiv_query_shaping),
                 ("Skill — rotator_etiquette.md",    rotator_etiquette),
@@ -162,7 +162,7 @@ def _build_node_details_inner() -> dict[str, dict]:
             "title":       "discovery_semantic_scholar (subagent)",
             "subtitle":    "Fetches Semantic Scholar via FastMCP semantic_scholar_search",
             "kind":        "subagent",
-            "source":      "apps/fastapi/domains/rr/agent/subagents/service.py::build_discovery_semantic_scholar",
+            "source":      "apps/server/domains/rr/agent/subagents/service.py::build_discovery_semantic_scholar",
             "body": [
                 ("Skill — rotator_etiquette.md",    rotator_etiquette),
                 ("Tool", "FastMCP `semantic_scholar_search` (apps/fastmcp/domains/rr/tools/semantic_scholar/)"),
@@ -172,7 +172,7 @@ def _build_node_details_inner() -> dict[str, dict]:
             "title":       "discovery_huggingface_daily_papers (subagent)",
             "subtitle":    "Fetches HF Daily Papers curation",
             "kind":        "subagent",
-            "source":      "apps/fastapi/domains/rr/agent/subagents/service.py::build_discovery_huggingface_daily_papers",
+            "source":      "apps/server/domains/rr/agent/subagents/service.py::build_discovery_huggingface_daily_papers",
             "body": [
                 ("Skill — rotator_etiquette.md",    rotator_etiquette),
                 ("Tool", "FastMCP `huggingface_daily_papers` (apps/fastmcp/domains/rr/tools/huggingface_daily_papers/)"),
@@ -182,7 +182,7 @@ def _build_node_details_inner() -> dict[str, dict]:
             "title":       "discovery_hn (subagent)",
             "subtitle":    "Fetches Hacker News via Algolia",
             "kind":        "subagent",
-            "source":      "apps/fastapi/domains/rr/agent/subagents/service.py::build_discovery_hn",
+            "source":      "apps/server/domains/rr/agent/subagents/service.py::build_discovery_hn",
             "body": [
                 ("Skill — rotator_etiquette.md",    rotator_etiquette),
                 ("Tool", "FastMCP `hn_search` (apps/fastmcp/domains/rr/tools/hn/)"),
@@ -192,7 +192,7 @@ def _build_node_details_inner() -> dict[str, dict]:
             "title":       "discovery_openalex (subagent)",
             "subtitle":    "Fetches OpenAlex via FastMCP openalex_search",
             "kind":        "subagent",
-            "source":      "apps/fastapi/domains/rr/agent/subagents/service.py::build_discovery_openalex",
+            "source":      "apps/server/domains/rr/agent/subagents/service.py::build_discovery_openalex",
             "body": [
                 ("Skill — rotator_etiquette.md",    rotator_etiquette),
                 ("Tool", "FastMCP `openalex_search` (apps/fastmcp/domains/rr/tools/openalex/)"),
@@ -210,7 +210,7 @@ def _build_node_details_inner() -> dict[str, dict]:
             "title":       "triage (tool)",
             "subtitle":    "Composite signal score + cross-source dedup",
             "kind":        "tool",
-            "source":      "apps/fastapi/domains/rr/agent/tools/triage/service.py::triage_candidates",
+            "source":      "apps/server/domains/rr/agent/tools/triage/service.py::triage_candidates",
             "body": [
                 ("Role", (
                     "Pure deterministic tool — no LLM. Reads all 5 discovery "
@@ -231,7 +231,7 @@ def _build_node_details_inner() -> dict[str, dict]:
             "title":       "deep_read (subagent)",
             "subtitle":    "Per-paper 5-field extraction",
             "kind":        "subagent",
-            "source":      "apps/fastapi/domains/rr/agent/subagents/service.py::build_deep_read",
+            "source":      "apps/server/domains/rr/agent/subagents/service.py::build_deep_read",
             "body": [
                 ("Skill — paper_extraction.md", paper_extraction),
                 ("Output", (
@@ -246,7 +246,7 @@ def _build_node_details_inner() -> dict[str, dict]:
             "title":       "graph_build (tool)",
             "subtitle":    "Persist papers to Neo4j + Qdrant in parallel",
             "kind":        "tool",
-            "source":      "apps/fastapi/domains/rr/agent/tools/graph_build/service.py::graph_build_papers",
+            "source":      "apps/server/domains/rr/agent/tools/graph_build/service.py::graph_build_papers",
             "body": [
                 ("Role", (
                     "Pure tool — no LLM. Fans out via `asyncio.gather` (semaphore=4) "
@@ -265,7 +265,7 @@ def _build_node_details_inner() -> dict[str, dict]:
             "title":       "synthesis (subagent)",
             "subtitle":    "Cluster extractions into 3-7 themes",
             "kind":        "subagent",
-            "source":      "apps/fastapi/domains/rr/agent/subagents/service.py::build_synthesis",
+            "source":      "apps/server/domains/rr/agent/subagents/service.py::build_synthesis",
             "body": [
                 ("Skill — cross_paper_synthesis.md", cross_paper_synthesis),
                 ("Output", "`fs/synthesis/report.json` — themes + 2-3 sentence executive summary."),
@@ -276,7 +276,7 @@ def _build_node_details_inner() -> dict[str, dict]:
             "title":       "report (subagent)",
             "subtitle":    "Assemble the final digest JSON",
             "kind":        "subagent",
-            "source":      "apps/fastapi/domains/rr/agent/subagents/service.py::build_report",
+            "source":      "apps/server/domains/rr/agent/subagents/service.py::build_report",
             "body": [
                 ("Skill — digest_rendering.md", digest_rendering),
                 ("Output", "`fs/digest.json` — the artifact the Celery task persists to MinIO."),
@@ -287,7 +287,7 @@ def _build_node_details_inner() -> dict[str, dict]:
             "title":       "persist (stores)",
             "subtitle":    "MinIO digest + Postgres findings + seen-set update",
             "kind":        "store",
-            "source":      "apps/fastapi/domains/rr/service.py::persist_scan_result",
+            "source":      "apps/server/domains/rr/service.py::persist_scan_result",
             "body": [
                 ("Stores written", (
                     "MinIO: `rr/scans/{scan_id}/digest.json`\n"

@@ -262,7 +262,7 @@ window.ddWipePlanner = wipePlanner;
 // a mobile-specific event-bubble / showToast / setActiveSlug timing
 // issue across the module graph, click handling now sits in a single
 // inline script that runs at HTML-parse time, has no module
-// dependencies, and posts directly to FastAPI. The module continues
+// dependencies, and posts directly to the server. The module continues
 // to handle EVERYTHING ELSE — graph render, SSE polling, node
 // drawer, Cancel button mid-run, refreshPlannerStartState's gate
 // updates — only the initial Start tap is routed through the inline

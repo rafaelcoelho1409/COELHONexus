@@ -1,14 +1,14 @@
 """Offline checks for the 2026-10-14 batch-10 fix (no LLM, no cluster): a big pool of docs no proposal fits
 becomes the catch-all appendix (split by directory afterwards) instead of being scattered by title words.
 
-    cd apps/fastapi && .venv/bin/python ../../scripts/dd/test_planner_fixes_8.py [planner_artifacts.jsonl ...]
+    cd apps/server && .venv/bin/python ../../scripts/dd/test_planner_fixes_8.py [planner_artifacts.jsonl ...]
 
 With dumps from dump_planner_artifacts.py it also replays the rule on every stored plan."""
 import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "fastapi"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
 SEL = domains.dd.planner.nodes.chapter_select.domain

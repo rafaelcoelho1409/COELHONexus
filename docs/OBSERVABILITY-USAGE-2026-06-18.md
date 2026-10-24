@@ -15,7 +15,7 @@ Every section below is **copy-pasteable** from a real shipped pattern in the cod
 
 ## Current State Audit — 2026-09-22
 
-Full repo inventory (`apps/fastapi`, `apps/fastmcp`, `apps/fasthtml`, plus a
+Full repo inventory (`apps/server`, `apps/fastmcp`, `apps/fasthtml`, plus a
 peek at the external LLM Rotator and COELHOCloud) against this guide's claims.
 
 **Confirmed good, no action needed:**
@@ -57,8 +57,8 @@ pointed at `domains.llm.rotator.chain` (retired 2026-09-21 per
 sites anywhere outside its own definition.
 
 **P1 — FastHTML is a trace dead-end.** Zero OTel/Langfuse dependency, no
-`infra/otel`, no trace-context propagation on its calls into the FastAPI
-backend. Every FastHTML→FastAPI hop starts a brand-new trace; a user click
+`infra/otel`, no trace-context propagation on its calls into the server
+backend. Every FastHTML→server hop starts a brand-new trace; a user click
 can't be followed through to the backend spans it triggered.
 
 **P2 — a parallel, un-unified telemetry system.**
@@ -69,10 +69,10 @@ the token/cost data the (currently dark) `gen_ai.usage.*` spans were meant to
 carry. Once P0 is fixed, decide whether these should dual-write an OTel
 metric too, or stay separate by design.
 
-**P2 — not a bug.** `infra/otel/` in `apps/fastapi` and `apps/fastmcp`
+**P2 — not a bug.** `infra/otel/` in `apps/server` and `apps/fastmcp`
 duplicate the LangFuse allow-list logic — deliberate per the fastmcp port
 comment, since the two are independently deployed apps. **Update
-2026-09-22:** `apps/fastapi/infra/otel/` was reorganized to the
+2026-09-22:** `apps/server/infra/otel/` was reorganized to the
 `domain.py`/`service.py`/`params.py`/`entities.py` shape (§2 below) — the
 old `_LangFuseSpanGate` class is now free functions in `domain.py`
 (`should_keep_span`), so the two apps' copies are no longer byte-identical,
@@ -184,8 +184,8 @@ above applies to it too.
 Plus the two cross-cutting locations touched regardless of which files
 above you add:
 
-- `apps/fastapi/infra/otel/entities.py` — append a `MetricSpec` for each new instrument.
-- `apps/fastapi/infra/otel/keys.py` — add `foo_id` to `ALLOWED_BAGGAGE_KEYS` if it needs propagating onto every child span (moved here from `params.py` in the 2026-09-22 `infra/otel/` reorg — see the file index below).
+- `apps/server/infra/otel/entities.py` — append a `MetricSpec` for each new instrument.
+- `apps/server/infra/otel/keys.py` — add `foo_id` to `ALLOWED_BAGGAGE_KEYS` if it needs propagating onto every child span (moved here from `params.py` in the 2026-09-22 `infra/otel/` reorg — see the file index below).
 
 **Audit against these triggers (2026-09-22)** — every existing domain
 already matches, with one real exception:
@@ -194,7 +194,7 @@ already matches, with one real exception:
 |---|---|---|
 | `dd/planner`, `dd/synth` | `metrics.py`, `service.py` | ✅ — `service.py` earned its keep (≥8 node files import it); no `spans.py`/`keys.py`/`domain.py` because neither trigger holds yet |
 | `dd/runtime` (shared) | `observability/spans.py` (new 2026-09-22) | ✅ — `api/v1/dd/{synth,planner}/router.py` both query the LangGraph `checkpoints` table directly (recent-threads listing, wipe endpoints) — real SQL we authored, not `AsyncPostgresSaver` internals — so it earned a shared `postgres_span(operation, **attrs)` at the `dd/runtime` level (used by both routers) rather than duplicating one per stage. `AsyncPostgresSaver`'s own internals (`domains/dd/planner/runtime/checkpoint/service.py`) stay unwrapped — third-party library code, not ours to instrument |
-| `ycs` | `metrics.py`, `service.py`, `spans.py`, `domain.py` | ✅ — the richest, because YCS genuinely has all four needs (node spans, `db.*`/`gen_ai.rerank` I/O spans, and pure attribute helpers). 2026-09-22: `spans.py` gained `postgres_span`, `qdrant_upsert_span`, `qdrant_admin_span`; every remaining raw Postgres/ES/Qdrant call site across `conversation/`, `query/`, `ingestion/`, `es_index/`, `embedding_migration/`, `transcript/service.py`, and `api/v1/ycs/admin/{router,service}.py` is now wrapped — no bare `psycopg`/ES-client/Qdrant-client call left un-spanned in `apps/fastapi/domains/ycs/` or its router |
+| `ycs` | `metrics.py`, `service.py`, `spans.py`, `domain.py` | ✅ — the richest, because YCS genuinely has all four needs (node spans, `db.*`/`gen_ai.rerank` I/O spans, and pure attribute helpers). 2026-09-22: `spans.py` gained `postgres_span`, `qdrant_upsert_span`, `qdrant_admin_span`; every remaining raw Postgres/ES/Qdrant call site across `conversation/`, `query/`, `ingestion/`, `es_index/`, `embedding_migration/`, `transcript/service.py`, and `api/v1/ycs/admin/{router,service}.py` is now wrapped — no bare `psycopg`/ES-client/Qdrant-client call left un-spanned in `apps/server/domains/ycs/` or its router |
 | `settings` | `metrics.py`, `spans.py`, `keys.py` | ✅ — no `service.py` (chat/embeddings are 2 leaf functions, not a multi-node graph, so no shared node-decorator need); `keys.py` earned its keep mirroring the `gen_ai.*` semconv |
 | `dd/ingestion` | `runtime/{dispatch,observability,progress}/`, `observability/` has only `metrics.py` | ✅ — moved under `runtime/` 2026-09-22 to match planner/synth structurally (`dispatch/`+`progress/`+`observability/` relocated together, not just observability alone — moving observability by itself would have left a `runtime/` folder holding exactly one thing, a worse inconsistency than the flat file it replaced). No `service.py`/`spans.py`/`keys.py`/`domain.py` — ingestion's one span is still inline in `runtime/dispatch/service.py:run()`, no fan-out of consumers exists to justify extracting it |
 | `rr` | `runtime/observability/{metrics,service,spans}.py` | ✅ (2026-09-22 consolidation) — `runtime/metrics.py` moved to `runtime/observability/metrics.py`; the `@traced_tool` decorator moved from `agent/tools/observability.py` (an orphan next to an already-existing `runtime/` folder — the placement mistake, not a legitimate exception) to `runtime/observability/service.py`, mirroring planner/synth's `@traced`. The 4 tool-module callers now reach it via `from domains.rr.runtime.observability.service import traced_tool` (a plain import, not a `domains.*` attribute chase — required per §8 Exception 2 since `@traced_tool` runs at module-exec time). Phase-transition spans deliberately stay in `agent/middleware/service.py` — tightly coupled to `PhaseEventsMiddleware`'s own state, a legitimate exception, not fragmentation. `stores/service.py`'s 32 functions across Neo4j/Postgres/Qdrant/MinIO are fully spanned; `api/v1/rr/scan/router.py`'s 3 raw Postgres reads reuse the same `postgres_span`. **Bug caught 2026-09-22**: the metrics-file move left `runtime/service.py` importing a stale sibling name (`from . import ..., metrics, ...` instead of `observability`), which only surfaces as `ImportError: cannot import name 'metrics' from partially initialized module` on a real `import domains` — invisible to `compileall`/`pyflakes`/`ruff` since those never execute package `__init__` chains. Fixed to `from . import ..., observability, ...` + `observability.metrics.record_phase_event(...)`. Takeaway: after any sibling-module move, run a real `import domains` (not just static checks) to catch circular/stale-name breakage |
@@ -299,7 +299,7 @@ This renders as a `db.foo.bulk_write` span in Tempo, with attributes `db.system=
 ### 3a. Define it once in the central registry
 
 ```python
-# apps/fastapi/infra/otel/entities.py
+# apps/server/infra/otel/entities.py
 INSTRUMENTS: tuple[MetricSpec, ...] = (
     ...,  # existing
     MetricSpec(
@@ -409,7 +409,7 @@ client.create_prompt(name="foo.bar", prompt=PROMPT, labels=["production"], type=
 
 Run it:
 ```bash
-kubectl exec -i -n coelhonexus-dev <pod> -c coelhonexus-fastapi -- \
+kubectl exec -i -n coelhonexus-dev <pod> -c coelhonexus-server -- \
     bash -c 'PYTHONPATH=/app python /tmp/publish_foo_prompt.py'
 ```
 
@@ -428,7 +428,7 @@ observability/fixtures/foo/<dataset_name>/
 ### 7b. Judge
 
 ```python
-# apps/fastapi/infra/langfuse/evals/judges/foo_quality.py
+# apps/server/infra/langfuse/evals/judges/foo_quality.py
 async def foo_quality(input_: dict, expected: dict, actual: dict) -> float:
     from domains.settings.chat.service import chat_judge_async  # domains/llm/ retired 2026-09-21
     prompt = f"Score 1-5. Expected={expected}; actual={actual}"
@@ -461,7 +461,7 @@ Reference shipped: `rotator-red.json`, `dd-pipeline.json`, `rr-digests.json`, `y
 
 ## 9. Loki ↔ Tempo correlation — jump from a log to its trace
 
-Already wired: `LoggingInstrumentor` in `apps/fastapi/infra/otel/service.py:_instrument_libraries` injects `trace_id` + `span_id` into every Python log record. Both fields flow through stdout/stderr → Alloy → Loki, and the same `trace_id` is on the Tempo span.
+Already wired: `LoggingInstrumentor` in `apps/server/infra/otel/service.py:_instrument_libraries` injects `trace_id` + `span_id` into every Python log record. Both fields flow through stdout/stderr → Alloy → Loki, and the same `trace_id` is on the Tempo span.
 
 In Grafana:
 1. **Log → Trace:** open a Loki query for `{namespace="coelhonexus-dev"}`. Click a log line — the right pane shows `trace_id: <hex>`. Click the `Tempo` icon next to it to jump straight to that span tree.

@@ -2,13 +2,13 @@
 USC fallback, heuristic stubs for failed digest sources, the judge's wait budget, the late retry of lost sections, writer subtopic ranges,
 top-up reject reasons and failed-call counters.
 
-    cd apps/fastapi && .venv/bin/python ../../scripts/dd/test_synth_fixes_5.py"""
+    cd apps/server && .venv/bin/python ../../scripts/dd/test_synth_fixes_5.py"""
 import asyncio
 import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "fastapi"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
 N = domains.dd.synth.nodes

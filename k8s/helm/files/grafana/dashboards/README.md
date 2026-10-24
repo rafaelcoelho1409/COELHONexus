@@ -13,7 +13,7 @@ confirmed in Mimir for COELHO Nexus:
   `dd_rotator_*` metrics emitted by the benchmark and discovery services.
 - `dd-pipeline.json` — Docs Distiller planner + study health, built on the
   live `dd_*` instruments declared in
-  `apps/fastapi/infra/otel/metrics_registry.py`.
+  `apps/server/infra/otel/metrics_registry.py`.
 - `rr-digests.json` — Research Radar scan health, built on the live `rr_*`
   metrics emitted by the RR runtime.
 - `ycs-retrieval.json` — YouTube Content Search ask/retrieval health, built on

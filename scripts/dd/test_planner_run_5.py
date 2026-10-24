@@ -1,7 +1,7 @@
 """Offline END-TO-END runs of the chapter_select and order_chapters nodes on stored artifacts, with an
 in-memory MinIO and a fake LLM (no cluster, no Rotator): proves the node wiring, not just the helpers.
 
-    cd apps/fastapi && .venv/bin/python ../../scripts/dd/test_planner_run_5.py planner_artifacts.jsonl
+    cd apps/server && .venv/bin/python ../../scripts/dd/test_planner_run_5.py planner_artifacts.jsonl
 
 For every stored framework: chapter_select_run (cluster split named by a fake model, appendix split
 included) then order_chapters_run (title-order samples from a fake model that reads the stages)."""
@@ -11,7 +11,7 @@ import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "fastapi"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
 nodes = domains.dd.planner.nodes

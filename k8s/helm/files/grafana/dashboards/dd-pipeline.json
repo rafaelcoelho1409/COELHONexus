@@ -342,7 +342,7 @@
       "id": 11,
       "type": "logs",
       "title": "Recent DD workflow error logs",
-      "description": "Planner and synth-oriented error signals from FastAPI and Celery.",
+      "description": "Planner and synth-oriented error signals from the server and Celery.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -359,7 +359,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-fastapi|coelhonexus-celery\"} |~ \"(?i)(planner|synth|study|error|exception|traceback|failed)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\" | regexp \"(?P<scan_slug>[a-z][a-z0-9_-]{2,})\" ",
+          "expr": "{namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-server|coelhonexus-celery\"} |~ \"(?i)(planner|synth|study|error|exception|traceback|failed)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\" | regexp \"(?P<scan_slug>[a-z][a-z0-9_-]{2,})\" ",
           "refId": "A"
         }
       ],
@@ -395,7 +395,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum by (detected_level) (count_over_time({namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-fastapi|coelhonexus-celery\"} |~ \"(?i)(planner|synth|study)\" [5m]))",
+          "expr": "sum by (detected_level) (count_over_time({namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-server|coelhonexus-celery\"} |~ \"(?i)(planner|synth|study)\" [5m]))",
           "legendFormat": "{{detected_level}}",
           "refId": "A"
         }
@@ -641,7 +641,7 @@
             "uid": "tempo"
           },
           "queryType": "traceql",
-          "query": "{ resource.service.name=~\"coelhonexus-fastapi|coelhonexus-celery\" && name =~ \"dd.(planner|synth).node..+\" }",
+          "query": "{ resource.service.name=~\"coelhonexus-server|coelhonexus-celery\" && name =~ \"dd.(planner|synth).node..+\" }",
           "limit": 30,
           "refId": "A",
           "tableType": "spans"
@@ -670,7 +670,7 @@
             "uid": "tempo"
           },
           "queryType": "traceql",
-          "query": "{ resource.service.name=~\"coelhonexus-fastapi|coelhonexus-celery\" && name =~ \"aws.s3..+\" }",
+          "query": "{ resource.service.name=~\"coelhonexus-server|coelhonexus-celery\" && name =~ \"aws.s3..+\" }",
           "limit": 30,
           "refId": "A",
           "tableType": "spans"
@@ -699,7 +699,7 @@
             "uid": "tempo"
           },
           "queryType": "traceql",
-          "query": "{ resource.service.name=~\"coelhonexus-fastapi|coelhonexus-celery\" && name =~ \"dd.(planner.run|synth..+.run|ingestion.run)\" }",
+          "query": "{ resource.service.name=~\"coelhonexus-server|coelhonexus-celery\" && name =~ \"dd.(planner.run|synth..+.run|ingestion.run)\" }",
           "limit": 20,
           "refId": "A",
           "tableType": "traces"
@@ -728,7 +728,7 @@
             "uid": "tempo"
           },
           "queryType": "traceql",
-          "query": "{ resource.service.name=~\"coelhonexus-fastapi|coelhonexus-celery\" && name =~ \"db.postgresql..+\" }",
+          "query": "{ resource.service.name=~\"coelhonexus-server|coelhonexus-celery\" && name =~ \"db.postgresql..+\" }",
           "limit": 30,
           "refId": "A",
           "tableType": "spans"

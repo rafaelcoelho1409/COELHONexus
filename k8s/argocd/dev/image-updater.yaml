@@ -7,13 +7,13 @@ spec:
   applicationRefs:
     - namePattern: coelhonexus
       images:
-        - alias: fastapi
-          imageName: coelho-cloud-registry:5000/coelhonexus-fastapi:latest
+        - alias: server
+          imageName: coelho-cloud-registry:5000/coelhonexus-server:latest
           commonUpdateSettings:
             updateStrategy: digest
           manifestTargets:
             helm:
-              spec: fastapi.image  # Full image reference (repo:tag@digest)
+              spec: server.image  # Full image reference (repo:tag@digest)
         - alias: fasthtml
           imageName: coelho-cloud-registry:5000/coelhonexus-fasthtml:latest
           commonUpdateSettings:

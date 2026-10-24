@@ -2,7 +2,7 @@
  * videos + per-row trash + bulk-action floating bar.
  *
  * Source-of-truth shape from the backend (see
- * `apps/fastapi/api/v1/ycs/admin/router.py`):
+ * `apps/server/entrypoints/api/v1/ycs/admin/router.py`):
  *
  *   GET    /admin/videos?q=&channel=&status=&lang=&limit=&offset=
  *      → { items: [...], total, returned, offset, limit }

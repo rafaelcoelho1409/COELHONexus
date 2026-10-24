@@ -4,8 +4,8 @@ call the rotator's `chat_judge_async` to get an actual outline, and
 score it with the `faithfulness` judge. Scores attach to the named
 LangFuse dataset run.
 
-Run inside the FastAPI container:
-    kubectl exec -i -n coelhonexus-dev <fastapi-pod> -c coelhonexus-fastapi -- \\
+Run inside the server container:
+    kubectl exec -i -n coelhonexus-dev <server-pod> -c coelhonexus-server -- \\
         bash -c "PYTHONPATH=/app python /tmp/run_faithfulness_eval.py"
 """
 from __future__ import annotations

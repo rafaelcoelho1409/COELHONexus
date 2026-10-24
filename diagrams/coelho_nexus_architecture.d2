@@ -226,7 +226,7 @@ app: Application Services Layer {
     style.font-size: 64
   }
 
-  fastapi: FastAPI — Core Intelligence Service {
+  server: FastAPI — Core Intelligence Service {
     style.fill: "#F0F4FF"
     style.stroke: "#0066CC"
     style.stroke-width: 2
@@ -308,27 +308,27 @@ app: Application Services Layer {
   }
 
   # OpenTelemetry auto-instruments every app service that initializes it
-  otel -> fastapi: "auto-instrument" {style.stroke: "#E53E3E"; style.stroke-width: 4; style.stroke-dash: 3}
+  otel -> server: "auto-instrument" {style.stroke: "#E53E3E"; style.stroke-width: 4; style.stroke-dash: 3}
   otel -> fastmcp: "auto-instrument" {style.stroke: "#E53E3E"; style.stroke-width: 4; style.stroke-dash: 3}
   otel -> celery: "auto-instrument" {style.stroke: "#E53E3E"; style.stroke-width: 4; style.stroke-dash: 3}
 
   # Internal app flow
-  fasthtml -> fastapi.dd: "REST API" {style.stroke: "#00B4D8"; style.stroke-width: 8}
-  fasthtml -> fastapi.ycs: {style.stroke: "#00B4D8"; style.stroke-width: 7}
-  fasthtml -> fastapi.rr: {style.stroke: "#00B4D8"; style.stroke-width: 7}
+  fasthtml -> server.dd: "REST API" {style.stroke: "#00B4D8"; style.stroke-width: 8}
+  fasthtml -> server.ycs: {style.stroke: "#00B4D8"; style.stroke-width: 7}
+  fasthtml -> server.rr: {style.stroke: "#00B4D8"; style.stroke-width: 7}
 
-  fastapi.rr -> fastmcp: "MCP\n(Streamable-HTTP)" {style.stroke: "#7C3AED"; style.stroke-width: 7}
+  server.rr -> fastmcp: "MCP\n(Streamable-HTTP)" {style.stroke: "#7C3AED"; style.stroke-width: 7}
 
-  fastapi.dd -> celery: "dispatch\ntasks" {style.stroke: "#0066CC"; style.stroke-width: 7}
-  fastapi.ycs -> celery: {style.stroke: "#0066CC"; style.stroke-width: 7}
-  fastapi.rr -> celery: {style.stroke: "#0066CC"; style.stroke-width: 7}
+  server.dd -> celery: "dispatch\ntasks" {style.stroke: "#0066CC"; style.stroke-width: 7}
+  server.ycs -> celery: {style.stroke: "#0066CC"; style.stroke-width: 7}
+  server.rr -> celery: {style.stroke: "#0066CC"; style.stroke-width: 7}
 
   celery -> flower: "metrics" {style.stroke: "#0066CC"; style.stroke-width: 2; style.stroke-dash: 5}
   celery -> playwright: "crawl\nrequests" {style.stroke: "#0066CC"; style.stroke-width: 7}
 
-  fastapi.llm -> fastapi.dd: {style.stroke: "#6B46C1"; style.stroke-width: 2; style.stroke-dash: 5}
-  fastapi.llm -> fastapi.ycs: {style.stroke: "#6B46C1"; style.stroke-width: 2; style.stroke-dash: 5}
-  fastapi.llm -> fastapi.rr: {style.stroke: "#6B46C1"; style.stroke-width: 2; style.stroke-dash: 5}
+  server.llm -> server.dd: {style.stroke: "#6B46C1"; style.stroke-width: 2; style.stroke-dash: 5}
+  server.llm -> server.ycs: {style.stroke: "#6B46C1"; style.stroke-width: 2; style.stroke-dash: 5}
+  server.llm -> server.rr: {style.stroke: "#6B46C1"; style.stroke-width: 2; style.stroke-dash: 5}
 }
 
 
@@ -425,7 +425,7 @@ gitops.argocd -> infra.helm: "GitOps\ndeploy" {style.stroke: "#FF6B35"; style.st
 
 # ── Helm deployment edges (faint dashed blue) ───────────────
 infra.helm -> app.fasthtml: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
-infra.helm -> app.fastapi: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
+infra.helm -> app.server: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
 infra.helm -> app.fastmcp: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
 infra.helm -> app.celery: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
 infra.helm -> app.flower: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
@@ -433,21 +433,21 @@ infra.helm -> app.playwright: {style.stroke: "#004D99"; style.stroke-width: 6; s
 infra.helm -> monitoring.langfuse: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
 
 # ── Data store connections (green solid) ────────────────────
-app.fastapi.dd -> stores.postgresql: "LangGraph\ncheckpoints" {style.stroke: "#28A745"; style.stroke-width: 7}
-app.fastapi.ycs -> stores.postgresql: "conversation\nthreads" {style.stroke: "#28A745"; style.stroke-width: 7}
-app.fastapi.rr -> stores.postgresql: {style.stroke: "#28A745"; style.stroke-width: 6}
-app.fastapi.llm -> stores.minio: "BYOK KEK\nencrypted keys" {style.stroke: "#28A745"; style.stroke-width: 7}
+app.server.dd -> stores.postgresql: "LangGraph\ncheckpoints" {style.stroke: "#28A745"; style.stroke-width: 7}
+app.server.ycs -> stores.postgresql: "conversation\nthreads" {style.stroke: "#28A745"; style.stroke-width: 7}
+app.server.rr -> stores.postgresql: {style.stroke: "#28A745"; style.stroke-width: 6}
+app.server.llm -> stores.minio: "BYOK KEK\nencrypted keys" {style.stroke: "#28A745"; style.stroke-width: 7}
 app.celery -> stores.redis: "broker +\nresult backend" {style.stroke: "#28A745"; style.stroke-width: 8}
-app.fastapi -> stores.redis: {style.stroke: "#28A745"; style.stroke-width: 6; style.stroke-dash: 5}
+app.server -> stores.redis: {style.stroke: "#28A745"; style.stroke-width: 6; style.stroke-dash: 5}
 
 # ── AI store connections ─────────────────────────────────────
-app.fastapi.ycs -> stores.neo4j: "graph\nbuilder" {style.stroke: "#6B46C1"; style.stroke-width: 7}
-app.fastapi.ycs -> stores.vector_stores.qdrant: "hybrid\nvector search" {style.stroke: "#6B46C1"; style.stroke-width: 7}
-app.fastapi.ycs -> stores.vector_stores.elasticsearch: "BM25\nfull-text" {style.stroke: "#6B46C1"; style.stroke-width: 7}
+app.server.ycs -> stores.neo4j: "graph\nbuilder" {style.stroke: "#6B46C1"; style.stroke-width: 7}
+app.server.ycs -> stores.vector_stores.qdrant: "hybrid\nvector search" {style.stroke: "#6B46C1"; style.stroke-width: 7}
+app.server.ycs -> stores.vector_stores.elasticsearch: "BM25\nfull-text" {style.stroke: "#6B46C1"; style.stroke-width: 7}
 app.celery -> stores.minio: "artifact\nstorage" {style.stroke: "#28A745"; style.stroke-width: 6}
 
 # ── OTel dual-export (red dashed) ───────────────────────────
-app.fastapi -> monitoring.alloy: "OTel gRPC\n(traces+metrics+logs)" {style.stroke: "#E53E3E"; style.stroke-width: 6; style.stroke-dash: 3}
+app.server -> monitoring.alloy: "OTel gRPC\n(traces+metrics+logs)" {style.stroke: "#E53E3E"; style.stroke-width: 6; style.stroke-dash: 3}
 app.fastmcp -> monitoring.alloy: {style.stroke: "#E53E3E"; style.stroke-width: 6; style.stroke-dash: 3}
 app.celery -> monitoring.alloy: {style.stroke: "#E53E3E"; style.stroke-width: 6; style.stroke-dash: 3}
-app.fastapi -> monitoring.langfuse: "OTel HTTP\n(LLM traces\n+ scores)" {style.stroke: "#E53E3E"; style.stroke-width: 6; style.stroke-dash: 3}
+app.server -> monitoring.langfuse: "OTel HTTP\n(LLM traces\n+ scores)" {style.stroke: "#E53E3E"; style.stroke-width: 6; style.stroke-dash: 3}

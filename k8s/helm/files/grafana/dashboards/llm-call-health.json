@@ -250,7 +250,7 @@
       "id": 7,
       "type": "logs",
       "title": "Recent LLM call error logs",
-      "description": "FastAPI and Celery log lines around chat/embedding calls — timeouts, rotator arm failures, schema errors.",
+      "description": "Server and Celery log lines around chat/embedding calls — timeouts, rotator arm failures, schema errors.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -267,7 +267,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-fastapi|coelhonexus-celery\"} |~ \"(?i)(gen_ai|chat-endpoint|embedding|rotator|llm|error|exception|traceback|failed|timeout)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\"",
+          "expr": "{namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-server|coelhonexus-celery\"} |~ \"(?i)(gen_ai|chat-endpoint|embedding|rotator|llm|error|exception|traceback|failed|timeout)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\"",
           "refId": "A"
         }
       ],
@@ -303,7 +303,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum by (detected_level) (count_over_time({namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-fastapi|coelhonexus-celery\"} |~ \"(?i)(gen_ai|chat-endpoint|embedding|rotator|llm)\" [5m]))",
+          "expr": "sum by (detected_level) (count_over_time({namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-server|coelhonexus-celery\"} |~ \"(?i)(gen_ai|chat-endpoint|embedding|rotator|llm)\" [5m]))",
           "legendFormat": "{{detected_level}}",
           "refId": "A"
         }
@@ -389,7 +389,7 @@
             "uid": "tempo"
           },
           "queryType": "traceql",
-          "query": "{ resource.service.name=~\"coelhonexus-fastapi|coelhonexus-celery\" && name=\"gen_ai.embed\" }",
+          "query": "{ resource.service.name=~\"coelhonexus-server|coelhonexus-celery\" && name=\"gen_ai.embed\" }",
           "limit": 30,
           "refId": "A",
           "tableType": "spans"

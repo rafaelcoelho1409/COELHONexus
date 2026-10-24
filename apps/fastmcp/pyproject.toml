@@ -21,7 +21,7 @@ dependencies = [
 DEP002 = ["uvicorn"]  # ASGI server run via entrypoint.sh CLI, not imported
 
 [tool.uv]
-# Application, not an installable library — see apps/fastapi/pyproject.toml's [tool.uv].
+# Application, not an installable library — see apps/server/pyproject.toml's [tool.uv].
 package = false
 
 [build-system]

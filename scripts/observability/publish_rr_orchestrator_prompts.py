@@ -1,13 +1,13 @@
 """Publish RR orchestrator prompts (tools + subagents) to LangFuse.
 
 Reads `ORCHESTRATOR_SYSTEM_PROMPT_TOOLS` and `ORCHESTRATOR_SYSTEM_PROMPT_SUBAGENTS`
-from `apps/fastapi/domains/rr/agent/prompts.py` and pushes both with label
+from `apps/server/domains/rr/agent/prompts.py` and pushes both with label
 `production`. The local constants remain the source of truth — keep them
 in sync; re-run this script to publish a new version when the local text
 changes.
 
-Run inside the FastAPI container:
-    kubectl exec -n coelhonexus-dev <fastapi-pod> -c coelhonexus-fastapi -- \\
+Run inside the server container:
+    kubectl exec -n coelhonexus-dev <server-pod> -c coelhonexus-server -- \\
         bash -c "PYTHONPATH=/app python /tmp/publish_rr_orchestrator_prompts.py"
 """
 from __future__ import annotations

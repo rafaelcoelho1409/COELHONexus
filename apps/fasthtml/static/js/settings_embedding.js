@@ -172,7 +172,7 @@ function bindBrowseModels() {
 
 // ---- Embedding migration — status banner + trigger + progress ------------
 // Gate lives server-side (every ingestion-dispatch endpoint 423s while a
-// migration is needed/running — see `api/v1/ycs/content/router.py
+// migration is needed/running — see `entrypoints/api/v1/ycs/content/router.py
 // ::_raise_if_embedding_migration_needed`); this is the UI half: show the
 // read-only active-collection name always, and a banner + "Migrate now"
 // button only when `needed` or a migration is already in flight.

@@ -2,7 +2,7 @@
 
 **Status:** LIVING document. Authored 2026-06-02 from a synthesis of FastAPI
 best-practices, Cosmic Python, Pydantic docs, and an audit of the current
-`apps/fastapi/domains/` tree. This is the rulebook for future modules and
+`apps/server/domains/` tree. This is the rulebook for future modules and
 the migration target for existing ones.
 **Updated 2026-09-18:** added §8, the cross-module reference convention
 (dotted `domains.*` path, no wrapper/namespace classes).
@@ -674,9 +674,11 @@ through a bare import.
 ## 9. The whole-project structure (target)
 
 ```
-apps/fastapi/
-├── api/v1/                  # routes (FastAPI routers) — thin, dispatch to domains
-│   └── dd/{planner,synth,ingestion,pipeline,runs}.py
+apps/server/
+├── entrypoints/             # process entry surfaces, referenced as `entrypoints.*` (same dotted rule as `domains.*`)
+│   ├── api/                 # REST: params.py (CORS_ORIGINS, ALLOWED_HOSTS), domain.py, v1/ routers — thin, dispatch to domains
+│   │   └── v1/dd/{planner,synth,ingestion,pipeline,runs}.py
+│   └── mcp/tools/<family>/  # FastMCP tools, each family exposes service.register(mcp); the server itself is built in main.py
 ├── domains/                 # business logic — the bounded contexts
 │   ├── dd/                  # Docs Distiller bounded context
 │   │   ├── ingestion/
@@ -707,7 +709,7 @@ apps/fastapi/
 │       ├── chat/{domain,service,params}.py        # chat endpoint adapter
 │       ├── embeddings/{domain,service,params}.py  # embedding endpoint adapter
 │       └── credentials/     # MinIO Fernet store + endpoint settings blobs
-├── app.py                   # FastAPI bootstrap
+├── main.py                  # FastAPI + FastMCP bootstrap (REST under /api, MCP at /mcp)
 ├── celery_app.py            # Celery bootstrap
 ├── pyproject.toml
 └── shared/                  # cross-cutting (sources.yaml, etc.)

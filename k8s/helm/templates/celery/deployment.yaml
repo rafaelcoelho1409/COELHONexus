@@ -1,6 +1,6 @@
 {{- if .Values.celery.enabled }}
 {{- $appName := "celery" -}}
-{{- $fastapi := index $.Values "fastapi" }}
+{{- $server := index $.Values "server" }}
 apiVersion: apps/v1
 {{- include "coelhonexus.DeploymentSettings" (dict "appName" $appName "root" .) | nindent 0 }}
 spec:
@@ -19,11 +19,11 @@ spec:
       {{- end }}
       containers:
         - name: coelhonexus-celery
-          image: {{ $fastapi.image }}
-          imagePullPolicy: {{ $fastapi.imagePullPolicy }}
+          image: {{ $server.image }}
+          imagePullPolicy: {{ $server.imagePullPolicy }}
           # SYS_PTRACE lets py-spy attach to the worker's Python processes to
           # dump a live stack trace when a task hangs (no restart required).
-          # Scoped to worker only — FastAPI pod doesn't need it.
+          # Scoped to worker only — the server pod doesn't need it.
           securityContext:
             capabilities:
               add:
@@ -43,11 +43,11 @@ spec:
             - "worker@%h"
           envFrom:
             - configMapRef:
-                name: coelhonexus-fastapi-configmap
+                name: coelhonexus-server-configmap
           env:
             - name: PYTHONPATH
               value: "/app"
-            # Override the shared FastAPI configmap; worker traces land under coelhonexus-celery.
+            # Override the shared server configmap; worker traces land under coelhonexus-celery.
             - name: OTEL_SERVICE_NAME
               value: "coelhonexus-celery"
             {{- include "coelhonexus.secretEnvVars" . | nindent 12 }}

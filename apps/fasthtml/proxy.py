@@ -1,6 +1,6 @@
-"""Reverse proxy: /api/* → FastAPI.
+"""Reverse proxy: /api/* → the server (apps/server).
 
-Browsers can't reach the in-cluster FastAPI service directly. Without
+Browsers can't reach the in-cluster server service directly. Without
 this proxy, every `fetch('/api/...')` from inline JS would hit the
 FastHTML port (3000) — which has no /api routes — and silently 404 with
 HTML, breaking the whole wizard.
@@ -17,8 +17,8 @@ from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
 
-FASTAPI_URL = os.environ.get(
-    "FASTAPI_URL", "http://coelhonexus-fastapi:8000"
+SERVER_URL = os.environ.get(
+    "SERVER_URL", "http://coelhonexus-server:8000"
 ).rstrip("/")
 
 
@@ -41,7 +41,7 @@ def _get_client() -> httpx.AsyncClient:
     global _proxy_client
     if _proxy_client is None:
         _proxy_client = httpx.AsyncClient(
-            base_url=FASTAPI_URL,
+            base_url=SERVER_URL,
             timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0),
             limits=httpx.Limits(max_connections=50, max_keepalive_connections=10),
             transport=httpx.AsyncHTTPTransport(retries=3),
@@ -57,7 +57,7 @@ def _get_sse_client() -> httpx.AsyncClient:
     global _sse_client
     if _sse_client is None:
         _sse_client = httpx.AsyncClient(
-            base_url=FASTAPI_URL,
+            base_url=SERVER_URL,
             timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0),
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=5),
         )
@@ -76,7 +76,7 @@ def _is_sse_request(request: Request) -> bool:
 
 
 async def _forward(request: Request) -> StreamingResponse:
-    """Forward `request` to FastAPI at its same path. Preserves method,
+    """Forward `request` to the server at its same path. Preserves method,
     headers (minus hop-by-hop), body, and query string. Streams the
     response back so large payloads don't balloon memory."""
     upstream_path = request.url.path

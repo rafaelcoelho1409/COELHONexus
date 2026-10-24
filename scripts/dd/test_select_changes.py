@@ -2,7 +2,7 @@
 harmonization, Foundations chapter, oversize-split planning/validation) on a
 real manifest with synthetic assignment scores. Run with the app's venv:
 
-    cd apps/fastapi && .venv/bin/python ../../scripts/dd/test_select_changes.py asyncio_fixture.json
+    cd apps/server && .venv/bin/python ../../scripts/dd/test_select_changes.py asyncio_fixture.json
 
 The fixture is {"entries", "distillates", "proposals"} dumped for one framework
 whose manifest has anchor-split families (asyncio). Prints OK or raises.
@@ -12,7 +12,7 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "fastapi"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
 sel = domains.dd.planner.nodes.chapter_select.domain

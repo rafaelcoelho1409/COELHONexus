@@ -1,9 +1,9 @@
 """Dump the stored Planner artifacts of every framework to JSON-lines on stdout,
 for offline replay (scripts/dd/replay_select.py). Read-only.
 
-Run inside a FastAPI pod (it needs MinIO access), redirecting stdout locally:
+Run inside a server pod (it needs MinIO access), redirecting stdout locally:
 
-    kubectl -n coelhonexus exec -i deploy/coelhonexus-fastapi -c coelhonexus-fastapi -- \
+    kubectl -n coelhonexus exec -i deploy/coelhonexus-server -c coelhonexus-server -- \
         python - < scripts/dd/dump_planner_artifacts.py > planner_artifacts.jsonl
 
 One line per framework: {slug, manifest, distillates, proposals, assignments, plan}.

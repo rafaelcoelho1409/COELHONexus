@@ -2,13 +2,13 @@
 signal + proposer prompt rules, source-order voting and Foundations pin in
 order_chapters, doc role plumbing, settle-poll criterion. Run:
 
-    cd apps/fastapi && .venv/bin/python ../../scripts/dd/test_planner_batch.py asyncio_fixture.json
+    cd apps/server && .venv/bin/python ../../scripts/dd/test_planner_batch.py asyncio_fixture.json
 """
 import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "fastapi"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
 nodes = domains.dd.planner.nodes

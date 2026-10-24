@@ -1,5 +1,5 @@
 // LLM Endpoint card — the OpenAI-compatible URL the Docs Distiller calls.
-// Talks to FastAPI through the /api reverse proxy. The API key is write-only:
+// Talks to the server through the /api reverse proxy. The API key is write-only:
 // it leaves the browser on Save and never comes back (GET returns masked status).
 
 const API = "/api/v1/settings";

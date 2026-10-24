@@ -1,6 +1,6 @@
 # LangFuse SOTA + rollout plan — 2026-09-22 (reorg landed same day, §§2/4/5 current)
 
-Scope: `apps/fastapi/` — `infra/langfuse/`, `infra/otel/` (export path),
+Scope: `apps/server/` — `infra/langfuse/`, `infra/otel/` (export path),
 `api/v1/` + `domains/{dd,ycs,rr,settings}` (consumers). SDK: `langfuse>=3,<4`
 (OTel-native v3). SOTA sourced directly from current Langfuse docs (v3/v4
 SDK, prompt-management-at-scale, evaluation core concepts).
@@ -98,7 +98,7 @@ Two planes, one rule (**fail-soft, never raise**):
 ### S9 runbook
 
 ```bash
-# inside the FastAPI image (fixtures mounted at /etc/langfuse-fixtures):
+# inside the server image (fixtures mounted at /etc/langfuse-fixtures):
 python -m infra.langfuse.evals.datasets.uploader \
   /etc/langfuse-fixtures/dd/reference_book dd.reference_book.v1
 python -m infra.langfuse.evals.datasets.uploader \

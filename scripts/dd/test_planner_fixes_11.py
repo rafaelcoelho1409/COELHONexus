@@ -1,10 +1,10 @@
 """Offline checks for the 2026-10-18 planner change (no LLM, no cluster): a chapter holding more code blocks than its sections can print is split, whatever its page count.
 
-    cd apps/fastapi && .venv/bin/python ../../scripts/dd/test_planner_fixes_11.py"""
+    cd apps/server && .venv/bin/python ../../scripts/dd/test_planner_fixes_11.py"""
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "fastapi"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
 SEL = domains.dd.planner.nodes.chapter_select.domain

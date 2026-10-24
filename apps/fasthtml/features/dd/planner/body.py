@@ -11,7 +11,7 @@ load). JS `_toggleStageEmpty` is still wired for runtime toggles
 source of truth for initial state.
 
 A small inline `<script>` at the bottom wires a fallback click handler
-on `#fw-planner-start` that issues a direct `fetch` to the FastAPI
+on `#fw-planner-start` that issues a direct `fetch` to the server
 endpoint. This bypasses the ES-module load chain entirely (which is
 where the planner module-init or dynamic-import sequence had been
 silently failing on some clients — typically mobile browsers where

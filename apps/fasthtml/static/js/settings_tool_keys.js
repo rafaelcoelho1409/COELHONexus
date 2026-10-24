@@ -15,7 +15,7 @@
  * Pulls the catalog of optional FastMCP source-tool API keys from
  * /api/v1/rr/tool-credentials/keys and renders one card per key with
  * Save / Test / Remove handlers. Raw keys NEVER round-trip — they only go
- * browser → FastAPI on save; responses carry a `last4` mask.
+ * browser → server on save; responses carry a `last4` mask.
  */
 const API = "/api/v1/rr/tool-credentials";
 const ROOT_ID = "settings-tool-keys-list";

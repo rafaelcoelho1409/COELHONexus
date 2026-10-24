@@ -2,7 +2,7 @@
 catch-all split sizing, migration page pull, naming prompt, SOURCE STRUCTURE from `source_path`,
 compact propose output + sample top-up, partial score re-ask.
 
-    cd apps/fastapi && .venv/bin/python ../../scripts/dd/test_planner_fixes_5.py [planner_artifacts.jsonl]
+    cd apps/server && .venv/bin/python ../../scripts/dd/test_planner_fixes_5.py [planner_artifacts.jsonl]
 
 With a dump from dump_planner_artifacts.py it also replays the full selection on every stored framework."""
 import asyncio
@@ -10,7 +10,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "fastapi"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
 nodes = domains.dd.planner.nodes

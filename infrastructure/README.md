@@ -154,7 +154,7 @@ cd infrastructure/live/coelhonexus/<layer>/<module> && terragrunt apply -auto-ap
 for f in infrastructure/live/coelhonexus/*/*/smoke.sh; do bash "$f" || break; done
 ```
 
-### Deploy the COELHO Nexus apps (`fastapi`, `fasthtml`, `fastmcp`)
+### Deploy the COELHO Nexus apps (`server`, `fasthtml`, `fastmcp`)
 
 Full instructions — Skaffold (`run`/`dev`) and ArgoCD (build via `docker buildx` or `skaffold build`, then Image Updater deploys) — moved to the root [`README.md`](../README.md)'s Installation section, so app-deploy instructions live in one place rather than being duplicated across two READMEs.
 
