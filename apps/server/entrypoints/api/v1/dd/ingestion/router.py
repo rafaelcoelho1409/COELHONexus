@@ -1,11 +1,10 @@
 """Read-only view of the per-framework MinIO content (canonical post-
 finalize corpus). Anything here survives Redis TTL."""
-import domains
+import domains, infra
 from . import params
 
 import logging
 
-import redis.asyncio as redis_aio
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, HTTPException, Response
 
@@ -129,11 +128,7 @@ async def delete_framework(slug: str) -> dict:
                 f"{type(e).__name__}: {e}"
             )
             failed.append(prefix)
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), 
-        socket_connect_timeout=3.0, 
-        socket_timeout=5.0,
-    )
+    r = infra.redis.service.new_redis()
     lock_released = False
     try:
         held_run_id = await domains.dd.ingestion.runtime.progress.service.read_lock(

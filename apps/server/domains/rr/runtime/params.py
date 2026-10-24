@@ -1,15 +1,9 @@
-"""Tunables for RR runtime — Redis timeouts, SSE snapshot retention,
-extraction-cache TTL, resilient-call retry classification.
+"""Tunables for RR runtime — SSE snapshot retention, extraction-cache TTL,
+resilient-call retry classification.
 
 Per docs/CODE-CONVENTIONS.md §3: loose numeric tunables live in params.py.
 """
 from __future__ import annotations
-
-
-# Redis client socket timeouts — short enough that a Redis blip surfaces
-# fast instead of stalling a whole agent run.
-REDIS_CONNECT_TIMEOUT_S: float = 3.0
-REDIS_OP_TIMEOUT_S:      float = 5.0
 
 
 # Snapshot list — bounded so a long scan doesn't grow Redis memory; TTL

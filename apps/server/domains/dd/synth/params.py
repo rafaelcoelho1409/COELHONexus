@@ -8,9 +8,6 @@ CANCEL_TTL_S = 3600
 SNAPSHOT_TTL_S = 86400   # 24h — covers overnight reloads while a study run is in flight
 SNAPSHOT_MAX_EVENTS = 200
 
-REDIS_CONNECT_TIMEOUT_S = 3.0
-REDIS_OP_TIMEOUT_S = 5.0
-
 
 CHECKLIST_THRESHOLD = 0.80
 MAX_REFINE_ITER = 5

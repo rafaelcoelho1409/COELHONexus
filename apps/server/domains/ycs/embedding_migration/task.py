@@ -24,10 +24,7 @@ import infra.celery
 from . import service
 
 import asyncio
-import os
 import time
-
-import redis.asyncio as redis_aio
 
 
 logger = infra.celery.service.get_task_logger(__name__)
@@ -44,14 +41,7 @@ def finalize_embedding_migration(self, physical_collection: str) -> dict:
     logger.info(f"[finalize_embedding_migration] cutover -> {physical_collection!r}")
 
     async def _run() -> dict:
-        redis_host = os.environ.get("REDIS_HOST", "localhost")
-        redis_port = os.environ.get("REDIS_PORT", "6379")
-        redis_password = os.environ.get("REDIS_PASSWORD", "")
-        redis_url = (
-            f"redis://:{redis_password}@{redis_host}:{redis_port}"
-            if redis_password else f"redis://{redis_host}:{redis_port}"
-        )
-        redis = redis_aio.from_url(redis_url)
+        redis = infra.redis.service.new_redis()
         qdrant = infra.qdrant.service.new_qdrant()
         with infra.langfuse.service.session(
             "ycs-embedding-migration",

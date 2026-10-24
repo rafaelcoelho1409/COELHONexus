@@ -41,11 +41,8 @@ import infra.celery
 
 import json
 import logging
-import os
 
 from typing import Any
-
-import redis.asyncio as redis_aio
 
 from . import keys, params
 
@@ -84,7 +81,7 @@ def dispatch_videos_pipeline(
 
 # Rerun state (Redis-backed)
 async def persist_pipeline_state(
-    redis:                 redis_aio.Redis | None,
+    redis:                 infra.redis.service.Redis | None,
     extract_id:            str,
     video_ids:             list[str],
     include_transcription: bool,
@@ -238,7 +235,7 @@ def revoke_pipeline_phases(
     return outcomes
 
 
-async def request_cancel(redis: redis_aio.Redis, extract_id: str) -> None:
+async def request_cancel(redis: infra.redis.service.Redis, extract_id: str) -> None:
     """Set the cooperative-cancel flag for `extract_id`. Checked by
     `extract_videos`' Playwright chunk loop and `ingest_to_neo4j`'s
     retry-pass loop at safe checkpoints — see `keys.pipeline_cancel_key`
@@ -255,7 +252,7 @@ async def request_cancel(redis: redis_aio.Redis, extract_id: str) -> None:
 
 
 async def is_pipeline_cancelled(
-    redis: redis_aio.Redis, extract_id: str,
+    redis: infra.redis.service.Redis, extract_id: str,
 ) -> bool:
     try:
         v = await redis.get(keys.pipeline_cancel_key(extract_id))
@@ -265,7 +262,7 @@ async def is_pipeline_cancelled(
 
 
 async def load_pipeline_state(
-    redis:      redis_aio.Redis | None,
+    redis:      infra.redis.service.Redis | None,
     extract_id: str,
 ) -> dict[str, Any] | None:
     """Look up the `{video_ids, include_transcription, languages}` blob
@@ -324,24 +321,16 @@ async def load_pipeline_state(
 # bookkeeping doesn't leak forever.
 
 
-def build_redis_client() -> redis_aio.Redis:
+def build_redis_client() -> infra.redis.service.Redis:
     """Fresh client for a Celery task's own event loop — same pattern
     as `qdrant_task/task.py::invalidate_cache` (a Celery worker process
     is not the FastAPI process; there's no shared `app.state.redis_aio`
     to reuse here)."""
-    redis_host = os.environ.get("REDIS_HOST", "localhost")
-    redis_port = os.environ.get("REDIS_PORT", "6379")
-    redis_password = os.environ.get("REDIS_PASSWORD", "")
-    url = (
-        f"redis://:{redis_password}@{redis_host}:{redis_port}"
-        if redis_password
-        else f"redis://{redis_host}:{redis_port}"
-    )
-    return redis_aio.from_url(url)
+    return infra.redis.service.new_redis()
 
 
 async def set_phase_total(
-    redis: redis_aio.Redis, extract_id: str, phase: str, total: int,
+    redis: infra.redis.service.Redis, extract_id: str, phase: str, total: int,
 ) -> tuple[int, int]:
     """Called by `extract_videos`: once UPFRONT (seeded to the full
     requested count, for early progress feedback while Playwright is
@@ -369,7 +358,7 @@ async def set_phase_total(
 
 
 async def set_phase_piece_total(
-    redis: redis_aio.Redis, extract_id: str, phase: str, total: int,
+    redis: infra.redis.service.Redis, extract_id: str, phase: str, total: int,
 ) -> None:
     """Companion to `set_phase_total` — the individual-PIECE count
     (partitions + unsplit videos), not the video-level count. See
@@ -390,7 +379,7 @@ async def set_phase_piece_total(
 
 
 async def mark_video_done(
-    redis:      redis_aio.Redis,
+    redis:      infra.redis.service.Redis,
     extract_id: str,
     phase:      str,
     video_id:   str,
@@ -424,7 +413,7 @@ async def mark_video_done(
 
 
 async def mark_video_or_partition_done(
-    redis:            redis_aio.Redis,
+    redis:            infra.redis.service.Redis,
     extract_id:       str,
     phase:            str,
     video_id:         str,
@@ -525,7 +514,7 @@ async def mark_video_or_partition_done(
 
 
 async def update_video_extra(
-    redis: redis_aio.Redis, extract_id: str, phase: str, video_id: str, extra: dict[str, Any],
+    redis: infra.redis.service.Redis, extract_id: str, phase: str, video_id: str, extra: dict[str, Any],
 ) -> None:
     """Merge additional fields into a video's already-recorded status
     entry, WITHOUT touching the finished counter (`mark_video_done`
@@ -546,7 +535,7 @@ async def update_video_extra(
 
 
 async def update_phase_preview(
-    redis: redis_aio.Redis, extract_id: str, phase: str, completed_ids: list[str],
+    redis: infra.redis.service.Redis, extract_id: str, phase: str, completed_ids: list[str],
 ) -> None:
     """Best-effort ADD to the display-only in-progress preview (see
     `keys.phase_preview_key`). Called by chunked phase tasks as videos
@@ -578,7 +567,7 @@ async def update_phase_preview(
 
 
 async def track_dispatched_task(
-    redis: redis_aio.Redis, extract_id: str, task_id: str,
+    redis: infra.redis.service.Redis, extract_id: str, task_id: str,
 ) -> None:
     """Best-effort record of a fired per-video task id so Stop can
     revoke everything actually in flight, not just a fixed 4 ids."""
@@ -593,7 +582,7 @@ async def track_dispatched_task(
 
 
 async def get_dispatched_task_ids(
-    redis: redis_aio.Redis, extract_id: str,
+    redis: infra.redis.service.Redis, extract_id: str,
 ) -> list[str]:
     try:
         raw = await redis.lrange(keys.dispatched_tasks_key(extract_id), 0, -1)
@@ -605,7 +594,7 @@ async def get_dispatched_task_ids(
     ]
 
 
-async def maybe_finalize(redis: redis_aio.Redis, extract_id: str) -> bool:
+async def maybe_finalize(redis: infra.redis.service.Redis, extract_id: str) -> bool:
     """Check whether BOTH streaming phases have reached their totals;
     if so, take the exactly-once finalize flag and fire
     `invalidate_cache`. Returns True only for the single caller that
@@ -639,7 +628,7 @@ async def maybe_finalize(redis: redis_aio.Redis, extract_id: str) -> bool:
 
 
 async def get_phase_progress(
-    redis: redis_aio.Redis, extract_id: str, phase: str,
+    redis: infra.redis.service.Redis, extract_id: str, phase: str,
 ) -> dict[str, Any]:
     """Synthesize the `{state, meta}` shape `/admin/task/{id}` normally
     returns, from this module's Redis counters/status hash, so the

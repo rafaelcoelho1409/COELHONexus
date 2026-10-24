@@ -7,7 +7,7 @@ The subpackages below are re-exported LAZILY (PEP 562 module
 `__getattr__`, 2026-09-24) so consumers can still write `import
 domains, infra` and call through the full dotted path
 (`infra.qdrant.service.get_qdrant()`, ...) without `import infra`
-alone paying for all five subpackages every time. Before this, a
+alone paying for every subpackage each time. Before this, a
 caller that only ever touches `infra.qdrant` still imported
 elasticsearch/langfuse/neo4j/opentelemetry too — verified live at ~27s for
 `import infra` cold, ~10-16s for ANY single `infra.X`, because
@@ -29,7 +29,7 @@ import importlib
 
 
 if TYPE_CHECKING:
-    from . import elasticsearch, langfuse, neo4j, opentelemetry, qdrant
+    from . import elasticsearch, langfuse, neo4j, opentelemetry, qdrant, redis
 
 
 __all__ = [
@@ -38,6 +38,7 @@ __all__ = [
     "neo4j",
     "opentelemetry",
     "qdrant",
+    "redis",
 ]
 
 

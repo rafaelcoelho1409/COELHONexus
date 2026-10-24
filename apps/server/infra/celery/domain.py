@@ -1,19 +1,5 @@
-"""celery domain — pure connection-string builders (no I/O, deterministic).
-
-`params.py` reads the env once and calls these; unit-test these, not the
-import-time env reads.
-"""
+"""celery domain — pure name builders (no I/O, deterministic)."""
 from __future__ import annotations
-
-
-def build_redis_url(host: str, port: str | int, password: str) -> str:
-    """Broker/result-backend URL. Password omitted when blank — a blank
-    `: @` segment breaks redis-py DSN parsing."""
-    host = (host or "").strip()
-    password = (password or "").strip()
-    if password:
-        return f"redis://:{password}@{host}:{port}"
-    return f"redis://{host}:{port}"
 
 
 def scoped_queue(base: str, environment: str) -> str:

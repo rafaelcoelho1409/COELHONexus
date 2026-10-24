@@ -12,10 +12,9 @@ from __future__ import annotations
 import json
 import logging
 
-import redis.asyncio as redis_aio
 from fastapi import HTTPException
 
-import domains
+import domains, infra
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +57,7 @@ async def wipe_one_chapter(slug: str, chapter_id: str) -> dict:
         )
     # Never delete outputs a running study is still writing.
     try:
-        r = redis_aio.from_url(
-            domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-        )
+        r = infra.redis.service.new_redis()
         try:
             running = await r.get(domains.dd.synth.keys.active_study_key(slug))
             # A single-chapter run (the strip's ▶ button) holds only the slug's synth lock, no study registry entry.

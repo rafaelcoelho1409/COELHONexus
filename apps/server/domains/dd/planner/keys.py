@@ -5,17 +5,6 @@ import os
 from urllib.parse import quote
 
 
-def redis_url() -> str:
-    """Build the Redis URL from env. Strict reads — secrets must be set."""
-    host = os.environ["REDIS_HOST"]
-    port = os.environ["REDIS_PORT"]
-    password = os.environ["REDIS_PASSWORD"]
-    return (
-        f"redis://:{password}@{host}:{port}"
-        if password else f"redis://{host}:{port}"
-    )
-
-
 def postgres_url() -> str:
     """Build the Postgres URL from env. User+password are percent-encoded
     because POSTGRES_PASSWORD may contain `%`, `&`, `#`, `!`, `^` which

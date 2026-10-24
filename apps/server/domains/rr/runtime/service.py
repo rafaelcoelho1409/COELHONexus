@@ -31,19 +31,16 @@ sectioned below.
                      subagents do.
 """
 from __future__ import annotations
+import infra
 from . import domain, keys, llm_counter, observability, params
 from .. import agent
 
 import asyncio
 import json
 import logging
-import os
 import random
 import time
 from typing import Any, AsyncIterator
-
-import redis as redis_sync
-import redis.asyncio as redis_aio
 
 
 logger = logging.getLogger(__name__)
@@ -66,11 +63,7 @@ def emit_event_sync(scan_id: str, phase: str, **fields) -> None:
     payload = json.dumps(event, default=str)
     observability.metrics.record_phase_event(phase = phase)
     try:
-        r = redis_sync.from_url(
-            keys.redis_url(),
-            socket_connect_timeout = params.REDIS_CONNECT_TIMEOUT_S,
-            socket_timeout         = params.REDIS_OP_TIMEOUT_S,
-        )
+        r = infra.redis.service.new_redis_sync()
         try:
             r.publish(keys.event_channel(scan_id), payload)
             key = keys.snapshot_key(scan_id)
@@ -98,11 +91,7 @@ async def emit_event(scan_id: str, phase: str, **fields) -> None:
     }
     payload = json.dumps(event, default=str)
     observability.metrics.record_phase_event(phase = phase)
-    r = redis_aio.from_url(
-        keys.redis_url(),
-        socket_connect_timeout = params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout         = params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis()
     try:
         await r.publish(keys.event_channel(scan_id), payload)
         key = keys.snapshot_key(scan_id)
@@ -125,11 +114,7 @@ async def emit_event(scan_id: str, phase: str, **fields) -> None:
 
 async def store_task_id(scan_id: str, task_id: str) -> None:
     """SET `rr:{scan_id}:task_id = task_id` with `TASK_ID_TTL_S` expiry."""
-    r = redis_aio.from_url(
-        keys.redis_url(),
-        socket_connect_timeout = params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout         = params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis()
     try:
         await r.set(keys.task_id_key(scan_id), task_id, ex=params.TASK_ID_TTL_S)
     except Exception as e:
@@ -147,11 +132,7 @@ async def store_task_id(scan_id: str, task_id: str) -> None:
 async def get_task_id(scan_id: str) -> str | None:
     """GET `rr:{scan_id}:task_id`. Returns None if the key is missing or
     Redis errors — both callers (cancel endpoint) treat None as 404."""
-    r = redis_aio.from_url(
-        keys.redis_url(),
-        socket_connect_timeout = params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout         = params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis()
     try:
         raw = await r.get(keys.task_id_key(scan_id))
         if raw is None:
@@ -173,11 +154,7 @@ async def get_task_id(scan_id: str) -> str | None:
 async def clear_task_id(scan_id: str) -> None:
     """DEL `rr:{scan_id}:task_id` after a successful cancel so a stale
     UUID never lingers past the revoke point."""
-    r = redis_aio.from_url(
-        keys.redis_url(),
-        socket_connect_timeout = params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout         = params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis()
     try:
         await r.delete(keys.task_id_key(scan_id))
     except Exception:
@@ -201,11 +178,7 @@ async def set_code_synth_running(
     shows "pending" instead of a false idle/404 while the Celery task
     (`domains.rr.task.run_code_synth`) is still running."""
     payload = json.dumps({"status": "running", "task_id": task_id, "ts": time.time()})
-    r = redis_aio.from_url(
-        keys.redis_url(),
-        socket_connect_timeout = params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout         = params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis()
     try:
         await r.set(
             keys.code_synth_status_key(scan_id, arxiv_id, prompt_version),
@@ -230,11 +203,7 @@ async def set_code_synth_error(
     the error (and the frontend shows a Retry button) instead of leaving
     the operator stuck on "pending" forever."""
     payload = json.dumps({"status": "error", "message": message, "ts": time.time()})
-    r = redis_aio.from_url(
-        keys.redis_url(),
-        socket_connect_timeout = params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout         = params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis()
     try:
         await r.set(
             keys.code_synth_status_key(scan_id, arxiv_id, prompt_version),
@@ -259,11 +228,7 @@ async def get_code_synth_status(
     Returns None when never started, already succeeded (cleared on
     success — the MinIO cache is the source of truth for "done"), or on
     a Redis error (caller falls back to treating it as idle)."""
-    r = redis_aio.from_url(
-        keys.redis_url(),
-        socket_connect_timeout = params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout         = params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis()
     try:
         raw = await r.get(keys.code_synth_status_key(scan_id, arxiv_id, prompt_version))
         if raw is None:
@@ -285,11 +250,7 @@ async def get_code_synth_status(
 async def clear_code_synth_status(scan_id: str, arxiv_id: str, prompt_version: str) -> None:
     """DEL the status key on success — the MinIO cache written right
     before this call is now the source of truth."""
-    r = redis_aio.from_url(
-        keys.redis_url(),
-        socket_connect_timeout = params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout         = params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis()
     try:
         await r.delete(keys.code_synth_status_key(scan_id, arxiv_id, prompt_version))
     except Exception:
@@ -302,7 +263,7 @@ async def clear_code_synth_status(scan_id: str, arxiv_id: str, prompt_version: s
 
 
 async def _replay_snapshot(
-    r: redis_aio.Redis, scan_id: str,
+    r: infra.redis.service.Redis, scan_id: str,
 ) -> list[dict]:
     """Per-scan snapshot list for late-subscriber catch-up. Empty on no history."""
     try:
@@ -325,11 +286,7 @@ async def subscribe_events(
 ) -> AsyncIterator[dict]:
     """Async iterator over phase events. Yields catch-up replay first,
     then live events. Caller owns close (SSE cancel path)."""
-    r = redis_aio.from_url(
-        keys.redis_url(),
-        socket_connect_timeout = params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout         = params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis()
     pubsub = r.pubsub()
     try:
         await pubsub.subscribe(keys.event_channel(scan_id))
@@ -368,31 +325,14 @@ async def subscribe_events(
 # Extraction cache — Redis cache for deep_read's per-paper 5-field output
 # ---------------------------------------------------------------------------
 
-async def _extraction_redis() -> redis_aio.Redis | None:
+async def _extraction_redis() -> infra.redis.service.Redis | None:
     """Lazy Redis client — None on env-misconfig so callers fall back
     gracefully (write_extraction proceeds without caching; prefill
     returns 0 hits)."""
-    if "REDIS_HOST" not in os.environ:
+    if not infra.redis.service.is_configured():
         return None
-    host = os.environ["REDIS_HOST"].strip()
-    if not host:
-        return None
-    port = (
-        os.environ["REDIS_PORT"].strip()
-        if "REDIS_PORT" in os.environ else "6379"
-    )
-    password = (
-        os.environ["REDIS_PASSWORD"].strip()
-        if "REDIS_PASSWORD" in os.environ else ""
-    )
-    url = (
-        f"redis://:{password}@{host}:{port}"
-        if password else f"redis://{host}:{port}"
-    )
     try:
-        return redis_aio.from_url(
-            url, socket_connect_timeout = 3.0, socket_timeout = 5.0,
-        )
+        return infra.redis.service.new_redis()
     except Exception as e:
         logger.warning(f"[rr-cache] redis init failed: {e}")
         return None
@@ -530,11 +470,7 @@ def mirror_write_sync(scan_id: str, path: str, value: Any) -> None:
     if not scan_id or not path:
         return
     try:
-        r = redis_sync.from_url(
-            keys.redis_url(),
-            socket_connect_timeout = params.REDIS_CONNECT_TIMEOUT_S,
-            socket_timeout         = params.REDIS_OP_TIMEOUT_S,
-        )
+        r = infra.redis.service.new_redis_sync()
         try:
             payload = json.dumps(value, default=str)
             pipe = r.pipeline(transaction=False)
@@ -557,11 +493,7 @@ async def mirror_read(scan_id: str, path: str) -> Any | None:
     Pipeline-page drawer."""
     if not scan_id or not path:
         return None
-    r = redis_aio.from_url(
-        keys.redis_url(),
-        socket_connect_timeout = params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout         = params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis()
     try:
         raw = await r.get(keys.fs_mirror_key(scan_id, path))
         if raw is None:
@@ -589,11 +521,7 @@ async def mirror_index(scan_id: str) -> list[str]:
     fetching individual entries."""
     if not scan_id:
         return []
-    r = redis_aio.from_url(
-        keys.redis_url(),
-        socket_connect_timeout = params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout         = params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis()
     try:
         raw = await r.smembers(keys.fs_mirror_index_key(scan_id))
         return sorted(p.decode() if isinstance(p, bytes) else str(p) for p in raw)

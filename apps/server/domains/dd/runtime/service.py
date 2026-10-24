@@ -1,15 +1,12 @@
 """Per-DD-thread LLM call/token counters; Redis for in-flight, MinIO snapshot on completion — avoids live Langfuse queries for the drawer UI."""
 from __future__ import annotations
-import domains
+import domains, infra
 from . import domain, keys, params
 
 import json
 import logging
 from contextvars import ContextVar
 from typing import Any
-
-import redis as redis_sync
-import redis.asyncio as redis_aio
 
 
 logger = logging.getLogger(__name__)
@@ -95,11 +92,7 @@ def bump_current_failure(exc: BaseException) -> None:
     if not stage or not thread_id or not node_id:
         return
     try:
-        r = redis_sync.from_url(
-            domains.dd.planner.keys.redis_url(),
-            socket_connect_timeout=domains.dd.planner.params.REDIS_CONNECT_TIMEOUT_S,
-            socket_timeout=domains.dd.planner.params.REDIS_OP_TIMEOUT_S,
-        )
+        r = infra.redis.service.new_redis_sync()
     except Exception:
         return
     try:
@@ -131,11 +124,7 @@ def _bump_sync(
     reasoning_tokens: int,
 ) -> None:
     try:
-        r = redis_sync.from_url(
-            domains.dd.planner.keys.redis_url(),
-            socket_connect_timeout=domains.dd.planner.params.REDIS_CONNECT_TIMEOUT_S,
-            socket_timeout=domains.dd.planner.params.REDIS_OP_TIMEOUT_S,
-        )
+        r = infra.redis.service.new_redis_sync()
     except Exception as e:
         logger.warning(f"[dd-llm-counter] connect failed: {e}")
         return
@@ -205,11 +194,7 @@ async def read_counters(thread_id: str) -> dict[str, Any]:
         return empty
 
     try:
-        r = redis_aio.from_url(
-            domains.dd.planner.keys.redis_url(),
-            socket_connect_timeout=domains.dd.planner.params.REDIS_CONNECT_TIMEOUT_S,
-            socket_timeout=domains.dd.planner.params.REDIS_OP_TIMEOUT_S,
-        )
+        r = infra.redis.service.new_redis()
     except Exception as e:
         logger.warning(f"[dd-llm-counter] connect failed: {e}")
         return await _read_snapshot(thread_id) or empty

@@ -1,12 +1,10 @@
 """Planner orchestration glue shared by the Celery task shell — lock release + checkpointer bootstrap + the plan blob reader."""
 from __future__ import annotations
-import domains
-from . import keys, params
+import domains, infra
+from . import keys
 
 import json
 import logging
-
-import redis as redis_sync
 
 
 logger = logging.getLogger(__name__)
@@ -32,11 +30,7 @@ def _release_planner_lock(slug: str, thread_id: str) -> None:
     if not slug or not thread_id:
         return
     try:
-        r = redis_sync.from_url(
-            keys.redis_url(),
-            socket_connect_timeout = params.REDIS_CONNECT_TIMEOUT_S,
-            socket_timeout = params.REDIS_OP_TIMEOUT_S,
-        )
+        r = infra.redis.service.new_redis_sync()
         try:
             r.eval(
                 domains.dd.runtime.params.CAD_RELEASE_LUA,

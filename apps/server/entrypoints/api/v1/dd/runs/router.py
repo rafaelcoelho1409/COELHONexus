@@ -8,7 +8,6 @@ from .. import resolver
 import logging
 import uuid
 
-import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
 
 
@@ -24,9 +23,7 @@ async def start_run(body: schemas.StartRunBody) -> dict:
     acquired, Celery dispatched) / locked (another in flight)."""
     await resolver.service.get_catalog_entry(body.slug)
 
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-    )
+    r = infra.redis.service.new_redis()
     try:
         cursor = 0
         running_slug = None
@@ -137,9 +134,7 @@ async def start_run(body: schemas.StartRunBody) -> dict:
 async def list_active_runs() -> dict:
     """Lock-held runs with progress; cross-checked so locks without a
     written progress record (rare race) aren't surfaced."""
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-    )
+    r = infra.redis.service.new_redis()
     active: list[dict] = []
     try:
         cursor = 0
@@ -171,9 +166,7 @@ async def list_active_runs() -> dict:
 
 @router.post("/{run_id}/cancel")
 async def cancel_run(run_id: str) -> dict:
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-    )
+    r = infra.redis.service.new_redis()
     try:
         await domains.dd.ingestion.runtime.progress.service.request_cancel(r, run_id)
     finally:
@@ -185,9 +178,7 @@ async def cancel_run(run_id: str) -> dict:
 async def get_run(run_id: str) -> dict:
     """In-flight snapshot from Redis (canonical post-finalize manifest
     lives in MinIO under /ingestion/{slug})."""
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-    )
+    r = infra.redis.service.new_redis()
     try:
         progress = await domains.dd.ingestion.runtime.progress.service.read_progress(r, run_id)
         manifest = await domains.dd.ingestion.storage.service.read_live_manifest(r, run_id)
@@ -208,9 +199,7 @@ async def get_run(run_id: str) -> dict:
 
 @router.get("/{run_id}/url-records")
 async def get_url_records(run_id: str) -> list[dict]:
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-    )
+    r = infra.redis.service.new_redis()
     try:
         return await domains.dd.ingestion.runtime.progress.service.read_url_records(r, run_id)
     finally:
@@ -219,9 +208,7 @@ async def get_url_records(run_id: str) -> list[dict]:
 
 @router.get("/{run_id}/pages/{idx}")
 async def get_page(run_id: str, idx: int) -> dict:
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-    )
+    r = infra.redis.service.new_redis()
     try:
         manifest = await domains.dd.ingestion.storage.service.read_live_manifest(r, run_id)
     finally:

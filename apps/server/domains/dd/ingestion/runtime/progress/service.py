@@ -1,6 +1,6 @@
 """Per-run progress, per-framework single-flight lock, and cancel flag."""
 from __future__ import annotations
-import domains
+import domains, infra
 from . import errors, keys, params
 
 import json
@@ -8,15 +8,12 @@ import logging
 import time
 from typing import Optional
 
-import redis.asyncio as redis_aio
-
-
 
 logger = logging.getLogger(__name__)
 
 
 async def acquire_lock(
-    r: redis_aio.Redis,
+    r: infra.redis.service.Redis,
     framework_slug: str,
     run_id: str,
     ttl_s: int = params.LOCK_TTL_S,
@@ -30,7 +27,7 @@ async def acquire_lock(
     return bool(ok)
 
 
-async def read_lock(r: redis_aio.Redis, framework_slug: str) -> Optional[str]:
+async def read_lock(r: infra.redis.service.Redis, framework_slug: str) -> Optional[str]:
     """run_id holding the lock, or None."""
     try:
         v = await r.get(keys.lock_key(framework_slug))
@@ -42,7 +39,7 @@ async def read_lock(r: redis_aio.Redis, framework_slug: str) -> Optional[str]:
 
 
 async def release_lock(
-    r: redis_aio.Redis,
+    r: infra.redis.service.Redis,
     framework_slug: str,
     run_id: str,
 ) -> bool:
@@ -58,14 +55,14 @@ async def release_lock(
     return bool(n)
 
 
-async def request_cancel(r: redis_aio.Redis, run_id: str) -> None:
+async def request_cancel(r: infra.redis.service.Redis, run_id: str) -> None:
     try:
         await r.set(keys.cancel_key(run_id), "1", ex=params.TTL_S)
     except Exception as e:
         logger.warning(f"[cancel] set failed: {e}")
 
 
-async def is_cancelled(r: redis_aio.Redis, run_id: str) -> bool:
+async def is_cancelled(r: infra.redis.service.Redis, run_id: str) -> bool:
     try:
         v = await r.get(keys.cancel_key(run_id))
     except Exception:
@@ -73,7 +70,7 @@ async def is_cancelled(r: redis_aio.Redis, run_id: str) -> bool:
     return bool(v)
 
 
-async def clear_cancel(r: redis_aio.Redis, run_id: str) -> None:
+async def clear_cancel(r: infra.redis.service.Redis, run_id: str) -> None:
     try:
         await r.delete(keys.cancel_key(run_id))
     except Exception:
@@ -83,7 +80,7 @@ async def clear_cancel(r: redis_aio.Redis, run_id: str) -> None:
 class Progress:
     def __init__(self, run_id: str) -> None:
         self.run_id = run_id
-        self._r: Optional[redis_aio.Redis] = None
+        self._r: Optional[infra.redis.service.Redis] = None
         self._last_flush = 0.0
         self._last_cancel_check = 0.0
         self._state: dict = {
@@ -96,14 +93,10 @@ class Progress:
             "updated_at": time.time(),
         }
 
-    async def _client(self) -> Optional[redis_aio.Redis]:
+    async def _client(self) -> Optional[infra.redis.service.Redis]:
         if self._r is None:
             try:
-                self._r = redis_aio.from_url(
-                    keys.redis_url(),
-                    socket_connect_timeout = 3.0,
-                    socket_timeout = 5.0,
-                )
+                self._r = infra.redis.service.new_redis()
             except Exception as e:
                 logger.warning(f"[progress] Redis init failed: {e}")
                 return None
@@ -253,7 +246,7 @@ class Progress:
             self._r = None
 
 
-async def read_progress(r: redis_aio.Redis, run_id: str) -> Optional[dict]:
+async def read_progress(r: infra.redis.service.Redis, run_id: str) -> Optional[dict]:
     try:
         raw = await r.get(keys.progress_key(run_id))
     except Exception:
@@ -268,7 +261,7 @@ async def read_progress(r: redis_aio.Redis, run_id: str) -> Optional[dict]:
         return None
 
 
-async def read_url_records(r: redis_aio.Redis, run_id: str) -> list[dict]:
+async def read_url_records(r: infra.redis.service.Redis, run_id: str) -> list[dict]:
     try:
         raw_list = await r.lrange(keys.url_records_key(run_id), 0, -1)
     except Exception:
@@ -284,7 +277,7 @@ async def read_url_records(r: redis_aio.Redis, run_id: str) -> list[dict]:
     return out
 
 
-async def read_post(r: redis_aio.Redis, run_id: str) -> Optional[dict]:
+async def read_post(r: infra.redis.service.Redis, run_id: str) -> Optional[dict]:
     try:
         raw = await r.get(keys.post_key(run_id))
     except Exception:

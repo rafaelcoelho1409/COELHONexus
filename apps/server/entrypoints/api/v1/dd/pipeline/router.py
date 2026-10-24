@@ -1,10 +1,9 @@
 """Cross-stage pipeline-state introspection. Per-slug cache map +
 global Planner/Synth lock status."""
-import domains
+import domains, infra
 
 import logging
 
-import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
 
 
@@ -16,11 +15,7 @@ router = APIRouter()
 async def pipeline_active() -> dict:
     """Drives the cross-stage proactive gate. Ingestion omitted — it's
     orthogonal to the Planner/Synth lock block."""
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), 
-        socket_connect_timeout=3.0, 
-        socket_timeout=5.0,
-    )
+    r = infra.redis.service.new_redis()
     async def _first_lock(prefix: str) -> dict | None:
         cursor = 0
         while True:

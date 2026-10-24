@@ -10,8 +10,6 @@ import logging
 import time
 from typing import Optional
 
-import redis.asyncio as redis_aio
-
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +36,7 @@ async def _persist_planner_timing(slug: str, total_wall_ms: int) -> None:
 async def _clear_active_run(slug: str) -> None:
     """Best-effort delete of the planner live-run registry key."""
     try:
-        r = redis_aio.from_url(
-            domains.dd.planner.keys.redis_url(),
-            socket_connect_timeout = domains.dd.planner.params.REDIS_CONNECT_TIMEOUT_S,
-            socket_timeout = domains.dd.planner.params.REDIS_OP_TIMEOUT_S,
-        )
+        r = infra.redis.service.new_redis()
         try:
             await r.delete(domains.dd.planner.keys.active_run_key(slug))
         finally:
@@ -286,11 +280,7 @@ async def _run_planner_async_inner(
         "callbacks": [c for c in (infra.langfuse.service.build_langchain_callback(),) if c is not None],
     }
 
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(),
-        socket_connect_timeout = domains.dd.planner.params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout = domains.dd.planner.params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis()
     try:
         await domains.dd.planner.runtime.cancel.service.clear_cancel(r, thread_id)
     finally:
@@ -409,11 +399,7 @@ async def resume_planner_async(thread_id: str) -> dict:
             ),
         }
 
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(),
-        socket_connect_timeout = domains.dd.planner.params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout = domains.dd.planner.params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis()
     try:
         await domains.dd.planner.runtime.cancel.service.clear_cancel(r, thread_id)
     finally:

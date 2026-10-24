@@ -8,8 +8,6 @@ import json
 import logging
 import time
 
-import redis.asyncio as redis_aio
-
 
 logger = logging.getLogger(__name__)
 
@@ -188,11 +186,7 @@ async def run_single_chapter_async(
                 "callbacks": [c for c in (infra.langfuse.service.build_langchain_callback(),) if c is not None],
             }
 
-            r = redis_aio.from_url(
-                domains.dd.synth.keys.redis_url(),
-                socket_connect_timeout = domains.dd.synth.params.REDIS_CONNECT_TIMEOUT_S,
-                socket_timeout = domains.dd.synth.params.REDIS_OP_TIMEOUT_S,
-            )
+            r = infra.redis.service.new_redis()
             try:
                 await domains.dd.synth.runtime.cancel.service.clear_cancel(r, thread_id)
             finally:
@@ -319,11 +313,7 @@ async def resume_synth_async(thread_id: str) -> dict:
             ),
         }
 
-    r = redis_aio.from_url(
-        domains.dd.synth.keys.redis_url(),
-        socket_connect_timeout = domains.dd.synth.params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout = domains.dd.synth.params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis()
     try:
         await domains.dd.synth.runtime.cancel.service.clear_cancel(r, thread_id)
     finally:
@@ -577,11 +567,7 @@ async def _run_book_harmonize_impl(
 
 async def _study_cancelled(study_thread_id: str) -> bool:
     """Per-study cancel flag set via `/synth/{study_thread_id}/cancel`."""
-    r = redis_aio.from_url(
-        domains.dd.synth.keys.redis_url(),
-        socket_connect_timeout = domains.dd.synth.params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout = domains.dd.synth.params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis()
     try:
         return await domains.dd.synth.runtime.cancel.service.is_cancelled(r, study_thread_id)
     except Exception:
@@ -852,11 +838,7 @@ async def _run_study_async_inner(
                 )
                 return
 
-            r = redis_aio.from_url(
-                domains.dd.synth.keys.redis_url(),
-                socket_connect_timeout = domains.dd.synth.params.REDIS_CONNECT_TIMEOUT_S,
-                socket_timeout = domains.dd.synth.params.REDIS_OP_TIMEOUT_S,
-            )
+            r = infra.redis.service.new_redis()
             try:
                 await domains.dd.synth.runtime.cancel.service.clear_cancel(r, chapter_thread_id)
                 try:
@@ -928,11 +910,7 @@ async def _run_study_async_inner(
                     await watcher_task
                 except (asyncio.CancelledError, Exception):
                     pass
-                _rc = redis_aio.from_url(
-                    domains.dd.synth.keys.redis_url(),
-                    socket_connect_timeout = domains.dd.synth.params.REDIS_CONNECT_TIMEOUT_S,
-                    socket_timeout = domains.dd.synth.params.REDIS_OP_TIMEOUT_S,
-                )
+                _rc = infra.redis.service.new_redis()
                 try:
                     await _rc.srem(
                         domains.dd.synth.keys.active_chapters_key(study_thread_id),
@@ -1082,11 +1060,7 @@ async def _run_study_async_inner(
         n_total = n_total,
     )
     try:
-        _rc = redis_aio.from_url(
-            domains.dd.synth.keys.redis_url(),
-            socket_connect_timeout = domains.dd.synth.params.REDIS_CONNECT_TIMEOUT_S,
-            socket_timeout = domains.dd.synth.params.REDIS_OP_TIMEOUT_S,
-        )
+        _rc = infra.redis.service.new_redis()
         try:
             await _rc.delete(domains.dd.synth.keys.active_study_key(slug))
         finally:

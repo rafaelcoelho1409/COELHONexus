@@ -16,7 +16,6 @@ from typing import Optional
 
 import aioboto3
 import httpx
-import redis.asyncio as redis_aio
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
@@ -408,7 +407,7 @@ class Store:
         self,
         run_id: str,
         framework_slug: str,
-        r: redis_aio.Redis,
+        r: infra.redis.service.Redis,
         minio: MinIOStorage,
     ) -> None:
         self.run_id = run_id
@@ -661,7 +660,7 @@ class Store:
         cls,
         run_id: str,
         framework_slug: str,
-        r: redis_aio.Redis,
+        r: infra.redis.service.Redis,
         minio: MinIOStorage,
     ) -> "Store":
         """Construct a Store with the canonical manifest pre-loaded (debug)."""
@@ -676,7 +675,7 @@ class Store:
         return s
 
 
-async def read_live_manifest(r: redis_aio.Redis, run_id: str) -> list[dict]:
+async def read_live_manifest(r: infra.redis.service.Redis, run_id: str) -> list[dict]:
     """Manifest for an in-flight run (Redis), polled by /runs/{id}."""
     try:
         raw = await r.get(keys.live_manifest_key(run_id))

@@ -1,9 +1,8 @@
 """Per-scan LLM call + token counters aggregated in Redis; read by FastAPI
 drawer — Imperative Shell."""
 from __future__ import annotations
+import infra
 from . import domain, keys, params
-from .. import keys as runtime_keys
-from .. import params as runtime_params
 from ... import stores
 
 import json
@@ -13,9 +12,6 @@ import time
 from contextvars import ContextVar
 from typing import Any
 from uuid import UUID
-
-import redis as redis_sync
-import redis.asyncio as redis_aio
 
 from langchain_core.callbacks import BaseCallbackHandler
 
@@ -238,11 +234,7 @@ def bump_retry_sync(scan_id: str, phase: str) -> None:
     if not scan_id or not phase:
         return
     try:
-        r = redis_sync.from_url(
-            runtime_keys.redis_url(),
-            socket_connect_timeout = runtime_params.REDIS_CONNECT_TIMEOUT_S,
-            socket_timeout         = runtime_params.REDIS_OP_TIMEOUT_S,
-        )
+        r = infra.redis.service.new_redis_sync()
     except Exception as e:
         logger.warning(f"[rr-retry] connect failed: {e}")
         return
@@ -279,11 +271,7 @@ def _bump_sync(
 ) -> None:
     """Sync Redis pipeline bumping totals + per-model breakdown. Best-effort."""
     try:
-        r = redis_sync.from_url(
-            runtime_keys.redis_url(),
-            socket_connect_timeout = runtime_params.REDIS_CONNECT_TIMEOUT_S,
-            socket_timeout         = runtime_params.REDIS_OP_TIMEOUT_S,
-        )
+        r = infra.redis.service.new_redis_sync()
     except Exception as e:
         logger.warning(f"[rr-llm-counter] connect failed: {e}")
         return
@@ -330,11 +318,7 @@ async def read_counters(scan_id: str) -> dict[str, Any]:
         return empty
 
     try:
-        r = redis_aio.from_url(
-            runtime_keys.redis_url(),
-            socket_connect_timeout = runtime_params.REDIS_CONNECT_TIMEOUT_S,
-            socket_timeout         = runtime_params.REDIS_OP_TIMEOUT_S,
-        )
+        r = infra.redis.service.new_redis()
     except Exception as e:
         logger.warning(f"[rr-llm-counter] connect failed: {e}")
         return empty

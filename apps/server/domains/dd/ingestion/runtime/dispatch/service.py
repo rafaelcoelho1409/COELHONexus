@@ -8,8 +8,6 @@ import asyncio
 import logging
 from dataclasses import asdict
 
-import redis.asyncio as redis_aio
-
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +22,7 @@ _TIER_MODULES = {
 
 
 async def _cancel_watcher(
-    redis_client: "redis_aio.Redis",
+    redis_client: "infra.redis.service.Redis",
     run_id: str,
     main_task: asyncio.Task,
     poll_interval_s: float = params.CANCEL_POLL_S,
@@ -125,11 +123,7 @@ async def _run_inner(run_id: str, slug: str) -> dict:
         }
 
     progress = domains.dd.ingestion.runtime.progress.service.Progress(run_id)
-    r = redis_aio.from_url(
-        domains.dd.ingestion.runtime.progress.keys.redis_url(),
-        socket_connect_timeout = params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout = params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis(op_timeout_s = params.REDIS_OP_TIMEOUT_S)
     minio = domains.dd.ingestion.storage.service.get_storage()
     store = domains.dd.ingestion.storage.service.Store(run_id, slug, r, minio)
 

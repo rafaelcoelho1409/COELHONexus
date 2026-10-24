@@ -11,8 +11,7 @@ KIND_PRIORITY: tuple[str, ...] = (
     "github",
 )
 
-REDIS_CONNECT_TIMEOUT_S = 3.0
-REDIS_OP_TIMEOUT_S      = 10.0
+REDIS_OP_TIMEOUT_S = 10.0  # ingestion runs wait up to 10s per Redis call (infra.redis default is 5s)
 
 # Watcher poll interval — cooperative `raise_if_cancelled()` doesn't fire
 # during Crawl4AI `arun_many` (30-60s blocking await).

@@ -5,20 +5,19 @@ invalidate primitives. Caller passes the redis client (consistent
 with the deprecated signature; no module-level singleton).
 """
 from __future__ import annotations
+import infra
 from . import keys, params
 
 import json
 import logging
 import time
 
-import redis.asyncio as redis_aio
-
 
 logger = logging.getLogger(__name__)
 
 
 async def get_cached_response(
-    redis: redis_aio.Redis,
+    redis: infra.redis.service.Redis,
     question: str,
     mode: str | None = None,
 ) -> dict | None:
@@ -39,7 +38,7 @@ async def get_cached_response(
 
 
 async def cache_response(
-    redis: redis_aio.Redis,
+    redis: infra.redis.service.Redis,
     question: str,
     response: dict,
     ttl: int = params.DEFAULT_TTL_S,
@@ -56,7 +55,7 @@ async def cache_response(
 
 
 async def invalidate_cache(
-    redis: redis_aio.Redis,
+    redis: infra.redis.service.Redis,
     question: str | None = None,
 ) -> int:
     """If `question` is supplied, drop that one key. If None, scan +

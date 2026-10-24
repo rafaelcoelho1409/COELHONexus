@@ -12,7 +12,6 @@ import logging
 import time
 
 import psycopg
-import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException, Query, Response
 from starlette.responses import StreamingResponse
 
@@ -118,9 +117,7 @@ async def synth_active(slug: str, response: Response) -> dict:
     response.headers["Cache-Control"] = "no-store"
     chapter_tid = None
     try:
-        r = redis_aio.from_url(
-            domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-        )
+        r = infra.redis.service.new_redis()
         try:
             sid = await r.get(domains.dd.synth.keys.active_study_key(slug))
             if not sid:
@@ -264,9 +261,7 @@ async def start_synth(
     if chapter_id is None:
         study_thread_id = thread_id or domains.dd.synth.runtime.dispatch.keys.make_study_thread_id(slug)
 
-        r = redis_aio.from_url(
-            domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-        )
+        r = infra.redis.service.new_redis()
         try:
             cursor = 0
             while True:
@@ -378,9 +373,7 @@ async def start_synth(
             await r.aclose()
 
         try:
-            r2 = redis_aio.from_url(
-                domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-            )
+            r2 = infra.redis.service.new_redis()
             try:
                 await r2.set(
                     domains.dd.synth.keys.active_study_key(slug),
@@ -422,9 +415,7 @@ async def start_synth(
     if not thread_id:
         thread_id = domains.dd.synth.runtime.dispatch.keys.make_thread_id(slug)
 
-    r = redis_aio.from_url(
-        domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-    )
+    r = infra.redis.service.new_redis()
     try:
         cursor = 0
         while True:
@@ -545,9 +536,7 @@ async def start_synth(
 
 @router.post("/{thread_id:path}/resume")
 async def resume_synth(thread_id: str) -> dict:
-    r = redis_aio.from_url(
-        domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-    )
+    r = infra.redis.service.new_redis()
     try:
         await domains.dd.synth.runtime.cancel.service.clear_cancel(r, thread_id)
     finally:
@@ -579,9 +568,7 @@ async def cancel_synth(thread_id: str) -> dict:
     thread — chapter watchers poll their own flag, not the study flag.
     Without propagation only the NEXT chapter is blocked; the in-flight
     one keeps firing LLM calls."""
-    r = redis_aio.from_url(
-        domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-    )
+    r = infra.redis.service.new_redis()
     propagated_to: list[str] = []
     try:
         await domains.dd.synth.runtime.cancel.service.request_cancel(r, thread_id)
@@ -816,9 +803,7 @@ async def wipe_synth(slug: str, chapter_id: str | None = Query(default=None)) ->
 
     n_redis = 0
     try:
-        r = redis_aio.from_url(
-            domains.dd.synth.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-        )
+        r = infra.redis.service.new_redis()
         try:
             for kind in ("synth", "study"):
                 match = f"coelhonexus:dd:synth:docs-distiller/{kind}/{slug}/*"

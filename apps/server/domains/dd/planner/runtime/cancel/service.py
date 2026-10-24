@@ -1,25 +1,22 @@
 """Cancel flag I/O + watcher; TTL 1h since planner runs can take 20-30 min on large corpora."""
 from __future__ import annotations
-import domains
+import domains, infra
 
 import asyncio
 import logging
-
-import redis.asyncio as redis_aio
-
 
 
 logger = logging.getLogger(__name__)
 
 
-async def request_cancel(r: redis_aio.Redis, thread_id: str) -> None:
+async def request_cancel(r: infra.redis.service.Redis, thread_id: str) -> None:
     try:
         await r.set(domains.dd.planner.keys.cancel_key(thread_id), "1", ex = domains.dd.planner.params.CANCEL_TTL_S)
     except Exception as e:
         logger.warning(f"[planner-cancel] set failed: {e}")
 
 
-async def is_cancelled(r: redis_aio.Redis, thread_id: str) -> bool:
+async def is_cancelled(r: infra.redis.service.Redis, thread_id: str) -> bool:
     try:
         v = await r.get(domains.dd.planner.keys.cancel_key(thread_id))
     except Exception:
@@ -27,7 +24,7 @@ async def is_cancelled(r: redis_aio.Redis, thread_id: str) -> bool:
     return bool(v)
 
 
-async def clear_cancel(r: redis_aio.Redis, thread_id: str) -> None:
+async def clear_cancel(r: infra.redis.service.Redis, thread_id: str) -> None:
     try:
         await r.delete(domains.dd.planner.keys.cancel_key(thread_id))
     except Exception:
@@ -41,11 +38,7 @@ async def watcher(
 ) -> None:
     """Polls the cancel flag every `poll_interval_s` and cancels `main_task`
     on first True. Exits when main task completes or is cancelled."""
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(),
-        socket_connect_timeout = domains.dd.planner.params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout = domains.dd.planner.params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis()
     try:
         while not main_task.done():
             try:

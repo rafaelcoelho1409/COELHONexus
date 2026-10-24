@@ -1,14 +1,13 @@
 """Dev-time stage isolation. Synchronous (no Celery, no lock, no
 progress writes) so exceptions surface with full stack traces.
 Not gated — single-user dev cluster only."""
-import domains
+import domains, infra
 from . import params
 from .. import resolver
 
 import time
 from typing import Optional
 
-import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
 
 
@@ -61,11 +60,7 @@ async def debug_ingest_one_tier(
 
     debug_run_id = f"debug-tier{tier}-{slug}-{int(time.time())}"
     progress = domains.dd.ingestion.runtime.progress.service.Progress(debug_run_id)
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), 
-        socket_connect_timeout=3.0, 
-        socket_timeout=10.0,
-    )
+    r = infra.redis.service.new_redis(op_timeout_s = 10.0)
     minio = domains.dd.ingestion.storage.service.get_storage()
     store = domains.dd.ingestion.storage.service.Store(
         debug_run_id, 
@@ -122,11 +117,7 @@ async def debug_post(
     tuning SPLIT_MIN_SECTION_BYTES without re-downloading)."""
     debug_run_id = f"debug-post-{slug}-{int(time.time())}"
     progress = domains.dd.ingestion.runtime.progress.service.Progress(debug_run_id)
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), 
-        socket_connect_timeout=3.0, 
-        socket_timeout=10.0,
-    )
+    r = infra.redis.service.new_redis(op_timeout_s = 10.0)
     minio = domains.dd.ingestion.storage.service.get_storage()
     try:
         store = await domains.dd.ingestion.storage.service.Store.from_existing(
@@ -177,11 +168,7 @@ async def debug_finalize(
     """Re-writes the canonical manifest from prior in-memory state.
     Useful when the manifest payload shape changes."""
     debug_run_id = f"debug-finalize-{slug}-{int(time.time())}"
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), 
-        socket_connect_timeout=3.0, 
-        socket_timeout=10.0,
-    )
+    r = infra.redis.service.new_redis(op_timeout_s = 10.0)
     minio = domains.dd.ingestion.storage.service.get_storage()
     try:
         store = await domains.dd.ingestion.storage.service.Store.from_existing(

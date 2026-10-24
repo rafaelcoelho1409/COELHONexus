@@ -11,7 +11,6 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-import redis.asyncio as redis_aio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastmcp import FastMCP
@@ -122,9 +121,7 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        app.state.redis_aio = redis_aio.from_url(
-            domains.ycs.runtime.keys.redis_url(),
-        )
+        app.state.redis_aio = infra.redis.service.new_redis()
     except Exception as e:
         app.state.redis_aio = None
         logger.warning(

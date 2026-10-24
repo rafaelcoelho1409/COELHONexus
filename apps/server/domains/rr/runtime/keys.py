@@ -1,4 +1,4 @@
-"""Redis URL + channel/key builders for RR runtime — events, extraction
+"""Redis channel/key builders for RR runtime — events, extraction
 cache, fs mirror.
 
 Per docs/CODE-CONVENTIONS.md §2: identifier-style values (Redis channel
@@ -7,20 +7,6 @@ retention) live in params.py.
 """
 from __future__ import annotations
 from . import params
-
-import os
-from urllib.parse import quote
-
-
-def redis_url() -> str:
-    """Build the Redis URL from env. Strict reads — secrets must be set.
-    Same pattern as `domains/dd/planner/keys.py::redis_url()`."""
-    host = os.environ["REDIS_HOST"]
-    port = os.environ["REDIS_PORT"]
-    password = os.environ["REDIS_PASSWORD"]
-    if password:
-        return f"redis://:{quote(password, safe='')}@{host}:{port}"
-    return f"redis://{host}:{port}"
 
 
 # Events — SSE pub/sub + task-id store

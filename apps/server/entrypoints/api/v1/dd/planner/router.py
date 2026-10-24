@@ -12,7 +12,6 @@ import logging
 import time
 
 import psycopg
-import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException, Response
 from starlette.responses import StreamingResponse
 
@@ -95,9 +94,7 @@ async def start_planner(
     if not thread_id:
         thread_id = domains.dd.planner.runtime.dispatch.keys.make_thread_id(slug)
 
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-    )
+    r = infra.redis.service.new_redis()
     try:
         cursor = 0
         while True:
@@ -204,9 +201,7 @@ async def start_planner(
         await r.aclose()
 
     try:
-        r2 = redis_aio.from_url(
-            domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-        )
+        r2 = infra.redis.service.new_redis()
         try:
             await r2.set(
                 domains.dd.planner.keys.active_run_key(slug),
@@ -236,9 +231,7 @@ async def planner_active(slug: str, response: Response) -> dict:
     """Page-refresh recovery without browser localStorage."""
     response.headers["Cache-Control"] = "no-store"
     try:
-        r = redis_aio.from_url(
-            domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-        )
+        r = infra.redis.service.new_redis()
         try:
             raw = await r.get(domains.dd.planner.keys.active_run_key(slug))
         finally:
@@ -262,9 +255,7 @@ async def planner_active(slug: str, response: Response) -> dict:
 
 @router.post("/{thread_id:path}/resume")
 async def resume_planner(thread_id: str) -> dict:
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-    )
+    r = infra.redis.service.new_redis()
     try:
         await domains.dd.planner.runtime.cancel.service.clear_cancel(r, thread_id)
     finally:
@@ -378,9 +369,7 @@ async def wipe_planner(slug: str) -> dict:
 
     n_redis = 0
     try:
-        rc = redis_aio.from_url(
-            domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-        )
+        rc = infra.redis.service.new_redis()
         try:
             n_redis = await rc.delete(
                 domains.dd.planner.keys.active_run_key(slug),
@@ -493,9 +482,7 @@ async def planner_events(thread_id: str) -> StreamingResponse:
 
 @router.post("/{thread_id:path}/cancel")
 async def cancel_planner(thread_id: str) -> dict:
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-    )
+    r = infra.redis.service.new_redis()
     try:
         await domains.dd.planner.runtime.cancel.service.request_cancel(r, thread_id)
         if thread_id.count("/") >= 2:

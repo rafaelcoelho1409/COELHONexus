@@ -307,6 +307,7 @@ print("15 shipped evaluation published ok")
 import importlib
 from fastapi import Response
 import os
+os.environ.setdefault("REDIS_HOST", "localhost")   # infra.celery's broker URL needs it at import (RuntimeError, not KeyError)
 for _ in range(30):                 # the router's module-level config reads env vars the cluster sets; give missing ones a dummy
     try:
         R = importlib.import_module("entrypoints.api.v1.dd.synth.router")
@@ -320,8 +321,9 @@ class FakeRedis:
     def __init__(self, kv): self.kv = kv
     async def get(self, k): return self.kv.get(k)
     async def aclose(self): pass
+import infra
 def active_with(kv):
-    R.redis_aio.from_url = lambda *a, **k: FakeRedis(kv)
+    infra.redis.service.new_redis = lambda *a, **k: FakeRedis(kv)
     return asyncio.run(R.synth_active("asyncio", Response()))
 KEYS = domains.dd.synth.keys
 assert active_with({}) == {"active": False}
@@ -342,7 +344,7 @@ class FakeStore:
 store17 = FakeStore()
 domains.dd.ingestion.storage.service.get_storage = lambda: store17
 def wipe_with(kv):
-    R.redis_aio.from_url = lambda *a, **k: FakeRedis(kv)
+    infra.redis.service.new_redis = lambda *a, **k: FakeRedis(kv)
     return asyncio.run(S.wipe_one_chapter("asyncio", "ch-01-a"))
 for kv in ({KEYS.lock_key("asyncio"): b"docs-distiller/synth/asyncio/T1"},                                     # a single-chapter run in another tab
            {KEYS.active_study_key("asyncio"): '{"study_thread_id": "docs-distiller/study/asyncio/S1"}'}):      # a study

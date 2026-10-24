@@ -15,8 +15,6 @@ import logging
 from typing import Any, AsyncIterator, Callable
 
 from langchain_core.documents import Document
-from redis.asyncio import Redis
-from redis.asyncio.lock import Lock
 
 
 logger = logging.getLogger(__name__)
@@ -730,7 +728,7 @@ async def _already_current(
 
 
 async def _flush_buffer(
-    redis: Redis, qdrant: infra.qdrant.service.AsyncQdrantClient, extract_id: str, *, drain_all: bool = False,
+    redis: infra.redis.service.Redis, qdrant: infra.qdrant.service.AsyncQdrantClient, extract_id: str, *, drain_all: bool = False,
 ) -> int:
     """Lock-guarded pop-and-upsert. Returns points upserted (0 if
     another caller was already flushing, or the buffer was empty).
@@ -741,7 +739,7 @@ async def _flush_buffer(
     lost those videos' points (22/24). A later video's flush or the
     final drain retries them. The embed call itself gets 3 attempts
     with backoff before giving up for this flush."""
-    lock = Lock(
+    lock = infra.redis.service.Lock(
         redis, keys.qdrant_flush_lock_key(extract_id), timeout = 60, blocking_timeout = 0,
     )
     acquired = await lock.acquire()
@@ -885,7 +883,7 @@ async def _flush_buffer(
 async def stream_video_to_qdrant(
     es:            infra.elasticsearch.service.AsyncElasticsearch,
     qdrant:        infra.qdrant.service.AsyncQdrantClient,
-    redis:         Redis,
+    redis:         infra.redis.service.Redis,
     video_id:      str,
     extract_id:    str,
     chunk_size:    int = params.DEFAULT_CHUNK_SIZE,
@@ -972,7 +970,7 @@ async def stream_video_to_qdrant(
 
 
 async def finalize_qdrant_buffer(
-    redis: Redis, qdrant: infra.qdrant.service.AsyncQdrantClient, extract_id: str,
+    redis: infra.redis.service.Redis, qdrant: infra.qdrant.service.AsyncQdrantClient, extract_id: str,
 ) -> int:
     """Called by whichever per-video task turns out to be the LAST one
     for the Qdrant phase (see `pipeline_task.service.mark_video_done`)

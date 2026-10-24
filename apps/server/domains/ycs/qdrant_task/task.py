@@ -4,10 +4,7 @@ import domains, infra
 import infra.celery
 
 import asyncio
-import os
 from typing import Any
-
-import redis.asyncio as redis_aio
 
 logger = infra.celery.service.get_task_logger(__name__)
 
@@ -314,15 +311,7 @@ def invalidate_cache(self) -> dict[str, Any]:
     """Clear all RAG search cache after new data ingestion.
 """
     async def _run() -> None:
-        redis_host = os.environ.get("REDIS_HOST", "localhost")
-        redis_port = os.environ.get("REDIS_PORT", "6379")
-        redis_password = os.environ.get("REDIS_PASSWORD", "")
-        url = (
-            f"redis://:{redis_password}@{redis_host}:{redis_port}"
-            if redis_password
-            else f"redis://{redis_host}:{redis_port}"
-        )
-        r = redis_aio.from_url(url)
+        r = infra.redis.service.new_redis()
         try:
             await domains.ycs.cache.service.invalidate_cache(r)
         finally:

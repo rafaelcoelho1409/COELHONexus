@@ -1,15 +1,12 @@
 """Redis pub/sub progress for mid-node events — LangGraph checkpoints only fire between nodes, so this fills the gap for the UI."""
 from __future__ import annotations
-import domains
+import domains, infra
 
 import asyncio
 import json
 import logging
 import time
 from typing import AsyncIterator
-
-import redis.asyncio as redis_aio
-
 
 
 logger = logging.getLogger(__name__)
@@ -30,11 +27,7 @@ async def emit_progress(
     }
     payload = json.dumps(event, default = str)
 
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(),
-        socket_connect_timeout = domains.dd.planner.params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout = domains.dd.planner.params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis()
     try:
         await r.publish(domains.dd.planner.keys.event_channel(thread_id), payload)
         key = domains.dd.planner.keys.snapshot_key(thread_id)
@@ -56,7 +49,7 @@ async def emit_progress(
 
 
 async def _replay_snapshot(
-    r: redis_aio.Redis, thread_id: str,
+    r: infra.redis.service.Redis, thread_id: str,
 ) -> list[dict]:
     """Per-thread snapshot list for late SSE catch-up. Empty on no history."""
     try:
@@ -80,11 +73,7 @@ async def subscribe_progress(
 ) -> AsyncIterator[dict]:
     """Async iterator over progress events. Yields catch-up replay first,
     then live events. Caller owns close (SSE cancel path)."""
-    r = redis_aio.from_url(
-        domains.dd.planner.keys.redis_url(),
-        socket_connect_timeout = domains.dd.planner.params.REDIS_CONNECT_TIMEOUT_S,
-        socket_timeout = domains.dd.planner.params.REDIS_OP_TIMEOUT_S,
-    )
+    r = infra.redis.service.new_redis()
     pubsub = r.pubsub()
     try:
         await pubsub.subscribe(domains.dd.planner.keys.event_channel(thread_id))
