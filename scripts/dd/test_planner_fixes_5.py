@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
-import domains  # noqa: E402
+import domains, infra  # noqa: E402
 
 nodes = domains.dd.planner.nodes
 SEL, SELS = nodes.chapter_select.domain, nodes.chapter_select
@@ -153,7 +153,7 @@ def good(n):
         for j in range(6)])
 async def run_propose(fail_idx):
     minio = FakeMinio()
-    domains.dd.ingestion.storage.service.get_storage = lambda: minio
+    infra.minio.service.get_storage = lambda: minio
     async def _manifest(m, slug):
         return {"entries": []}
     domains.dd.ingestion.storage.service.read_framework_manifest = _manifest

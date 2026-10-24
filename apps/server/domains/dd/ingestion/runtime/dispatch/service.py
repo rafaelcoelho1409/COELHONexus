@@ -124,7 +124,7 @@ async def _run_inner(run_id: str, slug: str) -> dict:
 
     progress = domains.dd.ingestion.runtime.progress.service.Progress(run_id)
     r = infra.redis.service.new_redis(op_timeout_s = params.REDIS_OP_TIMEOUT_S)
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     store = domains.dd.ingestion.storage.service.Store(run_id, slug, r, minio)
 
     base_result = {

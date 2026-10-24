@@ -74,7 +74,7 @@ async def wipe_one_chapter(slug: str, chapter_id: str) -> dict:
     except Exception as e:
         logger.warning(f"[synth-wipe] {slug}/{chapter_id}: active-study check skipped ({type(e).__name__})")
 
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     try:
         n_minio = await minio.delete_prefix(f"synth/{slug}/{chapter_id}/")
     except Exception as e:

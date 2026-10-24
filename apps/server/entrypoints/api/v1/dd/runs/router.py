@@ -67,7 +67,7 @@ async def start_run(body: schemas.StartRunBody) -> dict:
                 ),
             }
 
-        minio = domains.dd.ingestion.storage.service.get_storage()
+        minio = infra.minio.service.get_storage()
         if not body.refresh:
             cached = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, body.slug)
             if cached:
@@ -226,7 +226,7 @@ async def get_page(run_id: str, idx: int) -> dict:
             detail=f"manifest entry has no MinIO key (idx={idx})",
         )
     try:
-        body = await domains.dd.ingestion.storage.service.get_storage().read_text(key)
+        body = await infra.minio.service.get_storage().read_text(key)
     except Exception as e:
         raise HTTPException(
             status_code=404,

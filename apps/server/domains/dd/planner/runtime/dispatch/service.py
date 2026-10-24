@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 async def _persist_planner_timing(slug: str, total_wall_ms: int) -> None:
     """Best-effort write of the planner timing blob."""
     try:
-        await domains.dd.ingestion.storage.service.get_storage().write(
+        await infra.minio.service.get_storage().write(
             domains.dd.planner.keys.planner_timing_key(slug),
             json.dumps({
                 "slug": slug,

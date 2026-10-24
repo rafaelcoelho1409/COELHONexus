@@ -1,7 +1,7 @@
 """Store-specific I/O for the RR domain — Imperative Shell.
 
 Per docs/CODE-CONVENTIONS.md §8 strict-merge: MinIO / Neo4j / Postgres /
-Qdrant each have a different driver setup (aioboto3 / neo4j / psycopg /
+Qdrant each have a different driver setup (infra.minio / neo4j / psycopg /
 qdrant_client), but none is a feature name distinct from "this domain's
 persistence layer" — same role (I/O adapter for one backend), same file,
 sectioned below. `service.py` (this file) composes them; the orchestrator
@@ -22,14 +22,11 @@ from . import keys, params, prompts
 
 import json
 import logging
-import os
-from typing import Any, Optional
+from typing import Any
 from uuid import UUID
 
-import aioboto3
 import infra
 import psycopg
-from botocore.exceptions import ClientError
 from psycopg.types.json import Jsonb
 
 
@@ -40,40 +37,23 @@ logger = logging.getLogger(__name__)
 # MinIO — digest.json + per-paper extraction.json artifacts
 # ---------------------------------------------------------------------------
 
-# Session / config — one Session per process; clients are per-operation
-_minio_session: Optional[aioboto3.Session] = None
-
-
-def _minio_get_session() -> aioboto3.Session:
-    global _minio_session
-    if _minio_session is None:
-        _minio_session = aioboto3.Session()
-    return _minio_session
-
-
 def _minio_bucket() -> str:
-    """Resolve the bucket name from env (set in Helm values.yaml +
-    propagated via the server configmap)."""
-    return os.environ["MINIO_BUCKET_COELHONEXUS"]
-
-
-def _minio_endpoint() -> str:
-    return os.environ["MINIO_ENDPOINT"].strip()
+    """The COELHO Nexus bucket (set in Helm values.yaml + propagated via
+    the server configmap)."""
+    return infra.minio.service.bucket()
 
 
 def _minio_client():
-    """An aioboto3 s3 async-context-manager client. Use:
+    """An aioboto3 s3 async-context-manager client with RR's tuning. Use:
 
         async with _minio_client() as s3:
             await s3.put_object(...)
     """
-    return _minio_get_session().client(
-        "s3",
-        endpoint_url          = _minio_endpoint(),
-        aws_access_key_id     = os.environ["AWS_ACCESS_KEY_ID"],
-        aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"],
-        region_name           = "us-east-1",
-        config                = params.MINIO_BOTO_CONFIG,
+    return infra.minio.service.new_client(
+        max_pool_connections = params.MINIO_MAX_POOL_CONNECTIONS,
+        connect_timeout_s    = params.MINIO_CONNECT_TIMEOUT_S,
+        read_timeout_s       = params.MINIO_READ_TIMEOUT_S,
+        max_attempts         = params.MINIO_MAX_ATTEMPTS,
     )
 
 
@@ -90,7 +70,7 @@ async def bootstrap_minio() -> None:
                     f"(prefix={rr_keys.MINIO_PREFIX_RR!r})"
                 )
                 return
-            except ClientError as e:
+            except infra.minio.service.ClientError as e:
                 code = (e.response or {}).get("Error", {}).get("Code", "")
                 if code not in ("404", "NoSuchBucket", "NoSuchKey"):
                     raise
@@ -124,7 +104,7 @@ async def get_digest_json(scan_id: str) -> dict[str, Any] | None:
         async with _minio_client() as s3:
             try:
                 obj = await s3.get_object(Bucket=_minio_bucket(), Key=key)
-            except ClientError as e:
+            except infra.minio.service.ClientError as e:
                 code = (e.response or {}).get("Error", {}).get("Code", "")
                 if code in ("404", "NoSuchKey"):
                     return None
@@ -147,7 +127,7 @@ async def delete_digest_json(scan_id: str) -> bool:
             try:
                 await s3.delete_object(Bucket=_minio_bucket(), Key=key)
                 return True
-            except ClientError as e:
+            except infra.minio.service.ClientError as e:
                 code = (e.response or {}).get("Error", {}).get("Code", "")
                 if code in ("404", "NoSuchKey"):
                     return False
@@ -190,7 +170,7 @@ async def get_code_py(
         async with _minio_client() as s3:
             try:
                 obj = await s3.get_object(Bucket=_minio_bucket(), Key=key)
-            except ClientError as e:
+            except infra.minio.service.ClientError as e:
                 code = (e.response or {}).get("Error", {}).get("Code", "")
                 if code in ("404", "NoSuchKey"):
                     return None

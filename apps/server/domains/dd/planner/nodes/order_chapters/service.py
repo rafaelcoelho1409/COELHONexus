@@ -8,7 +8,7 @@ SOTA Sept 2026 on the rotator pooled:
 - Static prefix (pedagogical rubric) before dynamic chapter block → KV-cache.
 """
 from __future__ import annotations
-import domains
+import domains, infra
 from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio
@@ -97,7 +97,7 @@ async def order_chapters_run(state: domains.dd.planner.state.PlannerState) -> di
 
     t0 = time.monotonic()
 
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     # Identity follows the chapter plan's CONTENT: `reduce_ref` is the constant
     # "latest" path, so hashing it alone served the previous run's order for a
     # different chapter set (asyncio: the same order file name for a 12- and a

@@ -29,12 +29,13 @@ import importlib
 
 
 if TYPE_CHECKING:
-    from . import elasticsearch, langfuse, neo4j, opentelemetry, qdrant, redis
+    from . import elasticsearch, langfuse, minio, neo4j, opentelemetry, qdrant, redis
 
 
 __all__ = [
     "elasticsearch",
     "langfuse",
+    "minio",
     "neo4j",
     "opentelemetry",
     "qdrant",

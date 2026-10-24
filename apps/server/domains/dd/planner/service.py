@@ -17,7 +17,7 @@ async def load_plan(slug: str) -> dict | None:
 
     Single reader for `planner/{slug}/plan-latest.json`: the planner writes
     it (plan_write node), the synth router and the outline node read it."""
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     key = keys.plan_latest_key(slug)
     if not await minio.exists(key):
         return None

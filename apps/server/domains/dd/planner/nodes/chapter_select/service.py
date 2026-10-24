@@ -11,7 +11,7 @@ error leaves the chapter exactly as the deterministic pipeline produced it.
 Parallel I/O (gather proposals/assignments/seeds, concurrent 4-blob writes).
 """
 from __future__ import annotations
-import domains
+import domains, infra
 from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio
@@ -240,7 +240,7 @@ async def chapter_select_run(state: domains.dd.planner.state.PlannerState) -> di
         }
 
     t0 = time.monotonic()
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
 
     manifest = domain.manifest_hash(
         slug = slug,

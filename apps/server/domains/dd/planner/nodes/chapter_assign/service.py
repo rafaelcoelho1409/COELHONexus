@@ -326,7 +326,7 @@ async def chapter_assign_run(state: domains.dd.planner.state.PlannerState) -> di
         }
 
     t0 = time.monotonic()
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     proposals_obj = await domains.dd.planner.nodes.chapter_propose.service.load_proposals(minio, slug)
     if proposals_obj is None or not proposals_obj.proposals:
         return {

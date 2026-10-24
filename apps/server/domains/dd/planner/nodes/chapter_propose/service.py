@@ -9,7 +9,7 @@ SOTA Sept 2026 on the rotator pooled:
   reuse across N_SAMPLES parallel (Groq/Gemini/DeepSeek auto-cache).
 """
 from __future__ import annotations
-import domains
+import domains, infra
 from . import domain, errors, keys, params, prompts, schemas, versions
 
 import asyncio
@@ -206,7 +206,7 @@ async def chapter_propose_run(state: domains.dd.planner.state.PlannerState) -> d
 
     t0 = time.monotonic()
     n = len(relevant_files)
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
 
     distill_fp = ""
     try:

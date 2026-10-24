@@ -1,6 +1,6 @@
 """digest_construct — per-source parallel LLM routing (one call per source, content-addressed cache)."""
 from __future__ import annotations
-import domains
+import domains, infra
 from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio
@@ -308,7 +308,7 @@ async def digest_construct_run(state: domains.dd.synth.state.SynthState) -> dict
         }
 
     t0 = time.monotonic()
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
 
     outline_key = keys.outline_latest_key(slug, chapter_id)
     if not await minio.exists(outline_key):

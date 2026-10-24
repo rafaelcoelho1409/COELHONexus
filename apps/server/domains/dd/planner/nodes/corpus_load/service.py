@@ -1,7 +1,7 @@
 """corpus_load I/O shell — orchestrates the manifest read, stats build,
 and SSE/OTel surface."""
 from __future__ import annotations
-import domains
+import domains, infra
 from . import domain
 
 import logging
@@ -22,7 +22,7 @@ async def corpus_load_run(state: domains.dd.planner.state.PlannerState) -> dict:
 
     t0 = time.monotonic()
     await domains.dd.planner.runtime.progress.service.emit_progress(thread_id, "corpus_load", "start", slug = slug)
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     manifest = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)
     if not manifest:
         raise RuntimeError(

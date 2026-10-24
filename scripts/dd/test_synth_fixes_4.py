@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
-import domains  # noqa: E402
+import domains, infra  # noqa: E402
 
 SW = domains.dd.synth.nodes.sawc.domain
 SS = domains.dd.synth.nodes.sawc.schemas
@@ -105,12 +105,12 @@ class FakeStore:
 
 def persist(blob):
     store = FakeStore(blob)
-    orig = domains.dd.ingestion.storage.service.get_storage
-    domains.dd.ingestion.storage.service.get_storage = lambda: store
+    orig = infra.minio.service.get_storage
+    infra.minio.service.get_storage = lambda: store
     try:
         asyncio.run(DSP._persist_chapter_timing("asyncio", "ch-04", 2040000))
     finally:
-        domains.dd.ingestion.storage.service.get_storage = orig
+        infra.minio.service.get_storage = orig
     return store.written
 
 

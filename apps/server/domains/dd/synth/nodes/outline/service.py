@@ -1,5 +1,5 @@
 from __future__ import annotations
-import domains
+import domains, infra
 from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio
@@ -267,7 +267,7 @@ async def outline_sdp_run(state: domains.dd.synth.state.SynthState) -> dict:
         }
 
     t0 = time.monotonic()
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
 
     plan_key = domains.dd.planner.keys.plan_latest_key(slug)
     try:

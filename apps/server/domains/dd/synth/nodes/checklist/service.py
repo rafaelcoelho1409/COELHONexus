@@ -2,7 +2,7 @@
 prompt builders, LLM verdict coercion, CoCoA two-stage alignment check, and
 atomic-claim grounding."""
 from __future__ import annotations
-import domains
+import domains, infra
 from . import domain, keys, params, prompts, schemas, versions
 # For best-seen promotion — needs sawc's OWN versioned-key convention,
 # not checklist's (each node's versioned_blob_key hardcodes its own path
@@ -292,7 +292,7 @@ async def _cocoa_explain_blocks(blocks: list[dict]) -> dict[str, str]:
     if not blocks:
         return {}
 
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
 
     # derived blocks (code_source='derived') always go to the LLM; verbatim blocks cache by hash.
     cached: dict[str, str] = {}
@@ -737,7 +737,7 @@ async def _atomic_claim_extract_claims(prose: str) -> tuple[list[str], bool]:
     """Returns (claims, extraction_ok). extraction_ok=False means the LLM
     call/parse itself broke — distinct from a genuine "prose has 0 claims"
     result, since callers must not treat an outage as a trivial pass."""
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     cache_key = keys.atomic_claim_key(domain.prose_cache_key(prose))
     try:
         if await minio.exists(cache_key):
@@ -836,7 +836,7 @@ async def checklist_eval_run(state: domains.dd.synth.state.SynthState) -> dict:
         }
 
     t0 = time.monotonic()
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
 
     sawc_key = keys.sawc_latest_key(slug, chapter_id)
     digest_key = keys.digest_latest_key(slug, chapter_id)

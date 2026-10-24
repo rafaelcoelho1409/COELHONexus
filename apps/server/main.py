@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI):
     # this exact call and left the pod stuck at 1/2 Ready until killed.
     try:
         await asyncio.wait_for(
-            domains.dd.ingestion.storage.service.get_storage().ensure_bucket(), 
+            infra.minio.service.get_storage().ensure_bucket(), 
             timeout=30.0)
     except asyncio.TimeoutError:
         logger.warning(

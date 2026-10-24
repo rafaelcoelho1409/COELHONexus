@@ -10,7 +10,7 @@ SOTA Sept 2026 on the rotator pooled client:
 - Embed corpus fully removed: margins/coherence now 0/null (LLM authoritative).
 """
 from __future__ import annotations
-import domains
+import domains, infra
 from . import domain, params, prompts
 
 import asyncio
@@ -131,7 +131,7 @@ async def off_topic_run(state: domains.dd.planner.state.PlannerState) -> dict:
     index_summary = (state.get("corpus_stats") or {}).get("index_summary") or ""
 
     t0 = time.monotonic()
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     await domains.dd.planner.runtime.progress.service.emit_progress(
         thread_id, "off_topic", "start",
         files = len(raw_files),

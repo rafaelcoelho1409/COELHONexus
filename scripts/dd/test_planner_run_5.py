@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
-import domains  # noqa: E402
+import domains, infra  # noqa: E402
 
 nodes = domains.dd.planner.nodes
 chat = domains.settings.chat
@@ -43,7 +43,7 @@ async def _settle(cap):
 
 
 def patch(row, minio):
-    domains.dd.ingestion.storage.service.get_storage = lambda: minio
+    infra.minio.service.get_storage = lambda: minio
     async def _manifest(m, slug):
         return row["manifest"]
     domains.dd.ingestion.storage.service.read_framework_manifest = _manifest

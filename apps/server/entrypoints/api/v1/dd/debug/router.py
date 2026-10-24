@@ -61,7 +61,7 @@ async def debug_ingest_one_tier(
     debug_run_id = f"debug-tier{tier}-{slug}-{int(time.time())}"
     progress = domains.dd.ingestion.runtime.progress.service.Progress(debug_run_id)
     r = infra.redis.service.new_redis(op_timeout_s = 10.0)
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     store = domains.dd.ingestion.storage.service.Store(
         debug_run_id, 
         slug, 
@@ -118,7 +118,7 @@ async def debug_post(
     debug_run_id = f"debug-post-{slug}-{int(time.time())}"
     progress = domains.dd.ingestion.runtime.progress.service.Progress(debug_run_id)
     r = infra.redis.service.new_redis(op_timeout_s = 10.0)
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     try:
         store = await domains.dd.ingestion.storage.service.Store.from_existing(
             debug_run_id, 
@@ -169,7 +169,7 @@ async def debug_finalize(
     Useful when the manifest payload shape changes."""
     debug_run_id = f"debug-finalize-{slug}-{int(time.time())}"
     r = infra.redis.service.new_redis(op_timeout_s = 10.0)
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     try:
         store = await domains.dd.ingestion.storage.service.Store.from_existing(
             debug_run_id, 
@@ -207,7 +207,7 @@ async def debug_take_snapshot(
     label: Optional[str] = None,
 ) -> dict:
     return await domains.dd.ingestion.storage.service.take_snapshot(
-        domains.dd.ingestion.storage.service.get_storage(), 
+        infra.minio.service.get_storage(), 
         slug, 
         label=label)
 
@@ -219,7 +219,7 @@ async def debug_list_snapshots(
     return {
         "slug": slug,
         "snapshots": await domains.dd.ingestion.storage.service.list_snapshots(
-            domains.dd.ingestion.storage.service.get_storage(), 
+            infra.minio.service.get_storage(), 
             slug),
     }
 
@@ -231,7 +231,7 @@ async def debug_restore_snapshot(
     ts: str) -> dict:
     try:
         return await domains.dd.ingestion.storage.service.restore_snapshot(
-            domains.dd.ingestion.storage.service.get_storage(), 
+            infra.minio.service.get_storage(), 
             slug, 
             ts)
     except ValueError as e:
@@ -246,6 +246,6 @@ async def debug_delete_snapshot(
     entry: resolver.schemas.CatalogEntry, 
     ts: str) -> dict:
     return await domains.dd.ingestion.storage.service.delete_snapshot(
-        domains.dd.ingestion.storage.service.get_storage(), 
+        infra.minio.service.get_storage(), 
         slug, 
         ts)

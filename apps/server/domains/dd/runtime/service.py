@@ -1,6 +1,6 @@
 """Per-DD-thread LLM call/token counters; Redis for in-flight, MinIO snapshot on completion — avoids live Langfuse queries for the drawer UI."""
 from __future__ import annotations
-import domains, infra
+import infra
 from . import domain, keys, params
 
 import json
@@ -273,7 +273,7 @@ async def _read_models(r: Any, thread_id: str, node_id: str) -> dict:
 
 async def _read_snapshot(thread_id: str) -> dict[str, Any] | None:
     try:
-        raw = await domains.dd.ingestion.storage.service.get_storage().read_text(
+        raw = await infra.minio.service.get_storage().read_text(
             keys.snapshot_key(thread_id),
         )
         data = json.loads(raw)
@@ -302,7 +302,7 @@ async def snapshot(thread_id: str) -> bool:
         )
         return False
     try:
-        await domains.dd.ingestion.storage.service.get_storage().write(
+        await infra.minio.service.get_storage().write(
             keys.snapshot_key(thread_id),
             json.dumps(payload, ensure_ascii=False, indent=2),
             content_type="application/json",

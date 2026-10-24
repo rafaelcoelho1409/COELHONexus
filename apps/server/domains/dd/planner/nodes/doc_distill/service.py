@@ -10,7 +10,7 @@ SOTA Sept 2026 — fully on the rotator pooled client:
 - Jittered backoff on transient retries to avoid thundering-herd on shared arms.
 """
 from __future__ import annotations
-import domains
+import domains, infra
 from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio
@@ -196,7 +196,7 @@ async def doc_distill_run(state: domains.dd.planner.state.PlannerState) -> dict:
         n_files = n,
     )
 
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     content_fp = ""
     try:
         _m = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)

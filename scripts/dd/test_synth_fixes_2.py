@@ -342,7 +342,7 @@ class FakeStore:
     async def delete_prefix(self, p): self.deleted.append(p); return 3
     async def read_text(self, k): raise KeyError(k)
 store17 = FakeStore()
-domains.dd.ingestion.storage.service.get_storage = lambda: store17
+infra.minio.service.get_storage = lambda: store17
 def wipe_with(kv):
     infra.redis.service.new_redis = lambda *a, **k: FakeRedis(kv)
     return asyncio.run(S.wipe_one_chapter("asyncio", "ch-01-a"))

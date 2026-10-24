@@ -224,7 +224,7 @@ async def mgsr_replan_run(state: domains.dd.synth.state.SynthState) -> dict:
         }
 
     t0 = time.monotonic()
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
 
     # ── Load checklist + outline ───────────────────────────────────────
     checklist_key = keys.checklist_latest_key(slug, chapter_id)

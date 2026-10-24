@@ -1,6 +1,6 @@
 """sawc_derive service — Analogical Prompting (arXiv:2310.01714) + MPSC derived-code enrichment for thin vault blocks. Deterministic helpers live in domain.py/prompts.py (this module's own architecture note); this module is I/O (bandit, MinIO, Redis) only — previously duplicated the domain.py/prompts.py helpers locally, which is what let Optimal-Stopping's gate (body_passes_derive_gate) go unwired without anyone noticing."""
 from __future__ import annotations
-import domains
+import domains, infra
 from . import domain, keys, params, prompts, schemas
 
 import asyncio
@@ -252,7 +252,7 @@ async def sawc_derive_run(state: domains.dd.synth.state.SynthState) -> dict:
         }
 
     t0 = time.monotonic()
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     sawc_key = keys.sawc_latest_key(slug, chapter_id)
 
     if not await minio.exists(sawc_key):

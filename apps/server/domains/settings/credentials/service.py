@@ -1,5 +1,6 @@
 """Sync (entry-builders can't await) MinIO-backed Fernet store; resolve_key() never raises — MinIO outage degrades to env-only."""
 from __future__ import annotations
+import infra
 from . import config, domain, entities, keys, params
 
 import copy
@@ -11,8 +12,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeoutError
 from typing import Optional
 
-from botocore.exceptions import ClientError
-from botocore.session import get_session
 from cryptography.fernet import (
     Fernet,
     InvalidToken
@@ -31,20 +30,14 @@ class CredentialStore:
         self._kek_bytes: Optional[bytes] = None
         self._settings_cache: Optional[dict] = None
         self._settings_loaded_at: float = 0.0
-        self._endpoint = os.environ["MINIO_ENDPOINT"].strip()
-        self._bucket = os.environ["MINIO_BUCKET_COELHONEXUS"]
-        self._access_key = os.environ["AWS_ACCESS_KEY_ID"]
-        self._secret_key = os.environ["AWS_SECRET_ACCESS_KEY"]
-        self._boto_config = domain.build_boto_config(config.MINIO_CLIENT)
+        # Strict like the old env reads: missing MinIO config fails construction, so resolve_key() falls back to env.
+        self._bucket = infra.minio.service.bucket()
 
     def _client(self):
-        return get_session().create_client(
-            "s3",
-            endpoint_url = self._endpoint,
-            aws_access_key_id = self._access_key,
-            aws_secret_access_key = self._secret_key,
-            region_name = config.MINIO_CLIENT.region,
-            config = self._boto_config,
+        return infra.minio.service.new_sync_client(
+            connect_timeout_s = config.MINIO_CLIENT.connect_timeout_s,
+            read_timeout_s = config.MINIO_CLIENT.read_timeout_s,
+            max_attempts = config.MINIO_CLIENT.max_attempts,
         )
 
     def _get_object(self, key: str) -> Optional[bytes]:
@@ -57,7 +50,7 @@ class CredentialStore:
                 return resp["Body"].read()
             finally:
                 client.close()
-        except ClientError as e:
+        except infra.minio.service.ClientError as e:
             code = (e.response or {}).get("Error", {}).get("Code", "")
             if code in ("NoSuchKey", "404", "NoSuchBucket"):
                 return None

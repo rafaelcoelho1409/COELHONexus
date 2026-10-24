@@ -1,7 +1,7 @@
 """SAWC — Section-Aware Writer-Critic. v2 cookbook: {heading, intro, subtopics: [{subheading, explanation, code_ref_hash}], citations}.
 Best-of-N writer drafts + critic-picker (MAMM-Refine arXiv 2503.15272); 2-attempt repair loop for alignment violations."""
 from __future__ import annotations
-import domains
+import domains, infra
 from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio
@@ -888,7 +888,7 @@ async def sawc_write_run(state: domains.dd.synth.state.SynthState) -> dict:
         }
 
     t0 = time.monotonic()
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
 
     outline_key = keys.outline_latest_key(slug, chapter_id)
     digest_key = keys.digest_latest_key(slug, chapter_id)

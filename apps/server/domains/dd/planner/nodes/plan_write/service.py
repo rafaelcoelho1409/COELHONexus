@@ -6,7 +6,7 @@ I/O (gather exists/read, concurrent 2-blob writes). Old built-in vs pooled
 rotator is no-op here (never called rotator); SOTA is just MinIO concurrency.
 """
 from __future__ import annotations
-import domains
+import domains, infra
 from . import domain, keys, versions
 
 import asyncio
@@ -50,7 +50,7 @@ async def plan_write_run(state: domains.dd.planner.state.PlannerState) -> dict:
 
     t0 = time.monotonic()
 
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
 
     # Cache identity must follow the CONTENT of what this plan is built from.
     # `chapter_plan_ref` is the constant "latest" path, so hashing the ref alone

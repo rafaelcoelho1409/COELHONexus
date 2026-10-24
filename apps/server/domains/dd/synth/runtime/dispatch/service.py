@@ -409,7 +409,7 @@ async def _run_book_harmonize_impl(
     chapter_ids: list[str],
 ) -> dict:
     """Wrapped by _run_book_harmonize to keep the OTel span open across all return paths."""
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     entry = domains.dd.resolver.service.index_by_slug().get(slug, {})
     framework_name = entry.get("name") or entry.get("slug") or slug
 
@@ -596,7 +596,7 @@ async def _persist_study_timing(
         "finished_ts":     finished_ts,
     }
     try:
-        await domains.dd.ingestion.storage.service.get_storage().write(
+        await infra.minio.service.get_storage().write(
             domains.dd.synth.keys.study_timing_key(slug),
             json.dumps(payload, indent = 2),
             content_type = "application/json",
@@ -611,7 +611,7 @@ async def _persist_study_timing(
 async def _persist_chapter_timing(slug: str, chapter_id: str, wall_ms: int) -> None:
     """Best-effort merge of one finished chapter's wall time into the study timing blob (a single-chapter ▶ run leaves the
     other chapters' times, the harmonize time and the session fields as they were)."""
-    storage = domains.dd.ingestion.storage.service.get_storage()
+    storage = infra.minio.service.get_storage()
     key = domains.dd.synth.keys.study_timing_key(slug)
     try:
         prior = json.loads(await storage.read_text(key))
@@ -715,7 +715,7 @@ async def _run_study_async_inner(
     # Seed from prior blob so skipped-on-resume chapters keep their measured time.
     chapter_ms: dict[str, int] = {}
     try:
-        _prior = json.loads(await domains.dd.ingestion.storage.service.get_storage().read_text(domains.dd.synth.keys.study_timing_key(slug)))
+        _prior = json.loads(await infra.minio.service.get_storage().read_text(domains.dd.synth.keys.study_timing_key(slug)))
         chapter_ms.update(
             {str(k): int(v)
              for k, v in (_prior.get("per_chapter_ms") or {}).items()}
@@ -738,7 +738,7 @@ async def _run_study_async_inner(
     # without the plan no render is ever judged stale).
     plan_chapters: dict[str, dict] = {}
     try:
-        _plan = json.loads(await domains.dd.ingestion.storage.service.get_storage().read_text(
+        _plan = json.loads(await infra.minio.service.get_storage().read_text(
             domains.dd.synth.nodes.render.keys.planner_latest_key(slug),
         ))
         plan_chapters = {
@@ -753,7 +753,7 @@ async def _run_study_async_inner(
             return
 
         try:
-            _minio = domains.dd.ingestion.storage.service.get_storage()
+            _minio = infra.minio.service.get_storage()
             _render_key = domains.dd.synth.keys.chapter_render_latest_key(slug, chapter_id)
             if await _minio.exists(_render_key):
                 _prior_audit_passed = True

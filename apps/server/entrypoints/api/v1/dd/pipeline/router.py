@@ -55,7 +55,7 @@ async def pipeline_state(slug: str) -> dict:
             status_code=400,
             detail=f"invalid slug {slug!r}; slashes not allowed",
         )
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     async def _exists(key: str) -> bool:
         try:
             return await minio.exists(key)

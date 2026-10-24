@@ -45,7 +45,7 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
     if not chapters_in:
         return {"framework_slug": slug, "chapters": []}
 
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
 
     # Persisted timing roll-up (per-chapter wall + study total) so the
     # sidebar + navbar show times after a refresh / for cached studies.
@@ -161,7 +161,7 @@ async def get_study_artifact(
             ),
         )
     key = f"synth/{slug}/{chapter_id}/{artifact_name}"
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     if not await minio.exists(key):
         raise HTTPException(
             status_code=404,
@@ -763,7 +763,7 @@ async def wipe_synth(slug: str, chapter_id: str | None = Query(default=None)) ->
     if chapter_id is not None:
         return await service.wipe_one_chapter(slug, chapter_id)
 
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     try:
         n_minio = await minio.delete_prefix(f"synth/{slug}/")
     except Exception as e:

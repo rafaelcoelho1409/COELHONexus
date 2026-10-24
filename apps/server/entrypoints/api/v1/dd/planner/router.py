@@ -41,7 +41,7 @@ async def planner_health(slug: str, response: Response) -> dict:
     response.headers["Cache-Control"] = "no-store"
     try:
         key = domains.dd.planner.nodes.plan_write.keys.latest_blob_key(slug)
-        raw = await domains.dd.ingestion.storage.service.get_storage().read_text(key)
+        raw = await infra.minio.service.get_storage().read_text(key)
         plan = json.loads(raw)
         stats = plan.get("stats") or {}
         ph = stats.get("pipeline_health") or {}
@@ -61,7 +61,7 @@ async def planner_health(slug: str, response: Response) -> dict:
 async def planner_timing(slug: str, response: Response) -> dict:
     response.headers["Cache-Control"] = "no-store"
     try:
-        raw = await domains.dd.ingestion.storage.service.get_storage().read_text(domains.dd.planner.keys.planner_timing_key(slug))
+        raw = await infra.minio.service.get_storage().read_text(domains.dd.planner.keys.planner_timing_key(slug))
         data = json.loads(raw)
         return {
             "total_wall_ms": int(data.get("total_wall_ms") or 0),
@@ -84,7 +84,7 @@ async def start_planner(
             detail=f"invalid mode {mode!r}; expected one of {sorted(params.VALID_MODES)}",
         )
 
-    _manifest = await domains.dd.ingestion.storage.service.read_framework_manifest(domains.dd.ingestion.storage.service.get_storage(), slug)
+    _manifest = await domains.dd.ingestion.storage.service.read_framework_manifest(infra.minio.service.get_storage(), slug)
     if not _manifest:
         raise HTTPException(
             status_code=404,
@@ -335,7 +335,7 @@ async def wipe_planner(slug: str) -> dict:
             detail=f"invalid slug {slug!r}; slashes not allowed",
         )
 
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     try:
         n_minio = await minio.delete_prefix(f"planner/{slug}/")
     except Exception as e:

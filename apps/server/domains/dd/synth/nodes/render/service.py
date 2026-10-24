@@ -1,7 +1,7 @@
 """Render + audit + persist for one chapter. Vault sentinels prevent SAWC from copying code — byte-exact guarantee holds at materialization.
 LLM normalization pass (cached per-content-hash) fixes ingestion-time drift; plain-text/output blocks bypass it."""
 from __future__ import annotations
-import domains
+import domains, infra
 from . import domain, keys, params, prompts, schemas, versions
 
 import asyncio
@@ -295,7 +295,7 @@ async def render_audit_write_run(state: domains.dd.synth.state.SynthState) -> di
         }
 
     t0 = time.monotonic()
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
 
     # Prefer the best-seen iteration over whatever ran last. Fixed
     # 2026-09-05 — this used to always read the latest pointer, so a

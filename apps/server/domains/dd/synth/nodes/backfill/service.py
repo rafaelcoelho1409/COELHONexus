@@ -1,6 +1,6 @@
 """Vault + corpus-normalize backfills for pages ingested before the add_page hooks ran."""
 from __future__ import annotations
-import domains
+import domains, infra
 from . import domain
 
 import asyncio
@@ -15,13 +15,13 @@ logger = logging.getLogger(__name__)
 
 async def _list_framework_slugs() -> list[str]:
     """Walk MinIO `ingestion/` and return every framework slug with ≥1 page."""
-    s = domains.dd.ingestion.storage.service.get_storage()
+    s = infra.minio.service.get_storage()
     folders = await s.list_subfolders("ingestion/")
     return sorted(f.rstrip("/").rsplit("/", 1)[-1] for f in folders)
 
 
 async def _list_page_keys(slug: str) -> list[str]:
-    s = domains.dd.ingestion.storage.service.get_storage()
+    s = infra.minio.service.get_storage()
     return sorted(
         k for k in await s.list(f"{domains.dd.ingestion.storage.keys.framework_prefix(slug)}pages/")
         if k.endswith(".md")
@@ -30,7 +30,7 @@ async def _list_page_keys(slug: str) -> list[str]:
 
 async def _vault_exists(slug: str, idx: int, page_slug: str) -> bool:
     """True iff BOTH vault blobs are present. Partial state → missing."""
-    s = domains.dd.ingestion.storage.service.get_storage()
+    s = infra.minio.service.get_storage()
     vk = domains.dd.ingestion.storage.keys.vault_manifest_key(slug, idx, page_slug)
     sk = domains.dd.ingestion.storage.keys.vault_sentinelized_key(slug, idx, page_slug)
     a, b = await asyncio.gather(s.exists(vk), s.exists(sk))
@@ -50,7 +50,7 @@ async def _backfill_one(
         try:
             if await _vault_exists(slug, idx, page_slug):
                 return (page_slug, 0, "skipped")
-            s = domains.dd.ingestion.storage.service.get_storage()
+            s = infra.minio.service.get_storage()
             body = await s.read_text(page_key)
             sentinelized, manifest = domains.dd.synth.nodes.vault.domain.build_manifest(
                 framework = slug, source_key = page_key, md_text = body,
@@ -144,7 +144,7 @@ async def _normalize_one(
             return (page_key_str, "error")
         idx, page_slug = parsed
         try:
-            s = domains.dd.ingestion.storage.service.get_storage()
+            s = infra.minio.service.get_storage()
             body = await s.read_text(page_key_str)
             normalized = domains.dd.synth.nodes.corpus_normalize.domain.normalize_doc(body).body
             # A trailing-whitespace-only difference is not worth rewriting a
@@ -214,7 +214,7 @@ async def backfill_normalize_for_framework(slug: str) -> dict:
 async def ensure_framework_normalized(slug: str) -> dict:
     """Bring a framework's stored pages (+ vaults) up to the current normalizer version before Synth reads them. Version-gated via `normalizer_version` in the ingestion manifest (absent = pre-versioning = 0), so it is a single manifest read when nothing is stale. Without it, a normalizer improvement only ever reached corpora ingested afterwards — Synth kept sentinelizing the old pages and produced the old output. Stamps the manifest only on a clean pass so a partial failure retries on the next run."""
     current = domains.dd.synth.nodes.corpus_normalize.versions.NORMALIZER_VERSION
-    s = domains.dd.ingestion.storage.service.get_storage()
+    s = infra.minio.service.get_storage()
     manifest = await domains.dd.ingestion.storage.service.read_framework_manifest(s, slug)
     if not manifest:
         return {"slug": slug, "skipped": "no_manifest"}

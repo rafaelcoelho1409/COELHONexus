@@ -5,7 +5,6 @@ from . import params
 
 import logging
 
-from botocore.exceptions import ClientError
 from fastapi import APIRouter, HTTPException, Response
 
 
@@ -17,7 +16,7 @@ router = APIRouter()
 async def list_library() -> list[dict]:
     """Sidebar data source; joins MinIO manifests with resolver catalog
     so each row carries logo URL + framework metadata."""
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     catalog = domains.dd.resolver.service.index_by_slug()
     slugs = await minio.list_subfolders("ingestion/")
     if not slugs:
@@ -49,7 +48,7 @@ async def list_library() -> list[dict]:
 @router.get("/{slug}/manifest")
 async def get_manifest(slug: str) -> dict:
     m = await domains.dd.ingestion.storage.service.read_framework_manifest(
-        domains.dd.ingestion.storage.service.get_storage(), 
+        infra.minio.service.get_storage(), 
         slug)
     if not m:
         raise HTTPException(
@@ -62,7 +61,7 @@ async def get_manifest(slug: str) -> dict:
 @router.get("/{slug}/pages/{idx}")
 async def get_page(slug: str, idx: int) -> dict:
     body = await domains.dd.ingestion.storage.service.read_framework_page(
-        domains.dd.ingestion.storage.service.get_storage(), 
+        infra.minio.service.get_storage(), 
         slug, 
         idx)
     if body is None:
@@ -82,10 +81,10 @@ async def get_artifact(slug: str, name: str) -> Response:
     if not safe_name or "/" in safe_name:
         raise HTTPException(status_code=400, detail="invalid artifact name")
     key = domains.dd.ingestion.storage.keys.artifact_key(slug, safe_name)
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     try:
         data = await minio.read_bytes(key)
-    except ClientError as e:
+    except infra.minio.service.ClientError as e:
         code = (e.response or {}).get("Error", {}).get("Code", "")
         if code in ("404", "NoSuchKey"):
             raise HTTPException(
@@ -109,7 +108,7 @@ async def get_artifact(slug: str, name: str) -> Response:
 async def delete_framework(slug: str) -> dict:
     """Full-wipe every MinIO prefix keyed by this slug + the Redis
     single-flight lock if leaked by a crashed ingestion."""
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     prefixes = (
         domains.dd.ingestion.storage.keys.framework_prefix(slug),
         f"ingestion-raw/{slug}/",

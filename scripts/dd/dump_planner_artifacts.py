@@ -13,7 +13,7 @@ import asyncio
 import json
 import sys
 
-import domains
+import domains, infra
 
 
 async def _read(minio, key):
@@ -24,7 +24,7 @@ async def _read(minio, key):
 
 
 async def main() -> None:
-    minio = domains.dd.ingestion.storage.service.get_storage()
+    minio = infra.minio.service.get_storage()
     nodes = domains.dd.planner.nodes
     slugs = sorted(
         s.rstrip("/").split("/")[-1] for s in await minio.list_subfolders("planner/")
