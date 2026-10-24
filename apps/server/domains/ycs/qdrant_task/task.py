@@ -49,10 +49,10 @@ def ingest_to_qdrant(
             with infra.otel.service.get_tracer().start_as_current_span(
                 "ycs.ingest.qdrant.run",
                 attributes = {
-                    "coelho.langfuse.keep": True,
-                    "coelho.langfuse.kind": "workflow_root",
-                    "langfuse.trace.name": "ycs.ingest.qdrant.run",
-                    "langfuse.observation.metadata.workflow": "ycs_ingest",
+                    infra.langfuse.keys.KEEP: True,
+                    infra.langfuse.keys.KIND: "workflow_root",
+                    infra.langfuse.keys.TRACE_NAME: "ycs.ingest.qdrant.run",
+                    infra.langfuse.keys.OBS_META_WORKFLOW: "ycs_ingest",
                     "ycs.ingest.kind": "qdrant",
                     "ycs.chunk_size": int(chunk_size),
                     "ycs.chunk_overlap": int(chunk_overlap),

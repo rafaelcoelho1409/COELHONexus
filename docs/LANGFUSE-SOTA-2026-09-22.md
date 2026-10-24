@@ -9,9 +9,10 @@ SDK, prompt-management-at-scale, evaluation core concepts).
 
 Two planes, one rule (**fail-soft, never raise**):
 
-- **Trace plane (OTel):** spans → `infra/otel/service.py:add_langfuse_exporter`
-  → HTTP OTLP to LangFuse v3 `/api/public/otel`. `coelho.langfuse.keep`
-  gates export (`infra/otel/domain.py:33`). No SDK involved.
+- **Trace plane (OTel):** spans → `infra/langfuse/service.py:add_exporter`
+  (attached by `infra.otel.service.init_otel`) → HTTP OTLP to LangFuse v3
+  `/api/public/otel`. `coelho.langfuse.keep` gates export
+  (`infra/langfuse/domain.py:should_keep_span`). No SDK involved.
 - **SDK plane (`infra/langfuse/`):** everything OTel can't do — sessions,
   scores, prompts, evals. Final tree (§2-conformant, verified 2026-09-22):
   `service.py` (I/O shell: client, session, record_score, flag_for_review,

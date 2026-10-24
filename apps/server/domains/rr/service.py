@@ -266,15 +266,15 @@ async def run_scan_async(
         with infra.otel.service.get_tracer().start_as_current_span(
             "rr.scan.run",
             attributes = {
-                "coelho.langfuse.keep": True,
-                "coelho.langfuse.kind": "workflow_root",
-                "langfuse.trace.name": "rr.scan.run",
+                infra.langfuse.keys.KEEP: True,
+                infra.langfuse.keys.KIND: "workflow_root",
+                infra.langfuse.keys.TRACE_NAME: "rr.scan.run",
                 "rr.scan_id":        scan_id,
                 "rr.profile_id":     profile_id,
                 "rr.topic":          topic[:200],
                 "rr.vertical_count": len(verticals),
                 "rr.top_n":          top_n,
-                "langfuse.observation.metadata.workflow": "rr_scan",
+                infra.langfuse.keys.OBS_META_WORKFLOW: "rr_scan",
             },
         ):
             infra.langfuse.spans.set_current_span_langfuse_io(input_data = {
@@ -400,7 +400,7 @@ async def run_scan_pipeline(
 
         with infra.otel.service.get_tracer().start_as_current_span(
             "rr.node.backfill",
-            attributes={"coelho.langfuse.keep": True, "rr.scan_id": scan_id},
+            attributes={infra.langfuse.keys.KEEP: True, "rr.scan_id": scan_id},
         ):
             try:
                 await backfill_missing_extractions(scan_id)
@@ -412,7 +412,7 @@ async def run_scan_pipeline(
 
         with infra.otel.service.get_tracer().start_as_current_span(
             "rr.node.digest_assemble",
-            attributes={"coelho.langfuse.keep": True, "rr.scan_id": scan_id},
+            attributes={infra.langfuse.keys.KEEP: True, "rr.scan_id": scan_id},
         ):
             digest = build_digest_from_fs(scan_id)
             if not digest:

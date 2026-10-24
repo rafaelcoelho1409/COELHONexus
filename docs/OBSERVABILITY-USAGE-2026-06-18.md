@@ -563,9 +563,9 @@ one gap it has, #8), to carry into any new Python + LLM project:
 | File | What it owns |
 |---|---|
 | `infra/otel/service.py` | SDK init, exporter builders (Alloy + LangFuse OTLP + Mimir), `BaggageSpanProcessor` + `bag_context()`, `get_instrument(key)` factory, library auto-instrumentation |
-| `infra/otel/domain.py` | Pure predicates — LangFuse span-gate (`should_keep_span`) + baggage-key allow check (`is_allowed_baggage_key`) |
+| `infra/otel/domain.py` | Pure predicates — baggage-key allow check (`is_allowed_baggage_key`) + string transforms. The LangFuse span gate (`should_keep_span`) moved to `infra/langfuse/domain.py` 2026-10-24 |
 | `infra/otel/entities.py` | Central `INSTRUMENTS` list (`MetricSpec` registry) + `DedupeRateLimitFilter` (stateful log-dedup entity) |
-| `infra/otel/keys.py` | Task-path / route-name tables + `ALLOWED_BAGGAGE_KEYS` — consumed by `domain.py`, not `service.py` (moved out of `params.py` 2026-09-22) |
+| `infra/otel/keys.py` | `ALLOWED_BAGGAGE_KEYS` — consumed by `domain.py`, not `service.py` (moved out of `params.py` 2026-09-22; the span-gate tables moved to `infra/langfuse/keys.py` 2026-10-24) |
 | `infra/otel/params.py` | Tunables consumed only by `service.py` itself (service identity, BSP/OTLP timeouts, `FASTAPI_EXCLUDED_URLS`, `OTEL_NOISY_LOGGERS`) |
 | `infra/langfuse/service.py` | I/O shell — client singleton, `session(...)`, `record_score(...)`, `flag_for_review(...)`, `build_langchain_callback(...)` (consolidated from separate `sessions.py`/`scores.py`/`callbacks.py`/`annotation.py` files sometime before 2026-09-22 — confirmed via a live repo check, not a change made in this doc's own edit history) |
 | `infra/langfuse/spans.py` | current-span LangFuse attribute setters |

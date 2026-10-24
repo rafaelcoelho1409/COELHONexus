@@ -35,10 +35,10 @@ async def ingest_async(
         with infra.otel.service.get_tracer().start_as_current_span(
             "ycs.ingest.neo4j.run",
             attributes = {
-                "coelho.langfuse.keep": True,
-                "coelho.langfuse.kind": "workflow_root",
-                "langfuse.trace.name": "ycs.ingest.neo4j.run",
-                "langfuse.observation.metadata.workflow": "ycs_ingest",
+                infra.langfuse.keys.KEEP: True,
+                infra.langfuse.keys.KIND: "workflow_root",
+                infra.langfuse.keys.TRACE_NAME: "ycs.ingest.neo4j.run",
+                infra.langfuse.keys.OBS_META_WORKFLOW: "ycs_ingest",
                 "ycs.ingest.kind": "neo4j",
                 "ycs.batch_size": int(batch_size),
                 "ycs.video_count": len(video_ids or []),

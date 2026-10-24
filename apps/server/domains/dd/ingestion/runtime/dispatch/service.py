@@ -89,7 +89,7 @@ async def run(run_id: str, slug: str) -> dict:
             "dd.run.kind":              "ingestion",
             "ingestion.run_id":         run_id,
             "ingestion.framework_slug": slug,
-            "coelho.langfuse.keep":     True,
+            infra.langfuse.keys.KEEP:     True,
         },
     ):
         result = await _run_inner(run_id, slug)

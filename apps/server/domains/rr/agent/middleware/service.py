@@ -410,7 +410,7 @@ class PhaseEventsMiddleware(AgentMiddleware):
                 context=ctx,
                 start_time=start_ns,
                 attributes={
-                    "coelho.langfuse.keep": True,
+                    infra.langfuse.keys.KEEP: True,
                     "rr.scan_id": scan_id,
                     "rr.phase": phase,
                     "rr.phase_duration_ms": round((end_ns - start_ns) / 1_000_000),

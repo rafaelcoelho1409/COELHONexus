@@ -10,13 +10,13 @@ Env vars (init no-ops when OTEL_EXPORTER_OTLP_ENDPOINT is unset):
   OTEL_SERVICE_NAME             → default `coelhonexus-server`
   OTEL_SERVICE_VERSION          → default `1.0.0`
   OTEL_RESOURCE_ATTRIBUTES      → comma-separated `k=v` extras
-  LANGFUSE_OTLP_ENDPOINT        → LangFuse v3 /api/public/otel
-  LANGFUSE_PUBLIC_KEY           → HTTP Basic
-  LANGFUSE_SECRET_KEY
 
-  domain.py    — pure span-gate + baggage-key predicates
+LangFuse export (LANGFUSE_OTLP_ENDPOINT / PUBLIC_KEY / SECRET_KEY) is owned
+by `infra.langfuse.service.add_exporter`.
+
+  domain.py    — pure baggage-key predicate + string transforms
   entities.py  — MetricSpec registry (INSTRUMENTS) + DedupeRateLimitFilter
-  keys.py      — task-path / route-name tables, baggage-key allow-list
+  keys.py      — baggage-key allow-list
   params.py    — tunables (service identity, timeouts, backpressure)
   service.py   — bootstrap, exporters, baggage wiring, instrument factory
 """

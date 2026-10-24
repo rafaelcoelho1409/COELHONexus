@@ -1,8 +1,9 @@
 """OTel SDK bootstrap, exporters, and cross-cutting runtime helpers — the
-Imperative Shell for this package. Pure decision logic (the LangFuse span
-gate, the baggage-key allow check) lives in `domain.py`; everything here has
-a side effect: building resources/exporters, wiring SDK processors, reading
-env vars, touching global SDK state, logging.
+Imperative Shell for this package. Pure decision logic (the baggage-key allow
+check, string transforms) lives in `domain.py`; everything here has a side
+effect: building resources/exporters, wiring SDK processors, reading env
+vars, touching global SDK state, logging. The LangFuse exporter and its span
+gate live in `infra.langfuse`; `init_otel` only attaches it.
 
 `init_otel()` is idempotent. Call once from FastAPI lifespan + once from
 Celery `worker_process_init` — each forked worker needs its own provider
@@ -14,11 +15,9 @@ Env vars (init no-ops when OTEL_EXPORTER_OTLP_ENDPOINT is unset):
   OTEL_SERVICE_NAME             → default `coelhonexus-server`
   OTEL_SERVICE_VERSION          → default `1.0.0`
   OTEL_RESOURCE_ATTRIBUTES      → comma-separated `k=v` extras
-  LANGFUSE_OTLP_ENDPOINT        → LangFuse v3 /api/public/otel
-  LANGFUSE_PUBLIC_KEY           → HTTP Basic
-  LANGFUSE_SECRET_KEY
 """
 from __future__ import annotations
+import infra
 from . import domain, entities, params
 
 import contextlib
@@ -33,18 +32,11 @@ from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
     OTLPSpanExporter as GRPCOTLPSpanExporter,
 )
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-    OTLPSpanExporter as HTTPOTLPSpanExporter,
-)
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
-from opentelemetry.sdk.trace.export import (
-    BatchSpanProcessor,
-    SpanExporter,
-    SpanExportResult,
-)
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.instrumentation.celery import CeleryInstrumentor
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.logging import LoggingInstrumentor
@@ -137,59 +129,6 @@ def _bsp_kwargs() -> dict:
     }
 
 
-# These two wrap real network I/O (`on_end`/`export` ultimately ship spans
-# over gRPC/HTTP) — unlike entities.DedupeRateLimitFilter, they aren't value
-# objects the package manipulates, they're I/O adapters, so they stay here
-# rather than in entities.py. Only their pure gate decision lives in
-# domain.should_keep_span.
-
-class LangFuseFilterProcessor(SpanProcessor):
-    """Processor-side gate; reduces queue pressure before the authoritative
-    LangFuseFilterExporter. Decision logic lives in `domain.should_keep_span`."""
-
-    def __init__(self, inner: SpanProcessor) -> None:
-        self._inner = inner
-
-    def on_start(self, span, parent_context=None):
-        self._inner.on_start(span, parent_context)
-
-    def on_end(self, span) -> None:
-        if domain.should_keep_span(span.name or "", dict(span.attributes or {})):
-            self._inner.on_end(span)
-
-    def shutdown(self) -> None:
-        self._inner.shutdown()
-
-    def force_flush(self, timeout_millis: int = 30000) -> bool:
-        return self._inner.force_flush(timeout_millis)
-
-
-class LangFuseFilterExporter(SpanExporter):
-    """Last gate before OTLP/HTTP export; spans not matching the allow-list
-    are dropped here. Decision logic lives in `domain.should_keep_span`."""
-
-    def __init__(self, inner: SpanExporter) -> None:
-        self._inner = inner
-
-    def export(self, spans) -> SpanExportResult:
-        kept = tuple(
-            span for span in spans
-            if domain.should_keep_span(span.name or "", dict(span.attributes or {}))
-        )
-        if not kept:
-            return SpanExportResult.SUCCESS
-        return self._inner.export(kept)
-
-    def shutdown(self) -> None:
-        self._inner.shutdown()
-
-    def force_flush(self, timeout_millis: int = 30000) -> bool:
-        inner_flush = getattr(self._inner, "force_flush", None)
-        if callable(inner_flush):
-            return bool(inner_flush(timeout_millis))
-        return True
-
-
 def add_alloy_exporter(tracer_provider) -> bool:
     """gRPC OTLP → Alloy → LGTM."""
     endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -214,55 +153,6 @@ def add_alloy_exporter(tracer_provider) -> bool:
     except Exception as e:
         logger.warning(
             f"[otel] failed to attach Alloy exporter "
-            f"({type(e).__name__}: {e}); continuing without it"
-        )
-        return False
-
-
-def add_langfuse_exporter(tracer_provider) -> bool:
-    """HTTP OTLP → LangFuse v3 /api/public/otel. Skipped silently when
-    endpoint OR public/secret keys absent."""
-    endpoint = os.environ.get("LANGFUSE_OTLP_ENDPOINT")
-    if not endpoint:
-        logger.info(
-            "[otel] LANGFUSE_OTLP_ENDPOINT unset — LangFuse export disabled "
-            "(LGTM-only mode)"
-        )
-        return False
-    pk = os.environ.get("LANGFUSE_PUBLIC_KEY")
-    sk = os.environ.get("LANGFUSE_SECRET_KEY")
-    if not (pk and sk):
-        logger.warning(
-            "[otel] LANGFUSE_OTLP_ENDPOINT set but LANGFUSE_PUBLIC_KEY / "
-            "LANGFUSE_SECRET_KEY missing — skipping LangFuse exporter"
-        )
-        return False
-    try:
-        basic = domain.basic_auth_header(pk, sk)
-        traces_endpoint = domain.normalize_traces_endpoint(endpoint)
-        raw_exporter = HTTPOTLPSpanExporter(
-            endpoint=traces_endpoint,
-            headers={"Authorization": f"Basic {basic}"},
-            # 10s default timed out under heavy LLM volume; rich batches are slow to ingest.
-            timeout=int(os.environ.get(
-                "LANGFUSE_OTLP_TIMEOUT", str(params.LANGFUSE_OTLP_TIMEOUT_DEFAULT_S),
-            )),
-        )
-        tracer_provider.add_span_processor(
-            LangFuseFilterProcessor(
-                BatchSpanProcessor(
-                    LangFuseFilterExporter(raw_exporter),
-                    **_bsp_kwargs(),
-                )
-            )
-        )
-        logger.info(
-            f"[otel] LangFuse HTTP OTLP exporter attached → {traces_endpoint}"
-        )
-        return True
-    except Exception as e:
-        logger.warning(
-            f"[otel] failed to attach LangFuse exporter "
             f"({type(e).__name__}: {e}); continuing without it"
         )
         return False
@@ -428,7 +318,7 @@ def init_otel(also_instrument_fastapi_app=None) -> bool:
             logger.info("[otel] BaggageSpanProcessor attached")
 
         alloy_ok = add_alloy_exporter(tracer_provider)
-        langfuse_ok = add_langfuse_exporter(tracer_provider)
+        langfuse_ok = infra.langfuse.service.add_exporter(tracer_provider, _bsp_kwargs())
 
         trace.set_tracer_provider(tracer_provider)
         _tracer = trace.get_tracer(

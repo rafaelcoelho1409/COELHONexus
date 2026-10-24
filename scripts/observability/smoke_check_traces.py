@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -45,16 +44,11 @@ _GENAI_SPAN_NAME = "gen_ai.chat"
 
 
 def _get_client():
-    try:
-        from langfuse import Langfuse
-        return Langfuse(
-            public_key  = os.environ.get("LANGFUSE_PUBLIC_KEY",  ""),
-            secret_key  = os.environ.get("LANGFUSE_SECRET_KEY",  ""),
-            host        = os.environ.get("LANGFUSE_HOST", "http://langfuse-web.langfuse.svc.cluster.local:3000"),
-        )
-    except Exception as e:
-        logger.error(f"LangFuse client init failed: {e}")
-        return None
+    import infra
+    client = infra.langfuse.service.get_client()
+    if client is None:
+        logger.error("LangFuse client unavailable (host / LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY not all set)")
+    return client
 
 
 def _find_trace_for_pipeline(

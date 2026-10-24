@@ -236,15 +236,15 @@ async def run_planner_async(
         with infra.otel.service.get_tracer().start_as_current_span(
             "dd.planner.run",
             attributes = {
-                "coelho.langfuse.keep":  True,
-                "coelho.langfuse.kind":  "workflow_root",
-                "langfuse.trace.name":    "dd.planner.run",
+                infra.langfuse.keys.KEEP:  True,
+                infra.langfuse.keys.KIND:  "workflow_root",
+                infra.langfuse.keys.TRACE_NAME:    "dd.planner.run",
                 "dd.domain":             "planner",
                 "dd.run.kind":           "planner",
                 "planner.thread_id":     thread_id,
                 "planner.framework_slug": slug,
                 "planner.mode":          mode,
-                "langfuse.observation.metadata.workflow": "dd_planner",
+                infra.langfuse.keys.OBS_META_WORKFLOW: "dd_planner",
             },
         ):
             infra.langfuse.spans.set_current_span_langfuse_io(input_data = {

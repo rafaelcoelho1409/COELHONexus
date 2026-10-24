@@ -49,7 +49,7 @@ def full_channel_pipeline(
     with infra.otel.service.get_tracer().start_as_current_span(
         "ycs.pipeline.full_channel.dispatch",
         attributes = {
-            "coelho.langfuse.keep":  True,
+            infra.langfuse.keys.KEEP:  True,
             "ycs.channel_id":        channel_id,
             "ycs.max_results":       max_results,
             "ycs.include_qdrant":    include_qdrant,

@@ -52,9 +52,9 @@ def extract_videos(
         ), infra.otel.service.get_tracer().start_as_current_span(
             "ycs.extract.videos",
             attributes = {
-                "coelho.langfuse.keep":        True,
-                "coelho.langfuse.kind":        "workflow_root",
-                "langfuse.trace.name":         "ycs.extract.videos",
+                infra.langfuse.keys.KEEP:        True,
+                infra.langfuse.keys.KIND:        "workflow_root",
+                infra.langfuse.keys.TRACE_NAME:         "ycs.extract.videos",
                 "ycs.extract.kind":            "videos",
                 "ycs.video_count":             len(video_ids),
                 "ycs.include_transcription":   include_transcription,
@@ -109,9 +109,9 @@ def extract_channel(
         ), infra.otel.service.get_tracer().start_as_current_span(
             "ycs.extract.channel",
             attributes = {
-                "coelho.langfuse.keep":      True,
-                "coelho.langfuse.kind":      "workflow_root",
-                "langfuse.trace.name":       "ycs.extract.channel",
+                infra.langfuse.keys.KEEP:      True,
+                infra.langfuse.keys.KIND:      "workflow_root",
+                infra.langfuse.keys.TRACE_NAME:       "ycs.extract.channel",
                 "ycs.extract.kind":          "channel",
                 "ycs.channel_id":            channel_id,
                 "ycs.max_results":           max_results,
@@ -165,9 +165,9 @@ def extract_playlist(
         ), infra.otel.service.get_tracer().start_as_current_span(
             "ycs.extract.playlist",
             attributes = {
-                "coelho.langfuse.keep":      True,
-                "coelho.langfuse.kind":      "workflow_root",
-                "langfuse.trace.name":       "ycs.extract.playlist",
+                infra.langfuse.keys.KEEP:      True,
+                infra.langfuse.keys.KIND:      "workflow_root",
+                infra.langfuse.keys.TRACE_NAME:       "ycs.extract.playlist",
                 "ycs.extract.kind":          "playlist",
                 "ycs.playlist_id":           playlist_id,
                 "ycs.max_results":           max_results,

@@ -71,12 +71,12 @@ def _query_span(operation: str, *, backend: str, app: str):
     ), infra.otel.service.get_tracer().start_as_current_span(
         f"ycs.query.{operation}",
         attributes = {
-            "coelho.langfuse.keep":                   True,
-            "coelho.langfuse.kind":                   "workflow_root",
-            "langfuse.trace.name":                    f"ycs.query.{operation}",
+            infra.langfuse.keys.KEEP:                   True,
+            infra.langfuse.keys.KIND:                   "workflow_root",
+            infra.langfuse.keys.TRACE_NAME:                    f"ycs.query.{operation}",
             "ycs.query.backend":                      backend,
             "ycs.query.app":                          app or "",
-            "langfuse.observation.metadata.workflow": "ycs_query",
+            infra.langfuse.keys.OBS_META_WORKFLOW: "ycs_query",
         },
     ):
         yield
@@ -617,12 +617,12 @@ async def ai_generate_stream(
     span_cm = infra.otel.service.get_tracer().start_as_current_span(
         "ycs.query.ai.generate",
         attributes = {
-            "coelho.langfuse.keep":                    True,
-            "coelho.langfuse.kind":                    "workflow_root",
-            "langfuse.trace.name":                     "ycs.query.ai.generate",
+            infra.langfuse.keys.KEEP:                    True,
+            infra.langfuse.keys.KIND:                    "workflow_root",
+            infra.langfuse.keys.TRACE_NAME:                     "ycs.query.ai.generate",
             "ycs.query.backend":                       backend,
             "ycs.query.prompt":                         user_prompt[:200],
-            "langfuse.observation.metadata.workflow":  "ycs_query_ai",
+            infra.langfuse.keys.OBS_META_WORKFLOW:  "ycs_query_ai",
         },
     )
     span_cm.__enter__()

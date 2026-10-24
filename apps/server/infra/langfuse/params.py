@@ -6,6 +6,9 @@ from __future__ import annotations
 # 60s bounds staleness without re-fetching per call).
 PROMPT_CACHE_TTL_S = 60
 
+# OTLP/HTTP export timeout to LangFuse (`LANGFUSE_OTLP_TIMEOUT` overrides).
+OTLP_TIMEOUT_DEFAULT_S = 30
+
 # Span-attribute size caps — keep trace payloads bounded.
 JSON_ATTR_CAP = 12_000
 METADATA_VALUE_CAP = 512

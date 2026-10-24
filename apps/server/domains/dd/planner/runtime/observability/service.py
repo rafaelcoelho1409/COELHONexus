@@ -35,14 +35,14 @@ def traced(name: str) -> Callable:
                         node_id=prev_node_id,
                     )
             attrs = {
-                "coelho.langfuse.keep": True,
-                "coelho.langfuse.kind": "workflow_node",
+                infra.langfuse.keys.KEEP: True,
+                infra.langfuse.keys.KIND: "workflow_node",
                 "planner.node": name,
                 "planner.thread_id": state.get("thread_id") or "",
                 "planner.framework_slug": state.get("framework_slug") or "",
-                "langfuse.observation.metadata.workflow": "dd_planner",
-                "langfuse.observation.metadata.node_name": name,
-                "langfuse.observation.metadata.stage": "planner",
+                infra.langfuse.keys.OBS_META_WORKFLOW: "dd_planner",
+                infra.langfuse.keys.OBS_META_NODE_NAME: name,
+                infra.langfuse.keys.OBS_META_STAGE: "planner",
             }
             with tracer.start_as_current_span(
                 f"dd.planner.node.{name}", attributes = attrs,

@@ -65,9 +65,9 @@ def finalize_embedding_migration(self, physical_collection: str) -> dict:
         ), infra.otel.service.get_tracer().start_as_current_span(
             "ycs.embedding_migration.finalize",
             attributes = {
-                "coelho.langfuse.keep":          True,
-                "coelho.langfuse.kind":          "workflow_root",
-                "langfuse.trace.name":           "ycs.embedding_migration.finalize",
+                infra.langfuse.keys.KEEP:          True,
+                infra.langfuse.keys.KIND:          "workflow_root",
+                infra.langfuse.keys.TRACE_NAME:           "ycs.embedding_migration.finalize",
                 "ycs.embedding_migration.target": physical_collection,
             },
         ):

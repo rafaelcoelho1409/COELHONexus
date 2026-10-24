@@ -150,16 +150,16 @@ async def run_single_chapter_async(
         with infra.otel.service.get_tracer().start_as_current_span(
             "dd.synth.chapter.run",
             attributes = {
-                "coelho.langfuse.keep":  True,
-                "coelho.langfuse.kind":  "workflow_root",
-                "langfuse.trace.name":  "dd.synth.chapter.run",
+                infra.langfuse.keys.KEEP:  True,
+                infra.langfuse.keys.KIND:  "workflow_root",
+                infra.langfuse.keys.TRACE_NAME:  "dd.synth.chapter.run",
                 "dd.domain":            "synth",
                 "dd.run.kind":          "chapter",
                 "synth.thread_id":      thread_id,
                 "synth.framework_slug": slug,
                 "synth.chapter_id":     chapter_id,
                 "synth.mode":           mode,
-                "langfuse.observation.metadata.workflow": "dd_synth",
+                infra.langfuse.keys.OBS_META_WORKFLOW: "dd_synth",
             },
         ):
             infra.langfuse.spans.set_current_span_langfuse_io(input_data = {
@@ -392,15 +392,15 @@ async def _run_book_harmonize(
     cache skips work on identical inputs. Returns telemetry dict."""
     tracer = infra.otel.service.get_tracer()
     span_attrs = {
-        "coelho.langfuse.keep": True,
-        "coelho.langfuse.kind": "workflow_node",
+        infra.langfuse.keys.KEEP: True,
+        infra.langfuse.keys.KIND: "workflow_node",
         "synth.node":           "book_harmonize",
         "synth.framework_slug": slug,
         "synth.thread_id":      study_thread_id,
         "synth.chapter_count":  len(chapter_ids),
-        "langfuse.observation.metadata.workflow": "dd_synth",
-        "langfuse.observation.metadata.node_name": "book_harmonize",
-        "langfuse.observation.metadata.stage": "synth",
+        infra.langfuse.keys.OBS_META_WORKFLOW: "dd_synth",
+        infra.langfuse.keys.OBS_META_NODE_NAME: "book_harmonize",
+        infra.langfuse.keys.OBS_META_STAGE: "synth",
     }
     with tracer.start_as_current_span(
         "dd.synth.node.book_harmonize", attributes = span_attrs,
@@ -665,16 +665,16 @@ async def run_study_async(
         with infra.otel.service.get_tracer().start_as_current_span(
             "dd.synth.study.run",
             attributes = {
-                "coelho.langfuse.keep":  True,
-                "coelho.langfuse.kind":  "workflow_root",
-                "langfuse.trace.name":  "dd.synth.study.run",
+                infra.langfuse.keys.KEEP:  True,
+                infra.langfuse.keys.KIND:  "workflow_root",
+                infra.langfuse.keys.TRACE_NAME:  "dd.synth.study.run",
                 "dd.domain":            "synth",
                 "dd.run.kind":          "study",
                 "study.thread_id":      study_thread_id,
                 "study.framework_slug": slug,
                 "study.mode":           mode,
                 "study.chapter_count":  len(chapter_ids),
-                "langfuse.observation.metadata.workflow": "dd_synth",
+                infra.langfuse.keys.OBS_META_WORKFLOW: "dd_synth",
             },
         ):
             infra.langfuse.spans.set_current_span_langfuse_io(input_data = {

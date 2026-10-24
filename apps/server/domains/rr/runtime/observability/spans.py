@@ -82,11 +82,11 @@ def scan_read_span(operation: str, *, scan_id: str) -> Iterator[None]:
     ), infra.otel.service.get_tracer().start_as_current_span(
         f"rr.scan.{operation}",
         attributes = {
-            "coelho.langfuse.keep":                   True,
-            "coelho.langfuse.kind":                   "workflow_root",
-            "langfuse.trace.name":                    f"rr.scan.{operation}",
+            infra.langfuse.keys.KEEP:                   True,
+            infra.langfuse.keys.KIND:                   "workflow_root",
+            infra.langfuse.keys.TRACE_NAME:                    f"rr.scan.{operation}",
             "rr.scan_id":                              scan_id,
-            "langfuse.observation.metadata.workflow": "rr_scan_read",
+            infra.langfuse.keys.OBS_META_WORKFLOW: "rr_scan_read",
         },
     ):
         yield

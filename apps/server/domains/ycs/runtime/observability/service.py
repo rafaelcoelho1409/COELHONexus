@@ -24,14 +24,14 @@ def traced(name: str) -> Callable:
             if tracer is None:
                 return await fn(state, *args, **kwargs)
             attrs = {
-                "coelho.langfuse.keep": True,
-                "coelho.langfuse.kind": "workflow_node",
+                infra.langfuse.keys.KEEP: True,
+                infra.langfuse.keys.KIND: "workflow_node",
                 "ycs.node":      name,
                 "ycs.thread_id": state.get("thread_id") or "",
                 "ycs.question":  (state.get("question") or "")[:200],
-                "langfuse.observation.metadata.workflow": "ycs_ask",
-                "langfuse.observation.metadata.node_name": name,
-                "langfuse.observation.metadata.stage": "ycs",
+                infra.langfuse.keys.OBS_META_WORKFLOW: "ycs_ask",
+                infra.langfuse.keys.OBS_META_NODE_NAME: name,
+                infra.langfuse.keys.OBS_META_STAGE: "ycs",
             }
             with tracer.start_as_current_span(
                 f"ycs.node.{name}", attributes = attrs,

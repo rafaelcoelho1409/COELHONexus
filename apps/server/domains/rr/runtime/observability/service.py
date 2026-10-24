@@ -29,7 +29,7 @@ def _span_attrs(tool_name: str) -> dict:
         "gen_ai.tool.name":      tool_name,
         "gen_ai.tool.type":      "function",
         "gen_ai.agent.name":     "rr-orchestrator",
-        "coelho.langfuse.keep":  True,
+        infra.langfuse.keys.KEEP:  True,
     }
 
 
