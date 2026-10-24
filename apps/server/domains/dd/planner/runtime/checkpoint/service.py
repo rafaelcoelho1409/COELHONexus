@@ -1,126 +1,12 @@
-"""AsyncPostgresSaver lifecycle; re-opens when the event loop changes because Celery prefork creates a new loop per task (stale saver → closed-pool OperationalError)."""
+"""Checkpoint-history pruning for the planner + synth threads. The saver itself (pool, loop-change re-open, `setup()`) lives in `infra.postgres.service`."""
 from __future__ import annotations
-import domains
+import domains, infra
 
-import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Optional
-from urllib.parse import urlparse
-
-import psycopg
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from psycopg.rows import dict_row
-from psycopg_pool import AsyncConnectionPool
-
 
 
 logger = logging.getLogger(__name__)
-
-
-_saver: Optional[AsyncPostgresSaver] = None
-_pool: Optional[AsyncConnectionPool] = None
-_saver_loop: Optional[asyncio.AbstractEventLoop] = None
-
-
-async def _create_target_database(url: str) -> None:
-    """Bootstrap missing target DB; autocommit required because CREATE DATABASE cannot run inside a transaction."""
-    parsed = urlparse(url)
-    target_db = (parsed.path or "/").lstrip("/")
-    if not target_db or target_db == "postgres":
-        # Nothing to create; the URL already points at the admin DB.
-        return
-    # Rebuild the URL pointing at the admin DB; preserve user/pw/host/port.
-    admin_url = url.rsplit("/", 1)[0] + "/postgres"
-    logger.info(f"[checkpointer] bootstrapping missing DB '{target_db}'")
-    async with await psycopg.AsyncConnection.connect(
-        admin_url, autocommit = True
-    ) as conn:
-        # Quote the identifier defensively — CREATE DATABASE can't bind params.
-        quoted = '"' + target_db.replace('"', '""') + '"'
-        await conn.execute(f"CREATE DATABASE {quoted}")
-    logger.info(f"[checkpointer] DB '{target_db}' created")
-
-
-async def init_checkpointer() -> AsyncPostgresSaver:
-    """Open the pool and run `.setup()`. Idempotent within an event loop;
-    re-opens when the running loop changes (Celery tasks).
-
-    Backed by an `AsyncConnectionPool` with `check_connection` on checkout,
-    NOT `AsyncPostgresSaver.from_conn_string` (one long-lived
-    `AsyncConnection`): in the long-lived FastAPI process that single
-    connection died after a Postgres/network drop and was never reopened, so
-    every `aget_state` raised "the connection is closed" (planner `/state`
-    polling 500'd for the whole pod lifetime). The pool discards dead
-    connections and reconnects transparently."""
-    global _saver, _pool, _saver_loop
-    current_loop = asyncio.get_running_loop()
-    if _saver is not None and _saver_loop is current_loop:
-        return _saver
-
-    if _saver is not None and _saver_loop is not current_loop:
-        logger.info(
-            "[checkpointer] event loop changed; dropping stale saver "
-            "and re-opening on the current loop"
-        )
-        _saver = None
-        _pool = None
-        _saver_loop = None
-
-    url = domains.dd.planner.keys.postgres_url()
-    logger.info(f"[checkpointer] connecting to {url.split('@')[-1]}")
-
-    # Bootstrap missing DB on first connect; recovery path is no-op in steady
-    # state. Probed with a throwaway connection because a pool's open() times
-    # out (PoolTimeout) instead of surfacing "database does not exist".
-    try:
-        async with await psycopg.AsyncConnection.connect(url):
-            pass
-    except psycopg.OperationalError as e:
-        if "does not exist" not in str(e):
-            raise
-        await _create_target_database(url)
-
-    # Same connection kwargs `AsyncPostgresSaver.from_conn_string` uses.
-    _pool = AsyncConnectionPool(
-        conninfo = url,
-        min_size = 1,
-        max_size = 4,
-        kwargs = {"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
-        check = AsyncConnectionPool.check_connection,
-        open = False,
-    )
-    await _pool.open(wait = True, timeout = 30.0)
-    _saver = AsyncPostgresSaver(_pool)
-
-    await _saver.setup()
-    _saver_loop = current_loop
-    logger.info("[checkpointer] AsyncPostgresSaver ready (setup() idempotent)")
-    return _saver
-
-
-async def close_checkpointer() -> None:
-    """Tear down the pool. Called from lifespan shutdown."""
-    global _saver, _pool, _saver_loop
-    if _pool is None:
-        return
-    try:
-        await _pool.close()
-    except Exception as e:
-        logger.warning(f"[checkpointer] shutdown error (non-fatal): {e}")
-    _saver = None
-    _pool = None
-    _saver_loop = None
-
-
-def get_checkpointer() -> AsyncPostgresSaver:
-    """Sync accessor — must be called after `init_checkpointer()` resolved."""
-    if _saver is None:
-        raise RuntimeError(
-            "AsyncPostgresSaver not initialized — call init_checkpointer() "
-            "from FastAPI lifespan before any graph.compile()"
-        )
-    return _saver
 
 
 async def prune_old_threads(
@@ -159,9 +45,8 @@ async def prune_old_threads(
     True` by default; callers that actually want to delete must opt in
     explicitly."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
-    dsn = domains.dd.planner.keys.postgres_url()
 
-    async with await psycopg.AsyncConnection.connect(dsn) as conn:
+    async with await infra.postgres.service.connect() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 "SELECT DISTINCT thread_id FROM checkpoints "
@@ -203,7 +88,7 @@ async def prune_old_threads(
 
     deleted = 0
     if not dry_run and to_delete:
-        checkpointer = get_checkpointer()
+        checkpointer = infra.postgres.service.get_checkpointer()
         for thread_id in to_delete:
             try:
                 # Real, implemented method (verified 2026-09-26 via
@@ -236,5 +121,3 @@ async def prune_old_threads(
         "skipped_recent":      skipped_recent,
         "errors":              errors[:20],
     }
-
-

@@ -75,7 +75,7 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        await domains.dd.planner.runtime.checkpoint.service.init_checkpointer()
+        await infra.postgres.service.init_checkpointer()
     except Exception as e:
         logger.warning(
             f"[lifespan] AsyncPostgresSaver init failed: "
@@ -130,7 +130,7 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        app.state.pg_url = domains.ycs.runtime.keys.postgres_url()
+        app.state.pg_url = infra.postgres.service.url(database = infra.postgres.params.YCS_DATABASE)
         await domains.ycs.conversation.service.ensure_conversation_table(
             app.state.pg_url)
     except Exception as e:
@@ -239,7 +239,7 @@ async def lifespan(app: FastAPI):
     yield
 
     try:
-        await domains.dd.planner.runtime.checkpoint.service.close_checkpointer()
+        await infra.postgres.service.close_checkpointer()
     except Exception as e:
         logger.warning(f"[lifespan] checkpointer close failed: {e}")
 

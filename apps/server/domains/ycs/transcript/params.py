@@ -3,16 +3,6 @@ from __future__ import annotations
 import os
 
 
-CDP_HEADLESS = os.environ.get(
-    "PLAYWRIGHT_CDP_HEADLESS",
-    "http://playwright.playwright.svc.cluster.local:9224",
-)
-# YouTube blocks headless captions extraction; HEADED is the only working path.
-CDP_HEADED = os.environ.get(
-    "PLAYWRIGHT_CDP_HEADED",
-    "http://playwright.playwright.svc.cluster.local:9222",
-)
-
 # Requires playwright-headed pod with ≥4Gi memory; 5 concurrent pages OOMKilled at 2Gi.
 # 2026-09-13: trial bump 5→6 — per-page memory footprint should be lower now
 # thanks to the same day's blocklist expansion (stylesheets/fonts/peripheral

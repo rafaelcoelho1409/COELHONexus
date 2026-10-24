@@ -4,33 +4,18 @@ gate, 4a parallel httpx, 4b Playwright on SPA/high-fail. Pure helpers
 (slugify, link extraction, SPA heuristic, run-config assembly) live in
 domain.py."""
 from __future__ import annotations
-import domains
+import domains, infra
+import infra.playwright.crawler
 from . import domain, params
 
 import asyncio
-import json
 import logging
-import os
-import ssl
 import time
 import uuid
 from typing import Optional
 from urllib.parse import urlparse
-from urllib.request import urlopen
 
 import httpx
-from crawl4ai import (
-    AsyncUrlSeeder,
-    AsyncWebCrawler,
-    BrowserConfig,
-    CacheMode,
-    CrawlerRunConfig,
-    LXMLWebScrapingStrategy,
-    SeedingConfig,
-)
-from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher, RateLimiter
-from crawl4ai.content_filter_strategy import PruningContentFilter
-from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -40,64 +25,6 @@ from tenacity import (
 
 
 logger = logging.getLogger(__name__)
-
-
-# BrowserConfig needs wss://…/devtools/browser/<id> from CDP /json/version.
-# Cached per worker.
-_cdp_cached: dict[str, str] = {}
-
-
-def resolve_cdp_ws_url(cdp_http_url: str) -> Optional[str]:
-    """HTTP CDP URL → wss://…/devtools/browser/<id>. None on any failure so
-    the caller falls back to local Chromium (or skips Playwright)."""
-    if not cdp_http_url:
-        return None
-    if cdp_http_url in _cdp_cached:
-        return _cdp_cached[cdp_http_url]
-    parsed = urlparse(cdp_http_url)
-    json_url = f"{cdp_http_url.rstrip('/')}/json/version"
-    try:
-        # Tailscale ingress sometimes serves internal certs.
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        with urlopen(json_url, timeout=10, context=ctx) as resp:
-            data = json.loads(resp.read().decode())
-        ws_url = data.get("webSocketDebuggerUrl", "")
-        if not ws_url:
-            logger.warning(f"[cdp] no webSocketDebuggerUrl at {json_url}")
-            return None
-        ws_path = urlparse(ws_url).path
-        scheme = "wss" if parsed.scheme == "https" else "ws"
-        resolved = f"{scheme}://{parsed.netloc}{ws_path}"
-        _cdp_cached[cdp_http_url] = resolved
-        return resolved
-    except Exception as e:
-        logger.warning(f"[cdp] resolve failed for {cdp_http_url}: {e}")
-        return None
-
-
-def _build_browser_config():
-    """Build BrowserConfig using remote CDP if available, else local."""
-    cdp_http = (os.environ.get("PLAYWRIGHT_CDP_HEADLESS") or "").strip() or None
-    cdp_ws = resolve_cdp_ws_url(cdp_http) if cdp_http else None
-    if cdp_ws:
-        logger.info(f"[playwright] using remote CDP {cdp_ws[:80]}…")
-        return BrowserConfig(
-            browser_type = "chromium",
-            use_managed_browser = True,
-            cdp_url = cdp_ws,
-            headless = True,
-            verbose = False,
-        )
-    logger.info("[playwright] CDP unresolved — falling back to local Chromium")
-    proxy = (os.environ.get("BROWSER_PROXY_URL") or "").strip() or None
-    return BrowserConfig(
-        browser_type = "chromium",
-        headless = True,
-        verbose = False,
-        proxy = proxy,
-    )
 
 
 async def _install_resource_blocker(crawler) -> None:
@@ -120,8 +47,8 @@ async def _install_resource_blocker(crawler) -> None:
 
 def _build_md_generator():
     """PruningContentFilter + DefaultMarkdownGenerator."""
-    return DefaultMarkdownGenerator(
-        content_filter = PruningContentFilter(
+    return infra.playwright.crawler.DefaultMarkdownGenerator(
+        content_filter = infra.playwright.crawler.PruningContentFilter(
             threshold = 0.45,
             threshold_type = "dynamic",
             min_word_threshold = 5,
@@ -141,32 +68,32 @@ async def crawl_urls(
     if not urls:
         return 0, []
 
-    browser_cfg = _build_browser_config()
+    browser_cfg = infra.playwright.crawler.build_browser_config()
     md_generator = _build_md_generator()
     primary_cfg, retry_cfg = domain.build_run_configs(
-        CrawlerRunConfig,
-        CacheMode,
-        LXMLWebScrapingStrategy(),
+        infra.playwright.crawler.CrawlerRunConfig,
+        infra.playwright.crawler.CacheMode,
+        infra.playwright.crawler.LXMLWebScrapingStrategy(),
         md_generator,
     )
 
-    dispatcher_primary = MemoryAdaptiveDispatcher(
+    dispatcher_primary = infra.playwright.crawler.MemoryAdaptiveDispatcher(
         max_session_permit = params.MAX_SESSION_PERMIT,
         memory_threshold_percent = 85.0,
         recovery_threshold_percent = 75.0,
         check_interval = 1.0,
-        rate_limiter = RateLimiter(
+        rate_limiter = infra.playwright.crawler.RateLimiter(
             base_delay = (0.5, 1.5),
             max_delay = 20.0,
             max_retries = 3,
         ),
     )
-    dispatcher_retry = MemoryAdaptiveDispatcher(
+    dispatcher_retry = infra.playwright.crawler.MemoryAdaptiveDispatcher(
         max_session_permit = 1,
         memory_threshold_percent = 85.0,
         recovery_threshold_percent = 75.0,
         check_interval = 1.0,
-        rate_limiter = RateLimiter(
+        rate_limiter = infra.playwright.crawler.RateLimiter(
             base_delay = (1.0, 3.0),
             max_delay = 30.0,
             max_retries = 3,
@@ -233,7 +160,7 @@ async def crawl_urls(
             )
             await progress.update(current = written, last_url = url)
     await progress.start(tier = "playwright", total = len(urls))
-    async with AsyncWebCrawler(config = browser_cfg) as crawler:
+    async with infra.playwright.crawler.AsyncWebCrawler(config = browser_cfg) as crawler:
         await _install_resource_blocker(crawler)
         if hasattr(primary_cfg, "clone"):
             per_url_configs = [
@@ -300,14 +227,14 @@ async def _seeder_discover(
 ) -> list[str]:
     """Crawl4AI seeder URL list. [] on any failure — caller falls back to BFS.
     Import is deferred so tiers 1/2/3 don't pay the crawl4ai load cost."""
-    cfg = SeedingConfig(
+    cfg = infra.playwright.crawler.SeedingConfig(
         source="sitemap+cc",
         pattern=domain.seed_pattern_for(docs_path),
         max_urls=max_urls,
         extract_head=False,
     )
     try:
-        async with AsyncUrlSeeder() as seeder:
+        async with infra.playwright.crawler.AsyncUrlSeeder() as seeder:
             results = await seeder.urls(host, cfg)
     except Exception as e:
         logger.warning(f"[seeder] {host} discovery failed: {e}")

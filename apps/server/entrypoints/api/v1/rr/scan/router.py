@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from typing import AsyncIterator
 from uuid import UUID, uuid4
 
-import psycopg
 from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import StreamingResponse
 
@@ -32,7 +31,7 @@ async def _list_recent_scans_inner(profile_id: str, limit: int) -> dict:
     with domains.rr.runtime.observability.spans.postgres_span(
         "select", **{"db.postgres.table": domains.rr.keys.PG_TABLE_SCANS},
     ):
-        async with await psycopg.AsyncConnection.connect(domains.dd.planner.keys.postgres_url()) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     f"""
@@ -128,7 +127,7 @@ async def _get_scan_inner(scan_id: UUID) -> domains.rr.schemas.ScanResult:
     with domains.rr.runtime.observability.spans.postgres_span(
         "select", **{"db.postgres.table": domains.rr.keys.PG_TABLE_SCANS},
     ):
-        async with await psycopg.AsyncConnection.connect(domains.dd.planner.keys.postgres_url()) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     f"SELECT id, profile_id, status, started_at, finished_at, "
@@ -306,7 +305,7 @@ async def generate_finding_code(scan_id: UUID, arxiv_id: str) -> dict:
     with domains.rr.runtime.observability.spans.postgres_span(
         "select", **{"db.postgres.table": domains.rr.keys.PG_TABLE_FINDINGS},
     ):
-        async with await psycopg.AsyncConnection.connect(domains.dd.planner.keys.postgres_url()) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     f"SELECT 1 FROM {domains.rr.keys.PG_TABLE_FINDINGS} WHERE scan_id = %s AND arxiv_id = %s",

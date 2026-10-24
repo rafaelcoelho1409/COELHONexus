@@ -29,7 +29,7 @@ import importlib
 
 
 if TYPE_CHECKING:
-    from . import elasticsearch, langfuse, minio, neo4j, opentelemetry, qdrant, redis
+    from . import elasticsearch, langfuse, minio, neo4j, opentelemetry, playwright, postgres, qdrant, redis
 
 
 __all__ = [
@@ -38,6 +38,8 @@ __all__ = [
     "minio",
     "neo4j",
     "opentelemetry",
+    "playwright",
+    "postgres",
     "qdrant",
     "redis",
 ]

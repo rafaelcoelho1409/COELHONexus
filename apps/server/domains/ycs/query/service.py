@@ -25,7 +25,6 @@ import time
 import uuid
 from typing import Any
 
-import psycopg
 from fastapi import Request
 
 
@@ -1260,7 +1259,7 @@ async def ensure_query_history_table(pg_url: str) -> None:
     with domains.ycs.runtime.observability.spans.postgres_span(
         operation = "bootstrap", table = keys.HISTORY_TABLE_NAME,
     ):
-        async with await psycopg.AsyncConnection.connect(
+        async with await infra.postgres.service.connect(
             pg_url, autocommit = True,
         ) as conn:
             await conn.execute(f"""
@@ -1295,7 +1294,7 @@ async def save_query_history_entry(
     with domains.ycs.runtime.observability.spans.postgres_span(
         operation = "insert", table = keys.HISTORY_TABLE_NAME,
     ):
-        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        async with await infra.postgres.service.connect(pg_url) as conn:
             result = await conn.execute(
                 f"INSERT INTO {keys.HISTORY_TABLE_NAME} "
                 f"(backend, app, body, prompt, favorite) "
@@ -1317,7 +1316,7 @@ async def list_query_history_entries(
     with domains.ycs.runtime.observability.spans.postgres_span(
         operation = "select", table = keys.HISTORY_TABLE_NAME,
     ):
-        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        async with await infra.postgres.service.connect(pg_url) as conn:
             if backend:
                 result = await conn.execute(
                     f"SELECT id, backend, app, body, prompt, favorite, created_at "
@@ -1353,7 +1352,7 @@ async def delete_query_history_entry(pg_url: str, entry_id: int) -> int:
     with domains.ycs.runtime.observability.spans.postgres_span(
         operation = "delete", table = keys.HISTORY_TABLE_NAME,
     ):
-        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        async with await infra.postgres.service.connect(pg_url) as conn:
             result = await conn.execute(
                 f"DELETE FROM {keys.HISTORY_TABLE_NAME} WHERE id = %s",
                 (entry_id,),

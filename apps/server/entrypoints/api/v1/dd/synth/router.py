@@ -11,7 +11,6 @@ import json
 import logging
 import time
 
-import psycopg
 from fastapi import APIRouter, HTTPException, Query, Response
 from starlette.responses import StreamingResponse
 
@@ -194,14 +193,12 @@ async def get_study_artifact(
 @router.get("/recent")
 async def list_recent_synth() -> dict:
     """Most-recent thread per slug for page-refresh recovery."""
-    dsn = domains.dd.planner.keys.postgres_url()
-
     out: list[dict] = []
     try:
         with domains.dd.runtime.observability.spans.postgres_span(
             "select", **{"db.postgres.table": "checkpoints"},
         ):
-            async with await psycopg.AsyncConnection.connect(dsn) as conn:
+            async with await infra.postgres.service.connect() as conn:
                 async with conn.cursor() as cur:
                     await cur.execute("""
                         WITH thread_stats AS (
@@ -770,8 +767,6 @@ async def wipe_synth(slug: str, chapter_id: str | None = Query(default=None)) ->
         logger.warning(f"[synth-wipe] MinIO delete failed for {slug!r}: {e}")
         n_minio = -1
 
-    dsn = domains.dd.planner.keys.postgres_url()
-
     patterns = [
         f"docs-distiller/synth/{slug}/%",
         f"docs-distiller/study/{slug}/%",
@@ -781,9 +776,7 @@ async def wipe_synth(slug: str, chapter_id: str | None = Query(default=None)) ->
         with domains.dd.runtime.observability.spans.postgres_span(
             "delete", **{"db.postgres.table": "checkpoints,checkpoint_writes,checkpoint_blobs"},
         ):
-            async with await psycopg.AsyncConnection.connect(
-                dsn, autocommit=True,
-            ) as conn:
+            async with await infra.postgres.service.connect(autocommit=True) as conn:
                 for tbl in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
                     async with conn.cursor() as cur:
                         try:

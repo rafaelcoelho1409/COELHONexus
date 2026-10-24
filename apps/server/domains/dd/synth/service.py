@@ -33,5 +33,5 @@ def _release_synth_lock(slug: str, thread_id: str) -> None:
 async def _init_and_run(coro):
     """Ensure the AsyncPostgresSaver is open in this worker's interpreter
     (idempotent module-scope cache), then run `coro`."""
-    await domains.dd.planner.runtime.checkpoint.service.init_checkpointer()
+    await infra.postgres.service.init_checkpointer()
     return await coro

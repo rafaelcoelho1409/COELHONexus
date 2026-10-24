@@ -4,7 +4,7 @@ module; everything else reaches the service dotted through `infra.<service>.serv
     cd apps/server && .venv/bin/python ../../scripts/server/test_infra_boundary.py
 
 Add a service to RULES once its `infra/` module owns the library (so far: celery, elasticsearch, langfuse, neo4j,
-minio, opentelemetry, qdrant, redis)."""
+minio, opentelemetry, postgres, qdrant, redis)."""
 import ast
 import sys
 from pathlib import Path
@@ -37,6 +37,16 @@ RULES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "opentelemetry": (
         ("opentelemetry",),
         ('environ["OTEL_', 'environ.get("OTEL_', 'getenv("OTEL_', '"celery.task_id"'),
+    ),
+    "playwright": (
+        ("playwright", "crawl4ai"),
+        ('environ["PLAYWRIGHT_', 'environ.get("PLAYWRIGHT_', 'getenv("PLAYWRIGHT_',
+         'environ["BROWSER_', 'environ.get("BROWSER_', 'getenv("BROWSER_'),
+    ),
+    "postgres": (
+        ("psycopg", "psycopg_pool", "psycopg2", "asyncpg"),
+        ('environ["POSTGRES_', 'environ.get("POSTGRES_', 'getenv("POSTGRES_',
+         "postgresql://", "langgraph.checkpoint.postgres"),
     ),
     "qdrant": (
         ("qdrant_client", "langchain_qdrant"),

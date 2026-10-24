@@ -1,6 +1,6 @@
 """Synth LangGraph — per-chapter sequential nodes; shares AsyncPostgresSaver with planner (same tables, namespaced by thread_id prefix)."""
 from __future__ import annotations
-import domains
+import infra
 from . import nodes, params, state
 
 import logging
@@ -216,4 +216,4 @@ def build_graph():
         f"{', '.join(active)}"
         f"{' (CoRefine loop wired)' if loop_active else ''}"
     )
-    return g.compile(checkpointer = domains.dd.planner.runtime.checkpoint.service.get_checkpointer())
+    return g.compile(checkpointer = infra.postgres.service.get_checkpointer())

@@ -11,7 +11,6 @@ import json
 import logging
 import time
 
-import psycopg
 from fastapi import APIRouter, HTTPException, Response
 from starlette.responses import StreamingResponse
 
@@ -286,14 +285,12 @@ async def list_recent_planners() -> dict:
     """Per-slug thread selection prefers the thread with the MOST
     checkpoints — sorting by checkpoint_id alone picks abandoned threads
     that died early over later threads that completed all nodes."""
-    dsn = domains.dd.planner.keys.postgres_url()
-
     out: list[dict] = []
     try:
         with domains.dd.runtime.observability.spans.postgres_span(
             "select", **{"db.postgres.table": "checkpoints"},
         ):
-            async with await psycopg.AsyncConnection.connect(dsn) as conn:
+            async with await infra.postgres.service.connect() as conn:
                 async with conn.cursor() as cur:
                     await cur.execute("""
                         WITH thread_stats AS (
@@ -342,17 +339,13 @@ async def wipe_planner(slug: str) -> dict:
         logger.warning(f"[planner-wipe] MinIO delete failed for {slug!r}: {e}")
         n_minio = -1
 
-    dsn = domains.dd.planner.keys.postgres_url()
-
     counts: dict = {}
     pattern = f"docs-distiller/{slug}/%"
     try:
         with domains.dd.runtime.observability.spans.postgres_span(
             "delete", **{"db.postgres.table": "checkpoints,checkpoint_writes,checkpoint_blobs"},
         ):
-            async with await psycopg.AsyncConnection.connect(
-                dsn, autocommit=True,
-            ) as conn:
+            async with await infra.postgres.service.connect(autocommit=True) as conn:
                 for tbl in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
                     async with conn.cursor() as cur:
                         try:

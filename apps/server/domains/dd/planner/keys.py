@@ -1,22 +1,6 @@
 """Redis key-builders for the planner package."""
 from __future__ import annotations
 
-import os
-from urllib.parse import quote
-
-
-def postgres_url() -> str:
-    """Build the Postgres URL from env. User+password are percent-encoded
-    because POSTGRES_PASSWORD may contain `%`, `&`, `#`, `!`, `^` which
-    would break URL parsing as raw chars."""
-    user = quote(os.environ["POSTGRES_USER"], safe = "")
-    password = quote(os.environ["POSTGRES_PASSWORD"], safe = "")
-    host = os.environ["POSTGRES_HOST"]
-    port = os.environ["POSTGRES_PORT"]
-    db = os.environ["POSTGRES_DATABASE"]
-    auth = f"{user}:{password}@" if password else f"{user}@"
-    return f"postgresql://{auth}{host}:{port}/{db}"
-
 
 def cancel_key(thread_id: str) -> str:
     return f"coelhonexus:dd:planner:{thread_id}:cancel"

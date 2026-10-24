@@ -7,13 +7,11 @@ AsyncPostgresSaver pattern (no shared async pool needed for this
 low-volume table).
 """
 from __future__ import annotations
-import domains
+import domains, infra
 from . import params
 
 import json
 import logging
-
-import psycopg
 
 
 logger = logging.getLogger(__name__)
@@ -33,7 +31,7 @@ async def ensure_conversation_table(pg_url: str) -> None:
     with domains.ycs.runtime.observability.spans.postgres_span(
         operation = "bootstrap", table = params.TABLE_NAME,
     ):
-        async with await psycopg.AsyncConnection.connect(
+        async with await infra.postgres.service.connect(
             pg_url, autocommit = True,
         ) as conn:
             await conn.execute(
@@ -78,7 +76,7 @@ async def get_history(
     with domains.ycs.runtime.observability.spans.postgres_span(
         operation = "select", table = params.TABLE_NAME,
     ):
-        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        async with await infra.postgres.service.connect(pg_url) as conn:
             result = await conn.execute(
                 f"""
                 SELECT question, answer FROM {params.TABLE_NAME}
@@ -105,7 +103,7 @@ async def list_threads(
     with domains.ycs.runtime.observability.spans.postgres_span(
         operation = "select", table = params.TABLE_NAME,
     ):
-        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        async with await infra.postgres.service.connect(pg_url) as conn:
             result = await conn.execute(
                 f"""
                 SELECT
@@ -152,7 +150,7 @@ async def list_thread_messages(
     with domains.ycs.runtime.observability.spans.postgres_span(
         operation = "select", table = params.TABLE_NAME,
     ):
-        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        async with await infra.postgres.service.connect(pg_url) as conn:
             result = await conn.execute(
                 f"""
                 SELECT id, question, answer, mode, thinking_state, created_at
@@ -206,7 +204,7 @@ async def get_thread_locked_scope(
     with domains.ycs.runtime.observability.spans.postgres_span(
         operation = "select", table = params.TABLE_NAME,
     ):
-        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        async with await infra.postgres.service.connect(pg_url) as conn:
             result = await conn.execute(
                 f"""
                 SELECT thinking_state
@@ -252,7 +250,7 @@ async def branch_thread(
     with domains.ycs.runtime.observability.spans.postgres_span(
         operation = "insert", table = params.TABLE_NAME,
     ):
-        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        async with await infra.postgres.service.connect(pg_url) as conn:
             query_params: tuple = (new_thread_id, source_thread_id)
             cutoff_sql = ""
             if up_to_created_at:
@@ -288,7 +286,7 @@ async def delete_thread(
     with domains.ycs.runtime.observability.spans.postgres_span(
         operation = "delete", table = params.TABLE_NAME,
     ):
-        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        async with await infra.postgres.service.connect(pg_url) as conn:
             result = await conn.execute(
                 f"DELETE FROM {params.TABLE_NAME} WHERE thread_id = %s",
                 (thread_id,),
@@ -314,7 +312,7 @@ async def save_turn(
     with domains.ycs.runtime.observability.spans.postgres_span(
         operation = "insert", table = params.TABLE_NAME,
     ):
-        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        async with await infra.postgres.service.connect(pg_url) as conn:
             await conn.execute(
                 f"""
                 INSERT INTO {params.TABLE_NAME} (thread_id, question, answer, mode)
@@ -340,7 +338,7 @@ async def insert_turn(
     with domains.ycs.runtime.observability.spans.postgres_span(
         operation = "insert", table = params.TABLE_NAME,
     ):
-        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        async with await infra.postgres.service.connect(pg_url) as conn:
             result = await conn.execute(
                 f"""
                 INSERT INTO {params.TABLE_NAME} (thread_id, question, answer, mode)
@@ -371,7 +369,7 @@ async def update_turn_answer(
     with domains.ycs.runtime.observability.spans.postgres_span(
         operation = "update", table = params.TABLE_NAME,
     ):
-        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        async with await infra.postgres.service.connect(pg_url) as conn:
             if thinking_state is None:
                 await conn.execute(
                     f"""
@@ -405,7 +403,7 @@ async def delete_turn(pg_url: str, turn_id: int | None) -> None:
     with domains.ycs.runtime.observability.spans.postgres_span(
         operation = "delete", table = params.TABLE_NAME,
     ):
-        async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        async with await infra.postgres.service.connect(pg_url) as conn:
             await conn.execute(
                 f"DELETE FROM {params.TABLE_NAME} WHERE id = %s",
                 (turn_id,),

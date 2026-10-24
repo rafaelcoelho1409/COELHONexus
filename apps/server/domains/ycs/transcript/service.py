@@ -43,7 +43,6 @@ from datetime import datetime
 from typing import Any, Callable
 
 import httpx
-from playwright.async_api import async_playwright
 
 
 log = logging.getLogger("uvicorn.error")
@@ -701,19 +700,19 @@ class PlaywrightTranscriptService:
         if self._initialized:
             return
         # YouTube blocks headless for captions extraction → always HEADED
-        cdp_endpoint = self._cdp_endpoint or params.CDP_HEADED
+        cdp_endpoint = self._cdp_endpoint or infra.playwright.params.CDP_HEADED
         # Sweep stale service-worker / dedicated-worker targets left
         # over from a previous run BEFORE attaching — otherwise the
         # Playwright driver crashes in `_onAttachedToTarget`. See
-        # `domain._close_stale_cdp_targets` for the full story.
-        await asyncio.to_thread(domain._close_stale_cdp_targets, cdp_endpoint)
+        # `infra.playwright.service.close_stale_targets` for the full story.
+        await asyncio.to_thread(infra.playwright.service.close_stale_targets, cdp_endpoint)
         self._cdp_url = await asyncio.to_thread(
-            domain._get_cdp_websocket_url, cdp_endpoint,
-        )
+            infra.playwright.service.resolve_ws_url, cdp_endpoint,
+        ) or cdp_endpoint
         log.info(
             f"[transcript-service] Initializing with CDP: {self._cdp_url[:60]}...",
         )
-        self._playwright = await async_playwright().start()
+        self._playwright = await infra.playwright.service.start_playwright()
         self._browser = await self._playwright.chromium.connect_over_cdp(
             self._cdp_url,
         )
@@ -791,7 +790,7 @@ class PlaywrightTranscriptService:
                     f"[transcript-service] Error closing old browser: {e}",
                 )
         # 3. Re-resolve CDP URL and connect with retry
-        cdp_endpoint = self._cdp_endpoint or params.CDP_HEADED
+        cdp_endpoint = self._cdp_endpoint or infra.playwright.params.CDP_HEADED
         connect_timeout = params.CONNECT_TIMEOUT_S
         last_error: Exception | None = None
         for attempt in range(max_retries):
@@ -805,12 +804,12 @@ class PlaywrightTranscriptService:
                 # 10 videos and is exactly where the assertion crash
                 # would otherwise resurface.
                 await asyncio.to_thread(
-                    domain._close_stale_cdp_targets, cdp_endpoint,
+                    infra.playwright.service.close_stale_targets, cdp_endpoint,
                 )
                 self._cdp_url = await asyncio.wait_for(
-                    asyncio.to_thread(domain._get_cdp_websocket_url, cdp_endpoint),
+                    asyncio.to_thread(infra.playwright.service.resolve_ws_url, cdp_endpoint),
                     timeout = connect_timeout,
-                )
+                ) or cdp_endpoint
                 self._browser = await asyncio.wait_for(
                     self._playwright.chromium.connect_over_cdp(self._cdp_url),
                     timeout = connect_timeout,
@@ -937,7 +936,7 @@ class PlaywrightTranscriptService:
         (callers even override it to 10, per `extract/task.py`) but nothing
         ever compared it against `_videos_since_refresh`. Wired up now:
         dodges stale-CDP-connection accumulation (YouTube's per-page
-        service workers, `domain._close_stale_cdp_targets`) proactively instead
+        service workers, `infra.playwright.service.close_stale_targets`) proactively instead
         of waiting for a health-check failure to force a reactive one."""
         if self._videos_since_refresh < self.browser_refresh_interval:
             return

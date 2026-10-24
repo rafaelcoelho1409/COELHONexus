@@ -1,4 +1,4 @@
-"""AsyncPostgresSaver factory — shared across planner + synth."""
+"""Checkpoint pruning for planner + synth; the shared saver lives in `infra.postgres`."""
 from . import service
 
 

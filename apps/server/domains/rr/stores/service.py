@@ -26,8 +26,6 @@ from typing import Any
 from uuid import UUID
 
 import infra
-import psycopg
-from psycopg.types.json import Jsonb
 
 
 logger = logging.getLogger(__name__)
@@ -310,9 +308,7 @@ async def bootstrap_postgres() -> None:
     """Create RR's tables + indexes if missing. Idempotent. Call once at
     FastAPI lifespan startup (or before the first scan)."""
     with domains.rr.runtime.observability.spans.postgres_span("bootstrap"):
-        async with await psycopg.AsyncConnection.connect(
-            domains.dd.planner.keys.postgres_url(),
-        ) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(prompts.PG_DDL)
             await conn.commit()
@@ -335,9 +331,7 @@ async def create_scan(
     with domains.rr.runtime.observability.spans.postgres_span(
         "insert", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
     ):
-        async with await psycopg.AsyncConnection.connect(
-            domains.dd.planner.keys.postgres_url(),
-        ) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     f"INSERT INTO {rr_keys.PG_TABLE_SCANS} "
@@ -356,9 +350,7 @@ async def mark_scan_running(scan_id: UUID) -> None:
     with domains.rr.runtime.observability.spans.postgres_span(
         "update", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
     ):
-        async with await psycopg.AsyncConnection.connect(
-            domains.dd.planner.keys.postgres_url(),
-        ) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     f"UPDATE {rr_keys.PG_TABLE_SCANS} SET status = %s "
@@ -378,9 +370,7 @@ async def mark_scan_done(
     with domains.rr.runtime.observability.spans.postgres_span(
         "update", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
     ):
-        async with await psycopg.AsyncConnection.connect(
-            domains.dd.planner.keys.postgres_url(),
-        ) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     f"UPDATE {rr_keys.PG_TABLE_SCANS} SET "
@@ -400,9 +390,7 @@ async def mark_scan_error(scan_id: UUID, *, status: str, error: str) -> None:
     with domains.rr.runtime.observability.spans.postgres_span(
         "update", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
     ):
-        async with await psycopg.AsyncConnection.connect(
-            domains.dd.planner.keys.postgres_url(),
-        ) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     f"UPDATE {rr_keys.PG_TABLE_SCANS} SET "
@@ -425,7 +413,7 @@ async def record_findings(scan_id: UUID, findings: list[entities.Finding]) -> in
             f.arxiv_id,
             f.rank,
             f.signal,
-            Jsonb(_finding_as_dict(f)),
+            infra.postgres.service.Jsonb(_finding_as_dict(f)),
         )
         for f in findings
     ]
@@ -433,9 +421,7 @@ async def record_findings(scan_id: UUID, findings: list[entities.Finding]) -> in
         "insert_many",
         **{"db.postgres.table": rr_keys.PG_TABLE_FINDINGS, "db.postgres.row_count": len(rows)},
     ):
-        async with await psycopg.AsyncConnection.connect(
-            domains.dd.planner.keys.postgres_url(),
-        ) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.executemany(
                     f"INSERT INTO {rr_keys.PG_TABLE_FINDINGS} "
@@ -456,9 +442,7 @@ async def get_finding_digest_json(scan_id: UUID, arxiv_id: str) -> dict[str, Any
     with domains.rr.runtime.observability.spans.postgres_span(
         "select", **{"db.postgres.table": rr_keys.PG_TABLE_FINDINGS},
     ):
-        async with await psycopg.AsyncConnection.connect(
-            domains.dd.planner.keys.postgres_url(),
-        ) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     f"SELECT digest_json FROM {rr_keys.PG_TABLE_FINDINGS} "
@@ -515,9 +499,7 @@ async def mark_seen_batch(profile_id: str, arxiv_ids: list[str]) -> int:
         "insert_many",
         **{"db.postgres.table": rr_keys.PG_TABLE_SEEN, "db.postgres.row_count": len(rows)},
     ):
-        async with await psycopg.AsyncConnection.connect(
-            domains.dd.planner.keys.postgres_url(),
-        ) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.executemany(
                     f"INSERT INTO {rr_keys.PG_TABLE_SEEN} (profile_id, arxiv_id) "
@@ -534,9 +516,7 @@ async def get_seen_ids(profile_id: str) -> frozenset[str]:
     with domains.rr.runtime.observability.spans.postgres_span(
         "select", **{"db.postgres.table": rr_keys.PG_TABLE_SEEN},
     ):
-        async with await psycopg.AsyncConnection.connect(
-            domains.dd.planner.keys.postgres_url(),
-        ) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     f"SELECT arxiv_id FROM {rr_keys.PG_TABLE_SEEN} WHERE profile_id = %s",
@@ -559,9 +539,7 @@ async def write_synthesis_meta(
     with domains.rr.runtime.observability.spans.postgres_span(
         "update", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
     ):
-        async with await psycopg.AsyncConnection.connect(
-            domains.dd.planner.keys.postgres_url(),
-        ) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     f"UPDATE {rr_keys.PG_TABLE_SCANS} "
@@ -592,9 +570,7 @@ async def write_llm_counters(scan_id: UUID, payload: dict) -> bool:
     with domains.rr.runtime.observability.spans.postgres_span(
         "update", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
     ):
-        async with await psycopg.AsyncConnection.connect(
-            domains.dd.planner.keys.postgres_url(),
-        ) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     f"UPDATE {rr_keys.PG_TABLE_SCANS} SET llm_counters = %s::jsonb "
@@ -615,9 +591,7 @@ async def read_llm_counters(scan_id: UUID) -> dict | None:
     with domains.rr.runtime.observability.spans.postgres_span(
         "select", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
     ):
-        async with await psycopg.AsyncConnection.connect(
-            domains.dd.planner.keys.postgres_url(),
-        ) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     f"SELECT llm_counters FROM {rr_keys.PG_TABLE_SCANS} WHERE id = %s",
@@ -648,9 +622,7 @@ async def delete_scan_record(scan_id: UUID) -> bool:
     with domains.rr.runtime.observability.spans.postgres_span(
         "delete", **{"db.postgres.table": rr_keys.PG_TABLE_SCANS},
     ):
-        async with await psycopg.AsyncConnection.connect(
-            domains.dd.planner.keys.postgres_url(),
-        ) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     f"DELETE FROM {rr_keys.PG_TABLE_SCANS} WHERE id = %s",
@@ -669,9 +641,7 @@ async def reset_seen(profile_id: str) -> int:
     with domains.rr.runtime.observability.spans.postgres_span(
         "delete", **{"db.postgres.table": rr_keys.PG_TABLE_SEEN},
     ):
-        async with await psycopg.AsyncConnection.connect(
-            domains.dd.planner.keys.postgres_url(),
-        ) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     f"DELETE FROM {rr_keys.PG_TABLE_SEEN} WHERE profile_id = %s",
@@ -688,9 +658,7 @@ async def get_profile(profile_id: str) -> dict[str, Any] | None:
     with domains.rr.runtime.observability.spans.postgres_span(
         "select", **{"db.postgres.table": rr_keys.PG_TABLE_PROFILES},
     ):
-        async with await psycopg.AsyncConnection.connect(
-            domains.dd.planner.keys.postgres_url(),
-        ) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     f"SELECT id, interests, weights, created_at, updated_at "
@@ -720,9 +688,7 @@ async def upsert_profile(
     with domains.rr.runtime.observability.spans.postgres_span(
         "upsert", **{"db.postgres.table": rr_keys.PG_TABLE_PROFILES},
     ):
-        async with await psycopg.AsyncConnection.connect(
-            domains.dd.planner.keys.postgres_url(),
-        ) as conn:
+        async with await infra.postgres.service.connect() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     f"INSERT INTO {rr_keys.PG_TABLE_PROFILES} "
@@ -731,7 +697,7 @@ async def upsert_profile(
                     f"  interests = EXCLUDED.interests, "
                     f"  weights = EXCLUDED.weights, "
                     f"  updated_at = NOW()",
-                    (profile_id, Jsonb(interests), Jsonb(weights)),
+                    (profile_id, infra.postgres.service.Jsonb(interests), infra.postgres.service.Jsonb(weights)),
                 )
             await conn.commit()
 

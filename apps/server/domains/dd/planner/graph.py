@@ -1,6 +1,6 @@
 """LangGraph planner — strictly sequential; one AsyncPostgresSaver checkpoint + OTel span per node."""
 from __future__ import annotations
-import domains
+import infra
 from . import state, nodes
 
 import logging
@@ -80,4 +80,4 @@ def build_graph():
         f"{', '.join(active)}"
     )
     return g.compile(
-        checkpointer=domains.dd.planner.runtime.checkpoint.service.get_checkpointer())
+        checkpointer=infra.postgres.service.get_checkpointer())
