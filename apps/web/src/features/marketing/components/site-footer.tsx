@@ -1,5 +1,6 @@
+import { BrandMark } from "@/shared/ui/brand-mark";
+
 import { REPO_URL } from "../params";
-import { BrandMark } from "./brand-mark";
 
 export function SiteFooter() {
   return (

@@ -23,6 +23,34 @@ test.describe("home", () => {
     await expect(panel.getByText("1,204")).toBeVisible();
   });
 
+  test("the header leads into Docs Distiller and Settings", async ({ page, api }) => {
+    await api("healthy");
+    await page.goto("/");
+    const console = page.getByRole("navigation", { name: "Console" });
+    await expect(console.getByRole("link", { name: "Docs Distiller" })).toBeVisible();
+    await expect(console.getByRole("link", { name: "Settings" })).toBeVisible();
+
+    await console.getByRole("link", { name: "Settings" }).click();
+    await expect(page).toHaveURL(/\/settings$/);
+    // The app's own nav is there too, and says where you are.
+    await expect(
+      page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Settings" }),
+    ).toHaveAttribute("aria-current", "page");
+
+    await page
+      .getByRole("navigation", { name: "Primary" })
+      .getByRole("link", { name: "Docs Distiller" })
+      .click();
+    await expect(page).toHaveURL(/\/dd$/);
+  });
+
+  test("the hero opens Docs Distiller", async ({ page, api }) => {
+    await api("healthy");
+    await page.goto("/");
+    await page.getByRole("link", { name: "Open Docs Distiller" }).first().click();
+    await expect(page).toHaveURL(/\/dd$/);
+  });
+
   test("says so when the API is unreachable", async ({ page, api }) => {
     await api("down");
     await page.goto("/");

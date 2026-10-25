@@ -43,6 +43,19 @@ describe("HomePage", () => {
     expect(screen.getByRole("main")).toHaveAttribute("id", "main");
   });
 
+  it("links into the two apps from the header, the hero and the product card", () => {
+    server.use(http.all(`${ORIGIN}/api/*`, () => HttpResponse.error()));
+    renderPage();
+
+    const console = within(screen.getByRole("navigation", { name: "Console" }));
+    expect(console.getByRole("link", { name: "Docs Distiller" })).toHaveAttribute("href", "/dd");
+    expect(console.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
+    expect(screen.getAllByRole("link", { name: "Open Docs Distiller" })).toHaveLength(2); // hero + card
+    for (const link of screen.getAllByRole("link", { name: "Open Docs Distiller" })) {
+      expect(link).toHaveAttribute("href", "/dd");
+    }
+  });
+
   it("shows live figures from the API, not hard-coded ones", async () => {
     server.use(
       http.get(`${ORIGIN}/api/health`, () => HttpResponse.json({ status: "healthy" })),

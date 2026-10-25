@@ -47,6 +47,8 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-text: var(--destructive-text);
   --color-success: var(--success);
   --color-success-text: var(--success-text);
   --color-warning: var(--warning);
@@ -102,6 +104,8 @@
   --accent: var(--accent-3);
   --accent-foreground: var(--neutral-12);
   --destructive: var(--danger-9);
+  --destructive-foreground: var(--danger-contrast);
+  --destructive-text: var(--danger-11);
   --success: var(--success-9);
   --success-text: var(--success-11);
   --warning: var(--warning-9);

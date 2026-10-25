@@ -1,13 +1,22 @@
 # COELHO Nexus — web
 
 The Next.js front end for COELHO Nexus. Feature routes from `apps/fasthtml` migrate here one surface at a
-time (strangler); the home page is the first slice. Next.js 16 (App Router, Turbopack) · React 19 ·
-TypeScript 6 strict · Tailwind 4 · shadcn/ui on Base UI · TanStack Query · generated API client.
+time (strangler). Next.js 16 (App Router, Turbopack) · React 19 · TypeScript 6 strict · Tailwind 4 ·
+shadcn/ui on Base UI · TanStack Query · generated API client.
+
+| Surface | Served by | State |
+| --- | --- | --- |
+| Home, Settings, Docs Distiller (`/dd/*`) | this app | migrated; `/docs-distiller*` redirects here (307) |
+| YouTube content search (YCS) | FastHTML, via the `FASTHTML_URL` fallback | not migrated |
+
+**Rolling Docs Distiller back to FastHTML:** delete the `MOVED_PAGES` entry in `src/shared/config/redirects.ts`
+and rebuild the web image. The FastHTML pages (`apps/fasthtml/features/dd`) are deliberately still in place;
+delete them, and flip the redirect to `permanent: true`, only after the new pages have run live for a while.
 
 ```bash
 npm install
 npm run dev            # http://localhost:3000
-npm run verify         # lint, typecheck, knip, unit tests, boundaries, tokens, API drift, public copy
+npm run verify         # lint, typecheck, knip, unit tests, boundaries, tokens, API drift, public copy, backend contract
 npm run verify:full    # verify + production build + budgets + Playwright/axe e2e
 ```
 
@@ -19,7 +28,7 @@ Visual and content rules: [`DESIGN.md`](DESIGN.md).
 ```
 src/app/                    routing only — one-line re-exports of feature pages, layout, /health
 src/features/<context>/     api · domain · entities · params · components · hooks · index.ts
-src/shared/                 api (generated client) · config (env, rewrites) · lib · providers · sse · styles · ui
+src/shared/                 api (generated client) · config (env, rewrites, redirects) · lib · markdown · providers · sse · styles · ui
 ```
 
 Import layers are enforced (`eslint-plugin-boundaries`, proven by `npm run test:boundaries`):

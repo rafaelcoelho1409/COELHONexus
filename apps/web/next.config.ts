@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 import { env } from "./src/shared/config/env";
+import { buildRedirects } from "./src/shared/config/redirects";
 import { buildRewrites } from "./src/shared/config/rewrites";
 
 const nextConfig: NextConfig = {
@@ -12,6 +13,9 @@ const nextConfig: NextConfig = {
   turbopack: { root: import.meta.dirname },
   // Nexus pipelines can stream for minutes; Next's rewrite proxy defaults to 30s.
   experimental: { proxyTimeout: 30 * 60 * 1000 },
+  async redirects() {
+    return buildRedirects();
+  },
   async rewrites() {
     return buildRewrites(env);
   },

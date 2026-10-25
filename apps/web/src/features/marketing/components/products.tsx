@@ -1,3 +1,5 @@
+import { ArrowRight } from "lucide-react";
+
 import { PRODUCTS } from "../content";
 
 export function Products() {
@@ -30,6 +32,15 @@ export function Products() {
                 ))}
               </ol>
               <p className="mt-auto pt-8 font-mono text-xs text-muted-foreground">{product.stack}</p>
+              {"open" in product && (
+                <a
+                  href={product.open.href}
+                  className="mt-4 inline-flex h-9 items-center gap-1.5 self-start text-sm font-medium text-primary-text underline-offset-4 hover:underline"
+                >
+                  {product.open.label}
+                  <ArrowRight className="size-4" aria-hidden="true" />
+                </a>
+              )}
             </li>
           ))}
         </ul>

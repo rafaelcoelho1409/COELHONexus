@@ -1,0 +1,356 @@
+/* Reading styles for rendered markdown. Colours are the design tokens, so every theme (light, dark,
+ * high-contrast) is covered: text roles use the `-text` steps that the token check holds to 4.5:1. */
+
+.markdown {
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  scroll-margin-top: 5rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.markdown h1 {
+  margin: 2rem 0 0.75rem;
+  font-size: 1.5rem;
+}
+
+.markdown h2 {
+  margin: 2rem 0 0.75rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 1.25rem;
+}
+
+.markdown h3 {
+  margin: 1.5rem 0 0.5rem;
+  font-size: 1.0625rem;
+}
+
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 0.9375rem;
+}
+
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown table,
+.markdown blockquote,
+.markdown figure {
+  margin: 0.75rem 0;
+}
+
+.markdown ul {
+  list-style: disc;
+  padding-left: 1.5rem;
+}
+
+.markdown ol {
+  list-style: decimal;
+  padding-left: 1.5rem;
+}
+
+.markdown li {
+  margin: 0.25rem 0;
+}
+
+.markdown li > ul,
+.markdown li > ol {
+  margin: 0.25rem 0;
+}
+
+.markdown hr {
+  margin: 1.5rem 0;
+  border-color: var(--border);
+}
+
+.markdown a {
+  color: var(--primary-text);
+  text-underline-offset: 0.2em;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+}
+
+.markdown img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm, 2px);
+}
+
+.markdown :not(pre) > code {
+  padding: 0.1em 0.35em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 2px);
+  background: var(--muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.875em;
+}
+
+.markdown blockquote {
+  padding-left: 1rem;
+  border-left: 2px solid var(--border);
+  color: var(--muted-foreground);
+}
+
+/* Tables scroll inside their own focusable wrapper so a wide one never widens the page. */
+.markdown .md-table {
+  margin: 0.75rem 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.markdown .md-table table {
+  width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.markdown th,
+.markdown td {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown th {
+  background: var(--muted);
+  font-weight: 600;
+}
+
+/* Callouts */
+.markdown .md-alert {
+  margin: 1rem 0;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm, 2px);
+  color: var(--foreground);
+}
+
+.markdown .md-alert-title {
+  margin: 0.25rem 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.markdown .md-alert-note,
+.markdown .md-alert-tip {
+  border-left-color: var(--running);
+}
+.markdown .md-alert-note .md-alert-title,
+.markdown .md-alert-tip .md-alert-title {
+  color: var(--running-text);
+}
+
+.markdown .md-alert-important {
+  border-left-color: var(--primary);
+}
+.markdown .md-alert-important .md-alert-title {
+  color: var(--primary-text);
+}
+
+.markdown .md-alert-warning,
+.markdown .md-alert-caution {
+  border-left-color: var(--warning);
+}
+.markdown .md-alert-warning .md-alert-title {
+  color: var(--warning-text);
+}
+.markdown .md-alert-caution .md-alert-title {
+  color: var(--destructive-text);
+}
+
+/* Code */
+.markdown .md-code,
+.markdown .md-terminal,
+.markdown .md-diagram {
+  margin: 0.75rem 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 4px);
+  background: var(--card);
+  overflow: hidden;
+}
+
+.markdown .md-code-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 2.25rem;
+  padding: 0 0.25rem 0 0.75rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+}
+
+.markdown .md-code pre,
+.markdown .md-terminal pre {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.markdown .md-code pre code,
+.markdown .md-terminal pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: inherit;
+}
+
+.markdown .md-diagram {
+  padding: 1rem;
+  overflow-x: auto;
+}
+
+.markdown .md-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Terminal tones (ANSI colours): the semantic text roles, never raw colours. */
+.markdown .ansi-red {
+  color: var(--destructive-text);
+}
+.markdown .ansi-green {
+  color: var(--success-text);
+}
+.markdown .ansi-yellow {
+  color: var(--warning-text);
+}
+.markdown .ansi-blue,
+.markdown .ansi-cyan {
+  color: var(--running-text);
+}
+.markdown .ansi-magenta {
+  color: var(--primary-text);
+}
+.markdown .ansi-muted {
+  color: var(--muted-foreground);
+}
+.markdown .ansi-bold {
+  font-weight: 700;
+}
+.markdown .ansi-dim {
+  opacity: 0.8;
+}
+.markdown .ansi-italic {
+  font-style: italic;
+}
+.markdown .ansi-underline {
+  text-decoration: underline;
+}
+
+/* Syntax highlighting (highlight.js token classes) */
+.markdown .hljs-comment,
+.markdown .hljs-quote {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+.markdown .hljs-keyword,
+.markdown .hljs-selector-tag,
+.markdown .hljs-doctag {
+  color: var(--primary-text);
+}
+.markdown .hljs-string,
+.markdown .hljs-regexp,
+.markdown .hljs-addition {
+  color: var(--success-text);
+}
+.markdown .hljs-number,
+.markdown .hljs-literal,
+.markdown .hljs-symbol,
+.markdown .hljs-bullet {
+  color: var(--warning-text);
+}
+.markdown .hljs-title,
+.markdown .hljs-section,
+.markdown .hljs-function .hljs-title,
+.markdown .hljs-attr,
+.markdown .hljs-attribute {
+  color: var(--running-text);
+}
+.markdown .hljs-built_in,
+.markdown .hljs-type,
+.markdown .hljs-class .hljs-title,
+.markdown .hljs-meta {
+  color: var(--warning-text);
+}
+.markdown .hljs-variable,
+.markdown .hljs-template-variable,
+.markdown .hljs-deletion {
+  color: var(--destructive-text);
+}
+.markdown .hljs-emphasis {
+  font-style: italic;
+}
+.markdown .hljs-strong {
+  font-weight: 700;
+}
+
+/* KaTeX display math scrolls instead of widening the page */
+.markdown .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.25rem 0;
+}
+
+/* Sources folded under a chapter section (study reader) */
+.markdown details.study-sources {
+  margin: 0.75rem 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 2px);
+}
+
+.markdown details.study-sources > summary {
+  min-height: 2.25rem;
+  padding: 0.4rem 0.75rem;
+  cursor: pointer;
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+}
+
+.markdown details.study-sources > ul {
+  margin: 0;
+  padding: 0.25rem 0.75rem 0.75rem 2rem;
+}
+
+.markdown .md-source-file {
+  min-height: 1.5rem;
+  padding: 0.1em 0.35em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 2px);
+  background: var(--muted);
+  color: var(--primary-text);
+  cursor: pointer;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.8125rem;
+}
+
+.markdown .md-source-file:hover {
+  text-decoration: underline;
+}

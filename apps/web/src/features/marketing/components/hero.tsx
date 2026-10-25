@@ -22,9 +22,15 @@ export function Hero() {
             YouTube Content Search indexes a whole channel and answers questions across it, with citations.
           </p>
           <div className="mt-9 flex flex-wrap gap-3">
-            <a href="#products" className={buttonVariants({ size: "lg", className: "h-11 px-5 text-sm" })}>
-              See the products
+            <a href="/dd" className={buttonVariants({ size: "lg", className: "h-11 px-5 text-sm" })}>
+              Open Docs Distiller
               <ArrowRight className="size-4" aria-hidden="true" />
+            </a>
+            <a
+              href="#products"
+              className={buttonVariants({ variant: "outline", size: "lg", className: "h-11 px-5 text-sm" })}
+            >
+              See the products
             </a>
             <a
               href={REPO_URL}

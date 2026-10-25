@@ -67,6 +67,7 @@ k8s/helm/charts
 
 *.npz
 .openclaude-profile.json
+opencode.json
 .claude/
 .openclaude/
 .antigravitycli/

@@ -19,6 +19,7 @@ export const PRODUCTS = [
       "Reads a framework's documentation, plans the chapters, and writes a coherent study guide you can read in order.",
     pipeline: ["Ingest", "Plan", "Synthesize", "Study"],
     stack: "LangGraph · MinIO · PostgreSQL",
+    open: { label: "Open Docs Distiller", href: "/dd" },
   },
   {
     index: "02",
