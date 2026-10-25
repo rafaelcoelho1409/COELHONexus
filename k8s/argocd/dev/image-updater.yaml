@@ -28,5 +28,12 @@ spec:
           manifestTargets:
             helm:
               spec: fastmcp.image  # Full image reference (repo:tag@digest)
+        - alias: web
+          imageName: coelho-cloud-registry:5000/coelhonexus-web:latest
+          commonUpdateSettings:
+            updateStrategy: digest
+          manifestTargets:
+            helm:
+              spec: web.image  # Full image reference (repo:tag@digest)
   writeBackConfig:
     method: argocd

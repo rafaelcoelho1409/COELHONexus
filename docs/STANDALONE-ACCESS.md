@@ -8,13 +8,13 @@ Quick-reference for accessing every UI on the standalone k3d cluster. Bookmark t
 
 Infrastructure services are reachable immediately after `terragrunt run --all apply` — native k3d NodePort, no extra step, no script.
 
-The four app services need `skaffold dev` running in the foreground — it forwards them itself via its own `portForward:` config (cross-platform, no shell script involved):
+The five app services need `skaffold dev` running in the foreground — it forwards them itself via its own `portForward:` config (cross-platform, no shell script involved):
 
 ```bash
 skaffold dev
 ```
 
-Three deploy mechanisms, three disjoint port ranges (kept deliberately non-overlapping): `23000-23019` ArgoCD/production, `23001`+`23011-23023` Terragrunt-managed native NodePort infra, `23030-23039` Skaffold dev. See `README.md`'s Service Access section for the full budget table.
+Three deploy mechanisms, three disjoint port ranges (kept deliberately non-overlapping): `23000-23019` ArgoCD/production, `23001`+`23011-23028` Terragrunt-managed native NodePort (infra + app layer), `23030-23039` Skaffold dev. See `README.md`'s Service Access section for the full budget table.
 
 ---
 
@@ -28,6 +28,7 @@ Three deploy mechanisms, three disjoint port ranges (kept deliberately non-overl
 | **Flower** (Celery) | http://localhost:23032 | — (only if `flower.basicAuth.enabled=true` in chart) |
 | **FastHTML** | http://localhost:23033 | — (no auth) |
 | **FastMCP** | http://localhost:23034 | — (no auth; internal MCP gateway) |
+| **Web** | http://localhost:23035 | — (no auth) |
 
 Until `skaffold dev` is running, these will all show "connection refused" — `skaffold run` alone won't forward them (it's one-shot and exits, no foreground process to proxy through).
 
@@ -117,7 +118,7 @@ for svc in 23019:playwright-headed-cdp 23020:playwright-headless-cdp; do
 done
 
 # Apps — only respond while `skaffold dev` is running in the foreground
-for svc in 23030:server 23032:flower 23033:fasthtml 23034:fastmcp; do
+for svc in 23030:server 23032:flower 23033:fasthtml 23034:fastmcp 23035:web; do
   port=${svc%:*}; name=${svc#*:}
   code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://localhost:$port/" 2>/dev/null)
   echo "  $name (localhost:$port): HTTP $code"

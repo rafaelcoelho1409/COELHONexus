@@ -99,6 +99,18 @@ build:
             dest: /app
           - src: "**/*.toml"
             dest: /app
+    # Next.js homepage (apps/web). Standalone production build, so there is
+    # deliberately no `sync:` block — Next's compiled server output cannot be
+    # hot-patched file-by-file. Edits trigger a rebuild/rollout.
+    - image: localhost:5001/coelhonexus-web
+      context: apps/web
+      docker:
+        dockerfile: Dockerfile.web
+        noCache: false
+        buildArgs:
+          SERVER_URL: http://coelhonexus-server:8000
+          # Strangler seam: paths the Next app does not serve yet fall back to FastHTML.
+          FASTHTML_URL: http://coelhonexus-fasthtml:3000
   local:
     # Push to the k3d registry at localhost:5001 (k3d host port). Whichever
     # cluster this targets resolves the SAME address via its own containerd
@@ -140,6 +152,7 @@ manifests:
           server.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_server}}"
           fasthtml.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_fasthtml}}"
           fastmcp.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_fastmcp}}"
+          web.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_web}}"
           environment: local  # Enables --reload in uvicorn for hot-reload
 
 deploy:
@@ -185,12 +198,19 @@ portForward:
     port: 8001
     localPort: 23034
     address: 0.0.0.0
+  # Next.js homepage
+  - resourceType: service
+    resourceName: coelhonexus-web
+    namespace: coelhonexus-dev
+    port: 3001
+    localPort: 23035
+    address: 0.0.0.0
 
 
 # NOTE: Ensure docker-buildx is installed when useBuildkit is true
 
 # Development (Skaffold): ports 23030-23039
-# sh mirror_localhost_tailscale.sh $(for i in {23030..23034}; do echo $i; done)
+# sh mirror_localhost_tailscale.sh $(for i in {23030..23035}; do echo $i; done)
 # skaffold dev --cache-artifacts=false --no-prune=false --auto-sync=false
 
 profiles:
@@ -212,3 +232,11 @@ profiles:
           docker:
             dockerfile: Dockerfile.fastmcp
             noCache: false
+        - image: coelho-cloud-registry:5000/coelhonexus-web
+          context: apps/web
+          docker:
+            dockerfile: Dockerfile.web
+            noCache: false
+            buildArgs:
+              SERVER_URL: http://coelhonexus-server:8000
+              FASTHTML_URL: http://coelhonexus-fasthtml:3000

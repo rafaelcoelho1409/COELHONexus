@@ -1,0 +1,6095 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "COELHO Nexus API",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "get_health",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/debug/finalize/{slug}": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Debug Finalize",
+        "description": "Re-writes the canonical manifest from prior in-memory state.\nUseful when the manifest payload shape changes.",
+        "operationId": "post_dd_debug_finalize_slug",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Debug Finalize Slug"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/debug/ingest/{slug}": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Debug Ingest One Tier",
+        "description": "tier ∈ 1..5 (llms_full / llms_txt / sitemap / docs / github).\nWrites to the canonical MinIO path, overwriting same-idx bodies.",
+        "operationId": "post_dd_debug_ingest_slug",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "tier",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Tier"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Language"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Debug Ingest Slug"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/debug/post/{slug}": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Debug Post",
+        "description": "Re-runs post-process against current MinIO content (useful when\ntuning SPLIT_MIN_SECTION_BYTES without re-downloading).",
+        "operationId": "post_dd_debug_post_slug",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Debug Post Slug"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/debug/resolve/{slug}": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Debug Resolve",
+        "operationId": "post_dd_debug_resolve_slug",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Debug Resolve Slug"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/debug/restore/{slug}": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Debug Restore Snapshot",
+        "operationId": "post_dd_debug_restore_slug",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "ts",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ts"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Debug Restore Slug"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/debug/snapshot/{slug}": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Debug Take Snapshot",
+        "operationId": "post_dd_debug_snapshot_slug",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "label",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Label"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Debug Snapshot Slug"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Debug Delete Snapshot",
+        "operationId": "delete_dd_debug_snapshot_slug",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "ts",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ts"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Dd Debug Snapshot Slug"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/debug/snapshots/{slug}": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Debug List Snapshots",
+        "operationId": "get_dd_debug_snapshots_slug",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Debug Snapshots Slug"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/ingestion": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "List Library",
+        "description": "Sidebar data source; joins MinIO manifests with resolver catalog\nso each row carries logo URL + framework metadata.",
+        "operationId": "get_dd_ingestion",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response Get Dd Ingestion"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/ingestion/{slug}": {
+      "delete": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Delete Framework",
+        "description": "Full-wipe every MinIO prefix keyed by this slug + the Redis\nsingle-flight lock if leaked by a crashed ingestion.",
+        "operationId": "delete_dd_ingestion_slug",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Dd Ingestion Slug"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/ingestion/{slug}/artifacts/{name}": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Artifact",
+        "description": "SHA-256-addressed media; bytes are immutable for the life of the\nslug → 1y immutable cache. 404 on miss (no upstream fallback) so the\nbroken-image icon makes the absence visible.",
+        "operationId": "get_dd_ingestion_slug_artifacts_name",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/ingestion/{slug}/manifest": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Manifest",
+        "operationId": "get_dd_ingestion_slug_manifest",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Ingestion Slug Manifest"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/ingestion/{slug}/pages/{idx}": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Page",
+        "operationId": "get_dd_ingestion_slug_pages_idx",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Idx"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Ingestion Slug Pages Idx"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/pipeline/active": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Pipeline Active",
+        "description": "Drives the cross-stage proactive gate. Ingestion omitted — it's\northogonal to the Planner/Synth lock block.",
+        "operationId": "get_dd_pipeline_active",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Dd Pipeline Active"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/pipeline/{slug}/state": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Pipeline State",
+        "description": "Drives wipe-cascade dialogs (\"Wipe Planner also deletes Synth\").",
+        "operationId": "get_dd_pipeline_slug_state",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Pipeline Slug State"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/planner/debug/graph/{thread_id}/history": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Graph History",
+        "operationId": "get_dd_planner_debug_graph_thread_id_history",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Planner Debug Graph Thread Id History"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/planner/debug/graph/{thread_id}/llm-counters": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Graph Llm Counters",
+        "operationId": "get_dd_planner_debug_graph_thread_id_llm_counters",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Planner Debug Graph Thread Id Llm Counters"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/planner/debug/graph/{thread_id}/state": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Graph State",
+        "operationId": "get_dd_planner_debug_graph_thread_id_state",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Planner Debug Graph Thread Id State"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/planner/info": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Planner Info",
+        "operationId": "get_dd_planner_info",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Dd Planner Info"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/planner/prune": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Prune Checkpoints",
+        "description": "Manual trigger for the checkpoint-retention sweep (see\n`runtime.checkpoint.service.prune_old_threads`). `dry_run=true`\n(default) previews eligible thread_ids inline, no Celery hop, no\ndeletion. `dry_run=false` dispatches to Celery — a full-table scan\nacross every slug can run long, and this actually deletes rows, so\nit shouldn't block the request or run without an explicit opt-in.\nNothing in this codebase calls this on a schedule; wire it up via a\nk8s CronJob or celery beat if periodic pruning is wanted.",
+        "operationId": "post_dd_planner_prune",
+        "parameters": [
+          {
+            "name": "older_than_days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 30,
+              "title": "Older Than Days"
+            }
+          },
+          {
+            "name": "dry_run",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Dry Run"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Planner Prune"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/planner/recent": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "List Recent Planners",
+        "description": "Per-slug thread selection prefers the thread with the MOST\ncheckpoints — sorting by checkpoint_id alone picks abandoned threads\nthat died early over later threads that completed all nodes.",
+        "operationId": "get_dd_planner_recent",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Dd Planner Recent"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/planner/{slug}": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Start Planner",
+        "operationId": "post_dd_planner_slug",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "llm",
+              "title": "Mode"
+            }
+          },
+          {
+            "name": "thread_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Planner Slug"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/planner/{slug}/active": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Planner Active",
+        "description": "Page-refresh recovery without browser localStorage.",
+        "operationId": "get_dd_planner_slug_active",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Planner Slug Active"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/planner/{slug}/health": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Planner Health",
+        "description": "Wave H3 — pipeline health from the latest plan (no MinIO archaeology).\n`degraded` is the one-flag answer to 'will this plan be any good'.",
+        "operationId": "get_dd_planner_slug_health",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Planner Slug Health"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/planner/{slug}/timing": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Planner Timing",
+        "operationId": "get_dd_planner_slug_timing",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Planner Slug Timing"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/planner/{slug}/wipe": {
+      "delete": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Wipe Planner",
+        "description": "Wipes MinIO planner/{slug}/, Postgres checkpoints, Redis lock +\nactive-run registry. Drops the lock so the next Start Planner click\nisn't rejected by a stale lock that survived the wipe.",
+        "operationId": "delete_dd_planner_slug_wipe",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Dd Planner Slug Wipe"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/planner/{thread_id}/cancel": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Cancel Planner",
+        "operationId": "post_dd_planner_thread_id_cancel",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Planner Thread Id Cancel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/planner/{thread_id}/events": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Planner Events",
+        "description": "Initial `: stream open` forces proxies to flush headers (avoids\nfirst-event delay). 15s heartbeat keeps the connection alive through\nk3d/traefik during long off_topic/cluster gaps.",
+        "operationId": "get_dd_planner_thread_id_events",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/planner/{thread_id}/resume": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Resume Planner",
+        "operationId": "post_dd_planner_thread_id_resume",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Planner Thread Id Resume"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/resolver": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "List Catalog",
+        "description": "Re-read every request so YAML edits land without a pod restart.\nEach entry carries its resolved `tier` (1-5, None when sourceless) so\nthe Catalog UI can facet-filter without a second round-trip.",
+        "operationId": "get_dd_resolver",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response Get Dd Resolver"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/resolver/{slug}": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Resolve One",
+        "operationId": "get_dd_resolver_slug",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Resolver Slug"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/runs": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Start Run",
+        "description": "Status: cached (manifest present, no refresh) / queued (lock\nacquired, Celery dispatched) / locked (another in flight).",
+        "operationId": "post_dd_runs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRunBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Dd Runs"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/runs/active": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "List Active Runs",
+        "description": "Lock-held runs with progress; cross-checked so locks without a\nwritten progress record (rare race) aren't surfaced.",
+        "operationId": "get_dd_runs_active",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Dd Runs Active"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Run",
+        "description": "In-flight snapshot from Redis (canonical post-finalize manifest\nlives in MinIO under /ingestion/{slug}).",
+        "operationId": "get_dd_runs_run_id",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Runs Run Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/runs/{run_id}/cancel": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Cancel Run",
+        "operationId": "post_dd_runs_run_id_cancel",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Runs Run Id Cancel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/runs/{run_id}/pages/{idx}": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Page",
+        "operationId": "get_dd_runs_run_id_pages_idx",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Idx"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Runs Run Id Pages Idx"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/runs/{run_id}/url-records": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Url Records",
+        "operationId": "get_dd_runs_run_id_url_records",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response Get Dd Runs Run Id Url Records"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/synth/debug/graph/{thread_id}/history": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Synth History",
+        "operationId": "get_dd_synth_debug_graph_thread_id_history",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Synth Debug Graph Thread Id History"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/synth/debug/graph/{thread_id}/llm-counters": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Synth Llm Counters",
+        "operationId": "get_dd_synth_debug_graph_thread_id_llm_counters",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Synth Debug Graph Thread Id Llm Counters"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/synth/debug/graph/{thread_id}/state": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Synth State",
+        "operationId": "get_dd_synth_debug_graph_thread_id_state",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Synth Debug Graph Thread Id State"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/synth/info": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Synth Info",
+        "operationId": "get_dd_synth_info",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Dd Synth Info"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/synth/recent": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "List Recent Synth",
+        "description": "Most-recent thread per slug for page-refresh recovery.",
+        "operationId": "get_dd_synth_recent",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Dd Synth Recent"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/synth/{slug}": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Start Synth",
+        "description": "No chapter_id → STUDY mode (orchestrator runs all chapters);\nwith chapter_id → single-chapter escape hatch.",
+        "operationId": "post_dd_synth_slug",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "chapter_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Chapter Id"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "quality",
+              "title": "Mode"
+            }
+          },
+          {
+            "name": "thread_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Synth Slug"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/synth/{slug}/active": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Synth Active",
+        "description": "Page-refresh recovery: returns the study orchestrator's thread_id\nso the UI can reconnect to its SSE without browser localStorage. A single-chapter run (the per-chapter ▶ button on the\nchapter list) has no study registry entry; its thread is the value of the slug's synth lock, returned as `chapter_thread_id`.",
+        "operationId": "get_dd_synth_slug_active",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Synth Slug Active"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/synth/{slug}/study/chapters": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "List Study Chapters",
+        "description": "Drives the Study sidebar. `rendered` flags MUST NOT be cached —\na stale 200 after a wipe would show phantom synthesized chapters.",
+        "operationId": "get_dd_synth_slug_study_chapters",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Synth Slug Study Chapters"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/synth/{slug}/study/{chapter_id}/artifact/{artifact_name}": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Study Artifact",
+        "description": "VALID_ARTIFACTS allow-list prevents arbitrary MinIO key reads.",
+        "operationId": "get_dd_synth_slug_study_chapter_id_artifact_artifact_name",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "chapter_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Chapter Id"
+            }
+          },
+          {
+            "name": "artifact_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Artifact Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/synth/{slug}/wipe": {
+      "delete": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Wipe Synth",
+        "description": "Wipes MinIO synth/{slug}/, Postgres checkpoints for synth+study\nthreads, Redis SSE snapshots + lock. Without the Redis sweep a wiped\nslug \"comes back from the dead\" via the cached study SSE snapshot.\nWith `chapter_id`, wipes only that chapter's MinIO outputs (see\n`service.wipe_one_chapter`).",
+        "operationId": "delete_dd_synth_slug_wipe",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "chapter_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Chapter Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Dd Synth Slug Wipe"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/synth/{thread_id}/cancel": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Cancel Synth",
+        "description": "A STUDY thread cancel must propagate to each in-flight per-chapter\nthread — chapter watchers poll their own flag, not the study flag.\nWithout propagation only the NEXT chapter is blocked; the in-flight\none keeps firing LLM calls.",
+        "operationId": "post_dd_synth_thread_id_cancel",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Synth Thread Id Cancel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/synth/{thread_id}/events": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Synth Events",
+        "description": "Initial `: stream open` comment forces proxies to flush headers\n(avoid first-event delay). Heartbeat every 15s keeps the connection\nalive through k3d/traefik (default idle-stream timeout 60s) during\nlong Synth gaps (sawc_write, book_harmonize).",
+        "operationId": "get_dd_synth_thread_id_events",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/synth/{thread_id}/resume": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Resume Synth",
+        "operationId": "post_dd_synth_thread_id_resume",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Synth Thread Id Resume"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/embedding": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Get Embedding",
+        "operationId": "get_settings_embedding",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Put Embedding",
+        "operationId": "put_settings_embedding",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmbeddingBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/embedding/test": {
+      "post": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Test Embedding",
+        "description": "One tiny real embeddings call against the currently-configured\nembedding endpoint — proves it actually works.",
+        "operationId": "post_settings_embedding_test",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/endpoint": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Get Endpoint",
+        "operationId": "get_settings_endpoint",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Put Endpoint",
+        "operationId": "put_settings_endpoint",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndpointBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/endpoint/test": {
+      "post": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Test Endpoint",
+        "description": "One tiny completion against the currently-configured endpoint.",
+        "operationId": "post_settings_endpoint_test",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/admin/ingested-channels": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Ingested Channels",
+        "description": "Distinct channels in the metadata index with per-channel video count.\nBacks the Ask page's \"scope to channel(s)\" multi-select.",
+        "operationId": "get_ycs_admin_ingested_channels",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Ycs Admin Ingested Channels"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/admin/ingested-playlists": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Ingested Playlists",
+        "description": "Distinct playlists in the metadata index with per-playlist video\ncount. Used on the Ingest page library view.",
+        "operationId": "get_ycs_admin_ingested_playlists",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Ycs Admin Ingested Playlists"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/admin/pipeline/{extract_id}/llm-counters": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Pipeline Llm Counters",
+        "description": "LLM-usage drawer for the Neo4j box — same contract as DD's\n`/planner|synth/debug/graph/{thread_id}/llm-counters`\n(`domains.settings.llm_counter.service.read_counters`), under the\n`ycs` namespace since YCS's extraction isn't a LangGraph graph with\na thread_id to key off — keyed by extract_id instead, \"node\" is the\nvideo_id being extracted rather than a workflow node.",
+        "operationId": "get_ycs_admin_pipeline_extract_id_llm_counters",
+        "parameters": [
+          {
+            "name": "extract_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Extract Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Ycs Admin Pipeline Extract Id Llm Counters"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/admin/pipeline/{extract_id}/stream/{phase}": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Pipeline Stream Status",
+        "description": "2026-09-13: aggregator counterpart to `task_status` above, for\nthe Videos pipeline's per-video streaming fan-out (Neo4j/Qdrant no\nlonger map to one Celery task id — see `pipeline_task.service`'s\ndocstring). Synthesizes the SAME `{task_id, state, meta, result,\nerror}` shape `task_status` returns from Redis counters instead of\none `AsyncResult`, so `pipeline_panel.js`'s existing bar-rendering\ncode (`_setBar`/`_phasePct`/`_phaseLabel`/`_successHint`) needs no\nchanges beyond routing the qdrant/neo4j bars to this endpoint\ninstead of `/admin/task/{id}`.",
+        "operationId": "get_ycs_admin_pipeline_extract_id_stream_phase",
+        "parameters": [
+          {
+            "name": "extract_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Extract Id"
+            }
+          },
+          {
+            "name": "phase",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Phase"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Ycs Admin Pipeline Extract Id Stream Phase"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/admin/task/{task_id}": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Task Status",
+        "description": "Celery `AsyncResult` passthrough. `meta` = `self.update_state(meta=...)` payload; `result` = SUCCESS return value.",
+        "operationId": "get_ycs_admin_task_task_id",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Ycs Admin Task Task Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/admin/videos": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "List Videos",
+        "description": "Library rows — joins ES metadata, transcript presence, and Neo4j Document presence per video.\nChannel/`q` filters run in ES; `status`+`lang` are post-filtered in Python (cross-store).",
+        "operationId": "get_ycs_admin_videos",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Channel"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "lang",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lang"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Ycs Admin Videos"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/admin/videos/bulk-delete": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Bulk Delete Videos",
+        "description": "Multi-select wipe. POST (not DELETE) because HTTP DELETE doesn't reliably carry a body.",
+        "operationId": "post_ycs_admin_videos_bulk_delete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Ycs Admin Videos Bulk Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/admin/videos/facets": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Videos Facets",
+        "description": "Facet counts across EVERY indexed video, not just Neo4j-\"done\"\nones.\n\n2026-09-15: previously scoped to done-only video ids — if a video's\nNeo4j processing was behind (or wiped, or never run), its channel\nand language silently vanished from every filter option, and the\nStatus filter was permanently stuck offering only \"Done\" (a fixed\none-entry list, not a real facet) even though the frontend already\nhas CSS for all 3 status pills. Channels/languages now aggregate\nover the whole metadata/transcript indices directly — no id-scoping\nneeded since nothing is hidden by status anymore (see\n`list_videos`). Statuses is a REAL 3-way breakdown, computed via the\nsame `_compute_video_statuses` `list_videos` uses, so the two can\nnever drift apart again.",
+        "operationId": "get_ycs_admin_videos_facets",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Ycs Admin Videos Facets"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/admin/videos/{video_id}": {
+      "delete": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Delete Video",
+        "description": "Drop ES metadata + transcripts, Qdrant points, and Neo4j nodes for one video.",
+        "operationId": "delete_ycs_admin_videos_video_id",
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Video Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Ycs Admin Videos Video Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/agents/endpoint/ping": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Endpoint Ping",
+        "description": "Connectivity check against the live chat model.",
+        "operationId": "post_ycs_agents_endpoint_ping",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Ycs Agents Endpoint Ping"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/agents/feedback": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Ask Feedback",
+        "description": "User rating for an ask turn. Fire-and-forget by design (score writes\nmust never fail a request): returns `accepted` when the payload is\nvalid; the `user.feedback` score lands on the turn's trace.",
+        "operationId": "post_ycs_agents_feedback",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskFeedbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Ycs Agents Feedback"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/agents/graph/stats": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Graph Stats",
+        "description": "Get Neo4j node/relationship counts.",
+        "operationId": "get_ycs_agents_graph_stats",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Ycs Agents Graph Stats"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/agents/history/{thread_id}": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Get Thread History",
+        "description": "Return Q+A history for thread_id; empty list for default sentinel or unknown thread.",
+        "operationId": "get_ycs_agents_history_thread_id",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Ycs Agents History Thread Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/agents/ingest/neo4j": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Ingest To Neo4J",
+        "description": "Queue entity extraction → Neo4j (Celery); 1 LLM call per transcript.",
+        "operationId": "post_ycs_agents_ingest_neo4j",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GraphIngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Ycs Agents Ingest Neo4J"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/agents/ingest/qdrant": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Ingest To Qdrant",
+        "description": "Queue ES transcripts → Qdrant ingestion (Celery).",
+        "operationId": "post_ycs_agents_ingest_qdrant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Ycs Agents Ingest Qdrant"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/agents/pipeline": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Full Pipeline",
+        "description": "Queue full Celery chain: extract → Qdrant → Neo4j → cache.",
+        "operationId": "post_ycs_agents_pipeline",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PipelineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Ycs Agents Pipeline"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/agents/search": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Rag Search",
+        "description": "Agentic RAG: cache check → history load → graph.ainvoke() → save turn → cache response.",
+        "operationId": "post_ycs_agents_search",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RAGSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Ycs Agents Search"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/agents/search/stream": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Rag Search Stream",
+        "description": "Streaming agentic RAG via SSE; one event per node completion; saves final answer to Postgres.",
+        "operationId": "post_ycs_agents_search_stream",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RAGSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/agents/threads": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Get Threads",
+        "description": "List existing threads most-recent first; each item has thread_id/turn_count/last_seen/first_question.",
+        "operationId": "get_ycs_agents_threads",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Ycs Agents Threads"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/agents/threads/{thread_id}": {
+      "delete": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Delete Thread Endpoint",
+        "description": "Delete thread + all its turns; returns deleted row count (0 if not found); default sentinel is a no-op.",
+        "operationId": "delete_ycs_agents_threads_thread_id",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Ycs Agents Threads Thread Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/agents/threads/{thread_id}/branch": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Branch Thread Endpoint",
+        "description": "Branch a thread at up_to_created_at (copies whole source if absent); returns new_thread_id + copied count.",
+        "operationId": "post_ycs_agents_threads_thread_id_branch",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Ycs Agents Threads Thread Id Branch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/agents/turns/{turn_id}/cancel": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Cancel Turn Endpoint",
+        "description": "Mark turn for early SSE exit and delete its PG row; idempotent (second call returns deleted=0).",
+        "operationId": "post_ycs_agents_turns_turn_id_cancel",
+        "parameters": [
+          {
+            "name": "turn_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Turn Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Ycs Agents Turns Turn Id Cancel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/agents/usage/{thread_id}": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Get Thread Usage",
+        "description": "Aggregate LLM usage for one Ask conversation (models + tokens per\nnode, and totals) — mirrors Ingestion's per-video LLM drawer.",
+        "operationId": "get_ycs_agents_usage_thread_id",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Ycs Agents Usage Thread Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/content/channel": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Get Channel Videos",
+        "description": "Extract all channel videos → ES (Celery). `max_results=0` fetches ALL videos.",
+        "operationId": "post_ycs_content_channel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Ycs Content Channel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/content/channel/pipeline": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Channel Pipeline",
+        "description": "Enumerate ALL channel videos server-side, then dispatch the 3-phase pipeline. Bypasses the 100-per-page picker cap.",
+        "operationId": "post_ycs_content_channel_pipeline",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelPipelineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Ycs Content Channel Pipeline"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/content/channel/videos": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Enumerate Channel Videos",
+        "description": "Paginated channel video listing. Resolves any input shape (bare `UC…`, `@handle`, URL) to\nthe uploads playlist for cheapest pagination. `total=None` when yt-dlp can't surface `playlist_count`.",
+        "operationId": "get_ycs_content_channel_videos",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnumerationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/content/embedding-migration/start": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Embedding Migration Start",
+        "description": "Dispatch the re-embed job. 404 if nothing actually needs\nmigrating (avoids a spurious re-embed if the user double-clicks\nafter the gate already cleared).",
+        "operationId": "post_ycs_content_embedding_migration_start",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Ycs Content Embedding Migration Start"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/content/embedding-migration/status": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Embedding Migration Status",
+        "description": "Whether a migration is needed and/or already running — same check\n`_raise_if_embedding_migration_needed` uses, exposed read-only for the\nSettings/Ingestion page to show a banner before the user even tries\nto dispatch anything.",
+        "operationId": "get_ycs_content_embedding_migration_status",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Ycs Content Embedding Migration Status"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/content/playlist": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Get Playlist Videos",
+        "description": "Extract all playlist videos → ES (Celery). `max_results=0` fetches ALL videos.",
+        "operationId": "post_ycs_content_playlist",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaylistRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Ycs Content Playlist"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/content/playlist/pipeline": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Playlist Pipeline",
+        "description": "Enumerate ALL playlist videos server-side, then dispatch the 3-phase pipeline.",
+        "operationId": "post_ycs_content_playlist_pipeline",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaylistPipelineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Ycs Content Playlist Pipeline"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/content/playlist/videos": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Enumerate Playlist Videos",
+        "description": "Paginated playlist video listing. Accepts bare `PL…`/`UU…`, full `playlist?list=…`, or `watch?v=…&list=…` URLs.",
+        "operationId": "get_ycs_content_playlist_videos",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnumerationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/content/search": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Search Videos",
+        "description": "Synchronous yt-dlp `ytsearch*` — returns snippets, no persistence.",
+        "operationId": "post_ycs_content_search",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/content/videos": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Get Videos",
+        "description": "Extract specific videos → ES (Celery). Bare extract only; the Videos tab uses `/videos/pipeline`.\n\n2026-09-15: \"bare\" is about the API SHAPE, not behavior — `extract_videos`\n(the Celery task, shared verbatim with `/videos/pipeline`) always uses\nits own task id as `extract_id` and self-dispatches per-video Qdrant/\nNeo4j streaming work once `include_transcription=True`, regardless of\nwhich endpoint fired it. Needs the same gate as every other entry\npoint that can write to Qdrant.",
+        "operationId": "post_ycs_content_videos",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VideosRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Ycs Content Videos"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/content/videos/pipeline": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Get Videos Pipeline",
+        "description": "Full 3-phase pipeline (extract → Qdrant → Neo4j → invalidate). Chained at the API layer so\neach phase reports its own progress. Snapshots params to Redis to enable Rerun.",
+        "operationId": "post_ycs_content_videos_pipeline",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VideosRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Ycs Content Videos Pipeline"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/content/videos/pipeline/{extract_id}/rerun": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Rerun Videos Pipeline",
+        "description": "Re-fire the 3-phase chain from the Redis snapshot of a prior dispatch (24h TTL).\nPhase A skips existing ES transcripts; Phase B re-upserts (idempotent); Phase C skips tagged video_ids.",
+        "operationId": "post_ycs_content_videos_pipeline_extract_id_rerun",
+        "parameters": [
+          {
+            "name": "extract_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Extract Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Ycs Content Videos Pipeline Extract Id Rerun"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/content/videos/pipeline/{extract_id}/state": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Get Videos Pipeline State",
+        "description": "Return the saved dispatch state for a pipeline. Used to rehydrate `video_ids`+`phases` after\npage refresh or cross-tab navigation. 404 after the 24h Redis TTL.",
+        "operationId": "get_ycs_content_videos_pipeline_extract_id_state",
+        "parameters": [
+          {
+            "name": "extract_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Extract Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Ycs Content Videos Pipeline Extract Id State"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/content/videos/pipeline/{extract_id}/stop": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Stop Videos Pipeline",
+        "description": "Cooperatively cancel `extract_id`: sets a Redis flag `domains.ycs.extract.task.extract_videos`'\nPlaywright chunk loop and `ingest_to_neo4j`'s retry-pass loop poll at safe\ncheckpoints, then revokes (non-terminating) any phase/per-video task still\nqueued but not yet started. Preserves SUCCESS-state phases; idempotent\nQdrant upserts and Neo4j skip-on-video_id let a rerun pick up cleanly.\n\n2026-09-14: no longer sends SIGTERM to already-running tasks — that\nwas observed live to wedge Celery's prefork pool (see\n`pipeline_task.service.revoke_pipeline_phases` docstring for the\nfull incident). A task already past its last checkpoint when Stop\nis clicked finishes that unit of work (one Playwright chunk of up\nto 10 videos, or one Neo4j retry pass) before noticing the flag —\nbounded, not indefinite.",
+        "operationId": "post_ycs_content_videos_pipeline_extract_id_stop",
+        "parameters": [
+          {
+            "name": "extract_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Extract Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Ycs Content Videos Pipeline Extract Id Stop"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/content/videos/pipeline/{extract_id}/wipe": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Wipe Videos Pipeline",
+        "description": "Wipe artifacts for `extract_id`, then revoke in-flight phases (wipe first, revoke second).\nWithout revoke a mid-LLM-call Phase 3 writes orphan Document nodes the next Retry's skip-check finds.\n`__Entity__` nodes left intact — may be shared across other videos.\n\nSets the cooperative-cancel flag too (best-effort — a task already\npast its next checkpoint won't see it before the hard revoke below\nlands anyway), but keeps `terminate=True`: unlike Stop, Wipe has a\ncorrectness requirement (no orphan writes after data is deleted)\nthat cooperative-only cancellation can't guarantee — a task stuck\nmid-LLM-call between checkpoints would otherwise finish and write\nafter the wipe already ran.",
+        "operationId": "post_ycs_content_videos_pipeline_extract_id_wipe",
+        "parameters": [
+          {
+            "name": "extract_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Extract Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Ycs Content Videos Pipeline Extract Id Wipe"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/content/videos/preview": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Preview Videos",
+        "description": "yt-dlp metadata fetch for a comma-separated `ids=` list. Same `domains.ycs.content.schemas.EnumerationResponse` shape\nas channel/playlist so picker.js renders all three tabs with one shared module.",
+        "operationId": "get_ycs_content_videos_preview",
+        "parameters": [
+          {
+            "name": "ids",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ids"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnumerationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/query/ai/{backend}": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Post Ai Generate",
+        "description": "AI text-to-DSL SSE stream. `final` on `done` replaces the editor (clean output even after a self-repair mid-stream).",
+        "operationId": "post_ycs_query_ai_backend",
+        "parameters": [
+          {
+            "name": "backend",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Backend"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AIGenerateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/query/elasticsearch": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Post Query Es",
+        "operationId": "post_ycs_query_elasticsearch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/query/history": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "List History",
+        "description": "Return the latest history entries, newest-first. `backend` is an\noptional filter — UI passes the current backend so the user only\nsees relevant prior queries.",
+        "operationId": "get_ycs_query_history",
+        "parameters": [
+          {
+            "name": "backend",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Backend"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Ycs Query History"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Save History",
+        "description": "Persist one query into history. Body shape:\n`{backend, app?, body, prompt?, favorite?}`.",
+        "operationId": "post_ycs_query_history",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Ycs Query History"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/query/history/{entry_id}": {
+      "delete": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Delete History",
+        "operationId": "delete_ycs_query_history_entry_id",
+        "parameters": [
+          {
+            "name": "entry_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Entry Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Ycs Query History Entry Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/query/namespaces": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Get Namespaces",
+        "description": "Support matrix for the Query page — used to grey out unsupported chips.",
+        "operationId": "get_ycs_query_namespaces",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamespaceMap"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/query/neo4j": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Post Query Neo4J",
+        "operationId": "post_ycs_query_neo4j",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/query/qdrant": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Post Query Qdrant",
+        "operationId": "post_ycs_query_qdrant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/query/raw/elasticsearch": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Post Raw Es",
+        "operationId": "post_ycs_query_raw_elasticsearch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RawQueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RawQueryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/query/raw/neo4j": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Post Raw Neo4J",
+        "operationId": "post_ycs_query_raw_neo4j",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RawQueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RawQueryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/query/raw/qdrant": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Post Raw Qdrant",
+        "operationId": "post_ycs_query_raw_qdrant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RawQueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RawQueryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ycs/query/schema/{backend}": {
+      "get": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Get Schema",
+        "description": "Return a cached snapshot of the backend's schema. `refresh=true`\nbypasses the Redis cache for one call.",
+        "operationId": "get_ycs_query_schema_backend",
+        "parameters": [
+          {
+            "name": "backend",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Backend"
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Refresh"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Ycs Query Schema Backend"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AIGenerateRequest": {
+        "properties": {
+          "app": {
+            "type": "string",
+            "enum": [
+              "dd",
+              "ycs",
+              "rr"
+            ],
+            "title": "App",
+            "default": "ycs"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt",
+            "default": ""
+          },
+          "previous": {
+            "type": "string",
+            "title": "Previous",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "AIGenerateRequest",
+        "description": "`prompt` is the user's natural-language description; `previous`\n(optional) is whatever's currently in the editor so the model can\ndo `\"add a filter for channel X\"` follow-ups instead of starting\nfrom scratch."
+      },
+      "AskFeedbackRequest": {
+        "properties": {
+          "trace_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Trace Id"
+          },
+          "rating": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Rating"
+          },
+          "comment": {
+            "type": "string",
+            "title": "Comment",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "trace_id",
+          "rating"
+        ],
+        "title": "AskFeedbackRequest",
+        "description": "User rating for an ask turn. `trace_id` is the 32-hex OTel trace id\nreturned as `trace_id` in the `/search` response; `rating` is 0.0 (bad)\nto 1.0 (good). Lands as a `user.feedback` score on the trace."
+      },
+      "BulkDeleteRequest": {
+        "properties": {
+          "video_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Video Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "video_ids"
+        ],
+        "title": "BulkDeleteRequest"
+      },
+      "ChannelPipelineRequest": {
+        "properties": {
+          "channel_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Channel Id"
+          },
+          "include_transcription": {
+            "type": "boolean",
+            "title": "Include Transcription",
+            "default": true
+          },
+          "transcription_languages": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcription Languages"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "channel_id"
+        ],
+        "title": "ChannelPipelineRequest",
+        "description": "`POST /content/channel/pipeline` — enumerate ALL videos in the\nchannel server-side, then dispatch the 3-phase pipeline against\nevery video_id. Bypasses the 100-per-page picker cap on the\nSource · Channel tab."
+      },
+      "ChannelRequest": {
+        "properties": {
+          "channel_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Channel Id"
+          },
+          "max_results": {
+            "type": "integer",
+            "maximum": 2000.0,
+            "minimum": 0.0,
+            "title": "Max Results",
+            "default": 10
+          },
+          "include_transcription": {
+            "type": "boolean",
+            "title": "Include Transcription",
+            "default": true
+          },
+          "transcription_languages": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcription Languages"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "channel_id"
+        ],
+        "title": "ChannelRequest",
+        "description": "`channel_id` accepts: bare ID (UC…), full URL, or @handle.\n`max_results = 0` means \"all videos\" (deprecated convention)."
+      },
+      "EmbeddingBody": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Url"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "default": "auto"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "EmbeddingBody",
+        "description": "Embedding endpoint config — independent connection from chat's\nEndpointBody above, same shape. Can point at any OpenAI-compatible\nembedding service. `api_key=None` leaves the stored key unchanged;\n`api_key=\"\"` clears it."
+      },
+      "EndpointBody": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Url"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "default": "auto"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "EndpointBody",
+        "description": "LLM endpoint config. `api_key=None` leaves the stored key unchanged;\n`api_key=\"\"` clears it."
+      },
+      "EnumerationResponse": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/VideoSnippet"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source",
+          "source_id",
+          "offset",
+          "limit",
+          "has_more",
+          "items"
+        ],
+        "title": "EnumerationResponse",
+        "description": "Paginated video listing inside ONE channel or playlist. Frontend\nuses this to render a master+row checkbox picker so the user can\nsubmit a subset (or all) of the source's videos to the existing\n`/content/videos/pipeline` chain. yt-dlp pagination via\n`--playlist-items <offset+1>:<offset+limit>` is range-honest (walks\nthe playlist from the start internally; the limit just bounds the\nJSON output). For massive channels (10k+ videos) batches of 100 are\na reasonable trade between latency per page (~3–6s) and number of\npages."
+      },
+      "GraphIngestRequest": {
+        "properties": {
+          "video_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Video Ids"
+          },
+          "batch_size": {
+            "type": "integer",
+            "title": "Batch Size",
+            "default": 3
+          }
+        },
+        "type": "object",
+        "title": "GraphIngestRequest",
+        "description": "Request to extract entities from full transcripts into Neo4j.\nIf `video_ids` is None, processes ALL transcripts in ES.\n`batch_size` controls concurrent LLM calls per batch."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "IngestRequest": {
+        "properties": {
+          "video_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Video Ids"
+          },
+          "chunk_size": {
+            "type": "integer",
+            "title": "Chunk Size",
+            "default": 2000
+          },
+          "chunk_overlap": {
+            "type": "integer",
+            "title": "Chunk Overlap",
+            "default": 200
+          }
+        },
+        "type": "object",
+        "title": "IngestRequest",
+        "description": "Request to ingest transcripts from ES into Qdrant.\nIf `video_ids` is None, ingests ALL transcripts in ES."
+      },
+      "NamespaceEntry": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "default": ""
+          },
+          "target": {
+            "type": "string",
+            "title": "Target",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "available"
+        ],
+        "title": "NamespaceEntry"
+      },
+      "NamespaceMap": {
+        "properties": {
+          "apps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Apps"
+          },
+          "backends": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Backends"
+          },
+          "matrix": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/NamespaceEntry"
+              },
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Matrix"
+          }
+        },
+        "type": "object",
+        "title": "NamespaceMap",
+        "description": "Returned by `GET /query/namespaces`. The UI fetches this on\nfirst load to know which `(app, backend)` chips to grey out."
+      },
+      "PipelineRequest": {
+        "properties": {
+          "channel_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Channel Id"
+          },
+          "max_results": {
+            "type": "integer",
+            "title": "Max Results",
+            "default": 0
+          },
+          "include_transcription": {
+            "type": "boolean",
+            "title": "Include Transcription",
+            "default": true
+          },
+          "include_qdrant": {
+            "type": "boolean",
+            "title": "Include Qdrant",
+            "default": true
+          },
+          "include_graph": {
+            "type": "boolean",
+            "title": "Include Graph",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "channel_id"
+        ],
+        "title": "PipelineRequest",
+        "description": "Full channel pipeline: extract → ingest vectors → ingest graph."
+      },
+      "PlaylistPipelineRequest": {
+        "properties": {
+          "playlist_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Playlist Id"
+          },
+          "include_transcription": {
+            "type": "boolean",
+            "title": "Include Transcription",
+            "default": true
+          },
+          "transcription_languages": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcription Languages"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "playlist_id"
+        ],
+        "title": "PlaylistPipelineRequest",
+        "description": "`POST /content/playlist/pipeline` — enumerate ALL videos in the\nplaylist server-side, then dispatch the 3-phase pipeline. Same\nshape as ChannelPipelineRequest."
+      },
+      "PlaylistRequest": {
+        "properties": {
+          "playlist_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Playlist Id"
+          },
+          "max_results": {
+            "type": "integer",
+            "maximum": 2000.0,
+            "minimum": 0.0,
+            "title": "Max Results",
+            "default": 10
+          },
+          "include_transcription": {
+            "type": "boolean",
+            "title": "Include Transcription",
+            "default": true
+          },
+          "transcription_languages": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcription Languages"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "playlist_id"
+        ],
+        "title": "PlaylistRequest",
+        "description": "`playlist_id` accepts: bare ID (PL/UU/RD…), full URL with ?list=…"
+      },
+      "QueryHit": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "description": "Backend identifier — one of {elasticsearch, qdrant, neo4j}"
+          },
+          "app": {
+            "type": "string",
+            "title": "App"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title",
+            "default": ""
+          },
+          "snippet": {
+            "type": "string",
+            "title": "Snippet",
+            "default": ""
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "default": ""
+          },
+          "extra": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Extra"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "app",
+          "id"
+        ],
+        "title": "QueryHit",
+        "description": "Uniform projection across all three backends so the frontend's\nresult renderer is one switch on `kind`, not three.\n\nField meanings per backend:\n  ES     — `id`=doc id, `title`=metadata title, `snippet`=content\n           excerpt, `score`=BM25, `extra`=full _source.\n  Qdrant — `id`=point id, `title`=payload.title, `snippet`=content\n           or abstract, `score`=cosine similarity, `extra`=payload.\n  Neo4j  — `id`=node id/key, `title`=display name (title/name),\n           `snippet`=description/text, `score`=None,\n           `extra`={labels, properties, related}."
+      },
+      "QueryRequest": {
+        "properties": {
+          "app": {
+            "type": "string",
+            "enum": [
+              "dd",
+              "ycs",
+              "rr"
+            ],
+            "title": "App",
+            "default": "ycs"
+          },
+          "q": {
+            "type": "string",
+            "title": "Q",
+            "description": "Free-text query. Empty = browse-all.",
+            "default": ""
+          },
+          "limit": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "default": 20
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Offset",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "QueryRequest",
+        "description": "Free-text query, scoped to one app. The backend is implicit in\nthe route path (`POST /query/elasticsearch` vs `.../qdrant` vs\n`.../neo4j`) — keeps the router slim and the request body single-\npurpose."
+      },
+      "QueryResponse": {
+        "properties": {
+          "backend": {
+            "type": "string",
+            "enum": [
+              "elasticsearch",
+              "qdrant",
+              "neo4j"
+            ],
+            "title": "Backend"
+          },
+          "app": {
+            "type": "string",
+            "enum": [
+              "dd",
+              "ycs",
+              "rr"
+            ],
+            "title": "App"
+          },
+          "supported": {
+            "type": "boolean",
+            "title": "Supported"
+          },
+          "namespace": {
+            "type": "string",
+            "title": "Namespace",
+            "default": ""
+          },
+          "q": {
+            "type": "string",
+            "title": "Q",
+            "default": ""
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          },
+          "took_ms": {
+            "type": "integer",
+            "title": "Took Ms",
+            "default": 0
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/QueryHit"
+            },
+            "type": "array",
+            "title": "Hits"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "backend",
+          "app",
+          "supported"
+        ],
+        "title": "QueryResponse",
+        "description": "`supported=False` short-circuits the UI to a \"no data in this\nbackend for this app\" empty state, separately from \"supported but\nzero hits\". `namespace` doubles as the UI caption (\"Searching in:\nYCS · metadata + transcripts\")."
+      },
+      "RAGSearchRequest": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Question"
+          },
+          "thread_id": {
+            "type": "string",
+            "title": "Thread Id",
+            "default": "default"
+          },
+          "max_retries": {
+            "type": "integer",
+            "title": "Max Retries",
+            "default": 3
+          },
+          "force_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "fast",
+                  "standard",
+                  "deep"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Force Mode"
+          },
+          "channel_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel Ids"
+          },
+          "sub_questions": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub Questions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "question"
+        ],
+        "title": "RAGSearchRequest",
+        "description": "Adaptive RAG question. `force_mode` overrides auto-classification (fast/standard/deep)."
+      },
+      "RawQueryHit": {
+        "properties": {
+          "summary": {
+            "type": "string",
+            "title": "Summary",
+            "default": ""
+          },
+          "raw": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Raw"
+          }
+        },
+        "type": "object",
+        "title": "RawQueryHit",
+        "description": "Renderer-friendly projection of one row, generic across backends.\n\nEach backend's `service.raw_*` writes the FULL store-side record\nhere under `raw`; `summary` is a short label so the right-pane\nrenderers don't have to know each backend's payload shape just\nto print a fallback title."
+      },
+      "RawQueryRequest": {
+        "properties": {
+          "app": {
+            "type": "string",
+            "enum": [
+              "dd",
+              "ycs",
+              "rr"
+            ],
+            "title": "App",
+            "default": "ycs"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body",
+            "description": "Editor content.",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "RawQueryRequest",
+        "description": "Raw DSL/Cypher/JSON typed by the user in the CodeMirror editor.\n\n`app` is currently pinned to `\"ycs\"` by the frontend but threads\nthrough the same matrix so re-enabling the cross-app pivot is one\nJS line + a router-side payload.\n\nThe `body` is the editor's text content verbatim:\n  - Elasticsearch → JSON request-body for `_search`\n  - Qdrant        → JSON `{\"op\": ..., ...}` (see domain.parse_qdrant_body)\n  - Neo4j         → Cypher source"
+      },
+      "RawQueryResponse": {
+        "properties": {
+          "backend": {
+            "type": "string",
+            "enum": [
+              "elasticsearch",
+              "qdrant",
+              "neo4j"
+            ],
+            "title": "Backend"
+          },
+          "app": {
+            "type": "string",
+            "enum": [
+              "dd",
+              "ycs",
+              "rr"
+            ],
+            "title": "App"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          },
+          "took_ms": {
+            "type": "integer",
+            "title": "Took Ms",
+            "default": 0
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/RawQueryHit"
+            },
+            "type": "array",
+            "title": "Hits"
+          }
+        },
+        "type": "object",
+        "required": [
+          "backend",
+          "app",
+          "ok"
+        ],
+        "title": "RawQueryResponse",
+        "description": "`ok=False` short-circuits the UI to the error band; `notes` is a\nlist of user-visible advisories (e.g. \"default size=20 synthesized\nbecause the request body omitted it\")."
+      },
+      "SearchRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Query"
+          },
+          "max_results": {
+            "type": "integer",
+            "maximum": 200.0,
+            "minimum": 1.0,
+            "title": "Max Results",
+            "default": 25
+          },
+          "sort_by_date": {
+            "type": "boolean",
+            "title": "Sort By Date",
+            "default": false
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "Under 4 minutes",
+                  "4 - 20 minutes",
+                  "Over 20 minutes"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "duration_min": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Min"
+          },
+          "duration_max": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Max"
+          },
+          "date_after": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date After"
+          },
+          "date_before": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Before"
+          },
+          "min_views": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Views"
+          },
+          "max_views": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Views"
+          },
+          "min_likes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Likes"
+          },
+          "is_live": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Live"
+          },
+          "live_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "not_live",
+                  "is_live",
+                  "is_upcoming",
+                  "was_live",
+                  "post_live"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Live Status"
+          },
+          "availability": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "public",
+                  "unlisted",
+                  "private",
+                  "premium_only",
+                  "subscriber_only",
+                  "needs_auth"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Availability"
+          },
+          "age_limit": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age Limit"
+          },
+          "title_contains": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title Contains"
+          },
+          "description_contains": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description Contains"
+          },
+          "channel_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel Name"
+          },
+          "exclude_shorts": {
+            "type": "boolean",
+            "title": "Exclude Shorts",
+            "default": false
+          },
+          "kind_filter": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "video",
+                  "channel",
+                  "playlist"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind Filter"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "SearchRequest",
+        "description": "Search YouTube and return ranked snippets.\n\nNumeric filters use yt-dlp's `>=?N` syntax (optional comparison) so a\nmissing field on an entry doesn't fail the filter. String filters\nsupport the operator prefixes documented in patterns.STRING_FILTER_OP_PREFIXES;\na plain string defaults to a case-insensitive contains."
+      },
+      "SearchResponse": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/VideoSnippet"
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "fetched_for": {
+            "type": "integer",
+            "title": "Fetched For"
+          },
+          "elapsed_s": {
+            "type": "number",
+            "title": "Elapsed S"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "query",
+          "total",
+          "results",
+          "fetched_for",
+          "elapsed_s"
+        ],
+        "title": "SearchResponse",
+        "description": "Envelope for /content/search."
+      },
+      "StartRunBody": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "refresh": {
+            "type": "boolean",
+            "title": "Refresh",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug"
+        ],
+        "title": "StartRunBody"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VideoSnippet": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "default": "video"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "duration_string": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration String"
+          },
+          "view_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "View Count"
+          },
+          "like_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Like Count"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel"
+          },
+          "channel_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel Id"
+          },
+          "channel_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel Url"
+          },
+          "thumbnail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "upload_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upload Date"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamp"
+          },
+          "release_timestamp": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Timestamp"
+          },
+          "live_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Live Status"
+          },
+          "availability": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Availability"
+          },
+          "video_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Video Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "url"
+        ],
+        "title": "VideoSnippet",
+        "description": "One row in a search-result page. Fields mirror the\n`--flat-playlist --dump-single-json` projection — not full video\nmetadata (extract_video covers that).\n\nName kept for stability even though `kind` may be `\"channel\"` or\n`\"playlist\"` for non-video search hits. The frontend uses `kind`\nto draw a badge and to gate bulk-action routing (only `video`\nselections can go to the Videos tab, etc.)."
+      },
+      "VideosRequest": {
+        "properties": {
+          "video_ids": {
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Video Ids"
+          },
+          "include_transcription": {
+            "type": "boolean",
+            "title": "Include Transcription",
+            "default": true
+          },
+          "transcription_languages": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcription Languages"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "video_ids"
+        ],
+        "title": "VideosRequest",
+        "description": "Paste video IDs / URLs. `include_transcription` toggles whether the\nCelery task also fetches transcripts via Playwright after the yt-dlp\nmetadata pass (deprecated `tasks/youtube/crawler.py:L57-95`)."
+      }
+    }
+  }
+}

@@ -85,6 +85,7 @@ resource "null_resource" "cluster" {
       #   23025:30022 — Flower (app layer)
       #   23026:30023 — FastHTML (app layer)
       #   23027:30025 — FastMCP (app layer, internal-by-design but exposed for debugging) — 30024 collides with coelho-search-mcp-fastmcp on coelho-cloud (see argocd SyncError cb40f26652)
+      #   23028:30026 — Next.js web homepage (app layer, k8s/helm/values.yaml)
       if k3d cluster list -o json 2>/dev/null | jq -e \
            '.[] | select(.name == "${var.cluster_name}")' >/dev/null 2>&1; then
         echo "Cluster ${var.cluster_name} already exists — skipping create."
@@ -116,6 +117,7 @@ resource "null_resource" "cluster" {
           --port "23025:30022@loadbalancer" \
           --port "23026:30023@loadbalancer" \
           --port "23027:30025@loadbalancer" \
+          --port "23028:30026@loadbalancer" \
           --kubeconfig-update-default \
           --wait \
           --timeout 10m

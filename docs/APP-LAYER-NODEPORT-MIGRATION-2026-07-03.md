@@ -84,3 +84,13 @@ One additional bug found and fixed along the way, not anticipated in the origina
 Step 4 (delete the old script, update docs) is now done: `scripts/standalone-up.sh`, `scripts/standalone-port-forward.sh`, `scripts/argocd-port-forward.sh`, and `scripts/redis-check.sh` were all deleted (the last two aren't port-forward-related, but were deleted too per explicit user request to remove all `.sh` files from `scripts/`). This surfaced a real, pre-existing functional bug unrelated to today's port fix: `infrastructure/live/coelhonexus/40-apps/langfuse/terragrunt.hcl`'s `public_url` was hardcoded to `http://localhost:23006` (the deleted script's old, never-actually-correct port for LangFuse — the real native-NodePort value is `23017`), meaning every LangFuse-generated shareable trace URL was dead. Fixed to `23017`, matching `enable_local_expose`'s NodePort. Stale comments referencing the deleted scripts were also cleaned up in `infrastructure/README.md` and 5 modules' `variables.tf` (`minio`, `grafana`, `argocd`, `rancher`, `langfuse`).
 
 **Remaining follow-up, not yet done**: the LangFuse `terragrunt.hcl` fix needs a `terragrunt apply` on `40-apps/langfuse` to take effect live — it's currently just a file change.
+
+## Update 2026-10-24: Next.js web homepage added at 23028
+
+The new `apps/web` homepage now follows the same native-NodePort pattern: Helm `web.portsSettings` pins `nodePort: 30026`, and `infrastructure/modules/k3d/main.tf` maps host `23028` to it. Skaffold dev uses `portForward` `23035:3001`. The Service port is `3001` (targetPort `3000`) because FastHTML already holds k3d svclb hostPort `3000`; two LoadBalancer Services cannot share the same service port. Existing clusters need the one-time host mapping patch:
+
+```bash
+k3d cluster edit <cluster-name> --port-add "23028:30026@loadbalancer"
+```
+
+This claims `23028` from the previously documented headroom; only `23029` remains unused.

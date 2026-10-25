@@ -15,7 +15,7 @@ concurrency:
 
 env:
   REGISTRY: coelho-cloud-registry:5000
-  IMAGES: "coelhonexus-server coelhonexus-fasthtml coelhonexus-fastmcp"
+  IMAGES: "coelhonexus-server coelhonexus-fasthtml coelhonexus-fastmcp coelhonexus-web"
   SKAFFOLD_VERSION: v2.18.1 # keep in sync with local dev pin (`skaffold version`)
   DOCKER_BUILDKIT: "1"
 jobs:
@@ -52,7 +52,7 @@ jobs:
           helm version --short
 
       - name: Helm lint (chart validity gate)
-        # Fails fast on template errors before paying for 3 image builds.
+        # Fails fast on template errors before paying for 4 image builds.
         # Same check as local `helm lint k8s/helm` — currently clean.
         run: |
           set -euo pipefail
@@ -67,7 +67,7 @@ jobs:
           done
           docker info
 
-      - name: Skaffold build + push (server, fasthtml, fastmcp)
+      - name: Skaffold build + push (server, fasthtml, fastmcp, web)
         run: |
           set -euo pipefail
           SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"

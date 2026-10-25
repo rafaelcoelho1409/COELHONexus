@@ -1,0 +1,60 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.3/schema.json",
+  "files": {
+    "includes": [
+      "src/**",
+      "scripts/**",
+      "e2e/**",
+      "*.ts",
+      "*.mts",
+      "*.mjs",
+      "*.json",
+      "!**/*.svg",
+      "!src/shared/api/generated",
+      "!src/shared/styles/tokens.generated.css",
+      "!openapi",
+      "!package-lock.json"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 110
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all"
+    }
+  },
+  "css": {
+    "parser": { "tailwindDirectives": true },
+    "formatter": { "enabled": true }
+  },
+  "assist": {
+    "actions": { "source": { "organizeImports": "on" } }
+  },
+  "linter": {
+    "enabled": true,
+    "domains": { "react": "recommended", "next": "recommended", "test": "recommended" },
+    "rules": {
+      "preset": "recommended",
+      "a11y": { "preset": "recommended" },
+      "correctness": { "noUnusedImports": "error", "noUnusedVariables": "error" },
+      "style": {
+        "useImportType": "error",
+        "noNonNullAssertion": "error",
+        "useConst": "error"
+      },
+      "suspicious": { "noExplicitAny": "error", "noConsole": "warn" }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["scripts/**", "e2e/**"],
+      "linter": { "rules": { "suspicious": { "noConsole": "off" } } }
+    }
+  ]
+}

@@ -265,6 +265,7 @@ app = FastAPI(
     description="COELHO Nexus - FastAPI and FastMCP",
     version="1.0.0",
     lifespan=combine_lifespans(lifespan, mcp_app.lifespan),
+    generate_unique_id_function=entrypoints.api.domain.operation_id,
 )
 
 app.add_middleware(

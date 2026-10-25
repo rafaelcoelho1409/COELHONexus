@@ -1,0 +1,227 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "./tokens.generated.css";
+
+@custom-variant dark (&:is([data-theme="dark"], [data-theme="dark"] *));
+
+/* Tokens → Tailwind utilities. The 12-step scales (neutral, accent, success, warning, danger, running) come
+   from tokens.generated.css; the semantic names below are what components use. */
+@theme inline {
+  --font-sans: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, monospace;
+  --font-heading: var(--font-sans);
+
+  /* Type scale. 12px is the floor: nothing in the product is set smaller. */
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1.125rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 0.9375rem;
+  --text-base--line-height: 1.6;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.55;
+  --text-xl: 1.375rem;
+  --text-xl--line-height: 1.3;
+
+  /* Radius: a deliberate, small set used by role — controls 2px, surfaces 4px, overlays 8px. */
+  --radius-none: 0;
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-text: var(--primary-text);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-success-text: var(--success-text);
+  --color-warning: var(--warning);
+  --color-warning-text: var(--warning-text);
+  --color-running: var(--running);
+  --color-running-text: var(--running-text);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-neutral-1: var(--neutral-1);
+  --color-neutral-2: var(--neutral-2);
+  --color-neutral-3: var(--neutral-3);
+  --color-neutral-4: var(--neutral-4);
+  --color-neutral-5: var(--neutral-5);
+  --color-neutral-6: var(--neutral-6);
+  --color-neutral-7: var(--neutral-7);
+  --color-neutral-8: var(--neutral-8);
+  --color-neutral-9: var(--neutral-9);
+  --color-neutral-10: var(--neutral-10);
+  --color-neutral-11: var(--neutral-11);
+  --color-neutral-12: var(--neutral-12);
+}
+
+/* Semantic roles over the scales — one definition, correct in every theme because the scales change. */
+:root {
+  --background: var(--neutral-1);
+  --foreground: var(--neutral-12);
+  --card: var(--neutral-2);
+  --card-foreground: var(--neutral-12);
+  --popover: var(--neutral-2);
+  --popover-foreground: var(--neutral-12);
+  --primary: var(--accent-9);
+  --primary-foreground: var(--accent-contrast);
+  --primary-text: var(--accent-11);
+  --secondary: var(--neutral-3);
+  --secondary-foreground: var(--neutral-12);
+  --muted: var(--neutral-3);
+  --muted-foreground: var(--neutral-11);
+  --accent: var(--accent-3);
+  --accent-foreground: var(--neutral-12);
+  --destructive: var(--danger-9);
+  --success: var(--success-9);
+  --success-text: var(--success-11);
+  --warning: var(--warning-9);
+  --warning-text: var(--warning-11);
+  --running: var(--running-9);
+  --running-text: var(--running-11);
+  --border: var(--neutral-6);
+  /* Form-control edges must reach 3:1 against the surface (WCAG 1.4.11); decorative rules need not. */
+  --input: var(--neutral-9);
+  --ring: var(--accent-8);
+  --chart-1: var(--accent-9);
+  --chart-2: var(--running-9);
+  --chart-3: var(--warning-9);
+  --chart-4: var(--success-9);
+  --chart-5: var(--neutral-9);
+  --sidebar: var(--neutral-2);
+  --sidebar-foreground: var(--neutral-11);
+  --sidebar-primary: var(--accent-9);
+  --sidebar-primary-foreground: var(--accent-contrast);
+  --sidebar-accent: var(--accent-3);
+  --sidebar-accent-foreground: var(--neutral-12);
+  --sidebar-border: var(--neutral-6);
+  --sidebar-ring: var(--accent-8);
+
+  --row-compact: 2rem;
+  --row-comfortable: 2.5rem;
+}
+
+:root[data-density="compact"] {
+  --row-height: var(--row-compact);
+}
+
+:root:not([data-density="compact"]) {
+  --row-height: var(--row-comfortable);
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/60;
+    scrollbar-width: thin;
+    scrollbar-color: var(--neutral-7) transparent;
+  }
+
+  html {
+    @apply font-sans;
+    background: var(--background);
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: var(--primary);
+    color: var(--primary-foreground);
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--background);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--neutral-7);
+    border: 3px solid var(--background);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--neutral-8);
+  }
+
+  /* WCAG 2.2 focus appearance: a 2px ring with a gap, in every theme. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+}
+
+@layer components {
+  /* Metadata only — ids, units, section numbers. 12px, modest tracking: legible, not decorative. */
+  .mono-label {
+    @apply font-mono text-xs uppercase tracking-[0.08em] text-muted-foreground;
+  }
+
+  .skip-link {
+    @apply fixed top-3 left-3 z-[100] -translate-y-20 bg-primary px-4 py-2 font-mono text-xs uppercase tracking-[0.08em] text-primary-foreground transition-transform focus:translate-y-0;
+  }
+}
+
+@layer utilities {
+  .animate-status {
+    animation: status-pulse 3s ease-in-out infinite;
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-status {
+      animation: none;
+    }
+  }
+}

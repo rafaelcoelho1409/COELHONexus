@@ -1,0 +1,7 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": ["scripts/*.mjs", "e2e/**/*.ts", "src/shared/sse/index.ts"],
+  "project": ["src/**/*.{ts,tsx,css}", "scripts/**/*.mjs", "e2e/**/*.ts", "*.ts", "*.mts"],
+  "ignore": ["src/shared/api/generated/**", "src/shared/ui/**"],
+  "ignoreDependencies": ["@base-ui/react"]
+}

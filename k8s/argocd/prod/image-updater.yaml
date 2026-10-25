@@ -43,5 +43,12 @@ spec:
           manifestTargets:
             helm:
               spec: fastmcp.image
+        - alias: web
+          imageName: coelhonexus-registry:5000/coelhonexus-web:latest
+          commonUpdateSettings:
+            updateStrategy: digest
+          manifestTargets:
+            helm:
+              spec: web.image
   writeBackConfig:
     method: argocd

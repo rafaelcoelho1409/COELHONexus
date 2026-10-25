@@ -250,6 +250,55 @@ fasthtml:
       periodSeconds: 5
       failureThreshold: 3
 
+web:
+  # SERVER_URL is compiled into Next's rewrites at image build time (see
+  # apps/web/Dockerfile.web) — changing it requires a rebuild, not a Helm value.
+  image: coelho-cloud-registry:5000/coelhonexus-web:latest
+  imagePullPolicy: Always
+  replicas: 1
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  portsSettings:
+    ports:
+      # Service port != targetPort (3001 vs 3000): FastHTML's LoadBalancer
+      # already binds hostPort 3000 via k3d's svclb. Two LoadBalancer Services
+      # cannot share the same `port`. The container still listens on 3000.
+      # Native host mapping: 23028 -> 30026 (infrastructure/modules/k3d/main.tf).
+      - name: http
+        port: 3001
+        targetPort: 3000
+        nodePort: 30026
+        protocol: TCP
+    type: LoadBalancer
+  startupProbeSettings:
+    startupProbe:
+      httpGet:
+        path: /health
+        port: 3000
+      failureThreshold: 12
+      periodSeconds: 5
+  livenessProbeSettings:
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 3000
+      initialDelaySeconds: 0
+      periodSeconds: 10
+      failureThreshold: 3
+  readinessProbeSettings:
+    readinessProbe:
+      httpGet:
+        path: /health
+        port: 3000
+      initialDelaySeconds: 0
+      periodSeconds: 5
+      failureThreshold: 3
+
 fastmcp:
   image: coelho-cloud-registry:5000/coelhonexus-fastmcp:latest
   imagePullPolicy: Always
