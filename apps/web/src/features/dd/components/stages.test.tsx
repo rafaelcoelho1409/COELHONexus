@@ -86,7 +86,14 @@ describe("Planner stage", () => {
     // every node reads as done and carries its headline number
     await waitFor(() => expect(screen.getByText("12 files")).toBeInTheDocument());
     expect(screen.getByText("10 docs scored")).toBeInTheDocument();
-    expect(within(screen.getByRole("list", { name: "Stage nodes" })).getAllByText(/— done/)).toHaveLength(8);
+    // the default view is the graph …
+    const graph = await screen.findByRole("figure", { name: "Planner graph" });
+    expect(within(graph).getAllByText(/— done/)).toHaveLength(8);
+    // … and the list is its text equivalent, with the same nodes in the same order
+    await userEvent.click(screen.getByRole("button", { name: "List" }));
+    const list = screen.getByRole("list", { name: "Stage nodes" });
+    expect(within(list).getAllByText(/— done/)).toHaveLength(8);
+    expect(screen.queryByRole("figure", { name: "Planner graph" })).not.toBeInTheDocument();
   });
 
   it("streams a run to done, then lands on the final plan", async () => {

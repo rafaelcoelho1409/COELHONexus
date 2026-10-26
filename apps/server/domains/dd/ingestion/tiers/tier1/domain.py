@@ -1,5 +1,6 @@
-"""Tier 1 — pure helpers (manifest detection + host slug)."""
+"""Tier 1 — pure helpers (manifest detection, HTML detection, path filter, host slug)."""
 from __future__ import annotations
+import domains
 from . import params, patterns
 
 import re
@@ -20,6 +21,45 @@ def looks_like_manifest(body: str) -> tuple[bool, dict]:
         "urls": url_count,
         "md_pointers": md_pointer_count,
     }
+
+
+def apply_path_filter(body: str, path_filter: dict | None) -> tuple[str, int, int]:
+    """Keep only the sections of a bundle whose `Source:` URL passes the catalog's `path_filter` → (body, kept, total).
+
+    For a docs site whose single bundle covers more than one product (Browser Use: 177 Cloud pages around 56 of the
+    open-source library the catalog is after). Only the filter the catalog declares counts — the default noise filter
+    stays off, so a bundle is never trimmed on its own authority. A bundle whose sections do not carry `Source:` URLs
+    cannot be told apart by path and comes back whole (`kept == total == 0`), as does an entry with no filter."""
+    declared = path_filter and (path_filter.get("include") or path_filter.get("exclude"))
+    if not declared:
+        return body, 0, 0
+    sections = domains.dd.ingestion.post.domain.split_by_source_markers(body)
+    if sections is None:
+        return body, 0, 0
+    only_declared = {**path_filter, "disable_defaults": True}
+    kept = [
+        text
+        for _h1, _h2, text, source_url in sections
+        if source_url and domains.dd.ingestion.filters.domain.passes_path_filter(source_url, only_declared)
+    ]
+    return "".join(kept), len(kept), len(sections)
+
+
+def looks_like_html(body: str) -> bool:
+    """True for an HTML document: a site that answers 200 with its error page, a login wall or a bot challenge for a
+    URL that should hold markdown. Only the start is looked at — a real bundle may well quote HTML further down."""
+    return bool(patterns.HTML_START_RE.match(body[: params.HTML_SNIFF_CHARS]))
+
+
+def retry_after_seconds(header: str | None) -> float | None:
+    """A `Retry-After` given in seconds (the HTTP-date form is ignored), bounded by what a run is willing to wait."""
+    if header is None:
+        return None
+    try:
+        seconds = float(header.strip())
+    except ValueError:
+        return None
+    return min(max(seconds, 0.0), params.RETRY_AFTER_MAX_S)
 
 
 def host_slug(host: str) -> str:

@@ -17,7 +17,7 @@ export function StageNav({ stage, slug, aside }: { stage: DdStage; slug: string 
       </div>
       <div className="mt-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-2 border-b border-border">
         <nav aria-label="Docs Distiller stages" className="flex flex-wrap gap-x-1">
-          {DD_STAGES.map((s) =>
+          {DD_STAGES.filter((s) => s.tab || s.key === stage).map((s) =>
             s.key === stage ? (
               <span
                 key={s.key}

@@ -247,5 +247,5 @@ async def run(
     if written == 0:
         await progress.finish(status = "failed")
         raise RuntimeError(f"Tier 5: {org}/{repo} all blob fetches failed")
-    await progress.finish(status = "done")
+    # No `finish`: post-processing and finalizing follow, and the dispatcher alone marks the run done.
     return written

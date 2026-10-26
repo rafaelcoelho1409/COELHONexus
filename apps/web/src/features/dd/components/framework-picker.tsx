@@ -6,6 +6,7 @@
  * picker.py + catalog/picker.js + library.js. */
 
 import { useQueryClient } from "@tanstack/react-query";
+import { ChevronDown, RotateCw, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -18,6 +19,7 @@ import type { LibraryItem } from "../entities";
 import { useDeleteLibrary, useLibrary, useStartRun } from "../hooks/use-dd-data";
 import { useDdOverlays } from "../hooks/use-overlays";
 import { type DdStage, ingestionHref, stageHref } from "../params";
+import { LogoStrip } from "./logo-strip";
 
 export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; currentSlug: string | null }) {
   const libraryQuery = useLibrary();
@@ -132,22 +134,19 @@ export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; curren
       >
         {currentItem ? (
           <span className="flex items-center gap-2">
+            <LogoStrip logos={itemLogos(currentItem)} name={itemDisplayName(currentItem)} max={1} size="sm" />
             <span className="max-w-56 truncate font-medium">{itemDisplayName(currentItem)}</span>
-            <span aria-hidden className="text-muted-foreground">
-              ▾
-            </span>
+            <ChevronDown className="size-4 text-muted-foreground" aria-hidden />
           </span>
         ) : (
           <span className="flex items-center gap-2">
             Select framework
-            <span aria-hidden className="text-muted-foreground">
-              ▾
-            </span>
+            <ChevronDown className="size-4 text-muted-foreground" aria-hidden />
           </span>
         )}
       </button>
       {open ? (
-        <div className="absolute left-0 z-40 mt-1 w-80 rounded-md border border-border bg-card p-2">
+        <div className="absolute right-0 z-40 mt-1 w-[min(24rem,calc(100vw-2rem))] rounded-md border border-border bg-card p-2 lg:left-0 lg:right-auto">
           <input
             ref={searchRef}
             value={query}
@@ -158,21 +157,23 @@ export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; curren
           />
           <ul aria-label="Ingested frameworks" className="max-h-64 overflow-auto">
             {filtered.map((item) => {
-              const logos = itemLogos(item);
               return (
                 <li key={item.slug} className="group flex items-center gap-1 rounded-sm px-1 hover:bg-muted">
                   <button
                     type="button"
                     onClick={() => pick(item.slug)}
-                    className="flex min-h-9 flex-1 items-center gap-2 truncate text-left text-sm"
+                    className="flex min-h-12 min-w-0 flex-1 items-center gap-3 text-left text-sm"
                   >
-                    {logos.length > 0 ? (
-                      <span aria-hidden className="shrink-0 text-xs text-muted-foreground">
-                        {logos.slice(0, 3).join("·")}
-                      </span>
-                    ) : null}
-                    <span className="truncate font-medium">{itemDisplayName(item)}</span>
-                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">{itemMeta(item)}</span>
+                    <span
+                      aria-hidden="true"
+                      className="flex h-8 w-20 shrink-0 items-center justify-start overflow-hidden"
+                    >
+                      <LogoStrip logos={itemLogos(item)} name={itemDisplayName(item)} max={1} size="sm" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">{itemDisplayName(item)}</span>
+                      <span className="block truncate text-xs text-muted-foreground">{itemMeta(item)}</span>
+                    </span>
                   </button>
                   <button
                     type="button"
@@ -180,9 +181,9 @@ export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; curren
                     disabled={busy}
                     onClick={() => refresh(item.slug)}
                     title="Re-ingest (fresh crawls)"
-                    className="min-h-9 px-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
+                    className="inline-flex size-9 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
                   >
-                    ↻
+                    <RotateCw className="size-4" aria-hidden />
                   </button>
                   <button
                     type="button"
@@ -190,9 +191,9 @@ export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; curren
                     disabled={busy}
                     onClick={() => remove(item.slug)}
                     title="Delete"
-                    className="min-h-9 px-1 text-muted-foreground hover:text-destructive-text disabled:opacity-50"
+                    className="inline-flex size-9 items-center justify-center rounded-sm text-muted-foreground hover:text-destructive-text disabled:opacity-50"
                   >
-                    🗑
+                    <Trash2 className="size-4" aria-hidden />
                   </button>
                 </li>
               );

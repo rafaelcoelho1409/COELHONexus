@@ -1,7 +1,26 @@
 /** Docs Distiller ingestion — run progress view, manifest summary and the file-explorer grouping. */
 
-import type { Manifest, ManifestEntry, RunStatus } from "../entities";
+import type { CatalogEntry, LibraryItem, Manifest, ManifestEntry, RunStatus } from "../entities";
+import { tileLogos, tileName } from "./catalog";
 import { fmtAge, fmtBytes } from "./format";
+import { itemDisplayName, itemLogos } from "./library";
+
+/**
+ * Which framework a run belongs to, for its progress box: the catalog knows it (name and logos) even on a first
+ * ingestion, when the library has nothing yet; the library covers a framework the catalog no longer lists; the
+ * slug is the last resort.
+ */
+export function runFramework(
+  slug: string,
+  catalog: readonly CatalogEntry[] | undefined,
+  library: readonly LibraryItem[] | undefined,
+): { name: string; logos: string[] } {
+  const entry = catalog?.find((candidate) => candidate.slug === slug);
+  if (entry) return { name: tileName(entry), logos: tileLogos(entry) };
+  const item = library?.find((candidate) => candidate.slug === slug);
+  if (item) return { name: itemDisplayName(item), logos: itemLogos(item) };
+  return { name: slug, logos: [] };
+}
 
 /** Raw tier values are internal dispatch keys; each maps to a human phase label. */
 const TIER_LABELS: Record<string, string> = {
@@ -23,6 +42,24 @@ export function tierLabel(tier: string | null | undefined): string {
 /** Terminal states stop the poll loop. */
 export function isRunTerminal(status: string | null | undefined): boolean {
   return status === "done" || status === "failed" || status === "cancelled";
+}
+
+/**
+ * The run id a page opened without `?run=` should switch to, or null to leave it alone. This is the page-reload
+ * recovery ("an ingestion of this framework is in flight, show it"), and it must never put back a run the page
+ * has already watched finish: the list of active runs is cached for a few seconds, so right after a run ends it
+ * can still name it, and adopting it again would make the address flip between with and without `?run=`.
+ */
+export function runToAdopt(args: {
+  slug: string | null;
+  urlRunId: string | null;
+  active: { slug: string | null; run_id: string; progress?: { status?: string | null } | null } | undefined;
+  finished: ReadonlySet<string>;
+}): string | null {
+  const { slug, urlRunId, active, finished } = args;
+  if (urlRunId || !slug || !active || active.slug !== slug) return null;
+  if (finished.has(active.run_id) || isRunTerminal(active.progress?.status)) return null;
+  return active.run_id;
 }
 
 export type RunProgressView = {
@@ -146,6 +183,11 @@ function groupPrefix(entry: ManifestEntry): string {
 
 export type ExplorerGroup = { prefix: string; items: Array<{ entry: ManifestEntry; index: number }> };
 
+/**
+ * The pages under their section headings, **in the order of the original documentation**: the manifest lists pages
+ * in source order, so a group appears where its first page does and its pages keep their relative order. Nothing is
+ * sorted by name — that is what let the sidebar drift from the docs it mirrors.
+ */
 export function groupEntries(entries: ManifestEntry[]): ExplorerGroup[] {
   const groups = new Map<string, ExplorerGroup["items"]>();
   entries.forEach((entry, index) => {
@@ -154,18 +196,7 @@ export function groupEntries(entries: ManifestEntry[]): ExplorerGroup[] {
     if (items) items.push({ entry, index });
     else groups.set(key, [{ entry, index }]);
   });
-  const out: ExplorerGroup[] = [];
-  for (const [prefix, items] of groups) {
-    items.sort((a, b) =>
-      (a.entry.title || a.entry.slug || "").localeCompare(b.entry.title || b.entry.slug || ""),
-    );
-    out.push({ prefix, items });
-  }
-  return out.sort((a, b) => {
-    if (a.prefix === ROOT_GROUP) return -1;
-    if (b.prefix === ROOT_GROUP) return 1;
-    return a.prefix.localeCompare(b.prefix);
-  });
+  return [...groups].map(([prefix, items]) => ({ prefix, items }));
 }
 
 /** Indexes of the entries matching the tier filter and the search text. */

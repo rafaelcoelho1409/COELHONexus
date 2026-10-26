@@ -9,4 +9,6 @@ from __future__ import annotations
 # permalinks (Sphinx RTD theme's U+F0C1 headerlink).
 # v4 (2026-10-03): new pass hoists fences nested in Sphinx definition-list
 # bodies (4-space indented, invisible to CommonMark/the vault) to column 0.
-NORMALIZER_VERSION = 4
+# v5 (2026-10-26): Mintlify attrs are stripped from fence openers inside blockquotes/callouts too (`> ```bash theme={…}`
+# kept them); new pass drops `<video>`/`<audio>` elements that lost their `src`.
+NORMALIZER_VERSION = 5

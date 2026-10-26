@@ -11,7 +11,9 @@ import {
   isRunTerminal,
   manifestView,
   ROOT_GROUP,
+  runFramework,
   runProgressView,
+  runToAdopt,
   tierLabel,
 } from "./ingestion";
 
@@ -76,6 +78,59 @@ function entry(extra: Partial<ManifestEntry>): ManifestEntry {
   };
 }
 
+describe("runFramework", () => {
+  const catalog = [{ slug: "a", name: "Alpha", category: null, tier: 1, logo: "a.svg", logos: null }];
+  const library = [
+    {
+      slug: "b",
+      framework_name: "Beta",
+      framework_slug: "b",
+      page_count: 1,
+      ingested_at: 1,
+      tier_kind: null,
+      logo: null,
+      logos: ["b1.svg", "b2.svg"],
+    },
+  ];
+
+  it("takes the name and logos from the catalog, which knows a framework before its first ingestion", () => {
+    expect(runFramework("a", catalog, library)).toEqual({ name: "Alpha", logos: ["a.svg"] });
+  });
+
+  it("falls back to the library, then to the slug", () => {
+    expect(runFramework("b", catalog, library)).toEqual({ name: "Beta", logos: ["b1.svg", "b2.svg"] });
+    expect(runFramework("zeta", catalog, library)).toEqual({ name: "zeta", logos: [] });
+    expect(runFramework("zeta", undefined, undefined)).toEqual({ name: "zeta", logos: [] });
+  });
+});
+
+describe("runToAdopt", () => {
+  const running = { slug: "alpha", run_id: "r1", progress: { status: "running" } };
+  const none = new Set<string>();
+
+  it("adopts this framework's run when the page was opened without ?run=", () => {
+    expect(runToAdopt({ slug: "alpha", urlRunId: null, active: running, finished: none })).toBe("r1");
+  });
+
+  it("leaves the page alone when it already has a run, no framework, no active run, or another framework's", () => {
+    expect(runToAdopt({ slug: "alpha", urlRunId: "r1", active: running, finished: none })).toBeNull();
+    expect(runToAdopt({ slug: null, urlRunId: null, active: running, finished: none })).toBeNull();
+    expect(runToAdopt({ slug: "alpha", urlRunId: null, active: undefined, finished: none })).toBeNull();
+    expect(runToAdopt({ slug: "beta", urlRunId: null, active: running, finished: none })).toBeNull();
+  });
+
+  it("never puts back a run this page watched finish, even if the cached active list still names it", () => {
+    expect(
+      runToAdopt({ slug: "alpha", urlRunId: null, active: running, finished: new Set(["r1"]) }),
+    ).toBeNull();
+  });
+
+  it("does not adopt a run that is already over", () => {
+    const done = { ...running, progress: { status: "done" } };
+    expect(runToAdopt({ slug: "alpha", urlRunId: null, active: done, finished: none })).toBeNull();
+  });
+});
+
 describe("citation file names", () => {
   const pages = [
     entry({ idx: 0, key: "ingest/alpha/pages/0000-intro.md", slug: "intro" }),
@@ -125,8 +180,27 @@ describe("manifest view", () => {
 
   it("groups by curated section when present, root first", () => {
     const groups = groupEntries(entries);
-    expect(groups.map((g) => g.prefix)).toEqual([ROOT_GROUP, "Docs"]);
-    expect(groups[0]?.items[0]?.index).toBe(2);
+    // a group sits where its first page does: the two Docs pages come first in the manifest, the root page last
+    expect(groups.map((g) => g.prefix)).toEqual(["Docs", ROOT_GROUP]);
+    expect(groups[1]?.items[0]?.index).toBe(2);
+  });
+
+  it("keeps the original documentation order: groups by first page, pages in manifest order, nothing sorted by name", () => {
+    const pages = ["Zebra", "Apple", "Mango", "Banana", "Cherry"];
+    const groups = groupEntries(
+      pages.map((title, idx) =>
+        entry({ idx, title, section: idx % 2 === 0 ? "Zoo" : "Ark", url: `https://x.com/docs/${title}` }),
+      ),
+    );
+    expect(groups.map((g) => g.prefix)).toEqual(["Zoo", "Ark"]); // not alphabetical
+    expect(groups.flatMap((g) => g.items.map((i) => i.entry.title))).toEqual([
+      "Zebra",
+      "Mango",
+      "Cherry",
+      "Apple",
+      "Banana",
+    ]);
+    expect(groups[0]?.items.map((i) => i.index)).toEqual([0, 2, 4]); // ascending: source order within a group
   });
 
   it("skips version pins and scope roots but keeps a genuine python pair", () => {
@@ -136,7 +210,7 @@ describe("manifest view", () => {
       entry({ idx: 2, url: "https://x.com/usage/commands/config" }),
       entry({ idx: 3, url: "https://x.com" }),
     ]);
-    expect(groups.map((g) => g.prefix)).toEqual([ROOT_GROUP, "guides", "python", "usage/commands"]);
+    expect(groups.map((g) => g.prefix)).toEqual(["guides", "python", "usage/commands", ROOT_GROUP]);
   });
 
   it("filters entries by search text and tier, and lists the tiers present", () => {

@@ -25,4 +25,24 @@ if (typeof window !== "undefined" && !window.matchMedia) {
   });
 }
 
+// The stage graph (React Flow) measures its container with these; jsdom has neither. Stubs that report no
+// size are enough: the nodes carry a fixed width and height of their own.
+if (typeof window !== "undefined") {
+  if (!("ResizeObserver" in window)) {
+    class NoopResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    Object.defineProperty(window, "ResizeObserver", { writable: true, value: NoopResizeObserver });
+  }
+  if (!("DOMMatrixReadOnly" in window)) {
+    class IdentityMatrix {
+      m22 = 1;
+      constructor(_init?: string) {}
+    }
+    Object.defineProperty(window, "DOMMatrixReadOnly", { writable: true, value: IdentityMatrix });
+  }
+}
+
 afterEach(() => cleanup());

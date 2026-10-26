@@ -1,0 +1,94 @@
+/* The stage graph. React Flow's own stylesheet is loaded first; these rules only recolour it with the app's
+   tokens and switch off everything a read-only graph does not need. */
+
+.stage-flow .react-flow {
+  --xy-background-color: transparent;
+  --xy-node-background-color: transparent;
+  --xy-node-border: none;
+  background: transparent;
+}
+
+/* Nodes are plain buttons we draw ourselves; the wrapper must not add a frame, shadow or focus box. */
+.stage-flow .react-flow__node {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+.stage-flow .react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.stage-flow .react-flow__edge-path {
+  stroke: var(--neutral-8);
+  stroke-width: 1.5;
+}
+
+.stage-flow .react-flow__arrowhead polyline {
+  stroke: var(--neutral-8);
+  fill: var(--neutral-8);
+}
+
+/* An edge between a finished node and the one now running. */
+.stage-flow .react-flow__edge.stage-edge-active .react-flow__edge-path {
+  stroke: var(--running-text);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+
+/* The refine loop: amber and dashed while dormant, solid and brighter once it has fired. */
+.stage-flow .react-flow__edge.stage-edge-loop .react-flow__edge-path {
+  stroke: var(--warning-text);
+  stroke-dasharray: 5 5;
+  opacity: 0.75;
+}
+
+.stage-flow .react-flow__edge.stage-edge-loop-fired .react-flow__edge-path {
+  stroke-dasharray: none;
+  stroke-width: 2.5;
+  opacity: 1;
+}
+
+.stage-flow .react-flow__edge.stage-edge-loop-firing .react-flow__edge-path {
+  stroke-dasharray: 8 6;
+  animation: stage-flow-march 0.9s linear infinite;
+}
+
+.stage-flow .react-flow__edge-text {
+  font-size: 12px;
+  fill: var(--warning-text);
+}
+
+.stage-flow .react-flow__edge-textbg {
+  fill: var(--background);
+}
+
+/* The free licence asks for the small "React Flow" credit to stay; keep it legible. */
+.stage-flow .react-flow__attribution {
+  font-size: 12px;
+  background: transparent;
+}
+
+.stage-flow .react-flow__attribution a {
+  display: inline-flex;
+  align-items: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0 4px;
+  color: var(--muted-foreground);
+}
+
+@keyframes stage-flow-march {
+  to {
+    stroke-dashoffset: -28;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-flow .react-flow__edge.stage-edge-loop-firing .react-flow__edge-path {
+    animation: none;
+  }
+}

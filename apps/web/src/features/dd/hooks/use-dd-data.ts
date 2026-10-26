@@ -116,7 +116,9 @@ export function useActiveRun(enabled: boolean) {
     enabled,
     select: parseActiveRuns,
   });
-  return { run: query.data?.active[0] };
+  const runs = query.data?.active ?? [];
+  // `run` is the first one (enough to know "something is running"); `runs` lets a page find its own framework's.
+  return { run: runs[0], runs };
 }
 
 /** GET /dd/runs/{run_id} — the poll stops at a terminal state. */

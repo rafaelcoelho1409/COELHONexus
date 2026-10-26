@@ -203,8 +203,7 @@ async def crawl_urls(
             await _consume(stream, "retry")
     if written == 0:
         await progress.finish(status = "failed")
-    else:
-        await progress.finish(status = "done")
+    # Otherwise no `finish`: the run goes on (post-processing, finalizing) and the dispatcher alone marks it done.
     return written, failed
 
 
@@ -657,7 +656,7 @@ async def run(
         )
     # Restore discovery (chapter) order — gather raced the fetches.
     store.reorder_by_url_list(filtered)
-    await progress.finish(status = "done")
+    # No `finish`: post-processing and finalizing follow, and the dispatcher alone marks the run done.
     return written
 
 

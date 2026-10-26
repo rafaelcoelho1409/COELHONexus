@@ -1,7 +1,9 @@
 "use client";
 
-/** The row of node cards for one stage, with the drawer of whichever node the reader opened. */
+/** One stage's nodes as a graph (default) or as a plain list, with the drawer of whichever node the reader
+ * opened. The list is the text equivalent of the graph: the same buttons in order, nothing to pan or zoom. */
 
+import dynamic from "next/dynamic";
 import { useState } from "react";
 
 import { nodeKpi } from "../domain/node-details";
@@ -10,6 +12,19 @@ import type { StageEvent } from "../entities";
 import type { RunStage } from "../params";
 import { NodeDrawer } from "./node-drawer";
 import { StageNodes } from "./stage-parts";
+
+// The graph library is only needed once a graph is on screen.
+const StageFlow = dynamic(() => import("./stage-flow").then((module) => module.StageFlow), {
+  ssr: false,
+  loading: () => <p className="text-xs text-muted-foreground">Loading graph…</p>,
+});
+
+const VIEWS = [
+  { id: "graph", label: "Graph" },
+  { id: "list", label: "List" },
+] as const;
+
+const STAGE_TITLE: Record<RunStage, string> = { planner: "Planner", synth: "Synth" };
 
 export function StageNodeBoard({
   stage,
@@ -30,6 +45,7 @@ export function StageNodeBoard({
   live: boolean;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
+  const [mode, setMode] = useState<(typeof VIEWS)[number]["id"]>("graph");
   const open = views.find((view) => view.node.id === openId);
 
   const kpis: Record<string, string> = {};
@@ -40,7 +56,40 @@ export function StageNodeBoard({
 
   return (
     <>
-      <StageNodes views={views} liveLines={liveLines} kpis={kpis} onOpen={setOpenId} />
+      <div className="flex flex-col gap-2">
+        <fieldset className="m-0 flex min-w-0 self-end border-0 p-0">
+          <legend className="sr-only">{STAGE_TITLE[stage]} nodes shown as</legend>
+          {VIEWS.map((view) => (
+            <button
+              key={view.id}
+              type="button"
+              aria-pressed={mode === view.id}
+              onClick={() => setMode(view.id)}
+              className={`min-h-9 border px-3 text-xs first:rounded-l-sm last:rounded-r-sm ${
+                mode === view.id
+                  ? "border-primary bg-primary/10 text-primary-text"
+                  : "-ml-px border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {view.label}
+            </button>
+          ))}
+        </fieldset>
+        {mode === "graph" ? (
+          <StageFlow
+            stage={stage}
+            title={STAGE_TITLE[stage]}
+            views={views}
+            kpis={kpis}
+            liveLines={liveLines}
+            values={values}
+            live={live}
+            onOpen={setOpenId}
+          />
+        ) : (
+          <StageNodes views={views} liveLines={liveLines} kpis={kpis} onOpen={setOpenId} />
+        )}
+      </div>
       {open ? (
         <NodeDrawer
           key={open.node.id}

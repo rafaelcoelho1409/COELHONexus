@@ -47,15 +47,15 @@ async def list_library() -> list[dict]:
 
 @router.get("/{slug}/manifest")
 async def get_manifest(slug: str) -> dict:
-    m = await domains.dd.ingestion.storage.service.read_framework_manifest(
-        infra.minio.service.get_storage(), 
-        slug)
+    minio = infra.minio.service.get_storage()
+    m = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)
     if not m:
         raise HTTPException(
             status_code=404,
             detail=f"no finalized ingestion for {slug!r}",
         )
-    return m
+    # Pages ingested before titles were derived are named by slug; give them the heading from their body.
+    return await domains.dd.ingestion.storage.service.with_display_titles(minio, slug, m)
 
 
 @router.get("/{slug}/pages/{idx}")

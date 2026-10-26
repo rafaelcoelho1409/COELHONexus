@@ -357,14 +357,93 @@ test.describe("Docs Distiller", () => {
     expect(overflow).toBeLessThanOrEqual(0);
   });
 
+  test("the search box and the Category, Tier and Status dropdowns share one row on a wide screen", async ({
+    page,
+  }, testInfo) => {
+    await mockRoutes(page);
+    await page.goto("/dd");
+    await expect(page.getByText("2 of 2 frameworks shown")).toBeVisible();
+
+    const controls = [
+      page.getByLabel("Search the catalog"),
+      page.getByRole("button", { name: "Filter by category: All" }),
+      page.getByRole("button", { name: "Filter by tier: All" }),
+      page.getByRole("button", { name: "Filter by status: All" }),
+    ];
+    const tops = await Promise.all(controls.map(async (control) => (await control.boundingBox())?.y));
+    if (testInfo.project.name === "desktop")
+      expect(new Set(tops.map((y) => Math.round(y ?? -1))).size).toBe(1);
+
+    // Pick a category: the list closes, the tiles narrow, and the button says what is chosen.
+    await controls[1]?.click();
+    await page
+      .getByRole("group", { name: "Filter by category" })
+      .getByRole("button", { name: /^Ops/ })
+      .click();
+    await expect(page.getByRole("group", { name: "Filter by category" })).toHaveCount(0);
+    await expect(page.getByText("1 of 2 frameworks shown")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Filter by category: Ops" })).toBeVisible();
+
+    // An open list never widens the page, even on a phone.
+    await controls[3]?.click();
+    await expect(page.getByRole("group", { name: "Filter by status" })).toBeVisible();
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(0);
+  });
+
+  test("opening a dropdown never moves the page (the scrollbar's strip is always reserved)", async ({
+    page,
+  }) => {
+    await mockRoutes(page);
+    await page.setViewportSize({ width: 1280, height: 560 }); // short: an open list reaches past the page's end
+    await page.goto("/dd");
+    await expect(page.getByText("2 of 2 frameworks shown")).toBeVisible();
+
+    // Without a reserved strip, the scrollbar the open list brings in narrows the page and everything shifts.
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).overflowY)).toBe("scroll");
+
+    const heading = page.getByRole("heading", { level: 1, name: "Docs Distiller" });
+    const before = await heading.boundingBox();
+    const widthBefore = await page.evaluate(() => document.documentElement.clientWidth);
+    await page.getByRole("button", { name: "Filter by category: All" }).click();
+    await expect(page.getByRole("group", { name: "Filter by category" })).toBeVisible();
+    expect(await heading.boundingBox()).toEqual(before);
+    expect(await page.evaluate(() => document.documentElement.clientWidth)).toBe(widthBefore);
+  });
+
   test("a stage tab keeps the framework you are on", async ({ page }) => {
     await mockRoutes(page);
     await page.goto("/dd/ingestion?slug=alpha");
-    await page
-      .getByRole("navigation", { name: "Docs Distiller stages" })
-      .getByRole("link", { name: "Synth" })
-      .click();
-    await expect(page).toHaveURL(/\/dd\/synth\?slug=alpha$/);
+    const tabs = page.getByRole("navigation", { name: "Docs Distiller stages" });
+    await tabs.getByRole("link", { name: "Pipeline" }).click();
+    await expect(page).toHaveURL(/\/dd\/pipeline\?slug=alpha$/);
+  });
+
+  test("the tabs are Catalog, Ingestion, Pipeline and Study: planner and synth run on the Pipeline tab", async ({
+    page,
+  }) => {
+    await mockRoutes(page);
+    await page.goto("/dd/ingestion?slug=alpha");
+    const tabs = page.getByRole("navigation", { name: "Docs Distiller stages" });
+    await expect(tabs.getByRole("link")).toHaveText(["Catalog", "Pipeline", "Study"]); // Ingestion is current
+    await expect(tabs.getByText("Ingestion")).toHaveAttribute("aria-current", "page");
+    await expect(tabs.getByText("Planner")).toHaveCount(0);
+    await expect(tabs.getByText("Synth")).toHaveCount(0);
+  });
+
+  test("the sidebar lists pages by title, in the order of the original documentation", async ({ page }) => {
+    await mockRoutes(page);
+    await page.goto("/dd/ingestion?slug=alpha");
+    const tree = page.getByRole("region", { name: "Ingested library" });
+    // the manifest holds Quickstart before CLI; sorted by name CLI would come first
+    const titles = tree.locator("li button").filter({ hasText: /Quickstart|CLI/ });
+    await expect(titles).toHaveCount(2);
+    await expect(titles.nth(0)).toContainText("Quickstart");
+    await expect(titles.nth(1)).toContainText("CLI");
+    await expect(tree.getByText("0000-quickstart")).toHaveCount(0); // never the slug / file name
+    await expect(page.getByText("New framework?")).toHaveCount(0);
   });
 
   test("the ingestion preview renders the page, and Source shows the raw text", async ({ page }) => {
@@ -385,7 +464,14 @@ test.describe("Docs Distiller", () => {
     await mockRoutes(page);
     await page.goto("/dd/ingestion?slug=alpha&run=run-1");
 
-    await expect(page.getByRole("region", { name: "Ingestion progress" })).toBeVisible();
+    const box = page.getByRole("region", { name: "Ingestion progress" });
+    await expect(box).toBeVisible();
+    // Whose run it is: the framework's name and its logo, from the catalog.
+    await expect(box.getByTestId("run-framework")).toHaveText("Alpha");
+    await expect(box.locator("img")).toHaveCount(1);
+    await expect
+      .poll(() => box.locator("img").evaluate((img) => (img as HTMLImageElement).naturalWidth))
+      .toBeGreaterThan(0);
     await expect(page.getByText(/Splitting & deduplicating pages/i)).toBeVisible();
     await expect(page.getByText("2 / 3 (67%)")).toBeVisible();
     await expect(page.getByText("starting…")).toBeVisible();
@@ -395,6 +481,51 @@ test.describe("Docs Distiller", () => {
     );
     await page.getByRole("button", { name: "Cancel run" }).click();
     await expect(cancelRequest).resolves.toHaveProperty("url");
+
+    // The run keeps reporting "running" while the worker winds down; the box must say it is cancelling, and keep
+    // saying so (the request itself returns in milliseconds).
+    await expect(box.getByTestId("run-cancelling")).toBeVisible();
+    await expect(box.getByRole("button", { name: "Cancelling…" })).toBeDisabled();
+    await page.waitForTimeout(2_000); // past a status poll
+    await expect(box.getByText("cancelling…", { exact: true })).toBeVisible();
+    await expect(box.getByText("running", { exact: true })).toHaveCount(0);
+  });
+
+  test("a finished run's address settles on ?slug= and stays there, even if the active list still names the run", async ({
+    page,
+  }) => {
+    await mockRoutes(page);
+    // Right after a run ends the cached active list can still list it; the page must not put ?run= back.
+    await page.route("**/api/v1/dd/runs/active", (route) =>
+      json(route, {
+        active: [
+          {
+            run_id: "run-1",
+            slug: "alpha",
+            progress: { tier: "llms_full", status: "running", current: 1, total: 1 },
+          },
+        ],
+      }),
+    );
+    await page.route("**/api/v1/dd/runs/run-1", (route) =>
+      json(route, {
+        progress: { tier: "finalize", status: "done", current: 0, total: 0, last_url: "" },
+        post: null,
+      }),
+    );
+    const addresses: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) addresses.push(new URL(frame.url()).search);
+    });
+
+    await page.goto("/dd/ingestion?slug=alpha&run=run-1");
+    await expect(page).toHaveURL(/\/dd\/ingestion\?slug=alpha$/);
+    await page.waitForTimeout(1500); // long enough for a flicker to show itself
+    await expect(page).toHaveURL(/\/dd\/ingestion\?slug=alpha$/);
+    expect(
+      addresses.length,
+      `the address changed ${addresses.length} times: ${addresses.join(" → ")}`,
+    ).toBeLessThanOrEqual(3);
   });
 
   test("ingestion stage without a run falls back to the library state", async ({ page }) => {
@@ -464,7 +595,7 @@ test.describe("Docs Distiller", () => {
     }
     // The node board belongs to one chapter's run: it says so instead of showing every node as pending.
     await expect(
-      page.getByText("Pick a finished chapter above to see how each of its nodes ran."),
+      page.getByText("Pick a finished chapter in the list to see how each of its nodes ran."),
     ).toBeVisible();
   });
 
@@ -589,6 +720,50 @@ test.describe("Docs Distiller", () => {
     await page.goto("/dd/pipeline?slug=alpha");
     await expect(page.getByTestId("planner-start")).toBeDisabled();
     await expect(page.getByTestId("synth-start")).toBeDisabled();
+  });
+
+  test("pipeline shows planner and synth as two agent graphs, with synth's refine loop as an edge", async ({
+    page,
+  }, testInfo) => {
+    await mockPipelineRoutes(page, { synthBusy: false });
+    await page.goto("/dd/pipeline?slug=alpha");
+
+    const planner = page.getByRole("figure", { name: "Planner graph" });
+    const synth = page.getByRole("figure", { name: "Synth graph" });
+    await expect(planner.getByRole("button")).toHaveCount(8);
+    await expect(synth.getByRole("button")).toHaveCount(7);
+    await expect(planner.locator(".react-flow__edge")).toHaveCount(7); // a line: 8 nodes, 7 edges
+    await expect(synth.locator(".react-flow__edge")).toHaveCount(7); // 6 forward edges + the refine loop
+    await expect(synth.locator(".react-flow__edge.stage-edge-loop")).toHaveCount(1);
+    await expect(synth.getByText("refine loop")).toBeVisible();
+    await expect(planner.locator(".stage-edge-loop")).toHaveCount(0);
+
+    // Side by side where there is room, stacked on a phone; either way the graphs fit the screen.
+    const [left, right] = await Promise.all([planner.boundingBox(), synth.boundingBox()]);
+    if (!left || !right) throw new Error("graphs have no box");
+    if (testInfo.project.name === "desktop") expect(right.x).toBeGreaterThan(left.x + left.width / 2);
+    else expect(right.y).toBeGreaterThan(left.y + left.height - 1);
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(0);
+
+    // A node is a button: it opens its drawer.
+    await planner.getByRole("button", { name: /Off-topic filter/ }).click();
+    await expect(page.getByRole("dialog", { name: "Off-topic filter" })).toBeVisible();
+  });
+
+  test("a graph can be read as a list, which has the same nodes", async ({ page }) => {
+    await mockPipelineRoutes(page, { synthBusy: false });
+    await page.goto("/dd/pipeline?slug=alpha");
+    await expect(page.getByRole("figure", { name: "Planner graph" })).toBeVisible();
+
+    await page
+      .getByRole("group", { name: "Planner nodes shown as" })
+      .getByRole("button", { name: "List" })
+      .click();
+    await expect(page.getByRole("figure", { name: "Planner graph" })).toHaveCount(0);
+    await expect(page.getByRole("list", { name: "Stage nodes" }).first().getByRole("button")).toHaveCount(8);
   });
 
   for (const scheme of ["dark", "light"] as const) {

@@ -17,6 +17,18 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+# Pure-Python text work (normalizing, sentinelizing a vault) on a multi-megabyte bundle takes tens of seconds. Run
+# inline it would hold the event loop that serves the cancel watcher and the progress heartbeat; in a thread the
+# loop keeps turning. Small pages stay inline — a thread costs more than they do.
+_THREAD_THRESHOLD_CHARS = 200_000
+
+
+async def _cpu_bound(fn, *args, size: int, **kwargs):
+    if size < _THREAD_THRESHOLD_CHARS:
+        return fn(*args, **kwargs)
+    return await asyncio.to_thread(fn, *args, **kwargs)
+
+
 class Store:
     """Per-framework store; re-runs overwrite canonical MinIO path in place. Redis manifest keyed by run_id (live); MinIO manifest written on finalize (canonical)."""
     def __init__(
@@ -40,6 +52,10 @@ class Store:
         # Tier 2 index summary (llms.txt blockquote) — set by tier2.service.run,
         # read by dispatch.finalize into the manifest. "" = absent (all tiers).
         self.index_summary: str = ""
+        # The site's own index (llms.txt) as [(page URL, section heading), ...] in the order it lists them — set by Tier 1
+        # for a bundle that is about to be split, read by post.service so the split pages follow the site's navigation
+        # and carry its section headings. [] = none known.
+        self.nav_index: list[tuple[str, str]] = []
 
     async def add_page(
         self,
@@ -53,8 +69,17 @@ class Store:
         notes: str = "",
         lastmod: str = "",
         anchors: list | None = None,
+        defer_vault: bool = False,
+        relative_links: bool = True,
     ) -> entities.ManifestEntry:
-        """Stream page to store. idx-assign+manifest append are locked; MinIO PUT is not (concurrent writes to distinct keys). Raw body also → ingestion-raw/ for normalizer-version reversibility."""
+        """Stream page to store. idx-assign+manifest append are locked; MinIO PUT is not (concurrent writes to distinct keys). Raw body also → ingestion-raw/ for normalizer-version reversibility.
+
+        `defer_vault`: skip the page's vault now. For a bundle that is about to be split into pages: its own vault would
+        be built (seconds, ~10 MB) and then orphaned, while the dispatcher's vault backfill builds one per final page
+        (and skips any page that already has one), so nothing is lost.
+
+        The stored copy has its site-relative links made absolute against `url`. `relative_links=False` limits that to
+        `/x` links (a bundle's `./x` is relative to each section's own URL, which the split knows and `url` does not)."""
         # Markdown-side artifact hook for tiers 1/2/3/5 (tier4 uses HTML-stage).
         if url:
             try:
@@ -79,11 +104,18 @@ class Store:
         # Normalize before MinIO write; best-effort fall-through on bug.
         normalized_body = body
         try:
-            normalized_body = domains.dd.synth.nodes.corpus_normalize.domain.normalize_doc(body).body
+            normalized_body = (
+                await _cpu_bound(domains.dd.synth.nodes.corpus_normalize.domain.normalize_doc, body, size = len(body))
+            ).body
         except Exception as e:
             logger.warning(
                 f"[store] normalize_doc failed for slug={slug!r}: "
                 f"{type(e).__name__}: {e}; falling back to raw body"
+            )
+        if url:
+            normalized_body = await _cpu_bound(
+                domains.dd.ingestion.post.domain.absolutize_links, normalized_body, url,
+                size = len(normalized_body), relative = relative_links,
             )
         normalized_bytes = len(normalized_body.encode("utf-8"))
         async with self._add_lock:
@@ -112,13 +144,14 @@ class Store:
         )
         # Vault sees the same bytes synth will see; best-effort.
         body = normalized_body
-        try:
-            await self._build_and_persist_vault(idx, slug, body)
-        except Exception as e:
-            logger.warning(
-                f"[store] vault build failed for idx={idx} slug={slug!r}: "
-                f"{type(e).__name__}: {e}"
-            )
+        if not defer_vault:
+            try:
+                await self._build_and_persist_vault(idx, slug, body)
+            except Exception as e:
+                logger.warning(
+                    f"[store] vault build failed for idx={idx} slug={slug!r}: "
+                    f"{type(e).__name__}: {e}"
+                )
         await self._write_live_manifest()
         return entry
 
@@ -186,10 +219,12 @@ class Store:
         """Sentinelize body + persist vault manifest + sentinelized text.
         Empty vaults still get written so synth has a uniform read path."""
         source_key = keys.page_key(self.framework_slug, idx, slug)
-        sentinelized, manifest = domains.dd.synth.nodes.vault.domain.build_manifest(
+        sentinelized, manifest = await _cpu_bound(
+            domains.dd.synth.nodes.vault.domain.build_manifest,
             framework = self.framework_slug,
             source_key = source_key,
             md_text = body,
+            size = len(body),
         )
         vk = keys.vault_manifest_key(self.framework_slug, idx, slug)
         sk = keys.vault_sentinelized_key(self.framework_slug, idx, slug)
@@ -229,6 +264,16 @@ class Store:
             await self.minio.delete(key)
         except Exception as e:
             logger.info(f"[store] delete {key} skipped: {e}")
+
+    async def delete_vault(self, idx: int, slug: str) -> None:
+        """Drop the vault pair of a page that post-processing is replacing. Vault keys carry the page's idx and slug,
+        so once the page is rewritten under a new idx its old vault can never be found again — left alone it is
+        orphaned storage (for a split bundle, ~10 MB)."""
+        for key in (
+            keys.vault_manifest_key(self.framework_slug, idx, slug),
+            keys.vault_sentinelized_key(self.framework_slug, idx, slug),
+        ):
+            await self.delete_body_by_key(key)
 
     async def finalize(self, extra: dict | None = None) -> None:
         """Write the canonical MinIO manifest (once per run, after post)."""
@@ -319,6 +364,78 @@ async def read_framework_manifest(
         return json.loads(raw)
     except Exception:
         return None
+
+
+def _titled_by_slug(entry: dict) -> bool:
+    return (entry.get("title") or "") in ("", entry.get("slug") or "")
+
+
+# Titles worked out for manifests written before pages were titled at ingestion, keyed by (framework, run). In
+# memory only: reading a manifest never writes, and a re-ingestion writes real titles and gets a new run id.
+_TITLE_CACHE: dict[tuple[str, str], dict[int, str]] = {}
+_TITLE_CACHE_MAX = 16
+_TITLE_READ_CONCURRENCY = 16
+
+
+def _with_unique_titles(manifest: dict) -> dict:
+    """The manifest, with titles that repeat told apart by the docs section of their page (post.domain.disambiguate_titles).
+    Pure and cheap, so it is applied on every read — a library ingested earlier gets it without being re-ingested."""
+    entries = manifest.get("entries") or []
+    titles = domains.dd.ingestion.post.domain.disambiguate_titles(
+        [(e.get("title") or "", e.get("source_path") or e.get("url") or "") for e in entries],
+    )
+    if all(t == (e.get("title") or "") for t, e in zip(titles, entries)):
+        return manifest
+    return {**manifest, "entries": [{**e, "title": t} for t, e in zip(titles, entries)]}
+
+
+async def with_display_titles(
+    minio: infra.minio.service.MinIOStorage, framework_slug: str, manifest: dict,
+) -> dict:
+    """The manifest, with a real title on every page, and no two pages sharing one when their URLs can tell them apart.
+    Real titles first (below), then `_with_unique_titles`."""
+    return _with_unique_titles(await _with_real_titles(minio, framework_slug, manifest))
+
+
+async def _with_real_titles(
+    minio: infra.minio.service.MinIOStorage, framework_slug: str, manifest: dict,
+) -> dict:
+    """The manifest, with a real title on every page that is only named by its slug.
+
+    Ingestions before 2026-10-26 titled every split page by its slug ("code-claude-com-llms-full-orchestrate-…"); the
+    page's heading is in its body. Those pages are read once (bounded), their titles kept in memory, and handed out
+    here so a library ingested earlier lists by name without being re-ingested. A page that cannot be read keeps what
+    it had. Manifests that are already titled return untouched."""
+    entries = manifest.get("entries") or []
+    stale = [e for e in entries if _titled_by_slug(e)]
+    if not stale:
+        return manifest
+    cache_key = (framework_slug, str(manifest.get("run_id") or manifest.get("ingested_at") or ""))
+    titles = _TITLE_CACHE.get(cache_key)
+    if titles is None:
+        gate = asyncio.Semaphore(_TITLE_READ_CONCURRENCY)
+
+        async def one(entry: dict) -> tuple[int, str | None]:
+            idx = int(entry.get("idx", 0))
+            key = entry.get("key") or keys.page_key(framework_slug, idx, entry.get("slug", ""))
+            async with gate:
+                try:
+                    body = await minio.read_text(key)
+                except Exception:
+                    return idx, None
+            return idx, domains.dd.ingestion.post.domain.display_title(body, entry.get("slug", ""))
+
+        titles = {idx: t for idx, t in await asyncio.gather(*(one(e) for e in stale)) if t}
+        while len(_TITLE_CACHE) >= _TITLE_CACHE_MAX:
+            _TITLE_CACHE.pop(next(iter(_TITLE_CACHE)))
+        _TITLE_CACHE[cache_key] = titles
+    return {
+        **manifest,
+        "entries": [
+            {**e, "title": titles.get(int(e.get("idx", 0)), e.get("title", ""))} if _titled_by_slug(e) else e
+            for e in entries
+        ],
+    }
 
 
 async def read_framework_page(

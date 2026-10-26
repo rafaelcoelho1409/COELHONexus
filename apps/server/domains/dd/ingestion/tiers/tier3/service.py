@@ -262,5 +262,5 @@ async def run(
         await progress.finish(status = "failed")
         raise RuntimeError(f"Tier 3: {url} all pages failed")
     store.reorder_by_url_list(deduped)
-    await progress.finish(status = "done")
+    # No `finish`: post-processing and finalizing follow, and the dispatcher alone marks the run done.
     return written

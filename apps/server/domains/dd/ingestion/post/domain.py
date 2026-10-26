@@ -5,7 +5,9 @@ from . import params, patterns
 import hashlib
 import logging
 import re
+from bisect import bisect_right
 from collections import Counter
+from urllib.parse import urljoin, urlparse
 
 from markdown_it import MarkdownIt
 from mdit_py_plugins.deflist import deflist_plugin
@@ -122,6 +124,204 @@ def _resolve_display_heading(lines: list[str], h1_idx: int, fallback_title: str)
     return fallback_title
 
 
+def will_be_split(body: str) -> bool:
+    """Whether `split_monolith` would take this single page apart (it leaves anything under the threshold alone)."""
+    return len(body.encode("utf-8")) >= params.MONOLITH_SPLIT_THRESHOLD_BYTES
+
+
+_CHILD_HEADING_RE = re.compile(r"^#{2,4}\s+(.+?)\s*#*\s*$")
+_UPDATE_LABEL_RE = re.compile(r"""<Update\s+label=["']([^"']+)["']""")
+
+
+def _plain_heading(text: str) -> str:
+    """A heading as a title: no markdown link syntax (`[v2.9.1: Call Me Maybe](https://…)` reads as its text), backticks,
+    emphasis marks or trailing `#`s, one line, bounded."""
+    s = patterns.MD_LINK_TEXT_RE.sub(r"\1", text)
+    s = re.sub(r"[`*]+", "", s).strip().rstrip("#").strip()
+    return re.sub(r"\s+", " ", s)[: params.TITLE_MAX_CHARS]
+
+
+def display_title(body: str, fallback: str) -> str:
+    """The human title of a stored page, so the explorer can list pages by name instead of by slug.
+
+    The page's first H1 (past a throwaway filename-derived one — `_resolve_display_heading`). A page split out of
+    a bigger one starts `# Parent` and then, with nothing but blank lines between, its own heading — `### FileChanged`
+    or a changelog `<Update label="v3.2.3">` — so those read "Parent › Child" and stay distinguishable from their
+    siblings. A page whose H1 is followed by a `Source:` line is a whole page, never a child. With no H1 at all, the
+    first sentence of prose, then `fallback`."""
+    lines = (body or "").splitlines()
+    h1_idx = next(
+        (i for i, ln in enumerate(lines[: params.TITLE_SCAN_LINES]) if ln.startswith("# ") and not ln.startswith("## ")),
+        None,
+    )
+    if h1_idx is None:
+        return _plain_heading(_fallback_heading(body)) or fallback
+    title = _plain_heading(_resolve_display_heading(lines, h1_idx, lines[h1_idx][2:].strip())) or fallback
+    after = [ln.strip() for ln in lines[h1_idx + 1 : h1_idx + 1 + params.TITLE_CHILD_LOOKAHEAD_LINES] if ln.strip()]
+    first = after[0] if after else ""
+    if first.startswith("Source:"):
+        return title
+    child = _CHILD_HEADING_RE.match(first) or _UPDATE_LABEL_RE.search(first)
+    if child:
+        sub = _plain_heading(child.group(1))
+        if sub and sub.lower() != title.lower():
+            # An H1 of one or two characters is an index letter some bundles file their sections under (Next.js:
+            # `# C` over "Cache Components"), not a parent worth naming.
+            return sub if len(title) <= 2 else f"{title} › {sub}"[: params.TITLE_MAX_CHARS]
+    return title
+
+
+def _section_label(segment: str) -> str:
+    """A URL folder as a label: `legacy-actor` → `Legacy Actor`."""
+    return " ".join(w[:1].upper() + w[1:] for w in re.sub(r"[-_]+", " ", segment).split())
+
+
+def _leaf_label(url: str, title: str) -> str:
+    """The page's own file name as a label, minus the title it ends with: `dashboard_overview` for a page titled
+    "Overview" is "Dashboard". "" when it adds nothing."""
+    segments = [s for s in urlparse(url).path.split("/") if s]
+    if not segments:
+        return ""
+    label = _section_label(re.sub(r"\.\w{1,5}$", "", segments[-1]))
+    if label.casefold() != title.casefold() and label.casefold().endswith(title.casefold()):
+        label = label[: -len(title)].strip()
+    return "" if label.casefold() == title.casefold() else label
+
+
+def disambiguate_titles(pages: list[tuple[str, str]]) -> list[str]:
+    """[(title, page URL), ...] → the titles, in the same order, with any that repeat told apart by where their page
+    lives: three pages called "All Parameters" become "Agent › All Parameters", "Browser › All Parameters" and so on,
+    using the fewest parent folders that make them distinct — or, when they share a folder, their own file names
+    ("Dashboard › Overview"). Titles that are already unique, and repeats whose URLs give nothing to tell them apart by,
+    come back as they were."""
+    titles = [title for title, _url in pages]
+    groups: dict[str, list[int]] = {}
+    for i, (title, _url) in enumerate(pages):
+        if title.strip():
+            groups.setdefault(title.strip().casefold(), []).append(i)
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        folders = {
+            i: [s for s in [p for p in urlparse(pages[i][1]).path.split("/") if p][:-1] if s.lower() not in params.TITLE_SKIP_SEGMENTS]
+            for i in members
+        }
+        candidates = [
+            {i: " › ".join(_section_label(s) for s in folders[i][-depth:]) for i in members}
+            for depth in range(1, params.TITLE_CONTEXT_MAX_SEGMENTS + 1)
+        ]
+        candidates.append({i: _leaf_label(pages[i][1], pages[i][0]) for i in members})
+        labels = next((c for c in candidates if len(set(c.values())) == len(members)), None)
+        if labels is None:
+            continue
+        for i in members:
+            if labels[i]:
+                titles[i] = f"{labels[i]} › {pages[i][0]}"[: params.TITLE_MAX_CHARS]
+    return titles
+
+
+def _nav_key(url: str) -> str:
+    """A page URL the way an index and a bundle may each spell it: no query or fragment, no `.md`, no trailing slash."""
+    bare = url.split("#", 1)[0].split("?", 1)[0].rstrip("/")
+    return bare[:-3] if bare.endswith(".md") else bare
+
+
+def order_by_nav(
+    writes: list[tuple[str, str, str]],
+    nav_urls: list[str],
+) -> list[tuple[str, str, str]]:
+    """Put split pages `[(slug, body, source_path), ...]` in the order the site's own index lists them (`nav_urls`, from
+    its `llms.txt`), which is its navigation order — a bundle is often alphabetical by URL, which files the introduction
+    among the C's. Stable: pages that share a URL (a sub-split) stay together in the order they had, and pages the index
+    does not list keep their order after the listed ones. An index that names fewer than NAV_MIN_MATCH_RATIO of the
+    pages is not this site's navigation, and the order is left alone."""
+    if not nav_urls or not writes:
+        return writes
+    position: dict[str, int] = {}
+    for rank, url in enumerate(nav_urls):
+        position.setdefault(_nav_key(url), rank)
+    ranks = [position.get(_nav_key(source)) if source else None for _slug, _body, source in writes]
+    if sum(rank is not None for rank in ranks) < params.NAV_MIN_MATCH_RATIO * len(writes):
+        return writes
+    unlisted = len(nav_urls)
+    order = sorted(range(len(writes)), key = lambda i: (unlisted if ranks[i] is None else ranks[i], i))
+    return [writes[i] for i in order]
+
+
+def sections_by_nav(
+    writes: list[tuple[str, str, str]],
+    nav_index: list[tuple[str, str]],
+) -> list[str]:
+    """The site's own section heading for each split page `[(slug, body, source_path), ...]`, from its index
+    `[(url, section), ...]` (the `##` headings of its llms.txt): Claude Code's "Getting started", "Plugins", … — a
+    better grouping than the URL folders, which for it are all `docs/en`. `""` for a page the index does not list.
+    All `""` unless the index names at least NAV_MIN_SECTIONS different sections across these pages and lists
+    NAV_MIN_MATCH_RATIO of them: one heading over everything ("Docs") groups nothing, and a foreign index is no guide."""
+    blank = [""] * len(writes)
+    if not nav_index or not writes:
+        return blank
+    section_of = {_nav_key(url): _plain_heading(section)[:60] for url, section in reversed(nav_index)}
+    found = [section_of.get(_nav_key(source)) if source else None for _slug, _body, source in writes]
+    if sum(s is not None for s in found) < params.NAV_MIN_MATCH_RATIO * len(writes):
+        return blank
+    sections = [s or "" for s in found]
+    return sections if len({s for s in sections if s}) >= params.NAV_MIN_SECTIONS else blank
+
+
+def absolutize_links(body: str, base_url: str, *, relative: bool = True) -> str:
+    """Make a page's site-relative links absolute, against the page's own URL: `/open-source/x` and, unless `relative`
+    is off, `./y` and `../z` too. In this app a bare `/open-source/x` would open a page of Nexus that does not exist.
+    Anchors, absolute URLs, `mailto:` and the like are left alone, as is everything inside code (fenced or inline)."""
+    if not base_url or "](" not in body:
+        return body
+    host = (urlparse(base_url).netloc or "").lower()
+    if not host or host in params.LINK_REWRITE_SKIP_HOSTS:
+        return body
+
+    def resolve(match: re.Match) -> str:
+        dest = match.group(2)
+        if dest.startswith("//"):
+            return match.group(0)
+        if dest.startswith("/") or (relative and dest.startswith(("./", "../"))):
+            return f"{match.group(1)}{urljoin(base_url, dest)}{match.group(3)}"
+        return match.group(0)
+
+    out: list[str] = []
+    fence: tuple[str, int] | None = None  # (character, length) of the fence we are inside, if any
+    for line in body.split("\n"):
+        marker = patterns.FENCE_LINE_RE.match(line.lstrip(" \t>"))
+        if marker:
+            run, after = marker.group(1), marker.group(2)
+            if fence is None:
+                if run[0] == "~" or "`" not in after:  # a backtick run with more backticks after it is inline code, not a fence
+                    fence = (run[0], len(run))
+            elif run[0] == fence[0] and len(run) >= fence[1] and not after.strip():
+                fence = None
+            out.append(line)
+        elif fence is not None or "](" not in line:
+            out.append(line)
+        else:
+            pieces: list[str] = []
+            cursor = 0
+            for span in patterns.INLINE_CODE_RE.finditer(line):
+                pieces.append(patterns.MD_LINK_TARGET_RE.sub(resolve, line[cursor : span.start()]))
+                pieces.append(span.group(0))
+                cursor = span.end()
+            pieces.append(patterns.MD_LINK_TARGET_RE.sub(resolve, line[cursor:]))
+            out.append("".join(pieces))
+    return "\n".join(out)
+
+
+def _worth_keeping(body: str, *, delimited: bool) -> bool:
+    """Whether a split section is a page rather than a fragment. Under SPLIT_MIN_SECTION_BYTES it is a fragment — unless
+    the bundle itself marked it off as a page (`delimited`: a `Source:` line) and it carries a code example, which is
+    real documentation however short (Browser Use's "Remove Tools" is a sentence and the call that does it). Link lists
+    and one-line package descriptions have no code and are still dropped."""
+    if len(body.encode("utf-8")) >= params.SPLIT_MIN_SECTION_BYTES:
+        return True
+    return delimited and patterns.CODE_FENCE_RE.search(body) is not None
+
+
 def split_by_source_markers(text: str) -> list[tuple[str, str, str, str]] | None:
     """Boundary strategy A: walk back from each `Source: <url>` to the nearest
     H1 — that's the section start. None if < SOURCE_MIN_MARKERS markers.
@@ -136,10 +336,8 @@ def split_by_source_markers(text: str) -> list[tuple[str, str, str, str]] | None
     for line in lines:
         line_offsets.append(line_offsets[-1] + len(line))
     def _char_to_line_idx(pos: int) -> int:
-        for i in range(len(line_offsets) - 1):
-            if line_offsets[i] <= pos < line_offsets[i + 1]:
-                return i
-        return len(lines) - 1
+        # Binary search: this runs once per `Source:` marker over every line of a bundle of hundreds of thousands.
+        return min(bisect_right(line_offsets, pos) - 1, len(lines) - 1)
     section_starts: list[tuple[int, str, str]] = []
     seen_starts: set[int] = set()
     for m in matches:
@@ -232,12 +430,11 @@ def split_monolith(
         heading = h1 or h2 or _fallback_heading(sec_body) or f"section-{i:0{width}d}"
         sub = slugify_heading(heading, f"section-{i:0{width}d}")
         base = sub if sub.startswith(parent_slug) else f"{parent_slug}-{sub}"
-        writes.append((base, sec_body, source_url))
+        # Each section knows its own URL, which a bundle's `./x` and `../x` links are relative to.
+        writes.append((base, absolutize_links(sec_body, source_url) if source_url else sec_body, source_url))
     pre = len(writes)
-    writes = [
-        (s, b, sp) for s, b, sp in writes
-        if len(b.encode("utf-8")) >= params.SPLIT_MIN_SECTION_BYTES
-    ]
+    delimited = strategy == "source-markers"
+    writes = [(s, b, sp) for s, b, sp in writes if _worth_keeping(b, delimited = delimited)]
     stubs_dropped = pre - len(writes)
     seen: set[str] = set()
     deduped: list[tuple[str, str, str]] = []
@@ -325,6 +522,17 @@ def _split_changelog_releases(
     return out
 
 
+def _is_fragmented_changelog(h1_text: str, sub_pages: list[tuple[str, str, str]]) -> bool:
+    """Whether a changelog's sub-pages are fragments rather than releases. A changelog without `<Update>` tags is cut on
+    its internal H2s, which in FastMCP's are `## New Contributors` / `## What's Changed` under every release: 126 pages
+    with three titles between them, none of which says which release it belongs to. One per version (Dask's
+    `## 2024.5.0`) is what the split is for and is kept."""
+    if "changelog" not in h1_text.lower() or len(sub_pages) < 2:
+        return False
+    titles = {display_title(body, slug).casefold() for slug, body, _source in sub_pages}
+    return len(titles) < params.CHANGELOG_MIN_DISTINCT_RATIO * len(sub_pages)
+
+
 def _h2_subsplit_oversized(
     writes: list[tuple[str, str, str]],
     parent_slug: str,
@@ -348,6 +556,8 @@ def _h2_subsplit_oversized(
             sub_pages = _size_aware_recursive_split(
                 s, b, sp, h1_prefix = h1_prefix, levels = (2, 3),
             )
+            if _is_fragmented_changelog(h1_text, sub_pages):
+                sub_pages = [(s, b, sp)]
         if len(sub_pages) > 1:
             expanded.extend(sub_pages)
             n_expanded += 1

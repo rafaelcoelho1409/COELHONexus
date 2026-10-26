@@ -38,6 +38,9 @@ def normalize_doc(
     text, n_permalink = _permalink_pass(text)
     stats.permalink_debris_stripped = n_permalink
 
+    text, n_media = _empty_media_pass(text)
+    stats.empty_media_stripped = n_media
+
     text, n_ent, n_blank, n_trail = _whitespace_entity_pass(text)
     stats.html_entities_decoded = n_ent
     stats.blank_lines_collapsed = n_blank
@@ -96,8 +99,12 @@ def _boundary_pass(text: str) -> tuple[str, int]:
 
 
 def _identify_fence_ranges(text: str) -> list[tuple[int, int, int]]:
-    """Return (open_line_idx, close_exclusive, kind) tuples; kind=0 backtick, 1 tilde."""
-    md = MarkdownIt("commonmark")
+    """Return (open_line_idx, close_exclusive, kind) tuples; kind=0 backtick, 1 tilde.
+
+    HTML blocks are switched off: a bare `<pre />` (a bundle that lost the tag's content) opens an HTML block that, per
+    CommonMark, only a closing `</pre>` ends — SGLang's bundle has one at line 998, and every fence in the remaining
+    146,706 lines then read as HTML, so none of them was recognised, protected or cleaned. Fences are all this needs."""
+    md = MarkdownIt("commonmark").disable("html_block")
     ranges: list[tuple[int, int, int]] = []
     for tok in md.parse(text):
         if tok.type != "fence" or tok.map is None:
@@ -219,8 +226,9 @@ def _token_aware_passes(text: str) -> tuple[str, int, int, int]:
 def _rewrite_fence_opener(line: str, kind: int) -> tuple[str, bool]:
     """Strip Mintlify attrs from fence opener line."""
     fence_char = "~" if kind else "`"
-    stripped = line.lstrip()
-    indent = line[: len(line) - len(stripped)]
+    # The opener may sit inside a callout (`> ```bash theme={…}`): leave the indentation and quote markers as they are.
+    indent = patterns.QUOTE_PREFIX_RE.match(line).group(0)
+    stripped = line[len(indent):]
     if not stripped.startswith(fence_char * 3):
         return line, False
     n_chars = 0
@@ -273,6 +281,47 @@ def _permalink_pass(text: str) -> tuple[str, int]:
         if new_line != line:
             n += 1
         out.append(new_line)
+    return "\n".join(out), n
+
+
+def _empty_media_pass(text: str) -> tuple[str, int]:
+    """Drop `<video>` / `<audio>` elements that point at nothing: some bundles keep the tag and lose its `src`
+    (Browser Use: `<video />`, or a `<video>` of `<source type="video/mp4" />`), leaving a stray tag in the middle of the
+    prose. One with a `src` anywhere inside it is kept, as is anything inside a code fence, and a tag that shares its
+    line with other text. Idempotent."""
+    fenced: set[int] = set()
+    for (open_idx, close_idx, _) in _identify_fence_ranges(text):
+        fenced.update(range(open_idx, close_idx))
+    lines = text.split("\n")
+    out: list[str] = []
+    n = 0
+    i = 0
+    while i < len(lines):
+        m = None if i in fenced else patterns.MEDIA_OPEN_RE.match(lines[i])
+        if m is None:
+            out.append(lines[i])
+            i += 1
+            continue
+        closing = f"</{m.group('tag').lower()}>"
+        rest = m.group("rest").strip().lower()
+        if m.group("selfclose") or rest == closing:
+            end = i
+        elif rest == "":
+            end = next(
+                (j for j in range(i + 1, min(i + 1 + params.MEDIA_MAX_LINES, len(lines))) if closing in lines[j].lower()),
+                None,
+            )
+        else:
+            end = None
+        if end is None:
+            out.append(lines[i])
+            i += 1
+            continue
+        if patterns.MEDIA_SRC_RE.search("\n".join(lines[i : end + 1])):
+            out.extend(lines[i : end + 1])
+        else:
+            n += 1
+        i = end + 1
     return "\n".join(out), n
 
 

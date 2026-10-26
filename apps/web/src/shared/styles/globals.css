@@ -163,6 +163,12 @@
     @apply font-sans;
     background: var(--background);
     scroll-behavior: smooth;
+    /* Keep the scrollbar's strip reserved whether or not the page needs one. Without it, anything that makes a short
+       page a little taller — an open dropdown list hanging below its end, a toast — brings the scrollbar in and
+       narrows the whole page by its width, so everything on it shifts. (`scrollbar-gutter: stable` is the tidier
+       way, but Chromium ignores it next to our styled scrollbars; measured, `overflow-y: scroll` is what reserves
+       the strip, and it works in every browser.) */
+    overflow-y: scroll;
   }
 
   body {

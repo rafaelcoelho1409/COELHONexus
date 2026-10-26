@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { setupServer } from "msw/node";
@@ -84,10 +84,34 @@ describe("CatalogStage", () => {
   it("filters tiles by the search box", async () => {
     const user = userEvent.setup();
     renderStage();
-    const search = await screen.findByPlaceholderText("Search the catalog…");
+    const search = await screen.findByLabelText("Search the catalog");
+    expect(search).toHaveAttribute("placeholder", "Search 2 frameworks…");
     await user.type(search, "beta");
     await waitFor(() => expect(screen.queryByText("Alpha")).not.toBeInTheDocument());
     expect(screen.getByText("Beta")).toBeInTheDocument();
+    expect(screen.getByText("1 of 2 frameworks shown")).toBeInTheDocument();
+  });
+
+  it("filters with the Category, Tier and Status dropdowns that sit beside the search box", async () => {
+    const user = userEvent.setup();
+    renderStage();
+    await screen.findByText("Alpha");
+
+    // Status: toggle "Ingested" on, the button then says so; Reset puts everything back.
+    await user.click(screen.getByRole("button", { name: "Filter by status: All" }));
+    await user.click(screen.getByRole("button", { name: /^Ingested\s*1$/ }));
+    expect(screen.getByRole("button", { name: "Filter by status: Ingested" })).toBeInTheDocument();
+    expect(screen.getByText("1 of 2 frameworks shown")).toBeInTheDocument();
+    expect(screen.queryByText("Beta")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Reset" }));
+    expect(screen.getByText("2 of 2 frameworks shown")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    // Category: one choice, and the list closes after it.
+    await user.click(screen.getByRole("button", { name: "Filter by category: All" }));
+    const categories = screen.getByRole("group", { name: "Filter by category" });
+    await user.click(within(categories).getAllByRole("button")[1] as HTMLElement);
+    expect(screen.queryByRole("group", { name: "Filter by category" })).not.toBeInTheDocument();
     expect(screen.getByText("1 of 2 frameworks shown")).toBeInTheDocument();
   });
 

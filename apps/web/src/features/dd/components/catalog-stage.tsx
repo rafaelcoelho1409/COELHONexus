@@ -13,10 +13,13 @@ import { Input } from "@/shared/ui/input";
 
 import {
   type CatalogFilters,
+  type CatalogStatus,
   catalogCategories,
   catalogTiers,
+  categoryCounts,
   DEFAULT_FILTERS,
   facetCounts,
+  facetSummary,
   filterCatalog,
   tileName,
   tileStatus,
@@ -25,6 +28,9 @@ import { useActiveRun, useCatalog, useLibrary, useStartRun } from "../hooks/use-
 import { useDdOverlays } from "../hooks/use-overlays";
 import { ingestionHref, stageHref } from "../params";
 import { CatalogTile } from "./catalog-tile";
+import { FilterDropdown } from "./filter-dropdown";
+
+const STATUSES: readonly CatalogStatus[] = ["Ingested", "Not ingested"];
 
 export function CatalogStage() {
   const catalog = useCatalog();
@@ -88,6 +94,7 @@ export function CatalogStage() {
   };
 
   const categories = useMemo(() => ["All", ...catalogCategories(entries)], [entries]);
+  const categoryTotals = useMemo(() => categoryCounts(entries), [entries]);
   const tierKeys = useMemo(() => catalogTiers(entries), [entries]);
 
   if (catalog.isPending) {
@@ -107,94 +114,74 @@ export function CatalogStage() {
 
   return (
     <div className="pb-28">
-      <div className="mb-4 flex flex-wrap items-center gap-2">
+      {/* One row: search, how many match, then the three filters. `relative` anchors the lists on a phone. */}
+      <div className="relative mb-4 flex flex-wrap items-center gap-x-3 gap-y-2">
         <Input
           value={filters.query}
           onChange={(e) => setFilters((f) => ({ ...f, query: e.target.value }))}
-          placeholder="Search the catalog…"
+          placeholder={`Search ${entries.length} frameworks…`}
           aria-label="Search the catalog"
-          className="h-9 w-64"
+          className="h-9 w-full sm:w-64"
         />
-        <div className="flex flex-wrap gap-1">
-          {categories.map((category) => (
-            <button
-              key={category}
-              type="button"
-              aria-pressed={filters.category === category}
-              onClick={() => setFilters((f) => ({ ...f, category }))}
-              className={`min-h-9 rounded-sm border px-2 text-xs ${
-                filters.category === category
-                  ? "border-primary bg-primary/10 text-primary-text"
-                  : "border-border text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {category}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <span className="text-xs text-muted-foreground">Tiers:</span>
-        <div className="flex flex-wrap gap-1">
-          {tierKeys.map((tier) => {
-            const active = filters.tiers.has(tier);
-            return (
-              <button
-                key={tier}
-                type="button"
-                aria-pressed={active}
-                onClick={() =>
-                  setFilters((f) => {
-                    const tiers = new Set(f.tiers);
-                    if (active) {
-                      tiers.delete(tier);
-                    } else {
-                      tiers.add(tier);
-                    }
-                    return { ...f, tiers };
-                  })
-                }
-                className={`min-h-9 rounded-sm border px-2 text-xs ${
-                  active
-                    ? "border-primary bg-primary/10 text-primary-text"
-                    : "border-border text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {tier} <span className="text-muted-foreground">{counts.tier[tier] ?? 0}</span>
-              </button>
-            );
-          })}
-        </div>
-        <div className="flex flex-wrap gap-1">
-          {(["Ingested", "Not ingested"] as const).map((status) => {
-            const active = filters.statuses.has(status);
-            return (
-              <button
-                key={status}
-                type="button"
-                aria-pressed={active}
-                onClick={() =>
-                  setFilters((f) => {
-                    const statuses = new Set(f.statuses);
-                    if (active) {
-                      statuses.delete(status);
-                    } else {
-                      statuses.add(status);
-                    }
-                    return { ...f, statuses };
-                  })
-                }
-                className={`min-h-9 rounded-sm border px-2 text-xs ${
-                  active
-                    ? "border-primary bg-primary/10 text-primary-text"
-                    : "border-border text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {status} <span className="text-muted-foreground">{counts.status[status] ?? 0}</span>
-              </button>
-            );
-          })}
-        </div>
+        <p aria-live="polite" className="order-last text-xs text-muted-foreground sm:order-none">
+          {visible.length} of {entries.length} frameworks shown
+        </p>
+        <FilterDropdown
+          label="Category"
+          ariaLabel="Filter by category"
+          summary={filters.category}
+          multiple={false}
+          options={categories.map((category) => ({
+            value: category,
+            label: category,
+            count: category === "All" ? entries.length : (categoryTotals[category] ?? 0),
+            active: filters.category === category,
+          }))}
+          onToggle={(category) => setFilters((f) => ({ ...f, category }))}
+          onReset={() => setFilters((f) => ({ ...f, category: "All" }))}
+        />
+        <FilterDropdown
+          label="Tier"
+          ariaLabel="Filter by tier"
+          summary={facetSummary(filters.tiers)}
+          multiple
+          options={tierKeys.map((tier) => ({
+            value: tier,
+            label: tier,
+            count: counts.tier[tier] ?? 0,
+            active: filters.tiers.has(tier),
+          }))}
+          onToggle={(tier) =>
+            setFilters((f) => {
+              const tiers = new Set(f.tiers);
+              if (!tiers.delete(tier)) tiers.add(tier);
+              return { ...f, tiers };
+            })
+          }
+          onReset={() => setFilters((f) => ({ ...f, tiers: new Set() }))}
+        />
+        <FilterDropdown
+          label="Status"
+          ariaLabel="Filter by status"
+          summary={facetSummary(filters.statuses)}
+          multiple
+          options={STATUSES.map((status) => ({
+            value: status,
+            label: status,
+            count: counts.status[status] ?? 0,
+            active: filters.statuses.has(status),
+          }))}
+          onToggle={(value) => {
+            const status = STATUSES.find((candidate) => candidate === value);
+            if (!status) return;
+            setFilters((f) => {
+              const statuses = new Set(f.statuses);
+              if (!statuses.delete(status)) statuses.add(status);
+              return { ...f, statuses };
+            });
+          }}
+          onReset={() => setFilters((f) => ({ ...f, statuses: new Set() }))}
+        />
       </div>
 
       <ul className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
@@ -212,9 +199,6 @@ export function CatalogStage() {
           <li className="col-span-full text-sm text-muted-foreground">Nothing matches those filters.</li>
         ) : null}
       </ul>
-      <p aria-live="polite" className="mt-3 text-xs text-muted-foreground">
-        {visible.length} of {entries.length} frameworks shown
-      </p>
 
       {selected && selectedEntry ? (
         <div className="fixed bottom-0 left-0 z-40 w-full border-t border-border bg-card p-3">

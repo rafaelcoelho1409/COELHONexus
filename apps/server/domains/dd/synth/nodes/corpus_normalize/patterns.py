@@ -80,6 +80,14 @@ GITBOOK_TABS_CLOSE_RE = re.compile(
 PERMALINK_TRAILING_RE = re.compile(r"\s*\[[¶\ue000-\uf8ff]?\]\([^)]*\)\s*$")
 PERMALINK_LEADING_RE = re.compile(r"^\s*\[[¶\ue000-\uf8ff]?\]\(#[^)]*\)\s*")
 
+# A line's leading indentation and blockquote markers: a fenced block inside a callout opens with `> ```bash …`.
+QUOTE_PREFIX_RE = re.compile(r"^[ \t]*(?:>[ \t]?)*")
+
+# `<video>` / `<audio>` on a line of its own: the whole element when it is self-closing or closed on the same line,
+# otherwise the opening line of a multi-line one. `rest` is whatever follows the tag on that line.
+MEDIA_OPEN_RE = re.compile(r"^\s*<(?P<tag>video|audio)\b[^>]*?(?P<selfclose>/)?>(?P<rest>.*)$", re.IGNORECASE)
+MEDIA_SRC_RE = re.compile(r"\bsrc\s*=", re.IGNORECASE)
+
 # Zero-width + BOM + miscellaneous formatting chars.
 ZERO_WIDTH_RE = re.compile(r"[​‌‍⁠﻿]")
 

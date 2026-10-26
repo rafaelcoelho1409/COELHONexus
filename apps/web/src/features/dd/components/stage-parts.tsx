@@ -45,7 +45,7 @@ function StagePill({ pill, elapsedMs }: { pill: StagePillState; elapsedMs?: numb
 
 const GLYPH_CLASS = "size-3 shrink-0";
 
-function StatusGlyph({ status }: { status: NodeStatus }) {
+export function StatusGlyph({ status }: { status: NodeStatus }) {
   if (status === "done") return <Check aria-hidden className={`${GLYPH_CLASS} text-success-text`} />;
   if (status === "running") {
     return <CircleDot aria-hidden className={`${GLYPH_CLASS} animate-pulse text-running-text`} />;
@@ -55,7 +55,7 @@ function StatusGlyph({ status }: { status: NodeStatus }) {
   return <Circle aria-hidden className={`${GLYPH_CLASS} text-muted-foreground`} />;
 }
 
-const NODE_STATUS_LABEL: Record<NodeStatus, string> = {
+export const NODE_STATUS_LABEL: Record<NodeStatus, string> = {
   done: "done",
   running: "running",
   pending: "pending",

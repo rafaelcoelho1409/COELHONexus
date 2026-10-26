@@ -101,6 +101,15 @@ src/shared/                   api (generated client) · config · lib · markdow
   `npm run contract:check` compares those tables with the backend's `NODE_ORDER` and `PlannerState`/`SynthState`;
   change both sides together. Planner state calls the scheduled nodes `next_nodes`, synth calls them `next`
   (`graphStateSchema` folds both).
+- The stage graphs are React Flow (`@xyflow/react`, pinned 12.12.0 — not the 13 pre-release), and only
+  `stage-node-board.tsx` imports `stage-flow.tsx`, through `next/dynamic`, so the library (~42 KB gz) stays out of
+  every other page. Node positions are fixed (`domain/flow-layout.ts`; no dagre/ELK), so a stream event never
+  re-lays-out. A node is a real `<button>` (`nodesFocusable={false}` avoids a second tab stop). React Flow sets
+  `pointer-events: none` on nodes that cannot be dragged or selected, and children inherit it: the button
+  re-enables it inline. The list view is the text equivalent; keep both. jsdom has no `ResizeObserver` — stubs
+  are in `vitest.setup.ts`; edges only draw in a real browser, so test them in e2e.
+- Planner and Synth have no tabs: they run side by side on the Pipeline tab. `/dd/planner` and `/dd/synth` remain
+  as single-stage deep links (`DD_STAGES[].tab === false`).
 - A side panel is `SideSheet` (native `<dialog>`, `features/dd/components/side-sheet.tsx`); a hook that opens
   one for a clicked item is `useSourceSheet`-shaped (state + handlers, no `useMemo`/`useCallback` in the page —
   the compiler lint rejects them there).
@@ -116,6 +125,14 @@ src/shared/                   api (generated client) · config · lib · markdow
   very long logo URLs) printed each URL as text and overflowed to 2383px. Fixtures carry long URLs and
   untagged code fences, and a page-level check asserts no sideways scroll. Remote logos are `<img alt="">`
   (see `catalog-tile.tsx`), never their address as text.
+- An address param that one effect writes and another effect removes needs a one-way rule, or the two chase each
+  other (the ingestion `?run=` flicker: recovery re-added a run the finish handler had just dropped, because the
+  cached active-runs list was stale). Decide in a pure function (`runToAdopt`), remember what already finished,
+  and test it with a harness where `router.replace` really changes the props. `invalidateQueries` cancels a
+  refetch already in flight unless `{ cancelRefetch: false }`.
+- The Ingestion sidebar mirrors the original docs: pages in **manifest order** (the backend's split keeps source
+  order, audited for all 12 tier-1 docs), groups where their first page is, never sorted by name; a page is shown by
+  its `title` (its heading; the backend fills it, `with_display_titles` covers older manifests), never its slug.
 - A stage tab keeps `?slug=` (`StageNav` builds its links with `stageHref(stage, slug)`); an empty live
   region takes no height, so do not give status lines `min-h-*` — that is what left gaps in Settings.
 - Usage and cost screens show **counts and tokens only** — never model or provider names (`copy:check` guards the

@@ -139,10 +139,14 @@ async def run(
     framework_slug: str,
     progress: domains.dd.ingestion.runtime.progress.service.Progress,
     store: domains.dd.ingestion.storage.service.Store,
+    path_filter: dict | None = None,
 ) -> int:
     """Fetch index, fan out to N concurrent page fetches, write each to
-    store. Returns the number of pages written. Raises RuntimeError if the
-    index itself can't be fetched/parsed."""
+    store. Returns the number of pages written. Raises TierUnavailable if the
+    index itself can't be fetched (404, error, a filter that leaves nothing),
+    so the dispatcher moves on to the next declared source. `path_filter`
+    (the catalog's `include`/`exclude`) trims an index that lists more than
+    the framework."""
     logger.info(f"[tier-2] framework={framework_slug} index={url}")
     await progress.start(tier = "llms_txt", total = 0)
     async with httpx.AsyncClient(
@@ -161,8 +165,9 @@ async def run(
                 fetch_ms = int((time.monotonic() - t0) * 1000),
                 error_msg = err,
             )
-            await progress.finish(status = "failed")
-            raise RuntimeError(f"Tier 2 index fetch failed for {url}: {err}")
+            # `downgrade`, not `failed`: the run is not over — a lower tier may still serve this framework.
+            await progress.finish(status = "downgrade")
+            raise domains.dd.ingestion.tiers.errors.TierUnavailable(f"Tier 2 index fetch failed for {url}: {err}")
         if resp.status_code != 200:
             await progress.record_url(
                 url,
@@ -172,8 +177,8 @@ async def run(
                 fetch_ms = int((time.monotonic() - t0) * 1000),
                 error_msg = f"HTTP {resp.status_code}",
             )
-            await progress.finish(status = "failed")
-            raise RuntimeError(f"Tier 2: {url} → HTTP {resp.status_code}")
+            await progress.finish(status = "downgrade")
+            raise domains.dd.ingestion.tiers.errors.TierUnavailable(f"Tier 2: {url} → HTTP {resp.status_code}")
         await progress.record_url(
             url,
             status = "success",
@@ -190,6 +195,21 @@ async def run(
                 f"prose llms.txt; signalling fallback"
             )
             raise domains.dd.ingestion.tiers.errors.EmptyLinksDetected(url)
+        declared = path_filter and (path_filter.get("include") or path_filter.get("exclude"))
+        if declared:
+            # Only the filter the catalog declares counts — the default noise filter stays off here.
+            only_declared = {**path_filter, "disable_defaults": True}
+            listed = len(links)
+            links = [
+                link for link in links
+                if domains.dd.ingestion.filters.domain.passes_path_filter(link[1], only_declared)
+            ]
+            logger.info(f"[tier-2] {framework_slug}: path_filter kept {len(links)} of {listed} links")
+            if not links:
+                await progress.finish(status = "downgrade")
+                raise domains.dd.ingestion.tiers.errors.TierUnavailable(
+                    f"Tier 2: {url} lists {listed} links, none inside the catalog's path_filter"
+                )
         # Author-written index summary (spec v2 blockquote) — stashed on the
         # store for dispatch.finalize; "" when the index carries none.
         try:
@@ -308,5 +328,5 @@ async def run(
         await progress.finish(status = "failed")
         raise RuntimeError(f"Tier 2: {url} all {len(links)} pages failed")
     store.reorder_by_url_list([u for _, u, _, _ in links])
-    await progress.finish(status = "done")
+    # No `finish`: post-processing and finalizing follow, and the dispatcher alone marks the run done.
     return written

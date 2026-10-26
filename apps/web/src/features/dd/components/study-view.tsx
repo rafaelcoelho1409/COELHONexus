@@ -175,10 +175,10 @@ function StudyReader({ slug }: { slug: string }) {
             ) : null}
           </nav>
           <Link
-            href={stageHref("synth", slug)}
+            href={stageHref("pipeline", slug)}
             className={buttonVariants({ variant: "outline", size: "lg" })}
           >
-            Synth stage
+            Pipeline
           </Link>
         </aside>
 

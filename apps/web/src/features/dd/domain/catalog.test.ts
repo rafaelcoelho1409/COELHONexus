@@ -4,8 +4,10 @@ import type { CatalogEntry } from "../entities";
 import {
   catalogCategories,
   catalogTiers,
+  categoryCounts,
   DEFAULT_FILTERS,
   facetCounts,
+  facetSummary,
   filterCatalog,
   tileLogos,
   tileName,
@@ -27,6 +29,20 @@ describe("catalog filters", () => {
   it("filters by query and category", () => {
     const visible = filterCatalog(ENTRIES, ingested, { ...DEFAULT_FILTERS, query: "ab", category: "Dev" });
     expect(visible.map((e) => e.name)).toEqual(["Absorb"]);
+  });
+
+  it("counts each category over the whole catalog, putting the uncategorised under Other", () => {
+    expect(categoryCounts([...ENTRIES, tile({ slug: "d", name: "D" })])).toEqual({
+      Dev: 2,
+      Data: 1,
+      Other: 1,
+    });
+  });
+
+  it("words what a multi-toggle filter has chosen", () => {
+    expect(facetSummary(new Set())).toBe("All");
+    expect(facetSummary(new Set(["2", "1"]))).toBe("1, 2");
+    expect(facetSummary(new Set(["1", "2", "3"]))).toBe("3 selected");
   });
 
   it("filters by ingestion status", () => {

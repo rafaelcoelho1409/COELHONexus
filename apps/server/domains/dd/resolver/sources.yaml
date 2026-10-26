@@ -82,8 +82,9 @@ frameworks:
 - name: Browser Use
   logo: https://mintcdn.com/browseruse-0aece648/lNAyHi2yxyXHwQ6v/logo/dark.svg?fit=max&auto=format&n=lNAyHi2yxyXHwQ6v&q=85&s=711fa3bb6b312e888023b697db9112be
   docs: https://docs.browser-use.com/open-source/
-  llms_full: https://docs.browser-use.com/open-source/llms-full.txt
-  llms_txt: https://docs.browser-use.com/open-source/llms.txt
+  # The docs site now serves ONE bundle for everything (Cloud + open-source); `path_filter` below keeps the library.
+  llms_full: https://docs.browser-use.com/llms-full.txt
+  llms_txt: https://docs.browser-use.com/llms.txt
   sitemap: https://docs.browser-use.com/sitemap.xml
   github: https://github.com/browser-use/browser-use
   category: Python
@@ -122,7 +123,7 @@ frameworks:
 
 - name: Dagster
   logo: https://docs.dagster.io/img/dagster-docs-logo-dark.svg
-  docs: https://docs.dagster.io
+  docs: https://dagster.io/docs
   sitemap: https://docs.dagster.io/sitemap.xml
   github: https://github.com/dagster-io/dagster
   category: Python
@@ -130,7 +131,7 @@ frameworks:
 - name: Dask
   logo: https://docs.dask.org/en/stable/_static/images/dask-horizontal-white.svg
   llms_full: https://docs.dask.org/llms-full.txt
-  llms_txt: https://docs.dask.org/llms.txt
+  # No `llms_txt`: Dask's is its README rendered as a quote, not an index — it parses into 1161 "links", every one a 404.
   github: https://github.com/dask/dask
   category: Python
 
@@ -140,7 +141,7 @@ frameworks:
   llms_full: https://docs.getdbt.com/llms-full.txt
   llms_txt: https://docs.getdbt.com/llms.txt
   sitemap: https://docs.getdbt.com/sitemap.xml
-  github: https://github.com/dbt-labs/dbt-core
+  github: https://github.com/dbt-labs/dbt
   category: Data
 
 - name: DeepAgents
@@ -458,8 +459,8 @@ frameworks:
 
 - name: MediaPipe
   logo: https://cdn.simpleicons.org/mediapipe
-  docs: https://ai.google.dev/edge/mediapipe/
-  sitemap: https://ai.google.dev/sitemap.xml
+  docs: https://developers.google.com/edge/mediapipe/solutions/guide
+  # No `sitemap`: the docs moved from ai.google.dev to developers.google.com, and none of Google's 40 sitemaps lists a MediaPipe page.
   github: https://github.com/google-ai-edge/mediapipe
   category: Python
   path_filter:

@@ -1,13 +1,13 @@
-/** Docs Distiller stage table — mirrors the legacy `_STAGES` (shared/urls.py):
- * the tabs shown in the strip. Planner and synth are unified into the
- * Pipeline page; their legacy URLs stay reachable as deep-link routes. */
+/** Docs Distiller stages. `tab` marks the ones shown in the tab strip, as in the legacy `_STAGES`
+ * (shared/urls.py): Planner and Synth run side by side on the Pipeline tab, so they have no tab of their own;
+ * their URLs stay reachable as deep links to a single stage. */
 export const DD_STAGES = [
-  { key: "catalog", label: "Catalog", href: "/dd" },
-  { key: "ingestion", label: "Ingestion", href: "/dd/ingestion" },
-  { key: "pipeline", label: "Pipeline", href: "/dd/pipeline" },
-  { key: "planner", label: "Planner", href: "/dd/planner" },
-  { key: "synth", label: "Synth", href: "/dd/synth" },
-  { key: "study", label: "Study", href: "/dd/study" },
+  { key: "catalog", label: "Catalog", href: "/dd", tab: true },
+  { key: "ingestion", label: "Ingestion", href: "/dd/ingestion", tab: true },
+  { key: "pipeline", label: "Pipeline", href: "/dd/pipeline", tab: true },
+  { key: "planner", label: "Planner", href: "/dd/planner", tab: false },
+  { key: "synth", label: "Synth", href: "/dd/synth", tab: false },
+  { key: "study", label: "Study", href: "/dd/study", tab: true },
 ] as const;
 
 export type DdStage = (typeof DD_STAGES)[number]["key"];

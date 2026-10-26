@@ -25,12 +25,22 @@ async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> d
         except Exception as e:
             logger.warning(f"[post] body read failed: {e}")
             return domain.make_summary("split", input_files, input_bytes, current)
-        writes, stubs, dupes = domain.split_monolith(body, only.slug)
+        # Seconds of pure-Python work on a multi-megabyte bundle: off the event loop, which serves the cancel watcher.
+        writes, stubs, dupes = await asyncio.to_thread(domain.split_monolith, body, only.slug)
         if len(writes) == 1 and writes[0][1] == body:
             return domain.make_summary(
                 "split", input_files, input_bytes, current, was_split=False,
             )
+        # The site's own page order and sections (its llms.txt), when Tier 1 found one — the bundle is often
+        # alphabetical by URL, and its URL folders say little (Claude Code's are all `docs/en`).
+        nav_index = getattr(store, "nav_index", None) or []
+        ordered = domain.order_by_nav(writes, [url for url, _section in nav_index])
+        if ordered != writes:
+            logger.info(f"[post] {store.framework_slug}: {len(ordered)} pages put in the site's navigation order")
+        writes = ordered
+        sections = domain.sections_by_nav(writes, nav_index)
         await store.delete_body_by_key(only.key)
+        await store.delete_vault(only.idx, only.slug)  # the bundle's vault, if one was built, is orphaned by the split
         new_entries: list[domains.dd.ingestion.storage.entities.ManifestEntry] = []
         write_batch: list = []
         for new_idx, (slug, sec_body, source_path) in enumerate(writes):
@@ -50,14 +60,16 @@ async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> d
                 url = only.url,
                 tier = tier,
                 bytes = len(sec_body.encode("utf-8")),
-                title = slug,
+                # The page's own heading (the explorer lists pages by title); the slug only if it has none.
+                title = domain.display_title(sec_body, slug),
                 key = new_key,
                 source_path = source_path,
+                section = sections[new_idx],
             ))
         await store.minio.write_many(write_batch)
         await store.replace_manifest(new_entries)
         return domain.make_summary(
-            "split", 
+            "split",
             input_files, 
             input_bytes, 
             new_entries,
@@ -110,6 +122,7 @@ async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> d
     async def _del_one(e):
         async with del_sem:
             await store.delete_body_by_key(e.key)
+            await store.delete_vault(e.idx, e.slug)  # rewritten under a new idx: the old vault can never be found again
 
     await asyncio.gather(*(_del_one(e) for e in current))
     new_entries = []
@@ -120,10 +133,10 @@ async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> d
             (e for e in current if e.url == purl and e.slug == pslug), None,
         )
         tier = prev.tier if prev else (current[0].tier if current else "unknown")
-        # Split children (slug != parent slug) take their own heading-derived
-        # slug as title, mirroring the monolith split branch; untouched pages
-        # keep the parent title.
-        title = prev.title if (prev and slug == pslug) else slug
+        # Split children (slug != parent slug) take a title from their own
+        # heading, mirroring the monolith split branch; untouched pages keep
+        # the parent title.
+        title = prev.title if (prev and slug == pslug) else domain.display_title(body, slug)
         new_key = domains.dd.ingestion.storage.keys.page_key(store.framework_slug, new_idx, slug)
         write_batch.append((new_key, body, "text/markdown"))
         new_entries.append(domains.dd.ingestion.storage.entities.ManifestEntry(

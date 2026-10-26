@@ -52,6 +52,23 @@ export function catalogCategories(entries: CatalogEntry[]): string[] {
   return [...new Set(entries.map((e) => e.category ?? "Other"))].sort();
 }
 
+/** How many frameworks each category holds, over the whole catalog. */
+export function categoryCounts(entries: CatalogEntry[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const entry of entries) {
+    const category = entry.category ?? "Other";
+    counts[category] = (counts[category] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/** What a multi-toggle filter's button reads: "All" with nothing chosen, the values for one or two, else a count. */
+export function facetSummary(selected: ReadonlySet<string>): string {
+  if (selected.size === 0) return "All";
+  const values = [...selected].sort();
+  return values.length <= 2 ? values.join(", ") : `${values.length} selected`;
+}
+
 export function catalogTiers(entries: CatalogEntry[]): string[] {
   return [...new Set(entries.map(tileTier))].sort();
 }

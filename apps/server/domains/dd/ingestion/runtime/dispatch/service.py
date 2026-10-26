@@ -22,6 +22,47 @@ _TIER_MODULES = {
 }
 
 
+_FALL_THROUGH = (
+    tiers.errors.ManifestDetected,
+    tiers.errors.EmptyLinksDetected,
+    tiers.errors.TierUnavailable,
+)
+
+
+async def run_source_chain(chain, progress, *, new_progress, run_tier, base_result: dict, slug: str):
+    """Run the first source in `chain` (`[{kind, url}]`, best first) that works, and return the `Progress` the winning
+    tier used. A tier that says its source is unusable — a link index instead of content, a page of links with none to
+    follow, a 404 or an HTML page — hands over to the next declared source with a fresh `Progress`; any other error
+    ends the run as before. When nothing is left the run fails, naming every reason."""
+    reasons: list[str] = []
+    for position, source in enumerate(chain):
+        kind, url = source["kind"], source["url"]
+        base_result["tier_kind"] = kind
+        base_result["tier_url"] = url
+        try:
+            await run_tier(kind, url, progress)
+            return progress
+        except _FALL_THROUGH as unusable:
+            reasons.append(f"{kind} ({url}): {unusable}")
+            if isinstance(unusable, tiers.errors.EmptyLinksDetected):
+                # Tier 2 does not log its own downgrade (tier 1 does): without this marker the progress row would sit
+                # at "running" and the UI trail would lose the fact that a fallback happened at all.
+                await progress.record_url(
+                    url, status = "downgrade", tier = kind, error_msg = "zero links, falling through",
+                )
+            await progress.finish(status = "downgrade")
+            following = chain[position + 1] if position + 1 < len(chain) else None
+            if following is None:
+                break
+            logger.info(
+                f"[dispatch] {slug}: {kind} unusable ({type(unusable).__name__}) — "
+                f"falling through to {following['kind']} ({following['url']})"
+            )
+            await progress.close()
+            progress = new_progress()
+    raise RuntimeError(f"no declared source for {slug!r} worked: " + "; ".join(reasons))
+
+
 async def _cancel_watcher(
     redis_client: "infra.redis.service.Redis",
     run_id: str,
@@ -221,78 +262,34 @@ async def _run_inner(run_id: str, slug: str) -> dict:
     try:
         await progress.raise_if_cancelled()
 
-        kind = best["kind"]
-        url = best["url"]
-        try:
+        async def run_tier(kind: str, url: str, tier_progress) -> None:
             mod = _TIER_MODULES[kind]
             kwargs: dict = {
                 "url": url, "framework_slug": slug,
-                "progress": progress, "store": store,
+                "progress": tier_progress, "store": store,
             }
             if mod in (domains.dd.ingestion.tiers.tier3, domains.dd.ingestion.tiers.tier4):
                 kwargs["framework_name"] = entry["name"]
+            if mod in (
+                domains.dd.ingestion.tiers.tier1,
+                domains.dd.ingestion.tiers.tier2,
+                domains.dd.ingestion.tiers.tier3,
+                domains.dd.ingestion.tiers.tier4,
+            ):
                 kwargs["path_filter"] = entry.get("path_filter")
+            if mod is domains.dd.ingestion.tiers.tier1:
+                kwargs["nav_url"] = entry.get("llms_txt")  # the site's own page order, for the split
             await mod.service.run(**kwargs)
-        except domains.dd.ingestion.tiers.errors.ManifestDetected:
-            if entry.get("llms_txt"):
-                logger.info(
-                    f"[dispatch] {slug}: Tier 1 manifest detected, "
-                    f"falling through to Tier 2"
-                )
-                base_result["tier_kind"] = "llms_txt"
-                base_result["tier_url"] = entry["llms_txt"]
-                await progress.close()
-                progress = domains.dd.ingestion.runtime.progress.service.Progress(run_id)
-                await domains.dd.ingestion.tiers.tier2.service.run(
-                    url = entry["llms_txt"], framework_slug = slug,
-                    progress = progress, store = store,
-                )
-            else:
-                raise RuntimeError(
-                    f"Tier 1 manifest at {url} but no llms_txt URL "
-                    f"available to fall back to"
-                )
-        except domains.dd.ingestion.tiers.errors.EmptyLinksDetected:
-            # llms.txt long-form prose with no per-page links — fall through.
-            fallback_chain = [
-                ("sitemap", entry.get("sitemap"), domains.dd.ingestion.tiers.tier3),
-                ("docs",    entry.get("docs"),    domains.dd.ingestion.tiers.tier4),
-                ("github",  entry.get("github"),  domains.dd.ingestion.tiers.tier5),
-            ]
-            picked = next(((k, u, m) for k, u, m in fallback_chain if u), None)
-            if picked is None:
-                raise RuntimeError(
-                    f"Tier 2 llms.txt at {url} yielded zero links and no "
-                    f"fallback tier (sitemap/docs/github) is configured"
-                )
-            fb_kind, fb_url, fb_mod = picked
-            logger.info(
-                f"[dispatch] {slug}: Tier 2 yielded zero links, "
-                f"falling through to Tier {fb_kind} ({fb_url})"
-            )
-            base_result["tier_kind"] = fb_kind
-            base_result["tier_url"] = fb_url
-            # Downgrade marker (mirror of Tier 1's ManifestDetected path, which
-            # records status="downgrade" before falling through to Tier 2):
-            # without this the old progress row sits at "running" forever and
-            # the UI trail loses the fact a fallback happened at all.
-            await progress.record_url(
-                url,
-                status = "downgrade",
-                tier = "llms_txt",
-                error_msg = f"zero links, falling through to Tier {fb_kind}",
-            )
-            await progress.finish(status = "downgrade")
-            await progress.close()
-            progress = domains.dd.ingestion.runtime.progress.service.Progress(run_id)
-            fb_kwargs = {
-                "url": fb_url, "framework_slug": slug,
-                "progress": progress, "store": store,
-            }
-            if fb_mod in (domains.dd.ingestion.tiers.tier3, domains.dd.ingestion.tiers.tier4):
-                fb_kwargs["framework_name"] = entry["name"]
-                fb_kwargs["path_filter"] = entry.get("path_filter")
-            await fb_mod.service.run(**fb_kwargs)
+
+        # The best declared source first; each lower one only if the one before turns out unusable today.
+        progress = await run_source_chain(
+            domain.source_chain(entry),
+            progress,
+            new_progress = lambda: domains.dd.ingestion.runtime.progress.service.Progress(run_id),
+            run_tier = run_tier,
+            base_result = base_result,
+            slug = slug,
+        )
 
         await progress.raise_if_cancelled()
 

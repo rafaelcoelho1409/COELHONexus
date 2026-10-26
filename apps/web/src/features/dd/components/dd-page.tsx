@@ -4,10 +4,9 @@
  * The stage comes from the pathname; slug/run come from search params
  * (read inside a Suspense boundary per Next.js requirements). */
 
-import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
-import { DD_STAGES, type DdStage, stageHref } from "../params";
+import { DD_STAGES, type DdStage } from "../params";
 import { CatalogStage } from "./catalog-stage";
 import { FrameworkPicker } from "./framework-picker";
 import { IngestionStage } from "./ingestion-stage";
@@ -47,16 +46,7 @@ function StageHeader({ stage }: { stage: DdStage }) {
     <StageNav
       stage={stage}
       slug={slug}
-      aside={
-        stage === "catalog" ? null : (
-          <>
-            <FrameworkPicker stage={stage} currentSlug={slug} />
-            <Link href={stageHref("catalog")} className="text-xs text-muted-foreground hover:text-foreground">
-              New framework?
-            </Link>
-          </>
-        )
-      }
+      aside={stage === "catalog" ? null : <FrameworkPicker stage={stage} currentSlug={slug} />}
     />
   );
 }

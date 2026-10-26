@@ -18,6 +18,10 @@ MDX_WRAPPER_TAGS = (
 )
 
 
+# A multi-line `<video>` / `<audio>` element is looked for this far down from its opening line.
+MEDIA_MAX_LINES = 12
+
+
 # Stat tracking only — we always strip to first token regardless.
 FENCE_META_ATTRS = (
     "theme", "expandable", "lines", "title", "icon",

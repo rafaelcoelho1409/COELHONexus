@@ -11,7 +11,7 @@ import { useSynthRun } from "../hooks/use-synth-run";
 import { PipelineTotal } from "./pipeline-total";
 import { PlannerBoard } from "./planner-view";
 import { NoFrameworkCard } from "./stage-parts";
-import { SynthBoard } from "./synth-view";
+import { SynthChapters, SynthRunPanel } from "./synth-view";
 
 function PipelineWorkbench({ slug }: { slug: string }) {
   const overlays = useDdOverlays();
@@ -26,7 +26,7 @@ function PipelineWorkbench({ slug }: { slug: string }) {
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
         <p className="max-w-prose text-xs text-muted-foreground">
           Plan first, then chapters are synthesized in order and harmonized. The two stages never run
-          concurrently — start both from here, or jump to each stage directly.
+          concurrently. Open any node for its inputs, outputs and LLM usage.
         </p>
         <label
           htmlFor="dd-auto-chain"
@@ -44,8 +44,12 @@ function PipelineWorkbench({ slug }: { slug: string }) {
         </label>
       </div>
       <PipelineTotal planner={planner} synth={synth} />
-      <PlannerBoard slug={slug} planner={planner} blocker={plannerBlocker} />
-      <SynthBoard slug={slug} synth={synth} blocker={synthBlocker} />
+      {/* Two lanes side by side, each an agent graph: the plan on the left feeds the chapters on the right. */}
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+        <PlannerBoard slug={slug} planner={planner} blocker={plannerBlocker} />
+        <SynthRunPanel synth={synth} blocker={synthBlocker} />
+      </div>
+      <SynthChapters slug={slug} synth={synth} blocker={synthBlocker} />
     </div>
   );
 }
