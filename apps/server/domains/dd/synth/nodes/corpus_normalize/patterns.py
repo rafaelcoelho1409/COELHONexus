@@ -91,6 +91,25 @@ GITBOOK_TABS_CLOSE_RE = re.compile(
 PERMALINK_TRAILING_RE = re.compile(r"\s*\[[¶\ue000-\uf8ff]?\]\([^)]*\)\s*$")
 PERMALINK_LEADING_RE = re.compile(r"^\s*\[[¶\ue000-\uf8ff]?\]\(#[^)]*\)\s*")
 
+# Mintlify puts an empty permalink in front of a heading's text (`## [](#overview) Overview`: 815 headings in deepagents' 79
+# pages), where PERMALINK_LEADING_RE, which wants it at the start of the line, never looked; and Docusaurus-style API docs end
+# a line with a `[#](#anchor)` link to itself (Playwright's `**Returns**` lists).
+HEADING_PERMALINK_RE = re.compile(r"^(#{1,6}[ \t]+)(?:\[[¶-]?\]\(#[^)]*\)[ \t]*)+")
+PERMALINK_HASH_RE = re.compile(r"[ \t]*\[#\]\(#[^)\s]*\)[ \t]*$")
+
+# The header line a docs builder prints above a code block in its markdown: the language, a copy icon and the word "Copy"
+# (Grafana's twin pages, 882 of them in Tempo's 213: `Bash ![Copy code to clipboard](…/icon-copy-small-2.svg) Copy`). The
+# fence below says the language; the rest is a button.
+CODE_COPY_LINE_RE = re.compile(
+    r"^[ \t]*[\w+#.\-]{0,20}[ \t]*!\[(?:Copy code to clipboard|Copy to clipboard)\]\([^)\n]*\)[ \t]*(?:Copy(?: code)?)?[ \t]*$"
+    r"|^[ \t]*[\w+#.\-]{0,20}[ \t]*!\[Copy(?: code)?\]\([^)\n]*\)[ \t]*Copy(?: code)?[ \t]*$",
+    re.IGNORECASE,
+)
+
+# A code annotation a docs builder leaves at the end of a line of code to say "highlight this" (Shiki's transformer
+# notation, in Mintlify's markdown): `# [!code highlight]`, `// [!code ++]`.
+CODE_ANNOTATION_RE = re.compile(r"[ \t]*(?:#|//|--|/\*)[ \t]*\[!code[ \t]+[^\]\n]*\][ \t]*(?:\*/)?[ \t]*$")
+
 # A line's leading indentation and blockquote markers: a fenced block inside a callout opens with `> ```bash …`.
 QUOTE_PREFIX_RE = re.compile(r"^[ \t]*(?:>[ \t]?)*")
 

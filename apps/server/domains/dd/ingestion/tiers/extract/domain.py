@@ -16,9 +16,102 @@ logger = logging.getLogger(__name__)
 
 
 def strip_chrome(soup: BeautifulSoup) -> None:
+    _callouts_to_blockquotes(soup)
     for sel in params.CHROME_SELECTORS:
         for el in soup.select(sel):
             el.decompose()
+
+
+def _callouts_to_blockquotes(soup: BeautifulSoup) -> None:
+    """`<aside>` is in CHROME_SELECTORS — most are sidebars and tables of contents — but Starlight (Terragrunt) writes its
+    Note / Tip / Caution callouts as `<aside class="starlight-aside …">`, and they went with the rest: 3 of 3 Notes on the
+    sample page, and code examples inside callouts (17 of 62 code blocks of one reference page). An aside whose class, role
+    or label says callout becomes a `<blockquote>` with its title in bold; one that also says sidebar / contents stays chrome."""
+    for aside in soup.find_all("aside"):
+        marker = " ".join([*(aside.get("class") or []), aside.get("role") or "", aside.get("aria-label") or ""]).lower()
+        if not any(m in marker for m in params.CALLOUT_ASIDE_MARKERS) or any(m in marker for m in params.NOT_CALLOUT_MARKERS):
+            continue
+        for icon in aside.find_all("svg"):
+            icon.decompose()
+        for title in aside.find_all(class_=re.compile(r"title", re.I)):
+            text = title.get_text(" ", strip = True)
+            if text:
+                strong = soup.new_tag("strong")
+                strong.string = text
+                title.clear()
+                title.append(strong)
+        aside.name = "blockquote"
+        aside.attrs = {}
+
+
+def _prepare_tables(soup: BeautifulSoup) -> None:
+    """Make a table cell survive as one Markdown cell: a one-line `<pre>` in it (nginx's `Default: gzip off;`) is inline code,
+    not a fenced block squeezed into a cell, and a `|` in its text is escaped (`gzip on | off;` was split into two cells)."""
+    for cell in soup.find_all(["td", "th"]):
+        for pre in cell.find_all("pre"):
+            text = pre.get_text().strip()
+            if text and "\n" not in text:
+                code = soup.new_tag("code")
+                code.string = text
+                pre.replace_with(code)
+        for node in list(cell.find_all(string = True)):
+            if "|" in node and type(node) is NavigableString:
+                node.replace_with(NavigableString(str(node).replace("|", "\\|")))
+
+
+def _heading_text(root) -> str:
+    """The text of the first `<h1>` under `root`, on one line ("" if there is none)."""
+    h1 = root.find("h1")
+    if h1 is None:
+        return ""
+    return re.sub(r"\s+", " ", h1.get_text(" ", strip = True).replace("​", "")).strip()
+
+
+def page_name(title: str) -> str:
+    """The page's own name out of a `<title>`: what is before the last separator ("Quick start | Grafana Tempo
+    documentation" → "Quick start"). The title as it is when it has none, or when cutting it would leave nothing."""
+    best = -1
+    cut = ""
+    for sep in params.TITLE_SEPARATORS:
+        at = title.rfind(sep)
+        if at > best:
+            best, cut = at, sep
+    return title[:best].strip() or title.strip() if best > 0 else title.strip()
+
+
+_FENCED_RE = re.compile(r"^(`{3,}|~{3,}).*?^\1[ \t]*$", re.M | re.S)
+_ATX_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$", re.M)
+
+
+def _words(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", text.replace("’", "'").lower()).strip()
+
+
+def ensure_h1(markdown: str, title: str) -> str:
+    """A page that comes out with no H1 gets one: nginx.org writes a page's name as an `<h2>`, so its first heading is that
+    name — promoted when the page's `<title>` contains it ("nginx: Beginner's Guide" / "## Beginner’s Guide") — and
+    otherwise the `<title>`'s page name is put on top. Without one a page that is split into sections has no parent to name
+    them by. A page that already has an H1 (outside code), or one with no title to go by, is left as it is."""
+    name = page_name(title or "")
+    if not name:
+        return markdown
+    prose = _FENCED_RE.sub("", markdown)
+    if re.search(r"^# \S", prose, re.M):
+        return markdown
+    first = _ATX_RE.search(markdown)
+    head = markdown[: first.start()] if first else ""
+    if first and not head.strip() and _words(first.group(2)) and _words(first.group(2)) in _words(title):
+        return f"# {first.group(2)}{markdown[first.end():]}"
+    return f"# {name}\n\n{markdown}"
+
+
+def _heading_to_page_h1(soup: BeautifulSoup, root, heading: str) -> None:
+    """Put back the page's `<h1>` when stripping chrome took it: Docusaurus and Mintlify keep it in a `<header>`, which is
+    in CHROME_SELECTORS, so every page of Playwright, deepagents and langgraph came out with no H1."""
+    if heading and root.find("h1") is None:
+        h1 = soup.new_tag("h1")
+        h1.string = heading
+        root.insert(0, h1)
 
 
 def find_content_root(soup: BeautifulSoup):
@@ -214,9 +307,16 @@ def html_to_markdown(html: str, source_url: Optional[str] = None) -> str:
                     f"falling back to html.parser")
         soup = BeautifulSoup(html, "html.parser")
 
+    page_title = soup.title.get_text(" ", strip = True) if soup.title else ""
+    # The page's own <h1>, from inside its content element — with no such element the whole <body> is the root, and its first
+    # <h1> may be the site's logo in a banner, which is not the page's heading.
+    content = find_content_root(soup)
+    heading = "" if content is soup or content is soup.body else _heading_text(content)
     strip_chrome(soup)
     _normalize_math_to_markdown(soup)
+    _prepare_tables(soup)
     root = find_content_root(soup)
+    _heading_to_page_h1(soup, root, heading)
 
     md = _md(
         str(root),
@@ -226,7 +326,7 @@ def html_to_markdown(html: str, source_url: Optional[str] = None) -> str:
         bullets = "*-+",
         strip = ["script", "style"],
     )
-    return _collapse_blank_lines(md).strip()
+    return ensure_h1(_collapse_blank_lines(md).strip(), page_title)
 
 
 def extract_title(html: str) -> str:

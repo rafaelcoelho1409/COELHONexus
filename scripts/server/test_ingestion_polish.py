@@ -311,7 +311,7 @@ def normalized(text: str) -> str:
     return normalize.domain.normalize_doc(text).body
 
 
-check("the normalizer is at v8", normalize.versions.NORMALIZER_VERSION, 8)
+check("the normalizer is at v10", normalize.versions.NORMALIZER_VERSION, 10)
 check("a callout's fence loses its Mintlify attributes",
       normalized('> [!NOTE]\n>\n> ```bash theme={"theme":"css-variables"}\n> pip install "x[video]"\n> ```\n'),
       '> [!NOTE]\n>\n> ```bash\n> pip install "x[video]"\n> ```\n')
@@ -436,6 +436,28 @@ check("absolutizing leaves the app's own artifact paths alone and makes the page
       post.domain.absolutize_links(OWN_IMG, "https://huggingface.co/docs/transformers/v5/index.md"),
       "![x](/api/v1/dd/ingestion/transformers/artifacts/a590b05e22690c59.svg) and [guide](https://huggingface.co/docs/guide) and ![y](/api/v1/docs-distiller/ingestion/t/artifacts/b.png)\n")
 
+# Mintlify's empty permalink in front of a heading, and a `[#](#anchor)` ending a line (v9)
+check("an empty permalink in front of a heading's text goes", normalized("## [](#overview) Overview\n\nText.\n"), "## Overview\n\nText.\n")
+check("…whatever the level, and a run of them", normalized("### [](#a)[](#b) Deep dive\n"), "### Deep dive\n")
+check("…but a real link in a heading stays", normalized("## [Overview](/overview)\n"), "## [Overview](/overview)\n")
+check("…and code that shows one is code", normalized("```md\n## [](#overview) Overview\n```\n"), "```md\n## [](#overview) Overview\n```\n")
+check("a `[#](#anchor)` link ending a line goes", normalized("* [APIRequestContext](/api/x)[#](#api-request-new-context-return)\n"), "* [APIRequestContext](/api/x)\n")
+check("…a `[#]` to somewhere else is a link", normalized("See [#](https://x.dev/issues) for the list.\n"), "See [#](https://x.dev/issues) for the list.\n")
+check("a horizontal rule ending a page goes", normalized("The last paragraph.\n\n---\n"), "The last paragraph.\n")
+check("…a rule in the middle of it stays", normalized("One.\n\n---\n\nTwo.\n"), "One.\n\n---\n\nTwo.\n")
+check("a highlight annotation ends no line of code",
+      normalized("```python\nx = 1  # [!code highlight]\nreturn f(x)  // [!code ++]\n```\n"), "```python\nx = 1\nreturn f(x)\n```\n")
+check("…prose that mentions one is not code", normalized("Write `# [!code highlight]` after the line.\n"), "Write `# [!code highlight]` after the line.\n")
+COPY_LINE = "Bash ![Copy code to clipboard](https://grafana.com/media/images/icons/icon-copy-small-2.svg) Copy"
+check("the header line above a code block (language, copy icon, 'Copy') goes", normalized(f"Run it:\n\n{COPY_LINE}\n\n```bash\nls\n```\n"), "Run it:\n\n\n```bash\nls\n```\n")
+check("…also without the language or the word", normalized("![Copy code to clipboard](/i.svg)\n\ntext\n"), "\n\ntext\n")
+check("…but a copy icon in a sentence is a picture in a sentence", normalized("Press ![Copy](/copy.png) to copy the code.\n"), "Press ![Copy](/copy.png) to copy the code.\n")
+check("…and an image of something else on a line of its own stays", normalized("![Architecture](/a.png)\n"), "![Architecture](/a.png)\n")
+check("…the same line inside code is code", normalized(f"```md\n{COPY_LINE}\n```\n"), f"```md\n{COPY_LINE}\n```\n")
+check("the copy lines are counted", normalize.domain.normalize_doc(f"{COPY_LINE}\n\n```bash\nls\n```\n\n{COPY_LINE}\n\n```bash\npwd\n```\n").stats.code_copy_lines_stripped, 2)
+check("the new passes are counted",
+      (lambda s: (s.trailing_rules_stripped, s.code_annotations_stripped))(normalize.domain.normalize_doc("```py\nx  # [!code focus]\n```\n\n---\n").stats), (1, 1))
+
 check("the footer's rule, and the last section's own above it, both go",
       normalized("Last words.\n\n---\n\n\n---\n\n## Sitemap\n\n[Overview of all docs pages](/llms.txt)\n"), "Last words.\n")
 check("a rule that is not above the footer stays", normalized("One.\n\n---\n\nTwo.\n"), "One.\n\n---\n\nTwo.\n")
@@ -448,6 +470,12 @@ CN = [("ControlNet", "https://h/docs/diffusers/v1/using-diffusers/controlnet.md"
 check("four pages called ControlNet are told apart", len(set(post.domain.disambiguate_titles(CN))), 4)
 check("…by their folder, and the file name when the folder is shared",
       post.domain.disambiguate_titles(CN), ["Using Diffusers › ControlNet", "Pipelines › Controlnet Sana › ControlNet", "Pipelines › ControlNet", "Training › ControlNet"])
+
+# the sections of a split page lose the rule that separated them
+RULED = "# Class Page\n\n## One\n\n" + ("word " * 9000) + "\n\n---\n\n## Two\n\n" + ("word " * 9000) + "\n\n---\n\n## Three\n\n" + ("tail " * 9000) + "\n"
+ruled = post.domain.split_oversized_page("class-page", RULED, 30_000)
+check("a split section does not end on the `---` that divided it from the next", [b.rstrip().endswith("---") for _s, b, _p in ruled], [False] * len(ruled))
+check("…and none of its text goes with it", sum(b.count("word") for _s, b, _p in ruled), 18000)
 
 # a release folder tells nothing about a page: Hugging Face keeps every page of a release under `/v5.21.0/`
 QS = [("Quickstart", "https://huggingface.co/docs/transformers/v5.21.0/quickstart.md"),

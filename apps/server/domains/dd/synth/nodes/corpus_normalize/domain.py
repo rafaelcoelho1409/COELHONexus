@@ -31,6 +31,9 @@ def normalize_doc(
     text, n_footer = _agent_footer_pass(text)
     stats.agent_footer_stripped = n_footer
 
+    text, n_rules = _trailing_rule_pass(text)
+    stats.trailing_rules_stripped = n_rules
+
     text, n_license = _license_header_pass(text)
     stats.license_header_stripped = n_license
 
@@ -43,11 +46,13 @@ def normalize_doc(
     text, n_hoisted = _hoist_nested_fences_pass(text)
     stats.nested_fences_hoisted = n_hoisted
 
-    text, n_meta, n_admon, n_orphan, n_img = _token_aware_passes(text)
+    text, n_meta, n_admon, n_orphan, n_img, n_annot, n_copy = _token_aware_passes(text)
     stats.fence_meta_stripped       = n_meta
     stats.container_admonitions     = n_admon
     stats.orphan_tags_stripped      = n_orphan
     stats.img_tags_rewritten        = n_img
+    stats.code_annotations_stripped = n_annot
+    stats.code_copy_lines_stripped  = n_copy
 
     text, n_permalink, n_anchor = _permalink_pass(text)
     stats.permalink_debris_stripped = n_permalink
@@ -171,6 +176,17 @@ def _agent_footer_pass(text: str) -> tuple[str, int]:
     return kept[:cut] + patterns.TRAILING_RULES_RE.sub("", kept[cut:]) + "\n", 1
 
 
+def _trailing_rule_pass(text: str) -> tuple[str, int]:
+    """A horizontal rule at the very end of a page is where its footer was (Docusaurus' `<hr>` before the pagination, the
+    host's `---` before a sitemap): 132 of Playwright's 221 pages ended on one. Never content, so it goes, with the blank
+    lines above it. Only the end of the page is looked at."""
+    cut = max(0, len(text) - params.AGENT_FOOTER_TAIL_CHARS)
+    tail = patterns.TRAILING_RULES_RE.sub("", text[cut:].rstrip())
+    if tail == text[cut:].rstrip():
+        return text, 0
+    return text[:cut] + tail + "\n", 1
+
+
 def _license_header_pass(text: str) -> tuple[str, int]:
     """Drop a licence header that the docs builder left at the top of a page: the `#`-prefixed lines of a comment whose
     opening it dropped, through the closing `-->` (Hugging Face's `# Licensed under the Apache License…`). Without this
@@ -273,8 +289,9 @@ def _strip_fence_info_string(info: str) -> tuple[str, bool]:
     return parts[0], True
 
 
-def _token_aware_passes(text: str) -> tuple[str, int, int, int, int]:
-    """Fence-range-aware line walk: rewrite openers, skip bodies, strip prose tags (and rewrite JSX `<img>` as Markdown)."""
+def _token_aware_passes(text: str) -> tuple[str, int, int, int, int, int, int]:
+    """Fence-range-aware line walk: rewrite openers, strip a code annotation from the end of a line of code, strip prose tags
+    (and rewrite JSX `<img>` as Markdown), drop the "Bash [copy icon] Copy" line above a code block."""
     fence_ranges = _identify_fence_ranges(text)
     lines = text.split("\n")
 
@@ -289,10 +306,16 @@ def _token_aware_passes(text: str) -> tuple[str, int, int, int, int]:
     n_admon  = 0
     n_orphan = 0
     n_img    = 0
+    n_annot  = 0
+    n_copy   = 0
 
     out_lines: list[str] = []
     for i, line in enumerate(lines):
         if i in fence_body_lines:
+            if "[!code" in line:
+                annotated = patterns.CODE_ANNOTATION_RE.sub("", line)
+                n_annot += annotated != line
+                line = annotated
             out_lines.append(line)
             continue
 
@@ -311,9 +334,12 @@ def _token_aware_passes(text: str) -> tuple[str, int, int, int, int]:
         n_orphan += n_o
         new_line, n_i = _rewrite_img_tags(new_line)
         n_img += n_i
+        if "![" in new_line and patterns.CODE_COPY_LINE_RE.match(new_line):
+            new_line = ""
+            n_copy += 1
         out_lines.append(new_line)
 
-    return "\n".join(out_lines), n_meta, n_admon, n_orphan, n_img
+    return "\n".join(out_lines), n_meta, n_admon, n_orphan, n_img, n_annot, n_copy
 
 
 def _rewrite_fence_opener(line: str, kind: int) -> tuple[str, bool]:
@@ -373,6 +399,9 @@ def _permalink_pass(text: str) -> tuple[str, int, int]:
             continue
         new_line = patterns.PERMALINK_LEADING_RE.sub("", line)
         new_line = patterns.PERMALINK_TRAILING_RE.sub("", new_line)
+        if "](#" in new_line:
+            new_line = patterns.HEADING_PERMALINK_RE.sub(r"\1", new_line)
+            new_line = patterns.PERMALINK_HASH_RE.sub("", new_line)
         if new_line != line:
             n += 1
         if "[[" in new_line:

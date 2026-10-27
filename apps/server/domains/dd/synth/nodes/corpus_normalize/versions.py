@@ -21,4 +21,7 @@ from __future__ import annotations
 # it as an H1 (react.dev: no page had one) and TOML `+++` frontmatter is extracted like YAML's; react.dev's `## Sitemap`
 # footer goes; more react.dev components are stripped; a JSX `<img>` becomes a Markdown image.
 # v8 (2026-10-27): react.dev's pages for HTML elements (frontmatter `link: "<link>"`) get their H1 from that too.
-NORMALIZER_VERSION = 8
+# v9 (2026-10-27): the empty permalink Mintlify puts in front of a heading (`## [](#overview) Overview`) and a `[#](#anchor)`
+# link ending a line go; a horizontal rule ending a page goes; a `# [!code highlight]` annotation ends no line of code.
+# v10 (2026-10-27): the "Bash ![Copy code to clipboard](…) Copy" line Grafana's markdown prints above each code block goes.
+NORMALIZER_VERSION = 10

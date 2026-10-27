@@ -22,6 +22,9 @@ class NormalizeStats(BaseModel):
     agent_footer_stripped:      int  = 0
     heading_anchors_stripped:   int  = 0
     img_tags_rewritten:         int  = 0
+    code_annotations_stripped:  int  = 0
+    code_copy_lines_stripped:   int  = 0
+    trailing_rules_stripped:    int  = 0
     title_promoted:             bool = False
     frontmatter_extracted:      bool = False
     html_entities_decoded:      int  = 0

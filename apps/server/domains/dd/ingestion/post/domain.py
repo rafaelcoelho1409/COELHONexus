@@ -139,7 +139,42 @@ def _plain_heading(text: str) -> str:
     emphasis marks or trailing `#`s, one line, bounded."""
     s = patterns.MD_LINK_TEXT_RE.sub(r"\1", text)
     s = re.sub(r"[`*]+", "", s).strip().rstrip("#").strip()
+    # A converter escapes what Markdown would read as markup: `all\_inner\_texts` is the title "all_inner_texts".
+    s = re.sub(r"\\([\\_*\[\]()#+.!|<>-])", r"\1", s)
     return re.sub(r"\s+", " ", s)[: params.TITLE_MAX_CHARS]
+
+
+def strip_site_suffix(titles: list[str]) -> list[str]:
+    """The titles without the site's name when a page's `<title>` carried it: "Quick start | Grafana Tempo documentation" →
+    "Quick start", "Context overview - Docs by LangChain" → "Context overview". Every page of a site ends the same way, which
+    is noise in a list of pages and in what Planner is told. Only a trailing segment (after ` | `, ` - `, ` – `, ` — `, ` · `)
+    that is the same on at least TITLE_SUFFIX_MIN_SHARE of the titles — and at least TITLE_SUFFIX_MIN_COUNT of them — is
+    taken, so "List - Users" is safe in a docs set that names one resource now and then. Titles made up of a parent and a
+    child (`Parent › Child`) are left alone and are not counted. Another suffix with the same last word ("Grafana
+    Enterprise Traces documentation" beside "Grafana Tempo documentation") goes too, when it is seen as often as the minimum."""
+    def split(title: str) -> tuple[str, str] | None:
+        best, cut = -1, ""
+        for sep in params.TITLE_SUFFIX_SEPARATORS:
+            at = title.rfind(sep)
+            if at > best:
+                best, cut = at, sep
+        if best <= 0:
+            return None
+        head, tail = title[:best].strip(), title[best + len(cut):].strip()
+        return (head, tail) if head and tail else None
+
+    parts = [None if " › " in t else split(t) for t in titles]
+    eligible = sum(1 for t in titles if " › " not in t)
+    if eligible < params.TITLE_SUFFIX_MIN_COUNT:
+        return list(titles)
+    counts = Counter(p[1].casefold() for p in parts if p is not None)
+    dominant = {s for s, c in counts.items() if c >= params.TITLE_SUFFIX_MIN_COUNT and c / eligible >= params.TITLE_SUFFIX_MIN_SHARE}
+    if not dominant:
+        return list(titles)
+    last_words = {s.rsplit(" ", 1)[-1] for s in dominant if " " in s}
+    related = {s for s, c in counts.items() if c >= params.TITLE_SUFFIX_MIN_COUNT and " " in s and s.rsplit(" ", 1)[-1] in last_words}
+    drop = dominant | related
+    return [p[0] if p is not None and p[1].casefold() in drop else t for t, p in zip(titles, parts)]
 
 
 def display_title(body: str, fallback: str) -> str:
@@ -591,6 +626,15 @@ def _h2_subsplit_oversized(
     return expanded
 
 
+def _without_trailing_rule(body: str) -> str:
+    """The section without the `---` that separated it from the next one (131 of Playwright's split API pages ended on one).
+    Only the last few hundred characters are looked at."""
+    cut = max(0, len(body) - 400)
+    tail = body[cut:].rstrip()
+    stripped = patterns.TRAILING_RULE_RE.sub("", tail)
+    return body if stripped == tail else body[:cut] + stripped + "\n"
+
+
 def _size_aware_recursive_split(
     slug: str,
     body: str,
@@ -616,7 +660,7 @@ def _size_aware_recursive_split(
         heading = sub_h2 if sub_h2 else sub_h1
         if not heading:
             continue
-        body_with_context = (
+        body_with_context = _without_trailing_rule(
             h1_prefix + sub_b
             if h1_prefix and not sub_b.startswith(h1_prefix)
             else sub_b

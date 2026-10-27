@@ -417,7 +417,37 @@ async def main() -> None:
     check("a twin that is really an HTML page (a site answering 200 to anything) is no twin", by_url["p2"]["title"], "Scraped")
     asked.clear()
     outcome, progress, store, error = await run_tier3(twin_site)
-    check("with twins off nothing asks for a twin", (error, [p for p in asked if p.endswith(".md")]), (None, []))
+    by_url = {p["url"].rsplit("/", 1)[-1]: p for p in store.pages}
+    check("with twins off, a site where only one of three pages has a twin is scraped, after one probe of each page",
+          (error, sorted(p for p in asked if p.endswith(".md")), by_url["p0"]["title"]), (None, ["/guide/p0.md", "/guide/p1.md", "/guide/p2.md"], "Scraped"))
+
+    # a site that publishes twins is found by asking a few pages, without Tier 2 having said so
+    TWIN_OF = {f"/guide/p{i}.md": f"# Twin {i}\n\n" + "Clean markdown text. " * 40 for i in range(3)}
+    asked.clear()
+
+    def all_twins(request):
+        path = request.url.path
+        asked.append(path)
+        if path == "/sitemap.xml":
+            return httpx.Response(200, text=sitemap(3))
+        if path in TWIN_OF:
+            return httpx.Response(200, text=TWIN_OF[path], headers=MARKDOWN)
+        return httpx.Response(200, text=HTML_PAGE)
+
+    outcome, progress, store, error = await run_tier3(all_twins)
+    check("a site whose pages all have twins is read from them, whatever Tier 2 said", (error, sorted(p["title"] for p in store.pages)), (None, ["Twin 0", "Twin 1", "Twin 2"]))
+    check("…and none of its HTML pages is asked for", [p for p in asked if p.startswith("/guide/") and not p.endswith(".md")], [])
+    real_client = httpx.AsyncClient
+
+    def any_twin(request):
+        return httpx.Response(200, text="# Twin\n\n" + "Clean markdown text. " * 40, headers=MARKDOWN)
+
+    async with real_client(transport=httpx.MockTransport(any_twin)) as client:
+        urls = [f"https://docs.example.com/guide/p{i}" for i in range(12)]
+        check("the probe finds twins on a site that publishes them", await tier3.service.site_serves_twins(client, urls), True)
+        check("…nothing to probe in a site of two pages", await tier3.service.site_serves_twins(client, urls[:2]), False)
+    async with real_client(transport=httpx.MockTransport(twin_site)) as client:
+        check("…and a site where one page in three has a twin does not pass", await tier3.service.site_serves_twins(client, ["https://x/guide/p0", "https://x/guide/p1", "https://x/guide/p2"]), False)
 
     # pages that share one long title used to spin the slug-collision loop for ever (the counter was cut off the slug)
     long_title = "How to choose an embedding model for your search application and evaluate the tradeoffs " * 2

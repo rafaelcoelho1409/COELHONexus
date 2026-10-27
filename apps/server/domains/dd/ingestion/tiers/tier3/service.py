@@ -113,6 +113,22 @@ async def _fetch_twin(
     return text, int((time.monotonic() - t0) * 1000)
 
 
+async def site_serves_twins(
+    client: httpx.AsyncClient,
+    urls: list[str],
+    pacer: domains.dd.ingestion.tiers.fetch.service.Pacer | None = None,
+) -> bool:
+    """Whether the site publishes a markdown twin of its pages: TWIN_PROBE_SAMPLE pages spread over `urls` are asked for
+    theirs, and at least TWIN_PROBE_MIN_OK must have one (see `_fetch_twin`: a 200 that is really an HTML page is not a twin)."""
+    sample_size = min(params.TWIN_PROBE_SAMPLE, len(urls))
+    if sample_size < params.TWIN_PROBE_MIN_OK:
+        return False
+    step = len(urls) / sample_size
+    sample = [urls[int(i * step)] for i in range(sample_size)]
+    found = await asyncio.gather(*(_fetch_twin(client, u, pacer) for u in sample))
+    return sum(1 for twin in found if twin is not None) >= params.TWIN_PROBE_MIN_OK
+
+
 async def _fetch_page(
     client: httpx.AsyncClient,
     url: str,
@@ -264,9 +280,6 @@ async def run(
                 f"Tier 3: {url} lists {len(all_urls)} URLs, none inside the catalog's path_filter"
             )
         await progress.update_total(len(deduped))
-        twins = bool(getattr(store, "markdown_twins", False))
-        if twins:
-            logger.info(f"[tier-3] {framework_slug}: the site's index served markdown pages — asking for each page's markdown twin first")
         host = (urlparse(url).netloc or "").lower()
 
         async def _announce_wait(seconds: float) -> None:
@@ -277,6 +290,12 @@ async def run(
             )
 
         pacer = domains.dd.ingestion.tiers.fetch.service.Pacer(on_wait = _announce_wait)
+        twins = bool(getattr(store, "markdown_twins", False))
+        if twins:
+            logger.info(f"[tier-3] {framework_slug}: the site's index served markdown pages — asking for each page's markdown twin first")
+        elif await site_serves_twins(client, deduped, pacer):
+            twins = True
+            logger.info(f"[tier-3] {framework_slug}: the site publishes a markdown twin of its pages — asking for each page's twin first")
         sem = asyncio.Semaphore(params.CONCURRENCY)
         slug_lock = asyncio.Lock()
         slug_owner: dict[str, str] = {}

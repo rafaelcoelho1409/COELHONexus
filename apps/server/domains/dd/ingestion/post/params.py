@@ -37,6 +37,12 @@ NAV_MIN_SECTIONS = 2
 # at most this many parent folders are named.
 TITLE_CONTEXT_MAX_SEGMENTS = 3
 
+# The site's name that a `<title>` ends with ("Quick start | Grafana Tempo documentation") is taken off the titles when the same
+# trailing segment is on at least this share of them, and at least this many (domain.strip_site_suffix).
+TITLE_SUFFIX_SEPARATORS = (" | ", " - ", " – ", " — ", " · ", " :: ")
+TITLE_SUFFIX_MIN_SHARE = 0.5
+TITLE_SUFFIX_MIN_COUNT = 8
+
 # URL folders that say nothing about a page's topic, so they never name it: the language of the docs, the word "docs", and
 # the names a host gives a release (a numbered one is skipped by `patterns.VERSION_SEGMENT_RE`).
 TITLE_SKIP_SEGMENTS = frozenset({

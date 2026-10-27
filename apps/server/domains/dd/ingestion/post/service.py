@@ -16,6 +16,9 @@ async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> d
     """Single-large-entry → split; multi-page → dedup. Rewrites the manifest
     atomically; returns a summary dict for Progress.record_post."""
     current = store.manifest
+    # The site's name that every page's `<title>` ends with ("… | Grafana Tempo documentation") is not part of the title.
+    for entry, title in zip(current, domain.strip_site_suffix([e.title for e in current])):
+        entry.title = title
     input_files = len(current)
     input_bytes = sum(e.bytes for e in current)
     if input_files == 1 and current[0].bytes >= params.MONOLITH_SPLIT_THRESHOLD_BYTES:

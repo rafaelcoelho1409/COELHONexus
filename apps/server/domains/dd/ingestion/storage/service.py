@@ -384,8 +384,9 @@ def _with_unique_titles(manifest: dict) -> dict:
     """The manifest, with titles that repeat told apart by the docs section of their page (post.domain.disambiguate_titles).
     Pure and cheap, so it is applied on every read — a library ingested earlier gets it without being re-ingested."""
     entries = manifest.get("entries") or []
+    plain = domains.dd.ingestion.post.domain.strip_site_suffix([e.get("title") or "" for e in entries])
     titles = domains.dd.ingestion.post.domain.disambiguate_titles(
-        [(e.get("title") or "", e.get("source_path") or e.get("url") or "") for e in entries],
+        [(title, e.get("source_path") or e.get("url") or "") for title, e in zip(plain, entries)],
     )
     if all(t == (e.get("title") or "") for t, e in zip(titles, entries)):
         return manifest
