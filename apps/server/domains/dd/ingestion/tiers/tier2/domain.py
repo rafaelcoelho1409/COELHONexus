@@ -1,12 +1,44 @@
-"""Tier 2 — pure helpers (index parse + slug + markdown-response detect)."""
+"""Tier 2 — pure helpers (index parse + slug + markdown-response detect + what an index is worth)."""
 from __future__ import annotations
-from . import patterns
+import domains
+from . import params, patterns
 
 import re
 from urllib.parse import urljoin, urlparse
 
 import httpx
 
+
+
+def covers_site(listed: int, site_pages: int) -> bool:
+    """Whether an index listing `listed` pages is a fair index of a site whose sitemap has `site_pages`. Only a site
+    worth judging is judged (see COVERAGE_MIN/MAX_SITEMAP_PAGES): anything else gives the index the benefit of the doubt."""
+    if not params.COVERAGE_MIN_SITEMAP_PAGES <= site_pages <= params.COVERAGE_MAX_SITEMAP_PAGES:
+        return True
+    return listed / site_pages >= params.COVERAGE_MIN_RATIO
+
+
+def serves_markdown(links: list[tuple[str, str, str, str]]) -> bool:
+    """Whether the index's pages are markdown files (`…/page.md`): a site that publishes those for what it lists most
+    likely publishes them for the rest of its pages too (Qdrant: `…/search-patterns/` → `…/search-patterns.md`)."""
+    if not links:
+        return False
+    markdown = sum(1 for _title, url, _section, _notes in links if urlparse(url).path.lower().endswith(".md"))
+    return markdown / len(links) >= params.MARKDOWN_INDEX_MIN_SHARE
+
+
+def is_stub(body: str) -> bool:
+    """A fetched page too small to study from: under STUB_MIN_BYTES, unless it holds a code example."""
+    return not domains.dd.ingestion.post.domain.worth_keeping(body, delimited = True, floor = params.STUB_MIN_BYTES)
+
+
+def drop_single_section(links: list[tuple[str, str, str, str]]) -> list[tuple[str, str, str, str]]:
+    """The index's `##` headings become the pages' sections (the explorer groups by them) only when there are at least
+    NAV_MIN_SECTIONS of them: one heading over every page — Hugging Face's "Docs" over 771 of them — groups nothing, and
+    would stand in the sidebar for the folders the URLs show."""
+    if len({section for _title, _url, section, _notes in links if section}) >= domains.dd.ingestion.post.params.NAV_MIN_SECTIONS:
+        return links
+    return [(title, url, "", notes) for title, url, _section, notes in links]
 
 
 def parse_index(body: str, base_url: str) -> list[tuple[str, str, str, str]]:

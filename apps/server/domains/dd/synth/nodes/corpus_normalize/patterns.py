@@ -18,6 +18,10 @@ MDX_CLOSE_TAG_RE = re.compile(
     rf"</(?:{_MDX_TAGS_PATTERN})\s*>",
 )
 
+# An MDX comment (`{/* … */}`): react.dev puts one after every heading to carry its anchor (`## Reference {/*reference*/}`).
+# Never content — the whitespace before it goes too.
+MDX_COMMENT_RE = re.compile(r"[ \t]*\{/\*.*?\*/\}")
+
 FENCE_META_HINT_RE = re.compile(
     rf"\b(?:{'|'.join(params.FENCE_META_ATTRS)})(?:\s*[=]|\s|$)",
 )
@@ -29,11 +33,18 @@ BOUNDARY_RE = re.compile(
     re.MULTILINE,
 )
 
-# YAML frontmatter at top of file.
+# YAML frontmatter at top of file, or TOML's (`+++ … +++`, Hugo/Zola sites: the HTMX docs FastHTML links to).
 FRONTMATTER_RE = re.compile(
     r"\A---\s*\r?\n(?P<body>.*?)\r?\n---\s*\r?\n",
     re.DOTALL,
 )
+TOML_FRONTMATTER_RE = re.compile(
+    r"\A\+\+\+\s*\r?\n(?P<body>.*?)\r?\n\+\+\+\s*\r?\n",
+    re.DOTALL,
+)
+
+# A heading at the top level of a page: `# Title`.
+H1_LINE_RE = re.compile(r"^#[ \t]+\S")
 
 # Container admonitions (Docusaurus / VitePress / MkDocs Material subset).
 ADMON_OPEN_RE = re.compile(
@@ -87,6 +98,43 @@ QUOTE_PREFIX_RE = re.compile(r"^[ \t]*(?:>[ \t]?)*")
 # otherwise the opening line of a multi-line one. `rest` is whatever follows the tag on that line.
 MEDIA_OPEN_RE = re.compile(r"^\s*<(?P<tag>video|audio)\b[^>]*?(?P<selfclose>/)?>(?P<rest>.*)$", re.IGNORECASE)
 MEDIA_SRC_RE = re.compile(r"\bsrc\s*=", re.IGNORECASE)
+
+# The licence header of a Hugging Face docs source: an HTML comment whose opening line the doc builder drops, leaving
+# `#`-prefixed lines (which read as H1s: `# Licensed under the Apache License…`) up to the comment's closing `-->` — on a
+# line of its own (Optimum) or at the end of the last `#` line (`# limitations under the License. -->`, most of Diffusers).
+LICENSE_HEADER_RE = re.compile(r"\A\s*(?:#(?:(?!-->)[^\n])*\n)*(?:#[^\n]*?)?-->[ \t]*\n+")
+
+# The anchor Hugging Face's doc builder appends to a heading (`## AutoModel[[transformers.AutoModel]]`): its own id for the
+# heading, which nothing in the stored page links to. It is read as part of the heading's text — and of the page's title.
+HEADING_ANCHOR_RE = re.compile(r"^(#{1,6}[ \t]+.*?)[ \t]*\[\[[A-Za-z0-9_.:\-]+\]\][ \t]*$")
+
+# What the host tacks on at the foot of every page for agents: react.dev's `---` / `## Sitemap` / `[Overview of all docs
+# pages](/llms.txt)`. Looked for in the last few hundred characters of a page only, and only when nothing but a link to
+# the site's llms.txt follows the heading.
+AGENT_FOOTER_RE = re.compile(
+    r"(?:\n[ \t]*-{3,}[ \t]*)?\n+#{1,3}[ \t]+(?:Sitemap|Documentation Index)[ \t]*\n+"
+    r"(?:[-*][ \t]+)?\[[^\]\n]*\]\([^)\s]*llms(?:-full)?\.txt\)[ \t]*\n*\Z",
+    re.IGNORECASE,
+)
+
+# The horizontal rules react.dev leaves between its last section and the footer: more than one when the last section's own
+# rule is there too.
+TRAILING_RULES_RE = re.compile(r"(?:\s*\n[ \t]*-{3,}[ \t]*)+\Z")
+
+# A JSX `<img>` (`<img className="w-full" src="…" alt="…" />`): not Markdown, so a reader that does not render raw HTML
+# shows the tag as text. Rewritten as `![alt](src)`; the `dark-image` half of a light/dark pair is the same picture again.
+IMG_TAG_RE = re.compile(r"<img\b(?P<attrs>[^<>]*?)/?>", re.IGNORECASE)
+IMG_SRC_RE = re.compile(r"\bsrc\s*=\s*(?:\"([^\"]*)\"|'([^']*)')", re.IGNORECASE)
+IMG_ALT_RE = re.compile(r"\balt\s*=\s*(?:\"([^\"]*)\"|'([^']*)')", re.IGNORECASE)
+IMG_DARK_RE = re.compile(r"\bclass(?:Name)?\s*=\s*[\"'][^\"']*\bdark(?:-image|-only)\b", re.IGNORECASE)
+
+# A line of a block quote (up to three spaces of indentation, as CommonMark allows).
+QUOTE_LINE_RE = re.compile(r"^[ \t]{0,3}>")
+
+# What marks a block quote at the very top of a page as the host's notice to agents rather than part of the docs: a link to
+# the site's own llms.txt ("> Use this file for an index of the main pages: https://qdrant.tech/llms.txt"), or the
+# "Documentation Index" heading Mintlify puts there.
+AGENT_BANNER_RE = re.compile(r"https?://\S*llms(?:-full)?\.txt|documentation index", re.IGNORECASE)
 
 # Zero-width + BOM + miscellaneous formatting chars.
 ZERO_WIDTH_RE = re.compile(r"[​‌‍⁠﻿]")

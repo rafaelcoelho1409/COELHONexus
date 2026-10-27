@@ -117,9 +117,11 @@ export function Explorer({ slug, manifest }: { slug: string; manifest: Manifest 
         <div className="max-h-[60vh] overflow-auto rounded-md border border-border bg-card">
           {groups.map((group) => (
             <div key={group.prefix}>
-              <p className="border-b border-border bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
-                {group.prefix === ROOT_GROUP ? "(root)" : group.prefix}
-              </p>
+              {group.prefix ? (
+                <p className="border-b border-border bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
+                  {group.prefix === ROOT_GROUP ? "(root)" : group.prefix}
+                </p>
+              ) : null}
               <ul>
                 {group.items.map(({ entry }) => (
                   <li key={entry.idx}>

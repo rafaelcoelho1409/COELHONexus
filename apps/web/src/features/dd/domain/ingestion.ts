@@ -1,6 +1,14 @@
 /** Docs Distiller ingestion — run progress view, manifest summary and the file-explorer grouping. */
 
 import type { CatalogEntry, LibraryItem, Manifest, ManifestEntry, RunStatus } from "../entities";
+import {
+  EXPLORER_FLAT_MAX_PAGES,
+  EXPLORER_FLAT_MIN_PAGES,
+  EXPLORER_REGROUP_DOMINANT_SHARE,
+  EXPLORER_REGROUP_MIN_PAGES,
+  EXPLORER_SPLIT_DOMINANT_SHARE,
+  EXPLORER_SPLIT_GROUP_MIN_PAGES,
+} from "../params";
 import { tileLogos, tileName } from "./catalog";
 import { fmtAge, fmtBytes } from "./format";
 import { itemDisplayName, itemLogos } from "./library";
@@ -183,20 +191,137 @@ function groupPrefix(entry: ManifestEntry): string {
 
 export type ExplorerGroup = { prefix: string; items: Array<{ entry: ManifestEntry; index: number }> };
 
-/**
- * The pages under their section headings, **in the order of the original documentation**: the manifest lists pages
- * in source order, so a group appears where its first page does and its pages keep their relative order. Nothing is
- * sorted by name — that is what let the sidebar drift from the docs it mirrors.
- */
-export function groupEntries(entries: ManifestEntry[]): ExplorerGroup[] {
+function bucket(entries: ManifestEntry[], keyOf: (entry: ManifestEntry) => string): ExplorerGroup[] {
   const groups = new Map<string, ExplorerGroup["items"]>();
   entries.forEach((entry, index) => {
-    const key = groupPrefix(entry);
+    const key = keyOf(entry);
     const items = groups.get(key);
     if (items) items.push({ entry, index });
     else groups.set(key, [{ entry, index }]);
   });
   return [...groups].map(([prefix, items]) => ({ prefix, items }));
+}
+
+/** The folders a page's URL sits in (its own file name left out); null when the entry has no usable URL. */
+function folders(entry: ManifestEntry): string[] | null {
+  try {
+    const segments = new URL(entry.source_path || entry.url || "").pathname.split("/").filter(Boolean);
+    return segments.slice(0, -1);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Groups by the first folder the pages do not all share — for a docs site whose every page sits under one folder
+ * (`/open-source/…`, or Hugging Face's `/docs/diffusers/v0.42.0/…`), where the usual grouping puts them all in one.
+ * Pages directly in the shared folder go to the root group.
+ */
+function regroupBelowSharedFolders(entries: ManifestEntry[]): ExplorerGroup[] {
+  const depth = sharedFolderDepth(entries);
+  return bucket(entries, (entry) => folders(entry)?.[depth] ?? ROOT_GROUP);
+}
+
+/** How many leading folders every page with a usable URL has in common. */
+function sharedFolderDepth(entries: readonly ManifestEntry[]): number {
+  const all = entries.map(folders);
+  let shared = all.find((segments) => segments !== null) ?? [];
+  for (const segments of all) {
+    if (segments === null) continue;
+    let common = 0;
+    while (common < shared.length && common < segments.length && shared[common] === segments[common])
+      common += 1;
+    shared = shared.slice(0, common);
+  }
+  return shared.length;
+}
+
+/** The first letter of a page's title, upper-cased; `#` for a title that does not start with one. */
+function titleLetter(entry: ManifestEntry): string {
+  const letter = (entry.title || entry.slug || "").trim().charAt(0).toUpperCase();
+  return /[A-Z]/.test(letter) ? letter : "#";
+}
+
+type GroupItems = ExplorerGroup["items"];
+
+function bucketItems(items: GroupItems, keyOf: (entry: ManifestEntry) => string): Map<string, GroupItems> {
+  const buckets = new Map<string, GroupItems>();
+  for (const item of items) {
+    const key = keyOf(item.entry);
+    const bucketed = buckets.get(key);
+    if (bucketed) bucketed.push(item);
+    else buckets.set(key, [item]);
+  }
+  return buckets;
+}
+
+function largestShare(buckets: Map<string, GroupItems>, total: number): number {
+  return Math.max(0, ...[...buckets.values()].map((items) => items.length)) / total;
+}
+
+/**
+ * A group too long to scan, split: by the folder below the ones its pages share (`api/models`, `api/pipelines`; pages
+ * sitting directly in the shared folder stay under the group's own name), and — when its pages are all in one flat
+ * folder — by the first letter of their titles, letters in alphabetical order, pages in the docs' order within one.
+ * A group with curated sections, a short one, or one nothing splits sensibly comes back as it is.
+ */
+function splitLargeGroup(group: ExplorerGroup): ExplorerGroup[] {
+  const { items } = group;
+  if (items.length < EXPLORER_SPLIT_GROUP_MIN_PAGES || items.some(({ entry }) => entry.section?.trim())) {
+    return [group];
+  }
+  const depth = sharedFolderDepth(items.map(({ entry }) => entry));
+  const byFolder = bucketItems(items, (entry) => folders(entry)?.[depth] ?? "");
+  const named = [...byFolder.keys()].filter(Boolean);
+  if (named.length >= 2 && largestShare(byFolder, items.length) < EXPLORER_SPLIT_DOMINANT_SHARE) {
+    const root = group.prefix === ROOT_GROUP ? "" : `${group.prefix}/`;
+    return [...byFolder].flatMap(([folder, part]) =>
+      splitLargeGroup({ prefix: folder ? `${root}${folder}` : group.prefix, items: part }),
+    );
+  }
+  const byLetter = bucketItems(items, titleLetter);
+  if (byLetter.size < 2 || largestShare(byLetter, items.length) >= EXPLORER_SPLIT_DOMINANT_SHARE)
+    return [group];
+  return [...byLetter]
+    .sort(([a], [b]) => letterRank(a) - letterRank(b) || a.localeCompare(b))
+    .map(([letter, part]) => ({ prefix: `${group.prefix} · ${letter}`, items: part }));
+}
+
+/** `#` (a title that starts with no letter) sorts before the letters. */
+function letterRank(letter: string): number {
+  return letter === "#" ? 0 : 1;
+}
+
+/** A small docs set with no sections whose groups are mostly single pages reads better as one plain list. */
+function isMostlySingletons(groups: readonly ExplorerGroup[], pages: number): boolean {
+  if (pages < EXPLORER_FLAT_MIN_PAGES || pages > EXPLORER_FLAT_MAX_PAGES || groups.length < 2) return false;
+  const singles = groups.filter((group) => group.items.length === 1).length;
+  return singles * 2 >= groups.length;
+}
+
+/**
+ * The pages under their section headings, **in the order of the original documentation**: the manifest lists pages
+ * in source order, so a group appears where its first page does and its pages keep their relative order. Nothing is
+ * sorted by name — that is what let the sidebar drift from the docs it mirrors (only the letters of a flat folder of
+ * hundreds of pages are in alphabetical order). When one group would hold nearly every page, the folders all pages
+ * share are skipped to name the groups instead; a group still too long is split by its own subfolders or letters; and
+ * a small set of mostly one-page folders is a single list with no headings (prefix `""`).
+ */
+export function groupEntries(entries: ManifestEntry[]): ExplorerGroup[] {
+  let groups = bucket(entries, groupPrefix);
+  const largest = Math.max(0, ...groups.map((group) => group.items.length));
+  if (
+    entries.length >= EXPLORER_REGROUP_MIN_PAGES &&
+    largest / entries.length >= EXPLORER_REGROUP_DOMINANT_SHARE
+  ) {
+    const finer = regroupBelowSharedFolders(entries);
+    if (finer.length > groups.length) groups = finer;
+  }
+  groups = groups.flatMap(splitLargeGroup);
+  if (!entries.some((entry) => entry.section?.trim()) && isMostlySingletons(groups, entries.length)) {
+    return [{ prefix: "", items: groups.flatMap((group) => group.items).sort((a, b) => a.index - b.index) }];
+  }
+  return groups;
 }
 
 /** Indexes of the entries matching the tier filter and the search text. */

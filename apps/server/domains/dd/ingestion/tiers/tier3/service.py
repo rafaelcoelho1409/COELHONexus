@@ -10,25 +10,29 @@ from urllib.parse import urlparse
 
 import httpx
 from bs4 import BeautifulSoup
-from tenacity import (
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential_jitter,
-)
 
 
 logger = logging.getLogger(__name__)
 
 
-@retry(
-    reraise = True,
-    retry = retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError)),
-    stop = stop_after_attempt(3),
-    wait = wait_exponential_jitter(initial = 1, max = 8),
-)
-async def _get(client: httpx.AsyncClient, url: str) -> httpx.Response:
-    return await client.get(url, headers = {"User-Agent": params.USER_AGENT})
+async def _get(
+    client: httpx.AsyncClient,
+    url: str,
+    pacer: domains.dd.ingestion.tiers.fetch.service.Pacer | None = None,
+) -> httpx.Response:
+    """GET with the shared crawl policy: retries on timeouts, network errors and 429/5xx, a site's Retry-After and
+    rate-limit headers honoured, and — given the crawl's `pacer` — all concurrent requests waiting together."""
+    fetch = domains.dd.ingestion.tiers.fetch
+    return await fetch.service.get(
+        client,
+        url,
+        headers = {"User-Agent": params.USER_AGENT},
+        attempts = fetch.params.CRAWL_ATTEMPTS,
+        wait_initial = fetch.params.CRAWL_WAIT_INITIAL_S,
+        wait_max = fetch.params.CRAWL_WAIT_MAX_S,
+        retry_after_cap = fetch.params.CRAWL_RETRY_AFTER_MAX_S,
+        pacer = pacer,
+    )
 
 
 async def _expand_sitemap(
@@ -71,6 +75,44 @@ async def _expand_sitemap(
     return out
 
 
+async def scoped_urls(client: httpx.AsyncClient, url: str, path_filter: dict | None = None) -> list[str]:
+    """The page URLs a Tier 3 run of this sitemap would fetch (before any language filter), in sitemap order, each once.
+    `[]` when the sitemap cannot be read. Lets another tier compare its own list of pages with the site's."""
+    seen: set[str] = set()
+    urls: list[str] = []
+    for page_url, _lastmod in await _expand_sitemap(client, url):
+        if page_url not in seen and domain.in_scope(page_url, path_filter):
+            seen.add(page_url)
+            urls.append(page_url)
+    return urls
+
+
+async def _fetch_twin(
+    client: httpx.AsyncClient,
+    url: str,
+    pacer: domains.dd.ingestion.tiers.fetch.service.Pacer | None,
+) -> tuple[str, int] | None:
+    """The page's markdown twin, on a site that publishes one (see `domain.markdown_twin_url`): `(markdown, fetch_ms)`,
+    or None — the HTML is scraped instead. A twin that is missing, too short, or really an HTML page (a site that answers
+    200 to anything) is no twin."""
+    twin = domain.markdown_twin_url(url)
+    if twin is None:
+        return None
+    t0 = time.monotonic()
+    try:
+        resp = await _get(client, twin, pacer)
+    except Exception:  # noqa: BLE001
+        return None
+    text = resp.text or ""
+    if (
+        resp.status_code != 200
+        or len(text.encode("utf-8")) < params.MIN_OK_BYTES
+        or domains.dd.ingestion.tiers.tier1.domain.looks_like_html(text)
+    ):
+        return None
+    return text, int((time.monotonic() - t0) * 1000)
+
+
 async def _fetch_page(
     client: httpx.AsyncClient,
     url: str,
@@ -78,10 +120,28 @@ async def _fetch_page(
     progress: domains.dd.ingestion.runtime.progress.service.Progress,
     framework_slug: str | None = None,
     store: domains.dd.ingestion.storage.service.Store | None = None,
+    twin: bool = False,
+    pacer: domains.dd.ingestion.tiers.fetch.service.Pacer | None = None,
 ) -> tuple[str, str, str, str] | None:
+    if twin:
+        twin_page = await _fetch_twin(client, url, pacer)
+        if twin_page is not None:
+            markdown, twin_ms = twin_page
+            title = domains.dd.ingestion.post.domain.display_title(markdown, "")
+            await progress.record_url(
+                url,
+                status = "success",
+                tier = "sitemap",
+                http_code = 200,
+                fetch_ms = twin_ms,
+                bytes_fetched = len(markdown.encode("utf-8")),
+                extracted_chars = len(markdown),
+            )
+            slug = domain.slugify(title or urlparse(url).path)
+            return (slug, url, markdown, title or slug)
     t0 = time.monotonic()
     try:
-        resp = await _get(client, url)
+        resp = await _get(client, url, pacer)
     except Exception as e:
         await progress.record_url(
             url,
@@ -166,10 +226,7 @@ async def run(
     polyglot = domains.dd.ingestion.filters.domain.is_polyglot(framework_name or "")
 
     def _keep(u: str) -> bool:
-        p = urlparse(u)
-        if domains.dd.ingestion.filters.patterns.NON_TARGET_LANGUAGE_PATH_RE.search(p.path or ""):
-            return False
-        if not domains.dd.ingestion.filters.domain.passes_path_filter(u, path_filter):
+        if not domain.in_scope(u, path_filter):
             return False
         if polyglot and language:
             return domains.dd.ingestion.filters.domain.should_keep(u, allow, deny)
@@ -183,8 +240,9 @@ async def run(
     ) as client:
         all_entries = await _expand_sitemap(client, url)
         if not all_entries:
-            await progress.finish(status = "failed")
-            raise RuntimeError(f"Tier 3: {url} yielded zero URLs")
+            # `downgrade`, not `failed`: a lower tier (the docs crawl, the repository) may still serve this framework.
+            await progress.finish(status = "downgrade")
+            raise domains.dd.ingestion.tiers.errors.TierUnavailable(f"Tier 3: {url} yielded zero URLs")
         all_urls = [u for u, _ in all_entries]
         lastmod_by_url = {u: lm for u, lm in all_entries if lm}
         kept = [u for u in all_urls if _keep(u)]
@@ -200,7 +258,25 @@ async def run(
             f"[tier-3] {len(all_urls)} total → {len(kept)} after filter → "
             f"{len(deduped)} after dedup ({n_lastmod} with lastmod)"
         )
+        if not deduped:
+            await progress.finish(status = "downgrade")
+            raise domains.dd.ingestion.tiers.errors.TierUnavailable(
+                f"Tier 3: {url} lists {len(all_urls)} URLs, none inside the catalog's path_filter"
+            )
         await progress.update_total(len(deduped))
+        twins = bool(getattr(store, "markdown_twins", False))
+        if twins:
+            logger.info(f"[tier-3] {framework_slug}: the site's index served markdown pages — asking for each page's markdown twin first")
+        host = (urlparse(url).netloc or "").lower()
+
+        async def _announce_wait(seconds: float) -> None:
+            logger.info(f"[tier-3] {framework_slug}: {host} asked for a pause, waiting {seconds:.0f}s")
+            await progress.record_url(
+                host, status = "rate_limited", tier = "sitemap",
+                error_msg = f"the site asked for a pause: waiting {seconds:.0f}s before going on",
+            )
+
+        pacer = domains.dd.ingestion.tiers.fetch.service.Pacer(on_wait = _announce_wait)
         sem = asyncio.Semaphore(params.CONCURRENCY)
         slug_lock = asyncio.Lock()
         slug_owner: dict[str, str] = {}
@@ -221,10 +297,10 @@ async def run(
                 if slug_owner[base] == link:
                     return base
                 stem = domain.collision_suffix(base, link) or "x"
-                cand = f"{base}-{stem}"[:80]
+                cand = domain.suffixed_slug(base, stem)
                 i = 2
                 while cand in slug_owner and slug_owner[cand] != link:
-                    cand = f"{base}-{stem}-{i}"[:80]
+                    cand = domain.suffixed_slug(base, f"{stem}-{i}")
                     i += 1
                 slug_owner[cand] = link
                 return cand
@@ -239,6 +315,8 @@ async def run(
                     progress = progress,
                     framework_slug = framework_slug,
                     store = store,
+                    twin = twins,
+                    pacer = pacer,
                 )
             if r is not None:
                 slug, src_url, body, title = r

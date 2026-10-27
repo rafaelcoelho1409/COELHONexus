@@ -9,6 +9,11 @@ SOURCE_LINE_RE = re.compile(
 )
 
 
+# A URL folder that is a release, not a topic: `v5.21.0`, `v0.42.1`, `0.42`, `v1`, `2.x`. (Docs hosts keep every page of a
+# release under it — Hugging Face's `/docs/transformers/v5.21.0/…` — so it says nothing about where a page belongs.)
+VERSION_SEGMENT_RE = re.compile(r"^v?\d+(?:\.(?:\d+|x))*(?:[-.]?(?:rc|alpha|beta|dev|post)\d*)?$", re.IGNORECASE)
+
+
 # A fenced code block's opening line (backticks or tildes), whatever it sits inside.
 CODE_FENCE_RE = re.compile(r"^[ \t>]*(?:`{3,}|~{3,})", re.MULTILINE)
 

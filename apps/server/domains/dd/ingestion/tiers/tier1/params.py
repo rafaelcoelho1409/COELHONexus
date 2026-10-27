@@ -12,7 +12,6 @@ RETRY_ATTEMPTS = 3
 RETRY_WAIT_INITIAL_S = 1.0
 RETRY_WAIT_MAX_S = 15.0
 RETRY_AFTER_MAX_S = 30.0
-TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 # The site's own page order (its llms.txt) is a nicety, never a reason to hold a run up: one try, a short timeout.
 NAV_TIMEOUT_S = 15.0

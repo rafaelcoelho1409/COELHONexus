@@ -37,9 +37,11 @@ NAV_MIN_SECTIONS = 2
 # at most this many parent folders are named.
 TITLE_CONTEXT_MAX_SEGMENTS = 3
 
-# URL folders that say nothing about a page's topic, so they never name it: the language of the docs and the word "docs".
+# URL folders that say nothing about a page's topic, so they never name it: the language of the docs, the word "docs", and
+# the names a host gives a release (a numbered one is skipped by `patterns.VERSION_SEGMENT_RE`).
 TITLE_SKIP_SEGMENTS = frozenset({
     "docs", "doc", "documentation",
+    "main", "master", "latest", "stable", "current", "next",
     "en", "fr", "de", "es", "it", "pt", "pt-br", "ja", "jp", "ko", "zh", "zh-cn", "zh-tw", "ru", "id", "tr", "vi", "nl", "pl",
 })
 

@@ -279,6 +279,8 @@ async def _run_inner(run_id: str, slug: str) -> dict:
                 kwargs["path_filter"] = entry.get("path_filter")
             if mod is domains.dd.ingestion.tiers.tier1:
                 kwargs["nav_url"] = entry.get("llms_txt")  # the site's own page order, for the split
+            if mod is domains.dd.ingestion.tiers.tier2:
+                kwargs["sitemap_url"] = entry.get("sitemap")  # to tell a curated index from the docs
             await mod.service.run(**kwargs)
 
         # The best declared source first; each lower one only if the one before turns out unusable today.

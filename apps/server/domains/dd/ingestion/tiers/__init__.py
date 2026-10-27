@@ -2,7 +2,7 @@
 `extract` helpers + the control-flow exceptions used to fall through
 between tiers. A tier never marks the run done: the dispatcher does, once."""
 from __future__ import annotations
-from . import errors, extract, tier1, tier2, tier3, tier4, tier5
+from . import errors, extract, fetch, tier1, tier2, tier3, tier4, tier5
 
 
-__all__ = ["errors", "extract", "tier1", "tier2", "tier3", "tier4", "tier5"]
+__all__ = ["errors", "extract", "fetch", "tier1", "tier2", "tier3", "tier4", "tier5"]

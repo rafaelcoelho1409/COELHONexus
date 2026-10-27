@@ -17,6 +17,12 @@ class NormalizeStats(BaseModel):
     permalink_debris_stripped:  int  = 0
     nested_fences_hoisted:      int  = 0
     empty_media_stripped:       int  = 0
+    agent_banner_stripped:      int  = 0
+    license_header_stripped:    int  = 0
+    agent_footer_stripped:      int  = 0
+    heading_anchors_stripped:   int  = 0
+    img_tags_rewritten:         int  = 0
+    title_promoted:             bool = False
     frontmatter_extracted:      bool = False
     html_entities_decoded:      int  = 0
     blank_lines_collapsed:      int  = 0

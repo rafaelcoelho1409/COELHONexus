@@ -91,12 +91,12 @@ async def get_url_records(run_id: str) -> list[dict]:
 async def get_page(run_id: str, idx: int) -> dict:
     async with infra.redis.service.client() as r:
         manifest = await domains.dd.ingestion.storage.service.read_live_manifest(r, run_id)
-    if not manifest or idx < 0 or idx >= len(manifest):
+    entry = domains.dd.ingestion.storage.service.entry_with_idx(manifest or [], idx)
+    if entry is None:
         raise HTTPException(
             status_code=404,
             detail=f"page idx={idx} not found in run {run_id!r}",
         )
-    entry = manifest[idx]
     key = entry.get("key")
     if not key:
         raise HTTPException(

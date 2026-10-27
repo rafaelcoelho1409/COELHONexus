@@ -8,50 +8,24 @@ import time
 from urllib.parse import urlparse
 
 import httpx
-from tenacity import (
-    AsyncRetrying,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential_jitter,
-)
 
 
 logger = logging.getLogger(__name__)
 
 
-class _TransientStatus(Exception):
-    """A response worth asking for again (429 / 5xx). Carries the server's Retry-After, if it gave one."""
-
-    def __init__(self, status_code: int, retry_after: float | None) -> None:
-        super().__init__(f"HTTP {status_code}")
-        self.status_code = status_code
-        self.retry_after = retry_after
-
-
-def _wait(retry_state) -> float:
-    """The server's Retry-After when it sent one, else jittered exponential backoff."""
-    error = retry_state.outcome.exception() if retry_state.outcome else None
-    if isinstance(error, _TransientStatus) and error.retry_after is not None:
-        return error.retry_after
-    return wait_exponential_jitter(initial = params.RETRY_WAIT_INITIAL_S, max = params.RETRY_WAIT_MAX_S)(retry_state)
-
-
 async def _fetch(client: httpx.AsyncClient, url: str) -> httpx.Response:
-    """GET with retries on timeouts, network errors and transient statuses. The last response is returned for any
-    other status (the caller decides what a 404 means); a transient status that outlasts the retries raises."""
-    async for attempt in AsyncRetrying(
-        reraise = True,
-        retry = retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError, _TransientStatus)),
-        stop = stop_after_attempt(params.RETRY_ATTEMPTS),
-        wait = _wait,
-    ):
-        with attempt:
-            resp = await client.get(url, headers = {"User-Agent": params.USER_AGENT})
-            if resp.status_code in params.TRANSIENT_STATUSES:
-                raise _TransientStatus(
-                    resp.status_code, domain.retry_after_seconds(resp.headers.get("retry-after")),
-                )
-    return resp
+    """GET with retries on timeouts, network errors and transient statuses (the shared fetch). The last response is
+    returned for any other status — and for a transient one that outlasts the retries — so the caller decides what a
+    404 or a 503 means; a timeout or network error that outlasts them raises."""
+    return await domains.dd.ingestion.tiers.fetch.service.get(
+        client,
+        url,
+        headers = {"User-Agent": params.USER_AGENT},
+        attempts = params.RETRY_ATTEMPTS,
+        wait_initial = params.RETRY_WAIT_INITIAL_S,
+        wait_max = params.RETRY_WAIT_MAX_S,
+        retry_after_cap = params.RETRY_AFTER_MAX_S,
+    )
 
 
 async def _nav_index(client: httpx.AsyncClient, nav_url: str) -> list[tuple[str, str]]:

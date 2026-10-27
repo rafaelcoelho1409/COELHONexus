@@ -2,6 +2,7 @@
 from __future__ import annotations
 from . import params, patterns, schemas, versions
 
+import re
 import unicodedata
 from typing import Optional
 
@@ -24,19 +25,33 @@ def normalize_doc(
     text, frontmatter = _frontmatter_pass(text)
     stats.frontmatter_extracted = bool(frontmatter)
 
+    text, n_banner = _agent_banner_pass(text)
+    stats.agent_banner_stripped = n_banner
+
+    text, n_footer = _agent_footer_pass(text)
+    stats.agent_footer_stripped = n_footer
+
+    text, n_license = _license_header_pass(text)
+    stats.license_header_stripped = n_license
+
+    text, promoted = _title_heading_pass(text, frontmatter)
+    stats.title_promoted = promoted
+
     text, n_bound = _boundary_pass(text)
     stats.boundary_markers_stripped = n_bound
 
     text, n_hoisted = _hoist_nested_fences_pass(text)
     stats.nested_fences_hoisted = n_hoisted
 
-    text, n_meta, n_admon, n_orphan = _token_aware_passes(text)
+    text, n_meta, n_admon, n_orphan, n_img = _token_aware_passes(text)
     stats.fence_meta_stripped       = n_meta
     stats.container_admonitions     = n_admon
     stats.orphan_tags_stripped      = n_orphan
+    stats.img_tags_rewritten        = n_img
 
-    text, n_permalink = _permalink_pass(text)
+    text, n_permalink, n_anchor = _permalink_pass(text)
     stats.permalink_debris_stripped = n_permalink
+    stats.heading_anchors_stripped = n_anchor
 
     text, n_media = _empty_media_pass(text)
     stats.empty_media_stripped = n_media
@@ -68,8 +83,13 @@ def _unicode_pass(text: str) -> tuple[str, int]:
 
 
 def _frontmatter_pass(text: str) -> tuple[str, dict]:
-    """Extract YAML frontmatter → (body, dict); naive key:val parse to avoid yaml dep."""
+    """Extract YAML (`---`) or TOML (`+++`) frontmatter → (body, dict); naive key:val / key = val parse to avoid a
+    yaml/toml dep."""
     m = patterns.FRONTMATTER_RE.match(text)
+    separator = ":"
+    if not m:
+        m = patterns.TOML_FRONTMATTER_RE.match(text)
+        separator = "="
     if not m:
         return text, {}
     raw = m.group("body")
@@ -79,16 +99,86 @@ def _frontmatter_pass(text: str) -> tuple[str, dict]:
         line = line.rstrip()
         if not line or line.startswith("#"):
             continue
-        if ":" not in line:
+        if separator not in line:
             continue
-        k, _, v = line.partition(":")
+        k, _, v = line.partition(separator)
         key = k.strip()
-        val = v.strip().strip('"').strip("'")
+        val = _unquote(v.strip())
         if key:
             fm[key] = val
     if not fm:
         fm = {"_raw": raw}
     return rest, fm
+
+
+def _unquote(value: str) -> str:
+    """One layer of matching quotes off a frontmatter value (`"'use client'"` is the title `'use client'`)."""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
+
+
+def _title_heading_pass(text: str, frontmatter: dict) -> tuple[str, bool]:
+    """Give a page whose title lives only in its frontmatter a heading for it. react.dev's pages (`---\\ntitle: Quick
+    Start\\n---`) carry no `# Title`, so once the frontmatter is gone nothing in the page says what it is — and the
+    page's sections, which Planner and Synth cut it by, have no heading above them. A page that already has an H1 is left
+    as it is; so is one whose frontmatter has no title. Idempotent: the heading it adds is the H1 the next run finds."""
+    title = (frontmatter.get("title") or "").strip() if frontmatter else ""
+    if not title and frontmatter:
+        # react.dev's pages for HTML elements are headed `link: "<link>"`, not `title:` — the key is the tag's own name.
+        title = next((v.strip() for k, v in frontmatter.items() if isinstance(v, str) and v.strip() == f"<{k}>"), "")
+    if not title or "\n" in title:
+        return text, False
+    fenced: set[int] = set()
+    for (open_idx, close_idx, _) in _identify_fence_ranges(text):
+        fenced.update(range(open_idx, close_idx))
+    for i, line in enumerate(text.split("\n")):
+        if i not in fenced and patterns.H1_LINE_RE.match(line):
+            return text, False
+    return f"# {title}\n\n{text.lstrip(chr(10))}", True
+
+
+def _agent_banner_pass(text: str) -> tuple[str, int]:
+    """Drop the notice some docs hosts put in front of every page for agents: a block quote before the first heading that
+    points at the site's llms.txt (Mintlify's "> ## Documentation Index / > Fetch the complete documentation index at
+    …/llms.txt", Qdrant's three lines ending "Use this file for an index of the main pages"). Identical on every page of
+    the site and about nothing the page says; only a block quote opening the page is looked at, and only one that links
+    an llms.txt or is headed "Documentation Index"."""
+    lines = text.splitlines(keepends = True)
+    start = 0
+    while start < len(lines) and not lines[start].strip():
+        start += 1
+    end = start
+    while end < len(lines) and patterns.QUOTE_LINE_RE.match(lines[end]):
+        end += 1
+    if end == start or not patterns.AGENT_BANNER_RE.search("".join(lines[start:end])):
+        return text, 0
+    while end < len(lines) and not lines[end].strip():
+        end += 1
+    return "".join(lines[end:]), 1
+
+
+def _agent_footer_pass(text: str) -> tuple[str, int]:
+    """Drop the footer a host adds to every page for agents — react.dev's `## Sitemap` with a link to its llms.txt, preceded
+    by a `---` rule. Identical on every page of the site (179 of 179 for React) and about nothing the page says. Only the
+    last few hundred characters are searched, and only a heading followed by nothing but a link to an llms.txt is taken."""
+    start = max(0, len(text) - params.AGENT_FOOTER_TAIL_CHARS)
+    m = patterns.AGENT_FOOTER_RE.search(text, start)
+    if m is None:
+        return text, 0
+    kept = text[: m.start()].rstrip()
+    cut = max(0, len(kept) - params.AGENT_FOOTER_TAIL_CHARS)
+    return kept[:cut] + patterns.TRAILING_RULES_RE.sub("", kept[cut:]) + "\n", 1
+
+
+def _license_header_pass(text: str) -> tuple[str, int]:
+    """Drop a licence header that the docs builder left at the top of a page: the `#`-prefixed lines of a comment whose
+    opening it dropped, through the closing `-->` (Hugging Face's `# Licensed under the Apache License…`). Without this
+    the first "H1" of the page is the licence's first line. Only a block that mentions a licence is taken."""
+    m = patterns.LICENSE_HEADER_RE.match(text)
+    if m is None or "licen" not in m.group(0).lower():
+        return text, 0
+    return text[m.end():], 1
 
 
 def _boundary_pass(text: str) -> tuple[str, int]:
@@ -183,8 +273,8 @@ def _strip_fence_info_string(info: str) -> tuple[str, bool]:
     return parts[0], True
 
 
-def _token_aware_passes(text: str) -> tuple[str, int, int, int]:
-    """Fence-range-aware line walk: rewrite openers, skip bodies, strip prose tags."""
+def _token_aware_passes(text: str) -> tuple[str, int, int, int, int]:
+    """Fence-range-aware line walk: rewrite openers, skip bodies, strip prose tags (and rewrite JSX `<img>` as Markdown)."""
     fence_ranges = _identify_fence_ranges(text)
     lines = text.split("\n")
 
@@ -198,6 +288,7 @@ def _token_aware_passes(text: str) -> tuple[str, int, int, int]:
     n_meta   = 0
     n_admon  = 0
     n_orphan = 0
+    n_img    = 0
 
     out_lines: list[str] = []
     for i, line in enumerate(lines):
@@ -218,9 +309,11 @@ def _token_aware_passes(text: str) -> tuple[str, int, int, int]:
             n_admon += 1
         new_line, n_o = _strip_mdx_wrapper_tags(new_line)
         n_orphan += n_o
+        new_line, n_i = _rewrite_img_tags(new_line)
+        n_img += n_i
         out_lines.append(new_line)
 
-    return "\n".join(out_lines), n_meta, n_admon, n_orphan
+    return "\n".join(out_lines), n_meta, n_admon, n_orphan, n_img
 
 
 def _rewrite_fence_opener(line: str, kind: int) -> tuple[str, bool]:
@@ -260,9 +353,10 @@ def _strip_admonition_markers(line: str) -> tuple[str, bool]:
     return line, False
 
 
-def _permalink_pass(text: str) -> tuple[str, int]:
+def _permalink_pass(text: str) -> tuple[str, int, int]:
     """Strip static-site permalink debris from prose lines, fence-aware
-    (code samples quoting `[¶](#…)` markup must survive verbatim)."""
+    (code samples quoting `[¶](#…)` markup must survive verbatim). The anchor Hugging Face's doc builder appends to a
+    heading (`## AutoModel[[transformers.AutoModel]]`) goes the same way; it is counted apart."""
     fence_ranges = _identify_fence_ranges(text)
     fenced: set[int] = set()
     for (open_idx, close_idx, _) in fence_ranges:
@@ -271,6 +365,7 @@ def _permalink_pass(text: str) -> tuple[str, int]:
         fenced.add(open_idx)
         fenced.update(range(open_idx + 1, close_idx))
     n = 0
+    n_anchor = 0
     out: list[str] = []
     for i, line in enumerate(text.split("\n")):
         if i in fenced:
@@ -280,8 +375,13 @@ def _permalink_pass(text: str) -> tuple[str, int]:
         new_line = patterns.PERMALINK_TRAILING_RE.sub("", new_line)
         if new_line != line:
             n += 1
+        if "[[" in new_line:
+            anchored = patterns.HEADING_ANCHOR_RE.sub(r"\1", new_line)
+            if anchored != new_line:
+                n_anchor += 1
+                new_line = anchored
         out.append(new_line)
-    return "\n".join(out), n
+    return "\n".join(out), n, n_anchor
 
 
 def _empty_media_pass(text: str) -> tuple[str, int]:
@@ -326,14 +426,31 @@ def _empty_media_pass(text: str) -> tuple[str, int]:
 
 
 def _strip_mdx_wrapper_tags(line: str) -> tuple[str, int]:
-    """Strip MDX/JSX wrapper tags from a prose line; preserves inline-code spans."""
+    """Strip MDX/JSX wrapper tags and MDX comments from a prose line; preserves inline-code spans."""
     if "`" not in line:
         # Fast path — no inline code possible, apply regex directly.
         new_line, n_o = patterns.MDX_OPEN_TAG_RE.subn("", line)
         new_line, n_c = patterns.MDX_CLOSE_TAG_RE.subn("", new_line)
-        return new_line, n_o + n_c
+        new_line, n_m = patterns.MDX_COMMENT_RE.subn("", new_line)
+        return new_line, n_o + n_c + n_m
 
-    parts: list[tuple[str, bool]] = []   # (segment, is_code)
+    n_total = 0
+    rebuilt: list[str] = []
+    for seg, is_code in _inline_code_segments(line):
+        if is_code:
+            rebuilt.append(seg)
+            continue
+        seg, n_o = patterns.MDX_OPEN_TAG_RE.subn("", seg)
+        seg, n_c = patterns.MDX_CLOSE_TAG_RE.subn("", seg)
+        seg, n_m = patterns.MDX_COMMENT_RE.subn("", seg)
+        n_total += n_o + n_c + n_m
+        rebuilt.append(seg)
+    return "".join(rebuilt), n_total
+
+
+def _inline_code_segments(line: str) -> list[tuple[str, bool]]:
+    """A prose line cut into `(segment, is_inline_code)` pieces, so a pass can leave what is quoted in backticks alone."""
+    parts: list[tuple[str, bool]] = []
     i = 0
     while i < len(line):
         if line[i] == "`":
@@ -355,18 +472,31 @@ def _strip_mdx_wrapper_tags(line: str) -> tuple[str, int]:
                 j += 1
             parts.append((line[i:j], False))
             i = j
+    return parts
 
-    n_total = 0
-    rebuilt: list[str] = []
-    for seg, is_code in parts:
-        if is_code:
-            rebuilt.append(seg)
-            continue
-        seg, n_o = patterns.MDX_OPEN_TAG_RE.subn("", seg)
-        seg, n_c = patterns.MDX_CLOSE_TAG_RE.subn("", seg)
-        n_total += n_o + n_c
-        rebuilt.append(seg)
-    return "".join(rebuilt), n_total
+
+def _rewrite_img_tags(line: str) -> tuple[str, int]:
+    """`<img className="…" src="x.png" alt="y" />` → `![y](x.png)` on a prose line (react.dev writes its figures that way);
+    the `dark-image` copy of a light/dark pair is dropped. A tag with no `src` is left as it is, as is anything quoted in
+    backticks."""
+    if "<img" not in line.lower():
+        return line, 0
+    n = 0
+
+    def rewrite(m: re.Match) -> str:
+        nonlocal n
+        attrs = m.group("attrs")
+        src = patterns.IMG_SRC_RE.search(attrs)
+        if src is None:
+            return m.group(0)
+        n += 1
+        if patterns.IMG_DARK_RE.search(attrs):
+            return ""
+        alt = patterns.IMG_ALT_RE.search(attrs)
+        return f"![{(alt.group(1) or alt.group(2) or '') if alt else ''}]({src.group(1) or src.group(2)})"
+
+    rebuilt = [seg if is_code else patterns.IMG_TAG_RE.sub(rewrite, seg) for seg, is_code in _inline_code_segments(line)]
+    return "".join(rebuilt), n
 
 
 def _whitespace_entity_pass(text: str) -> tuple[str, int, int, int]:

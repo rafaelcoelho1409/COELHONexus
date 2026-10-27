@@ -75,6 +75,31 @@ export const GRAPH_STATE_RETRY_DELAYS_MS = [0, 250, 400, 550, 700, 850, 1_000] a
 /** Opt-in "start synth when the planner finishes", remembered per browser. Same key as the FastHTML page. */
 export const AUTO_CHAIN_STORAGE_KEY = "dd:pipeline:autochain";
 
+/**
+ * The explorer groups pages by their section or first folder. When one group would hold this share of the pages — at least
+ * `EXPLORER_REGROUP_MIN_PAGES` of them — that grouping tells nothing (every page of a docs site under one folder), so the
+ * folders every page shares are skipped and the next level names the groups.
+ */
+export const EXPLORER_REGROUP_DOMINANT_SHARE = 0.9;
+export const EXPLORER_REGROUP_MIN_PAGES = 10;
+
+/**
+ * A group of at least this many pages (and no curated section) is too long to scan: it is split by the folder below it —
+ * Diffusers' `api` holds 408 of 507 pages in `models`, `pipelines`, `schedulers` — and, when its pages sit in one flat
+ * folder (Transformers' `model_doc`: 935 pages), by the first letter of their titles. No folder or letter group is
+ * made when one of them would still hold this share of the group.
+ */
+export const EXPLORER_SPLIT_GROUP_MIN_PAGES = 120;
+export const EXPLORER_SPLIT_DOMINANT_SHARE = 0.9;
+
+/**
+ * A small docs set with no sections whose folders mostly hold one page each (Optimum: 11 pages in 6 folders) is one plain
+ * list: those headings only add rows. Applies from this many pages up to the maximum, when at least half the groups are
+ * a single page.
+ */
+export const EXPLORER_FLAT_MIN_PAGES = 8;
+export const EXPLORER_FLAT_MAX_PAGES = 30;
+
 /** After the planner finishes its lock needs a moment to clear before synth can start. */
 export const AUTO_CHAIN_POLL_MS = 300;
 export const AUTO_CHAIN_MAX_WAIT_MS = 10_000;

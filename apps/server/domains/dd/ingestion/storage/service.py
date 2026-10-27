@@ -56,6 +56,9 @@ class Store:
         # for a bundle that is about to be split, read by post.service so the split pages follow the site's navigation
         # and carry its section headings. [] = none known.
         self.nav_index: list[tuple[str, str]] = []
+        # Set by Tier 2 when it hands a site over to the sitemap although its index serves markdown pages (a curated index
+        # that is a fraction of the docs): Tier 3 then asks for each page's markdown twin before scraping its HTML.
+        self.markdown_twins: bool = False
 
     async def add_page(
         self,
@@ -438,6 +441,19 @@ async def _with_real_titles(
     }
 
 
+def entry_with_idx(entries: list[dict], idx: int) -> dict | None:
+    """The manifest entry whose `idx` is `idx` — not the `idx`-th one in the list: tiers 2-4 store the manifest in the
+    site's navigation order (`Store.reorder_by_url_list`), while `idx` is the order the pages were written in, so the two
+    differ and a lookup by position opened a different page than the one clicked (React's "Learn › Installation" opened
+    the tic-tac-toe tutorial). A manifest whose entries carry no `idx` at all is read by position."""
+    for entry in entries:
+        if entry.get("idx") == idx:
+            return entry
+    if entries and not any("idx" in entry for entry in entries) and 0 <= idx < len(entries):
+        return entries[idx]
+    return None
+
+
 async def read_framework_page(
     minio: infra.minio.service.MinIOStorage, framework_slug: str, idx: int,
 ) -> Optional[str]:
@@ -445,11 +461,11 @@ async def read_framework_page(
     m = await read_framework_manifest(minio, framework_slug)
     if not m:
         return None
-    entries = m.get("entries", [])
-    if idx < 0 or idx >= len(entries):
+    entry = entry_with_idx(m.get("entries", []), idx)
+    if entry is None:
         return None
-    key = entries[idx].get("key") or keys.page_key(
-        framework_slug, idx, entries[idx].get("slug", ""),
+    key = entry.get("key") or keys.page_key(
+        framework_slug, idx, entry.get("slug", ""),
     )
     try:
         return await minio.read_text(key)

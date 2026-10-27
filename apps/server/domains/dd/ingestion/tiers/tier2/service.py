@@ -9,25 +9,43 @@ import time
 from urllib.parse import urlparse
 
 import httpx
-from tenacity import (
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential_jitter,
-)
 
 
 logger = logging.getLogger(__name__)
 
 
-@retry(
-    reraise = True,
-    retry = retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError)),
-    stop = stop_after_attempt(3),
-    wait = wait_exponential_jitter(initial = 1, max = 8),
-)
-async def _get(client: httpx.AsyncClient, url: str) -> httpx.Response:
-    return await client.get(url, headers = {"User-Agent": params.USER_AGENT})
+async def _get(
+    client: httpx.AsyncClient,
+    url: str,
+    pacer: domains.dd.ingestion.tiers.fetch.service.Pacer | None = None,
+) -> httpx.Response:
+    """GET with the shared crawl policy: retries on timeouts, network errors and 429/5xx, a site's Retry-After and
+    rate-limit headers honoured, and — given the crawl's `pacer` — all concurrent requests waiting together."""
+    fetch = domains.dd.ingestion.tiers.fetch
+    return await fetch.service.get(
+        client,
+        url,
+        headers = {"User-Agent": params.USER_AGENT},
+        attempts = fetch.params.CRAWL_ATTEMPTS,
+        wait_initial = fetch.params.CRAWL_WAIT_INITIAL_S,
+        wait_max = fetch.params.CRAWL_WAIT_MAX_S,
+        retry_after_cap = fetch.params.CRAWL_RETRY_AFTER_MAX_S,
+        pacer = pacer,
+    )
+
+
+async def _site_pages(client: httpx.AsyncClient, sitemap_url: str, path_filter: dict | None) -> int | None:
+    """How many pages the site's sitemap has (the ones a Tier 3 run would fetch), or None when it cannot be told —
+    a missing or slow sitemap is no reason to doubt the index."""
+    try:
+        urls = await asyncio.wait_for(
+            domains.dd.ingestion.tiers.tier3.service.scoped_urls(client, sitemap_url, path_filter),
+            timeout = params.COVERAGE_TIMEOUT_S,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.info(f"[tier-2] no page count from {sitemap_url}: {type(e).__name__}: {e}")
+        return None
+    return len(urls) or None
 
 
 async def _fetch_one(
@@ -40,12 +58,13 @@ async def _fetch_one(
     framework_slug: str | None = None,
     store: domains.dd.ingestion.storage.service.Store | None = None,
     index_host: str = "",
+    pacer: domains.dd.ingestion.tiers.fetch.service.Pacer | None = None,
 ) -> tuple[str, str, str, str] | None:
     """Returns (slug, url, body_markdown, title) on success, None on failure.
     Records progress + URL log internally."""
     t0 = time.monotonic()
     try:
-        resp = await _get(client, url)
+        resp = await _get(client, url, pacer)
     except Exception as e:
         await progress.record_url(
             url,
@@ -140,13 +159,15 @@ async def run(
     progress: domains.dd.ingestion.runtime.progress.service.Progress,
     store: domains.dd.ingestion.storage.service.Store,
     path_filter: dict | None = None,
+    sitemap_url: str | None = None,
 ) -> int:
     """Fetch index, fan out to N concurrent page fetches, write each to
     store. Returns the number of pages written. Raises TierUnavailable if the
-    index itself can't be fetched (404, error, a filter that leaves nothing),
-    so the dispatcher moves on to the next declared source. `path_filter`
-    (the catalog's `include`/`exclude`) trims an index that lists more than
-    the framework."""
+    index itself can't be fetched (404, error, a filter that leaves nothing)
+    or names far fewer pages than the site's sitemap (`sitemap_url`, the
+    catalog's: a curated agent index is not the docs), so the dispatcher
+    moves on to the next declared source. `path_filter` (the catalog's
+    `include`/`exclude`) trims an index that lists more than the framework."""
     logger.info(f"[tier-2] framework={framework_slug} index={url}")
     await progress.start(tier = "llms_txt", total = 0)
     async with httpx.AsyncClient(
@@ -210,6 +231,20 @@ async def run(
                 raise domains.dd.ingestion.tiers.errors.TierUnavailable(
                     f"Tier 2: {url} lists {listed} links, none inside the catalog's path_filter"
                 )
+        if sitemap_url:
+            site_pages = await _site_pages(client, sitemap_url, path_filter)
+            if site_pages is not None and not domain.covers_site(len(links), site_pages):
+                reason = f"the index lists {len(links)} pages, the sitemap {site_pages}"
+                logger.info(f"[tier-2] {framework_slug}: {reason} — falling through to the sitemap")
+                # An index of markdown files means the site has markdown twins of its pages: the sitemap tier asks for those.
+                store.markdown_twins = domain.serves_markdown(links)
+                await progress.record_url(
+                    url, status = "downgrade", tier = "llms_txt", error_msg = f"{reason}; falling through to the sitemap",
+                )
+                await progress.finish(status = "downgrade")
+                raise domains.dd.ingestion.tiers.errors.TierUnavailable(f"Tier 2: {url}: {reason}")
+        # One heading over every page ("Docs") is no section; keep the explorer on the URL folders then.
+        links = domain.drop_single_section(links)
         # Author-written index summary (spec v2 blockquote) — stashed on the
         # store for dispatch.finalize; "" when the index carries none.
         try:
@@ -219,6 +254,15 @@ async def run(
         logger.info(f"[tier-2] parsed {len(links)} URLs from {url}")
         await progress.update_total(len(links))
         index_host = (urlparse(url).netloc or "").lower()
+
+        async def _announce_wait(seconds: float) -> None:
+            logger.info(f"[tier-2] {framework_slug}: {index_host} asked for a pause, waiting {seconds:.0f}s")
+            await progress.record_url(
+                index_host, status = "rate_limited", tier = "llms_txt",
+                error_msg = f"the site asked for a pause: waiting {seconds:.0f}s before going on",
+            )
+
+        pacer = domains.dd.ingestion.tiers.fetch.service.Pacer(on_wait = _announce_wait)
         sem = asyncio.Semaphore(params.CONCURRENCY)
         slug_lock = asyncio.Lock()
         slug_owner: dict[str, str] = {}
@@ -260,10 +304,11 @@ async def run(
                         stem = domain.slugify(stem) or "x"
                 except Exception:
                     stem = "x"
-                cand = f"{base}-{stem}"[:80]
+                suffixed = domains.dd.ingestion.tiers.tier3.domain.suffixed_slug
+                cand = suffixed(base, stem)
                 i = 2
                 while cand in slug_owner and slug_owner[cand] != link:
-                    cand = f"{base}-{stem}-{i}"[:80]
+                    cand = suffixed(base, f"{stem}-{i}")
                     i += 1
                 slug_owner[cand] = link
                 return cand
@@ -281,6 +326,7 @@ async def run(
                     framework_slug = framework_slug,
                     store = store,
                     index_host = index_host,
+                    pacer = pacer,
                 )
             if r is not None:
                 slug, src_url, body, t = r
@@ -296,9 +342,10 @@ async def run(
                     )
                 # Tier-2-gated stub floor (~1KB): nav fragments / course
                 # scaffolding carry no study signal and each burns a full
-                # judge+distill cycle downstream. Tier 1 untouched — its own
-                # post.split path keeps the 300B floor.
-                elif len((body or "").encode("utf-8")) < params.STUB_MIN_BYTES:
+                # judge+distill cycle downstream — unless the page holds a
+                # code example. Tier 1 untouched — its own post.split path
+                # keeps the 300B floor.
+                elif domain.is_stub(body or ""):
                     await progress.record_url(
                         link,
                         status = "stub_dropped",

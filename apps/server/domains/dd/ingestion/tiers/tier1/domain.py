@@ -52,14 +52,9 @@ def looks_like_html(body: str) -> bool:
 
 
 def retry_after_seconds(header: str | None) -> float | None:
-    """A `Retry-After` given in seconds (the HTTP-date form is ignored), bounded by what a run is willing to wait."""
-    if header is None:
-        return None
-    try:
-        seconds = float(header.strip())
-    except ValueError:
-        return None
-    return min(max(seconds, 0.0), params.RETRY_AFTER_MAX_S)
+    """A `Retry-After` given in seconds (the HTTP-date form is ignored), bounded by what a single bundle's fetch is
+    willing to wait."""
+    return domains.dd.ingestion.tiers.fetch.domain.retry_after_seconds(header, cap = params.RETRY_AFTER_MAX_S)
 
 
 def host_slug(host: str) -> str:

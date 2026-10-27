@@ -213,6 +213,173 @@ describe("manifest view", () => {
     expect(groups.map((g) => g.prefix)).toEqual(["guides", "python", "usage/commands", ROOT_GROUP]);
   });
 
+  it("names the groups by the first folder the pages do not share when one folder holds them all", () => {
+    const at = (path: string, idx: number) =>
+      entry({ idx, title: path, url: `https://docs.example.com${path}` });
+    // Browser Use: everything lives under /open-source/
+    const groups = groupEntries([
+      at("/open-source/introduction", 0),
+      at("/open-source/quickstart", 1),
+      at("/open-source/customize/agent/basics", 2),
+      at("/open-source/customize/agent/all-parameters", 3),
+      at("/open-source/customize/browser/basics", 4),
+      at("/open-source/examples/templates/ad-use", 5),
+      at("/open-source/examples/templates/news-use", 6),
+      at("/open-source/examples/skills/overview", 7),
+      at("/open-source/development/setup/local-setup", 8),
+      at("/open-source/development/telemetry", 9),
+    ]);
+    expect(groups.map((g) => [g.prefix, g.items.length])).toEqual([
+      [ROOT_GROUP, 2],
+      ["customize", 3],
+      ["examples", 3],
+      ["development", 2],
+    ]);
+    expect(groups.flatMap((g) => g.items.map((i) => i.index))).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  });
+
+  it("looks past a version pin and the product folder too (Hugging Face)", () => {
+    const at = (path: string, idx: number) =>
+      entry({ idx, source_path: `https://huggingface.co/docs/diffusers/v0.42.0/${path}.md` });
+    const paths = [
+      "quicktour",
+      "installation",
+      "api/pipelines/a",
+      "api/pipelines/b",
+      "api/models/c",
+      "api/models/d",
+    ];
+    const more = ["training/e", "training/f", "using-diffusers/g", "using-diffusers/h"];
+    const groups = groupEntries([...paths, ...more].map(at));
+    expect(groups.map((g) => g.prefix)).toEqual([ROOT_GROUP, "api", "training", "using-diffusers"]);
+  });
+
+  it("leaves the usual grouping alone when it already tells pages apart, or the docs are small", () => {
+    const at = (path: string, idx: number) => entry({ idx, url: `https://docs.example.com${path}` });
+    const varied = ["/a/1", "/a/2", "/b/1", "/b/2", "/c/1", "/c/2", "/d/1", "/d/2", "/e/1", "/e/2"].map(at);
+    expect(groupEntries(varied).map((g) => g.prefix)).toEqual(["a", "b", "c", "d", "e"]);
+    const small = ["/docs/x/a/1", "/docs/x/a/2", "/docs/x/b/1"].map(at);
+    expect(groupEntries(small).map((g) => g.prefix)).toEqual(["x"]);
+    const one = Array.from({ length: 12 }, (_, i) => at(`/guide/page-${i}`, i));
+    expect(groupEntries(one).map((g) => g.prefix)).toEqual(["guide"]); // nothing finer to name
+  });
+
+  it("does not regroup pages that carry real sections", () => {
+    const sectioned = Array.from({ length: 12 }, (_, i) =>
+      entry({ idx: i, section: i < 6 ? "Basics" : "Advanced", url: `https://x.com/docs/guide/p${i}` }),
+    );
+    expect(groupEntries(sectioned).map((g) => g.prefix)).toEqual(["Basics", "Advanced"]);
+  });
+
+  it("splits a group that holds most of the docs by the folders below it (Diffusers' api)", () => {
+    const page = (path: string, idx: number) =>
+      entry({
+        idx,
+        title: `Page ${idx}`,
+        source_path: `https://huggingface.co/docs/diffusers/v0.42.0/${path}.md`,
+      });
+    const paths = [
+      ...Array.from({ length: 70 }, (_, i) => `api/models/m${i}`),
+      ...Array.from({ length: 60 }, (_, i) => `api/pipelines/p${i}`),
+      ...Array.from({ length: 20 }, (_, i) => `api/schedulers/s${i}`),
+      "api/overview",
+      ...Array.from({ length: 20 }, (_, i) => `using-diffusers/u${i}`),
+      ...Array.from({ length: 10 }, (_, i) => `training/t${i}`),
+    ];
+    const groups = groupEntries(paths.map(page));
+    expect(groups.map((g) => [g.prefix, g.items.length])).toEqual([
+      ["api/models", 70],
+      ["api/pipelines", 60],
+      ["api/schedulers", 20],
+      ["api", 1],
+      ["using-diffusers", 20],
+      ["training", 10],
+    ]);
+    expect(groups.flatMap((g) => g.items.map((i) => i.index))).toEqual(paths.map((_, i) => i));
+  });
+
+  it("splits a flat folder of hundreds of pages by the first letter of the titles (Transformers' model_doc)", () => {
+    const names = ["Bert", "albert", "Zebra", "bart", "Albert Large", "2D Vision", "Zeta"];
+    const models = Array.from({ length: 140 }, (_, i) =>
+      entry({
+        idx: i,
+        title: `${names[i % names.length]} ${i}`,
+        source_path: `https://huggingface.co/docs/transformers/v5/model_doc/m${i}.md`,
+      }),
+    );
+    const guide = Array.from({ length: 12 }, (_, i) =>
+      entry({
+        idx: 140 + i,
+        title: `Guide ${i}`,
+        source_path: `https://huggingface.co/docs/transformers/v5/g${i}.md`,
+      }),
+    );
+    const groups = groupEntries([...guide, ...models.map((m, i) => ({ ...m, idx: 12 + i }))]);
+    const letters = groups.filter((g) => g.prefix.startsWith("model_doc"));
+    expect(letters.map((g) => g.prefix)).toEqual([
+      "model_doc · #",
+      "model_doc · A",
+      "model_doc · B",
+      "model_doc · Z",
+    ]);
+    const bGroup = letters.find((g) => g.prefix === "model_doc · B");
+    expect(bGroup?.items.map((i) => i.index)).toEqual(
+      [...(bGroup?.items.map((i) => i.index) ?? [])].sort((a, b) => a - b),
+    );
+    expect(groups.reduce((n, g) => n + g.items.length, 0)).toBe(152);
+  });
+
+  it("leaves a long group alone when it carries curated sections or nothing splits it", () => {
+    const sectioned = Array.from({ length: 150 }, (_, i) =>
+      entry({
+        idx: i,
+        title: `Page ${i}`,
+        section: i < 130 ? "API Reference" : "Guides",
+        url: `https://x.com/docs/api/m${i % 3}/p${i}`,
+      }),
+    );
+    expect(groupEntries(sectioned).map((g) => [g.prefix, g.items.length])).toEqual([
+      ["API Reference", 130],
+      ["Guides", 20],
+    ]);
+    const sameLetter = Array.from({ length: 150 }, (_, i) =>
+      entry({ idx: i, title: `Alpha ${i}`, url: `https://x.com/docs/api/p${i}` }),
+    );
+    expect(groupEntries(sameLetter).map((g) => g.prefix)).toEqual(["api"]);
+  });
+
+  it("shows a small set of mostly one-page folders as one plain list (Optimum)", () => {
+    const at = (path: string, idx: number) =>
+      entry({ idx, title: `P${idx}`, source_path: `https://huggingface.co/docs/optimum/main/${path}.md` });
+    const pages = [
+      "installation",
+      "index",
+      "quicktour",
+      "notebooks",
+      "exporters/tasks",
+      "utils/dummy",
+      "utils/normalized",
+      "concept_guides/quantization",
+      "llm_quantization/usage",
+      "torch_fx/optimization",
+      "torch_fx/reference",
+    ].map(at);
+    const groups = groupEntries(pages);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.prefix).toBe("");
+    expect(groups[0]?.items.map((i) => i.index)).toEqual(pages.map((_, i) => i));
+  });
+
+  it("keeps folder headings when the folders hold several pages, or the docs have sections", () => {
+    const at = (path: string, idx: number) => entry({ idx, source_path: `https://x.com/docs/${path}.md` });
+    const grouped = ["a/1", "a/2", "a/3", "b/1", "b/2", "b/3", "c/1", "c/2", "c/3"].map(at);
+    expect(groupEntries(grouped).map((g) => g.prefix)).toEqual(["a", "b", "c"]);
+    const sectioned = ["a/1", "b/1", "c/1", "d/1", "e/1", "f/1", "g/1", "h/1", "i/1"].map((p, i) =>
+      entry({ idx: i, section: `S${i}`, source_path: `https://x.com/docs/${p}.md` }),
+    );
+    expect(groupEntries(sectioned).map((g) => g.prefix)).toHaveLength(9);
+  });
+
   it("filters entries by search text and tier, and lists the tiers present", () => {
     expect(filterEntries(entries, new Set(), "Cli")).toEqual([1]);
     expect(filterEntries(entries, new Set(["llms-full"]), "")).toEqual([0]);

@@ -15,7 +15,18 @@ MDX_WRAPPER_TAGS = (
     "Aside", "LinkCard", "FileTree",
     # Nextra 4
     "Tree",
+    # react.dev's own components (Tier 2 pages carry them raw): callouts and sections wrap prose, `Sandpack` wraps the
+    # example's code fences, `CodeStep` marks a word inline, `InlineToc` and the diagrams are page furniture.
+    "Intro", "Pitfall", "DeepDive", "Recap", "YouWillLearn", "Challenges", "Solution", "Recipes",
+    "Sandpack", "SandpackWithHTMLOutput", "CodeStep", "LearnMore", "InlineToc", "Illustration", "IllustrationBlock",
+    "Diagram", "DiagramGroup", "TerminalBlock", "ConsoleBlock", "ConsoleBlockMulti", "ConsoleLogLine", "Deprecated",
+    "RSC", "Math", "MathI",
+    # …and the ones the rest of react.dev's reference uses: status callouts and badges, wide-figure wrappers.
+    "Experimental", "ExperimentalBadge", "Canary", "CanaryBadge", "Wip", "FullWidth", "CodeDiagram",
 )
+
+# Only the tail of a page is searched for the host's footer for agents.
+AGENT_FOOTER_TAIL_CHARS = 800
 
 
 # A multi-line `<video>` / `<audio>` element is looked for this far down from its opening line.

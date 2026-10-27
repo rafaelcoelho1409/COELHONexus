@@ -1,5 +1,6 @@
 """Monolith splitter: Source-marker → H1 → H2/H3 precedence (Docusaurus: single H1 wraps the whole bundle). markdown-it tokens keep code fences/tables/HTML atomic."""
 from __future__ import annotations
+import domains
 from . import params, patterns
 
 import hashlib
@@ -203,7 +204,10 @@ def disambiguate_titles(pages: list[tuple[str, str]]) -> list[str]:
         if len(members) < 2:
             continue
         folders = {
-            i: [s for s in [p for p in urlparse(pages[i][1]).path.split("/") if p][:-1] if s.lower() not in params.TITLE_SKIP_SEGMENTS]
+            i: [
+                s for s in [p for p in urlparse(pages[i][1]).path.split("/") if p][:-1]
+                if s.lower() not in params.TITLE_SKIP_SEGMENTS and not patterns.VERSION_SEGMENT_RE.match(s)
+            ]
             for i in members
         }
         candidates = [
@@ -211,6 +215,15 @@ def disambiguate_titles(pages: list[tuple[str, str]]) -> list[str]:
             for depth in range(1, params.TITLE_CONTEXT_MAX_SEGMENTS + 1)
         ]
         candidates.append({i: _leaf_label(pages[i][1], pages[i][0]) for i in members})
+        # Neither alone told them apart (Diffusers' four "ControlNet"s: two share a folder, and the other two's file names
+        # are the title): the nearest folder with the file name, when it adds one.
+        candidates.append({
+            i: " › ".join(filter(None, [
+                _section_label(folders[i][-1]) if folders[i] else "",
+                _leaf_label(pages[i][1], pages[i][0]),
+            ]))
+            for i in members
+        })
         labels = next((c for c in candidates if len(set(c.values())) == len(members)), None)
         if labels is None:
             continue
@@ -271,16 +284,19 @@ def sections_by_nav(
 def absolutize_links(body: str, base_url: str, *, relative: bool = True) -> str:
     """Make a page's site-relative links absolute, against the page's own URL: `/open-source/x` and, unless `relative`
     is off, `./y` and `../z` too. In this app a bare `/open-source/x` would open a page of Nexus that does not exist.
-    Anchors, absolute URLs, `mailto:` and the like are left alone, as is everything inside code (fenced or inline)."""
+    Anchors, absolute URLs, `mailto:` and the like are left alone, as is everything inside code (fenced or inline) — and the
+    stored copy of a page's image (`/api/v1/dd/ingestion/<slug>/artifacts/…`), which is this app's own path: made absolute it
+    named a page on the docs' host (`https://huggingface.co/api/v1/…`) and every such image was broken."""
     if not base_url or "](" not in body:
         return body
     host = (urlparse(base_url).netloc or "").lower()
     if not host or host in params.LINK_REWRITE_SKIP_HOSTS:
         return body
+    own = domains.dd.ingestion.artifacts.keys.OWN_ARTIFACT_URL_MARKERS
 
     def resolve(match: re.Match) -> str:
         dest = match.group(2)
-        if dest.startswith("//"):
+        if dest.startswith("//") or dest.startswith(own):
             return match.group(0)
         if dest.startswith("/") or (relative and dest.startswith(("./", "../"))):
             return f"{match.group(1)}{urljoin(base_url, dest)}{match.group(3)}"
@@ -312,12 +328,13 @@ def absolutize_links(body: str, base_url: str, *, relative: bool = True) -> str:
     return "\n".join(out)
 
 
-def _worth_keeping(body: str, *, delimited: bool) -> bool:
-    """Whether a split section is a page rather than a fragment. Under SPLIT_MIN_SECTION_BYTES it is a fragment — unless
-    the bundle itself marked it off as a page (`delimited`: a `Source:` line) and it carries a code example, which is
-    real documentation however short (Browser Use's "Remove Tools" is a sentence and the call that does it). Link lists
-    and one-line package descriptions have no code and are still dropped."""
-    if len(body.encode("utf-8")) >= params.SPLIT_MIN_SECTION_BYTES:
+def worth_keeping(body: str, *, delimited: bool, floor: int | None = None) -> bool:
+    """Whether a page is a page rather than a fragment. Under the floor (SPLIT_MIN_SECTION_BYTES unless a tier gives its
+    own) it is a fragment — unless the source itself marked it off as a page (`delimited`: a `Source:` line in a
+    bundle, or a page fetched on its own) and it carries a code example, which is real documentation however short
+    (Browser Use's "Remove Tools" is a sentence and the call that does it; FastHTML's websocket example is a script).
+    Link lists and one-line package descriptions have no code and are still dropped."""
+    if len(body.encode("utf-8")) >= (params.SPLIT_MIN_SECTION_BYTES if floor is None else floor):
         return True
     return delimited and patterns.CODE_FENCE_RE.search(body) is not None
 
@@ -434,7 +451,7 @@ def split_monolith(
         writes.append((base, absolutize_links(sec_body, source_url) if source_url else sec_body, source_url))
     pre = len(writes)
     delimited = strategy == "source-markers"
-    writes = [(s, b, sp) for s, b, sp in writes if _worth_keeping(b, delimited = delimited)]
+    writes = [(s, b, sp) for s, b, sp in writes if worth_keeping(b, delimited = delimited)]
     stubs_dropped = pre - len(writes)
     seen: set[str] = set()
     deduped: list[tuple[str, str, str]] = []
@@ -630,13 +647,25 @@ def split_oversized_page(
     self-containment). Returns [(slug, body, "")] — single element, unsplit —
     when no clean split exists. Deliberately NOT the changelog path (Tier-1
     monolith's territory) and no stub/dup filtering (dedup already ran);
-    slugs get hash-suffixed on collision like everywhere else here."""
+    slugs get hash-suffixed on collision like everywhere else here. Not H4: tried on Transformers' two children that stay
+    over the cap (`AutoConfig`, 139 KB, `Generic model classes`, 273 KB), it cut off a few 500-byte method stubs and left
+    the one `from_pretrained` docstring that holds the size at 138 KB and 170 KB — no gain for the fragments it adds."""
     h1_match = patterns.H1_PREFIX_RE.match(body)
     h1_prefix = (h1_match.group(1) + "\n\n") if h1_match else ""
     out = _size_aware_recursive_split(
         slug, body, "", h1_prefix = h1_prefix, levels = (2, 3),
         max_bytes = max_bytes,
     )
+    # A heading that occurs twice in the page (Diffusers' LoRA page documents `LoraBaseMixin` in two places) gives two
+    # identical sections — and `dedup_pages` already ran, before the split could make them.
+    seen: set[str] = set()
+    distinct: list[tuple[str, str, str]] = []
+    for section in out:
+        digest = hashlib.sha256(section[1].strip().encode("utf-8")).hexdigest()
+        if digest not in seen:
+            seen.add(digest)
+            distinct.append(section)
+    out = distinct
     if len(out) <= 1:
         return [(slug, body, "")]
     return _disambiguate_duplicate_slugs(out)
@@ -646,12 +675,9 @@ def dedup_pages(
     pages: list[tuple[str, str, str]],
 ) -> tuple[list[tuple[str, str, str]], int, int]:
     """[(slug, url, body), ...] → (filtered, stubs, dupes). Same rules as
-    the monolith split's cleanup."""
+    the monolith split's cleanup; each page was fetched on its own, so a short one with a code example is kept."""
     pre = len(pages)
-    kept = [
-        (s, u, b) for s, u, b in pages
-        if len(b.encode("utf-8")) >= params.SPLIT_MIN_SECTION_BYTES
-    ]
+    kept = [(s, u, b) for s, u, b in pages if worth_keeping(b, delimited = True)]
     stubs_dropped = pre - len(kept)
     seen: set[str] = set()
     deduped: list[tuple[str, str, str]] = []
