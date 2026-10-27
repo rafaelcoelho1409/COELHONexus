@@ -213,7 +213,9 @@ step("runs: cached manifest", "POST", "/runs", json={"slug": "cachefw"})
 MINIO.objects.update({
     domains.dd.ingestion.storage.keys.manifest_key("rf"): "{}", "ingestion-raw/rf/a": "x", "synth-vault/rf/b": "y", "keep/rf/c": "z",
 })
-step("runs: refresh wipes the stale prefixes then queues", "POST", "/runs", json={"slug": "rf", "refresh": True})
+# A refresh no longer wipes the stored copy at the API call: the queued run sets it aside itself when it starts (and puts it back
+# if it fails), so what is stored is untouched here.
+step("runs: refresh queues and leaves the stored copy for the run to set aside", "POST", "/runs", json={"slug": "rf", "refresh": True})
 
 # ===== planner =====
 reset()

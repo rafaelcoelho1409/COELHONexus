@@ -8,6 +8,7 @@ from . import entities, params, patterns
 
 import copy
 import logging
+import re
 import zlib
 from typing import Optional
 from urllib.parse import urljoin, urlparse
@@ -155,9 +156,40 @@ def _slugify(s: str) -> str:
     return patterns.SLUG_RE.sub("-", (s or "").lower()).strip("-")[:80] or "section"
 
 
+_FENCED_RE = re.compile(r"^(`{3,}|~{3,}).*?^\1[ \t]*$", re.M | re.S)
+
+
+def _md(html: str, source_url: str, lang: str) -> str:
+    return domains.dd.ingestion.tiers.extract.domain.html_to_markdown(html, source_url = source_url, default_code_language = lang)
+
+
+def compose_child(parent_title: str, heading: str, body_md: str, fallback: str = "") -> tuple[str, str]:
+    """`(title, body)` of a page cut out of a bigger one, in the shape every other split page has: the title is "Parent › heading"
+    — the parent as its page name, not its raw `<title>` with the docs' name and version in it ("Tasks — Celery 5.6.3
+    documentation") — and the body opens with `# Parent` and, unless the piece already starts with a heading of its own,
+    `## heading`. An autodoc piece is a `<dl>` that opens with a signature, so before this 676 of Elasticsearch-py's 691
+    pages had no H1, and a title made of the page's `<title>` and a signature's text."""
+    parent = domains.dd.ingestion.tiers.extract.domain.page_name(parent_title or "")
+    # `¶` (Sphinx) or ` #` (pydata-sphinx-theme: "Model considerations #") is the heading's permalink, read as part of its text.
+    heading = re.sub(r"\s+[#¶]$", "", re.sub(r"\s+", " ", (heading or "").strip()).rstrip("¶").strip())[:120]
+    if parent and heading and heading.casefold() != parent.casefold():
+        title = f"{parent} › {heading}"
+    else:
+        title = heading or parent or fallback
+    first = next((line for line in body_md.splitlines() if line.strip()), "")
+    prefix = ""
+    # An H1 is a `# Title` outside code: a `# comment` in a fenced example is not one (103 of Celery's pieces had no H1 for that reason).
+    if parent and not re.search(r"^# \S", _FENCED_RE.sub("", body_md), re.M):
+        prefix += f"# {parent}\n\n"
+    if heading and not re.match(r"#{1,6}\s", first):
+        prefix += f"## {heading}\n\n"
+    return title, prefix + body_md
+
+
 def maybe_split_page(
     html: str, source_url: str, parent_title: str = "",
     inventory: Optional[entities.Inventory] = None,
+    default_code_language: str = "",
 ) -> list[entities.SubPage]:
     """Split precedence: inventory (per-entity) → autodoc (≥4 dl.py.class or 1-class-N-methods) → anchor (≥12 H2). Returns [] if page stays whole."""
     if not html:
@@ -170,31 +202,32 @@ def maybe_split_page(
     domains.dd.ingestion.tiers.extract.domain.strip_chrome(soup)
     root = domains.dd.ingestion.tiers.extract.domain.find_content_root(soup)
 
+    lang = default_code_language
     if inventory is not None:
-        out = _split_by_inventory(soup, root, source_url, parent_title, inventory)
+        out = _split_by_inventory(soup, root, source_url, parent_title, inventory, lang)
         if out:
             n_entity = len(out)
-            out += _split_residual(root, out, source_url, parent_title)
+            out += _split_residual(root, out, source_url, parent_title, lang)
             logger.info(
                 f"[page-split] inventory split: {n_entity} entity + "
                 f"{len(out) - n_entity} narrative virtual pages from {source_url}"
             )
             return out
 
-    out = _split_autodoc(root, source_url, parent_title)
+    out = _split_autodoc(root, source_url, parent_title, lang)
     if out:
         n_entity = len(out)
-        out += _split_residual(root, out, source_url, parent_title)
+        out += _split_residual(root, out, source_url, parent_title, lang)
         logger.info(
             f"[page-split] autodoc split: {n_entity} entity + "
             f"{len(out) - n_entity} narrative virtual pages from {source_url}"
         )
         return out
 
-    out = _split_anchored(root, source_url, parent_title)
+    out = _split_anchored(root, source_url, parent_title, lang)
     if out:
         n_entity = len(out)
-        out += _split_residual(root, out, source_url, parent_title)
+        out += _split_residual(root, out, source_url, parent_title, lang)
         logger.info(
             f"[page-split] anchor split: {n_entity} section + "
             f"{len(out) - n_entity} narrative virtual pages from {source_url}"
@@ -222,7 +255,7 @@ def _container_for_anchor(soup: BeautifulSoup, root: Tag, anchor: str) -> Option
 
 def _split_by_inventory(
     soup: BeautifulSoup, root: Tag, source_url: str,
-    parent_title: str, inventory: entities.Inventory,
+    parent_title: str, inventory: entities.Inventory, lang: str = "",
 ) -> list[entities.SubPage]:
     """Inventory-driven split: one SubPage per splittable entity on page.
     Top-level first; falls back to members on 1-class-N-methods pages."""
@@ -243,17 +276,13 @@ def _split_by_inventory(
         container = _container_for_anchor(soup, root, ent.anchor)
         if container is None:
             continue
-        body_md = domains.dd.ingestion.tiers.extract.domain.html_to_markdown(str(container), source_url=source_url)
+        body_md = _md(str(container), source_url, lang)
         if len(body_md.encode("utf-8")) < params.INVENTORY_MIN_BODY_BYTES:
             n_stubs_dropped += 1
             continue
         seen.add(ent.anchor)
-        title_text = (ent.dispname or ent.name).rstrip("¶").strip()[:160]
-        title = (
-            f"{parent_title} — {title_text}"
-            if parent_title and title_text and title_text not in parent_title
-            else (title_text or parent_title or ent.anchor)
-        )
+        # The entity's own (qualified) name names the piece — `dispname` is, for an autodoc entity, its whole signature.
+        title, body_md = compose_child(parent_title, ent.name or ent.dispname, body_md, ent.anchor)
         out.append(entities.SubPage(
             slug_suffix=_slugify(ent.anchor),
             sub_url=f"{parent_url}#{ent.anchor}",
@@ -281,7 +310,7 @@ def _is_h2_section(sec: Tag) -> bool:
 
 
 def _split_residual(
-    root: Tag, emitted: list[entities.SubPage], source_url: str, parent_title: str,
+    root: Tag, emitted: list[entities.SubPage], source_url: str, parent_title: str, lang: str = "",
 ) -> list[entities.SubPage]:
     """Narrative the entity/anchor split would otherwise discard.
 
@@ -305,7 +334,9 @@ def _split_residual(
             node.decompose()
 
     parent_url = source_url.split("#", 1)[0]
-    md_of = domains.dd.ingestion.tiers.extract.domain.html_to_markdown
+
+    def md_of(html: str, source_url: str) -> str:
+        return _md(html, source_url, lang)
 
     def _unique(anchor: str) -> str:
         base, n = anchor, 1
@@ -315,34 +346,29 @@ def _split_residual(
         taken.add(anchor)
         return anchor
 
-    def _title(text: str, fallback: str) -> str:
-        text = (text or "").rstrip("¶").strip()[:160]
-        if parent_title and text and text not in parent_title:
-            return f"{parent_title} — {text}"
-        return text or parent_title or fallback
-
     out: list[entities.SubPage] = []
     sections = [
         sec for sec in work.select("section, div.section")
         if _is_h2_section(sec)
     ]
     for sec in sections:
-        body_md = md_of(str(sec), source_url=source_url)
+        body_md = md_of(str(sec), source_url)
         heading = sec.find("h2")
         if len(body_md.encode("utf-8")) >= params.MIN_BODY_BYTES:
             anchor = _unique(
                 (sec.get("id") or "").strip()
                 or _slugify(heading.get_text(strip=True) if heading else "")
             )
+            title, body_md = compose_child(parent_title, heading.get_text(" ", strip=True) if heading else "", body_md, anchor)
             out.append(entities.SubPage(
                 slug_suffix=_slugify(anchor),
                 sub_url=f"{parent_url}#{anchor}",
-                title=_title(heading.get_text(strip=True) if heading else "", anchor),
+                title=title,
                 body_md=body_md,
             ))
         sec.decompose()
 
-    overview_md = md_of(str(work), source_url=source_url)
+    overview_md = md_of(str(work), source_url)
     if len(overview_md.encode("utf-8")) >= params.MIN_BODY_BYTES:
         h1_sec = next(
             (sec for sec in work.select("section, div.section")
@@ -353,17 +379,18 @@ def _split_residual(
             ((h1_sec.get("id") or "").strip() if h1_sec is not None else "")
             or "overview"
         )
+        title, overview_md = compose_child(parent_title, "Overview", overview_md, anchor)
         out.append(entities.SubPage(
             slug_suffix=_slugify(anchor),
             sub_url=f"{parent_url}#{anchor}",
-            title=_title("Overview", anchor),
+            title=title,
             body_md=overview_md,
         ))
     return out
 
 
 def _split_autodoc(
-    root: Tag, source_url: str, parent_title: str,
+    root: Tag, source_url: str, parent_title: str, lang: str = "",
 ) -> list[entities.SubPage]:
     blocks = root.select(params.AUTODOC_SELECTOR)
     # Top-level only — a class with nested methods is ONE unit, not 1+N.
@@ -400,15 +427,12 @@ def _split_autodoc(
             continue
         seen_ids.add(anchor_id)
         title_text = dt.get_text(strip=True).rstrip("¶").strip()[:160]
-        body_md = domains.dd.ingestion.tiers.extract.domain.html_to_markdown(str(dl), source_url=source_url)
+        body_md = _md(str(dl), source_url, lang)
         if len(body_md.encode("utf-8")) < params.MIN_BODY_BYTES:
             continue
         slug_suffix = _slugify(anchor_id) or _slugify(title_text)
-        title = (
-            f"{parent_title} — {title_text}"
-            if parent_title and title_text not in parent_title
-            else (title_text or parent_title or anchor_id)
-        )
+        # The object's id (`celery.app.task.Task.retry`) names the piece; the `<dt>`'s text is its signature.
+        title, body_md = compose_child(parent_title, anchor_id, body_md, title_text)
         out.append(entities.SubPage(
             slug_suffix=slug_suffix,
             sub_url=f"{parent_url}#{anchor_id}",
@@ -447,7 +471,7 @@ def _section_html_for_h2(h2: Tag, anchor_id: str) -> str:
 
 
 def _split_anchored(
-    root: Tag, source_url: str, parent_title: str,
+    root: Tag, source_url: str, parent_title: str, lang: str = "",
 ) -> list[entities.SubPage]:
     h2s = root.select("h2")
     anchored: list[tuple[Tag, str]] = []
@@ -474,15 +498,11 @@ def _split_anchored(
             continue
         seen_ids.add(anchor_id)
         sub_html = _section_html_for_h2(h2, anchor_id)
-        body_md = domains.dd.ingestion.tiers.extract.domain.html_to_markdown(sub_html, source_url=source_url)
+        body_md = _md(sub_html, source_url, lang)
         if len(body_md.encode("utf-8")) < params.MIN_BODY_BYTES:
             continue
-        title_text = h2.get_text(strip=True).rstrip("¶").strip()[:160]
-        title = (
-            f"{parent_title} — {title_text}"
-            if parent_title and title_text and title_text not in parent_title
-            else (title_text or parent_title or anchor_id)
-        )
+        title_text = h2.get_text(" ", strip=True).rstrip("¶").strip()[:160]
+        title, body_md = compose_child(parent_title, title_text, body_md, anchor_id)
         out.append(entities.SubPage(
             slug_suffix=_slugify(anchor_id),
             sub_url=f"{parent_url}#{anchor_id}",

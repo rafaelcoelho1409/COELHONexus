@@ -563,3 +563,60 @@ async def delete_snapshot(
     prefix = keys.snapshot_prefix(framework_slug, ts)
     n = await minio.delete_prefix(prefix)
     return {"framework_slug": framework_slug, "ts": ts, "deleted": n}
+
+
+# --- The copy a re-ingestion replaces, kept until the new one is done. A refresh used to wipe the old copy first, so a
+# failed or cancelled run left nothing (Diffusers was a 404 for 18 minutes; a failure would have been permanent). ---
+
+def _framework_parts(framework_slug: str) -> tuple[tuple[str, str], ...]:
+    """The three places a framework's stored copy lives: the pages and manifest, the raw copies, the citation vaults."""
+    return (
+        ("pages", keys.framework_prefix(framework_slug)),
+        ("raw", keys.raw_prefix(framework_slug)),
+        ("vault", keys.vault_prefix(framework_slug)),
+    )
+
+
+async def stash_old_copy(minio: infra.minio.service.MinIOStorage, framework_slug: str) -> str | None:
+    """Make room for a re-ingestion of `framework_slug`: copy the finalized copy aside, then empty its three prefixes. Returns
+    the backup's id (what `restore_old_copy` / `drop_old_copy` take), or None when there was nothing worth keeping.
+    A copy that is not finalized (a run that crashed) is not backed up over a backup an earlier run left: that backup is
+    kept and returned instead."""
+    older = sorted(await minio.list_subfolders(keys.backup_root(framework_slug)), reverse = True)
+    backup_id: str | None = older[0] if older else None
+    if await read_framework_manifest(minio, framework_slug) is not None:
+        backup_id = _snapshot_now_ts()
+        base = keys.backup_prefix(framework_slug, backup_id)
+        for part, prefix in _framework_parts(framework_slug):
+            await minio.copy_prefix(prefix, f"{base}{part}/", skip_substring = f"/{params.SNAPSHOTS_SUBDIR}")
+        for stale in older:
+            if stale != backup_id:  # a backup made in the same second as an older one shares its id: it is not the stale one
+                await minio.delete_prefix(keys.backup_prefix(framework_slug, stale))
+    for _part, prefix in _framework_parts(framework_slug):
+        await minio.delete_prefix(prefix)
+    return backup_id
+
+
+async def restore_old_copy(minio: infra.minio.service.MinIOStorage, framework_slug: str, backup_id: str) -> int:
+    """Put a backup back as the framework's copy, in place of whatever a failed or cancelled run left. Returns the objects
+    restored (0 when the backup is gone, in which case nothing is touched)."""
+    base = keys.backup_prefix(framework_slug, backup_id)
+    if not await minio.list(base):
+        return 0
+    restored = 0
+    for part, prefix in _framework_parts(framework_slug):
+        await minio.delete_prefix(prefix)
+        restored += await minio.copy_prefix(f"{base}{part}/", prefix)
+    return restored
+
+
+async def latest_backup(minio: infra.minio.service.MinIOStorage, framework_slug: str) -> str | None:
+    """The newest backup of `framework_slug`'s previous copy, if one is waiting (a run in flight, or one that crashed)."""
+    found = sorted(await minio.list_subfolders(keys.backup_root(framework_slug)), reverse = True)
+    return found[0] if found else None
+
+
+async def drop_old_copy(minio: infra.minio.service.MinIOStorage, framework_slug: str, backup_id: str | None = None) -> int:
+    """The new copy is finished: the backup of the old one is not needed. Without an id, every backup of the framework goes."""
+    prefix = keys.backup_prefix(framework_slug, backup_id) if backup_id else keys.backup_root(framework_slug)
+    return await minio.delete_prefix(prefix)

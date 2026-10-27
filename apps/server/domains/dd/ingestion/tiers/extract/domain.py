@@ -17,9 +17,29 @@ logger = logging.getLogger(__name__)
 
 def strip_chrome(soup: BeautifulSoup) -> None:
     _callouts_to_blockquotes(soup)
+    _drop_viewcode_links(soup)
     for sel in params.CHROME_SELECTORS:
+        furniture = sel in params.HEADING_FURNITURE_SELECTORS
         for el in soup.select(sel):
+            # Inside a heading, a selector that is not heading furniture would take the heading's own text with it.
+            if not furniture and el.find_parent(list(params.HEADING_TAGS)) is not None:
+                continue
             el.decompose()
+
+
+def _unwrap_heading_anchors(soup: BeautifulSoup) -> None:
+    """A heading that is a link to itself (mdBook's `<h1><a class="header" href="#intro">Getting started</a></h1>`) is the plain
+    heading: `# [Getting started](#intro)` is no better a title than `# Getting started`."""
+    for heading in soup.find_all(list(params.HEADING_TAGS)):
+        for link in heading.find_all("a", href = re.compile(r"^#")):
+            link.unwrap()
+
+
+def _drop_viewcode_links(soup: BeautifulSoup) -> None:
+    """Sphinx's `[source]` link after every signature goes with its `<a>`, which would otherwise be left empty."""
+    for span in soup.select(params.VIEWCODE_SELECTOR):
+        link = span.find_parent("a")
+        (link or span).decompose()
 
 
 def _callouts_to_blockquotes(soup: BeautifulSoup) -> None:
@@ -31,17 +51,29 @@ def _callouts_to_blockquotes(soup: BeautifulSoup) -> None:
         marker = " ".join([*(aside.get("class") or []), aside.get("role") or "", aside.get("aria-label") or ""]).lower()
         if not any(m in marker for m in params.CALLOUT_ASIDE_MARKERS) or any(m in marker for m in params.NOT_CALLOUT_MARKERS):
             continue
-        for icon in aside.find_all("svg"):
-            icon.decompose()
-        for title in aside.find_all(class_=re.compile(r"title", re.I)):
-            text = title.get_text(" ", strip = True)
-            if text:
-                strong = soup.new_tag("strong")
-                strong.string = text
-                title.clear()
-                title.append(strong)
-        aside.name = "blockquote"
-        aside.attrs = {}
+        _as_blockquote(soup, aside)
+    # …and a callout written as a `<div>`: Sphinx's `<div class="admonition note"><p class="admonition-title">Note</p>…` came out as a
+    # bare "Note" line over the text (45 pages of XGBoost).
+    for div in soup.find_all("div"):
+        classes = div.get("class") or []
+        if any(c.startswith(params.ADMONITION_CLASS_PREFIXES) for c in classes):
+            _as_blockquote(soup, div)
+
+
+def _as_blockquote(soup: BeautifulSoup, node: Tag) -> None:
+    """A callout element as a `<blockquote>`, its icon gone and its title (`<p class="… title …">`) in bold."""
+    for icon in node.find_all("svg"):
+        icon.decompose()
+    title = node.find(class_=re.compile(r"(^|[-_])title($|[-_])", re.I))
+    if title is not None and title.find_parent(["pre", "code"]) is None:
+        text = title.get_text(" ", strip = True)
+        if text:
+            strong = soup.new_tag("strong")
+            strong.string = text
+            title.clear()
+            title.append(strong)
+    node.name = "blockquote"
+    node.attrs = {}
 
 
 def _prepare_tables(soup: BeautifulSoup) -> None:
@@ -296,8 +328,11 @@ def code_language(pre: Tag) -> str:
     return ""
 
 
-def html_to_markdown(html: str, source_url: Optional[str] = None) -> str:
-    """HTML → markdown: strip chrome, pick content root, convert with markdownify (ATX headings, fenced code, strip empty anchors). Empty string on bad input."""
+def html_to_markdown(html: str, source_url: Optional[str] = None, default_code_language: str = "") -> str:
+    """HTML → markdown: strip chrome, pick content root, convert with markdownify (ATX headings, fenced code, strip empty anchors). Empty string on bad input.
+    `default_code_language` labels a code block whose markup names no language (go.dev's, typescriptlang.org's and SHAP's
+    notebooks' `<pre>` have no class: 929 of Go's 932 fences, all 257 of TypeScript's were unlabelled) — what the catalog says
+    the docs are written in; a block that looks like a shell session is not labelled."""
     if not html or not html.strip():
         return ""
     try:
@@ -308,25 +343,43 @@ def html_to_markdown(html: str, source_url: Optional[str] = None) -> str:
         soup = BeautifulSoup(html, "html.parser")
 
     page_title = soup.title.get_text(" ", strip = True) if soup.title else ""
+    for sel in params.PERMALINK_SELECTORS:
+        for el in soup.select(sel):
+            el.decompose()
     # The page's own <h1>, from inside its content element — with no such element the whole <body> is the root, and its first
     # <h1> may be the site's logo in a banner, which is not the page's heading.
     content = find_content_root(soup)
     heading = "" if content is soup or content is soup.body else _heading_text(content)
     strip_chrome(soup)
+    _unwrap_heading_anchors(soup)
     _normalize_math_to_markdown(soup)
     _prepare_tables(soup)
     root = find_content_root(soup)
     _heading_to_page_h1(soup, root, heading)
 
+    def language_of(pre: Tag) -> str:
+        found = code_language(pre)
+        if found or not default_code_language:
+            return found
+        return "" if _looks_like_shell(pre.get_text()) else default_code_language
+
     md = _md(
         str(root),
         heading_style = "ATX",
         code_language = "",
-        code_language_callback = code_language,
+        code_language_callback = language_of,
         bullets = "*-+",
         strip = ["script", "style"],
     )
     return ensure_h1(_collapse_blank_lines(md).strip(), page_title)
+
+
+_SHELL_START_RE = re.compile(r"^\s*(?:\$|#!|>>>|%|(?:sudo|pip3?|npm|npx|yarn|pnpm|brew|apt(?:-get)?|go (?:get|install|run|build|mod|test)|git|cd|mkdir|curl|wget|export|docker|make)\s)")
+
+
+def _looks_like_shell(text: str) -> bool:
+    """A code block that is a shell session or a command (`$ go run x.go`, `npm install typescript`), not source in the docs' language."""
+    return bool(_SHELL_START_RE.match(text or ""))
 
 
 def extract_title(html: str) -> str:

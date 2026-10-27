@@ -24,4 +24,6 @@ from __future__ import annotations
 # v9 (2026-10-27): the empty permalink Mintlify puts in front of a heading (`## [](#overview) Overview`) and a `[#](#anchor)`
 # link ending a line go; a horizontal rule ending a page goes; a `# [!code highlight]` annotation ends no line of code.
 # v10 (2026-10-27): the "Bash ![Copy code to clipboard](…) Copy" line Grafana's markdown prints above each code block goes.
-NORMALIZER_VERSION = 10
+# v11 (2026-10-27): a `[#](#anchor "Link to this heading")` permalink (pydata-sphinx-theme: OpenVINO) goes with its title; Sphinx's
+# `[[source]](…)` viewcode link goes; a table that is only links to places in the page (nginx's table of contents) goes.
+NORMALIZER_VERSION = 11

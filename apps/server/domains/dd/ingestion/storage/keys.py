@@ -54,3 +54,12 @@ def artifact_key(framework_slug: str, name: str) -> str:
 
 def snapshot_prefix(framework_slug: str, ts: str) -> str:
     return f"{framework_prefix(framework_slug)}{params.SNAPSHOTS_SUBDIR}{ts}/"
+
+
+def backup_root(framework_slug: str) -> str:
+    """Where the copy a re-ingestion replaces waits until the new one is finished (see service.stash_old_copy)."""
+    return f"ingestion-backup/{framework_slug.strip().strip('/')}/"
+
+
+def backup_prefix(framework_slug: str, backup_id: str) -> str:
+    return f"{backup_root(framework_slug)}{backup_id}/"

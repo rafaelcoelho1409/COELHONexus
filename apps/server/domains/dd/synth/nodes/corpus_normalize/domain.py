@@ -54,9 +54,13 @@ def normalize_doc(
     stats.code_annotations_stripped = n_annot
     stats.code_copy_lines_stripped  = n_copy
 
-    text, n_permalink, n_anchor = _permalink_pass(text)
+    text, n_permalink, n_anchor, n_source = _permalink_pass(text)
     stats.permalink_debris_stripped = n_permalink
     stats.heading_anchors_stripped = n_anchor
+    stats.viewcode_links_stripped = n_source
+
+    text, n_toc = _toc_table_pass(text)
+    stats.toc_tables_stripped = n_toc
 
     text, n_media = _empty_media_pass(text)
     stats.empty_media_stripped = n_media
@@ -379,10 +383,11 @@ def _strip_admonition_markers(line: str) -> tuple[str, bool]:
     return line, False
 
 
-def _permalink_pass(text: str) -> tuple[str, int, int]:
+def _permalink_pass(text: str) -> tuple[str, int, int, int]:
     """Strip static-site permalink debris from prose lines, fence-aware
     (code samples quoting `[¶](#…)` markup must survive verbatim). The anchor Hugging Face's doc builder appends to a
-    heading (`## AutoModel[[transformers.AutoModel]]`) goes the same way; it is counted apart."""
+    heading (`## AutoModel[[transformers.AutoModel]]`) and Sphinx's `[source]` viewcode link go the same way; each is
+    counted apart."""
     fence_ranges = _identify_fence_ranges(text)
     fenced: set[int] = set()
     for (open_idx, close_idx, _) in fence_ranges:
@@ -392,6 +397,7 @@ def _permalink_pass(text: str) -> tuple[str, int, int]:
         fenced.update(range(open_idx + 1, close_idx))
     n = 0
     n_anchor = 0
+    n_source = 0
     out: list[str] = []
     for i, line in enumerate(text.split("\n")):
         if i in fenced:
@@ -409,8 +415,45 @@ def _permalink_pass(text: str) -> tuple[str, int, int]:
             if anchored != new_line:
                 n_anchor += 1
                 new_line = anchored
+            sourced = patterns.VIEWCODE_LINK_RE.sub("", new_line)
+            if sourced != new_line:
+                n_source += 1
+                new_line = sourced
         out.append(new_line)
-    return "\n".join(out), n, n_anchor
+    return "\n".join(out), n, n_anchor, n_source
+
+
+def _toc_table_pass(text: str) -> tuple[str, int]:
+    """Drop a table that is nothing but links to places in the same page (nginx.org's table of contents at the top of every
+    module page: 148 pages began with `| [Example Configuration](#example) [Directives](#directives) … |`). The page's own
+    headings say the same; a table of anchors is a navigation widget. A table with any other text in it stays."""
+    lines = text.split("\n")
+    fenced: set[int] = set()
+    for (open_idx, close_idx, _) in _identify_fence_ranges(text):
+        fenced.update(range(open_idx, close_idx))
+    out: list[str] = []
+    dropped = 0
+    i = 0
+    while i < len(lines):
+        if i in fenced or not patterns.TABLE_LINE_RE.match(lines[i]):
+            out.append(lines[i])
+            i += 1
+            continue
+        j = i
+        while j < len(lines) and j not in fenced and patterns.TABLE_LINE_RE.match(lines[j]):
+            j += 1
+        block = "\n".join(lines[i:j])
+        residue = patterns.ANCHOR_LINK_RE.sub("", block)
+        only_links = (
+            len(patterns.ANCHOR_LINK_RE.findall(block)) >= 2
+            and not re.sub(r"[\s|:\-\xa0]|&nbsp;", "", residue)
+        )
+        if only_links:
+            dropped += 1
+        else:
+            out.extend(lines[i:j])
+        i = j
+    return "\n".join(out), dropped
 
 
 def _empty_media_pass(text: str) -> tuple[str, int]:

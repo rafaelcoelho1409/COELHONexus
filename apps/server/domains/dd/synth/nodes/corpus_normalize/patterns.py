@@ -95,7 +95,16 @@ PERMALINK_LEADING_RE = re.compile(r"^\s*\[[¶\ue000-\uf8ff]?\]\(#[^)]*\)\s*")
 # pages), where PERMALINK_LEADING_RE, which wants it at the start of the line, never looked; and Docusaurus-style API docs end
 # a line with a `[#](#anchor)` link to itself (Playwright's `**Returns**` lists).
 HEADING_PERMALINK_RE = re.compile(r"^(#{1,6}[ \t]+)(?:\[[¶-]?\]\(#[^)]*\)[ \t]*)+")
-PERMALINK_HASH_RE = re.compile(r"[ \t]*\[#\]\(#[^)\s]*\)[ \t]*$")
+PERMALINK_HASH_RE = re.compile(r"[ \t]*\[#\]\(#[^)\s]*(?:[ \t]+\"[^\"]*\")?\)[ \t]*$")
+
+# The `[source]` link Sphinx's viewcode extension puts after a signature: a link whose text is the word in square brackets, to the
+# module's highlighted source. (Hugging Face's `[Source](https://github.com/…)` is a different thing and is kept.)
+VIEWCODE_LINK_RE = re.compile(r"[ \t]*\[\[source\]\]\([^)\n]*\)")
+
+# A table that is only links to places in the page: nginx.org's table of contents at the top of every module page
+# (`| [Example Configuration](#example) [Directives](#directives) … |`).
+TABLE_LINE_RE = re.compile(r"^[ \t]*\|")
+ANCHOR_LINK_RE = re.compile(r"\[[^\]]*\]\(#[^)]*\)")
 
 # The header line a docs builder prints above a code block in its markdown: the language, a copy icon and the word "Copy"
 # (Grafana's twin pages, 882 of them in Tempo's 213: `Bash ![Copy code to clipboard](…/icon-copy-small-2.svg) Copy`). The

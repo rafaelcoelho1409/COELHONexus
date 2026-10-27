@@ -24,6 +24,8 @@ class NormalizeStats(BaseModel):
     img_tags_rewritten:         int  = 0
     code_annotations_stripped:  int  = 0
     code_copy_lines_stripped:   int  = 0
+    toc_tables_stripped:        int  = 0
+    viewcode_links_stripped:    int  = 0
     trailing_rules_stripped:    int  = 0
     title_promoted:             bool = False
     frontmatter_extracted:      bool = False

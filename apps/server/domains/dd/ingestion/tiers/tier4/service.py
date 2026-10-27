@@ -62,8 +62,11 @@ async def crawl_urls(
     progress: domains.dd.ingestion.runtime.progress.service.Progress,
     store: domains.dd.ingestion.storage.service.Store,
     min_ok_bytes: int = params.DEFAULT_MIN_OK_BYTES,
+    code_language: str = "",
 ) -> tuple[int, list[str]]:
-    """Crawl URLs via Playwright; stream successes to store immediately. Transient navigation failures get one retry with longer timeouts. Returns (pages_written, failed_urls)."""
+    """Crawl URLs via Playwright; stream successes to store immediately. Transient navigation failures get one retry with longer timeouts. Returns (pages_written, failed_urls).
+    A page is converted from the HTML the browser rendered with the same extractor every other tier uses (chrome removed, the
+    page's own H1 kept, code blocks labelled) — crawl4ai's markdown kept TypeScript's cookie banner (the title of 13 pages) and its footer."""
     if not urls:
         return 0, []
 
@@ -124,13 +127,21 @@ async def crawl_urls(
                 )
                 continue
 
-            md_obj = getattr(r, "markdown", None)
-            body = ""
-            if md_obj is not None:
-                body = getattr(md_obj, "fit_markdown", "") or \
-                       getattr(md_obj, "raw_markdown", "") or ""
-            if not body:
-                body = getattr(r, "cleaned_html", "") or ""
+            extract = domains.dd.ingestion.tiers.extract.domain
+            rendered = getattr(r, "html", "") or ""
+            title = ""
+            body = extract.html_to_markdown(rendered, source_url = url, default_code_language = code_language) if rendered else ""
+            if rendered:
+                title = extract.extract_title(rendered)
+            if len(body.encode("utf-8")) < min_ok_bytes:
+                # The rendered HTML gave nothing: what crawl4ai made of the page is better than nothing.
+                md_obj = getattr(r, "markdown", None)
+                body = ""
+                if md_obj is not None:
+                    body = getattr(md_obj, "fit_markdown", "") or \
+                           getattr(md_obj, "raw_markdown", "") or ""
+                if not body:
+                    body = getattr(r, "cleaned_html", "") or ""
             if len(body.encode("utf-8")) < min_ok_bytes:
                 failed.append(url)
                 await progress.record_url(
@@ -148,7 +159,7 @@ async def crawl_urls(
                 url = url,
                 body = body,
                 tier = "playwright",
-                title = slug,
+                title = title or slug,
             )
             written += 1
             await progress.record_url(
@@ -341,6 +352,7 @@ async def _fetch_one(
     inventory: domains.dd.ingestion.tiers.tier4.sphinx.entities.Inventory | None = None,
     framework_slug: str | None = None,
     store: domains.dd.ingestion.storage.service.Store | None = None,
+    code_language: str = "",
 ) -> list[tuple[str, str, str, str]]:
     """Fetch + extract a URL. Returns [(slug, url, body_md, title), ...]; N entries when page_split fires (autodoc/anchored H2), empty list on failure."""
     t0 = time.monotonic()
@@ -391,7 +403,9 @@ async def _fetch_one(
             )
     # Anchor-dense / autodoc pages → N virtual sub-pages (no-op otherwise).
     try:
-        subs = domains.dd.ingestion.tiers.tier4.sphinx.domain.maybe_split_page(raw, url, parent_title = title, inventory = inventory)
+        subs = domains.dd.ingestion.tiers.tier4.sphinx.domain.maybe_split_page(
+            raw, url, parent_title = title, inventory = inventory, default_code_language = code_language,
+        )
     except Exception as e:
         logger.warning(f"[tier-4] page_split failed for {url}: {e}")
         subs = []
@@ -409,7 +423,7 @@ async def _fetch_one(
             (f"{base_slug}--{s.slug_suffix}"[:120], s.sub_url, s.body_md, s.title)
             for s in subs
         ]
-    body = domains.dd.ingestion.tiers.extract.domain.html_to_markdown(raw, source_url = url)
+    body = domains.dd.ingestion.tiers.extract.domain.html_to_markdown(raw, source_url = url, default_code_language = code_language)
     if len(body.encode("utf-8")) < params.MIN_OK_BYTES:
         await progress.record_url(
             url,
@@ -443,7 +457,9 @@ async def run(
     language: str | None = None,
     framework_name: str | None = None,
     path_filter: dict | None = None,
+    code_language: str | None = None,
 ) -> int:
+    code_language = code_language or ""
     parsed = urlparse(url)
     host = (parsed.netloc or "").lower()
     if not host:
@@ -460,6 +476,8 @@ async def run(
     async with httpx.AsyncClient(
         headers = {"User-Agent": params.USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
         timeout = httpx.Timeout(params.TIMEOUT_S, connect = 10.0),
+        # Go's 36 `http_error` pages were all 301s (`/doc/articles/go_command.html` → its post in the blog): a redirect is a page.
+        follow_redirects = True,
     ) as client:
         enriched = await _seed_enrichment(url, client)
         seeded = await _seeder_discover(host, raw_path)
@@ -574,12 +592,18 @@ async def run(
                 "[tier-4] SPA shells detected (majority of samples) → "
                 "falling through to Playwright (Phase 4b)"
             )
-            return await _phase4b_playwright(
+            browser_written = await _phase4b_playwright(
                 filtered,
                 framework_slug = framework_slug,
                 progress = progress,
                 store = store,
+                code_language = code_language,
             )
+            if browser_written == 0:
+                # Bash's run ended `done` with 0 pages: this early return skipped the check every other path makes.
+                await progress.finish(status = "failed")
+                raise RuntimeError(f"Tier 4: the browser fetched none of the {len(filtered)} pages")
+            return browser_written
         await progress.update_total(len(filtered))
         sem = asyncio.Semaphore(params.CONCURRENCY)
         # urls_done = progress-bar denom; written = MinIO pages (page_split makes written > urls_done — bar overflowed 251/190 on Airflow autodoc).
@@ -599,6 +623,7 @@ async def run(
                         inventory = inventory,
                         framework_slug = framework_slug,
                         store = store,
+                        code_language = code_language,
                     )
                 if not results:
                     failed.append(u)
@@ -645,6 +670,7 @@ async def run(
                 framework_slug = framework_slug,
                 progress = progress,
                 store = store,
+                code_language = code_language,
             )
             written += extra
         except Exception as e:
@@ -666,6 +692,7 @@ async def _phase4b_playwright(
     framework_slug: str,
     progress: domains.dd.ingestion.runtime.progress.service.Progress,
     store: domains.dd.ingestion.storage.service.Store,
+    code_language: str = "",
 ) -> int:
     written, failed = await crawl_urls(
         urls,
@@ -673,6 +700,7 @@ async def _phase4b_playwright(
         progress = progress,
         store = store,
         min_ok_bytes = params.MIN_OK_BYTES,
+        code_language = code_language,
     )
     logger.info(
         f"[tier-4] Playwright phase 4b: {written} written, {len(failed)} failed"

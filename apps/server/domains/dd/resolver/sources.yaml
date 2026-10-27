@@ -76,8 +76,11 @@ frameworks:
 
 - name: Bash
   logo: https://cdn.freebiesupply.com/logos/large/2x/bash-1-logo-black-and-white.png
-  docs: https://www.gnu.org/software/bash/manual/html_node/index.html
+  # The one-page manual: the per-node pages (`html_node/`) were not reachable from the cluster on 2026-10-27 (www.gnu.org timed out for
+  # every request, from the cluster and from a laptop alike), and the run ended `done` with no pages. One page is also one request.
+  docs: https://www.gnu.org/software/bash/manual/bash.html
   category: Programming Language
+  code_language: bash
 
 - name: Browser Use
   logo: https://mintcdn.com/browseruse-0aece648/lNAyHi2yxyXHwQ6v/logo/dark.svg?fit=max&auto=format&n=lNAyHi2yxyXHwQ6v&q=85&s=711fa3bb6b312e888023b697db9112be
@@ -191,10 +194,14 @@ frameworks:
   sitemap: https://duckdb.org/sitemap.xml
   github: https://github.com/duckdb/duckdb
   category: Python
+  # The sitemap lists the docs under numbered releases only (/docs/2.0/, /docs/1.5/, …), never /docs/current/ or /docs/stable/ —
+  # the earlier filter matched nothing and the run fell through to a docs crawl that matched nothing either. Any release matches;
+  # Tier 3 keeps one release of each page (the highest-numbered).
   path_filter:
     include:
-      - "/docs/current/clients/python"
-      - "/docs/current/guides/python"
+      - "/docs/[^/]+/clients/python"
+      - "/docs/[^/]+/guides/python"
+  code_language: python
 
 - name: ElasticSearch
   logo: https://upload.wikimedia.org/wikipedia/commons/thumb/f/f4/Elasticsearch_logo.svg/3840px-Elasticsearch_logo.svg.png
@@ -296,15 +303,23 @@ frameworks:
     exclude:
       - "/book/en/v1"
       - "/docs/[^/]+/[^/]+\\.html$"
+      # About 600 pages of the book's old chapter numbering that only redirect ("Redirecting…", 117 bytes of Markdown): each was fetched
+      # and dropped as empty.
+      - "/book/en/v2/ch00/"
 
 - name: Go
   logo: https://go.dev/images/go-logo-white.svg
   docs: https://go.dev/doc/
   github: https://github.com/golang/go
   category: Programming Language
+  code_language: go
   path_filter:
     exclude:
       - "/doc/devel/"
+      # Dynamic code-walk pages: 35 stored as a listing with no title.
+      - "/doc/codewalk"
+      # Source files the articles link to (`/doc/articles/wiki/final.go`): a listing, not a page.
+      - "\\.go$"
 
 - name: Grafana
   logo: https://cdn.simpleicons.org/grafana
@@ -955,6 +970,7 @@ frameworks:
   docs: https://shap.readthedocs.io/en/latest/
   github: https://github.com/shap/shap
   category: Python
+  code_language: python
   path_filter:
     exclude:
       - "/generated/"
@@ -1103,6 +1119,7 @@ frameworks:
   docs: https://www.typescriptlang.org/docs/
   github: https://github.com/microsoft/TypeScript-Website
   category: Programming Language
+  code_language: typescript
   path_filter:
     include:
       - "/docs/"

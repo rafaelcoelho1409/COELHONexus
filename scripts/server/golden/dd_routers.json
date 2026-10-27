@@ -261,8 +261,11 @@
    "status": "queued"
   },
   "minio": [
+   "ingestion-raw/rf/a",
    "ingestion/cachefw/manifest.json",
-   "keep/rf/c"
+   "ingestion/rf/manifest.json",
+   "keep/rf/c",
+   "synth-vault/rf/b"
   ],
   "redis": {
    "coelhonexus:dd:lock:rf": {
@@ -272,7 +275,7 @@
    }
   },
   "status": 200,
-  "step": "runs: refresh wipes the stale prefixes then queues"
+  "step": "runs: refresh queues and leaves the stored copy for the run to set aside"
  },
  {
   "celery": [],

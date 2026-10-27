@@ -97,6 +97,13 @@ check("…and the result is stable", post.strip_site_suffix(cleaned), cleaned)
 rest = [f"{verb} - Users" for verb in ("List", "Get", "Create")] + [f"Topic {i}" for i in range(20)]
 check("a suffix on a few titles of a big set (a REST docs set's 'List - Users') is not a site name", post.strip_site_suffix(rest), rest)
 check("a small set is left alone", post.strip_site_suffix(["A | S", "B | S", "C | S"]), ["A | S", "B | S", "C | S"])
+ts = [f"TypeScript: Documentation - Page {i}" for i in range(10)] + ["TypeScript: The starting point for learning TypeScript", "Plain", "Other thing"]
+check("a site's name at the FRONT of a title goes too (typescriptlang.org)", post.strip_site_suffix(ts)[:3], ["Page 0", "Page 1", "Page 2"])
+check("…the titles that do not have it stay", post.strip_site_suffix(ts)[10:], ["TypeScript: The starting point for learning TypeScript", "Plain", "Other thing"])
+agent = [f"Agent - Overview {i}" for i in range(5)] + [f"Agent - Setup {i}" for i in range(5)]
+check("…a first segment shared by every title of a set goes when what is left stays distinct", post.strip_site_suffix(agent)[:2], ["Overview 0", "Overview 1"])
+collide = ["Guide - Intro", "Intro"] + [f"Guide - Part {i}" for i in range(9)]
+check("…and not when it would make two different titles the same", post.strip_site_suffix(collide), collide)
 mixed = [f"Parent › Child {i} | Site" for i in range(12)]
 check("`Parent › Child` titles are not touched, nor counted", post.strip_site_suffix(mixed), mixed)
 check("an escaped underscore is not part of a title", post.display_title("# Page\n\n### add\\_script\\_tag\n\ntext\n", "x"), "Page › add_script_tag")

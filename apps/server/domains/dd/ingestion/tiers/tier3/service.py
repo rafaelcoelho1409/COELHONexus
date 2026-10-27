@@ -138,6 +138,7 @@ async def _fetch_page(
     store: domains.dd.ingestion.storage.service.Store | None = None,
     twin: bool = False,
     pacer: domains.dd.ingestion.tiers.fetch.service.Pacer | None = None,
+    code_language: str = "",
 ) -> tuple[str, str, str, str] | None:
     if twin:
         twin_page = await _fetch_twin(client, url, pacer)
@@ -199,7 +200,7 @@ async def _fetch_page(
                 f"[tier-3] artifact extraction failed for {url}: "
                 f"{type(e).__name__}: {e}"
             )
-    body = domains.dd.ingestion.tiers.extract.domain.html_to_markdown(raw, source_url = url)
+    body = domains.dd.ingestion.tiers.extract.domain.html_to_markdown(raw, source_url = url, default_code_language = code_language)
     title = domains.dd.ingestion.tiers.extract.domain.extract_title(raw)
     if len(body.encode("utf-8")) < params.MIN_OK_BYTES:
         await progress.record_url(
@@ -235,6 +236,7 @@ async def run(
     language: str | None = None,
     framework_name: str | None = None,
     path_filter: dict | None = None,
+    code_language: str | None = None,
 ) -> int:
     logger.info(f"[tier-3] framework={framework_slug} sitemap={url}")
     await progress.start(tier = "sitemap", total = 0)
@@ -269,10 +271,12 @@ async def run(
                 continue
             seen.add(u)
             deduped.append(u)
+        n_distinct = len(deduped)
+        deduped = domain.collapse_versions(deduped)
         n_lastmod = sum(1 for u in deduped if lastmod_by_url.get(u))
         logger.info(
             f"[tier-3] {len(all_urls)} total → {len(kept)} after filter → "
-            f"{len(deduped)} after dedup ({n_lastmod} with lastmod)"
+            f"{n_distinct} after dedup → {len(deduped)} after keeping one release of a page ({n_lastmod} with lastmod)"
         )
         if not deduped:
             await progress.finish(status = "downgrade")
@@ -336,6 +340,7 @@ async def run(
                     store = store,
                     twin = twins,
                     pacer = pacer,
+                    code_language = code_language or "",
                 )
             if r is not None:
                 slug, src_url, body, title = r

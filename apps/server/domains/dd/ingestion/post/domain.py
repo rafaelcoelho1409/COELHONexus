@@ -169,12 +169,34 @@ def strip_site_suffix(titles: list[str]) -> list[str]:
         return list(titles)
     counts = Counter(p[1].casefold() for p in parts if p is not None)
     dominant = {s for s, c in counts.items() if c >= params.TITLE_SUFFIX_MIN_COUNT and c / eligible >= params.TITLE_SUFFIX_MIN_SHARE}
-    if not dominant:
-        return list(titles)
-    last_words = {s.rsplit(" ", 1)[-1] for s in dominant if " " in s}
-    related = {s for s, c in counts.items() if c >= params.TITLE_SUFFIX_MIN_COUNT and " " in s and s.rsplit(" ", 1)[-1] in last_words}
-    drop = dominant | related
-    return [p[0] if p is not None and p[1].casefold() in drop else t for t, p in zip(titles, parts)]
+    out = list(titles)
+    if dominant:
+        last_words = {s.rsplit(" ", 1)[-1] for s in dominant if " " in s}
+        related = {s for s, c in counts.items() if c >= params.TITLE_SUFFIX_MIN_COUNT and " " in s and s.rsplit(" ", 1)[-1] in last_words}
+        drop = dominant | related
+        out = [p[0] if p is not None and p[1].casefold() in drop else t for t, p in zip(titles, parts)]
+    return _strip_site_prefix(out, eligible)
+
+
+def _strip_site_prefix(titles: list[str], eligible: int) -> list[str]:
+    """The same for a site's name at the FRONT of a title ("TypeScript: Documentation - Everyday Types": 26 of TypeScript's 42
+    pages), when what follows differs from page to page. Refused when it would make titles collide that were distinct."""
+    def split_front(title: str) -> tuple[str, str] | None:
+        at, cut = min(((title.find(sep), sep) for sep in params.TITLE_SUFFIX_SEPARATORS if title.find(sep) > 0), default = (-1, ""))
+        if at <= 0:
+            return None
+        head, rest = title[:at].strip(), title[at + len(cut):].strip()
+        return (head, rest) if head and rest else None
+
+    fronts = [None if " › " in t else split_front(t) for t in titles]
+    counts = Counter(f[0].casefold() for f in fronts if f is not None)
+    drop = {h for h, c in counts.items() if c >= params.TITLE_SUFFIX_MIN_COUNT and c / max(1, eligible) >= params.TITLE_SUFFIX_MIN_SHARE}
+    if not drop:
+        return titles
+    stripped = [f[1] if f is not None and f[0].casefold() in drop else t for t, f in zip(titles, fronts)]
+    if len({t.casefold() for t in stripped}) < len({t.casefold() for t in titles}):
+        return titles
+    return stripped
 
 
 def display_title(body: str, fallback: str) -> str:

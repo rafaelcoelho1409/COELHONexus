@@ -100,12 +100,29 @@ async def _cleanup_framework(minio, framework_slug: str) -> int:
         return 0
 
 
+async def _restore_old_copy(minio, slug: str) -> None:
+    """After a failed or cancelled run: the copy it replaced (set aside when it started) goes back. Never raises — it runs in an
+    error path and must not hide the error; a copy that cannot be put back is logged."""
+    storage = domains.dd.ingestion.storage.service
+    try:
+        backup_id = await storage.latest_backup(minio, slug)
+        if backup_id is None:
+            return
+        n = await storage.restore_old_copy(minio, slug, backup_id)
+        if n:
+            await storage.drop_old_copy(minio, slug)
+        logger.info(f"[dispatch] {slug}: the run did not finish — the previous copy is back ({n} objects)")
+    except Exception as e:
+        logger.warning(f"[dispatch] {slug}: could not put the previous copy back: {type(e).__name__}: {e}")
+
+
 async def reserve_run(slug: str, refresh: bool) -> dict:
     """Single-flight gate for starting an ingestion of `slug`. Returns a terminal response — `locked` (another
     ingestion is running, this slug's lock is held, or a concurrent start won the lock) or `cached` (a manifest
     exists and no refresh was asked) — or `{"status": "reserved", "run_id": ...}` with the slug's lock held and the
-    cancel flag cleared: the caller enqueues the run and calls `release_run` if that fails. A refresh first wipes the
-    slug's stale MinIO prefixes."""
+    cancel flag cleared: the caller enqueues the run and calls `release_run` if that fails. A refresh does not touch the
+    stored copy here: the run itself sets the old copy aside when it starts (`storage.service.stash_old_copy`) and puts it
+    back if it fails or is cancelled."""
     progress = domains.dd.ingestion.runtime.progress.service
     async with infra.redis.service.client() as r:
         other = await progress.find_other_running(r, slug)
@@ -134,26 +151,11 @@ async def reserve_run(slug: str, refresh: bool) -> dict:
                 ),
             }
 
-        minio = infra.minio.service.get_storage()
         if not refresh:
+            minio = infra.minio.service.get_storage()
             cached = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)
             if cached:
                 return {"status": "cached", "slug": slug, "run_id": None, "manifest": cached}
-        else:
-            for prefix in (
-                domains.dd.ingestion.storage.keys.framework_prefix(slug),
-                f"ingestion-raw/{slug}/",
-                f"synth-vault/{slug}/",
-            ):
-                try:
-                    n = await minio.delete_prefix(prefix)
-                    if n:
-                        logger.info(
-                            f"[runs] refresh wipe: deleted {n} stale objects "
-                            f"from {prefix!r} before re-ingestion"
-                        )
-                except Exception as e:
-                    logger.warning(f"[runs] refresh wipe failed for {prefix!r}: {e}")
 
         run_id = uuid.uuid4().hex
         if not await progress.acquire_lock(r, slug, run_id):
@@ -262,6 +264,12 @@ async def _run_inner(run_id: str, slug: str) -> dict:
     try:
         await progress.raise_if_cancelled()
 
+        # A re-ingestion sets the copy it replaces aside (and empties the slug's prefixes) before it writes anything; the copy
+        # comes back if the run fails or is cancelled, and is dropped once the new one is finalized.
+        backup_id = await domains.dd.ingestion.storage.service.stash_old_copy(minio, slug)
+        if backup_id:
+            logger.info(f"[dispatch] {slug}: the previous copy is set aside ({backup_id}) until this run is done")
+
         async def run_tier(kind: str, url: str, tier_progress) -> None:
             mod = _TIER_MODULES[kind]
             kwargs: dict = {
@@ -270,6 +278,9 @@ async def _run_inner(run_id: str, slug: str) -> dict:
             }
             if mod in (domains.dd.ingestion.tiers.tier3, domains.dd.ingestion.tiers.tier4):
                 kwargs["framework_name"] = entry["name"]
+            if mod in (domains.dd.ingestion.tiers.tier2, domains.dd.ingestion.tiers.tier3, domains.dd.ingestion.tiers.tier4):
+                # What the docs are written in, for a code block whose markup names no language (catalog `code_language`).
+                kwargs["code_language"] = entry.get("code_language")
             if mod in (
                 domains.dd.ingestion.tiers.tier1,
                 domains.dd.ingestion.tiers.tier2,
@@ -348,6 +359,11 @@ async def _run_inner(run_id: str, slug: str) -> dict:
 
         await progress.finish(status = "done")
 
+        try:
+            await domains.dd.ingestion.storage.service.drop_old_copy(minio, slug)
+        except Exception as e:
+            logger.warning(f"[dispatch] {slug}: could not drop the previous copy's backup: {type(e).__name__}: {e}")
+
         return {
             **base_result,
             "status": "done",
@@ -373,6 +389,7 @@ async def _run_inner(run_id: str, slug: str) -> dict:
                 f"[dispatch] {slug}: cleanup pass 2 caught {n2} straggler "
                 f"objects (pass 1 deleted {n1})"
             )
+        await _restore_old_copy(minio, slug)
         await progress.finish(status = "cancelled")
         return {
             **base_result, "status": "cancelled", "pages_written": 0,
@@ -380,8 +397,9 @@ async def _run_inner(run_id: str, slug: str) -> dict:
 
     except Exception as e:
         logger.exception(f"[dispatch] {slug}: failed")
-        # Wipe partial state so the next cached-check sees nothing.
+        # Wipe partial state so the next cached-check sees nothing — then the previous copy, if there was one, goes back.
         await _cleanup_framework(minio, slug)
+        await _restore_old_copy(minio, slug)
         await progress.finish(status = "failed", error = f"{type(e).__name__}: {e}")
         return {
             **base_result, "status": "failed",

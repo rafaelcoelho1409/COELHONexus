@@ -311,7 +311,7 @@ def normalized(text: str) -> str:
     return normalize.domain.normalize_doc(text).body
 
 
-check("the normalizer is at v10", normalize.versions.NORMALIZER_VERSION, 10)
+check("the normalizer is at v11", normalize.versions.NORMALIZER_VERSION, 11)
 check("a callout's fence loses its Mintlify attributes",
       normalized('> [!NOTE]\n>\n> ```bash theme={"theme":"css-variables"}\n> pip install "x[video]"\n> ```\n'),
       '> [!NOTE]\n>\n> ```bash\n> pip install "x[video]"\n> ```\n')
@@ -448,6 +448,18 @@ check("…a rule in the middle of it stays", normalized("One.\n\n---\n\nTwo.\n")
 check("a highlight annotation ends no line of code",
       normalized("```python\nx = 1  # [!code highlight]\nreturn f(x)  // [!code ++]\n```\n"), "```python\nx = 1\nreturn f(x)\n```\n")
 check("…prose that mentions one is not code", normalized("Write `# [!code highlight]` after the line.\n"), "Write `# [!code highlight]` after the line.\n")
+# v11: a permalink with a title, Sphinx's `[source]` link, a table that is only links to the page's own sections
+check("a `[#](#anchor \"Link to this heading\")` permalink goes with its title", normalized('# NonMaxSuppression[#](#nonmaxsuppression "Link to this heading")\n\nText.\n'), "# NonMaxSuppression\n\nText.\n")
+check("…the plain form still does", normalized("## Heading[#](#heading)\n"), "## Heading\n")
+check("Sphinx's `[[source]](…)` link after a signature goes", normalized("open(*mode='r'*)[[source]](https://x.dev/_modules/luigi/target.html#open)\n\nOpens it.\n"), "open(*mode='r'*)\n\nOpens it.\n")
+check("…a `[Source](…)` link to a repository, with its capital, is kept", normalized("[Source](https://github.com/o/r/blob/main/x.py#L3)\n"), "[Source](https://github.com/o/r/blob/main/x.py#L3)\n")
+check("…and `[[source]]` in code is code", normalized("```md\nf()[[source]](x)\n```\n"), "```md\nf()[[source]](x)\n```\n")
+NGINX_TOC = "# Module ngx\\_http\\_gzip\\_module\n\n|  |\n| --- |\n| [Example Configuration](#example) [Directives](#directives) \xa0\xa0\xa0\xa0\xa0[gzip](#gzip) [gzip\\_buffers](#gzip_buffers) |\n\nThe module compresses.\n"
+check("a table that is only links to the page's own sections goes (nginx's table of contents)", normalized(NGINX_TOC), "# Module ngx\\_http\\_gzip\\_module\n\n\nThe module compresses.\n")
+check("…a table with words in it stays", normalized("| Topic | Where |\n| --- | --- |\n| Install | [here](#install) |\n"), "| Topic | Where |\n| --- | --- |\n| Install | [here](#install) |\n")
+check("…and a table of links to other pages stays", normalized("|  |\n| --- |\n| [A](/a) [B](/b) |\n"), "|  |\n| --- |\n| [A](/a) [B](/b) |\n")
+check("the v11 passes are counted", (lambda s: (s.toc_tables_stripped, s.viewcode_links_stripped))(normalize.domain.normalize_doc(NGINX_TOC + "f()[[source]](x)\n").stats), (1, 1))
+
 COPY_LINE = "Bash ![Copy code to clipboard](https://grafana.com/media/images/icons/icon-copy-small-2.svg) Copy"
 check("the header line above a code block (language, copy icon, 'Copy') goes", normalized(f"Run it:\n\n{COPY_LINE}\n\n```bash\nls\n```\n"), "Run it:\n\n\n```bash\nls\n```\n")
 check("…also without the language or the word", normalized("![Copy code to clipboard](/i.svg)\n\ntext\n"), "\n\ntext\n")

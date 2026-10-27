@@ -59,6 +59,7 @@ async def _fetch_one(
     store: domains.dd.ingestion.storage.service.Store | None = None,
     index_host: str = "",
     pacer: domains.dd.ingestion.tiers.fetch.service.Pacer | None = None,
+    code_language: str = "",
 ) -> tuple[str, str, str, str] | None:
     """Returns (slug, url, body_markdown, title) on success, None on failure.
     Records progress + URL log internally."""
@@ -124,7 +125,7 @@ async def _fetch_one(
                     f"[tier-2] artifact extraction failed for {url}: "
                     f"{type(e).__name__}: {e}"
                 )
-        body_md = domains.dd.ingestion.tiers.extract.domain.html_to_markdown(raw, source_url = url)
+        body_md = domains.dd.ingestion.tiers.extract.domain.html_to_markdown(raw, source_url = url, default_code_language = code_language)
         if not title:
             title = domains.dd.ingestion.tiers.extract.domain.extract_title(raw) or title
     if len(body_md.encode("utf-8")) < params.MIN_OK_BYTES:
@@ -160,6 +161,7 @@ async def run(
     store: domains.dd.ingestion.storage.service.Store,
     path_filter: dict | None = None,
     sitemap_url: str | None = None,
+    code_language: str | None = None,
 ) -> int:
     """Fetch index, fan out to N concurrent page fetches, write each to
     store. Returns the number of pages written. Raises TierUnavailable if the
@@ -327,6 +329,7 @@ async def run(
                     store = store,
                     index_host = index_host,
                     pacer = pacer,
+                    code_language = code_language or "",
                 )
             if r is not None:
                 slug, src_url, body, t = r
