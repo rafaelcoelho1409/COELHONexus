@@ -14,9 +14,9 @@ for name, value in {"REDIS_HOST": "localhost", "REDIS_PORT": "6379", "REDIS_PASS
     os.environ.setdefault(name, value)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
-import httpx  # noqa: E402
+import httpx
 
-import domains  # noqa: E402
+import domains
 
 ingestion = domains.dd.ingestion
 tier1 = ingestion.tiers.tier1
@@ -45,6 +45,42 @@ check("an undeclared tier is skipped",
       [s["kind"] for s in dispatch.domain.source_chain({"docs": "u", "llms_txt": "t"})], ["llms_txt", "docs"])
 check("no source at all", dispatch.domain.source_chain({"name": "X"}), [])
 check("the chain starts where pick_best does", dispatch.domain.source_chain(entry)[0], dispatch.domain.pick_best(entry))
+
+# what each tier is handed from the catalog (these were `if mod in (…)` branches in the dispatcher)
+catalog = {"name": "X", "llms_txt": "https://x/llms.txt", "sitemap": "https://x/sitemap.xml", "path_filter": {"include": ["/docs"]}, "code_language": "python"}
+check("Tier 1 gets the path filter and the site's own index as its page order",
+      dispatch.domain.tier_arguments("llms_full", catalog), {"path_filter": {"include": ["/docs"]}, "nav_url": "https://x/llms.txt"})
+check("Tier 2 gets the code language, the path filter and the sitemap to tell a curated index from the docs",
+      dispatch.domain.tier_arguments("llms_txt", catalog), {"code_language": "python", "path_filter": {"include": ["/docs"]}, "sitemap_url": "https://x/sitemap.xml"})
+check("Tiers 3 and 4 get the framework's name, the code language and the path filter",
+      [dispatch.domain.tier_arguments(kind, catalog) for kind in ("sitemap", "docs")], [{"framework_name": "X", "code_language": "python", "path_filter": {"include": ["/docs"]}}] * 2)
+check("Tier 5 gets nothing from the catalog", dispatch.domain.tier_arguments("github", catalog), {})
+check("a field the entry lacks is None", dispatch.domain.tier_arguments("docs", {"name": "X"}), {"framework_name": "X", "code_language": None, "path_filter": None})
+check("every error that sends the dispatcher to the next source is listed once",
+      errors.FALL_THROUGH, (errors.ManifestDetected, errors.EmptyLinksDetected, errors.TierUnavailable))
+
+# the dispatcher's answers
+check("a run is found in Langfuse under the framework's label", dispatch.domain.session_id("tempo", "ab12"), "docs-distiller/tempo/ab12")
+check("a finished run's metric carries its tier, outcome and size; one with no post summary carries zeros and `unknown`",
+      (dispatch.domain.run_metrics({"tier_kind": "docs", "status": "done", "post": {"output_files": 7, "output_bytes": 900}}),
+       dispatch.domain.run_metrics({})),
+      ({"tier_kind": "docs", "outcome": "done", "output_files": 7, "output_bytes": 900},
+       {"tier_kind": "unknown", "outcome": "unknown", "output_files": 0, "output_bytes": 0}))
+base = dispatch.domain.base_result("r1", "tempo", {"name": "Tempo"}, {"kind": "docs", "url": "https://t/docs"})
+check("every answer after the source is picked carries the run, the framework and the source",
+      base, {"run_id": "r1", "slug": "tempo", "framework_name": "Tempo", "tier_kind": "docs", "tier_url": "https://t/docs"})
+check("a run that could not start says why, with what is known of it",
+      dispatch.domain.rejected_result("r1", "nope", "unknown framework slug: 'nope'"),
+      {"run_id": "r1", "slug": "nope", "status": "failed", "error": "unknown framework slug: 'nope'"})
+check("…a failed one carries the error's type and message", dispatch.domain.failed_result(base, ValueError("boom"))["error"], "ValueError: boom")
+check("…a cancelled one wrote nothing", dispatch.domain.cancelled_result(base)["pages_written"], 0)
+check("the gate says who holds the lock and what to do",
+      (dispatch.domain.locked_by_other("a", "b", "r9")["slug"], "cancel it before starting 'a'" in dispatch.domain.locked_by_other("a", "b", "r9")["message"],
+       dispatch.domain.locked_by_same("a", "r9")["run_id"], dispatch.domain.locked_by_race("a", None)["run_id"]),
+      ("b", True, "r9", "?"))
+check("the finalized manifest names the framework, source, run and the index's summary (\"\" when there is none)",
+      dispatch.domain.finalize_extra({"name": "Tempo"}, base, "r1", None),
+      {"framework_name": "Tempo", "tier_kind": "docs", "tier_url": "https://t/docs", "run_id": "r1", "index_summary": ""})
 
 
 # ---- fakes ----------------------------------------------------------------------------------------------------------

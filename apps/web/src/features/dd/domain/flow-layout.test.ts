@@ -26,6 +26,14 @@ describe("flowLayout", () => {
     expect(flowLayout("synth", ["outline_sdp", "sawc_write"]).loop).toBeNull();
   });
 
+  it("makes a node tall enough for its three lines (label, KPI, live line) with air above and below", () => {
+    const labelLine = 20;
+    const detailLine = 18;
+    const lineGap = 2;
+    const air = 10;
+    expect(NODE_HEIGHT).toBeGreaterThanOrEqual(labelLine + 2 * detailLine + 2 * lineGap + 2 * air);
+  });
+
   it("is as tall as its nodes and gaps, and is deterministic", () => {
     const nodes = ids(SYNTH_NODES);
     const layout = flowLayout("synth", nodes);

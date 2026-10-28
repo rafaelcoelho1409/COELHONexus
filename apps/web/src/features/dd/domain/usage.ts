@@ -1,13 +1,15 @@
-/** Docs Distiller usage — LLM calls and tokens per run, per node and combined. Counts only: which model
- * answered is deliberately not surfaced. */
+/** Docs Distiller usage — LLM calls and tokens per run, per node, per model and combined. Models are named
+ * exactly as the LLM endpoint reported them. */
 
-import type { UsageCounts, UsagePayload } from "../entities";
+import type { ModelCounts, NodeUsage, UsageCounts, UsagePayload } from "../entities";
 import type { RunStage } from "../params";
 import { fmtInt } from "./format";
 import type { NodeMetric } from "./node-details";
+import { percent } from "./overview/read";
 import { STAGE_NODES } from "./stages";
 
-const NO_COUNTS: UsageCounts = { calls: 0, tokens_in: 0, tokens_out: 0, reasoning_tokens: 0 };
+const NO_COUNTS: UsageCounts = { calls: 0, tokens_in: 0, tokens_out: 0, reasoning_tokens: 0, errors: 0 };
+const NO_NODE: NodeUsage = { ...NO_COUNTS, by_model: {} };
 
 export function hasUsage(payload: UsagePayload | null | undefined): payload is UsagePayload {
   return (payload?.total.calls ?? 0) > 0;
@@ -18,7 +20,28 @@ const add = (a: UsageCounts, b: UsageCounts): UsageCounts => ({
   tokens_in: a.tokens_in + b.tokens_in,
   tokens_out: a.tokens_out + b.tokens_out,
   reasoning_tokens: a.reasoning_tokens + b.reasoning_tokens,
+  errors: a.errors + b.errors,
 });
+
+const addModel = (a: ModelCounts, b: ModelCounts): ModelCounts => ({
+  calls: a.calls + b.calls,
+  tokens_in: a.tokens_in + b.tokens_in,
+  tokens_out: a.tokens_out + b.tokens_out,
+  reasoning_tokens: a.reasoning_tokens + b.reasoning_tokens,
+});
+
+/** `into` plus `from`, model by model. */
+function addModels(
+  into: Readonly<Record<string, ModelCounts>>,
+  from: Readonly<Record<string, ModelCounts>>,
+): Record<string, ModelCounts> {
+  const merged = { ...into };
+  for (const [model, counts] of Object.entries(from)) {
+    const soFar = merged[model];
+    merged[model] = soFar ? addModel(soFar, counts) : counts;
+  }
+  return merged;
+}
 
 /** The sum of several runs' usage (one planner run plus every chapter run, for instance). */
 export function mergeUsage(payloads: ReadonlyArray<UsagePayload | null | undefined>): UsagePayload {
@@ -26,11 +49,39 @@ export function mergeUsage(payloads: ReadonlyArray<UsagePayload | null | undefin
   for (const payload of payloads) {
     if (!payload) continue;
     merged.total = add(merged.total, payload.total);
-    for (const [nodeId, counts] of Object.entries(payload.by_node)) {
-      merged.by_node[nodeId] = add(merged.by_node[nodeId] ?? NO_COUNTS, counts);
+    for (const [nodeId, node] of Object.entries(payload.by_node)) {
+      const soFar = merged.by_node[nodeId] ?? NO_NODE;
+      merged.by_node[nodeId] = {
+        ...add(soFar, node),
+        by_model: addModels(soFar.by_model, node.by_model),
+      };
     }
   }
   return merged;
+}
+
+export type ModelUsageRow = ModelCounts & { model: string };
+
+/** Models that answered at least one call, busiest first. */
+function modelRows(byModel: Readonly<Record<string, ModelCounts>>): ModelUsageRow[] {
+  return Object.entries(byModel)
+    .filter(([, counts]) => counts.calls > 0)
+    .map(([model, counts]) => ({ ...counts, model }))
+    .sort((a, b) => b.calls - a.calls || a.model.localeCompare(b.model));
+}
+
+/** One node's calls and tokens per model. The model id is shown exactly as the endpoint returned it. */
+export function nodeModelRows(payload: UsagePayload | null | undefined, nodeId: string): ModelUsageRow[] {
+  return modelRows(payload?.by_node[nodeId]?.by_model ?? {});
+}
+
+/** The whole run's calls and tokens per model, every node added up. */
+export function payloadModelRows(payload: UsagePayload | null | undefined): ModelUsageRow[] {
+  const all = Object.values(payload?.by_node ?? {}).reduce<Record<string, ModelCounts>>(
+    (merged, node) => addModels(merged, node.by_model),
+    {},
+  );
+  return modelRows(all);
 }
 
 export type UsageNodeRow = UsageCounts & { nodeId: string; label: string };
@@ -74,7 +125,67 @@ export function nodeUsageMetrics(payload: UsagePayload | null | undefined, nodeI
   ];
   if (counts.reasoning_tokens > 0)
     metrics.push({ label: "reasoning tokens", value: fmtInt(counts.reasoning_tokens) });
+  const top = nodeModelRows(payload, nodeId)[0];
+  if (top) metrics.push({ label: "top model", value: top.model, note: `${fmtInt(top.calls)} calls` });
   return metrics;
+}
+
+/** Headline figures, usage first: when two lists carry the same label (a node's own "LLM calls" and the exact
+ * usage's), the usage one wins and the other is dropped, so no figure appears twice. */
+export function mergeMetrics(usage: readonly NodeMetric[], own: readonly NodeMetric[]): NodeMetric[] {
+  const taken = new Set(usage.map((metric) => metric.label.toLowerCase()));
+  return [...usage, ...own.filter((metric) => !taken.has(metric.label.toLowerCase()))];
+}
+
+type UsageTableRow = {
+  label: string;
+  /** This node's figure, the whole run's, and the node's share of the run. */
+  node: string;
+  run: string;
+  share: string;
+};
+
+export type NodeUsageTable = { runLabel: string; rows: UsageTableRow[] };
+
+const share = (part: number, whole: number): string => {
+  if (whole <= 0 || part <= 0) return "—";
+  const fraction = part / whole;
+  return fraction < 0.01 ? "<1%" : percent(fraction);
+};
+
+const perCall = (tokens: number, calls: number): number => (calls > 0 ? Math.round(tokens / calls) : 0);
+
+/** The "LLM calls and tokens" table of a node's drawer: what it used next to what the whole run used, and its
+ * share. Counts only, no model; null when the node made no call. */
+export function nodeUsageTable(
+  stage: RunStage,
+  payload: UsagePayload | null | undefined,
+  nodeId: string,
+): NodeUsageTable | null {
+  const node = payload?.by_node[nodeId];
+  if (!payload || !node || node.calls <= 0) return null;
+  const run = payload.total;
+  const counted = (label: string, pick: (counts: UsageCounts) => number): UsageTableRow => ({
+    label,
+    node: fmtInt(pick(node)),
+    run: fmtInt(pick(run)),
+    share: share(pick(node), pick(run)),
+  });
+  const average = (label: string, pick: (counts: UsageCounts) => number): UsageTableRow => ({
+    label,
+    node: fmtInt(perCall(pick(node), node.calls)),
+    run: fmtInt(perCall(pick(run), run.calls)),
+    share: "—",
+  });
+
+  const rows = [counted("Calls", (counts) => counts.calls)];
+  if (run.errors > 0) rows.push(counted("Failed calls", (counts) => counts.errors));
+  rows.push(counted("Input tokens", (counts) => counts.tokens_in));
+  rows.push(counted("Output tokens", (counts) => counts.tokens_out));
+  if (run.reasoning_tokens > 0) rows.push(counted("Reasoning tokens", (counts) => counts.reasoning_tokens));
+  rows.push(average("Input per call", (counts) => counts.tokens_in));
+  rows.push(average("Output per call", (counts) => counts.tokens_out));
+  return { runLabel: stage === "planner" ? "Whole run" : "Whole chapter", rows };
 }
 
 // ============================================================

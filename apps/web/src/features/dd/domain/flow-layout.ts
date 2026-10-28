@@ -5,7 +5,10 @@
 import type { RunStage } from "../params";
 
 export const NODE_WIDTH = 216;
-export const NODE_HEIGHT = 68;
+/** A node can show three lines — its label (a 20px line), a KPI and a live line (18px each), 2px apart — which is 60px of
+ * text; the height keeps 10px of air above and below it. At 68px the third line sat on the border and, in a font with a
+ * taller line box, left the shape. */
+export const NODE_HEIGHT = 80;
 const NODE_GAP = 30;
 const PADDING = 16;
 /** Room kept to the right of the column for the cycle's arc and its label. */

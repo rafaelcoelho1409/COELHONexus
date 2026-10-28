@@ -31,13 +31,13 @@ afterAll(() => server.close());
 const renderWith = (children: React.ReactNode) => render(<QueryProvider>{children}</QueryProvider>);
 
 describe("PlannerUsageSheet", () => {
-  it("shows calls and tokens, then each busy node, and never a model", async () => {
+  it("shows calls and tokens, then each busy node, then each model", async () => {
     server.use(
       http.get(`${API}/planner/debug/graph/*/llm-counters`, () =>
         HttpResponse.json({
           total: counts(14, 9000, 2100),
           by_node: {
-            off_topic: { ...counts(12, 6000, 300), by_model: { "p/model-x": counts(12, 6000, 300) } },
+            off_topic: { ...counts(12, 6000, 300), by_model: { "vendor-a/model-x": counts(12, 6000, 300) } },
             chapter_propose: counts(2, 3000, 1800),
             corpus_load: counts(0, 0, 0),
           },
@@ -58,7 +58,12 @@ describe("PlannerUsageSheet", () => {
       "Off-topic filter126,000300",
       "Chapter propose23,0001,800",
     ]);
-    expect(dialog.textContent).not.toContain("model-x");
+    const models = within(dialog).getByRole("region", { name: "Usage by model" });
+    expect(
+      within(models)
+        .getAllByRole("row")
+        .map((row) => row.textContent),
+    ).toEqual(["ModelCallsInput tokensOutput tokensReasoning", "vendor-a/model-x126,0003000"]);
   });
 
   it("says so when nothing was recorded", async () => {

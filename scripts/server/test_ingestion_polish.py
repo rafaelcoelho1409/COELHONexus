@@ -14,9 +14,9 @@ for name, value in {"REDIS_HOST": "localhost", "REDIS_PORT": "6379", "REDIS_PASS
     os.environ.setdefault(name, value)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
-import httpx  # noqa: E402
+import httpx
 
-import domains  # noqa: E402
+import domains
 
 ingestion = domains.dd.ingestion
 post = ingestion.post
@@ -292,13 +292,13 @@ async def main() -> None:
         {"idx": 1, "slug": "b", "title": "All Parameters", "source_path": f"{BASE}/customize/browser/all-parameters"},
         {"idx": 2, "slug": "c", "title": "Quickstart", "source_path": f"{BASE}/quickstart"},
     ]}
-    unique = ingestion.storage.service._with_unique_titles(manifest)
+    unique = ingestion.storage.domain.with_unique_titles(manifest)
     check("a manifest read back gets distinct titles", [e["title"] for e in unique["entries"]], ["Agent › All Parameters", "Browser › All Parameters", "Quickstart"])
-    check("…and reading it again changes nothing", ingestion.storage.service._with_unique_titles(unique), unique)
+    check("…and reading it again changes nothing", ingestion.storage.domain.with_unique_titles(unique), unique)
     clean = {"entries": [{"idx": 0, "slug": "a", "title": "A", "source_path": "https://s/x/a"}]}
-    check("a manifest with no repeats is returned as it is", ingestion.storage.service._with_unique_titles(clean) is clean, True)
+    check("a manifest with no repeats is returned as it is", ingestion.storage.domain.with_unique_titles(clean) is clean, True)
     check("a title falls back to the entry's URL when it has no source path",
-          [e["title"] for e in ingestion.storage.service._with_unique_titles({"entries": [
+          [e["title"] for e in ingestion.storage.domain.with_unique_titles({"entries": [
               {"idx": 0, "title": "Intro", "url": "https://s/api/intro"}, {"idx": 1, "title": "Intro", "url": "https://s/sdk/intro"}]})["entries"]],
           ["Api › Intro", "Sdk › Intro"])
 
@@ -458,7 +458,8 @@ NGINX_TOC = "# Module ngx\\_http\\_gzip\\_module\n\n|  |\n| --- |\n| [Example Co
 check("a table that is only links to the page's own sections goes (nginx's table of contents)", normalized(NGINX_TOC), "# Module ngx\\_http\\_gzip\\_module\n\n\nThe module compresses.\n")
 check("…a table with words in it stays", normalized("| Topic | Where |\n| --- | --- |\n| Install | [here](#install) |\n"), "| Topic | Where |\n| --- | --- |\n| Install | [here](#install) |\n")
 check("…and a table of links to other pages stays", normalized("|  |\n| --- |\n| [A](/a) [B](/b) |\n"), "|  |\n| --- |\n| [A](/a) [B](/b) |\n")
-check("the v11 passes are counted", (lambda s: (s.toc_tables_stripped, s.viewcode_links_stripped))(normalize.domain.normalize_doc(NGINX_TOC + "f()[[source]](x)\n").stats), (1, 1))
+v11_stats = normalize.domain.normalize_doc(NGINX_TOC + "f()[[source]](x)\n").stats
+check("the v11 passes are counted", (v11_stats.toc_tables_stripped, v11_stats.viewcode_links_stripped), (1, 1))
 
 COPY_LINE = "Bash ![Copy code to clipboard](https://grafana.com/media/images/icons/icon-copy-small-2.svg) Copy"
 check("the header line above a code block (language, copy icon, 'Copy') goes", normalized(f"Run it:\n\n{COPY_LINE}\n\n```bash\nls\n```\n"), "Run it:\n\n\n```bash\nls\n```\n")
@@ -467,8 +468,8 @@ check("…but a copy icon in a sentence is a picture in a sentence", normalized(
 check("…and an image of something else on a line of its own stays", normalized("![Architecture](/a.png)\n"), "![Architecture](/a.png)\n")
 check("…the same line inside code is code", normalized(f"```md\n{COPY_LINE}\n```\n"), f"```md\n{COPY_LINE}\n```\n")
 check("the copy lines are counted", normalize.domain.normalize_doc(f"{COPY_LINE}\n\n```bash\nls\n```\n\n{COPY_LINE}\n\n```bash\npwd\n```\n").stats.code_copy_lines_stripped, 2)
-check("the new passes are counted",
-      (lambda s: (s.trailing_rules_stripped, s.code_annotations_stripped))(normalize.domain.normalize_doc("```py\nx  # [!code focus]\n```\n\n---\n").stats), (1, 1))
+new_stats = normalize.domain.normalize_doc("```py\nx  # [!code focus]\n```\n\n---\n").stats
+check("the new passes are counted", (new_stats.trailing_rules_stripped, new_stats.code_annotations_stripped), (1, 1))
 
 check("the footer's rule, and the last section's own above it, both go",
       normalized("Last words.\n\n---\n\n\n---\n\n## Sitemap\n\n[Overview of all docs pages](/llms.txt)\n"), "Last words.\n")
@@ -503,5 +504,63 @@ check("…and a release alias that is a word is skipped too",
 DOUBLE = "# LoRA\n\n## One\n\n" + ("word " * 9000) + "\n\n## Two\n\ntwo " + ("w " * 3000) + "\n\n## One\n\n" + ("word " * 9000) + "\n"
 twice = post.domain.split_oversized_page("lora", DOUBLE, 30_000)
 check("a section that appears twice in a split page is kept once", sorted(post.domain.display_title(b, "x") for _s, b, _p in twice), ["LoRA › One", "LoRA › Two"])
+
+# ---- the manifest the post-ingest step writes (moved out of post.service) -------------------------------------------------
+Entry = ingestion.storage.entities.ManifestEntry
+BIG = "# Big\n\n## One\n\n" + ("word " * 9000) + "\n\n## Two\n\n" + ("word two " * 4000) + "\n"
+SMALL = "# Small\n\nA page that is long enough to be a page, with a sentence of prose in it. " * 5
+expanded, report = post.domain.presplit_oversized([("big", "https://s/big", BIG), ("small", "https://s/small", SMALL)], 30_000)
+check("an oversized page is cut into children that share its URL and name it as their parent",
+      [(s, u, p) for s, u, _b, p in expanded if s.startswith("big")], [("big-one", "https://s/big", ("big", "https://s/big")), ("big-two", "https://s/big", ("big", "https://s/big"))])
+check("…a page under the cap passes through whole, as its own parent", expanded[-1], ("small", "https://s/small", SMALL, ("small", "https://s/small")))
+check("…and the report names the pages that were cut, with their size and children", [(s, kb > 0, n) for s, kb, n in report], [("big", True, 2)])
+
+before = [Entry(idx = 0, slug = "big", url = "https://s/big", tier = "docs", bytes = len(BIG), title = "Big Page", key = "k0", section = "Guides", notes = "n", lastmod = "2026-01-01", anchors = ["a"]),
+          Entry(idx = 1, slug = "small", url = "https://s/small", tier = "docs", bytes = len(SMALL), title = "Small Page", key = "k1")]
+entries, batch = post.domain.dedup_manifest("fw", before, expanded)
+check("a child takes its title from its own heading, an untouched page keeps its title",
+      [(e.slug, e.title) for e in entries], [("big-one", "Big › One"), ("big-two", "Big › Two"), ("small", "Small Page")])
+check("…and what the page it came from knew (tier, section, notes, lastmod, anchors) carries on",
+      [(e.tier, e.section, e.notes, e.lastmod, e.anchors) for e in entries[:2]], [("docs", "Guides", "n", "2026-01-01", ["a"])] * 2)
+check("…a page's source_path is its URL, and each is written as Markdown under a key in document order",
+      ([e.source_path for e in entries], [(k, t) for k, _b, t in batch]),
+      (["https://s/big", "https://s/big", "https://s/small"], [(f"ingestion/fw/pages/{i:04d}-{e.slug}.md", "text/markdown") for i, e in enumerate(entries)]))
+check("…a page no entry of the manifest accounts for takes the first entry's tier",
+      post.domain.dedup_manifest("fw", before, [("other", "https://s/other", SMALL, ("gone", "https://s/gone"))])[0][0].tier, "docs")
+
+parent = Entry(idx = 0, slug = "bundle", url = "https://s/llms-full.txt", tier = "llms_full", bytes = 10, key = "k")
+release = f"bundle{post.patterns.CHANGELOG_RELEASE_MARKER}v1-0-0"
+split_entries, split_batch = post.domain.split_manifest(
+    "fw", parent, [("bundle-intro", SMALL, "https://s/intro"), (release, "# Changelog\n\n<Update label=\"v1.0.0\">\n", "https://s/changelog")], ["Start", ""])
+check("a monolith's pages carry its URL, their own source and section; a changelog release takes the `changelog` tier, the rest the bundle's",
+      [(e.url, e.source_path, e.section, e.tier) for e in split_entries],
+      [("https://s/llms-full.txt", "https://s/intro", "Start", "llms_full"), ("https://s/llms-full.txt", "https://s/changelog", "", "changelog")])
+check("…and each is written as Markdown under a key in order", [(k.rsplit("/", 1)[-1], t) for k, _b, t in split_batch], [("0000-bundle-intro.md", "text/markdown"), (f"0001-{release}.md", "text/markdown")])
+
+# ---- the stored manifest (moved out of storage.service) --------------------------------------------------------------------
+sd = ingestion.storage.domain
+made = sd.new_entry("fw", 3, slug = "intro", url = "https://s/intro", tier = "docs", size = 120, anchors = ["a"])
+check("a new entry is titled by its slug when it has no title, and keyed by its number",
+      (made.idx, made.title, made.key, made.bytes, made.anchors, made.section), (3, "intro", "ingestion/fw/pages/0003-intro.md", 120, ["a"], ""))
+written = [sd.new_entry("fw", i, slug = s, url = u, tier = "docs", size = 1) for i, (s, u) in enumerate(
+    [("b", "https://s/b#x"), ("a", "https://s/a"), ("z", "https://s/z"), ("c", "https://s/b#y")])]
+check("entries follow the discovery order of the URL list (a fragment is ignored, an unlisted page goes last, equal ones keep their write order)",
+      [e.slug for e in sd.ordered_by_urls(written, ["https://s/a", "https://s/b"])], ["a", "b", "c", "z"])
+payload = sd.manifest_payload("fw", written, ingested_at = 5.0, normalizer_version = 11, extra = {"run_id": "r1", "page_count": 99})
+check("the manifest names its pages, their size and the normalizer version; what a run adds is laid over it",
+      (payload["page_count"], payload["total_bytes"], payload["normalizer_version"], payload["run_id"], len(payload["entries"])), (99, 4, 11, "r1", 4))
+check("a stored manifest is read back into entries, ignoring a field this version does not know",
+      [e.slug for e in sd.entries_from_manifest({"entries": [{"idx": 0, "slug": "a", "url": "u", "tier": "t", "bytes": 1, "legacy_field": 1}]})], ["a"])
+check("an unreadable stored value is the default",
+      (sd.parse_json(None, []), sd.parse_json("{nope", None), sd.parse_json(b'{"a": 1}', None), sd.parse_json("", {})), ([], None, {"a": 1}, {}))
+check("an entry is stored under the key it carries, or the one its number and slug make",
+      (sd.entry_key("fw", {"key": "k"}, 0), sd.entry_key("fw", {"slug": "x"}, 2)), ("k", "ingestion/fw/pages/0002-x.md"))
+check("a snapshot's id is its time, and its label if it has one; ids list newest first",
+      (sd.snapshot_id("20261027T200000Z", None), sd.snapshot_id("20261027T200000Z", "pre"), sd.newest_first(["20260101T000000Z", "20261027T200000Z"])),
+      ("20261027T200000Z", "20261027T200000Z-pre", ["20261027T200000Z", "20260101T000000Z"]))
+check("the snapshots subtree is not part of the canonical copy",
+      sd.outside_snapshots(["ingestion/fw/manifest.json", "ingestion/fw/_snapshots/t/manifest.json"]), ["ingestion/fw/manifest.json"])
+check("a framework's copy is its pages, raw copies and vaults",
+      [part for part, _prefix in ingestion.storage.keys.framework_parts("fw")], ["pages", "raw", "vault"])
 
 print("\nall checks passed")

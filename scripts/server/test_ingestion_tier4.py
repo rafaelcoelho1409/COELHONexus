@@ -8,7 +8,6 @@ Small pages shaped like the real ones (Rust's mdBook headings, Sphinx autodoc, p
 download menu) and in-memory fakes for MinIO and the crawl; the real docs were checked live."""
 import asyncio
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -16,9 +15,9 @@ for name, value in {"REDIS_HOST": "localhost", "REDIS_PORT": "6379", "REDIS_PASS
     os.environ.setdefault(name, value)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
-import yaml  # noqa: E402
+import yaml
 
-import domains  # noqa: E402
+import domains
 
 ingestion = domains.dd.ingestion
 extract = ingestion.tiers.extract.domain
@@ -68,6 +67,17 @@ ts_page = md(f'<main><section id="doc-layout"><h1>Everyday Types</h1>{LOREM}<div
 check("typescriptlang.org's footer, feedback popup and consent banner are gone", [t in ts_page for t in ("open source project", "Last updated", "helpful", "optional cookies")], [False] * 4)
 duck_page = md(f'<main><div class="searchoverlay">Search Shortcut cmd + k</div><div class="sidenavigation"><ul class="sidenav"><li>Installation</li></ul></div><div class="pagemeta">Edit this page</div><h1>Overview</h1>{LOREM}</main>')
 check("duckdb.org's search overlay, side menu and edit bar are gone", [t in duck_page for t in ("Search Shortcut", "Installation", "Edit this page")], [False] * 3)
+
+# ---- Texinfo's HTML (the GNU manuals; Bash's on Chet Ramey's site) ---------------------------------------------------------------------------------
+texinfo = md('<div class="top-level-extent" id="Top"><div class="nav-panel"><p>Next: <a href="#Introduction">Introduction</a>, Previous: <a href="dir.html#Top">(dir)</a>, Up: <a href="dir.html#Top">(dir)</a></p></div>'
+             f'<h1 class="top" id="Bash-Features-1"><span>Bash Features<a class="copiable-link" href="#Bash-Features-1"> &para;</a></span></h1>{LOREM}'
+             '<div class="region-contents" id="SEC_Contents"><h2 class="contents-heading">Table of Contents</h2><div class="contents"><ul><li><a href="#Introduction">1 Introduction</a></li></ul></div></div>'
+             f'<div class="chapter-level-extent" id="Introduction"><h2 class="chapter" id="Introduction-1">1 Introduction<a class="copiable-link" href="#Introduction-1"> &para;</a></h2>{LOREM}</div>'
+             '<div class="appendix-level-extent" id="Indexes"><h2 class="appendix">Appendix D Indexes</h2><h3>D.1 Index of Shell Builtin Commands</h3><table class="fn-entries-printindex"><tr><td><a href="#index-alias">alias</a></td></tr></table></div></div>',
+             "Bash Reference Manual")
+check("Texinfo: the navigation panel is gone and the manual's own title is the H1", texinfo.splitlines()[0], "# Bash Features")
+check("…the `¶` permalinks are gone from the headings", ("¶" in texinfo, "## 1 Introduction" in texinfo), (False, True))
+check("…and so are the table of contents, the index tables and the appendix that holds them", [t in texinfo for t in ("Next:", "Table of Contents", "alias", "Appendix D")], [False] * 4)
 
 # ---- code blocks with no language ---------------------------------------------------------------------------------------------------------------
 code = md(f'<main><h1>Go</h1>{LOREM}<pre>package main\nfunc main() {{}}</pre><pre>$ go run main.go</pre><pre class="language-text">plain</pre><pre><code class="language-ts">let x = 1</code></pre></main>', default_code_language="go")
@@ -192,7 +202,7 @@ check("a page under one release only, a URL with none, and a year are left alone
 check("10 sorts after 9 (numbers, not text)", tier3.domain.collapse_versions(["https://x.dev/1.9/a", "https://x.dev/1.10/a"]), ["https://x.dev/1.10/a"])
 
 # ---- the catalog edits ---------------------------------------------------------------------------------------------------------------------------
-CATALOG = {e["name"]: e for e in yaml.safe_load(open(Path(__file__).resolve().parents[2] / "apps" / "server" / "domains" / "dd" / "resolver" / "sources.yaml"))["frameworks"]}
+CATALOG = {e["name"]: e for e in yaml.safe_load((Path(__file__).resolve().parents[2] / "apps" / "server" / "domains" / "dd" / "resolver" / "sources.yaml").read_text())["frameworks"]}
 duck = CATALOG["DuckDB (Python)"]["path_filter"]
 check("DuckDB's filter matches the Python docs under any numbered release", [filters.passes_path_filter(f"https://duckdb.org{p}", duck) for p in
       ("/docs/2.0/clients/python/overview", "/docs/1.5/guides/python/jupyter", "/docs/2.0/sql/functions/numeric", "/docs/stable/clients/python/overview")], [True, True, False, True])
@@ -201,7 +211,10 @@ check("Go skips its code walks and keeps the rest", [filters.passes_path_filter(
 git = CATALOG["Git"]["path_filter"]
 check("Git skips its redirect chapters", [filters.passes_path_filter(f"https://git-scm.com{p}", git) for p in ("/book/en/v2/ch00/ch00-x", "/book/en/v2/Git-Basics-Recording-Changes-to-the-Repository")], [False, True])
 check("the catalog names the language of the docs that need it", [CATALOG[n].get("code_language") for n in ("Go", "TypeScript", "SHAP", "Bash")], ["go", "typescript", "python", "bash"])
-check("…and Bash is the one-page manual", CATALOG["Bash"]["docs"].endswith("/manual/bash.html"), True)
+bash = CATALOG["Bash"]
+check("…and Bash is the one-page manual on the maintainer's site (www.gnu.org is not reachable from the cluster), the manual only",
+      (bash["docs"], [filters.passes_path_filter(f"https://tiswww.case.edu{p}", bash["path_filter"]) for p in ("/php/chet/bash/bashref.html", "/php/chet/bash/bash.html", "/php/chet/bash/FAQ")]),
+      ("https://tiswww.case.edu/php/chet/bash/bashref.html", [True, False, False]))
 
 
 # ---- the copy a re-ingestion replaces waits until the new one is done ------------------------------------------------------------------------

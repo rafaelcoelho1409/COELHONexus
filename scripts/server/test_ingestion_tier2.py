@@ -17,9 +17,9 @@ for name, value in {"REDIS_HOST": "localhost", "REDIS_PORT": "6379", "REDIS_PASS
     os.environ.setdefault(name, value)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
-import httpx  # noqa: E402
+import httpx
 
-import domains  # noqa: E402
+import domains
 
 ingestion = domains.dd.ingestion
 tiers = ingestion.tiers
@@ -224,6 +224,18 @@ async def main() -> None:
     except httpx.ConnectError as e:
         error = e
     check("a network error that outlasts the attempts is raised, after them", (type(error), calls["n"]), (httpx.ConnectError, 3))
+
+    # a server that closes the connection without answering (Read the Docs did, once, to 1 of XGBoost's 92 pages) is the connection's fault
+    calls["n"] = 0
+
+    def hangs_up_once(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.", request=request)
+        return httpx.Response(200, text="ok")
+
+    response = await get(hangs_up_once)
+    check("a server that hangs up once and then answers is retried to success", (response.status_code, calls["n"]), (200, 2))
 
     # one pace for all of a crawl's requests: a request that starts during a hold waits instead of spending a 429
     state = {"until": 0.0, "n": 0}
@@ -546,7 +558,7 @@ async def main() -> None:
     check("a page is read by its idx, not by its place in a manifest that is in navigation order",
           [await storage.read_framework_page(minio, "demo", n) for n in (2, 0, 1)], ["# quick-start\n", "# setup\n", "# tutorial\n"])
     check("an idx no page has is not found", [await storage.read_framework_page(minio, "demo", n) for n in (3, -1)], [None, None])
-    check("a manifest whose entries carry no idx is read by position", storage.entry_with_idx([{"key": "a"}, {"key": "b"}], 1), {"key": "b"})
+    check("a manifest whose entries carry no idx is read by position", ingestion.storage.domain.entry_with_idx([{"key": "a"}, {"key": "b"}], 1), {"key": "b"})
 
 
 asyncio.run(main())

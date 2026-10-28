@@ -170,62 +170,70 @@ export function ChapterStrip({
             key={cell.id}
             data-chapter-id={cell.id}
             data-status={cell.status}
-            className={cell.selected ? "bg-muted" : ""}
+            className={`border-b border-border last:border-b-0 ${cell.selected ? "bg-muted" : ""}`}
           >
-            <div className="flex items-center gap-2 border-b border-border px-3 py-0.5 last:border-b-0">
-              <StatusGlyph status={CELL_GLYPH[cell.status]} />
-              <span className="sr-only">{cell.status}:</span>
-              <button
-                type="button"
-                onClick={() => onSelect(cell.id)}
-                disabled={cell.status !== "done" || !cell.threadId}
-                className="min-h-9 min-w-0 flex-1 truncate text-left text-sm hover:text-foreground disabled:cursor-default"
-                title={cell.title}
-              >
-                <span className="mr-1.5 font-mono text-xs text-muted-foreground">{index + 1}</span>
-                {cell.title}
-              </button>
-              <span className="hidden font-mono text-xs text-muted-foreground sm:block">
-                {fmtMs(cell.wallMs)}
-              </span>
-              <button
-                type="button"
-                aria-label={`Run only ${cell.title}`}
-                data-testid={`chapter-run-${cell.id}`}
-                onClick={() => onRun(cell.id)}
-                disabled={!runEnabled}
-                title={runTitle || "Run only this chapter"}
-                className={ICON_BUTTON}
-              >
-                <Play className="size-4" aria-hidden />
-              </button>
-              <button
-                type="button"
-                aria-label={`Wipe only ${cell.title}`}
-                onClick={() => onWipe(cell.id)}
-                disabled={cell.status === "running"}
-                className={ICON_BUTTON}
-              >
-                <Trash2 className="size-4" aria-hidden />
-              </button>
-              {cell.status === "done" ? (
-                <Link
-                  href={studyHref(cell.id)}
-                  aria-label={`Open ${cell.title} in the study reader`}
-                  className={ICON_BUTTON}
-                >
-                  <BookOpen className="size-4" aria-hidden />
-                </Link>
-              ) : (
-                <span
-                  className={`${ICON_BUTTON} opacity-40`}
-                  title="Synthesize this chapter first"
-                  role="img"
-                  aria-label={`${cell.title} is not synthesized yet`}
-                >
-                  <BookOpen className="size-4" aria-hidden />
+            {/* Two rows, as in the original strip: the whole title (it wraps, never clipped) on top; below it the time on
+                the left and this chapter's own actions on the right. */}
+            <div className="flex flex-col gap-0.5 px-3 py-1.5">
+              <div className="flex items-start gap-2">
+                <span className="flex min-h-9 items-center">
+                  <StatusGlyph status={CELL_GLYPH[cell.status]} />
                 </span>
-              )}
+                <span className="sr-only">{cell.status}:</span>
+                <button
+                  type="button"
+                  onClick={() => onSelect(cell.id)}
+                  disabled={cell.status !== "done" || !cell.threadId}
+                  className="min-h-9 min-w-0 flex-1 py-1.5 text-left text-sm break-words hover:text-foreground disabled:cursor-default"
+                  title={cell.title}
+                >
+                  <span className="mr-1.5 font-mono text-xs text-muted-foreground">{index + 1}</span>
+                  {cell.title}
+                </button>
+              </div>
+              <div className="flex items-center justify-between gap-2 pl-6">
+                <span className="font-mono text-xs text-muted-foreground">{fmtMs(cell.wallMs)}</span>
+                <span className="flex items-center">
+                  <button
+                    type="button"
+                    aria-label={`Run only ${cell.title}`}
+                    data-testid={`chapter-run-${cell.id}`}
+                    onClick={() => onRun(cell.id)}
+                    disabled={!runEnabled}
+                    title={runTitle || "Run only this chapter"}
+                    className={ICON_BUTTON}
+                  >
+                    <Play className="size-4" aria-hidden />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Wipe only ${cell.title}`}
+                    onClick={() => onWipe(cell.id)}
+                    disabled={cell.status === "running"}
+                    className={ICON_BUTTON}
+                  >
+                    <Trash2 className="size-4" aria-hidden />
+                  </button>
+                  {cell.status === "done" ? (
+                    <Link
+                      href={studyHref(cell.id)}
+                      aria-label={`Open ${cell.title} in the study reader`}
+                      className={ICON_BUTTON}
+                    >
+                      <BookOpen className="size-4" aria-hidden />
+                    </Link>
+                  ) : (
+                    <span
+                      className={`${ICON_BUTTON} opacity-40`}
+                      title="Synthesize this chapter first"
+                      role="img"
+                      aria-label={`${cell.title} is not synthesized yet`}
+                    >
+                      <BookOpen className="size-4" aria-hidden />
+                    </span>
+                  )}
+                </span>
+              </div>
             </div>
           </li>
         ))}

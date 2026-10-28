@@ -5,10 +5,11 @@
 
 import type { ChapterCell } from "../domain/chapters";
 import { fmtInt } from "../domain/format";
-import { hasUsage, mergeUsage, usageFigures, usageRows } from "../domain/usage";
+import { hasUsage, mergeUsage, payloadModelRows, usageFigures, usageRows } from "../domain/usage";
 import type { UsagePayload } from "../entities";
 import { useChapterUsage, useRunUsage } from "../hooks/use-usage";
 import type { RunStage } from "../params";
+import { ModelUsageTableView } from "./model-usage-table";
 import { SideSheet } from "./side-sheet";
 
 /** The headline figures of one usage payload: calls, input and output tokens. */
@@ -67,6 +68,7 @@ function UsageDetail({ stage, usage }: { stage: RunStage; usage: UsagePayload })
           </tbody>
         </table>
       </section>
+      <ModelUsageTableView rows={payloadModelRows(usage)} />
     </div>
   );
 }
@@ -83,7 +85,7 @@ export function PlannerUsageSheet({
   const usage = useRunUsage("planner", threadId, { live });
   return (
     <SideSheet title="Planner LLM usage" closeLabel="Close usage" onClose={onClose}>
-      <p className="mb-3 text-sm text-muted-foreground">The latest planner run, by node.</p>
+      <p className="mb-3 text-sm text-muted-foreground">The latest planner run, grouped by node and model.</p>
       {hasUsage(usage) ? (
         <UsageDetail stage="planner" usage={usage} />
       ) : (

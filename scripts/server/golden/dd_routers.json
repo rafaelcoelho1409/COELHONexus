@@ -17,7 +17,7 @@
   "minio": [],
   "redis": {
    "coelhonexus:dd:lock:fw": {
-    "ttl_min": 65,
+    "ttl_min": 30,
     "type": "string",
     "value": "<hex>"
    }
@@ -36,7 +36,7 @@
   "minio": [],
   "redis": {
    "coelhonexus:dd:lock:fw": {
-    "ttl_min": 65,
+    "ttl_min": 30,
     "type": "string",
     "value": "<hex>"
    }
@@ -55,7 +55,7 @@
   "minio": [],
   "redis": {
    "coelhonexus:dd:lock:fw": {
-    "ttl_min": 65,
+    "ttl_min": 30,
     "type": "string",
     "value": "<hex>"
    }
@@ -71,7 +71,7 @@
   "minio": [],
   "redis": {
    "coelhonexus:dd:lock:fw": {
-    "ttl_min": 65,
+    "ttl_min": 30,
     "type": "string",
     "value": "<hex>"
    }
@@ -96,7 +96,7 @@
   "minio": [],
   "redis": {
    "coelhonexus:dd:lock:fw": {
-    "ttl_min": 65,
+    "ttl_min": 30,
     "type": "string",
     "value": "<hex>"
    },
@@ -123,7 +123,7 @@
   "minio": [],
   "redis": {
    "coelhonexus:dd:lock:fw": {
-    "ttl_min": 65,
+    "ttl_min": 30,
     "type": "string",
     "value": "<hex>"
    },
@@ -144,7 +144,7 @@
   "minio": [],
   "redis": {
    "coelhonexus:dd:lock:fw": {
-    "ttl_min": 65,
+    "ttl_min": 30,
     "type": "string",
     "value": "<hex>"
    },
@@ -163,7 +163,7 @@
   "minio": [],
   "redis": {
    "coelhonexus:dd:lock:fw": {
-    "ttl_min": 65,
+    "ttl_min": 30,
     "type": "string",
     "value": "<hex>"
    },
@@ -185,7 +185,7 @@
   "minio": [],
   "redis": {
    "coelhonexus:dd:lock:fw": {
-    "ttl_min": 65,
+    "ttl_min": 30,
     "type": "string",
     "value": "<hex>"
    },
@@ -269,7 +269,7 @@
   ],
   "redis": {
    "coelhonexus:dd:lock:rf": {
-    "ttl_min": 65,
+    "ttl_min": 30,
     "type": "string",
     "value": "<hex>"
    }

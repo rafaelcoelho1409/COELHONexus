@@ -13,7 +13,7 @@ for name, value in {"REDIS_HOST": "localhost", "REDIS_PORT": "6379", "REDIS_PASS
     os.environ.setdefault(name, value)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
-import domains  # noqa: E402
+import domains
 
 extract = domains.dd.ingestion.tiers.extract.domain
 post = domains.dd.ingestion.post.domain
@@ -110,7 +110,7 @@ check("an escaped underscore is not part of a title", post.display_title("# Page
 check("…nor in a plain heading", post.display_title("# locator.all\\_inner\\_texts\n\ntext\n", "x"), "locator.all_inner_texts")
 
 # ---- post-processing writes the cleaned titles into the manifest, also when it changes nothing else -----------------------------------------
-import asyncio  # noqa: E402
+import asyncio
 
 
 class FakeStore:

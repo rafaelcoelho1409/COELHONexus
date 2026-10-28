@@ -1,6 +1,7 @@
 /** Docs Distiller synth — chapter cells for the strip, the study list and the run controller. */
 
 import type { SynthChapters } from "../entities";
+import { isRecord } from "./format";
 
 /** A readable label from a chapter id: strips the "ch-NN-" prefix, turns separators into spaces and
  * capitalises. The fallback while titles load; the chapters endpoint supplies the exact title. */
@@ -29,6 +30,13 @@ export function toChapterStatus(status: string): ChapterCell["status"] {
 /** Strings out of an open event payload field; anything else is dropped. */
 export function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+/** The chapter titles the planner's `chapter_propose` node chose to propose, read from its stats in the run's graph
+ * state. Available as soon as that node is done — before the plan itself is written. */
+export function proposedTitles(values: Record<string, unknown>): string[] {
+  const stats = values.propose_stats;
+  return isRecord(stats) ? stringList(stats.titles) : [];
 }
 
 /** Chapter cells from the plan endpoint, in plan order, with the durable render status. */

@@ -55,7 +55,8 @@ function StageNodeCard({ data }: NodeProps<StageFlowNode>) {
         // React Flow switches pointer events off for nodes that cannot be dragged or selected, and children
         // inherit that; the button is the one thing here that must stay clickable.
         style={{ width: NODE_WIDTH, height: NODE_HEIGHT, pointerEvents: "auto" }}
-        className={`nodrag nopan flex flex-col justify-center rounded-md border bg-card px-3 text-left transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ${
+        // `overflow-hidden` is the guard: whatever a line holds, nothing paints outside the node's shape (every line also truncates).
+        className={`nodrag nopan flex flex-col justify-center overflow-hidden rounded-md border bg-card px-3 py-2.5 text-left transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ${
           data.status === "running"
             ? "border-running"
             : data.status === "failed"

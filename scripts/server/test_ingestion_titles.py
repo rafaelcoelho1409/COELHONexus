@@ -14,7 +14,7 @@ for name, value in {"REDIS_HOST": "localhost", "REDIS_PORT": "6379", "REDIS_PASS
     os.environ.setdefault(name, value)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
-import domains  # noqa: E402
+import domains
 
 display_title = domains.dd.ingestion.post.domain.display_title
 with_display_titles = domains.dd.ingestion.storage.service.with_display_titles
@@ -101,7 +101,7 @@ async def main() -> None:
 
     for n in range(40):
         await with_display_titles(minio, f"fw{n}", manifest([entry(0, "one")], run_id=f"r{n}"))
-    check("the cache stays bounded", len(service._TITLE_CACHE) <= service._TITLE_CACHE_MAX, True)
+    check("the cache stays bounded", len(service._TITLE_CACHE) <= domains.dd.ingestion.storage.params.TITLE_CACHE_MAX, True)
     print("\nall checks passed")
 
 

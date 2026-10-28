@@ -3,8 +3,12 @@ import { describe, expect, it } from "vitest";
 import { usagePayloadSchema } from "../entities";
 import {
   hasUsage,
+  mergeMetrics,
   mergeUsage,
+  nodeModelRows,
   nodeUsageMetrics,
+  nodeUsageTable,
+  payloadModelRows,
   planHealthView,
   usageFigures,
   usageLine,
@@ -13,14 +17,18 @@ import {
 
 const planner = usagePayloadSchema.parse({
   dd_run_id: "planner/alpha/old",
-  total: { calls: 14, tokens_in: 9000, tokens_out: 2100, reasoning_tokens: 0 },
+  total: { calls: 14, tokens_in: 9000, tokens_out: 2100, reasoning_tokens: 0, errors: 3 },
   by_node: {
     off_topic: {
       calls: 12,
       tokens_in: 6000,
       tokens_out: 300,
       reasoning_tokens: 0,
-      by_model: { "provider/model": { calls: 12 } },
+      errors: 2,
+      by_model: {
+        "vendor-a/model-small": { calls: 9, tokens_in: 4500, tokens_out: 200, reasoning_tokens: 0 },
+        "vendor-b/model-large": { calls: 3, tokens_in: 1500, tokens_out: 100, reasoning_tokens: 0 },
+      },
     },
     chapter_propose: { calls: 2, tokens_in: 3000, tokens_out: 1800, reasoning_tokens: 0, by_model: {} },
     corpus_load: { calls: 0, tokens_in: 0, tokens_out: 0, reasoning_tokens: 0, by_model: {} },
@@ -82,11 +90,114 @@ describe("usage payloads", () => {
       ["LLM calls", "12"],
       ["input tokens", "6,000"],
       ["output tokens", "300"],
+      ["top model", "vendor-a/model-small"],
     ]);
+    expect(nodeUsageMetrics(planner, "off_topic").at(-1)?.note).toBe("9 calls");
+    expect(nodeUsageMetrics(planner, "chapter_propose").map((m) => m.label)).not.toContain("top model"); // none reported
     expect(nodeUsageMetrics(planner, "corpus_load")).toEqual([]);
     expect(nodeUsageMetrics(null, "off_topic")).toEqual([]);
-    // never any model or provider in what is shown
-    expect(JSON.stringify(nodeUsageMetrics(planner, "off_topic"))).not.toContain("provider");
+  });
+
+  it("lists a node's models busiest first with their own calls and tokens, the id exactly as reported", () => {
+    expect(nodeModelRows(planner, "off_topic")).toMatchObject([
+      { model: "vendor-a/model-small", calls: 9, tokens_in: 4500, tokens_out: 200, reasoning_tokens: 0 },
+      { model: "vendor-b/model-large", calls: 3, tokens_in: 1500, tokens_out: 100, reasoning_tokens: 0 },
+    ]);
+    expect(nodeModelRows(planner, "chapter_propose")).toEqual([]);
+    expect(nodeModelRows(planner, "unknown_node")).toEqual([]);
+    expect(nodeModelRows(null, "off_topic")).toEqual([]);
+  });
+
+  it("drops a model that answered nothing, and breaks a tie by name", () => {
+    const payload = usagePayloadSchema.parse({
+      by_node: {
+        a: { by_model: { "m/zeta": { calls: 2 }, "m/alpha": { calls: 2 }, "m/idle": { calls: 0 } } },
+      },
+    });
+    expect(nodeModelRows(payload, "a").map((row) => row.model)).toEqual(["m/alpha", "m/zeta"]);
+  });
+
+  it("adds the models up across nodes, and across runs", () => {
+    const other = usagePayloadSchema.parse({
+      by_node: {
+        off_topic: {
+          calls: 4,
+          by_model: { "vendor-b/model-large": { calls: 4, tokens_in: 400, tokens_out: 40 } },
+        },
+        doc_distill: {
+          calls: 5,
+          by_model: { "vendor-a/model-small": { calls: 5, tokens_in: 50, tokens_out: 5 } },
+        },
+      },
+    });
+    expect(payloadModelRows(mergeUsage([planner, other]))).toMatchObject([
+      { model: "vendor-a/model-small", calls: 14, tokens_in: 4550, tokens_out: 205 },
+      { model: "vendor-b/model-large", calls: 7, tokens_in: 1900, tokens_out: 140 },
+    ]);
+    expect(mergeUsage([planner, other]).by_node.off_topic?.by_model["vendor-b/model-large"]?.calls).toBe(7);
+    expect(payloadModelRows(null)).toEqual([]);
+  });
+
+  it("counts failed calls, and adds them across runs", () => {
+    expect(planner.total.errors).toBe(3);
+    expect(planner.by_node.off_topic?.errors).toBe(2);
+    expect(usagePayloadSchema.parse({ total: { calls: 1 } }).total.errors).toBe(0); // older runs carry none
+    expect(mergeUsage([planner, planner]).total.errors).toBe(6);
+    expect(mergeUsage([planner, planner]).by_node.off_topic?.errors).toBe(4);
+  });
+
+  it("keeps a figure once when the usage and the node both report it, the exact usage first", () => {
+    const usage = [{ label: "LLM calls", value: "12", note: "exact usage" }];
+    const own = [
+      { label: "llm calls", value: "11" },
+      { label: "kept/dropped", value: "9/2" },
+    ];
+    expect(mergeMetrics(usage, own)).toEqual([...usage, { label: "kept/dropped", value: "9/2" }]);
+    expect(mergeMetrics([], own)).toEqual(own);
+  });
+});
+
+describe("a node's LLM calls and tokens table", () => {
+  it("sets the node beside the whole run, with its share and what each call cost on average", () => {
+    const table = nodeUsageTable("planner", planner, "off_topic");
+    expect(table?.runLabel).toBe("Whole run");
+    expect(table?.rows.map((row) => [row.label, row.node, row.run, row.share])).toEqual([
+      ["Calls", "12", "14", "86%"],
+      ["Failed calls", "2", "3", "67%"],
+      ["Input tokens", "6,000", "9,000", "67%"],
+      ["Output tokens", "300", "2,100", "14%"],
+      ["Input per call", "500", "643", "—"],
+      ["Output per call", "25", "150", "—"],
+    ]);
+  });
+
+  it("shows failed and reasoning rows only when the run had any, and names a synth run a chapter", () => {
+    const table = nodeUsageTable("synth", chapter, "sawc_write");
+    expect(table?.runLabel).toBe("Whole chapter");
+    expect(table?.rows.map((row) => row.label)).toEqual([
+      "Calls",
+      "Input tokens",
+      "Output tokens",
+      "Reasoning tokens",
+      "Input per call",
+      "Output per call",
+    ]);
+  });
+
+  it("has no table for a node that made no call, or before the counters load", () => {
+    expect(nodeUsageTable("planner", planner, "corpus_load")).toBeNull();
+    expect(nodeUsageTable("planner", planner, "unknown_node")).toBeNull();
+    expect(nodeUsageTable("planner", null, "off_topic")).toBeNull();
+  });
+
+  it("says a tiny share is under one percent, and never divides by an empty run", () => {
+    const payload = usagePayloadSchema.parse({
+      total: { calls: 1_000, tokens_in: 1_000_000 },
+      by_node: { a: { calls: 1, tokens_in: 1 }, b: { calls: 999, tokens_in: 999_999 } },
+    });
+    expect(nodeUsageTable("planner", payload, "a")?.rows[0]?.share).toBe("<1%");
+    const empty = usagePayloadSchema.parse({ total: {}, by_node: { a: { calls: 2 } } });
+    expect(nodeUsageTable("planner", empty, "a")?.rows[0]?.share).toBe("—");
   });
 });
 

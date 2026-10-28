@@ -45,6 +45,14 @@ export function StageNodeBoard({
   live: boolean;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
+  // When each node was last opened, so its Activity tab can mark what arrived since (this page visit only).
+  const [openedAt, setOpenedAt] = useState<Record<string, number>>({});
+  const [since, setSince] = useState(0);
+  const openNode = (nodeId: string) => {
+    setSince(openedAt[nodeId] ?? 0);
+    setOpenedAt({ ...openedAt, [nodeId]: Date.now() });
+    setOpenId(nodeId);
+  };
   const [mode, setMode] = useState<(typeof VIEWS)[number]["id"]>("graph");
   const open = views.find((view) => view.node.id === openId);
 
@@ -84,10 +92,10 @@ export function StageNodeBoard({
             liveLines={liveLines}
             values={values}
             live={live}
-            onOpen={setOpenId}
+            onOpen={openNode}
           />
         ) : (
-          <StageNodes views={views} liveLines={liveLines} kpis={kpis} onOpen={setOpenId} />
+          <StageNodes views={views} liveLines={liveLines} kpis={kpis} onOpen={openNode} />
         )}
       </div>
       {open ? (
@@ -99,6 +107,7 @@ export function StageNodeBoard({
           events={events}
           threadId={threadId}
           live={live}
+          since={since}
           onClose={() => setOpenId(null)}
         />
       ) : null}

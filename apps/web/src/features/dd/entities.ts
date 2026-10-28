@@ -256,19 +256,31 @@ export type StageEvent = z.infer<typeof stageEventSchema>;
 // Usage — LLM call and token counts of a run
 // ============================================================
 
-const usageCountsSchema = z.looseObject({
+const modelCountsSchema = z.looseObject({
   calls: z.number().catch(0),
   tokens_in: z.number().catch(0),
   tokens_out: z.number().catch(0),
   reasoning_tokens: z.number().catch(0),
 });
+export type ModelCounts = z.infer<typeof modelCountsSchema>;
+
+const usageCountsSchema = modelCountsSchema.extend({
+  /** LLM calls that failed (the planner and synth count these; absent on older runs). */
+  errors: z.number().catch(0),
+});
 export type UsageCounts = z.infer<typeof usageCountsSchema>;
 
-/** GET /api/v1/dd/{stage}/debug/graph/{thread_id}/llm-counters — totals and a per-node breakdown. The
- * backend also breaks counts down by model; the UI never shows that, so it is left unparsed. */
+const nodeUsageSchema = usageCountsSchema.extend({
+  /** The same counts per model, keyed by the model id exactly as the LLM endpoint reported it. */
+  by_model: z.record(z.string(), modelCountsSchema).catch({}),
+});
+export type NodeUsage = z.infer<typeof nodeUsageSchema>;
+
+/** GET /api/v1/dd/{stage}/debug/graph/{thread_id}/llm-counters — totals, and a per-node breakdown that itself
+ * breaks down by model. */
 export const usagePayloadSchema = z.looseObject({
-  total: usageCountsSchema.catch({ calls: 0, tokens_in: 0, tokens_out: 0, reasoning_tokens: 0 }),
-  by_node: z.record(z.string(), usageCountsSchema).catch({}),
+  total: usageCountsSchema.catch({ calls: 0, tokens_in: 0, tokens_out: 0, reasoning_tokens: 0, errors: 0 }),
+  by_node: z.record(z.string(), nodeUsageSchema).catch({}),
 });
 export type UsagePayload = z.infer<typeof usagePayloadSchema>;
 

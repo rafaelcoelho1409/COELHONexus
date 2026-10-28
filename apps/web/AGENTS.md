@@ -135,8 +135,10 @@ src/shared/                   api (generated client) · config · lib · markdow
   its `title` (its heading; the backend fills it, `with_display_titles` covers older manifests), never its slug.
 - A stage tab keeps `?slug=` (`StageNav` builds its links with `stageHref(stage, slug)`); an empty live
   region takes no height, so do not give status lines `min-h-*` — that is what left gaps in Settings.
-- Usage and cost screens show **counts and tokens only** — never model or provider names (`copy:check` guards the
-  source; the backend's per-model breakdown is deliberately left unparsed).
+- Usage screens (the node drawer's "By model" table and "top model", and the usage sheets) show the model ids the
+  server reports, verbatim, because the owner asked for it (2026-10-28). Those names arrive as runtime data and are
+  never written in source, copy or fixtures (`copy:check` guards the source; use neutral ids like `vendor-a/model-x`
+  in tests). Anywhere else — marketing, home, settings copy — still no model or provider names.
 
 ## Commands (run from `apps/web/`)
 

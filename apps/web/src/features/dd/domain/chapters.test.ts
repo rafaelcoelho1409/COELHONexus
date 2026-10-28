@@ -7,6 +7,7 @@ import {
   chapterFacts,
   harmonizeDoneLabel,
   humanizeChapterId,
+  proposedTitles,
   stringList,
   synthStartLabel,
   toChapterStatus,
@@ -97,6 +98,15 @@ describe("chapter cells", () => {
     expect(
       chapterFacts({ ...chapter, n_sections: undefined, n_sources: undefined, rendered_chars: null }),
     ).toEqual([]);
+  });
+
+  it("reads the planner's proposed chapter titles from its stats, whatever else the state holds", () => {
+    expect(
+      proposedTitles({ propose_stats: { n_proposals: 2, titles: ["Foundations", "Agents", 7, null] } }),
+    ).toEqual(["Foundations", "Agents"]);
+    expect(proposedTitles({ propose_stats: { skipped: "no_files" } })).toEqual([]);
+    expect(proposedTitles({ propose_stats: "oops" })).toEqual([]);
+    expect(proposedTitles({})).toEqual([]);
   });
 
   it("words the volume audit outcome", () => {

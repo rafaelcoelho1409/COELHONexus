@@ -3,15 +3,17 @@
 /** The pipeline stage: planner and synth on one page, with the opt-in "Auto-chain" that starts synth as
  * soon as the planner finishes cleanly. The two stages never run at the same time. */
 
+import { proposedTitles } from "../domain/chapters";
 import { useAutoChain } from "../hooks/use-auto-chain";
 import { useCrossStageBlocker } from "../hooks/use-cross-stage-blocker";
 import { useDdOverlays } from "../hooks/use-overlays";
 import { usePlannerRun } from "../hooks/use-planner-run";
 import { useSynthRun } from "../hooks/use-synth-run";
+import { ChaptersColumn } from "./chapters-column";
 import { PipelineTotal } from "./pipeline-total";
 import { PlannerBoard } from "./planner-view";
 import { NoFrameworkCard } from "./stage-parts";
-import { SynthChapters, SynthRunPanel } from "./synth-view";
+import { SynthRunPanel } from "./synth-view";
 
 function PipelineWorkbench({ slug }: { slug: string }) {
   const overlays = useDdOverlays();
@@ -44,12 +46,25 @@ function PipelineWorkbench({ slug }: { slug: string }) {
         </label>
       </div>
       <PipelineTotal planner={planner} synth={synth} />
-      {/* Two lanes side by side, each an agent graph: the plan on the left feeds the chapters on the right. */}
-      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+      {/* Three columns, left to right as the work flows: the planner's graph, the synth graph of one chapter, and the chapters
+          the planner proposes (the original's chapter strip). The chapters stay a column from 1024px up (a narrower strip
+          below 1280px); between 768 and 1023px they take a row under the two graphs, and on a phone everything stacks. */}
+      <div
+        data-testid="pipeline-columns"
+        className="grid grid-cols-1 items-start gap-6 md:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,16rem)] xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,20rem)]"
+      >
         <PlannerBoard slug={slug} planner={planner} blocker={plannerBlocker} />
         <SynthRunPanel synth={synth} blocker={synthBlocker} />
+        <div className="md:col-span-2 lg:col-span-1">
+          <ChaptersColumn
+            slug={slug}
+            synth={synth}
+            blocker={synthBlocker}
+            proposed={proposedTitles(planner.values)}
+            planning={planner.running}
+          />
+        </div>
       </div>
-      <SynthChapters slug={slug} synth={synth} blocker={synthBlocker} />
     </div>
   );
 }
