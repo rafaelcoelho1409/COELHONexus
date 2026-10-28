@@ -63,3 +63,13 @@ def backup_root(framework_slug: str) -> str:
 
 def backup_prefix(framework_slug: str, backup_id: str) -> str:
     return f"{backup_root(framework_slug)}{backup_id}/"
+
+
+def framework_parts(framework_slug: str) -> tuple[tuple[str, str], ...]:
+    """The three places a framework's stored copy lives, as `(part, prefix)`: the pages and manifest, the raw copies, the citation
+    vaults. A backup keeps each under its part's name."""
+    return (
+        ("pages", framework_prefix(framework_slug)),
+        ("raw", raw_prefix(framework_slug)),
+        ("vault", vault_prefix(framework_slug)),
+    )

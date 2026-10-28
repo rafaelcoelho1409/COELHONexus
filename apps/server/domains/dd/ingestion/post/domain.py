@@ -29,8 +29,8 @@ def split_markdown_by_headings(
     here — a pure heading split has no per-section URL to report (see
     split_by_source_markers for the strategy that does)."""
     md = (
-        MarkdownIt("commonmark", {"html": True})
-        .enable(["table", "strikethrough"])
+        MarkdownIt(params.MARKDOWN_PRESET, dict(params.MARKDOWN_OPTIONS))
+        .enable(list(params.MARKDOWN_ENABLED_RULES))
         .use(front_matter_plugin)
         .use(deflist_plugin)
         .use(footnote_plugin)
@@ -71,7 +71,7 @@ def split_markdown_by_headings(
 
 
 def slugify_heading(s: str, fallback: str) -> str:
-    s2 = re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:60]
+    s2 = patterns.NON_SLUG_RE.sub("-", s.lower()).strip("-")[: params.SLUG_MAX_CHARS]
     return s2 or fallback
 
 
@@ -88,14 +88,14 @@ def _fallback_heading(body: str) -> str:
             continue
         if in_fence or not s:
             continue
-        if s[0] in (">", "-", "*", "+", "|"):
+        if s[0] in params.FALLBACK_HEADING_SKIP_LEADS:
             continue
-        if re.match(r"^\d+[.)]\s+", s):
+        if patterns.NUMBERED_ITEM_RE.match(s):
             continue
-        s = re.sub(r"!?\[[^\]]*\]\([^)]*\)", "", s).strip()
-        s = re.sub(r"[*_`~#]+", "", s).strip()
-        if len(s) >= 20 and re.search(r"[a-zA-Z]{3,}", s):
-            return s[:120]
+        s = patterns.MD_LINK_TEXT_RE.sub("", s).strip()
+        s = patterns.MD_MARKS_RE.sub("", s).strip()
+        if len(s) >= params.FALLBACK_HEADING_MIN_CHARS and patterns.WORD_RE.search(s):
+            return s[: params.FALLBACK_HEADING_MAX_CHARS]
     return ""
 
 
@@ -130,18 +130,14 @@ def will_be_split(body: str) -> bool:
     return len(body.encode("utf-8")) >= params.MONOLITH_SPLIT_THRESHOLD_BYTES
 
 
-_CHILD_HEADING_RE = re.compile(r"^#{2,4}\s+(.+?)\s*#*\s*$")
-_UPDATE_LABEL_RE = re.compile(r"""<Update\s+label=["']([^"']+)["']""")
-
-
 def _plain_heading(text: str) -> str:
     """A heading as a title: no markdown link syntax (`[v2.9.1: Call Me Maybe](https://…)` reads as its text), backticks,
     emphasis marks or trailing `#`s, one line, bounded."""
     s = patterns.MD_LINK_TEXT_RE.sub(r"\1", text)
-    s = re.sub(r"[`*]+", "", s).strip().rstrip("#").strip()
+    s = patterns.INLINE_MARKS_RE.sub("", s).strip().rstrip("#").strip()
     # A converter escapes what Markdown would read as markup: `all\_inner\_texts` is the title "all_inner_texts".
-    s = re.sub(r"\\([\\_*\[\]()#+.!|<>-])", r"\1", s)
-    return re.sub(r"\s+", " ", s)[: params.TITLE_MAX_CHARS]
+    s = patterns.ESCAPED_CHAR_RE.sub(r"\1", s)
+    return patterns.WHITESPACE_RE.sub(" ", s)[: params.TITLE_MAX_CHARS]
 
 
 def strip_site_suffix(titles: list[str]) -> list[str]:
@@ -219,7 +215,7 @@ def display_title(body: str, fallback: str) -> str:
     first = after[0] if after else ""
     if first.startswith("Source:"):
         return title
-    child = _CHILD_HEADING_RE.match(first) or _UPDATE_LABEL_RE.search(first)
+    child = patterns.CHILD_HEADING_RE.match(first) or patterns.UPDATE_LABEL_RE.search(first)
     if child:
         sub = _plain_heading(child.group(1))
         if sub and sub.lower() != title.lower():
@@ -231,7 +227,7 @@ def display_title(body: str, fallback: str) -> str:
 
 def _section_label(segment: str) -> str:
     """A URL folder as a label: `legacy-actor` → `Legacy Actor`."""
-    return " ".join(w[:1].upper() + w[1:] for w in re.sub(r"[-_]+", " ", segment).split())
+    return " ".join(w[:1].upper() + w[1:] for w in patterns.WORD_SEPARATOR_RE.sub(" ", segment).split())
 
 
 def _leaf_label(url: str, title: str) -> str:
@@ -240,7 +236,7 @@ def _leaf_label(url: str, title: str) -> str:
     segments = [s for s in urlparse(url).path.split("/") if s]
     if not segments:
         return ""
-    label = _section_label(re.sub(r"\.\w{1,5}$", "", segments[-1]))
+    label = _section_label(patterns.FILE_EXTENSION_RE.sub("", segments[-1]))
     if label.casefold() != title.casefold() and label.casefold().endswith(title.casefold()):
         label = label[: -len(title)].strip()
     return "" if label.casefold() == title.casefold() else label
@@ -292,8 +288,7 @@ def disambiguate_titles(pages: list[tuple[str, str]]) -> list[str]:
 
 def _nav_key(url: str) -> str:
     """A page URL the way an index and a bundle may each spell it: no query or fragment, no `.md`, no trailing slash."""
-    bare = url.split("#", 1)[0].split("?", 1)[0].rstrip("/")
-    return bare[:-3] if bare.endswith(".md") else bare
+    return url.split("#", 1)[0].split("?", 1)[0].rstrip("/").removesuffix(".md")
 
 
 def order_by_nav(
@@ -330,7 +325,7 @@ def sections_by_nav(
     blank = [""] * len(writes)
     if not nav_index or not writes:
         return blank
-    section_of = {_nav_key(url): _plain_heading(section)[:60] for url, section in reversed(nav_index)}
+    section_of = {_nav_key(url): _plain_heading(section)[: params.NAV_SECTION_MAX_CHARS] for url, section in reversed(nav_index)}
     found = [section_of.get(_nav_key(source)) if source else None for _slug, _body, source in writes]
     if sum(s is not None for s in found) < params.NAV_MIN_MATCH_RATIO * len(writes):
         return blank
@@ -353,7 +348,7 @@ def absolutize_links(body: str, base_url: str, *, relative: bool = True) -> str:
 
     def resolve(match: re.Match) -> str:
         dest = match.group(2)
-        if dest.startswith("//") or dest.startswith(own):
+        if dest.startswith(("//", *own)):
             return match.group(0)
         if dest.startswith("/") or (relative and dest.startswith(("./", "../"))):
             return f"{match.group(1)}{urljoin(base_url, dest)}{match.group(3)}"
@@ -462,7 +457,7 @@ def split_monolith(
     if sections is None:
         sections = split_markdown_by_headings(body, split_levels = (1,))
         strategy = "h1-fallback"
-    if len(sections) < 3:
+    if len(sections) < params.MONOLITH_MIN_H1_SECTIONS:
         # Docusaurus single-H1 case — fall through to H2/H3.
         logger.info(
             f"[post] split_monolith: {strategy} → only {len(sections)} "
@@ -493,7 +488,7 @@ def split_monolith(
         f"[post] split_monolith: {strategy} → {len(sections)} sections "
         f"(input {len(body)//1024} KB)"
     )
-    width = max(4, len(str(max(0, len(sections) - 1))))
+    width = max(params.SECTION_INDEX_MIN_WIDTH, len(str(max(0, len(sections) - 1))))
     writes: list[tuple[str, str, str]] = []
     for i, (h1, h2, sec_body, source_url) in enumerate(sections):
         # H1 (parent) wins over H2 to preserve parent context. Empty H1+H2
@@ -545,7 +540,7 @@ def _disambiguate_duplicate_slugs(
     out: list[tuple[str, str, str]] = []
     for s, b, sp in writes:
         if not sp and counts[s] > 1:
-            suffix = hashlib.sha256(b.encode("utf-8")).hexdigest()[:6]
+            suffix = hashlib.sha256(b.encode("utf-8")).hexdigest()[: params.SLUG_HASH_CHARS]
             out.append((f"{s}-{suffix}", b, sp))
         else:
             out.append((s, b, sp))
@@ -558,7 +553,7 @@ def _looks_like_changelog(h1_text: str, body: str) -> bool:
     # the real signal, the title just gates against false positives on an
     # unrelated oversized section that happens to contain a couple of them.
     return (
-        "changelog" in h1_text.strip().lower()
+        params.CHANGELOG_TITLE_WORD in h1_text.strip().lower()
         and len(patterns.UPDATE_TAG_RE.findall(body)) >= 2
     )
 
@@ -587,7 +582,7 @@ def _split_changelog_releases(
         if h1_prefix and not release_body.startswith(h1_prefix):
             release_body = h1_prefix + release_body
         version_slug = slugify_heading(m.group(1), f"release-{i}")
-        base = slug[:-len("-changelog")] if slug.endswith("-changelog") else slug
+        base = slug.removesuffix(params.CHANGELOG_SLUG_SUFFIX)
         new_slug = f"{base}{patterns.CHANGELOG_RELEASE_MARKER}{version_slug}"
         if new_slug in seen_slugs:
             new_slug = f"{new_slug}-{i}"
@@ -601,7 +596,7 @@ def _is_fragmented_changelog(h1_text: str, sub_pages: list[tuple[str, str, str]]
     its internal H2s, which in FastMCP's are `## New Contributors` / `## What's Changed` under every release: 126 pages
     with three titles between them, none of which says which release it belongs to. One per version (Dask's
     `## 2024.5.0`) is what the split is for and is kept."""
-    if "changelog" not in h1_text.lower() or len(sub_pages) < 2:
+    if params.CHANGELOG_TITLE_WORD not in h1_text.lower() or len(sub_pages) < 2:
         return False
     titles = {display_title(body, slug).casefold() for slug, body, _source in sub_pages}
     return len(titles) < params.CHANGELOG_MIN_DISTINCT_RATIO * len(sub_pages)
@@ -628,7 +623,7 @@ def _h2_subsplit_oversized(
             sub_pages = _split_changelog_releases(s, b, sp, h1_prefix)
         if sub_pages is None:
             sub_pages = _size_aware_recursive_split(
-                s, b, sp, h1_prefix = h1_prefix, levels = (2, 3),
+                s, b, sp, h1_prefix = h1_prefix, levels = params.SUBSPLIT_LEVELS,
             )
             if _is_fragmented_changelog(h1_text, sub_pages):
                 sub_pages = [(s, b, sp)]
@@ -651,7 +646,7 @@ def _h2_subsplit_oversized(
 def _without_trailing_rule(body: str) -> str:
     """The section without the `---` that separated it from the next one (131 of Playwright's split API pages ended on one).
     Only the last few hundred characters are looked at."""
-    cut = max(0, len(body) - 400)
+    cut = max(0, len(body) - params.TRAILING_RULE_TAIL_CHARS)
     tail = body[cut:].rstrip()
     stripped = patterns.TRAILING_RULE_RE.sub("", tail)
     return body if stripped == tail else body[:cut] + stripped + "\n"
@@ -719,7 +714,7 @@ def split_oversized_page(
     h1_match = patterns.H1_PREFIX_RE.match(body)
     h1_prefix = (h1_match.group(1) + "\n\n") if h1_match else ""
     out = _size_aware_recursive_split(
-        slug, body, "", h1_prefix = h1_prefix, levels = (2, 3),
+        slug, body, "", h1_prefix = h1_prefix, levels = params.SUBSPLIT_LEVELS,
         max_bytes = max_bytes,
     )
     # A heading that occurs twice in the page (Diffusers' LoRA page documents `LoraBaseMixin` in two places) gives two
@@ -756,6 +751,101 @@ def dedup_pages(
         seen.add(h)
         deduped.append((s, u, b))
     return deduped, stubs_dropped, duplicates_dropped
+
+
+def presplit_oversized(
+    pages: list[tuple[str, str, str]],
+    max_bytes: int,
+) -> tuple[list[tuple[str, str, str, tuple[str, str]]], list[tuple[str, int, int]]]:
+    """[(slug, url, body), ...] → (expanded, report). Each page of `max_bytes` or more is cut on its H2/H3
+    (`split_oversized_page`) into children that share its URL; one with no clean split passes through intact, never dropped.
+    `expanded` is [(slug, url, body, (parent_slug, parent_url)), ...] — the parent is what a child's manifest entry carries
+    on from — and `report` is [(parent_slug, size_kb, children), ...] for the pages that were cut."""
+    expanded: list[tuple[str, str, str, tuple[str, str]]] = []
+    report: list[tuple[str, int, int]] = []
+    for slug, url, body in pages:
+        size = len(body.encode("utf-8"))
+        if size >= max_bytes:
+            children = split_oversized_page(slug, body, max_bytes)
+            if len(children) > 1:
+                expanded.extend((child_slug, url, child_body, (slug, url)) for child_slug, child_body, _source in children)
+                report.append((slug, size // 1024, len(children)))
+                continue
+        expanded.append((slug, url, body, (slug, url)))
+    return expanded, report
+
+
+def split_manifest(
+    framework_slug: str,
+    parent: domains.dd.ingestion.storage.entities.ManifestEntry,
+    writes: list[tuple[str, str, str]],
+    sections: list[str],
+) -> tuple[list[domains.dd.ingestion.storage.entities.ManifestEntry], list[tuple[str, str, str]]]:
+    """The manifest entries, and the `(key, body, content type)` to write for each, of the pages a monolith `parent` was split
+    into (`writes`: [(slug, body, source_path), ...], `sections`: the section of each)."""
+    entries: list[domains.dd.ingestion.storage.entities.ManifestEntry] = []
+    batch: list[tuple[str, str, str]] = []
+    for idx, (slug, body, source_path) in enumerate(writes):
+        key = domains.dd.ingestion.storage.keys.page_key(framework_slug, idx, slug)
+        batch.append((key, body, params.PAGE_CONTENT_TYPE))
+        # A changelog-release sub-page (`_split_changelog_releases`) gets its own tier so corpus_load can drop it from the
+        # Planner/Synth path — every other split page keeps the parent's tier.
+        tier = params.CHANGELOG_TIER if patterns.CHANGELOG_RELEASE_MARKER in slug else parent.tier
+        entries.append(domains.dd.ingestion.storage.entities.ManifestEntry(
+            idx = idx,
+            slug = slug,
+            url = parent.url,
+            tier = tier,
+            bytes = len(body.encode("utf-8")),
+            # The page's own heading (the explorer lists pages by title); the slug only if it has none.
+            title = display_title(body, slug),
+            key = key,
+            source_path = source_path,
+            section = sections[idx],
+        ))
+    return entries, batch
+
+
+def dedup_manifest(
+    framework_slug: str,
+    current: list[domains.dd.ingestion.storage.entities.ManifestEntry],
+    pages: list[tuple[str, str, str, tuple[str, str]]],
+) -> tuple[list[domains.dd.ingestion.storage.entities.ManifestEntry], list[tuple[str, str, str]]]:
+    """The manifest entries, and the `(key, body, content type)` to write for each, of a multi-page corpus once it has been
+    deduplicated and its oversized pages cut (`pages`: what `presplit_oversized` returns). What the entry of the page a page
+    came from (`current`, matched on URL and slug) knew — tier, section, notes, lastmod, anchors — carries on to it."""
+    previous: dict[tuple[str, str], domains.dd.ingestion.storage.entities.ManifestEntry] = {}
+    for entry in current:
+        previous.setdefault((entry.url, entry.slug), entry)
+    fallback_tier = current[0].tier if current else params.UNKNOWN_TIER
+    entries: list[domains.dd.ingestion.storage.entities.ManifestEntry] = []
+    batch: list[tuple[str, str, str]] = []
+    for idx, (slug, url, body, (parent_slug, parent_url)) in enumerate(pages):
+        prev = previous.get((parent_url, parent_slug))
+        key = domains.dd.ingestion.storage.keys.page_key(framework_slug, idx, slug)
+        batch.append((key, body, params.PAGE_CONTENT_TYPE))
+        entries.append(domains.dd.ingestion.storage.entities.ManifestEntry(
+            idx = idx,
+            slug = slug,
+            url = url,
+            tier = prev.tier if prev else fallback_tier,
+            bytes = len(body.encode("utf-8")),
+            # Split children (slug != parent slug) take a title from their own heading, mirroring the monolith split;
+            # untouched pages keep the parent title.
+            title = prev.title if (prev and slug == parent_slug) else display_title(body, slug),
+            key = key,
+            # Already distinct per page here (unlike the monolith split) — mirrored so downstream consumers can always
+            # read source_path without a url fallback.
+            source_path = url,
+            # Tier 2 enrichment survives the rewrite (prev matched on url+slug); Tier 1 entries carry "" and stay "" here.
+            section = (prev.section if prev else "") or "",
+            notes = (prev.notes if prev else "") or "",
+            # Tier 3 sitemap lastmod, same prev-match survival.
+            lastmod = (prev.lastmod if prev else "") or "",
+            # Tier 4 collapsed anchors, same prev-match survival.
+            anchors = list(prev.anchors) if prev and prev.anchors else [],
+        ))
+    return entries, batch
 
 
 def make_summary(

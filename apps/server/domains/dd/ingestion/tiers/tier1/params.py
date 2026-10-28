@@ -2,9 +2,15 @@
 from __future__ import annotations
 
 
+TIER_KIND = "llms_full"  # what this tier is called in the catalog, in progress records and on a page's manifest entry
 USER_AGENT = "COELHONexus-DocsDistiller-Tier1/1.0"
 TIMEOUT_S = 30.0
+CONNECT_TIMEOUT_S = 10.0
 MIN_OK_BYTES = 500
+
+# The bundle's page is named after its host (`code-claude-com-llms-full`), at most this long.
+HOST_SLUG_SUFFIX = "-llms-full"
+SLUG_MAX_CHARS = 120
 
 # A bundle is fetched in one request, so a flaky moment must not sink the run: these are retried with
 # jittered exponential backoff, or for as long as the server's Retry-After asks (capped).

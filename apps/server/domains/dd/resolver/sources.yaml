@@ -76,11 +76,15 @@ frameworks:
 
 - name: Bash
   logo: https://cdn.freebiesupply.com/logos/large/2x/bash-1-logo-black-and-white.png
-  # The one-page manual: the per-node pages (`html_node/`) were not reachable from the cluster on 2026-10-27 (www.gnu.org timed out for
-  # every request, from the cluster and from a laptop alike), and the run ended `done` with no pages. One page is also one request.
-  docs: https://www.gnu.org/software/bash/manual/bash.html
+  # The one-page GNU Bash Reference Manual (Edition 5.3), from the maintainer's own site: www.gnu.org timed out for every request on
+  # 2026-10-27 and 28, from the cluster and from a laptop alike, and the run ended `done` with no pages. This is the same manual
+  # (GFDL), reachable from the cluster. The filter keeps the crawl to the manual: the folder also holds the 426 KB `bash.html` man page,
+  # the FAQ and NEWS.
+  docs: https://tiswww.case.edu/php/chet/bash/bashref.html
   category: Programming Language
   code_language: bash
+  path_filter:
+    include: ["^/php/chet/bash/bashref\\.html$"]
 
 - name: Browser Use
   logo: https://mintcdn.com/browseruse-0aece648/lNAyHi2yxyXHwQ6v/logo/dark.svg?fit=max&auto=format&n=lNAyHi2yxyXHwQ6v&q=85&s=711fa3bb6b312e888023b697db9112be

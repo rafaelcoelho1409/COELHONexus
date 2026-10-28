@@ -6,12 +6,12 @@ domain.py."""
 from __future__ import annotations
 import domains, infra
 from . import domain, params
+from .. import fetch
 
 import asyncio
 import logging
 import time
 import uuid
-from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -30,12 +30,8 @@ async def _install_resource_blocker(crawler) -> None:
     """Block Next.js prefetch + images/fonts/CSS via Playwright route()."""
     async def _hook(page, context, **_):
         try:
-            await context.route("**/_next/data/**", lambda r: r.abort())
-            await context.route(
-                "**/*.{png,jpg,jpeg,gif,webp,svg,ico,woff,woff2,ttf,otf,mp4,webm}",
-                lambda r: r.abort(),
-            )
-            await context.route("**/*.css", lambda r: r.abort())
+            for pattern in params.BLOCKED_ROUTES:
+                await context.route(pattern, lambda r: r.abort())
         except Exception as e:
             logger.warning(f"[playwright] route-hook failed (non-fatal): {e}")
     try:
@@ -48,11 +44,36 @@ def _build_md_generator():
     """PruningContentFilter + DefaultMarkdownGenerator."""
     return infra.playwright.crawl4ai.service.DefaultMarkdownGenerator(
         content_filter = infra.playwright.crawl4ai.service.PruningContentFilter(
-            threshold = 0.45,
-            threshold_type = "dynamic",
-            min_word_threshold = 5,
+            threshold = params.MD_PRUNING_THRESHOLD,
+            threshold_type = params.MD_PRUNING_THRESHOLD_TYPE,
+            min_word_threshold = params.MD_PRUNING_MIN_WORDS,
         ),
     )
+
+
+def _build_dispatcher(max_session_permit: int, rate_delay: tuple[float, float], rate_max_delay: float):
+    """crawl4ai's memory-adaptive dispatcher: `max_session_permit` pages at once, a random delay in `rate_delay` between requests."""
+    crawl4ai = infra.playwright.crawl4ai.service
+    return crawl4ai.MemoryAdaptiveDispatcher(
+        max_session_permit = max_session_permit,
+        memory_threshold_percent = params.MEMORY_THRESHOLD_PERCENT,
+        recovery_threshold_percent = params.RECOVERY_THRESHOLD_PERCENT,
+        check_interval = params.DISPATCH_CHECK_INTERVAL_S,
+        rate_limiter = crawl4ai.RateLimiter(
+            base_delay = rate_delay,
+            max_delay = rate_max_delay,
+            max_retries = params.RATE_MAX_RETRIES,
+        ),
+    )
+
+
+async def _arun_many(crawler, urls: list[str], cfg, dispatcher, session_prefix: str):
+    """Start the browser pass over `urls`: each URL gets a session of its own when the config can be cloned per URL."""
+    if hasattr(cfg, "clone"):
+        config = [cfg.clone(session_id = f"{session_prefix}-{uuid.uuid4().hex[: params.SESSION_ID_CHARS]}") for _ in urls]
+    else:
+        config = cfg
+    return await crawler.arun_many(urls, config = config, dispatcher = dispatcher)
 
 
 async def crawl_urls(
@@ -79,28 +100,8 @@ async def crawl_urls(
         md_generator,
     )
 
-    dispatcher_primary = infra.playwright.crawl4ai.service.MemoryAdaptiveDispatcher(
-        max_session_permit = params.MAX_SESSION_PERMIT,
-        memory_threshold_percent = 85.0,
-        recovery_threshold_percent = 75.0,
-        check_interval = 1.0,
-        rate_limiter = infra.playwright.crawl4ai.service.RateLimiter(
-            base_delay = (0.5, 1.5),
-            max_delay = 20.0,
-            max_retries = 3,
-        ),
-    )
-    dispatcher_retry = infra.playwright.crawl4ai.service.MemoryAdaptiveDispatcher(
-        max_session_permit = 1,
-        memory_threshold_percent = 85.0,
-        recovery_threshold_percent = 75.0,
-        check_interval = 1.0,
-        rate_limiter = infra.playwright.crawl4ai.service.RateLimiter(
-            base_delay = (1.0, 3.0),
-            max_delay = 30.0,
-            max_retries = 3,
-        ),
-    )
+    dispatcher_primary = _build_dispatcher(params.MAX_SESSION_PERMIT, params.PRIMARY_RATE_DELAY_S, params.PRIMARY_RATE_MAX_DELAY_S)
+    dispatcher_retry = _build_dispatcher(params.RETRY_SESSION_PERMIT, params.RETRY_RATE_DELAY_S, params.RETRY_RATE_MAX_DELAY_S)
     written = 0
     failed: list[str] = []
     transient_nav_failures: list[str] = []
@@ -112,18 +113,15 @@ async def crawl_urls(
             url = getattr(r, "url", "?")
             if not getattr(r, "success", False):
                 err = str(getattr(r, "error_message", "no detail"))
-                transient = any(s in err for s in (
-                    "ACS-GOTO", "Timeout", "timeout", "Navigation", "net::ERR",
-                ))
-                if transient and label == "primary":
+                if domain.is_transient_nav_error(err) and label == "primary":
                     transient_nav_failures.append(url)
                 else:
                     failed.append(url)
                 await progress.record_url(
                     url,
                     status = "fetch_error",
-                    tier = "playwright",
-                    error_msg = err[:300],
+                    tier = params.BROWSER_TIER,
+                    error_msg = err[: params.ERROR_MAX_CHARS],
                 )
                 continue
 
@@ -135,19 +133,13 @@ async def crawl_urls(
                 title = extract.extract_title(rendered)
             if len(body.encode("utf-8")) < min_ok_bytes:
                 # The rendered HTML gave nothing: what crawl4ai made of the page is better than nothing.
-                md_obj = getattr(r, "markdown", None)
-                body = ""
-                if md_obj is not None:
-                    body = getattr(md_obj, "fit_markdown", "") or \
-                           getattr(md_obj, "raw_markdown", "") or ""
-                if not body:
-                    body = getattr(r, "cleaned_html", "") or ""
+                body = domain.fallback_markdown(r)
             if len(body.encode("utf-8")) < min_ok_bytes:
                 failed.append(url)
                 await progress.record_url(
                     url,
                     status = "extract_empty",
-                    tier = "playwright",
+                    tier = params.BROWSER_TIER,
                     extracted_chars = len(body),
                     error_msg = f"body too short ({len(body)}B)",
                 )
@@ -158,36 +150,21 @@ async def crawl_urls(
                 slug = slug,
                 url = url,
                 body = body,
-                tier = "playwright",
+                tier = params.BROWSER_TIER,
                 title = title or slug,
             )
             written += 1
             await progress.record_url(
                 url,
                 status = "success",
-                tier = "playwright",
+                tier = params.BROWSER_TIER,
                 extracted_chars = len(body),
             )
             await progress.update(current = written, last_url = url)
-    await progress.start(tier = "playwright", total = len(urls))
+    await progress.start(tier = params.BROWSER_TIER, total = len(urls))
     async with infra.playwright.crawl4ai.service.AsyncWebCrawler(config = browser_cfg) as crawler:
         await _install_resource_blocker(crawler)
-        if hasattr(primary_cfg, "clone"):
-            per_url_configs = [
-                primary_cfg.clone(session_id = f"crawl-{uuid.uuid4().hex[:12]}")
-                for _ in urls
-            ]
-            stream = await crawler.arun_many(
-                urls,
-                config = per_url_configs,
-                dispatcher = dispatcher_primary,
-            )
-        else:
-            stream = await crawler.arun_many(
-                urls,
-                config = primary_cfg,
-                dispatcher = dispatcher_primary,
-            )
+        stream = await _arun_many(crawler, urls, primary_cfg, dispatcher_primary, "crawl")
         await _consume(stream, "primary")
         if transient_nav_failures:
             logger.info(
@@ -195,22 +172,7 @@ async def crawl_urls(
                 f"with longer timeouts"
             )
             await asyncio.sleep(params.RETRY_DELAY_S)
-            if hasattr(retry_cfg, "clone"):
-                per_url_retry = [
-                    retry_cfg.clone(session_id = f"retry-{uuid.uuid4().hex[:12]}")
-                    for _ in transient_nav_failures
-                ]
-                stream = await crawler.arun_many(
-                    transient_nav_failures,
-                    config = per_url_retry,
-                    dispatcher = dispatcher_retry,
-                )
-            else:
-                stream = await crawler.arun_many(
-                    transient_nav_failures,
-                    config = retry_cfg,
-                    dispatcher = dispatcher_retry,
-                )
+            stream = await _arun_many(crawler, transient_nav_failures, retry_cfg, dispatcher_retry, "retry")
             await _consume(stream, "retry")
     if written == 0:
         await progress.finish(status = "failed")
@@ -220,9 +182,9 @@ async def crawl_urls(
 
 @retry(
     reraise = True,
-    retry = retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError)),
-    stop = stop_after_attempt(3),
-    wait = wait_exponential_jitter(initial=1, max=8),
+    retry = retry_if_exception_type(fetch.params.RETRYABLE_ERRORS),
+    stop = stop_after_attempt(params.GET_ATTEMPTS),
+    wait = wait_exponential_jitter(initial = params.GET_WAIT_INITIAL_S, max = params.GET_WAIT_MAX_S),
 )
 async def _get(client: httpx.AsyncClient, url: str) -> httpx.Response:
     return await client.get(url, headers = {"User-Agent": params.USER_AGENT})
@@ -232,15 +194,15 @@ async def _seeder_discover(
     host: str,
     docs_path: str,
     *,
-    max_urls: int = 10_000_000,
+    max_urls: int = params.SEEDER_MAX_URLS,
 ) -> list[str]:
     """Crawl4AI seeder URL list. [] on any failure — caller falls back to BFS.
     Import is deferred so tiers 1/2/3 don't pay the crawl4ai load cost."""
     cfg = infra.playwright.crawl4ai.service.SeedingConfig(
-        source="sitemap+cc",
-        pattern=domain.seed_pattern_for(docs_path),
-        max_urls=max_urls,
-        extract_head=False,
+        source = params.SEEDER_SOURCE,
+        pattern = domain.seed_pattern_for(docs_path),
+        max_urls = max_urls,
+        extract_head = False,
     )
     try:
         async with infra.playwright.crawl4ai.service.AsyncUrlSeeder() as seeder:
@@ -250,7 +212,7 @@ async def _seeder_discover(
         return []
     out = [
         d.get("url") for d in (results or [])
-        if d.get("url") and d.get("status") in ("valid", "found")
+        if d.get("url") and d.get("status") in params.SEEDER_OK_STATUSES
     ]
     logger.info(f"[seeder] {host} found {len(out)} URLs (pattern={cfg.pattern!r})")
     return out
@@ -259,17 +221,13 @@ async def _seeder_discover(
 async def _seed_enrichment(
     docs_url: str, client: httpx.AsyncClient,
 ) -> list[str]:
-    parsed = urlparse(docs_url)
-    if parsed.path and parsed.path.rstrip("/") not in ("", "/"):
-        return []
-    root = f"{parsed.scheme}://{parsed.netloc}"
-    candidates = [root + p for p in params.DOCS_PROBES]
+    candidates = domain.probe_candidates(docs_url)
 
-    async def _probe(u: str) -> Optional[str]:
+    async def _probe(u: str) -> str | None:
         try:
-            r = await client.head(u, timeout = 10.0, follow_redirects = True)
+            r = await client.head(u, timeout = params.PROBE_TIMEOUT_S, follow_redirects = True)
             if r.status_code == 405:
-                r = await client.get(u, timeout = 10.0, follow_redirects = True)
+                r = await client.get(u, timeout = params.PROBE_TIMEOUT_S, follow_redirects = True)
             return str(r.url) if 200 <= r.status_code < 400 else None
         except Exception:
             return None
@@ -313,10 +271,7 @@ async def _bfs(
             if depth >= max_depth:
                 continue
             for link in links:
-                p = urlparse(link)
-                if (p.netloc or "").lower() != host:
-                    continue
-                if subtree and not (p.path or "").startswith(subtree):
+                if not domain.crawlable_link(link, host, subtree):
                     continue
                 if link not in discovered:
                     discovered[link] = depth + 1
@@ -327,21 +282,15 @@ async def _bfs(
 async def _is_spa_majority(
     candidates: list[str], client: httpx.AsyncClient,
 ) -> bool:
-    deep = [u for u in candidates if (urlparse(u).path or "").strip("/")]
-    sample = (deep or candidates)[:params.SPA_SAMPLE_SIZE]
     bodies: list[str] = []
-    for u in sample:
+    for u in domain.spa_sample(candidates):
         try:
             r = await client.get(u, timeout = params.TIMEOUT_S, follow_redirects = True)
             if r.status_code == 200:
                 bodies.append(r.text or "")
         except Exception:
             pass
-    if not bodies:
-        # All fetches failed — bias to safety; Playwright will retry with browser fingerprint.
-        return True
-    spa_hits = sum(1 for b in bodies if domain.looks_like_spa_shell(b))
-    return spa_hits >= (len(bodies) // 2 + 1)
+    return domain.is_spa_majority(bodies)
 
 
 async def _fetch_one(
@@ -362,7 +311,7 @@ async def _fetch_one(
         await progress.record_url(
             url,
             status = "fetch_error",
-            tier = "docs",
+            tier = params.TIER_KIND,
             fetch_ms = int((time.monotonic() - t0) * 1000),
             error_msg = f"{type(e).__name__}: {e}",
         )
@@ -372,7 +321,7 @@ async def _fetch_one(
         await progress.record_url(
             url,
             status = "http_error",
-            tier = "docs",
+            tier = params.TIER_KIND,
             http_code = resp.status_code,
             fetch_ms = fetch_ms,
             bytes_fetched = len(resp.content or b""),
@@ -381,7 +330,7 @@ async def _fetch_one(
         return []
     raw = resp.text or ""
     title = domains.dd.ingestion.tiers.extract.domain.extract_title(raw)
-    base_slug = domain.slugify(title or urlparse(url).path)
+    base_slug = domain.page_slug(title, url)
     if framework_slug and store is not None:
         try:
             raw, n_artifacts = await domains.dd.ingestion.artifacts.service.extract_and_save_artifacts(
@@ -413,22 +362,19 @@ async def _fetch_one(
         await progress.record_url(
             url,
             status = "success",
-            tier = "docs",
+            tier = params.TIER_KIND,
             http_code = resp.status_code,
             fetch_ms = fetch_ms,
             bytes_fetched = len(raw),
             extracted_chars = sum(len(s.body_md) for s in subs),
         )
-        return [
-            (f"{base_slug}--{s.slug_suffix}"[:120], s.sub_url, s.body_md, s.title)
-            for s in subs
-        ]
+        return [(domain.sub_slug(base_slug, s.slug_suffix), s.sub_url, s.body_md, s.title) for s in subs]
     body = domains.dd.ingestion.tiers.extract.domain.html_to_markdown(raw, source_url = url, default_code_language = code_language)
     if len(body.encode("utf-8")) < params.MIN_OK_BYTES:
         await progress.record_url(
             url,
             status = "extract_empty",
-            tier = "docs",
+            tier = params.TIER_KIND,
             http_code = resp.status_code,
             fetch_ms = fetch_ms,
             bytes_fetched = len(raw),
@@ -439,7 +385,7 @@ async def _fetch_one(
     await progress.record_url(
         url,
         status = "success",
-        tier = "docs",
+        tier = params.TIER_KIND,
         http_code = resp.status_code,
         fetch_ms = fetch_ms,
         bytes_fetched = len(raw),
@@ -461,41 +407,30 @@ async def run(
 ) -> int:
     code_language = code_language or ""
     parsed = urlparse(url)
-    host = (parsed.netloc or "").lower()
+    host = domains.dd.ingestion.tiers.fetch.domain.host_of(url)
     if not host:
         raise RuntimeError(f"Tier 4: cannot parse host from url={url!r}")
     raw_path = parsed.path or "/"
-    subtree = raw_path.rsplit("/", 1)[0] if "/" in raw_path else ""
-    if subtree in ("/", ""):
-        subtree = ""
+    subtree = domain.docs_subtree(parsed.path)
     logger.info(
         f"[tier-4] framework={framework_slug} host={host} "
         f"subtree={subtree or '(none)'} url={url}"
     )
-    await progress.start(tier = "docs", total = 0)
+    await progress.start(tier = params.TIER_KIND, total = 0)
     async with httpx.AsyncClient(
-        headers = {"User-Agent": params.USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
-        timeout = httpx.Timeout(params.TIMEOUT_S, connect = 10.0),
+        headers = {"User-Agent": params.USER_AGENT, "Accept": params.ACCEPT},
+        timeout = httpx.Timeout(params.TIMEOUT_S, connect = params.CONNECT_TIMEOUT_S),
         # Go's 36 `http_error` pages were all 301s (`/doc/articles/go_command.html` → its post in the blog): a redirect is a page.
         follow_redirects = True,
     ) as client:
         enriched = await _seed_enrichment(url, client)
         seeded = await _seeder_discover(host, raw_path)
         # Sphinx objects.inv — deterministic page + anchor catalog when present.
-        docs_root_path = subtree if subtree else "/"
-        if not docs_root_path.endswith("/"):
-            docs_root_path += "/"
-        docs_root = f"{parsed.scheme}://{parsed.netloc}{docs_root_path}"
-        inventory = await domains.dd.ingestion.tiers.tier4.sphinx.service.fetch_inventory(docs_root, client = client)
+        docs_root = domain.docs_root(parsed.scheme, parsed.netloc, subtree)
+        sphinx = domains.dd.ingestion.tiers.tier4.sphinx
+        inventory = await sphinx.service.fetch_inventory(docs_root, client = client)
         # Inventory iteration order ≈ Sphinx source-tree order; doc_pages() returns a non-deterministic set.
-        inv_pages: list[str] = []
-        if inventory:
-            _seen_inv: set[str] = set()
-            for ent in inventory.entities:
-                if ent.role in ("std:doc", "std:label") and ent.page_url \
-                        and ent.page_url not in _seen_inv:
-                    _seen_inv.add(ent.page_url)
-                    inv_pages.append(ent.page_url)
+        inv_pages: list[str] = sphinx.domain.ordered_doc_pages(inventory) if inventory else []
         if inventory:
             logger.info(
                 f"[tier-4] objects.inv: {inventory.project} "
@@ -503,7 +438,7 @@ async def run(
                 f"{len(inventory.entities)} entities"
             )
         # DOM toctree — fallback when no inventory; complement when present.
-        toctree = await domains.dd.ingestion.tiers.tier4.sphinx.service.discover_via_toctree(
+        toctree = await sphinx.service.discover_via_toctree(
             url,
             host = host,
             subtree = subtree,
@@ -513,27 +448,8 @@ async def run(
             logger.info(
                 f"[tier-4] toctree sidebar contributed {len(toctree)} URLs"
             )
-        # Order-preserving union; sorting alphabetizes and breaks chapter order (Bash GNU regression). Priority: most-author-curated wins.
-        # Fragment canonicalization (Google: fragments are never canonical
-        # identities): `page#anchor` seeds (mostly objects.inv `std:label`
-        # entities) collapse onto their base page; anchors are kept as
-        # per-page metadata instead of separate documents. Without this,
-        # asyncio-style corpora ingest ~9 near-duplicate overlapping slices
-        # per real page (65/73 asyncio pages were `#` fragments).
-        seeds: list[str] = []
-        anchors_by_page: dict[str, list[str]] = {}
-        _seen: set[str] = set()
-        for src in (toctree, inv_pages, seeded, enriched, [url]):
-            for u in src:
-                base, _, frag = (u or "").partition("#")
-                base = base.strip()
-                if not base:
-                    continue
-                if frag and frag not in anchors_by_page.get(base, []):
-                    anchors_by_page.setdefault(base, []).append(frag)
-                if base not in _seen:
-                    _seen.add(base)
-                    seeds.append(base)
+        # Priority: most-author-curated wins (see `domain.merge_seeds` for the order and fragment rules).
+        seeds, anchors_by_page = domain.merge_seeds([toctree, inv_pages, seeded, enriched, [url]])
         if len(seeds) < params.DISCOVERY_MIN_URLS:
             logger.info(
                 f"[tier-4] discovery sparse ({len(seeds)} URLs) — "
@@ -549,22 +465,10 @@ async def run(
         allow, deny = domains.dd.ingestion.filters.domain.build_language_filter(language)
         polyglot = domains.dd.ingestion.filters.domain.is_polyglot(framework_name or "")
 
-        def _keep(u: str) -> bool:
-            p = urlparse(u)
-            if not domains.dd.ingestion.filters.domain.same_host(u, host):
-                return False
-            if domains.dd.ingestion.filters.patterns.NON_TARGET_LANGUAGE_PATH_RE.search(p.path or ""):
-                return False
-            # Stage 1 noise filter — defaults + per-framework path_filter.
-            if not domains.dd.ingestion.filters.domain.passes_path_filter(u, path_filter):
-                return False
-            if polyglot and language:
-                return domains.dd.ingestion.filters.domain.should_keep(u, allow, deny)
-            if allow or deny:
-                return domains.dd.ingestion.filters.domain.should_keep(u, allow, deny)
-            return True
-
-        filtered = [u for u in seeds if _keep(u)]
+        filtered = [
+            u for u in seeds
+            if domain.wanted(u, host, path_filter, polyglot = polyglot, language = language, allow = allow, deny = deny)
+        ]
         if not filtered:
             await progress.finish(status = "failed")
             raise RuntimeError(
@@ -576,12 +480,10 @@ async def run(
         )
         if inventory:
             inv_set = inventory.doc_pages()
-            kept_set = {u.split("#", 1)[0] for u in filtered}
-            gap = inv_set - kept_set
-            extras = kept_set - inv_set
+            n_crawled, gap, extras = domain.oracle_gap(inv_set, filtered)
             logger.info(
                 f"[tier-4 oracle] inventory={len(inv_set)} pages, "
-                f"crawling={len(kept_set)}, missing={len(gap)}, "
+                f"crawling={n_crawled}, missing={len(gap)}, "
                 f"extras-from-dom={len(extras)}"
             )
             for u in sorted(gap)[:10]:
@@ -629,20 +531,12 @@ async def run(
                     failed.append(u)
                 else:
                     for slug, src_url, body, title in results:
-                        # Sub-page urls may themselves carry `#anchor`
-                        # (page_split emits per-anchor slices) — same
-                        # canonicalization as seeds: base page is the
-                        # identity, anchors merge into metadata.
-                        base, _, sub_frag = (src_url or "").partition("#")
-                        base = base.strip() or src_url
-                        anchors = list(anchors_by_page.get(base, []))
-                        if sub_frag and sub_frag not in anchors:
-                            anchors.append(sub_frag)
+                        base, anchors = domain.page_identity(src_url, anchors_by_page)
                         await store.add_page(
                             slug = slug,
                             url = base,
                             body = body,
-                            tier = "docs",
+                            tier = params.TIER_KIND,
                             title = title,
                             anchors = anchors,
                         )
@@ -657,8 +551,8 @@ async def run(
             *(_bound(u) for u in filtered),
             return_exceptions = False,
         )
-    fail_rate = len(failed) / max(1, len(filtered))
-    if fail_rate > params.PHASE4A_FAIL_RATE_TRIGGER and failed:
+    if domain.should_escalate(len(failed), len(filtered)):
+        fail_rate = len(failed) / max(1, len(filtered))
         logger.warning(
             f"[tier-4] phase 4a fail-rate {fail_rate*100:.0f}% "
             f"({len(failed)}/{len(filtered)}) — escalating failed URLs to "

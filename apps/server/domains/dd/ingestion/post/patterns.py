@@ -49,3 +49,39 @@ UPDATE_TAG_RE = re.compile(r'<Update\s+label="([^"]+)"')
 # to tag the manifest entry `tier = "changelog"` (see domain.split_monolith's
 # changelog branch); corpus_load filters on that tier.
 CHANGELOG_RELEASE_MARKER = "-changelog-release-"
+
+# The `<Update label="v3.2.3">` tag as the FIRST line after a split child's `# Parent`, where either quote may be used (the
+# splitter's UPDATE_TAG_RE above is the double-quoted form it cuts a changelog on). Group 1 is the label.
+UPDATE_LABEL_RE = re.compile(r"""<Update\s+label=["']([^"']+)["']""")
+
+# A sub-split child's own heading (`## x`, `### x`, `#### x`), right after the `# Parent` it was filed under: group 1 is its
+# text, minus any closing `#`s.
+CHILD_HEADING_RE = re.compile(r"^#{2,4}\s+(.+?)\s*#*\s*$")
+
+
+# A run of anything a slug does not keep.
+NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+# The first line of a numbered list item (`1. x`, `2) x`): not a sentence worth naming a page after.
+NUMBERED_ITEM_RE = re.compile(r"^\d+[.)]\s+")
+
+# Markdown's own marks in a line of text (emphasis, code, strikethrough, `#`), taken off before it is used as a title.
+MD_MARKS_RE = re.compile(r"[*_`~#]+")
+
+# What makes a line prose: a word of three letters or more.
+WORD_RE = re.compile(r"[a-zA-Z]{3,}")
+
+# Emphasis and code marks inside a heading (`**x**`, `` `x` ``).
+INLINE_MARKS_RE = re.compile(r"[`*]+")
+
+# A character a converter escaped because Markdown would read it as markup: `all\_inner\_texts`. Group 1 is the character.
+ESCAPED_CHAR_RE = re.compile(r"\\([\\_*\[\]()#+.!|<>-])")
+
+# Any run of whitespace (a title is one line, one space apart).
+WHITESPACE_RE = re.compile(r"\s+")
+
+# The `-` / `_` between the words of a URL folder or file name.
+WORD_SEPARATOR_RE = re.compile(r"[-_]+")
+
+# A file name's extension at the end of a URL segment (`.html`, `.md`, `.php`).
+FILE_EXTENSION_RE = re.compile(r"\.\w{1,5}$")

@@ -8,9 +8,7 @@ from . import entities, params, patterns
 
 import copy
 import logging
-import re
 import zlib
-from typing import Optional
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
@@ -18,6 +16,15 @@ from bs4 import BeautifulSoup, Tag
 
 
 logger = logging.getLogger(__name__)
+
+
+def _soup(html: str) -> BeautifulSoup:
+    """The page parsed with the extractor's parser, or the standard library's when that cannot read it."""
+    extract_params = domains.dd.ingestion.tiers.extract.params
+    try:
+        return BeautifulSoup(html, extract_params.PARSER)
+    except Exception:  # noqa: BLE001
+        return BeautifulSoup(html, extract_params.FALLBACK_PARSER)
 
 
 def has_version_segment(path: str) -> bool:
@@ -30,7 +37,7 @@ def has_version_segment(path: str) -> bool:
 
 def parse_inventory_v2(
     raw: bytes, base_url: str,
-) -> Optional[entities.Inventory]:
+) -> entities.Inventory | None:
     """Parse v2 binary. None on malformed input."""
     if not raw.startswith(params.V2_HEADER):
         return None
@@ -43,9 +50,9 @@ def parse_inventory_v2(
             return None
         line = raw[cursor:nl].decode("utf-8", "replace")
         cursor = nl + 1
-        if line.startswith("# Project:"):
+        if line.startswith(params.INVENTORY_PROJECT_PREFIX):
             project = line.split(":", 1)[1].strip()
-        elif line.startswith("# Version:"):
+        elif line.startswith(params.INVENTORY_VERSION_PREFIX):
             version = line.split(":", 1)[1].strip()
     try:
         payload = zlib.decompress(raw[cursor:]).decode("utf-8", "replace")
@@ -94,7 +101,7 @@ def _normalize_href(href: str, base_url: str) -> str | None:
     if not href or href.startswith(params.SKIP_HREF_PREFIXES):
         return None
     full = urljoin(base_url, href).split("#", 1)[0]
-    if not full.startswith(("http://", "https://")):
+    if not full.startswith(domains.dd.ingestion.tiers.tier4.params.HTTP_SCHEMES):
         return None
     path = urlparse(full).path or ""
     if patterns.EXCLUDE_PATH_RE.search(path) or patterns.EXCLUDE_EXT_RE.search(path):
@@ -142,21 +149,25 @@ def extract_internal_pages(html: str, base_url: str) -> dict[str, list[str]]:
     """Sphinx/MkDocs surfaces → {sidebar, body}. Both empty ⇒ not Sphinx/MkDocs."""
     if not html:
         return {"sidebar": [], "body": []}
-    try:
-        soup = BeautifulSoup(html, "lxml")
-    except Exception:
-        soup = BeautifulSoup(html, "html.parser")
+    soup = _soup(html)
     return {
         "sidebar": _sidebar_links(soup, base_url),
         "body": _body_links(soup, base_url),
     }
 
 
+def ordered_doc_pages(inventory: entities.Inventory) -> list[str]:
+    """The inventory's document pages (`std:doc` / `std:label`), each once, in the inventory's own order — Sphinx's source-tree
+    order, which `Inventory.doc_pages()` (a set) loses."""
+    pages: dict[str, None] = {}
+    for ent in inventory.entities:
+        if ent.role in params.DOC_ROLES and ent.page_url:
+            pages.setdefault(ent.page_url)
+    return list(pages)
+
+
 def _slugify(s: str) -> str:
-    return patterns.SLUG_RE.sub("-", (s or "").lower()).strip("-")[:80] or "section"
-
-
-_FENCED_RE = re.compile(r"^(`{3,}|~{3,}).*?^\1[ \t]*$", re.M | re.S)
+    return patterns.SLUG_RE.sub("-", (s or "").lower()).strip("-")[: params.SLUG_MAX_CHARS] or params.SLUG_FALLBACK
 
 
 def _md(html: str, source_url: str, lang: str) -> str:
@@ -171,7 +182,9 @@ def compose_child(parent_title: str, heading: str, body_md: str, fallback: str =
     pages had no H1, and a title made of the page's `<title>` and a signature's text."""
     parent = domains.dd.ingestion.tiers.extract.domain.page_name(parent_title or "")
     # `¶` (Sphinx) or ` #` (pydata-sphinx-theme: "Model considerations #") is the heading's permalink, read as part of its text.
-    heading = re.sub(r"\s+[#¶]$", "", re.sub(r"\s+", " ", (heading or "").strip()).rstrip("¶").strip())[:120]
+    heading = patterns.HEADING_PERMALINK_RE.sub(
+        "", patterns.WHITESPACE_RE.sub(" ", (heading or "").strip()).rstrip(params.PERMALINK_MARK).strip(),
+    )[: params.HEADING_MAX_CHARS]
     if parent and heading and heading.casefold() != parent.casefold():
         title = f"{parent} › {heading}"
     else:
@@ -179,25 +192,23 @@ def compose_child(parent_title: str, heading: str, body_md: str, fallback: str =
     first = next((line for line in body_md.splitlines() if line.strip()), "")
     prefix = ""
     # An H1 is a `# Title` outside code: a `# comment` in a fenced example is not one (103 of Celery's pieces had no H1 for that reason).
-    if parent and not re.search(r"^# \S", _FENCED_RE.sub("", body_md), re.M):
+    extract_patterns = domains.dd.ingestion.tiers.extract.patterns
+    if parent and not extract_patterns.H1_LINE_RE.search(extract_patterns.FENCED_BLOCK_RE.sub("", body_md)):
         prefix += f"# {parent}\n\n"
-    if heading and not re.match(r"#{1,6}\s", first):
+    if heading and not patterns.HEADING_START_RE.match(first):
         prefix += f"## {heading}\n\n"
     return title, prefix + body_md
 
 
 def maybe_split_page(
     html: str, source_url: str, parent_title: str = "",
-    inventory: Optional[entities.Inventory] = None,
+    inventory: entities.Inventory | None = None,
     default_code_language: str = "",
 ) -> list[entities.SubPage]:
     """Split precedence: inventory (per-entity) → autodoc (≥4 dl.py.class or 1-class-N-methods) → anchor (≥12 H2). Returns [] if page stays whole."""
     if not html:
         return []
-    try:
-        soup = BeautifulSoup(html, "lxml")
-    except Exception:
-        soup = BeautifulSoup(html, "html.parser")
+    soup = _soup(html)
 
     domains.dd.ingestion.tiers.extract.domain.strip_chrome(soup)
     root = domains.dd.ingestion.tiers.extract.domain.find_content_root(soup)
@@ -235,7 +246,7 @@ def maybe_split_page(
     return out
 
 
-def _container_for_anchor(soup: BeautifulSoup, root: Tag, anchor: str) -> Optional[Tag]:
+def _container_for_anchor(soup: BeautifulSoup, root: Tag, anchor: str) -> Tag | None:
     """Resolve anchor id to container: autodoc → <dt>'s parent <dl>; narrative → <section>/<div.section>; older Sphinx → <h2>."""
     node = root.find(id=anchor) or soup.find(id=anchor)
     if node is None or not isinstance(node, Tag):
@@ -342,7 +353,7 @@ def _split_residual(
         base, n = anchor, 1
         while anchor in taken:
             n += 1
-            anchor = f"{base}-narrative" if n == 2 else f"{base}-narrative-{n}"
+            anchor = f"{base}{params.NARRATIVE_SUFFIX}" if n == 2 else f"{base}{params.NARRATIVE_SUFFIX}-{n}"
         taken.add(anchor)
         return anchor
 
@@ -394,21 +405,14 @@ def _split_autodoc(
 ) -> list[entities.SubPage]:
     blocks = root.select(params.AUTODOC_SELECTOR)
     # Top-level only — a class with nested methods is ONE unit, not 1+N.
-    blocks_set = set(id(b) for b in blocks)
+    blocks_set = {id(b) for b in blocks}
     top: list[Tag] = []
     for b in blocks:
         if not any(id(a) in blocks_set for a in b.parents):
             top.append(b)
     # Fallback: 1-class-N-methods pages (ElasticSearch-Py indices.html) — split by members.
     if len(top) < params.AUTODOC_MIN_BLOCKS:
-        member_sel = (
-            "dl.py.method, dl.py.attribute, dl.py.classmethod, "
-            "dl.py.staticmethod, dl.py.property, dl.py.data, "
-            "dl.cpp.function, dl.cpp.member, dl.js.function, dl.js.attribute, "
-            # Older Sphinx pre-namespaced forms
-            "dl.method, dl.attribute, dl.classmethod, dl.staticmethod"
-        )
-        members = root.select(member_sel)
+        members = root.select(params.MEMBER_SELECTOR)
         if len(members) >= params.AUTODOC_MIN_BLOCKS:
             top = members
         else:
@@ -426,7 +430,7 @@ def _split_autodoc(
         if not anchor_id or anchor_id in seen_ids:
             continue
         seen_ids.add(anchor_id)
-        title_text = dt.get_text(strip=True).rstrip("¶").strip()[:160]
+        title_text = dt.get_text(strip=True).rstrip(params.PERMALINK_MARK).strip()[: params.TITLE_TEXT_MAX_CHARS]
         body_md = _md(str(dl), source_url, lang)
         if len(body_md.encode("utf-8")) < params.MIN_BODY_BYTES:
             continue
@@ -501,7 +505,7 @@ def _split_anchored(
         body_md = _md(sub_html, source_url, lang)
         if len(body_md.encode("utf-8")) < params.MIN_BODY_BYTES:
             continue
-        title_text = h2.get_text(" ", strip=True).rstrip("¶").strip()[:160]
+        title_text = h2.get_text(" ", strip=True).rstrip(params.PERMALINK_MARK).strip()[: params.TITLE_TEXT_MAX_CHARS]
         title, body_md = compose_child(parent_title, title_text, body_md, anchor_id)
         out.append(entities.SubPage(
             slug_suffix=_slugify(anchor_id),

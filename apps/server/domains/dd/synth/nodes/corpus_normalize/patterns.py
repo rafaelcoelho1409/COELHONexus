@@ -105,6 +105,8 @@ VIEWCODE_LINK_RE = re.compile(r"[ \t]*\[\[source\]\]\([^)\n]*\)")
 # (`| [Example Configuration](#example) [Directives](#directives) … |`).
 TABLE_LINE_RE = re.compile(r"^[ \t]*\|")
 ANCHOR_LINK_RE = re.compile(r"\[[^\]]*\]\(#[^)]*\)")
+# What is left of such a table once its links are gone: whitespace, the cell bars, alignment colons and dashes, non-breaking spaces.
+TABLE_RESIDUE_RE = re.compile(r"[\s|:\-\xa0]|&nbsp;")
 
 # The header line a docs builder prints above a code block in its markdown: the language, a copy icon and the word "Copy"
 # (Grafana's twin pages, 882 of them in Tempo's 213: `Bash ![Copy code to clipboard](…/icon-copy-small-2.svg) Copy`). The

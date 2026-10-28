@@ -52,7 +52,7 @@ async def _give_up(
 ) -> None:
     """Log why this URL cannot be used and hand over to the next tier. Marked `downgrade`, not `failed`: the run
     is not over, and only the dispatcher decides when it is."""
-    await progress.record_url(url, status = status, tier = "llms_full", error_msg = reason, **record)
+    await progress.record_url(url, status = status, tier = params.TIER_KIND, error_msg = reason, **record)
     await progress.finish(status = "downgrade")
     raise domains.dd.ingestion.tiers.errors.TierUnavailable(f"{url}: {reason}")
 
@@ -71,10 +71,10 @@ async def run(
     if not host:
         raise RuntimeError(f"Tier 1: cannot parse host from url={url!r}")
     logger.info(f"[tier-1] framework={framework_slug} url={url}")
-    await progress.start(tier = "llms_full", total = 1)
+    await progress.start(tier = params.TIER_KIND, total = 1)
     await progress.raise_if_cancelled()
     async with httpx.AsyncClient(
-        timeout = httpx.Timeout(params.TIMEOUT_S, connect = 10.0),
+        timeout = httpx.Timeout(params.TIMEOUT_S, connect = params.CONNECT_TIMEOUT_S),
         follow_redirects = True,
     ) as client:
         t0 = time.monotonic()
@@ -115,7 +115,7 @@ async def run(
             await progress.record_url(
                 url,
                 status = "downgrade",
-                tier = "llms_full",
+                tier = params.TIER_KIND,
                 http_code = resp.status_code,
                 fetch_ms = fetch_ms,
                 bytes_fetched = len(body),
@@ -142,7 +142,7 @@ async def run(
             slug = slug,
             url = url,
             body = body,
-            tier = "llms_full",
+            tier = params.TIER_KIND,
             # Its own heading when it stays one page; a bundle big enough to be split is replaced by pages that carry
             # their own titles.
             title = domains.dd.ingestion.post.domain.display_title(body, slug),
@@ -155,7 +155,7 @@ async def run(
         await progress.record_url(
             url,
             status = "success",
-            tier = "llms_full",
+            tier = params.TIER_KIND,
             http_code = resp.status_code,
             fetch_ms = fetch_ms,
             bytes_fetched = fetched_chars,

@@ -3,8 +3,6 @@ from __future__ import annotations
 import domains
 from . import params, patterns
 
-import re
-
 
 
 def looks_like_manifest(body: str) -> tuple[bool, dict]:
@@ -30,13 +28,12 @@ def apply_path_filter(body: str, path_filter: dict | None) -> tuple[str, int, in
     open-source library the catalog is after). Only the filter the catalog declares counts — the default noise filter
     stays off, so a bundle is never trimmed on its own authority. A bundle whose sections do not carry `Source:` URLs
     cannot be told apart by path and comes back whole (`kept == total == 0`), as does an entry with no filter."""
-    declared = path_filter and (path_filter.get("include") or path_filter.get("exclude"))
-    if not declared:
+    only_declared = domains.dd.ingestion.filters.domain.declared_filter(path_filter)
+    if only_declared is None:
         return body, 0, 0
     sections = domains.dd.ingestion.post.domain.split_by_source_markers(body)
     if sections is None:
         return body, 0, 0
-    only_declared = {**path_filter, "disable_defaults": True}
     kept = [
         text
         for _h1, _h2, text, source_url in sections
@@ -58,5 +55,5 @@ def retry_after_seconds(header: str | None) -> float | None:
 
 
 def host_slug(host: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "-", host.lower()).strip("-")
-    return f"{s}-llms-full"[:120] or "llms-full"
+    s = patterns.NON_SLUG_RE.sub("-", host.lower()).strip("-")
+    return f"{s}{params.HOST_SLUG_SUFFIX}"[: params.SLUG_MAX_CHARS] or params.HOST_SLUG_SUFFIX.lstrip("-")

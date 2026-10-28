@@ -26,3 +26,12 @@ EXCLUDE_EXT_RE = re.compile(
 
 # Slug normalization for sub-page URLs.
 SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+# Any run of whitespace.
+WHITESPACE_RE = re.compile(r"\s+")
+
+# A heading's permalink, read as part of its text: Sphinx's `¶`, or pydata-sphinx-theme's ` #` ("Model considerations #").
+HEADING_PERMALINK_RE = re.compile(r"\s+[#¶]$")
+
+# A Markdown heading line of any level (`#` to `######`, then a space).
+HEADING_START_RE = re.compile(r"#{1,6}\s")

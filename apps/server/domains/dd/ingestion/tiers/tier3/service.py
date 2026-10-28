@@ -6,10 +6,8 @@ from . import domain, params
 import asyncio
 import logging
 import time
-from urllib.parse import urlparse
 
 import httpx
-from bs4 import BeautifulSoup
 
 
 logger = logging.getLogger(__name__)
@@ -54,37 +52,20 @@ async def _expand_sitemap(
     if resp.status_code != 200:
         logger.info(f"[tier-3] sitemap {url} → HTTP {resp.status_code}")
         return []
-    try:
-        soup = BeautifulSoup(resp.text or "", "lxml-xml")
-    except Exception:
-        soup = BeautifulSoup(resp.text or "", "html.parser")
+    nested_sitemaps, pages = domain.parse_sitemap(resp.text or "")
     out: list[tuple[str, str]] = []
-    for sm in soup.find_all("sitemap"):
-        loc = sm.find("loc")
-        if loc and loc.text:
-            nested = await _expand_sitemap(client, loc.text.strip(), depth + 1)
-            out.extend(nested)
-    for u in soup.find_all("url"):
-        loc = u.find("loc")
-        if loc and loc.text:
-            lm = u.find("lastmod")
-            out.append((
-                loc.text.strip(),
-                (lm.text.strip() if lm and lm.text else "")[:32],
-            ))
+    for nested_url in nested_sitemaps:
+        out.extend(await _expand_sitemap(client, nested_url, depth + 1))
+    out.extend(pages)
     return out
 
 
 async def scoped_urls(client: httpx.AsyncClient, url: str, path_filter: dict | None = None) -> list[str]:
     """The page URLs a Tier 3 run of this sitemap would fetch (before any language filter), in sitemap order, each once.
     `[]` when the sitemap cannot be read. Lets another tier compare its own list of pages with the site's."""
-    seen: set[str] = set()
-    urls: list[str] = []
-    for page_url, _lastmod in await _expand_sitemap(client, url):
-        if page_url not in seen and domain.in_scope(page_url, path_filter):
-            seen.add(page_url)
-            urls.append(page_url)
-    return urls
+    return domain.unique_in_order(
+        [page_url for page_url, _lastmod in await _expand_sitemap(client, url) if domain.in_scope(page_url, path_filter)]
+    )
 
 
 async def _fetch_twin(
@@ -104,11 +85,7 @@ async def _fetch_twin(
     except Exception:  # noqa: BLE001
         return None
     text = resp.text or ""
-    if (
-        resp.status_code != 200
-        or len(text.encode("utf-8")) < params.MIN_OK_BYTES
-        or domains.dd.ingestion.tiers.tier1.domain.looks_like_html(text)
-    ):
+    if not domain.usable_twin(resp.status_code, text):
         return None
     return text, int((time.monotonic() - t0) * 1000)
 
@@ -120,11 +97,9 @@ async def site_serves_twins(
 ) -> bool:
     """Whether the site publishes a markdown twin of its pages: TWIN_PROBE_SAMPLE pages spread over `urls` are asked for
     theirs, and at least TWIN_PROBE_MIN_OK must have one (see `_fetch_twin`: a 200 that is really an HTML page is not a twin)."""
-    sample_size = min(params.TWIN_PROBE_SAMPLE, len(urls))
-    if sample_size < params.TWIN_PROBE_MIN_OK:
+    sample = domain.twin_sample(urls)
+    if not sample:
         return False
-    step = len(urls) / sample_size
-    sample = [urls[int(i * step)] for i in range(sample_size)]
     found = await asyncio.gather(*(_fetch_twin(client, u, pacer) for u in sample))
     return sum(1 for twin in found if twin is not None) >= params.TWIN_PROBE_MIN_OK
 
@@ -148,13 +123,13 @@ async def _fetch_page(
             await progress.record_url(
                 url,
                 status = "success",
-                tier = "sitemap",
+                tier = params.TIER_KIND,
                 http_code = 200,
                 fetch_ms = twin_ms,
                 bytes_fetched = len(markdown.encode("utf-8")),
                 extracted_chars = len(markdown),
             )
-            slug = domain.slugify(title or urlparse(url).path)
+            slug = domain.page_slug(title, url)
             return (slug, url, markdown, title or slug)
     t0 = time.monotonic()
     try:
@@ -163,7 +138,7 @@ async def _fetch_page(
         await progress.record_url(
             url,
             status = "fetch_error",
-            tier = "sitemap",
+            tier = params.TIER_KIND,
             fetch_ms = int((time.monotonic() - t0) * 1000),
             error_msg = f"{type(e).__name__}: {e}",
         )
@@ -173,7 +148,7 @@ async def _fetch_page(
         await progress.record_url(
             url,
             status = "http_error",
-            tier = "sitemap",
+            tier = params.TIER_KIND,
             http_code = resp.status_code,
             fetch_ms = fetch_ms,
             bytes_fetched = len(resp.content or b""),
@@ -206,7 +181,7 @@ async def _fetch_page(
         await progress.record_url(
             url,
             status = "extract_empty",
-            tier = "sitemap",
+            tier = params.TIER_KIND,
             http_code = resp.status_code,
             fetch_ms = fetch_ms,
             bytes_fetched = len(raw),
@@ -217,13 +192,13 @@ async def _fetch_page(
     await progress.record_url(
         url,
         status = "success",
-        tier = "sitemap",
+        tier = params.TIER_KIND,
         http_code = resp.status_code,
         fetch_ms = fetch_ms,
         bytes_fetched = len(raw),
         extracted_chars = len(body),
     )
-    slug = domain.slugify(title or urlparse(url).path)
+    slug = domain.page_slug(title, url)
     return (slug, url, body, title or slug)
 
 
@@ -239,21 +214,12 @@ async def run(
     code_language: str | None = None,
 ) -> int:
     logger.info(f"[tier-3] framework={framework_slug} sitemap={url}")
-    await progress.start(tier = "sitemap", total = 0)
+    await progress.start(tier = params.TIER_KIND, total = 0)
     allow, deny = domains.dd.ingestion.filters.domain.build_language_filter(language)
     polyglot = domains.dd.ingestion.filters.domain.is_polyglot(framework_name or "")
 
-    def _keep(u: str) -> bool:
-        if not domain.in_scope(u, path_filter):
-            return False
-        if polyglot and language:
-            return domains.dd.ingestion.filters.domain.should_keep(u, allow, deny)
-        if allow or deny:
-            return domains.dd.ingestion.filters.domain.should_keep(u, allow, deny)
-        return True
-
     async with httpx.AsyncClient(
-        timeout = httpx.Timeout(params.TIMEOUT_S, connect = 10.0),
+        timeout = httpx.Timeout(params.TIMEOUT_S, connect = params.CONNECT_TIMEOUT_S),
         follow_redirects = True,
     ) as client:
         all_entries = await _expand_sitemap(client, url)
@@ -263,14 +229,11 @@ async def run(
             raise domains.dd.ingestion.tiers.errors.TierUnavailable(f"Tier 3: {url} yielded zero URLs")
         all_urls = [u for u, _ in all_entries]
         lastmod_by_url = {u: lm for u, lm in all_entries if lm}
-        kept = [u for u in all_urls if _keep(u)]
-        seen: set[str] = set()
-        deduped: list[str] = []
-        for u in kept:
-            if u in seen:
-                continue
-            seen.add(u)
-            deduped.append(u)
+        kept = [
+            u for u in all_urls
+            if domain.wanted(u, path_filter, polyglot = polyglot, language = language, allow = allow, deny = deny)
+        ]
+        deduped = domain.unique_in_order(kept)
         n_distinct = len(deduped)
         deduped = domain.collapse_versions(deduped)
         n_lastmod = sum(1 for u in deduped if lastmod_by_url.get(u))
@@ -284,12 +247,12 @@ async def run(
                 f"Tier 3: {url} lists {len(all_urls)} URLs, none inside the catalog's path_filter"
             )
         await progress.update_total(len(deduped))
-        host = (urlparse(url).netloc or "").lower()
+        host = domains.dd.ingestion.tiers.fetch.domain.host_of(url)
 
         async def _announce_wait(seconds: float) -> None:
             logger.info(f"[tier-3] {framework_slug}: {host} asked for a pause, waiting {seconds:.0f}s")
             await progress.record_url(
-                host, status = "rate_limited", tier = "sitemap",
+                host, status = "rate_limited", tier = params.TIER_KIND,
                 error_msg = f"the site asked for a pause: waiting {seconds:.0f}s before going on",
             )
 
@@ -306,27 +269,11 @@ async def run(
         written = 0
 
         async def _claim_slug(base: str, link: str) -> str:
-            """Collision-free slug within this run (ported from Tier 2:
-            first claimant keeps the bare slug, later same-title pages take
-            the nearest distinctive URL ancestor, counter as fallback).
-            Keys were already unique (idx-prefixed) — this only cleans
-            manifests/explorer titles. Cross-product same-topic pages
-            (langchain/langgraph/deepagents `streaming`×3) and tutorial-vs-
-            reference pairs (fastapi `middleware`×2) are the live cases."""
+            """A collision-free slug within this run (`domain.free_slug`): the first page to want a slug keeps it."""
             async with slug_lock:
-                if base not in slug_owner:
-                    slug_owner[base] = link
-                    return base
-                if slug_owner[base] == link:
-                    return base
-                stem = domain.collision_suffix(base, link) or "x"
-                cand = domain.suffixed_slug(base, stem)
-                i = 2
-                while cand in slug_owner and slug_owner[cand] != link:
-                    cand = domain.suffixed_slug(base, f"{stem}-{i}")
-                    i += 1
-                slug_owner[cand] = link
-                return cand
+                slug = domain.free_slug(slug_owner, base, link)
+                slug_owner[slug] = link
+                return slug
 
         async def _bound(u: str):
             nonlocal written
@@ -349,7 +296,7 @@ async def run(
                     slug = slug,
                     url = src_url,
                     body = body,
-                    tier = "sitemap",
+                    tier = params.TIER_KIND,
                     title = title,
                     lastmod = lastmod_by_url.get(src_url, ""),
                 )

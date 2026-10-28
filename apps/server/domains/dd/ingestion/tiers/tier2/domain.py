@@ -3,7 +3,7 @@ from __future__ import annotations
 import domains
 from . import params, patterns
 
-import re
+from typing import Literal
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -23,7 +23,7 @@ def serves_markdown(links: list[tuple[str, str, str, str]]) -> bool:
     likely publishes them for the rest of its pages too (Qdrant: `…/search-patterns/` → `…/search-patterns.md`)."""
     if not links:
         return False
-    markdown = sum(1 for _title, url, _section, _notes in links if urlparse(url).path.lower().endswith(".md"))
+    markdown = sum(1 for _title, url, _section, _notes in links if urlparse(url).path.lower().endswith(params.MARKDOWN_SUFFIX))
     return markdown / len(links) >= params.MARKDOWN_INDEX_MIN_SHARE
 
 
@@ -57,13 +57,9 @@ def parse_index(body: str, base_url: str) -> list[tuple[str, str, str, str]]:
     def _add(title: str, url: str, notes: str) -> None:
         full = urljoin(base_url, url.strip())
         host = (urlparse(full).netloc or "").lower()
-        if base_host and host and host != base_host:
-            # Cross-host: static raw content only (FastHTML curates an HTMX
-            # `reference.md`, Starlette `.md` guides, `.py` examples, and a
-            # MonsterUI `apilist.txt` off-host). Never HTML pages — GitHub
-            # repo / PyPI project meta-links stay dropped.
-            if not urlparse(full).path.lower().endswith((".md", ".txt", ".py")):
-                return
+        # Cross-host: static raw content only. Never HTML pages — GitHub repo / PyPI project meta-links stay dropped.
+        if base_host and host and host != base_host and not urlparse(full).path.lower().endswith(params.CROSS_HOST_SUFFIXES):
+            return
         if full in seen:
             return
         seen.add(full)
@@ -72,7 +68,7 @@ def parse_index(body: str, base_url: str) -> list[tuple[str, str, str, str]]:
     for line in (body or "").splitlines():
         h2 = patterns.H2_RE.match(line)
         if h2:
-            section = h2.group(1).strip()[:120]
+            section = h2.group(1).strip()[: params.SECTION_MAX_CHARS]
             continue
         m = patterns.LINK_MD_RE.match(line)
         if m:
@@ -103,11 +99,16 @@ def parse_index_summary(body: str) -> str:
             continue
         if lines:
             break
-    return " ".join(lines)[:2000]
+    return " ".join(lines)[: params.SUMMARY_MAX_CHARS]
 
 
 def slugify(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:80] or "page"
+    return patterns.NON_SLUG_RE.sub("-", s.lower()).strip("-")[: params.SLUG_MAX_CHARS] or params.SLUG_FALLBACK
+
+
+def page_slug(title: str, url: str) -> str:
+    """A page's slug: its title's, else its URL path's."""
+    return slugify(title or urlparse(url).path)
 
 
 def strip_filename_h1(body: str, url: str) -> str:
@@ -126,15 +127,15 @@ def strip_filename_h1(body: str, url: str) -> str:
     first = next((i for i, l in enumerate(lines) if l.strip()), None)
     if first is None:
         return body
-    m = re.match(r"^#\s+([\w\-. ]+\.(?:md|markdown|txt|rst))\s*$", lines[first].strip())
+    m = patterns.FILENAME_H1_RE.match(lines[first].strip())
     if not m:
         return body
-    following = [l for l in lines[first + 1 :] if l.strip()][:6]
+    following = [l for l in lines[first + 1 :] if l.strip()][: params.FILENAME_H1_LOOKAHEAD_LINES]
     if not any(l.strip().startswith("#") for l in following):
         return body
     out = lines[:first] + lines[first + 1 :]
     nxt = next((i for i, l in enumerate(out) if l.strip()), None)
-    if nxt is not None and out[nxt].strip() in ("---", "..."):
+    if nxt is not None and out[nxt].strip() in params.FILENAME_H1_SEPARATORS:
         out = out[:nxt] + out[nxt + 1 :]
     return "".join(out)
 
@@ -150,7 +151,7 @@ def looks_like_redirect_stub(body: str) -> bool:
     exactly on the 1 archived stub, zero false positives on the other 119
     (real short tutorials keep their fences/headings)."""
     b = body or ""
-    if len(b.encode("utf-8")) >= 2048:
+    if len(b.encode("utf-8")) >= params.REDIRECT_STUB_MAX_BYTES:
         return False
     if b.count("```") > 0:
         return False
@@ -160,7 +161,73 @@ def looks_like_redirect_stub(body: str) -> bool:
 def is_markdown_response(resp: httpx.Response) -> bool:
     ctype = (resp.headers.get("content-type") or "").lower()
     return (
-        "text/markdown" in ctype
-        or "text/x-markdown" in ctype
-        or resp.url.path.endswith(".md")
+        any(markdown_type in ctype for markdown_type in params.MARKDOWN_CONTENT_TYPES)
+        or resp.url.path.endswith(params.MARKDOWN_SUFFIX)
     )
+
+
+def body_kind(resp: httpx.Response) -> Literal["markdown", "text", "python", "html"]:
+    """What a fetched page is, which decides how it becomes Markdown: markdown passes through, a plain-text index (`apilist.txt`)
+    is kept verbatim so its function list survives intact, a raw example script is fenced as code, and HTML goes through the
+    extractor."""
+    if is_markdown_response(resp):
+        return "markdown"
+    path = resp.url.path.lower()
+    if path.endswith(params.TEXT_SUFFIX):
+        return "text"
+    if path.endswith(params.PYTHON_SUFFIX):
+        return "python"
+    return "html"
+
+
+def fence_python(source: str) -> str:
+    """An example script as a Python code block, so vault fence extraction and the digest's code references see real code
+    instead of flat prose."""
+    return f"```python\n{(source or '').strip()}\n```\n"
+
+
+def filter_links(
+    links: list[tuple[str, str, str, str]], path_filter: dict | None,
+) -> tuple[list[tuple[str, str, str, str]], int] | None:
+    """`(links inside the catalog's path_filter, how many were listed)`, or None when the entry declares no filter. Only the
+    filter the catalog declares counts — the default noise filter stays off, so an index is never trimmed on the crawler's
+    own authority."""
+    only_declared = domains.dd.ingestion.filters.domain.declared_filter(path_filter)
+    if only_declared is None:
+        return None
+    kept = [link for link in links if domains.dd.ingestion.filters.domain.passes_path_filter(link[1], only_declared)]
+    return kept, len(links)
+
+
+def slug_stem(link: str, base: str) -> str:
+    """What tells a page from the earlier one that took the slug `base`: the nearest folder of its URL that is not `base` itself
+    (`…/private-cloud/configuration/` → `private-cloud`, not the `configuration` folder), else the first label of its host. A
+    trailing file segment (`index.md`, `foo.md`) is left out: its name re-slugifies to `base` and gives a redundant `slug-slug`."""
+    try:
+        parts = [p for p in urlparse(link).path.split("/") if p]
+        if parts and parts[-1].lower().endswith(params.MARKDOWN_SUFFIX):
+            parts = parts[:-1]
+        for segment in reversed(parts):
+            candidate = slugify(segment)
+            if candidate and candidate != base:
+                return candidate
+        return slugify((urlparse(link).netloc or params.SLUG_STEM_FALLBACK).split(".")[0]) or params.SLUG_STEM_FALLBACK
+    except Exception:  # noqa: BLE001
+        return params.SLUG_STEM_FALLBACK
+
+
+def free_slug(owners: dict[str, str], base: str, link: str) -> str:
+    """The slug `link` takes in a run where `owners` ({slug: the link that has it}) is already spoken for: the bare `base` when
+    nobody else has it, else `base` with the stem that tells the page apart, a counter as the last resort. The same input gives
+    the same slug, so nothing is silently overwritten. Keys were already unique (idx-prefixed), so this only cleans manifests
+    and explorer titles — no storage layout change."""
+    if base not in owners or owners[base] == link:
+        return base
+    stem = slug_stem(link, base)
+    suffixed = domains.dd.ingestion.tiers.tier3.domain.suffixed_slug
+    candidate = suffixed(base, stem)
+    i = 2
+    while candidate in owners and owners[candidate] != link:
+        candidate = suffixed(base, f"{stem}-{i}")
+        i += 1
+    return candidate

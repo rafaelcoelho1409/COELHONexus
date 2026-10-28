@@ -38,11 +38,7 @@ async def start_run(body: schemas.StartRunBody) -> dict:
         await domains.dd.ingestion.runtime.dispatch.service.release_run(body.slug, run_id)
         raise
 
-    return {
-        "status": "queued",
-        "slug": body.slug,
-        "run_id": run_id,
-    }
+    return domains.dd.ingestion.runtime.dispatch.domain.queued(body.slug, run_id)
 
 
 @router.get("/active")
@@ -58,7 +54,7 @@ async def list_active_runs() -> dict:
 async def cancel_run(run_id: str) -> dict:
     async with infra.redis.service.client() as r:
         await domains.dd.ingestion.runtime.cancel.service.request_cancel(r, run_id)
-    return {"run_id": run_id, "status": "cancel_requested"}
+    return domains.dd.ingestion.runtime.dispatch.domain.cancel_requested(run_id)
 
 
 @router.get("/{run_id}")
@@ -73,12 +69,7 @@ async def get_run(run_id: str) -> dict:
     if progress is None and not manifest:
         raise HTTPException(status_code=404, detail=f"run {run_id!r} not found")
 
-    return {
-        "run_id": run_id,
-        "progress": progress,
-        "manifest": manifest,
-        "post": post,
-    }
+    return domains.dd.ingestion.runtime.dispatch.domain.run_snapshot(run_id, progress, manifest, post)
 
 
 @router.get("/{run_id}/url-records")
@@ -91,7 +82,7 @@ async def get_url_records(run_id: str) -> list[dict]:
 async def get_page(run_id: str, idx: int) -> dict:
     async with infra.redis.service.client() as r:
         manifest = await domains.dd.ingestion.storage.service.read_live_manifest(r, run_id)
-    entry = domains.dd.ingestion.storage.service.entry_with_idx(manifest or [], idx)
+    entry = domains.dd.ingestion.storage.domain.entry_with_idx(manifest or [], idx)
     if entry is None:
         raise HTTPException(
             status_code=404,

@@ -28,6 +28,11 @@ def active_run_key(slug: str) -> str:
     return f"coelhonexus:dd:planner:current:{slug}"
 
 
+def minio_prefix(slug: str) -> str:
+    """Every MinIO object of a framework's planner output (what a full wipe of the framework removes)."""
+    return f"planner/{slug}/"
+
+
 def planner_timing_key(slug: str) -> str:
     """MinIO key for the persisted planner timing roll-up — survives a UI
     refresh so the total wall-clock can be shown for a finished run."""

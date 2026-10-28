@@ -10,6 +10,12 @@ LINK_BARE_RE = re.compile(
 )
 H2_RE = re.compile(r"^\s*##\s+(.+?)\s*$", re.MULTILINE)
 QUOTE_RE = re.compile(r"^\s*>\s?(.*)$", re.MULTILINE)
+# A run of anything a slug does not keep.
+NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+# An H1 that is a file name (`# index.md`): a gist or raw mirror's display name, not a heading. Group 1 is the name.
+FILENAME_H1_RE = re.compile(r"^#\s+([\w\-. ]+\.(?:md|markdown|txt|rst))\s*$")
+
 # Redirect/archived-stub markers (mirror of Tier 1's manifest-shape guard, at
 # page granularity): a fetched page that is only a pointer elsewhere.
 REDIRECT_STUB_RES = (

@@ -6,7 +6,6 @@ from . import domain, params
 import asyncio
 import logging
 import time
-from urllib.parse import urlparse
 
 import httpx
 
@@ -88,23 +87,19 @@ async def _fetch_one(
         )
         return None
     raw = resp.text or ""
-    cross_host = bool(index_host) and (urlparse(url).netloc or "").lower() != index_host
-    if domain.is_markdown_response(resp):
+    cross_host = bool(index_host) and domains.dd.ingestion.tiers.fetch.domain.host_of(url) != index_host
+    kind = domain.body_kind(resp)
+    if kind == "markdown":
         body_md = raw
         if cross_host:
             # Gist/raw mirrors prepend the filename as a debris H1 (observed:
             # `starlette-sml.md` starts with a literal `# index.md` line) —
             # strip it so it never seeds a junk heading downstream.
             body_md = domain.strip_filename_h1(body_md, url)
-    elif resp.url.path.lower().endswith(".txt"):
-        # Plain-text index (e.g. `apilist.txt`) — no HTML to extract, keep
-        # verbatim so the function list survives intact.
+    elif kind == "text":
         body_md = raw
-    elif resp.url.path.lower().endswith(".py"):
-        # Raw example source (linked straight from the index, not HTML) —
-        # fence it so vault fence extraction + digest code_refs see a real
-        # code block instead of flat prose.
-        body_md = f"```python\n{(raw or '').strip()}\n```\n"
+    elif kind == "python":
+        body_md = domain.fence_python(raw)
     else:
         if framework_slug and store is not None:
             try:
@@ -149,7 +144,7 @@ async def _fetch_one(
         bytes_fetched = len(raw),
         extracted_chars = len(body_md),
     )
-    slug = domain.slugify(title or urlparse(url).path)
+    slug = domain.page_slug(title, url)
     return (slug, url, body_md, title or slug)
 
 
@@ -171,9 +166,9 @@ async def run(
     moves on to the next declared source. `path_filter` (the catalog's
     `include`/`exclude`) trims an index that lists more than the framework."""
     logger.info(f"[tier-2] framework={framework_slug} index={url}")
-    await progress.start(tier = "llms_txt", total = 0)
+    await progress.start(tier = params.TIER_KIND, total = 0)
     async with httpx.AsyncClient(
-        timeout = httpx.Timeout(params.TIMEOUT_S, connect = 10.0),
+        timeout = httpx.Timeout(params.TIMEOUT_S, connect = params.CONNECT_TIMEOUT_S),
         follow_redirects = True,
     ) as client:
         t0 = time.monotonic()
@@ -184,7 +179,7 @@ async def run(
             await progress.record_url(
                 url,
                 status = "fetch_error",
-                tier = "llms_txt",
+                tier = params.TIER_KIND,
                 fetch_ms = int((time.monotonic() - t0) * 1000),
                 error_msg = err,
             )
@@ -195,7 +190,7 @@ async def run(
             await progress.record_url(
                 url,
                 status = "http_error",
-                tier = "llms_txt",
+                tier = params.TIER_KIND,
                 http_code = resp.status_code,
                 fetch_ms = int((time.monotonic() - t0) * 1000),
                 error_msg = f"HTTP {resp.status_code}",
@@ -205,7 +200,7 @@ async def run(
         await progress.record_url(
             url,
             status = "success",
-            tier = "llms_txt",
+            tier = params.TIER_KIND,
             http_code = resp.status_code,
             fetch_ms = int((time.monotonic() - t0) * 1000),
             bytes_fetched = len(resp.text or ""),
@@ -218,15 +213,9 @@ async def run(
                 f"prose llms.txt; signalling fallback"
             )
             raise domains.dd.ingestion.tiers.errors.EmptyLinksDetected(url)
-        declared = path_filter and (path_filter.get("include") or path_filter.get("exclude"))
-        if declared:
-            # Only the filter the catalog declares counts — the default noise filter stays off here.
-            only_declared = {**path_filter, "disable_defaults": True}
-            listed = len(links)
-            links = [
-                link for link in links
-                if domains.dd.ingestion.filters.domain.passes_path_filter(link[1], only_declared)
-            ]
+        filtered = domain.filter_links(links, path_filter)
+        if filtered is not None:
+            links, listed = filtered
             logger.info(f"[tier-2] {framework_slug}: path_filter kept {len(links)} of {listed} links")
             if not links:
                 await progress.finish(status = "downgrade")
@@ -241,7 +230,7 @@ async def run(
                 # An index of markdown files means the site has markdown twins of its pages: the sitemap tier asks for those.
                 store.markdown_twins = domain.serves_markdown(links)
                 await progress.record_url(
-                    url, status = "downgrade", tier = "llms_txt", error_msg = f"{reason}; falling through to the sitemap",
+                    url, status = "downgrade", tier = params.TIER_KIND, error_msg = f"{reason}; falling through to the sitemap",
                 )
                 await progress.finish(status = "downgrade")
                 raise domains.dd.ingestion.tiers.errors.TierUnavailable(f"Tier 2: {url}: {reason}")
@@ -255,12 +244,12 @@ async def run(
             store.index_summary = ""
         logger.info(f"[tier-2] parsed {len(links)} URLs from {url}")
         await progress.update_total(len(links))
-        index_host = (urlparse(url).netloc or "").lower()
+        index_host = domains.dd.ingestion.tiers.fetch.domain.host_of(url)
 
         async def _announce_wait(seconds: float) -> None:
             logger.info(f"[tier-2] {framework_slug}: {index_host} asked for a pause, waiting {seconds:.0f}s")
             await progress.record_url(
-                index_host, status = "rate_limited", tier = "llms_txt",
+                index_host, status = "rate_limited", tier = params.TIER_KIND,
                 error_msg = f"the site asked for a pause: waiting {seconds:.0f}s before going on",
             )
 
@@ -271,49 +260,11 @@ async def run(
         written = 0
 
         async def _claim_slug(base: str, link: str) -> str:
-            """Deterministic collision-free slug within this run (mirror of
-            Tier 1's stable `host_slug` philosophy: same input → same slug,
-            no silent overwrites). First claimant keeps the bare slug;
-            later same-title pages suffix the parent path segment
-            (`quantization` → `quantization-usage-guides`,
-            `module-overview` → `module-overview-module-3`), counter as final
-            fallback. Keys were already unique (idx-prefixed), so this only
-            cleans manifests/explorer titles — no storage layout change."""
+            """A collision-free slug within this run (`domain.free_slug`): the first page to want a slug keeps it."""
             async with slug_lock:
-                if base not in slug_owner:
-                    slug_owner[base] = link
-                    return base
-                if slug_owner[base] == link:
-                    return base
-                try:
-                    raw_parts = [p for p in urlparse(link).path.split("/") if p]
-                    # Drop a trailing file segment (`index.md`, `foo.md`) — the
-                    # page's own filename re-slugifies to `base` itself and
-                    # would yield a redundant `slug-slug` suffix. Then walk
-                    # ancestors outward, taking the first segment that actually
-                    # distinguishes (`.../private-cloud/configuration/` →
-                    # `private-cloud`, not the `configuration` dir itself).
-                    if raw_parts and raw_parts[-1].lower().endswith(".md"):
-                        raw_parts = raw_parts[:-1]
-                    stem = ""
-                    for seg in reversed(raw_parts):
-                        cand_seg = domain.slugify(seg)
-                        if cand_seg and cand_seg != base:
-                            stem = cand_seg
-                            break
-                    if not stem:
-                        stem = (urlparse(link).netloc or "x").split(".")[0]
-                        stem = domain.slugify(stem) or "x"
-                except Exception:
-                    stem = "x"
-                suffixed = domains.dd.ingestion.tiers.tier3.domain.suffixed_slug
-                cand = suffixed(base, stem)
-                i = 2
-                while cand in slug_owner and slug_owner[cand] != link:
-                    cand = suffixed(base, f"{stem}-{i}")
-                    i += 1
-                slug_owner[cand] = link
-                return cand
+                slug = domain.free_slug(slug_owner, base, link)
+                slug_owner[slug] = link
+                return slug
 
         async def _bound(title: str, link: str, section: str = "", notes: str = ""):
             nonlocal written
@@ -324,7 +275,7 @@ async def run(
                     title,
                     link,
                     progress = progress,
-                    tier_name = "llms_txt",
+                    tier_name = params.TIER_KIND,
                     framework_slug = framework_slug,
                     store = store,
                     index_host = index_host,
@@ -339,7 +290,7 @@ async def run(
                     await progress.record_url(
                         link,
                         status = "redirect_stub",
-                        tier = "llms_txt",
+                        tier = params.TIER_KIND,
                         bytes_fetched = len((body or "").encode("utf-8")),
                         error_msg = "redirect/archived stub pointer, skipped",
                     )
@@ -352,7 +303,7 @@ async def run(
                     await progress.record_url(
                         link,
                         status = "stub_dropped",
-                        tier = "llms_txt",
+                        tier = params.TIER_KIND,
                         bytes_fetched = len((body or "").encode("utf-8")),
                         error_msg = "tier-2 stub (<1KB), skipped",
                     )
@@ -362,7 +313,7 @@ async def run(
                         slug = slug,
                         url = src_url,
                         body = body,
-                        tier = "llms_txt",
+                        tier = params.TIER_KIND,
                         title = t,
                         section = section,
                         notes = notes,

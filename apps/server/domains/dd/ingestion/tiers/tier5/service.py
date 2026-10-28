@@ -2,12 +2,12 @@
 from __future__ import annotations
 import domains
 from . import domain, params
+from .. import fetch
 
 import asyncio
 import logging
 import os
 import time
-from typing import Optional
 
 import httpx
 from tenacity import (
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def _auth_headers() -> dict[str, str]:
-    h = {"User-Agent": params.USER_AGENT, "Accept": "application/vnd.github+json"}
+    h = {"User-Agent": params.USER_AGENT, "Accept": params.GITHUB_ACCEPT}
     tok = os.environ.get("GITHUB_TOKEN", "").strip()
     if tok:
         h["Authorization"] = f"Bearer {tok}"
@@ -31,9 +31,9 @@ def _auth_headers() -> dict[str, str]:
 
 @retry(
     reraise = True,
-    retry = retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError)),
-    stop = stop_after_attempt(3),
-    wait = wait_exponential_jitter(initial = 1, max = 15),
+    retry = retry_if_exception_type(fetch.params.RETRYABLE_ERRORS),
+    stop = stop_after_attempt(params.GET_ATTEMPTS),
+    wait = wait_exponential_jitter(initial = params.API_WAIT_INITIAL_S, max = params.API_WAIT_MAX_S),
 )
 async def _get_json(client: httpx.AsyncClient, url: str) -> dict:
     r = await client.get(url, headers = _auth_headers())
@@ -45,46 +45,33 @@ async def _get_json(client: httpx.AsyncClient, url: str) -> dict:
 async def _default_branch(
     client: httpx.AsyncClient, org: str, repo: str,
 ) -> str:
-    data = await _get_json(client, f"{params.API_BASE}/repos/{org}/{repo}")
-    return data.get("default_branch") or "main"
+    data = await _get_json(client, domain.repo_api_url(org, repo))
+    return data.get("default_branch") or params.DEFAULT_BRANCH
 
 
 async def _list_blobs(
     client: httpx.AsyncClient, org: str, repo: str, branch: str,
-) -> list[tuple[str, Optional[int]]]:
+) -> list[tuple[str, int | None]]:
     """Return [(path, size_bytes?), ...] for every blob in the repo tree."""
-    data = await _get_json(
-        client,
-        f"{params.API_BASE}/repos/{org}/{repo}/git/trees/{branch}?recursive=1",
-    )
-    tree = data.get("tree") or []
-    out: list[tuple[str, Optional[int]]] = []
-    for node in tree:
-        if node.get("type") != "blob":
-            continue
-        path = node.get("path") or ""
-        size = node.get("size")
-        if path:
-            out.append((path, size))
+    data = await _get_json(client, domain.tree_api_url(org, repo, branch))
     if data.get("truncated"):
         logger.warning(
             f"[tier-5] {org}/{repo} tree was truncated by GitHub — "
             f"large monorepos may miss some blobs"
         )
-    return out
+    return domain.blobs_of_tree(data)
 
 
 @retry(
     reraise = True,
-    retry = retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError)),
-    stop = stop_after_attempt(3),
-    wait = wait_exponential_jitter(initial = 1, max = 8),
+    retry = retry_if_exception_type(fetch.params.RETRYABLE_ERRORS),
+    stop = stop_after_attempt(params.GET_ATTEMPTS),
+    wait = wait_exponential_jitter(initial = params.RAW_WAIT_INITIAL_S, max = params.RAW_WAIT_MAX_S),
 )
 async def _fetch_blob(
     client: httpx.AsyncClient, org: str, repo: str, branch: str, path: str,
 ) -> httpx.Response:
-    url = f"{params.RAW_BASE}/{org}/{repo}/{branch}/{path}"
-    return await client.get(url, headers = {"User-Agent": params.USER_AGENT})
+    return await client.get(domain.raw_url(org, repo, branch, path), headers = {"User-Agent": params.USER_AGENT})
 
 
 async def _fetch_one(
@@ -94,7 +81,7 @@ async def _fetch_one(
     *,
     progress: domains.dd.ingestion.runtime.progress.service.Progress,
 ) -> tuple[str, str, str, str] | None:
-    raw_url = f"{params.RAW_BASE}/{org}/{repo}/{branch}/{path}"
+    raw_url = domain.raw_url(org, repo, branch, path)
     t0 = time.monotonic()
     try:
         resp = await _fetch_blob(client, org, repo, branch, path)
@@ -102,7 +89,7 @@ async def _fetch_one(
         await progress.record_url(
             raw_url,
             status = "fetch_error",
-            tier = "github",
+            tier = params.TIER_KIND,
             fetch_ms = int((time.monotonic() - t0) * 1000),
             error_msg = f"{type(e).__name__}: {e}",
         )
@@ -112,7 +99,7 @@ async def _fetch_one(
         await progress.record_url(
             raw_url,
             status = "http_error",
-            tier = "github",
+            tier = params.TIER_KIND,
             http_code = resp.status_code,
             fetch_ms = fetch_ms,
             error_msg = f"HTTP {resp.status_code}",
@@ -123,7 +110,7 @@ async def _fetch_one(
         await progress.record_url(
             raw_url,
             status = "extract_empty",
-            tier = "github",
+            tier = params.TIER_KIND,
             http_code = resp.status_code,
             fetch_ms = fetch_ms,
             bytes_fetched = len(body),
@@ -134,7 +121,7 @@ async def _fetch_one(
     await progress.record_url(
         raw_url,
         status = "success",
-        tier = "github",
+        tier = params.TIER_KIND,
         http_code = resp.status_code,
         fetch_ms = fetch_ms,
         bytes_fetched = len(body),
@@ -157,9 +144,9 @@ async def run(
         raise RuntimeError(f"Tier 5: not a github.com repo URL: {url!r}")
     org, repo = parsed
     logger.info(f"[tier-5] framework={framework_slug} repo={org}/{repo}")
-    await progress.start(tier = "github", total = 0)
+    await progress.start(tier = params.TIER_KIND, total = 0)
     async with httpx.AsyncClient(
-        timeout = httpx.Timeout(params.TIMEOUT_S, connect = 10.0),
+        timeout = httpx.Timeout(params.TIMEOUT_S, connect = params.CONNECT_TIMEOUT_S),
         follow_redirects = True,
     ) as client:
         t0 = time.monotonic()
@@ -168,18 +155,18 @@ async def run(
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
             await progress.record_url(
-                f"{params.API_BASE}/repos/{org}/{repo}",
+                domain.repo_api_url(org, repo),
                 status = "fetch_error",
-                tier = "github",
+                tier = params.TIER_KIND,
                 fetch_ms = int((time.monotonic() - t0) * 1000),
                 error_msg = err,
             )
             await progress.finish(status = "failed")
             raise RuntimeError(f"Tier 5: repo lookup failed: {err}")
         await progress.record_url(
-            f"{params.API_BASE}/repos/{org}/{repo}",
+            domain.repo_api_url(org, repo),
             status = "success",
-            tier = "github",
+            tier = params.TIER_KIND,
             fetch_ms = int((time.monotonic() - t0) * 1000),
         )
 
@@ -189,18 +176,18 @@ async def run(
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
             await progress.record_url(
-                f"{params.API_BASE}/repos/{org}/{repo}/git/trees/{branch}",
+                domain.tree_api_url(org, repo, branch, recursive = False),
                 status = "fetch_error",
-                tier = "github",
+                tier = params.TIER_KIND,
                 fetch_ms = int((time.monotonic() - t0) * 1000),
                 error_msg = err,
             )
             await progress.finish(status = "failed")
             raise RuntimeError(f"Tier 5: tree fetch failed: {err}")
         await progress.record_url(
-            f"{params.API_BASE}/repos/{org}/{repo}/git/trees/{branch}",
+            domain.tree_api_url(org, repo, branch, recursive = False),
             status = "success",
-            tier = "github",
+            tier = params.TIER_KIND,
             fetch_ms = int((time.monotonic() - t0) * 1000),
         )
         keep: list[str] = [
@@ -233,7 +220,7 @@ async def run(
                     slug = slug,
                     url = raw_url,
                     body = body,
-                    tier = "github",
+                    tier = params.TIER_KIND,
                     title = title,
                 )
                 written += 1

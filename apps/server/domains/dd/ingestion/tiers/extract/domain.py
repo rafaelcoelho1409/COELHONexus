@@ -1,11 +1,9 @@
 """Pure HTML→Markdown: strip chrome, normalize KaTeX/MathJax triple-print math (MathML + visual + LaTeX all in DOM) to $…$/$$$…$$$ text nodes so markdownify sees one clean representation."""
 from __future__ import annotations
-from . import params
+from . import params, patterns
 
 import ast
 import logging
-import re
-from typing import Optional
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 from markdownify import markdownify as _md
@@ -31,7 +29,7 @@ def _unwrap_heading_anchors(soup: BeautifulSoup) -> None:
     """A heading that is a link to itself (mdBook's `<h1><a class="header" href="#intro">Getting started</a></h1>`) is the plain
     heading: `# [Getting started](#intro)` is no better a title than `# Getting started`."""
     for heading in soup.find_all(list(params.HEADING_TAGS)):
-        for link in heading.find_all("a", href = re.compile(r"^#")):
+        for link in heading.find_all("a", href = patterns.SELF_LINK_HREF_RE):
             link.unwrap()
 
 
@@ -64,7 +62,7 @@ def _as_blockquote(soup: BeautifulSoup, node: Tag) -> None:
     """A callout element as a `<blockquote>`, its icon gone and its title (`<p class="… title …">`) in bold."""
     for icon in node.find_all("svg"):
         icon.decompose()
-    title = node.find(class_=re.compile(r"(^|[-_])title($|[-_])", re.I))
+    title = node.find(class_=patterns.CALLOUT_TITLE_CLASS_RE)
     if title is not None and title.find_parent(["pre", "code"]) is None:
         text = title.get_text(" ", strip = True)
         if text:
@@ -96,27 +94,18 @@ def _heading_text(root) -> str:
     h1 = root.find("h1")
     if h1 is None:
         return ""
-    return re.sub(r"\s+", " ", h1.get_text(" ", strip = True).replace("​", "")).strip()
+    return patterns.WHITESPACE_RE.sub(" ", h1.get_text(" ", strip = True).replace(params.ZERO_WIDTH_SPACE, "")).strip()
 
 
 def page_name(title: str) -> str:
     """The page's own name out of a `<title>`: what is before the last separator ("Quick start | Grafana Tempo
     documentation" → "Quick start"). The title as it is when it has none, or when cutting it would leave nothing."""
-    best = -1
-    cut = ""
-    for sep in params.TITLE_SEPARATORS:
-        at = title.rfind(sep)
-        if at > best:
-            best, cut = at, sep
+    best = max((title.rfind(sep) for sep in params.TITLE_SEPARATORS), default = -1)
     return title[:best].strip() or title.strip() if best > 0 else title.strip()
 
 
-_FENCED_RE = re.compile(r"^(`{3,}|~{3,}).*?^\1[ \t]*$", re.M | re.S)
-_ATX_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$", re.M)
-
-
 def _words(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", text.replace("’", "'").lower()).strip()
+    return patterns.NON_ALNUM_RE.sub(" ", text.replace("’", "'").lower()).strip()
 
 
 def ensure_h1(markdown: str, title: str) -> str:
@@ -127,10 +116,10 @@ def ensure_h1(markdown: str, title: str) -> str:
     name = page_name(title or "")
     if not name:
         return markdown
-    prose = _FENCED_RE.sub("", markdown)
-    if re.search(r"^# \S", prose, re.M):
+    prose = patterns.FENCED_BLOCK_RE.sub("", markdown)
+    if patterns.H1_LINE_RE.search(prose):
         return markdown
-    first = _ATX_RE.search(markdown)
+    first = patterns.ATX_HEADING_RE.search(markdown)
     head = markdown[: first.start()] if first else ""
     if first and not head.strip() and _words(first.group(2)) and _words(first.group(2)) in _words(title):
         return f"# {first.group(2)}{markdown[first.end():]}"
@@ -155,39 +144,40 @@ def find_content_root(soup: BeautifulSoup):
 
 
 def _collapse_blank_lines(s: str) -> str:
-    return re.sub(r"\n{3,}", "\n\n", s)
+    return patterns.BLANK_LINES_RE.sub("\n\n", s)
 
 
-def _katex_container_and_display(annotation: Tag) -> tuple[Optional[Tag], bool]:
+def _katex_container_and_display(annotation: Tag) -> tuple[Tag | None, bool]:
     """For a KaTeX ``<annotation encoding="application/x-tex">`` node,
     walk up to find the outermost wrapping span and report whether it's
     display math (``span.katex-display`` ancestor) or inline."""
-    katex_span: Optional[Tag] = None
+    katex_span: Tag | None = None
     is_display = False
     for anc in annotation.parents:
         classes = anc.get("class") or [] if isinstance(anc, Tag) else []
-        if "katex-display" in classes:
+        if params.KATEX_DISPLAY_CLASS in classes:
             return anc, True
-        if "katex" in classes and katex_span is None:
+        if params.KATEX_CLASS in classes and katex_span is None:
             katex_span = anc
             par = anc.parent
             if par is not None and isinstance(par, Tag) \
-                    and "katex-display" in (par.get("class") or []):
+                    and params.KATEX_DISPLAY_CLASS in (par.get("class") or []):
                 return par, True
     return katex_span, is_display
 
 
-def _mathjax_source(container: Tag) -> Optional[str]:
+def _is_tex_script_type(value) -> bool:
+    return bool(value) and params.TEX_SCRIPT_TYPE in value
+
+
+def _mathjax_source(container: Tag) -> str | None:
     """Extract TeX from MathJax container: tries annotation (MathJax3 MathML), then script[type=math/tex] (MathJax2). None if neither present."""
-    ann = container.find("annotation", attrs = {"encoding": "application/x-tex"})
+    ann = container.find("annotation", attrs = {"encoding": params.TEX_ANNOTATION_ENCODING})
     if ann is not None:
         src = ann.get_text("", strip = False)
         if src.strip():
             return src
-    scr = container.find(
-        "script",
-        attrs = {"type": lambda v: bool(v) and "math/tex" in v},
-    )
+    scr = container.find("script", attrs = {"type": _is_tex_script_type})
     if scr is not None:
         src = scr.get_text("", strip = False)
         if src.strip():
@@ -213,7 +203,7 @@ def _normalize_math_to_markdown(soup: BeautifulSoup) -> None:
     """Replace KaTeX + MathJax server-rendered math containers with
     ``$..$`` / ``$$..$$``-delimited TeX in-place. Idempotent."""
     for ann in list(soup.find_all(
-        "annotation", attrs = {"encoding": "application/x-tex"},
+        "annotation", attrs = {"encoding": params.TEX_ANNOTATION_ENCODING},
     )):
         src = ann.get_text("", strip = False)
         if not (src or "").strip():
@@ -228,27 +218,24 @@ def _normalize_math_to_markdown(soup: BeautifulSoup) -> None:
         src = _mathjax_source(cont)
         if not src:
             continue
-        is_display = (cont.get("display") in ("true", "block")) or (
-            "MathJax_Display" in (cont.get("class") or [])
+        is_display = (cont.get("display") in params.MATHJAX_DISPLAY_VALUES) or (
+            params.MATHJAX_DISPLAY_CLASS in (cont.get("class") or [])
         )
         cont.replace_with(NavigableString(_wrap_math(src, is_display)))
 
-    for scr in list(soup.find_all(
-        "script",
-        attrs = {"type": lambda v: bool(v) and "math/tex" in v},
-    )):
+    for scr in list(soup.find_all("script", attrs = {"type": _is_tex_script_type})):
         if scr.parent is None:
             continue
         src = scr.get_text("", strip = False)
         if not (src or "").strip():
             scr.decompose()
             continue
-        is_display = "mode=display" in (scr.get("type") or "")
+        is_display = params.TEX_SCRIPT_DISPLAY_MARK in (scr.get("type") or "")
         sib = scr.previous_sibling
         while sib is not None:
             if isinstance(sib, Tag):
                 cls = sib.get("class") or []
-                if any(c.startswith("MathJax") for c in cls):
+                if any(c.startswith(params.MATHJAX_PREVIEW_CLASS_PREFIX) for c in cls):
                     nxt = sib.previous_sibling
                     sib.decompose()
                     sib = nxt
@@ -257,36 +244,17 @@ def _normalize_math_to_markdown(soup: BeautifulSoup) -> None:
         scr.replace_with(NavigableString(_wrap_math(src, is_display)))
 
 
-_LANG_CLASS_RE = re.compile(
-    r"^(?:language|lang|highlight-source|highlight)[-_]([A-Za-z][A-Za-z0-9+#_-]{0,19})$"
-)
-_LANG_IGNORE = frozenset({
-    "none", "text", "plain", "plaintext", "nohighlight", "notranslate",
-    "source", "highlight", "code", "output", "raw",
-})
-# Sphinx's `highlight-default` means "python3, falling back to no highlighting
-# when it doesn't lex" — i.e. unlabeled Python-library examples (elasticsearch-py,
-# requests). Sniffed from the content rather than assumed.
-_DEFAULT_MARK = "@default"
-_PY_STATEMENTS = (
-    ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
-    ast.Assign, ast.AugAssign, ast.AnnAssign, ast.For, ast.AsyncFor, ast.While,
-    ast.If, ast.With, ast.AsyncWith, ast.Try, ast.Return, ast.Raise,
-)
-_LANG_ALIASES = {"python3": "python", "py3": "python", "py": "python"}
-
-
 def _lang_from_classes(classes) -> str:
     for c in classes or []:
-        m = _LANG_CLASS_RE.match(c)
+        m = patterns.LANGUAGE_CLASS_RE.match(c)
         if not m:
             continue
         lang = m.group(1).lower()
         if lang == "default":
-            return _DEFAULT_MARK
-        if lang in _LANG_IGNORE:
+            return params.DEFAULT_LANGUAGE_MARK
+        if lang in params.LANGUAGE_IGNORE:
             continue
-        return _LANG_ALIASES.get(lang, lang)
+        return params.LANGUAGE_ALIASES.get(lang, lang)
     return ""
 
 
@@ -302,7 +270,7 @@ def _sniff_default_language(text: str) -> str:
     except (SyntaxError, ValueError, MemoryError, RecursionError):
         return ""
     for n in ast.walk(tree):
-        if isinstance(n, _PY_STATEMENTS) or (isinstance(n, ast.Expr) and isinstance(n.value, (ast.Call, ast.Await))):
+        if isinstance(n, params.PYTHON_STATEMENT_NODES) or (isinstance(n, ast.Expr) and isinstance(n.value, (ast.Call, ast.Await))):
             return "python"
     return ""
 
@@ -313,22 +281,22 @@ def code_language(pre: Tag) -> str:
     code = pre.find("code")
     if code is not None:
         nodes.append(code)
-    nodes.extend(list(pre.parents)[:3])
+    nodes.extend(list(pre.parents)[: params.LANGUAGE_ANCESTOR_DEPTH])
     for node in nodes:
         if not isinstance(node, Tag):
             continue
         lang = _lang_from_classes(node.get("class"))
-        if lang == _DEFAULT_MARK:
+        if lang == params.DEFAULT_LANGUAGE_MARK:
             return _sniff_default_language(pre.get_text())
         if lang:
             return lang
         attr = (node.get("data-language") or node.get("data-lang") or "").strip().lower()
-        if attr and attr not in _LANG_IGNORE and re.fullmatch(r"[a-z][a-z0-9+#_-]{0,19}", attr):
-            return _LANG_ALIASES.get(attr, attr)
+        if attr and attr not in params.LANGUAGE_IGNORE and patterns.LANGUAGE_NAME_RE.fullmatch(attr):
+            return params.LANGUAGE_ALIASES.get(attr, attr)
     return ""
 
 
-def html_to_markdown(html: str, source_url: Optional[str] = None, default_code_language: str = "") -> str:
+def html_to_markdown(html: str, source_url: str | None = None, default_code_language: str = "") -> str:
     """HTML → markdown: strip chrome, pick content root, convert with markdownify (ATX headings, fenced code, strip empty anchors). Empty string on bad input.
     `default_code_language` labels a code block whose markup names no language (go.dev's, typescriptlang.org's and SHAP's
     notebooks' `<pre>` have no class: 929 of Go's 932 fences, all 257 of TypeScript's were unlabelled) — what the catalog says
@@ -336,11 +304,11 @@ def html_to_markdown(html: str, source_url: Optional[str] = None, default_code_l
     if not html or not html.strip():
         return ""
     try:
-        soup = BeautifulSoup(html, "lxml")
+        soup = BeautifulSoup(html, params.PARSER)
     except Exception as e:
-        logger.info(f"[extract] lxml parse failed for {source_url}: {e}; "
-                    f"falling back to html.parser")
-        soup = BeautifulSoup(html, "html.parser")
+        logger.info(f"[extract] {params.PARSER} parse failed for {source_url}: {e}; "
+                    f"falling back to {params.FALLBACK_PARSER}")
+        soup = BeautifulSoup(html, params.FALLBACK_PARSER)
 
     page_title = soup.title.get_text(" ", strip = True) if soup.title else ""
     for sel in params.PERMALINK_SELECTORS:
@@ -365,21 +333,18 @@ def html_to_markdown(html: str, source_url: Optional[str] = None, default_code_l
 
     md = _md(
         str(root),
-        heading_style = "ATX",
+        heading_style = params.MARKDOWNIFY_HEADING_STYLE,
         code_language = "",
         code_language_callback = language_of,
-        bullets = "*-+",
-        strip = ["script", "style"],
+        bullets = params.MARKDOWNIFY_BULLETS,
+        strip = list(params.MARKDOWNIFY_STRIP),
     )
     return ensure_h1(_collapse_blank_lines(md).strip(), page_title)
 
 
-_SHELL_START_RE = re.compile(r"^\s*(?:\$|#!|>>>|%|(?:sudo|pip3?|npm|npx|yarn|pnpm|brew|apt(?:-get)?|go (?:get|install|run|build|mod|test)|git|cd|mkdir|curl|wget|export|docker|make)\s)")
-
-
 def _looks_like_shell(text: str) -> bool:
     """A code block that is a shell session or a command (`$ go run x.go`, `npm install typescript`), not source in the docs' language."""
-    return bool(_SHELL_START_RE.match(text or ""))
+    return bool(patterns.SHELL_START_RE.match(text or ""))
 
 
 def extract_title(html: str) -> str:
@@ -388,12 +353,12 @@ def extract_title(html: str) -> str:
     if not html:
         return ""
     try:
-        soup = BeautifulSoup(html, "lxml")
+        soup = BeautifulSoup(html, params.PARSER)
     except Exception:
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(html, params.FALLBACK_PARSER)
     if soup.title and soup.title.string:
-        return soup.title.string.strip()[:200]
+        return soup.title.string.strip()[: params.TITLE_MAX_CHARS]
     h1 = soup.find("h1")
     if h1:
-        return h1.get_text(strip = True)[:200]
+        return h1.get_text(strip = True)[: params.TITLE_MAX_CHARS]
     return ""

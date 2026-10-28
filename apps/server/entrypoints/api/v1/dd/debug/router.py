@@ -6,7 +6,6 @@ from . import params
 from .. import resolver
 
 import time
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 
@@ -20,19 +19,13 @@ router = APIRouter()
 async def debug_resolve(
     slug: str, 
     entry: resolver.schemas.CatalogEntry) -> dict:
-    best = None
-    available: list[dict] = []
-    for kind in ("llms_full", "llms_txt", "sitemap", "docs", "github"):
-        if entry.get(kind):
-            available.append({"kind": kind, "url": entry[kind]})
-            if best is None:
-                best = {"kind": kind, "url": entry[kind]}
+    dispatch = domains.dd.ingestion.runtime.dispatch.domain
     return {
         "slug": slug,
         "framework_name": entry["name"],
         "category": entry.get("category"),
-        "best_source": best,
-        "all_sources": available,
+        "best_source": dispatch.pick_best(entry),
+        "all_sources": dispatch.source_chain(entry),
     }
 
 
@@ -41,7 +34,7 @@ async def debug_ingest_one_tier(
     slug: str,
     entry: resolver.schemas.CatalogEntry,
     tier: int,
-    language: Optional[str] = None,
+    language: str | None = None,
 ) -> dict:
     """tier ∈ 1..5 (llms_full / llms_txt / sitemap / docs / github).
     Writes to the canonical MinIO path, overwriting same-idx bodies."""
@@ -61,28 +54,19 @@ async def debug_ingest_one_tier(
     debug_run_id = f"debug-tier{tier}-{slug}-{int(time.time())}"
     progress = domains.dd.ingestion.runtime.progress.service.Progress(debug_run_id)
     minio = infra.minio.service.get_storage()
-    async with infra.redis.service.client(op_timeout_s = 10.0) as r:
+    async with infra.redis.service.client(op_timeout_s = domains.dd.ingestion.runtime.dispatch.params.REDIS_OP_TIMEOUT_S) as r:
         store = domains.dd.ingestion.storage.service.Store(
             debug_run_id,
             slug,
             r,
             minio)
         try:
-            mod = params.TIER_BY_KIND[kind][1]
-            kwargs: dict = {
-                "url": url,
-                "framework_slug": slug,
-                "progress": progress,
-                "store": store,
-            }
-            if mod in (
-                domains.dd.ingestion.tiers.tier3,
-                domains.dd.ingestion.tiers.tier4):
-                kwargs["framework_name"] = entry["name"]
-            if mod is domains.dd.ingestion.tiers.tier4 and language is not None:
-                kwargs["language"] = language
+            # The same call the dispatcher makes (the catalog's path_filter, code language, …), so a tier run here behaves as it does in a run.
+            extra = {"language": language} if kind == "docs" and language is not None else {}
             try:
-                await mod.service.run(**kwargs)
+                await domains.dd.ingestion.runtime.dispatch.service.run_tier(
+                    kind, url, entry = entry, slug = slug, progress = progress, store = store, **extra,
+                )
             except domains.dd.ingestion.tiers.errors.ManifestDetected as e:
                 return {
                     "status": "manifest_detected",
@@ -99,10 +83,7 @@ async def debug_ingest_one_tier(
                 "total_bytes": sum(e.bytes for e in store.manifest),
             }
         finally:
-            try:
-                await progress.close()
-            except Exception:
-                pass
+            await progress.close()  # never raises: it swallows its own Redis errors
 
 
 @router.post("/post/{slug}")
@@ -114,7 +95,7 @@ async def debug_post(
     debug_run_id = f"debug-post-{slug}-{int(time.time())}"
     progress = domains.dd.ingestion.runtime.progress.service.Progress(debug_run_id)
     minio = infra.minio.service.get_storage()
-    async with infra.redis.service.client(op_timeout_s = 10.0) as r:
+    async with infra.redis.service.client(op_timeout_s = domains.dd.ingestion.runtime.dispatch.params.REDIS_OP_TIMEOUT_S) as r:
         try:
             store = await domains.dd.ingestion.storage.service.Store.from_existing(
                 debug_run_id,
@@ -147,10 +128,7 @@ async def debug_post(
                 "summary": summary,
             }
         finally:
-            try:
-                await progress.close()
-            except Exception:
-                pass
+            await progress.close()  # never raises: it swallows its own Redis errors
 
 
 @router.post("/finalize/{slug}")
@@ -161,7 +139,7 @@ async def debug_finalize(
     Useful when the manifest payload shape changes."""
     debug_run_id = f"debug-finalize-{slug}-{int(time.time())}"
     minio = infra.minio.service.get_storage()
-    async with infra.redis.service.client(op_timeout_s = 10.0) as r:
+    async with infra.redis.service.client(op_timeout_s = domains.dd.ingestion.runtime.dispatch.params.REDIS_OP_TIMEOUT_S) as r:
         store = await domains.dd.ingestion.storage.service.Store.from_existing(
             debug_run_id,
             slug,
@@ -190,7 +168,7 @@ async def debug_finalize(
 async def debug_take_snapshot(
     slug: str,
     entry: resolver.schemas.CatalogEntry, 
-    label: Optional[str] = None,
+    label: str | None = None,
 ) -> dict:
     return await domains.dd.ingestion.storage.service.take_snapshot(
         infra.minio.service.get_storage(), 

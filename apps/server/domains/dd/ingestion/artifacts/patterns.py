@@ -30,6 +30,10 @@ MD_HTML_TAG_RE = re.compile(
 )
 
 
+# Any run of whitespace (a base64 payload may be wrapped over several lines).
+WHITESPACE_RE = re.compile(r"\s+")
+
+
 HTML_ATTR_RE = re.compile(
     r"""(?P<attr>\b(?:src|data-src|poster|srcset))\s*=\s*"""
     r"""(?P<q>['"])(?P<value>.*?)(?P=q)""",

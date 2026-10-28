@@ -352,7 +352,7 @@ def _rewrite_fence_opener(line: str, kind: int) -> tuple[str, bool]:
     # The opener may sit inside a callout (`> ```bash theme={…}`): leave the indentation and quote markers as they are.
     indent = patterns.QUOTE_PREFIX_RE.match(line).group(0)
     stripped = line[len(indent):]
-    if not stripped.startswith(fence_char * 3):
+    if not stripped.startswith(fence_char * params.MIN_FENCE_CHARS):
         return line, False
     n_chars = 0
     for ch in stripped:
@@ -446,7 +446,7 @@ def _toc_table_pass(text: str) -> tuple[str, int]:
         residue = patterns.ANCHOR_LINK_RE.sub("", block)
         only_links = (
             len(patterns.ANCHOR_LINK_RE.findall(block)) >= 2
-            and not re.sub(r"[\s|:\-\xa0]|&nbsp;", "", residue)
+            and not patterns.TABLE_RESIDUE_RE.sub("", residue)
         )
         if only_links:
             dropped += 1
@@ -603,7 +603,7 @@ def _whitespace_entity_pass(text: str) -> tuple[str, int, int, int]:
             line = line.rstrip()
         if line == "":
             blank_streak += 1
-            if blank_streak >= 3:
+            if blank_streak >= params.BLANK_LINES_COLLAPSE_AT:
                 n_blank += 1
                 continue
         else:

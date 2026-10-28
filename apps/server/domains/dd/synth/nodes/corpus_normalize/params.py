@@ -32,6 +32,10 @@ AGENT_FOOTER_TAIL_CHARS = 800
 # A multi-line `<video>` / `<audio>` element is looked for this far down from its opening line.
 MEDIA_MAX_LINES = 12
 
+# A run of this many blank lines (or more) outside a code fence is cut down to one; a fence is at least this many backticks or tildes.
+BLANK_LINES_COLLAPSE_AT = 3
+MIN_FENCE_CHARS = 3
+
 
 # Stat tracking only — we always strip to first token regardless.
 FENCE_META_ATTRS = (

@@ -78,18 +78,18 @@ async def get(
             await pacer.wait()
         try:
             resp = await client.get(url, headers = headers)
-        except (httpx.TimeoutException, httpx.NetworkError):
+        except params.RETRYABLE_ERRORS:
             if attempt == attempts:
                 raise
             await asyncio.sleep(domain.backoff_seconds(attempt, initial = wait_initial, maximum = wait_max))
             continue
         if pacer is not None:
-            window = domain.rate_limit_window(resp.headers.get("ratelimit"))
+            window = domain.rate_limit_window(resp.headers.get(params.RATE_LIMIT_HEADER))
             if window is not None and window[0] <= 0:
                 pacer.hold(min(window[1], retry_after_cap))
         if resp.status_code not in params.TRANSIENT_STATUSES or attempt == attempts:
             return resp
-        wait = domain.retry_after_seconds(resp.headers.get("retry-after"), cap = retry_after_cap)
+        wait = domain.retry_after_seconds(resp.headers.get(params.RETRY_AFTER_HEADER), cap = retry_after_cap)
         if wait is None:
             wait = domain.backoff_seconds(attempt, initial = wait_initial, maximum = wait_max)
         if pacer is None:

@@ -51,6 +51,11 @@ def active_chapters_key(study_thread_id: str) -> str:
     return f"coelhonexus:dd:study:{study_thread_id}:active_chapters"
 
 
+def minio_prefix(slug: str) -> str:
+    """Every MinIO object of a framework's synth output (what a full wipe of the framework removes)."""
+    return f"synth/{slug}/"
+
+
 def study_timing_key(slug: str) -> str:
     """MinIO key for study timing roll-up — persisted so totals survive a UI refresh."""
     return f"synth/{slug}/study-timing-latest.json"

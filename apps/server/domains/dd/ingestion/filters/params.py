@@ -26,6 +26,13 @@ DEFAULT_DENY_PATTERNS: tuple[str, ...] = (
 )
 
 
+# Another language's folder is denied only when its name is at least this long: `js` / `go` / `rs` alone match too much else.
+LANGUAGE_SLUG_MIN_CHARS = 3
+
+# Whatever the language asked for, pages about concepts, the specification or an overview are wanted.
+LANGUAGE_ALLOW_ALWAYS: tuple[str, ...] = ("*concept*", "*specification*", "*spec*", "*overview*")
+
+
 # Stage-1 path-noise filter; contributing/community absent intentionally (real content lives there; planner off_topic handles it). Version-tag catches XGBoost-style vN.M.html pages.
 DEFAULT_EXCLUDE_PATH_PATTERNS: tuple[str, ...] = (
     r"/events?(\.html?|/|$)",

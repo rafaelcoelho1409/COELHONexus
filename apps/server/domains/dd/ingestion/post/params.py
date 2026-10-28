@@ -24,6 +24,22 @@ SPLIT_MAX_SECTION_BYTES = 150_000
 
 SOURCE_MIN_MARKERS = 3
 
+# A monolith cut on its H1s (or its `Source:` lines) into fewer sections than this is a single-H1 bundle (Docusaurus wraps the
+# whole thing in one), and goes on to the size-aware H2/H3 split instead.
+MONOLITH_MIN_H1_SECTIONS = 3
+
+# The heading levels an oversized section is cut on, in order: H2 first, H3 where H2 alone does not bring the pieces under the
+# cap. Not H4: see domain.split_oversized_page.
+SUBSPLIT_LEVELS = (2, 3)
+
+# The `---` that separated a section from the next one is looked for in this many trailing characters only.
+TRAILING_RULE_TAIL_CHARS = 400
+
+# How a document is read into blocks, so a code fence, a table or a block of HTML stays one piece (markdown-it-py).
+MARKDOWN_PRESET = "commonmark"
+MARKDOWN_OPTIONS = {"html": True}
+MARKDOWN_ENABLED_RULES = ("table", "strikethrough")
+
 # A site's own index (`llms.txt`) lists its pages in navigation order; the bundle next to it is often alphabetical by
 # URL. Split pages follow the index only when it accounts for at least this share of them — below that it is some other
 # index (Streamlit's names none of its bundle's pages) and the bundle's order stands.
@@ -70,6 +86,36 @@ HEADING_LOOKAHEAD_LINES = 6
 TITLE_SCAN_LINES = 40
 TITLE_CHILD_LOOKAHEAD_LINES = 4
 TITLE_MAX_CHARS = 120
+
+# A heading-less section is named by its first sentence of prose (domain._fallback_heading): a line that starts with one of these
+# is markup (quote, list, table), not a sentence; one shorter than the minimum is not a name; one longer is cut.
+FALLBACK_HEADING_SKIP_LEADS = (">", "-", "*", "+", "|")
+FALLBACK_HEADING_MIN_CHARS = 20
+FALLBACK_HEADING_MAX_CHARS = 120
+
+# A page's slug is its heading, cut at this length; two pages that still share one get this many characters of their body's hash;
+# a section with no heading at all is `section-NNNN`, its number at least this many digits wide.
+SLUG_MAX_CHARS = 60
+SLUG_HASH_CHARS = 6
+SECTION_INDEX_MIN_WIDTH = 4
+
+# A section name taken from the site's index is cut at this length.
+NAV_SECTION_MAX_CHARS = 60
+
+# What marks a changelog: a title with the word in it, and the slug a page called so ends with (the release pages replace it).
+CHANGELOG_TITLE_WORD = "changelog"
+CHANGELOG_SLUG_SUFFIX = "-changelog"
+
+# The tier a changelog-release page is filed under, which corpus_load reads back to keep it out of Planner and Synth.
+CHANGELOG_TIER = "changelog"
+
+# A page the split or the dedup writes back is Markdown; one whose parent is gone from the manifest has no tier to carry on.
+PAGE_CONTENT_TYPE = "text/markdown"
+UNKNOWN_TIER = "unknown"
+
+# The `kind` of the summary `apply_to_store` returns (what the run's progress records).
+SUMMARY_KIND_SPLIT = "split"
+SUMMARY_KIND_DEDUP = "dedup"
 
 # 32 amortizes latency without overwhelming the MinIO pool (serial was 75s/1500 pages).
 READ_CONCURRENCY = 32

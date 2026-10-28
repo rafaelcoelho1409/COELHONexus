@@ -1,11 +1,11 @@
 """Sphinx discovery — I/O shell: objects.inv probing/fetch + DOM toctree
 BFS discovery. Parsing/classification lives in domain.py."""
 from __future__ import annotations
+import domains
 from . import domain, entities, params
 
 import asyncio
 import logging
-from typing import Optional
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 async def _probe_one(
     inv_url: str, client: httpx.AsyncClient,
-) -> Optional[bytes]:
+) -> bytes | None:
     try:
         r = await client.get(
             inv_url, timeout=params.TIMEOUT_S, follow_redirects=True,
@@ -33,18 +33,18 @@ async def _probe_one(
 
 async def fetch_inventory(
     docs_root: str, *, client: httpx.AsyncClient,
-) -> Optional[entities.Inventory]:
+) -> entities.Inventory | None:
     """Fetch+parse docs_root/objects.inv. For unversioned paths probes stable/latest/main siblings; returns None on 404/non-Sphinx/parse error."""
     if not docs_root.endswith("/"):
         docs_root = docs_root + "/"
     parsed = urlparse(docs_root)
     candidates: list[str] = [docs_root]
     if not domain.has_version_segment(parsed.path):
-        for sib in ("stable/", "latest/", "main/"):
+        for sib in params.INVENTORY_SIBLINGS:
             candidates.append(urljoin(docs_root, sib))
 
     for base in candidates:
-        inv_url = urljoin(base, "objects.inv")
+        inv_url = urljoin(base, params.INVENTORY_FILENAME)
         raw = await _probe_one(inv_url, client)
         if raw is None:
             continue
@@ -67,18 +67,13 @@ async def discover_via_toctree(
     host: str,
     subtree: str,
     client: httpx.AsyncClient,
-    max_depth: int = 1,
-    max_pages: int = 50,
+    max_depth: int = params.TOCTREE_MAX_DEPTH,
+    max_pages: int = params.TOCTREE_MAX_PAGES,
 ) -> list[str]:
     """BFS-expand sidebar+body links; skips BFS if landing sidebar has a full tree. Returns [] for non-Sphinx pages."""
 
     def _in_scope(u: str) -> bool:
-        p = urlparse(u)
-        if (p.netloc or "").lower() != host:
-            return False
-        if subtree and not (p.path or "").startswith(subtree):
-            return False
-        return True
+        return domains.dd.ingestion.tiers.tier4.domain.crawlable_link(u, host, subtree)
 
     sem = asyncio.Semaphore(params.NAV_CONCURRENCY)
 

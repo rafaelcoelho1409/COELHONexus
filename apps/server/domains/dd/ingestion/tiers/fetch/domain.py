@@ -1,9 +1,15 @@
 """Shared fetching — pure helpers (what a server's headers say about waiting)."""
 from __future__ import annotations
-from . import patterns
+from . import params, patterns
 
 import random
+from urllib.parse import urlparse
 
+
+
+def host_of(url: str) -> str:
+    """The host of a URL, lower-cased ("" when it has none)."""
+    return (urlparse(url).netloc or "").lower()
 
 
 def retry_after_seconds(header: str | None, *, cap: float) -> float | None:
@@ -29,5 +35,5 @@ def rate_limit_window(header: str | None) -> tuple[int, float] | None:
 
 def backoff_seconds(attempt: int, *, initial: float, maximum: float) -> float:
     """Jittered exponential backoff before the next try (`attempt` counts from 1, the try that just failed)."""
-    base = min(maximum, initial * (2 ** (attempt - 1)))
-    return base * random.uniform(0.5, 1.5)
+    base = min(maximum, initial * (params.BACKOFF_FACTOR ** (attempt - 1)))
+    return base * random.uniform(*params.BACKOFF_JITTER)

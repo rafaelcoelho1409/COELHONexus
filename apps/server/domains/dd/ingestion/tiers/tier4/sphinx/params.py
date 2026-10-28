@@ -92,3 +92,34 @@ AUTODOC_SELECTOR = (
 
 # Landing sidebar ≥ this many links → assume full tree rendered (skip expansion BFS).
 FULL_TREE_HINT = 25
+
+# The same selector for the members of a class (used when a page has fewer than AUTODOC_MIN_BLOCKS top-level entities).
+MEMBER_SELECTOR = (
+    "dl.py.method, dl.py.attribute, dl.py.classmethod, "
+    "dl.py.staticmethod, dl.py.property, dl.py.data, "
+    "dl.cpp.function, dl.cpp.member, dl.js.function, dl.js.attribute, "
+    # Older Sphinx pre-namespaced forms
+    "dl.method, dl.attribute, dl.classmethod, dl.staticmethod"
+)
+
+# A piece's slug suffix is its anchor, cut at this length; a piece with none is called `section`. A narrative piece whose anchor is
+# taken gets this appended (and a counter after it).
+SLUG_MAX_CHARS = 80
+SLUG_FALLBACK = "section"
+NARRATIVE_SUFFIX = "-narrative"
+
+# A piece's heading is cut at this length (it becomes the end of its title); the text of a `<dt>` or `<h2>` used as a fallback
+# title, at this one. `¶` is Sphinx's permalink mark after a heading.
+HEADING_MAX_CHARS = 120
+TITLE_TEXT_MAX_CHARS = 160
+PERMALINK_MARK = "¶"
+
+# `objects.inv` is looked for in the docs folder; with no release folder in the path, in these siblings of it too.
+INVENTORY_FILENAME = "objects.inv"
+INVENTORY_SIBLINGS = ("stable/", "latest/", "main/")
+INVENTORY_PROJECT_PREFIX = "# Project:"
+INVENTORY_VERSION_PREFIX = "# Version:"
+
+# The sidebar and body links of a section page are read to this depth, for at most this many pages.
+TOCTREE_MAX_DEPTH = 1
+TOCTREE_MAX_PAGES = 50

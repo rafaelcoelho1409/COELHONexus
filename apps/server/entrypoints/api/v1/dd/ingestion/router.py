@@ -1,7 +1,6 @@
 """Read-only view of the per-framework MinIO content (canonical post-
 finalize corpus). Anything here survives Redis TTL."""
 import domains, infra
-from . import params
 
 import logging
 
@@ -28,21 +27,8 @@ async def list_library() -> list[dict]:
             slug)
         if not m:
             continue
-        cat = catalog.get(slug, {})
-        out.append({
-            "slug": slug,
-            "framework_name": m.get("framework_name") or cat.get("name") or slug,
-            "logo": cat.get("logo"),
-            "logos": cat.get("logos") or [],
-            "ingested_at": m.get("ingested_at"),
-            "page_count": m.get("page_count") or 0,
-            "total_bytes": m.get("total_bytes") or 0,
-            "tier_kind": m.get("tier_kind"),
-            "tier_url": m.get("tier_url"),
-            "run_id": m.get("run_id"),
-        })
-    out.sort(key=lambda e: e.get("ingested_at") or 0, reverse=True)
-    return out
+        out.append(domains.dd.ingestion.storage.domain.library_row(slug, m, catalog.get(slug, {})))
+    return domains.dd.ingestion.storage.domain.newest_ingested_first(out)
 
 
 @router.get("/{slug}/manifest")
@@ -77,8 +63,9 @@ async def get_artifact(slug: str, name: str) -> Response:
     """SHA-256-addressed media; bytes are immutable for the life of the
     slug → 1y immutable cache. 404 on miss (no upstream fallback) so the
     broken-image icon makes the absence visible."""
-    safe_name = (name or "").strip().strip("/").replace("..", "")
-    if not safe_name or "/" in safe_name:
+    artifacts = domains.dd.ingestion.artifacts
+    safe_name = artifacts.domain.safe_name(name)
+    if not artifacts.domain.is_valid_name(safe_name):
         raise HTTPException(status_code=400, detail="invalid artifact name")
     key = domains.dd.ingestion.storage.keys.artifact_key(slug, safe_name)
     minio = infra.minio.service.get_storage()
@@ -86,19 +73,17 @@ async def get_artifact(slug: str, name: str) -> Response:
         data = await minio.read_bytes(key)
     except infra.minio.service.ClientError as e:
         code = (e.response or {}).get("Error", {}).get("Code", "")
-        if code in ("404", "NoSuchKey"):
+        if code in artifacts.params.MISSING_OBJECT_CODES:
             raise HTTPException(
                 status_code=404,
                 detail=f"artifact {safe_name!r} not found for {slug!r}",
             )
         raise
-    ext = safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else ""
-    media_type = params.ARTIFACT_MIME.get(ext, "application/octet-stream")
     return Response(
-        content=data, 
-        media_type=media_type,
+        content=data,
+        media_type=artifacts.domain.media_type_of(safe_name),
         headers={
-            "Cache-Control": "public, max-age=31536000, immutable",
+            "Cache-Control": artifacts.params.CACHE_CONTROL,
             "Content-Length": str(len(data)),
         },
     )
@@ -110,11 +95,9 @@ async def delete_framework(slug: str) -> dict:
     single-flight lock if leaked by a crashed ingestion."""
     minio = infra.minio.service.get_storage()
     prefixes = (
-        domains.dd.ingestion.storage.keys.framework_prefix(slug),
-        f"ingestion-raw/{slug}/",
-        f"synth-vault/{slug}/",
-        f"planner/{slug}/",
-        f"synth/{slug}/",
+        *(prefix for _part, prefix in domains.dd.ingestion.storage.keys.framework_parts(slug)),
+        domains.dd.planner.keys.minio_prefix(slug),
+        domains.dd.synth.keys.minio_prefix(slug),
     )
     deleted = 0
     failed: list[str] = []

@@ -1,12 +1,11 @@
 """Per-run progress and per-framework single-flight lock (the cancel flag lives in `../cancel/`)."""
 from __future__ import annotations
 import domains, infra
-from . import errors, keys, params
+from . import domain, errors, keys, params
 
 import json
 import logging
 import time
-from typing import Optional
 
 
 logger = logging.getLogger(__name__)
@@ -16,7 +15,7 @@ async def acquire_lock(
     r: infra.redis.service.Redis,
     framework_slug: str,
     run_id: str,
-    ttl_s: int = params.LOCK_TTL_S,
+    ttl_s: int = params.LOCK_QUEUED_S,
 ) -> bool:
     """SETNX with TTL. True if this run_id now holds the lock."""
     try:
@@ -27,7 +26,20 @@ async def acquire_lock(
     return bool(ok)
 
 
-async def read_lock(r: infra.redis.service.Redis, framework_slug: str) -> Optional[str]:
+async def renew_lock(r: infra.redis.service.Redis, framework_slug: str, run_id: str) -> bool:
+    """Keep this run's lock alive for another LOCK_LEASE_S: extend it while it is still ours, or take it again when it lapsed
+    (a stall longer than the lease) and nobody else has it. False when another run holds it now — this run no longer owns the
+    framework."""
+    try:
+        if await infra.redis.service.extend_if_owner(r, keys.lock_key(framework_slug), run_id, params.LOCK_LEASE_S):
+            return True
+    except Exception as e:
+        logger.warning(f"[lock] renew failed: {e}")
+        return False
+    return await acquire_lock(r, framework_slug, run_id, ttl_s = params.LOCK_LEASE_S)
+
+
+async def read_lock(r: infra.redis.service.Redis, framework_slug: str) -> str | None:
     """run_id holding the lock, or None."""
     try:
         v = await r.get(keys.lock_key(framework_slug))
@@ -51,7 +63,7 @@ async def release_lock(
         return False
 
 
-async def find_other_running(r: infra.redis.service.Redis, framework_slug: str) -> Optional[tuple[str, str]]:
+async def find_other_running(r: infra.redis.service.Redis, framework_slug: str) -> tuple[str, str] | None:
     """`(slug, run_id)` of an ingestion running for ANOTHER framework (one ingestion at a time), else None."""
     return await infra.redis.service.first_held(r, keys.lock_prefix(), skip=framework_slug)
 
@@ -64,7 +76,7 @@ async def list_active(r: infra.redis.service.Redis) -> list[dict]:
         if not run_id:
             continue
         progress = await read_progress(r, run_id)
-        if progress and progress.get("status") in ("running", "idle"):
+        if domain.is_active(progress):
             active.append({"slug": slug, "run_id": run_id, "progress": progress})
     return active
 
@@ -72,20 +84,12 @@ async def list_active(r: infra.redis.service.Redis) -> list[dict]:
 class Progress:
     def __init__(self, run_id: str) -> None:
         self.run_id = run_id
-        self._r: Optional[infra.redis.service.Redis] = None
+        self._r: infra.redis.service.Redis | None = None
         self._last_flush = 0.0
         self._last_cancel_check = 0.0
-        self._state: dict = {
-            "phase":      "ingest",
-            "tier":       None,
-            "current":    0,
-            "total":      0,
-            "last_url":   "",
-            "status":     "idle",
-            "updated_at": time.time(),
-        }
+        self._state: dict = domain.initial_state(time.time())
 
-    async def _client(self) -> Optional[infra.redis.service.Redis]:
+    async def _client(self) -> infra.redis.service.Redis | None:
         if self._r is None:
             try:
                 self._r = infra.redis.service.new_redis()
@@ -117,7 +121,7 @@ class Progress:
             total = max(0, int(total)),
             current = 0,
             last_url = "",
-            status = "running",
+            status = params.STATUS_RUNNING,
         )
         await self._flush(force = True)
 
@@ -128,7 +132,7 @@ class Progress:
     async def update(self, current: int, last_url: str = "") -> None:
         self._state.update(
             current = max(0, int(current)),
-            last_url = (last_url or "")[:200],
+            last_url = (last_url or "")[: params.LAST_URL_MAX_CHARS],
         )
         await self._flush(force = False)
 
@@ -152,27 +156,27 @@ class Progress:
         url: str,
         *,
         status: str,
-        tier: Optional[str] = None,
-        http_code: Optional[int] = None,
-        fetch_ms: Optional[int] = None,
-        bytes_fetched: Optional[int] = None,
-        extracted_chars: Optional[int] = None,
-        error_msg: Optional[str] = None,
+        tier: str | None = None,
+        http_code: int | None = None,
+        fetch_ms: int | None = None,
+        bytes_fetched: int | None = None,
+        extracted_chars: int | None = None,
+        error_msg: str | None = None,
     ) -> None:
         r = await self._client()
         if r is None:
             return
-        rec = {
-            "url":             (url or "")[:500],
-            "tier":            tier or self._state.get("tier"),
-            "status":          status,
-            "http_code":       http_code,
-            "fetch_ms":        fetch_ms,
-            "bytes":           bytes_fetched,
-            "extracted_chars": extracted_chars,
-            "error_msg":       (error_msg or "")[:500] if error_msg else None,
-            "recorded_at":     time.time(),
-        }
+        rec = domain.url_record(
+            url,
+            status = status,
+            tier = tier or self._state.get("tier"),
+            http_code = http_code,
+            fetch_ms = fetch_ms,
+            bytes_fetched = bytes_fetched,
+            extracted_chars = extracted_chars,
+            error_msg = error_msg,
+            now = time.time(),
+        )
         try:
             pipe = r.pipeline()
             pipe.rpush(keys.url_records_key(self.run_id), json.dumps(rec))
@@ -184,7 +188,7 @@ class Progress:
     async def record_post(
         self,
         *,
-        tier: Optional[str] = None,
+        tier: str | None = None,
         input_files: int,
         input_bytes: int,
         output_files: int,
@@ -192,26 +196,23 @@ class Progress:
         was_split: bool,
         stubs_dropped: int = 0,
         duplicates_dropped: int = 0,
-        notes: Optional[str] = None,
+        notes: str | None = None,
     ) -> None:
         r = await self._client()
         if r is None:
             return
-        payload = {
-            "tier":               tier or self._state.get("tier"),
-            "input_files":        int(input_files),
-            "input_bytes":        int(input_bytes),
-            "output_files":       int(output_files),
-            "output_bytes":       int(output_bytes),
-            "expansion_ratio":    (
-                float(output_files) / float(input_files) if input_files > 0 else 0.0
-            ),
-            "was_split":          bool(was_split),
-            "stubs_dropped":      int(stubs_dropped),
-            "duplicates_dropped": int(duplicates_dropped),
-            "notes":              (notes or "")[:200] if notes else None,
-            "recorded_at":        time.time(),
-        }
+        payload = domain.post_summary(
+            tier = tier or self._state.get("tier"),
+            input_files = input_files,
+            input_bytes = input_bytes,
+            output_files = output_files,
+            output_bytes = output_bytes,
+            was_split = was_split,
+            stubs_dropped = stubs_dropped,
+            duplicates_dropped = duplicates_dropped,
+            notes = notes,
+            now = time.time(),
+        )
         try:
             await r.set(keys.post_key(self.run_id), json.dumps(payload), ex=params.TTL_S)
         except Exception as e:
@@ -226,7 +227,7 @@ class Progress:
         500 chars like url-record `error_msg`."""
         self._state["status"] = status
         if error:
-            self._state["error"] = error[:500]
+            self._state["error"] = error[: params.ERROR_MAX_CHARS]
         await self._flush(force = True)
 
     async def close(self) -> None:
@@ -238,47 +239,27 @@ class Progress:
             self._r = None
 
 
-async def read_progress(r: infra.redis.service.Redis, run_id: str) -> Optional[dict]:
+async def _read_json(r: infra.redis.service.Redis, key: str) -> dict | None:
+    """The JSON object stored under `key`, or None when there is none, Redis fails or it cannot be read."""
     try:
-        raw = await r.get(keys.progress_key(run_id))
-    except Exception:
+        raw = await r.get(key)
+    except Exception:  # noqa: BLE001 — a progress read never fails the caller; "no progress" is its answer
         return None
-    if not raw:
-        return None
-    if isinstance(raw, bytes):
-        raw = raw.decode("utf-8")
-    try:
-        return json.loads(raw)
-    except Exception:
-        return None
+    return domains.dd.ingestion.storage.domain.parse_json(raw, None)
+
+
+async def read_progress(r: infra.redis.service.Redis, run_id: str) -> dict | None:
+    return await _read_json(r, keys.progress_key(run_id))
 
 
 async def read_url_records(r: infra.redis.service.Redis, run_id: str) -> list[dict]:
     try:
         raw_list = await r.lrange(keys.url_records_key(run_id), 0, -1)
-    except Exception:
+    except Exception:  # noqa: BLE001 — a progress read never fails the caller
         return []
-    out: list[dict] = []
-    for raw in raw_list or []:
-        if isinstance(raw, bytes):
-            raw = raw.decode("utf-8")
-        try:
-            out.append(json.loads(raw))
-        except Exception:
-            continue
-    return out
+    records = (domains.dd.ingestion.storage.domain.parse_json(raw, None) for raw in raw_list or [])
+    return [record for record in records if record is not None]
 
 
-async def read_post(r: infra.redis.service.Redis, run_id: str) -> Optional[dict]:
-    try:
-        raw = await r.get(keys.post_key(run_id))
-    except Exception:
-        return None
-    if not raw:
-        return None
-    if isinstance(raw, bytes):
-        raw = raw.decode("utf-8")
-    try:
-        return json.loads(raw)
-    except Exception:
-        return None
+async def read_post(r: infra.redis.service.Redis, run_id: str) -> dict | None:
+    return await _read_json(r, keys.post_key(run_id))

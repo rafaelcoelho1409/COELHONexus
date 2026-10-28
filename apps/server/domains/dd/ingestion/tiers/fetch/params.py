@@ -1,9 +1,24 @@
 """Shared fetching — tunable scalars."""
 from __future__ import annotations
 
+import httpx
+
+# Worth asking again: a timeout, a network error, and a server that closed the connection without answering (`RemoteProtocolError:
+# Server disconnected without sending a response` — a stale keep-alive socket, or a docs host shedding load; Read the Docs did it to one
+# of XGBoost's 92 pages). All three are the connection's fault, not the page's.
+RETRYABLE_ERRORS: tuple[type[Exception], ...] = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
 
 # Worth asking again: too many requests, and the server's own hiccups.
 TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+# The response headers a server says how long to wait in (httpx lower-cases header names).
+RETRY_AFTER_HEADER = "retry-after"
+RATE_LIMIT_HEADER = "ratelimit"
+
+# The wait before a retry doubles each attempt, and is multiplied by a random factor in this range so a crawl's workers do not
+# all ask again at the same moment.
+BACKOFF_FACTOR = 2
+BACKOFF_JITTER = (0.5, 1.5)
 
 # A crawl of many pages from one host. A site that rate-limits (Hugging Face: 100 docs pages per 5 minutes per IP) says how
 # long to wait; the crawl waits that out — all its requests together — instead of dropping every page past the limit.

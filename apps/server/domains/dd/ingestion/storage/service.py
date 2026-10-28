@@ -1,15 +1,13 @@
 """Per-framework Store over the shared MinIO adapter (`infra.minio`). Redis manifest keyed by run_id (live); MinIO manifest keyed by framework_slug (canonical on finalize)."""
 from __future__ import annotations
 import domains, infra
-from . import entities, keys, params
+from . import domain, entities, keys, params
 
 import asyncio
 import json
 import logging
 import time
-from dataclasses import asdict, fields
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 import httpx
 
@@ -17,14 +15,8 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
-# Pure-Python text work (normalizing, sentinelizing a vault) on a multi-megabyte bundle takes tens of seconds. Run
-# inline it would hold the event loop that serves the cancel watcher and the progress heartbeat; in a thread the
-# loop keeps turning. Small pages stay inline — a thread costs more than they do.
-_THREAD_THRESHOLD_CHARS = 200_000
-
-
 async def _cpu_bound(fn, *args, size: int, **kwargs):
-    if size < _THREAD_THRESHOLD_CHARS:
+    if size < params.CPU_THREAD_THRESHOLD_CHARS:
         return fn(*args, **kwargs)
     return await asyncio.to_thread(fn, *args, **kwargs)
 
@@ -47,7 +39,7 @@ class Store:
         self._add_lock = asyncio.Lock()
         self._live_last_flush = 0.0
         # Lazy artifact client — every tier flows through add_page.
-        self._artifact_client: "httpx.AsyncClient | None" = None
+        self._artifact_client: httpx.AsyncClient | None = None
         self._artifact_lock = asyncio.Lock()
         # Tier 2 index summary (llms.txt blockquote) — set by tier2.service.run,
         # read by dispatch.finalize into the manifest. "" = absent (all tiers).
@@ -88,10 +80,10 @@ class Store:
             try:
                 client = await self._get_artifact_client()
                 body, n_art = await domains.dd.ingestion.artifacts.service.extract_and_save_artifacts_from_md(
-                    body, 
-                    url, 
+                    body,
+                    url,
                     slug = self.framework_slug,
-                    store = self, 
+                    store = self,
                     client = client,
                 )
                 if n_art:
@@ -123,26 +115,17 @@ class Store:
         normalized_bytes = len(normalized_body.encode("utf-8"))
         async with self._add_lock:
             idx = len(self._cached_manifest)
-            key = keys.page_key(self.framework_slug, idx, slug)
-            entry = entities.ManifestEntry(
-                idx = idx, 
-                slug = slug, 
-                url = url, 
-                tier = tier,
-                bytes = normalized_bytes, 
-                title = title or slug, 
-                key = key,
-                section = section or "",
-                notes = notes or "",
-                lastmod = lastmod or "",
-                anchors = list(anchors or []),
+            entry = domain.new_entry(
+                self.framework_slug, idx,
+                slug = slug, url = url, tier = tier, size = normalized_bytes,
+                title = title, section = section, notes = notes, lastmod = lastmod, anchors = anchors,
             )
             self._cached_manifest.append(entry)
         await asyncio.gather(
-            self.minio.write(key, normalized_body, content_type = "text/markdown"),
+            self.minio.write(entry.key, normalized_body, content_type = params.MARKDOWN_TYPE),
             self.minio.write(
                 keys.raw_page_key(self.framework_slug, idx, slug),
-                body, content_type = "text/markdown",
+                body, content_type = params.MARKDOWN_TYPE,
             ),
         )
         # Vault sees the same bytes synth will see; best-effort.
@@ -150,7 +133,7 @@ class Store:
         if not defer_vault:
             try:
                 await self._build_and_persist_vault(idx, slug, body)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — the vault is best-effort; the page is already stored
                 logger.warning(
                     f"[store] vault build failed for idx={idx} slug={slug!r}: "
                     f"{type(e).__name__}: {e}"
@@ -167,14 +150,14 @@ class Store:
             if self._artifact_client is not None:
                 return self._artifact_client
             self._artifact_client = httpx.AsyncClient(
-                timeout = httpx.Timeout(30.0, connect = 10.0),
+                timeout = httpx.Timeout(params.ARTIFACT_TIMEOUT_S, connect = params.ARTIFACT_CONNECT_TIMEOUT_S),
                 headers = {
-                    "User-Agent": "COELHONexus-DocsDistiller-Artifacts/1.0",
-                    "Accept": "image/*, video/*, audio/*, */*;q=0.5",
+                    "User-Agent": params.ARTIFACT_USER_AGENT,
+                    "Accept": params.ARTIFACT_ACCEPT,
                 },
                 limits = httpx.Limits(
-                    max_connections = 20, 
-                    max_keepalive_connections = 10),
+                    max_connections = params.ARTIFACT_MAX_CONNECTIONS,
+                    max_keepalive_connections = params.ARTIFACT_MAX_KEEPALIVE),
                 follow_redirects = True,
             )
             return self._artifact_client
@@ -183,14 +166,7 @@ class Store:
         """Reorder manifest to discovery order; parallel fetch writes in race order, not chapter order (Bash GNU manual regression). entry.idx unchanged."""
         if not url_list or not self._cached_manifest:
             return
-        url_pos = {u: i for i, u in enumerate(url_list)}
-        sentinel = len(url_list)
-
-        def _key(entry: entities.ManifestEntry) -> tuple[int, int]:
-            base = (entry.url or "").split("#", 1)[0]
-            return (url_pos.get(base, sentinel), entry.idx)
-
-        self._cached_manifest.sort(key = _key)
+        self._cached_manifest = domain.ordered_by_urls(self._cached_manifest, url_list)
 
     async def close(self) -> None:
         """Release the lazy httpx artifact client. Idempotent."""
@@ -233,13 +209,13 @@ class Store:
         sk = keys.vault_sentinelized_key(self.framework_slug, idx, slug)
         await asyncio.gather(
             self.minio.write(
-                vk, 
-                manifest.model_dump_json(), 
-                content_type = "application/json"),
+                vk,
+                manifest.model_dump_json(),
+                content_type = params.JSON_TYPE),
             self.minio.write(
-                sk, 
-                sentinelized, 
-                content_type = "text/markdown"),
+                sk,
+                sentinelized,
+                content_type = params.MARKDOWN_TYPE),
         )
         n = len(manifest.entries)
         if n:
@@ -280,23 +256,18 @@ class Store:
 
     async def finalize(self, extra: dict | None = None) -> None:
         """Write the canonical MinIO manifest (once per run, after post)."""
-        payload = {
-            "framework_slug": self.framework_slug,
-            "ingested_at":    time.time(),
-            "page_count":     len(self._cached_manifest),
-            "total_bytes":    sum(e.bytes for e in self._cached_manifest),
-            "entries":        [asdict(e) for e in self._cached_manifest],
-            # Pages above were written through add_page's normalize_doc at this
-            # version; Synth's ensure_framework_normalized compares against it.
-            "normalizer_version": domains.dd.synth.nodes.corpus_normalize.versions.NORMALIZER_VERSION,
-        }
-        if extra:
-            payload.update(extra)
+        payload = domain.manifest_payload(
+            self.framework_slug,
+            self._cached_manifest,
+            ingested_at = time.time(),
+            normalizer_version = domains.dd.synth.nodes.corpus_normalize.versions.NORMALIZER_VERSION,
+            extra = extra,
+        )
         try:
             await self.minio.write(
                 keys.manifest_key(self.framework_slug),
-                json.dumps(payload, separators = (",", ":")),
-                content_type = "application/json",
+                json.dumps(payload, separators = params.MANIFEST_JSON_SEPARATORS),
+                content_type = params.JSON_TYPE,
             )
         except Exception as e:
             logger.warning(f"[store] manifest write to MinIO failed: {e}")
@@ -309,7 +280,7 @@ class Store:
         try:
             await self.r.set(
                 keys.live_manifest_key(self.run_id),
-                json.dumps([asdict(e) for e in self._cached_manifest]),
+                domain.live_manifest_json(self._cached_manifest),
                 ex = params.TTL_S,
             )
         except Exception as e:
@@ -326,16 +297,10 @@ class Store:
         framework_slug: str,
         r: infra.redis.service.Redis,
         minio: infra.minio.service.MinIOStorage,
-    ) -> "Store":
+    ) -> Store:
         """Construct a Store with the canonical manifest pre-loaded (debug)."""
         s = cls(run_id, framework_slug, r, minio)
-        m = await read_framework_manifest(minio, framework_slug)
-        if m:
-            valid = {f.name for f in fields(entities.ManifestEntry)}
-            for e in m.get("entries", []):
-                s._cached_manifest.append(entities.ManifestEntry(
-                    **{k: v for k, v in e.items() if k in valid}
-                ))
+        s._cached_manifest.extend(domain.entries_from_manifest(await read_framework_manifest(minio, framework_slug)))
         return s
 
 
@@ -345,60 +310,31 @@ async def read_live_manifest(r: infra.redis.service.Redis, run_id: str) -> list[
         raw = await r.get(keys.live_manifest_key(run_id))
     except Exception:
         return []
-    if not raw:
-        return []
-    if isinstance(raw, bytes):
-        raw = raw.decode("utf-8")
-    try:
-        return json.loads(raw)
-    except Exception:
-        return []
+    return domain.parse_json(raw, [])
 
 
 async def read_framework_manifest(
     minio: infra.minio.service.MinIOStorage, framework_slug: str,
-) -> Optional[dict]:
+) -> dict | None:
     """Canonical per-framework manifest. None if no run finalized for slug."""
     try:
         raw = await minio.read_text(keys.manifest_key(framework_slug))
     except Exception:
         return None
-    try:
-        return json.loads(raw)
-    except Exception:
-        return None
-
-
-def _titled_by_slug(entry: dict) -> bool:
-    return (entry.get("title") or "") in ("", entry.get("slug") or "")
+    return domain.parse_json(raw, None)
 
 
 # Titles worked out for manifests written before pages were titled at ingestion, keyed by (framework, run). In
 # memory only: reading a manifest never writes, and a re-ingestion writes real titles and gets a new run id.
 _TITLE_CACHE: dict[tuple[str, str], dict[int, str]] = {}
-_TITLE_CACHE_MAX = 16
-_TITLE_READ_CONCURRENCY = 16
-
-
-def _with_unique_titles(manifest: dict) -> dict:
-    """The manifest, with titles that repeat told apart by the docs section of their page (post.domain.disambiguate_titles).
-    Pure and cheap, so it is applied on every read — a library ingested earlier gets it without being re-ingested."""
-    entries = manifest.get("entries") or []
-    plain = domains.dd.ingestion.post.domain.strip_site_suffix([e.get("title") or "" for e in entries])
-    titles = domains.dd.ingestion.post.domain.disambiguate_titles(
-        [(title, e.get("source_path") or e.get("url") or "") for title, e in zip(plain, entries)],
-    )
-    if all(t == (e.get("title") or "") for t, e in zip(titles, entries)):
-        return manifest
-    return {**manifest, "entries": [{**e, "title": t} for t, e in zip(titles, entries)]}
 
 
 async def with_display_titles(
     minio: infra.minio.service.MinIOStorage, framework_slug: str, manifest: dict,
 ) -> dict:
     """The manifest, with a real title on every page, and no two pages sharing one when their URLs can tell them apart.
-    Real titles first (below), then `_with_unique_titles`."""
-    return _with_unique_titles(await _with_real_titles(minio, framework_slug, manifest))
+    Real titles first (below), then `domain.with_unique_titles`."""
+    return domain.with_unique_titles(await _with_real_titles(minio, framework_slug, manifest))
 
 
 async def _with_real_titles(
@@ -410,64 +346,42 @@ async def _with_real_titles(
     page's heading is in its body. Those pages are read once (bounded), their titles kept in memory, and handed out
     here so a library ingested earlier lists by name without being re-ingested. A page that cannot be read keeps what
     it had. Manifests that are already titled return untouched."""
-    entries = manifest.get("entries") or []
-    stale = [e for e in entries if _titled_by_slug(e)]
+    stale = [e for e in manifest.get("entries") or [] if domain.titled_by_slug(e)]
     if not stale:
         return manifest
-    cache_key = (framework_slug, str(manifest.get("run_id") or manifest.get("ingested_at") or ""))
+    cache_key = domain.title_cache_key(framework_slug, manifest)
     titles = _TITLE_CACHE.get(cache_key)
     if titles is None:
-        gate = asyncio.Semaphore(_TITLE_READ_CONCURRENCY)
+        gate = asyncio.Semaphore(params.TITLE_READ_CONCURRENCY)
 
         async def one(entry: dict) -> tuple[int, str | None]:
             idx = int(entry.get("idx", 0))
-            key = entry.get("key") or keys.page_key(framework_slug, idx, entry.get("slug", ""))
+            key = domain.entry_key(framework_slug, entry, idx)
             async with gate:
                 try:
                     body = await minio.read_text(key)
-                except Exception:
+                except Exception:  # noqa: BLE001 — a page that cannot be read keeps the title it had
                     return idx, None
             return idx, domains.dd.ingestion.post.domain.display_title(body, entry.get("slug", ""))
 
         titles = {idx: t for idx, t in await asyncio.gather(*(one(e) for e in stale)) if t}
-        while len(_TITLE_CACHE) >= _TITLE_CACHE_MAX:
+        while len(_TITLE_CACHE) >= params.TITLE_CACHE_MAX:
             _TITLE_CACHE.pop(next(iter(_TITLE_CACHE)))
         _TITLE_CACHE[cache_key] = titles
-    return {
-        **manifest,
-        "entries": [
-            {**e, "title": titles.get(int(e.get("idx", 0)), e.get("title", ""))} if _titled_by_slug(e) else e
-            for e in entries
-        ],
-    }
-
-
-def entry_with_idx(entries: list[dict], idx: int) -> dict | None:
-    """The manifest entry whose `idx` is `idx` — not the `idx`-th one in the list: tiers 2-4 store the manifest in the
-    site's navigation order (`Store.reorder_by_url_list`), while `idx` is the order the pages were written in, so the two
-    differ and a lookup by position opened a different page than the one clicked (React's "Learn › Installation" opened
-    the tic-tac-toe tutorial). A manifest whose entries carry no `idx` at all is read by position."""
-    for entry in entries:
-        if entry.get("idx") == idx:
-            return entry
-    if entries and not any("idx" in entry for entry in entries) and 0 <= idx < len(entries):
-        return entries[idx]
-    return None
+    return domain.with_titles(manifest, titles)
 
 
 async def read_framework_page(
     minio: infra.minio.service.MinIOStorage, framework_slug: str, idx: int,
-) -> Optional[str]:
+) -> str | None:
     """Resolve idx → MinIO key via the manifest, then read the body."""
     m = await read_framework_manifest(minio, framework_slug)
     if not m:
         return None
-    entry = entry_with_idx(m.get("entries", []), idx)
+    entry = domain.entry_with_idx(m.get("entries", []), idx)
     if entry is None:
         return None
-    key = entry.get("key") or keys.page_key(
-        framework_slug, idx, entry.get("slug", ""),
-    )
+    key = domain.entry_key(framework_slug, entry, idx)
     try:
         return await minio.read_text(key)
     except Exception as e:
@@ -480,7 +394,7 @@ async def read_framework_page(
 # chronological. ---
 
 def _snapshot_now_ts() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return datetime.now(UTC).strftime(params.SNAPSHOT_TS_FORMAT)
 
 
 async def take_snapshot(
@@ -492,20 +406,15 @@ async def take_snapshot(
     """Copy the current canonical content into `_snapshots/{ts}/`. Skips
     the `_snapshots/` subtree itself so we don't snapshot snapshots."""
     src = keys.framework_prefix(framework_slug)
-    ts = _snapshot_now_ts() + (f"-{label}" if label else "")
+    ts = domain.snapshot_id(_snapshot_now_ts(), label)
     dst = keys.snapshot_prefix(framework_slug, ts)
     t0 = time.monotonic()
-    n = await minio.copy_prefix(
-        src, dst, skip_substring = f"/{params.SNAPSHOTS_SUBDIR}",
-    )
+    n = await minio.copy_prefix(src, dst, skip_substring = params.SNAPSHOTS_SKIP_SUBSTRING)
     dt_ms = int((time.monotonic() - t0) * 1000)
     logger.info(
         f"[snapshot] {framework_slug} → {ts}: {n} files in {dt_ms}ms"
     )
-    return {
-        "framework_slug": framework_slug, "ts": ts,
-        "files_copied": n, "took_ms": dt_ms,
-    }
+    return domain.snapshot_taken(framework_slug, ts, n, dt_ms)
 
 
 async def list_snapshots(
@@ -513,8 +422,7 @@ async def list_snapshots(
 ) -> list[str]:
     """Return snapshot timestamps for `slug`, newest first."""
     snaps_prefix = keys.framework_prefix(framework_slug) + params.SNAPSHOTS_SUBDIR
-    names = await minio.list_subfolders(snaps_prefix)
-    return sorted(names, reverse = True)
+    return domain.newest_first(await minio.list_subfolders(snaps_prefix))
 
 
 async def restore_snapshot(
@@ -532,11 +440,10 @@ async def restore_snapshot(
         )
 
     canonical_prefix = keys.framework_prefix(framework_slug)
-    cur = await minio.list(canonical_prefix)
-    cur = [k for k in cur if f"/{params.SNAPSHOTS_SUBDIR}" not in k]
+    cur = domain.outside_snapshots(await minio.list(canonical_prefix))
     deleted = 0
     if cur:
-        sem = asyncio.BoundedSemaphore(32)
+        sem = asyncio.BoundedSemaphore(params.DELETE_CONCURRENCY)
         async with minio._client() as s3:
             async def _one(k: str) -> None:
                 async with sem:
@@ -551,10 +458,7 @@ async def restore_snapshot(
         f"[snapshot] restored {framework_slug} from {ts}: "
         f"-{deleted} +{copied} in {dt_ms}ms"
     )
-    return {
-        "framework_slug": framework_slug, "ts": ts,
-        "deleted": deleted, "copied": copied, "took_ms": dt_ms,
-    }
+    return domain.snapshot_restored(framework_slug, ts, deleted, copied, dt_ms)
 
 
 async def delete_snapshot(
@@ -562,37 +466,28 @@ async def delete_snapshot(
 ) -> dict:
     prefix = keys.snapshot_prefix(framework_slug, ts)
     n = await minio.delete_prefix(prefix)
-    return {"framework_slug": framework_slug, "ts": ts, "deleted": n}
+    return domain.snapshot_deleted(framework_slug, ts, n)
 
 
 # --- The copy a re-ingestion replaces, kept until the new one is done. A refresh used to wipe the old copy first, so a
 # failed or cancelled run left nothing (Diffusers was a 404 for 18 minutes; a failure would have been permanent). ---
-
-def _framework_parts(framework_slug: str) -> tuple[tuple[str, str], ...]:
-    """The three places a framework's stored copy lives: the pages and manifest, the raw copies, the citation vaults."""
-    return (
-        ("pages", keys.framework_prefix(framework_slug)),
-        ("raw", keys.raw_prefix(framework_slug)),
-        ("vault", keys.vault_prefix(framework_slug)),
-    )
-
 
 async def stash_old_copy(minio: infra.minio.service.MinIOStorage, framework_slug: str) -> str | None:
     """Make room for a re-ingestion of `framework_slug`: copy the finalized copy aside, then empty its three prefixes. Returns
     the backup's id (what `restore_old_copy` / `drop_old_copy` take), or None when there was nothing worth keeping.
     A copy that is not finalized (a run that crashed) is not backed up over a backup an earlier run left: that backup is
     kept and returned instead."""
-    older = sorted(await minio.list_subfolders(keys.backup_root(framework_slug)), reverse = True)
+    older = domain.newest_first(await minio.list_subfolders(keys.backup_root(framework_slug)))
     backup_id: str | None = older[0] if older else None
     if await read_framework_manifest(minio, framework_slug) is not None:
         backup_id = _snapshot_now_ts()
         base = keys.backup_prefix(framework_slug, backup_id)
-        for part, prefix in _framework_parts(framework_slug):
-            await minio.copy_prefix(prefix, f"{base}{part}/", skip_substring = f"/{params.SNAPSHOTS_SUBDIR}")
+        for part, prefix in keys.framework_parts(framework_slug):
+            await minio.copy_prefix(prefix, f"{base}{part}/", skip_substring = params.SNAPSHOTS_SKIP_SUBSTRING)
         for stale in older:
             if stale != backup_id:  # a backup made in the same second as an older one shares its id: it is not the stale one
                 await minio.delete_prefix(keys.backup_prefix(framework_slug, stale))
-    for _part, prefix in _framework_parts(framework_slug):
+    for _part, prefix in keys.framework_parts(framework_slug):
         await minio.delete_prefix(prefix)
     return backup_id
 
@@ -604,7 +499,7 @@ async def restore_old_copy(minio: infra.minio.service.MinIOStorage, framework_sl
     if not await minio.list(base):
         return 0
     restored = 0
-    for part, prefix in _framework_parts(framework_slug):
+    for part, prefix in keys.framework_parts(framework_slug):
         await minio.delete_prefix(prefix)
         restored += await minio.copy_prefix(f"{base}{part}/", prefix)
     return restored
@@ -612,7 +507,7 @@ async def restore_old_copy(minio: infra.minio.service.MinIOStorage, framework_sl
 
 async def latest_backup(minio: infra.minio.service.MinIOStorage, framework_slug: str) -> str | None:
     """The newest backup of `framework_slug`'s previous copy, if one is waiting (a run in flight, or one that crashed)."""
-    found = sorted(await minio.list_subfolders(keys.backup_root(framework_slug)), reverse = True)
+    found = domain.newest_first(await minio.list_subfolders(keys.backup_root(framework_slug)))
     return found[0] if found else None
 
 

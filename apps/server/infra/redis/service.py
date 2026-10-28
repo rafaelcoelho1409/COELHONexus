@@ -97,6 +97,13 @@ async def release_if_owner(r: Redis, key: str, owner: str) -> bool:
     return bool(await r.eval(params.RELEASE_IF_OWNER_LUA, 1, key, owner))
 
 
+async def extend_if_owner(r: Redis, key: str, owner: str, ttl_s: int) -> bool:
+    """Set `key`'s remaining lifetime to `ttl_s` seconds only while it still holds `owner` (atomic compare-and-expire): the
+    heartbeat of a lock that is held as a short lease, so a holder that dies loses the lock within one lease instead of one
+    worst-case run. True when the lease was renewed."""
+    return bool(await r.eval(params.EXTEND_IF_OWNER_LUA, 1, key, owner, ttl_s))
+
+
 def release_if_owner_sync(r: redis_sync.Redis, key: str, owner: str) -> bool:
     """Blocking-client twin of `release_if_owner`."""
     return bool(r.eval(params.RELEASE_IF_OWNER_LUA, 1, key, owner))
@@ -290,7 +297,7 @@ async def watch_flag(
 
 # Public surface for the rest of the code (the re-exports are intentional).
 __all__ = [
-    "Lock", "Redis", "clear_flag", "client", "client_sync", "delete_matching", "emit_event", "first_held",
+    "Lock", "Redis", "clear_flag", "client", "client_sync", "delete_matching", "emit_event", "extend_if_owner", "first_held",
     "flag_is_set", "is_configured", "iter_held", "new_redis", "new_redis_sync", "release_if_owner",
     "release_if_owner_sync", "replay_snapshot", "set_flag", "subscribe_events", "try_lock", "url", "watch_flag",
 ]

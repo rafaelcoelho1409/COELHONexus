@@ -3,6 +3,14 @@ from __future__ import annotations
 import re
 
 
+# A run of anything a slug does not keep.
+NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+# A `<script>` or `<style>` block with its content, and any tag: what is left after taking them off is the text a reader sees.
+SCRIPT_BLOCK_RE = re.compile(r"<script[^>]*>.*?</script>", re.DOTALL | re.IGNORECASE)
+STYLE_BLOCK_RE = re.compile(r"<style[^>]*>.*?</style>", re.DOTALL | re.IGNORECASE)
+TAG_RE = re.compile(r"<[^>]+>")
+
 # `<div id="root|app|__next|__nuxt|svelte|main-app|gatsby"></div>` — empty
 # SPA mount point signals an unhydrated shell.
 SPA_ROOT_RE = re.compile(
