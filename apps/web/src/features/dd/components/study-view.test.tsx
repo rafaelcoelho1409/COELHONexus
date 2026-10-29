@@ -82,6 +82,7 @@ const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledFrame: "error" }));
 beforeEach(() => {
   client.setConfig({ baseUrl: "http://nexus.test" });
+  localStorage.clear(); // the layout the reader chose is remembered per browser
   nav.push.mockClear();
   nav.params = new URLSearchParams("slug=alpha&chapter=ch-1");
   server.use(
@@ -223,5 +224,93 @@ describe("Study reader", () => {
     );
     renderStudy();
     expect(await screen.findByText(/could not be loaded/)).toBeInTheDocument();
+  });
+});
+
+describe("Study layout", () => {
+  const TEXT = "Verifiers cut hallucination rates before collapse.";
+
+  async function openReadingMode() {
+    renderStudy();
+    await screen.findByText(TEXT);
+    await userEvent.click(screen.getByRole("button", { name: /Reading mode/ }));
+    return screen.getByRole("dialog", { name: "Hallucinations" });
+  }
+
+  it("folds the chapter list and the outline away, and remembers it on the next visit", async () => {
+    const { unmount } = renderStudy();
+    await screen.findByText(TEXT);
+    expect(screen.getByRole("navigation", { name: "Chapters" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Hide chapters" }));
+    expect(screen.queryByRole("navigation", { name: "Chapters" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show chapters" })).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(screen.getByRole("button", { name: "Hide outline" }));
+    expect(screen.queryByRole("navigation", { name: "On this page" })).not.toBeInTheDocument();
+    expect(screen.getByText(TEXT)).toBeInTheDocument(); // the chapter itself stays
+
+    unmount();
+    renderStudy();
+    await screen.findByText(TEXT);
+    expect(screen.queryByRole("navigation", { name: "Chapters" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "On this page" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show chapters" }));
+    expect(screen.getByRole("navigation", { name: "Chapters" })).toBeInTheDocument();
+  });
+
+  it("reads the chapter on the whole screen, with each heading drawn once", async () => {
+    const reading = await openReadingMode();
+    const text = within(reading).getByRole("region", { name: "Chapter text" });
+    expect(within(text).getByText(TEXT)).toBeInTheDocument();
+    expect(document.querySelectorAll("#verifiers")).toHaveLength(1); // not once here and once on the page behind
+    expect(within(reading).getByText("Chapter 1 / 3")).toBeInTheDocument();
+
+    expect(within(reading).getByRole("button", { name: "Previous chapter" })).toBeDisabled();
+    expect(within(reading).getByRole("link", { name: "Next chapter" })).toHaveAttribute(
+      "href",
+      "/dd/study?slug=alpha&chapter=ch-2",
+    );
+
+    await userEvent.click(within(reading).getByRole("button", { name: "Exit reading mode" }));
+    expect(screen.queryByRole("dialog", { name: "Hallucinations" })).not.toBeInTheDocument();
+    expect(screen.getByText(TEXT)).toBeInTheDocument(); // the page draws the text again
+    expect(document.querySelectorAll("#verifiers")).toHaveLength(1);
+  });
+
+  it("opens the reading window with both side columns closed, and lets the reader open them", async () => {
+    const reading = await openReadingMode();
+    expect(within(reading).queryByRole("navigation", { name: "Chapters" })).not.toBeInTheDocument();
+    expect(within(reading).queryByRole("navigation", { name: "On this page" })).not.toBeInTheDocument();
+
+    await userEvent.click(within(reading).getByRole("button", { name: "Show chapters" }));
+    expect(within(reading).getByRole("navigation", { name: "Chapters" })).toBeInTheDocument();
+    await userEvent.click(within(reading).getByRole("button", { name: "Show outline" }));
+    expect(within(reading).getByRole("navigation", { name: "On this page" })).toBeInTheDocument();
+
+    // The window's columns are its own: the page behind kept its.
+    expect(JSON.parse(localStorage.getItem("dd:study:layout") ?? "{}")).toMatchObject({
+      chapters: true,
+      outline: true,
+      readingChapters: true,
+      readingOutline: true,
+    });
+  });
+
+  it("lets the text run wider in the reading window, and remembers it", async () => {
+    const reading = await openReadingMode();
+    const wide = within(reading).getByRole("button", { name: "Wide" });
+    expect(wide).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(wide);
+    expect(wide).toHaveAttribute("aria-pressed", "true");
+    expect(JSON.parse(localStorage.getItem("dd:study:layout") ?? "{}")).toMatchObject({ width: "wide" });
+  });
+
+  it("offers no reading window for a chapter that is not written yet", async () => {
+    nav.params = new URLSearchParams("slug=alpha&chapter=ch-3");
+    renderStudy();
+    expect(await screen.findByText(/pending synthesis/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Reading mode/ })).not.toBeInTheDocument();
   });
 });

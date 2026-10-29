@@ -291,3 +291,21 @@ export const plannerHealthSchema = z.looseObject({
   pipeline_health: z.record(z.string(), z.unknown()).catch({}),
 });
 export type PlannerHealth = z.infer<typeof plannerHealthSchema>;
+
+// ============================================================
+// Study — how the reader lays the page out (a per-browser preference, not server data)
+// ============================================================
+
+/** What the stored layout holds. Every field falls back on its own, so a value from an older version or a hand-edited one
+ * still gives a usable layout. */
+export const studyLayoutSchema = z.object({
+  /** The page's left column (the chapter list) and right column ("On this page"). */
+  chapters: z.boolean().catch(true),
+  outline: z.boolean().catch(true),
+  /** The same two columns inside the reading window, which opens with both closed so the chapter has the screen. */
+  readingChapters: z.boolean().catch(false),
+  readingOutline: z.boolean().catch(false),
+  /** How wide the text runs in the reading window. */
+  width: z.enum(["comfortable", "wide"]).catch("comfortable"),
+});
+export type StudyLayout = z.infer<typeof studyLayoutSchema>;

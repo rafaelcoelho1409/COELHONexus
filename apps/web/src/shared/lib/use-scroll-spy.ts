@@ -8,10 +8,13 @@ const ACTIVE_BAND = "0px 0px -75% 0px";
 /**
  * The id of the last element, among `ids`, that scrolled into the top band of the viewport — the section the
  * reader is in. `ids` must be referentially stable. Does nothing where `IntersectionObserver` does not exist.
+ * `rebuilt` changes when the page draws the same headings again as new elements (it moved them into another
+ * container), so they are watched afresh.
  */
-export function useScrollSpy(ids: readonly string[]): string | null {
+export function useScrollSpy(ids: readonly string[], rebuilt: unknown = null): string | null {
   const [active, setActive] = useState<string | null>(null);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `rebuilt` is the trigger, not a value read here
   useEffect(() => {
     if (ids.length === 0 || typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver(
@@ -25,7 +28,7 @@ export function useScrollSpy(ids: readonly string[]): string | null {
       if (element) observer.observe(element);
     }
     return () => observer.disconnect();
-  }, [ids]);
+  }, [ids, rebuilt]);
 
   return active;
 }

@@ -187,7 +187,11 @@ export function applyAskEvent(turn: AskTurn, event: AskEvent): AskTurn {
   if (mapped) {
     next = {
       ...next,
-      stages: withAction(stageMark(next.stages, mapped, "active"), mapped, NODE_ACTION_TEXT[event.node] ?? ""),
+      stages: withAction(
+        stageMark(next.stages, mapped, "active"),
+        mapped,
+        NODE_ACTION_TEXT[event.node] ?? "",
+      ),
     };
   }
   if (event.mode) next = { ...next, mode: event.mode };
@@ -198,7 +202,11 @@ export function applyAskEvent(turn: AskTurn, event: AskEvent): AskTurn {
     next = { ...next, stages: stageMark(next.stages, "generate", "active"), answer: event.generation };
   }
   if (event.confidence_score != null) {
-    next = { ...next, stages: stageMark(next.stages, "verify", "active"), confidence: event.confidence_score };
+    next = {
+      ...next,
+      stages: stageMark(next.stages, "verify", "active"),
+      confidence: event.confidence_score,
+    };
     if (next.deep) {
       next = { ...next, deep: { ...next.deep, banner: deepConfidenceBanner(event.confidence_score) } };
     }
@@ -375,7 +383,9 @@ export const STALLED_SUBTITLE = "Stalled — pipeline lost (likely backend resta
 
 /** Stage pills for a history turn. No persisted state + an answer = all done (the legacy default);
  * a mid-stream snapshot keeps its active/queued pills as persisted. */
-export function stagesFromThinking(state: AskThinkingState | null | undefined): Record<AskStageId, AskStageView> {
+export function stagesFromThinking(
+  state: AskThinkingState | null | undefined,
+): Record<AskStageId, AskStageView> {
   const stages = freshStages();
   if (!state) {
     for (const stage of ASK_STAGES) stages[stage.id as AskStageId] = DONE;

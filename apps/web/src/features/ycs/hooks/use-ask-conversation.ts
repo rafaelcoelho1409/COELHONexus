@@ -9,11 +9,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiErrorMessage } from "@/shared/lib/api-error";
 import { readMessages } from "@/shared/sse";
-
+import { askStreamUrl, cancelAskTurn, fetchHistory } from "../api";
 import {
-  applyAskEvent,
   type AskStatus,
   type AskTurn,
+  applyAskEvent,
   isTurnInProgress,
   newLiveTurn,
   snapshotKey,
@@ -21,7 +21,6 @@ import {
   streamErrorText,
   turnFromHistory,
 } from "../ask";
-import { askStreamUrl, cancelAskTurn, fetchHistory } from "../api";
 import type { AskEvent } from "../entities";
 import { askEventSchema } from "../entities";
 import { HISTORY_POLL_MS, STALL_TICKS_THRESHOLD } from "../params";

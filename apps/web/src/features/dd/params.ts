@@ -75,6 +75,9 @@ export const GRAPH_STATE_RETRY_DELAYS_MS = [0, 250, 400, 550, 700, 850, 1_000] a
 /** Opt-in "start synth when the planner finishes", remembered per browser. Same key as the FastHTML page. */
 export const AUTO_CHAIN_STORAGE_KEY = "dd:pipeline:autochain";
 
+/** How the reader of the Study tab wants it laid out (side columns open or closed, text width), remembered per browser. */
+export const STUDY_LAYOUT_STORAGE_KEY = "dd:study:layout";
+
 /**
  * The explorer groups pages by their section or first folder. When one group would hold this share of the pages — at least
  * `EXPLORER_REGROUP_MIN_PAGES` of them — that grouping tells nothing (every page of a docs site under one folder), so the

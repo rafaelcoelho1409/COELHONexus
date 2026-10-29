@@ -670,6 +670,72 @@ test.describe("Docs Distiller", () => {
     await expect(page.getByText("Verifiers cut hallucination rates before collapse.")).toBeVisible();
   });
 
+  test("the chapter list and the outline fold away, the text takes their room, and the choice survives a reload", async ({
+    page,
+  }, testInfo) => {
+    await mockSynthRoutes(page);
+    await page.goto("/dd/study?slug=alpha");
+    const chapter = page.getByRole("region", { name: "Chapter" });
+    await expect(page.getByTestId("study-title")).toBeVisible();
+    const wide = testInfo.project.name === "desktop";
+    const before = (await chapter.boundingBox())?.width ?? 0;
+
+    await page.getByRole("button", { name: "Hide chapters" }).click();
+    await expect(page.getByRole("navigation", { name: "Chapters" })).toHaveCount(0);
+    if (wide) {
+      // The outline only sits beside the text from 1024px up; there the second fold gives the text both columns' room.
+      await page.getByRole("button", { name: "Hide outline" }).click();
+      await expect(page.getByRole("navigation", { name: "On this page" })).toHaveCount(0);
+      expect((await chapter.boundingBox())?.width ?? 0).toBeGreaterThan(before + 200);
+    }
+
+    await page.reload();
+    await expect(page.getByTestId("study-title")).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Chapters" })).toHaveCount(0);
+    await page.getByRole("button", { name: "Show chapters" }).click();
+    await expect(page.getByRole("navigation", { name: "Chapters" })).toBeVisible();
+  });
+
+  test("reading mode takes the whole screen, and Escape leaves it with focus back on its button", async ({
+    page,
+  }) => {
+    await mockSynthRoutes(page);
+    await page.goto("/dd/study?slug=alpha");
+    const open = page.getByRole("button", { name: /Reading mode/ });
+    await open.click();
+
+    const reading = page.getByRole("dialog", { name: "Hallucinations" });
+    await expect(reading).toBeVisible();
+    const [box, viewport] = [await reading.boundingBox(), page.viewportSize()];
+    if (!box || !viewport) throw new Error("no box");
+    expect([box.x, box.y, box.width, box.height]).toEqual([0, 0, viewport.width, viewport.height]);
+    await expect(
+      reading
+        .getByRole("region", { name: "Chapter text" })
+        .getByText("Verifiers cut hallucination rates before collapse."),
+    ).toBeVisible();
+    await expect(page.locator("#verifiers")).toHaveCount(1); // the text is drawn here, not twice
+
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(open).toBeFocused();
+    await expect(page.getByText("Verifiers cut hallucination rates before collapse.")).toBeVisible();
+  });
+
+  test("reading mode steps to the next chapter without leaving the window", async ({ page }) => {
+    await mockSynthRoutes(page);
+    await page.goto("/dd/study?slug=alpha");
+    await page.getByRole("button", { name: /Reading mode/ }).click();
+    const reading = page.getByRole("dialog", { name: "Hallucinations" });
+    await expect(reading.getByRole("button", { name: "Previous chapter" })).toBeDisabled();
+
+    await reading.getByRole("link", { name: "Next chapter" }).click();
+    const next = page.getByRole("dialog", { name: "Evaluations" });
+    await expect(next).toBeVisible();
+    await expect(next.getByText(/pending synthesis/)).toBeVisible(); // this chapter has not been written yet
+    await expect(next.getByRole("button", { name: "Next chapter" })).toBeDisabled();
+  });
+
   test("the study reader shows math, a table, highlighted code and a callout, without the inline Contents", async ({
     page,
   }) => {
@@ -863,6 +929,29 @@ test.describe("Docs Distiller", () => {
       await search.getByRole("combobox").fill("verifiers");
       await expect(search.getByRole("option").first()).toBeVisible();
       await check("search dialog");
+    });
+  }
+
+  for (const scheme of ["dark", "light"] as const) {
+    test(`the reading window has no WCAG 2.2 AA violations, with both side columns open (${scheme})`, async ({
+      page,
+    }, testInfo) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await mockSynthRoutes(page);
+      await page.goto("/dd/study?slug=alpha");
+      await page.getByRole("button", { name: /Reading mode/ }).click();
+      const reading = page.getByRole("dialog", { name: "Hallucinations" });
+      await expect(reading).toBeVisible();
+      if (testInfo.project.name === "desktop") {
+        await reading.getByRole("button", { name: "Show chapters" }).click();
+        await reading.getByRole("button", { name: "Show outline" }).click();
+        await reading.getByRole("button", { name: "Wide" }).click();
+      }
+      const results = await new AxeBuilder({ page }).withTags(WCAG).analyze();
+      expect(
+        results.violations,
+        JSON.stringify(results.violations.map((v) => [v.id, v.nodes.map((n) => n.target)])),
+      ).toEqual([]);
     });
   }
 

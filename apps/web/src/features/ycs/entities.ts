@@ -312,10 +312,7 @@ const subResultSchema = z.looseObject({
 /** The persisted per-turn trace (Postgres `conversation_history.thinking_state` JSONB). */
 export const thinkingStateSchema = z.looseObject({
   stages: z
-    .record(
-      z.string(),
-      z.looseObject({ status: z.string().catch(""), action: z.string().catch("") }),
-    )
+    .record(z.string(), z.looseObject({ status: z.string().catch(""), action: z.string().catch("") }))
     .nullish()
     .catch(null),
   deep: z
