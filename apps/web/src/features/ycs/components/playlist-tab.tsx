@@ -2,18 +2,22 @@
 
 import { enumeratePlaylistVideos, queuePlaylistPipeline, queueVideosPipeline } from "../api";
 import { parsePlaylist } from "../domain";
+import type { SourceMode } from "../params";
 import { SingleSourceTab } from "./single-source-tab";
 
 /** Source · Playlist — mirror of the Channel tab: one playlist, pick a subset, or Ingest all. */
 export function PlaylistTab({
   initialIdentity,
   routedWarn,
+  onSwitch,
 }: {
   initialIdentity: string | null;
   routedWarn: string | null;
+  onSwitch: (mode: Exclude<SourceMode, "search">, text: string) => void;
 }) {
   return (
     <SingleSourceTab
+      mode="playlist"
       idPrefix="ycs-playlist"
       inputLabel="Playlist"
       placeholder="Playlist URL or PL… ID"
@@ -36,6 +40,7 @@ export function PlaylistTab({
       }
       initialIdentity={initialIdentity}
       routedWarn={routedWarn}
+      onSwitch={onSwitch}
     />
   );
 }

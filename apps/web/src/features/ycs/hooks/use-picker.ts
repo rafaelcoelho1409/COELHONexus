@@ -1,8 +1,8 @@
 "use client";
 
 /** State for the shared source picker — one channel/playlist/batch's videos, accumulated page by page,
- * with tri-state selection, a client-side title filter and Load more. The DOM work lives in
- * `picker-view.tsx`. */
+ * with tri-state selection (Shift-click selects a range), a client-side title filter and Load more. The DOM
+ * work lives in `picker-view.tsx`. */
 
 import { useState } from "react";
 
@@ -17,6 +17,7 @@ export type PickerFetch = (offset: number, limit: number) => Promise<Enumeration
 export function usePicker(fetchPage: PickerFetch) {
   const [items, setItems] = useState<VideoSnippet[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [lastToggled, setLastToggled] = useState<string | null>(null);
   const [title, setTitle] = useState<string | null>(null);
   const [channel, setChannel] = useState<string | null>(null);
   const [total, setTotal] = useState<number | null>(null);
@@ -52,6 +53,7 @@ export function usePicker(fetchPage: PickerFetch) {
   const refetch = async (): Promise<void> => {
     setItems([]);
     setSelected(new Set());
+    setLastToggled(null);
     setTotal(null);
     setTitle(null);
     setChannel(null);
@@ -65,14 +67,13 @@ export function usePicker(fetchPage: PickerFetch) {
     return appendPage(items.length, false);
   };
 
-  const toggle = (id: string, on: boolean): void => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (on) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  };
+  const query = filterQ.trim().toLowerCase();
+  const filtered = query
+    ? items.filter(
+        (v) =>
+          (v.title ?? "").toLowerCase().includes(query) || (v.channel ?? "").toLowerCase().includes(query),
+      )
+    : items;
 
   const setAll = (ids: ReadonlyArray<string>, on: boolean): void => {
     setSelected((prev) => {
@@ -85,13 +86,29 @@ export function usePicker(fetchPage: PickerFetch) {
     });
   };
 
-  const filtered = filterQ.trim().toLowerCase()
-    ? items.filter(
-        (v) =>
-          (v.title ?? "").toLowerCase().includes(filterQ.trim().toLowerCase()) ||
-          (v.channel ?? "").toLowerCase().includes(filterQ.trim().toLowerCase()),
-      )
-    : items;
+  /** Tick or untick one row; with `shift`, every row between it and the last one touched, in the order shown. */
+  const toggle = (id: string, on: boolean, shift = false): void => {
+    if (shift && lastToggled) {
+      const from = filtered.findIndex((v) => v.id === lastToggled);
+      const to = filtered.findIndex((v) => v.id === id);
+      if (from !== -1 && to !== -1) {
+        const [lo, hi] = from < to ? [from, to] : [to, from];
+        setAll(
+          filtered.slice(lo, hi + 1).map((v) => v.id),
+          on,
+        );
+        setLastToggled(id);
+        return;
+      }
+    }
+    setAll([id], on);
+    setLastToggled(id);
+  };
+
+  const clearSelection = (): void => {
+    setSelected(new Set());
+    setLastToggled(null);
+  };
 
   return {
     items,
@@ -109,12 +126,13 @@ export function usePicker(fetchPage: PickerFetch) {
     loadMore,
     toggle,
     setAll,
+    clearSelection,
   };
 }
 
 export type Picker = ReturnType<typeof usePicker>;
 
-/** The status line under the picker head — loading, or the loaded count. */
+/** The status line under the input — loading, or the loaded count. */
 export function pickerStatus(picker: Picker): string | null {
   if (picker.loading) return "Loading videos…";
   if (picker.items.length === 0) return null;

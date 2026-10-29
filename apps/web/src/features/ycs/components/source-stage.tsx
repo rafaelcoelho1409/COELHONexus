@@ -40,17 +40,24 @@ export function SourceStage(): JSX.Element {
     return `Routed ${items.length} — one ${ROUTE_LABELS[target]} at a time: the first is kept, the rest dropped.`;
   };
 
+  // A paste that belongs to another tab moves there the way a Search selection does: the same seed, the same re-mount.
+  const onSwitch = (target: Exclude<SourceMode, "search">, text: string) =>
+    onRoute({ mode: target, items: [text] });
+
   return (
     <div>
       <ModeTabs mode={mode} onChange={setMode} />
       <div className="mt-4">
         {mode === "search" ? <SearchTab onRoute={onRoute} /> : null}
-        {mode === "videos" ? <VideosTab key={`videos-${routed.nonce}`} initialIds={routed.videos} /> : null}
+        {mode === "videos" ? (
+          <VideosTab key={`videos-${routed.nonce}`} initialIds={routed.videos} onSwitch={onSwitch} />
+        ) : null}
         {mode === "playlist" ? (
           <PlaylistTab
             key={`playlist-${routed.nonce}`}
             initialIdentity={routed.playlist[0] ?? null}
             routedWarn={warnFor("playlist", routed.playlist)}
+            onSwitch={onSwitch}
           />
         ) : null}
         {mode === "channel" ? (
@@ -58,6 +65,7 @@ export function SourceStage(): JSX.Element {
             key={`channel-${routed.nonce}`}
             initialIdentity={routed.channel[0] ?? null}
             routedWarn={warnFor("channel", routed.channel)}
+            onSwitch={onSwitch}
           />
         ) : null}
       </div>

@@ -51,6 +51,8 @@ export const PAGE_SIZE_DEFAULT = 25;
 export const PAGE_SIZES: ReadonlyArray<number> = [10, 25, 50, 100, 200];
 /** yt-dlp walks a channel/playlist page in ~3–6 s; 100 rows per page keeps the wait reasonable. */
 export const PICKER_PAGE_SIZE = 100;
+/** "Ingest all" hands a whole channel or playlist to the server; above this many videos it asks first, with the count. */
+export const INGEST_ALL_CONFIRM_ABOVE = 50;
 
 // ---- Pipeline panel ----
 /** 700 ms (the legacy console's value): Phase 2 finishes in ~5 s, and at 1500 ms the poll only caught

@@ -67,20 +67,75 @@ export function unfurlState(raw: string, parser: (text: string) => ParsedSource 
   return { state: "invalid", raw };
 }
 
-/** The pasted Videos textarea → deduped video ids. Accepts bare 11-char ids, watch URLs, youtu.be URLs,
- * mixed CSV + newline; unparsable tokens are skipped. */
-export function parseTextareaIds(text: string): string[] {
-  if (!text) return [];
+export type PasteSummary = {
+  /** The video ids, deduped, in paste order. */
+  ids: string[];
+  /** How many tokens repeated an id already counted. */
+  duplicates: number;
+  /** Tokens that are neither an id nor a video URL, with the line they sit on (1-based). */
+  invalid: Array<{ line: number; text: string }>;
+};
+
+/** The pasted Videos text, read the way the fetch reads it: bare 11-char ids, watch URLs and youtu.be URLs, mixed
+ * newline and comma separated. Says what was understood, what repeated, and what was not recognised, so the reader
+ * can fix a line before fetching instead of finding it silently missing. */
+export function summarizePaste(text: string): PasteSummary {
   const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of text.split(/[\n,]+/)) {
-    const parsed = parseVideo(raw);
-    if (parsed && !seen.has(parsed.identity)) {
-      seen.add(parsed.identity);
-      out.push(parsed.identity);
+  const summary: PasteSummary = { ids: [], duplicates: 0, invalid: [] };
+  text.split("\n").forEach((line, index) => {
+    for (const token of line.split(",")) {
+      const trimmed = token.trim();
+      if (!trimmed) continue;
+      const parsed = parseVideo(trimmed);
+      if (!parsed) {
+        summary.invalid.push({ line: index + 1, text: trimmed });
+      } else if (seen.has(parsed.identity)) {
+        summary.duplicates += 1;
+      } else {
+        seen.add(parsed.identity);
+        summary.ids.push(parsed.identity);
+      }
     }
-  }
-  return out;
+  });
+  return summary;
+}
+
+/** The pasted Videos textarea → deduped video ids. */
+export function parseTextareaIds(text: string): string[] {
+  return summarizePaste(text).ids;
+}
+
+/** A Source tab that takes a pasted source (the Search tab does not). */
+type PasteMode = Exclude<SourceMode, "search">;
+
+/** Which tab a pasted text belongs to, by yt-dlp's own precedence: playlist, then channel, then video. */
+export function detectMode(text: string): PasteMode | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  if (parsePlaylist(trimmed)) return "playlist";
+  if (parseChannel(trimmed)) return "channel";
+  if (parseVideo(trimmed)) return "videos";
+  return null;
+}
+
+/** The tab to suggest when what was pasted into `own` looks like another kind — one token only; a list of
+ * lines is the Videos tab's own business. Suggested, never switched for the reader. */
+export function modeHint(text: string, own: PasteMode): PasteMode | null {
+  const trimmed = text.trim();
+  if (!trimmed || /[\n,]/.test(trimmed)) return null;
+  const found = detectMode(trimmed);
+  return found && found !== own ? found : null;
+}
+
+/** The master checkbox's state over `ids`: every one selected, some of them, or none. */
+export function idsMasterState(
+  ids: ReadonlyArray<string>,
+  selected: ReadonlySet<string>,
+): "all" | "some" | "none" {
+  if (ids.length === 0) return "none";
+  const count = ids.reduce((n, id) => n + (selected.has(id) ? 1 : 0), 0);
+  if (count === 0) return "none";
+  return count === ids.length ? "all" : "some";
 }
 
 // ============================================================

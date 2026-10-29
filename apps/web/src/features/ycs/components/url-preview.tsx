@@ -3,8 +3,17 @@ import { Check, CircleAlert, X } from "lucide-react";
 import type { UnfurlState } from "../domain";
 
 /** The compact claim card shown in place of the input once a paste parses (Slack/Linear unfurl idiom).
- * `parsed` gets a clear button; `invalid` explains why the text was rejected. */
-export function UrlPreview({ state, onReset }: { state: UnfurlState; onReset: () => void }) {
+ * `parsed` gets a clear button; `invalid` explains why the text was rejected — by name of the kind this tab takes (`expected`),
+ * so "not a playlist" does not contradict a suggestion that it is a channel. */
+export function UrlPreview({
+  state,
+  onReset,
+  expected,
+}: {
+  state: UnfurlState;
+  onReset: () => void;
+  expected?: string;
+}) {
   if (state.state === "hidden") {
     return null;
   }
@@ -20,7 +29,7 @@ export function UrlPreview({ state, onReset }: { state: UnfurlState; onReset: ()
           type="button"
           onClick={onReset}
           aria-label="Clear"
-          className="inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground"
+          className="inline-flex size-9 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground"
         >
           <X className="size-4" aria-hidden />
         </button>
@@ -32,7 +41,9 @@ export function UrlPreview({ state, onReset }: { state: UnfurlState; onReset: ()
       <CircleAlert className="size-4 text-destructive-text" aria-hidden />
       <span className="text-xs text-muted-foreground">Unrecognized</span>
       <span className="min-w-0 flex-1 truncate font-mono text-xs">{state.raw.slice(0, 80)}</span>
-      <span className="text-xs text-muted-foreground">Doesn&apos;t look like a YouTube URL or ID</span>
+      <span className="text-xs text-muted-foreground">
+        {expected ? `Not a ${expected} URL or ID` : "Doesn't look like a YouTube URL or ID"}
+      </span>
     </div>
   );
 }

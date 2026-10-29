@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   cellDuration,
+  detectMode,
   dropRouted,
   extractBarState,
   extractOutcome,
@@ -11,12 +12,14 @@ import {
   fmtDate,
   fmtElapsed,
   fmtInt,
+  idsMasterState,
   libraryMasterState,
   libraryMetaLine,
   libraryStatsLine,
   libraryStatusTone,
   libraryUrl,
   masterState,
+  modeHint,
   nextTiming,
   type PhaseSnapshot,
   panelFilterCount,
@@ -39,6 +42,7 @@ import {
   subPhaseLabel,
   subPhasePct,
   successHint,
+  summarizePaste,
   type Timing,
   unfurlState,
   wipeSummaryLine,
@@ -161,6 +165,48 @@ describe("readSearchRequest", () => {
 
   it("requires a query", () => {
     expect(() => readSearchRequest(new FormData(), 25)).toThrow();
+  });
+});
+
+describe("pasting into the Source tabs", () => {
+  it("reads a pasted batch like the fetch does, and says what repeated and what was not understood", () => {
+    const summary = summarizePaste(
+      "aaaaaaaaaaa, https://youtu.be/bbbbbbbbbbb\nhttps://www.youtube.com/watch?v=aaaaaaaaaaa\n\nwhat is this\nccccccccccc,xyz",
+    );
+    expect(summary.ids).toEqual(["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"]);
+    expect(summary.duplicates).toBe(1);
+    expect(summary.invalid).toEqual([
+      { line: 4, text: "what is this" },
+      { line: 5, text: "xyz" },
+    ]);
+    expect(parseTextareaIds("aaaaaaaaaaa\naaaaaaaaaaa")).toEqual(["aaaaaaaaaaa"]);
+    expect(summarizePaste("")).toEqual({ ids: [], duplicates: 0, invalid: [] });
+  });
+
+  it("tells which tab a paste belongs to, playlist before channel before video", () => {
+    expect(detectMode("https://www.youtube.com/playlist?list=PLabc123defghij")).toBe("playlist");
+    expect(detectMode("https://www.youtube.com/watch?v=aaaaaaaaaaa&list=PLabc123defghij")).toBe("playlist");
+    expect(detectMode("@anthropicai")).toBe("channel");
+    expect(detectMode("https://youtu.be/aaaaaaaaaaa")).toBe("videos");
+    expect(detectMode("hello there")).toBeNull();
+    expect(detectMode("  ")).toBeNull();
+  });
+
+  it("suggests another tab only for a single token that belongs there", () => {
+    expect(modeHint("@anthropicai", "playlist")).toBe("channel");
+    expect(modeHint("@anthropicai", "channel")).toBeNull();
+    expect(modeHint("aaaaaaaaaaa", "playlist")).toBe("videos");
+    // a list of lines is the Videos tab's own input
+    expect(modeHint("aaaaaaaaaaa\nbbbbbbbbbbb", "channel")).toBeNull();
+    expect(modeHint("aaaaaaaaaaa, bbbbbbbbbbb", "channel")).toBeNull();
+    expect(modeHint("gibberish", "videos")).toBeNull();
+  });
+
+  it("states the master checkbox over ids: none is not 'some'", () => {
+    expect(idsMasterState([], new Set())).toBe("none");
+    expect(idsMasterState(["a", "b"], new Set())).toBe("none");
+    expect(idsMasterState(["a", "b"], new Set(["a"]))).toBe("some");
+    expect(idsMasterState(["a", "b"], new Set(["a", "b", "z"]))).toBe("all");
   });
 });
 

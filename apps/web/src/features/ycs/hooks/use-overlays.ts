@@ -2,7 +2,13 @@
 
 import { createContext, useContext } from "react";
 
-export type ConfirmOptions = { title: string; message: string; confirmLabel: string };
+export type ConfirmOptions = {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  /** `destructive` (the default) paints the confirm button as a warning; `primary` is for an action that only starts work. */
+  tone?: "destructive" | "primary";
+};
 
 export type OverlaysValue = {
   /** Persistent, dismissible message. */

@@ -2,6 +2,7 @@
 
 import { enumerateChannelVideos, queueChannelPipeline, queueVideosPipeline } from "../api";
 import { parseChannel } from "../domain";
+import type { SourceMode } from "../params";
 import { SingleSourceTab } from "./single-source-tab";
 
 /** Source · Channel — paste ONE channel, pick a subset of its videos, dispatch them through the videos
@@ -9,12 +10,15 @@ import { SingleSourceTab } from "./single-source-tab";
 export function ChannelTab({
   initialIdentity,
   routedWarn,
+  onSwitch,
 }: {
   initialIdentity: string | null;
   routedWarn: string | null;
+  onSwitch: (mode: Exclude<SourceMode, "search">, text: string) => void;
 }) {
   return (
     <SingleSourceTab
+      mode="channel"
       idPrefix="ycs-channel"
       inputLabel="Channel"
       placeholder="@handle, /channel/UC… or a channel URL"
@@ -37,6 +41,7 @@ export function ChannelTab({
       }
       initialIdentity={initialIdentity}
       routedWarn={routedWarn}
+      onSwitch={onSwitch}
     />
   );
 }

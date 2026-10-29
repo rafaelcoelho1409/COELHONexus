@@ -50,7 +50,11 @@ function ConfirmDialog({
         <button
           type="button"
           onClick={() => onClose(true)}
-          className="min-h-9 rounded-sm bg-destructive px-3 text-sm text-destructive-foreground"
+          className={`min-h-9 rounded-sm px-3 text-sm ${
+            options.tone === "primary"
+              ? "bg-primary text-primary-foreground hover:bg-primary/80"
+              : "bg-destructive text-destructive-foreground"
+          }`}
         >
           {options.confirmLabel}
         </button>
