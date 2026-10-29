@@ -253,6 +253,54 @@ export function readSearchRequest(form: FormData, pageSize: number): SearchReque
   return searchRequestSchema.parse(record);
 }
 
+export type FilterChip = { key: string; label: string };
+
+const KIND_FILTER_LABEL = { video: "Videos", channel: "Channels", playlist: "Playlists" } as const;
+
+/** The filters a submitted request carries, as removable chips in the order the filter panel lists them.
+ * `key` is the form field's name, so removing a chip clears that field. */
+export function filterChips(req: SearchRequestPayload): FilterChip[] {
+  const chips: FilterChip[] = [];
+  const add = (key: string, label: string) => chips.push({ key, label });
+  if (req.kind_filter) add("kind_filter", `Kind: ${KIND_FILTER_LABEL[req.kind_filter]}`);
+  if (req.duration) add("duration", `Duration: ${req.duration}`);
+  if (req.date_after) add("date_after", `Uploaded after ${fmtDate(req.date_after)}`);
+  if (req.date_before) add("date_before", `Uploaded before ${fmtDate(req.date_before)}`);
+  if (req.min_views) add("min_views", `Min views: ${fmtInt(req.min_views)}`);
+  if (req.max_views) add("max_views", `Max views: ${fmtInt(req.max_views)}`);
+  if (req.min_likes) add("min_likes", `Min likes: ${fmtInt(req.min_likes)}`);
+  if (req.title_contains) add("title_contains", `Title: ${req.title_contains}`);
+  if (req.channel_name) add("channel_name", `Channel: ${req.channel_name}`);
+  if (req.sort_by_date) add("sort_by_date", "Newest first");
+  if (req.exclude_shorts) add("exclude_shorts", "No shorts");
+  return chips;
+}
+
+/** The filters that sit in the "More filters" panel; the others (kind, duration, newest first) are always in view. */
+const PANEL_FILTER_KEYS: ReadonlySet<string> = new Set([
+  "date_after",
+  "date_before",
+  "min_views",
+  "max_views",
+  "min_likes",
+  "title_contains",
+  "channel_name",
+  "exclude_shorts",
+]);
+
+/** How many of the active filters are set in the panel — the number on its button. */
+export function panelFilterCount(chips: ReadonlyArray<FilterChip>): number {
+  return chips.filter((chip) => PANEL_FILTER_KEYS.has(chip.key)).length;
+}
+
+/** "1–25 of 25+": where the page sits in what has been fetched; the "+" says the source may hold more. */
+export function rangeLabel(page: number, size: number, total: number, exhausted: boolean): string {
+  if (total === 0) return "No results";
+  const from = (page - 1) * size + 1;
+  const to = Math.min(page * size, total);
+  return `${from}–${to} of ${total}${exhausted ? "" : "+"}`;
+}
+
 // ============================================================
 // Selection + bulk routing (Search results list)
 // ============================================================

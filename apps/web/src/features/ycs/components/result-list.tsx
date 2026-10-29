@@ -1,56 +1,37 @@
 "use client";
 
-import { Check, Copy, ExternalLink, ListVideo, Play, User, Video } from "lucide-react";
+/** The rows of the Search results: one checkbox, a thumbnail, the title and meta, and a copy-ID control per result.
+ * Neutral surfaces and hairlines only — the kind is said in words and an icon, never by colour. */
+
+import { Check, Copy, ListVideo, User, Video } from "lucide-react";
 import { type JSX, useState } from "react";
 
-import { durationLabel, fmtCount, resultMeta } from "../domain";
+import { durationLabel, resultMeta } from "../domain";
 import type { VideoSnippet } from "../entities";
 
 export type Density = "compact" | "comfortable";
 
-/** The master row at the top of the result list — tri-state per Gmail/Linear: unchecked, indeterminate
- * when some rows are selected, checked when every visible row is. */
-export function MasterRow({
-  state,
-  onToggle,
-  totalVisible,
-  selectedCount,
-}: {
-  state: "all" | "some" | "none";
-  onToggle: () => void;
-  totalVisible?: number;
-  selectedCount?: number;
-}): JSX.Element {
-  return (
-    <li className="flex items-center justify-between border-b border-border bg-muted/40 px-3.5 py-2 text-xs font-medium text-muted-foreground select-none">
-      <label className="flex items-center gap-2.5 cursor-pointer">
-        <input
-          type="checkbox"
-          ref={(el) => {
-            if (el) el.indeterminate = state === "some";
-          }}
-          checked={state === "all"}
-          onChange={onToggle}
-          aria-label="Select all visible results"
-          className="size-4 rounded border-border text-primary focus:ring-primary/40"
-        />
-        <span className="text-sm font-medium text-foreground">Select all</span>
-        {totalVisible != null ? (
-          <span className="text-xs text-muted-foreground">({totalVisible} on page)</span>
-        ) : null}
-      </label>
-      {selectedCount && selectedCount > 0 ? (
-        <span className="text-xs text-muted-foreground">
-          <strong className="text-foreground">{selectedCount}</strong> selected
-        </span>
-      ) : null}
-    </li>
-  );
+const KIND_LABEL = { video: "Video", channel: "Channel", playlist: "Playlist" } as const;
+type Kind = keyof typeof KIND_LABEL;
+
+const kindOf = (snippet: VideoSnippet): Kind =>
+  snippet.kind === "channel" || snippet.kind === "playlist" ? snippet.kind : "video";
+
+function KindIcon({ kind, className }: { kind: Kind; className: string }): JSX.Element {
+  if (kind === "channel") return <User aria-hidden className={className} />;
+  if (kind === "playlist") return <ListVideo aria-hidden className={className} />;
+  return <Video aria-hidden className={className} />;
 }
 
-/** One result row — checkbox, thumbnail link with duration overlay, kind badge, title link,
- * per-kind meta line, description, and an interactive copy-id control. `data-id` lets the
- * Shift-range finder locate rows. */
+/** Row grid: checkbox | thumbnail | text, and the copy-ID control on the right from 640px up (under the text below).
+ * Off-screen rows skip layout and paint (`content-visibility`), which is what keeps 200 rows cheap without windowing. */
+const ROW_GRID =
+  "grid grid-cols-[auto_auto_minmax(0,1fr)] items-start gap-x-3 gap-y-1 border-b border-border px-3 [contain-intrinsic-size:auto_88px] [content-visibility:auto] last:border-b-0 sm:grid-cols-[auto_auto_minmax(0,1fr)_auto]";
+
+const THUMB_SIZE: Record<Density, string> = { compact: "w-24", comfortable: "w-40" };
+const ROW_PAD: Record<Density, string> = { compact: "py-1.5", comfortable: "py-3" };
+
+/** One result row. `data-id` lets tests and the Shift-range finder locate it. */
 export function ResultRow({
   snippet,
   checked,
@@ -65,181 +46,117 @@ export function ResultRow({
   onCopyId: () => void;
 }): JSX.Element {
   const [copied, setCopied] = useState(false);
-  const kind = snippet.kind || "video";
-  const duration = durationLabel(snippet);
+  const kind = kindOf(snippet);
+  const duration = kind === "video" ? durationLabel(snippet) : null;
+  const title = snippet.title ?? "(no title)";
 
-  const handleCopy = () => {
+  const copy = () => {
     onCopyId();
     setCopied(true);
     setTimeout(() => setCopied(false), 1800);
   };
 
-  const kindBadgeClass =
-    kind === "channel"
-      ? "bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-500/20"
-      : kind === "playlist"
-        ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20"
-        : "bg-primary/10 text-primary-text border-primary/20";
-
   return (
     <li
       data-id={snippet.id}
-      className={`group flex items-start gap-3.5 border-b border-border px-3.5 transition-colors hover:bg-muted/30 ${
-        checked ? "bg-muted/40" : ""
-      } ${density === "compact" ? "py-2.5" : "py-3.5"} last:border-b-0`}
+      data-kind={kind}
+      className={`${ROW_GRID} ${ROW_PAD[density]} ${checked ? "bg-muted" : "hover:bg-muted/50"}`}
     >
-      <div className="pt-1">
+      {/* The label is the 36px target; the checkbox is named for the screen reader by its own aria-label. */}
+      <label className="flex size-9 cursor-pointer items-center justify-center">
         <input
           type="checkbox"
           checked={checked}
-          onChange={(e) => {
-            const shiftKey = (e.nativeEvent as MouseEvent).shiftKey ?? false;
-            onCheck(e.target.checked, shiftKey);
-          }}
-          onClick={(e) => {
-            // Support direct click with shift
-            if (e.shiftKey) {
-              onCheck(!checked, true);
-            }
-          }}
-          aria-label={`Select ${snippet.title ?? snippet.id}`}
-          className="size-4 rounded border-border text-primary focus:ring-primary/40 cursor-pointer"
+          // The click is the one event that carries Shift (a change event does not), and Space on the box is a click too.
+          readOnly
+          onClick={(event) => onCheck(!checked, event.shiftKey)}
+          aria-label={`Select ${title}`}
+          className="size-4 cursor-pointer accent-primary"
         />
-      </div>
+      </label>
 
-      {/* Thumbnail with duration overlay & hover play cue */}
+      {/* The same link as the title, so it is hidden from assistive technology and is not a second tab stop. */}
+      {/* biome-ignore lint/a11y/useAnchorContent: a duplicate of the title link, deliberately hidden (aria-hidden + tabIndex -1) so it is read and tabbed to once */}
       <a
         href={snippet.url}
         target="_blank"
         rel="noopener noreferrer"
-        className={`group/thumb relative shrink-0 overflow-hidden rounded-md border border-border/80 bg-muted shadow-xs ${
-          density === "compact" ? "h-14 w-24" : "h-18 w-32"
-        }`}
+        tabIndex={-1}
+        aria-hidden
+        className={`relative mt-0.5 block aspect-video shrink-0 overflow-hidden rounded-sm border border-border bg-muted ${THUMB_SIZE[density]}`}
       >
         {snippet.thumbnail ? (
-          // biome-ignore lint/performance/noImgElement: YouTube thumbnails from dynamic CDN hosts
-          <img
-            src={snippet.thumbnail}
-            alt=""
-            loading="lazy"
-            className="h-full w-full object-cover transition-transform duration-300 group-hover/thumb:scale-105"
-          />
+          // biome-ignore lint/performance/noImgElement: YouTube thumbnails come from changing CDN hosts
+          <img src={snippet.thumbnail} alt="" loading="lazy" className="size-full object-cover" />
         ) : (
-          <div
-            aria-hidden
-            className="flex h-full w-full items-center justify-center bg-muted text-muted-foreground"
-          >
-            {kind === "channel" ? (
-              <User className="size-6 opacity-60" />
-            ) : kind === "playlist" ? (
-              <ListVideo className="size-6 opacity-60" />
-            ) : (
-              <Video className="size-6 opacity-60" />
-            )}
-          </div>
+          <span className="flex size-full items-center justify-center text-muted-foreground">
+            <KindIcon kind={kind} className="size-6" />
+          </span>
         )}
-
-        {/* Hover play overlay */}
-        <div className="absolute inset-0 flex items-center justify-center bg-black/35 opacity-0 transition-opacity group-hover/thumb:opacity-100">
-          <Play className="size-5 fill-white text-white drop-shadow" />
-        </div>
-
-        {/* Duration badge overlay */}
-        {duration && kind === "video" ? (
-          <span className="absolute bottom-1 right-1 rounded bg-black/85 px-1 py-0.5 font-mono text-[10px] font-medium leading-none text-white shadow-sm ring-1 ring-white/10">
+        {duration ? (
+          <span className="absolute right-1 bottom-1 rounded-sm bg-foreground px-1 py-0.5 font-mono text-xs leading-none text-background">
             {duration}
           </span>
         ) : null}
       </a>
 
-      {/* Metadata & Title */}
-      <div className="min-w-0 flex-1 pt-0.5">
-        <div className="flex flex-wrap items-center gap-1.5 leading-snug">
-          <span
-            className={`inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider ${kindBadgeClass}`}
-          >
-            {kind === "channel" ? (
-              <User className="size-3" />
-            ) : kind === "playlist" ? (
-              <ListVideo className="size-3" />
-            ) : (
-              <Video className="size-3" />
-            )}
-            {kind}
+      <div className="min-w-0 pt-0.5">
+        {/* The kind sits above the title on a phone (the title needs the width) and beside it from 640px up. */}
+        <div className="flex flex-col items-start gap-1 sm:flex-row sm:gap-2">
+          <span className="mono-label mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-sm border border-border px-1.5 py-0.5 leading-none">
+            <KindIcon kind={kind} className="size-3" />
+            {KIND_LABEL[kind]}
           </span>
-
           <a
             href={snippet.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 font-medium text-foreground hover:text-primary-text hover:underline text-sm"
+            className={`min-w-0 text-sm leading-snug font-medium hover:text-primary-text hover:underline ${
+              density === "compact" ? "line-clamp-2 sm:line-clamp-1" : "line-clamp-2"
+            }`}
           >
-            <span className="line-clamp-1">{snippet.title ?? "(no title)"}</span>
-            <ExternalLink className="size-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-60" />
+            {title}
+            <span className="sr-only"> (opens YouTube in a new tab)</span>
           </a>
         </div>
-
-        <div className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground font-mono">
-          <span>{resultMeta(snippet)}</span>
-        </div>
-
+        <p className="mt-1 font-mono text-xs text-muted-foreground">{resultMeta(snippet)}</p>
         {snippet.description ? (
           <p
-            className={`mt-1 text-xs text-muted-foreground ${
-              density === "compact" ? "line-clamp-1" : "line-clamp-2"
-            }`}
+            className={`mt-1 text-xs text-muted-foreground ${density === "compact" ? "line-clamp-1" : "line-clamp-2"}`}
           >
             {snippet.description}
           </p>
         ) : null}
       </div>
 
-      {/* Copy ID Button */}
       <button
         type="button"
-        onClick={handleCopy}
-        title={copied ? "Copied to clipboard!" : `Copy ID: ${snippet.id}`}
+        onClick={copy}
+        title={copied ? "Copied to the clipboard" : `Copy ID ${snippet.id}`}
         aria-label={snippet.id}
-        className={`inline-flex items-center gap-1 self-start rounded-md border border-border px-2 py-1 font-mono text-xs transition-colors ${
-          copied
-            ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-            : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
-        }`}
+        className="col-start-3 inline-flex min-h-9 items-center gap-1.5 justify-self-start rounded-sm border border-border px-2 font-mono text-xs text-muted-foreground hover:bg-muted hover:text-foreground sm:col-start-auto"
       >
         {copied ? (
-          <Check className="size-3 text-emerald-600 dark:text-emerald-400" aria-hidden />
+          <Check aria-hidden className="size-3.5 text-success-text" />
         ) : (
-          <Copy className="size-3 opacity-70" aria-hidden />
+          <Copy aria-hidden className="size-3.5" />
         )}
-        <span>{snippet.id}</span>
+        <span>{copied ? "Copied" : snippet.id}</span>
       </button>
     </li>
   );
 }
 
-/** Skeleton loader placeholder rows for smooth zero-shift loading state */
+/** Placeholder rows while the first page loads, the same shape as a row so nothing jumps. */
 export function ResultSkeleton({ density }: { density: Density }): JSX.Element {
   return (
-    <li
-      className={`flex items-start gap-3.5 border-b border-border px-3.5 animate-pulse ${
-        density === "compact" ? "py-2.5" : "py-3.5"
-      }`}
-    >
-      <div className="mt-1 size-4 rounded bg-muted" />
-      <div className={`shrink-0 rounded-md bg-muted ${density === "compact" ? "h-14 w-24" : "h-18 w-32"}`} />
-      <div className="min-w-0 flex-1 pt-1 space-y-2">
-        <div className="flex items-center gap-2">
-          <div className="h-4 w-12 rounded bg-muted" />
-          <div className="h-4 w-3/5 rounded bg-muted" />
-        </div>
-        <div className="h-3 w-2/5 rounded bg-muted" />
-        {density === "comfortable" ? <div className="h-3 w-4/5 rounded bg-muted" /> : null}
-      </div>
-      <div className="h-6 w-20 rounded bg-muted" />
+    <li aria-hidden className={`${ROW_GRID} ${ROW_PAD[density]} animate-status`}>
+      <span className="size-9" />
+      <span className={`aspect-video rounded-sm bg-muted ${THUMB_SIZE[density]}`} />
+      <span className="flex flex-col gap-2 pt-1.5">
+        <span className="h-4 w-3/5 rounded-sm bg-muted" />
+        <span className="h-3 w-2/5 rounded-sm bg-muted" />
+      </span>
     </li>
   );
-}
-
-export function kindCountLabel(count: number, label: string): string {
-  return `→ ${fmtCount(count)} ${label}`;
 }

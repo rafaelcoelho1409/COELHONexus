@@ -6,6 +6,7 @@ import {
   extractBarState,
   extractOutcome,
   extractSuccessLabel,
+  filterChips,
   fmtCount,
   fmtDate,
   fmtElapsed,
@@ -18,12 +19,14 @@ import {
   masterState,
   nextTiming,
   type PhaseSnapshot,
+  panelFilterCount,
   parseChannel,
   parseLangs,
   parsePlaylist,
   parseTextareaIds,
   phaseLabel,
   phasePct,
+  rangeLabel,
   readSearchRequest,
   resultMeta,
   routeItems,
@@ -158,6 +161,77 @@ describe("readSearchRequest", () => {
 
   it("requires a query", () => {
     expect(() => readSearchRequest(new FormData(), 25)).toThrow();
+  });
+});
+
+describe("filter chips and the range line", () => {
+  it("names each filter the request carries, in the panel's order, and nothing else", () => {
+    expect(filterChips({ query: "hooks", max_results: 25 })).toEqual([]);
+    const chips = filterChips({
+      query: "hooks",
+      max_results: 25,
+      sort_by_date: true,
+      exclude_shorts: true,
+      kind_filter: "channel",
+      duration: "4 - 20 minutes",
+      date_after: "20240105",
+      date_before: "20250301",
+      min_views: 10000,
+      max_views: 2000000,
+      min_likes: 250,
+      title_contains: "hooks",
+      channel_name: "React",
+    });
+    expect(chips.map((chip) => chip.key)).toEqual([
+      "kind_filter",
+      "duration",
+      "date_after",
+      "date_before",
+      "min_views",
+      "max_views",
+      "min_likes",
+      "title_contains",
+      "channel_name",
+      "sort_by_date",
+      "exclude_shorts",
+    ]);
+    expect(chips.map((chip) => chip.label)).toEqual([
+      "Kind: Channels",
+      "Duration: 4 - 20 minutes",
+      "Uploaded after 2024-01-05",
+      "Uploaded before 2025-03-01",
+      "Min views: 10,000",
+      "Max views: 2,000,000",
+      "Min likes: 250",
+      "Title: hooks",
+      "Channel: React",
+      "Newest first",
+      "No shorts",
+    ]);
+  });
+
+  it("counts only the filters that live in the panel, not the quick ones", () => {
+    const chips = filterChips({
+      query: "x",
+      kind_filter: "video",
+      duration: "Over 20 minutes",
+      sort_by_date: true,
+      min_views: 5000,
+      exclude_shorts: true,
+    });
+    expect(chips).toHaveLength(5);
+    expect(panelFilterCount(chips)).toBe(2);
+    expect(panelFilterCount([])).toBe(0);
+  });
+
+  it("does not make a chip of a zero floor", () => {
+    expect(filterChips({ query: "x", min_views: 0, min_likes: 0 })).toEqual([]);
+  });
+
+  it("words where the page sits, with a plus while the source may hold more", () => {
+    expect(rangeLabel(1, 25, 0, false)).toBe("No results");
+    expect(rangeLabel(1, 25, 25, false)).toBe("1–25 of 25+");
+    expect(rangeLabel(2, 25, 40, true)).toBe("26–40 of 40");
   });
 });
 
