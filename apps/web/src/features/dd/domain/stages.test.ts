@@ -8,6 +8,7 @@ import {
   plannerStartLabel,
   SYNTH_NODES,
   stageAllImplementedDone,
+  stageCaption,
   stageNodeViews,
   stageProgressLabel,
   terminalPill,
@@ -46,6 +47,18 @@ describe("stage node views", () => {
     expect(stageProgressLabel(PLANNER_NODES, views, ALL_PLANNER_IDS)).toBe("2/8");
     const idle = stageNodeViews(PLANNER_NODES, {}, [], false, ALL_PLANNER_IDS);
     expect(stageProgressLabel(PLANNER_NODES, idle, ALL_PLANNER_IDS)).toBeNull();
+  });
+
+  it("captions the graph with live progress and what is next, else with how many nodes are done", () => {
+    const running = stageNodeViews(PLANNER_NODES, { raw_files: [] }, ["off_topic"], true, ALL_PLANNER_IDS);
+    expect(stageCaption(running, "2/8", ["off_topic"])).toBe("Progress: 2/8 · Next: off_topic");
+    expect(stageCaption(running, "2/8", [])).toBe("Progress: 2/8");
+
+    const committed = Object.fromEntries(PLANNER_NODES.map((node) => [node.field, {}]));
+    const finished = stageNodeViews(PLANNER_NODES, committed, [], false, ALL_PLANNER_IDS);
+    expect(stageCaption(finished, null, [])).toBe("8 of 8 nodes done");
+    const empty = stageNodeViews(PLANNER_NODES, {}, [], false, ALL_PLANNER_IDS);
+    expect(stageCaption(empty, null, [])).toBe("0 of 8 nodes done");
   });
 
   it("is done only when every implemented node has committed", () => {

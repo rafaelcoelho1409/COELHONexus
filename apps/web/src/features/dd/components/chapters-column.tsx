@@ -14,13 +14,17 @@ function ProposedChapters({ titles, planning }: { titles: readonly string[]; pla
     <section
       aria-label="Proposed chapters"
       data-testid="proposed-chapters"
-      className="rounded-md border border-border bg-card"
+      className="flex min-h-0 flex-col rounded-md border border-border bg-card"
     >
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <h3 className="text-xs font-medium text-muted-foreground">Proposed chapters</h3>
         <span className="font-mono text-xs text-muted-foreground">{titles.length}</span>
       </div>
-      <ol>
+      <ol
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: the list scrolls beside the graphs, so keyboard users must be able to focus it to scroll it (WCAG 2.1.1)
+        tabIndex={0}
+        className="min-h-0 lg:overflow-y-auto"
+      >
         {titles.map((title, index) => (
           <li key={title} className="flex gap-2 border-b border-border px-3 py-2 text-sm">
             <span className="font-mono text-xs leading-5 text-muted-foreground">{index + 1}</span>
@@ -54,9 +58,14 @@ export function ChaptersColumn({
 }) {
   // A re-plan shows its own proposals instead of the old plan's chapters; with no plan at all, proposals are all there is.
   const showProposals = proposed.length > 0 && (planning || synth.cells.length === 0);
-  return showProposals ? (
-    <ProposedChapters titles={proposed} planning={planning} />
-  ) : (
-    <SynthChapters slug={slug} synth={synth} blocker={blocker} />
+  // From 1024px up the column is as tall as the graphs beside it (its parent stretches; this box fills it), and the list scrolls inside.
+  return (
+    <div className="flex flex-col lg:absolute lg:inset-0">
+      {showProposals ? (
+        <ProposedChapters titles={proposed} planning={planning} />
+      ) : (
+        <SynthChapters slug={slug} synth={synth} blocker={blocker} />
+      )}
+    </div>
   );
 }

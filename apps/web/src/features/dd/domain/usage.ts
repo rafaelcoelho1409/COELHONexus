@@ -107,11 +107,36 @@ export function usageFigures(counts: UsageCounts): Array<{ label: string; value:
   return figures;
 }
 
-/** "12 calls · 3,400 input tokens · 800 output tokens" */
-export function usageLine(counts: UsageCounts): string {
-  return usageFigures(counts)
-    .map((figure) => `${figure.value} ${figure.label}`)
-    .join(" · ");
+/** One figure of the whole pipeline, with the part of it the planner and the synth chapters each used. */
+export type PipelineFigure = { label: string; value: string; planner: string; synth: string };
+
+const PIPELINE_FIELDS: ReadonlyArray<{
+  label: string;
+  pick: (counts: UsageCounts) => number;
+  /** Shown only when something was counted (reasoning tokens exist for some models only). */
+  optional?: boolean;
+}> = [
+  { label: "LLM calls", pick: (counts) => counts.calls },
+  { label: "Input tokens", pick: (counts) => counts.tokens_in },
+  { label: "Output tokens", pick: (counts) => counts.tokens_out },
+  { label: "Reasoning tokens", pick: (counts) => counts.reasoning_tokens, optional: true },
+];
+
+/** The pipeline's calls and tokens: the planner's run plus every chapter's, each split by stage. */
+export function pipelineFigures(planner: UsageCounts, synth: UsageCounts): PipelineFigure[] {
+  return PIPELINE_FIELDS.flatMap(({ label, pick, optional }) => {
+    const plannerPart = pick(planner);
+    const synthPart = pick(synth);
+    if (optional && plannerPart + synthPart <= 0) return [];
+    return [
+      {
+        label,
+        value: fmtInt(plannerPart + synthPart),
+        planner: fmtInt(plannerPart),
+        synth: fmtInt(synthPart),
+      },
+    ];
+  });
 }
 
 /** What one node used, for its drawer; empty when the node made no call. */

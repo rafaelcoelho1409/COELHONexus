@@ -34,6 +34,7 @@ export function StageNodeBoard({
   events,
   threadId,
   live,
+  caption,
 }: {
   stage: RunStage;
   views: StageNodeView[];
@@ -43,6 +44,8 @@ export function StageNodeBoard({
   /** The run thread the board shows; its LLM usage fills the drawers. */
   threadId: string | null;
   live: boolean;
+  /** One line of context for the graph (whose nodes these are, how far the run is), on the left of the view switch. */
+  caption: string;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   // When each node was last opened, so its Activity tab can mark what arrived since (this page visit only).
@@ -65,24 +68,35 @@ export function StageNodeBoard({
   return (
     <>
       <div className="flex flex-col gap-2">
-        <fieldset className="m-0 flex min-w-0 self-end border-0 p-0">
-          <legend className="sr-only">{STAGE_TITLE[stage]} nodes shown as</legend>
-          {VIEWS.map((view) => (
-            <button
-              key={view.id}
-              type="button"
-              aria-pressed={mode === view.id}
-              onClick={() => setMode(view.id)}
-              className={`min-h-9 border px-3 text-xs first:rounded-l-sm last:rounded-r-sm ${
-                mode === view.id
-                  ? "border-primary bg-primary/10 text-primary-text"
-                  : "-ml-px border-border text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {view.label}
-            </button>
-          ))}
-        </fieldset>
+        {/* One row, the same height in both stages (the switch is 36px; the caption takes two lines of 16px at most), so
+            the planner's graph and the synth graph start at the same height. */}
+        <div className="flex min-h-9 items-center justify-between gap-3">
+          <p
+            aria-live="polite"
+            title={caption}
+            className="line-clamp-2 min-w-0 text-xs leading-4 text-muted-foreground"
+          >
+            {caption}
+          </p>
+          <fieldset className="m-0 flex min-w-0 shrink-0 border-0 p-0">
+            <legend className="sr-only">{STAGE_TITLE[stage]} nodes shown as</legend>
+            {VIEWS.map((view) => (
+              <button
+                key={view.id}
+                type="button"
+                aria-pressed={mode === view.id}
+                onClick={() => setMode(view.id)}
+                className={`min-h-9 border px-3 text-xs first:rounded-l-sm last:rounded-r-sm ${
+                  mode === view.id
+                    ? "border-primary bg-primary/10 text-primary-text"
+                    : "-ml-px border-border text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {view.label}
+              </button>
+            ))}
+          </fieldset>
+        </div>
         {mode === "graph" ? (
           <StageFlow
             stage={stage}

@@ -1,5 +1,5 @@
 import { render, screen, within } from "@testing-library/react";
-import { HttpResponse, http } from "msw";
+import { delay, HttpResponse, http } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -130,6 +130,7 @@ describe("PlanHealth", () => {
     );
     renderWith(<PlanHealth slug="alpha" />);
     expect(await screen.findByText("degraded")).toBeInTheDocument();
+    expect(screen.getByText("It ran on fallbacks, so review it before synthesizing.")).toBeInTheDocument();
     expect(screen.getByText("Chapter proposals fell back to deterministic titles.")).toBeInTheDocument();
     expect(screen.getByText("Only 2 chapters survived selection.")).toBeInTheDocument();
   });
@@ -173,9 +174,30 @@ describe("PipelineTotal", () => {
   it("adds the planner and every chapter once both are finished", async () => {
     allCounters();
     renderWith(<PipelineTotal planner={planner({})} synth={synth({})} />);
-    expect(
-      await screen.findByText(/19 calls · 13,000 input tokens · 3,100 output tokens/),
-    ).toBeInTheDocument();
+
+    const total = await screen.findByRole("region", { name: "Pipeline total" });
+    const figure = (label: string) => within(total).getByText(label).closest("div");
+    expect(figure("LLM calls")).toHaveTextContent("19Planner 14Synth 5");
+    expect(figure("Input tokens")).toHaveTextContent("13,000Planner 9,000Synth 4,000");
+    expect(figure("Output tokens")).toHaveTextContent("3,100Planner 2,100Synth 1,000");
+    expect(within(total).queryByText("Reasoning tokens")).not.toBeInTheDocument();
+  });
+
+  it("prints nothing until every usage has loaded, so the figure never grows", async () => {
+    server.use(
+      http.get(`${API}/planner/debug/graph/*/llm-counters`, () =>
+        HttpResponse.json({ total: counts(14, 9000, 2100), by_node: {} }),
+      ),
+      http.get(`${API}/synth/debug/graph/*/llm-counters`, async () => {
+        await delay(300);
+        return HttpResponse.json({ total: counts(5, 4000, 1000), by_node: {} });
+      }),
+    );
+    renderWith(<PipelineTotal planner={planner({})} synth={synth({})} />);
+
+    await new Promise((resolve) => setTimeout(resolve, 100)); // the planner's usage is in, the chapter's is not
+    expect(screen.queryByRole("region", { name: "Pipeline total" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Pipeline total" })).toHaveTextContent("19");
   });
 
   it("shows no moving partial while either side is still running or incomplete", async () => {

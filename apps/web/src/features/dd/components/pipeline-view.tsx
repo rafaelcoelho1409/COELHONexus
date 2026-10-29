@@ -15,6 +15,9 @@ import { PlannerBoard } from "./planner-view";
 import { NoFrameworkCard } from "./stage-parts";
 import { SynthRunPanel } from "./synth-view";
 
+/** A stage panel on the pipeline grid: two rows (its bar, then the rest) shared with the other stage's panel. */
+const STAGE_PANEL = "md:row-span-2 md:grid md:grid-rows-subgrid md:self-stretch";
+
 function PipelineWorkbench({ slug }: { slug: string }) {
   const overlays = useDdOverlays();
   const plannerBlocker = useCrossStageBlocker("planner");
@@ -47,15 +50,20 @@ function PipelineWorkbench({ slug }: { slug: string }) {
       </div>
       <PipelineTotal planner={planner} synth={synth} />
       {/* Three columns, left to right as the work flows: the planner's graph, the synth graph of one chapter, and the chapters
-          the planner proposes (the original's chapter strip). The chapters stay a column from 1024px up (a narrower strip
-          below 1280px); between 768 and 1023px they take a row under the two graphs, and on a phone everything stacks. */}
+          the planner proposes (the original's chapter strip). From 768px the planner and synth each take two grid rows — their
+          run bar, then the rest — on rows they share (a subgrid), so the two bars are one height whatever each holds and the
+          graphs start level. The chapters stay a column from 1024px up (a narrower strip below 1280px) as tall as the graphs
+          beside it, their list scrolling inside; between 768 and 1023px they take a row under the two graphs, and on a phone
+          everything stacks. */}
       <div
         data-testid="pipeline-columns"
-        className="grid grid-cols-1 items-start gap-6 md:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,16rem)] xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,20rem)]"
+        className="grid grid-cols-1 items-start gap-x-6 gap-y-4 md:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,16rem)] lg:grid-rows-[auto_1fr] xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,20rem)]"
       >
-        <PlannerBoard slug={slug} planner={planner} blocker={plannerBlocker} />
-        <SynthRunPanel synth={synth} blocker={synthBlocker} />
-        <div className="md:col-span-2 lg:col-span-1">
+        <PlannerBoard slug={slug} planner={planner} blocker={plannerBlocker} className={STAGE_PANEL} />
+        <SynthRunPanel synth={synth} blocker={synthBlocker} className={STAGE_PANEL} />
+        {/* The chapters' minimum height lets the second row (the flexible one) grow, never the bars' row, when the
+            graphs are short — a node list is shorter than a graph. */}
+        <div className="md:col-span-2 lg:relative lg:col-span-1 lg:col-start-3 lg:row-span-2 lg:row-start-1 lg:min-h-160 lg:self-stretch">
           <ChaptersColumn
             slug={slug}
             synth={synth}

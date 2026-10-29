@@ -9,9 +9,9 @@ import {
   nodeUsageMetrics,
   nodeUsageTable,
   payloadModelRows,
+  pipelineFigures,
   planHealthView,
   usageFigures,
-  usageLine,
   usageRows,
 } from "./usage";
 
@@ -81,8 +81,22 @@ describe("usage payloads", () => {
       "input tokens",
       "output tokens",
     ]);
-    expect(usageLine(planner.total)).toBe("14 calls · 9,000 input tokens · 2,100 output tokens");
     expect(usageFigures(chapter.total).at(-1)).toEqual({ label: "reasoning tokens", value: "200" });
+  });
+
+  it("totals the pipeline and splits each figure between the planner and the synth chapters", () => {
+    expect(pipelineFigures(planner.total, chapter.total)).toEqual([
+      { label: "LLM calls", value: "19", planner: "14", synth: "5" },
+      { label: "Input tokens", value: "13,000", planner: "9,000", synth: "4,000" },
+      { label: "Output tokens", value: "3,100", planner: "2,100", synth: "1,000" },
+      { label: "Reasoning tokens", value: "200", planner: "0", synth: "200" },
+    ]);
+    // no reasoning tokens anywhere: no such figure
+    expect(pipelineFigures(planner.total, planner.total).map((figure) => figure.label)).toEqual([
+      "LLM calls",
+      "Input tokens",
+      "Output tokens",
+    ]);
   });
 
   it("describes one node's usage for its drawer, and nothing for a node that made no call", () => {

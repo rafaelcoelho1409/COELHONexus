@@ -2,7 +2,7 @@
 
 /** Presentation-only parts shared by the Docs Distiller stage views. */
 
-import { BookOpen, Check, Circle, CircleDot, Clock3, Lock, Play, Trash2, X } from "lucide-react";
+import { BookOpen, ChartColumn, Check, Circle, CircleDot, Clock3, Lock, Play, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
@@ -87,25 +87,30 @@ export function StageNodes({
   onOpen: (nodeId: string) => void;
 }) {
   return (
-    <ul aria-label="Stage nodes" className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-4">
+    // One node per row, top to bottom in run order — the same order as the graph.
+    <ul aria-label="Stage nodes" className="flex flex-col gap-1.5">
       {views.map((view) => (
         <li key={view.node.id} data-status={view.status} data-node={view.node.id}>
           <button
             type="button"
             onClick={() => onOpen(view.node.id)}
             aria-haspopup="dialog"
-            className={`block min-h-9 w-full rounded-sm border bg-card px-2.5 py-2 text-left hover:bg-muted ${
+            className={`block min-h-9 w-full rounded-sm border bg-card px-3 py-2 text-left hover:bg-muted ${
               view.status === "running" ? "border-running" : "border-border"
             }`}
           >
-            <span className="flex items-center gap-1.5">
-              <StatusGlyph status={view.status} />
-              <span className="text-sm">{view.node.label}</span>
-              <span className="sr-only">— {NODE_STATUS_LABEL[view.status]}</span>
+            <span className="flex items-center justify-between gap-3">
+              <span className="flex min-w-0 items-center gap-1.5">
+                <StatusGlyph status={view.status} />
+                <span className="text-sm">{view.node.label}</span>
+                <span className="sr-only">— {NODE_STATUS_LABEL[view.status]}</span>
+              </span>
+              {kpis[view.node.id] ? (
+                <span className="min-w-0 truncate text-xs text-muted-foreground tabular-nums">
+                  {kpis[view.node.id]}
+                </span>
+              ) : null}
             </span>
-            {kpis[view.node.id] ? (
-              <span className="mt-0.5 block text-xs text-muted-foreground">{kpis[view.node.id]}</span>
-            ) : null}
             {liveLines[view.node.id] ? (
               <span className="mt-1 block font-mono text-xs break-all text-muted-foreground">
                 {liveLines[view.node.id]}
@@ -157,24 +162,32 @@ export function ChapterStrip({
     );
   }
   return (
-    <section aria-label="Chapters" className="rounded-md border border-border bg-card">
+    <section aria-label="Chapters" className="flex min-h-0 flex-col rounded-md border border-border bg-card">
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <span className="text-xs font-medium text-muted-foreground">Chapters</span>
         <span data-testid="chstrip-counter" className="font-mono text-xs text-muted-foreground">
           {counter}
         </span>
       </div>
-      <ul>
+      {/* Beside the graphs the list scrolls inside its column, so a long plan never makes the page taller than the graphs. */}
+      <ul
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: the list scrolls beside the graphs, so keyboard users must be able to focus it to scroll it (WCAG 2.1.1)
+        tabIndex={0}
+        className="min-h-0 lg:overflow-y-auto"
+      >
         {cells.map((cell, index) => (
           <li
             key={cell.id}
             data-chapter-id={cell.id}
             data-status={cell.status}
-            className={`border-b border-border last:border-b-0 ${cell.selected ? "bg-muted" : ""}`}
+            className={`relative border-b border-border last:border-b-0 ${
+              cell.selected ? "bg-muted" : cell.status === "done" && cell.threadId ? "hover:bg-muted" : ""
+            }`}
           >
             {/* Two rows, as in the original strip: the whole title (it wraps, never clipped) on top; below it the time on
-                the left and this chapter's own actions on the right. */}
-            <div className="flex flex-col gap-0.5 px-3 py-1.5">
+                the left and this chapter's own actions on the right. The title button stretches over the whole rectangle
+                (its `after` covers the row), so a click anywhere on it picks the chapter; the action buttons sit above it. */}
+            <div className="flex flex-col px-3">
               <div className="flex items-start gap-2">
                 <span className="flex min-h-9 items-center">
                   <StatusGlyph status={CELL_GLYPH[cell.status]} />
@@ -184,7 +197,7 @@ export function ChapterStrip({
                   type="button"
                   onClick={() => onSelect(cell.id)}
                   disabled={cell.status !== "done" || !cell.threadId}
-                  className="min-h-9 min-w-0 flex-1 py-1.5 text-left text-sm break-words hover:text-foreground disabled:cursor-default"
+                  className="min-h-9 min-w-0 flex-1 py-1.5 text-left text-sm break-words outline-none after:absolute after:inset-0 hover:text-foreground focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-inset enabled:cursor-pointer disabled:cursor-default"
                   title={cell.title}
                 >
                   <span className="mr-1.5 font-mono text-xs text-muted-foreground">{index + 1}</span>
@@ -193,7 +206,7 @@ export function ChapterStrip({
               </div>
               <div className="flex items-center justify-between gap-2 pl-6">
                 <span className="font-mono text-xs text-muted-foreground">{fmtMs(cell.wallMs)}</span>
-                <span className="flex items-center">
+                <span className="relative z-10 flex items-center">
                   <button
                     type="button"
                     aria-label={`Run only ${cell.title}`}
@@ -255,7 +268,9 @@ export type RunControls = {
   wipe: () => Promise<void>;
 };
 
-/** Title, status, and Start / Stop / Wipe for one stage. `testId` prefixes the button test ids. */
+/** Title and status on top; below, the LLM usage button on the left and Start / Stop / Wipe on the right. Both bars
+ * of the pipeline page are this one shape, so their graphs start at the same height. `testId` prefixes the button
+ * test ids. `children` sit beside the status (a health or audit line). */
 export function RunBar({
   title,
   testId,
@@ -275,54 +290,65 @@ export function RunBar({
 }) {
   const busy = controls.running || controls.starting;
   return (
-    <header className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md border border-border bg-card px-3 py-2.5">
-      <h2 className="text-sm font-medium">{title}</h2>
-      <StagePill pill={controls.pill} elapsedMs={controls.elapsedMs} />
-      {children}
-      {blockedMessage ? (
-        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Clock3 className="size-4 shrink-0" aria-hidden />
-          {blockedMessage}
-        </p>
-      ) : null}
-      <div className="ml-auto flex flex-wrap items-center gap-2">
+    // `justify-between`: when a neighbouring bar is taller (the pipeline page gives both bars one height), the buttons stay at the bottom edge.
+    <header className="flex flex-col justify-between gap-3 rounded-md border border-border bg-card p-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <h2 className="text-sm font-medium">{title}</h2>
+        <StagePill pill={controls.pill} elapsedMs={controls.elapsedMs} />
+        {children}
+        {blockedMessage ? (
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Clock3 className="size-4 shrink-0" aria-hidden />
+            {blockedMessage}
+          </p>
+        ) : null}
+      </div>
+      {/* Tight padding and gaps: in the narrowest column beside the graphs (320px) all four fit on one row. */}
+      <div className="flex flex-wrap items-center gap-1.5">
         <Button
           size="lg"
-          variant="ghost"
+          variant="outline"
+          className="px-2"
           data-testid={`${testId}-usage`}
           onClick={onOpenUsage}
           aria-haspopup="dialog"
         >
+          <ChartColumn aria-hidden />
           LLM usage
         </Button>
-        <Button
-          size="lg"
-          data-testid={`${testId}-start`}
-          onClick={() => void controls.start()}
-          disabled={busy || blockedMessage !== null}
-          aria-busy={controls.starting}
-        >
-          {controls.startLabel}
-        </Button>
-        <Button
-          size="lg"
-          variant="outline"
-          data-testid={`${testId}-stop`}
-          onClick={() => void controls.cancel()}
-          disabled={!controls.running || controls.canceling}
-          aria-busy={controls.canceling}
-        >
-          {controls.canceling ? "Stopping…" : "Stop"}
-        </Button>
-        <Button
-          size="lg"
-          variant="destructive"
-          data-testid={`${testId}-wipe`}
-          onClick={() => void controls.wipe()}
-          disabled={busy}
-        >
-          Wipe
-        </Button>
+        <div className="ml-auto flex items-center gap-1.5">
+          <Button
+            size="lg"
+            className="px-2"
+            data-testid={`${testId}-start`}
+            onClick={() => void controls.start()}
+            disabled={busy || blockedMessage !== null}
+            aria-busy={controls.starting}
+          >
+            {controls.startLabel}
+          </Button>
+          <Button
+            size="lg"
+            variant="outline"
+            className="px-2"
+            data-testid={`${testId}-stop`}
+            onClick={() => void controls.cancel()}
+            disabled={!controls.running || controls.canceling}
+            aria-busy={controls.canceling}
+          >
+            {controls.canceling ? "Stopping…" : "Stop"}
+          </Button>
+          <Button
+            size="lg"
+            variant="destructive"
+            className="px-2"
+            data-testid={`${testId}-wipe`}
+            onClick={() => void controls.wipe()}
+            disabled={busy}
+          >
+            Wipe
+          </Button>
+        </div>
       </div>
     </header>
   );

@@ -22,13 +22,22 @@ function nodeBoardCaption(synth: SynthRunController): string {
   return "Pick a finished chapter in the list to see how each of its nodes ran.";
 }
 
-/** Run bar, volume-audit line and the node graph. */
-export function SynthRunPanel({ synth, blocker }: { synth: SynthRunController; blocker: CrossStageBlocker }) {
+/** Run bar, volume-audit line and the node graph: two rows — the run bar, then everything under it — so the pipeline
+ * page can lay it on shared grid rows (`className`). */
+export function SynthRunPanel({
+  synth,
+  blocker,
+  className = "",
+}: {
+  synth: SynthRunController;
+  blocker: CrossStageBlocker;
+  className?: string;
+}) {
   const { harmonize } = synth;
   const [usageOpen, setUsageOpen] = useState(false);
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
+    <div className={`flex min-w-0 flex-col gap-4 ${className}`}>
       <RunBar
         title="Synth"
         testId="synth"
@@ -42,25 +51,27 @@ export function SynthRunPanel({ synth, blocker }: { synth: SynthRunController; b
           </span>
         ) : null}
       </RunBar>
-      {synth.views.length > 0 ? (
-        <section aria-label="Chapter pipeline" className="flex flex-col gap-2">
-          <p className="text-xs text-muted-foreground">{nodeBoardCaption(synth)}</p>
-          <StageNodeBoard
-            stage="synth"
-            views={synth.views}
-            values={synth.values}
-            liveLines={synth.liveLines}
-            events={synth.events}
-            threadId={synth.canvasThreadId}
-            live={synth.running}
-          />
-        </section>
-      ) : null}
-      {synth.error ? (
-        <p role="alert" className="text-xs text-destructive-text">
-          {synth.error}
-        </p>
-      ) : null}
+      <div className="flex min-w-0 flex-col gap-4">
+        {synth.views.length > 0 ? (
+          <section aria-label="Chapter pipeline">
+            <StageNodeBoard
+              stage="synth"
+              views={synth.views}
+              values={synth.values}
+              liveLines={synth.liveLines}
+              events={synth.events}
+              threadId={synth.canvasThreadId}
+              live={synth.running}
+              caption={nodeBoardCaption(synth)}
+            />
+          </section>
+        ) : null}
+        {synth.error ? (
+          <p role="alert" className="text-xs text-destructive-text">
+            {synth.error}
+          </p>
+        ) : null}
+      </div>
       {usageOpen ? (
         <SynthUsageSheet cells={synth.cells} live={synth.running} onClose={() => setUsageOpen(false)} />
       ) : null}
@@ -80,7 +91,7 @@ export function SynthChapters({
 }) {
   const studyHref = (chapterId: string) => chapterStudyHref(slug, chapterId);
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex min-h-0 flex-col gap-2">
       <ChapterStrip
         cells={synth.cells}
         counter={synth.counter}

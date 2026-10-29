@@ -266,6 +266,25 @@ describe("Pipeline stage", () => {
     });
   });
 
+  it("gives each run bar an LLM usage button that opens that stage's usage sheet", async () => {
+    mockIdlePipeline();
+    server.use(
+      http.get(`${API}/v1/dd/planner/debug/graph/*/llm-counters`, () =>
+        HttpResponse.json({ total: { calls: 3, tokens_in: 900, tokens_out: 90 }, by_node: {} }),
+      ),
+    );
+    renderWith(<PipelineView slug="alpha" />);
+
+    const buttons = await screen.findAllByRole("button", { name: "LLM usage" });
+    expect(buttons).toHaveLength(2);
+    const [planner, synth] = buttons;
+    expect(planner).toHaveAttribute("data-testid", "planner-usage");
+    expect(synth).toHaveAttribute("data-testid", "synth-usage");
+
+    await userEvent.click(planner as HTMLElement);
+    expect(screen.getByRole("dialog", { name: "Planner LLM usage" })).toBeInTheDocument();
+  });
+
   function mockIdlePipeline() {
     server.use(
       http.get(`${API}/v1/dd/planner/info`, () => HttpResponse.json(PLANNER_IMPLEMENTED)),

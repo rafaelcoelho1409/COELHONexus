@@ -84,6 +84,18 @@ export function stageNodeViews(
   });
 }
 
+/** The line over a stage's graph: how far a live run is and what comes next, else how many nodes have committed. */
+export function stageCaption(
+  views: readonly StageNodeView[],
+  progress: string | null,
+  next: readonly string[],
+): string {
+  if (progress)
+    return next.length > 0 ? `Progress: ${progress} · Next: ${next.join(", ")}` : `Progress: ${progress}`;
+  const done = views.filter((view) => view.status === "done").length;
+  return `${done} of ${views.length} nodes done`;
+}
+
 /** Progress label for the working pill: "3/8". */
 export function stageProgressLabel(
   nodes: StageNode[],

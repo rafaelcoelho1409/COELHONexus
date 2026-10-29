@@ -599,6 +599,30 @@ test.describe("Docs Distiller", () => {
     ).toBeVisible();
   });
 
+  test("a written chapter is picked by clicking anywhere on its rectangle, not only on its title", async ({
+    page,
+  }) => {
+    await mockSynthRoutes(page);
+    await page.goto("/dd/synth?slug=alpha");
+    await expect(page.getByTestId("chstrip-counter")).toHaveText("1 / 2");
+
+    // A chapter that is not written has nothing to show: its rectangle does nothing.
+    const pending = page.locator('[data-chapter-id="02_eval"]');
+    const pendingBox = await pending.boundingBox();
+    if (!pendingBox) throw new Error("chapter row has no box");
+    await pending.click({ position: { x: 120, y: pendingBox.height - 18 } });
+    await expect(
+      page.getByText("Pick a finished chapter in the list to see how each of its nodes ran."),
+    ).toBeVisible();
+
+    // The empty part of the second row (between the time and the action buttons) is not the title, and still picks it.
+    const row = page.locator('[data-chapter-id="01_hall"]');
+    const box = await row.boundingBox();
+    if (!box) throw new Error("chapter row has no box");
+    await row.click({ position: { x: 120, y: box.height - 18 } });
+    await expect(page.getByText("How each node ran for “Hallucinations”")).toBeVisible();
+  });
+
   test("synth stage asks before re-running a synthesized chapter, then runs it to done", async ({ page }) => {
     await mockSynthRoutes(page);
     let wiped = false;
@@ -741,8 +765,21 @@ test.describe("Docs Distiller", () => {
     // Side by side where there is room, stacked on a phone; either way the graphs fit the screen.
     const [left, right] = await Promise.all([planner.boundingBox(), synth.boundingBox()]);
     if (!left || !right) throw new Error("graphs have no box");
-    if (testInfo.project.name === "desktop") expect(right.x).toBeGreaterThan(left.x + left.width / 2);
-    else expect(right.y).toBeGreaterThan(left.y + left.height - 1);
+    if (testInfo.project.name === "desktop") {
+      expect(right.x).toBeGreaterThan(left.x + left.width / 2);
+      // Both run bars are one shape, so the graphs start at the same height, and each bar's LLM usage button is on screen.
+      expect(Math.abs(right.y - left.y)).toBeLessThanOrEqual(1);
+      await expect(page.getByTestId("planner-usage")).toBeVisible();
+      await expect(page.getByTestId("synth-usage")).toBeVisible();
+      // The two bars share grid rows, so they are one height.
+      const [plannerBar, synthBar] = await Promise.all(
+        ["planner", "synth"].map((stage) =>
+          page.getByTestId(`${stage}-usage`).locator("xpath=ancestor::header").boundingBox(),
+        ),
+      );
+      if (!plannerBar || !synthBar) throw new Error("run bars have no box");
+      expect(Math.abs(plannerBar.height - synthBar.height)).toBeLessThanOrEqual(1);
+    } else expect(right.y).toBeGreaterThan(left.y + left.height - 1);
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     );
@@ -763,7 +800,15 @@ test.describe("Docs Distiller", () => {
       .getByRole("button", { name: "List" })
       .click();
     await expect(page.getByRole("figure", { name: "Planner graph" })).toHaveCount(0);
-    await expect(page.getByRole("list", { name: "Stage nodes" }).first().getByRole("button")).toHaveCount(8);
+    const planner = page.getByRole("list", { name: "Stage nodes" }).first();
+    await expect(planner.getByRole("button")).toHaveCount(8);
+
+    // A vertical list: every node on its own row, all starting at the same left edge.
+    const rows = await planner
+      .getByRole("listitem")
+      .evaluateAll((items) => items.map((item) => item.getBoundingClientRect()));
+    expect(new Set(rows.map((row) => Math.round(row.x))).size).toBe(1);
+    expect(new Set(rows.map((row) => Math.round(row.y))).size).toBe(rows.length);
   });
 
   for (const scheme of ["dark", "light"] as const) {

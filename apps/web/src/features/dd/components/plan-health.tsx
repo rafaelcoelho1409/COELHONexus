@@ -1,6 +1,8 @@
 "use client";
 
-/** One line on how the latest plan was produced; says why when it ran on deterministic fallbacks. */
+/** How the latest plan was produced, beside the planner's status in its run bar (a flex-wrap row): one short
+ * "Plan health: healthy" item, and — only when it ran on deterministic fallbacks — a full-width line saying so with
+ * the reasons under it. */
 
 import { planHealthView } from "../domain/usage";
 import { usePlannerHealth } from "../hooks/use-usage";
@@ -13,24 +15,23 @@ export function PlanHealth({ slug }: { slug: string }) {
   if (!view || view.status === "unknown") return null;
 
   return (
-    <div className="text-xs">
-      <p>
+    <>
+      <p className="text-xs">
         <span className="text-muted-foreground">Plan health: </span>
         <span className={`font-medium ${TONE[view.status]}`}>{view.status}</span>
-        {view.status === "degraded" ? (
-          <span className="text-muted-foreground">
-            {" "}
-            — it ran on fallbacks, so review it before synthesizing
-          </span>
-        ) : null}
       </p>
-      {view.reasons.length > 0 ? (
-        <ul className="mt-1 list-disc space-y-0.5 pl-5 text-muted-foreground">
-          {view.reasons.map((reason) => (
-            <li key={reason}>{reason}</li>
-          ))}
-        </ul>
+      {view.status === "degraded" || view.reasons.length > 0 ? (
+        <div className="basis-full text-xs text-muted-foreground">
+          {view.status === "degraded" ? <p>It ran on fallbacks, so review it before synthesizing.</p> : null}
+          {view.reasons.length > 0 ? (
+            <ul className="mt-1 list-disc space-y-0.5 pl-5">
+              {view.reasons.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
       ) : null}
-    </div>
+    </>
   );
 }
