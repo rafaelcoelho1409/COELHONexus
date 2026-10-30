@@ -30,7 +30,7 @@ function SourceCard({
     <li
       id={`ask-source-${number}`}
       aria-current={active ? "true" : undefined}
-      className={`scroll-mt-32 rounded-sm border p-3 ${active ? "border-primary bg-primary/10" : "border-border"}`}
+      className={`scroll-mt-32 rounded-sm border p-2.5 ${active ? "border-primary bg-primary/10" : "border-border"}`}
     >
       <div className="flex gap-3">
         <span className="tabular flex size-6 shrink-0 items-center justify-center rounded-sm border border-border text-xs font-medium">
@@ -60,7 +60,7 @@ function SourceCard({
           rel="noopener noreferrer"
           tabIndex={-1}
           aria-hidden
-          className="block aspect-video w-20 shrink-0 self-start overflow-hidden rounded-sm border border-border bg-muted"
+          className="block aspect-video w-16 shrink-0 self-start overflow-hidden rounded-sm border border-border bg-muted"
         >
           {thumb ? (
             // biome-ignore lint/performance/noImgElement: YouTube thumbnails come from changing CDN hosts
@@ -100,7 +100,7 @@ export function AskSources({
   heading: string;
 }): JSX.Element {
   if (!citations.length) {
-    return <p className="text-sm text-muted-foreground">This answer has no sources.</p>;
+    return <p className="text-sm text-muted-foreground">No sources for this answer.</p>;
   }
   // The answer cites by position, so the number — not the video — is a card's identity.
   const numbered = citations.map((citation, i) => ({ citation, number: i + 1 }));

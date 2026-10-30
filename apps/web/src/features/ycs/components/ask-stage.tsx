@@ -180,6 +180,12 @@ function AskConversation({
           notice("Wait for the running answer to finish, or press Stop, before you regenerate.", "info");
         }
       },
+      onRetry: async (index: number) => {
+        // No confirmation: a failed turn has no answer to lose.
+        if (!(await latest.current.regenerate(index, latest.current.options()))) {
+          notice("Wait for the running answer to finish, or press Stop, before you retry.", "info");
+        }
+      },
       onBranch: async (index: number) => {
         const turn = latest.current.turns[index];
         if (!turn) return;
@@ -227,7 +233,7 @@ function AskConversation({
   };
 
   const isEmpty = hydrated && !hydrateError && turns.length === 0;
-  const railTitle = shown ? `Sources for “${shown.question}”` : "Sources";
+  const railTitle = shown ? `Sources (${shown.citations.length})` : "Sources";
 
   return (
     <div className="flex flex-col gap-4">
@@ -238,7 +244,7 @@ function AskConversation({
         scopeLocked={locked}
         onScope={setScope}
         threadId={threadId}
-        threadSaved={locked}
+        threadTitle={turns[0]?.question ?? ""}
         onSwitchThread={(id) => (running ? busyNotice("switch threads") : onOpenThread(id))}
         onDeleteThread={(id) => void onDeleteThread(id)}
         onNewThread={() => (running ? busyNotice("start a new thread") : onNewThread())}
@@ -246,7 +252,8 @@ function AskConversation({
       />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="flex min-w-0 flex-col">
+        {/* Tall enough that the message box sits at the bottom of the screen even before there is a conversation. */}
+        <div className="flex min-h-[calc(100dvh-23rem)] min-w-0 flex-col sm:min-h-[calc(100dvh-18rem)]">
           {!hydrated ? <p className="text-sm text-muted-foreground">Loading the conversation…</p> : null}
           {hydrateError ? (
             <p role="alert" className="text-sm text-destructive-text">
@@ -255,7 +262,7 @@ function AskConversation({
           ) : null}
 
           {isEmpty ? (
-            <div className="py-10">
+            <div className="flex-1 py-10">
               <h2 className="m-0 text-lg font-semibold tracking-tight">Ask about your videos</h2>
               <p className="mt-1 mb-4 text-sm text-muted-foreground">
                 Answers come from the transcripts you have ingested, with the videos they came from.
@@ -285,7 +292,7 @@ function AskConversation({
             aria-label="Conversation"
             aria-relevant="additions"
             aria-busy={running}
-            className="flex flex-col gap-8 pb-6"
+            className="flex flex-1 flex-col gap-8 pb-6"
           >
             {turns.map((turn, index) => (
               <AskTurnView
@@ -320,10 +327,17 @@ function AskConversation({
           />
         </div>
 
-        {wide ? (
+        {/* Nothing to say until the first question: the rail appears with the conversation, and an empty first screen
+            does not carry a "no sources" note. */}
+        {wide && turns.length > 0 ? (
           <aside aria-label="Sources" className="min-w-0">
             <div className="sticky top-20 max-h-[calc(100dvh-6rem)] overflow-y-auto pr-1">
-              <h2 className="mt-0 mb-2 text-sm font-semibold break-words">{railTitle}</h2>
+              <h2 className="mt-0 mb-1 text-sm font-semibold">{railTitle}</h2>
+              {shown ? (
+                <p className="mt-0 mb-2 line-clamp-2 text-xs break-words text-muted-foreground">
+                  {shown.question}
+                </p>
+              ) : null}
               <AskSources citations={shown?.citations ?? []} highlight={highlight} heading={railTitle} />
             </div>
           </aside>

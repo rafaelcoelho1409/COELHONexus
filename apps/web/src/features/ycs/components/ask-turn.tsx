@@ -14,8 +14,10 @@ import {
   type AskTurn,
   citeMarkdown,
   citeNumber,
+  failedAnswerReason,
   formatTurnDuration,
   STALLED_SUBTITLE,
+  turnFailure,
   usageLabel,
 } from "../ask";
 import type { AskCitation } from "../entities";
@@ -74,6 +76,8 @@ export type AskTurnActions = {
   onSources: (index: number) => void;
   onCopy: (index: number) => void;
   onRegenerate: (index: number) => void;
+  /** Ask a failed turn's question again — no confirmation, there is no answer to lose. */
+  onRetry: (index: number) => void;
   onBranch: (index: number) => void;
   onFollowup: (question: string) => void;
 };
@@ -98,7 +102,11 @@ function AskTurnViewBase({
   const took = formatTurnDuration(turn.durationMs);
   const tokens = usageLabel(turn.usage);
   const live = turn.streaming || turn.recovered;
-  const waitingForText = live && !turn.answer;
+  // A failed answer is not shown as an answer: the server's error text stands in for it, so it becomes an error band
+  // with the reason and a Retry once the turn has stopped.
+  const failure = live ? null : turnFailure(turn);
+  const answerIsError = failedAnswerReason(turn.answer) !== null;
+  const waitingForText = live && (!turn.answer || answerIsError);
   const text = citeMarkdown(turn.answer, turn.citations);
   return (
     <article className="flex flex-col gap-3" data-testid="ask-turn">
@@ -115,7 +123,7 @@ function AskTurnViewBase({
                 {turn.mode}
               </span>
             ) : null}
-            {took ? <span>Answered {took}</span> : null}
+            {took ? <span>{failure ? `Ended ${took}` : `Answered ${took}`}</span> : null}
             {tokens ? <span className="tabular">{tokens}</span> : null}
           </p>
         ) : null}
@@ -124,7 +132,7 @@ function AskTurnViewBase({
 
         {waitingForText ? (
           <Skeleton />
-        ) : turn.answer ? (
+        ) : turn.answer && !answerIsError ? (
           <div className="ask-answer text-sm leading-relaxed">
             <CiteContext.Provider
               value={{ citations: turn.citations, onCite: (n) => actions.onCite(index, n) }}
@@ -141,11 +149,21 @@ function AskTurnViewBase({
             <span className="text-muted-foreground">Regenerate to ask again.</span>
           </p>
         ) : null}
-        {turn.error ? (
-          <p role="alert" className="m-0 flex flex-wrap items-baseline gap-x-2 text-sm">
-            <StatusBadge tone="failed" label="Failed" />
-            <span className="min-w-0 break-words text-muted-foreground">{turn.error}</span>
-          </p>
+        {failure ? (
+          <div
+            role="alert"
+            className="flex flex-col items-start gap-2 rounded-sm border border-destructive p-3"
+          >
+            <p className="m-0 flex flex-wrap items-center gap-x-2 text-sm">
+              <StatusBadge tone="failed" label="Failed" />
+              <span className="font-medium">The answer could not be generated.</span>
+            </p>
+            <p className="m-0 min-w-0 text-sm break-words text-muted-foreground">{failure}</p>
+            <Button variant="outline" size="lg" onClick={() => actions.onRetry(index)} disabled={busy}>
+              <RefreshCw aria-hidden data-icon="inline-start" />
+              Retry
+            </Button>
+          </div>
         ) : null}
 
         {!live && turn.followups.length ? (
@@ -164,7 +182,7 @@ function AskTurnViewBase({
           </ul>
         ) : null}
 
-        {!live ? (
+        {!live && !failure ? (
           <div className="-ml-2 flex flex-wrap items-center gap-1">
             <Button
               variant="ghost"

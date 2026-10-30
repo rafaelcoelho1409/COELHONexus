@@ -6,12 +6,16 @@ import {
   citationUrl,
   citeMarkdown,
   citeNumber,
+  failedAnswerReason,
   formatDuration,
   isTurnInProgress,
   lastSourcedTurn,
   newLiveTurn,
   scopeLabel,
+  statusFromEvent,
   thinkingLabel,
+  threadLabel,
+  turnFailure,
   turnFromHistory,
 } from "./ask";
 import type { AskCitation, AskEvent, HistoryRow } from "./entities";
@@ -73,10 +77,58 @@ describe("source helpers", () => {
     expect(citationThumb(cite("a"))).toBe("");
   });
 
-  it("picks the latest turn that has sources", () => {
-    expect(lastSourcedTurn([{ citations: [cite("a")] }, { citations: [] }])).toBe(0);
-    expect(lastSourcedTurn([{ citations: [] }])).toBeNull();
+  it("picks the latest turn that has sources and did not fail", () => {
+    const turn = (citations: AskCitation[], answer = "An answer.", error: string | null = null) => ({
+      citations,
+      answer,
+      error,
+    });
+    expect(lastSourcedTurn([turn([cite("a")]), turn([])])).toBe(0);
+    expect(lastSourcedTurn([turn([])])).toBeNull();
     expect(lastSourcedTurn([])).toBeNull();
+    // A failed turn has no answer for its retrieved sources to back, so the rail falls back to the one before it.
+    expect(lastSourcedTurn([turn([cite("a")]), turn([cite("b")], "Error generating answer: down")])).toBe(0);
+    expect(lastSourcedTurn([turn([cite("a")], "", "stream error")])).toBeNull();
+  });
+});
+
+describe("failed answers", () => {
+  it("reads the reason out of the server's error text, and nothing out of a real answer", () => {
+    expect(failedAnswerReason("Error generating answer: Connection error.")).toBe("Connection error.");
+    expect(failedAnswerReason("  Error generating answer:   ")).toBe("The model gave no reason.");
+    expect(failedAnswerReason("Redis keeps data in memory.")).toBeNull();
+    expect(failedAnswerReason("")).toBeNull();
+    // Only a leading prefix counts: an answer that merely mentions it is an answer.
+    expect(failedAnswerReason("The log says Error generating answer: x")).toBeNull();
+  });
+
+  it("takes a stream error before the answer text", () => {
+    expect(turnFailure({ answer: "fine", error: "stream error" })).toBe("stream error");
+    expect(turnFailure({ answer: "Error generating answer: down", error: null })).toBe("down");
+    expect(turnFailure({ answer: "fine", error: null })).toBeNull();
+  });
+
+  it("keeps the status on Failed to the end of the run, where a good run says Done", () => {
+    const idle = { text: "Thinking…", tone: "running" } as const;
+    const failed = statusFromEvent(
+      idle,
+      event({ node: "generate", generation: "Error generating answer: down" }),
+    );
+    expect(failed).toEqual({ text: "Failed: down", tone: "error" });
+    // Later nodes and the closing event do not paint over it.
+    expect(statusFromEvent(failed, event({ node: "grade", mode: "standard" }))).toEqual(failed);
+    expect(statusFromEvent(failed, event({ node: "end" }))).toEqual(failed);
+    expect(statusFromEvent(idle, event({ node: "end" }))).toEqual({ text: "Done.", tone: "" });
+  });
+});
+
+describe("threadLabel", () => {
+  it("shows the first question, trimmed, and New while there is none", () => {
+    expect(threadLabel("")).toBe("New");
+    expect(threadLabel("   ")).toBe("New");
+    expect(threadLabel("What is Redis?")).toBe("What is Redis?");
+    expect(threadLabel("What are the main themes across all videos?")).toBe("What are the main themes acr…");
+    expect(threadLabel("two\n  lines")).toBe("two lines");
   });
 });
 

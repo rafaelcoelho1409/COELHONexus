@@ -165,6 +165,92 @@ test.describe("YouTube Content Search · Ask", () => {
     await expect(page.getByRole("button", { name: /Thread:/ })).toHaveAttribute("aria-expanded", "false");
   });
 
+  test("the empty first screen has the message box at the bottom of the screen and no sources note", async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop", "the desktop viewport is the measure");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await mockAsk(page);
+    await page.goto("/ycs/ask");
+    await expect(page.getByRole("heading", { name: "Ask about your videos" })).toBeVisible();
+    await expect(page.getByText(/no sources/i)).toHaveCount(0);
+    const box = await page.getByRole("textbox", { name: "Ask about your videos" }).boundingBox();
+    expect((box?.y ?? 0) + (box?.height ?? 0), "the message box floats mid-page").toBeGreaterThan(760);
+  });
+
+  test("a failed answer is an error band with Retry, and the status never says Done", async ({ page }) => {
+    await mockAsk(page);
+    let asked = 0;
+    await page.route("**/api/v1/ycs/agents/search/stream", (route) => {
+      asked += 1;
+      const events =
+        asked === 1
+          ? [
+              { node: "_meta", turn_id: 7 },
+              { node: "retrieve", documents: [], document_count: 5 },
+              {
+                node: "generate",
+                generation: "Error generating answer: Connection error.",
+                citations: SOURCES,
+              },
+              { node: "end", duration_ms: 20_000 },
+            ]
+          : EVENTS;
+      return route.fulfill({
+        contentType: "text/event-stream",
+        body: `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}\n\n`,
+      });
+    });
+    await page.goto("/ycs/ask");
+    await page.getByRole("textbox", { name: "Ask about your videos" }).fill("What is Redis?");
+    await page.keyboard.press("Enter");
+    const band = page.getByRole("alert").filter({ hasText: "The answer could not be generated." });
+    await expect(band).toBeVisible();
+    await expect(band).toContainText("Connection error.");
+    await expect(page.getByText("Failed: Connection error.")).toBeVisible();
+    await expect(page.getByText("Done.")).toHaveCount(0);
+    await expect(page.getByText(/Error generating answer/)).toHaveCount(0);
+    const results = await new AxeBuilder({ page }).withTags(WCAG).analyze();
+    expect(
+      results.violations,
+      JSON.stringify(results.violations.map((v) => [v.id, v.nodes.map((n) => n.target)])),
+    ).toEqual([]);
+
+    await band.getByRole("button", { name: "Retry" }).click();
+    await expect(page.getByText("Answered in 14.0s")).toBeVisible();
+    await expect(band).toHaveCount(0);
+  });
+
+  test("on a phone the toolbar is two rows and the thread panel stays on screen", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await mockAsk(page, HISTORY);
+    await page.goto("/ycs/ask?thread=t1");
+    await expect(page.getByRole("heading", { name: "You asked: What is Redis?" })).toBeVisible();
+    // The scope note and the thread picker share a row; the two actions are icons beside the mode.
+    const scope = await page
+      .getByText(/locked to this thread/)
+      .locator("..")
+      .boundingBox();
+    const thread = await page.getByRole("button", { name: /Thread:/ }).boundingBox();
+    expect(
+      Math.abs((scope?.y ?? 0) - (thread?.y ?? 9999)),
+      "scope and thread are on separate rows",
+    ).toBeLessThan(6);
+    const mode = await page.getByLabel("Fast").locator("..").boundingBox();
+    const usage = await page.getByRole("button", { name: "LLM usage" }).boundingBox();
+    expect(Math.abs((mode?.y ?? 0) - (usage?.y ?? 9999)), "the actions dropped below the mode").toBeLessThan(
+      6,
+    );
+    expect(usage?.width ?? 999, "the usage button still carries its words").toBeLessThan(60);
+
+    await page.getByRole("button", { name: /Thread:/ }).click();
+    const panel = await page.getByRole("button", { name: /^What is Redis\?/ }).boundingBox();
+    expect(
+      (panel?.x ?? -1) >= 0 && (panel?.x ?? 0) + (panel?.width ?? 9999) <= 390,
+      "the thread panel leaves the screen",
+    ).toBe(true);
+  });
+
   test("on a phone the sources open in a sheet and nothing scrolls sideways", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 800 });
     await askOnce(page);

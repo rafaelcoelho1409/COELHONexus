@@ -43,10 +43,11 @@ async def direct_answer(state: state.AdaptiveRAGState, llm) -> dict:
     except asyncio.TimeoutError:
         return {
             "generation": (
-                f"The model didn't respond within "
+                "Error generating answer: the model did not respond within "
                 f"{int(params.DIRECT_ANSWER_TIMEOUT_S)}s. Please retry."
             ),
             "grounded": False,
         }
     except Exception as e:
-        return {"generation": f"Error: {e}", "grounded": False}
+        # The "Error generating answer:" prefix is what the web client reads as a failed turn (see the generate node).
+        return {"generation": f"Error generating answer: {e}", "grounded": False}

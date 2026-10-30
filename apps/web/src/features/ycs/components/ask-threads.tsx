@@ -69,20 +69,21 @@ function ThreadList({
 
 export function AskThreads({
   threadId,
-  saved,
+  title,
   onSwitch,
   onDelete,
 }: {
   threadId: string;
-  /** The current thread has turns on the server; until then it is just "New". */
-  saved: boolean;
+  /** The current thread's first question; empty until it has turns on the server, when the button just says "New". */
+  title: string;
   onSwitch: (id: string) => void;
   onDelete: (id: string) => void;
 }): JSX.Element {
   return (
     <ToolbarPanel
       icon={<MessagesSquare aria-hidden />}
-      label={`Thread: ${threadLabel(saved ? threadId : "")}`}
+      label={`Thread: ${threadLabel(title)}`}
+      align="phone-right"
     >
       {(close) => (
         <ThreadList

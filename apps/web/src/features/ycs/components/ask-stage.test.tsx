@@ -177,6 +177,90 @@ describe("Ask stage — new thread", () => {
     expect(screen.getAllByRole("alert").some((el) => /Failed/.test(el.textContent ?? ""))).toBe(true);
   });
 
+  it("shows the server's error text as a failed turn with a Retry, not as an answer", async () => {
+    const asked: unknown[] = [];
+    server.use(
+      http.post(`${API}/v1/ycs/agents/search/stream`, async ({ request }) => {
+        asked.push(await request.json());
+        return asked.length === 1
+          ? sse([
+              { node: "_meta", turn_id: 7 },
+              { node: "retrieve", documents: [], document_count: 3 },
+              {
+                node: "generate",
+                generation: "Error generating answer: Connection error.",
+                citations: [SOURCE],
+              },
+              { node: "end", duration_ms: 20_000 },
+            ])
+          : sse(ANSWER_EVENTS);
+      }),
+    );
+    const user = userEvent.setup();
+    renderStage();
+    await user.type(
+      await screen.findByRole("textbox", { name: "Ask about your videos" }),
+      "What is Redis?{Enter}",
+    );
+
+    const band = await screen.findByRole("alert");
+    expect(band).toHaveTextContent("The answer could not be generated.");
+    expect(band).toHaveTextContent("Connection error.");
+    // The error text is not rendered as an answer, and the turn offers no actions that need an answer.
+    expect(screen.queryByText(/Error generating answer/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Sources/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Branch" })).not.toBeInTheDocument();
+    expect(screen.getByText("Ended in 20.0s")).toBeInTheDocument();
+    // The status line says Failed to the end of the run — never "Done.".
+    expect(screen.getByText("Failed: Connection error.")).toBeInTheDocument();
+    expect(screen.queryByText("Done.")).not.toBeInTheDocument();
+
+    // Retry asks the same question again at once, with no confirmation.
+    await user.click(within(band).getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText(/Redis is an in-memory store/)).toBeInTheDocument();
+    expect(asked).toHaveLength(2);
+    expect(asked[1]).toMatchObject({ question: "What is Redis?" });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("shows a saved turn whose answer is the server's error as failed, too", async () => {
+    nav.params = new URLSearchParams("thread=t1");
+    server.use(
+      http.get(`${API}/v1/ycs/agents/history/t1`, () =>
+        HttpResponse.json({ items: [historyRow({ answer: "Error generating answer: model is down" })] }),
+      ),
+    );
+    renderStage();
+    const band = await screen.findByRole("alert");
+    expect(band).toHaveTextContent("model is down");
+    expect(within(band).getByRole("button", { name: "Retry" })).toBeEnabled();
+    expect(screen.queryByText(/Error generating answer/)).not.toBeInTheDocument();
+  });
+
+  it("names the thread by its first question", async () => {
+    nav.params = new URLSearchParams("thread=t1");
+    server.use(
+      http.get(`${API}/v1/ycs/agents/history/t1`, () =>
+        HttpResponse.json({
+          items: [historyRow({ question: "What are the main themes across all videos?" })],
+        }),
+      ),
+    );
+    renderStage();
+    expect(
+      await screen.findByRole("button", { name: "Thread: What are the main themes acr…" }),
+    ).toBeInTheDocument();
+  });
+
+  it("has no sources note on the empty first screen", async () => {
+    renderStage();
+    await screen.findByRole("heading", { name: "Ask about your videos" });
+    expect(screen.getByRole("button", { name: "Thread: New" })).toBeInTheDocument();
+    expect(screen.queryByText(/no sources/i)).not.toBeInTheDocument();
+  });
+
   it("keeps Shift+Enter as a new line", async () => {
     const user = userEvent.setup();
     renderStage();

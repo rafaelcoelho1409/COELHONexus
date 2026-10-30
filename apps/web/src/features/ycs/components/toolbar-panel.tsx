@@ -18,7 +18,9 @@ export function ToolbarPanel({
   icon: ReactNode;
   /** The button's text — it says what the setting is now. */
   label: string;
-  align?: "left" | "right";
+  /** Which edge of the button the panel lines up with; `phone-right` is `right` on a phone and `left` from `sm` up, for a
+   * picker that sits at the right end of a phone's row. */
+  align?: "left" | "right" | "phone-right";
   children: (close: () => void) => ReactNode;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
@@ -56,7 +58,7 @@ export function ToolbarPanel({
         aria-expanded={open}
         aria-controls={panelId}
         onClick={() => setOpen((on) => !on)}
-        className="max-w-full"
+        className="w-full max-w-full justify-between sm:w-auto sm:justify-center"
       >
         {icon}
         <span className="min-w-0 truncate">{label}</span>
@@ -66,7 +68,11 @@ export function ToolbarPanel({
         <div
           id={panelId}
           className={`absolute top-full z-30 mt-1 w-[min(24rem,calc(100vw-2rem))] rounded-sm border border-border bg-background p-2 ${
-            align === "right" ? "right-0" : "left-0"
+            align === "right"
+              ? "right-0"
+              : align === "phone-right"
+                ? "right-0 sm:right-auto sm:left-0"
+                : "left-0"
           }`}
         >
           {children(() => setOpen(false))}

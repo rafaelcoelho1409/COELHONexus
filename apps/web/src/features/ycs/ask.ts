@@ -3,7 +3,7 @@
  * React, no fetch; everything here is unit-testable in isolation. */
 
 import type { AskCitation, AskEvent, AskThinkingState, HistoryRow, ThreadSummary } from "./entities";
-import { ASK_STAGES, THREAD_LABEL_MAX } from "./params";
+import { ASK_FAILED_ANSWER_PREFIX, ASK_STAGES, THREAD_LABEL_MAX } from "./params";
 
 export type AskStageId = "retrieve" | "grade" | "generate" | "verify";
 export type AskStageStatus = "queued" | "active" | "done";
@@ -335,10 +335,24 @@ export function shortId(): string {
   return uuid.replaceAll("-", "").slice(0, 12);
 }
 
-/** "New" for a candidate thread that has no saved turns yet; trimmed otherwise. */
-export function threadLabel(id: string): string {
-  if (!id) return "New";
-  return id.length > THREAD_LABEL_MAX ? `${id.slice(0, THREAD_LABEL_MAX)}…` : id;
+/** The picker button's text for the current thread: its first question, trimmed; "New" while it has none (no saved turns). */
+export function threadLabel(firstQuestion: string): string {
+  const text = firstQuestion.trim().replace(/\s+/g, " ");
+  if (!text) return "New";
+  return text.length > THREAD_LABEL_MAX ? `${text.slice(0, THREAD_LABEL_MAX).trimEnd()}…` : text;
+}
+
+/** Why an answer failed, when the answer text is the server's error (the generate step reports a failed model call as the
+ * answer itself); null for a real answer. */
+export function failedAnswerReason(answer: string): string | null {
+  const text = answer.trim();
+  if (!text.startsWith(ASK_FAILED_ANSWER_PREFIX)) return null;
+  return text.slice(ASK_FAILED_ANSWER_PREFIX.length).trim() || "The model gave no reason.";
+}
+
+/** The reason a turn failed — a stream error, or an answer that is really the server's error — or null. */
+export function turnFailure(turn: Pick<AskTurn, "answer" | "error">): string | null {
+  return turn.error ?? failedAnswerReason(turn.answer);
 }
 
 /** Picker row title: first question, or the placeholder when a thread somehow has none. */
@@ -457,6 +471,10 @@ export type AskStatus = { text: string; tone: "" | "running" | "error" };
 
 /** Derive the next status line from one SSE node update (mirrors the legacy applyUpdate writes). */
 export function statusFromEvent(prev: AskStatus, event: AskEvent): AskStatus {
+  // A failed answer stays "Failed" to the end of the run: the later nodes and `end` must not paint over it with "Done.".
+  const failure = event.generation ? failedAnswerReason(event.generation) : null;
+  if (failure) return { text: `Failed: ${failure}`, tone: "error" };
+  if (prev.tone === "error" && event.node !== "error") return prev;
   if (event.node === "end") return { text: "Done.", tone: "" };
   if (event.node === "error") return { text: "Stream error", tone: "error" };
   if (event.confidence_score != null) {
@@ -523,8 +541,14 @@ export function thinkingLabel(turn: Pick<AskTurn, "streaming" | "recovered" | "d
   return took ? `Thought for ${took}` : "Thinking trace";
 }
 
-/** The turn whose sources the rail shows by default: the latest one that has any. */
-export function lastSourcedTurn(turns: readonly Pick<AskTurn, "citations">[]): number | null {
-  for (let i = turns.length - 1; i >= 0; i--) if (turns[i]?.citations.length) return i;
+/** The turn whose sources the rail shows by default: the latest one that has any and did not fail (a failed turn has no
+ * answer for them to back). */
+export function lastSourcedTurn(
+  turns: readonly Pick<AskTurn, "citations" | "answer" | "error">[],
+): number | null {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i];
+    if (turn?.citations.length && !turnFailure(turn)) return i;
+  }
   return null;
 }

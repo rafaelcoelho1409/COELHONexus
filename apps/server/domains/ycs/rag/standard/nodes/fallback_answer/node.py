@@ -152,12 +152,11 @@ async def fallback_answer(state: state.YouTubeRAGState, llm) -> dict:
         }
     except asyncio.TimeoutError:
         return {
+            # "Error generating answer:" is the prefix the web client reads as a failed turn (see the generate node).
             "generation": (
-                "The strict grader didn't find direct evidence for "
-                "your question in the indexed transcripts, and the "
-                "fallback generation didn't respond within "
-                f"{int(params.FALLBACK_TIMEOUT_S)}s. Please retry — the "
-                "rotator may pick a healthier arm next attempt."
+                "Error generating answer: no direct evidence for your question was found in the indexed "
+                "transcripts, and the fallback answer did not respond within "
+                f"{int(params.FALLBACK_TIMEOUT_S)}s. Please retry."
             ),
             "citations": related_citations,
             "grounded":  False,
@@ -165,9 +164,8 @@ async def fallback_answer(state: state.YouTubeRAGState, llm) -> dict:
     except Exception as e:
         return {
             "generation": (
-                "The strict grader didn't find direct evidence for "
-                "your question in the indexed transcripts, and the "
-                "fallback generation hit an error: "
+                "Error generating answer: no direct evidence for your question was found in the indexed "
+                "transcripts, and the fallback answer failed: "
                 f"`{type(e).__name__}: {e}`. Please retry."
             ),
             "citations": related_citations,

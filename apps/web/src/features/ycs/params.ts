@@ -81,8 +81,10 @@ export const ASK_THREAD_PARAM = "thread";
 export function askHref(threadId?: string): string {
   return threadId ? `/ycs/ask?${ASK_THREAD_PARAM}=${encodeURIComponent(threadId)}` : "/ycs/ask";
 }
-/** Trigger-label trim before ellipsis in the thread picker. */
-export const THREAD_LABEL_MAX = 16;
+/** Trigger-label trim before ellipsis in the thread picker (the thread's first question). */
+export const THREAD_LABEL_MAX = 28;
+/** The text the server puts in place of an answer when the model call fails (the generate step has no error event). */
+export const ASK_FAILED_ANSWER_PREFIX = "Error generating answer:";
 /** Stages of the adaptive RAG graph, in pill order. Keys match the LangGraph stage mapping. */
 export const ASK_STAGES: ReadonlyArray<{ id: string; label: string }> = [
   { id: "retrieve", label: "Retrieve" },

@@ -43,13 +43,14 @@ async def generate(state: state.YouTubeRAGState, llm) -> dict:
             timeout_s = params.GENERATE_TIMEOUT_S,
         )
         return {"generation": domain.strip_think_tags(response.content)}
+    # A failed call is reported AS the generation, always under the "Error generating answer:" prefix: the web client
+    # (apps/web `ASK_FAILED_ANSWER_PREFIX`) shows a turn whose answer starts with it as a failure with a Retry, not as an
+    # answer. Keep the prefix when changing these messages.
     except asyncio.TimeoutError:
         return {
             "generation": (
-                "The model didn't respond within "
-                f"{int(params.GENERATE_TIMEOUT_S)}s. The rotator may have "
-                "exhausted its retries on a hung deployment — please "
-                "retry the question."
+                "Error generating answer: the model did not respond within "
+                f"{int(params.GENERATE_TIMEOUT_S)}s. Please retry the question."
             ),
         }
     except Exception as e:

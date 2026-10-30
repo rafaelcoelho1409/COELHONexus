@@ -32,11 +32,12 @@ export function AskScope({
     return (
       <p
         title="A thread keeps the channels it started with. Start a new thread to search others."
-        className="m-0 inline-flex min-h-9 max-w-full items-center gap-2 rounded-sm border border-border px-2.5 text-sm text-muted-foreground"
+        className="m-0 flex min-h-9 w-full max-w-full items-center gap-2 rounded-sm border border-border px-2.5 text-sm text-muted-foreground sm:inline-flex sm:w-auto"
       >
         <Lock aria-hidden className="size-4 shrink-0" />
         <span className="min-w-0 truncate">{label}</span>
-        <span className="shrink-0 text-xs">· locked to this thread</span>
+        {/* On a phone the lock icon says it and the words stay for screen readers: the row has no room for them. */}
+        <span className="sr-only shrink-0 text-xs sm:not-sr-only">· locked to this thread</span>
       </p>
     );
   }
