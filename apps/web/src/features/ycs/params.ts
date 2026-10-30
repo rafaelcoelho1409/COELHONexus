@@ -76,6 +76,11 @@ export const LIBRARY_SEARCH_DEBOUNCE_MS = 250;
 /** Ask thread ids are server-known once a turn lands, so they live in the URL (`?thread=`), not in
  * localStorage. */
 export const ASK_THREAD_PARAM = "thread";
+
+/** The Ask stage, on one thread (`?thread=`) or fresh (no argument). */
+export function askHref(threadId?: string): string {
+  return threadId ? `/ycs/ask?${ASK_THREAD_PARAM}=${encodeURIComponent(threadId)}` : "/ycs/ask";
+}
 /** Trigger-label trim before ellipsis in the thread picker. */
 export const THREAD_LABEL_MAX = 16;
 /** Stages of the adaptive RAG graph, in pill order. Keys match the LangGraph stage mapping. */

@@ -27,14 +27,19 @@ import {
   parseLangs,
   parsePlaylist,
   parseTextareaIds,
+  phaseAnnouncement,
   phaseLabel,
   phasePct,
+  pipelineOverall,
   rangeLabel,
   readSearchRequest,
   resultMeta,
   routeItems,
+  type StoreStatus,
   selectRange,
   selectSnippet,
+  sortVideoRows,
+  statusWord,
   storeStatus,
   streamBarState,
   streamLabel,
@@ -45,6 +50,8 @@ import {
   summarizePaste,
   type Timing,
   unfurlState,
+  usageModelRows,
+  videoCounts,
   wipeSummaryLine,
 } from "./domain";
 import { type LibraryItem, libraryItemSchema, type TaskMeta, taskSnapshotSchema } from "./entities";
@@ -165,6 +172,95 @@ describe("readSearchRequest", () => {
 
   it("requires a query", () => {
     expect(() => readSearchRequest(new FormData(), 25)).toThrow();
+  });
+});
+
+describe("the pipeline run as a whole", () => {
+  it("names a bar's state in words", () => {
+    expect(statusWord("success")).toBe("done");
+    expect(statusWord("partial")).toBe("partial");
+    expect(statusWord("failure")).toBe("failed");
+    expect(statusWord("revoked")).toBe("failed");
+    expect(statusWord("pending")).toBe("queued");
+    expect(statusWord("progress")).toBe("running");
+    expect(statusWord("started")).toBe("running");
+    expect(statusWord("cancelled")).toBe("cancelled");
+  });
+
+  it("reads the four bars as one state", () => {
+    expect(pipelineOverall(["pending", "pending", "pending", "pending"], false)).toBe("queued");
+    expect(pipelineOverall(["success", "progress", "pending", "pending"], false)).toBe("running");
+    expect(pipelineOverall(["success", "success", "pending", "pending"], false)).toBe("running"); // a phase waits behind a finished one
+    expect(pipelineOverall(["success", "success", "success", "success"], false)).toBe("done");
+    expect(pipelineOverall(["success", "partial", "success", "success"], false)).toBe("partial");
+    expect(pipelineOverall(["success", "success", "success", "failure"], false)).toBe("partial");
+    expect(pipelineOverall(["failure", "failure", "error", "revoked"], false)).toBe("failed");
+    expect(pipelineOverall(["success", "progress", "pending", "pending"], true)).toBe("cancelled");
+    expect(pipelineOverall(["success", "cancelled", "cancelled", "cancelled"], false)).toBe("cancelled");
+  });
+
+  it("announces the phases by their words only, so the line changes at a transition and not at every poll", () => {
+    const phases = [
+      { title: "Phase 1 · Playwright", barState: "progress" },
+      { title: "Phase 2 · ElasticSearch", barState: "pending" },
+    ];
+    expect(phaseAnnouncement(phases, "running")).toBe(
+      "Pipeline running. Phase 1 · Playwright: running. Phase 2 · ElasticSearch: queued.",
+    );
+  });
+
+  it("lists failed videos first, then running, queued and done, keeping dispatch order within a group", () => {
+    const cells = (a: StoreStatus, b: StoreStatus = a) => ({
+      playwright: a,
+      elasticsearch: a,
+      qdrant: b,
+      neo4j: b,
+    });
+    const rows = [
+      { id: "done1", cells: cells("done") },
+      { id: "queued1", cells: cells("queued") },
+      { id: "running1", cells: cells("done", "running") },
+      { id: "failed1", cells: cells("done", "failed") },
+      { id: "done2", cells: cells("done", "unavailable") },
+      { id: "failed2", cells: cells("failed") },
+    ];
+    expect(sortVideoRows(rows).map((row) => row.id)).toEqual([
+      "failed1",
+      "failed2",
+      "running1",
+      "queued1",
+      "done1",
+      "done2",
+    ]);
+    expect(videoCounts(rows)).toEqual({ failed: 2, running: 1, queued: 1, done: 2 });
+  });
+
+  it("sums a run's usage by model, busiest first, ignoring models that made no call", () => {
+    const rows = usageModelRows({
+      by_node: {
+        v1: {
+          by_model: {
+            "vendor-a/model-x": { calls: 2, tokens_in: 100, tokens_out: 10, reasoning_tokens: 0 },
+            "vendor-b/model-y": { calls: 0, tokens_in: 0, tokens_out: 0, reasoning_tokens: 0 },
+          },
+        },
+        v2: {
+          by_model: {
+            "vendor-a/model-x": { calls: 1, tokens_in: 50, tokens_out: 5, reasoning_tokens: 3 },
+            "vendor-c/model-z": { calls: 5, tokens_in: 10, tokens_out: 1, reasoning_tokens: 0 },
+          },
+        },
+      },
+    });
+    expect(rows.map((row) => row.model)).toEqual(["vendor-c/model-z", "vendor-a/model-x"]);
+    expect(rows[1]).toEqual({
+      model: "vendor-a/model-x",
+      calls: 3,
+      tokens_in: 150,
+      tokens_out: 15,
+      reasoning_tokens: 3,
+    });
+    expect(usageModelRows(null)).toEqual([]);
   });
 });
 

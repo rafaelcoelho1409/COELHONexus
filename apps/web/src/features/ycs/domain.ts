@@ -3,6 +3,7 @@
 
 import type {
   LibraryItem,
+  ModelCounts,
   PipelineWipe,
   SearchRequestPayload,
   TaskMeta,
@@ -811,6 +812,146 @@ export function libraryStatusTone(status: string): string {
 /** Watch-page URL for a library row, falling back to the canonical watch link. */
 export function libraryUrl(v: LibraryItem): string {
   return v.webpage_url || `https://www.youtube.com/watch?v=${v.video_id}`;
+}
+
+export type ModelUsageRow = {
+  model: string;
+  calls: number;
+  tokens_in: number;
+  tokens_out: number;
+  reasoning_tokens: number;
+};
+
+/** The models a run called, summed over its videos, busiest first (ties by name). Names are the server's, verbatim. */
+export function usageModelRows(
+  payload:
+    | { by_node: Readonly<Record<string, { by_model: Readonly<Record<string, ModelCounts>> }>> }
+    | null
+    | undefined,
+): ModelUsageRow[] {
+  const merged = new Map<string, ModelUsageRow>();
+  for (const node of Object.values(payload?.by_node ?? {})) {
+    for (const [model, counts] of Object.entries(node.by_model)) {
+      const soFar = merged.get(model) ?? {
+        model,
+        calls: 0,
+        tokens_in: 0,
+        tokens_out: 0,
+        reasoning_tokens: 0,
+      };
+      merged.set(model, {
+        model,
+        calls: soFar.calls + counts.calls,
+        tokens_in: soFar.tokens_in + counts.tokens_in,
+        tokens_out: soFar.tokens_out + counts.tokens_out,
+        reasoning_tokens: soFar.reasoning_tokens + counts.reasoning_tokens,
+      });
+    }
+  }
+  return [...merged.values()]
+    .filter((row) => row.calls > 0)
+    .sort((a, b) => b.calls - a.calls || a.model.localeCompare(b.model));
+}
+
+// ============================================================
+// The run as a whole, status words, and the per-video table's order
+// ============================================================
+
+/** What a status is called to a person, from a bar's `state` (lower-cased Celery state, or the outcome of a finished one). */
+export type StatusWord = "queued" | "running" | "done" | "partial" | "failed" | "cancelled";
+
+export function statusWord(barState: string): StatusWord {
+  switch (barState.toLowerCase()) {
+    case "success":
+      return "done";
+    case "partial":
+      return "partial";
+    case "failure":
+    case "error":
+    case "revoked":
+      return "failed";
+    case "cancelled":
+      return "cancelled";
+    case "pending":
+    case "queued":
+      return "queued";
+    default:
+      return "running"; // started, progress, retry — work is going on
+  }
+}
+
+export const STATUS_WORD_LABEL: Record<StatusWord, string> = {
+  queued: "Queued",
+  running: "Running",
+  done: "Done",
+  partial: "Done with problems",
+  failed: "Failed",
+  cancelled: "Cancelled",
+};
+
+/** The run in one word, from its four bars. Running while any phase works or waits behind a finished one; once every phase has
+ * stopped: done when all succeeded, failed when none did, otherwise done with problems. A Stop reads as cancelled. */
+export function pipelineOverall(barStates: ReadonlyArray<string>, stopped: boolean): StatusWord {
+  const words = barStates.map(statusWord);
+  if (words.length > 0 && words.every((word) => word === "queued")) return stopped ? "cancelled" : "queued";
+  const finished = words.every(
+    (word) => word === "done" || word === "partial" || word === "failed" || word === "cancelled",
+  );
+  if (!finished) return stopped ? "cancelled" : "running";
+  if (words.some((word) => word === "cancelled") || stopped) return "cancelled";
+  if (words.every((word) => word === "failed")) return "failed";
+  if (words.some((word) => word === "failed" || word === "partial")) return "partial";
+  return "done";
+}
+
+/** What a screen reader hears when a phase changes state: the four phases and their words, never the counts, so the line only
+ * changes at a transition and not at every poll. */
+export function phaseAnnouncement(
+  phases: ReadonlyArray<{ title: string; barState: string }>,
+  overall: StatusWord,
+): string {
+  const parts = phases.map(
+    (phase) => `${phase.title}: ${STATUS_WORD_LABEL[statusWord(phase.barState)].toLowerCase()}`,
+  );
+  return `Pipeline ${STATUS_WORD_LABEL[overall].toLowerCase()}. ${parts.join(". ")}.`;
+}
+
+const STORES: ReadonlyArray<PipelinePrefix> = ["playwright", "elasticsearch", "qdrant", "neo4j"];
+
+/** Failed videos first, then those being worked on, then waiting, then done — so what needs a look is at the top of the table.
+ * Stable within each group (the order the batch was dispatched in). */
+export function sortVideoRows<T extends { cells: Record<PipelinePrefix, StoreStatus> }>(
+  rows: ReadonlyArray<T>,
+): T[] {
+  const rank = (row: T): number => {
+    const cells = STORES.map((store) => row.cells[store]);
+    if (cells.includes("failed")) return 0;
+    if (cells.includes("running")) return 1;
+    if (cells.includes("queued")) return 2;
+    return 3;
+  };
+  return rows
+    .map((row, index) => ({ row, index, rank: rank(row) }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((entry) => entry.row);
+}
+
+/** How many videos are failed, in progress, waiting or finished — the summary over the per-video table. */
+export function videoCounts(rows: ReadonlyArray<{ cells: Record<PipelinePrefix, StoreStatus> }>): {
+  failed: number;
+  running: number;
+  queued: number;
+  done: number;
+} {
+  const counts = { failed: 0, running: 0, queued: 0, done: 0 };
+  for (const row of rows) {
+    const cells = STORES.map((store) => row.cells[store]);
+    if (cells.includes("failed")) counts.failed += 1;
+    else if (cells.includes("running")) counts.running += 1;
+    else if (cells.includes("queued")) counts.queued += 1;
+    else counts.done += 1;
+  }
+  return counts;
 }
 
 /** Per-video client-side timing for the pipeline's duration column. Copy-on-write maps, so a tick

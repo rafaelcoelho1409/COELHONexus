@@ -1,29 +1,23 @@
 "use client";
 
-/** The Library: debounced search, three exclusive facet filters (Status / Channel / Language), the flat
- * row list of every ingested video, per-row delete and the bulk bar (Delete / Re-ingest). Port of
- * `static/js/ycs/ingest/library.js`. Refreshes on the pipeline panel's phase ticks (`refreshTick`),
- * not on a timer. */
+/** The Library: every ingested video as one list. A filter row (debounced search and three exclusive facets — Status, Channel,
+ * Language — with their counts), a list header that sticks under the app header with the master checkbox and where the page
+ * sits, the rows, server-side paging, and a bar over the bottom of the screen while rows are selected (Re-ingest, Delete).
+ * Port of `static/js/ycs/ingest/library.js`. Refreshes on the pipeline panel's phase ticks (`refreshTick`), not on a timer. */
 
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { JSX } from "react";
 import { useEffect, useState } from "react";
 
 import { getYcsAdminVideosFacetsOptions, getYcsAdminVideosOptions } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
+import { Button } from "@/shared/ui/button";
+import { Input } from "@/shared/ui/input";
+import { Label } from "@/shared/ui/label";
 
 import { bulkDeleteLibraryVideos, deleteLibraryVideo, queueVideosPipeline } from "../api";
-import {
-  fmtCount,
-  fmtInt,
-  libraryMasterState,
-  libraryMetaLine,
-  libraryStatsLine,
-  libraryStatusTone,
-  libraryUrl,
-} from "../domain";
+import { fmtCount, fmtInt, libraryMasterState } from "../domain";
 import {
   type FacetEntry,
   type LibraryFacets,
@@ -33,6 +27,9 @@ import {
 } from "../entities";
 import { useYcsOverlays } from "../hooks/use-overlays";
 import { ingestionHref, LIBRARY_PAGE_SIZE, LIBRARY_SEARCH_DEBOUNCE_MS } from "../params";
+import { LibraryBar } from "./library-bar";
+import { LibraryRow } from "./library-row";
+import { SELECT_CLASS } from "./search-filters";
 
 /** The facets response keys are plural while the query params are singular — mapped explicitly so a
  * group can never silently empty again. */
@@ -63,6 +60,7 @@ function libraryGroupOf(facets: LibraryFacets, group: FacetGroupKey): FacetEntry
 }
 
 const EMPTY_FACETS: LibraryFacets = { channels: [], languages: [], statuses: [] };
+const SKELETON_KEYS = ["sk-1", "sk-2", "sk-3", "sk-4"] as const;
 
 export function LibraryPanel({ refreshTick }: { refreshTick: number }): JSX.Element {
   const router = useRouter();
@@ -77,6 +75,7 @@ export function LibraryPanel({ refreshTick }: { refreshTick: number }): JSX.Elem
   });
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [lastToggled, setLastToggled] = useState<string | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -154,6 +153,8 @@ export function LibraryPanel({ refreshTick }: { refreshTick: number }): JSX.Elem
     },
   });
 
+  const filtering = q !== "" || FACET_GROUPS.some((group) => filters[group.key] !== "");
+
   function setFilter(group: FacetGroupKey, value: string): void {
     setFilters((current) => ({ ...current, [group]: value }));
     setOffset(0);
@@ -166,24 +167,39 @@ export function LibraryPanel({ refreshTick }: { refreshTick: number }): JSX.Elem
     setOffset(0);
   }
 
-  function toggleRow(videoId: string, on: boolean): void {
+  function setMany(ids: ReadonlyArray<string>, on: boolean): void {
     setSelected((current) => {
       const next = new Set(current);
-      if (on) next.add(videoId);
-      else next.delete(videoId);
+      for (const id of ids) {
+        if (on) next.add(id);
+        else next.delete(id);
+      }
       return next;
     });
   }
 
-  function toggleAll(on: boolean): void {
-    setSelected((current) => {
-      const next = new Set(current);
-      for (const row of rows) {
-        if (on) next.add(row.video_id);
-        else next.delete(row.video_id);
+  /** Tick or untick a row; with Shift, every row between it and the last one touched, in the order shown. */
+  function toggleRow(videoId: string, on: boolean, shift: boolean): void {
+    if (shift && lastToggled) {
+      const from = rows.findIndex((row) => row.video_id === lastToggled);
+      const to = rows.findIndex((row) => row.video_id === videoId);
+      if (from !== -1 && to !== -1) {
+        const [lo, hi] = from < to ? [from, to] : [to, from];
+        setMany(
+          rows.slice(lo, hi + 1).map((row) => row.video_id),
+          on,
+        );
+        setLastToggled(videoId);
+        return;
       }
-      return next;
-    });
+    }
+    setMany([videoId], on);
+    setLastToggled(videoId);
+  }
+
+  function clearSelection(): void {
+    setSelected(new Set());
+    setLastToggled(null);
   }
 
   async function handleDeleteOne(videoId: string): Promise<void> {
@@ -218,46 +234,48 @@ export function LibraryPanel({ refreshTick }: { refreshTick: number }): JSX.Elem
   const master = libraryMasterState(rows, selected);
   const rangeStart = total === 0 ? 0 : offset + 1;
   const rangeEnd = offset + returned;
+  const status =
+    rowsQuery.isFetching && rows.length > 0
+      ? "Updating…"
+      : total === 0
+        ? ""
+        : `${rangeStart}–${rangeEnd} of ${fmtInt(total)}`;
 
   return (
-    <section aria-label="Library" className="rounded-md border border-border bg-card p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-base font-medium">
-          Library <span className="font-mono text-xs text-muted-foreground">· {fmtInt(total)} videos</span>
-        </p>
-        <button
-          type="button"
-          onClick={clearFilters}
-          className="min-h-9 rounded-sm border border-border px-3 text-sm text-muted-foreground hover:text-foreground"
-        >
-          Clear filters
-        </button>
-      </div>
+    <section aria-label="Library" className="flex flex-col gap-4">
+      <h2 className="text-base font-medium">
+        Library{" "}
+        <span className="font-mono text-xs font-normal text-muted-foreground">· {fmtInt(total)} videos</span>
+      </h2>
 
-      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        <div>
-          <label htmlFor="ycs-lib-search" className="text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-end gap-x-3 gap-y-3">
+        <div className="min-w-0 flex-[1_1_14rem]">
+          <Label htmlFor="ycs-lib-search" className="mb-1.5 block text-xs font-medium text-muted-foreground">
             Search
-          </label>
-          <input
+          </Label>
+          <Input
             id="ycs-lib-search"
             type="search"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             placeholder="Title or channel"
-            className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 text-sm"
+            autoComplete="off"
+            className="h-9 text-sm"
           />
         </div>
         {FACET_GROUPS.map((group) => (
-          <div key={group.key}>
-            <label htmlFor={`ycs-lib-facet-${group.key}`} className="text-xs text-muted-foreground">
+          <div key={group.key} className="min-w-0 flex-[1_1_10rem]">
+            <Label
+              htmlFor={`ycs-lib-facet-${group.key}`}
+              className="mb-1.5 block text-xs font-medium text-muted-foreground"
+            >
               {group.label}
-            </label>
+            </Label>
             <select
               id={`ycs-lib-facet-${group.key}`}
               value={filters[group.key]}
               onChange={(event) => setFilter(group.key, event.target.value)}
-              className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 text-sm"
+              className={`${SELECT_CLASS} w-full`}
             >
               <option value="">All</option>
               {libraryGroupOf(facetsQuery.data ?? EMPTY_FACETS, group.key).map((entry) => {
@@ -272,152 +290,133 @@ export function LibraryPanel({ refreshTick }: { refreshTick: number }): JSX.Elem
             </select>
           </div>
         ))}
+        {filtering ? (
+          <Button type="button" variant="ghost" size="lg" onClick={clearFilters}>
+            Clear filters
+          </Button>
+        ) : null}
       </div>
 
-      {selected.size > 0 ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-sm border border-border px-2 py-1.5">
-          <span className="text-sm">{selected.size} selected</span>
-          <button
-            type="button"
-            onClick={() => void handleDeleteBulk()}
-            disabled={deleteBulk.isPending}
-            className="min-h-9 rounded-sm border border-border px-3 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
-          >
-            {deleteBulk.isPending ? "Deleting…" : "Delete"}
-          </button>
-          <button
-            type="button"
-            onClick={handleReingest}
-            disabled={reingest.isPending}
-            className="min-h-9 rounded-sm border border-border px-3 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
-          >
-            {reingest.isPending ? "Queuing…" : "Re-ingest"}
-          </button>
-          <button
-            type="button"
-            onClick={() => setSelected(new Set())}
-            aria-label="Clear selection"
-            className="min-h-9 rounded-sm px-2 text-sm text-muted-foreground hover:text-foreground"
-          >
-            ×
-          </button>
-        </div>
-      ) : null}
-
       {deleteOne.isError ? (
-        <p role="alert" className="mt-2 text-sm text-destructive-text">
+        <p role="alert" className="text-sm text-destructive-text">
           Delete failed — {apiErrorMessage(deleteOne.error)}
         </p>
       ) : null}
       {deleteBulk.isError ? (
-        <p role="alert" className="mt-2 text-sm text-destructive-text">
+        <p role="alert" className="text-sm text-destructive-text">
           Bulk delete failed — {apiErrorMessage(deleteBulk.error)}
         </p>
       ) : null}
       {reingest.isError ? (
-        <p role="alert" className="mt-2 text-sm text-destructive-text">
+        <p role="alert" className="text-sm text-destructive-text">
           Re-ingest failed — {apiErrorMessage(reingest.error)}
         </p>
       ) : null}
 
-      <div className="mt-2 flex items-center gap-2 px-1">
-        <input
-          type="checkbox"
-          checked={master === "all"}
-          ref={(el) => {
-            if (el) el.indeterminate = master === "some";
-          }}
-          onChange={(event) => toggleAll(event.target.checked)}
-          aria-label="Select all videos on this page"
-          className="h-4 w-4"
-        />
-        <span className="text-xs text-muted-foreground">Select all on this page</span>
-      </div>
-
-      {rowsQuery.isPending ? (
-        <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>
-      ) : rowsQuery.isError ? (
-        <p role="alert" className="py-6 text-center text-sm text-destructive-text">
-          Could not load the library — {apiErrorMessage(rowsQuery.error)}
-        </p>
-      ) : rows.length === 0 ? (
-        <p className="py-6 text-center text-sm text-muted-foreground">No videos match the current filters.</p>
-      ) : (
-        <ul className="mt-1">
-          {rows.map((row) => (
-            <li key={row.video_id} className="flex items-start gap-2 border-t border-border py-2">
+      <div className="rounded-md border border-border bg-card">
+        <div className="z-10 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-t-md border-b border-border bg-card px-3 py-1 sm:sticky sm:top-14">
+          <label className="flex min-h-9 cursor-pointer items-center gap-3 text-sm">
+            <span className="flex size-9 items-center justify-center">
               <input
                 type="checkbox"
-                checked={selected.has(row.video_id)}
-                onChange={(event) => toggleRow(row.video_id, event.target.checked)}
-                aria-label={`Select ${row.title || row.video_id}`}
-                className="mt-1 h-4 w-4"
+                checked={master === "all"}
+                ref={(el) => {
+                  if (el) el.indeterminate = master === "some";
+                }}
+                disabled={rows.length === 0}
+                onChange={(event) =>
+                  setMany(
+                    rows.map((row) => row.video_id),
+                    event.target.checked,
+                  )
+                }
+                aria-label="Select all videos on this page"
+                className="size-4 cursor-pointer accent-primary"
               />
-              {row.thumbnail ? (
-                // biome-ignore lint/performance/noImgElement: YouTube thumbnails of arbitrary hosts — next/image would need every host allow-listed
-                <img // eslint-disable-line @next/next/no-img-element
-                  src={row.thumbnail}
-                  alt=""
-                  loading="lazy"
-                  className="h-9 w-16 shrink-0 rounded-sm object-cover"
-                />
-              ) : (
-                <div className="h-9 w-16 shrink-0 rounded-sm bg-muted" />
-              )}
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline gap-2">
-                  <span className={`shrink-0 text-xs ${libraryStatusTone(row.status)}`}>{row.status}</span>
-                  <a
-                    href={libraryUrl(row)}
-                    target="_blank"
-                    rel="noopener"
-                    className="min-w-0 truncate text-sm hover:underline"
-                    title={row.title || row.video_id}
-                  >
-                    {row.title || "(no title)"}
-                  </a>
-                </div>
-                <p className="truncate text-xs text-muted-foreground">{libraryMetaLine(row)}</p>
-                {libraryStatsLine(row) ? (
-                  <p className="truncate font-mono text-xs text-muted-foreground">{libraryStatsLine(row)}</p>
-                ) : null}
-              </div>
-              <button
-                type="button"
-                onClick={() => void handleDeleteOne(row.video_id)}
-                disabled={deleteOne.isPending}
-                aria-label={`Delete ${row.title || row.video_id}`}
-                className="min-h-9 min-w-9 rounded-sm px-2 text-muted-foreground hover:text-foreground disabled:opacity-50"
-              >
-                <Trash2 size={16} aria-hidden="true" />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {total > LIBRARY_PAGE_SIZE ? (
-        <div className="mt-2 flex items-center justify-center gap-3 text-sm">
-          <button
-            type="button"
-            onClick={() => setOffset(Math.max(0, offset - LIBRARY_PAGE_SIZE))}
-            disabled={offset === 0}
-            className="min-h-9 rounded-sm border border-border px-3 text-muted-foreground hover:text-foreground disabled:opacity-50"
-          >
-            Previous
-          </button>
-          <span className="font-mono text-xs text-muted-foreground">
-            {rangeStart}–{rangeEnd} of {fmtInt(total)}
-          </span>
-          <button
-            type="button"
-            onClick={() => setOffset(offset + LIBRARY_PAGE_SIZE)}
-            disabled={rangeEnd >= total}
-            className="min-h-9 rounded-sm border border-border px-3 text-muted-foreground hover:text-foreground disabled:opacity-50"
-          >
-            Next
-          </button>
+            </span>
+            Select all on this page
+          </label>
+          <p role="status" className="tabular text-xs text-muted-foreground">
+            {status}
+          </p>
         </div>
+
+        {rowsQuery.isPending ? (
+          <ul aria-label="Loading the library" aria-busy>
+            {SKELETON_KEYS.map((key) => (
+              <li
+                key={key}
+                aria-hidden
+                className="grid animate-status grid-cols-[auto_auto_minmax(0,1fr)] gap-x-3 border-b border-border px-3 py-2"
+              >
+                <span className="size-9" />
+                <span className="aspect-video w-24 rounded-sm bg-muted" />
+                <span className="flex flex-col gap-2 pt-1.5">
+                  <span className="h-4 w-3/5 rounded-sm bg-muted" />
+                  <span className="h-3 w-2/5 rounded-sm bg-muted" />
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : rowsQuery.isError ? (
+          <p role="alert" className="px-3 py-8 text-center text-sm text-destructive-text">
+            Could not load the library — {apiErrorMessage(rowsQuery.error)}
+          </p>
+        ) : rows.length === 0 ? (
+          <p className="px-3 py-8 text-center text-sm text-muted-foreground">
+            No videos match the current filters.
+          </p>
+        ) : (
+          <ul aria-label="Ingested videos" aria-busy={rowsQuery.isFetching}>
+            {rows.map((row) => (
+              <LibraryRow
+                key={row.video_id}
+                row={row}
+                checked={selected.has(row.video_id)}
+                deleting={deleteOne.isPending}
+                onToggle={(on, shift) => toggleRow(row.video_id, on, shift)}
+                onDelete={() => void handleDeleteOne(row.video_id)}
+              />
+            ))}
+          </ul>
+        )}
+
+        {total > LIBRARY_PAGE_SIZE ? (
+          <div className="flex items-center justify-between gap-3 rounded-b-md border-t border-border px-3 py-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              onClick={() => setOffset(Math.max(0, offset - LIBRARY_PAGE_SIZE))}
+              disabled={offset === 0}
+            >
+              Previous
+            </Button>
+            <span className="tabular font-mono text-xs text-muted-foreground">
+              {rangeStart}–{rangeEnd} of {fmtInt(total)}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              onClick={() => setOffset(offset + LIBRARY_PAGE_SIZE)}
+              disabled={rangeEnd >= total}
+            >
+              Next
+            </Button>
+          </div>
+        ) : null}
+      </div>
+
+      {selected.size > 0 ? (
+        <LibraryBar
+          count={selected.size}
+          reingesting={reingest.isPending}
+          deleting={deleteBulk.isPending}
+          onReingest={handleReingest}
+          onDelete={() => void handleDeleteBulk()}
+          onClear={clearSelection}
+        />
       ) : null}
     </section>
   );

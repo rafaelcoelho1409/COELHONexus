@@ -7,8 +7,8 @@ import { ASK_STAGES, THREAD_LABEL_MAX } from "./params";
 
 export type AskStageId = "retrieve" | "grade" | "generate" | "verify";
 export type AskStageStatus = "queued" | "active" | "done";
-export type AskStageView = { status: AskStageStatus; action: string };
-export type AskDeepCard = { question: string; status: "queued" | "done"; answer: string };
+type AskStageView = { status: AskStageStatus; action: string };
+type AskDeepCard = { question: string; status: "queued" | "done"; answer: string };
 export type AskDeep = { banner: string | null; planText: string; cards: AskDeepCard[] };
 export type UsageTotal = { calls: number; tokens_in: number; tokens_out: number };
 
@@ -35,7 +35,14 @@ export type AskTurn = {
   createdAt: string;
   /** Whether the Thinking accordion renders at all (a bare legacy row with no state and no answer doesn't). */
   hasThinking: boolean;
+  /** The channels this turn searched (empty = all); null when the history row does not say. A thread's first turn fixes the
+   * scope of all its turns. */
+  channelIds: string[] | null;
+  /** Identity for rendering: a live turn's own counter value, a saved turn's row id. */
+  key: string;
 };
+
+let liveTurnCount = 0;
 
 const STAGE_INDEX: Record<AskStageId, number> = (() => {
   const map = {} as Record<AskStageId, number>;
@@ -53,8 +60,11 @@ function freshStages(): Record<AskStageId, AskStageView> {
   return stages;
 }
 
-export function newLiveTurn(question: string): AskTurn {
+export function newLiveTurn(question: string, channelIds: string[] | null = null): AskTurn {
+  liveTurnCount += 1;
   return {
+    key: `live-${liveTurnCount}`,
+    channelIds,
     question,
     mode: "",
     stages: freshStages(),
@@ -259,18 +269,18 @@ export function formatTurnDuration(ms: number | null | undefined): string {
   return text ? `in ${text}` : "";
 }
 
-export function fmtTokens(n: number | null | undefined): string {
+function fmtTokens(n: number | null | undefined): string {
   return Number.isFinite(Number(n)) ? Number(n ?? 0).toLocaleString("en-US") : "0";
 }
 
 /** Per-turn usage chip: "1,234 in · 5,678 out", or "" when zero calls (the chip renders disabled then). */
 export function usageLabel(usage: UsageTotal | null): string {
-  if (!usage || !usage.calls) return "";
+  if (!usage?.calls) return "";
   return `${fmtTokens(usage.tokens_in)} in · ${fmtTokens(usage.tokens_out)} out`;
 }
 
 /** "2h ago" relative timestamp from an ISO string; falls back to the raw string when parsing fails. */
-export function relTime(iso: string): string {
+function relTime(iso: string): string {
   if (!iso) return "";
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return iso;
@@ -297,7 +307,7 @@ export function armLabel(source: string | null | undefined): string {
 /** `[Video: title]` → `⟦CITE-N⟧`, title-aware with a substring fallback because LLMs sometimes
  * paraphrase. The Unicode brackets have no markdown semantics, so they pass a markdown renderer
  * verbatim — unlike the old `__CITE_N__` placeholder, which CommonMark rewrote into bold. */
-export function citeTokens(text: string, citations: readonly AskCitation[]): string {
+function citeTokens(text: string, citations: readonly AskCitation[]): string {
   if (!citations.length) return text;
   const index = new Map<string, number>();
   citations.forEach((c, i) => {
@@ -383,9 +393,7 @@ export const STALLED_SUBTITLE = "Stalled — pipeline lost (likely backend resta
 
 /** Stage pills for a history turn. No persisted state + an answer = all done (the legacy default);
  * a mid-stream snapshot keeps its active/queued pills as persisted. */
-export function stagesFromThinking(
-  state: AskThinkingState | null | undefined,
-): Record<AskStageId, AskStageView> {
+function stagesFromThinking(state: AskThinkingState | null | undefined): Record<AskStageId, AskStageView> {
   const stages = freshStages();
   if (!state) {
     for (const stage of ASK_STAGES) stages[stage.id as AskStageId] = DONE;
@@ -407,7 +415,7 @@ export function stagesFromThinking(
 export function turnFromHistory(row: HistoryRow): AskTurn {
   const ts = row.thinking_state;
   const deep = ts?.deep ?? null;
-  const hasDeep = Boolean(deep && deep.sub_questions.length);
+  const hasDeep = Boolean(deep?.sub_questions.length);
   return {
     question: row.question,
     mode: row.mode,
@@ -439,6 +447,8 @@ export function turnFromHistory(row: HistoryRow): AskTurn {
     error: null,
     createdAt: row.created_at,
     hasThinking: Boolean(row.answer) || Boolean(ts),
+    channelIds: ts?.channel_ids ?? null,
+    key: `row-${row.id ?? row.created_at}`,
   };
 }
 
@@ -480,4 +490,41 @@ export function streamErrorText(error: unknown): string {
     }
   }
   return typeof candidate?.message === "string" && candidate.message ? candidate.message : "request failed";
+}
+
+/** Hash prefix of a citation pill's link: `[2](#cite-2)` is how the answer's markdown carries pill 2. */
+const CITE_HREF = /^#cite-(\d+)$/;
+
+/** The answer with every resolvable `[Video: title]` turned into a `[N](#cite-N)` link the renderer shows as a pill. */
+export function citeMarkdown(text: string, citations: readonly AskCitation[]): string {
+  return citeTokens(text, citations).replace(/⟦CITE-(\d+)⟧/g, "[$1](#cite-$1)");
+}
+
+/** The pill number carried by a link href, or null for any other link. */
+export function citeNumber(href: string | undefined): number | null {
+  const match = href ? CITE_HREF.exec(href) : null;
+  return match?.[1] ? Number(match[1]) : null;
+}
+
+/** Where a source opens: its own URL, else the watch page of its video. */
+export function citationUrl(citation: AskCitation): string {
+  if (citation.url) return citation.url;
+  return citation.video_id ? `https://www.youtube.com/watch?v=${citation.video_id}` : "";
+}
+
+export function citationThumb(citation: AskCitation): string {
+  return citation.video_id ? `https://i.ytimg.com/vi/${citation.video_id}/mqdefault.jpg` : "";
+}
+
+/** "Thought for 14s" once a turn is done, "Thinking" while it runs. */
+export function thinkingLabel(turn: Pick<AskTurn, "streaming" | "recovered" | "durationMs">): string {
+  if (turn.streaming || turn.recovered) return "Thinking";
+  const took = formatDuration(turn.durationMs);
+  return took ? `Thought for ${took}` : "Thinking trace";
+}
+
+/** The turn whose sources the rail shows by default: the latest one that has any. */
+export function lastSourcedTurn(turns: readonly Pick<AskTurn, "citations">[]): number | null {
+  for (let i = turns.length - 1; i >= 0; i--) if (turns[i]?.citations.length) return i;
+  return null;
 }

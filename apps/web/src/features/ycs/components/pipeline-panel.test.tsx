@@ -140,11 +140,72 @@ describe("PipelinePanel", () => {
     expect(await screen.findByText("3/10")).toBeInTheDocument(); // playwright bar label
     expect(screen.getByText("· 2 videos")).toBeInTheDocument();
 
-    const table = screen.getByRole("region", { name: "Per-video pipeline progress" });
+    // Each phase says where it stands in an icon and a word, and draws a named progress bar with a value.
+    const steps = screen.getByRole("list", { name: "Pipeline phases" });
+    expect(within(steps).getAllByRole("progressbar")).toHaveLength(4);
+    const playwright = within(steps).getByRole("progressbar", { name: "Phase 1 · Playwright" });
+    expect(playwright).toHaveAttribute("aria-valuenow");
+
+    // The per-video table is in a side sheet, failed videos first.
+    await userEvent.click(screen.getByRole("button", { name: "Videos (2)" }));
+    const sheet = await screen.findByRole("dialog", { name: "Videos in this pipeline" });
+    const table = within(sheet).getByRole("region", { name: "Per-video pipeline progress" });
     const row1 = within(table).getByRole("row", { name: /One/ });
     expect(within(row1).getAllByText("Done").length).toBeGreaterThan(0); // qdrant done
     const row2 = within(table).getByRole("row", { name: /Two/ });
     expect(within(row2).getAllByText("Queued").length).toBe(4); // PW, ES, qdrant, neo4j
+  });
+
+  it("announces the run once, by words, and keeps the phases themselves out of any live region", async () => {
+    taskState.state = "RUNNING";
+    taskState.meta = { phase: "transcription", current: 3, total: 10 };
+    renderWith(
+      <PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} onDismiss={vi.fn()} />,
+    );
+    await screen.findByText("3/10");
+    const live = screen.getAllByRole("status").find((element) => element.className.includes("sr-only"));
+    expect(live).toHaveTextContent("Pipeline running.");
+    expect(live).toHaveTextContent("Phase 1 · Playwright: running");
+    expect(live).not.toHaveTextContent("3/10"); // counts change at every poll; they are not announced
+    expect(screen.getByRole("region", { name: "Pipeline progress" })).not.toHaveAttribute("aria-live");
+  });
+
+  it("opens the LLM usage in a sheet, with the models the run called", async () => {
+    server.use(
+      http.get(`${API}/v1/ycs/admin/pipeline/:extractId/llm-counters`, () =>
+        HttpResponse.json({
+          total: { calls: 3, tokens_in: 1200, tokens_out: 90, reasoning_tokens: 0 },
+          by_node: {
+            vid1aaaaaaa: {
+              by_model: {
+                "vendor-a/model-x": { calls: 2, tokens_in: 800, tokens_out: 60, reasoning_tokens: 0 },
+              },
+            },
+            vid2aaaaaaa: {
+              by_model: {
+                "vendor-b/model-y": { calls: 1, tokens_in: 400, tokens_out: 30, reasoning_tokens: 0 },
+              },
+            },
+          },
+        }),
+      ),
+    );
+    renderWith(
+      <PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} onDismiss={vi.fn()} />,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "LLM usage" }));
+    const sheet = await screen.findByRole("dialog", { name: "Pipeline LLM usage" });
+    expect(await within(sheet).findByText("1,200")).toBeInTheDocument();
+    const models = within(sheet).getByRole("region", { name: "Usage by model" });
+    expect(
+      within(models)
+        .getAllByRole("row")
+        .map((row) => row.textContent),
+    ).toEqual([
+      "ModelCallsInput tokensOutput tokensReasoning",
+      "vendor-a/model-x2800600",
+      "vendor-b/model-y1400300",
+    ]);
   });
 
   it("shows usage counts and phase hints on success, firing done callbacks once", async () => {
@@ -195,7 +256,6 @@ describe("PipelinePanel", () => {
     expect(screen.getByText("2 transcripts in ES (2 new · 0 cached)")).toBeInTheDocument();
     expect(screen.getByText("2 transcripts · 20 chunks · 20 points")).toBeInTheDocument();
     expect(screen.getByText("5 nodes · 3 rels · 1 merged")).toBeInTheDocument();
-    expect(screen.getByText("2 calls · 100 input tokens · 20 output tokens")).toBeInTheDocument();
     expect(screen.getAllByText("Done").length).toBeGreaterThanOrEqual(4);
     await waitFor(() => expect(onPhaseDone).toHaveBeenCalledTimes(4)); // both split bars share the task
     await waitFor(() => expect(onAllDone).toHaveBeenCalledTimes(1));
@@ -214,8 +274,10 @@ describe("PipelinePanel", () => {
     expect(await within(dialog).findByText("Stop the pipeline?")).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Stop" }));
 
-    expect(screen.getAllByText("Cancelled")).toHaveLength(2); // both split bars read the task
-    expect(screen.getAllByText("Stopped by user — partial writes preserved.")).toHaveLength(2);
+    await waitFor(() => expect(screen.getAllByText("Cancelled").length).toBeGreaterThanOrEqual(2));
+    expect(screen.getAllByText("Stopped by user — partial writes preserved.").length).toBeGreaterThanOrEqual(
+      2,
+    );
   });
 
   it("wipes through the confirm dialog and prints the summary", async () => {

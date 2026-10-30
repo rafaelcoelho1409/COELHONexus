@@ -1,14 +1,16 @@
 "use client";
 
-/** The pipeline panel: four live progress bars (Playwright, ElasticSearch, Qdrant, Neo4j), an elapsed
- * clock, the Stop / Retry / Wipe cache / Dismiss actions and the per-video × per-store table. Port of
+/** The pipeline panel: the run as four steps (Playwright, ElasticSearch, Qdrant, Neo4j) with one overall state, an elapsed clock and
+ * the actions that belong to a run — Stop while it works, Retry once it has stopped — and, apart from them, the two that end it for
+ * good (Dismiss, Wipe cache). The per-video × per-store table and the LLM usage open in side sheets. Port of
  * `static/js/ycs/pipeline_panel.js` + `features/ycs/shared/pipeline_panel.py`.
  *
- * Playwright and ElasticSearch poll the SAME extract task (there is no separate ES task) and read
- * different sub-phase targets out of its `phase` field; Qdrant and Neo4j poll the per-store aggregator
- * (the dispatch's ids for those phases are the extract id reused as a lookup key, not task ids). */
+ * Playwright and ElasticSearch poll the SAME extract task (there is no separate ES task) and read different sub-phase targets out
+ * of its `phase` field; Qdrant and Neo4j poll the per-store aggregator (the dispatch's ids for those phases are the extract id
+ * reused as a lookup key, not task ids). */
 
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { ChartColumn, ListChecks } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { JSX } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -19,34 +21,31 @@ import {
   getYcsAdminTaskTaskIdOptions,
 } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
+import { Button } from "@/shared/ui/button";
 
 import { rerunPipeline, stopPipeline, wipePipeline } from "../api";
 import {
-  cellDuration,
   extractBarState,
   extractSuccessLabel,
   fmtElapsed,
-  fmtInt,
   isTerminal,
-  nextTiming,
   type PhaseSnapshot,
   type PipelinePrefix,
-  STORE_STATUS_LABELS,
-  type StoreStatus,
-  storeStatus,
+  phaseAnnouncement,
+  pipelineOverall,
+  STATUS_WORD_LABEL,
   streamBarState,
   streamLabel,
   streamPct,
   subPhaseLabel,
   subPhasePct,
   successHint,
-  type Timing,
-  type TimingRow,
   wipeSummaryLine,
 } from "../domain";
 import { llmCountersSchema, taskSnapshotSchema } from "../entities";
 import { useYcsOverlays } from "../hooks/use-overlays";
 import type { PipelineTracking } from "../hooks/use-pipeline-tracking";
+import { useVideoRows } from "../hooks/use-video-rows";
 import {
   ingestionHref,
   LLM_USAGE_REFRESH_MS,
@@ -54,6 +53,12 @@ import {
   PIPELINE_POLL_BACKOFF_MS,
   PIPELINE_POLL_MS,
 } from "../params";
+import { PipelineSteps, type Step, type StepView } from "./pipeline-steps";
+import { PipelineUsageSheet } from "./pipeline-usage-sheet";
+import { PipelineVideosSheet } from "./pipeline-videos-sheet";
+import { StatusBadge } from "./status-badge";
+
+const PREFIXES: ReadonlyArray<PipelinePrefix> = ["playwright", "elasticsearch", "qdrant", "neo4j"];
 
 const BAR_TITLES: Record<PipelinePrefix, string> = {
   playwright: "Phase 1 · Playwright",
@@ -68,34 +73,6 @@ const BAR_HINTS: Record<PipelinePrefix, string> = {
   qdrant: "Hybrid dense + BM25 upsert.",
   neo4j: "Full-transcript LLM entity extraction.",
 };
-
-const FILL_CLASS: Record<string, string> = {
-  success: "bg-success",
-  partial: "bg-warning",
-  failure: "bg-destructive",
-  error: "bg-destructive",
-  cancelled: "bg-neutral-8",
-  revoked: "bg-neutral-8",
-};
-const DEFAULT_FILL = "bg-primary";
-
-const LABEL_CLASS: Record<string, string> = {
-  success: "text-success-text",
-  partial: "text-warning-text",
-  failure: "text-destructive-text",
-  error: "text-destructive-text",
-};
-const DEFAULT_LABEL_CLASS = "text-muted-foreground";
-
-const CELL_CLASS: Record<StoreStatus, string> = {
-  queued: "text-muted-foreground",
-  running: "text-running-text",
-  done: "text-success-text",
-  failed: "text-destructive-text",
-  unavailable: "text-muted-foreground",
-};
-
-type BarView = { state: string; pct: number; label: string; hint: string | null };
 
 type AllItem = { id: string; title?: string | null; channel?: string | null };
 
@@ -130,6 +107,7 @@ export function PipelinePanel({
 }): JSX.Element {
   const router = useRouter();
   const { confirm, toast } = useYcsOverlays();
+  const [sheet, setSheet] = useState<"videos" | "usage" | null>(null);
 
   const extractQuery = useQuery({
     ...getYcsAdminTaskTaskIdOptions({ path: { task_id: tracking.extract } }),
@@ -159,15 +137,15 @@ export function PipelinePanel({
     qdrant: qdrantSnap,
     neo4j: neo4jSnap,
   };
-  const allTerminal = (Object.keys(snapshots) as PipelinePrefix[]).every((p) =>
-    isTerminal(snapshots[p].state),
-  );
+  const allTerminal = PREFIXES.every((p) => isTerminal(snapshots[p].state));
+  // Counters follow the run while it works, and are fetched once more whenever the sheet is opened after it has ended.
   const countersQuery = useQuery({
     ...getYcsAdminPipelineExtractIdLlmCountersOptions({ path: { extract_id: tracking.neo4j } }),
     retry: 0,
-    enabled: !allTerminal,
-    refetchInterval: LLM_USAGE_REFRESH_MS,
+    enabled: !allTerminal || sheet === "usage",
+    refetchInterval: allTerminal ? false : LLM_USAGE_REFRESH_MS,
   });
+  const usage = llmCountersSchema.safeParse(countersQuery.data);
 
   // Phase 1 emits a one-shot all_items payload once yt-dlp metadata is done; later polls lack it, so
   // the latest non-empty list is kept for the per-video table. The guard makes this the sanctioned
@@ -182,6 +160,12 @@ export function PipelinePanel({
     ...(extractSnap.meta?.no_transcript_ids ?? []),
     ...(extractSnap.result?.no_transcript_ids ?? []),
   ]);
+  const videoRows = useVideoRows({
+    videoIds: tracking.videoIds,
+    items: allItems,
+    snapshots,
+    noTranscriptIds,
+  });
 
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -236,7 +220,7 @@ export function PipelinePanel({
     },
   });
 
-  function barView(prefix: PipelinePrefix): BarView {
+  function stepView(prefix: PipelinePrefix): StepView {
     const snap = snapshots[prefix];
     let state: string;
     let pct: number;
@@ -256,9 +240,10 @@ export function PipelinePanel({
       pct = streamPct(snap, prefix);
       label = streamLabel(snap, prefix);
     } else {
-      state = snap.state.toLowerCase();
       pct = subPhasePct(snap, prefix);
       label = subPhaseLabel(snap, prefix);
+      // Playwright and ElasticSearch share one task: while it works on the other one's sub-phase this one is still waiting.
+      state = label === "Queued" ? "pending" : snap.state.toLowerCase();
     }
     if (stopped && !isTerminal(snap.state)) {
       return {
@@ -270,6 +255,22 @@ export function PipelinePanel({
     }
     return { state, pct, label, hint };
   }
+
+  const steps: Step[] = PREFIXES.map((prefix) => ({
+    key: prefix,
+    title: BAR_TITLES[prefix],
+    defaultHint: BAR_HINTS[prefix],
+    view: stepView(prefix),
+  }));
+  const overall = pipelineOverall(
+    steps.map((step) => step.view.state),
+    stopped,
+  );
+  const running = !allTerminal && !stopped;
+  const announcement = phaseAnnouncement(
+    steps.map((step) => ({ title: step.title, barState: step.view.state })),
+    overall,
+  );
 
   async function handleStop(): Promise<void> {
     const ok = await confirm({
@@ -285,8 +286,7 @@ export function PipelinePanel({
   async function handleWipe(): Promise<void> {
     const ok = await confirm({
       title: "Wipe cache for these videos?",
-      message:
-        "Deletes every cached artifact for the videos in this pipeline — ES metadata + transcripts, Qdrant hybrid points, Neo4j Document and Video nodes. The next Retry will re-run the full chain from scratch (no Phase 1 cache hits, no Phase 3 skip-on-video_id). Entity nodes are left intact. This cannot be undone.",
+      message: `Deletes every cached artifact for the ${videoCount || ""} video${videoCount === 1 ? "" : "s"} in this pipeline — ES metadata + transcripts, Qdrant hybrid points, Neo4j Document and Video nodes. The next Retry will re-run the full chain from scratch (no Phase 1 cache hits, no Phase 3 skip-on-video_id). Entity nodes are left intact. This cannot be undone.`,
       confirmLabel: "Wipe",
     });
     if (!ok) return;
@@ -305,248 +305,108 @@ export function PipelinePanel({
   }
 
   const videoCount = tracking.videoIds.length || allItems.length;
+  const retryIsPrimary = !running && overall !== "done";
 
   return (
-    <section
-      aria-label="Pipeline progress"
-      aria-live="polite"
-      className="mb-4 rounded-md border border-border bg-card p-3"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-base font-medium">
-          Pipeline{" "}
-          <span className="font-mono text-xs text-muted-foreground">
-            {videoCount ? `· ${videoCount} video${videoCount === 1 ? "" : "s"}` : ""}
-          </span>
-        </p>
-        <p className="font-mono text-xs text-muted-foreground">{elapsed}</p>
-      </div>
-      {wipeLine ? <p className="mt-1 text-xs text-muted-foreground">{wipeLine}</p> : null}
-      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {(["playwright", "elasticsearch", "qdrant", "neo4j"] as const).map((prefix) => {
-          const view = barView(prefix);
-          return (
-            <div key={prefix}>
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="text-sm font-medium">{BAR_TITLES[prefix]}</span>
-                <span className={`font-mono text-xs ${LABEL_CLASS[view.state] ?? DEFAULT_LABEL_CLASS}`}>
-                  {view.label}
-                </span>
-              </div>
-              <div className="mt-1 h-1 w-full overflow-hidden rounded-sm bg-muted">
-                <div
-                  className={`h-full ${FILL_CLASS[view.state] ?? DEFAULT_FILL}`}
-                  style={{ width: `${Math.max(0, Math.min(100, view.pct))}%` }}
-                />
-              </div>
-              <p className="mt-1 text-xs text-muted-foreground">{view.hint ?? BAR_HINTS[prefix]}</p>
-            </div>
-          );
-        })}
-      </div>
-      <UsageLine data={countersQuery.data} />
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        {!allTerminal && !stopped ? (
-          <button
+    <section aria-label="Pipeline progress" className="mb-6 flex flex-col gap-3">
+      {/* The one place a screen reader hears the run: it changes when a phase changes state, not at every poll. */}
+      <p role="status" className="sr-only">
+        {announcement}
+      </p>
+
+      <header className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <h2 className="text-base font-medium">Pipeline</h2>
+        <span className="font-mono text-xs text-muted-foreground">
+          {videoCount ? `· ${videoCount} video${videoCount === 1 ? "" : "s"}` : ""}
+        </span>
+        <StatusBadge tone={overall} label={STATUS_WORD_LABEL[overall]} />
+        <span className="tabular font-mono text-xs text-muted-foreground">{elapsed}</span>
+        <div className="ml-auto flex items-center gap-2">
+          {running ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              onClick={() => void handleStop()}
+              disabled={stop.isPending}
+            >
+              {stop.isPending ? "Stopping…" : "Stop"}
+            </Button>
+          ) : null}
+          <Button
             type="button"
-            onClick={() => void handleStop()}
-            disabled={stop.isPending}
-            className="min-h-9 rounded-sm border border-border px-3 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
+            variant={retryIsPrimary ? "default" : "outline"}
+            size="lg"
+            onClick={() => rerun.mutate()}
+            disabled={running || rerun.isPending}
           >
-            {stop.isPending ? "Stopping…" : "Stop"}
-          </button>
-        ) : null}
-        <button
+            {rerun.isPending ? "Queuing retry…" : "Retry"}
+          </Button>
+        </div>
+      </header>
+
+      {wipeLine ? <p className="text-xs text-muted-foreground">{wipeLine}</p> : null}
+
+      <PipelineSteps steps={steps} />
+
+      <footer className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+        <Button
           type="button"
-          onClick={() => rerun.mutate()}
-          disabled={!(allTerminal || stopped) || rerun.isPending}
-          className="min-h-9 rounded-sm border border-border px-3 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
+          variant="outline"
+          size="lg"
+          aria-haspopup="dialog"
+          onClick={() => setSheet("videos")}
         >
-          {rerun.isPending ? "Queuing retry…" : "Retry"}
-        </button>
-        <button
+          <ListChecks aria-hidden />
+          {`Videos (${videoCount})`}
+        </Button>
+        <Button
           type="button"
-          onClick={() => void handleWipe()}
-          disabled={wipe.isPending}
-          className="min-h-9 rounded-sm border border-border px-3 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
+          variant="outline"
+          size="lg"
+          aria-haspopup="dialog"
+          onClick={() => setSheet("usage")}
         >
-          {wipe.isPending ? "Wiping…" : "Wipe cache"}
-        </button>
-        <button
-          type="button"
-          onClick={() => void handleDismiss()}
-          className="min-h-9 rounded-sm border border-border px-3 text-sm text-muted-foreground hover:text-foreground"
-        >
-          Dismiss
-        </button>
-      </div>
+          <ChartColumn aria-hidden />
+          LLM usage
+        </Button>
+        {/* Apart from the routine actions: what ends a run's data or its panel for good. */}
+        <div className="ml-auto flex items-center gap-2">
+          <Button type="button" variant="ghost" size="lg" onClick={() => void handleDismiss()}>
+            Dismiss
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            size="lg"
+            onClick={() => void handleWipe()}
+            disabled={wipe.isPending}
+          >
+            {wipe.isPending ? "Wiping…" : "Wipe cache"}
+          </Button>
+        </div>
+      </footer>
+
       {stop.isError ? (
-        <p role="alert" className="mt-2 text-sm text-destructive-text">
+        <p role="alert" className="text-sm text-destructive-text">
           Stop failed — {apiErrorMessage(stop.error)}
         </p>
       ) : null}
       {wipe.isError ? (
-        <p role="alert" className="mt-2 text-sm text-destructive-text">
+        <p role="alert" className="text-sm text-destructive-text">
           Wipe failed — {apiErrorMessage(wipe.error)}
         </p>
       ) : null}
       {rerun.isError ? (
-        <p role="alert" className="mt-2 text-sm text-destructive-text">
+        <p role="alert" className="text-sm text-destructive-text">
           Retry failed — {apiErrorMessage(rerun.error)}
         </p>
       ) : null}
-      <VideoTable
-        videoIds={tracking.videoIds}
-        allItems={allItems}
-        snapshots={snapshots}
-        noTranscriptIds={noTranscriptIds}
-      />
-    </section>
-  );
-}
 
-function UsageLine({ data }: { data: unknown }): JSX.Element | null {
-  const parsed = llmCountersSchema.safeParse(data);
-  if (!parsed.success) return null;
-  const total = parsed.data.total ?? null;
-  if (!total || total.calls <= 0) return null;
-  const reasoning = total.reasoning_tokens > 0 ? ` · ${fmtInt(total.reasoning_tokens)} reasoning tokens` : "";
-  return (
-    <p className="mt-3 text-xs text-muted-foreground">
-      {fmtInt(total.calls)} calls · {fmtInt(total.tokens_in)} input tokens · {fmtInt(total.tokens_out)} output
-      tokens{reasoning}
-    </p>
-  );
-}
-
-type VideoTableRow = {
-  videoId: string;
-  title: string;
-  channel: string | null;
-  cells: Record<PipelinePrefix, StoreStatus>;
-  anyRunning: boolean;
-  allDone: boolean;
-  anyFailed: boolean;
-  duration: string;
-};
-
-function VideoTable({
-  videoIds,
-  allItems,
-  snapshots,
-  noTranscriptIds,
-}: {
-  videoIds: ReadonlyArray<string>;
-  allItems: ReadonlyArray<AllItem>;
-  snapshots: Record<PipelinePrefix, PhaseSnapshot>;
-  noTranscriptIds: ReadonlySet<string>;
-}): JSX.Element | null {
-  const metaById = new Map(allItems.filter((v) => v.id).map((v) => [v.id, v]));
-  const ids = videoIds.length ? videoIds : allItems.map((v) => v.id).filter(Boolean);
-
-  const rows: VideoTableRow[] = ids.map((videoId) => {
-    const meta = metaById.get(videoId);
-    const cells: Record<PipelinePrefix, StoreStatus> = {
-      playwright: storeStatus(videoId, "playwright", snapshots.playwright, null),
-      elasticsearch: storeStatus(videoId, "elasticsearch", snapshots.elasticsearch, noTranscriptIds),
-      qdrant: storeStatus(videoId, "qdrant", snapshots.qdrant, noTranscriptIds),
-      neo4j: storeStatus(videoId, "neo4j", snapshots.neo4j, noTranscriptIds),
-    };
-    const values = Object.values(cells);
-    const anyRunning = values.includes("running");
-    const anyFailed = values.includes("failed");
-    const allDone = values.every((s) => s === "done" || s === "unavailable");
-    return {
-      videoId,
-      title: meta?.title || videoId,
-      channel: meta?.channel ?? null,
-      cells,
-      anyRunning,
-      allDone,
-      anyFailed,
-      duration: "",
-    };
-  });
-
-  // Timing lives in a ref the render never reads: a dep-less effect snapshots the row summaries and
-  // the one-second ticker stamps starts/finishes through the pure `nextTiming`. Reading either ref
-  // during render would violate the React compiler's purity rules.
-  const [tick, setTick] = useState(() => Date.now());
-  const [timing, setTiming] = useState<Timing>(() => ({ started: new Map(), finished: new Map() }));
-  const rowsRef = useRef<ReadonlyArray<TimingRow>>([]);
-  useEffect(() => {
-    rowsRef.current = rows.map(({ videoId, anyRunning, allDone, anyFailed }) => ({
-      videoId,
-      anyRunning,
-      allDone,
-      anyFailed,
-    }));
-  });
-  useEffect(() => {
-    const timer = setInterval(() => {
-      const stamp = Date.now();
-      setTiming((prev) => nextTiming(prev, rowsRef.current, stamp));
-      setTick(stamp);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const withDurations = rows.map((row) => {
-    const started = timing.started.get(row.videoId);
-    if (started == null) return { ...row, duration: "—" };
-    const finished = timing.finished.get(row.videoId);
-    return { ...row, duration: cellDuration((finished ?? tick) - started) };
-  });
-
-  if (!ids.length) return null;
-
-  return (
-    <section
-      // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be reachable by keyboard (WCAG 2.1.1)
-      tabIndex={0}
-      aria-label="Per-video pipeline progress"
-      className="mt-3 max-h-64 overflow-y-auto rounded-sm border border-border"
-    >
-      <table className="w-full border-collapse text-left text-xs">
-        <thead>
-          <tr className="bg-card">
-            <th scope="col" className="px-2 py-1 font-medium">
-              Video
-            </th>
-            <th scope="col" className="px-2 py-1 font-medium" title="Playwright transcript fetch">
-              PW
-            </th>
-            <th scope="col" className="px-2 py-1 font-medium" title="ElasticSearch chunk-commit">
-              ES
-            </th>
-            <th scope="col" className="px-2 py-1 font-medium">
-              Qdrant
-            </th>
-            <th scope="col" className="px-2 py-1 font-medium">
-              Neo4j
-            </th>
-            <th scope="col" className="px-2 py-1 text-right font-medium">
-              Time
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {withDurations.map((row) => (
-            <tr key={row.videoId} className="border-t border-border">
-              <td className="max-w-60 truncate px-2 py-1" title={`${row.title} · ${row.videoId}`}>
-                {row.title}
-                {row.channel ? <span className="text-muted-foreground"> · {row.channel}</span> : null}
-              </td>
-              {(["playwright", "elasticsearch", "qdrant", "neo4j"] as const).map((prefix) => (
-                <td key={prefix} className={`px-2 py-1 ${CELL_CLASS[row.cells[prefix]]}`}>
-                  {STORE_STATUS_LABELS[row.cells[prefix]]}
-                </td>
-              ))}
-              <td className="px-2 py-1 text-right font-mono">{row.duration}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {sheet === "videos" ? <PipelineVideosSheet rows={videoRows} onClose={() => setSheet(null)} /> : null}
+      {sheet === "usage" ? (
+        <PipelineUsageSheet usage={usage.success ? usage.data : null} onClose={() => setSheet(null)} />
+      ) : null}
     </section>
   );
 }

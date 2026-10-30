@@ -131,7 +131,7 @@ describe("LibraryPanel", () => {
   it("renders rows with status, meta and stats lines, and facet options", async () => {
     renderWith(<LibraryPanel refreshTick={0} />);
 
-    expect(await screen.findByRole("link", { name: "Redis in practice" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: /^Redis in practice/ })).toBeInTheDocument();
     expect(screen.getByText("done")).toBeInTheDocument();
     expect(screen.getByText("partial")).toBeInTheDocument();
     expect(
@@ -147,7 +147,7 @@ describe("LibraryPanel", () => {
   it("filters through the facet selects and the debounced search", async () => {
     const user = userEvent.setup();
     renderWith(<LibraryPanel refreshTick={0} />);
-    await screen.findByRole("link", { name: "Redis in practice" });
+    await screen.findByRole("link", { name: /^Redis in practice/ });
 
     await user.selectOptions(screen.getByLabelText("Status"), "partial");
     await waitFor(() => expect(lastRowsQuery).toContain("status=partial"));
@@ -160,14 +160,14 @@ describe("LibraryPanel", () => {
       { timeout: 1500 },
     );
     await waitFor(() =>
-      expect(screen.queryByRole("link", { name: "Postgres deep dive" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("link", { name: /^Postgres deep dive/ })).not.toBeInTheDocument(),
     );
   });
 
   it("selects rows, shows the bulk bar and bulk-deletes through the confirm dialog", async () => {
     const user = userEvent.setup();
     renderWith(<LibraryPanel refreshTick={0} />);
-    await screen.findByRole("link", { name: "Redis in practice" });
+    await screen.findByRole("link", { name: /^Redis in practice/ });
 
     await user.click(screen.getByRole("checkbox", { name: "Select Redis in practice" }));
     expect(screen.getByText("1 selected")).toBeInTheDocument();
@@ -187,7 +187,7 @@ describe("LibraryPanel", () => {
   it("deletes one row through its trash button and the confirm dialog", async () => {
     const user = userEvent.setup();
     renderWith(<LibraryPanel refreshTick={0} />);
-    await screen.findByRole("link", { name: "Redis in practice" });
+    await screen.findByRole("link", { name: /^Redis in practice/ });
 
     await user.click(screen.getByRole("button", { name: "Delete Redis in practice" }));
     const dialog = screen.getByRole("dialog");
@@ -195,15 +195,15 @@ describe("LibraryPanel", () => {
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));
 
     await waitFor(() =>
-      expect(screen.queryByRole("link", { name: "Redis in practice" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("link", { name: /^Redis in practice/ })).not.toBeInTheDocument(),
     );
-    expect(screen.getByRole("link", { name: "Postgres deep dive" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^Postgres deep dive/ })).toBeInTheDocument();
   });
 
   it("re-ingests the selection into the pipeline and routes to the ingestion stage", async () => {
     const user = userEvent.setup();
     renderWith(<LibraryPanel refreshTick={0} />);
-    await screen.findByRole("link", { name: "Redis in practice" });
+    await screen.findByRole("link", { name: /^Redis in practice/ });
 
     await user.click(screen.getByRole("checkbox", { name: "Select Redis in practice" }));
     await user.click(screen.getByRole("button", { name: "Re-ingest" }));

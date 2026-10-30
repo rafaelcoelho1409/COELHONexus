@@ -21,7 +21,7 @@ import {
   streamErrorText,
   turnFromHistory,
 } from "../ask";
-import type { AskEvent } from "../entities";
+import type { AskEvent, HistoryRow } from "../entities";
 import { askEventSchema } from "../entities";
 import { HISTORY_POLL_MS, STALL_TICKS_THRESHOLD } from "../params";
 
@@ -39,6 +39,8 @@ export type AskConversation = {
   recovering: boolean;
   status: AskStatus;
   hydrateError: string | null;
+  /** The thread's saved turns have been read (or could not be): until then an empty list means "loading", not "new". */
+  hydrated: boolean;
   send: (question: string, options: AskSendOptions) => Promise<void>;
   stop: () => Promise<void>;
   /** Deletes the turn's row (best-effort), drops it from the list, then re-fires the question.
@@ -62,6 +64,7 @@ export function useAskConversation(threadId: string): AskConversation {
   const [recovering, setRecovering] = useState(false);
   const [status, setStatus] = useState<AskStatus>({ text: "", tone: "" });
   const [hydrateError, setHydrateError] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   const running = stream !== null || recovering;
@@ -73,17 +76,18 @@ export function useAskConversation(threadId: string): AskConversation {
       setTurns([]);
       setStatus({ text: "", tone: "" });
       setHydrateError(null);
-      let rows;
+      let rows: HistoryRow[];
       try {
         rows = await fetchHistory(threadId);
       } catch (error) {
         if (!alive) return;
         setHydrateError(apiErrorMessage(error));
+        setHydrated(true);
         return;
       }
       if (!alive) return;
-      const hydrated = rows.map(turnFromHistory);
-      setTurns(hydrated);
+      setTurns(rows.map(turnFromHistory));
+      setHydrated(true);
       const last = rows.at(-1);
       if (last && isTurnInProgress(last.thinking_state, last.answer)) {
         setRecovering(true);
@@ -98,7 +102,7 @@ export function useAskConversation(threadId: string): AskConversation {
   const apply = useCallback((event: AskEvent) => {
     setTurns((ts) => {
       const last = ts.at(-1);
-      if (!last || !last.streaming) return ts;
+      if (!last?.streaming) return ts;
       return [...ts.slice(0, -1), applyAskEvent(last, event)];
     });
     setStatus((prev) => statusFromEvent(prev, event));
@@ -121,7 +125,7 @@ export function useAskConversation(threadId: string): AskConversation {
         })) {
           if (!alive) return;
           if (!message.data) continue;
-          let event;
+          let event: AskEvent;
           try {
             event = askEventSchema.parse(JSON.parse(message.data));
           } catch {
@@ -160,7 +164,7 @@ export function useAskConversation(threadId: string): AskConversation {
     let lastKey = "";
     let ticks = 0;
     const poll = async () => {
-      let rows;
+      let rows: HistoryRow[];
       try {
         rows = await fetchHistory(threadId);
       } catch {
@@ -202,7 +206,7 @@ export function useAskConversation(threadId: string): AskConversation {
       setRecovering(false); // a live stream owns the conversation from here on
       setHydrateError(null);
       setStatus({ text: "Thinking…", tone: "running" });
-      setTurns((ts) => [...ts, newLiveTurn(question)]);
+      setTurns((ts) => [...ts, newLiveTurn(question, [...options.channelIds])]);
       const payload: StreamJob["payload"] = { question, thread_id: threadId };
       if (options.channelIds.length) payload.channel_ids = [...options.channelIds];
       if (options.forceMode) payload.force_mode = options.forceMode;
@@ -243,6 +247,7 @@ export function useAskConversation(threadId: string): AskConversation {
     recovering,
     status,
     hydrateError,
+    hydrated,
     send,
     stop,
     regenerate,

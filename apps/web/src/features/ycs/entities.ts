@@ -211,8 +211,16 @@ export const libraryFacetsSchema = z.looseObject({
 });
 export type LibraryFacets = z.infer<typeof libraryFacetsSchema>;
 
-/** `GET /admin/pipeline/{extract_id}/llm-counters` — token counters only; per-model breakdown is
- * deliberately left unparsed. */
+const modelCountsSchema = z.object({
+  calls: z.number().catch(0),
+  tokens_in: z.number().catch(0),
+  tokens_out: z.number().catch(0),
+  reasoning_tokens: z.number().catch(0),
+});
+export type ModelCounts = z.infer<typeof modelCountsSchema>;
+
+/** `GET /admin/pipeline/{extract_id}/llm-counters` — the run's totals, and a per-video breakdown that itself breaks down
+ * by model, named exactly as the LLM endpoint reported it (shown to the reader as runtime data; see the usage sheet). */
 export const llmCountersSchema = z.looseObject({
   total: z
     .looseObject({
@@ -223,6 +231,9 @@ export const llmCountersSchema = z.looseObject({
     })
     .nullish()
     .catch(null),
+  by_node: z
+    .record(z.string(), z.looseObject({ by_model: z.record(z.string(), modelCountsSchema).catch({}) }))
+    .catch({}),
 });
 
 /** The thread-total usage payload shape (counts only). */
@@ -259,7 +270,7 @@ export type SearchRequestPayload = z.infer<typeof searchRequestSchema>;
 // ============================================================
 
 /** `GET /admin/ingested-channels` — one row per indexed channel. */
-export const channelInfoSchema = z.looseObject({
+const channelInfoSchema = z.looseObject({
   channel_id: z.string().catch(""),
   channel: z.string().catch("Unknown channel"),
   video_count: z.number().int().catch(0),
@@ -271,7 +282,7 @@ export const channelsResponseSchema = z.looseObject({
 });
 
 /** `GET /agents/threads` — one row per saved conversation. */
-export const threadSummarySchema = z.looseObject({
+const threadSummarySchema = z.looseObject({
   thread_id: z.string().catch(""),
   first_question: z.string().catch(""),
   turn_count: z.number().int().catch(0),
@@ -284,7 +295,7 @@ export const threadsResponseSchema = z.looseObject({
 });
 
 /** One retrieved source: shown in the sources rail and cited inline as `[N]`. */
-export const citationSchema = z.looseObject({
+const citationSchema = z.looseObject({
   title: z.string().catch(""),
   url: z.string().catch(""),
   video_id: z.string().catch(""),
@@ -295,13 +306,12 @@ export const citationSchema = z.looseObject({
 export type AskCitation = z.infer<typeof citationSchema>;
 
 /** One sub-question card of a Deep run (persisted card shape). */
-export const askSubQuestionSchema = z.looseObject({
+const askSubQuestionSchema = z.looseObject({
   question: z.string().catch(""),
   status: z.string().catch("queued"),
   answer: z.string().nullish().catch(null),
   answer_preview: z.string().nullish().catch(null),
 });
-export type AskSubQuestion = z.infer<typeof askSubQuestionSchema>;
 
 /** A `sub_results` event item — different keys than the persisted card shape. */
 const subResultSchema = z.looseObject({
@@ -310,7 +320,7 @@ const subResultSchema = z.looseObject({
 });
 
 /** The persisted per-turn trace (Postgres `conversation_history.thinking_state` JSONB). */
-export const thinkingStateSchema = z.looseObject({
+const thinkingStateSchema = z.looseObject({
   stages: z
     .record(z.string(), z.looseObject({ status: z.string().catch(""), action: z.string().catch("") }))
     .nullish()
@@ -332,7 +342,7 @@ export const thinkingStateSchema = z.looseObject({
 export type AskThinkingState = z.infer<typeof thinkingStateSchema>;
 
 /** One persisted turn row of `GET /agents/history/{thread_id}`. */
-export const historyRowSchema = z.looseObject({
+const historyRowSchema = z.looseObject({
   id: z.number().nullish().catch(null),
   question: z.string().catch(""),
   answer: z.string().catch(""),

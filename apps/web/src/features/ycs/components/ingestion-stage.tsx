@@ -1,11 +1,15 @@
 "use client";
 
-/** Ingestion stage: the live pipeline panel (when a dispatch is being tracked) above the Library.
+/** Ingestion stage: the live pipeline panel (when a dispatch is being tracked) above the Library. With nothing running the panel
+ * gives way to one line — the Library is what this stage is for, so it is not pushed down by an empty card.
  * Search params come in as props — Next only gives them to a component inside a Suspense boundary. */
 
+import Link from "next/link";
 import type { JSX } from "react";
 import { useState } from "react";
+
 import { usePipelineTracking } from "../hooks/use-pipeline-tracking";
+import { stageHref } from "../params";
 import { LibraryPanel } from "./library-panel";
 import { PipelinePanel } from "./pipeline-panel";
 
@@ -28,12 +32,13 @@ export function IngestionStage(): JSX.Element {
           onDismiss={dismiss}
         />
       ) : (
-        <section aria-label="Pipeline progress" className="mb-4 rounded-md border border-border bg-card p-3">
-          <h2 className="text-base font-medium">Nothing is running</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Dispatch a pipeline from the Source tab — its progress will show up here.
-          </p>
-        </section>
+        <p className="mb-6 text-sm text-muted-foreground">
+          No pipeline is running.{" "}
+          <Link href={stageHref("source")} className="text-primary-text underline underline-offset-2">
+            Start one from the Source tab
+          </Link>
+          ; its progress will show up here.
+        </p>
       )}
       <LibraryPanel refreshTick={refreshTick} />
     </div>
