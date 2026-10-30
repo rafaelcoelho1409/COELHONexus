@@ -1,8 +1,8 @@
 "use client";
 
 /** The YouTube Content Search page: stage tabs on top, the stage body below. The Ingestion and Ask stages read
- * search params (inside a Suspense boundary per Next.js requirements); Query still reads the legacy
- * console. Route pages re-export this single component. */
+ * search params (inside a Suspense boundary per Next.js requirements); Source and Query keep their state locally.
+ * Route pages re-export this single component. */
 
 import { usePathname } from "next/navigation";
 import type { JSX } from "react";
@@ -11,10 +11,9 @@ import { stageByHref, type YcsStage } from "../params";
 import { AskStage } from "./ask-stage";
 import { IngestionStage } from "./ingestion-stage";
 import { YcsOverlaysProvider } from "./overlays";
+import { QueryStage } from "./query-stage";
 import { SourceStage } from "./source-stage";
 import { StageNav } from "./stage-nav";
-
-const QUERY_PLACEHOLDER = "The Query stage is being migrated — the legacy console still serves it.";
 
 export function YcsPage(): JSX.Element {
   const pathname = usePathname();
@@ -40,5 +39,5 @@ export function YcsPage(): JSX.Element {
 function StageBody({ stage }: { stage: Exclude<YcsStage, "source"> }): JSX.Element {
   if (stage === "ingestion") return <IngestionStage />;
   if (stage === "ask") return <AskStage />;
-  return <p className="text-sm text-muted-foreground">{QUERY_PLACEHOLDER}</p>;
+  return <QueryStage />;
 }

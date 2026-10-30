@@ -378,6 +378,66 @@ export const askEventSchema = z.looseObject({
 });
 export type AskEvent = z.infer<typeof askEventSchema>;
 
+// ============================================================
+// Query stage — raw backend queries, namespaces, schema, history, AI text-to-query
+// ============================================================
+
+const rawHitSchema = z.looseObject({
+  summary: z.string().catch(""),
+  raw: z.record(z.string(), z.unknown()).catch({}),
+});
+export type RawHit = z.infer<typeof rawHitSchema>;
+
+/** `POST /query/raw/{backend}` — `ok: false` carries a readable `error` (a rejected or failed query), still HTTP 200. */
+export const rawQueryResponseSchema = z.looseObject({
+  ok: z.boolean().catch(false),
+  error: z.string().nullish().catch(null),
+  notes: z.array(z.string()).catch([]),
+  took_ms: z.number().catch(0),
+  total: z.number().nullish().catch(null),
+  hits: z.array(rawHitSchema).catch([]),
+});
+export type RawQueryResult = z.infer<typeof rawQueryResponseSchema>;
+
+const namespaceEntrySchema = z.looseObject({
+  available: z.boolean().catch(false),
+  label: z.string().catch(""),
+});
+
+/** `GET /query/namespaces` — which app/backend pairs hold data, with the caption for each. */
+export const namespaceMapSchema = z.looseObject({
+  matrix: z.record(z.string(), z.record(z.string(), namespaceEntrySchema)).catch({}),
+});
+
+/** `GET /query/schema/{backend}` — the shape differs per backend, so the body stays an open object that
+ * `schemaOutline` reads defensively. */
+export const querySchemaResponseSchema = z.looseObject({
+  schema: z.record(z.string(), z.unknown()).catch({}),
+});
+
+const queryHistoryEntrySchema = z.looseObject({
+  id: z.number().catch(0),
+  backend: z.string().catch(""),
+  body: z.string().catch(""),
+  prompt: z.string().catch(""),
+  created_at: z.string().catch(""),
+});
+export type QueryHistoryEntry = z.infer<typeof queryHistoryEntrySchema>;
+
+export const queryHistoryResponseSchema = z.looseObject({
+  items: z.array(queryHistoryEntrySchema).catch([]),
+});
+
+/** One frame of the `POST /query/ai/{backend}` SSE: start | model | chunk | repair | done | error. */
+export const queryAiEventSchema = z.looseObject({
+  event: z.string().catch("unknown"),
+  data: z.string().nullish().catch(null),
+  ok: z.boolean().nullish().catch(null),
+  final: z.string().nullish().catch(null),
+  error: z.string().nullish().catch(null),
+});
+export type QueryAiEvent = z.infer<typeof queryAiEventSchema>;
+
 /** `POST /agents/threads/{thread_id}/branch` — the forked thread's id + copied turn count. */
 export const branchResponseSchema = z.looseObject({
   new_thread_id: z.string().catch(""),

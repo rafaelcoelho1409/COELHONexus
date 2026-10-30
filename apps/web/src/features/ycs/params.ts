@@ -109,3 +109,79 @@ export const HISTORY_POLL_MS = 2500;
 export const STALL_TICKS_THRESHOLD = 6;
 /** Defensive second cap on a source-card excerpt (the backend caps at 220 chars first). */
 export const SNIPPET_CAP = 220;
+
+// ---- Query ----
+export type QueryBackend = "elasticsearch" | "qdrant" | "neo4j";
+export type QueryLanguage = "json" | "cypher";
+
+export const QUERY_BACKENDS: ReadonlyArray<{ id: QueryBackend; label: string; language: QueryLanguage }> = [
+  { id: "elasticsearch", label: "Elasticsearch", language: "json" },
+  { id: "qdrant", label: "Qdrant", language: "json" },
+  { id: "neo4j", label: "Neo4j", language: "cypher" },
+];
+
+/** What each backend's editor starts with — a runnable query, so Run works the moment a backend is picked. */
+export const QUERY_SCAFFOLDS: Record<QueryBackend, string> = {
+  // The field list stays on one line: ten lines, not fifteen, so the results start higher on the page.
+  elasticsearch: [
+    "{",
+    '  "query": {',
+    '    "multi_match": {',
+    '      "query": "transformer attention",',
+    '      "fields": ["title^3", "description", "channel", "content"],',
+    '      "type": "best_fields"',
+    "    }",
+    "  },",
+    '  "size": 10',
+    "}",
+  ].join("\n"),
+  qdrant: JSON.stringify({ op: "scroll", limit: 10, with_payload: true }, null, 2),
+  // Whole nodes and relationships, so the first Run opens on the Graph view (a query that returns plain values has none).
+  neo4j: [
+    "// Browse the YCS knowledge graph: return whole nodes and relationships to see them as a graph.",
+    "MATCH (a)-[r]->(b)",
+    "RETURN a, r, b",
+    "LIMIT 25",
+  ].join("\n"),
+};
+
+/** Row cap of a query the Schema sheet writes for a label, an index or a field. */
+export const QUERY_INSERT_LIMIT = 25;
+/** The Schema sheet opens every group when a backend has this few; more than that it starts folded (Neo4j lists
+ * dozens of labels). */
+export const QUERY_SCHEMA_OPEN_UNDER = 4;
+
+export const QUERY_AI_PLACEHOLDER = "e.g. List the 10 most recent videos from each channel";
+export const QUERY_HISTORY_LIMIT = 50;
+/** Table rows painted at first and per "Show more" — a result set can be thousands of rows, a screen holds dozens. */
+export const QUERY_ROWS_STEP = 50;
+/** Longest cell text before it is cut with an ellipsis (the full value stays in the title and the inspector). */
+export const QUERY_CELL_MAX = 160;
+/** A column whose longest value is longer than this is a text column: it gets room and its cells clamp to a few lines. */
+export const QUERY_WIDE_TEXT = 80;
+/** Longest an identifier shows in a table cell before its middle is cut (the record sheet has the whole value). */
+export const QUERY_ID_CLIP = 20;
+/** JSON tree: how many levels start open — two, so a hit list opens on each hit's `_source` or payload. */
+export const QUERY_TREE_OPEN_DEPTH = 2;
+/** Graph: the largest result drawn; above it the view asks for a tighter query and the table stays complete. */
+export const QUERY_GRAPH_MAX_NODES = 300;
+/** Graph: fixed layout settings — the layout runs once per result, so nothing moves afterwards. */
+export const QUERY_GRAPH_ITERATIONS = 260;
+/** Ideal distance between linked nodes; wider than a node card so neighbours never overlap. */
+export const QUERY_GRAPH_SPACING = 240;
+/** Pull toward the middle per iteration: strong enough that separate clusters settle side by side instead of drifting far apart. */
+export const QUERY_GRAPH_GRAVITY = 0.2;
+/** Strength of the push between any two nodes, against the pull of a relationship; below 1 keeps clusters compact. */
+export const QUERY_GRAPH_REPULSION = 0.5;
+/** Empty space kept between two separate clusters of a graph. */
+export const QUERY_GRAPH_GAP = 56;
+export const QUERY_GRAPH_NODE_WIDTH = 176;
+export const QUERY_GRAPH_NODE_HEIGHT = 52;
+/** Categorical node colours: the five chart tokens, assigned to labels in first-seen order. */
+export const QUERY_GRAPH_COLORS: ReadonlyArray<string> = [
+  "var(--chart-1)",
+  "var(--chart-2)",
+  "var(--chart-3)",
+  "var(--chart-4)",
+  "var(--chart-5)",
+];

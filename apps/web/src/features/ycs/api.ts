@@ -5,6 +5,7 @@ import {
   client,
   deleteYcsAdminVideosVideoId,
   deleteYcsAgentsThreadsThreadId,
+  deleteYcsQueryHistoryEntryId,
   getYcsAdminIngestedChannels,
   getYcsAgentsHistoryThreadId,
   getYcsAgentsThreads,
@@ -13,6 +14,9 @@ import {
   getYcsContentPlaylistVideos,
   getYcsContentVideosPipelineExtractIdState,
   getYcsContentVideosPreview,
+  getYcsQueryHistory,
+  getYcsQueryNamespaces,
+  getYcsQuerySchemaBackend,
   postYcsAdminVideosBulkDelete,
   postYcsAgentsTurnsTurnIdCancel,
   postYcsContentChannelPipeline,
@@ -22,6 +26,9 @@ import {
   postYcsContentVideosPipelineExtractIdRerun,
   postYcsContentVideosPipelineExtractIdStop,
   postYcsContentVideosPipelineExtractIdWipe,
+  postYcsQueryRawElasticsearch,
+  postYcsQueryRawNeo4J,
+  postYcsQueryRawQdrant,
 } from "@/shared/api";
 
 import type {
@@ -31,6 +38,8 @@ import type {
   HistoryRow,
   PipelinePhases,
   PipelineWipe,
+  QueryHistoryEntry,
+  RawQueryResult,
   SearchRequestPayload,
   SearchResponse,
   ThreadSummary,
@@ -41,12 +50,17 @@ import {
   enumerationSchema,
   historyResponseSchema,
   llmCountersSchema,
+  namespaceMapSchema,
   pipelineSavedStateSchema,
   pipelineStartSchema,
   pipelineWipeSchema,
+  queryHistoryResponseSchema,
+  querySchemaResponseSchema,
+  rawQueryResponseSchema,
   searchResponseSchema,
   threadsResponseSchema,
 } from "./entities";
+import { QUERY_BACKENDS, QUERY_HISTORY_LIMIT, type QueryBackend } from "./params";
 
 /** yt-dlp metadata search. Throws on failure so the caller surfaces a readable line. */
 export async function searchVideos(req: SearchRequestPayload): Promise<SearchResponse> {
@@ -243,4 +257,78 @@ export async function deleteThread(threadId: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// ============================================================
+// Query stage — raw backend queries, schema, history, AI stream URL
+// ============================================================
+
+/** Runs the editor's text against one backend. A rejected or failed query still answers 200 with `ok: false`
+ * and a readable `error`; only transport failures throw. */
+export async function runRawQuery(backend: QueryBackend, body: string): Promise<RawQueryResult> {
+  const options = { body: { app: "ycs" as const, body }, throwOnError: true as const };
+  const result =
+    backend === "elasticsearch"
+      ? await postYcsQueryRawElasticsearch(options)
+      : backend === "qdrant"
+        ? await postYcsQueryRawQdrant(options)
+        : await postYcsQueryRawNeo4J(options);
+  return rawQueryResponseSchema.parse(result.data);
+}
+
+/** The caption each backend carries for YCS ("YCS · metadata + transcripts"); empty where the server says none. */
+export async function fetchQueryLabels(): Promise<Record<QueryBackend, string>> {
+  const result = await getYcsQueryNamespaces({ throwOnError: true });
+  const ycs = namespaceMapSchema.parse(result.data).matrix.ycs ?? {};
+  return {
+    elasticsearch: ycs.elasticsearch?.label ?? "",
+    qdrant: ycs.qdrant?.label ?? "",
+    neo4j: ycs.neo4j?.label ?? "",
+  };
+}
+
+/** A backend's schema snapshot (cached server-side for a few minutes). */
+export async function fetchQuerySchema(backend: QueryBackend): Promise<Record<string, unknown>> {
+  const result = await getYcsQuerySchemaBackend({ path: { backend }, throwOnError: true });
+  return querySchemaResponseSchema.parse(result.data).schema;
+}
+
+/** Saved queries for one backend, newest first. */
+export async function fetchQueryHistory(backend: QueryBackend): Promise<QueryHistoryEntry[]> {
+  const result = await getYcsQueryHistory({
+    query: { backend, limit: QUERY_HISTORY_LIMIT },
+    throwOnError: true,
+  });
+  return queryHistoryResponseSchema
+    .parse(result.data)
+    .items.filter((item) => item.id > 0 && QUERY_BACKENDS.some((b) => b.id === item.backend));
+}
+
+/** Records a query that ran. Best-effort: history is a convenience, so a failure is swallowed. The endpoint reads
+ * the raw request body, so the generated spec types it as `never` — the generated client's method passes it. */
+export async function saveQueryHistory(backend: QueryBackend, body: string, prompt: string): Promise<void> {
+  try {
+    await client.post({
+      url: "/api/v1/ycs/query/history",
+      body: { backend, app: "ycs", body, prompt },
+      throwOnError: true,
+    });
+  } catch {
+    // best-effort
+  }
+}
+
+/** Deletes one saved query; false when the caller should show a failure notice. */
+export async function deleteQueryHistory(entryId: number): Promise<boolean> {
+  try {
+    await deleteYcsQueryHistoryEntryId({ path: { entry_id: entryId }, throwOnError: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Absolute URL for the AI text-to-query SSE (read through the shared sse reader). */
+export function queryAiUrl(backend: QueryBackend): string {
+  return client.buildUrl({ url: "/api/v1/ycs/query/ai/{backend}", path: { backend } });
 }

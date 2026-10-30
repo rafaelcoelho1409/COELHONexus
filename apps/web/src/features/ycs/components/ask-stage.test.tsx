@@ -313,13 +313,14 @@ describe("Ask stage — saved thread", () => {
               thread_id: "t1",
               first_question: "What is Redis?",
               turn_count: 1,
-              last_seen: "2026-10-29T10:00:00Z",
+              last_seen: new Date(Date.now() - 2 * 3_600_000).toISOString(),
             },
             {
               thread_id: "t2",
               first_question: "How do indexes work?",
               turn_count: 3,
-              last_seen: "2026-10-28T10:00:00Z",
+              // Relative to now: the picker prints "1d ago", so a fixed date would go stale the next day.
+              last_seen: new Date(Date.now() - 36 * 3_600_000).toISOString(),
             },
           ],
         }),

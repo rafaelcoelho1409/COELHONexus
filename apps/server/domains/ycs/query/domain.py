@@ -872,7 +872,7 @@ def neo4j_value(v, *, Node, Rel, Path):
             "_kind":      "node",
             "id":         v.element_id,
             "labels":     list(v.labels),
-            "properties": dict(v),
+            "properties": {k: neo4j_value(x, Node = Node, Rel = Rel, Path = Path) for k, x in dict(v).items()},
         }
     if isinstance(v, Rel):
         return {
@@ -881,7 +881,7 @@ def neo4j_value(v, *, Node, Rel, Path):
             "type":       v.type,
             "start":      v.start_node.element_id if v.start_node else None,
             "end":        v.end_node.element_id   if v.end_node   else None,
-            "properties": dict(v),
+            "properties": {k: neo4j_value(x, Node = Node, Rel = Rel, Path = Path) for k, x in dict(v).items()},
         }
     if isinstance(v, Path):
         return {
