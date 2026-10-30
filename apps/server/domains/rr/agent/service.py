@@ -86,7 +86,7 @@ async def get_tools_by_name(*names: str) -> list[BaseTool]:
     if missing:
         raise RuntimeError(
             f"[rr-mcp] tool(s) not registered at {_mcp_url()}: {missing}. "
-            f"Available: {list(by_name)}. Check apps/fastmcp/domains/rr/"
-            f"tools/<source>/tool.py @mcp.tool(name=...) registration."
+            f"Available: {list(by_name)}. Check the MCP gateway's "
+            f"RR source tools' @mcp.tool(name=...) registration."
         )
     return [by_name[n] for n in names]

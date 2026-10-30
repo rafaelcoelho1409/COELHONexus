@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-// The FastHTML UI's Docs Distiller URLs now belong to this app. Following them must land on the same page
+// The old UI's Docs Distiller URLs now belong to this app. Following them must land on the same page
 // with the same query, and the redirect must stay temporary so it can be rolled back.
 test.describe("legacy Docs Distiller URLs", () => {
   const cases = [

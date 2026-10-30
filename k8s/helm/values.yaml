@@ -207,49 +207,6 @@ flower:
       periodSeconds: 10
       failureThreshold: 3
 
-fasthtml:
-  image: coelho-cloud-registry:5000/coelhonexus-fasthtml:latest
-  imagePullPolicy: Always
-  replicas: 1
-  resources:
-    requests:
-      memory: "256Mi"
-      cpu: "100m"
-    limits:
-      memory: "512Mi"
-      cpu: "500m"
-  portsSettings:
-    ports:
-      - name: http
-        port: 3000
-        targetPort: 3000
-        nodePort: 30023
-        protocol: TCP
-    type: LoadBalancer
-  startupProbeSettings:
-    startupProbe:
-      httpGet:
-        path: /health
-        port: 3000
-      failureThreshold: 12
-      periodSeconds: 5
-  livenessProbeSettings:
-    livenessProbe:
-      httpGet:
-        path: /health
-        port: 3000
-      initialDelaySeconds: 0
-      periodSeconds: 10
-      failureThreshold: 3
-  readinessProbeSettings:
-    readinessProbe:
-      httpGet:
-        path: /health
-        port: 3000
-      initialDelaySeconds: 0
-      periodSeconds: 5
-      failureThreshold: 3
-
 web:
   # SERVER_URL is compiled into Next's rewrites at image build time (see
   # apps/web/Dockerfile.web) — changing it requires a rebuild, not a Helm value.
@@ -265,9 +222,9 @@ web:
       cpu: "500m"
   portsSettings:
     ports:
-      # Service port != targetPort (3001 vs 3000): FastHTML's LoadBalancer
-      # already binds hostPort 3000 via k3d's svclb. Two LoadBalancer Services
-      # cannot share the same `port`. The container still listens on 3000.
+      # Service port != targetPort (3001 vs 3000): the Service keeps 3001 so the
+      # in-cluster URL (coelhonexus-web:3001) and the NodePort mapping stay valid.
+      # The container still listens on 3000.
       # Native host mapping: 23028 -> 30026 (infrastructure/modules/k3d/main.tf).
       - name: http
         port: 3001
@@ -295,55 +252,6 @@ web:
       httpGet:
         path: /health
         port: 3000
-      initialDelaySeconds: 0
-      periodSeconds: 5
-      failureThreshold: 3
-
-fastmcp:
-  image: coelho-cloud-registry:5000/coelhonexus-fastmcp:latest
-  imagePullPolicy: Always
-  replicas: 1
-  resources:
-    requests:
-      memory: "256Mi"
-      cpu: "100m"
-    limits:
-      memory: "512Mi"
-      cpu: "500m"
-  portsSettings:
-    ports:
-      # Service port intentionally != targetPort (8001 vs 8000): the server's
-      # Service also declares port 8000, and k3d's svclb LoadBalancer
-      # mechanism binds a hostPort matching this field on every node — two
-      # LoadBalancer Services sharing the same `port` collide there (the server
-      # already holds hostPort 8000 on all 3 nodes, so fastmcp's svclb pods
-      # could never schedule). The container itself is untouched — it still
-      # listens on 8000 (targetPort + the probes below).
-      - name: http
-        port: 8001
-        targetPort: 8000
-        protocol: TCP
-    type: ClusterIP
-  startupProbeSettings:
-    startupProbe:
-      httpGet:
-        path: /health
-        port: 8000
-      failureThreshold: 12
-      periodSeconds: 5
-  livenessProbeSettings:
-    livenessProbe:
-      httpGet:
-        path: /health
-        port: 8000
-      initialDelaySeconds: 0
-      periodSeconds: 10
-      failureThreshold: 3
-  readinessProbeSettings:
-    readinessProbe:
-      httpGet:
-        path: /health
-        port: 8000
       initialDelaySeconds: 0
       periodSeconds: 5
       failureThreshold: 3

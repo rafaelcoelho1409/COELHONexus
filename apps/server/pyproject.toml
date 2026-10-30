@@ -60,7 +60,7 @@ dependencies = [
     # Research Radar agent stack: DeepAgents orchestrator + LangChain MCP adapter.
     "deepagents>=0.6,<1.0",
     "langchain-mcp-adapters>=0.3,<1.0",
-    # MCP server mounted into the FastAPI app (mcp_server/); same range as apps/fastmcp.
+    # MCP server mounted into the FastAPI app (mcp_server/); the standalone FastMCP gateway is retired.
     "fastmcp>=3.4.10,<4.0",
     # Directly imported but only pulled in transitively — declared explicitly
     # so an upstream version change can't silently break these imports (deptry DEP003).

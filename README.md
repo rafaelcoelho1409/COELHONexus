@@ -35,7 +35,7 @@
 
 ## What is this?
 
-COELHO Nexus is a single, self-contained platform hosting three independent AI-powered applications, all running on the same Kubernetes cluster, sharing the same observability stack, the same free-tier LLM rotator, and the same infrastructure-as-code foundation. It was designed and built end-to-end by one engineer — from the Terraform modules that provision every data store, to the FastAPI/FastHTML/FastMCP services that run the apps, to the pipeline that deploys them.
+COELHO Nexus is a single, self-contained platform hosting three independent AI-powered applications, all running on the same Kubernetes cluster, sharing the same observability stack, the same free-tier LLM rotator, and the same infrastructure-as-code foundation. It was designed and built end-to-end by one engineer — from the Terraform modules that provision every data store, to the FastAPI backend and Next.js front end that run the apps, to the pipeline that deploys them.
 
 The point of this repo isn't just "three AI apps." It's a demonstration of what a single engineer can own end-to-end: infrastructure, backend, observability, and delivery, all treated with the same rigor a platform team would bring to production.
 
@@ -53,11 +53,11 @@ The point of this repo isn't just "three AI apps." It's a demonstration of what 
 <img src="diagrams/coelho_nexus_architecture.png" alt="COELHO Nexus Architecture" width="800">
 </div>
 
-**Three microservices plus the web homepage:**
+**Two services, plus Celery workers and Flower:**
 - **Server** — the FastAPI ML/agent backend (with a FastMCP endpoint at `/mcp`). Owns the actual pipelines for all three features, plus Celery-orchestrated background task queues (one isolated queue per feature pipeline).
-- **FastHTML** — the frontend. Server-side rendered, HTMX-reactive, no separate JS build step. Streams live pipeline progress over SSE.
-- **FastMCP** — an internal Model Context Protocol tool surface. Exposes discovery/retrieval tools that the agent pipelines call into, with BYOK credential injection and rate-limited token buckets.
-- **Web** — the Next.js homepage, deployed alongside the three services. Feature routes migrate here incrementally; FastHTML still owns the application UI.
+- **Web** — the Next.js front end, and the only UI: home, Settings, Docs Distiller and YouTube Content Search. It proxies `/api/*` to the server and streams live pipeline progress over SSE.
+
+The earlier FastHTML UI and the standalone FastMCP gateway were retired and moved out of this repo.
 
 **Data layer**, six stores, each earning its place rather than being there by default:
 - **PostgreSQL** — relational state (Grafana, LangFuse, ArgoCD).
@@ -80,8 +80,8 @@ The point of this repo isn't just "three AI apps." It's a demonstration of what 
 | Technology | Purpose |
 |---|---|
 | **FastAPI** | ML/agent backend — owns all three pipelines |
-| **FastHTML** | Server-rendered, HTMX-reactive frontend |
-| **FastMCP** | Internal Model Context Protocol tool gateway |
+| **Next.js** | The web front end (React, Tailwind, shadcn/ui, TanStack Query) |
+| **FastMCP** | Model Context Protocol endpoint mounted on the server (`/mcp`) |
 | **Celery** | Background task orchestration, one queue per feature |
 | **DeepAgents** | Multi-phase autonomous agent orchestration (Research Radar) |
 | **LangGraph** | Graph-structured pipelines (Docs Distiller Planner/Synth) |
@@ -249,14 +249,12 @@ Two independent deploy paths — pick one. **Option A (ArgoCD) has been verified
 
 Build and push images to the registry first; ArgoCD's Image Updater (not you) detects the new image and triggers the deploy. Two interchangeable ways to build — pick either, both push to the same registry under the same name+tag, and Image Updater can't tell which tool produced the image.
 
-Host-facing `localhost:5001` (not the in-cluster `coelhonexus-registry:5000` DNS name) in both, because this runs from a plain host terminal, not a Docker-in-Docker CI runner on the registry's own Docker network. **Tag must be `latest`, not a git SHA** — `k8s/argocd/prod/image-updater.yaml` hardcodes `imageName: coelhonexus-registry:5000/coelhonexus-server:latest` (and same for fasthtml/fastmcp/web) with `updateStrategy: digest`. Image Updater watches that one fixed `:latest` tag for digest changes; it does not scan for new SHA-tagged images.
+Host-facing `localhost:5001` (not the in-cluster `coelhonexus-registry:5000` DNS name) in both, because this runs from a plain host terminal, not a Docker-in-Docker CI runner on the registry's own Docker network. **Tag must be `latest`, not a git SHA** — `k8s/argocd/prod/image-updater.yaml` hardcodes `imageName: coelhonexus-registry:5000/coelhonexus-server:latest` (and same for web) with `updateStrategy: digest`. Image Updater watches that one fixed `:latest` tag for digest changes; it does not scan for new SHA-tagged images.
 
 **a. Via `docker buildx build`** (one command per service, no `skaffold.yaml` involved — `--push` builds and pushes in one step, no separate `docker push` needed):
 
 ```bash
 docker buildx build --push -t localhost:5001/coelhonexus-server:latest   -f apps/server/Dockerfile.server   apps/server
-docker buildx build --push -t localhost:5001/coelhonexus-fasthtml:latest -f apps/fasthtml/Dockerfile.fasthtml apps/fasthtml
-docker buildx build --push -t localhost:5001/coelhonexus-fastmcp:latest  -f apps/fastmcp/Dockerfile.fastmcp  apps/fastmcp
 docker buildx build --push -t localhost:5001/coelhonexus-web:latest      -f apps/web/Dockerfile.web      apps/web
 ```
 
@@ -274,14 +272,12 @@ kubectl apply -f k8s/argocd/prod/
 
 `k8s/argocd/prod/application.yaml` points at this public GitHub repo directly (no in-cluster Git server on the standalone cluster — kept out of the port to save ~3 GB RAM). Same build/push-then-Image-Updater-deploys split `.gitlab-ci.yml` uses elsewhere, just with GitHub as the source and a manual build/push instead of a CI pipeline.
 
-**Reach the deployed app** — no port-forward process needed. Server/Flower/FastHTML/FastMCP/Web are on the same native k3d NodePort mapping the infrastructure services already use (see [`docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md`](docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md)) — reachable immediately, whichever deployment (this one or `skaffold dev`) currently holds those Service NodePorts:
+**Reach the deployed app** — no port-forward process needed. Server/Flower/Web are on the same native k3d NodePort mapping the infrastructure services already use (see [`docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md`](docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md)) — reachable immediately, whichever deployment (this one or `skaffold dev`) currently holds those Service NodePorts:
 
 | Service | URL |
 |---|---|
 | Server | http://localhost:23024 |
 | Flower | http://localhost:23025 |
-| FastHTML | http://localhost:23026 |
-| FastMCP | http://localhost:23027 |
 | Web | http://localhost:23028 |
 
 Existing clusters created before the web port was added need the host mapping once: `k3d cluster edit <cluster-name> --port-add "23028:30026@loadbalancer"`. Fresh clusters get it from `infrastructure/modules/k3d/main.tf`.
@@ -297,8 +293,6 @@ helm upgrade --install coelhonexus k8s/helm \
   -f k8s/helm/values.yaml \
   -f k8s/helm/values-coelhonexus.yaml \
   --set server.image=localhost:5001/coelhonexus-server:latest \
-  --set fasthtml.image=localhost:5001/coelhonexus-fasthtml:latest \
-  --set fastmcp.image=localhost:5001/coelhonexus-fastmcp:latest \
   --set web.image=localhost:5001/coelhonexus-web:latest
 ```
 
@@ -346,7 +340,7 @@ rm -rf infrastructure/.tfstate/   # local Terragrunt state (empty after a clean 
 
 Two independent access mechanisms exist, and they use *different port numbers* — mixing them up is the most common "why won't this load" moment on a fresh install:
 
-- **Native k3d NodePorts** — baked into the cluster at creation time, work immediately after `terragrunt apply`, no extra process required. Covers every infrastructure service below *and* the app layer (Server/Flower/FastHTML/FastMCP/Web), reaching whichever deployment — ArgoCD or `skaffold dev` — currently holds those Service NodePorts.
+- **Native k3d NodePorts** — baked into the cluster at creation time, work immediately after `terragrunt apply`, no extra process required. Covers every infrastructure service below *and* the app layer (Server/Flower/Web), reaching whichever deployment — ArgoCD or `skaffold dev` — currently holds those Service NodePorts.
 - **`skaffold dev`'s built-in `portForward:`** — a second, dev-loop-specific way to reach the app layer, guaranteed to target the `coelhonexus-dev` namespace specifically regardless of what else is running. Cross-platform (it's Skaffold itself doing the forwarding, not a wrapper script), but only active while `skaffold dev` is running in the foreground.
 
 Three deploy mechanisms, three disjoint port ranges — kept deliberately non-overlapping so none of them can ever collide with each other:
@@ -354,7 +348,7 @@ Three deploy mechanisms, three disjoint port ranges — kept deliberately non-ov
 | Range | Mechanism | Fixed? |
 |---|---|---|
 | `23000-23019` | ArgoCD / `coelhonexus` production (manual `kubectl port-forward`, optional — native NodePort below covers the same services without it) | Fixed |
-| `23001`, `23011-23028` | Terragrunt-managed native k3d NodePort — infra (`23001`, `23011-23023`) + app layer (`23024-23028`) | Fixed |
+| `23001`, `23011-23025`, `23028` | Terragrunt-managed native k3d NodePort — infra (`23001`, `23011-23023`) + app layer (`23024`, `23025`, `23028`; `23026`-`23027` retired) | Fixed |
 | `23029` | *(unused — remaining headroom for future Terragrunt modules)* | — |
 | `23030-23039` | Skaffold / `coelhonexus-dev` (this table) | Fixed |
 
@@ -364,13 +358,9 @@ Full URL/credential table, quirks, and a connectivity smoke-test script live in 
 |---|---|---|---|---|
 | **Server** | http://localhost:23024 | nothing — native NodePort | — | — (no auth) |
 | **Flower** (Celery) | http://localhost:23025 | nothing — native NodePort | — | — (no auth) |
-| **FastHTML** | http://localhost:23026 | nothing — native NodePort | — | — (no auth) |
-| **FastMCP** | http://localhost:23027 | nothing — native NodePort | — | — (no auth) |
 | **Web** | http://localhost:23028 | nothing — native NodePort | — | — (no auth) |
 | **Server** (dev loop) | http://localhost:23030 | `skaffold dev` | — | — (no auth) |
 | **Flower** (dev loop) | http://localhost:23032 | `skaffold dev` | — | — (no auth) |
-| **FastHTML** (dev loop) | http://localhost:23033 | `skaffold dev` | — | — (no auth) |
-| **FastMCP** (dev loop) | http://localhost:23034 | `skaffold dev` | — | — (no auth) |
 | **Web** (dev loop) | http://localhost:23035 | `skaffold dev` | — | — (no auth) |
 | **Neo4j Browser** | http://localhost:23001 | nothing — native NodePort | `neo4j` | `neo4j-demo-password`³ |
 | **Qdrant Dashboard** | http://localhost:23011 | nothing — native NodePort | — (API key field, not user/pass) | `qdrant-demo-api-key` |
@@ -408,7 +398,7 @@ Adding observability to a new domain follows one documented, copy-pasteable patt
 
 COELHO Nexus supports two delivery models on this standalone cluster, rather than forcing one pattern — see [Installation](#installation) for the full command sequence for either:
 
-- **Skaffold** — `skaffold run` / `skaffold dev` builds all three service images, pushes them to the local k3d registry, and deploys the Helm chart directly. No Git server required, cross-platform (Windows/macOS/Linux), and the fastest path to "see it running." Targets the `coelhonexus-dev` namespace.
+- **Skaffold** — `skaffold run` / `skaffold dev` builds the server and web images, pushes them to the local k3d registry, and deploys the Helm chart directly. No Git server required, cross-platform (Windows/macOS/Linux), and the fastest path to "see it running." Targets the `coelhonexus-dev` namespace.
 - **ArgoCD GitOps** — build/push an image, apply `k8s/argocd/prod/` once, and ArgoCD's Image Updater takes it from there: watches the registry, detects new `:latest` digests, rolls out automatically. Targets the `coelhonexus` namespace. A separate production homelab cluster runs this same model too, against an in-cluster GitLab instance as the source of truth instead of GitHub directly.
 
 Both models deploy the exact same Helm chart (`k8s/helm/`) — only the registry hostname and image references flex between environments (`k8s/helm/values-coelhonexus.yaml` is the 4-line override).
@@ -422,18 +412,10 @@ COELHONexus/
 │   │   ├── entrypoints/          # api/ (REST routes) + mcp/ (MCP tools)
 │   │   ├── domains/              # dd/ ycs/ rr/ llm/ — one folder per feature
 │   │   └── infra/                # otel/, langfuse/, db clients
-│   ├── fasthtml/                # Server-rendered frontend
-│   │   ├── features/             # one folder per feature's UI
-│   │   ├── layout/               # shell, nav, shared components
-│   │   └── static/               # CSS/JS assets
-│   ├── fastmcp/                  # Internal MCP tool gateway
-│   │   ├── domains/               # tool implementations per feature
-│   │   ├── middleware/            # telemetry, auth, rate limiting
-│   │   └── infra/                 # otel/ mirror of the server's
-│   └── web/                      # Next.js homepage (feature routes migrate here)
-        ├── src/app/               # App Router routes
-        ├── src/components/        # layout + homepage sections + shadcn/ui
-        └── src/lib/               # shared site config + utilities
+│   └── web/                      # Next.js front end (home, Settings, Docs Distiller, YCS)
+│       ├── src/app/               # App Router routes (one-line page re-exports)
+│       ├── src/features/          # dd/, ycs/, settings/, marketing/ — one folder per feature
+│       └── src/shared/            # generated API client, UI kit, config, layout
 │
 ├── infrastructure/               # Terraform + Terragrunt IaC
 │   ├── modules/                  # 18 reusable modules (one per service)

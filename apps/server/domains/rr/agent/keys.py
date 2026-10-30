@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-# MCP tool names — must match @mcp.tool(name=...) in apps/fastmcp/domains/rr/tools/<source>/tool.py.
+# MCP tool names — must match the @mcp.tool(name=...) of the (retired) FastMCP gateway's RR source tools.
 TOOL_ARXIV_SEARCH    = "arxiv_search"
 TOOL_S2_SEARCH       = "semantic_scholar_search"
 TOOL_HF_DAILY        = "huggingface_daily_papers"

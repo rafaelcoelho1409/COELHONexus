@@ -14,20 +14,6 @@ spec:
           manifestTargets:
             helm:
               spec: server.image  # Full image reference (repo:tag@digest)
-        - alias: fasthtml
-          imageName: coelho-cloud-registry:5000/coelhonexus-fasthtml:latest
-          commonUpdateSettings:
-            updateStrategy: digest
-          manifestTargets:
-            helm:
-              spec: fasthtml.image  # Full image reference (repo:tag@digest)
-        - alias: fastmcp
-          imageName: coelho-cloud-registry:5000/coelhonexus-fastmcp:latest
-          commonUpdateSettings:
-            updateStrategy: digest
-          manifestTargets:
-            helm:
-              spec: fastmcp.image  # Full image reference (repo:tag@digest)
         - alias: web
           imageName: coelho-cloud-registry:5000/coelhonexus-web:latest
           commonUpdateSettings:

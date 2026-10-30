@@ -8,7 +8,7 @@ If the brief and the code disagree, or you are unsure, **stop and report** — d
 
 1. **Never run `git commit`, `git push`, `git add`, `git stash` or `git checkout`.** The human commits.
 2. **Only edit files inside `apps/web/`**, and only the paths the brief lists as allowed. Never touch
-   `apps/server`, `apps/fasthtml`, `k8s`, `skaffold.yaml`, `infrastructure`, or `docs/` (except the brief's
+   `apps/server`, `k8s`, `skaffold.yaml`, `infrastructure`, or `docs/` (except the brief's
    own report file if it says so).
 3. **Never edit generated or managed files**: `src/shared/api/generated/**`, `src/shared/styles/tokens.generated.css`,
    `openapi/openapi.json`, `package-lock.json` (by hand), `biome.json`, `eslint.config.mjs`, `tsconfig.json`,

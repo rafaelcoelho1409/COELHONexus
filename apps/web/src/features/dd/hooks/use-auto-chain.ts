@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { fetchPipelineActive } from "../api";
 import { AUTO_CHAIN_MAX_WAIT_MS, AUTO_CHAIN_POLL_MS, AUTO_CHAIN_STORAGE_KEY } from "../params";
 
-// The opt-in lives in localStorage (same key as the FastHTML page); the store keeps every checkbox in sync.
+// The opt-in lives in localStorage (same key the old UI used); the store keeps every checkbox in sync.
 const listeners = new Set<() => void>();
 
 function subscribe(listener: () => void) {

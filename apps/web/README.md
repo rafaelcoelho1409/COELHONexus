@@ -1,17 +1,17 @@
 # COELHO Nexus — web
 
-The Next.js front end for COELHO Nexus. Feature routes from `apps/fasthtml` migrate here one surface at a
-time (strangler). Next.js 16 (App Router, Turbopack) · React 19 · TypeScript 6 strict · Tailwind 4 ·
-shadcn/ui on Base UI · TanStack Query · generated API client.
+The Next.js front end for COELHO Nexus — the only UI. Next.js 16 (App Router, Turbopack) · React 19 ·
+TypeScript 6 strict · Tailwind 4 · shadcn/ui on Base UI · TanStack Query · generated API client.
 
-| Surface | Served by | State |
-| --- | --- | --- |
-| Home, Settings, Docs Distiller (`/dd/*`) | this app | migrated; `/docs-distiller*` redirects here (307) |
-| YouTube content search (YCS) | FastHTML, via the `FASTHTML_URL` fallback | not migrated |
+| Surface | Served by |
+| --- | --- |
+| Home, Settings | this app |
+| Docs Distiller (`/dd/*`) | this app; the old `/docs-distiller*` URLs redirect here (307) |
+| YouTube content search (YCS: Source, Ingestion, Ask, Query) | this app |
 
-**Rolling Docs Distiller back to FastHTML:** delete the `MOVED_PAGES` entry in `src/shared/config/redirects.ts`
-and rebuild the web image. The FastHTML pages (`apps/fasthtml/features/dd`) are deliberately still in place;
-delete them, and flip the redirect to `permanent: true`, only after the new pages have run live for a while.
+The retired FastHTML UI no longer exists in this repo, so there is no fallback to it. The `/docs-distiller`
+redirect stays so old bookmarks and shared study links keep working; flip it to `permanent: true`
+(`src/shared/config/redirects.ts`) once you no longer need to roll it back.
 
 ```bash
 npm install
@@ -55,7 +55,6 @@ Docker build args (`Dockerfile.web`, `skaffold.yaml`). See `.env.example`.
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `SERVER_URL` | `http://localhost:23030` | The Nexus API; `/api/*` is proxied here |
-| `FASTHTML_URL` | unset | Legacy UI; every path this app does not serve falls back to it |
 | `EXPOSE_API_DOCS` | `false` | Also proxy `/docs` and `/openapi.json` |
 
 `/health` is this app's own probe and never touches the backend.

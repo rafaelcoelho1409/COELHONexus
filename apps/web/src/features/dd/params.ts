@@ -72,7 +72,7 @@ export const CANCEL_SAFETY_MS = 5_000;
 /** Node checkpoints commit a tick after the stream's `done` event: re-read the state at these offsets. */
 export const GRAPH_STATE_RETRY_DELAYS_MS = [0, 250, 400, 550, 700, 850, 1_000] as const;
 
-/** Opt-in "start synth when the planner finishes", remembered per browser. Same key as the FastHTML page. */
+/** Opt-in "start synth when the planner finishes", remembered per browser. Same key the old UI used, so the choice carries over. */
 export const AUTO_CHAIN_STORAGE_KEY = "dd:pipeline:autochain";
 
 /** How the reader of the Study tab wants it laid out (side columns open or closed, text width), remembered per browser. */

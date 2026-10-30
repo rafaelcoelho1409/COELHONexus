@@ -29,20 +29,6 @@ spec:
           manifestTargets:
             helm:
               spec: server.image
-        - alias: fasthtml
-          imageName: coelhonexus-registry:5000/coelhonexus-fasthtml:latest
-          commonUpdateSettings:
-            updateStrategy: digest
-          manifestTargets:
-            helm:
-              spec: fasthtml.image
-        - alias: fastmcp
-          imageName: coelhonexus-registry:5000/coelhonexus-fastmcp:latest
-          commonUpdateSettings:
-            updateStrategy: digest
-          manifestTargets:
-            helm:
-              spec: fastmcp.image
         - alias: web
           imageName: coelhonexus-registry:5000/coelhonexus-web:latest
           commonUpdateSettings:

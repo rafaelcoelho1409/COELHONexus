@@ -63,7 +63,7 @@ When it's green, infrastructure services are already reachable (native k3d NodeP
 skaffold dev
 ```
 
-Four port ranges, kept disjoint on purpose — see the root [`README.md`](../README.md#service-access) for the full app-layer table (native NodePort at `23024-23027`, ArgoCD's optional `kubectl port-forward` at `23000-23019`, Skaffold dev at `23030-23039`). This file covers just the Terragrunt-managed infra range below (`23001`, `23011-23023`):
+Four port ranges, kept disjoint on purpose — see the root [`README.md`](../README.md#service-access) for the full app-layer table (native NodePort at `23024`, `23025` and `23028`, ArgoCD's optional `kubectl port-forward` at `23000-23019`, Skaffold dev at `23030-23039`). This file covers just the Terragrunt-managed infra range below (`23001`, `23011-23023`):
 
 | Service | URL | Login |
 |---|---|---|
@@ -154,7 +154,7 @@ cd infrastructure/live/coelhonexus/<layer>/<module> && terragrunt apply -auto-ap
 for f in infrastructure/live/coelhonexus/*/*/smoke.sh; do bash "$f" || break; done
 ```
 
-### Deploy the COELHO Nexus apps (`server`, `fasthtml`, `fastmcp`)
+### Deploy the COELHO Nexus apps (`server`, `web`)
 
 Full instructions — Skaffold (`run`/`dev`) and ArgoCD (build via `docker buildx` or `skaffold build`, then Image Updater deploys) — moved to the root [`README.md`](../README.md)'s Installation section, so app-deploy instructions live in one place rather than being duplicated across two READMEs.
 
@@ -193,7 +193,7 @@ kubectl logs -n <ns> <pod> --tail=100
 
 All demo credentials live in `infrastructure/env.hcl` under the `demo` map. Edit that file and re-apply if you need different passwords. They're plain-text on purpose — this is a local demo, not a production cluster. **Do not commit real secrets** to this file.
 
-For real BYOK secrets (LLM provider API keys), use the in-app Settings UI at `http://localhost:23033/settings` (Fernet-encrypted, stored in MinIO).
+For real BYOK secrets (LLM provider API keys), use the in-app Settings UI at `http://localhost:23035/settings` (Fernet-encrypted, stored in MinIO).
 
 ---
 

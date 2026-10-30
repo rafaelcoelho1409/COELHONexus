@@ -251,7 +251,7 @@
       "id": 8,
       "type": "logs",
       "title": "Recent RR workflow error logs",
-      "description": "Research Radar errors and scan-specific workflow signals from Celery and FastMCP.",
+      "description": "Research Radar errors and scan-specific workflow signals from Celery.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -268,7 +268,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-celery|coelhonexus-fastmcp\"} |~ \"(?i)(radar|scan|rr\\\\b|fastmcp|error|exception|traceback|failed)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\" | regexp \"(?P<scan_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\"",
+          "expr": "{namespace=~\"coelhonexus.*\",service_name=\"coelhonexus-celery\"} |~ \"(?i)(radar|scan|rr\\\\b|error|exception|traceback|failed)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\" | regexp \"(?P<scan_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\"",
           "refId": "A"
         }
       ],
@@ -304,7 +304,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum by (detected_level) (count_over_time({namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-celery|coelhonexus-fastmcp\"} |~ \"(?i)(radar|scan|rr\\\\b|phase|mcp)\" [5m]))",
+          "expr": "sum by (detected_level) (count_over_time({namespace=~\"coelhonexus.*\",service_name=\"coelhonexus-celery\"} |~ \"(?i)(radar|scan|rr\\\\b|phase|mcp)\" [5m]))",
           "legendFormat": "{{detected_level}}",
           "refId": "A"
         }
@@ -401,7 +401,7 @@
       "id": 11,
       "type": "traces",
       "title": "RR error traces",
-      "description": "Error-status spans from Celery + FastMCP. Click a row to open the full distributed trace in Tempo. Useful for diagnosing discovery 429s, triage failures, synthesis timeouts.",
+      "description": "Error-status spans from Celery. Click a row to open the full distributed trace in Tempo. Useful for diagnosing discovery 429s, triage failures, synthesis timeouts.",
       "datasource": {
         "type": "tempo",
         "uid": "tempo"
@@ -419,7 +419,7 @@
             "uid": "tempo"
           },
           "queryType": "traceql",
-          "query": "{ resource.service.name=~\"coelhonexus-celery|coelhonexus-fastmcp\" && status=error }",
+          "query": "{ resource.service.name=\"coelhonexus-celery\" && status=error }",
           "limit": 20,
           "refId": "A",
           "tableType": "traces"

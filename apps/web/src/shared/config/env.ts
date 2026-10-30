@@ -3,14 +3,12 @@ import { z } from "zod";
 /**
  * The web app's whole environment, validated once at startup.
  *
- * `SERVER_URL` and `FASTHTML_URL` are read when `next.config.ts` compiles the rewrites, so for a
- * production image they are build-time values (Dockerfile ARGs), not runtime ones.
+ * `SERVER_URL` is read when `next.config.ts` compiles the rewrites, so for a production image it is a
+ * build-time value (a Dockerfile ARG), not a runtime one.
  */
 const schema = z.object({
   /** The Nexus API (FastAPI). In-cluster: http://coelhonexus-server:8000. */
   SERVER_URL: z.url().default("http://localhost:23030"),
-  /** The legacy FastHTML UI. When set, every path this app does not serve falls back to it. */
-  FASTHTML_URL: z.url().optional(),
   /** Proxy the API's /docs and /openapi.json through this app. Off by default: the schema is not public. */
   EXPOSE_API_DOCS: z.stringbool().default(false),
 });
@@ -19,7 +17,6 @@ const withoutTrailingSlash = (url: string) => url.replace(/\/+$/, "");
 
 export type Env = {
   SERVER_URL: string;
-  FASTHTML_URL: string | undefined;
   EXPOSE_API_DOCS: boolean;
 };
 
@@ -35,12 +32,8 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
       .join("; ");
     throw new Error(`Invalid environment — ${problems}`);
   }
-  const { SERVER_URL, FASTHTML_URL, EXPOSE_API_DOCS } = result.data;
-  return {
-    SERVER_URL: withoutTrailingSlash(SERVER_URL),
-    FASTHTML_URL: FASTHTML_URL === undefined ? undefined : withoutTrailingSlash(FASTHTML_URL),
-    EXPOSE_API_DOCS,
-  };
+  const { SERVER_URL, EXPOSE_API_DOCS } = result.data;
+  return { SERVER_URL: withoutTrailingSlash(SERVER_URL), EXPOSE_API_DOCS };
 }
 
 export const env: Env = parseEnv(process.env);

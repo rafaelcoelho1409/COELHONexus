@@ -4,41 +4,20 @@ metadata:
   name: coelhonexus
 
 build:
-  # Content-based tag: hashes the build context, so the tag changes whenever
-  # source files change. This guarantees:
-  #   1. Skaffold rebuilds when sources change (new tag => cache miss)
-  #   2. Kubernetes detects image change and rolls out a new pod (tag differs)
-  #   3. tryImportMissing can't accidentally pull a stale 'latest' from registry
-  #      because the tag itself is unique per content snapshot.
-  # Identical builds reuse cache (same tag), so this stays fast.
+  # Content-hash tag: a source change means a new tag, so Skaffold rebuilds and Kubernetes rolls out.
   tagPolicy:
     sha256: {}
   artifacts:
-    # Server: FastAPI ML backend + FastMCP (apps/server).
-    # Image name is fully qualified with `localhost:5001` (k3d host port
-    # mapping → the cluster's own registry container). Every cluster this
-    # chart can target resolves this same address via its own containerd
-    # mirror (see infrastructure/modules/k3d/files/registries.yaml.tpl) —
-    # so the artifact image string is identical to the deployed pod's image
-    # string, which Skaffold's sync matcher requires for hot-reload to
-    # work. No setValueTemplates rewrite needed.
+    # Server (FastAPI + FastMCP). Images use `localhost:5001` (k3d registry); every cluster's containerd
+    # mirror resolves it, so the artifact name equals the pod's image and hot-reload sync matches.
     - image: localhost:5001/coelhonexus-server
       context: apps/server
       docker:
         dockerfile: Dockerfile.server
         noCache: false  # Enable layer caching for faster rebuilds
       sync:
-        # Hot-reload: sync Python files directly to container (no rebuild)
-        # Requires: skaffold dev (not skaffold run)
-        #
-        # Skaffold's manual sync is ALL-OR-NOTHING: if any changed file in
-        # a debounce batch doesn't match a `src` glob, the whole batch
-        # falls back to rebuild. So we list everything a normal edit pass
-        # might touch — .py, .yaml, .json, .toml — and let .dockerignore
-        # filter the noise (__pycache__/*.pyc et al) BEFORE Skaffold's
-        # watcher even sees it. Without this combination, the .pyc files
-        # Python generates as a side effect of any `import` would race
-        # into the batch and trigger a 2-3 minute rebuild on every save.
+        # Hot-reload (`skaffold dev` only). Manual sync is all-or-nothing: one unmatched file in a batch
+        # forces a rebuild, so every source type is listed and .dockerignore hides __pycache__/*.pyc.
         manual:
           - src: "**/*.py"
             dest: /app
@@ -50,58 +29,7 @@ build:
             dest: /app
           - src: "**/*.toml"
             dest: /app
-    # FastHTML frontend (Python + python-fasthtml + HTMX + PWA).
-    # Replaced the legacy Go web frontend on 2026-05-09 — see
-    # apps/fasthtml/ for the full-parity port. Same fully-qualified-image
-    # pattern as server above.
-    - image: localhost:5001/coelhonexus-fasthtml
-      context: apps/fasthtml
-      docker:
-        dockerfile: Dockerfile.fasthtml
-        noCache: false
-      sync:
-        # Same all-or-nothing reasoning as server above — list every
-        # source file type so the watcher never falls back to rebuild on
-        # an edit-pass batch. apps/fasthtml/.dockerignore (added in the
-        # same commit) excludes __pycache__/*.pyc + editor swapfiles so
-        # they don't even enter the build context.
-        manual:
-          - src: "**/*.py"
-            dest: /app
-          - src: "static/**"
-            dest: /app/static
-            strip: "static/"
-          - src: "**/*.yaml"
-            dest: /app
-          - src: "**/*.yml"
-            dest: /app
-          - src: "**/*.json"
-            dest: /app
-          - src: "**/*.toml"
-            dest: /app
-    # FastMCP server (Model Context Protocol tool surface — apps/fastmcp).
-    # Internal/ClusterIP MCP gateway consumed by the server's Research Radar
-    # agent. Same fully-qualified-image + all-or-nothing sync pattern as above.
-    - image: localhost:5001/coelhonexus-fastmcp
-      context: apps/fastmcp
-      docker:
-        dockerfile: Dockerfile.fastmcp
-        noCache: false
-      sync:
-        manual:
-          - src: "**/*.py"
-            dest: /app
-          - src: "**/*.yaml"
-            dest: /app
-          - src: "**/*.yml"
-            dest: /app
-          - src: "**/*.json"
-            dest: /app
-          - src: "**/*.toml"
-            dest: /app
-    # Next.js homepage (apps/web). Standalone production build, so there is
-    # deliberately no `sync:` block — Next's compiled server output cannot be
-    # hot-patched file-by-file. Edits trigger a rebuild/rollout.
+    # Next.js front end: a standalone build can't be hot-patched, so no `sync:` — edits rebuild.
     - image: localhost:5001/coelhonexus-web
       context: apps/web
       docker:
@@ -109,21 +37,10 @@ build:
         noCache: false
         buildArgs:
           SERVER_URL: http://coelhonexus-server:8000
-          # Strangler seam: paths the Next app does not serve yet fall back to FastHTML.
-          FASTHTML_URL: http://coelhonexus-fasthtml:3000
   local:
-    # Push to the k3d registry at localhost:5001 (k3d host port). Whichever
-    # cluster this targets resolves the SAME address via its own containerd
-    # mirror (registries.yaml.tpl in infrastructure/modules/k3d/), so
-    # `localhost:5001/foo:bar` works as a single image name end-to-end —
-    # host pushes there, kubelet pulls from there. Single source of truth,
-    # Skaffold's sync matcher matches, hot-reload works.
+    # Push to the k3d registry (localhost:5001, see infrastructure/modules/k3d/files/registries.yaml.tpl).
     push: true
-    # IMPORTANT: tryImportMissing=false forces Skaffold to always build from
-    # source. With true, Skaffold would silently import an existing image with
-    # the same name+tag from the registry — which masked code changes when
-    # combined with the old 'latest' tag policy. Combined with sha256 tags
-    # above, this guarantees every build reflects current source code.
+    # Always build from source; never import a same-named image from the registry.
     tryImportMissing: false
     useBuildkit: true
     useDockerCLI: true
@@ -137,21 +54,10 @@ manifests:
         namespace: coelhonexus-dev
         createNamespace: true
         skipBuildDependencies: true
-        # Enable Skaffold image tracking for hot-reload sync.
-        #
-        # IMAGE_FULLY_QUALIFIED_<name> = "<artifact-image>:<sha256-tag>".
-        # Variable name uses the artifact image with non-alphanumerics
-        # replaced by underscores — so `localhost:5001/coelhonexus-server`
-        # becomes `localhost_5001_coelhonexus_server`.
-        #
-        # The pod's deployed image string equals what Skaffold pushed
-        # (no rewrite), so Skaffold's sync matcher finds the pod and
-        # hot-reload works. The cluster's containerd mirror handles
-        # `localhost:5001` → in-cluster registry transparently.
+        # IMAGE_FULLY_QUALIFIED_<image with non-alphanumerics as "_"> = "<image>:<sha256-tag>"; the pod
+        # runs exactly what was pushed, so hot-reload sync finds it.
         setValueTemplates:
           server.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_server}}"
-          fasthtml.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_fasthtml}}"
-          fastmcp.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_fastmcp}}"
           web.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_web}}"
           environment: local  # Enables --reload in uvicorn for hot-reload
 
@@ -164,11 +70,6 @@ deploy:
       upgrade:
         - --timeout=10m
         - --wait
-
-# No profiles (2026-09-11) — plain `skaffold dev` is the only mode. No LLM
-# backend is bundled with this cluster — point the Settings page (or
-# values.yaml's `llm.endpoint.url`) at whatever OpenAI-compatible endpoint
-# you want to use.
 
 portForward:
   - resourceType: service
@@ -184,21 +85,7 @@ portForward:
     port: 5555
     localPort: 23032
     address: 0.0.0.0
-  # FastHTML frontend
-  - resourceType: service
-    resourceName: coelhonexus-fasthtml
-    namespace: coelhonexus-dev
-    port: 3000
-    localPort: 23033
-    address: 0.0.0.0
-  # FastMCP server
-  - resourceType: service
-    resourceName: coelhonexus-fastmcp
-    namespace: coelhonexus-dev
-    port: 8001
-    localPort: 23034
-    address: 0.0.0.0
-  # Next.js homepage
+  # Next.js front end
   - resourceType: service
     resourceName: coelhonexus-web
     namespace: coelhonexus-dev
@@ -206,11 +93,7 @@ portForward:
     localPort: 23035
     address: 0.0.0.0
 
-
-# NOTE: Ensure docker-buildx is installed when useBuildkit is true
-
-# Development (Skaffold): ports 23030-23039
-# sh mirror_localhost_tailscale.sh $(for i in {23030..23035}; do echo $i; done)
+# Needs docker-buildx (useBuildkit). Dev ports: 23030-23039.
 # skaffold dev --cache-artifacts=false --no-prune=false --auto-sync=false
 
 profiles:
@@ -222,16 +105,6 @@ profiles:
           docker:
             dockerfile: Dockerfile.server
             noCache: false
-        - image: coelho-cloud-registry:5000/coelhonexus-fasthtml
-          context: apps/fasthtml
-          docker:
-            dockerfile: Dockerfile.fasthtml
-            noCache: false
-        - image: coelho-cloud-registry:5000/coelhonexus-fastmcp
-          context: apps/fastmcp
-          docker:
-            dockerfile: Dockerfile.fastmcp
-            noCache: false
         - image: coelho-cloud-registry:5000/coelhonexus-web
           context: apps/web
           docker:
@@ -239,4 +112,3 @@ profiles:
             noCache: false
             buildArgs:
               SERVER_URL: http://coelhonexus-server:8000
-              FASTHTML_URL: http://coelhonexus-fasthtml:3000

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 # Source provenance identifiers
 # Match `Paper.source` / `Hit.source` of each MCP tool's boundary schema in
-# apps/fastmcp/domains/rr/tools/<source>/schemas.py EXACTLY (typos here =
+# the (retired) FastMCP gateway's RR source tools' schemas EXACTLY (typos here =
 # silent dedup fails).
 SOURCE_ARXIV:    str = "arxiv"
 SOURCE_S2:       str = "semantic_scholar"

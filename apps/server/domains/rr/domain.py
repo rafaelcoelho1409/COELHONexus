@@ -316,9 +316,7 @@ def _log1p(x: int | float) -> float:
 # some third-party docs claiming so.
 #
 # Used at the HTTP boundary by `domains/rr/schemas.py`'s `ScanRequest`
-# validator. A verbatim copy lives in `apps/fasthtml/features/rr/taxonomy.py`
-# so the multi-select widget's custom-add field can validate client-side
-# without a round-trip. Keep them in sync; regenerate both together.
+# validator. (A copy once lived in the retired FastHTML UI's RR taxonomy module.)
 #
 # Regen recipe (zero deps, copy/paste into a REPL):
 #

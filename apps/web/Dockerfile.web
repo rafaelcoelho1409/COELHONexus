@@ -8,13 +8,10 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 # Routing is compiled into the build (see src/shared/config/rewrites.ts), so these are build args:
 #   SERVER_URL      the Nexus API
-#   FASTHTML_URL    the legacy UI; unmigrated paths fall back to it (empty = no fallback)
 #   EXPOSE_API_DOCS proxy /docs and /openapi.json (off: the schema is not public)
 ARG SERVER_URL=http://coelhonexus-server:8000
-ARG FASTHTML_URL=
 ARG EXPOSE_API_DOCS=false
 ENV SERVER_URL=$SERVER_URL \
-    FASTHTML_URL=$FASTHTML_URL \
     EXPOSE_API_DOCS=$EXPOSE_API_DOCS
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
