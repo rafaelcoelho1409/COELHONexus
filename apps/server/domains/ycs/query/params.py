@@ -31,18 +31,17 @@ SNIPPET_CHARS: int = 600
 # through schemas / service / router. Rename in one place → propagates.
 APP_DD:  str = "dd"
 APP_YCS: str = "ycs"
-APP_RR:  str = "rr"
 
 BACKEND_ES:     str = "elasticsearch"
 BACKEND_QDRANT: str = "qdrant"
 BACKEND_NEO4J:  str = "neo4j"
 
-APPS:     tuple[str, ...] = (APP_DD, APP_YCS, APP_RR)
+APPS:     tuple[str, ...] = (APP_DD, APP_YCS)
 BACKENDS: tuple[str, ...] = (BACKEND_ES, BACKEND_QDRANT, BACKEND_NEO4J)
 
 
-# Source of truth — the 3x3 (app x backend) matrix. Service + router
-# both read from here so adding RR-to-ES later is a one-line change.
+# Source of truth — the 2x3 (app x backend) matrix. Service + router
+# both read from here so adding another app later is a one-line change.
 APP_BACKENDS: dict[str, dict[str, entities.AppNamespace]] = {
     APP_DD: {
         BACKEND_ES:     entities.AppNamespace(available = False),
@@ -64,19 +63,6 @@ APP_BACKENDS: dict[str, dict[str, entities.AppNamespace]] = {
             available = True,
             label     = "YCS · entities + videos",
             target    = "__Entity__,Document,Video,Channel",
-        ),
-    },
-    APP_RR: {
-        BACKEND_ES:     entities.AppNamespace(available = False),
-        BACKEND_QDRANT: entities.AppNamespace(
-            available = True,
-            label     = "RR · paper abstracts",
-            target    = "radar_papers",
-        ),
-        BACKEND_NEO4J: entities.AppNamespace(
-            available = True,
-            label     = "RR · papers + authors + concepts",
-            target    = "Paper,Author,Concept,Source",
         ),
     },
 }

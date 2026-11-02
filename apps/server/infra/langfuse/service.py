@@ -5,7 +5,7 @@ in `prompts.py`:
 
   client     — lazy `Langfuse` singleton (`get_client`, `is_available`)
   sessions   — `session(...)`: stamp session_id + user_id into OTel baggage
-               (DD one study run, YCS one Ask conversation, RR one digest)
+               (DD one study run, YCS one Ask conversation)
   scores     — `record_score(...)` onto the active trace
   annotation — `flag_for_review(...)`: span markers + review score
   span attrs — `set_current_span_langfuse_io / _trace_metadata /
@@ -248,7 +248,7 @@ def flag_for_review(
 
 # ---------------------------------------------------------------------------
 # Span attributes — LangFuse-recognized I/O + filterable metadata on the CURRENT
-# active span (typically the workflow-root span for DD, YCS and RR). Keeps COELHO
+# active span (typically the workflow-root span for DD and YCS). Keeps COELHO
 # Nexus on a single OpenTelemetry tracing plane while still setting the
 # LangFuse-specific attributes needed for rich trace previews, filtering and
 # evaluations. All fail-soft: no recording span, or any error, is a no-op.
@@ -343,7 +343,7 @@ def set_current_span_langfuse_observation_metadata(
 #
 # Usage:
 #     import infra
-#     with infra.langfuse.service.session("rr", session_id=scan_id, user_id=profile_id):
+#     with infra.langfuse.service.session("ycs", session_id=conversation_id, user_id=user_id):
 #         cb = infra.langfuse.service.build_langchain_callback()
 #         callbacks = [c for c in (existing_cb, cb) if c is not None]
 #         await agent.ainvoke(..., config={"callbacks": callbacks})

@@ -96,7 +96,7 @@ variable "memory_request" {
 }
 
 variable "memory_limit" {
-  description = "Memory limit. Raised 512Mi→768Mi 2026-09-23, ported from COELHO Cloud's 2026-09-05 fix: under real sustained load (ServiceMonitor growth, slow downstream exports) Alloy OOMKilled ×2 at 512Mi while retry-storming. Raised 768Mi→1536Mi 2026-09-28, ported from COELHO Cloud's 2026-09-24 fix: the same DD/YCS/RR workload that runs in this cluster pushed a Cloud Alloy pod to 95% memory with the readiness probe failing under GC pressure. Not cluster-specific — Nexus runs the identical Celery/FastAPI app traffic, just at smaller scale, and nodes have ample headroom either way."
+  description = "Memory limit. Raised 512Mi→768Mi 2026-09-23, ported from COELHO Cloud's 2026-09-05 fix: under real sustained load (ServiceMonitor growth, slow downstream exports) Alloy OOMKilled ×2 at 512Mi while retry-storming. Raised 768Mi→1536Mi 2026-09-28, ported from COELHO Cloud's 2026-09-24 fix: the same DD/YCS workload that runs in this cluster pushed a Cloud Alloy pod to 95% memory with the readiness probe failing under GC pressure. Not cluster-specific — Nexus runs the identical Celery/FastAPI app traffic, just at smaller scale, and nodes have ample headroom either way."
   type        = string
   default     = "1536Mi"
 }
@@ -155,7 +155,7 @@ variable "logs_memory_request" {
 }
 
 variable "logs_memory_limit" {
-  description = "Memory limit per alloy-logs pod. File-based tailing has no WAL/receiver buffers, so this stays far below the metrics release's limit. Raised 128Mi→256Mi 2026-09-28, ported from COELHO Cloud's 2026-09-27 fix: live-observed OOMKilled DaemonSet pods under sustained DD/YCS/RR log volume, the same growth pattern that already forced memory_limit up twice above. Cheap insurance given available node headroom."
+  description = "Memory limit per alloy-logs pod. File-based tailing has no WAL/receiver buffers, so this stays far below the metrics release's limit. Raised 128Mi→256Mi 2026-09-28, ported from COELHO Cloud's 2026-09-27 fix: live-observed OOMKilled DaemonSet pods under sustained DD/YCS log volume, the same growth pattern that already forced memory_limit up twice above. Cheap insurance given available node headroom."
   type        = string
   default     = "256Mi"
 }

@@ -35,12 +35,6 @@
       "targetBlank": false
     },
     {
-      "title": "RR Scan",
-      "type": "link",
-      "url": "/d/coelhonexus-rr-digests",
-      "targetBlank": false
-    },
-    {
       "title": "Service Topology",
       "type": "link",
       "url": "/d/coelhonexus-service-topology",

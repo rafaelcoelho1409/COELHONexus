@@ -35,12 +35,6 @@
       "targetBlank": false
     },
     {
-      "title": "RR Scan",
-      "type": "link",
-      "url": "/d/coelhonexus-rr-digests",
-      "targetBlank": false
-    },
-    {
       "title": "LLM Call Health",
       "type": "link",
       "url": "/d/coelhonexus-llm-call-health",

@@ -37,7 +37,7 @@ def is_curated_keep(name: str, attributes: Mapping[str, object]) -> bool:
     if attributes.get(keys.KEEP) is True:
         return True
     return (
-        name.startswith(("dd.", "rr.", "ycs.", "mcp.tool."))
+        name.startswith(("dd.", "ycs.", "mcp.tool."))
         or any(name.startswith(prefix) for prefix in keys.CELERY_DOMAIN_PREFIXES)
     )
 

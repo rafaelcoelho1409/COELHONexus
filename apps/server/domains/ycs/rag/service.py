@@ -285,8 +285,7 @@ _client: Any = None
 _tool: Any = None
 _client_loop: asyncio.AbstractEventLoop | None = None
 
-# Event-loop-aware cache — same pattern as `domains/rr/agent/
-# mcp_client.py`'s `get_mcp_tools()`: the client binds to whichever
+# Event-loop-aware cache: the client binds to whichever
 # loop opened it. FastAPI's uvicorn loop is long-lived for this call
 # site (fallback_answer only ever runs inside a request, never a
 # Celery task), so this normally never re-opens — kept anyway so this

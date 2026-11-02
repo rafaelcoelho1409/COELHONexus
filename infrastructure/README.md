@@ -100,8 +100,8 @@ infrastructure/
 │   ├── minio/               # MinIO object storage
 │   ├── postgresql/          # Bitnami Postgres
 │   ├── redis/               # Bitnami Redis
-│   ├── qdrant/              # Vector store (YCS + RR)
-│   ├── neo4j/               # Knowledge graph (YCS + RR)
+│   ├── qdrant/              # Vector store (YCS)
+│   ├── neo4j/               # Knowledge graph (YCS)
 │   ├── elasticsearch/       # ECK Operator + cluster (YCS metadata)
 │   ├── loki/                # LGTM logs
 │   ├── tempo/               # LGTM traces

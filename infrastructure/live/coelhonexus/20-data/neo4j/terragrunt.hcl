@@ -2,7 +2,7 @@
 # Leaf — neo4j (coelhonexus standalone, 20-data layer)
 # =============================================================================
 # Neo4j Community Edition (single node) + APOC plugins. Knowledge graph for
-# YCS (Video/Channel/Entity/Relationship) and RR (Paper/Author/Concept/Source).
+# YCS (Video/Channel/Entity/Relationship).
 #
 # Adaptations vs COELHO Cloud's leaf:
 #   - DROP the external-ingress-operator dependency

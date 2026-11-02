@@ -108,10 +108,10 @@ _apply_endpoint(force=True)
 # `infra.qdrant.service.get_qdrant()`. A single module-level client would
 # bind its internal httpx connection pool to whichever event loop was
 # running at construction; reusing it from a LATER `asyncio.run()` call in
-# the same worker process (e.g. a second Celery RR scan, or YCS/RR sharing
-# this same endpoint from different processes) raises `RuntimeError: Event
-# loop is closed`. Live-confirmed 2026-09-27 on an RR scan's embed call —
-# entries auto-evict once their loop is garbage-collected.
+# the same worker process (e.g. a second Celery task embedding through this
+# same endpoint) raises `RuntimeError: Event loop is closed`.
+# Live-confirmed 2026-09-27 on an embed call — entries auto-evict once
+# their loop is garbage-collected.
 _clients: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, object]" = (
     weakref.WeakKeyDictionary()
 )
@@ -228,7 +228,7 @@ async def embed_probe_async(
 async def embed_texts_async(
     texts: list[str],
 ) -> tuple[list[list[float]], str]:
-    """Real batch embeddings call for actual callers (YCS, RR). Raises on
+    """Real batch embeddings call for actual callers (YCS). Raises on
     failure; callers decide how to react.
 
     Returns `(vectors, model)` — `model` is the model that ACTUALLY served

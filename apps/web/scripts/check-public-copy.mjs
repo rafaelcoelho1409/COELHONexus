@@ -19,7 +19,7 @@ const FORBIDDEN = [
   /\bopenrouter\b/i,
   /\bfree[- ]tier\b/i,
   /\b(nvidia nim|groq|cerebras|mistral|deepseek)\b/i,
-  /\bresearch radar\b/i,
+  // Retired products: add a pattern here when a product is removed.
 ];
 
 function* files(dir) {

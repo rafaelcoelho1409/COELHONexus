@@ -40,7 +40,7 @@ no-ops."""`. Every `genai_completion_span` / `genai_embedding_span` /
 `_NoOpSpan` stub. Nexus's own outbound call (`domains/settings/chat/service.py`)
 has zero span code either — it relies entirely on `HTTPXClientInstrumentor`'s
 generic `POST` span, which the Langfuse gate's allow-list doesn't match (no
-`gen_ai.*` attrs, no `dd./rr./ycs.` prefix). **Net effect: no LLM call
+`gen_ai.*` attrs, no `dd./ycs.` prefix). **Net effect: no LLM call
 anywhere in the system currently produces a `gen_ai.*` span or a Langfuse
 "generation" observation** — despite the Rotator having a fully-designed
 `gen_ai.*` + `bandit.*` attribute contract sitting dormant in
@@ -53,7 +53,7 @@ version conflict? perf?) before re-wiring.
 pointed at `domains.llm.rotator.chain` (retired 2026-09-21 per
 `docs/CODE-CONVENTIONS.md`); the real path is
 `domains.settings.chat.service.chat_judge_async`. §10 claimed
-`build_langchain_callback` "shipped in `domains/rr/task.py`" — it has no call
+`build_langchain_callback` "shipped" in an agent task — it has no call
 sites anywhere outside its own definition.
 
 **P1 — FastHTML is a trace dead-end.** Zero OTel/Langfuse dependency, no
@@ -62,8 +62,8 @@ backend. Every FastHTML→server hop starts a brand-new trace; a user click
 can't be followed through to the backend spans it triggered.
 
 **P2 — a parallel, un-unified telemetry system.**
-`domains/ycs/runtime/llm_counter/` and `domains/rr/runtime/llm_counter/` are
-Redis-backed LangChain-callback counters feeding the FastHTML "usage drawer"
+`domains/ycs/runtime/llm_counter/` is a
+Redis-backed LangChain-callback counter feeding the FastHTML "usage drawer"
 — legitimate (sync UI read vs. trace-store query) but they duplicate exactly
 the token/cost data the (currently dark) `gen_ai.usage.*` spans were meant to
 carry. Once P0 is fixed, decide whether these should dual-write an OTel
@@ -111,8 +111,8 @@ code across independently-deployed apps).
    attribute names as pinned-to-a-snapshot, not a stable API — schedule a
    deliberate re-sync whenever OTel ships a stable `gen_ai` release, rather
    than letting it silently drift.
-4. **LangGraph instrumentation**: the hand-rolled `@traced` decorator + RR's
-   `PhaseEventsMiddleware` is a legitimate, actively-recommended pattern
+4. **LangGraph instrumentation**: the hand-rolled `@traced` decorator
+   is a legitimate, actively-recommended pattern
    (native manual spans) — not something to feel behind on.
    `openinference-instrumentation-langchain` (Arize, actively maintained,
    releases through 2026-09-18) hooks LangChain's callback system for less
@@ -197,7 +197,6 @@ already matches, with one real exception:
 | `ycs` | `metrics.py`, `service.py`, `spans.py`, `domain.py` | ✅ — the richest, because YCS genuinely has all four needs (node spans, `db.*`/`gen_ai.rerank` I/O spans, and pure attribute helpers). 2026-09-22: `spans.py` gained `postgres_span`, `qdrant_upsert_span`, `qdrant_admin_span`; every remaining raw Postgres/ES/Qdrant call site across `conversation/`, `query/`, `ingestion/`, `es_index/`, `embedding_migration/`, `transcript/service.py`, and `api/v1/ycs/admin/{router,service}.py` is now wrapped — no bare `psycopg`/ES-client/Qdrant-client call left un-spanned in `apps/server/domains/ycs/` or its router |
 | `settings` | `metrics.py`, `spans.py`, `keys.py` | ✅ — no `service.py` (chat/embeddings are 2 leaf functions, not a multi-node graph, so no shared node-decorator need); `keys.py` earned its keep mirroring the `gen_ai.*` semconv |
 | `dd/ingestion` | `runtime/{dispatch,observability,progress}/`, `observability/` has only `metrics.py` | ✅ — moved under `runtime/` 2026-09-22 to match planner/synth structurally (`dispatch/`+`progress/`+`observability/` relocated together, not just observability alone — moving observability by itself would have left a `runtime/` folder holding exactly one thing, a worse inconsistency than the flat file it replaced). No `service.py`/`spans.py`/`keys.py`/`domain.py` — ingestion's one span is still inline in `runtime/dispatch/service.py:run()`, no fan-out of consumers exists to justify extracting it |
-| `rr` | `runtime/observability/{metrics,service,spans}.py` | ✅ (2026-09-22 consolidation) — `runtime/metrics.py` moved to `runtime/observability/metrics.py`; the `@traced_tool` decorator moved from `agent/tools/observability.py` (an orphan next to an already-existing `runtime/` folder — the placement mistake, not a legitimate exception) to `runtime/observability/service.py`, mirroring planner/synth's `@traced`. The 4 tool-module callers now reach it via `from domains.rr.runtime.observability.service import traced_tool` (a plain import, not a `domains.*` attribute chase — required per §8 Exception 2 since `@traced_tool` runs at module-exec time). Phase-transition spans deliberately stay in `agent/middleware/service.py` — tightly coupled to `PhaseEventsMiddleware`'s own state, a legitimate exception, not fragmentation. `stores/service.py`'s 32 functions across Neo4j/Postgres/Qdrant/MinIO are fully spanned; `api/v1/rr/scan/router.py`'s 3 raw Postgres reads reuse the same `postgres_span`. **Bug caught 2026-09-22**: the metrics-file move left `runtime/service.py` importing a stale sibling name (`from . import ..., metrics, ...` instead of `observability`), which only surfaces as `ImportError: cannot import name 'metrics' from partially initialized module` on a real `import domains` — invisible to `compileall`/`pyflakes`/`ruff` since those never execute package `__init__` chains. Fixed to `from . import ..., observability, ...` + `observability.metrics.record_phase_event(...)`. Takeaway: after any sibling-module move, run a real `import domains` (not just static checks) to catch circular/stale-name breakage |
 
 ---
 
@@ -351,7 +350,6 @@ async def run_foo_pipeline(workflow_id: str, tenant: str):
 ```
 
 The same pattern is shipped in:
-- `domains/rr/task.py` — RR digest cycle
 - `api/v1/ycs/agents/router.py:rag_search` — YCS Ask
 - `domains/dd/synth/runtime/dispatch/service.py:run_study_async` — DD study
 
@@ -455,7 +453,7 @@ Existing shipped reference: `scripts/observability/run_faithfulness_eval.py`.
 
 Drop `observability/grafana-dashboards/foo-something.json` next to the existing ones. Use `Mimir` as the Prometheus datasource UID. For span-derived metrics (latency, error rate), the `traces_spanmetrics_*` series populate automatically (Tempo→Mimir pipeline).
 
-Reference shipped: `rotator-red.json`, `dd-pipeline.json`, `rr-digests.json`, `ycs-retrieval.json`.
+Reference shipped: `rotator-red.json`, `dd-pipeline.json`, `ycs-retrieval.json`.
 
 ---
 
@@ -490,9 +488,9 @@ await agent.ainvoke({"messages": [...]}, config = {"callbacks": callbacks})
 ```
 
 **Not yet wired anywhere** (corrected 2026-09-22 — previously claimed shipped
-in `domains/rr/task.py`; `build_langchain_callback` currently has no call
-sites outside its own definition). RR is the natural first caller once its
-DeepAgents orchestrator lands. Returns `None` when LangFuse is unavailable —
+in an agent task; `build_langchain_callback` currently has no call
+sites outside its own definition). The natural first caller is an agent
+feature built on DeepAgents. Returns `None` when LangFuse is unavailable —
 the `None`-filter line keeps the existing path intact regardless of caller.
 
 ---

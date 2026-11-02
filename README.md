@@ -17,7 +17,7 @@
 ## Table of Contents
 
 - [What is this?](#what-is-this)
-- [The three applications](#the-three-applications)
+- [The applications](#the-applications)
 - [Architecture](#architecture)
 - [Tech Stack](#tech-stack)
 - [Key Components](#key-components)
@@ -35,17 +35,17 @@
 
 ## What is this?
 
-COELHO Nexus is a single, self-contained platform hosting three independent AI-powered applications, all running on the same Kubernetes cluster, sharing the same observability stack, the same free-tier LLM rotator, and the same infrastructure-as-code foundation. It was designed and built end-to-end by one engineer — from the Terraform modules that provision every data store, to the FastAPI backend and Next.js front end that run the apps, to the pipeline that deploys them.
+COELHO Nexus is a single, self-contained platform hosting two independent AI-powered applications (a third, AgenticMath, is in development), all running on the same Kubernetes cluster, sharing the same observability stack, the same free-tier LLM rotator, and the same infrastructure-as-code foundation. It was designed and built end-to-end by one engineer — from the Terraform modules that provision every data store, to the FastAPI backend and Next.js front end that run the apps, to the pipeline that deploys them.
 
-The point of this repo isn't just "three AI apps." It's a demonstration of what a single engineer can own end-to-end: infrastructure, backend, observability, and delivery, all treated with the same rigor a platform team would bring to production.
+The point of this repo isn't just "a few AI apps." It's a demonstration of what a single engineer can own end-to-end: infrastructure, backend, observability, and delivery, all treated with the same rigor a platform team would bring to production.
 
-## The three applications
+## The applications
 
 | Feature | What it does |
 |---|---|
 | **Docs Distiller** | Turns any framework's scattered documentation into a single, coherent study guide. A five-tier ingestion cascade (`llms_full.txt` → `llms_txt` → sitemap → httpx-crawl-with-Playwright-fallback → GitHub README) pulls in raw docs; a Planner → Resolver → Synth pipeline turns them into a structured, chapter-by-chapter book. |
 | **YouTube Content Search** | Full semantic search over YouTube video transcripts. Playwright-driven transcript scraping feeds a hybrid retrieval pipeline — Qdrant for dense vector search, Elasticsearch for full-text, Neo4j for the entity/relationship graph extracted from what's actually said in each video. |
-| **Research Radar** | An autonomous research-digest agent. An 8-phase DeepAgents orchestrator pulls from four discovery sources (arXiv, Semantic Scholar, HuggingFace daily papers, Hacker News), scores every candidate with an 8-term weighted relevance signal, and ships a ranked, implementable-ideas digest — no manual paper-hunting required. |
+| **AgenticMath** *(in development)* | A multi-agent solver for mathematical problems. LangGraph orchestrates Deep Agents that work inside an isolated sandbox, with durable checkpoints, resumable runs and a live view of the graph. |
 
 ## Architecture
 
@@ -54,15 +54,15 @@ The point of this repo isn't just "three AI apps." It's a demonstration of what 
 </div>
 
 **Two services, plus Celery workers and Flower:**
-- **Server** — the FastAPI ML/agent backend (with a FastMCP endpoint at `/mcp`). Owns the actual pipelines for all three features, plus Celery-orchestrated background task queues (one isolated queue per feature pipeline).
+- **Server** — the FastAPI ML/agent backend (with a FastMCP endpoint at `/mcp`). Owns the actual pipelines for the features, plus Celery-orchestrated background task queues (one isolated queue per feature pipeline).
 - **Web** — the Next.js front end, and the only UI: home, Settings, Docs Distiller and YouTube Content Search. It proxies `/api/*` to the server and streams live pipeline progress over SSE.
 
 The earlier FastHTML UI and the standalone FastMCP gateway were retired and moved out of this repo.
 
 **Data layer**, six stores, each earning its place rather than being there by default:
 - **PostgreSQL** — relational state (Grafana, LangFuse, ArgoCD).
-- **Neo4j** — knowledge graphs (YCS entity/relationship extraction, Research Radar's author-paper network).
-- **Qdrant** — vector search (YCS transcript embeddings, Research Radar paper deduplication and relevance scoring).
+- **Neo4j** — knowledge graphs (YCS entity/relationship extraction).
+- **Qdrant** — vector search (YCS transcript embeddings).
 - **Elasticsearch** — full-text search over ingested transcripts and documents.
 - **MinIO** — S3-compatible object storage; also backs Loki/Tempo/Mimir's own storage.
 - **Redis** — caching and Celery's broker/result backend.
@@ -79,11 +79,11 @@ The earlier FastHTML UI and the standalone FastMCP gateway were retired and move
 
 | Technology | Purpose |
 |---|---|
-| **FastAPI** | ML/agent backend — owns all three pipelines |
+| **FastAPI** | ML/agent backend — owns all the pipelines |
 | **Next.js** | The web front end (React, Tailwind, shadcn/ui, TanStack Query) |
 | **FastMCP** | Model Context Protocol endpoint mounted on the server (`/mcp`) |
 | **Celery** | Background task orchestration, one queue per feature |
-| **DeepAgents** | Multi-phase autonomous agent orchestration (Research Radar) |
+| **DeepAgents** | Autonomous agent orchestration (AgenticMath, in development) |
 | **LangGraph** | Graph-structured pipelines (Docs Distiller Planner/Synth) |
 | **Playwright** | Headless/headed browser automation — transcript scraping, doc-site rendering |
 
@@ -124,22 +124,18 @@ The earlier FastHTML UI and the standalone FastMCP gateway were retired and move
 ## Key Components
 
 <div align="center">
-<img src="diagrams/coelho_nexus_ai_domains.png" alt="COELHO Nexus AI Domains — pipeline internals for DD, YCS, RR, and the shared LLM Rotator" width="1000">
+<img src="diagrams/coelho_nexus_ai_domains.png" alt="COELHO Nexus AI Domains — pipeline internals for DD, YCS, and the shared LLM Rotator" width="1000">
 </div>
 
-<p align="center"><em>Every LangGraph node, FastMCP tool, and data-store write in the three pipelines below, plus the shared LLM Rotator they all route through.</em></p>
+<p align="center"><em>Every LangGraph node, FastMCP tool, and data-store write in the two pipelines below, plus the shared LLM Rotator they all route through.</em></p>
 
 ### The free-tier LLM rotator
 
-Every LLM call across all three features routes through a single rotator that load-balances across 20+ free models from multiple providers (NVIDIA NIM, Groq, Cerebras, Mistral, Google, DeepSeek, SambaNova) using bandit-based arm selection — models that are actually performing well get more traffic, not round-robin. BYOK: bring your own provider keys via the `/settings` UI, encrypted at rest in MinIO.
+Every LLM call across both features routes through a single rotator that load-balances across 20+ free models from multiple providers (NVIDIA NIM, Groq, Cerebras, Mistral, Google, DeepSeek, SambaNova) using bandit-based arm selection — models that are actually performing well get more traffic, not round-robin. BYOK: bring your own provider keys via the `/settings` UI, encrypted at rest in MinIO.
 
 ### Docs Distiller's five-tier ingestion cascade
 
 Any framework's documentation gets pulled in through the cheapest source that actually works: a pre-bundled `llms_full.txt`, then a `llms_txt` link index, then `sitemap.xml`, then an `httpx` crawl with Playwright fallback for JS-rendered sites, then a GitHub README as last resort. A Planner → Resolver → Synth pipeline turns whatever lands into a structured, chapter-by-chapter study guide.
-
-### Research Radar's DeepAgents orchestrator
-
-An 8-phase autonomous agent pulls candidates from four discovery sources (arXiv, Semantic Scholar, HuggingFace daily papers, Hacker News) via FastMCP tools, scores each one on an 8-term weighted relevance signal, and synthesizes a ranked digest — no manual paper-hunting required.
 
 ### YCS hybrid retrieval
 
@@ -237,7 +233,7 @@ cp .env.example .env
 | ArgoCD | `coelhonexus` | `python upload_env_to_k3d.py .env coelhonexus` |
 | `skaffold dev` | `coelhonexus-dev` | `python upload_env_to_k3d.py .env coelhonexus-dev` |
 
-`.env.example`'s placeholder infrastructure credentials (`postgres`, `redis-demo-password`, etc.) are fine as-is — they already match what Terragrunt provisioned via `env.hcl`. Only the LLM keys are worth replacing — without at least one, DD/YCS/RR won't do anything real.
+`.env.example`'s placeholder infrastructure credentials (`postgres`, `redis-demo-password`, etc.) are fine as-is — they already match what Terragrunt provisioned via `env.hcl`. Only the LLM keys are worth replacing — without at least one, DD/YCS won't do anything real.
 
 **Quick test** — skip the copy/edit step and pass `.env.example` directly as the source file for either command above (e.g. `python upload_env_to_k3d.py .env.example coelhonexus`). Works, but every BYOK provider key in it is blank.
 
@@ -389,7 +385,7 @@ All demo credentials above are defined in [`infrastructure/env.hcl`](infrastruct
 
 Every pipeline run, LLM call, and cross-service request is traced twice, to two different tools built for two different questions:
 
-- **Grafana LGTM stack** (Loki + Grafana Mimir + Tempo, fed by Alloy) — infra-level observability: request latency, error rates, resource usage, cross-service traces. A pre-built PromQL/LogQL/TraceQL query catalog covering every feature (Planner, Synth, YCS retrieval, Research Radar, the LLM rotator, service-graph edges) lives in [`docs/GRAFANA-EXPLORE-QUERIES.md`](docs/GRAFANA-EXPLORE-QUERIES.md).
+- **Grafana LGTM stack** (Loki + Grafana Mimir + Tempo, fed by Alloy) — infra-level observability: request latency, error rates, resource usage, cross-service traces. A pre-built PromQL/LogQL/TraceQL query catalog covering every feature (Planner, Synth, YCS retrieval, the LLM rotator, service-graph edges) lives in [`docs/GRAFANA-EXPLORE-QUERIES.md`](docs/GRAFANA-EXPLORE-QUERIES.md).
 - **LangFuse** — LLM-specific observability: prompts, token usage, cost, per-session grouping, grader/quality scores dual-written from each pipeline's own evaluation logic.
 
 Adding observability to a new domain follows one documented, copy-pasteable pattern — see [`docs/OBSERVABILITY-USAGE-2026-06-18.md`](docs/OBSERVABILITY-USAGE-2026-06-18.md).
@@ -410,7 +406,7 @@ COELHONexus/
 ├── apps/
 │   ├── server/                 # FastAPI + FastMCP backend
 │   │   ├── entrypoints/          # api/ (REST routes) + mcp/ (MCP tools)
-│   │   ├── domains/              # dd/ ycs/ rr/ llm/ — one folder per feature
+│   │   ├── domains/              # dd/ ycs/ llm/ — one folder per feature
 │   │   └── infra/                # otel/, langfuse/, db clients
 │   └── web/                      # Next.js front end (home, Settings, Docs Distiller, YCS)
 │       ├── src/app/               # App Router routes (one-line page re-exports)

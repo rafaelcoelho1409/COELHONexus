@@ -1,7 +1,7 @@
 # =============================================================================
 # Leaf — qdrant (coelhonexus standalone, 20-data layer)
 # =============================================================================
-# Vector store for YCS embeddings + RR paper deduplication. Self-contained
+# Vector store for YCS embeddings. Self-contained
 # (no DB deps at runtime); MinIO used only by the snapshot CronJob.
 #
 # Adaptations vs COELHO Cloud's leaf:

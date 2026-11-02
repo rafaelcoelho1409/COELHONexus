@@ -407,133 +407,6 @@ ycs: "YCS — YouTube Content Search" {
 }
 
 
-# ── Domain 3: RR — Research Radar ───────────────────────────
-
-rr: "RR — Research Radar" {
-  style.fill: "#FFF4E6"
-  style.stroke: "#FF6B35"
-  style.stroke-width: 4
-  style.border-radius: 12
-  style.font-size: 96
-  style.font-color: "#000000"
-  style.bold: true
-
-  deep_agent: "DeepAgent Orchestrator\n(create_deep_agent\nDeepAgents + LangGraph)" {
-    shape: image
-    icon: ./icons/deepagents.svg
-    width: 500
-    height: 500
-    style.font-size: 64
-  }
-
-  mcp_tools: FastMCP Tool Registry (Streamable-HTTP) {
-    style.fill: "#FFFAF0"
-    style.stroke: "#FF6B35"
-    style.stroke-width: 2
-    style.stroke-dash: 5
-    style.border-radius: 8
-    style.font-size: 80
-    style.font-color: "#000000"
-    style.bold: true
-
-    arxiv: "arXiv\n(Free Papers API)" {
-      shape: image
-      icon: ./icons/arxiv.svg
-      width: 500
-      height: 500
-      style.font-size: 64
-    }
-    semantic_scholar: "Semantic Scholar\n(S2 Citations API)" {
-      shape: image
-      icon: ./icons/semanticscholar.svg
-      width: 500
-      height: 500
-      style.font-size: 64
-    }
-    hn: "Hacker News\n(Algolia Search API)" {
-      shape: image
-      icon: ./icons/ycombinator.svg
-      width: 500
-      height: 500
-      style.font-size: 64
-    }
-    hf_daily: "HF Daily Papers\n(HuggingFace API)" {
-      shape: image
-      icon: ./icons/huggingface.svg
-      width: 500
-      height: 500
-      style.font-size: 64
-    }
-  }
-
-  stores: Scan Persistence (4 stores) {
-    style.fill: "#FFFAF0"
-    style.stroke: "#FF6B35"
-    style.stroke-width: 2
-    style.stroke-dash: 5
-    style.border-radius: 8
-    style.font-size: 80
-    style.font-color: "#000000"
-    style.bold: true
-
-    postgres: "PostgreSQL\n(radar_scans · findings\nradar_papers · profiles)" {
-      shape: image
-      icon: ./icons/postgresql.svg
-      width: 500
-      height: 500
-      style.font-size: 64
-    }
-    neo4j: "Neo4j\n(Paper · Author · Concept\nSource graph — MERGE dedup)" {
-      shape: image
-      icon: ./icons/neo4j.svg
-      width: 500
-      height: 500
-      style.font-size: 64
-    }
-    qdrant: "Qdrant\n(radar_papers vectors\nNemotron 1B 2048d)" {
-      shape: image
-      icon: ./icons/qdrant.svg
-      width: 500
-      height: 500
-      style.font-size: 64
-    }
-    minio: "MinIO\n(Scan Artifacts\nDigest + Synthesis files)" {
-      shape: image
-      icon: ./icons/minio.png
-      width: 500
-      height: 500
-      style.font-size: 64
-    }
-  }
-
-  credentials: "Credential Rotation\n(BYOK per-user\nenv-injected at boot)" {
-    shape: image
-    icon: ./icons/python.svg
-    width: 500
-    height: 500
-    style.font-size: 64
-  }
-  rate_limit: "Rate Limiter\n(Per-tool sliding window\nmiddleware)" {
-    shape: image
-    icon: ./icons/python.svg
-    width: 500
-    height: 500
-    style.font-size: 64
-  }
-
-  deep_agent -> mcp_tools.arxiv: "MCP tool\ncall" {style.stroke: "#FF6B35"; style.stroke-width: 7}
-  deep_agent -> mcp_tools.semantic_scholar: {style.stroke: "#FF6B35"; style.stroke-width: 7}
-  deep_agent -> mcp_tools.hn: {style.stroke: "#FF6B35"; style.stroke-width: 7}
-  deep_agent -> mcp_tools.hf_daily: {style.stroke: "#FF6B35"; style.stroke-width: 7}
-  deep_agent -> stores.postgres: "scan\nstatus" {style.stroke: "#FF6B35"; style.stroke-width: 7}
-  deep_agent -> stores.neo4j: "paper\ngraph" {style.stroke: "#FF6B35"; style.stroke-width: 7}
-  deep_agent -> stores.qdrant: "paper\nvectors" {style.stroke: "#FF6B35"; style.stroke-width: 7}
-  deep_agent -> stores.minio: "scan\nartifacts" {style.stroke: "#FF6B35"; style.stroke-width: 7}
-  credentials -> mcp_tools: "inject\nAPI keys" {style.stroke: "#FF6B35"; style.stroke-width: 2; style.stroke-dash: 5}
-  rate_limit -> mcp_tools: "throttle" {style.stroke: "#FF6B35"; style.stroke-width: 2; style.stroke-dash: 5}
-}
-
-
 # ============================================================
 # CROSS-LAYER EDGES
 # ============================================================
@@ -541,7 +414,6 @@ rr: "RR — Research Radar" {
 # Layer ordering
 llm_layer -> dd: {style.stroke: "#CCCCCC"; style.stroke-width: 6; style.stroke-dash: 8; style.opacity: 0.3}
 llm_layer -> ycs: {style.stroke: "#CCCCCC"; style.stroke-width: 6; style.stroke-dash: 8; style.opacity: 0.3}
-llm_layer -> rr: {style.stroke: "#CCCCCC"; style.stroke-width: 6; style.stroke-dash: 8; style.opacity: 0.3}
 
 # LLM rotator feeds all domains
 llm_layer.litellm -> dd.planner.doc_distill: "LLM\ncalls" {style.stroke: "#7C3AED"; style.stroke-width: 7}
@@ -550,4 +422,3 @@ llm_layer.litellm -> dd.synth.sawc: {style.stroke: "#7C3AED"; style.stroke-width
 llm_layer.litellm -> dd.synth.sawc_derive: {style.stroke: "#7C3AED"; style.stroke-width: 7}
 llm_layer.litellm -> ycs.graph_builder: "entity\nextraction" {style.stroke: "#7C3AED"; style.stroke-width: 7}
 llm_layer.litellm -> ycs.rag.answer: "CRAG\ngenerate" {style.stroke: "#7C3AED"; style.stroke-width: 7}
-llm_layer.litellm -> rr.deep_agent: "reasoning\nloop" {style.stroke: "#7C3AED"; style.stroke-width: 8}

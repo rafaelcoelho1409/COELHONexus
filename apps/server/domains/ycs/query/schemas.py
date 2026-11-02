@@ -13,7 +13,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-AppLiteral     = Literal["dd", "ycs", "rr"]
+AppLiteral     = Literal["dd", "ycs"]
 BackendLiteral = Literal["elasticsearch", "qdrant", "neo4j"]
 
 

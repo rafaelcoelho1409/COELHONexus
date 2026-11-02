@@ -514,7 +514,7 @@ internals change:
 
 ```python
 # domains/__init__.py
-from . import dd, rr, settings, ycs
+from . import dd, settings, ycs
 
 # domains/dd/__init__.py
 from . import ingestion, planner, resolver, synth

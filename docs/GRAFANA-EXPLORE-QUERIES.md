@@ -13,7 +13,6 @@ Select the datasource from the top-left dropdown, paste the query, and hit Run.
    - [DD Planner](#dd-planner)
    - [DD Synth](#dd-synth)
    - [YCS Retrieval](#ycs-retrieval)
-   - [Research Radar (RR)](#research-radar-rr)
    - [LLM Rotator](#llm-rotator)
    - [Service Graph](#service-graph)
    - [SLO / Health Snapshot](#slo--health-snapshot)
@@ -21,14 +20,12 @@ Select the datasource from the top-left dropdown, paste the query, and hit Run.
    - [Cross-Domain](#cross-domain)
    - [DD Planner & Synth](#dd-planner--synth)
    - [YCS](#ycs)
-   - [Research Radar (RR)](#research-radar-rr-1)
    - [LLM Rotator](#llm-rotator-1)
    - [Log Rates](#log-rates)
 3. [Tempo — TraceQL](#tempo--traceql)
    - [Cross-Domain](#cross-domain-1)
    - [DD Planner & Synth](#dd-planner--synth-1)
    - [YCS Retrieval](#ycs-retrieval-1)
-   - [Research Radar (RR)](#research-radar-rr-2)
    - [LLM / Rotator](#llm--rotator)
    - [MCP Tools](#mcp-tools)
 
@@ -162,49 +159,6 @@ sum by (outcome) (rate(ycs_subquestion_total[30m]))
 
 ---
 
-### Research Radar (RR)
-
-**Scan run rate by outcome and degradation flag**
-```promql
-sum by (outcome, degraded) (rate(rr_scan_run_total[1h]))
-```
-
-**Scan p95 wall time**
-```promql
-histogram_quantile(0.95, sum by (le) (rate(rr_scan_run_duration_seconds_bucket[24h])))
-```
-
-**Degraded scan share (%)**
-```promql
-sum(rate(rr_scan_run_total{degraded="true"}[24h]))
-/ clamp_min(sum(rate(rr_scan_run_total[24h])), 0.001) * 100
-```
-
-**Mean findings per scan**
-```promql
-sum(rate(rr_findings_sum[24h]))
-/ clamp_min(sum(rate(rr_findings_count[24h])), 0.001)
-```
-
-**Triage pass rate — findings / candidates (%)**
-```promql
-sum(rate(rr_findings_sum[24h]))
-/ clamp_min(sum(rate(rr_candidates_sum[24h])), 0.001) * 100
-```
-
-**Themes per scan (mean)**
-```promql
-sum(rate(rr_theme_count_sum[24h]))
-/ clamp_min(sum(rate(rr_theme_count_count[24h])), 0.001)
-```
-
-**Phase event count by phase**
-```promql
-sum by (phase) (max_over_time(rr_phase_event_total[24h]))
-```
-
----
-
 ### LLM Rotator
 
 **Alive models by provider (current)**
@@ -283,18 +237,6 @@ sum(max_over_time(ycs_grounded_total[24h]))
 / clamp_min(sum(max_over_time(ycs_ask_run_total[24h])), 1) * 100
 ```
 
-**RR degraded scan rate (target: <10%)**
-```promql
-sum(max_over_time(rr_scan_run_total{degraded="true"}[24h]))
-/ clamp_min(sum(max_over_time(rr_scan_run_total[24h])), 1) * 100
-```
-
-**RR mean findings per scan (target: >3)**
-```promql
-sum(max_over_time(rr_findings_sum[24h]))
-/ clamp_min(sum(max_over_time(rr_findings_count[24h])), 1)
-```
-
 ---
 
 ## Loki — LogQL
@@ -323,7 +265,7 @@ sum(max_over_time(rr_findings_sum[24h]))
 ```logql
 {namespace=~"coelhonexus.*",
  service_name=~"coelhonexus-celery|coelhonexus-fastmcp"}
-  |~ "(?i)(planner|synth|study|ycs|ask|rr|radar|scan|task|pipeline)"
+  |~ "(?i)(planner|synth|study|ycs|ask|scan|task|pipeline)"
 ```
 
 **Error rate over time (all services)**
@@ -436,71 +378,6 @@ sum (
      service_name=~"coelhonexus-server|coelhonexus-celery"}
     |~ "(?i)(ycs|youtube|ask|qdrant|neo4j)"
     |~ "(?i)(error|failed|exception)"
-    [5m]
-  )
-)
-```
-
----
-
-### Research Radar (RR)
-
-**Scan start and completion (with scan_id extraction)**
-```logql
-{namespace=~"coelhonexus.*", service_name="coelhonexus-celery"}
-  |~ "\\[rr-task\\]"
-  |~ "(?i)(run_radar_scan|DONE)"
-  | regexp "(?P<scan_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
-```
-
-**Specific scan — all logs for one scan_id** (replace UUID)
-```logql
-{namespace=~"coelhonexus.*",
- service_name=~"coelhonexus-celery|coelhonexus-fastmcp"}
-  |~ "6abc1eb0-577b-41da-87f4-deee40b94c04"
-```
-
-**Degraded scan completions**
-```logql
-{namespace=~"coelhonexus.*", service_name="coelhonexus-celery"}
-  |~ "\\[rr-task\\]"
-  |~ "degraded=True"
-```
-
-**Backfill recovery events**
-```logql
-{namespace=~"coelhonexus.*", service_name="coelhonexus-celery"}
-  |~ "\\[rr-task\\]"
-  |~ "backfill"
-```
-
-**Discovery tool errors (arxiv 429, HN 400, S2 429)**
-```logql
-{namespace=~"coelhonexus.*", service_name="coelhonexus-fastmcp"}
-  |~ "(?i)(429|400|rate.exceeded|too.many.requests|toolerror)"
-```
-
-**Phase enforcer nudges (orchestrator loop diagnosis)**
-```logql
-{namespace=~"coelhonexus.*", service_name="coelhonexus-celery"}
-  |~ "\\[phase-enforcer\\]"
-  | regexp "(?P<scan_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
-```
-
-**MCP tool calls — all tool dispatches for RR**
-```logql
-{namespace=~"coelhonexus.*", service_name="coelhonexus-fastmcp"}
-  |~ "(?i)(arxiv|semantic.scholar|huggingface|hn_search|triage|deep.read|synthesis)"
-```
-
-**RR scan error rate over time**
-```logql
-sum (
-  count_over_time(
-    {namespace=~"coelhonexus.*",
-     service_name=~"coelhonexus-celery|coelhonexus-fastmcp"}
-    |~ "(?i)(radar|scan|rr)"
-    |~ "(?i)(error|failed|exception|traceback)"
     [5m]
   )
 )
@@ -682,55 +559,6 @@ sum by (service_name) (
 
 ---
 
-### Research Radar (RR)
-
-**All RR scan root spans**
-```traceql
-{ name="rr.scan.run" }
-```
-
-**RR phase spans (all phases for all scans)**
-```traceql
-{ span.rr.phase=~".+" }
-```
-
-**RR phase spans for a specific scan_id** (replace UUID)
-```traceql
-{ name="rr.scan.run" && span.rr.scan_id="6abc1eb0-577b-41da-87f4-deee40b94c04" }
-```
-
-**RR discovery phase spans only**
-```traceql
-{ name="rr.node.discovery" }
-```
-
-**RR deep_read phase spans**
-```traceql
-{ name="rr.node.deep_read" }
-```
-
-**RR synthesis phase spans**
-```traceql
-{ name="rr.node.synthesis" }
-```
-
-**Degraded RR scans (backfill fired)**
-```traceql
-{ name="rr.node.backfill" }
-```
-
-**RR error traces (discovery 429s, tool failures)**
-```traceql
-{ resource.service.name=~"coelhonexus-celery|coelhonexus-fastmcp" && status=error }
-```
-
-**Slow RR scans (>5 min)**
-```traceql
-{ name="rr.scan.run" && duration>5m }
-```
-
----
-
 ### LLM / Rotator
 
 **All gen_ai.chat spans (every LLM completion)**
@@ -743,7 +571,7 @@ sum by (service_name) (
 { name="gen_ai.chat" && duration>30s }
 ```
 
-**LLM calls from Celery only (DD/RR domain)**
+**LLM calls from Celery only (DD domain)**
 ```traceql
 { resource.service.name="coelhonexus-celery" && name="gen_ai.chat" }
 ```

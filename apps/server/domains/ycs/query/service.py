@@ -165,9 +165,9 @@ async def _query_qdrant_inner(
     (= browse) so the user can sample what's stored without typing.
 
     YCS path searches a hybrid (dense+sparse) collection; we ONLY query
-    the dense vector here because RR's collection is dense-only. Keeping
-    one path = one mental model. For YCS hybrid retrieval the agentic
-    RAG pipeline still owns that surface (`/agents/search`)."""
+    the dense vector here. Keeping one path = one mental model. For YCS
+    hybrid retrieval the agentic RAG pipeline still owns that surface
+    (`/agents/search`)."""
     if not domain.is_supported(app, params.BACKEND_QDRANT):
         return _unsupported(params.BACKEND_QDRANT, app, q)
 
@@ -193,7 +193,7 @@ async def _query_qdrant_inner(
                 params.BACKEND_QDRANT, app, q, hits = [], total = 0, t0 = t0,
                 error = f"embed failed: {type(e).__name__}: {str(e)[:160]}",
             )
-        # YCS uses NAMED vectors ("dense"/"sparse"); RR uses the default unnamed vector.
+        # YCS uses NAMED vectors ("dense"/"sparse").
         using = "dense" if app == params.APP_YCS else None
         try:
             # 2026-09-17: `AsyncQdrantClient.search()` was removed in
@@ -265,10 +265,7 @@ async def _query_neo4j_inner(
         return _unsupported(params.BACKEND_NEO4J, app, q)
 
     raw_q = q.strip()
-    if app == params.APP_RR:
-        cypher = prompts.RR_CYPHER_SEARCH if raw_q else prompts.RR_CYPHER_BROWSE
-    else:
-        cypher = prompts.YCS_CYPHER_SEARCH if raw_q else prompts.YCS_CYPHER_BROWSE
+    cypher = prompts.YCS_CYPHER_SEARCH if raw_q else prompts.YCS_CYPHER_BROWSE
 
     cypher_params: dict[str, Any] = {"limit": limit}
     if raw_q:
@@ -486,7 +483,6 @@ async def _raw_qdrant_inner(
         title   = (
             payload.get("title")
             or payload.get("video_id")
-            or payload.get("arxiv_id")
             or pid
         )
         projected.append({

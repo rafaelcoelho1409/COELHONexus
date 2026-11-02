@@ -2,7 +2,7 @@
 
     cd apps/server && .venv/bin/python ../../scripts/server/test_llm_usage.py
 
-The expected values are what the three parsers it replaced (DD raw `.usage`, RR `LLMResult` + usage_metadata,
+The expected values are what the parsers it replaced (DD raw `.usage`, `LLMResult` + usage_metadata,
 YCS `llm_output`) returned on the same inputs; the only deliberate differences are called out inline."""
 import os
 import sys
@@ -46,17 +46,17 @@ def check(label, response, model, tokens_in, tokens_out, reasoning = 0):
 
 
 # ---- LangChain LLMResult (the on_llm_end payload) -----------------------------------------------------------------
-check("llm_output token_usage + reasoning details (RR and YCS agreed)",
+check("llm_output token_usage + reasoning details",
       llm({"token_usage": {"prompt_tokens": 7, "completion_tokens": 9, "completion_tokens_details": {"reasoning_tokens": 4}}, "model_name": "m"}),
       "m", 7, 9, 4)
-check("usage_metadata wins over llm_output (RR behaviour; YCS used llm_output only, same numbers in practice)",
+check("usage_metadata wins over llm_output (YCS used llm_output only, same numbers in practice)",
       llm({"token_usage": {"prompt_tokens": 11, "completion_tokens": 6}, "model_name": "m-out"},
           usage_metadata = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}, response_metadata = {"model_name": "m-meta"}),
       "m-out", 10, 5)
-check("usage_metadata only, model from response_metadata (RR; YCS returned 0 tokens and 'unknown' here)",
+check("usage_metadata only, model from response_metadata (YCS returned 0 tokens and 'unknown' here)",
       llm(None, usage_metadata = {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7}, response_metadata = {"model_name": "m-meta"}),
       "m-meta", 3, 4)
-check("llm_output `usage` key with input/output names (YCS; RR returned 0 tokens here)",
+check("llm_output `usage` key with input/output names (YCS)",
       llm({"usage": {"input_tokens": 3, "output_tokens": 2}, "model": "m4"}),
       "m4", 3, 2)
 check("reasoning tokens from usage_metadata.output_token_details",

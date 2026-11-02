@@ -5,8 +5,7 @@
 
 The web app's typed client (`@hey-api/openapi-ts`) is generated from this committed file, so the spec is
 reviewable in a diff and the web build never needs a running backend. What it contains:
-  * only the product routes (`/api/v1/dd`, `/api/v1/ycs`, `/api/v1/settings`) — the Research Radar routes are
-    being replaced and are left out;
+  * only the product routes (`/api/v1/dd`, `/api/v1/ycs`, `/api/v1/settings`);
   * `/health`, republished as `/api/health` (the web app proxies `/api/*`; its own `/health` is its probe);
   * only the schemas those routes still reference.
 It refuses to write a spec that mentions the LLM Rotator: that project is private and must not leak into

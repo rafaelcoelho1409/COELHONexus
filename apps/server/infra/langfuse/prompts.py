@@ -106,12 +106,11 @@ def ensure_prompts(
     2026-09-27: `get_prompt()`'s fallback design means a feature can ship
     fully wired to LangFuse prompt management and still never actually
     USE it, because nothing ever created the prompt rows — every call
-    404s and silently falls back forever (live-confirmed on RR: 3 prompt
-    names 404ing repeatedly across a single scan, always resolved via
+    404s and silently falls back forever (live-confirmed: 3 prompt names
+    404ing repeatedly across a single run, always resolved via
     `fallback`, `error.status_code=404` polluting trace error rates).
-    Callers own their own {name: current_fallback_text} mapping (see
-    `domains.rr.service.bootstrap_langfuse_prompts`) — seeding with the
-    text already live via `fallback` means zero behavior change the
+    Callers own their own {name: current_fallback_text} mapping — seeding
+    with the text already live via `fallback` means zero behavior change the
     moment this runs; it only makes the LangFuse-managed copy live and
     editable going forward.
 
@@ -167,7 +166,7 @@ def with_langfuse_override(
     (lists of dicts, nested dicts) at least produce a deterministic
     string in the rendered prompt.
 
-    Usage (sawc, RR triage, anywhere with a builder fn):
+    Usage (sawc, anywhere with a builder fn):
         @with_langfuse_override("dd.synth.sawc.writer")
         def build_writer_prompt(*, framework, chapter_id, ...) -> str:
             return f"... long static body ..."

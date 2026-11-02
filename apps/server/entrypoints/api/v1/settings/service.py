@@ -6,7 +6,7 @@ from . import schemas
 from dataclasses import asdict
 
 # ---------------------------------------------------------------------------
-# LLM endpoint — the OpenAI-compatible URL the Docs Distiller / YCS / RR
+# LLM endpoint — the OpenAI-compatible URL the Docs Distiller / YCS
 # apps call. This field is the single runtime source of truth for where it
 # lives — point it at any OpenAI-compatible chat endpoint. Overrides the
 # LLM_ENDPOINT_* / COELHO_LLM_* env defaults when set.

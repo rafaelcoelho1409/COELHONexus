@@ -1,8 +1,8 @@
 """Redis connection env + client timeouts.
 
 Soft env reads: `service.url()` raises a clear error when `REDIS_HOST` is
-missing, `service.is_configured()` lets optional callers (RR extraction
-cache) skip Redis instead."""
+missing, `service.is_configured()` lets optional callers skip Redis
+instead."""
 from __future__ import annotations
 
 import os

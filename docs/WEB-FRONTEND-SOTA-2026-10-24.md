@@ -23,7 +23,7 @@ of every text pair passes WCAG AA (ivory 16.7:1, muted 7.6:1, muted/80 5.2:1, ox
 | 1 | **P0** | `next@16.3.8` carries 2 CRITICAL RCEs + 1 HIGH DoS | OSV: GHSA-2464-fhr4-w9xw (SVG image optimizer, glibc Linux — your `node:24-slim` is glibc), GHSA-673q-mjm6-r5xr (`use cache`), GHSA-p3m5-59mp-jv5r (Server Actions). Fixed in 16.4.1; **16.4.3 (2026-10-23) = 0 advisories** | `next@16.4.3`. Current code uses no `use cache`, Server Actions or `next/image`, so exploitability is probably low — patch anyway |
 | 2 | **P1** | Dockerfile `COPY /app/public` fails from a clean clone | `public/` is empty and git does not track empty dirs | add `public/.gitkeep` (or drop the COPY) |
 | 3 | **P1** | `npm audit`: 4 vulns (3 high, 1 critical), all `shadcn → @shadcn/registry → zod` | `shadcn` is a **runtime** dependency (it is a CLI) | `shadcn@4.22.1` (fixed range ends 4.21.5) and move to `devDependencies` |
-| 4 | **P1** | Homepage content is stale/static | advertises **Research Radar** as a live third product (rr is being replaced); "Operational/Live" and the metric numbers are hard-coded; hero says "Solo-built · 100% free-tier LLM" | wire to real data (§3.2) or remove; move provenance claims to `/about` |
+| 4 | **P1** | Homepage content is stale/static | advertises a retired product as a live third product; "Operational/Live" and the metric numbers are hard-coded; hero says "Solo-built · 100% free-tier LLM" | wire to real data (§3.2) or remove; move provenance claims to `/about` |
 | 5 | **P1** | Readability tic | **46** uses of 8–11px text; 42 tracked uppercase mono labels, 33 `uppercase` | 12px floor; reserve mono caps for metadata only |
 | 6 | P2 | TS config is only `strict` | missing `noUncheckedIndexedAccess`, `noImplicitOverride`, `verbatimModuleSyntax`, `noFallthroughCasesInSwitch`; `target ES2017`, `allowJs: true` | §3.3 |
 | 7 | P2 | No formatter, minimal ESLint, no boundaries, 1 test, no e2e/a11y/visual tests, no typed API client (`SystemStatus` hand-types `Health` and compares to `"healthy"`) | — | §3.4–3.8 |
@@ -142,11 +142,11 @@ Rules (enforced, §3.4): `app → features → shared`; **a feature never import
 | openapi-typescript 7.13.0 + openapi-fetch | types only, 0 runtime | you hand-write hooks | maximum control |
 Workflow: `generate_unique_id_function` on FastAPI (`tag-name` ids), `npm run api:generate` from `openapi.json`, **commit the generated
 client** and fail CI on drift (`git diff --exit-code`). **Backend follow-up:** FastAPI ≥0.135 (you run 0.136.3) has native
-`EventSourceResponse` + `AsyncIterable[Event]` that puts the **stream item type in OpenAPI** — migrating the planner/synth/rr/ask
+`EventSourceResponse` + `AsyncIterable[Event]` that puts the **stream item type in OpenAPI** — migrating the planner/synth/ask
 streams gives typed events end to end.
 
 ### 3.6 Streaming (SSE) — measured, not assumed
-Old UI: `EventSource` (GET) for planner/synth/rr, `fetch` + `getReader()` for POST (Ask, query AI).
+Old UI: `EventSource` (GET) for planner/synth, `fetch` + `getReader()` for POST (Ask, query AI).
 New: one `shared/sse` module on `fetch` streaming + `eventsource-parser` 4.1.2 (supports POST; `@microsoft/fetch-event-source` is
 unmaintained since 2021) with reconnect/backoff, `Last-Event-ID`, abort on unmount, and a zod-validated event union per stream.
 
@@ -178,14 +178,14 @@ async rewrites() { return { afterFiles: [/* /api, /docs, /openapi.json → SERVE
 Migrating a route = add its folder; **rollback = delete the folder**. Ingress points at `web`; `fasthtml` becomes internal.
 
 Surface to migrate (measured): FastHTML = 7.3k Py, **24.5k JS**, 12.4k CSS; 14 page routes; biggest: `ycs/ask.js` 2,471,
-`rr/main.js` 1,818, `ycs/pipeline_panel.js` 1,142, `dd/synth/lifecycle.js` 1,020. **Do not migrate `rr/*`** (~3.5k JS; being replaced).
+`ycs/pipeline_panel.js` 1,142, `dd/synth/lifecycle.js` 1,020.
 | Phase | Scope | Exit criteria |
 |---|---|---|
 | 0 | harden: `next@16.4.3`, `public/.gitkeep`, `shadcn` fix, `git add apps/web`, CI + Biome/boundaries/knip, tsconfig, DESIGN.md | `verify` green; image builds from a clean clone |
 | 1 | design tokens (light/dark), app shell, ⌘K, generated client, `shared/sse`, `compress:false`, fallback rewrite | health + one real read view live behind `web` |
 | 2 | **DD**: ingestion → pipeline → planner → synth → study (core product; SSE EventSource streams) | feature parity + Playwright flows; FastHTML DD routes removed |
 | 3 | **YCS**: ingest → source → query → ask (POST SSE) | same |
-| 4 | settings (BYOK), new feature that replaces rr | same |
+| 4 | settings (BYOK), new third feature | same |
 | 5 | cut-over: ingress → web, delete `apps/fasthtml` + `proxy.py` | no fallback traffic for 7 days |
 
 ---

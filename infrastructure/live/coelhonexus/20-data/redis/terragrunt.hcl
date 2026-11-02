@@ -6,7 +6,6 @@
 #   - argocd (logical DB 2 — caching, OIDC sessions, manifest cache)
 #   - celery (logical DB 0 — task broker + result backend)
 #   - langfuse (logical DB 3 — queue + cache)
-#   - RR runtime (pub/sub for SSE phase events; fs mirror; LLM counters)
 #
 # Backup CronJob: nightly 02:15 UTC → MinIO `backups` bucket, retention 30.
 #

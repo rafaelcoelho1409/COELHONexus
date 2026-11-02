@@ -67,34 +67,25 @@ def project_es_hit(hit: dict[str, Any], app: str = params.APP_YCS) -> dict[str, 
     }
 
 
-# Qdrant — YCS (`youtube-transcripts`) and RR (`radar_papers`). Both
-# collections embed via the same NIM model (2048d cosine) so query-side
-# embedding is a shared path; only payload shape differs.
+# Qdrant — YCS (`youtube-transcripts`).
 def project_qdrant_point(point: Any, app: str) -> dict[str, Any]:
     """Qdrant point (ScoredPoint or Record) → `QueryHit` dict.
 
-    YCS payload: `content / video_id / title / channel / webpage_url`.
-    RR  payload: `arxiv_id / title / authors / categories / signal`."""
+    YCS payload: `content / video_id / title / channel / webpage_url`."""
     payload = (getattr(point, "payload", None) or {}) if not isinstance(point, dict) else point.get("payload", {})
     pid     = str(getattr(point, "id", "") if not isinstance(point, dict) else point.get("id", ""))
     score   = getattr(point, "score", None) if not isinstance(point, dict) else point.get("score")
 
-    if app == params.APP_RR:
-        arxiv_id = payload.get("arxiv_id") or pid
-        title    = payload.get("title") or arxiv_id
-        snippet  = _snippet(payload.get("abstract") or payload.get("content"))
-        url      = f"https://arxiv.org/abs/{arxiv_id}" if arxiv_id else ""
-    else:
-        # YCS — youtube-transcripts collection
-        video_id = payload.get("video_id") or ""
-        chunk    = payload.get("chunk_index")
-        title    = payload.get("title") or video_id
-        if chunk is not None and video_id:
-            title = f"{title}  · chunk {chunk}"
-        snippet  = _snippet(payload.get("content"))
-        url      = payload.get("webpage_url") or (
-            f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
-        )
+    # YCS — youtube-transcripts collection
+    video_id = payload.get("video_id") or ""
+    chunk    = payload.get("chunk_index")
+    title    = payload.get("title") or video_id
+    if chunk is not None and video_id:
+        title = f"{title}  · chunk {chunk}"
+    snippet  = _snippet(payload.get("content"))
+    url      = payload.get("webpage_url") or (
+        f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
+    )
 
     return {
         "kind":    params.BACKEND_QDRANT,
@@ -108,9 +99,9 @@ def project_qdrant_point(point: Any, app: str) -> dict[str, Any]:
     }
 
 
-# Neo4j — YCS (Document/Video/Channel/__Entity__) and RR (Paper/Author/
-# Concept/Source). The Cypher in `service.py` returns a uniform projection
-# dict; the helper below just re-shapes it into a QueryHit.
+# Neo4j — YCS (Document/Video/Channel/__Entity__). The Cypher in `service.py`
+# returns a uniform projection dict; the helper below just re-shapes it into
+# a QueryHit.
 def project_neo4j_row(row: dict[str, Any], app: str) -> dict[str, Any]:
     """Cypher row → `QueryHit`.
 

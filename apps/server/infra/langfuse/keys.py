@@ -51,7 +51,6 @@ OBSERVATION_TYPE_EMBEDDING  = "embedding"
 # these domains become the trace root in LangFuse and give the trace its name.
 CELERY_DOMAIN_PREFIXES = (
     "run/domains.dd.",
-    "run/domains.rr.",
     "run/domains.ycs.",
 )
 

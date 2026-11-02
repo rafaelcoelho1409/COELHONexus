@@ -602,8 +602,7 @@ async def _find_all_ycs_collections(qdrant: infra.qdrant.service.AsyncQdrantClie
     safety net, not deleted automatically — see that module's
     docstring — so they build up over time and need to be included
     here). Scoped by name prefix so this can never touch another
-    project's collection sharing the same Qdrant instance (e.g.
-    Research Radar's `radar_papers`)."""
+    project's collection sharing the same Qdrant instance."""
     try:
         collections = await qdrant.get_collections()
     except Exception:

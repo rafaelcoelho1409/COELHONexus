@@ -4,7 +4,6 @@
 # Bitnami PostgreSQL 18 standalone. Consumed downstream by:
 #   - langfuse (primary DB)
 #   - app conversation history (services/youtube/conversation_history table)
-#   - app RR stores (radar_scans, radar_profiles, etc.)
 #   - app AsyncPostgresSaver (LangGraph checkpointing for planner + synth)
 #
 # Backup CronJob: nightly 02:00 UTC → MinIO `backups` bucket / `postgres/` prefix.

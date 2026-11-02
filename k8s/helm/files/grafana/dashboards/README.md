@@ -1,10 +1,10 @@
 # Grafana dashboards — COELHO Nexus application observability
 
-Seven importable Grafana dashboard JSONs that visualize the app-level metrics
+Six importable Grafana dashboard JSONs that visualize the app-level metrics
 confirmed in Mimir for COELHO Nexus:
 
 - `overview.json` — top-level cross-application RED-style view for Docs
-  Distiller, YouTube Content Search, and Research Radar.
+  Distiller and YouTube Content Search.
 - `investigations.json` — mixed Mimir + Loki investigation surface for
   recent errors, orchestration logs, and trace-oriented troubleshooting.
 - `service-topology.json` — service-edge view built on Tempo
@@ -14,8 +14,6 @@ confirmed in Mimir for COELHO Nexus:
 - `dd-pipeline.json` — Docs Distiller planner + study health, built on the
   live `dd_*` instruments declared in
   `apps/server/infra/opentelemetry/entities.py`.
-- `rr-digests.json` — Research Radar scan health, built on the live `rr_*`
-  metrics emitted by the RR runtime.
 - `ycs-retrieval.json` — YouTube Content Search ask/retrieval health, built on
   the live `ycs_*` metrics emitted by the YCS runtime.
 

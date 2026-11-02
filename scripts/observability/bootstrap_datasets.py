@@ -2,7 +2,7 @@
 to LangFuse as a versioned dataset.
 
 This is the missing piece between the gold fixtures (in-repo at
-`k8s/helm/files/langfuse/{dd,ycs,rr}/`, mounted via ConfigMap into the pod) and the eval runners (also already
+`k8s/helm/files/langfuse/{dd,ycs}/`, mounted via ConfigMap into the pod) and the eval runners (also already
 in-repo at `scripts/observability/run_*_eval.py`). The runners reference
 dataset names like `dd.reference_book.v1` and assume they exist in
 LangFuse. Without this bootstrap, the runners fail with "dataset not
@@ -47,11 +47,6 @@ DATASETS = [
         "/etc/langfuse-fixtures/ycs/qa_pairs",
         "ycs.qa_pairs.v1",
         "YCS Ask-pipeline Q/A pairs — graded by the RAGAS-style relevance judge.",
-    ),
-    (
-        "/etc/langfuse-fixtures/rr/known_good_digest",
-        "rr.known_good_digest.v1",
-        "RR digest gold items — graded by the novelty judge (Jaccard vs prior digests).",
     ),
 ]
 

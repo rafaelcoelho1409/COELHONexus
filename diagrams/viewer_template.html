@@ -518,7 +518,7 @@
       "docker": {
         title: "Docker",
         category: "Container Engine",
-        description: "Local container engine used to package and build all core application microservices (Docs Distiller, YCS, Research Radar, and LLM Rotator) into standard image artifacts.",
+        description: "Local container engine used to package and build all core application microservices (Docs Distiller, YCS, and LLM Rotator) into standard image artifacts.",
         associations: "Integrated with local K3D Registry and hot-reload workflows."
       },
       "k3d": {
@@ -577,7 +577,7 @@
         title: "PostgreSQL Database",
         category: "Data Store",
         description: "Relational database holding user states, persistent conversation sessions, and LangGraph agent checkpointers/step checklists.",
-        associations: "Utilized by Docs Distiller, YCS, and Research Radar."
+        associations: "Utilized by Docs Distiller and YCS."
       },
       "redis": {
         title: "Redis Cache & Broker",
@@ -629,23 +629,17 @@
         description: "Advanced Graph-RAG system that ingests YouTube videos, builds semantic relationships in Neo4j, and performs fused searches (Qdrant + ES + Neo4j) to formulate contextual answers with citations.",
         associations: "Builds Neo4j graphs, queries Qdrant/ES, and saves logs in PostgreSQL."
       },
-      "rr": {
-        title: "Research Radar (/api/v1/research-radar)",
-        category: "AI Domain Service",
-        description: "Autonomous scientific search agent utilizing LangGraph ReAct loop. Queries academic papers and discussions across arXiv, Semantic Scholar, HN, and HF daily papers.",
-        associations: "Uses FastMCP registry tools, implements sliding-window rate limiters."
-      },
       "llm": {
         title: "LLM Rotator (LiteLLM + ParetoBandit)",
         category: "Shared AI Core",
         description: "Decentralized model selection gateway. Uses LiteLLM proxy and a ParetoBandit algorithm to dynamically route calls across Groq, SambaNova, Cerebras, NVIDIA NIM, and DeepSeek, optimizing for latency and quality.",
-        associations: "Uses BYOK vaults for Fernet-encrypted keys; powers all three product domains."
+        associations: "Uses BYOK vaults for Fernet-encrypted keys; powers both product domains."
       },
       "fastmcp": {
         title: "FastMCP Server",
         category: "Application Service",
-        description: "Model Context Protocol gateway that registers and exposes external data search tools to the Research Radar agent.",
-        associations: "Connects Research Radar directly with arXiv, Semantic Scholar, HN, and HF APIs."
+        description: "Model Context Protocol server exposing tools to agent clients over Streamable-HTTP.",
+        associations: "Auto-instrumented by OpenTelemetry; exports its telemetry through Alloy."
       },
       "celery": {
         title: "Celery Workers",
@@ -806,54 +800,6 @@
         category: "YouTube Search Core",
         description: "State persistence database saving LangGraph thread details, system states, and user configurations.",
         associations: "Maintains conversational memory."
-      },
-      "deep_agent": {
-        title: "LangGraph DeepAgent",
-        category: "Research Radar Core",
-        description: "ReAct agent looping to analyze academic sources, invoke research tools, and synthesize reports.",
-        associations: "Calls FastMCP tool registries; saves report states in PostgreSQL."
-      },
-      "arxiv": {
-        title: "arXiv Tool",
-        category: "Research Radar Core",
-        description: "Scientific paper search tool pulling abstracts, preprints, and publications from arXiv.",
-        associations: "Registered as a FastMCP endpoint tool."
-      },
-      "semantic_scholar": {
-        title: "Semantic Scholar Tool",
-        category: "Research Radar Core",
-        description: "Academic metadata search tool pulling citations, co-authors, and paper influence metrics.",
-        associations: "Registered as a FastMCP endpoint tool."
-      },
-      "hn": {
-        title: "Hacker News Tool",
-        category: "Research Radar Core",
-        description: "Community discussion search tool pulling comment threads and posts from HN.",
-        associations: "Registered as a FastMCP endpoint tool."
-      },
-      "hf_daily": {
-        title: "HuggingFace Daily Papers Tool",
-        category: "Research Radar Core",
-        description: "Curated ML feed tool fetching daily trending papers and discussions.",
-        associations: "Registered as a FastMCP endpoint tool."
-      },
-      "credentials": {
-        title: "Credentials Injector",
-        category: "Research Radar Core",
-        description: "Rotation agent injecting user-specific keys and tokens into tool requests to prevent provider rate-limits.",
-        associations: "Injects API keys dynamically into FastMCP requests."
-      },
-      "digest_store": {
-        title: "Digest Cache Store",
-        category: "Research Radar Core",
-        description: "Redis and PostgreSQL cache storing generated newsletters and document analysis logs.",
-        associations: "Caches FastMCP query responses."
-      },
-      "rate_limit": {
-        title: "Rate Limiter",
-        category: "Research Radar Core",
-        description: "Token-bucket regulator enforcing request rates for external APIs to avoid provider blocks.",
-        associations: "Regulates deep agent tool calls."
       }
     };
 

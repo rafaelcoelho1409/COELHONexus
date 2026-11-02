@@ -58,8 +58,8 @@ Interactions change colour (150ms). Nothing scrolls, parallaxes, or fades in on 
 ## Content policy
 
 The site describes what the products do and how the platform is operated. It never names the model-routing
-layer, the model providers behind it, bandit/router internals, "free-tier", BYOK, or retired products
-(Research Radar). `npm run copy:check` scans `src/app`, `src/features`, `src/shared/ui` and `public` and
+layer, the model providers behind it, bandit/router internals, "free-tier", BYOK, or retired products.
+`npm run copy:check` scans `src/app`, `src/features`, `src/shared/ui` and `public` and
 fails the build on a hit. The OpenAPI exporter applies the same rule to the published API schema.
 Figures on the page are read from the API (`PlatformPanel`); never type a number in by hand.
 

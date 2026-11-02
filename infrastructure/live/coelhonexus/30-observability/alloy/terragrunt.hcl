@@ -4,7 +4,7 @@
 # Alloy — TWO Helm releases from this one unit (split 2026-09-23, ported from
 # the COELHO Cloud fix — see that repo's docs/alloy_optimization.md):
 #   - helm_release.alloy (Deployment, 1 replica):
-#       - OTLP gRPC :4317 + HTTP :4318 (from in-cluster apps — DD/YCS/RR
+#       - OTLP gRPC :4317 + HTTP :4318 (from in-cluster apps — DD/YCS
 #         spans and metrics from FastAPI + Celery)
 #       - ServiceMonitor + PodMonitor discovery → Mimir remote_write
 #       - Kubelet + cAdvisor scraping → Mimir
@@ -113,7 +113,7 @@ inputs = {
   # memory_limit/gomemlimit (both releases) and the Tempo exporter's
   # retry_on_failure/sending_queue sizing were bumped 2026-09-28, ported from
   # COELHO Cloud fixes (2026-09-24, 2026-09-27, 2026-09-26 respectively) —
-  # same DD/YCS/RR FastAPI+Celery workload runs in this cluster, so the same
+  # same DD/YCS FastAPI+Celery workload runs in this cluster, so the same
   # sustained-load OOM / Tempo-export-burst patterns apply. See variables.tf
   # and helm/values.yaml.tpl for the per-value history.
 }

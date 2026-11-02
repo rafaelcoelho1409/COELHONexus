@@ -16,7 +16,7 @@ export type AiGenerateRequest = {
     /**
      * App
      */
-    app?: 'dd' | 'ycs' | 'rr';
+    app?: 'dd' | 'ycs';
     /**
      * Prompt
      */
@@ -435,7 +435,7 @@ export type QueryRequest = {
     /**
      * App
      */
-    app?: 'dd' | 'ycs' | 'rr';
+    app?: 'dd' | 'ycs';
     /**
      * Q
      *
@@ -468,7 +468,7 @@ export type QueryResponse = {
     /**
      * App
      */
-    app: 'dd' | 'ycs' | 'rr';
+    app: 'dd' | 'ycs';
     /**
      * Supported
      */
@@ -572,7 +572,7 @@ export type RawQueryRequest = {
     /**
      * App
      */
-    app?: 'dd' | 'ycs' | 'rr';
+    app?: 'dd' | 'ycs';
     /**
      * Body
      *
@@ -596,7 +596,7 @@ export type RawQueryResponse = {
     /**
      * App
      */
-    app: 'dd' | 'ycs' | 'rr';
+    app: 'dd' | 'ycs';
     /**
      * Ok
      */

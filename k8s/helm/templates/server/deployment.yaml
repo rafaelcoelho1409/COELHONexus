@@ -12,9 +12,6 @@ spec:
             - name: langfuse-dd-reference-book
               mountPath: /etc/langfuse-fixtures/dd/reference_book
               readOnly: true
-            - name: langfuse-rr-known-good-digest
-              mountPath: /etc/langfuse-fixtures/rr/known_good_digest
-              readOnly: true
             - name: langfuse-ycs-qa-pairs
               mountPath: /etc/langfuse-fixtures/ycs/qa_pairs
               readOnly: true
@@ -46,9 +43,6 @@ spec:
         - name: langfuse-dd-reference-book
           configMap:
             name: coelhonexus-langfuse-dd-reference-book
-        - name: langfuse-rr-known-good-digest
-          configMap:
-            name: coelhonexus-langfuse-rr-known-good-digest
         - name: langfuse-ycs-qa-pairs
           configMap:
             name: coelhonexus-langfuse-ycs-qa-pairs

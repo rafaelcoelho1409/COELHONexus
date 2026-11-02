@@ -1,7 +1,7 @@
 # =============================================================================
 # Leaf — langfuse (coelhonexus standalone, 40-apps layer)
 # =============================================================================
-# Langfuse 3 — LLM observability for FastAPI + Celery + DeepAgents/RR.
+# Langfuse 3 — LLM observability for FastAPI + Celery.
 # Bundled ClickHouse (chart-managed) + external Postgres/Redis/MinIO.
 #
 # OTLP endpoint after this leaf is green:

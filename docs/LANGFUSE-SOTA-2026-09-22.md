@@ -1,7 +1,7 @@
 # LangFuse SOTA + rollout plan — 2026-09-22 (reorg landed same day, §§2/4/5 current)
 
 Scope: `apps/server/` — `infra/langfuse/`, `infra/opentelemetry/` (export path),
-`api/v1/` + `domains/{dd,ycs,rr,settings}` (consumers). SDK: `langfuse>=3,<4`
+`api/v1/` + `domains/{dd,ycs,settings}` (consumers). SDK: `langfuse>=3,<4`
 (OTel-native v3). SOTA sourced directly from current Langfuse docs (v3/v4
 SDK, prompt-management-at-scale, evaluation core concepts).
 
@@ -33,7 +33,7 @@ Two planes, one rule (**fail-soft, never raise**):
 | `spans.py` | Current-span setters (kept — dissolving would contaminate `domain` or bloat `service`) | ok |
 | `keys.py` / `params.py` / `patterns.py` / `domain.py` | Namespace / tunables / regex / pure encoders | ok |
 | `prompts.py` | Managed fetch, 60s TTL + `_MISS`, local fallback, override decorator | ok (consumer bug §4.1, not this file) |
-| `evals/datasets/` | `uploader` (CLI) + `runner` (harness); fixtures `k8s/helm/files/langfuse/{dd,rr,ycs}` → `/etc/langfuse-fixtures/` mounts | ok, offline-only |
+| `evals/datasets/` | `uploader` (CLI) + `runner` (harness); fixtures `k8s/helm/files/langfuse/{dd,ycs}` → `/etc/langfuse-fixtures/` mounts | ok, offline-only |
 | `evals/judges/` | `service` (incl. 3 LLM judges + choke point) · `domain` (renders, parser, novelty) · `params` · `patterns` · `prompts` (rubric catalog) | ok except §4.2 (single line) |
 
 ## 3. Consumer map (complete 2026-09-22)
@@ -45,8 +45,6 @@ Two planes, one rule (**fail-soft, never raise**):
   `dd.planner.run`, `dd.synth.chapter.run`, `dd.synth.study.run`);
   `chapter_propose` get_prompt; `chapter_assign` flag_for_review;
   synth `metrics` record_score; `sawc` override (§4.1).
-- RR: `service.py` root (`rr.scan.run`); `agent/graph.py` get_prompt;
-  middleware phase spans + `traced_tool` keep-flags.
 - YCS: extract ×3 roots, neo4j/qdrant ingest roots, embedding-migration
   root; pipeline dispatch + transcript spans keep-flagged; RAG node
   decorators + shared I/O encoders (`runtime/observability/`).
@@ -65,7 +63,7 @@ Two planes, one rule (**fail-soft, never raise**):
    `import domains` anywhere in `infra/`).
 2. `evals/judges/service.py::run_rubric_judge` does lazy `import domains`
    (single line — the S8 injection point). infra→domains inversion.
-3. WITHDRAWN 2026-09-23: the "rr cycle" was stale bytecode, not a live
+3. WITHDRAWN 2026-09-23: the reported import cycle was stale bytecode, not a live
    cycle — traceback line numbers referenced a previous `service.py`
    (with a `metrics` import that no longer exists); after clearing
    `__pycache__`, bare `import domains` succeeds. No code change needed.
@@ -86,7 +84,6 @@ Two planes, one rule (**fail-soft, never raise**):
   (`doc_distill`, `off_topic` judge, `order_chapters`) intentionally local.
 - **S5** ✅ YCS: `rag.service.resolve_prompt` (system-message override) + 12
   nodes + grader. `query/service.py` streaming builder = follow-up.
-- **S6** ✅ RR: 8 role blocks via `_resolve_role` (orchestrator already wired).
 - **S7** ✅ `mgsr.pass_rate`/`chapter_passed`, `ycs.grader.keep_rate`,
   POST `/feedback` + `AskFeedbackRequest` + `trace_id` in `/search` response.
 - **S8** ✅ `chat_fn` injection (judges score without `domains`);
@@ -103,13 +100,11 @@ Two planes, one rule (**fail-soft, never raise**):
 python -m infra.langfuse.evals.datasets.uploader \
   /etc/langfuse-fixtures/dd/reference_book dd.reference_book.v1
 python -m infra.langfuse.evals.datasets.uploader \
-  /etc/langfuse-fixtures/rr/known_good_digest rr.known_good_digest.v1
-python -m infra.langfuse.evals.datasets.uploader \
   /etc/langfuse-fixtures/ycs/qa_pairs ycs.qa_pairs.v1
 ```
 Then per-feature nightly (notebook/CI): `run_dataset_eval` with
-planner→`faithfulness`/`citation_accuracy`, ask→`ragas_relevance`,
-digest→`novelty` (inject `chat_fn` — no `domains` import needed).
+planner→`faithfulness`/`citation_accuracy`, ask→`ragas_relevance`
+(inject `chat_fn` — no `domains` import needed).
 Promote prompts by moving the `production` label only after the
 experiment beats baseline; configure online eval rules + score/cost
 alerts in the LangFuse UI (no code — UI objects).

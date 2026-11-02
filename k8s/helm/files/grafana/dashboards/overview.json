@@ -6,7 +6,6 @@
     "overview",
     "dd",
     "ycs",
-    "rr",
     "otel",
     "lgtm"
   ],
@@ -28,12 +27,6 @@
       "title": "YCS Ask",
       "type": "link",
       "url": "/d/coelhonexus-ycs-retrieval",
-      "targetBlank": false
-    },
-    {
-      "title": "RR Scan",
-      "type": "link",
-      "url": "/d/coelhonexus-rr-digests",
       "targetBlank": false
     },
     {
@@ -201,85 +194,6 @@
       }
     },
     {
-      "id": 7,
-      "type": "stat",
-      "title": "RR scans observed",
-      "description": "Research Radar scans observed over the selected period.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "mimir"
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 0,
-        "y": 5
-      },
-      "targets": [
-        {
-          "expr": "sum(max_over_time(rr_scan_run_total[7d]))",
-          "legendFormat": "scans"
-        }
-      ]
-    },
-    {
-      "id": 8,
-      "type": "stat",
-      "title": "RR degraded share",
-      "description": "Share of scans that completed in degraded mode.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "mimir"
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 4,
-        "y": 5
-      },
-      "targets": [
-        {
-          "expr": "sum(max_over_time(rr_scan_run_total{degraded=\"true\"}[7d])) / clamp_min(sum(max_over_time(rr_scan_run_total[7d])), 1)",
-          "legendFormat": "degraded share"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1
-        }
-      }
-    },
-    {
-      "id": 9,
-      "type": "stat",
-      "title": "RR scan p95",
-      "description": "Research Radar p95 latency. Use the RR dashboard for detailed phase and outcome views.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "mimir"
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 8,
-        "y": 5
-      },
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(rr_scan_run_duration_seconds_bucket[1h])))",
-          "legendFormat": "p95",
-          "exemplar": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s"
-        }
-      }
-    },
-    {
       "id": 10,
       "type": "timeseries",
       "title": "Service interaction request rate",
@@ -291,7 +205,7 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
+        "x": 0,
         "y": 5
       },
       "targets": [
@@ -318,8 +232,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
-        "y": 10
+        "x": 12,
+        "y": 5
       },
       "targets": [
         {
@@ -344,8 +258,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
+        "w": 24,
+        "x": 0,
         "y": 13
       },
       "targets": [
@@ -408,35 +322,6 @@
       "targets": [
         {
           "expr": "sum(rate(ycs_ask_run_total{outcome!=\"done\"}[1h])) / clamp_min(sum(rate(ycs_ask_run_total[1h])), 0.000001)",
-          "legendFormat": "non-done share"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1
-        }
-      }
-    },
-    {
-      "id": 15,
-      "type": "stat",
-      "title": "RR recent non-done share",
-      "description": "Recent Research Radar failure symptom over the last hour.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "mimir"
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 8,
-        "y": 21
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(rr_scan_run_total{outcome!=\"done\"}[1h])) / clamp_min(sum(rate(rr_scan_run_total[1h])), 0.000001)",
           "legendFormat": "non-done share"
         }
       ],
@@ -580,7 +465,7 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 8,
+        "w": 12,
         "x": 0,
         "y": 31
       },
@@ -642,8 +527,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 8,
-        "x": 8,
+        "w": 12,
+        "x": 12,
         "y": 31
       },
       "targets": [
@@ -674,68 +559,6 @@
               {
                 "color": "green",
                 "value": 80
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          }
-        }
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "background"
-      }
-    },
-    {
-      "id": 20,
-      "type": "stat",
-      "title": "RR degraded scan rate",
-      "description": "Share of RR scans that completed in degraded mode (missing extractions) in the last hour. SLO target: <10%. Red=SLO breach.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "mimir"
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 8,
-        "x": 16,
-        "y": 31
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "mimir"
-          },
-          "expr": "sum(max_over_time(rr_scan_run_total{degraded=\"true\"}[7d])) / clamp_min(sum(max_over_time(rr_scan_run_total[7d])), 1) * 100",
-          "legendFormat": "RR degraded scan rate",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 10
-              },
-              {
-                "color": "red",
-                "value": 25
               }
             ]
           },

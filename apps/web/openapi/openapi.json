@@ -4636,8 +4636,7 @@
             "type": "string",
             "enum": [
               "dd",
-              "ycs",
-              "rr"
+              "ycs"
             ],
             "title": "App",
             "default": "ycs"
@@ -5219,8 +5218,7 @@
             "type": "string",
             "enum": [
               "dd",
-              "ycs",
-              "rr"
+              "ycs"
             ],
             "title": "App",
             "default": "ycs"
@@ -5264,8 +5262,7 @@
             "type": "string",
             "enum": [
               "dd",
-              "ycs",
-              "rr"
+              "ycs"
             ],
             "title": "App"
           },
@@ -5415,8 +5412,7 @@
             "type": "string",
             "enum": [
               "dd",
-              "ycs",
-              "rr"
+              "ycs"
             ],
             "title": "App",
             "default": "ycs"
@@ -5447,8 +5443,7 @@
             "type": "string",
             "enum": [
               "dd",
-              "ycs",
-              "rr"
+              "ycs"
             ],
             "title": "App"
           },

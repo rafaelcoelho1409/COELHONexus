@@ -4,9 +4,8 @@ Thin OpenAI-compatible client over the user-configured external endpoint
 (Settings page "LLM Endpoint" card → `llm_endpoint` {url, model} + managed
 key `LLM_API_KEY`). No gateway logic here: no arm pool, no bandit
 cells, no cascade, no feedback loop — the endpoint owns all of that.
-Every caller (DD planner/synth, YCS Ask/query/graph, RR orchestrator/
-subagents, Langfuse judges) builds through `build_chat_model()` or calls
-`chat_text_async()` directly.
+Every caller (DD planner/synth, YCS Ask/query/graph, Langfuse judges)
+builds through `build_chat_model()` or calls `chat_text_async()` directly.
 
 SOTA Sept 2026 optimizations (kept from the previous adapter):
 - Singleton pooled httpx.AsyncClient (Limits 200/100, http2, keepalive
@@ -233,11 +232,11 @@ def build_chat_model(
 
     `max_retries` is overridable (still defaults to 0 — every existing
     caller is unaffected) for callers with NO retry protection of their
-    own: RR's orchestrator/subagent models are passed directly to
-    DeepAgents as the bare model object, so they can't use
-    `resilient_ainvoke` (wrapping the model breaks DeepAgents'
-    `isinstance(model, BaseChatModel)` check). SDK-level retry is the
-    only retry mechanism that doesn't touch the model's class.
+    own: an agent framework such as DeepAgents takes the bare model
+    object, so such callers can't use `resilient_ainvoke` (wrapping the
+    model breaks the framework's `isinstance(model, BaseChatModel)`
+    check). SDK-level retry is the only retry mechanism that doesn't
+    touch the model's class.
 
     Every instance shares ONE module-level pooled `httpx.AsyncClient`
     (same pool shape as the raw hot path's client). Per-request
@@ -397,7 +396,7 @@ async def chat_text_async(
 
     meta = {
         "model": resp_model,
-        "deployment": resp_model,  # compat alias — DD/RR/YCS counter + log call sites read `deployment`
+        "deployment": resp_model,  # compat alias — DD/YCS counter + log call sites read `deployment`
         "attempts": 1,
         "latency_s": round(latency_s, 3),
         "rotator_request_id": ((rm.get("headers") or {}).get("x-rotator-request-id") if isinstance(rm, dict) else None),

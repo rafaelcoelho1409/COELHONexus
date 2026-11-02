@@ -12,7 +12,7 @@ PORT     = os.environ.get("POSTGRES_PORT", "5432")
 USER     = os.environ.get("POSTGRES_USER", "")
 PASSWORD = os.environ.get("POSTGRES_PASSWORD", "")
 
-# Database every domain uses (set by the Helm chart): DD planner/synth checkpoints, RR, YCS.
+# Database every domain uses (set by the Helm chart): DD planner/synth checkpoints, YCS.
 DATABASE = os.environ.get("POSTGRES_DATABASE", "")
 
 # LangGraph checkpointer pool (shared by planner + synth).

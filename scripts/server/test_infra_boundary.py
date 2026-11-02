@@ -128,11 +128,11 @@ def entrypoint_redis() -> list[str]:
 
 
 def llm_counter_homes() -> list[str]:
-    """LLM-usage accounting lives in `domains/settings/llm_counter/` only. (`rr` keeps its own until rr is removed.)"""
+    """LLM-usage accounting lives in `domains/settings/llm_counter/` only."""
     found = [
         f"{path.relative_to(SERVER)}: a per-context llm_counter (use domains.settings.llm_counter)"
         for path in sorted((SERVER / "domains").glob("*/llm_counter"))
-        if path.parent.name not in ("settings", "rr")
+        if path.parent.name != "settings"
     ]
     found += lines_with(
         SERVER, ("domains.dd.llm_counter", "domains.ycs.llm_counter"), skip_names = (), hint = "domains.settings.llm_counter",

@@ -250,13 +250,6 @@ app: Application Services Layer {
       height: 500
       style.font-size: 64
     }
-    rr: "/api/v1/research-radar\n(DeepAgent)" {
-      shape: image
-      icon: ./icons/fastapi.png
-      width: 500
-      height: 500
-      style.font-size: 64
-    }
     llm: "LLM Rotator\n(LiteLLM + ParetoBandit\nBYOK Provider)" {
       shape: image
       icon: ./icons/fastapi.png
@@ -315,20 +308,15 @@ app: Application Services Layer {
   # Internal app flow
   fasthtml -> server.dd: "REST API" {style.stroke: "#00B4D8"; style.stroke-width: 8}
   fasthtml -> server.ycs: {style.stroke: "#00B4D8"; style.stroke-width: 7}
-  fasthtml -> server.rr: {style.stroke: "#00B4D8"; style.stroke-width: 7}
-
-  server.rr -> fastmcp: "MCP\n(Streamable-HTTP)" {style.stroke: "#7C3AED"; style.stroke-width: 7}
 
   server.dd -> celery: "dispatch\ntasks" {style.stroke: "#0066CC"; style.stroke-width: 7}
   server.ycs -> celery: {style.stroke: "#0066CC"; style.stroke-width: 7}
-  server.rr -> celery: {style.stroke: "#0066CC"; style.stroke-width: 7}
 
   celery -> flower: "metrics" {style.stroke: "#0066CC"; style.stroke-width: 2; style.stroke-dash: 5}
   celery -> playwright: "crawl\nrequests" {style.stroke: "#0066CC"; style.stroke-width: 7}
 
   server.llm -> server.dd: {style.stroke: "#6B46C1"; style.stroke-width: 2; style.stroke-dash: 5}
   server.llm -> server.ycs: {style.stroke: "#6B46C1"; style.stroke-width: 2; style.stroke-dash: 5}
-  server.llm -> server.rr: {style.stroke: "#6B46C1"; style.stroke-width: 2; style.stroke-dash: 5}
 }
 
 
@@ -435,7 +423,6 @@ infra.helm -> monitoring.langfuse: {style.stroke: "#004D99"; style.stroke-width:
 # ── Data store connections (green solid) ────────────────────
 app.server.dd -> stores.postgresql: "LangGraph\ncheckpoints" {style.stroke: "#28A745"; style.stroke-width: 7}
 app.server.ycs -> stores.postgresql: "conversation\nthreads" {style.stroke: "#28A745"; style.stroke-width: 7}
-app.server.rr -> stores.postgresql: {style.stroke: "#28A745"; style.stroke-width: 6}
 app.server.llm -> stores.minio: "BYOK KEK\nencrypted keys" {style.stroke: "#28A745"; style.stroke-width: 7}
 app.celery -> stores.redis: "broker +\nresult backend" {style.stroke: "#28A745"; style.stroke-width: 8}
 app.server -> stores.redis: {style.stroke: "#28A745"; style.stroke-width: 6; style.stroke-dash: 5}

@@ -1,4 +1,4 @@
-"""Observability smoke check — query the latest DD / YCS / RR traces from
+"""Observability smoke check — query the latest DD / YCS traces from
 LangFuse API and fail if the contract is broken.
 
 Checks per pipeline:
@@ -37,7 +37,6 @@ _PIPELINE_ROOT_SPANS: dict[str, str] = {
     "dd_planner": "dd.planner.run",
     "dd_synth":   "dd.synth.study.run",
     "ycs":        "ycs.ask.run",
-    "rr":         "rr.scan.run",
 }
 
 _GENAI_SPAN_NAME = "gen_ai.chat"

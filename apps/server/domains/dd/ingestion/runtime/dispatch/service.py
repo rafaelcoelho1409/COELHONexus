@@ -172,7 +172,7 @@ async def release_run(slug: str, run_id: str) -> None:
 
 async def run(run_id: str, slug: str) -> dict:
     """Session + span + metrics wrapper around the ingestion dispatcher.
-    The session wrapper was missing until now — every other DD/RR/YCS
+    The session wrapper was missing until now — every other DD/YCS
     pipeline groups its spans into one LangFuse trace via `session(...)`;
     ingestion had the span but not the session, so its spans never
     grouped into one trace in the LangFuse UI.

@@ -15,8 +15,8 @@ If the brief and the code disagree, or you are unsure, **stop and report** — d
    `knip.json`, `next.config.ts`, `playwright.config.ts`. If one of them seems to need a change, stop and report.
 4. **No new dependencies** unless the brief names them. If one is named, install it with an exact version
    (`npm install --save-exact name@x.y.z`), never `^`.
-5. **Never write the words** rotator, router (model routing), bandit, provider names, BYOK, free-tier,
-   Research Radar in any UI text, test fixture or comment. `npm run copy:check` enforces it.
+5. **Never write the words** rotator, router (model routing), bandit, provider names, BYOK, free-tier
+   in any UI text, test fixture or comment. `npm run copy:check` enforces it.
 6. **Do not read** outside `apps/web/` unless the brief lists the file. Do not open `.env*` files.
 7. **Two failed attempts at the same error → stop** and report the exact error text and what you tried.
    Do not loop, do not weaken a check, do not add `@ts-ignore`, `eslint-disable`, `as any` or `biome-ignore`

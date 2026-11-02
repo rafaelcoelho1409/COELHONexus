@@ -518,46 +518,6 @@ RETURN label,
 LIMIT  $limit
 """
 
-RR_CYPHER_BROWSE = """
-MATCH (n)
-WHERE  n:Paper OR n:Author OR n:Concept OR n:Source
-WITH   n, labels(n)[0] AS label, coalesce(n.id, n.name) AS key
-RETURN label,
-       key,
-       coalesce(n.title, n.name, n.id, key)              AS title,
-       coalesce(n.abstract, '')                          AS snippet,
-       CASE WHEN n.id IS NOT NULL AND label = 'Paper'
-            THEN 'https://arxiv.org/abs/' + toString(n.id)
-            ELSE ''
-       END                                               AS url,
-       properties(n)                                     AS properties
-ORDER BY label, coalesce(n.signal, 0) DESC, title
-LIMIT  $limit
-"""
-
-RR_CYPHER_SEARCH = """
-MATCH (n)
-WHERE  (n:Paper OR n:Author OR n:Concept OR n:Source)
-  AND  (
-        toLower(toString(coalesce(n.title, '')))     CONTAINS $needle
-     OR toLower(toString(coalesce(n.name, '')))      CONTAINS $needle
-     OR toLower(toString(coalesce(n.id, '')))        CONTAINS $needle
-     OR toLower(toString(coalesce(n.abstract, '')))  CONTAINS $needle
-  )
-WITH   n, labels(n)[0] AS label, coalesce(n.id, n.name) AS key
-RETURN label,
-       key,
-       coalesce(n.title, n.name, n.id, key)              AS title,
-       coalesce(n.abstract, '')                          AS snippet,
-       CASE WHEN n.id IS NOT NULL AND label = 'Paper'
-            THEN 'https://arxiv.org/abs/' + toString(n.id)
-            ELSE ''
-       END                                               AS url,
-       properties(n)                                     AS properties
-LIMIT  $limit
-"""
-
-
 # All read procedures only — no APOC dep.
 SCHEMA_CYPHER_LABELS = "CALL db.labels() YIELD label RETURN collect(label) AS labels"
 SCHEMA_CYPHER_RELS   = "CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) AS rels"

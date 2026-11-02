@@ -30,12 +30,6 @@
       "targetBlank": false
     },
     {
-      "title": "RR Scan",
-      "type": "link",
-      "url": "/d/coelhonexus-rr-digests",
-      "targetBlank": false
-    },
-    {
       "title": "LLM Rotator",
       "type": "link",
       "url": "/d/coelhonexus-rotator-red",

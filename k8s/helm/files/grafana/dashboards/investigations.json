@@ -36,12 +36,6 @@
       "targetBlank": false
     },
     {
-      "title": "RR Scan",
-      "type": "link",
-      "url": "/d/coelhonexus-rr-digests",
-      "targetBlank": false
-    },
-    {
       "title": "Service Topology",
       "type": "link",
       "url": "/d/coelhonexus-service-topology",
@@ -87,11 +81,6 @@
         {
           "expr": "histogram_quantile(0.95, sum by (le) (rate(ycs_ask_run_duration_seconds_bucket[30m])))",
           "legendFormat": "YCS ask p95",
-          "exemplar": true
-        },
-        {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(rr_scan_run_duration_seconds_bucket[30m])))",
-          "legendFormat": "RR scan p95",
           "exemplar": true
         }
       ],
@@ -182,7 +171,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{namespace=~\"coelhonexus.*\",service_name=\"coelhonexus-celery\"} |~ \"(?i)(planner|synth|study|ycs|ask|rr|radar|scan|task|pipeline|trace_id=)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\" | regexp \"(?P<scan_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\"",
+          "expr": "{namespace=~\"coelhonexus.*\",service_name=\"coelhonexus-celery\"} |~ \"(?i)(planner|synth|study|ycs|ask|scan|task|pipeline|trace_id=)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\" | regexp \"(?P<scan_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\"",
           "refId": "A"
         }
       ],
@@ -201,7 +190,7 @@
       "id": 6,
       "type": "traces",
       "title": "Slowest traces (last 3h)",
-      "description": "Recent traces from all COELHO Nexus services. Click any row to open the full distributed trace waterfall. Most recent first. For longest traces, look at the RR scan rows (333s+ duration).",
+      "description": "Recent traces from all COELHO Nexus services. Click any row to open the full distributed trace waterfall. Most recent first.",
       "datasource": {
         "type": "tempo",
         "uid": "tempo"

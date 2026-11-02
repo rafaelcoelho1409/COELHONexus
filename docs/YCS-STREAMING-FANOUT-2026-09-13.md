@@ -177,7 +177,7 @@ Library-endpoint query (not by guessing):
 
 **Root cause: Celery worker-slot starvation.** The worker pool is
 capped at `concurrency: 2` (memory budget, shared across every domain —
-crawler/llm/planner/synth/ycs/rr). `extract_videos` pins one slot for
+crawler/llm/planner/synth/ycs). `extract_videos` pins one slot for
 its entire run (424s here). That left exactly **one** slot for all 21
 per-video Neo4j + Qdrant tasks combined — they ran strictly one at a
 time. Worse: `extract_and_store_graph`'s internal `EXTRACT_CONCURRENCY`

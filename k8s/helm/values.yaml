@@ -3,7 +3,7 @@
 # 'production' = ArgoCD with GitLab Container Registry
 environment: production
 
-# LLM endpoint the Docs Distiller / YCS / RR apps call (OpenAI-compatible HTTP).
+# LLM endpoint the Docs Distiller / YCS apps call (OpenAI-compatible HTTP).
 # No default endpoint is baked into the chart — set url/apiKey/model here, or
 # configure it at runtime from the Settings page (BYOK, takes precedence over
 # these chart defaults either way). Read by
@@ -152,7 +152,7 @@ celery:
   replicas: 1
   # 2 workers: peak COW RSS (5 × 2GB + parent) OOMKilled at concurrency=5; 2 × 8 LLM calls already hits DD_LLM_GLOBAL_CONCURRENCY.
   concurrency: 2
-  queues: "crawler,embedding,llm,planner,synth,default,ycs,rr"
+  queues: "crawler,embedding,llm,planner,synth,default,ycs"
   resources:
     requests:
       memory: "2Gi"

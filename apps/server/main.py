@@ -84,24 +84,6 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        await domains.rr.service.bootstrap_stores()
-    except Exception as e:
-        logger.warning(
-            f"[lifespan] RR bootstrap_stores failed: "
-            f"{type(e).__name__}: {e}. Radar /v1/rr/scan endpoints will 5xx "
-            f"until the missing store is reachable."
-        )
-
-    try:
-        domains.rr.service.bootstrap_langfuse_prompts()
-    except Exception as e:
-        logger.warning(
-            f"[lifespan] RR bootstrap_langfuse_prompts failed: "
-            f"{type(e).__name__}: {e}. RR prompts will keep falling back "
-            f"to local text until this runs successfully."
-        )
-
-    try:
         await infra.elasticsearch.service.ensure_indexes()
     except Exception as e:
         logger.warning(

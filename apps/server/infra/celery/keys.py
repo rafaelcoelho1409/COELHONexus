@@ -16,8 +16,6 @@ Q_CRAWLER = domain.scoped_queue("crawler", params.ENVIRONMENT)
 Q_PLANNER = domain.scoped_queue("planner", params.ENVIRONMENT)
 Q_SYNTH = domain.scoped_queue("synth", params.ENVIRONMENT)
 Q_YCS = domain.scoped_queue("ycs", params.ENVIRONMENT)
-# RR's long DeepAgents runs on own queue to avoid contending with DD/YCS
-Q_RR = domain.scoped_queue("rr", params.ENVIRONMENT)
 
 
 # qdrant_task / neo4j_task names dodge qdrant_client / neo4j package collisions
@@ -30,16 +28,13 @@ TASK_INCLUDE = [
     "domains.ycs.neo4j_task.task",
     "domains.ycs.pipeline_task.task",
     "domains.ycs.embedding_migration.task",
-    # Research Radar (3rd feature)
-    "domains.rr.task",
 ]
 
 
-# per-module queue isolation: planner CPU / synth LLM / YCS embed / RR long-running each separated
+# per-module queue isolation: planner CPU / synth LLM / YCS embed each separated
 TASK_ROUTES = {
     "domains.dd.ingestion.task.*": {"queue": Q_CRAWLER},
     "domains.dd.planner.task.*":   {"queue": Q_PLANNER},
     "domains.dd.synth.task.*":     {"queue": Q_SYNTH},
     "domains.ycs.*":               {"queue": Q_YCS},
-    "domains.rr.task.*":           {"queue": Q_RR},
 }
