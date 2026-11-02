@@ -8,14 +8,21 @@ spec:
     - namePattern: coelhonexus
       images:
         - alias: server
-          imageName: coelho-cloud-registry:5000/coelhonexus-server:latest
+          imageName: localhost:5001/coelhonexus-server:latest
           commonUpdateSettings:
             updateStrategy: digest
           manifestTargets:
             helm:
               spec: server.image  # Full image reference (repo:tag@digest)
+        - alias: bd
+          imageName: localhost:5001/coelhonexus-bd:latest
+          commonUpdateSettings:
+            updateStrategy: digest
+          manifestTargets:
+            helm:
+              spec: bd.image  # Full image reference (repo:tag@digest)
         - alias: web
-          imageName: coelho-cloud-registry:5000/coelhonexus-web:latest
+          imageName: localhost:5001/coelhonexus-web:latest
           commonUpdateSettings:
             updateStrategy: digest
           manifestTargets:
