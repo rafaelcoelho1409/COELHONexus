@@ -1,3 +1,39 @@
+# =============================================================================
+# FORGEJO ACTIONS — COELHO Nexus (Skaffold build → k3d registry → Image Updater)
+# =============================================================================
+# Same GitOps flow as COELHOSearchMCP/COELHOLLMRotator's ci.yml, Forgejo-native:
+#   git push → Forgejo Actions `skaffold build` → ArgoCD Image Updater
+#   detects new digest → patches Application → ArgoCD reconciles → rollout.
+# No deploy job: GitOps owns deploys.
+# Multi-image: server + web are pushed (both watched by the dev Image Updater).
+# The bd artifact is BUILT (cache parity with server) but NOT pushed/updated.
+#
+# Runner assumptions (COELHOCloud `forgejo-runner`,
+# `COELHOCloud/infrastructure/modules/forgejo/`):
+#   - `runs-on: ubuntu-latest` → catthehacker act image (docker CLI present).
+#   - Job containers run with host network; DOCKER_HOST=tcp://localhost:2376
+#     (TLS) is forwarded from the runner's dind sidecar into every job — do
+#     NOT override DOCKER_HOST and do NOT start your own dind `services:`.
+#   - The push still runs INSIDE the dind sidecar's network namespace, so
+#     `localhost` there is dind itself, not the host — a k3d host-port
+#     registry (e.g. localhost:5001) is unreachable for pushes.
+#   - dind allowlists the in-cluster registry hostname as insecure, and k3d
+#     puts it on every node's /etc/hosts — plain-HTTP push just works.
+#
+# Registry privacy: every name the repo shares (skaffold artifacts,
+# values.yaml, Image Updater CR) is the generic `localhost:5001/…`. The
+# actual in-cluster registry endpoint is injected as the repo secret
+# `REGISTRY` (Forgejo masks secret values in logs) — never restate it here.
+# LOCAL_ALIASES below equal the `ci` profile artifact images and are only
+# local tags from this build; CI retags them onto ${REGISTRY} and pushes.
+# The dev Image Updater (k8s/argocd/dev/image-updater.yaml) watches the
+# `localhost:5001/…` names via the `localhost-mirror` alias configured in
+# COELHOCloud/terraform/modules/argocd-image-updater/values.yaml.tpl.
+#
+# NOTE: secrets are per-repo on Forgejo — this repo needs its own `REGISTRY`
+# secret (same value as COELHOSearchMCP's).
+# =============================================================================
+
 name: ci
 
 on:
@@ -14,8 +50,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  REGISTRY: coelho-cloud-registry:5000
+  REGISTRY: ${{ secrets.REGISTRY }} # in-cluster registry endpoint (private)
   IMAGES: "coelhonexus-server coelhonexus-web"
+  LOCAL_ALIASES: "localhost:5001/coelhonexus-server localhost:5001/coelhonexus-web"
   SKAFFOLD_VERSION: v2.18.1 # keep in sync with local dev pin (`skaffold version`)
   DOCKER_BUILDKIT: "1"
 jobs:
@@ -71,14 +108,31 @@ jobs:
         run: |
           set -euo pipefail
           SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          # `skaffold build` only marks the images locally under the
+          # $LOCAL_ALIASES names (the skaffold.yaml `ci` profile artifacts,
+          # which override local.push=false — the base config's push:true
+          # would make skaffold push to its dead-from-dind localhost:5001
+          # names itself). No --default-repo: it mangles fully-qualified
+          # names (localhost_5001_... repo) instead of replacing them.
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            # Validate only — no push from PRs.
             skaffold build -p ci --tag="${SHORT_SHA}"
           else
-            skaffold build -p ci --push --tag="${SHORT_SHA}"
-            for IMAGE in ${IMAGES}; do
-              DEST="${REGISTRY}/${IMAGE}"
-              docker pull "${DEST}:${SHORT_SHA}"
-              docker tag "${DEST}:${SHORT_SHA}" "${DEST}:latest"
-              docker push "${DEST}:latest"
+            [ -n "${REGISTRY}" ] || { echo "::error::Secret REGISTRY is not set on this repo (Settings → Actions → Secrets)"; exit 1; }
+            skaffold build -p ci --tag="${SHORT_SHA}"
+            # Builds ran locally in dind, so retag straight to the secret
+            # registry — no pull needed (buildx only skips local load with --push).
+            # `--tag` stamps one tag (the short SHA) per local image, so every
+            # pushed tag derives from it; there is no :latest.
+            # IMAGES and LOCAL_ALIASES are kept positionally aligned.
+            read -ra IMGS <<< "${IMAGES}"
+            read -ra LOCALS <<< "${LOCAL_ALIASES}"
+            for idx in "${!IMGS[@]}"; do
+              IMAGE="${IMGS[$idx]}"
+              LOCAL="${LOCALS[$idx]}"
+              for TAG in "${SHORT_SHA}" latest; do
+                docker tag "${LOCAL}:${SHORT_SHA}" "${REGISTRY}/${IMAGE}:${TAG}"
+                docker push "${REGISTRY}/${IMAGE}:${TAG}"
+              done
             done
           fi

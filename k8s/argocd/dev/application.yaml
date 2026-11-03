@@ -17,8 +17,24 @@ spec:
       releaseName: coelhonexus
       valueFiles:
         - values.yaml
-      # values.yaml already configured with correct registry and imagePullPolicy
-      # No overrides needed - all config is in values.yaml
+      parameters:
+        # Seed the image refs in the Image Updater's watched (localhost:5001/…)
+        # form so its name-match always succeeds. Without this, stale
+        # write-backs in the resolved-registry form (…@sha256:<old-digest>) can
+        # pin the app forever: the updater skips the mismatched name and never
+        # rewrites. Applying this also drops leftover params from older chart
+        # generations (fastapi/fasthtml/fastmcp were removed from the chart).
+        # bd keeps the chart default (values.yaml); if CI ever pushes bd, the
+        # updater adds its digest param by itself.
+        # Auto-sync heals from THIS value on every sync, and the updater
+        # retags from here when CI pushes new digests. Same seed pattern as
+        # COELHOSearchMCP / COELHOLLMRotator.
+        - name: server.image
+          forceString: true
+          value: localhost:5001/coelhonexus-server:latest
+        - name: web.image
+          forceString: true
+          value: localhost:5001/coelhonexus-web:latest
   destination:
     server: https://kubernetes.default.svc
     namespace: coelhonexus

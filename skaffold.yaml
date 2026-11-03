@@ -29,6 +29,15 @@ build:
             dest: /app
           - src: "**/*.toml"
             dest: /app
+    # Book Distiller worker: the server image plus Docling and CPU-only PyTorch (`uv sync --group bd`). Same source as the
+    # server, so its layers are shared; no `sync:` — a worker is restarted by a rebuild, not hot-patched.
+    - image: localhost:5001/coelhonexus-bd
+      context: apps/server
+      docker:
+        dockerfile: Dockerfile.server
+        noCache: false
+        buildArgs:
+          UV_SYNC_EXTRA: "--group bd"
     # Next.js front end: a standalone build can't be hot-patched, so no `sync:` — edits rebuild.
     - image: localhost:5001/coelhonexus-web
       context: apps/web
@@ -58,6 +67,7 @@ manifests:
         # runs exactly what was pushed, so hot-reload sync finds it.
         setValueTemplates:
           server.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_server}}"
+          bd.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_bd}}"
           web.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_web}}"
           environment: local  # Enables --reload in uvicorn for hot-reload
 
@@ -98,14 +108,41 @@ portForward:
 
 profiles:
   - name: ci
+    # CI (Forgejo Actions): builds all artifacts under the generic
+    # `localhost:5001/…` names (LOCAL_ALIASES in ci.yml), tagged locally only —
+    # CI retags server/web onto the secret-injected registry and pushes. The
+    # dev Image Updater (k8s/argocd/dev/image-updater.yaml) watches the
+    # `localhost:5001/…` names via the `localhost-mirror` alias. Build-only
+    # profile — `skaffold build -p ci` never touches manifests/deploy, GitOps
+    # owns deploys. Local `dev` flow above is untouched.
     build:
+      # Base config's `local.push: true` makes every `skaffold build` push the
+      # artifacts to their own fully-qualified names (localhost:5001/...) —
+      # fine for dev (host port), fatal in CI (nothing listens there inside
+      # dind, and the real registry is secret-injected). CI retags and pushes
+      # with plain `docker push` instead (see ci.yml), so disable it here.
+      # NOTE: profile sections REPLACE (not deep-merge) — restate the other
+      # local.* fields or `useBuildkit` is lost and the Dockerfiles' mount
+      # cache options fail on the classic builder.
+      local:
+        push: false
+        tryImportMissing: false
+        useBuildkit: true
+        useDockerCLI: true
       artifacts:
-        - image: coelho-cloud-registry:5000/coelhonexus-server
+        - image: localhost:5001/coelhonexus-server
           context: apps/server
           docker:
             dockerfile: Dockerfile.server
             noCache: false
-        - image: coelho-cloud-registry:5000/coelhonexus-web
+        - image: localhost:5001/coelhonexus-bd
+          context: apps/server
+          docker:
+            dockerfile: Dockerfile.server
+            noCache: false
+            buildArgs:
+              UV_SYNC_EXTRA: "--group bd"
+        - image: localhost:5001/coelhonexus-web
           context: apps/web
           docker:
             dockerfile: Dockerfile.web
