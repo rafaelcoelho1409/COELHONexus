@@ -1,13 +1,13 @@
 "use client";
 
-import { ChevronDown, Trash2 } from "lucide-react";
+import { ChevronDown, RotateCw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { BookRow } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 
 import { bookUnits, fmtBytes, isLive, newestFirst, toBookStatus } from "../domain/books";
-import { useDeleteBook, useLibrary } from "../hooks/use-bd-data";
+import { useDeleteBook, useLibrary, useRunBook } from "../hooks/use-bd-data";
 import { useBdOverlays } from "../hooks/use-overlays";
 import { StatusChip } from "./status-chip";
 
@@ -16,12 +16,15 @@ const titleOf = (row: BookRow) => row.title.trim() || row.filename;
 export function LibraryPicker({
   selected,
   onOpen,
+  onRefresh,
 }: {
   selected: string | null;
   onOpen: (bookId: string | null) => void;
+  onRefresh: (bookId: string) => void;
 }) {
   const library = useLibrary();
   const del = useDeleteBook();
+  const runBook = useRunBook();
   const { confirm, notice } = useBdOverlays();
   const rows = newestFirst(library.data ?? []);
   const [open, setOpen] = useState(false);
@@ -62,6 +65,7 @@ export function LibraryPicker({
     return rows.filter((row) => `${titleOf(row)} ${row.filename}`.toLowerCase().includes(search));
   }, [rows, query]);
   const currentBook = rows.find((row) => row.book_id === selected);
+  const busy = runBook.isPending || del.isPending;
 
   const close = () => {
     setOpen(false);
@@ -86,6 +90,28 @@ export function LibraryPicker({
       },
       onError: (error) => notice(apiErrorMessage(error), "error"),
     });
+  };
+
+  const refreshBook = (row: BookRow) => {
+    runBook.mutate(
+      { bookId: row.book_id, refresh: true },
+      {
+        onSuccess: (result) => {
+          if (result.status === "queued") {
+            close();
+            onRefresh(row.book_id);
+            notice("Extraction queued.");
+          } else if (result.status === "locked") {
+            close();
+            onRefresh(row.book_id);
+            notice("This book is already being extracted — following the live run.");
+          } else {
+            notice("Already extracted.");
+          }
+        },
+        onError: (error) => notice(apiErrorMessage(error), "error"),
+      },
+    );
   };
 
   return (
@@ -163,9 +189,19 @@ export function LibraryPicker({
                     </button>
                     <button
                       type="button"
+                      aria-label={`Refresh ${titleOf(row)}`}
+                      title="Refresh extraction"
+                      disabled={busy || isLive(status)}
+                      onClick={() => refreshBook(row)}
+                      className="inline-flex size-9 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
+                    >
+                      <RotateCw className="size-4" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
                       aria-label={`Delete ${titleOf(row)}`}
                       title={isLive(status) ? "Cancel the extraction first" : "Delete"}
-                      disabled={del.isPending || isLive(status)}
+                      disabled={busy || isLive(status)}
                       onClick={() => void remove(row)}
                       className="inline-flex size-9 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-destructive-text disabled:opacity-50"
                     >

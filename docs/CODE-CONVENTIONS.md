@@ -8,6 +8,8 @@ the migration target for existing ones.
 (dotted `domains.*` path, no wrapper/namespace classes).
 **Updated 2026-09-21:** `domains/llm/` (gateway + provider registry) retired;
 external chat/embeddings live in `domains/settings/` (§9 tree).
+**Updated 2026-11-03:** recorded a pending internal-import observation for
+`ai/`, `domains/`, `entrypoints/`, and `infra/` (no code migration yet).
 
 **Why this exists:** the project is a knowledge-demonstration codebase.
 Every file name, every module split, every choice between "dataclass vs
@@ -487,6 +489,20 @@ params.COUNTER_TTL_S
 
 Never `from .domain import extract_usage` — same reasoning as the
 cross-package case, just one folder over instead of several.
+
+### Pending observation — internal imports across server package trees
+
+For a later convention review and migration, prefer relative package imports
+when code references sibling packages from within any of these trees:
+`apps/server/ai/`, `apps/server/domains/`, `apps/server/entrypoints/`, and
+`apps/server/infra/`. Avoid importing the current tree's root from inside
+that same tree (`import ai`, `import domains`, `import entrypoints`, or
+`import infra`) unless an absolute import is necessary. Use the appropriate
+relative level instead, such as `from . import <package_name>`,
+`from .. import <package_name>`, or `from ... import <package_name>`, then
+access members through the imported package. This is a recorded observation
+for future work, not an instruction to migrate source files now; reconcile
+it with the existing dotted `domains.*` rule above when that review begins.
 
 ### Why this over the alternatives considered
 

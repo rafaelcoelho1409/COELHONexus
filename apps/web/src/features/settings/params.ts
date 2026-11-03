@@ -4,8 +4,11 @@ export type ConnectionKind = "llm" | "embedding";
 /** PUT body. `api_key`: omit = keep the stored key, `""` = delete it, otherwise replace it. */
 export type SaveBody = { url: string; model: string; api_key?: string };
 
-/** Sentinel the backend accepts when no explicit model id is configured. */
-export const DEFAULT_MODEL = "auto";
+/** Fallback model selectors for chat and embedding endpoints. */
+export const DEFAULT_MODELS: Record<ConnectionKind, string> = {
+  llm: "fgts-va",
+  embedding: "auto",
+};
 
 /** The migration task poll re-reads the worker's task status this often. */
 export const MIGRATION_POLL_MS = 3_000;

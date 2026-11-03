@@ -9,7 +9,8 @@ import { QueryProvider } from "@/shared/providers/query-provider";
 import { SettingsPage } from "./settings-page";
 
 const ORIGIN = "http://nexus.test";
-const VIEW = { url: "http://g:8000/v1", model: "auto", has_key: false, source: null, last4: null };
+const LLM_VIEW = { url: "http://g:8000/v1", model: "fgts-va", has_key: false, source: null, last4: null };
+const EMBEDDING_VIEW = { ...LLM_VIEW, model: "auto" };
 
 const server = setupServer();
 
@@ -17,8 +18,8 @@ beforeAll(() => server.listen({ onUnhandledFrame: "error" }));
 beforeEach(() => {
   client.setConfig({ baseUrl: ORIGIN });
   server.use(
-    http.get(`${ORIGIN}/api/v1/settings/endpoint`, () => HttpResponse.json(VIEW)),
-    http.get(`${ORIGIN}/api/v1/settings/embedding`, () => HttpResponse.json(VIEW)),
+    http.get(`${ORIGIN}/api/v1/settings/endpoint`, () => HttpResponse.json(LLM_VIEW)),
+    http.get(`${ORIGIN}/api/v1/settings/embedding`, () => HttpResponse.json(EMBEDDING_VIEW)),
   );
 });
 afterEach(() => server.resetHandlers());

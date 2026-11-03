@@ -14,7 +14,7 @@ llm:
     url: ""             # blank = must be set here or via the Settings page before any pipeline call works
     apiKey: ""          # blank = no auth. Required for a keyed external endpoint.
                         # TODO: move to a Secret before any real external/OpenAI use.
-    model: "auto"       # model id the endpoint should serve
+    model: "fgts-va"    # model id the endpoint should serve
 
 observability:
   enabled: true

@@ -79,6 +79,26 @@ class Snapshot(BaseModel):
     progress: Progress | None
 
 
+class AgenticRunStart(BaseModel):
+    status: Literal["queued"]
+    book_id: str
+    extraction_run_id: str
+    agentic_run_id: str
+
+
+class AgenticRunStatus(BaseModel):
+    book_id: str
+    extraction_run_id: str
+    agentic_run_id: str
+    status: Literal["queued", "running", "done", "failed", "cancelled"]
+    expected_page_count: int
+    published_page_count: int
+    created_at: float
+    updated_at: float
+    finished_at: float | None
+    error: str | None
+
+
 class ActiveRun(BaseModel):
     book_id: str
     run_id: str

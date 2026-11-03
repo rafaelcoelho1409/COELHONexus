@@ -1,5 +1,5 @@
 import type { EmbeddingTestResult, KeyStatus, LlmTestResult, MigrationStatus, TaskStatus } from "./entities";
-import { DEFAULT_MODEL, type SaveBody, TERMINAL_TASK_STATES } from "./params";
+import { DEFAULT_MODELS, type ConnectionKind, type SaveBody, TERMINAL_TASK_STATES } from "./params";
 
 /** The trust-safe pill text for the API-key field — the field itself never carries the key back. */
 export function keyPillLabel(status: KeyStatus): { tone: "custom" | "env" | "none"; text: string } {
@@ -27,13 +27,14 @@ export function validateBaseUrl(value: string): string | null {
 
 /** api_key semantics: omit = keep the stored key, "" = delete it, non-blank = replace it. */
 export function buildSavePayload(input: {
+  kind: ConnectionKind;
   url: string;
   model: string;
   apiKey: string;
   clearKey: boolean;
 }): SaveBody {
   const url = input.url.trim();
-  const model = input.model.trim() || DEFAULT_MODEL;
+  const model = input.model.trim() || DEFAULT_MODELS[input.kind];
   if (input.clearKey) return { url, model, api_key: "" };
   const apiKey = input.apiKey.trim();
   return apiKey ? { url, model, api_key: apiKey } : { url, model };

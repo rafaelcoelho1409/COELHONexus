@@ -27,7 +27,7 @@ def _endpoint_view() -> dict:
         st = domains.settings.credentials.service.get_store().key_status(_ENDPOINT_KEY_ENV_LEGACY)
     return {
         "url": ep.get("url") or "",
-        "model": ep.get("model") or "auto",
+        "model": ep.get("model") or "fgts-va",
         **asdict(st),  # has_key, source, last4
     }
 
@@ -37,7 +37,7 @@ def _write_endpoint(body: schemas.EndpointBody) -> None:
     s = store.read_settings() or {}
     s["llm_endpoint"] = {
         "url": body.url.strip(),
-        "model": (body.model or "auto").strip() or "auto",
+        "model": (body.model or "fgts-va").strip() or "fgts-va",
     }
     store.write_settings(s)
     if body.api_key is not None:

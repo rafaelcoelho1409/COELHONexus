@@ -108,6 +108,8 @@ describe("Library", () => {
     expect(items[0]).toHaveTextContent("extracting");
     expect(items[0]).toHaveTextContent("3/9 pages");
     expect(items[1]).toHaveTextContent("failed");
+    expect(within(list).getByRole("button", { name: "Refresh A Newer Book" })).toBeDisabled();
+    expect(within(list).getByRole("button", { name: "Refresh An Older Book" })).toBeEnabled();
     await userEvent.click(within(list).getByRole("button", { name: /^A Newer Book/ }));
     expect(push).toHaveBeenCalledWith("/bd/ingestion?book=new", { scroll: false });
   });
@@ -417,12 +419,19 @@ describe("A book being extracted", () => {
       "<!-- image -->",
     );
 
-    const summary = within(reader).getByText("Figures · 5");
+    expect(within(reader).getByRole("figure", { name: "Figure 1 from page 2" })).toBeInTheDocument();
+    await userEvent.click(within(reader).getByRole("button", { name: "View figure 1 from page 2 (a.png)" }));
+    const viewer = await screen.findByRole("dialog", { name: "Figure 1 of 5" });
+    await userEvent.click(within(viewer).getByRole("button", { name: "Next figure" }));
+    expect(within(viewer).getByRole("heading", { name: "Figure 2 of 5" })).toBeInTheDocument();
+    await userEvent.click(within(viewer).getByRole("button", { name: "Close figure viewer" }));
+
+    const summary = within(reader).getByText("Figure gallery · 5");
     const gallery = summary.closest("details");
     expect(gallery).not.toHaveAttribute("open");
     await userEvent.click(summary);
     expect(gallery).toHaveAttribute("open");
-    expect(within(reader).getAllByRole("img")).toHaveLength(5);
+    expect(within(reader).getAllByRole("figure")).toHaveLength(5);
   });
 
   it("fills in live: progress, throughput, chapters, pages, the reader, figures", async () => {
@@ -448,8 +457,14 @@ describe("A book being extracted", () => {
     expect(reader).toHaveTextContent("Continuing to work correctly");
     expect(reader).toHaveTextContent("Foundations of Data Systems › Reliability");
     expect(reader).toHaveTextContent("1 picture");
-    const figure = within(reader).getByAltText("Figure p0002-1.png from page 2");
-    expect(figure.getAttribute("src")).toContain(`/api/v1/bd/ingestion/${BOOK_ID}/figures/p0002-1.png`);
+    await userEvent.click(within(reader).getByText("Figure gallery · 1"));
+    const figure = within(reader).getByRole("button", {
+      name: "View figure 1 from page 2 (p0002-1.png)",
+    });
+    expect(figure.querySelector("img")).toHaveAttribute(
+      "src",
+      expect.stringContaining(`/api/v1/bd/ingestion/${BOOK_ID}/figures/p0002-1.png`),
+    );
     // the chapter being read is marked
     expect(screen.getByRole("button", { name: /^Foundations of Data Systems/ })).toHaveAttribute(
       "aria-current",
@@ -482,18 +497,20 @@ describe("A book being extracted", () => {
     expect(screen.getByRole("article", { name: "Page 3" })).toHaveTextContent("Percentile");
   });
 
-  it("ends on done: the status, the full count, and a way to extract again", async () => {
-    serveLibrary([bookRow()]);
+  it("ends on done without a standalone refresh button", async () => {
+    serveLibrary([bookRow({ status: "done", pages_done: 9 })]);
     serveBook(snapshot({ status: "extracting" }), () =>
       sse([startedEvent, pageEvent(1), pageEvent(2), pageEvent(3), sliceDone, terminalEvent("done")]),
     );
     renderStage(BOOK_ID);
 
-    expect(await screen.findByRole("button", { name: "Extract again" })).toBeInTheDocument();
-    expect(screen.getByRole("progressbar", { name: "Pages extracted" })).toHaveAttribute(
+    expect(await screen.findByRole("progressbar", { name: "Pages extracted" })).toHaveAttribute(
       "aria-valuetext",
       "9 of 9 pages",
     );
+    expect(screen.queryByRole("button", { name: "Extract again" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: BOOK_TITLE }));
+    expect(screen.getByRole("button", { name: `Refresh ${BOOK_TITLE}` })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "Follow newest" })).not.toBeInTheDocument();
   });
@@ -588,7 +605,7 @@ describe("A book being extracted", () => {
     expect(await screen.findByText(/Resuming the extraction where it stopped/)).toBeInTheDocument();
   });
 
-  it("extracts a finished book again with refresh", async () => {
+  it("refreshes a finished book from its library dropdown option", async () => {
     const runs: string[] = [];
     serveLibrary([bookRow({ status: "done", pages_done: 9 })]);
     serveBook(snapshot({ status: "done", pages: [pageEntry(1)] }, null));
@@ -603,8 +620,11 @@ describe("A book being extracted", () => {
     );
     renderStage(BOOK_ID);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Extract again" }));
+    await userEvent.click(await screen.findByRole("button", { name: BOOK_TITLE }));
+    await userEvent.click(screen.getByRole("button", { name: `Refresh ${BOOK_TITLE}` }));
     await waitFor(() => expect(runs).toEqual(["?refresh=true"]));
+    expect(push).toHaveBeenCalledWith(`/bd/ingestion?book=${BOOK_ID}`, { scroll: false });
+    expect(await screen.findByText("Extraction queued.")).toBeInTheDocument();
   });
 
   it("reconnects when the stream drops, and the replay does not double anything", async () => {
@@ -645,7 +665,9 @@ describe("A finished book", () => {
     renderStage(BOOK_ID);
 
     expect(await screen.findByText("Intro text")).toBeInTheDocument(); // the first page, not the last
-    expect(screen.getByRole("button", { name: "Extract again" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Extract again" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: BOOK_TITLE }));
+    expect(screen.getByRole("button", { name: `Refresh ${BOOK_TITLE}` })).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: /^p\. 3\b/ }));
     expect(await screen.findByText("480 ms")).toBeInTheDocument();
     expect(fetched).toEqual(["1", "3"]);

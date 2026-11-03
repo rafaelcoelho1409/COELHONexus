@@ -38,7 +38,7 @@ export function ConnectionForm({
     const invalid = validateBaseUrl(url);
     setUrlError(invalid);
     if (invalid) return;
-    save.mutate(buildSavePayload({ url, model, apiKey, clearKey }), {
+    save.mutate(buildSavePayload({ kind, url, model, apiKey, clearKey }), {
       onSuccess: () => setApiKey(""),
     });
   };

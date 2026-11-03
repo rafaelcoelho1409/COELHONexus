@@ -16,7 +16,7 @@ const EMBEDDING_URL = `${ORIGIN}/api/v1/settings/embedding`;
 
 const LLM_VIEW: ConnectionView = {
   url: "http://llm-gateway:8000/v1",
-  model: "auto",
+  model: "fgts-va",
   has_key: false,
   source: null,
   last4: null,

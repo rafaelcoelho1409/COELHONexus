@@ -8,7 +8,7 @@ class EndpointBody(BaseModel):
     """LLM endpoint config. `api_key=None` leaves the stored key unchanged;
     `api_key=""` clears it."""
     url: str = Field(min_length=1)
-    model: str = "auto"
+    model: str = "fgts-va"
     api_key: str | None = None
 
 

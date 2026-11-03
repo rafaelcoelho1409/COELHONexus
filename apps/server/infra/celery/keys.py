@@ -22,6 +22,7 @@ Q_BD = domain.scoped_queue("bd", params.ENVIRONMENT)
 # qdrant_task / neo4j_task names dodge qdrant_client / neo4j package collisions
 TASK_INCLUDE = [
     "domains.bd.ingestion.task",
+    "domains.bd.ingestion.ai.task",
     "domains.dd.ingestion.task",
     "domains.dd.planner.task",
     "domains.dd.synth.task",
@@ -36,6 +37,7 @@ TASK_INCLUDE = [
 # per-module queue isolation: planner CPU / synth LLM / YCS embed each separated
 TASK_ROUTES = {
     "domains.bd.ingestion.task.*": {"queue": Q_BD},
+    "domains.bd.ingestion.ai.task.*": {"queue": Q_BD},
     "domains.dd.ingestion.task.*": {"queue": Q_CRAWLER},
     "domains.dd.planner.task.*":   {"queue": Q_PLANNER},
     "domains.dd.synth.task.*":     {"queue": Q_SYNTH},

@@ -179,7 +179,7 @@ describe("ConnectionForm", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
 
     expect(bodies).toHaveLength(1);
-    expect(bodies[0]).toEqual({ url: "http://gateway.internal:8000/v1", model: "auto" });
+    expect(bodies[0]).toEqual({ url: "http://gateway.internal:8000/v1", model: "fgts-va" });
   });
 
   it("surfaces a 408-free detail string verbatim", async () => {

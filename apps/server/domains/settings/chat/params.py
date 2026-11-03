@@ -56,4 +56,4 @@ SETTLE_HEALTH_TIMEOUT_S: float = 8.0
 # Env fallback, read at import.
 URL_ENVS: tuple[str, ...] = ("LLM_ENDPOINT_URL",)
 MODEL_ENVS: tuple[str, ...] = ("LLM_MODEL",)
-DEFAULT_MODEL: str = "auto"
+DEFAULT_MODEL: str = "fgts-va"

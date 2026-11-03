@@ -99,9 +99,9 @@ function BookDetail({ bookId, snapshot }: { bookId: string; snapshot: Snapshot }
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [rows.length]);
 
-  const start = (again: boolean) =>
+  const start = () =>
     runBook.mutate(
-      { bookId, refresh: again },
+      { bookId },
       {
         onSuccess: (result) => {
           run.restart();
@@ -172,17 +172,8 @@ function BookDetail({ bookId, snapshot }: { bookId: string; snapshot: Snapshot }
               {cancelling ? "Cancelling…" : "Cancel"}
             </button>
           ) : status === "cancelled" || status === "failed" ? (
-            <button
-              type="button"
-              onClick={() => start(false)}
-              disabled={runBook.isPending}
-              className={BUTTON}
-            >
+            <button type="button" onClick={start} disabled={runBook.isPending} className={BUTTON}>
               {runBook.isPending ? "Starting…" : "Resume"}
-            </button>
-          ) : status === "done" ? (
-            <button type="button" onClick={() => start(true)} disabled={runBook.isPending} className={BUTTON}>
-              {runBook.isPending ? "Starting…" : "Extract again"}
             </button>
           ) : null}
         </div>

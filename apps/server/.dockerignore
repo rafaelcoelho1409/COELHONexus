@@ -50,3 +50,4 @@
 # (agent skills, memory), whitelist them back below: in a Docker .dockerignore
 # a later `!negation` overrides an earlier ignore.
 **/*.md
+!ai/bd/prompts/ingestion/**/SYSTEM.md

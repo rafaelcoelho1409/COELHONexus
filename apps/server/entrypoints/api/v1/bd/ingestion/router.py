@@ -2,6 +2,7 @@
 `bd` Celery queue; this router is HTTP only (see `domains.bd.ingestion.runtime.dispatch`)."""
 import domains, infra
 import domains.bd.ingestion.task
+import domains.bd.ingestion.ai.task
 from . import params, schemas
 
 import asyncio
@@ -55,6 +56,102 @@ async def get_book(book_id: str) -> dict:
     if snapshot is None:
         raise HTTPException(status_code = 404, detail = f"book {book_id!r} not found")
     return snapshot
+
+
+@router.post("/{book_id}/agentic/runs", response_model = schemas.AgenticRunStart, status_code = 202)
+async def start_agentic_run(book_id: str) -> dict:
+    """Queue one manual candidate run against the book's current completed extraction."""
+    try:
+        manifest = await domains.bd.ingestion.ai.service.create_ingestion_ai_run(book_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code = 404, detail = str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code = 409, detail = str(error)) from error
+
+    try:
+        task = domains.bd.ingestion.ai.task.run_ingestion_ai.apply_async(args = (
+            book_id,
+            manifest["extraction_run_id"],
+            manifest["agentic_run_id"],
+        ))
+    except Exception as error:
+        await domains.bd.ingestion.ai.service.mark_ingestion_ai_run_failed(
+            book_id, manifest["agentic_run_id"], error,
+        )
+        logger.exception(f"[bd-agentic] unable to queue run for {book_id}")
+        raise HTTPException(status_code = 503, detail = "Unable to queue the agentic ingestion run") from error
+    infra.opentelemetry.service.tag_celery_task(task.id)
+    return {
+        "status": "queued",
+        "book_id": book_id,
+        "extraction_run_id": manifest["extraction_run_id"],
+        "agentic_run_id": manifest["agentic_run_id"],
+    }
+
+
+@router.post(
+    "/{book_id}/agentic/runs/{agentic_run_id}/resume",
+    response_model = schemas.AgenticRunStart,
+    status_code = 202,
+)
+async def resume_agentic_run(book_id: str, agentic_run_id: str) -> dict:
+    """Requeue a failed candidate, preserving its source and LangGraph thread identity."""
+    try:
+        manifest = await domains.bd.ingestion.ai.service.queue_ingestion_ai_resume(
+            book_id, agentic_run_id,
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code = 404, detail = str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code = 409, detail = str(error)) from error
+
+    try:
+        task = domains.bd.ingestion.ai.task.run_ingestion_ai.apply_async(args = (
+            book_id,
+            manifest["extraction_run_id"],
+            manifest["agentic_run_id"],
+        ))
+    except Exception as error:
+        await domains.bd.ingestion.ai.service.mark_ingestion_ai_run_failed(
+            book_id, agentic_run_id, error,
+        )
+        logger.exception(f"[bd-agentic] unable to resume run {agentic_run_id}")
+        raise HTTPException(status_code = 503, detail = "Unable to resume the agentic ingestion run") from error
+    infra.opentelemetry.service.tag_celery_task(task.id)
+    return {
+        "status": "queued",
+        "book_id": book_id,
+        "extraction_run_id": manifest["extraction_run_id"],
+        "agentic_run_id": agentic_run_id,
+    }
+
+
+@router.get(
+    "/{book_id}/agentic/runs/{agentic_run_id}",
+    response_model = schemas.AgenticRunStatus,
+)
+async def get_agentic_run(book_id: str, agentic_run_id: str) -> dict:
+    """Read queued/running/completed candidate status from its durable MinIO manifest."""
+    try:
+        manifest = await domains.bd.ingestion.ai.service.read_ingestion_ai_run(
+            book_id, agentic_run_id,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code = 404, detail = str(error)) from error
+    if manifest is None:
+        raise HTTPException(status_code = 404, detail = "Agentic ingestion run not found")
+    return {
+        "book_id": manifest["book_id"],
+        "extraction_run_id": manifest["extraction_run_id"],
+        "agentic_run_id": manifest["agentic_run_id"],
+        "status": manifest["status"],
+        "expected_page_count": manifest["expected_page_count"],
+        "published_page_count": len(manifest["pages"]),
+        "created_at": manifest["created_at"],
+        "updated_at": manifest["updated_at"],
+        "finished_at": manifest["finished_at"],
+        "error": manifest["error"],
+    }
 
 
 @router.get("/{book_id}/pages/{page_no}", response_model = schemas.PageBody)
