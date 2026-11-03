@@ -15,6 +15,12 @@ const statsSchema = z.looseObject({
 });
 export type PageStats = z.infer<typeof statsSchema>;
 
+export const pageBodySchema = z.object({
+  book_id: z.string(),
+  page: z.number(),
+  markdown: z.string(),
+});
+
 const ZERO_STATS: PageStats = { chars: 0, headings: 0, tables: 0, pictures: 0, formulas: 0 };
 
 const outlineEntrySchema = z.looseObject({

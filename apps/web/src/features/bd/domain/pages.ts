@@ -56,6 +56,19 @@ export function pageChips(row: Pick<PageRow, "headings" | "tables" | "pictures" 
   return chips;
 }
 
+/** Search extracted units by number, section trail, or the structure they contain. */
+export function filterPageRows(rows: readonly PageRow[], query: string): PageRow[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [...rows];
+
+  return rows.filter((row) =>
+    [String(row.page), breadcrumb(row.sectionPath), ...pageChips(row)]
+      .join(" ")
+      .toLowerCase()
+      .includes(needle),
+  );
+}
+
 /** The converter leaves HTML comments in the markdown where a picture was (`<!-- image -->`). Raw HTML is not rendered, so
  * they would show as text: take them out. */
 export function readableMarkdown(text: string): string {

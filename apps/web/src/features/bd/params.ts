@@ -17,6 +17,11 @@ export const LIBRARY_REFRESH_MS = 4_000;
 /** The open book's snapshot is re-read this often while a run is live — a fallback for a stream that cannot connect. */
 export const SNAPSHOT_REFRESH_MS = 6_000;
 
+/** Search fetches content in small batches so a large book does not flood the API. */
+export const BOOK_SEARCH_BATCH_SIZE = 8;
+export const BOOK_SEARCH_MAX_HITS = 30;
+export const BOOK_SEARCH_STALE_MS = 60_000;
+
 /** A cancel lands between 5-page slices; measured on a real 314-page book, that took 15–95 s (a slice of
  * table-of-contents pages took 96 s). The UI stops saying "Cancelling…" after this long even if the terminal event
  * has not arrived; the stream stays connected, so the event is still applied when it comes. */

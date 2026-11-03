@@ -78,6 +78,7 @@ def new_manifest(*, book_id: str, filename: str, size_bytes: int, now: float) ->
         "outline":    [],
         "chapters":   [],
         "pages":      [],
+        "extraction_id": None,
         "created_at": now,
         "updated_at": now,
     }
@@ -97,6 +98,21 @@ def with_info(manifest: dict, *, title: str, n_pages: int, outline: list[dict], 
 
 def with_status(manifest: dict, status: str, now: float, error: str | None = None) -> dict:
     return {**manifest, "status": status, "error": error, "updated_at": now}
+
+
+def with_extraction(manifest: dict, extraction_id: str, now: float, *, reset: bool = False) -> dict:
+    """Select the current immutable extraction generation, optionally starting it empty."""
+    updated = {**manifest, "extraction_id": extraction_id, "updated_at": now}
+    if reset:
+        updated.update(pages = [], status = params.STATUS_QUEUED, error = None)
+    return updated
+
+
+def legacy_extraction_id(manifest: dict) -> str:
+    """Stable ID for the one pre-run-layout extraction of a legacy book."""
+    payload = json.dumps(manifest, sort_keys = True, separators = params.MANIFEST_JSON_SEPARATORS, default = str)
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return f"legacy-{digest}"
 
 
 def page_entry(*, page_no: int, key: str, chars: int, headings: int, tables: int, pictures: int, formulas: int,

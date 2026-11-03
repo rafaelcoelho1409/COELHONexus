@@ -73,7 +73,7 @@ async def get_figure(book_id: str, name: str) -> Response:
     return Response(
         content = png,
         media_type = domains.bd.ingestion.extract.params.FIGURE_CONTENT_TYPE,
-        headers = {"Cache-Control": "public, max-age=31536000, immutable"},  # a book id is its content: a figure never changes
+        headers = {"Cache-Control": "no-cache"},
     )
 
 

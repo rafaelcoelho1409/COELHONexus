@@ -37,6 +37,8 @@ async def accept_upload(filename: str, data: bytes, refresh: bool = False) -> di
         await ingestion.storage.service.write_manifest(storage, ingestion.storage.domain.new_manifest(
             book_id = book_id, filename = filename, size_bytes = len(data), now = time.time(),
         ))
+    else:
+        existing = await ingestion.storage.service.ensure_current_layout(storage, book_id) or existing
     gate = await reserve_run(book_id, refresh)
     if gate["status"] != "reserved":
         return gate
@@ -47,7 +49,8 @@ async def accept_restart(book_id: str, refresh: bool = False) -> dict | None:
     """Start a run for a stored PDF or EPUB (no upload): continue a stopped extraction, or with `refresh` start
     over. None when the book does not exist; otherwise the same answer as `accept_upload`."""
     ingestion = domains.bd.ingestion
-    manifest = await ingestion.storage.service.read_manifest(infra.minio.service.get_storage(), book_id)
+    storage = infra.minio.service.get_storage()
+    manifest = await ingestion.storage.service.ensure_current_layout(storage, book_id)
     if manifest is None:
         return None
     gate = await reserve_run(book_id, refresh)
@@ -60,9 +63,11 @@ async def reserve_run(book_id: str, refresh: bool = False) -> dict:
     """The start gate. `cached` when the book is fully extracted (and `refresh` is off), `locked` when a run holds it, else
     `reserved` with a new run id: the lock is taken, the last run's cancel flag and events are cleared."""
     storage = infra.minio.service.get_storage()
-    manifest = await domains.bd.ingestion.storage.service.read_manifest(storage, book_id)
+    manifest = await domains.bd.ingestion.storage.service.ensure_current_layout(storage, book_id)
     if not refresh and not domain.needs_run(manifest):
         return domain.cached(book_id)
+    if manifest is None:
+        raise RuntimeError(f"book {book_id} has no manifest")
     run_id = uuid.uuid4().hex
     async with infra.redis.service.client() as r:
         taken, holder = await domains.bd.ingestion.runtime.progress.service.acquire_lock(r, book_id, run_id)
@@ -73,6 +78,27 @@ async def reserve_run(book_id: str, refresh: bool = False) -> dict:
         await domains.bd.ingestion.runtime.progress.service.write_state(
             r, book_id, domains.bd.ingestion.runtime.progress.domain.initial_state(run_id, time.time()),
         )
+    now = time.time()
+    extraction_id = manifest.get("extraction_id") if manifest else None
+    if refresh or not extraction_id:
+        extraction_id = uuid.uuid4().hex
+    manifest = domains.bd.ingestion.storage.domain.with_extraction(
+        manifest, extraction_id, now, reset = bool(refresh),
+    )
+    manifest = domains.bd.ingestion.storage.domain.with_status(
+        manifest, domains.bd.ingestion.storage.params.STATUS_QUEUED, now,
+    )
+    try:
+        await domains.bd.ingestion.storage.service.write_manifest(storage, manifest)
+        await domains.bd.ingestion.storage.service.update_run_metadata(
+            storage, manifest, domains.bd.ingestion.storage.params.STATUS_QUEUED, now, attempt_id = run_id,
+        )
+    except Exception:
+        try:
+            await release_run(book_id, run_id)
+        except Exception:
+            logger.exception(f"[bd-run] unable to release reservation lock for {book_id}")
+        raise
     return domain.reserved(run_id)
 
 
@@ -152,6 +178,9 @@ async def _finish(r, storage, manifest: dict, run_id: str, status: str, error: s
     ingestion = domains.bd.ingestion
     manifest = ingestion.storage.domain.with_status(manifest, status, time.time(), error)
     await ingestion.storage.service.write_manifest(storage, manifest)
+    await ingestion.storage.service.update_run_metadata(
+        storage, manifest, status, manifest["updated_at"], attempt_id = run_id, error = error,
+    )
     await ingestion.runtime.progress.service.write_state(r, manifest["book_id"], {
         **ingestion.runtime.progress.domain.initial_state(run_id, manifest["created_at"]),
         "status": status, "completed": len(manifest["pages"]), "total": manifest["n_pages"], "error": error,
@@ -179,12 +208,14 @@ async def _extract(r, storage, manifest: dict, run_id: str, refresh: bool) -> di
         try:
             if source_format == "epub":
                 info = await asyncio.to_thread(ingestion.outline.service.inspect_epub, source_path)
-                if refresh:
-                    manifest = {**manifest, "pages": []}
                 manifest = ingestion.storage.domain.with_status(
                     manifest, ingestion.storage.params.STATUS_EXTRACTING, time.time(),
                 )
                 await ingestion.storage.service.write_manifest(storage, manifest)
+                await ingestion.storage.service.update_run_metadata(
+                    storage, manifest, ingestion.storage.params.STATUS_EXTRACTING, manifest["updated_at"],
+                    attempt_id = run_id,
+                )
                 await _report(r, manifest, run_id)
                 await ingestion.runtime.progress.service.emit(
                     book_id, "started", title = ingestion.storage.domain.book_title(manifest["filename"], info.title),
@@ -215,12 +246,13 @@ async def _extract(r, storage, manifest: dict, run_id: str, refresh: bool) -> di
             outline = ingestion.outline.domain.to_dicts(outline),
             chapters = ingestion.outline.domain.chapter_ranges(outline, n_pages), now = time.time(),
         )
-        if refresh and source_format == "pdf":
-            manifest = {**manifest, "pages": []}
         manifest = ingestion.storage.domain.with_status(
             manifest, ingestion.storage.params.STATUS_EXTRACTING, time.time(),
         )
         await ingestion.storage.service.write_manifest(storage, manifest)
+        await ingestion.storage.service.update_run_metadata(
+            storage, manifest, ingestion.storage.params.STATUS_EXTRACTING, manifest["updated_at"], attempt_id = run_id,
+        )
         await _report(r, manifest, run_id)
         await ingestion.runtime.progress.service.emit(
             book_id, "started", title = manifest["title"], n_pages = n_pages,
@@ -229,7 +261,9 @@ async def _extract(r, storage, manifest: dict, run_id: str, refresh: bool) -> di
         )
 
         if source_format == "epub" and epub_result.structured is not None:
-            await ingestion.storage.service.write_structured(storage, book_id, 1, n_pages, epub_result.structured)
+            await ingestion.storage.service.write_structured(
+                storage, book_id, 1, n_pages, epub_result.structured, manifest["extraction_id"],
+            )
         slices = ingestion.extract.domain.pending_slices(
             n_pages, ingestion.storage.domain.done_pages(manifest), ingestion.params.SLICE_PAGES,
         )
@@ -268,15 +302,19 @@ async def _store_slice(storage, manifest: dict, outline, first: int, last: int, 
     book_id = manifest["book_id"]
     entries: list[dict] = []
     for page in result.pages:
-        key = await ingestion.storage.service.write_page(storage, book_id, page.page_no, page.markdown)
+        key = await ingestion.storage.service.write_page(
+            storage, book_id, page.page_no, page.markdown, manifest["extraction_id"],
+        )
         entries.append(ingestion.storage.domain.page_entry(
             page_no = page.page_no, key = key, chars = len(page.markdown), headings = len(page.headings),
             tables = page.tables, pictures = page.pictures, formulas = page.formulas, figures = list(page.figures),
             section_path = ingestion.outline.domain.section_path(outline, page.page_no),
         ))
-    await ingestion.storage.service.write_figures(storage, book_id, result.figures)
+    await ingestion.storage.service.write_figures(storage, book_id, result.figures, manifest["extraction_id"])
     if result.structured is not None:
-        await ingestion.storage.service.write_structured(storage, book_id, first, last, result.structured)
+        await ingestion.storage.service.write_structured(
+            storage, book_id, first, last, result.structured, manifest["extraction_id"],
+        )
     manifest = ingestion.storage.domain.with_pages(manifest, entries, time.time())
     await ingestion.storage.service.write_manifest(storage, manifest)
     return manifest, entries

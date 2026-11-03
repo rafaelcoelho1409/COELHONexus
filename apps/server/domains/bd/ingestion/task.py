@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
     time_limit = params.TIME_LIMIT_S,
 )
 def run_extraction(self, book_id: str, run_id: str, refresh: bool = False) -> dict:
-    """Extract the pages of `book_id`; the manifest lands at `books/{book_id}/manifest.json`."""
+    """Extract the pages of `book_id` into its active run's `raw/` prefix."""
     logger.info(f"[task] run_extraction book_id={book_id} run_id={run_id} refresh={refresh}")
     try:
         return asyncio.run(domains.bd.ingestion.runtime.dispatch.service.run(book_id, run_id, refresh))

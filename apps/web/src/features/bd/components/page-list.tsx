@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { breadcrumb, type PageRow, pageChips } from "../domain/pages";
 import type { BookUnits } from "../domain/books";
+import { breadcrumb, filterPageRows, type PageRow, pageChips } from "../domain/pages";
 
 /** The extracted content units, in book order, filling in as the stream delivers them. Following keeps the newest unit in
  * view (the list scrolls itself, never the document). Choosing a page stops the following. */
@@ -28,7 +28,9 @@ export function PageList({
   onPick: (page: number) => void;
 }) {
   const list = useRef<HTMLOListElement | null>(null);
+  const [query, setQuery] = useState("");
   const count = rows.length;
+  const visibleRows = filterPageRows(rows, query);
 
   useEffect(() => {
     const element = list.current;
@@ -50,13 +52,28 @@ export function PageList({
           </label>
         ) : null}
       </div>
+      <input
+        type="search"
+        aria-label={`Search ${units.plural}`}
+        placeholder="Search chapter or number"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        className="mt-2 h-9 w-full min-w-0 rounded-sm border border-border bg-background px-2 text-sm"
+      />
+      {query.trim() ? (
+        <p role="status" className="mt-1 text-xs text-muted-foreground">
+          Showing {visibleRows.length} of {count} {units.plural}
+        </p>
+      ) : null}
       {count === 0 ? (
         <p className="mt-2 text-sm text-muted-foreground">
           {live ? `Waiting for the first ${units.singular}…` : "Nothing has been extracted yet."}
         </p>
+      ) : visibleRows.length === 0 ? (
+        <p className="mt-2 text-sm text-muted-foreground">No {units.plural} match that search.</p>
       ) : (
         <ol ref={list} aria-label={`Extracted ${units.plural}`} className="mt-2 max-h-72 overflow-auto">
-          {rows.map((row) => {
+          {visibleRows.map((row) => {
             const chips = pageChips(row);
             const where = row.sectionPath.at(-1);
             return (

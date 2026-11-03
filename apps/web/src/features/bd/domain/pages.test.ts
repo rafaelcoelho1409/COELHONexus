@@ -2,7 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import { bdEventSchema } from "../entities";
 import { pageEntry, pageEvent } from "../test-fixtures";
-import { breadcrumb, mergePages, type PageRow, pageChips, readableMarkdown, shownPage } from "./pages";
+import {
+  breadcrumb,
+  filterPageRows,
+  mergePages,
+  type PageRow,
+  pageChips,
+  readableMarkdown,
+  shownPage,
+} from "./pages";
 import { EMPTY_RUN, runReducer } from "./run-state";
 
 describe("mergePages", () => {
@@ -35,6 +43,37 @@ describe("page labels", () => {
   it("joins the section path, and is empty before the first heading", () => {
     expect(breadcrumb(["Part I", "Chapter 2", "Limits"])).toBe("Part I › Chapter 2 › Limits");
     expect(breadcrumb([])).toBe("");
+  });
+});
+
+describe("filterPageRows", () => {
+  const rows: PageRow[] = [
+    {
+      page: 1,
+      headings: 1,
+      tables: 0,
+      pictures: 0,
+      formulas: 0,
+      figures: [],
+      sectionPath: ["Part I", "Reliability"],
+    },
+    {
+      page: 2,
+      headings: 0,
+      tables: 2,
+      pictures: 0,
+      formulas: 0,
+      figures: [],
+      sectionPath: ["Part I", "Scalability"],
+    },
+  ];
+
+  it("matches unit numbers, section paths, and content structure", () => {
+    expect(filterPageRows(rows, " 2 ").map((row) => row.page)).toEqual([2]);
+    expect(filterPageRows(rows, "reliability").map((row) => row.page)).toEqual([1]);
+    expect(filterPageRows(rows, "tables").map((row) => row.page)).toEqual([2]);
+    expect(filterPageRows(rows, "unknown")).toEqual([]);
+    expect(filterPageRows(rows, "")).toEqual(rows);
   });
 });
 

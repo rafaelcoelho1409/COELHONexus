@@ -205,6 +205,7 @@ test.describe("Book Distiller · Ingestion", () => {
     await expect(
       page.getByRole("navigation", { name: "Book Distiller stages" }).getByText("Ingestion"),
     ).toBeVisible();
+    await page.getByRole("button", { name: "Library · 0" }).click();
     await expect(page.getByText("No books yet. Upload a PDF or EPUB to start.")).toBeVisible();
   });
 
@@ -216,7 +217,7 @@ test.describe("Book Distiller · Ingestion", () => {
     await mockBd(page, state);
     await page.goto("/bd");
 
-    await page.getByLabel(/Drop a PDF or EPUB here or choose one/).setInputFiles(pdf);
+    await page.getByLabel("Upload book").setInputFiles(pdf);
     await expect(page).toHaveURL(new RegExp(`/bd/ingestion\\?book=${BOOK}`));
     await expect(page.getByRole("heading", { level: 2, name: TITLE })).toBeVisible();
 
@@ -317,6 +318,7 @@ test.describe("Book Distiller · Ingestion", () => {
     });
     await page.goto("/bd");
 
+    await page.getByRole("button", { name: "Library · 1" }).click();
     await page.getByRole("button", { name: `Delete ${TITLE}` }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
     expect(state.calls).toEqual([]);
@@ -331,7 +333,10 @@ test.describe("Book Distiller · Ingestion", () => {
       name: "empty",
       url: "/bd",
       state: () => stateOf({ inLibrary: false }),
-      ready: (page) => expect(page.getByText("No books yet. Upload a PDF or EPUB to start.")).toBeVisible(),
+      ready: async (page) => {
+        await page.getByRole("button", { name: "Library · 0" }).click();
+        await expect(page.getByText("No books yet. Upload a PDF or EPUB to start.")).toBeVisible();
+      },
     },
     {
       name: "live",

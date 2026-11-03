@@ -76,6 +76,7 @@ check("a title is the PDF's own, else the file name without extension and unders
       ["The Book", "Deep Learning 2nd", "Untitled book"])
 M0 = storage.new_manifest(book_id = "b1", filename = "My_Book.pdf", size_bytes = 10, now = 1.0)
 check("a new book is queued with nothing known of its pages", (M0["status"], M0["n_pages"], M0["pages"], M0["title"]), ("queued", 0, [], "My Book"))
+check("a new book has no extraction generation until its first run is reserved", M0["extraction_id"], None)
 M1 = storage.with_info(M0, title = "", n_pages = 4, outline = [{"level": 1, "title": "A", "page": 1}], chapters = [], now = 2.0)
 check("opening the file fills in the page count and keeps the file-name title", (M1["n_pages"], M1["title"], M1["updated_at"]), (4, "My Book", 2.0))
 
@@ -90,6 +91,8 @@ check("pages are kept in book order", [p["page"] for p in M2["pages"]], [1, 3])
 M3 = storage.with_pages(M2, [page(3, section_path = ["A"]), page(2)], now = 4.0)
 check("a page extracted again replaces its entry", ([p["page"] for p in M3["pages"]], storage.entry_for_page(M3, 3)["section_path"]), ([1, 2, 3], ["A"]))
 check("the pages done are a set", storage.done_pages(M3), {1, 2, 3})
+check("a refresh starts a new empty extraction generation", (storage.with_extraction(M3, "next-run", 10, reset = True)["extraction_id"],
+      storage.with_extraction(M3, "next-run", 10, reset = True)["pages"]), ("next-run", []))
 check("the library row has counts, not pages", (storage.library_row(M3)["pages_done"], "pages" in storage.library_row(M3), storage.library_row(M3)["status"]), (3, False, "queued"))
 check("the library lists the most recently touched first",
       [r["book_id"] for r in storage.newest_first([{"book_id": "old", "updated_at": 1}, {"book_id": "new", "updated_at": 5}])], ["new", "old"])
@@ -97,10 +100,23 @@ check("a status change carries its error", storage.with_status(M3, "failed", 9.0
 check("a manifest is read back from JSON, or the default when it cannot be", (storage.parse_json('{"a": 1}', None), storage.parse_json("{broken", None), storage.parse_json(None, [])), ({"a": 1}, None, []))
 
 # ---- keys -------------------------------------------------------------------------------------------------------------------
-check("everything of a book sits under one prefix",
-      all(k.startswith("books/b1/") for k in (keys.source_key("b1"), keys.manifest_key("b1"), keys.page_key("b1", 7), keys.structured_key("b1", 1, 5), keys.figure_key("b1", "p0001-1.png"))), True)
-check("page keys sort in book order", sorted([keys.page_key("b", 10), keys.page_key("b", 9), keys.page_key("b", 100)]), [keys.page_key("b", 9), keys.page_key("b", 10), keys.page_key("b", 100)])
-check("a figure name cannot climb out of the book's prefix", keys.figure_key("b1", "../../x.png"), "books/b1/figures/x.png")
+check("book metadata and source use the canonical book-first prefix",
+      all(k.startswith("bd/books/b1/") for k in (keys.source_key("b1"), keys.manifest_key("b1"))), True)
+check("all Docling output is isolated under the extraction's raw prefix",
+      all(k.startswith("bd/books/b1/ingestion/raw/run-1/") for k in (
+          keys.page_key("b1", 7, "run-1"), keys.structured_key("b1", 1, 5, "run-1"),
+          keys.figure_key("b1", "p0001-1.png", "run-1"),
+      )), True)
+check("run metadata stays separate from raw extraction artifacts",
+      keys.run_metadata_key("b1", "run-1"), "bd/books/b1/ingestion/runs/run-1/run.json")
+check("the previous namespaced layout remains addressable during migration",
+      (keys.previous_source_key("b1"), keys.previous_page_key("b1", 7, "run-1")),
+      ("bd/ingestion/books/b1/source.pdf", "bd/ingestion/books/b1/runs/run-1/raw/pages/0007.md"))
+check("legacy keys remain available for migration", keys.page_key("b1", 7), "books/b1/pages/0007.md")
+check("page keys sort in book order", sorted([keys.page_key("b", 10, "r"), keys.page_key("b", 9, "r"), keys.page_key("b", 100, "r")]),
+      [keys.page_key("b", 9, "r"), keys.page_key("b", 10, "r"), keys.page_key("b", 100, "r")])
+check("a figure name cannot climb out of the run's raw prefix",
+      keys.figure_key("b1", "../../x.png", "run-1"), "bd/books/b1/ingestion/raw/run-1/figures/x.png")
 lock_keys = ingestion.runtime.progress.keys
 check("the lock scan prefix is an exact prefix of the lock key", lock_keys.lock_key("b1").startswith(lock_keys.lock_prefix()), True)
 check("the wipe pattern covers progress, snapshot and cancel but not the lock",
@@ -138,8 +154,8 @@ check("format detection distinguishes supported PDF and EPUB inputs",
 check("the source extension is normalized and unknown suffixes stay unsupported",
       [storage.format_from_filename("book.PDF"), storage.format_from_filename("book.epub"), storage.format_from_filename("book.zip")],
       ["pdf", "epub", None])
-check("PDF and EPUB sources have distinct keys", (keys.source_key("b1"), keys.source_key("b1", "epub")),
-      ("books/b1/source.pdf", "books/b1/source.epub"))
+check("PDF and EPUB sources have distinct canonical keys", (keys.source_key("b1"), keys.source_key("b1", "epub")),
+      ("bd/books/b1/source.pdf", "bd/books/b1/source.epub"))
 
 epub_units = extract.epub_sections("Front matter\n\n# Part I\n\nOpening.\n\n## Chapter 1\n\nText.\n\n# Part II\n\nMore text.")
 check("EPUB Markdown is split at its highest-level headings while preserving order and its preface",

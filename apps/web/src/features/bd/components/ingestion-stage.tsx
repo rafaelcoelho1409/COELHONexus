@@ -1,13 +1,13 @@
 "use client";
 
-/** The Ingestion tab: the upload and the library on the left, the open book on the right. The open book is the
+/** The Ingestion tab: upload and book selection stay in a compact toolbar above the open book. The open book is the
  * `?book=` parameter — written only by the handlers below (never by an effect), so there is nothing to chase. */
 
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { BOOK_PARAM, bookHref } from "../params";
 import { BookView } from "./book-view";
-import { LibraryList } from "./library-list";
+import { LibraryPicker } from "./library-list";
 import { UploadDropzone } from "./upload-dropzone";
 
 export function IngestionStage() {
@@ -16,10 +16,10 @@ export function IngestionStage() {
   const open = (id: string | null) => router.push(bookHref(id), { scroll: false });
 
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[19rem_minmax(0,1fr)]">
-      <div className="flex min-w-0 flex-col gap-5">
+    <div className="min-w-0">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-card p-2">
         <UploadDropzone onOpen={open} />
-        <LibraryList selected={bookId} onOpen={open} />
+        <LibraryPicker selected={bookId} onOpen={open} />
       </div>
       <div className="min-w-0">
         {bookId ? (
@@ -31,8 +31,8 @@ export function IngestionStage() {
           >
             <p className="font-medium text-foreground">No book open.</p>
             <p className="mt-1">
-              Upload a PDF, or open one from the library. The extraction is shown page by page while it is
-              read.
+              Upload a PDF or EPUB, or open one from the library. Extracted pages and sections appear here as
+              the book is read.
             </p>
           </section>
         )}

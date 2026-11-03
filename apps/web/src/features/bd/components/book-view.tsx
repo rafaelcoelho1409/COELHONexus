@@ -4,15 +4,20 @@
  * (`GET /bd/ingestion/{id}`) restores the picture after a reload; the event stream, which replays its history, fills
  * in the rest and keeps it live. */
 
-import { useState } from "react";
+import { Maximize2, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { Snapshot } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
+import { Button } from "@/shared/ui/button";
 import { bookUnits, fmtBytes, isLive } from "../domain/books";
 import { chapterTree } from "../domain/outline";
 import { mergePages, shownPage } from "../domain/pages";
 import { useCancelBook, useRunBook, useSnapshot } from "../hooks/use-bd-data";
 import { useBookRun } from "../hooks/use-book-run";
 import { useBdOverlays } from "../hooks/use-overlays";
+import { BookReadingMode } from "./book-reading-mode";
+import { BookReadingProgress } from "./book-reading-progress";
+import { BookSearch } from "./book-search";
 import { ChapterTree } from "./chapter-tree";
 import { PageList } from "./page-list";
 import { PageReader } from "./page-reader";
@@ -75,6 +80,24 @@ function BookDetail({ bookId, snapshot }: { bookId: string; snapshot: Snapshot }
   });
   const page = shownPage(view, state.newest, rows);
   const row = rows.find((candidate) => candidate.page === page);
+  const [navigationOpen, setNavigationOpen] = useState(true);
+  const [reading, setReading] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const currentIndex = rows.findIndex((candidate) => candidate.page === page);
+  const previousPage = currentIndex > 0 ? (rows[currentIndex - 1]?.page ?? null) : null;
+  const nextPage = currentIndex >= 0 ? (rows[currentIndex + 1]?.page ?? null) : null;
+
+  useEffect(() => {
+    if (rows.length === 0) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [rows.length]);
 
   const start = (again: boolean) =>
     runBook.mutate(
@@ -99,9 +122,38 @@ function BookDetail({ bookId, snapshot }: { bookId: string; snapshot: Snapshot }
     });
 
   const cancelling = state.canceling || cancelBook.isPending;
+  const choosePage = (target: number) => setView({ follow: false, picked: target });
+  const openReadingMode = () => {
+    if (page === null) return;
+    choosePage(page);
+    setReading(true);
+  };
+  const navigation = (
+    <>
+      <ChapterTree
+        tree={tree}
+        activePage={page}
+        unitLabel={units.singular}
+        isExtracted={(candidate) => extracted.has(candidate)}
+        onOpenPage={choosePage}
+      />
+      <PageList
+        rows={rows}
+        total={total}
+        units={units}
+        shown={page}
+        following={view.follow}
+        live={live}
+        onFollow={(follow) => setView({ follow, picked: null })}
+        onPick={choosePage}
+      />
+    </>
+  );
+  const position = `${page ?? 0} / ${nPages > 0 ? nPages : total || rows.length}`;
 
   return (
     <section aria-label={title} className="min-w-0">
+      <BookReadingProgress />
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="break-words text-xl font-semibold tracking-tight">{title}</h2>
@@ -166,35 +218,85 @@ function BookDetail({ bookId, snapshot }: { bookId: string; snapshot: Snapshot }
         streamStatus={run.streamStatus}
       />
 
-      <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-[15rem_minmax(0,1fr)]">
-        <div className="flex min-w-0 flex-col gap-4">
-          <ChapterTree
-            tree={tree}
-            activePage={page}
-            unitLabel={units.singular}
-            isExtracted={(candidate) => extracted.has(candidate)}
-            onOpenPage={(target) => setView({ follow: false, picked: target })}
-          />
-          <PageList
-            rows={rows}
-            total={total}
+      <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+        <Button variant="outline" size="lg" onClick={() => setSearchOpen(true)} disabled={rows.length === 0}>
+          <Search aria-hidden />
+          Search book
+          <kbd className="ml-1 font-mono text-xs text-muted-foreground">Ctrl K</kbd>
+        </Button>
+        <Button
+          variant="outline"
+          size="icon-lg"
+          aria-expanded={navigationOpen}
+          aria-label={navigationOpen ? "Hide contents" : "Show contents"}
+          title={navigationOpen ? "Hide contents" : "Show contents"}
+          onClick={() => setNavigationOpen(!navigationOpen)}
+        >
+          {navigationOpen ? <PanelLeftClose aria-hidden /> : <PanelLeftOpen aria-hidden />}
+        </Button>
+        <Button variant="outline" size="lg" onClick={openReadingMode} disabled={page === null}>
+          <Maximize2 aria-hidden />
+          Reading mode
+        </Button>
+      </div>
+
+      {!reading ? (
+        <div
+          className={`mt-4 grid grid-cols-1 gap-4 ${
+            navigationOpen ? "lg:grid-cols-[15rem_minmax(0,1fr)]" : "lg:grid-cols-[minmax(0,1fr)]"
+          }`}
+        >
+          {navigationOpen ? (
+            <aside className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:self-start lg:overflow-y-auto">
+              {navigation}
+            </aside>
+          ) : null}
+          <PageReader
+            bookId={bookId}
+            page={page}
+            row={row}
+            livePage={page === null ? undefined : state.pages[page]}
+            nPages={nPages}
             units={units}
-            shown={page}
-            following={view.follow}
-            live={live}
-            onFollow={(follow) => setView({ follow, picked: null })}
-            onPick={(target) => setView({ follow: false, picked: target })}
           />
         </div>
-        <PageReader
-          bookId={bookId}
+      ) : page !== null ? (
+        <BookReadingMode
+          title={title}
+          unitLabel={units.singular[0]?.toUpperCase() + units.singular.slice(1)}
+          position={position}
           page={page}
-          row={row}
-          livePage={page === null ? undefined : state.pages[page]}
-          nPages={nPages}
-          units={units}
+          previousPage={previousPage}
+          nextPage={nextPage}
+          navigation={navigation}
+          onPage={choosePage}
+          onSearch={() => setSearchOpen(true)}
+          onExit={() => setReading(false)}
+        >
+          <PageReader
+            bookId={bookId}
+            page={page}
+            row={row}
+            livePage={state.pages[page]}
+            nPages={nPages}
+            units={units}
+            readingMode
+          />
+        </BookReadingMode>
+      ) : null}
+
+      {searchOpen ? (
+        <BookSearch
+          bookId={bookId}
+          unitLabel={units.singular[0]?.toUpperCase() + units.singular.slice(1)}
+          rows={rows}
+          onChoose={(hit) => {
+            choosePage(hit.page);
+            setSearchOpen(false);
+          }}
+          onClose={() => setSearchOpen(false)}
         />
-      </div>
+      ) : null}
     </section>
   );
 }

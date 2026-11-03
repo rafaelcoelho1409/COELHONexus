@@ -266,6 +266,27 @@ class MinIOStorage:
                 head = await s3.head_object(Bucket = self.bucket, Key = dst_key)
                 return int(head.get("ContentLength") or 0)
 
+    async def copy_objects(
+        self, objects: list[tuple[str, str]], max_concurrent: int = params.COPY_MAX_CONCURRENT,
+    ) -> int:
+        """Copy an explicit set of keys in this bucket using one pooled client."""
+        if not objects:
+            return 0
+        with span("copy_objects_batch", bucket = self.bucket) as sp:
+            if sp is not None:
+                sp.set_attribute("aws.s3.copy_count", len(objects))
+            sem = asyncio.BoundedSemaphore(max_concurrent)
+            async with self._client() as s3:
+                async def _one(src_key: str, dst_key: str) -> None:
+                    async with sem:
+                        await s3.copy_object(
+                            Bucket = self.bucket,
+                            Key = dst_key,
+                            CopySource = {"Bucket": self.bucket, "Key": src_key},
+                        )
+                await asyncio.gather(*(_one(src_key, dst_key) for src_key, dst_key in objects))
+        return len(objects)
+
     async def copy_prefix(
         self, src_prefix: str, dst_prefix: str,
         max_concurrent: int = params.COPY_MAX_CONCURRENT,

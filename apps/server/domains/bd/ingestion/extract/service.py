@@ -21,15 +21,15 @@ logger = logging.getLogger(__name__)
 @functools.cache
 def converter():
     """The Docling converter, built once per process for PDFs and EPUBs."""
-    options = PdfPipelineOptions(artifacts_path = params.ARTIFACTS_PATH)
-    options.do_ocr = config.DOCLING.ocr
-    options.do_table_structure = config.DOCLING.table_structure
-    options.generate_picture_images = config.DOCLING.figures
-    options.images_scale = config.DOCLING.images_scale
-    options.heading_hierarchy_options = HeadingHierarchyOptions(enabled = config.DOCLING.heading_hierarchy)
+    pdf_options = PdfPipelineOptions(artifacts_path = params.ARTIFACTS_PATH)
+    pdf_options.do_ocr = config.DOCLING.ocr
+    pdf_options.do_table_structure = config.DOCLING.table_structure
+    pdf_options.generate_picture_images = config.DOCLING.figures
+    pdf_options.images_scale = config.DOCLING.images_scale
+    pdf_options.heading_hierarchy_options = HeadingHierarchyOptions(enabled = config.DOCLING.heading_hierarchy)
     epub_options = EpubBackendOptions(fetch_images = True, enable_local_fetch = True, enable_remote_fetch = False)
     return DocumentConverter(format_options = {
-        InputFormat.PDF:  PdfFormatOption(pipeline_options = options),
+        InputFormat.PDF:  PdfFormatOption(pipeline_options = pdf_options),
         InputFormat.EPUB: EpubFormatOption(backend_options = epub_options),
     })
 

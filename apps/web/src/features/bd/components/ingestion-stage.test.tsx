@@ -99,32 +99,52 @@ describe("Library", () => {
     ]);
     renderStage();
 
+    await userEvent.click(await screen.findByRole("button", { name: "Library · 3" }));
     const list = await screen.findByRole("list", { name: "Books" });
     const items = within(list).getAllByRole("listitem");
-    expect(items.map((item) => within(item).getByRole("link").textContent)).toEqual([
-      expect.stringContaining("A Newer Book"),
-      expect.stringContaining("A Broken Book"),
-      expect.stringContaining("An Older Book"),
-    ]);
+    expect(items[0]).toHaveTextContent("A Newer Book");
+    expect(items[1]).toHaveTextContent("A Broken Book");
+    expect(items[2]).toHaveTextContent("An Older Book");
     expect(items[0]).toHaveTextContent("extracting");
     expect(items[0]).toHaveTextContent("3/9 pages");
     expect(items[1]).toHaveTextContent("failed");
-    expect(within(list).getByRole("link", { name: /A Newer Book/ })).toHaveAttribute(
-      "href",
-      "/bd/ingestion?book=new",
-    );
-    expect(screen.getByRole("heading", { name: "Library · 3" })).toBeInTheDocument();
+    await userEvent.click(within(list).getByRole("button", { name: /^A Newer Book/ }));
+    expect(push).toHaveBeenCalledWith("/bd/ingestion?book=new", { scroll: false });
+  });
+
+  it("filters the searchable book picker and closes it with Escape", async () => {
+    serveLibrary([
+      bookRow({ title: "The Quiet Archive", filename: "quiet-archive.epub" }),
+      bookRow({ book_id: "second", title: "Field Notes", filename: "field-notes.pdf" }),
+    ]);
+    renderStage();
+
+    const trigger = await screen.findByRole("button", { name: "Library · 2" });
+    await userEvent.click(trigger);
+    const search = screen.getByRole("searchbox", { name: "Search books" });
+    await userEvent.type(search, "field-notes.pdf");
+
+    const list = screen.getByRole("list", { name: "Books" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(list).getByRole("button", { name: /^Field Notes/ })).toBeInTheDocument();
+    expect(within(list).queryByRole("button", { name: /The Quiet Archive/ })).not.toBeInTheDocument();
+
+    await userEvent.keyboard("{Escape}");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveFocus();
   });
 
   it("says so when the library is empty, loading or unavailable", async () => {
     serveLibrary([]);
     const { unmount } = renderStage();
+    await userEvent.click(await screen.findByRole("button", { name: "Library · 0" }));
     expect(await screen.findByText(/No books yet/)).toBeInTheDocument();
     expect(screen.getByText("No book open.")).toBeInTheDocument();
     unmount();
 
     server.use(http.get(API, () => new HttpResponse(null, { status: 503 })));
     renderStage();
+    await userEvent.click(await screen.findByRole("button", { name: "Library" }));
     expect(await screen.findByText("The library could not be loaded.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
@@ -140,12 +160,14 @@ describe("Library", () => {
     );
     renderStage();
 
+    await userEvent.click(await screen.findByRole("button", { name: "Library · 1" }));
     await userEvent.click(await screen.findByRole("button", { name: `Delete ${BOOK_TITLE}` }));
     const dialog = await screen.findByRole("dialog");
     expect(deleted).toEqual([]);
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(deleted).toEqual([]);
 
+    await userEvent.click(screen.getByRole("button", { name: "Library · 1" }));
     await userEvent.click(screen.getByRole("button", { name: `Delete ${BOOK_TITLE}` }));
     await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(deleted).toEqual([BOOK_ID]));
@@ -164,6 +186,7 @@ describe("Library", () => {
     );
     renderStage();
 
+    await userEvent.click(await screen.findByRole("button", { name: "Library · 2" }));
     expect(await screen.findByRole("button", { name: "Delete Live One" })).toBeDisabled();
     await userEvent.click(screen.getByRole("button", { name: `Delete ${BOOK_TITLE}` }));
     await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
@@ -172,7 +195,7 @@ describe("Library", () => {
 });
 
 describe("Upload", () => {
-  const choose = () => screen.getByLabelText(/Drop a PDF or EPUB here or choose one/);
+  const choose = () => screen.getByLabelText("Upload book");
 
   it("refuses an unsupported file, or one over 300 MB, without sending anything", async () => {
     serveLibrary();
@@ -274,11 +297,132 @@ describe("A book being extracted", () => {
       "aria-valuetext",
       "1 of 2 sections",
     );
+    await userEvent.click(screen.getByRole("button", { name: BOOK_TITLE }));
     expect(screen.getByText("1/2 sections")).toBeInTheDocument();
     expect(await screen.findByRole("article", { name: "Section 1" })).toHaveTextContent(
       "The opening section.",
     );
     expect(screen.getByRole("list", { name: "Extracted sections" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Reading mode" }));
+    expect(await screen.findByRole("dialog", { name: BOOK_TITLE })).toHaveTextContent("Section 1 / 2");
+  });
+
+  it("searches extracted units by section title and number", async () => {
+    const rows = [pageEntry(1), pageEntry(2), pageEntry(3)];
+    serveLibrary([bookRow({ status: "done", pages_done: 3 })]);
+    serveBook(snapshot({ status: "done", n_pages: 3, pages: rows }, null));
+    server.use(
+      http.get(`${API}/${BOOK_ID}/pages/1`, () =>
+        HttpResponse.json({ book_id: BOOK_ID, page: 1, markdown: "Opening page." }),
+      ),
+    );
+    renderStage(BOOK_ID);
+
+    const pages = await screen.findByRole("list", { name: "Extracted pages" });
+    const search = screen.getByRole("searchbox", { name: "Search pages" });
+    await userEvent.type(search, "Scalability");
+    expect(within(pages).getAllByRole("button")).toHaveLength(1);
+    expect(within(pages).getByRole("button", { name: /^p\. 3\b/ })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Showing 1 of 3 pages");
+
+    await userEvent.clear(search);
+    await userEvent.type(search, "unknown");
+    expect(screen.getByText("No pages match that search.")).toBeInTheDocument();
+  });
+
+  it("searches the full extracted text and opens the matching page", async () => {
+    const rows = [pageEntry(1), pageEntry(2)];
+    serveLibrary([bookRow({ status: "done", pages_done: 2 })]);
+    serveBook(snapshot({ status: "done", n_pages: 2, pages: rows }, null));
+    server.use(
+      http.get(`${API}/${BOOK_ID}/pages/1`, () =>
+        HttpResponse.json({ book_id: BOOK_ID, page: 1, markdown: "# Opening\n\nThe first passage." }),
+      ),
+      http.get(`${API}/${BOOK_ID}/pages/2`, () =>
+        HttpResponse.json({
+          book_id: BOOK_ID,
+          page: 2,
+          markdown: "## Storage\n\nA durable record survives failure.",
+        }),
+      ),
+    );
+    renderStage(BOOK_ID);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Search book/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Search this book" });
+    const search = within(dialog).getByRole("combobox", {
+      name: "Search titles, headings, and extracted text",
+    });
+    await userEvent.type(search, "durable record");
+    const result = await within(dialog).findByRole("option", {
+      name: /Page\s*2\s*Reliability\s*Match in the text/,
+    });
+    await userEvent.click(result);
+
+    expect(await screen.findByRole("article", { name: "Page 2" })).toHaveTextContent(
+      "A durable record survives failure.",
+    );
+  });
+
+  it("opens a focused reader with page navigation and progress-friendly content flow", async () => {
+    const rows = [pageEntry(1), pageEntry(2)];
+    serveLibrary([bookRow({ status: "done", pages_done: 2 })]);
+    serveBook(snapshot({ status: "done", n_pages: 2, pages: rows }, null));
+    server.use(
+      http.get(`${API}/${BOOK_ID}/pages/1`, () =>
+        HttpResponse.json({ book_id: BOOK_ID, page: 1, markdown: "# Opening\n\nFirst extracted page." }),
+      ),
+      http.get(`${API}/${BOOK_ID}/pages/2`, () =>
+        HttpResponse.json({ book_id: BOOK_ID, page: 2, markdown: "## Next\n\nSecond extracted page." }),
+      ),
+    );
+    renderStage(BOOK_ID);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Reading mode" }));
+    const dialog = await screen.findByRole("dialog", { name: BOOK_TITLE });
+    expect(within(dialog).getByText("Page 1 / 2")).toBeInTheDocument();
+    expect(within(dialog).getByRole("article", { name: "Page 1" })).toHaveTextContent(
+      "First extracted page.",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next page" }));
+    expect(await within(dialog).findByRole("article", { name: "Page 2" })).toHaveTextContent(
+      "Second extracted page.",
+    );
+    expect(within(dialog).getByText("Page 2 / 2")).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Exit reading mode" }));
+    expect(screen.queryByRole("dialog", { name: BOOK_TITLE })).not.toBeInTheDocument();
+  });
+
+  it("switches to raw Markdown and keeps large figure galleries collapsed until opened", async () => {
+    const figures = ["a.png", "b.png", "c.png", "d.png", "e.png"];
+    serveLibrary([bookRow({ status: "done", pages_done: 1 })]);
+    serveBook(
+      snapshot({ status: "done", pages: [pageEntry(2, { figures, pictures: figures.length })] }, null),
+    );
+    server.use(
+      http.get(`${API}/${BOOK_ID}/pages/2`, () =>
+        HttpResponse.json({
+          book_id: BOOK_ID,
+          page: 2,
+          markdown: "## Reliability\n\n<!-- image -->\n\nExtracted paragraph.",
+        }),
+      ),
+    );
+    renderStage(BOOK_ID);
+
+    const reader = await screen.findByRole("article", { name: "Page 2" });
+    expect(await within(reader).findByText("Extracted paragraph.")).toBeInTheDocument();
+    await userEvent.click(within(reader).getByRole("button", { name: "Markdown source" }));
+    expect(within(reader).getByRole("region", { name: "Markdown source" })).toHaveTextContent(
+      "<!-- image -->",
+    );
+
+    const summary = within(reader).getByText("Figures · 5");
+    const gallery = summary.closest("details");
+    expect(gallery).not.toHaveAttribute("open");
+    await userEvent.click(summary);
+    expect(gallery).toHaveAttribute("open");
+    expect(within(reader).getAllByRole("img")).toHaveLength(5);
   });
 
   it("fills in live: progress, throughput, chapters, pages, the reader, figures", async () => {

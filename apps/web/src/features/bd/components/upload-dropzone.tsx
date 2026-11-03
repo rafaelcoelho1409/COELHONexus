@@ -1,7 +1,7 @@
 "use client";
 
 import { Upload } from "lucide-react";
-import { type ChangeEvent, type DragEvent, useState } from "react";
+import { type ChangeEvent, type DragEvent, useId, useState } from "react";
 
 import { describeUploadError } from "../api";
 import { bookFileProblem } from "../domain/books";
@@ -14,6 +14,9 @@ import { MAX_UPLOAD_LABEL } from "../params";
 export function UploadDropzone({ onOpen }: { onOpen: (bookId: string) => void }) {
   const upload = useUploadBook();
   const { notice } = useBdOverlays();
+  const inputId = useId();
+  const hintId = useId();
+  const errorId = useId();
   const [progress, setProgress] = useState<number | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -59,42 +62,36 @@ export function UploadDropzone({ onOpen }: { onOpen: (bookId: string) => void })
   const percent = progress === null ? null : Math.round(progress * 100);
 
   return (
-    <section aria-labelledby="upload-title">
-      <h2 id="upload-title" className="mono-label">
-        Upload a book
-      </h2>
+    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
       <label
+        htmlFor={inputId}
         onDragOver={(event) => {
           event.preventDefault();
           setDragging(true);
         }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
-        className={`mt-2 flex cursor-pointer flex-col items-center gap-2 rounded-md border border-dashed p-5 text-center focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ring ${
-          dragging ? "border-primary bg-muted" : "border-border bg-card hover:border-neutral-8"
+        className={`inline-flex min-h-10 shrink-0 cursor-pointer items-center gap-2 rounded-sm border px-3 text-sm font-medium focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ring ${
+          dragging ? "border-primary bg-muted" : "border-border bg-background hover:border-neutral-8"
         } ${busy ? "cursor-progress opacity-80" : ""}`}
       >
-        <Upload className="size-5 text-muted-foreground" aria-hidden="true" />
-        <span className="text-sm font-medium">
-          {busy
-            ? "Uploading…"
-            : dragging
-              ? "Drop the book to upload it"
-              : "Drop a PDF or EPUB here or choose one"}
-        </span>
-        <span className="text-xs text-muted-foreground">
-          PDF or EPUB, up to {MAX_UPLOAD_LABEL}. The same file is the same book.
-        </span>
+        <Upload className="size-4 text-muted-foreground" aria-hidden="true" />
+        <span>{busy ? "Uploading…" : dragging ? "Drop to upload" : "Upload book"}</span>
         <input
+          id={inputId}
           type="file"
           accept="application/pdf,.pdf,application/epub+zip,.epub"
           className="sr-only"
           disabled={busy}
+          aria-describedby={problem ? `${hintId} ${errorId}` : hintId}
           onChange={onChoose}
         />
       </label>
+      <p id={hintId} className="text-xs text-muted-foreground">
+        PDF or EPUB · up to {MAX_UPLOAD_LABEL}
+      </p>
       {percent !== null ? (
-        <div className="mt-2">
+        <div className="w-full max-w-sm">
           <div
             role="progressbar"
             aria-label="Upload progress"
@@ -111,10 +108,10 @@ export function UploadDropzone({ onOpen }: { onOpen: (bookId: string) => void })
         </div>
       ) : null}
       {problem ? (
-        <p role="alert" className="mt-2 text-sm text-destructive-text">
+        <p id={errorId} role="alert" className="w-full text-sm text-destructive-text">
           {problem}
         </p>
       ) : null}
-    </section>
+    </div>
   );
 }

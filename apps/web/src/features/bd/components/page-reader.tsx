@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { useState } from "react";
 
 import { Markdown } from "@/shared/markdown";
 
@@ -9,6 +10,11 @@ import type { BookUnits } from "../domain/books";
 import { breadcrumb, type PageRow, pageChips, readableMarkdown } from "../domain/pages";
 import type { LivePage } from "../domain/run-state";
 import { usePageBody } from "../hooks/use-bd-data";
+
+const PREVIEW_MODES = [
+  { id: "rendered", label: "Rendered" },
+  { id: "source", label: "Markdown source" },
+] as const;
 
 /** One extracted content unit: its section path, what it contains, its markdown and its figures. The text comes from the
  * stream while it is complete; a cut page (`truncated`) and a page known only from the manifest (after a reload)
@@ -20,6 +26,7 @@ export function PageReader({
   livePage,
   nPages,
   units,
+  readingMode = false,
 }: {
   bookId: string;
   page: number | null;
@@ -27,7 +34,9 @@ export function PageReader({
   livePage: LivePage | undefined;
   nPages: number;
   units: BookUnits;
+  readingMode?: boolean;
 }) {
+  const [previewMode, setPreviewMode] = useState<(typeof PREVIEW_MODES)[number]["id"]>("rendered");
   const needsBody =
     row !== undefined && (livePage === undefined || livePage.truncated || livePage.markdown === "");
   const body = usePageBody(bookId, page, needsBody);
@@ -44,14 +53,16 @@ export function PageReader({
     );
   }
 
-  const text = readableMarkdown(body.data ?? livePage?.markdown ?? "");
+  const source = body.data ?? livePage?.markdown ?? "";
+  const text = readableMarkdown(source);
+  const content = previewMode === "rendered" ? text : source;
   const chips = pageChips(row);
   const trail = breadcrumb(row.sectionPath);
 
   return (
     <article
       aria-label={`${units.singular[0]?.toUpperCase()}${units.singular.slice(1)} ${page}`}
-      className="min-w-0 rounded-md border border-border bg-card p-4 sm:p-5"
+      className={`min-w-0 ${readingMode ? "" : "rounded-md border border-border bg-card p-4 sm:p-5"}`}
     >
       <header>
         <p className="mono-label">
@@ -73,37 +84,70 @@ export function PageReader({
           </ul>
         ) : null}
       </header>
-      <div className="mt-4 min-w-0">
-        {text ? (
-          <Markdown text={text} />
+      <div className="mt-4 flex justify-end">
+        <fieldset className="m-0 flex min-w-0 border-0 p-0">
+          <legend className="sr-only">Content view</legend>
+          {PREVIEW_MODES.map((mode) => (
+            <button
+              key={mode.id}
+              type="button"
+              aria-pressed={previewMode === mode.id}
+              onClick={() => setPreviewMode(mode.id)}
+              className={`min-h-9 border px-3 text-xs first:rounded-l-sm last:rounded-r-sm ${
+                previewMode === mode.id
+                  ? "border-primary bg-primary/10 text-primary-text"
+                  : "-ml-px border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {mode.label}
+            </button>
+          ))}
+        </fieldset>
+      </div>
+      <section
+        aria-label={previewMode === "rendered" ? "Rendered content" : "Markdown source"}
+        className="mt-2 min-w-0"
+      >
+        {content ? (
+          previewMode === "rendered" ? (
+            <Markdown text={text} />
+          ) : (
+            <pre className="break-words whitespace-pre-wrap font-mono text-xs text-foreground">{source}</pre>
+          )
         ) : body.isError ? (
           <p role="alert" className="text-sm text-destructive-text">
             This {units.singular} could not be loaded.
           </p>
-        ) : (
+        ) : body.isPending ? (
           <p className="text-sm text-muted-foreground">Loading the {units.singular}…</p>
+        ) : (
+          <p className="text-sm text-muted-foreground">No readable text in this {units.singular}.</p>
         )}
-        {livePage?.truncated && body.isPending && text ? (
+        {livePage?.truncated && body.isPending && source ? (
           <p className="mt-2 text-xs text-muted-foreground">Loading the rest of the {units.singular}…</p>
         ) : null}
-      </div>
+      </section>
       {row.figures.length > 0 ? (
-        <ul aria-label="Figures" className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {row.figures.map((name) => (
-            <li key={name} className="min-w-0 border border-border p-2">
-              {/* The figure is a PNG the server cropped from the page; its size is not known here. */}
-              <Image
-                src={figureUrl(bookId, name)}
-                alt={`Figure ${name} from ${units.singular} ${page}`}
-                width={640}
-                height={480}
-                unoptimized
-                className="h-auto w-full"
-              />
-              <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{name}</p>
-            </li>
-          ))}
-        </ul>
+        <details open={row.figures.length <= 4} className="mt-4 rounded-sm border border-border p-2">
+          <summary className="flex min-h-9 cursor-pointer items-center text-sm font-medium">
+            Figures · {row.figures.length}
+          </summary>
+          <ul aria-label="Figures" className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {row.figures.map((name) => (
+              <li key={name} className="min-w-0 border border-border p-2">
+                <Image
+                  src={figureUrl(bookId, name)}
+                  alt={`Figure ${name} from ${units.singular} ${page}`}
+                  width={640}
+                  height={480}
+                  unoptimized
+                  className="h-auto w-full"
+                />
+                <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{name}</p>
+              </li>
+            ))}
+          </ul>
+        </details>
       ) : null}
     </article>
   );

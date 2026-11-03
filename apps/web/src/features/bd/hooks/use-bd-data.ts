@@ -19,7 +19,7 @@ import {
 
 import { uploadBook } from "../api";
 import { isLive, libraryHasLiveBook, toBookStatus } from "../domain/books";
-import type { StartResponse } from "../entities";
+import { pageBodySchema, type StartResponse } from "../entities";
 import { LIBRARY_REFRESH_MS, SNAPSHOT_REFRESH_MS } from "../params";
 
 /** GET /bd/ingestion — the library, re-read while any book is being extracted. */
@@ -55,7 +55,7 @@ export function usePageBody(bookId: string, page: number | null, enabled: boolea
     enabled: enabled && page !== null,
     retry: false,
     staleTime: Number.POSITIVE_INFINITY, // an extracted page does not change until the book is extracted again
-    select: (data) => data.markdown,
+    select: (data) => pageBodySchema.parse(data).markdown,
   });
 }
 
