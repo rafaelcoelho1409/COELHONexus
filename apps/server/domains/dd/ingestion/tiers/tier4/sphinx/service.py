@@ -33,8 +33,10 @@ async def _probe_one(
 
 async def fetch_inventory(
     docs_root: str, *, client: httpx.AsyncClient,
+    writer: domains.dd.ingestion.capture.service.Writer | None = None,
 ) -> entities.Inventory | None:
-    """Fetch+parse docs_root/objects.inv. For unversioned paths probes stable/latest/main siblings; returns None on 404/non-Sphinx/parse error."""
+    """Fetch+parse docs_root/objects.inv. For unversioned paths probes stable/latest/main siblings; returns None on 404/non-Sphinx/parse error.
+    The inventory that is used is kept in the run's capture (`writer`) as the bytes the site sent, with the base it was read against."""
     if not docs_root.endswith("/"):
         docs_root = docs_root + "/"
     parsed = urlparse(docs_root)
@@ -57,6 +59,13 @@ async def fetch_inventory(
             f"{len(inv.doc_pages())} doc pages, "
             f"{len(inv.all_pages())} pages total"
         )
+        if writer is not None:
+            raw_capture = domains.dd.ingestion.capture
+            await writer.add(
+                params.INVENTORY_FILENAME, role = raw_capture.params.ROLE_INDEX, url = inv_url, status = 200,
+                content_type = raw_capture.params.BINARY_TYPE, data = raw, via = raw_capture.params.VIA_HTTP,
+            )
+            writer.params["inventory_base"] = base
         return inv
     return None
 

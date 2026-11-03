@@ -12,14 +12,15 @@ function currentLinks(path: string): string[] {
   return screen
     .getAllByRole("link")
     .filter((link) => link.getAttribute("aria-current") === "page")
-    .map((link) => link.textContent ?? "");
+    .map((link) => link.querySelector(".sr-only")?.textContent ?? ""); // the full label; the other span is the phone label
 }
 
 describe("AppNav", () => {
-  it("links both apps", () => {
+  it("links the apps", () => {
     pathname.current = "/";
     render(<AppNav />);
     expect(screen.getByRole("link", { name: "Docs Distiller" })).toHaveAttribute("href", "/dd");
+    expect(screen.getByRole("link", { name: "Book Distiller" })).toHaveAttribute("href", "/bd");
     expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
   });
 

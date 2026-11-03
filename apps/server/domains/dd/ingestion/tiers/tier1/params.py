@@ -8,6 +8,17 @@ TIMEOUT_S = 30.0
 CONNECT_TIMEOUT_S = 10.0
 MIN_OK_BYTES = 500
 
+# What the run keeps of what it fetched (`capture`): the bundle as the site sent it, and the site's own page index beside it.
+# A paginated bundle (GitBook: Unsloth's is 2 parts of 100 pages) is kept part by part: `bundle.md`, `bundle.part2.md`, …
+BUNDLE_FILE = "bundle.md"
+PART_FILE = "bundle.part{n}.md"
+NAV_FILE = "llms.txt"
+
+# A bundle that says it has a next part is followed through its parts, at most this many (a loop or a runaway site ends here), and
+# only to the same host. The banner is looked for in the first characters of a part.
+MAX_PARTS = 25
+PART_BANNER_SNIFF_CHARS = 1500
+
 # The bundle's page is named after its host (`code-claude-com-llms-full`), at most this long.
 HOST_SLUG_SUFFIX = "-llms-full"
 SLUG_MAX_CHARS = 120

@@ -146,7 +146,9 @@ export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; curren
         )}
       </button>
       {open ? (
-        <div className="absolute right-0 z-40 mt-1 w-[min(24rem,calc(100vw-2rem))] rounded-md border border-border bg-card p-2 lg:left-0 lg:right-auto">
+        // Opens toward the left of the button (the picker sits at the right end of the tab row). On a phone the
+        // button wraps to the left edge, so there it opens to the right instead, to stay on screen.
+        <div className="absolute left-0 z-40 mt-1 w-[min(24rem,calc(100vw-2rem))] rounded-md border border-border bg-card p-2 sm:left-auto sm:right-0">
           <input
             ref={searchRef}
             value={query}

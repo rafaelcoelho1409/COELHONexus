@@ -55,6 +55,11 @@ Numbers that change use `tabular` (tabular-nums). Uppercase is for `.mono-label`
 Almost none. The only animation is the 3s status pulse; it is off under `prefers-reduced-motion`.
 Interactions change colour (150ms). Nothing scrolls, parallaxes, or fades in on view.
 
+The home page is a stack of sections that the page snaps between: native CSS scroll snap (`.snap-page` in
+`globals.css`), no script, driven only by the user's own scrolling. `proximity` by default so a section taller
+than the window can always be read to its end; `mandatory` + `scroll-snap-stop: always` only at 768×720 and
+up, where each section fits one screen. A new page opts in with `.snap-page` on its `<main>`.
+
 ## Content policy
 
 The site describes what the products do and how the platform is operated. It never names the model-routing

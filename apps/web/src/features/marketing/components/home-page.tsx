@@ -10,7 +10,7 @@ export function HomePage() {
   return (
     <>
       <SiteHeader />
-      <main id="main">
+      <main id="main" className="snap-page">
         <Hero />
         <Products />
         <System />

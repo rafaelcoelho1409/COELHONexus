@@ -37,25 +37,29 @@ async def _expand_sitemap(
     client: httpx.AsyncClient,
     url: str,
     depth: int = 0,
+    writer: domains.dd.ingestion.capture.service.Writer | None = None,
 ) -> list[tuple[str, str]]:
     """Recursively flatten sitemap indexes. Returns [(page_url, lastmod)] —
     `lastmod` is "" when the index carries none. Callers must treat "" as
-    unknown, never as old."""
+    unknown, never as old. Every sitemap read is kept in the run's capture (`writer`) as it came."""
+    fetch = domains.dd.ingestion.tiers.fetch
     if depth > params.INDEX_MAX_DEPTH:
         logger.info(f"[tier-3] sitemap depth cap hit at {url}")
         return []
     try:
         resp = await _get(client, url)
     except Exception as e:
+        await fetch.service.keep(writer, url, None, error = f"{type(e).__name__}: {e}", role = domains.dd.ingestion.capture.params.ROLE_INDEX)
         logger.info(f"[tier-3] sitemap fetch failed for {url}: {e}")
         return []
+    await fetch.service.keep(writer, url, resp, role = domains.dd.ingestion.capture.params.ROLE_INDEX)
     if resp.status_code != 200:
         logger.info(f"[tier-3] sitemap {url} → HTTP {resp.status_code}")
         return []
     nested_sitemaps, pages = domain.parse_sitemap(resp.text or "")
     out: list[tuple[str, str]] = []
     for nested_url in nested_sitemaps:
-        out.extend(await _expand_sitemap(client, nested_url, depth + 1))
+        out.extend(await _expand_sitemap(client, nested_url, depth + 1, writer))
     out.extend(pages)
     return out
 
@@ -72,10 +76,11 @@ async def _fetch_twin(
     client: httpx.AsyncClient,
     url: str,
     pacer: domains.dd.ingestion.tiers.fetch.service.Pacer | None,
+    writer: domains.dd.ingestion.capture.service.Writer | None = None,
 ) -> tuple[str, int] | None:
     """The page's markdown twin, on a site that publishes one (see `domain.markdown_twin_url`): `(markdown, fetch_ms)`,
     or None — the HTML is scraped instead. A twin that is missing, too short, or really an HTML page (a site that answers
-    200 to anything) is no twin."""
+    200 to anything) is no twin. A twin that is one is kept in the run's capture (`writer`) as it came, standing for the page."""
     twin = domain.markdown_twin_url(url)
     if twin is None:
         return None
@@ -85,7 +90,11 @@ async def _fetch_twin(
     except Exception:  # noqa: BLE001
         return None
     text = resp.text or ""
-    if not domain.usable_twin(resp.status_code, text):
+    usable = domain.usable_twin(resp.status_code, text)
+    await domains.dd.ingestion.tiers.fetch.service.keep(
+        writer, twin, resp, for_url = url, via = domains.dd.ingestion.capture.params.VIA_TWIN, note_only = not usable,
+    )
+    if not usable:
         return None
     return text, int((time.monotonic() - t0) * 1000)
 
@@ -114,9 +123,10 @@ async def _fetch_page(
     twin: bool = False,
     pacer: domains.dd.ingestion.tiers.fetch.service.Pacer | None = None,
     code_language: str = "",
+    writer: domains.dd.ingestion.capture.service.Writer | None = None,
 ) -> tuple[str, str, str, str] | None:
     if twin:
-        twin_page = await _fetch_twin(client, url, pacer)
+        twin_page = await _fetch_twin(client, url, pacer, writer)
         if twin_page is not None:
             markdown, twin_ms = twin_page
             title = domains.dd.ingestion.post.domain.display_title(markdown, "")
@@ -135,6 +145,7 @@ async def _fetch_page(
     try:
         resp = await _get(client, url, pacer)
     except Exception as e:
+        await domains.dd.ingestion.tiers.fetch.service.keep(writer, url, None, error = f"{type(e).__name__}: {e}")
         await progress.record_url(
             url,
             status = "fetch_error",
@@ -144,6 +155,7 @@ async def _fetch_page(
         )
         return None
     fetch_ms = int((time.monotonic() - t0) * 1000)
+    await domains.dd.ingestion.tiers.fetch.service.keep(writer, url, resp)
     if resp.status_code != 200:
         await progress.record_url(
             url,
@@ -222,7 +234,15 @@ async def run(
         timeout = httpx.Timeout(params.TIMEOUT_S, connect = params.CONNECT_TIMEOUT_S),
         follow_redirects = True,
     ) as client:
-        all_entries = await _expand_sitemap(client, url)
+        # What the run fetches is kept as it comes — the sitemaps and every page — and is what a transform starts from.
+        writer = domains.dd.ingestion.capture.service.Writer(
+            store.minio, framework_slug, params.TIER_KIND, url,
+            capture_params = {
+                "path_filter": path_filter, "code_language": code_language or "", "language": language, "framework_name": framework_name or "",
+            },
+        )
+        await writer.begin()
+        all_entries = await _expand_sitemap(client, url, writer = writer)
         if not all_entries:
             # `downgrade`, not `failed`: a lower tier (the docs crawl, the repository) may still serve this framework.
             await progress.finish(status = "downgrade")
@@ -288,6 +308,7 @@ async def run(
                     twin = twins,
                     pacer = pacer,
                     code_language = code_language or "",
+                    writer = writer,
                 )
             if r is not None:
                 slug, src_url, body, title = r
@@ -299,6 +320,8 @@ async def run(
                     tier = params.TIER_KIND,
                     title = title,
                     lastmod = lastmod_by_url.get(src_url, ""),
+                    # The capture holds what the site sent; a second copy, already changed, is not kept next to the pages.
+                    keep_raw = False,
                 )
                 written += 1
             await progress.update(current = written, last_url = u)
@@ -310,6 +333,9 @@ async def run(
     if written == 0:
         await progress.finish(status = "failed")
         raise RuntimeError(f"Tier 3: {url} all pages failed")
+    # The decisions the run took from the network that a transform cannot take again: which pages (in order), their sitemap dates, whether
+    # it asked for markdown twins.
+    await writer.finish({"urls": deduped, "lastmod": lastmod_by_url, "twins": twins})
     store.reorder_by_url_list(deduped)
     # No `finish`: post-processing and finalizing follow, and the dispatcher alone marks the run done.
     return written

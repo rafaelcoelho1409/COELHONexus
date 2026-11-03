@@ -18,6 +18,7 @@ for name, value in {"REDIS_HOST": "localhost", "REDIS_PORT": "6379", "REDIS_PASS
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
 import httpx
+from capture_fakes import CaptureMinio
 
 import domains
 
@@ -114,9 +115,12 @@ class FakeProgress:
 
 
 class FakeStore:
+    framework_slug = "demo"
+
     def __init__(self):
         self.pages: list[dict] = []
         self.index_summary = ""
+        self.minio = CaptureMinio()
 
     async def add_page(self, **kwargs): self.pages.append(kwargs)
     def reorder_by_url_list(self, urls): pass

@@ -578,6 +578,11 @@ direct `from domains.dd.planner.task import X`, same shape as any normal
 Python import, and the same class of exception as the LLM rotator's
 reverse-edge import above).
 
+`bd/ingestion/extract/service.py` and `bd/ingestion/outline/service.py` import Docling, torch and pypdfium2. These dependencies are in
+the shared server image, but their `__init__.py` files leave `service` out so API requests and unrelated Celery tasks do not load the
+heavy libraries at startup. `bd/ingestion/task.py` imports the services only inside the extraction run; the router imports the task and
+calls `.delay()`, and the task is included in `infra/celery/keys.py::TASK_INCLUDE` for worker discovery.
+
 `dd/synth`'s `params.py` originally did `STUDY_SEM = int(os.environ["KD_STUDY_SEM"])`
 at module scope — a hard eager read that would have forced this same exception
 onto `params`, `graph`, and most of `runtime` (all pull constants from
@@ -680,6 +685,7 @@ apps/server/
 │   │   └── v1/dd/{planner,synth,ingestion,pipeline,runs}.py
 │   └── mcp/tools/<family>/  # FastMCP tools, each family exposes service.register(mcp); the server itself is built in main.py
 ├── domains/                 # business logic — the bounded contexts
+│   ├── bd/                  # Book Distiller bounded context (ingestion/ so far: outline/, extract/, storage/, runtime/, task.py)
 │   ├── dd/                  # Docs Distiller bounded context
 │   │   ├── ingestion/
 │   │   │   ├── storage/     # ← module = directory with the 5–10 files above

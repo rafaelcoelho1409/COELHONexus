@@ -59,13 +59,15 @@ async def _fetch_one(
     index_host: str = "",
     pacer: domains.dd.ingestion.tiers.fetch.service.Pacer | None = None,
     code_language: str = "",
+    writer: domains.dd.ingestion.capture.service.Writer | None = None,
 ) -> tuple[str, str, str, str] | None:
     """Returns (slug, url, body_markdown, title) on success, None on failure.
-    Records progress + URL log internally."""
+    Records progress + URL log internally; the response is kept in the run's capture (`writer`) as it came."""
     t0 = time.monotonic()
     try:
         resp = await _get(client, url, pacer)
     except Exception as e:
+        await domains.dd.ingestion.tiers.fetch.service.keep(writer, url, None, error = f"{type(e).__name__}: {e}")
         await progress.record_url(
             url,
             status = "fetch_error",
@@ -75,6 +77,7 @@ async def _fetch_one(
         )
         return None
     fetch_ms = int((time.monotonic() - t0) * 1000)
+    await domains.dd.ingestion.tiers.fetch.service.keep(writer, url, resp)
     if resp.status_code != 200:
         await progress.record_url(
             url,
@@ -243,6 +246,17 @@ async def run(
         except Exception:
             store.index_summary = ""
         logger.info(f"[tier-2] parsed {len(links)} URLs from {url}")
+        # From here the run fetches pages: keep the index and every response as they come (the transform starts from these).
+        raw = domains.dd.ingestion.capture
+        writer = raw.service.Writer(
+            store.minio, framework_slug, params.TIER_KIND, url,
+            capture_params = {"path_filter": path_filter, "code_language": code_language or "", "sitemap_url": sitemap_url},
+        )
+        await writer.begin()
+        await writer.add(
+            params.INDEX_FILE, role = raw.params.ROLE_INDEX, url = url, final_url = str(resp.url), status = resp.status_code,
+            content_type = resp.headers.get("content-type", ""), text = resp.text or "", via = raw.params.VIA_HTTP,
+        )
         await progress.update_total(len(links))
         index_host = domains.dd.ingestion.tiers.fetch.domain.host_of(url)
 
@@ -281,6 +295,7 @@ async def run(
                     index_host = index_host,
                     pacer = pacer,
                     code_language = code_language or "",
+                    writer = writer,
                 )
             if r is not None:
                 slug, src_url, body, t = r
@@ -317,6 +332,8 @@ async def run(
                         title = t,
                         section = section,
                         notes = notes,
+                        # The capture holds what the site sent; a second copy, already changed, is not kept next to the pages.
+                        keep_raw = False,
                     )
                     written += 1
             await progress.update(current = written, last_url = link)
@@ -328,6 +345,7 @@ async def run(
     if written == 0:
         await progress.finish(status = "failed")
         raise RuntimeError(f"Tier 2: {url} all {len(links)} pages failed")
+    await writer.finish()
     store.reorder_by_url_list([u for _, u, _, _ in links])
     # No `finish`: post-processing and finalizing follow, and the dispatcher alone marks the run done.
     return written

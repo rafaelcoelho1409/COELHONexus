@@ -29,7 +29,7 @@ ENV PATH="/usr/local/bin:$PATH"
 # on drift, guaranteeing the image matches what was tested in CI.
 COPY pyproject.toml uv.lock ./
 
-# Install pinned dependencies. No PyTorch — embeddings use ONNX via FastEmbed.
+# Install pinned dependencies. Torch uses the CPU-only index in pyproject.toml.
 # The unclecode-litellm vs litellm namespace collision is handled at lock
 # time by `[tool.uv] override-dependencies` in pyproject.toml — no post-
 # install patching needed.

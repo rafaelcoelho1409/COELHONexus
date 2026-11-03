@@ -15,6 +15,10 @@ dependencies = [
     # Ingestion stack
     "beautifulsoup4>=4.12,<5.0",       # HTML parsing for sitemap + tier 4 fallback
     "lxml>=6.1.0,<7.0",                # fast XML parser for sitemap.xml
+    "docling>=2.145,<3.0",             # PDF → DoclingDocument (layout, tables, heading hierarchy, page/bbox provenance)
+    "pypdfium2>=4.30,<6.0",            # PDF outline and page metadata
+    "torch>=2.9,<3.0",                 # CPU wheel on Linux (see [tool.uv.sources])
+    "torchvision>=0.24,<1.0",
     "markdownify>=0.13,<2.0",          # HTML → markdown (tier 3, tier 4 httpx path)
     "markdown-it-py>=3.0,<4.0",        # token-aware monolith splitter (post-process)
     "mdit-py-plugins>=0.4,<1.0",       # frontmatter / deflist / footnote tokens
@@ -99,7 +103,7 @@ package = false
 # `uv sync --frozen`, so this only affects re-locking. Per-package exceptions are for security fixes that
 # were vetted by hand; remove an entry once its release is older than the window.
 exclude-newer = "7 days"
-exclude-newer-package = { fastmcp-slim = "2026-10-25T00:00:00Z", fastmcp = "2026-10-25T00:00:00Z", certifi = "2026-10-25T00:00:00Z", pypdf = "2026-10-25T00:00:00Z", brotli = "2026-10-25T00:00:00Z" }
+exclude-newer-package = { fastmcp-slim = "2026-10-25T00:00:00Z", fastmcp = "2026-10-25T00:00:00Z", certifi = "2026-10-25T00:00:00Z", pypdf = "2026-10-25T00:00:00Z", brotli = "2026-10-25T00:00:00Z", docling = "2026-11-02T00:00:00Z", docling-slim = "2026-11-02T00:00:00Z", docling-core = "2026-11-02T00:00:00Z", docling-ibm-models = "2026-11-02T00:00:00Z", docling-parse = "2026-11-02T00:00:00Z" }
 
 # No litellm in this project. crawl4ai hard-depends on `unclecode-litellm` (a litellm fork, which
 # installs into the `litellm/` namespace) for its LLM-extraction helpers; this app never uses
@@ -121,3 +125,11 @@ dev = [
     "pyflakes>=3.2,<4.0",
     "deptry>=0.25,<1.0",
 ]
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

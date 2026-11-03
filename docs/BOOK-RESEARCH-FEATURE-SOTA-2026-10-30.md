@@ -1,10 +1,10 @@
-# Third feature: Book Research (decision + architecture, saved 2026-10-30)
+# Third feature: Book Distiller (decision + architecture, saved 2026-10-30; named 2026-11-02)
 
 Question: which third Nexus feature maximizes the chance of a Senior AI Engineer job in Abu Dhabi (from Brazil): Deep Research only, Book Distillation only, or both combined? Stack: DeepAgents + LangChain + LangGraph + FastMCP. Private leverage: COELHO Search MCP + LLM Rotator ($0 for the author, paid providers for everyone else).
 
 Status: decision + design only. Nothing built. The COELHO Search MCP failed to connect (timeout) during this research, so the web-researcher wiring is untested.
 
-**Update 2026-11-02: postponed.** AgenticMath (LangGraph orchestrating Deep Agents, `AIAgentsStudies/AgenticMath`) took the third-feature slot. Book Research is built after the two Nexus features and AgenticMath are mature; the maturity checklist is in `AIAgentsStudies/docs/agenticmath-architecture.md` (section 6c).
+**Update 2026-11-02: named Book Distiller, and it is the third feature again.** The feature (book distillation + deep research over the distilled book and the live web) is called **Book Distiller**, the sibling of Docs Distiller; the name was chosen after a collision check (Knowledge Distiller reads as the ML model-compression technique; Scriptorium, Marginalia and Tome are taken in the AI space). Domain code `bd`: `domains/bd/`, `/api/v1/bd`, Celery queue `bd`. The user builds it by hand, to learn Deep Agents, LangChain, LangGraph and FastMCP. Tagline: "Distill any book, then research across it and the live web, with citations." The file name keeps "BOOK-RESEARCH" because it is dated and linked from elsewhere; read "Book Research" below as Book Distiller.
 
 ---
 

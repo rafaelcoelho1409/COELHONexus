@@ -3,6 +3,7 @@ from __future__ import annotations
 
 
 TIER_KIND = "llms_txt"  # what this tier is called in the catalog, in progress records and on a page's manifest entry
+INDEX_FILE = "llms.txt"  # the index, as the site sent it, in the run's capture
 USER_AGENT = "COELHONexus-DocsDistiller-Tier2/1.0"
 TIMEOUT_S = 30.0
 CONCURRENCY = 8

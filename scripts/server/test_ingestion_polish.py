@@ -234,10 +234,17 @@ async def main() -> None:
         async def update(self, current, last_url=""): pass
         async def finish(self, status="done", error=None): pass
 
+    class CaptureMinio:
+        def __init__(self):
+            self.objects: dict[str, str] = {}
+
+        async def write(self, key, text, content_type=""): self.objects[key] = text
+
     class TierStore:
         def __init__(self):
             self.nav_index: list[tuple[str, str]] = []
             self.pages: list[dict] = []
+            self.minio = CaptureMinio()
 
         async def add_page(self, **kwargs):
             self.pages.append(kwargs)

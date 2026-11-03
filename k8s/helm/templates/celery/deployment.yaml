@@ -47,6 +47,8 @@ spec:
           env:
             - name: PYTHONPATH
               value: "/app"
+            - name: OMP_NUM_THREADS
+              value: "{{ .Values.celery.threads }}"
             # Override the shared server configmap; worker traces land under coelhonexus-celery.
             - name: OTEL_SERVICE_NAME
               value: "coelhonexus-celery"

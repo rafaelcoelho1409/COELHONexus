@@ -18,10 +18,10 @@ import importlib
 
 
 if TYPE_CHECKING:
-    from . import dd, settings, ycs
+    from . import dd, ycs, bd, settings
 
 
-__all__ = ["dd", "settings", "ycs"]
+__all__ = ["dd", "ycs", "bd", "settings"]
 
 
 def __getattr__(name: str):

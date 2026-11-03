@@ -3,6 +3,7 @@ from __future__ import annotations
 
 
 TIER_KIND = "github"  # what this tier is called in the catalog, in progress records and on a page's manifest entry
+TREE_FILE = "tree.json"  # the repository's tree, as the API answered, in the run's capture
 USER_AGENT = "COELHONexus-DocsDistiller-Tier5/1.0"
 GITHUB_ACCEPT = "application/vnd.github+json"
 TIMEOUT_S = 30.0

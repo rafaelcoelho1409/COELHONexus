@@ -10,7 +10,7 @@ export function Hero() {
     <section id="top" aria-labelledby="hero-title" className="border-b border-border">
       <div className="mx-auto grid max-w-6xl grid-cols-1 gap-12 px-4 py-16 sm:px-6 md:py-24 lg:grid-cols-[1.15fr_1fr] lg:items-center">
         <div>
-          <p className="mono-label">Docs Distiller · YouTube Content Search</p>
+          <p className="mono-label">Docs Distiller · YouTube Content Search · Book Distiller</p>
           <h1
             id="hero-title"
             className="mt-5 text-balance text-4xl font-semibold leading-[1.08] tracking-tight sm:text-5xl"
@@ -20,6 +20,7 @@ export function Hero() {
           <p className="mt-6 max-w-xl text-pretty text-base text-muted-foreground sm:text-lg">
             Docs Distiller turns a framework&rsquo;s documentation into a study guide you can read in order.
             YouTube Content Search indexes a whole channel and answers questions across it, with citations.
+            Book Distiller, in development, does the same for books.
           </p>
           <div className="mt-9 flex flex-wrap gap-3">
             <a href="/dd" className={buttonVariants({ size: "lg", className: "h-11 px-5 text-sm" })}>

@@ -66,8 +66,9 @@ class Store:
         anchors: list | None = None,
         defer_vault: bool = False,
         relative_links: bool = True,
+        keep_raw: bool = True,
     ) -> entities.ManifestEntry:
-        """Stream page to store. idx-assign+manifest append are locked; MinIO PUT is not (concurrent writes to distinct keys). Raw body also → ingestion-raw/ for normalizer-version reversibility.
+        """Stream page to store. idx-assign+manifest append are locked; MinIO PUT is not (concurrent writes to distinct keys). Raw body also → ingestion/raw/ for normalizer-version reversibility — unless `keep_raw` is off, for a tier whose run keeps what it fetched as a `capture` (Tier 1).
 
         `defer_vault`: skip the page's vault now. For a bundle that is about to be split into pages: its own vault would
         be built (seconds, ~10 MB) and then orphaned, while the dispatcher's vault backfill builds one per final page
@@ -123,9 +124,9 @@ class Store:
             self._cached_manifest.append(entry)
         await asyncio.gather(
             self.minio.write(entry.key, normalized_body, content_type = params.MARKDOWN_TYPE),
-            self.minio.write(
-                keys.raw_page_key(self.framework_slug, idx, slug),
-                body, content_type = params.MARKDOWN_TYPE,
+            *(
+                [self.minio.write(keys.raw_page_key(self.framework_slug, idx, slug), body, content_type = params.MARKDOWN_TYPE)]
+                if keep_raw else []
             ),
         )
         # Vault sees the same bytes synth will see; best-effort.

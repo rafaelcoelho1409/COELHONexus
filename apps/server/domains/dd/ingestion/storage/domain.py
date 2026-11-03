@@ -114,6 +114,11 @@ def entry_key(framework_slug: str, entry: dict, idx: int) -> str:
     return entry.get("key") or keys.page_key(framework_slug, idx, entry.get("slug", ""))
 
 
+def framework_slugs(folders: list[str]) -> list[str]:
+    """The frameworks among the immediate folders of `ingestion/`: every folder but the raw copies'."""
+    return [f.rstrip("/").rsplit("/", 1)[-1] for f in folders if f.rstrip("/").rsplit("/", 1)[-1] != params.RAW_FOLDER]
+
+
 def library_row(slug: str, manifest: dict, catalog_entry: dict) -> dict:
     """One framework of the library sidebar: what its finalized manifest says, with the catalog's name and logos where the manifest
     has none."""

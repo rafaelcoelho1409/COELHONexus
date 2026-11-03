@@ -76,6 +76,23 @@ async def _arun_many(crawler, urls: list[str], cfg, dispatcher, session_prefix: 
     return await crawler.arun_many(urls, config = config, dispatcher = dispatcher)
 
 
+async def _keep_rendering(
+    writer: domains.dd.ingestion.capture.service.Writer | None,
+    url: str,
+    html: str | None,
+    error: str = "",
+) -> None:
+    """Keep the HTML the browser rendered for `url` in the run's capture, or note that it could not render it. Apart from the page the
+    plain request got (same URL, `page-<hash>.html`): a page that failed there and was rendered here has both."""
+    if writer is None:
+        return
+    raw = domains.dd.ingestion.capture
+    await writer.add(
+        domain.browser_file_name(url), role = raw.params.ROLE_PAGE, url = url, status = 200 if html is not None else 0,
+        content_type = "text/html", text = html, error = error, via = raw.params.VIA_BROWSER,
+    )
+
+
 async def crawl_urls(
     urls: list[str],
     *,
@@ -84,6 +101,7 @@ async def crawl_urls(
     store: domains.dd.ingestion.storage.service.Store,
     min_ok_bytes: int = params.DEFAULT_MIN_OK_BYTES,
     code_language: str = "",
+    writer: domains.dd.ingestion.capture.service.Writer | None = None,
 ) -> tuple[int, list[str]]:
     """Crawl URLs via Playwright; stream successes to store immediately. Transient navigation failures get one retry with longer timeouts. Returns (pages_written, failed_urls).
     A page is converted from the HTML the browser rendered with the same extractor every other tier uses (chrome removed, the
@@ -117,6 +135,7 @@ async def crawl_urls(
                     transient_nav_failures.append(url)
                 else:
                     failed.append(url)
+                    await _keep_rendering(writer, url, None, error = err[: params.ERROR_MAX_CHARS])
                 await progress.record_url(
                     url,
                     status = "fetch_error",
@@ -127,6 +146,7 @@ async def crawl_urls(
 
             extract = domains.dd.ingestion.tiers.extract.domain
             rendered = getattr(r, "html", "") or ""
+            await _keep_rendering(writer, url, rendered)
             title = ""
             body = extract.html_to_markdown(rendered, source_url = url, default_code_language = code_language) if rendered else ""
             if rendered:
@@ -152,6 +172,8 @@ async def crawl_urls(
                 body = body,
                 tier = params.BROWSER_TIER,
                 title = title or slug,
+                # The capture holds the browser's rendering; a second copy, already changed, is not kept next to the pages.
+                keep_raw = False,
             )
             written += 1
             await progress.record_url(
@@ -302,12 +324,15 @@ async def _fetch_one(
     framework_slug: str | None = None,
     store: domains.dd.ingestion.storage.service.Store | None = None,
     code_language: str = "",
+    writer: domains.dd.ingestion.capture.service.Writer | None = None,
 ) -> list[tuple[str, str, str, str]]:
-    """Fetch + extract a URL. Returns [(slug, url, body_md, title), ...]; N entries when page_split fires (autodoc/anchored H2), empty list on failure."""
+    """Fetch + extract a URL. Returns [(slug, url, body_md, title), ...]; N entries when page_split fires (autodoc/anchored H2), empty list on failure.
+    The response is kept in the run's capture (`writer`) as it came."""
     t0 = time.monotonic()
     try:
         resp = await _get(client, url)
     except Exception as e:
+        await domains.dd.ingestion.tiers.fetch.service.keep(writer, url, None, error = f"{type(e).__name__}: {e}")
         await progress.record_url(
             url,
             status = "fetch_error",
@@ -317,6 +342,7 @@ async def _fetch_one(
         )
         return []
     fetch_ms = int((time.monotonic() - t0) * 1000)
+    await domains.dd.ingestion.tiers.fetch.service.keep(writer, url, resp)
     if resp.status_code != 200:
         await progress.record_url(
             url,
@@ -417,6 +443,15 @@ async def run(
         f"subtree={subtree or '(none)'} url={url}"
     )
     await progress.start(tier = params.TIER_KIND, total = 0)
+    # Everything the crawl fetches — each page, the browser's rendering of those it could not read, Sphinx's inventory — is kept as it
+    # comes; so are the decisions it took from the network (which pages, in what order, which anchors).
+    writer = domains.dd.ingestion.capture.service.Writer(
+        store.minio, framework_slug, params.TIER_KIND, url,
+        capture_params = {
+            "path_filter": path_filter, "code_language": code_language, "language": language, "framework_name": framework_name or "",
+        },
+    )
+    await writer.begin()
     async with httpx.AsyncClient(
         headers = {"User-Agent": params.USER_AGENT, "Accept": params.ACCEPT},
         timeout = httpx.Timeout(params.TIMEOUT_S, connect = params.CONNECT_TIMEOUT_S),
@@ -428,7 +463,7 @@ async def run(
         # Sphinx objects.inv — deterministic page + anchor catalog when present.
         docs_root = domain.docs_root(parsed.scheme, parsed.netloc, subtree)
         sphinx = domains.dd.ingestion.tiers.tier4.sphinx
-        inventory = await sphinx.service.fetch_inventory(docs_root, client = client)
+        inventory = await sphinx.service.fetch_inventory(docs_root, client = client, writer = writer)
         # Inventory iteration order ≈ Sphinx source-tree order; doc_pages() returns a non-deterministic set.
         inv_pages: list[str] = sphinx.domain.ordered_doc_pages(inventory) if inventory else []
         if inventory:
@@ -500,11 +535,13 @@ async def run(
                 progress = progress,
                 store = store,
                 code_language = code_language,
+                writer = writer,
             )
             if browser_written == 0:
                 # Bash's run ended `done` with 0 pages: this early return skipped the check every other path makes.
                 await progress.finish(status = "failed")
                 raise RuntimeError(f"Tier 4: the browser fetched none of the {len(filtered)} pages")
+            await writer.finish({"urls": filtered, "anchors": anchors_by_page, "spa": True})
             return browser_written
         await progress.update_total(len(filtered))
         sem = asyncio.Semaphore(params.CONCURRENCY)
@@ -526,6 +563,7 @@ async def run(
                         framework_slug = framework_slug,
                         store = store,
                         code_language = code_language,
+                        writer = writer,
                     )
                 if not results:
                     failed.append(u)
@@ -539,6 +577,8 @@ async def run(
                             tier = params.TIER_KIND,
                             title = title,
                             anchors = anchors,
+                            # The capture holds the page as the site sent it; a second copy, already changed, is not kept next to the pages.
+                            keep_raw = False,
                         )
                         written += 1
                 return results
@@ -565,6 +605,7 @@ async def run(
                 progress = progress,
                 store = store,
                 code_language = code_language,
+                writer = writer,
             )
             written += extra
         except Exception as e:
@@ -574,6 +615,7 @@ async def run(
         raise RuntimeError(
             f"Tier 4: all {len(filtered)} URL fetches failed in both 4a + 4b"
         )
+    await writer.finish({"urls": filtered, "anchors": anchors_by_page, "spa": False})
     # Restore discovery (chapter) order — gather raced the fetches.
     store.reorder_by_url_list(filtered)
     # No `finish`: post-processing and finalizing follow, and the dispatcher alone marks the run done.
@@ -587,6 +629,7 @@ async def _phase4b_playwright(
     progress: domains.dd.ingestion.runtime.progress.service.Progress,
     store: domains.dd.ingestion.storage.service.Store,
     code_language: str = "",
+    writer: domains.dd.ingestion.capture.service.Writer | None = None,
 ) -> int:
     written, failed = await crawl_urls(
         urls,
@@ -595,6 +638,7 @@ async def _phase4b_playwright(
         store = store,
         min_ok_bytes = params.MIN_OK_BYTES,
         code_language = code_language,
+        writer = writer,
     )
     logger.info(
         f"[tier-4] Playwright phase 4b: {written} written, {len(failed)} failed"

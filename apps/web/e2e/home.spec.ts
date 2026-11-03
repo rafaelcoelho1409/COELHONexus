@@ -11,7 +11,7 @@ test.describe("home", () => {
 
     await expect(page.getByRole("heading", { level: 1 })).toContainText("Framework docs, distilled");
     for (const section of [
-      "Two tools, one platform.",
+      "Three tools, one platform.",
       "Six layers",
       "How it is built.",
       "Run it yourself.",
@@ -28,6 +28,7 @@ test.describe("home", () => {
     await page.goto("/");
     const console = page.getByRole("navigation", { name: "Console" });
     await expect(console.getByRole("link", { name: "Docs Distiller" })).toBeVisible();
+    await expect(console.getByRole("link", { name: "Book Distiller" })).toBeVisible();
     await expect(console.getByRole("link", { name: "Settings" })).toBeVisible();
 
     await console.getByRole("link", { name: "Settings" }).click();

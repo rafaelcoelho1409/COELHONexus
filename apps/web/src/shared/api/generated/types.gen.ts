@@ -28,6 +28,31 @@ export type AiGenerateRequest = {
 };
 
 /**
+ * ActiveRun
+ */
+export type ActiveRun = {
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Run Id
+     */
+    run_id: string;
+    progress: Progress;
+};
+
+/**
+ * ActiveRuns
+ */
+export type ActiveRuns = {
+    /**
+     * Active
+     */
+    active: Array<ActiveRun>;
+};
+
+/**
  * AskFeedbackRequest
  *
  * User rating for an ask turn. `trace_id` is the 32-hex OTel trace id
@@ -50,6 +75,62 @@ export type AskFeedbackRequest = {
 };
 
 /**
+ * Body_post_bd_ingestion
+ */
+export type BodyPostBdIngestion = {
+    /**
+     * File
+     */
+    file: Blob | File;
+    /**
+     * Refresh
+     */
+    refresh?: boolean;
+};
+
+/**
+ * BookRow
+ */
+export type BookRow = {
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Filename
+     */
+    filename: string;
+    /**
+     * Size Bytes
+     */
+    size_bytes: number;
+    /**
+     * N Pages
+     */
+    n_pages: number;
+    /**
+     * Pages Done
+     */
+    pages_done: number;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Created At
+     */
+    created_at: number;
+    /**
+     * Updated At
+     */
+    updated_at: number;
+};
+
+/**
  * BulkDeleteRequest
  */
 export type BulkDeleteRequest = {
@@ -57,6 +138,20 @@ export type BulkDeleteRequest = {
      * Video Ids
      */
     video_ids: Array<string>;
+};
+
+/**
+ * CancelResponse
+ */
+export type CancelResponse = {
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Status
+     */
+    status: string;
 };
 
 /**
@@ -105,6 +200,46 @@ export type ChannelRequest = {
      * Transcription Languages
      */
     transcription_languages?: Array<string> | null;
+};
+
+/**
+ * ChapterRange
+ */
+export type ChapterRange = {
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * First Page
+     */
+    first_page: number;
+    /**
+     * Last Page
+     */
+    last_page: number;
+};
+
+/**
+ * DeleteResponse
+ */
+export type DeleteResponse = {
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Deleted
+     */
+    deleted: boolean;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+    /**
+     * Objects
+     */
+    objects?: number | null;
 };
 
 /**
@@ -253,6 +388,60 @@ export type IngestRequest = {
 };
 
 /**
+ * Manifest
+ */
+export type Manifest = {
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Filename
+     */
+    filename: string;
+    /**
+     * Size Bytes
+     */
+    size_bytes: number;
+    /**
+     * N Pages
+     */
+    n_pages: number;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Error
+     */
+    error: string | null;
+    /**
+     * Outline
+     */
+    outline: Array<OutlineEntry>;
+    /**
+     * Chapters
+     */
+    chapters: Array<ChapterRange>;
+    /**
+     * Pages
+     */
+    pages: Array<PageEntry>;
+    /**
+     * Created At
+     */
+    created_at: number;
+    /**
+     * Updated At
+     */
+    updated_at: number;
+};
+
+/**
  * NamespaceEntry
  */
 export type NamespaceEntry = {
@@ -293,6 +482,84 @@ export type NamespaceMap = {
             [key: string]: NamespaceEntry;
         };
     };
+};
+
+/**
+ * OutlineEntry
+ */
+export type OutlineEntry = {
+    /**
+     * Level
+     */
+    level: number;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Page
+     */
+    page: number;
+};
+
+/**
+ * PageBody
+ */
+export type PageBody = {
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Page
+     */
+    page: number;
+    /**
+     * Markdown
+     */
+    markdown: string;
+};
+
+/**
+ * PageEntry
+ */
+export type PageEntry = {
+    /**
+     * Page
+     */
+    page: number;
+    /**
+     * Key
+     */
+    key: string;
+    /**
+     * Chars
+     */
+    chars: number;
+    /**
+     * Headings
+     */
+    headings: number;
+    /**
+     * Tables
+     */
+    tables: number;
+    /**
+     * Pictures
+     */
+    pictures: number;
+    /**
+     * Formulas
+     */
+    formulas: number;
+    /**
+     * Figures
+     */
+    figures: Array<string>;
+    /**
+     * Section Path
+     */
+    section_path: Array<string>;
 };
 
 /**
@@ -367,6 +634,40 @@ export type PlaylistRequest = {
      * Transcription Languages
      */
     transcription_languages?: Array<string> | null;
+};
+
+/**
+ * Progress
+ */
+export type Progress = {
+    /**
+     * Run Id
+     */
+    run_id: string;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Completed
+     */
+    completed: number;
+    /**
+     * Total
+     */
+    total: number;
+    /**
+     * Error
+     */
+    error: string | null;
+    /**
+     * Started At
+     */
+    started_at: number;
+    /**
+     * Updated At
+     */
+    updated_at: number;
 };
 
 /**
@@ -745,6 +1046,36 @@ export type SearchResponse = {
 };
 
 /**
+ * Snapshot
+ */
+export type Snapshot = {
+    manifest: Manifest;
+    progress: Progress | null;
+};
+
+/**
+ * StartResponse
+ */
+export type StartResponse = {
+    /**
+     * Status
+     */
+    status: 'queued' | 'cached' | 'locked';
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Run Id
+     */
+    run_id: string | null;
+    /**
+     * Resumed
+     */
+    resumed: boolean;
+};
+
+/**
  * StartRunBody
  */
 export type StartRunBody = {
@@ -912,6 +1243,284 @@ export type GetHealthResponses = {
      */
     200: unknown;
 };
+
+export type GetBdIngestionData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/bd/ingestion';
+};
+
+export type GetBdIngestionResponses = {
+    /**
+     * Response Get Bd Ingestion
+     *
+     * Successful Response
+     */
+    200: Array<BookRow>;
+};
+
+export type GetBdIngestionResponse = GetBdIngestionResponses[keyof GetBdIngestionResponses];
+
+export type PostBdIngestionData = {
+    body: BodyPostBdIngestion;
+    path?: never;
+    query?: never;
+    url: '/api/v1/bd/ingestion';
+};
+
+export type PostBdIngestionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBdIngestionError = PostBdIngestionErrors[keyof PostBdIngestionErrors];
+
+export type PostBdIngestionResponses = {
+    /**
+     * Successful Response
+     */
+    200: StartResponse;
+};
+
+export type PostBdIngestionResponse = PostBdIngestionResponses[keyof PostBdIngestionResponses];
+
+export type GetBdIngestionActiveData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/bd/ingestion/active';
+};
+
+export type GetBdIngestionActiveResponses = {
+    /**
+     * Successful Response
+     */
+    200: ActiveRuns;
+};
+
+export type GetBdIngestionActiveResponse = GetBdIngestionActiveResponses[keyof GetBdIngestionActiveResponses];
+
+export type DeleteBdIngestionBookIdData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}';
+};
+
+export type DeleteBdIngestionBookIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteBdIngestionBookIdError = DeleteBdIngestionBookIdErrors[keyof DeleteBdIngestionBookIdErrors];
+
+export type DeleteBdIngestionBookIdResponses = {
+    /**
+     * Successful Response
+     */
+    200: DeleteResponse;
+};
+
+export type DeleteBdIngestionBookIdResponse = DeleteBdIngestionBookIdResponses[keyof DeleteBdIngestionBookIdResponses];
+
+export type GetBdIngestionBookIdData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}';
+};
+
+export type GetBdIngestionBookIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetBdIngestionBookIdError = GetBdIngestionBookIdErrors[keyof GetBdIngestionBookIdErrors];
+
+export type GetBdIngestionBookIdResponses = {
+    /**
+     * Successful Response
+     */
+    200: Snapshot;
+};
+
+export type GetBdIngestionBookIdResponse = GetBdIngestionBookIdResponses[keyof GetBdIngestionBookIdResponses];
+
+export type PostBdIngestionBookIdCancelData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}/cancel';
+};
+
+export type PostBdIngestionBookIdCancelErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBdIngestionBookIdCancelError = PostBdIngestionBookIdCancelErrors[keyof PostBdIngestionBookIdCancelErrors];
+
+export type PostBdIngestionBookIdCancelResponses = {
+    /**
+     * Successful Response
+     */
+    200: CancelResponse;
+};
+
+export type PostBdIngestionBookIdCancelResponse = PostBdIngestionBookIdCancelResponses[keyof PostBdIngestionBookIdCancelResponses];
+
+export type GetBdIngestionBookIdEventsData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}/events';
+};
+
+export type GetBdIngestionBookIdEventsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetBdIngestionBookIdEventsError = GetBdIngestionBookIdEventsErrors[keyof GetBdIngestionBookIdEventsErrors];
+
+export type GetBdIngestionBookIdEventsResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type GetBdIngestionBookIdFiguresNameData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Name
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}/figures/{name}';
+};
+
+export type GetBdIngestionBookIdFiguresNameErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetBdIngestionBookIdFiguresNameError = GetBdIngestionBookIdFiguresNameErrors[keyof GetBdIngestionBookIdFiguresNameErrors];
+
+export type GetBdIngestionBookIdFiguresNameResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type GetBdIngestionBookIdPagesPageNoData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Page No
+         */
+        page_no: number;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}/pages/{page_no}';
+};
+
+export type GetBdIngestionBookIdPagesPageNoErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetBdIngestionBookIdPagesPageNoError = GetBdIngestionBookIdPagesPageNoErrors[keyof GetBdIngestionBookIdPagesPageNoErrors];
+
+export type GetBdIngestionBookIdPagesPageNoResponses = {
+    /**
+     * Successful Response
+     */
+    200: PageBody;
+};
+
+export type GetBdIngestionBookIdPagesPageNoResponse = GetBdIngestionBookIdPagesPageNoResponses[keyof GetBdIngestionBookIdPagesPageNoResponses];
+
+export type PostBdIngestionBookIdRunData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+    };
+    query?: {
+        /**
+         * Refresh
+         */
+        refresh?: boolean;
+    };
+    url: '/api/v1/bd/ingestion/{book_id}/run';
+};
+
+export type PostBdIngestionBookIdRunErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBdIngestionBookIdRunError = PostBdIngestionBookIdRunErrors[keyof PostBdIngestionBookIdRunErrors];
+
+export type PostBdIngestionBookIdRunResponses = {
+    /**
+     * Successful Response
+     */
+    200: StartResponse;
+};
+
+export type PostBdIngestionBookIdRunResponse = PostBdIngestionBookIdRunResponses[keyof PostBdIngestionBookIdRunResponses];
 
 export type PostDdDebugFinalizeSlugData = {
     body?: never;

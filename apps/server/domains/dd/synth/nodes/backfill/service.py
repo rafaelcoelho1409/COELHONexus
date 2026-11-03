@@ -17,7 +17,7 @@ async def _list_framework_slugs() -> list[str]:
     """Walk MinIO `ingestion/` and return every framework slug with ≥1 page."""
     s = infra.minio.service.get_storage()
     folders = await s.list_subfolders("ingestion/")
-    return sorted(f.rstrip("/").rsplit("/", 1)[-1] for f in folders)
+    return sorted(domains.dd.ingestion.storage.domain.framework_slugs(folders))
 
 
 async def _list_page_keys(slug: str) -> list[str]:
@@ -154,13 +154,8 @@ async def _normalize_one(
             # fastmcp: 334 of its 355 "changed" pages differed only by a final
             # newline, which would have invalidated a finished study's caches.
             changed = normalized.rstrip() != body.rstrip()
-            # Raw always preserved. Only seed it when absent: a page ingested
-            # after the add_page hook already has its true raw body there, and
-            # `body` here is the (previously normalized) stored copy — writing
-            # it over the original would destroy normalizer reversibility.
-            raw_k = domains.dd.ingestion.storage.keys.raw_page_key(slug, idx, page_slug)
-            if not await s.exists(raw_k):
-                await s.write(raw_k, body, content_type = "text/markdown")
+            # What the site sent is kept as the framework's capture (`ingestion/raw/{slug}/`), written when it was fetched. This stored
+            # copy is already normalized: filed under raw it would pass for what the site sent, so nothing is seeded there any more.
             if changed:
                 await s.write(
                     page_key_str, normalized, content_type = "text/markdown",

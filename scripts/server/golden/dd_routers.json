@@ -261,8 +261,8 @@
    "status": "queued"
   },
   "minio": [
-   "ingestion-raw/rf/a",
    "ingestion/cachefw/manifest.json",
+   "ingestion/raw/rf/a",
    "ingestion/rf/manifest.json",
    "keep/rf/c",
    "synth-vault/rf/b"

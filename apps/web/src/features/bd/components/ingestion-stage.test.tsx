@@ -1,0 +1,533 @@
+// @vitest-environment jsdom
+// @vitest-environment-options { "url": "http://nexus.test" }
+// The page is served from the API's own origin, as in the browser (the app proxies `/api`): the upload goes through
+// XMLHttpRequest, and a cross-origin one would need a CORS preflight that does not exist in production.
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { HttpResponse, http } from "msw";
+import { setupServer } from "msw/node";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { BookRow, Snapshot } from "@/shared/api";
+import { client } from "@/shared/api";
+import { QueryProvider } from "@/shared/providers/query-provider";
+
+import {
+  BOOK_ID,
+  BOOK_TITLE,
+  bookRow,
+  pageEntry,
+  pageEvent,
+  sliceDone,
+  snapshot,
+  sse,
+  startedEvent,
+  terminalEvent,
+} from "../test-fixtures";
+import { IngestionStage } from "./ingestion-stage";
+import { BdOverlaysProvider } from "./overlays";
+
+const ORIGIN = "http://nexus.test";
+const API = `${ORIGIN}/api/v1/bd/ingestion`;
+
+const push = vi.fn();
+let search = "";
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push, replace: vi.fn(), refresh: vi.fn(), back: vi.fn(), forward: vi.fn() }),
+  usePathname: () => "/bd/ingestion",
+  useSearchParams: () => new URLSearchParams(search),
+}));
+
+const server = setupServer();
+beforeAll(() => server.listen({ onUnhandledFrame: "error" }));
+beforeEach(() => {
+  push.mockClear();
+  client.setConfig({ baseUrl: ORIGIN });
+});
+afterEach(() => server.resetHandlers());
+afterAll(() => server.close());
+
+function renderStage(book?: string) {
+  search = book ? `book=${book}` : "";
+  return render(
+    <QueryProvider>
+      <BdOverlaysProvider>
+        <IngestionStage />
+      </BdOverlaysProvider>
+    </QueryProvider>,
+  );
+}
+
+/** An event stream the test pushes into, as the server does while a run is live. */
+function liveStream() {
+  const encoder = new TextEncoder();
+  let send: (event: unknown) => void = () => {};
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      send = (event) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+    },
+  });
+  return {
+    response: new HttpResponse(body, { headers: { "Content-Type": "text/event-stream" } }),
+    send: (event: unknown) => send(event),
+  };
+}
+
+function serveLibrary(rows: BookRow[] = []) {
+  server.use(http.get(API, () => HttpResponse.json(rows)));
+}
+
+function serveBook(snap: Snapshot, events?: () => Response) {
+  server.use(http.get(`${API}/${BOOK_ID}`, () => HttpResponse.json(snap)));
+  if (events) server.use(http.get(`${API}/${BOOK_ID}/events`, events));
+}
+
+const queued = { status: "queued", book_id: BOOK_ID, run_id: "run-2", resumed: false };
+
+function pdf(name = "book.pdf", size?: number): File {
+  const file = new File(["%PDF-1.7"], name, { type: "application/pdf" });
+  if (size !== undefined) Object.defineProperty(file, "size", { value: size });
+  return file;
+}
+
+describe("Library", () => {
+  it("lists the books newest first with a status in words and the pages done", async () => {
+    serveLibrary([
+      bookRow({ book_id: "old", title: "An Older Book", status: "done", pages_done: 9, created_at: 1 }),
+      bookRow({ book_id: "new", title: "A Newer Book", status: "extracting", pages_done: 3, created_at: 9 }),
+      bookRow({ book_id: "bad", title: "A Broken Book", status: "failed", pages_done: 2, created_at: 5 }),
+    ]);
+    renderStage();
+
+    const list = await screen.findByRole("list", { name: "Books" });
+    const items = within(list).getAllByRole("listitem");
+    expect(items.map((item) => within(item).getByRole("link").textContent)).toEqual([
+      expect.stringContaining("A Newer Book"),
+      expect.stringContaining("A Broken Book"),
+      expect.stringContaining("An Older Book"),
+    ]);
+    expect(items[0]).toHaveTextContent("extracting");
+    expect(items[0]).toHaveTextContent("3/9 pages");
+    expect(items[1]).toHaveTextContent("failed");
+    expect(within(list).getByRole("link", { name: /A Newer Book/ })).toHaveAttribute(
+      "href",
+      "/bd/ingestion?book=new",
+    );
+    expect(screen.getByRole("heading", { name: "Library · 3" })).toBeInTheDocument();
+  });
+
+  it("says so when the library is empty, loading or unavailable", async () => {
+    serveLibrary([]);
+    const { unmount } = renderStage();
+    expect(await screen.findByText(/No books yet/)).toBeInTheDocument();
+    expect(screen.getByText("No book open.")).toBeInTheDocument();
+    unmount();
+
+    server.use(http.get(API, () => new HttpResponse(null, { status: 503 })));
+    renderStage();
+    expect(await screen.findByText("The library could not be loaded.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("deletes a book after a confirmation, and not before", async () => {
+    const deleted: string[] = [];
+    serveLibrary([bookRow({ status: "done", pages_done: 9 })]);
+    server.use(
+      http.delete(`${API}/${BOOK_ID}`, () => {
+        deleted.push(BOOK_ID);
+        return HttpResponse.json({ book_id: BOOK_ID, deleted: true });
+      }),
+    );
+    renderStage();
+
+    await userEvent.click(await screen.findByRole("button", { name: `Delete ${BOOK_TITLE}` }));
+    const dialog = await screen.findByRole("dialog");
+    expect(deleted).toEqual([]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(deleted).toEqual([]);
+
+    await userEvent.click(screen.getByRole("button", { name: `Delete ${BOOK_TITLE}` }));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(deleted).toEqual([BOOK_ID]));
+    expect(await screen.findByText(/^Deleted /)).toBeInTheDocument();
+  });
+
+  it("relays the server's refusal to delete, and disables delete for a running book", async () => {
+    serveLibrary([
+      bookRow({ status: "done" }),
+      bookRow({ book_id: "live", title: "Live One", status: "extracting" }),
+    ]);
+    server.use(
+      http.delete(`${API}/${BOOK_ID}`, () =>
+        HttpResponse.json({ book_id: BOOK_ID, deleted: false, reason: "a run holds this book" }),
+      ),
+    );
+    renderStage();
+
+    expect(await screen.findByRole("button", { name: "Delete Live One" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: `Delete ${BOOK_TITLE}` }));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
+    expect(await screen.findByText("a run holds this book")).toBeInTheDocument();
+  });
+});
+
+describe("Upload", () => {
+  const choose = () => screen.getByLabelText(/Drop a PDF or EPUB here or choose one/);
+
+  it("refuses an unsupported file, or one over 300 MB, without sending anything", async () => {
+    serveLibrary();
+    renderStage();
+    const user = userEvent.setup({ applyAccept: false });
+
+    await user.upload(choose(), new File(["hi"], "notes.txt", { type: "text/plain" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Only PDF or EPUB files can be uploaded.");
+
+    await user.upload(choose(), pdf("huge.pdf", 301 * 1024 * 1024));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/over 300 MB/));
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("opens the book when the upload is queued", async () => {
+    serveLibrary();
+    server.use(http.post(API, () => HttpResponse.json(queued)));
+    renderStage();
+
+    await userEvent.upload(choose(), pdf());
+    await waitFor(() =>
+      expect(push).toHaveBeenCalledWith(`/bd/ingestion?book=${BOOK_ID}`, { scroll: false }),
+    );
+    expect(await screen.findByText("Extraction queued.")).toBeInTheDocument();
+  });
+
+  it("accepts an EPUB whose browser media type is generic", async () => {
+    serveLibrary();
+    server.use(http.post(API, () => HttpResponse.json(queued)));
+    renderStage();
+
+    const epub = new File(["PK"], "novel.epub", { type: "application/octet-stream" });
+    await userEvent.setup({ applyAccept: false }).upload(choose(), epub);
+    await waitFor(() =>
+      expect(push).toHaveBeenCalledWith(`/bd/ingestion?book=${BOOK_ID}`, { scroll: false }),
+    );
+    expect(await screen.findByText("Extraction queued.")).toBeInTheDocument();
+  });
+
+  it("opens a cached book and says it was already extracted", async () => {
+    serveLibrary();
+    server.use(http.post(API, () => HttpResponse.json({ ...queued, status: "cached", run_id: null })));
+    renderStage();
+
+    await userEvent.upload(choose(), pdf());
+    expect(await screen.findByText("Already extracted — opened it.")).toBeInTheDocument();
+    expect(push).toHaveBeenCalledWith(`/bd/ingestion?book=${BOOK_ID}`, { scroll: false });
+  });
+
+  it("opens a locked book to follow its live run", async () => {
+    serveLibrary();
+    server.use(http.post(API, () => HttpResponse.json({ ...queued, status: "locked" })));
+    renderStage();
+
+    await userEvent.upload(choose(), pdf());
+    expect(await screen.findByText(/already being extracted — following the live run/)).toBeInTheDocument();
+    expect(push).toHaveBeenCalledTimes(1);
+  });
+
+  it("says it resumed a stopped extraction", async () => {
+    serveLibrary();
+    server.use(http.post(API, () => HttpResponse.json({ ...queued, resumed: true })));
+    renderStage();
+
+    await userEvent.upload(choose(), pdf());
+    expect(await screen.findByText(/Resuming the extraction where it stopped/)).toBeInTheDocument();
+  });
+
+  it("explains a 413 and a 400 from the server", async () => {
+    serveLibrary();
+    server.use(http.post(API, () => HttpResponse.json({ detail: "payload too large" }, { status: 413 })));
+    renderStage();
+
+    await userEvent.upload(choose(), pdf());
+    expect(await screen.findByRole("alert")).toHaveTextContent("That file is over 300 MB.");
+
+    server.use(
+      http.post(API, () => HttpResponse.json({ detail: "this is not a readable PDF" }, { status: 400 })),
+    );
+    await userEvent.upload(choose(), pdf("second.pdf"));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("this is not a readable PDF"));
+    expect(push).not.toHaveBeenCalled();
+  });
+});
+
+describe("A book being extracted", () => {
+  it("shows EPUB reader units as sections rather than invented pages", async () => {
+    const epubName = "field-notes.epub";
+    serveLibrary([bookRow({ filename: epubName, n_pages: 2, pages_done: 1, status: "done" })]);
+    serveBook(snapshot({ filename: epubName, n_pages: 2, status: "done", pages: [pageEntry(1)] }, null));
+    server.use(
+      http.get(`${API}/${BOOK_ID}/pages/1`, () =>
+        HttpResponse.json({ book_id: BOOK_ID, page: 1, markdown: "# Opening\n\nThe opening section." }),
+      ),
+    );
+    renderStage(BOOK_ID);
+
+    expect(await screen.findByRole("progressbar", { name: "Sections extracted" })).toHaveAttribute(
+      "aria-valuetext",
+      "1 of 2 sections",
+    );
+    expect(screen.getByText("1/2 sections")).toBeInTheDocument();
+    expect(await screen.findByRole("article", { name: "Section 1" })).toHaveTextContent(
+      "The opening section.",
+    );
+    expect(screen.getByRole("list", { name: "Extracted sections" })).toBeInTheDocument();
+  });
+
+  it("fills in live: progress, throughput, chapters, pages, the reader, figures", async () => {
+    const stream = liveStream();
+    serveLibrary([bookRow()]);
+    serveBook(snapshot({ status: "extracting" }, { status: "running" }), () => stream.response);
+    renderStage(BOOK_ID);
+
+    expect(await screen.findByRole("heading", { name: BOOK_TITLE, level: 2 })).toBeInTheDocument();
+    stream.send(startedEvent);
+    stream.send(pageEvent(1));
+    stream.send(pageEvent(2));
+    stream.send(sliceDone);
+
+    const bar = await screen.findByRole("progressbar", { name: "Pages extracted" });
+    await waitFor(() => expect(bar).toHaveAttribute("aria-valuetext", "2 of 9 pages"));
+    expect(screen.getByText("15.0 pages/min")).toBeInTheDocument();
+
+    const pages = screen.getByRole("list", { name: "Extracted pages" });
+    expect(within(pages).getAllByRole("button")).toHaveLength(2);
+    // following: the reader shows the newest page, its section path, its counts and its figure
+    const reader = screen.getByRole("article", { name: "Page 2" });
+    expect(reader).toHaveTextContent("Continuing to work correctly");
+    expect(reader).toHaveTextContent("Foundations of Data Systems › Reliability");
+    expect(reader).toHaveTextContent("1 picture");
+    const figure = within(reader).getByAltText("Figure p0002-1.png from page 2");
+    expect(figure.getAttribute("src")).toContain(`/api/v1/bd/ingestion/${BOOK_ID}/figures/p0002-1.png`);
+    // the chapter being read is marked
+    expect(screen.getByRole("button", { name: /^Foundations of Data Systems/ })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  });
+
+  it("follows the newest page until the reader picks one, and again when asked", async () => {
+    const stream = liveStream();
+    serveLibrary([bookRow()]);
+    serveBook(snapshot({ status: "extracting" }), () => stream.response);
+    renderStage(BOOK_ID);
+    await screen.findByRole("heading", { name: BOOK_TITLE, level: 2 });
+
+    stream.send(startedEvent);
+    stream.send(pageEvent(1));
+    stream.send(pageEvent(2));
+    await screen.findByRole("article", { name: "Page 2" });
+
+    await userEvent.click(screen.getByRole("button", { name: /^p\. 1\b/ }));
+    expect(screen.getByRole("article", { name: "Page 1" })).toHaveTextContent("Foundations of Data Systems");
+    expect(screen.getByRole("checkbox", { name: "Follow newest" })).not.toBeChecked();
+
+    stream.send(pageEvent(3));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^p\. 3\b/ })).toBeInTheDocument());
+    expect(screen.getByRole("article", { name: "Page 1" })).toBeInTheDocument(); // not dragged along
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "Follow newest" }));
+    expect(screen.getByRole("article", { name: "Page 3" })).toHaveTextContent("Percentile");
+  });
+
+  it("ends on done: the status, the full count, and a way to extract again", async () => {
+    serveLibrary([bookRow()]);
+    serveBook(snapshot({ status: "extracting" }), () =>
+      sse([startedEvent, pageEvent(1), pageEvent(2), pageEvent(3), sliceDone, terminalEvent("done")]),
+    );
+    renderStage(BOOK_ID);
+
+    expect(await screen.findByRole("button", { name: "Extract again" })).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Pages extracted" })).toHaveAttribute(
+      "aria-valuetext",
+      "9 of 9 pages",
+    );
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Follow newest" })).not.toBeInTheDocument();
+  });
+
+  it("restores the picture after a reload from the manifest and the replayed history, without duplicates", async () => {
+    serveLibrary([bookRow()]);
+    serveBook(
+      snapshot(
+        { status: "extracting", pages: [pageEntry(1), pageEntry(2)] },
+        { status: "running", completed: 2 },
+      ),
+      () => sse([startedEvent, pageEvent(1), pageEvent(2), pageEvent(3), sliceDone]),
+    );
+    renderStage(BOOK_ID);
+
+    await screen.findByRole("article", { name: "Page 3" });
+    expect(within(screen.getByRole("list", { name: "Extracted pages" })).getAllByRole("button")).toHaveLength(
+      3,
+    );
+    expect(screen.getByRole("checkbox", { name: "Follow newest" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+
+  it("reads the whole page when the stream cut it", async () => {
+    const fetched: string[] = [];
+    serveLibrary([bookRow()]);
+    serveBook(snapshot({ status: "extracting" }), () =>
+      sse([startedEvent, pageEvent(1, { markdown: "The beginning of a long page…", truncated: true })]),
+    );
+    server.use(
+      http.get(`${API}/${BOOK_ID}/pages/1`, () => {
+        fetched.push("1");
+        return HttpResponse.json({
+          book_id: BOOK_ID,
+          page: 1,
+          markdown: "The beginning of a long page, and its very long end.",
+        });
+      }),
+    );
+    renderStage(BOOK_ID);
+
+    expect(await screen.findByText(/and its very long end/)).toBeInTheDocument();
+    expect(fetched).toEqual(["1"]);
+  });
+
+  it("cancels: asks the server, says it is stopping, then shows the cancelled state and offers Resume", async () => {
+    const stream = liveStream();
+    const requests: string[] = [];
+    serveLibrary([bookRow()]);
+    serveBook(snapshot({ status: "extracting" }), () => stream.response);
+    server.use(
+      http.post(`${API}/${BOOK_ID}/cancel`, () => {
+        requests.push("cancel");
+        return HttpResponse.json({ book_id: BOOK_ID, status: "cancelling" });
+      }),
+    );
+    renderStage(BOOK_ID);
+    stream.send(startedEvent);
+    stream.send(pageEvent(1));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(await screen.findByRole("button", { name: "Cancelling…" })).toBeDisabled();
+    expect(requests).toEqual(["cancel"]);
+    expect(await screen.findByText(/the run stops between slices/)).toBeInTheDocument();
+
+    stream.send(terminalEvent("cancelled"));
+    expect(await screen.findByRole("button", { name: "Resume" })).toBeEnabled();
+    expect(screen.queryByText(/the run stops between slices/)).not.toBeInTheDocument();
+  });
+
+  it("shows why a run failed, and resumes it without uploading again", async () => {
+    const runs: string[] = [];
+    serveLibrary([bookRow()]);
+    serveBook(snapshot({ status: "extracting" }), () =>
+      sse([
+        startedEvent,
+        pageEvent(1),
+        terminalEvent("failed", { error: "the converter ran out of memory on page 4" }),
+      ]),
+    );
+    server.use(
+      http.post(`${API}/${BOOK_ID}/run`, ({ request }) => {
+        runs.push(new URL(request.url).search);
+        return HttpResponse.json({ ...queued, resumed: true });
+      }),
+    );
+    renderStage(BOOK_ID);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("the converter ran out of memory on page 4");
+    await userEvent.click(screen.getByRole("button", { name: "Resume" }));
+    await waitFor(() => expect(runs).toEqual([""]));
+    expect(await screen.findByText(/Resuming the extraction where it stopped/)).toBeInTheDocument();
+  });
+
+  it("extracts a finished book again with refresh", async () => {
+    const runs: string[] = [];
+    serveLibrary([bookRow({ status: "done", pages_done: 9 })]);
+    serveBook(snapshot({ status: "done", pages: [pageEntry(1)] }, null));
+    server.use(
+      http.get(`${API}/${BOOK_ID}/pages/1`, () =>
+        HttpResponse.json({ book_id: BOOK_ID, page: 1, markdown: "First page" }),
+      ),
+      http.post(`${API}/${BOOK_ID}/run`, ({ request }) => {
+        runs.push(new URL(request.url).search);
+        return HttpResponse.json(queued);
+      }),
+    );
+    renderStage(BOOK_ID);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Extract again" }));
+    await waitFor(() => expect(runs).toEqual(["?refresh=true"]));
+  });
+
+  it("reconnects when the stream drops, and the replay does not double anything", async () => {
+    let connections = 0;
+    serveLibrary([bookRow()]);
+    serveBook(snapshot({ status: "extracting" }), () => {
+      connections += 1;
+      if (connections === 1) return new HttpResponse(null, { status: 503 });
+      return sse([startedEvent, pageEvent(1), pageEvent(2)]);
+    });
+    renderStage(BOOK_ID);
+
+    await screen.findByRole("article", { name: "Page 2" });
+    expect(connections).toBeGreaterThanOrEqual(2);
+    expect(within(screen.getByRole("list", { name: "Extracted pages" })).getAllByRole("button")).toHaveLength(
+      2,
+    );
+  });
+});
+
+describe("A finished book", () => {
+  it("opens without a stream and reads a page from the server when it is chosen", async () => {
+    const fetched: string[] = [];
+    serveLibrary([bookRow({ status: "done", pages_done: 3 })]);
+    // no events handler: connecting to one would fail the test (`onUnhandledFrame: "error"`)
+    serveBook(snapshot({ status: "done", pages: [pageEntry(1), pageEntry(2), pageEntry(3)] }, null));
+    server.use(
+      http.get(`${API}/${BOOK_ID}/pages/:page`, ({ params }) => {
+        fetched.push(String(params.page));
+        return HttpResponse.json({
+          book_id: BOOK_ID,
+          page: Number(params.page),
+          markdown:
+            params.page === "3" ? "| Percentile | Latency |\n|---|---|\n| p99 | 480 ms |" : "Intro text",
+        });
+      }),
+    );
+    renderStage(BOOK_ID);
+
+    expect(await screen.findByText("Intro text")).toBeInTheDocument(); // the first page, not the last
+    expect(screen.getByRole("button", { name: "Extract again" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^p\. 3\b/ }));
+    expect(await screen.findByText("480 ms")).toBeInTheDocument();
+    expect(fetched).toEqual(["1", "3"]);
+  });
+
+  it("says when the book cannot be opened", async () => {
+    serveLibrary([]);
+    server.use(
+      http.get(`${API}/${BOOK_ID}`, () => HttpResponse.json({ detail: "book not found" }, { status: 404 })),
+    );
+    renderStage(BOOK_ID);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("book not found");
+  });
+
+  it("shows a queued book as waiting, with Cancel, and a book with no outline plainly", async () => {
+    serveLibrary([bookRow({ status: "queued", pages_done: 0 })]);
+    serveBook(
+      snapshot({ status: "queued", outline: [], chapters: [] }, { status: "queued" }),
+      () => liveStream().response,
+    );
+    renderStage(BOOK_ID);
+
+    expect(await screen.findByText(/Queued — waiting for a worker/)).toBeInTheDocument();
+    expect(screen.getByText("This book has no outline.")).toBeInTheDocument();
+    expect(screen.getByText("Waiting for the first page…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+});

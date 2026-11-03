@@ -211,7 +211,7 @@ reset()
 seed_manifest("cachefw")
 step("runs: cached manifest", "POST", "/runs", json={"slug": "cachefw"})
 MINIO.objects.update({
-    domains.dd.ingestion.storage.keys.manifest_key("rf"): "{}", "ingestion-raw/rf/a": "x", "synth-vault/rf/b": "y", "keep/rf/c": "z",
+    domains.dd.ingestion.storage.keys.manifest_key("rf"): "{}", "ingestion/raw/rf/a": "x", "synth-vault/rf/b": "y", "keep/rf/c": "z",
 })
 # A refresh no longer wipes the stored copy at the API call: the queued run sets it aside itself when it starts (and puts it back
 # if it fails), so what is stored is untouched here.

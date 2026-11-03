@@ -8,9 +8,9 @@ export function Products() {
       <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 md:py-24">
         <p className="mono-label">Products</p>
         <h2 id="products-title" className="mt-4 max-w-2xl text-balance text-3xl font-semibold tracking-tight">
-          Two tools, one platform.
+          Three tools, one platform.
         </h2>
-        <ul className="mt-12 grid grid-cols-1 gap-px border border-border bg-border md:grid-cols-2">
+        <ul className="mt-12 grid grid-cols-1 gap-px border border-border bg-border lg:grid-cols-3">
           {PRODUCTS.map((product) => (
             <li key={product.name} className="flex flex-col bg-background p-7 sm:p-9">
               <p className="mono-label">{product.index}</p>
@@ -41,6 +41,7 @@ export function Products() {
                   <ArrowRight className="size-4" aria-hidden="true" />
                 </a>
               )}
+              {"status" in product && <p className="mt-4 mono-label">{product.status}</p>}
             </li>
           ))}
         </ul>

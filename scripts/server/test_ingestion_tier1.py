@@ -15,6 +15,7 @@ for name, value in {"REDIS_HOST": "localhost", "REDIS_PORT": "6379", "REDIS_PASS
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
 import httpx
+from capture_fakes import CaptureMinio
 
 import domains
 
@@ -101,10 +102,12 @@ class FakeProgress:
         return [c[1] for c in self.calls if c[0] == "finish"]
 
 
+
 class FakeStore:
     def __init__(self):
         self.pages: list[dict] = []
         self.index_summary = ""
+        self.minio = CaptureMinio()
 
     async def add_page(self, **kwargs):
         self.pages.append(kwargs)
@@ -158,6 +161,35 @@ async def main() -> None:
 
     outcome, progress, store, error = await run_tier1(lambda request: httpx.Response(200, text="<!doctype html><html><body>" + "x" * 800 + "</body></html>"))
     check("a soft-404 HTML page is not ingested as markdown", (type(error), len(store.pages)), (errors.TierUnavailable, 0))
+
+    # -- a paginated bundle (GitBook: "part 1 of 2 … Next part: <url>") ------------------------------------------------------
+    banner = "> This is part {n} of 2 of the full documentation (pages 1–2 of 4).\n> The content is paginated: fetch every part to see all of it.\n> {link}\n> Page index: https://docs.example.com/llms.txt\n\n"
+    first = banner.format(n=1, link="Next part: https://docs.example.com/llms-full.txt/1") + GOOD
+    second = banner.format(n=2, link="Previous part: https://docs.example.com/llms-full.txt") + GOOD.replace("Quickstart", "Second part")
+
+    def paginated(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=second) if request.url.path.endswith("/1") else httpx.Response(200, text=first)
+
+    outcome, progress, store, error = await run_tier1(paginated)
+    check("every part of a paginated bundle is followed, and joined without the later parts' banners",
+          (error, store.pages[0]["body"].count("part 1 of 2"), store.pages[0]["body"].count("part 2 of 2"), "Second part" in store.pages[0]["body"]), (None, 1, 0, True))
+    check("each part is kept as it came", sorted(k.rsplit("/", 1)[-1] for k in store.minio.objects if "/files/" in k), ["bundle.md", "bundle.part2.md"])
+    check("the second part's text is what the site sent", store.minio.objects["ingestion/raw/demo/files/bundle.part2.md"], second)
+
+    outcome, progress, store, error = await run_tier1(lambda request: httpx.Response(404, text="gone") if request.url.path.endswith("/1") else httpx.Response(200, text=first))
+    check("a part that cannot be had refuses the bundle (half the docs is not a bundle) and falls through",
+          (type(error), progress.statuses(), len(store.pages), "part 2" in str(error)), (errors.TierUnavailable, ["downgrade"], 0, True))
+
+    loop = banner.format(n=1, link="Next part: https://docs.example.com/llms-full.txt") + GOOD
+    outcome, progress, store, error = await run_tier1(lambda request: httpx.Response(200, text=loop))
+    check("a bundle that points at itself is read once", (error, len(store.minio.objects)), (None, 2))
+    check("a pointer to another host is not followed",
+          (tier1.domain.next_part_url(banner.format(n=1, link="Next part: https://elsewhere.dev/x"), "https://docs.example.com/llms-full.txt"),
+           tier1.domain.next_part_url(banner.format(n=1, link="Next part: /llms-full.txt/1"), "https://docs.example.com/llms-full.txt"),
+           tier1.domain.next_part_url(GOOD, "https://docs.example.com/llms-full.txt")),
+          (None, "https://docs.example.com/llms-full.txt/1", None))
+    check("a body that merely quotes the words is not paginated", tier1.domain.next_part_url("# Doc\n\nThe API says `Next part: https://docs.example.com/x` somewhere.", "https://docs.example.com/a"), None)
+    check("parts of a text with no banner join as they are", tier1.domain.join_parts(["# A\n\none\n", "# B\n\ntwo\n"]), "# A\n\none\n# B\n\ntwo\n")
 
     outcome, progress, store, error = await run_tier1(lambda request: httpx.Response(200, text="tiny"))
     check("a body that is too short is TierUnavailable", type(error), errors.TierUnavailable)
@@ -377,7 +409,7 @@ async def main() -> None:
     check("a page gets its vault when added", len(vault_keys(minio)), 2)
     await store.add_page(slug="deferred", url="", body=page, tier="llms_full", defer_vault=True)
     check("a deferred page does not (the backfill makes it after the split)", len(vault_keys(minio)), 2)
-    check("…but its body and its raw copy are stored", sum(1 for k in minio.objects if "deferred" in k and k.startswith(("ingestion/", "ingestion-raw/"))), 2)
+    check("…but its body and its raw copy are stored", sum(1 for k in minio.objects if "deferred" in k and k.startswith("ingestion/")), 2)
     await store.delete_vault(0, "kept")
     check("deleting a replaced page's vault removes both blobs", vault_keys(minio), [])
 

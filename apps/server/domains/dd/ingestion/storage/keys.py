@@ -1,4 +1,4 @@
-"""Key builders: ingestion/ (normalized), ingestion-raw/ (reversibility across normalizer bumps), synth-vault/ (wipeable without affecting ingestion)."""
+"""Key builders: ingestion/{slug}/ (normalized), ingestion/raw/{slug}/ (what each tier fetched, as it came: reversibility across normalizer bumps), synth-vault/ (wipeable without affecting ingestion)."""
 from __future__ import annotations
 from . import params
 
@@ -20,12 +20,25 @@ def page_key(framework_slug: str, idx: int, slug: str) -> str:
 
 
 def raw_prefix(framework_slug: str) -> str:
-    return f"ingestion-raw/{framework_slug.strip().strip('/')}/"
+    """The raw copies sit beside the frameworks, under the reserved folder name `params.RAW_FOLDER` — not inside any framework's own
+    prefix, so wiping or listing `ingestion/{slug}/` never touches them."""
+    return f"ingestion/{params.RAW_FOLDER}/{framework_slug.strip().strip('/')}/"
 
 
 def raw_page_key(framework_slug: str, idx: int, slug: str) -> str:
     safe_slug = (slug or "page").strip().strip("/")[:80]
     return f"{raw_prefix(framework_slug)}pages/{idx:04d}-{safe_slug}.md"
+
+
+def raw_capture_key(framework_slug: str) -> str:
+    """What a capture says about itself (`capture.entities.Capture`); written last, so a capture without one is unfinished."""
+    return f"{raw_prefix(framework_slug)}capture.json"
+
+
+def raw_file_key(framework_slug: str, name: str) -> str:
+    """A file of the capture — a bundle, an index, a page — under the name `capture.domain` gave it."""
+    safe_name = (name or "file").strip().strip("/").replace("..", "")[:120]
+    return f"{raw_prefix(framework_slug)}files/{safe_name}"
 
 
 def vault_prefix(framework_slug: str) -> str:

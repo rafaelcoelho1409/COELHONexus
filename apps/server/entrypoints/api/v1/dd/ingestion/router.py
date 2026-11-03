@@ -17,7 +17,7 @@ async def list_library() -> list[dict]:
     so each row carries logo URL + framework metadata."""
     minio = infra.minio.service.get_storage()
     catalog = domains.dd.resolver.service.index_by_slug()
-    slugs = await minio.list_subfolders("ingestion/")
+    slugs = domains.dd.ingestion.storage.domain.framework_slugs(await minio.list_subfolders("ingestion/"))
     if not slugs:
         return []
     out: list[dict] = []

@@ -16,10 +16,12 @@ Q_CRAWLER = domain.scoped_queue("crawler", params.ENVIRONMENT)
 Q_PLANNER = domain.scoped_queue("planner", params.ENVIRONMENT)
 Q_SYNTH = domain.scoped_queue("synth", params.ENVIRONMENT)
 Q_YCS = domain.scoped_queue("ycs", params.ENVIRONMENT)
+Q_BD = domain.scoped_queue("bd", params.ENVIRONMENT)
 
 
 # qdrant_task / neo4j_task names dodge qdrant_client / neo4j package collisions
 TASK_INCLUDE = [
+    "domains.bd.ingestion.task",
     "domains.dd.ingestion.task",
     "domains.dd.planner.task",
     "domains.dd.synth.task",
@@ -33,6 +35,7 @@ TASK_INCLUDE = [
 
 # per-module queue isolation: planner CPU / synth LLM / YCS embed each separated
 TASK_ROUTES = {
+    "domains.bd.ingestion.task.*": {"queue": Q_BD},
     "domains.dd.ingestion.task.*": {"queue": Q_CRAWLER},
     "domains.dd.planner.task.*":   {"queue": Q_PLANNER},
     "domains.dd.synth.task.*":     {"queue": Q_SYNTH},

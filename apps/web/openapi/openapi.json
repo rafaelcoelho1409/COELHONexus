@@ -21,6 +21,411 @@
         }
       }
     },
+    "/api/v1/bd/ingestion": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "List Books",
+        "operationId": "get_bd_ingestion",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BookRow"
+                  },
+                  "type": "array",
+                  "title": "Response Get Bd Ingestion"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Upload Book",
+        "description": "Status: queued (the task is dispatched; `resumed` when it continues a stopped extraction) / cached (already extracted, no\n`refresh`) / locked (an extraction of this book is in flight). The same file is the same book.",
+        "operationId": "post_bd_ingestion",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_post_bd_ingestion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/ingestion/active": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "List Active",
+        "operationId": "get_bd_ingestion_active",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveRuns"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/ingestion/{book_id}": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Book",
+        "description": "The manifest (outline, chapters, the pages extracted so far) and the run's progress.",
+        "operationId": "get_bd_ingestion_book_id",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Snapshot"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Delete Book",
+        "operationId": "delete_bd_ingestion_book_id",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/ingestion/{book_id}/cancel": {
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Cancel Book",
+        "operationId": "post_bd_ingestion_book_id_cancel",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/ingestion/{book_id}/events": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Book Events",
+        "description": "Server-sent events of the book's extraction: the history first (a late subscriber replays it), then live. Kinds: started,\npage, slice_done, then one of done / failed / cancelled. A 15 s comment keeps the connection alive through the ingress.",
+        "operationId": "get_bd_ingestion_book_id_events",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/ingestion/{book_id}/figures/{name}": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Figure",
+        "operationId": "get_bd_ingestion_book_id_figures_name",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/ingestion/{book_id}/pages/{page_no}": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Page",
+        "operationId": "get_bd_ingestion_book_id_pages_page_no",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "page_no",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Page No"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/ingestion/{book_id}/run": {
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Run Book",
+        "description": "Start (or continue) the extraction of a book already stored, from its stored PDF: the way to resume a cancelled or failed\nbook, or with `refresh` to extract it again, without uploading it again. Same answers as the upload.",
+        "operationId": "post_bd_ingestion_book_id_run",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Refresh"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dd/debug/finalize/{slug}": {
       "post": {
         "tags": [
@@ -4656,6 +5061,44 @@
         "title": "AIGenerateRequest",
         "description": "`prompt` is the user's natural-language description; `previous`\n(optional) is whatever's currently in the editor so the model can\ndo `\"add a filter for channel X\"` follow-ups instead of starting\nfrom scratch."
       },
+      "ActiveRun": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/Progress"
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "run_id",
+          "progress"
+        ],
+        "title": "ActiveRun"
+      },
+      "ActiveRuns": {
+        "properties": {
+          "active": {
+            "items": {
+              "$ref": "#/components/schemas/ActiveRun"
+            },
+            "type": "array",
+            "title": "Active"
+          }
+        },
+        "type": "object",
+        "required": [
+          "active"
+        ],
+        "title": "ActiveRuns"
+      },
       "AskFeedbackRequest": {
         "properties": {
           "trace_id": {
@@ -4683,6 +5126,78 @@
         "title": "AskFeedbackRequest",
         "description": "User rating for an ask turn. `trace_id` is the 32-hex OTel trace id\nreturned as `trace_id` in the `/search` response; `rating` is 0.0 (bad)\nto 1.0 (good). Lands as a `user.feedback` score on the trace."
       },
+      "Body_post_bd_ingestion": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "refresh": {
+            "type": "boolean",
+            "title": "Refresh",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_post_bd_ingestion"
+      },
+      "BookRow": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "n_pages": {
+            "type": "integer",
+            "title": "N Pages"
+          },
+          "pages_done": {
+            "type": "integer",
+            "title": "Pages Done"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "number",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "number",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "title",
+          "filename",
+          "size_bytes",
+          "n_pages",
+          "pages_done",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "BookRow"
+      },
       "BulkDeleteRequest": {
         "properties": {
           "video_ids": {
@@ -4698,6 +5213,24 @@
           "video_ids"
         ],
         "title": "BulkDeleteRequest"
+      },
+      "CancelResponse": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "status"
+        ],
+        "title": "CancelResponse"
       },
       "ChannelPipelineRequest": {
         "properties": {
@@ -4777,6 +5310,69 @@
         ],
         "title": "ChannelRequest",
         "description": "`channel_id` accepts: bare ID (UC…), full URL, or @handle.\n`max_results = 0` means \"all videos\" (deprecated convention)."
+      },
+      "ChapterRange": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "first_page": {
+            "type": "integer",
+            "title": "First Page"
+          },
+          "last_page": {
+            "type": "integer",
+            "title": "Last Page"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "first_page",
+          "last_page"
+        ],
+        "title": "ChapterRange"
+      },
+      "DeleteResponse": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "objects": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objects"
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "deleted"
+        ],
+        "title": "DeleteResponse"
       },
       "EmbeddingBody": {
         "properties": {
@@ -4988,6 +5584,90 @@
         "title": "IngestRequest",
         "description": "Request to ingest transcripts from ES into Qdrant.\nIf `video_ids` is None, ingests ALL transcripts in ES."
       },
+      "Manifest": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "n_pages": {
+            "type": "integer",
+            "title": "N Pages"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "outline": {
+            "items": {
+              "$ref": "#/components/schemas/OutlineEntry"
+            },
+            "type": "array",
+            "title": "Outline"
+          },
+          "chapters": {
+            "items": {
+              "$ref": "#/components/schemas/ChapterRange"
+            },
+            "type": "array",
+            "title": "Chapters"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/PageEntry"
+            },
+            "type": "array",
+            "title": "Pages"
+          },
+          "created_at": {
+            "type": "number",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "number",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "title",
+          "filename",
+          "size_bytes",
+          "n_pages",
+          "status",
+          "error",
+          "outline",
+          "chapters",
+          "pages",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "Manifest"
+      },
       "NamespaceEntry": {
         "properties": {
           "available": {
@@ -5041,6 +5721,111 @@
         "type": "object",
         "title": "NamespaceMap",
         "description": "Returned by `GET /query/namespaces`. The UI fetches this on\nfirst load to know which `(app, backend)` chips to grey out."
+      },
+      "OutlineEntry": {
+        "properties": {
+          "level": {
+            "type": "integer",
+            "title": "Level"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          }
+        },
+        "type": "object",
+        "required": [
+          "level",
+          "title",
+          "page"
+        ],
+        "title": "OutlineEntry"
+      },
+      "PageBody": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "markdown": {
+            "type": "string",
+            "title": "Markdown"
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "page",
+          "markdown"
+        ],
+        "title": "PageBody"
+      },
+      "PageEntry": {
+        "properties": {
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "chars": {
+            "type": "integer",
+            "title": "Chars"
+          },
+          "headings": {
+            "type": "integer",
+            "title": "Headings"
+          },
+          "tables": {
+            "type": "integer",
+            "title": "Tables"
+          },
+          "pictures": {
+            "type": "integer",
+            "title": "Pictures"
+          },
+          "formulas": {
+            "type": "integer",
+            "title": "Formulas"
+          },
+          "figures": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Figures"
+          },
+          "section_path": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Section Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "page",
+          "key",
+          "chars",
+          "headings",
+          "tables",
+          "pictures",
+          "formulas",
+          "figures",
+          "section_path"
+        ],
+        "title": "PageEntry"
       },
       "PipelineRequest": {
         "properties": {
@@ -5155,6 +5940,56 @@
         ],
         "title": "PlaylistRequest",
         "description": "`playlist_id` accepts: bare ID (PL/UU/RD…), full URL with ?list=…"
+      },
+      "Progress": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "completed": {
+            "type": "integer",
+            "title": "Completed"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "started_at": {
+            "type": "number",
+            "title": "Started At"
+          },
+          "updated_at": {
+            "type": "number",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "status",
+          "completed",
+          "total",
+          "error",
+          "started_at",
+          "updated_at"
+        ],
+        "title": "Progress"
       },
       "QueryHit": {
         "properties": {
@@ -5784,6 +6619,69 @@
         ],
         "title": "SearchResponse",
         "description": "Envelope for /content/search."
+      },
+      "Snapshot": {
+        "properties": {
+          "manifest": {
+            "$ref": "#/components/schemas/Manifest"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Progress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "manifest",
+          "progress"
+        ],
+        "title": "Snapshot"
+      },
+      "StartResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "cached",
+              "locked"
+            ],
+            "title": "Status"
+          },
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "resumed": {
+            "type": "boolean",
+            "title": "Resumed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "book_id",
+          "run_id",
+          "resumed"
+        ],
+        "title": "StartResponse"
       },
       "StartRunBody": {
         "properties": {

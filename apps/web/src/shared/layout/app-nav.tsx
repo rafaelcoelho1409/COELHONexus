@@ -25,7 +25,11 @@ export function AppNav() {
                 : "inline-flex h-9 items-center px-2 text-sm text-muted-foreground transition-colors hover:text-foreground sm:px-3"
             }
           >
-            {item.label}
+            {/* A phone shows the short label; the full one stays the accessible name. */}
+            <span aria-hidden="true" className="sm:hidden">
+              {item.short}
+            </span>
+            <span className="sr-only sm:not-sr-only">{item.label}</span>
           </Link>
         );
       })}

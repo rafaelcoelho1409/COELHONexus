@@ -36,11 +36,18 @@ describe("HomePage", () => {
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
       "Framework docs, distilled. YouTube channels, searchable.",
     );
-    expect(screen.getByRole("navigation", { name: "Primary" })).toBeInTheDocument();
-    for (const name of ["Products", "System", "Principles"]) {
-      expect(screen.getByRole("link", { name })).toHaveAttribute("href", `#${name.toLowerCase()}`);
+    // The page is a stack of snapping sections; there is no in-page navbar.
+    expect(screen.queryByRole("navigation", { name: "Primary" })).not.toBeInTheDocument();
+    for (const name of [
+      "Three tools, one platform.",
+      "Six layers, each replaceable on its own.",
+      "How it is built.",
+      "Run it yourself.",
+    ]) {
+      expect(screen.getByRole("heading", { level: 2, name })).toBeInTheDocument();
     }
     expect(screen.getByRole("main")).toHaveAttribute("id", "main");
+    expect(screen.getByRole("main")).toHaveClass("snap-page");
   });
 
   it("links into the two apps from the header, the hero and the product card", () => {
@@ -49,6 +56,7 @@ describe("HomePage", () => {
 
     const console = within(screen.getByRole("navigation", { name: "Console" }));
     expect(console.getByRole("link", { name: "Docs Distiller" })).toHaveAttribute("href", "/dd");
+    expect(console.getByRole("link", { name: "Book Distiller" })).toHaveAttribute("href", "/bd");
     expect(console.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
     expect(screen.getAllByRole("link", { name: "Open Docs Distiller" })).toHaveLength(2); // hero + card
     for (const link of screen.getAllByRole("link", { name: "Open Docs Distiller" })) {

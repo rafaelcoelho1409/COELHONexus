@@ -1,5 +1,6 @@
 """Fetch a URL the way a crawler must: retried on timeouts, network errors and transient statuses, the server's Retry-After and rate-limit headers honoured, and — through a `Pacer` — one pace for all of a crawl's concurrent requests."""
 from __future__ import annotations
+import domains
 from . import domain, params
 
 import asyncio
@@ -98,3 +99,31 @@ async def get(
             logger.info(f"[fetch] {url}: the crawl's waiting budget is spent, not retrying HTTP {resp.status_code}")
             return resp
     raise AssertionError("unreachable: the last attempt always returns or raises")
+
+
+async def keep(
+    writer: domains.dd.ingestion.capture.service.Writer | None,
+    url: str,
+    resp: httpx.Response | None,
+    *,
+    error: str = "",
+    for_url: str = "",
+    via: str = "",
+    role: str = "",
+    note_only: bool = False,
+) -> None:
+    """Keep what a crawl fetched for `url` in the run's capture (`writer`, None when the run keeps none): the body of a 200 exactly as it
+    came, and for anything else a note of what came of the request (its status, or the error of a request that never got one), so a
+    transform knows the page was tried. Called with the response the moment it is in hand, before anything is made of it. `note_only`
+    notes the request without keeping a body (a markdown twin that turned out not to be one)."""
+    if writer is None:
+        return
+    raw = domains.dd.ingestion.capture
+    content_type = resp.headers.get("content-type", "") if resp is not None else ""
+    kept = resp is not None and resp.status_code == 200 and not note_only
+    await writer.add(
+        raw.domain.page_file_name(url, content_type), role = role or raw.params.ROLE_PAGE, url = url,
+        final_url = str(resp.url) if resp is not None else url,
+        status = resp.status_code if resp is not None else 0, content_type = content_type,
+        text = (resp.text or "") if kept else None, error = error, for_url = for_url, via = via or raw.params.VIA_HTTP,
+    )

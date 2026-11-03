@@ -152,7 +152,8 @@ celery:
   replicas: 1
   # 2 workers: peak COW RSS (5 × 2GB + parent) OOMKilled at concurrency=5; 2 × 8 LLM calls already hits DD_LLM_GLOBAL_CONCURRENCY.
   concurrency: 2
-  queues: "crawler,embedding,llm,planner,synth,default,ycs"
+  queues: "crawler,embedding,llm,planner,synth,default,ycs,bd"
+  threads: "1"
   resources:
     requests:
       memory: "2Gi"
@@ -160,28 +161,6 @@ celery:
     limits:
       memory: "6Gi"  # concurrency=2 + worker_max_memory=2GB + parent 1.8GB ≈ 5.8GB peak
       cpu: "2000m"
-
-# Book Distiller worker: the server image built with `uv sync --group bd` (Docling + CPU-only PyTorch, which the API and
-# the workers above never load). A Deployment of its own: it consumes only the `bd` queue, and the `celery` workers
-# above must not list it (their image cannot import the task).
-bd:
-  enabled: true
-  image: localhost:5001/coelhonexus-bd:latest
-  imagePullPolicy: Always
-  replicas: 1  # RWO model volume + one extraction at a time
-  concurrency: 1  # a slice holds ~2.5 GB and every CPU thread it is given; two at once only slow each other down
-  queues: "bd"
-  threads: "4"  # OMP_NUM_THREADS, which Docling reads as its thread count
-  modelsMountPath: /models  # HF_HOME: Docling's layout and table models, downloaded on the first extraction and kept
-  storageSize: "5Gi"
-  storageClassName: "local-path"
-  resources:
-    requests:
-      memory: "3Gi"
-      cpu: "1000m"
-    limits:
-      memory: "6Gi"
-      cpu: "4000m"
 
 # Flower uses mher/flower (NOT the server image) — shelve storage, single-writer enforced.
 flower:

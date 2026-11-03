@@ -4,13 +4,6 @@
  * project (`scripts/check-public-copy.mjs` fails the build if it does).
  */
 
-export const NAV = [
-  { label: "Products", href: "#products" },
-  { label: "System", href: "#system" },
-  { label: "Principles", href: "#principles" },
-  { label: "Source", href: "#source" },
-] as const;
-
 export const PRODUCTS = [
   {
     index: "01",
@@ -28,6 +21,16 @@ export const PRODUCTS = [
       "Indexes a whole channel, then answers questions against the transcripts, the entities in them and the relationships between them — with citations.",
     pipeline: ["Transcribe", "Index", "Graph", "Ask"],
     stack: "Playwright · Qdrant · Neo4j",
+  },
+  {
+    index: "03",
+    name: "Book Distiller",
+    summary:
+      "Turns a book into a chapter-by-chapter study guide, then researches across it and the live web — with citations.",
+    pipeline: ["Ingest", "Distill", "Index", "Research"],
+    stack: "LangGraph · Deep Agents · FastMCP",
+    status: "In development",
+    open: { label: "Open Book Distiller", href: "/bd" },
   },
 ] as const;
 

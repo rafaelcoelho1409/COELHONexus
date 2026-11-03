@@ -5,6 +5,7 @@ from . import domain, params
 from .. import fetch
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -51,15 +52,15 @@ async def _default_branch(
 
 async def _list_blobs(
     client: httpx.AsyncClient, org: str, repo: str, branch: str,
-) -> list[tuple[str, int | None]]:
-    """Return [(path, size_bytes?), ...] for every blob in the repo tree."""
+) -> tuple[list[tuple[str, int | None]], dict]:
+    """Return ([(path, size_bytes?), ...] for every blob in the repo tree, the tree as the API answered)."""
     data = await _get_json(client, domain.tree_api_url(org, repo, branch))
     if data.get("truncated"):
         logger.warning(
             f"[tier-5] {org}/{repo} tree was truncated by GitHub — "
             f"large monorepos may miss some blobs"
         )
-    return domain.blobs_of_tree(data)
+    return domain.blobs_of_tree(data), data
 
 
 @retry(
@@ -80,12 +81,14 @@ async def _fetch_one(
     path: str,
     *,
     progress: domains.dd.ingestion.runtime.progress.service.Progress,
+    writer: domains.dd.ingestion.capture.service.Writer | None = None,
 ) -> tuple[str, str, str, str] | None:
     raw_url = domain.raw_url(org, repo, branch, path)
     t0 = time.monotonic()
     try:
         resp = await _fetch_blob(client, org, repo, branch, path)
     except Exception as e:
+        await fetch.service.keep(writer, raw_url, None, error = f"{type(e).__name__}: {e}")
         await progress.record_url(
             raw_url,
             status = "fetch_error",
@@ -95,6 +98,7 @@ async def _fetch_one(
         )
         return None
     fetch_ms = int((time.monotonic() - t0) * 1000)
+    await fetch.service.keep(writer, raw_url, resp)
     if resp.status_code != 200:
         await progress.record_url(
             raw_url,
@@ -172,7 +176,7 @@ async def run(
 
         t0 = time.monotonic()
         try:
-            blobs = await _list_blobs(client, org, repo, branch)
+            blobs, tree = await _list_blobs(client, org, repo, branch)
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
             await progress.record_url(
@@ -204,6 +208,17 @@ async def run(
             f"(branch={branch})"
         )
         await progress.update_total(len(keep))
+        # The repository's tree (as the API answered) and every file fetched are kept as they come: what a transform starts from.
+        raw = domains.dd.ingestion.capture
+        writer = raw.service.Writer(
+            store.minio, framework_slug, params.TIER_KIND, url,
+            capture_params = {"org": org, "repo": repo, "branch": branch, "paths": keep},
+        )
+        await writer.begin()
+        await writer.add(
+            params.TREE_FILE, role = raw.params.ROLE_INDEX, url = domain.tree_api_url(org, repo, branch), status = 200,
+            content_type = "application/json", text = json.dumps(tree, ensure_ascii = False), via = raw.params.VIA_HTTP,
+        )
         sem = asyncio.Semaphore(params.CONCURRENCY)
         written = 0
 
@@ -212,7 +227,7 @@ async def run(
             async with sem:
                 await progress.raise_if_cancelled()
                 r = await _fetch_one(
-                    client, org, repo, branch, p, progress = progress,
+                    client, org, repo, branch, p, progress = progress, writer = writer,
                 )
             if r is not None:
                 slug, raw_url, body, title = r
@@ -222,6 +237,8 @@ async def run(
                     body = body,
                     tier = params.TIER_KIND,
                     title = title,
+                    # The capture holds the file as the repository has it; a second copy, already changed, is not kept next to the pages.
+                    keep_raw = False,
                 )
                 written += 1
             await progress.update(current = written, last_url = p)
@@ -234,5 +251,6 @@ async def run(
     if written == 0:
         await progress.finish(status = "failed")
         raise RuntimeError(f"Tier 5: {org}/{repo} all blob fetches failed")
+    await writer.finish()
     # No `finish`: post-processing and finalizing follow, and the dispatcher alone marks the run done.
     return written

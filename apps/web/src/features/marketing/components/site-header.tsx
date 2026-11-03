@@ -4,7 +4,6 @@ import { APP_NAV } from "@/shared/layout/nav";
 import { BrandMark } from "@/shared/ui/brand-mark";
 import { ThemeToggle } from "@/shared/ui/theme-toggle";
 
-import { NAV } from "../content";
 import { REPO_URL } from "../params";
 
 export function SiteHeader() {
@@ -16,19 +15,9 @@ export function SiteHeader() {
           {/* The wordmark gives way to the app links on a phone; it stays the link's accessible name. */}
           <span className="sr-only font-semibold tracking-tight sm:not-sr-only">COELHO Nexus</span>
         </a>
-        <nav aria-label="Primary" className="hidden items-center gap-7 md:flex">
-          {NAV.map((item) => (
-            <a
-              key={item.href}
-              href={item.href}
-              className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-            >
-              {item.label}
-            </a>
-          ))}
-        </nav>
         <div className="flex items-center gap-1 sm:gap-2">
-          {/* The way in: the two pages that exist as apps, on every screen size. */}
+          {/* The way in: the app pages, on every screen size. A phone shows the short labels; the full one stays the
+              link's accessible name. */}
           <nav aria-label="Console" className="flex items-center">
             {APP_NAV.map((item) => (
               <a
@@ -36,7 +25,10 @@ export function SiteHeader() {
                 href={item.href}
                 className="inline-flex h-9 items-center px-2 text-sm text-foreground transition-colors hover:text-primary-text sm:px-3"
               >
-                {item.label}
+                <span aria-hidden="true" className="sm:hidden">
+                  {item.short}
+                </span>
+                <span className="sr-only sm:not-sr-only">{item.label}</span>
               </a>
             ))}
           </nav>

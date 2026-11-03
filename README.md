@@ -35,7 +35,7 @@
 
 ## What is this?
 
-COELHO Nexus is a single, self-contained platform hosting two independent AI-powered applications (a third, AgenticMath, is in development), all running on the same Kubernetes cluster, sharing the same observability stack, the same free-tier LLM rotator, and the same infrastructure-as-code foundation. It was designed and built end-to-end by one engineer — from the Terraform modules that provision every data store, to the FastAPI backend and Next.js front end that run the apps, to the pipeline that deploys them.
+COELHO Nexus is a single, self-contained platform hosting two independent AI-powered applications (a third, Book Distiller, is in development), all running on the same Kubernetes cluster, sharing the same observability stack, the same free-tier LLM rotator, and the same infrastructure-as-code foundation. It was designed and built end-to-end by one engineer — from the Terraform modules that provision every data store, to the FastAPI backend and Next.js front end that run the apps, to the pipeline that deploys them.
 
 The point of this repo isn't just "a few AI apps." It's a demonstration of what a single engineer can own end-to-end: infrastructure, backend, observability, and delivery, all treated with the same rigor a platform team would bring to production.
 
@@ -45,7 +45,7 @@ The point of this repo isn't just "a few AI apps." It's a demonstration of what 
 |---|---|
 | **Docs Distiller** | Turns any framework's scattered documentation into a single, coherent study guide. A five-tier ingestion cascade (`llms_full.txt` → `llms_txt` → sitemap → httpx-crawl-with-Playwright-fallback → GitHub README) pulls in raw docs; a Planner → Resolver → Synth pipeline turns them into a structured, chapter-by-chapter book. |
 | **YouTube Content Search** | Full semantic search over YouTube video transcripts. Playwright-driven transcript scraping feeds a hybrid retrieval pipeline — Qdrant for dense vector search, Elasticsearch for full-text, Neo4j for the entity/relationship graph extracted from what's actually said in each video. |
-| **AgenticMath** *(in development)* | A multi-agent solver for mathematical problems. LangGraph orchestrates Deep Agents that work inside an isolated sandbox, with durable checkpoints, resumable runs and a live view of the graph. |
+| **Book Distiller** *(in development)* | Turns a book into a structured, chapter-by-chapter study guide, then researches across it and the live web with citations. The sibling of Docs Distiller, built on Deep Agents, LangGraph and FastMCP. |
 
 ## Architecture
 
@@ -83,7 +83,7 @@ The earlier FastHTML UI and the standalone FastMCP gateway were retired and move
 | **Next.js** | The web front end (React, Tailwind, shadcn/ui, TanStack Query) |
 | **FastMCP** | Model Context Protocol endpoint mounted on the server (`/mcp`) |
 | **Celery** | Background task orchestration, one queue per feature |
-| **DeepAgents** | Autonomous agent orchestration (AgenticMath, in development) |
+| **DeepAgents** | Autonomous agent orchestration (Book Distiller, in development) |
 | **LangGraph** | Graph-structured pipelines (Docs Distiller Planner/Synth) |
 | **Playwright** | Headless/headed browser automation — transcript scraping, doc-site rendering |
 

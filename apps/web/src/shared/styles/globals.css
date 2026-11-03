@@ -207,6 +207,36 @@
       scroll-behavior: auto;
     }
   }
+
+  /* The home page is a stack of sections that the page snaps between. Native scroll snap, no script: the browser keeps
+     its own wheel, touch, keyboard (arrows, Page Up/Down, Space) and scrollbar behaviour, and nothing is animated by us.
+     `proximity` everywhere, so a section taller than the window (a phone) can always be read to its end; `mandatory`
+     only where every section fits one screen. The page opts in with `.snap-page` on its <main> (`html:has()` lifts it to
+     the viewport scroller), so the app pages are untouched. */
+  html:has(.snap-page) {
+    scroll-snap-type: y proximity;
+    scroll-padding-top: 3.5rem; /* the sticky header is h-14 */
+  }
+  .snap-page > section {
+    scroll-snap-align: start;
+  }
+  .snap-footer {
+    scroll-snap-align: end; /* the bottom of the page is a snap position, so the footer is reachable */
+  }
+  @media (min-width: 768px) and (min-height: 720px) {
+    html:has(.snap-page) {
+      scroll-snap-type: y mandatory;
+    }
+    .snap-page > section {
+      display: grid;
+      align-content: center;
+      min-height: calc(100dvh - 3.5rem);
+      scroll-snap-stop: always;
+    }
+    .snap-page > section > div {
+      width: 100%;
+    }
+  }
 }
 
 @layer components {

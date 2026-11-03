@@ -107,6 +107,13 @@ def merge_seeds(sources: list[list[str]]) -> tuple[list[str], dict[str, list[str
     return seeds, anchors_by_page
 
 
+def browser_file_name(url: str) -> str:
+    """Where the browser's rendering of `url` is kept in the run's capture, beside (never over) the page a plain request got: the same
+    name as that page's with `.browser` before the extension."""
+    plain = domains.dd.ingestion.capture.domain.page_file_name(url, "text/html")
+    return plain.removesuffix(".html") + ".browser.html"
+
+
 def page_identity(src_url: str, anchors_by_page: dict[str, list[str]]) -> tuple[str, list[str]]:
     """`(page URL, its anchors)` for a fetched piece. A piece's URL may itself carry an `#anchor` (the split emits one slice per
     anchor): the base page is the identity, and the anchor joins the page's metadata."""

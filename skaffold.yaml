@@ -29,15 +29,6 @@ build:
             dest: /app
           - src: "**/*.toml"
             dest: /app
-    # Book Distiller worker: the server image plus Docling and CPU-only PyTorch (`uv sync --group bd`). Same source as the
-    # server, so its layers are shared; no `sync:` — a worker is restarted by a rebuild, not hot-patched.
-    - image: localhost:5001/coelhonexus-bd
-      context: apps/server
-      docker:
-        dockerfile: Dockerfile.server
-        noCache: false
-        buildArgs:
-          UV_SYNC_EXTRA: "--group bd"
     # Next.js front end: a standalone build can't be hot-patched, so no `sync:` — edits rebuild.
     - image: localhost:5001/coelhonexus-web
       context: apps/web
@@ -67,7 +58,6 @@ manifests:
         # runs exactly what was pushed, so hot-reload sync finds it.
         setValueTemplates:
           server.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_server}}"
-          bd.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_bd}}"
           web.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_web}}"
           environment: local  # Enables --reload in uvicorn for hot-reload
 
@@ -135,13 +125,6 @@ profiles:
           docker:
             dockerfile: Dockerfile.server
             noCache: false
-        - image: localhost:5001/coelhonexus-bd
-          context: apps/server
-          docker:
-            dockerfile: Dockerfile.server
-            noCache: false
-            buildArgs:
-              UV_SYNC_EXTRA: "--group bd"
         - image: localhost:5001/coelhonexus-web
           context: apps/web
           docker:

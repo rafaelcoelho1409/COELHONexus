@@ -14,13 +14,6 @@ spec:
           manifestTargets:
             helm:
               spec: server.image  # Full image reference (repo:tag@digest)
-        - alias: bd
-          imageName: localhost:5001/coelhonexus-bd:latest
-          commonUpdateSettings:
-            updateStrategy: digest
-          manifestTargets:
-            helm:
-              spec: bd.image  # Full image reference (repo:tag@digest)
         - alias: web
           imageName: localhost:5001/coelhonexus-web:latest
           commonUpdateSettings:
