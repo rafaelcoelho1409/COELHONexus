@@ -41,7 +41,7 @@ async def audit_page(
     if not isinstance(result, dict) or "structured_response" not in result:
         raise ValueError("page auditor returned no structured PageAssessment")
 
-    assessment = domain.validate_assessment(
+    assessment, warnings = domain.sanitize_assessment(
         result["structured_response"],
         page_number = page_number,
         pictures = pictures,
@@ -51,4 +51,5 @@ async def audit_page(
         "assessment": assessment.model_dump(mode = "json"),
         "source_sha256": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
         "status": "complete",
+        "warnings": warnings,
     }

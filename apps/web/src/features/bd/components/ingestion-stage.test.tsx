@@ -12,6 +12,8 @@ import type { BookRow, Snapshot } from "@/shared/api";
 import { client } from "@/shared/api";
 import { QueryProvider } from "@/shared/providers/query-provider";
 
+import type { AgenticProgress } from "../entities";
+import { AUTO_CHAIN_STORAGE_KEY } from "../params";
 import {
   BOOK_ID,
   BOOK_TITLE,
@@ -42,6 +44,7 @@ const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledFrame: "error" }));
 beforeEach(() => {
   push.mockClear();
+  window.localStorage.removeItem(AUTO_CHAIN_STORAGE_KEY);
   client.setConfig({ baseUrl: ORIGIN });
 });
 afterEach(() => server.resetHandlers());
@@ -235,6 +238,14 @@ describe("Upload", () => {
       expect(push).toHaveBeenCalledWith(`/bd/ingestion?book=${BOOK_ID}`, { scroll: false }),
     );
     expect(await screen.findByText("Extraction queued.")).toBeInTheDocument();
+  });
+
+  it("persists the automatic chain preference for future runs", async () => {
+    serveLibrary();
+    renderStage();
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "Run Agentic AI after extraction" }));
+    expect(window.localStorage.getItem(AUTO_CHAIN_STORAGE_KEY)).toBe("true");
   });
 
   it("opens a cached book and says it was already extracted", async () => {
@@ -556,6 +567,103 @@ describe("A book being extracted", () => {
     expect(fetched).toEqual(["1"]);
   });
 
+  it("switches an extracted page to its AI version as soon as repair finishes", async () => {
+    const stream = liveStream();
+    let pageReads = 0;
+    const progress: AgenticProgress = {
+      current_node: "repair_pages",
+      node_status: { audit_batch: "done", repair_pages: "running" },
+      audited_pages: [1],
+      audit_warning_pages: [1],
+      processed_pages: [],
+      active_audit_pages: [],
+      active_repair_pages: [1],
+    };
+    serveLibrary([bookRow({ status: "done", n_pages: 1, pages_done: 1 })]);
+    serveBook(
+      snapshot({ status: "done", n_pages: 1, pages: [pageEntry(1)] }, null, {
+        book_id: BOOK_ID,
+        extraction_run_id: "extract-1",
+        agentic_run_id: "agentic-1",
+        status: "running",
+        expected_page_count: 1,
+        published_page_count: 0,
+        progress,
+        created_at: 1,
+        updated_at: 2,
+        finished_at: null,
+        error: null,
+      }),
+    );
+    server.use(
+      http.get(`${API}/${BOOK_ID}/pages/1`, () => {
+        pageReads += 1;
+        return HttpResponse.json({
+          book_id: BOOK_ID,
+          page: 1,
+          markdown: pageReads === 1 ? "Docling body" : "AI repaired body",
+          content_source: pageReads === 1 ? "docling" : "agentic",
+        });
+      }),
+      http.get(`${API}/${BOOK_ID}/agentic/runs/agentic-1/events`, () => stream.response),
+      http.get(`${API}/${BOOK_ID}/agentic/runs/agentic-1/llm-counters`, () =>
+        HttpResponse.json({
+          total: { calls: 1, tokens_in: 20, tokens_out: 8, reasoning_tokens: 2, errors: 0 },
+          by_node: {},
+        }),
+      ),
+    );
+    renderStage(BOOK_ID);
+
+    const reader = await screen.findByRole("article", { name: "Page 1" });
+    expect(await within(reader).findByText("Docling body")).toBeInTheDocument();
+    expect(within(reader).getByText("Docling extraction")).toBeInTheDocument();
+    expect(screen.getByText("1 page needs review")).toBeInTheDocument();
+    stream.send({
+      kind: "page_repair",
+      page: 1,
+      status: "done",
+      progress: { ...progress, processed_pages: [1], active_repair_pages: [] },
+    });
+
+    expect(await within(reader).findByText("AI repaired body")).toBeInTheDocument();
+    expect(within(reader).getByText("AI-processed content")).toBeInTheDocument();
+    expect(pageReads).toBe(2);
+    expect(screen.getByRole("progressbar", { name: "AI-processed pages" })).toHaveAttribute(
+      "aria-valuenow",
+      "1",
+    );
+    expect(screen.queryByRole("dialog", { name: "Agentic pipeline" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "View pipeline" }));
+    const pipeline = await screen.findByRole("dialog", { name: "Agentic pipeline" });
+    await userEvent.click(within(pipeline).getByRole("button", { name: "LLM Usage" }));
+    expect(await screen.findByRole("dialog", { name: "Ingestion LLM usage" })).toBeInTheDocument();
+  });
+
+  it("lets the user start Agentic AI separately after extraction", async () => {
+    const requests: string[] = [];
+    serveLibrary([bookRow({ status: "done", n_pages: 1, pages_done: 1 })]);
+    serveBook(snapshot({ status: "done", n_pages: 1, pages: [pageEntry(1)] }, null));
+    server.use(
+      http.post(`${API}/${BOOK_ID}/agentic/runs`, ({ request }) => {
+        requests.push(request.method);
+        return HttpResponse.json({
+          status: "queued",
+          book_id: BOOK_ID,
+          extraction_run_id: "extract-1",
+          agentic_run_id: "agentic-1",
+        });
+      }),
+    );
+    renderStage(BOOK_ID);
+
+    expect(screen.queryByRole("dialog", { name: "Agentic pipeline" })).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "Run Agentic AI" }));
+
+    await waitFor(() => expect(requests).toEqual(["POST"]));
+    expect(await screen.findByText("Agentic ingestion queued.")).toBeInTheDocument();
+  });
+
   it("cancels: asks the server, says it is stopping, then shows the cancelled state and offers Resume", async () => {
     const stream = liveStream();
     const requests: string[] = [];
@@ -620,9 +728,10 @@ describe("A book being extracted", () => {
     );
     renderStage(BOOK_ID);
 
+    await userEvent.click(screen.getByRole("checkbox", { name: "Run Agentic AI after extraction" }));
     await userEvent.click(await screen.findByRole("button", { name: BOOK_TITLE }));
     await userEvent.click(screen.getByRole("button", { name: `Refresh ${BOOK_TITLE}` }));
-    await waitFor(() => expect(runs).toEqual(["?refresh=true"]));
+    await waitFor(() => expect(runs).toEqual(["?refresh=true&auto_chain=true"]));
     expect(push).toHaveBeenCalledWith(`/bd/ingestion?book=${BOOK_ID}`, { scroll: false });
     expect(await screen.findByText("Extraction queued.")).toBeInTheDocument();
   });

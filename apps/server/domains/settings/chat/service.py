@@ -112,6 +112,11 @@ def _apply_endpoint(*, force: bool = False) -> bool:
     return True
 
 
+def refresh_endpoint(*, force: bool = False) -> bool:
+    """Refresh the worker's cached endpoint before starting a long-lived run."""
+    return _apply_endpoint(force = force)
+
+
 _apply_endpoint(force=True)
 
 

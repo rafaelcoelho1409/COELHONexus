@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 @infra.celery.service.app.task(
-    name = "domains.bd.ingestion.ai.task.run_ingestion_ai",
+    name = domains.bd.ingestion.ai.params.TASK_NAME,
     bind = True,
     acks_late = True,
     reject_on_worker_lost = True,
@@ -45,10 +45,24 @@ def run_ingestion_ai(self, book_id: str, extraction_run_id: str, agentic_run_id:
             logger.exception(f"[task] run_ingestion_ai failed for {agentic_run_id}")
             try:
                 await service.mark_ingestion_ai_run_failed(book_id, agentic_run_id, error)
+                failed = await service.read_ingestion_ai_run(book_id, agentic_run_id)
+                if failed is not None:
+                    await domains.bd.ingestion.ai.progress.service.emit(
+                        book_id,
+                        agentic_run_id,
+                        "run_failed",
+                        status = domains.bd.ingestion.ai.schemas.AgenticRunStatus.FAILED.value,
+                        error = failed["error"],
+                        progress = failed["progress"],
+                    )
             except Exception:
                 logger.exception(f"[task] unable to persist failure for {agentic_run_id}")
             raise
         finally:
+            try:
+                await domains.settings.llm_counter.service.snapshot("bd", agentic_run_id)
+            except Exception:
+                logger.exception(f"[task] unable to snapshot LLM counters for {agentic_run_id}")
             await infra.postgres.service.close_checkpointer()
 
     return asyncio.run(execute())

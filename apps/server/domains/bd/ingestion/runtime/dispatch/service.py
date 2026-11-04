@@ -17,7 +17,7 @@ import uuid
 logger = logging.getLogger(__name__)
 
 
-async def accept_upload(filename: str, data: bytes, refresh: bool = False) -> dict:
+async def accept_upload(filename: str, data: bytes, refresh: bool = False, auto_chain: bool = False) -> dict:
     """Take an uploaded PDF or EPUB: validate it, keep it (and a manifest that says `queued`) unless already stored, and pass
     the start gate. The answer is `cached`, `locked`, or `reserved` with the run id — the router queues the task for a `reserved` one."""
     ingestion = domains.bd.ingestion
@@ -39,13 +39,13 @@ async def accept_upload(filename: str, data: bytes, refresh: bool = False) -> di
         ))
     else:
         existing = await ingestion.storage.service.ensure_current_layout(storage, book_id) or existing
-    gate = await reserve_run(book_id, refresh)
+    gate = await reserve_run(book_id, refresh, auto_chain)
     if gate["status"] != "reserved":
         return gate
     return {**gate, "book_id": book_id, "resumed": bool(existing and existing.get("pages")) and not refresh}
 
 
-async def accept_restart(book_id: str, refresh: bool = False) -> dict | None:
+async def accept_restart(book_id: str, refresh: bool = False, auto_chain: bool = False) -> dict | None:
     """Start a run for a stored PDF or EPUB (no upload): continue a stopped extraction, or with `refresh` start
     over. None when the book does not exist; otherwise the same answer as `accept_upload`."""
     ingestion = domains.bd.ingestion
@@ -53,13 +53,13 @@ async def accept_restart(book_id: str, refresh: bool = False) -> dict | None:
     manifest = await ingestion.storage.service.ensure_current_layout(storage, book_id)
     if manifest is None:
         return None
-    gate = await reserve_run(book_id, refresh)
+    gate = await reserve_run(book_id, refresh, auto_chain)
     if gate["status"] != "reserved":
         return gate
     return {**gate, "book_id": book_id, "resumed": bool(manifest.get("pages")) and not refresh}
 
 
-async def reserve_run(book_id: str, refresh: bool = False) -> dict:
+async def reserve_run(book_id: str, refresh: bool = False, auto_chain: bool = False) -> dict:
     """The start gate. `cached` when the book is fully extracted (and `refresh` is off), `locked` when a run holds it, else
     `reserved` with a new run id: the lock is taken, the last run's cancel flag and events are cleared."""
     storage = infra.minio.service.get_storage()
@@ -88,6 +88,7 @@ async def reserve_run(book_id: str, refresh: bool = False) -> dict:
     manifest = domains.bd.ingestion.storage.domain.with_status(
         manifest, domains.bd.ingestion.storage.params.STATUS_QUEUED, now,
     )
+    manifest["auto_chain"] = auto_chain
     try:
         await domains.bd.ingestion.storage.service.write_manifest(storage, manifest)
         await domains.bd.ingestion.storage.service.update_run_metadata(
@@ -185,8 +186,71 @@ async def _finish(r, storage, manifest: dict, run_id: str, status: str, error: s
         **ingestion.runtime.progress.domain.initial_state(run_id, manifest["created_at"]),
         "status": status, "completed": len(manifest["pages"]), "total": manifest["n_pages"], "error": error,
     })
+    if status == ingestion.storage.params.STATUS_DONE and manifest.get("auto_chain", False):
+        await _start_automatic_agentic_run(manifest)
     await ingestion.runtime.progress.service.emit(
         manifest["book_id"], status, pages = len(manifest["pages"]), total = manifest["n_pages"], error = error,
+    )
+
+
+async def _start_automatic_agentic_run(manifest: dict) -> None:
+    """Queue one automatic AI candidate after Docling commits a completed extraction."""
+    book_id = manifest["book_id"]
+    extraction_run_id = manifest.get("extraction_id")
+    try:
+        importlib.import_module("domains.bd.ingestion.ai")
+        agentic_manifest, created = await domains.bd.ingestion.ai.service.create_automatic_ingestion_ai_run(
+            book_id,
+            extraction_run_id,
+        )
+        if not created:
+            return
+        agentic_run_id = agentic_manifest["agentic_run_id"]
+        await domains.bd.ingestion.ai.progress.service.emit(
+            book_id,
+            agentic_run_id,
+            "run_queued",
+            status = agentic_manifest["status"],
+            progress = agentic_manifest["progress"],
+        )
+        task = infra.celery.service.app.send_task(
+            domains.bd.ingestion.ai.params.TASK_NAME,
+            args = (book_id, extraction_run_id, agentic_run_id),
+            task_id = f"bd-agentic-{book_id}-{extraction_run_id}",
+        )
+        infra.opentelemetry.service.tag_celery_task(task.id)
+    except Exception as error:
+        logger.exception(f"[bd-run] unable to queue automatic agentic processing for {book_id}")
+        try:
+            if _safe_run_segment(extraction_run_id):
+                agentic_run_id = domains.bd.ingestion.ai.service.automatic_run_id(extraction_run_id)
+                await domains.bd.ingestion.ai.service.mark_ingestion_ai_run_failed(
+                    book_id,
+                    agentic_run_id,
+                    error,
+                )
+                failed = await domains.bd.ingestion.ai.service.read_ingestion_ai_run(
+                    book_id,
+                    agentic_run_id,
+                )
+                if failed is None:
+                    return
+                await domains.bd.ingestion.ai.progress.service.emit(
+                    book_id,
+                    agentic_run_id,
+                    "run_failed",
+                    status = domains.bd.ingestion.ai.schemas.AgenticRunStatus.FAILED.value,
+                    error = failed["error"],
+                    progress = failed["progress"],
+                )
+        except Exception:
+            logger.exception(f"[bd-run] unable to persist automatic agentic failure for {book_id}")
+
+
+def _safe_run_segment(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and all(
+        character.isascii() and (character.isalnum() or character in "-_")
+        for character in value
     )
 
 

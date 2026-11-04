@@ -6,6 +6,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
+import { useAutoChainPreference } from "../hooks/use-auto-chain-preference";
 import { BOOK_PARAM, bookHref } from "../params";
 import { BookView } from "./book-view";
 import { LibraryPicker } from "./library-list";
@@ -15,6 +16,7 @@ export function IngestionStage() {
   const router = useRouter();
   const bookId = useSearchParams().get(BOOK_PARAM);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [autoChain, setAutoChain] = useAutoChainPreference();
   const open = (id: string | null) => router.push(bookHref(id), { scroll: false });
   const refresh = (id: string) => {
     setRefreshKey((key) => key + 1);
@@ -24,12 +26,21 @@ export function IngestionStage() {
   return (
     <div className="min-w-0">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-card p-2">
-        <UploadDropzone onOpen={open} />
-        <LibraryPicker selected={bookId} onOpen={open} onRefresh={refresh} />
+        <UploadDropzone onOpen={open} autoChain={autoChain} />
+        <LibraryPicker selected={bookId} onOpen={open} onRefresh={refresh} autoChain={autoChain} />
+        <label className="flex min-h-9 items-center gap-2 px-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={autoChain}
+            onChange={(event) => setAutoChain(event.currentTarget.checked)}
+            className="size-4 accent-primary"
+          />
+          Run Agentic AI after extraction
+        </label>
       </div>
       <div className="min-w-0">
         {bookId ? (
-          <BookView key={`${bookId}-${refreshKey}`} bookId={bookId} />
+          <BookView key={`${bookId}-${refreshKey}`} bookId={bookId} autoChain={autoChain} />
         ) : (
           <section
             aria-label="No book open"

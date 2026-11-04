@@ -49,6 +49,7 @@ class IngestionPageAuditResult(TypedDict):
     markdown_chars: int
     pictures: int
     assessment: dict[str, object]
+    warnings: NotRequired[list[str]]
 
 
 class PageInventoryResult(TypedDict):
@@ -83,6 +84,7 @@ class PageAuditState(TypedDict, total = False):
     assessment: dict[str, object]
     source_sha256: str
     status: str
+    warnings: list[str]
 
 
 class IngestionRunState(TypedDict, total = False):

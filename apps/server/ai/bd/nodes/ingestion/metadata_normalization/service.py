@@ -18,7 +18,11 @@ ArtifactWriter = Callable[[str, str, str], Any]
 
 
 class Normalizer(Protocol):
-    async def ainvoke(self, input: dict[str, Any]) -> dict[str, Any]: ...
+    async def ainvoke(
+        self,
+        input: dict[str, Any],
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
 
 
 async def normalize_metadata(
@@ -61,10 +65,16 @@ async def normalize_metadata(
     proposal_validated = False
     errors = []
     try:
-        response = await normalizer.ainvoke({"messages": [{
-            "role": "user",
-            "content": json.dumps(payload, ensure_ascii = False),
-        }]})
+        run_id = state.get("agentic_run_id")
+        if not isinstance(run_id, str):
+            raise ValueError("the ingestion run has no agentic_run_id")
+        with domains.settings.llm_counter.service.llm_context(
+            ns = "bd", run_id = run_id, node_id = "metadata_normalizer",
+        ):
+            response = await normalizer.ainvoke({"messages": [{
+                "role": "user",
+                "content": json.dumps(payload, ensure_ascii = False),
+            }]}, config = {"callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()]})
         if not isinstance(response, dict) or "structured_response" not in response:
             raise ValueError("metadata normalizer returned no structured BookMetadataProposal")
         proposal = agents.schemas.BookMetadataProposal.model_validate(response["structured_response"])

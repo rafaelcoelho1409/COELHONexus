@@ -90,6 +90,56 @@ def validate_assessment(
     return assessment
 
 
+def sanitize_assessment(
+    value: Any,
+    *,
+    page_number: int,
+    pictures: int,
+    markdown: str,
+) -> tuple[agents.schemas.PageAssessment, list[str]]:
+    """Keep only auditor findings whose evidence can be verified against this page."""
+    assessment = agents.schemas.PageAssessment.model_validate(value)
+    if assessment.page_number != page_number:
+        raise ValueError("assessment page_number does not match the requested page")
+    if len(assessment.issues) > params.MAX_ISSUES_PER_PAGE:
+        raise ValueError("assessment exceeds the maximum issues per page")
+
+    media_kinds = {agents.schemas.PageKind.IMAGE_ONLY, agents.schemas.PageKind.MIXED}
+    text_kinds = {agents.schemas.PageKind.TEXT, agents.schemas.PageKind.BLANK}
+    warnings = []
+    if pictures > 0 and assessment.page_kind in text_kinds:
+        warnings.append("The auditor page-kind label conflicted with extracted media; the deterministic label was kept.")
+    if pictures == 0 and assessment.page_kind in media_kinds:
+        warnings.append("The auditor reported media that extraction did not find; the deterministic label was kept.")
+
+    valid_issues = []
+    invalid_evidence_count = 0
+    dropped_issue_count = 0
+    for issue in assessment.issues:
+        verified_evidence = [
+            evidence
+            for evidence in issue.evidence
+            if evidence.source == agents.schemas.EvidenceSource.PAGE_MARKDOWN
+            and evidence.page_number == page_number
+            and len(evidence.excerpt) <= params.MAX_EVIDENCE_CHARS
+            and evidence.excerpt in markdown
+        ]
+        invalid_evidence_count += len(issue.evidence) - len(verified_evidence)
+        if not verified_evidence:
+            dropped_issue_count += 1
+            continue
+        valid_issues.append(issue.model_copy(update = {"evidence": verified_evidence}))
+
+    if invalid_evidence_count:
+        warnings.append(
+            f"Discarded {invalid_evidence_count} auditor evidence excerpt(s) that were not exact source text."
+        )
+    if dropped_issue_count:
+        warnings.append(f"Discarded {dropped_issue_count} auditor finding(s) without verifiable evidence.")
+
+    return assessment.model_copy(update = {"issues": valid_issues}), warnings
+
+
 def _is_safe_segment(value: object) -> bool:
     return isinstance(value, str) and bool(value) and all(
         character.isascii() and (character.isalnum() or character in "-_")

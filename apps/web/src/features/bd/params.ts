@@ -10,6 +10,7 @@ export const MAX_UPLOAD_LABEL = "300 MB";
 
 /** The address parameter that names the open book. */
 export const BOOK_PARAM = "book";
+export const AUTO_CHAIN_STORAGE_KEY = "bd-ingestion-auto-chain";
 
 /** While any book is being extracted the library list is re-read this often (the open book's stream is live anyway). */
 export const LIBRARY_REFRESH_MS = 4_000;

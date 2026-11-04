@@ -3,7 +3,8 @@
 
 import { HttpResponse } from "msw";
 
-import type { BookRow, Manifest, PageEntry, Progress, Snapshot } from "@/shared/api";
+import type { BookRow, Manifest, PageEntry, Progress } from "@/shared/api";
+import type { AgenticRunStatus, BookSnapshot } from "./entities";
 
 export const BOOK_ID = "9f8e7d6c5b4a3210";
 export const BOOK_TITLE =
@@ -88,10 +89,12 @@ function progress(over: Partial<Progress> = {}): Progress {
 export function snapshot(
   manifestOver: Partial<Manifest> = {},
   progressOver: Partial<Progress> | null = {},
-): Snapshot {
+  agentic: AgenticRunStatus | null = null,
+): BookSnapshot {
   return {
     manifest: manifest(manifestOver),
     progress: progressOver === null ? null : progress(progressOver),
+    agentic,
   };
 }
 

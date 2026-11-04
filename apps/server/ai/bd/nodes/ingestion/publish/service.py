@@ -43,6 +43,12 @@ async def publish(
         "pages_total": expected_page_count,
         "pages_completed": len(page_results),
         "pages_requiring_review": review_pages,
+        "pages_with_audit_warnings": [
+            page["page"] for page in state["page_audits"] if page.get("warnings")
+        ],
+        "audit_warning_count": sum(
+            len(page.get("warnings", [])) for page in state["page_audits"]
+        ),
         "page_kinds": dict(sorted(page_kinds.items())),
         "blank_pages": [assessment.page_number for assessment in assessments if assessment.page_kind.value == "blank"],
         "image_only_pages": [

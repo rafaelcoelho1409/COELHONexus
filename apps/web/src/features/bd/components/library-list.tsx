@@ -17,10 +17,12 @@ export function LibraryPicker({
   selected,
   onOpen,
   onRefresh,
+  autoChain,
 }: {
   selected: string | null;
   onOpen: (bookId: string | null) => void;
   onRefresh: (bookId: string) => void;
+  autoChain: boolean;
 }) {
   const library = useLibrary();
   const del = useDeleteBook();
@@ -94,7 +96,7 @@ export function LibraryPicker({
 
   const refreshBook = (row: BookRow) => {
     runBook.mutate(
-      { bookId: row.book_id, refresh: true },
+      { bookId: row.book_id, refresh: true, autoChain },
       {
         onSuccess: (result) => {
           if (result.status === "queued") {

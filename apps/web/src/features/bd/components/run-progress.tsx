@@ -1,6 +1,7 @@
+import type { ReactNode } from "react";
 import type { StreamStatus } from "@/shared/sse";
 
-import { percent, type BookUnits } from "../domain/books";
+import { type BookUnits, percent } from "../domain/books";
 
 /** How far the extraction is, how fast it goes, and whether the live connection is healthy. The numbers sit outside
  * the live region (they change on every page); only the connection line is announced. */
@@ -11,6 +12,9 @@ export function RunProgress({
   ratePerMinute,
   streaming,
   streamStatus,
+  statusText,
+  action,
+  className = "mt-4",
 }: {
   completed: number;
   total: number;
@@ -18,10 +22,22 @@ export function RunProgress({
   ratePerMinute: number | null;
   streaming: boolean;
   streamStatus: StreamStatus;
+  statusText: string;
+  action?: ReactNode;
+  className?: string;
 }) {
   const done = percent(completed, total);
   return (
-    <div className="mt-4">
+    <div className={className}>
+      <div className="flex min-h-9 flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-medium">Docling extraction</h3>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <span aria-live="polite" className="text-xs text-muted-foreground">
+            {statusText}
+          </span>
+          {action}
+        </div>
+      </div>
       <div
         role="progressbar"
         aria-label={`${units.plural[0]?.toUpperCase()}${units.plural.slice(1)} extracted`}
@@ -29,7 +45,7 @@ export function RunProgress({
         aria-valuemax={total > 0 ? total : 100}
         aria-valuenow={total > 0 ? completed : 0}
         aria-valuetext={total > 0 ? `${completed} of ${total} ${units.plural}` : "not started"}
-        className="h-1.5 w-full overflow-hidden rounded-sm bg-muted"
+        className="mt-2 h-1.5 w-full overflow-hidden rounded-sm bg-muted"
       >
         <div className="h-full bg-primary" style={{ width: `${done ?? 0}%` }} />
       </div>

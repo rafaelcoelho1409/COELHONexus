@@ -75,6 +75,15 @@ def agentic_prefix(book_id: str, agentic_run_id: str) -> str:
     return f"{ingestion_prefix(book_id)}agentic/{agentic_run_id}/"
 
 
+def agentic_runs_prefix(book_id: str) -> str:
+    _safe_segment(book_id, "a book ID")
+    return f"{ingestion_prefix(book_id)}agentic/"
+
+
+def current_agentic_run_key(book_id: str) -> str:
+    return f"{agentic_runs_prefix(book_id)}current.json"
+
+
 def agentic_manifest_key(book_id: str, agentic_run_id: str) -> str:
     return f"{agentic_prefix(book_id, agentic_run_id)}manifest.json"
 

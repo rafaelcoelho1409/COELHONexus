@@ -6,15 +6,23 @@
 
 import { Maximize2, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { Snapshot } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 import { Button } from "@/shared/ui/button";
 import { bookUnits, fmtBytes, isLive } from "../domain/books";
 import { chapterTree } from "../domain/outline";
 import { mergePages, shownPage } from "../domain/pages";
-import { useCancelBook, useRunBook, useSnapshot } from "../hooks/use-bd-data";
+import type { BookSnapshot } from "../entities";
+import { useAgenticRun } from "../hooks/use-agentic-run";
+import {
+  useCancelBook,
+  useResumeAgenticRun,
+  useRunBook,
+  useSnapshot,
+  useStartAgenticRun,
+} from "../hooks/use-bd-data";
 import { useBookRun } from "../hooks/use-book-run";
 import { useBdOverlays } from "../hooks/use-overlays";
+import { AgenticPipeline, AgenticProgressBar } from "./agentic-pipeline";
 import { BookReadingMode } from "./book-reading-mode";
 import { BookReadingProgress } from "./book-reading-progress";
 import { BookSearch } from "./book-search";
@@ -27,7 +35,7 @@ import { StatusChip } from "./status-chip";
 const BUTTON =
   "min-h-9 rounded-sm border border-border px-3 text-sm text-foreground hover:border-neutral-8 disabled:opacity-50";
 
-export function BookView({ bookId }: { bookId: string }) {
+export function BookView({ bookId, autoChain }: { bookId: string; autoChain: boolean }) {
   const snapshot = useSnapshot(bookId);
   if (snapshot.isPending) {
     return (
@@ -48,13 +56,24 @@ export function BookView({ bookId }: { bookId: string }) {
       </section>
     );
   }
-  return <BookDetail bookId={bookId} snapshot={snapshot.data} />;
+  return <BookDetail bookId={bookId} snapshot={snapshot.data} autoChain={autoChain} />;
 }
 
-function BookDetail({ bookId, snapshot }: { bookId: string; snapshot: Snapshot }) {
+function BookDetail({
+  bookId,
+  snapshot,
+  autoChain,
+}: {
+  bookId: string;
+  snapshot: BookSnapshot;
+  autoChain: boolean;
+}) {
   const run = useBookRun(bookId, snapshot);
+  const agentic = useAgenticRun(bookId, snapshot);
   const runBook = useRunBook();
   const cancelBook = useCancelBook();
+  const startAgentic = useStartAgenticRun();
+  const resumeAgentic = useResumeAgenticRun();
   const { notice } = useBdOverlays();
   const { manifest } = snapshot;
   const units = bookUnits(manifest.filename);
@@ -83,6 +102,7 @@ function BookDetail({ bookId, snapshot }: { bookId: string; snapshot: Snapshot }
   const [navigationOpen, setNavigationOpen] = useState(true);
   const [reading, setReading] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [pipelineOpen, setPipelineOpen] = useState(false);
   const currentIndex = rows.findIndex((candidate) => candidate.page === page);
   const previousPage = currentIndex > 0 ? (rows[currentIndex - 1]?.page ?? null) : null;
   const nextPage = currentIndex >= 0 ? (rows[currentIndex + 1]?.page ?? null) : null;
@@ -101,7 +121,7 @@ function BookDetail({ bookId, snapshot }: { bookId: string; snapshot: Snapshot }
 
   const start = () =>
     runBook.mutate(
-      { bookId },
+      { bookId, autoChain },
       {
         onSuccess: (result) => {
           run.restart();
@@ -122,6 +142,25 @@ function BookDetail({ bookId, snapshot }: { bookId: string; snapshot: Snapshot }
     });
 
   const cancelling = state.canceling || cancelBook.isPending;
+  const agenticActionPending = startAgentic.isPending || resumeAgentic.isPending;
+  const startAgenticProcessing = () =>
+    startAgentic.mutate(bookId, {
+      onSuccess: () => notice("Agentic ingestion queued."),
+      onError: (error) => notice(apiErrorMessage(error), "error"),
+    });
+  const retryAgenticProcessing = () => {
+    if (!agentic.run) return;
+    resumeAgentic.mutate(
+      { bookId, agenticRunId: agentic.run.agentic_run_id },
+      {
+        onSuccess: () => {
+          agentic.restart();
+          notice("Agentic ingestion retry queued.");
+        },
+        onError: (error) => notice(apiErrorMessage(error), "error"),
+      },
+    );
+  };
   const choosePage = (target: number) => setView({ follow: false, picked: target });
   const openReadingMode = () => {
     if (page === null) return;
@@ -167,11 +206,7 @@ function BookDetail({ bookId, snapshot }: { bookId: string; snapshot: Snapshot }
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {live ? (
-            <button type="button" onClick={cancel} disabled={cancelling} className={BUTTON}>
-              {cancelling ? "Cancelling…" : "Cancel"}
-            </button>
-          ) : status === "cancelled" || status === "failed" ? (
+          {status === "cancelled" || status === "failed" ? (
             <button type="button" onClick={start} disabled={runBook.isPending} className={BUTTON}>
               {runBook.isPending ? "Starting…" : "Resume"}
             </button>
@@ -200,14 +235,65 @@ function BookDetail({ bookId, snapshot }: { bookId: string; snapshot: Snapshot }
         </p>
       ) : null}
 
-      <RunProgress
-        completed={completed}
-        total={total}
-        units={units}
-        ratePerMinute={units.singular === "page" ? run.pagesPerMinute : null}
-        streaming={run.streaming}
-        streamStatus={run.streamStatus}
-      />
+      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <RunProgress
+          completed={completed}
+          total={total}
+          units={units}
+          ratePerMinute={units.singular === "page" ? run.pagesPerMinute : null}
+          streaming={run.streaming}
+          streamStatus={run.streamStatus}
+          statusText={
+            status === "extracting"
+              ? "Processing"
+              : status === "queued"
+                ? "Queued"
+                : status === "done"
+                  ? "Complete"
+                  : status === "failed"
+                    ? "Failed"
+                    : status === "cancelled"
+                      ? "Cancelled"
+                      : "Waiting"
+          }
+          action={
+            live ? (
+              <Button variant="outline" size="default" onClick={cancel} disabled={cancelling}>
+                {cancelling ? "Cancelling…" : "Cancel"}
+              </Button>
+            ) : null
+          }
+          className="mt-0"
+        />
+        <AgenticProgressBar
+          status={agentic.status}
+          progress={agentic.progress}
+          total={nPages}
+          error={agentic.error}
+          units={units}
+          extractionDone={status === "done"}
+          streamStatus={agentic.streamStatus}
+          actionPending={agenticActionPending}
+          onStart={startAgenticProcessing}
+          onResume={retryAgenticProcessing}
+          onOpenPipeline={() => setPipelineOpen(true)}
+          chapters={state.chapters.length > 0 ? state.chapters : manifest.chapters}
+        />
+      </div>
+
+      {agentic.run && agentic.status && agentic.progress ? (
+        <AgenticPipeline
+          bookId={bookId}
+          run={agentic.run}
+          status={agentic.status}
+          progress={agentic.progress}
+          error={agentic.error}
+          units={units}
+          chapters={state.chapters.length > 0 ? state.chapters : manifest.chapters}
+          open={pipelineOpen}
+          onClose={() => setPipelineOpen(false)}
+        />
+      ) : null}
 
       <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
         <Button variant="outline" size="lg" onClick={() => setSearchOpen(true)} disabled={rows.length === 0}>
@@ -247,6 +333,7 @@ function BookDetail({ bookId, snapshot }: { bookId: string; snapshot: Snapshot }
             page={page}
             row={row}
             livePage={page === null ? undefined : state.pages[page]}
+            agenticRunAvailable={agentic.run !== null}
             nPages={nPages}
             units={units}
           />
@@ -269,6 +356,7 @@ function BookDetail({ bookId, snapshot }: { bookId: string; snapshot: Snapshot }
             page={page}
             row={row}
             livePage={state.pages[page]}
+            agenticRunAvailable={agentic.run !== null}
             nPages={nPages}
             units={units}
             readingMode

@@ -29,6 +29,25 @@ class AgenticPageStatus(StrEnum):
     FAILED = "failed"
 
 
+class AgenticNodeStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class AgenticRunProgress(BaseModel):
+    """Small, durable progress snapshot for the live Ingestion view."""
+
+    current_node: str | None = None
+    node_status: dict[str, AgenticNodeStatus] = Field(default_factory = dict)
+    audited_pages: list[int] = Field(default_factory = list)
+    audit_warning_pages: list[int] = Field(default_factory = list)
+    processed_pages: list[int] = Field(default_factory = list)
+    active_audit_pages: list[int] = Field(default_factory = list)
+    active_repair_pages: list[int] = Field(default_factory = list)
+
+
 class IngestionPageArtifact(BaseModel):
     """Source identity and versioned output references for one physical page."""
 
@@ -71,6 +90,7 @@ class IngestionAIRunManifest(BaseModel):
     source_manifest_sha256: Sha256Hex
     status: AgenticRunStatus = AgenticRunStatus.QUEUED
     expected_page_count: int = Field(gt = 0, strict = True)
+    progress: AgenticRunProgress = Field(default_factory = AgenticRunProgress)
     pages: list[IngestionPageArtifact] = Field(default_factory = list)
     book_metadata_key: ObjectKey
     book_metadata_sha256: Sha256Hex | None = None
@@ -125,8 +145,10 @@ class IngestionAIRunManifest(BaseModel):
 
 
 __all__ = [
+    "AgenticNodeStatus",
     "AgenticPageStatus",
     "AgenticRunStatus",
+    "AgenticRunProgress",
     "IngestionAIRunManifest",
     "IngestionPageArtifact",
 ]

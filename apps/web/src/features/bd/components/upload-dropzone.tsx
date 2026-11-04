@@ -11,7 +11,13 @@ import { MAX_UPLOAD_LABEL } from "../params";
 
 /** PDF and EPUB files are checked here before anything is sent. The answer decides what happens next: a queued book (or one that
  * resumes) and a cached one are opened; one that is already being extracted is opened too, to follow its live run. */
-export function UploadDropzone({ onOpen }: { onOpen: (bookId: string) => void }) {
+export function UploadDropzone({
+  onOpen,
+  autoChain = false,
+}: {
+  onOpen: (bookId: string) => void;
+  autoChain?: boolean;
+}) {
   const upload = useUploadBook();
   const { notice } = useBdOverlays();
   const inputId = useId();
@@ -31,7 +37,7 @@ export function UploadDropzone({ onOpen }: { onOpen: (bookId: string) => void })
     setProblem(null);
     setProgress(0);
     upload.mutate(
-      { file, onProgress: setProgress },
+      { file, autoChain, onProgress: setProgress },
       {
         onSuccess: (result) => {
           if (result.status === "cached") notice("Already extracted — opened it.");

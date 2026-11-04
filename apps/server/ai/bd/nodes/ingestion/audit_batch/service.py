@@ -7,21 +7,36 @@ from .. import inventory, page_audit
 import asyncio
 import hashlib
 import inspect
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 
 PageReader = Callable[[str], str | None | Awaitable[str | None]]
+logger = logging.getLogger(__name__)
 
 
 class Auditor(Protocol):
-    async def ainvoke(self, input: dict[str, Any]) -> dict[str, Any]: ...
+    async def ainvoke(
+        self,
+        input: dict[str, Any],
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
+
+
+async def _report(progress_callback, **event: Any) -> None:
+    if progress_callback is None:
+        return
+    result = progress_callback(event)
+    if inspect.isawaitable(result):
+        await result
 
 
 async def audit_pages(
     state: graphs.ingestion.state.IngestionRunState,
     read_page: PageReader,
     auditor: Auditor,
+    progress_callback = None,
 ) -> dict:
     """Audit all manifest pages concurrently while keeping Markdown out of graph state."""
     page_refs = state.get("source_page_refs")
@@ -42,31 +57,55 @@ async def audit_pages(
 
     async def audit_one(page_ref: graphs.ingestion.state.PageReference) -> tuple[dict, dict]:
         async with semaphore:
+            await _report(progress_callback, kind = "page_audit", page = page_ref["page"], status = "running")
             markdown = read_page(page_ref["key"])
             if inspect.isawaitable(markdown):
                 markdown = await markdown
             if not isinstance(markdown, str):
                 raise ValueError(f"page {page_ref['page']} could not be read as Markdown text")
-            if len(markdown) > domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS:
-                raise ValueError(f"page {page_ref['page']} exceeds the configured audit limit")
-
             deterministic = inventory.domain.assess_page(
                 page_ref["page"], markdown, page_ref["pictures"],
             )
-            result = await auditor.ainvoke({"messages": [{
-                "role": "user",
-                "content": page_audit.domain.user_payload(
-                    page_ref["page"], page_ref["pictures"], markdown,
-                ),
-            }]})
-            if not isinstance(result, dict) or "structured_response" not in result:
-                raise ValueError(f"page auditor returned no assessment for page {page_ref['page']}")
-            proposed = page_audit.domain.validate_assessment(
-                result["structured_response"],
-                page_number = page_ref["page"],
-                pictures = page_ref["pictures"],
-                markdown = markdown,
-            )
+            run_id = state.get("agentic_run_id")
+            if not isinstance(run_id, str):
+                raise ValueError("the ingestion run has no agentic_run_id")
+            oversized = len(markdown) > domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS
+            warnings = []
+            if oversized:
+                proposed = deterministic
+                warnings.append(
+                    f"Page exceeds the {domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS}-character "
+                    "audit limit; deterministic findings were retained and manual review is required."
+                )
+            else:
+                try:
+                    with domains.settings.llm_counter.service.llm_context(
+                        ns = "bd", run_id = run_id, node_id = "page_auditor",
+                    ):
+                        result = await auditor.ainvoke({"messages": [{
+                            "role": "user",
+                            "content": page_audit.domain.user_payload(
+                                page_ref["page"], page_ref["pictures"], markdown,
+                            ),
+                        }]}, config = {"callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()]})
+                    if not isinstance(result, dict) or "structured_response" not in result:
+                        raise ValueError("page auditor returned no structured assessment")
+                    proposed, warnings = page_audit.domain.sanitize_assessment(
+                        result["structured_response"],
+                        page_number = page_ref["page"],
+                        pictures = page_ref["pictures"],
+                        markdown = markdown,
+                    )
+                except Exception as error:
+                    logger.warning(
+                        f"[bd-page-audit] page {page_ref['page']} degraded to deterministic findings "
+                        f"({type(error).__name__})",
+                    )
+                    proposed = deterministic
+                    warnings = [
+                        f"Page auditor was unavailable or returned an invalid assessment ({type(error).__name__}); "
+                        "deterministic findings were retained for review."
+                    ]
             known_ids = {issue.issue_id for issue in deterministic.issues}
             merged_issues = list(deterministic.issues)
             merged_issues.extend(issue for issue in proposed.issues if issue.issue_id not in known_ids)
@@ -105,7 +144,15 @@ async def audit_pages(
                 "markdown_chars": len(markdown),
                 "pictures": page_ref["pictures"],
                 "assessment": assessment.model_dump(mode = "json"),
+                "warnings": warnings,
             }
+            await _report(
+                progress_callback,
+                kind = "page_audit",
+                page = page_number,
+                status = "done",
+                warning = bool(warnings),
+            )
             return output_ref, audit
 
     results = await asyncio.gather(*(audit_one(page_ref) for page_ref in validated_refs))

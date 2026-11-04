@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -17,6 +18,11 @@ def normalize_base_url(url: str) -> str:
     u = (url or "").strip().rstrip("/")
     if not u:
         return ""
+    if "://" not in u:
+        u = f"https://{u}"
+    parsed = urlsplit(u)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("chat endpoint URL must use http:// or https://")
     for suffix in ("/chat/completions", "/chat/completions/"):
         if u.endswith(suffix):
             u = u[: -len(suffix)].rstrip("/")

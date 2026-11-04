@@ -3,6 +3,7 @@
  * a fallback, so one malformed value never breaks a stream. */
 
 import { z } from "zod";
+import type { Snapshot } from "@/shared/api";
 
 const count = z.number().catch(0);
 
@@ -19,7 +20,76 @@ export const pageBodySchema = z.object({
   book_id: z.string(),
   page: z.number(),
   markdown: z.string(),
+  content_source: z.enum(["docling", "agentic"]).catch("docling"),
 });
+
+const agenticProgressSchema = z.looseObject({
+  current_node: z.string().nullable().catch(null),
+  node_status: z.record(z.string(), z.enum(["pending", "running", "done", "failed"])).catch({}),
+  audited_pages: z.array(z.number()).catch([]),
+  audit_warning_pages: z.array(z.number()).catch([]),
+  processed_pages: z.array(z.number()).catch([]),
+  active_audit_pages: z.array(z.number()).catch([]),
+  active_repair_pages: z.array(z.number()).catch([]),
+});
+
+export const agenticRunStatusSchema = z.looseObject({
+  book_id: z.string(),
+  extraction_run_id: z.string(),
+  agentic_run_id: z.string(),
+  status: z.enum(["queued", "running", "done", "failed", "cancelled"]),
+  expected_page_count: z.number().catch(0),
+  published_page_count: z.number().catch(0),
+  progress: agenticProgressSchema,
+  created_at: z.number().catch(0),
+  updated_at: z.number().catch(0),
+  finished_at: z.number().nullable().catch(null),
+  error: z.string().nullable().catch(null),
+});
+export type AgenticRunStatus = z.infer<typeof agenticRunStatusSchema>;
+export type AgenticProgress = z.infer<typeof agenticProgressSchema>;
+export type BookSnapshot = Snapshot & { agentic: AgenticRunStatus | null };
+
+export const agenticRunStartSchema = z.object({
+  status: z.literal("queued"),
+  book_id: z.string(),
+  extraction_run_id: z.string(),
+  agentic_run_id: z.string(),
+});
+export type AgenticRunStart = z.infer<typeof agenticRunStartSchema>;
+
+export const agenticEventSchema = z.looseObject({
+  kind: z.enum(["run_queued", "node", "page_audit", "page_repair", "run_done", "run_failed"]),
+  ts: z.number().optional(),
+  node: z.string().optional(),
+  status: z.string().optional(),
+  page: z.number().optional(),
+  progress: agenticProgressSchema.optional(),
+  error: z.string().nullable().optional(),
+});
+export type AgenticEvent = z.infer<typeof agenticEventSchema>;
+
+const usageCountsSchema = z.looseObject({
+  calls: count,
+  tokens_in: count,
+  tokens_out: count,
+  reasoning_tokens: count,
+  errors: count,
+});
+const modelCountsSchema = z.looseObject({
+  calls: count,
+  tokens_in: count,
+  tokens_out: count,
+  reasoning_tokens: count,
+});
+const nodeUsageSchema = usageCountsSchema.extend({
+  by_model: z.record(z.string(), modelCountsSchema).catch({}),
+});
+export const agenticUsageSchema = z.looseObject({
+  total: usageCountsSchema,
+  by_node: z.record(z.string(), nodeUsageSchema).catch({}),
+});
+export type AgenticUsage = z.infer<typeof agenticUsageSchema>;
 
 const ZERO_STATS: PageStats = { chars: 0, headings: 0, tables: 0, pictures: 0, formulas: 0 };
 

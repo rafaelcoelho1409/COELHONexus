@@ -6,6 +6,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  client,
   deleteBdIngestionBookId,
   getBdIngestionActiveQueryKey,
   getBdIngestionBookIdOptions,
@@ -14,12 +15,17 @@ import {
   getBdIngestionOptions,
   getBdIngestionQueryKey,
   postBdIngestionBookIdCancel,
-  postBdIngestionBookIdRun,
 } from "@/shared/api";
 
-import { uploadBook } from "../api";
+import { resumeAgenticRun, startAgenticRun, uploadBook } from "../api";
 import { isLive, libraryHasLiveBook, toBookStatus } from "../domain/books";
-import { pageBodySchema, type StartResponse } from "../entities";
+import {
+  agenticRunStatusSchema,
+  type BookSnapshot,
+  pageBodySchema,
+  type StartResponse,
+  startResponseSchema,
+} from "../entities";
 import { LIBRARY_REFRESH_MS, SNAPSHOT_REFRESH_MS } from "../params";
 
 /** GET /bd/ingestion — the library, re-read while any book is being extracted. */
@@ -37,10 +43,18 @@ export function useSnapshot(bookId: string) {
   return useQuery({
     ...getBdIngestionBookIdOptions({ path: { book_id: bookId } }),
     retry: false,
+    select: (data): BookSnapshot => ({
+      ...data,
+      agentic: zAgenticStatus(data),
+    }),
     refetchInterval: (query) => {
       const data = query.state.data;
+      const agentic = data ? zAgenticStatus(data) : null;
       const live = data
-        ? isLive(toBookStatus(data.manifest.status)) || isLive(toBookStatus(data.progress?.status))
+        ? isLive(toBookStatus(data.manifest.status)) ||
+          isLive(toBookStatus(data.progress?.status)) ||
+          agentic?.status === "queued" ||
+          agentic?.status === "running"
         : false;
       return live ? SNAPSHOT_REFRESH_MS : false;
     },
@@ -55,7 +69,7 @@ export function usePageBody(bookId: string, page: number | null, enabled: boolea
     enabled: enabled && page !== null,
     retry: false,
     staleTime: Number.POSITIVE_INFINITY, // an extracted page does not change until the book is extracted again
-    select: (data) => pageBodySchema.parse(data).markdown,
+    select: (data) => pageBodySchema.parse(data),
   });
 }
 
@@ -69,15 +83,47 @@ export function useRefreshBook() {
       { queryKey: getBdIngestionBookIdQueryKey({ path: { book_id: bookId } }) },
       keepGoing,
     );
+    void queryClient.invalidateQueries(
+      {
+        predicate: (query) => isBookPageQuery(query.queryKey, bookId),
+      },
+      keepGoing,
+    );
     void queryClient.invalidateQueries({ queryKey: getBdIngestionActiveQueryKey() }, keepGoing);
   };
+}
+
+function isBookPageQuery(queryKey: readonly unknown[], bookId: string): boolean {
+  const [entry] = queryKey;
+  if (typeof entry !== "object" || entry === null || !("_id" in entry) || !("path" in entry)) return false;
+  const path = entry.path;
+  return (
+    entry._id === "getBdIngestionBookIdPagesPageNo" &&
+    typeof path === "object" &&
+    path !== null &&
+    "book_id" in path &&
+    path.book_id === bookId
+  );
+}
+
+function zAgenticStatus(data: unknown) {
+  const extension = agenticRunStatusSchema
+    .nullable()
+    .optional()
+    .safeParse(data && typeof data === "object" && "agentic" in data ? data.agentic : null);
+  return extension.success ? (extension.data ?? null) : null;
 }
 
 /** POST /bd/ingestion — upload a PDF. */
 export function useUploadBook() {
   const refresh = useRefreshBook();
-  return useMutation<StartResponse, unknown, { file: File; onProgress?: (fraction: number) => void }>({
-    mutationFn: ({ file, onProgress }) => uploadBook(file, onProgress ? { onProgress } : {}),
+  return useMutation<
+    StartResponse,
+    unknown,
+    { file: File; autoChain?: boolean; onProgress?: (fraction: number) => void }
+  >({
+    mutationFn: ({ file, autoChain, onProgress }) =>
+      uploadBook(file, { autoChain, ...(onProgress ? { onProgress } : {}) }),
     onSuccess: (result) => refresh(result.book_id),
   });
 }
@@ -85,16 +131,37 @@ export function useUploadBook() {
 /** POST /bd/ingestion/{id}/run — start or continue a stored book (`refresh`: extract it again). */
 export function useRunBook() {
   const refresh = useRefreshBook();
-  return useMutation<StartResponse, unknown, { bookId: string; refresh?: boolean }>({
-    mutationFn: async ({ bookId, refresh: again }) => {
-      const result = await postBdIngestionBookIdRun({
+  return useMutation<StartResponse, unknown, { bookId: string; refresh?: boolean; autoChain?: boolean }>({
+    mutationFn: async ({ bookId, refresh: again, autoChain }) => {
+      const result = await client.request({
+        method: "POST",
+        url: "/api/v1/bd/ingestion/{book_id}/run",
         path: { book_id: bookId },
-        query: again ? { refresh: true } : {},
+        query: { ...(again ? { refresh: true } : {}), ...(autoChain ? { auto_chain: true } : {}) },
         throwOnError: true,
       });
-      return result.data;
+      return startResponseSchema.parse(result.data);
     },
     onSuccess: (_result, { bookId }) => refresh(bookId),
+  });
+}
+
+export function useStartAgenticRun() {
+  const refresh = useRefreshBook();
+  return useMutation({
+    mutationFn: startAgenticRun,
+    onSuccess: (_result, bookId) => refresh(bookId),
+    onError: (_error, bookId) => refresh(bookId),
+  });
+}
+
+export function useResumeAgenticRun() {
+  const refresh = useRefreshBook();
+  return useMutation({
+    mutationFn: ({ bookId, agenticRunId }: { bookId: string; agenticRunId: string }) =>
+      resumeAgenticRun(bookId, agenticRunId),
+    onSuccess: (_result, { bookId }) => refresh(bookId),
+    onError: (_error, { bookId }) => refresh(bookId),
   });
 }
 

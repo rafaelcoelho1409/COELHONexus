@@ -249,6 +249,11 @@ class LLMCounterCallback(AsyncCallbackHandler):
         except Exception as e:
             logger.warning(f"[llm-counter] on_llm_start failed: {type(e).__name__}: {e}")
 
+    async def on_chat_model_start(self, serialized: dict, messages: list, *, run_id: Any, **kwargs: Any) -> None:
+        """Open the same call span for chat models, whose callback lifecycle starts here instead of `on_llm_start`."""
+        prompts = [str(message) for conversation in messages for message in conversation]
+        await self.on_llm_start(serialized, prompts, run_id = run_id, **kwargs)
+
     async def on_llm_end(self, response: Any, *, run_id: Any, **kwargs: Any) -> None:
         span, t0, req_model = self._pending.pop(run_id, (None, None, None))
         try:
@@ -276,6 +281,7 @@ class LLMCounterCallback(AsyncCallbackHandler):
         timeouts that halt a run's retry passes, otherwise visible only in Loki."""
         span, t0, req_model = self._pending.pop(run_id, (None, None, None))
         try:
+            await bump_current_failure(error)
             outcome = "timeout" if "timeout" in (type(error).__name__ + str(error)).lower() else "error"
             domains.settings.observability.service.record_gen_ai_call(
                 operation  = "chat",

@@ -74,11 +74,6 @@ class Progress(BaseModel):
     updated_at: float
 
 
-class Snapshot(BaseModel):
-    manifest: Manifest
-    progress: Progress | None
-
-
 class AgenticRunStart(BaseModel):
     status: Literal["queued"]
     book_id: str
@@ -93,10 +88,26 @@ class AgenticRunStatus(BaseModel):
     status: Literal["queued", "running", "done", "failed", "cancelled"]
     expected_page_count: int
     published_page_count: int
+    progress: AgenticProgress
     created_at: float
     updated_at: float
     finished_at: float | None
     error: str | None
+
+
+class AgenticProgress(BaseModel):
+    current_node: str | None
+    node_status: dict[str, str]
+    audited_pages: list[int]
+    processed_pages: list[int]
+    active_audit_pages: list[int]
+    active_repair_pages: list[int]
+
+
+class Snapshot(BaseModel):
+    manifest: Manifest
+    progress: Progress | None
+    agentic: AgenticRunStatus | None = None
 
 
 class ActiveRun(BaseModel):
@@ -113,6 +124,7 @@ class PageBody(BaseModel):
     book_id: str
     page: int
     markdown: str
+    content_source: Literal["docling", "agentic"] = "docling"
 
 
 class CancelResponse(BaseModel):

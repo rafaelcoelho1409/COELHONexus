@@ -13,5 +13,6 @@ UNKNOWN_NODE = "unknown"
 NAMESPACES: dict[str, entities.Namespace] = {
     "dd":  entities.Namespace(id_field = "thread_id",  errors = True,  snapshot = True),
     "ycs": entities.Namespace(id_field = "extract_id", errors = False, snapshot = False),
+    "bd":  entities.Namespace(id_field = "run_id",     errors = True,  snapshot = True),
 }
 DEFAULT_NAMESPACE = entities.Namespace(id_field = "run_id", errors = False, snapshot = False)

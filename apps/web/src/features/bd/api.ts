@@ -5,12 +5,56 @@
 import { client } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 
-import { type StartResponse, startResponseSchema } from "./entities";
+import {
+  type AgenticRunStart,
+  type AgenticUsage,
+  agenticRunStartSchema,
+  agenticUsageSchema,
+  type StartResponse,
+  startResponseSchema,
+} from "./entities";
 import { MAX_UPLOAD_LABEL } from "./params";
 
 /** SSE address of one book's extraction. Streams are not typed in the spec; `client.buildUrl` keeps the base URL. */
 export function eventsUrl(bookId: string): string {
   return client.buildUrl({ url: "/api/v1/bd/ingestion/{book_id}/events", path: { book_id: bookId } });
+}
+
+export function agenticEventsUrl(bookId: string, agenticRunId: string): string {
+  return client.buildUrl({
+    url: "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/events",
+    path: { book_id: bookId, agentic_run_id: agenticRunId },
+  });
+}
+
+export async function fetchAgenticUsage(bookId: string, agenticRunId: string): Promise<AgenticUsage> {
+  const result = await client.request({
+    method: "GET",
+    url: "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/llm-counters",
+    path: { book_id: bookId, agentic_run_id: agenticRunId },
+    throwOnError: true,
+  });
+  return agenticUsageSchema.parse(result.data);
+}
+
+export async function startAgenticRun(bookId: string): Promise<AgenticRunStart> {
+  const result = await client.request({
+    method: "POST",
+    url: "/api/v1/bd/ingestion/{book_id}/agentic/runs",
+    path: { book_id: bookId },
+    throwOnError: true,
+  });
+  return agenticRunStartSchema.parse(result.data);
+}
+
+export async function resumeAgenticRun(bookId: string, agenticRunId: string): Promise<AgenticRunStart> {
+  const result = await client.request({
+    method: "POST",
+    url: "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/resume",
+    path: { book_id: bookId, agentic_run_id: agenticRunId },
+    throwOnError: true,
+  });
+  return agenticRunStartSchema.parse(result.data);
 }
 
 /** A figure cropped from a page, as PNG. */
@@ -54,7 +98,7 @@ function failure(status: number, text: string): UploadError {
  * book: the answer says whether the extraction was queued, is already cached, or is already running. */
 export function uploadBook(
   file: File,
-  { onProgress }: { onProgress?: (fraction: number) => void } = {},
+  { onProgress, autoChain = false }: { onProgress?: (fraction: number) => void; autoChain?: boolean } = {},
 ): Promise<StartResponse> {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
@@ -77,6 +121,7 @@ export function uploadBook(
     };
     const form = new FormData();
     form.append("file", file);
+    form.append("auto_chain", String(autoChain));
     request.send(form);
   });
 }

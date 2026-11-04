@@ -17,7 +17,19 @@ ArtifactWriter = Callable[[str, str, str], Any]
 
 
 class Specialist(Protocol):
-    async def ainvoke(self, input: dict[str, Any]) -> dict[str, Any]: ...
+    async def ainvoke(
+        self,
+        input: dict[str, Any],
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
+
+
+async def _report(progress_callback, **event: Any) -> None:
+    if progress_callback is None:
+        return
+    result = progress_callback(event)
+    if inspect.isawaitable(result):
+        await result
 
 
 async def repair_pages(
@@ -25,6 +37,7 @@ async def repair_pages(
     read_page: PageReader,
     write_artifact: ArtifactWriter,
     specialists: dict[str, Specialist],
+    progress_callback = None,
 ) -> dict:
     """Run bounded specialists, apply only unambiguous low-risk proposals, and persist every page."""
     page_refs = state["page_refs"]
@@ -53,10 +66,17 @@ async def repair_pages(
             "assigned_issues": [issue.model_dump(mode = "json") for issue in assigned.values()],
         }
         try:
-            response = await specialists[role].ainvoke({"messages": [{
-                "role": "user",
-                "content": json.dumps(payload, ensure_ascii = False),
-            }]})
+            run_id = state.get("agentic_run_id")
+            if not isinstance(run_id, str):
+                raise ValueError("the ingestion run has no agentic_run_id")
+            node_id = "structure_repair" if role == "structure" else "text_repair"
+            with domains.settings.llm_counter.service.llm_context(
+                ns = "bd", run_id = run_id, node_id = node_id,
+            ):
+                response = await specialists[role].ainvoke({"messages": [{
+                    "role": "user",
+                    "content": json.dumps(payload, ensure_ascii = False),
+                }]}, config = {"callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()]})
             if not isinstance(response, dict) or "structured_response" not in response:
                 raise ValueError("specialist returned no structured PatchProposalBatch")
             proposals = domain.validate_proposals(
@@ -74,6 +94,7 @@ async def repair_pages(
     async def process(page_ref: graphs.ingestion.state.IngestionPageReference) -> dict:
         async with semaphore:
             page_number = page_ref["page"]
+            await _report(progress_callback, kind = "page_repair", page = page_number, status = "running")
             markdown = read_page(page_ref["source_key"])
             if inspect.isawaitable(markdown):
                 markdown = await markdown
@@ -82,20 +103,27 @@ async def repair_pages(
             source_sha256 = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
             if source_sha256 != page_ref["source_sha256"]:
                 raise ValueError(f"source page {page_number} changed after its quality audit")
-            if len(markdown) > domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS:
-                raise ValueError(f"page {page_number} exceeds the configured repair limit")
+            oversized = len(markdown) > domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS
 
             issue_list = agents.schemas.PageAssessment.model_validate(
                 audits[page_number]["assessment"],
             ).issues
             issues = {issue.issue_id: issue for issue in issue_list}
             assigned_items = work_by_page.get(page_number, [])
-            responses = await asyncio.gather(*(
+            responses = [] if oversized else await asyncio.gather(*(
                 run_specialist(item, markdown, page_number, source_sha256, issues)
                 for item in assigned_items
             ))
             proposals = [proposal for batch, _ in responses for proposal in batch]
-            errors = [error for _, error in responses if error]
+            errors = [
+                f"Page audit: {warning}"
+                for warning in audits[page_number].get("warnings", [])
+            ] + [error for _, error in responses if error]
+            if oversized:
+                errors.append(
+                    f"Page exceeds the {domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS}-character "
+                    "repair limit; the original Markdown was preserved for manual review."
+                )
             try:
                 normalized, auto_applied, proposal_reviews = domain.apply_proposals(markdown, proposals)
             except ValueError as error:
@@ -132,7 +160,7 @@ async def repair_pages(
             await _write(write_artifact, page_ref["normalized_key"], normalized, "text/markdown; charset=utf-8")
             await _write(write_artifact, page_ref["assessment_key"], assessment_content, "application/json")
             await _write(write_artifact, page_ref["patch_proposals_key"], proposal_content, "application/json")
-            return {
+            result = {
                 "page": page_number,
                 "source_sha256": source_sha256,
                 "normalized_sha256": normalized_hash,
@@ -148,6 +176,8 @@ async def repair_pages(
                 "status": "review_required" if review_ids or errors else "done",
                 "error": "; ".join(errors) if errors else "",
             }
+            await _report(progress_callback, kind = "page_repair", page = page_number, status = "done")
+            return result
 
     page_results = await asyncio.gather(*(process(page_ref) for page_ref in page_refs))
     return {"page_results": page_results, "status": "repaired"}

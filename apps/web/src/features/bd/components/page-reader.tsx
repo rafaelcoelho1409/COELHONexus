@@ -28,6 +28,7 @@ export function PageReader({
   page,
   row,
   livePage,
+  agenticRunAvailable = false,
   nPages,
   units,
   readingMode = false,
@@ -36,17 +37,20 @@ export function PageReader({
   page: number | null;
   row: PageRow | undefined;
   livePage: LivePage | undefined;
+  agenticRunAvailable?: boolean;
   nPages: number;
   units: BookUnits;
   readingMode?: boolean;
 }) {
   const [previewMode, setPreviewMode] = useState<(typeof PREVIEW_MODES)[number]["id"]>("rendered");
   const needsBody =
-    row !== undefined && (livePage === undefined || livePage.truncated || livePage.markdown === "");
+    row !== undefined &&
+    (agenticRunAvailable || livePage === undefined || livePage.truncated || livePage.markdown === "");
   const body = usePageBody(bookId, page, needsBody);
   const [selectedFigure, setSelectedFigure] = useState<number | null>(null);
   const figures = row?.figures ?? EMPTY_FIGURES;
-  const source = body.data ?? livePage?.markdown ?? "";
+  const source = body.data?.markdown ?? livePage?.markdown ?? "";
+  const contentSource = body.data?.content_source ?? "docling";
   const renderedText = useMemo(
     () => inlineFigures(source, figures, bookId, page ?? 0, units.singular),
     [source, figures, bookId, page, units.singular],
@@ -103,6 +107,9 @@ export function PageReader({
           {units.singular[0]?.toUpperCase()}
           {units.singular.slice(1)} {page}
           {nPages > 0 ? ` of ${nPages}` : ""}
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground" aria-live="polite">
+          {contentSource === "agentic" ? "AI-processed content" : "Docling extraction"}
         </p>
         {trail ? <p className="mt-1 text-sm text-muted-foreground">{trail}</p> : null}
         {chips.length > 0 ? (
