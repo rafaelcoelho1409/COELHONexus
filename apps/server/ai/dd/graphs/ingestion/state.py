@@ -1,4 +1,5 @@
 """Typed LangGraph state for Docs Distiller page ingestion."""
+
 from __future__ import annotations
 
 from typing import Any, NotRequired, TypedDict
@@ -29,6 +30,8 @@ class PageAssessmentResult(TypedDict):
     source_sha256: str
     assessment: dict[str, Any]
     warnings: NotRequired[list[str]]
+    audit_status: NotRequired[str]
+    audit_error: NotRequired[str]
     patches: NotRequired[dict[str, Any]]
     normalization_status: NotRequired[str]
     output_key: NotRequired[str]
@@ -54,9 +57,10 @@ class PageOutputReference(TypedDict):
     raw_key: str
     key: str
     assessment_key: str
+    repair_status: NotRequired[str]
 
 
-class IngestionState(TypedDict, total = False):
+class IngestionState(TypedDict, total=False):
     """Graph state carries references and compact findings, never page Markdown."""
 
     framework_slug: str

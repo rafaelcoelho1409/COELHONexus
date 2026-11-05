@@ -2492,6 +2492,116 @@ export type DeleteDdIngestionSlugResponses = {
 
 export type DeleteDdIngestionSlugResponse = DeleteDdIngestionSlugResponses[keyof DeleteDdIngestionSlugResponses];
 
+export type PostDdIngestionSlugAgenticRunsData = {
+    body?: never;
+    path: {
+        /**
+         * Slug
+         */
+        slug: string;
+    };
+    query?: never;
+    url: '/api/v1/dd/ingestion/{slug}/agentic/runs';
+};
+
+export type PostDdIngestionSlugAgenticRunsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostDdIngestionSlugAgenticRunsError = PostDdIngestionSlugAgenticRunsErrors[keyof PostDdIngestionSlugAgenticRunsErrors];
+
+export type PostDdIngestionSlugAgenticRunsResponses = {
+    /**
+     * Response Post Dd Ingestion Slug Agentic Runs
+     *
+     * Successful Response
+     */
+    202: {
+        [key: string]: unknown;
+    };
+};
+
+export type PostDdIngestionSlugAgenticRunsResponse = PostDdIngestionSlugAgenticRunsResponses[keyof PostDdIngestionSlugAgenticRunsResponses];
+
+export type DeleteDdIngestionSlugAgenticRunsRunIdData = {
+    body?: never;
+    path: {
+        /**
+         * Slug
+         */
+        slug: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/dd/ingestion/{slug}/agentic/runs/{run_id}';
+};
+
+export type DeleteDdIngestionSlugAgenticRunsRunIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteDdIngestionSlugAgenticRunsRunIdError = DeleteDdIngestionSlugAgenticRunsRunIdErrors[keyof DeleteDdIngestionSlugAgenticRunsRunIdErrors];
+
+export type DeleteDdIngestionSlugAgenticRunsRunIdResponses = {
+    /**
+     * Response Delete Dd Ingestion Slug Agentic Runs Run Id
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type DeleteDdIngestionSlugAgenticRunsRunIdResponse = DeleteDdIngestionSlugAgenticRunsRunIdResponses[keyof DeleteDdIngestionSlugAgenticRunsRunIdResponses];
+
+export type PostDdIngestionSlugAgenticRunsRunIdResumeData = {
+    body?: never;
+    path: {
+        /**
+         * Slug
+         */
+        slug: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/dd/ingestion/{slug}/agentic/runs/{run_id}/resume';
+};
+
+export type PostDdIngestionSlugAgenticRunsRunIdResumeErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostDdIngestionSlugAgenticRunsRunIdResumeError = PostDdIngestionSlugAgenticRunsRunIdResumeErrors[keyof PostDdIngestionSlugAgenticRunsRunIdResumeErrors];
+
+export type PostDdIngestionSlugAgenticRunsRunIdResumeResponses = {
+    /**
+     * Response Post Dd Ingestion Slug Agentic Runs Run Id Resume
+     *
+     * Successful Response
+     */
+    202: {
+        [key: string]: unknown;
+    };
+};
+
+export type PostDdIngestionSlugAgenticRunsRunIdResumeResponse = PostDdIngestionSlugAgenticRunsRunIdResumeResponses[keyof PostDdIngestionSlugAgenticRunsRunIdResumeResponses];
+
 export type GetDdIngestionSlugArtifactsNameData = {
     body?: never;
     path: {
@@ -2570,7 +2680,12 @@ export type GetDdIngestionSlugPagesIdxData = {
          */
         idx: number;
     };
-    query?: never;
+    query?: {
+        /**
+         * Version
+         */
+        version?: 'processed' | 'original';
+    };
     url: '/api/v1/dd/ingestion/{slug}/pages/{idx}';
 };
 
@@ -3322,7 +3437,12 @@ export type GetDdRunsRunIdPagesIdxData = {
          */
         idx: number;
     };
-    query?: never;
+    query?: {
+        /**
+         * Version
+         */
+        version?: 'processed' | 'original';
+    };
     url: '/api/v1/dd/runs/{run_id}/pages/{idx}';
 };
 

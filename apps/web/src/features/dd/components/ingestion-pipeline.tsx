@@ -8,8 +8,9 @@ import { isRunTerminal, tierLabel } from "../domain/ingestion";
 import {
   INGESTION_NODES,
   ingestionNodeCaption,
+  ingestionNodeKpis,
   ingestionNodeStatus,
-  ingestionNodeText,
+  ingestionNodeViews,
   ingestionPercent,
   pageProgress,
   pageProgressSummary,
@@ -20,12 +21,18 @@ import { useIngestionUsage } from "../hooks/use-dd-data";
 import { ActionButton } from "./action-button";
 import { AgenticProgress, ExtractionProgress } from "./ingestion-progress";
 import { IngestionNodeSheet, IngestionUsageSheet, PipelineUsageTotal } from "./ingestion-usage";
+import { StageNodes } from "./stage-parts";
 import { ToggleGroup } from "./toggle-group";
 
-const IngestionFlow = dynamic(() => import("./ingestion-flow").then((module) => module.IngestionFlow), {
+// The graph library is only needed once a graph is on screen.
+const StageFlow = dynamic(() => import("./stage-flow").then((module) => module.StageFlow), {
   ssr: false,
   loading: () => <p className="text-xs text-muted-foreground">Loading graph…</p>,
 });
+
+// Ingestion has no per-node live line or graph state; the shared graph still asks for them.
+const NO_LIVE_LINES: Record<string, string> = {};
+const NO_VALUES: Record<string, unknown> = {};
 
 const MODES = [
   { id: "graph", label: "Graph" },
@@ -41,12 +48,19 @@ export function IngestionPipeline({
   ingestedPages,
   startPending,
   wipePending,
+  agenticActionPending,
+  agenticCancelPending,
+  agenticWipePending,
   cancelRequested,
   cancelError,
   statusUnavailable,
   onStart,
   onStop,
   onWipe,
+  onStartAgentic,
+  onResumeAgentic,
+  onStopAgentic,
+  onWipeAgentic,
   onDismiss,
 }: {
   runId: string | null;
@@ -56,12 +70,19 @@ export function IngestionPipeline({
   ingestedPages: number;
   startPending: boolean;
   wipePending: boolean;
+  agenticActionPending: boolean;
+  agenticCancelPending: boolean;
+  agenticWipePending: boolean;
   cancelRequested: boolean;
   cancelError: string | null;
   statusUnavailable: boolean;
   onStart: () => void;
   onStop: () => void;
   onWipe: () => void;
+  onStartAgentic: () => void;
+  onResumeAgentic: () => void;
+  onStopAgentic: () => void;
+  onWipeAgentic: () => void;
   onDismiss?: () => void;
 }) {
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
@@ -72,31 +93,39 @@ export function IngestionPipeline({
   const terminal = isRunTerminal(runStatus);
   // A run in the address that can no longer be read (its progress expired) is not in flight.
   const live = hasRun && !terminal && !statusUnavailable;
-  const stopping = live && cancelRequested;
   const usage = useIngestionUsage(runId, live);
   const extraction = progress?.stages?.extraction ?? null;
   const agentic = progress?.stages?.agentic ?? null;
+  const extractionActive = live && extraction?.status === "running";
+  const agenticActive = live && (agentic?.status === "running" || agentic?.status === "queued");
+  const extractionStopping = extractionActive && cancelRequested;
+  const agenticStopping = agenticActive && cancelRequested;
 
   // Without a run on screen the library says the pages are there; with one, the run is the truth.
   const extractionDone = hasRun ? extraction?.status === "done" : ingested;
   const extractionTotal = hasRun ? (extraction?.total ?? 0) : ingestedPages;
   const extractionCurrent = hasRun ? (extraction?.current ?? 0) : ingestedPages;
   const extractionStatusText = hasRun
-    ? stopping && extraction?.status === "running"
+    ? extractionStopping
       ? "Stopping"
       : phaseStatusText(extraction?.status, runStatus)
     : ingested
       ? "Complete"
       : "Not started";
   const agenticStatusText = hasRun
-    ? stopping && agentic?.status === "running"
+    ? agenticStopping
       ? "Stopping"
       : phaseStatusText(agentic?.status, runStatus)
-    : "Waiting";
+    : ingested
+      ? "Ready to run"
+      : "Waiting";
+  const nodeViews = ingestionNodeViews(agentic, runStatus);
+  const nodeKpis = ingestionNodeKpis(agentic);
   const agenticCurrent = agentic?.current ?? 0;
   const agenticTotal = agentic?.total ?? 0;
   const auditTotal = agentic?.node_progress.audit_pages;
   const retryable = runStatus === "failed" || runStatus === "cancelled";
+  const agenticRetryable = agentic?.status === "failed" || agentic?.status === "cancelled";
   const pageRows = pageProgress(agentic);
   const pageSummary = pageProgressSummary(pageRows);
   const selectedNode = INGESTION_NODES.find((node) => node.id === selectedNodeId);
@@ -115,9 +144,10 @@ export function IngestionPipeline({
           lastUrl={extraction?.last_url ?? null}
           successful={extractionDone && !extraction?.error}
           live={live}
+          extracting={extractionActive}
           ingested={ingested}
           retryable={retryable}
-          stopping={stopping}
+          stopping={extractionStopping}
           startPending={startPending}
           wipePending={wipePending}
           statusUnavailable={statusUnavailable}
@@ -135,9 +165,21 @@ export function IngestionPipeline({
           audited={auditTotal?.current ?? 0}
           successful={agentic?.status === "done" && !agentic.error}
           live={live}
-          stopping={stopping}
+          stopping={agenticStopping}
           preparing={progress?.tier === "post" && !terminal}
           error={agenticError}
+          active={agenticActive}
+          actionPending={agenticActionPending}
+          cancelPending={agenticCancelPending}
+          wipePending={agenticWipePending}
+          hasRun={hasRun}
+          ready={ingested}
+          retryable={agenticRetryable}
+          cancelError={cancelError}
+          onStart={onStartAgentic}
+          onResume={onResumeAgentic}
+          onStop={onStopAgentic}
+          onWipe={onWipeAgentic}
         />
       </div>
 
@@ -155,108 +197,99 @@ export function IngestionPipeline({
                   : "Agentic AI is ready to run after extraction."}
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {hasRun ? (
-                <ActionButton onClick={() => setUsageOpen(true)} aria-haspopup="dialog">
-                  <ChartNoAxesColumn aria-hidden />
-                  LLM usage
-                </ActionButton>
-              ) : null}
-              <ToggleGroup legend="Pipeline shown as" options={MODES} value={mode} onChange={setMode} />
-            </div>
           </header>
           <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-[minmax(0,3fr)_minmax(16rem,1fr)]">
             <div className="min-w-0">
+              {/* The same graph and list as the planner and synth stages, fed the three ingestion nodes. */}
               {mode === "graph" ? (
-                <IngestionFlow agentic={agentic} runStatus={runStatus} onOpenNode={setSelectedNodeId} />
+                <StageFlow
+                  stage="ingestion"
+                  title="Agentic AI ingestion"
+                  views={nodeViews}
+                  kpis={nodeKpis}
+                  liveLines={NO_LIVE_LINES}
+                  values={NO_VALUES}
+                  live={live}
+                  onOpen={setSelectedNodeId}
+                />
               ) : (
-                <ol aria-label="Agentic pipeline nodes" className="flex flex-col gap-1.5">
-                  {INGESTION_NODES.map((node) => {
-                    const nodeStatus = ingestionNodeStatus(agentic, node.id, runStatus);
-                    const caption = ingestionNodeCaption(agentic, node.id);
-                    return (
-                      <li key={node.id} data-status={nodeStatus}>
-                        <button
-                          type="button"
-                          aria-haspopup="dialog"
-                          onClick={() => setSelectedNodeId(node.id)}
-                          className={`flex min-h-14 w-full flex-col justify-center rounded-sm border bg-background px-3 py-2 text-left hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ${
-                            nodeStatus === "running"
-                              ? "border-running"
-                              : nodeStatus === "failed"
-                                ? "border-destructive"
-                                : "border-border"
-                          }`}
-                        >
-                          <span className="flex flex-wrap items-center justify-between gap-2">
-                            <span className="text-sm font-medium">{node.label}</span>
-                            <span className="text-xs text-muted-foreground">
-                              {ingestionNodeText(nodeStatus)}
-                            </span>
-                          </span>
-                          {caption ? (
-                            <span className="mt-1 text-xs text-muted-foreground">{caption}</span>
-                          ) : null}
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ol>
+                <StageNodes
+                  label="Agentic pipeline nodes"
+                  views={nodeViews}
+                  kpis={nodeKpis}
+                  liveLines={NO_LIVE_LINES}
+                  onOpen={setSelectedNodeId}
+                />
               )}
             </div>
-            {/* From xl the box is as tall as the graph beside it and nothing more: its content is taken out of flow
-             * (`absolute inset-0`), so a long list scrolls inside it instead of stretching the row. */}
-            <section
-              aria-label="Page progress"
-              className="relative min-w-0 rounded-sm border border-border bg-background xl:min-h-72"
-            >
-              <div className="flex min-h-0 flex-col p-3 xl:absolute xl:inset-0">
-                <header className="flex flex-wrap items-baseline justify-between gap-2">
-                  <h4 className="text-sm font-medium">Page progress</h4>
-                  {pageSummary ? (
-                    <span className="text-xs tabular-nums text-muted-foreground">
-                      {pageSummary.completed} of {pageSummary.total} complete
-                    </span>
-                  ) : null}
-                </header>
-                {pageRows.length > 0 ? (
-                  <ol
-                    aria-label="Page progress entries"
-                    // biome-ignore lint/a11y/noNoninteractiveTabindex: a long list scrolls, so keyboard users must be able to focus it to scroll it (WCAG 2.1.1)
-                    tabIndex={0}
-                    className="mt-3 flex max-h-[34rem] min-h-0 flex-col gap-3 overflow-y-auto xl:max-h-none xl:flex-1"
+            <div className="flex min-w-0 flex-col">
+              <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
+                {hasRun ? (
+                  <ActionButton
+                    className="min-w-0 flex-1 justify-center whitespace-nowrap px-2"
+                    onClick={() => setUsageOpen(true)}
+                    aria-haspopup="dialog"
                   >
-                    {pageRows.map((row) => {
-                      const percent = ingestionPercent(row.processed, row.total);
-                      return (
-                        <li key={row.id} className="min-w-0">
-                          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                            <span className="min-w-0 break-words">{row.label}</span>
-                            <span className="shrink-0 tabular-nums text-muted-foreground">
-                              {row.processed}/{row.total} pages
-                            </span>
-                          </div>
-                          <div
-                            role="progressbar"
-                            aria-label={`${row.label} progress`}
-                            aria-valuemin={0}
-                            aria-valuemax={row.total}
-                            aria-valuenow={row.processed}
-                            className="mt-1 h-1 w-full overflow-hidden rounded-sm bg-muted"
-                          >
-                            <div className="h-full bg-primary" style={{ width: `${percent ?? 0}%` }} />
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ol>
-                ) : (
-                  <p className="mt-3 text-xs text-muted-foreground">
-                    Page counts appear once Agentic AI starts.
-                  </p>
-                )}
+                    <ChartNoAxesColumn aria-hidden />
+                    LLM usage
+                  </ActionButton>
+                ) : null}
+                <ToggleGroup legend="Pipeline shown as" options={MODES} value={mode} onChange={setMode} />
               </div>
-            </section>
+              {/* From xl the box is as tall as the graph beside it and nothing more: its content is taken out of flow
+               * (`absolute inset-0`), so a long list scrolls inside it instead of stretching the row. */}
+              <section
+                aria-label="Page progress"
+                className="relative min-w-0 rounded-sm border border-border bg-background xl:min-h-72 xl:flex-1"
+              >
+                <div className="flex min-h-0 flex-col p-3 xl:absolute xl:inset-0">
+                  <header className="flex flex-wrap items-baseline justify-between gap-2">
+                    <h4 className="text-sm font-medium">Page progress</h4>
+                    {pageSummary ? (
+                      <span className="text-xs tabular-nums text-muted-foreground">
+                        {pageSummary.completed} of {pageSummary.total} complete
+                      </span>
+                    ) : null}
+                  </header>
+                  {pageRows.length > 0 ? (
+                    <ol
+                      aria-label="Page progress entries"
+                      // biome-ignore lint/a11y/noNoninteractiveTabindex: a long list scrolls, so keyboard users must be able to focus it to scroll it (WCAG 2.1.1)
+                      tabIndex={0}
+                      className="mt-3 flex max-h-[60dvh] min-h-0 flex-col gap-3 overflow-y-auto xl:max-h-none xl:flex-1"
+                    >
+                      {pageRows.map((row) => {
+                        const percent = ingestionPercent(row.processed, row.total);
+                        return (
+                          <li key={row.id} className="min-w-0">
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                              <span className="min-w-0 break-words">{row.label}</span>
+                              <span className="shrink-0 tabular-nums text-muted-foreground">
+                                {row.processed}/{row.total} pages
+                              </span>
+                            </div>
+                            <div
+                              role="progressbar"
+                              aria-label={`${row.label} progress`}
+                              aria-valuemin={0}
+                              aria-valuemax={row.total}
+                              aria-valuenow={row.processed}
+                              className="mt-1 h-1 w-full overflow-hidden rounded-sm bg-muted"
+                            >
+                              <div className="h-full bg-primary" style={{ width: `${percent ?? 0}%` }} />
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  ) : (
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      Page counts appear once Agentic AI starts.
+                    </p>
+                  )}
+                </div>
+              </section>
+            </div>
           </div>
         </section>
         <PipelineUsageTotal usage={usage.data} hasRun={hasRun} loading={usageLoading} failed={usageFailed} />

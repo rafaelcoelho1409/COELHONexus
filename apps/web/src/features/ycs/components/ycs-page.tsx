@@ -1,8 +1,8 @@
 "use client";
 
-/** The YouTube Content Search page: stage tabs on top, the stage body below. The Ingestion and Ask stages read
- * search params (inside a Suspense boundary per Next.js requirements); Source and Query keep their state locally.
- * Route pages re-export this single component. */
+/** The YouTube Content Search page: the stage body (the stage tabs sit in the app's second navbar). The Ingestion
+ * and Ask stages read search params (inside a Suspense boundary per Next.js requirements); Source and Query keep
+ * their state locally. Route pages re-export this single component. */
 
 import { usePathname } from "next/navigation";
 import type { JSX } from "react";
@@ -13,7 +13,6 @@ import { IngestionStage } from "./ingestion-stage";
 import { YcsOverlaysProvider } from "./overlays";
 import { QueryStage } from "./query-stage";
 import { SourceStage } from "./source-stage";
-import { StageNav } from "./stage-nav";
 
 export function YcsPage(): JSX.Element {
   const pathname = usePathname();
@@ -21,16 +20,13 @@ export function YcsPage(): JSX.Element {
   return (
     <YcsOverlaysProvider>
       <div>
-        <StageNav stage={stage} />
-        <div className="mt-6">
-          {stage === "ingestion" || stage === "ask" || stage === "query" ? (
-            <Suspense fallback={<p className="text-sm text-muted-foreground">Loading…</p>}>
-              <StageBody stage={stage} />
-            </Suspense>
-          ) : (
-            <SourceStage />
-          )}
-        </div>
+        {stage === "ingestion" || stage === "ask" || stage === "query" ? (
+          <Suspense fallback={<p className="text-sm text-muted-foreground">Loading…</p>}>
+            <StageBody stage={stage} />
+          </Suspense>
+        ) : (
+          <SourceStage />
+        )}
       </div>
     </YcsOverlaysProvider>
   );

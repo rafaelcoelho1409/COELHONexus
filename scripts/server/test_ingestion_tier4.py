@@ -206,7 +206,7 @@ check("a page under one release only, a URL with none, and a year are left alone
 check("10 sorts after 9 (numbers, not text)", tier3.domain.collapse_versions(["https://x.dev/1.9/a", "https://x.dev/1.10/a"]), ["https://x.dev/1.10/a"])
 
 # ---- the catalog edits ---------------------------------------------------------------------------------------------------------------------------
-CATALOG = {e["name"]: e for e in yaml.safe_load((Path(__file__).resolve().parents[2] / "apps" / "server" / "domains" / "dd" / "resolver" / "sources.yaml").read_text())["frameworks"]}
+CATALOG = {e["name"]: e for e in yaml.safe_load((Path(__file__).resolve().parents[2] / "apps" / "server" / "domains" / "dd" / "catalog" / "sources.yaml").read_text())["frameworks"]}
 duck = CATALOG["DuckDB (Python)"]["path_filter"]
 check("DuckDB's filter matches the Python docs under any numbered release", [filters.passes_path_filter(f"https://duckdb.org{p}", duck) for p in
       ("/docs/2.0/clients/python/overview", "/docs/1.5/guides/python/jupyter", "/docs/2.0/sql/functions/numeric", "/docs/stable/clients/python/overview")], [True, True, False, True])

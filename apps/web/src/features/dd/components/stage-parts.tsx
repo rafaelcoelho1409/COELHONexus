@@ -2,7 +2,19 @@
 
 /** Presentation-only parts shared by the Docs Distiller stage views. */
 
-import { BookOpen, ChartColumn, Check, Circle, CircleDot, Clock3, Lock, Play, Trash2, X } from "lucide-react";
+import {
+  Ban,
+  BookOpen,
+  ChartColumn,
+  Check,
+  Circle,
+  CircleDot,
+  Clock3,
+  Lock,
+  Play,
+  Trash2,
+  X,
+} from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
@@ -10,7 +22,7 @@ import { Button } from "@/shared/ui/button";
 
 import type { ChapterCell } from "../domain/chapters";
 import { fmtMs } from "../domain/format";
-import type { NodeStatus, StageNodeView, StagePillState } from "../domain/stages";
+import type { NodeStatus, NodeView, StagePillState } from "../domain/stages";
 
 const PILL_LABEL: Record<StagePillState["status"], string> = {
   idle: "Idle",
@@ -52,6 +64,7 @@ export function StatusGlyph({ status }: { status: NodeStatus }) {
   }
   if (status === "future") return <Lock aria-hidden className={`${GLYPH_CLASS} text-muted-foreground`} />;
   if (status === "failed") return <X aria-hidden className={`${GLYPH_CLASS} text-destructive-text`} />;
+  if (status === "stopped") return <Ban aria-hidden className={`${GLYPH_CLASS} text-muted-foreground`} />;
   return <Circle aria-hidden className={`${GLYPH_CLASS} text-muted-foreground`} />;
 }
 
@@ -61,6 +74,7 @@ export const NODE_STATUS_LABEL: Record<NodeStatus, string> = {
   pending: "pending",
   future: "not available yet",
   failed: "failed",
+  stopped: "stopped",
 };
 
 /** Glyph plus the status in words, so the state never rests on the icon or its colour alone. */
@@ -79,16 +93,19 @@ export function StageNodes({
   liveLines,
   kpis,
   onOpen,
+  label = "Stage nodes",
 }: {
-  views: StageNodeView[];
+  views: readonly NodeView[];
   liveLines: Record<string, string>;
   /** A node's headline number once it has committed ("1,200 files"). */
   kpis: Record<string, string>;
   onOpen: (nodeId: string) => void;
+  /** What the list is called to assistive technology. */
+  label?: string;
 }) {
   return (
     // One node per row, top to bottom in run order — the same order as the graph.
-    <ul aria-label="Stage nodes" className="flex flex-col gap-1.5">
+    <ul aria-label={label} className="flex flex-col gap-1.5">
       {views.map((view) => (
         <li key={view.node.id} data-status={view.status} data-node={view.node.id}>
           <button

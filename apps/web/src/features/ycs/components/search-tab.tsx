@@ -339,7 +339,12 @@ export function SearchTab({ onRoute }: { onRoute: (routed: Routed) => void }): J
       </form>
 
       <section aria-labelledby="ycs-results-heading" className="rounded-md border border-border bg-card">
-        <h3 id="ycs-results-heading" ref={headingRef} tabIndex={-1} className="sr-only scroll-mt-32">
+        <h3
+          id="ycs-results-heading"
+          ref={headingRef}
+          tabIndex={-1}
+          className="sr-only scroll-mt-[calc(var(--chrome-top)+4.5rem)]"
+        >
           Search results
         </h3>
 

@@ -134,13 +134,21 @@ describe("validateBaseUrl", () => {
 
 describe("buildSavePayload", () => {
   it("omits api_key entirely when nothing is typed, so the stored key survives", () => {
-    const payload = buildSavePayload({ kind: "llm", url: " http://g/v1 ", model: " m1 ", apiKey: "   ", clearKey: false });
+    const payload = buildSavePayload({
+      kind: "llm",
+      url: " http://g/v1 ",
+      model: " m1 ",
+      apiKey: "   ",
+      clearKey: false,
+    });
     expect(payload).toEqual({ url: "http://g/v1", model: "m1" });
     expect("api_key" in payload).toBe(false);
   });
 
   it("sends a typed key once, trimmed", () => {
-    expect(buildSavePayload({ kind: "llm", url: "http://g", model: "m", apiKey: "  sk-1  ", clearKey: false })).toEqual({
+    expect(
+      buildSavePayload({ kind: "llm", url: "http://g", model: "m", apiKey: "  sk-1  ", clearKey: false }),
+    ).toEqual({
       url: "http://g",
       model: "m",
       api_key: "sk-1",
@@ -148,23 +156,25 @@ describe("buildSavePayload", () => {
   });
 
   it("clearKey wins and sends an empty string", () => {
-    expect(buildSavePayload({ kind: "llm", url: "http://g", model: "", apiKey: "", clearKey: true })).toEqual({
-      url: "http://g",
-      model: "fgts-va",
-      api_key: "",
-    });
+    expect(buildSavePayload({ kind: "llm", url: "http://g", model: "", apiKey: "", clearKey: true })).toEqual(
+      {
+        url: "http://g",
+        model: "fgts-va",
+        api_key: "",
+      },
+    );
   });
 
   it("falls back to the default model when the field is blank", () => {
-    expect(buildSavePayload({ kind: "llm", url: "http://g", model: "   ", apiKey: "", clearKey: false }).model).toBe(
-      "fgts-va",
-    );
+    expect(
+      buildSavePayload({ kind: "llm", url: "http://g", model: "   ", apiKey: "", clearKey: false }).model,
+    ).toBe("fgts-va");
   });
 
   it("keeps the embedding endpoint's independent default model", () => {
-    expect(buildSavePayload({ kind: "embedding", url: "http://g", model: "", apiKey: "", clearKey: false }).model).toBe(
-      "auto",
-    );
+    expect(
+      buildSavePayload({ kind: "embedding", url: "http://g", model: "", apiKey: "", clearKey: false }).model,
+    ).toBe("auto");
   });
 });
 

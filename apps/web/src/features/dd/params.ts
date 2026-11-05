@@ -1,3 +1,5 @@
+import type { Section } from "@/shared/layout/section";
+
 /** Docs Distiller stages. `tab` marks the ones shown in the tab strip, as in the legacy `_STAGES`
  * (shared/urls.py): Planner and Synth run side by side on the Pipeline tab, so they have no tab of their own;
  * their URLs stay reachable as deep links to a single stage. */
@@ -11,6 +13,17 @@ export const DD_STAGES = [
 ] as const;
 
 export type DdStage = (typeof DD_STAGES)[number]["key"];
+
+/** The title and stage tabs in the second navbar. A tab keeps the framework you are on (`?slug=`), so moving from
+ * Pipeline to Study does not ask you to pick it again; the catalog never carries one. */
+export const DD_SECTION: Section = {
+  href: "/dd",
+  title: "Docs Distiller",
+  description: "Ingest docs, plan distillation, study what was distilled",
+  defaultTab: "catalog",
+  carryParam: "slug",
+  tabs: DD_STAGES.map((stage) => ({ ...stage, carry: stage.key !== "catalog" })),
+};
 
 /** The two graph-driven stages that stream progress and share a run lock. */
 export type RunStage = "planner" | "synth";

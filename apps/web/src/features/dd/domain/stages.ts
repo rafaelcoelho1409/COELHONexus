@@ -46,7 +46,14 @@ export const SYNTH_NODES: StageNode[] = [
 
 export const STAGE_NODES: Record<RunStage, StageNode[]> = { planner: PLANNER_NODES, synth: SYNTH_NODES };
 
-export type NodeStatus = "done" | "running" | "pending" | "future" | "failed";
+/** `stopped`: a node left running by a run that was cancelled (ingestion; the planner and synth graphs never show it). */
+export type NodeStatus = "done" | "running" | "pending" | "future" | "failed" | "stopped";
+
+/** What a graph or a node list needs of a node: its name and its state. Planner, synth and ingestion all draw it. */
+export type NodeView = {
+  node: Pick<StageNode, "id" | "label">;
+  status: NodeStatus;
+};
 
 /** The node id the values mark as running: the server's scheduled set first (sent only while a thread
  * streams), then the first node that has not committed. */

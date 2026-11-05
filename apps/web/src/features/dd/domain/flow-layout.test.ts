@@ -22,6 +22,18 @@ describe("flowLayout", () => {
     expect(synth.width).toBeGreaterThan(planner.width);
   });
 
+  it("lays the Agentic AI ingestion graph out as the same column, with no loop", () => {
+    const nodes = ["audit_pages", "normalize_pages", "publish"];
+    const layout = flowLayout("ingestion", nodes);
+    expect(new Set(nodes.map((id) => layout.positions[id]?.x)).size).toBe(1);
+    expect(layout.loop).toBeNull();
+    expect(layout.width).toBe(flowLayout("planner", nodes).width);
+    expect(flowEdges(nodes, layout.loop).map((edge) => edge.id)).toEqual([
+      "audit_pages->normalize_pages",
+      "normalize_pages->publish",
+    ]);
+  });
+
   it("drops the loop when either end is not in the graph", () => {
     expect(flowLayout("synth", ["outline_sdp", "sawc_write"]).loop).toBeNull();
   });

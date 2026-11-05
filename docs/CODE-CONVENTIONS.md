@@ -533,7 +533,7 @@ internals change:
 from . import dd, settings, ycs
 
 # domains/dd/__init__.py
-from . import ingestion, planner, resolver, synth
+from . import catalog, ingestion, planner, synth
 
 # domains/dd/ingestion/__init__.py
 from . import artifacts, dispatch, filters, post, progress, storage, tiers

@@ -1388,6 +1388,159 @@
         }
       }
     },
+    "/api/v1/dd/ingestion/{slug}/agentic/runs": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Start Agentic Run",
+        "description": "Queue a fresh Agentic AI candidate using saved pages; extraction is not repeated.",
+        "operationId": "post_dd_ingestion_slug_agentic_runs",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Ingestion Slug Agentic Runs"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/ingestion/{slug}/agentic/runs/{run_id}": {
+      "delete": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Wipe Agentic Run",
+        "description": "Wipe one terminal AI candidate and restore its immutable pre-AI pages.",
+        "operationId": "delete_dd_ingestion_slug_agentic_runs_run_id",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Dd Ingestion Slug Agentic Runs Run Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/ingestion/{slug}/agentic/runs/{run_id}/resume": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Resume Agentic Run",
+        "description": "Resume a failed or stopped Agentic AI candidate from its saved page inputs and graph checkpoint.",
+        "operationId": "post_dd_ingestion_slug_agentic_runs_run_id_resume",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Ingestion Slug Agentic Runs Run Id Resume"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dd/ingestion/{slug}/artifacts/{name}": {
       "get": {
         "tags": [
@@ -1506,6 +1659,20 @@
             "schema": {
               "type": "integer",
               "title": "Idx"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "processed",
+                "original"
+              ],
+              "type": "string",
+              "default": "processed",
+              "title": "Version"
             }
           }
         ],
@@ -2514,6 +2681,20 @@
             "schema": {
               "type": "integer",
               "title": "Idx"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "processed",
+                "original"
+              ],
+              "type": "string",
+              "default": "processed",
+              "title": "Version"
             }
           }
         ],

@@ -1,3 +1,6 @@
+/* The Agentic AI graph. React Flow's own stylesheet is loaded first; these rules only recolour it with the app's
+   tokens and switch off everything a read-only graph does not need. */
+
 .bd-agentic-flow .react-flow {
   --xy-background-color: transparent;
   --xy-node-background-color: transparent;
@@ -5,11 +8,13 @@
   background: transparent;
 }
 
+/* Nodes are plain buttons we draw ourselves; the wrapper must not add a frame, shadow or focus box. */
 .bd-agentic-flow .react-flow__node {
   padding: 0;
   border: 0;
   background: transparent;
   box-shadow: none;
+  border-radius: 0;
 }
 
 .bd-agentic-flow .react-flow__handle {
@@ -27,6 +32,14 @@
   fill: var(--neutral-8);
 }
 
+/* An edge between a finished node and the one now running. */
+.bd-agentic-flow .react-flow__edge.agentic-edge-active .react-flow__edge-path {
+  stroke: var(--running-text);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+
+/* The free licence asks for the small "React Flow" credit to stay; keep it legible. */
 .bd-agentic-flow .react-flow__attribution {
   font-size: 12px;
   background: transparent;

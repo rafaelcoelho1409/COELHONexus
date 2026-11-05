@@ -14,14 +14,19 @@ ContentType = Literal[
 
 @dataclass
 class ManifestEntry:
-    idx:   int
-    slug:  str
-    url:   str
-    tier:  str
+    idx: int
+    slug: str
+    url: str
+    tier: str
     bytes: int
     title: str = ""
-    key:   str = ""        # MinIO key — populated once written
-    raw_key: str = ""     # Immutable extracted/agent-input object for this page and ingestion run
+    key: str = ""  # MinIO key — populated once written
+    raw_key: str = (
+        ""  # Immutable extracted/agent-input object for this page and ingestion run
+    )
+    source_key: str = (
+        ""  # Immutable page text that entered Agentic AI; survives later normalizations
+    )
     # Per-section `Source: <url>` line found inside a split monolith page
     # (post.domain.split_by_source_markers) — `url` above stays the ORIGINAL
     # bundle URL shared by every split sibling, so this is the only field
@@ -41,4 +46,4 @@ class ManifestEntry:
     # `std:label` entities, page-split sub-slices). The base URL is the
     # canonical identity (fragments never are); anchors stay queryable
     # metadata instead of separate near-duplicate documents.
-    anchors: list = field(default_factory = list)
+    anchors: list = field(default_factory=list)

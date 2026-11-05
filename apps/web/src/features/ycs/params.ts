@@ -2,14 +2,25 @@
  * keys. The stage shape mirrors `features/dd/params.ts`; YCS has no per-framework slug, so hrefs take no
  * argument. */
 
+import type { Section } from "@/shared/layout/section";
+
 export type YcsStage = "source" | "ingestion" | "ask" | "query";
 
-export const YCS_STAGES: ReadonlyArray<{ key: YcsStage; label: string; href: string; tab: boolean }> = [
+const YCS_STAGES: ReadonlyArray<{ key: YcsStage; label: string; href: string; tab: boolean }> = [
   { key: "source", label: "Source", href: "/ycs", tab: true },
   { key: "ingestion", label: "Ingestion", href: "/ycs/ingestion", tab: true },
   { key: "ask", label: "Ask", href: "/ycs/ask", tab: true },
   { key: "query", label: "Query", href: "/ycs/query", tab: true },
 ];
+
+/** The title and stage tabs in the second navbar. YCS keeps no per-framework slug, so the tabs carry no query. */
+export const YCS_SECTION: Section = {
+  href: "/ycs",
+  title: "YouTube Content Search",
+  description: "Find videos, ingest transcripts, ask, and query",
+  defaultTab: "source",
+  tabs: YCS_STAGES.map((stage) => ({ ...stage, carry: false })),
+};
 
 export function stageHref(stage: YcsStage): string {
   const found = YCS_STAGES.find((s) => s.key === stage);

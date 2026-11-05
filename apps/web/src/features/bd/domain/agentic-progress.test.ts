@@ -2,8 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import type { AgenticProgress } from "../entities";
 import {
+  AGENTIC_NODE_DETAILS,
+  AGENTIC_NODES,
+  agenticBoardCaption,
   agenticNodeCaption,
+  agenticNodeKpi,
+  agenticNodeLiveLine,
   agenticNodeStatus,
+  agenticNodeViews,
   agenticPercent,
   chapterProgress,
   chapterProgressSummary,
@@ -41,6 +47,48 @@ describe("agentic progress display", () => {
       "2 sections repaired · 1 active · 10 total",
     );
     expect(agenticNodeCaption(progress, "publish", 10)).toBeNull();
+  });
+
+  it("gives a finished node a headline number and a running node a live line, never both", () => {
+    const summary = { deliveredPages: 8, reviewPages: 2, unverifiedPages: 1 };
+    expect(agenticNodeKpi(progress, "audit_batch", "done", "pages", summary)).toBe("3 pages audited");
+    expect(agenticNodeKpi(progress, "repair_pages", "done", "sections", summary)).toBe("2 sections repaired");
+    expect(agenticNodeKpi(progress, "publish", "done", "pages", summary)).toBe("8 delivered · 2 need review");
+    expect(agenticNodeKpi(progress, "publish", "done", "pages", null)).toBeNull();
+    expect(agenticNodeKpi(progress, "plan_repairs", "done", "pages", summary)).toBeNull();
+    expect(agenticNodeKpi(progress, "audit_batch", "running", "pages", summary)).toBeNull();
+
+    expect(agenticNodeLiveLine(progress, "repair_pages", "running", 10)).toBe("2/10 · 1 in flight");
+    expect(agenticNodeLiveLine({ ...progress, active_repair_pages: [] }, "repair_pages", "running", 10)).toBe(
+      "2/10",
+    );
+    expect(agenticNodeLiveLine(progress, "audit_batch", "done", 10)).toBeNull();
+    expect(agenticNodeLiveLine(progress, "publish", "running", 10)).toBeNull();
+    expect(agenticNodeLiveLine(progress, "repair_pages", "running", 0)).toBeNull();
+  });
+
+  it("builds the node views in run order and the caption above the graph", () => {
+    const views = agenticNodeViews(progress, "running", 10, "pages", null);
+    expect(views.map((view) => view.id)).toEqual(AGENTIC_NODES.map((node) => node.id));
+    expect(views.map((view) => view.status)).toEqual(["done", "pending", "running", "pending", "pending"]);
+    expect(views[0]?.kpi).toBe("3 pages audited");
+    expect(views[2]?.liveLine).toBe("2/10 · 1 in flight");
+    expect(agenticBoardCaption(progress, "running", true, 2, 10, "pages")).toBe(
+      "Run running · 2 of 10 pages processed · 1 of 5 nodes done",
+    );
+    expect(agenticBoardCaption(progress, "pending", false, 0, 0, "pages")).toBe(
+      "Ready to run after extraction · 1 of 5 nodes done",
+    );
+  });
+
+  it("describes every node, with something to read and something it writes", () => {
+    for (const node of AGENTIC_NODES) {
+      const details = AGENTIC_NODE_DETAILS[node.id];
+      expect(details.title).toBe(node.label);
+      expect(details.actions.length).toBeGreaterThan(0);
+      expect(details.reads.length).toBeGreaterThan(0);
+      expect(details.writes.length).toBeGreaterThan(0);
+    }
   });
 
   it("derives chapter completion from the page ranges", () => {

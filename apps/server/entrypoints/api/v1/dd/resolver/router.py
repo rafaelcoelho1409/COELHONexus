@@ -15,12 +15,12 @@ def list_catalog() -> list[dict]:
     Each entry carries its resolved `tier` (1-5, None when sourceless) so
     the Catalog UI can facet-filter without a second round-trip."""
     out = []
-    for e in domains.dd.resolver.service.load_catalog():
-        best = domains.dd.resolver.domain.pick_best_source(e)
+    for e in domains.dd.catalog.service.load_catalog():
+        best = domains.dd.catalog.domain.pick_best_source(e)
         out.append({**e, "tier": best["tier"] if best else None})
     return out
 
 
 @router.get("/{slug}")
 def resolve_one(entry: schemas.CatalogEntry) -> dict:
-    return {**entry, "best_source": domains.dd.resolver.domain.pick_best_source(entry)}
+    return {**entry, "best_source": domains.dd.catalog.domain.pick_best_source(entry)}

@@ -1,5 +1,7 @@
 # Book Distiller Agentic Ingestion Assessment — 2026-11-05
 
+> Historical report: this document covers workflow 1.1. The latest completed run for this book is workflow 1.4; see the [workflow 1.4 assessment](BD-INGESTION-AGENTIC-AI-ASSESSMENT-2026-11-05-WORKFLOW-1.4.md). Later run assessments are also available for [workflow 1.2](BD-INGESTION-AGENTIC-AI-ASSESSMENT-2026-11-05-WORKFLOW-1.2.md) and [workflow 1.3](BD-INGESTION-AGENTIC-AI-ASSESSMENT-2026-11-05-WORKFLOW-1.3.md).
+
 Second run, after the quality-disposition, deterministic-check, bounded-repair-context and metadata changes. Compared with [the 2026-11-04 run](BD-INGESTION-AGENTIC-AI-ASSESSMENT-2026-11-04.md). Read-only: data came from the `coelhonexus-dev` server API and the run's MinIO artifacts.
 
 ## Verdict

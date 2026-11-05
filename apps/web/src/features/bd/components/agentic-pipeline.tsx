@@ -5,9 +5,14 @@ import dynamic from "next/dynamic";
 import { useState } from "react";
 import type { StreamStatus } from "@/shared/sse";
 import {
+  AGENTIC_NODE_DETAILS,
   AGENTIC_NODES,
+  type AgenticNodeStatus,
+  type AgenticRunSummary,
+  agenticBoardCaption,
   agenticNodeCaption,
   agenticNodeStatus,
+  agenticNodeViews,
   agenticPercent,
   chapterProgress,
   chapterProgressSummary,
@@ -19,17 +24,20 @@ import type { AgenticProgress, AgenticRunStatus, AgenticUsage, ChapterRange } fr
 import { useAgenticUsage } from "../hooks/use-agentic-run";
 import { useModalDialog } from "../hooks/use-modal-dialog";
 import { ActionButton } from "./action-button";
+import {
+  AgenticNodeList,
+  AgenticPills,
+  AgenticStatusBadge,
+  type AgenticViewId,
+  AgenticViewSwitch,
+} from "./agentic-parts";
 import { ToggleGroup } from "./toggle-group";
 
+// The graph library is only needed once a graph is on screen.
 const AgenticFlow = dynamic(() => import("./agentic-flow").then((module) => module.AgenticFlow), {
   ssr: false,
   loading: () => <p className="text-xs text-muted-foreground">Loading graph…</p>,
 });
-
-const MODES = [
-  { id: "graph", label: "Graph" },
-  { id: "list", label: "List" },
-] as const;
 
 const USAGE_MODES: readonly { id: AgenticUsageMode; label: string }[] = [
   { id: "agent", label: "By agent" },
@@ -283,11 +291,29 @@ export function AgenticPipelineOverview({
   const usage = useAgenticUsage(bookId, run?.agentic_run_id ?? null, live, run !== null);
   const chapterRows = chapterProgress(chapters, progress?.processed_pages ?? []);
   const chapterSummary = chapterProgressSummary(chapters, progress?.processed_pages ?? []);
-  const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
+  const [mode, setMode] = useState<AgenticViewId>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const selectedNode = AGENTIC_NODES.find((node) => node.id === selectedNodeId);
   const runStatus = status ?? run?.status ?? "pending";
   const graphProgress = progress ?? EMPTY_AGENTIC_PROGRESS;
+  const total = run?.expected_page_count ?? 0;
+  const summary: AgenticRunSummary | null =
+    run?.status === "done"
+      ? {
+          deliveredPages: run.delivered_page_count,
+          reviewPages: run.review_page_count,
+          unverifiedPages: run.unverified_page_count,
+        }
+      : null;
+  const views = agenticNodeViews(graphProgress, runStatus, total, units.plural, summary);
+  const caption = agenticBoardCaption(
+    graphProgress,
+    runStatus,
+    run !== null,
+    graphProgress.processed_pages.length,
+    total,
+    units.plural,
+  );
 
   return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,4fr)_minmax(0,1fr)]">
@@ -295,15 +321,11 @@ export function AgenticPipelineOverview({
         aria-label="Agentic pipeline stages"
         className="min-w-0 rounded-md border border-border bg-card p-3"
       >
-        <header className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-medium">Agentic pipeline</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {run
-                ? `Run ${runStatus} · ${progress?.processed_pages.length ?? 0} of ${run.expected_page_count} ${units.plural} processed`
-                : "Agentic AI is ready to run after extraction."}
-            </p>
-          </div>
+        <header>
+          <h3 className="text-sm font-medium">Agentic pipeline</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Open any node for what it does, what it produced and its LLM usage.
+          </p>
         </header>
         {error ? (
           <p role="alert" className="mt-3 break-words text-sm text-destructive-text">
@@ -311,55 +333,28 @@ export function AgenticPipelineOverview({
           </p>
         ) : null}
         <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-[minmax(0,3fr)_minmax(16rem,1fr)]">
-          <div className="min-w-0">
+          <div className="flex min-w-0 flex-col gap-2">
+            {/* One row above the graph, as on the Docs Distiller's stage graphs: where the run is on the left, the
+                Graph | List switch on the right (the switch is 36px; the caption takes two lines of 16px at most). */}
+            <div className="flex min-h-9 items-center justify-between gap-3">
+              <p
+                aria-live="polite"
+                title={caption}
+                className="line-clamp-2 min-w-0 text-xs leading-4 text-muted-foreground"
+              >
+                {caption}
+              </p>
+              <AgenticViewSwitch value={mode} onChange={setMode} />
+            </div>
             {mode === "graph" ? (
-              <AgenticFlow
-                progress={graphProgress}
-                status={runStatus}
-                total={run?.expected_page_count ?? 0}
-                unitPlural={units.plural}
-                onOpenNode={setSelectedNodeId}
-              />
+              <AgenticFlow views={views} onOpenNode={setSelectedNodeId} />
             ) : (
-              <ol aria-label="Agentic pipeline nodes" className="flex flex-col gap-1.5">
-                {AGENTIC_NODES.map((node) => {
-                  const nodeStatus = agenticNodeStatus(graphProgress, node.id, runStatus);
-                  const caption = agenticNodeCaption(
-                    graphProgress,
-                    node.id,
-                    run?.expected_page_count ?? 0,
-                    units.plural,
-                  );
-                  return (
-                    <li key={node.id} data-status={nodeStatus}>
-                      <button
-                        type="button"
-                        aria-haspopup="dialog"
-                        onClick={() => setSelectedNodeId(node.id)}
-                        className={`flex min-h-14 w-full flex-col justify-center rounded-sm border bg-background px-3 py-2 text-left hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ${
-                          nodeStatus === "running"
-                            ? "border-running"
-                            : nodeStatus === "failed"
-                              ? "border-destructive"
-                              : "border-border"
-                        }`}
-                      >
-                        <span className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="text-sm font-medium">{node.label}</span>
-                          <span className="text-xs text-muted-foreground">{nodeStatus}</span>
-                        </span>
-                        {caption ? (
-                          <span className="mt-1 text-xs text-muted-foreground">{caption}</span>
-                        ) : null}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ol>
+              <AgenticNodeList rows={views} onOpen={setSelectedNodeId} />
             )}
           </div>
           <div className="min-w-0">
-            <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
+            {/* The row keeps its height without a run, so the chapter box always starts at the same place. */}
+            <div className="mb-1 flex min-h-10 min-w-0 items-center">
               {run ? (
                 <ActionButton
                   className="min-w-0 flex-1 justify-center whitespace-nowrap px-2"
@@ -370,7 +365,6 @@ export function AgenticPipelineOverview({
                   LLM usage
                 </ActionButton>
               ) : null}
-              <ToggleGroup legend="Pipeline shown as" options={MODES} value={mode} onChange={setMode} />
             </div>
             {/* The controls and chapter box share the same column width. */}
             <section
@@ -444,12 +438,8 @@ export function AgenticPipelineOverview({
         <AgenticNodeSheet
           node={selectedNode}
           status={agenticNodeStatus(graphProgress, selectedNode.id, runStatus)}
-          caption={agenticNodeCaption(
-            graphProgress,
-            selectedNode.id,
-            run?.expected_page_count ?? 0,
-            units.plural,
-          )}
+          caption={agenticNodeCaption(graphProgress, selectedNode.id, total, units.plural)}
+          kpi={views.find((view) => view.id === selectedNode.id)?.kpi ?? null}
           usage={usage.data}
           loading={run !== null && usage.isPending}
           failed={usage.isError}
@@ -461,10 +451,20 @@ export function AgenticPipelineOverview({
   );
 }
 
+const PENDING_NOTE: Record<AgenticNodeStatus, string | null> = {
+  done: null,
+  failed: "This node failed before it finished. The run's error is shown above the graph.",
+  running: "Running — its results appear here the moment the node commits.",
+  pending: "This node has not run yet.",
+};
+
+/** A side sheet for one graph node, as the Docs Distiller's: what it does and what it reads and writes (Overview), then
+ * the LLM calls it made. It stays live while the run goes on. */
 function AgenticNodeSheet({
   node,
   status,
   caption,
+  kpi,
   usage,
   loading,
   failed,
@@ -472,8 +472,9 @@ function AgenticNodeSheet({
   onClose,
 }: {
   node: (typeof AGENTIC_NODES)[number];
-  status: ReturnType<typeof agenticNodeStatus>;
+  status: AgenticNodeStatus;
   caption: string | null;
+  kpi: string | null;
   usage: AgenticUsage | undefined;
   loading: boolean;
   failed: boolean;
@@ -481,11 +482,13 @@ function AgenticNodeSheet({
   onClose: () => void;
 }) {
   const dialog = useModalDialog();
+  const details = AGENTIC_NODE_DETAILS[node.id];
+  const note = PENDING_NOTE[status];
 
   return (
     <dialog
       ref={dialog}
-      aria-labelledby="bd-agentic-node-usage-title"
+      aria-labelledby="bd-agentic-node-title"
       onCancel={(event) => {
         event.preventDefault();
         onClose();
@@ -494,21 +497,42 @@ function AgenticNodeSheet({
     >
       <header className="sticky top-0 z-10 flex items-start gap-3 border-b border-border bg-background px-5 py-4">
         <div className="min-w-0 flex-1">
-          <h2 id="bd-agentic-node-usage-title" className="text-lg font-semibold tracking-tight">
-            Ingestion LLM usage
+          <h2 id="bd-agentic-node-title" className="text-lg font-semibold tracking-tight">
+            {details.title}
           </h2>
-          <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            <span>{node.label}</span>
-            <span>{status}</span>
-            <span className="font-mono">ingestion · {node.id}</span>
-            {caption ? <span>{caption}</span> : null}
-          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <AgenticStatusBadge status={status} />
+            <span className="font-mono text-xs text-muted-foreground">ingestion · {node.id}</span>
+            <span className="font-mono text-xs text-muted-foreground">{details.kind}</span>
+            {kpi ? (
+              <span className="text-xs font-medium tabular-nums">{kpi}</span>
+            ) : caption ? (
+              <span className="text-xs text-muted-foreground">{caption}</span>
+            ) : null}
+          </div>
         </div>
-        <ActionButton iconOnly onClick={onClose} aria-label="Close node usage">
+        <ActionButton iconOnly onClick={onClose} aria-label="Close node details">
           <X aria-hidden />
         </ActionButton>
       </header>
-      <div className="flex flex-col gap-4 px-5 py-4">
+      <div className="flex flex-col gap-5 px-5 py-4">
+        <section aria-label="What this node does" className="flex flex-col gap-3">
+          <p className="text-sm">{details.subtitle}</p>
+          <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+            {details.actions.map((action) => (
+              <li key={action}>{action}</li>
+            ))}
+          </ul>
+          <div className="grid grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-2 text-xs text-muted-foreground">
+            <span>Reads</span>
+            <AgenticPills items={details.reads} />
+            <span>Writes</span>
+            <AgenticPills items={details.writes} />
+            <span>LLM</span>
+            <span className="text-sm">{details.llm}</span>
+          </div>
+        </section>
+        {note ? <p className="text-sm text-muted-foreground">{note}</p> : null}
         <UsageBreakdown usage={usage} nodeId={node.id} loading={loading} failed={failed} hasRun={hasRun} />
       </div>
     </dialog>

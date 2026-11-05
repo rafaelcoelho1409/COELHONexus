@@ -48,7 +48,7 @@ export function ResultsHeader({
   onToggleMaster: () => void;
 }): JSX.Element {
   return (
-    <div className="z-10 flex sm:sticky sm:top-14 flex-wrap items-center gap-x-4 gap-y-2 rounded-t-md border-b border-border bg-card px-3 py-2">
+    <div className="z-10 flex sm:sticky sm:top-(--chrome-top) flex-wrap items-center gap-x-4 gap-y-2 rounded-t-md border-b border-border bg-card px-3 py-2">
       <label className="flex min-h-9 cursor-pointer items-center gap-3 text-sm">
         <span className="flex size-9 items-center justify-center">
           <input

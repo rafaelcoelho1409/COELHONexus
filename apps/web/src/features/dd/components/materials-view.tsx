@@ -22,7 +22,7 @@ import { Markdown, markdownToc } from "@/shared/markdown";
 import { explorerTierValues, filterEntries, groupEntries } from "../domain/ingestion";
 import { dropLeadingTitle, pageNeighbours, pageTitle } from "../domain/materials";
 import type { PageSearchHit } from "../domain/materials-search";
-import type { Manifest } from "../entities";
+import type { Manifest, PageVersion } from "../entities";
 import { usePageBody, useRunPageBody } from "../hooks/use-dd-data";
 import { useMaterialsLayout } from "../hooks/use-study-layout";
 import { ActionButton } from "./action-button";
@@ -42,7 +42,8 @@ const COLUMNS = {
 } as const;
 
 /** A column that stays in view while the page scrolls, and scrolls on its own when it is taller than the screen. */
-const STICKY_COLUMN = "lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:self-start";
+const STICKY_COLUMN =
+  "lg:sticky lg:top-[calc(var(--chrome-top)+1.5rem)] lg:max-h-[calc(100dvh-var(--chrome-top)-2.5rem)] lg:self-start";
 
 /** Arrow keys step through pages, unless the reader is typing somewhere. */
 function isTyping(target: EventTarget | null): boolean {
@@ -66,6 +67,7 @@ export function MaterialsView({
 }) {
   const { layout, update } = useMaterialsLayout();
   const [mode, setMode] = useState<PreviewMode>("rendered");
+  const [version, setVersion] = useState<PageVersion>("processed");
   const [query, setQuery] = useState("");
   const [tiers, setTiers] = useState<ReadonlySet<string>>(new Set());
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
@@ -97,8 +99,17 @@ export function MaterialsView({
   const goNext = neighbours.next === null ? null : () => setSelectedIdx(neighbours.next);
   const place = neighbours.position < 0 ? null : `${neighbours.position + 1} of ${filtered.length}`;
 
-  const canonicalPage = usePageBody(runId ? null : slug, selected);
-  const runPage = useRunPageBody(runId, selected, selectedEntry?.key ?? null);
+  const originalKey = selectedEntry?.source_key || selectedEntry?.raw_key;
+  const hasVersions = Boolean(
+    selectedEntry &&
+      originalKey &&
+      selectedEntry.key &&
+      selectedEntry.key !== originalKey &&
+      (runId || manifest?.agentic_run_id),
+  );
+  const selectedVersion = hasVersions ? version : "processed";
+  const canonicalPage = usePageBody(runId ? null : slug, selected, selectedVersion);
+  const runPage = useRunPageBody(runId, selected, selectedEntry?.key ?? null, selectedVersion);
   const page = runId ? runPage : canonicalPage;
   const text = page.data ?? "";
 
@@ -297,6 +308,9 @@ export function MaterialsView({
           framed
           mode={mode}
           onMode={setMode}
+          version={selectedVersion}
+          onVersion={setVersion}
+          hasVersions={hasVersions}
           onPrevious={goPrevious}
           onNext={goNext}
         >
@@ -331,6 +345,9 @@ export function MaterialsView({
             framed={false}
             mode={mode}
             onMode={setMode}
+            version={selectedVersion}
+            onVersion={setVersion}
+            hasVersions={hasVersions}
             onPrevious={goPrevious}
             onNext={goNext}
           >

@@ -1,7 +1,6 @@
 import { ActionButton } from "./action-button";
 
-/** A "show it as…" choice: one `ActionButton` per option, the chosen one marked `aria-pressed` (and drawn with the
- * pressed look), so the state is in the markup and never only in colour. */
+/** A compact segmented toggle: one connected control, with its selected value exposed through `aria-pressed`. */
 export function ToggleGroup<Id extends string>({
   legend,
   options,
@@ -14,10 +13,15 @@ export function ToggleGroup<Id extends string>({
   onChange: (id: Id) => void;
 }) {
   return (
-    <fieldset className="m-0 flex flex-wrap items-center gap-1.5 border-0 p-0">
+    <fieldset className="m-0 inline-flex overflow-hidden rounded-sm border border-border bg-background p-0">
       <legend className="sr-only">{legend}</legend>
       {options.map((option) => (
-        <ActionButton key={option.id} aria-pressed={value === option.id} onClick={() => onChange(option.id)}>
+        <ActionButton
+          key={option.id}
+          aria-pressed={value === option.id}
+          onClick={() => onChange(option.id)}
+          className="min-h-9 rounded-none border-0 border-r border-r-border px-2.5 last:border-r-0"
+        >
           {option.label}
         </ActionButton>
       ))}

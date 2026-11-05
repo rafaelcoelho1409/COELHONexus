@@ -119,7 +119,7 @@ check(
 queued = manifest(pages = [page_artifact(1), page_artifact(2)])
 check("queued manifests can pin source hashes before outputs are generated",
       queued.pages[0].source_sha256, SOURCE_SHA256)
-check("new manifests carry the current schema version", queued.model_dump(mode = "json")["schema_version"], "1.1")
+check("new manifests carry the current schema version", queued.model_dump(mode = "json")["schema_version"], "1.2")
 
 completed = manifest(
     status = schemas.AgenticRunStatus.DONE,

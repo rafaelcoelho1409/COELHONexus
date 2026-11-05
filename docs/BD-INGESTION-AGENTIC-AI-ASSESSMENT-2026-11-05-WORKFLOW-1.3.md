@@ -64,13 +64,13 @@ This is expected. [`plan_repairs/domain.py`](../apps/server/ai/bd/nodes/ingestio
 
 ## Fixes applied after this run
 
-The local implementation is now workflow **1.4**; the persisted manifest schema remains **1.2**.
+These fixes set the workflow version to **1.4**; the persisted manifest schema remained **1.2**.
 
 1. Duplicate proposals for an issue no longer invalidate the entire specialist batch. The first proposal that passes the page, evidence, and assignment checks is retained; later proposals for that issue are ignored. The existing safety gate still controls whether a retained proposal can be applied automatically.
 2. Table cleanup now recognizes a dot leader before a page number in the final table cell. TOC evidence matching also checks the individual cells of a cited Markdown row, so a repaired row can be marked resolved.
 3. Metadata parsing now recovers a `BookMetadataProposal` from a JSON object in the last assistant message when `structured_response` is absent or null. The existing evidence checks and confidence gate still run before metadata is accepted.
 
-These changes have not yet been deployed or run against the book. Their impact on calls, errors, and quality remains unmeasured. The next useful comparison is a workflow 1.4 candidate against the same immutable extraction.
+At the time of this report, these changes had not yet been deployed or run against the book. They were subsequently exercised in workflow 1.4 on the same extraction; see the [workflow 1.4 assessment](BD-INGESTION-AGENTIC-AI-ASSESSMENT-2026-11-05-WORKFLOW-1.4.md). The metadata proposal was accepted, structured-output audit fallbacks fell from two to zero, and repair errors fell from 29 records to 12. Review pages rose from 119 to 127, so the run improved repair reliability without reducing the number of pages needing human review.
 
 ## Assessment basis
 

@@ -38,6 +38,8 @@ const manifestEntrySchema = z.looseObject({
   idx: z.number(),
   /** Storage key of the page; manifests written before it was stored have none. */
   key: z.string().nullable().catch(null),
+  /** Immutable page text supplied to Agentic AI. */
+  source_key: z.string().nullable().optional().catch(null),
   title: z.string().nullable().catch(null),
   slug: z.string().nullable().catch(null),
   tier: z.string().nullable().catch(null),
@@ -57,8 +59,10 @@ export const manifestSchema = z.looseObject({
   total_bytes: z.number().nullable().catch(null),
   tier_kind: z.string().nullable().catch(null),
   ingested_at: z.number().nullable().catch(null),
+  agentic_run_id: z.string().nullable().catch(null),
 });
 export type Manifest = z.infer<typeof manifestSchema>;
+export type PageVersion = "processed" | "original";
 
 /** GET /api/v1/dd/ingestion/{slug}/pages/{idx} — page body. */
 export const pageBodySchema = z.looseObject({ body: z.string() });
@@ -147,6 +151,16 @@ export const startRunResponseSchema = z.looseObject({
   run_id: z.string().optional(),
   message: z.string().optional(),
 });
+export type StartRunResponse = z.infer<typeof startRunResponseSchema>;
+
+/** DELETE /api/v1/dd/ingestion/{slug}/agentic/runs/{run_id}. */
+export const agenticWipeResponseSchema = z.looseObject({
+  slug: z.string(),
+  run_id: z.string(),
+  wiped: z.boolean(),
+  objects_deleted: z.number().catch(0),
+});
+export type AgenticWipeResponse = z.infer<typeof agenticWipeResponseSchema>;
 
 // ============================================================
 // Pipeline — cross-stage state + active runs

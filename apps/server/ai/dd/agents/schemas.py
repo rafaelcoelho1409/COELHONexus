@@ -64,7 +64,7 @@ class PageAssessment(BaseModel):
 
     page_kind: PageKind
     confidence: Confidence
-    title: str = ""
+    title: str = Field(default = "", description = "The page's title as written in the text, without a leading `#` marker.")
     title_confidence: Confidence = 0.0
     summary: str = ""
     issues: list[PageIssue] = Field(default_factory = list, max_length = 24)
@@ -93,8 +93,10 @@ class PagePatch(BaseModel):
     target_text: NonEmptyText
     context_after: str = ""
     replacement: str
-    rationale: NonEmptyText
-    evidence: NonEmptyText
+    rationale: NonEmptyText = Field(description = "Why this edit resolves the finding; commentary belongs here.")
+    evidence: NonEmptyText = Field(
+        description = "The audited finding's evidence, copied exactly; never an explanation or a paraphrase."
+    )
     confidence: Confidence
 
     @field_validator("source_sha256")

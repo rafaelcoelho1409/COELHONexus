@@ -41,6 +41,7 @@ const PENDING_NOTE: Record<StageNodeView["status"], string | null> = {
   running: "Running — its results appear here the moment the node commits.",
   pending: "This node has not run yet.",
   future: "The server does not implement this node yet.",
+  stopped: "This node was stopped with its run before it finished.",
 };
 
 function Pills({ items }: { items: string[] }) {

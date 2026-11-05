@@ -16,8 +16,9 @@ THROTTLE_S = 1.0
 CANCEL_POLL_THROTTLE_S = 1.0
 
 # A run is in flight while its progress says one of these (a finished run says `done`, `failed`, `cancelled`, `downgrade`…).
-ACTIVE_STATUSES = ("running", "idle")
+ACTIVE_STATUSES = ("queued", "running", "idle")
 STATUS_IDLE = "idle"
+STATUS_QUEUED = "queued"
 STATUS_RUNNING = "running"
 PHASE_INGEST = "ingest"
 

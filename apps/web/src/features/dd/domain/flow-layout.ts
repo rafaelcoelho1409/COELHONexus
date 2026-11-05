@@ -4,6 +4,9 @@
 
 import type { RunStage } from "../params";
 
+/** The graphs drawn in this style: the two stage graphs and the Agentic AI ingestion graph (one column, no loop). */
+export type FlowStage = RunStage | "ingestion";
+
 export const NODE_WIDTH = 216;
 /** A node can show three lines — its label (a 20px line), a KPI and a live line (18px each), 2px apart — which is 60px of
  * text; the height keeps 10px of air above and below it. At 68px the third line sat on the border and, in a font with a
@@ -29,13 +32,14 @@ export type FlowLayout = {
 };
 
 /** The refine cycle of the synth graph: after `mgsr_replan` the run may re-enter `sawc_write`. */
-const LOOPS: Record<RunStage, { from: string; to: string } | null> = {
+const LOOPS: Record<FlowStage, { from: string; to: string } | null> = {
   planner: null,
   synth: { from: "mgsr_replan", to: "sawc_write" },
+  ingestion: null,
 };
 
 /** One vertical column in node order, with room on the right for the loop arc when the stage has one. */
-export function flowLayout(stage: RunStage, ids: readonly string[]): FlowLayout {
+export function flowLayout(stage: FlowStage, ids: readonly string[]): FlowLayout {
   const positions: Record<string, FlowPoint> = {};
   ids.forEach((id, index) => {
     positions[id] = { x: PADDING, y: PADDING + index * (NODE_HEIGHT + NODE_GAP) };

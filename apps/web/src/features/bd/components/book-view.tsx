@@ -39,6 +39,7 @@ import { useBookRun } from "../hooks/use-book-run";
 import { useBdOverlays } from "../hooks/use-overlays";
 import { usePageContent } from "../hooks/use-page-content";
 import { useReaderLayout } from "../hooks/use-reader-layout";
+import type { BookViewId } from "../params";
 import { ActionButton } from "./action-button";
 import { AgenticPipelineOverview, AgenticProgressBar, AgenticUsageSheet } from "./agentic-pipeline";
 import { BookReadingMode } from "./book-reading-mode";
@@ -60,9 +61,20 @@ const COLUMNS = {
 } as const;
 
 /** A column that stays in view while the page scrolls, and scrolls on its own when it is taller than the screen. */
-const STICKY_COLUMN = "lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:self-start lg:overflow-y-auto";
+const STICKY_COLUMN =
+  "lg:sticky lg:top-[calc(var(--chrome-top)+1.5rem)] lg:max-h-[calc(100dvh-var(--chrome-top)-2.5rem)] lg:self-start lg:overflow-y-auto";
 
-export function BookView({ bookId, autoChain }: { bookId: string; autoChain: boolean }) {
+export function BookView({
+  bookId,
+  autoChain,
+  activeView,
+  onViewChange,
+}: {
+  bookId: string;
+  autoChain: boolean;
+  activeView: BookViewId;
+  onViewChange: (view: BookViewId) => void;
+}) {
   const snapshot = useSnapshot(bookId);
   if (snapshot.isPending) {
     return (
@@ -83,17 +95,29 @@ export function BookView({ bookId, autoChain }: { bookId: string; autoChain: boo
       </section>
     );
   }
-  return <BookDetail bookId={bookId} snapshot={snapshot.data} autoChain={autoChain} />;
+  return (
+    <BookDetail
+      bookId={bookId}
+      snapshot={snapshot.data}
+      autoChain={autoChain}
+      activeView={activeView}
+      onViewChange={onViewChange}
+    />
+  );
 }
 
 function BookDetail({
   bookId,
   snapshot,
   autoChain,
+  activeView,
+  onViewChange,
 }: {
   bookId: string;
   snapshot: BookSnapshot;
   autoChain: boolean;
+  activeView: BookViewId;
+  onViewChange: (view: BookViewId) => void;
 }) {
   const run = useBookRun(bookId, snapshot);
   const agentic = useAgenticRun(bookId, snapshot);
@@ -138,7 +162,6 @@ function BookDetail({
   const [reading, setReading] = useState<{ startId: string | null } | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
-  const [activeView, setActiveView] = useState<"pipeline" | "materials">("pipeline");
   const currentIndex = rows.findIndex((candidate) => candidate.page === page);
   const previousPage = currentIndex > 0 ? (rows[currentIndex - 1]?.page ?? null) : null;
   const nextPage = currentIndex >= 0 ? (rows[currentIndex + 1]?.page ?? null) : null;
@@ -186,7 +209,7 @@ function BookDetail({
       { bookId, autoChain },
       {
         onSuccess: (result) => {
-          setActiveView("pipeline");
+          onViewChange("pipeline");
           run.restart();
           setView({ follow: true, picked: null });
           if (result.status === "locked")
@@ -211,7 +234,7 @@ function BookDetail({
   const startAgenticProcessing = () =>
     startAgentic.mutate(bookId, {
       onSuccess: () => {
-        setActiveView("pipeline");
+        onViewChange("pipeline");
         notice("Agentic ingestion queued.");
       },
       onError: (error) => notice(apiErrorMessage(error), "error"),
@@ -222,7 +245,7 @@ function BookDetail({
       { bookId, agenticRunId: agentic.run.agentic_run_id },
       {
         onSuccess: () => {
-          setActiveView("pipeline");
+          onViewChange("pipeline");
           agentic.restart();
           notice("Agentic ingestion retry queued.");
         },
@@ -276,7 +299,7 @@ function BookDetail({
       onSuccess: () => {
         run.clear();
         setView({ follow: false, picked: null });
-        setActiveView("materials");
+        onViewChange("materials");
         notice("Extracted materials wiped. The uploaded book is preserved.");
       },
       onError: (error) => notice(apiErrorMessage(error), "error"),
@@ -463,41 +486,6 @@ function BookDetail({
           onClose={() => setUsageOpen(false)}
         />
       ) : null}
-      <div role="tablist" aria-label="Book views" className="mt-5 border-b border-border">
-        {(
-          [
-            ["pipeline", "Pipeline"],
-            ["materials", "Materials"],
-          ] as const
-        ).map(([viewId, label]) => (
-          <button
-            key={viewId}
-            id={`bd-${viewId}-tab`}
-            type="button"
-            role="tab"
-            aria-selected={activeView === viewId}
-            aria-controls={`bd-${viewId}-panel`}
-            tabIndex={activeView === viewId ? 0 : -1}
-            onClick={() => setActiveView(viewId)}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-                event.preventDefault();
-                const nextView = viewId === "pipeline" ? "materials" : "pipeline";
-                setActiveView(nextView);
-                document.getElementById(`bd-${nextView}-tab`)?.focus();
-              }
-            }}
-            className={`-mb-px border-b-2 px-3 py-2 text-sm ${
-              activeView === viewId
-                ? "border-primary font-medium text-primary-text"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
       <div
         role="tabpanel"
         id="bd-pipeline-panel"

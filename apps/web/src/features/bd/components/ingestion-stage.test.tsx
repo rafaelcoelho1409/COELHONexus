@@ -105,6 +105,58 @@ function pdf(name = "book.pdf", size?: number): File {
   return file;
 }
 
+describe("The third navbar", () => {
+  it("holds the library picker, upload, hint and auto-chain choice on the left and the views on the right", async () => {
+    serveLibrary([bookRow({ status: "done", n_pages: 1, pages_done: 1 })]);
+    serveBook(snapshot({ status: "done", n_pages: 1, pages: [pageEntry(1)] }));
+    renderStage(BOOK_ID);
+
+    const pipeline = await screen.findByRole("tab", { name: "Pipeline" });
+    const materials = screen.getByRole("tab", { name: "Materials" });
+    const picker = screen.getByRole("button", { name: /Library|Book/ });
+    const upload = screen.getByText("Upload book");
+    const hint = screen.getByText(/PDF or EPUB · up to 300 MB/);
+    const autoChain = screen.getByLabelText("Run Agentic AI after extraction");
+
+    const bar = pipeline.closest("div.border-b");
+    expect(bar).not.toBeNull();
+    for (const control of [picker, upload, hint, autoChain, materials]) expect(bar).toContainElement(control);
+    const precedes = (first: Element, second: Element) =>
+      Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(precedes(picker, upload)).toBe(true);
+    expect(precedes(upload, hint)).toBe(true);
+    expect(precedes(hint, autoChain)).toBe(true);
+    expect(precedes(autoChain, pipeline)).toBe(true);
+    expect(precedes(pipeline, materials)).toBe(true);
+  });
+
+  it("shows the toolbar without the views when no book is open", async () => {
+    serveLibrary([]);
+    renderStage();
+
+    expect(await screen.findByText("Upload book")).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Pipeline" })).not.toBeInTheDocument();
+  });
+
+  it("returns to Pipeline when another book is opened", async () => {
+    serveLibrary([bookRow({ status: "done", n_pages: 1, pages_done: 1 })]);
+    serveBook(snapshot({ status: "done", n_pages: 1, pages: [pageEntry(1)] }));
+    const view = renderStage(BOOK_ID);
+
+    await openMaterials();
+    expect(screen.getByRole("tab", { name: "Materials" })).toHaveAttribute("aria-selected", "true");
+    search = "book=other-book";
+    view.rerender(
+      <QueryProvider>
+        <BdOverlaysProvider>
+          <IngestionStage />
+        </BdOverlaysProvider>
+      </QueryProvider>,
+    );
+    expect(await screen.findByRole("tab", { name: "Pipeline" })).toHaveAttribute("aria-selected", "true");
+  });
+});
+
 describe("Library", () => {
   it("lists the books newest first with a status in words and the pages done", async () => {
     serveLibrary([
@@ -732,8 +784,10 @@ describe("A book being extracted", () => {
     const pipeline = screen.getByRole("region", { name: "Agentic pipeline stages" });
     await userEvent.click(within(pipeline).getByRole("button", { name: "List" }));
     await userEvent.click(within(pipeline).getByRole("button", { name: /Audit pages/ }));
-    const nodeDetails = await screen.findByRole("dialog", { name: "Ingestion LLM usage" });
-    expect(nodeDetails).toHaveTextContent("Audit pages");
+    const nodeDetails = await screen.findByRole("dialog", { name: "Audit pages" });
+    expect(within(nodeDetails).getByRole("region", { name: "What this node does" })).toHaveTextContent(
+      "page-auditor agent",
+    );
     expect(nodeDetails).toHaveTextContent("Input tokens");
     expect(nodeDetails).toHaveTextContent("20");
     const nodeUsage = within(nodeDetails).getByRole("region", { name: "Usage by agent and model" });
@@ -748,7 +802,7 @@ describe("A book being extracted", () => {
     );
     expect(within(nodeDetails).queryByText("Provider")).not.toBeInTheDocument();
     await userEvent.click(within(nodeDetails).getByRole("button", { name: "By agent + model" }));
-    await userEvent.click(within(nodeDetails).getByRole("button", { name: "Close node usage" }));
+    await userEvent.click(within(nodeDetails).getByRole("button", { name: "Close node details" }));
     const progressBox = screen.getByRole("region", { name: "Agentic AI progress" });
     expect(within(progressBox).queryByRole("button", { name: "LLM usage" })).not.toBeInTheDocument();
     expect(within(progressBox).queryByRole("button", { name: "Pipeline" })).not.toBeInTheDocument();

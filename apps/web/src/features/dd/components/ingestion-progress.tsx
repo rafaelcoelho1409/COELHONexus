@@ -58,6 +58,7 @@ export function ExtractionProgress({
   lastUrl,
   successful,
   live,
+  extracting,
   ingested,
   retryable,
   stopping,
@@ -78,6 +79,7 @@ export function ExtractionProgress({
   lastUrl: string | null;
   successful: boolean;
   live: boolean;
+  extracting: boolean;
   ingested: boolean;
   retryable: boolean;
   stopping: boolean;
@@ -125,10 +127,10 @@ export function ExtractionProgress({
             </ActionButton>
             <ActionButton
               onClick={onStop}
-              disabled={!live || stopping}
+              disabled={!extracting || stopping}
               aria-busy={stopping}
               aria-label="Stop documentation extraction"
-              title={live ? undefined : "There is no active ingestion to stop."}
+              title={extracting ? undefined : "Documentation extraction is not running."}
             >
               {stopping ? "Stopping…" : "Stop"}
             </ActionButton>
@@ -155,7 +157,7 @@ export function ExtractionProgress({
         current={current}
         total={total}
         valueText={total > 0 ? `${Math.min(current, total)} of ${total} pages` : "not started"}
-        indeterminate={live}
+        indeterminate={extracting}
       />
       <p className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
         <span className="tabular-nums">
@@ -190,8 +192,7 @@ export function ExtractionProgress({
   );
 }
 
-/** How far the Agentic AI normalization is. It runs on its own once the extraction finishes, so the buttons on the
- * extraction card are the run's controls and this card only reports. */
+/** How far the Agentic AI normalization is, with controls for the saved page set. */
 export function AgenticProgress({
   statusText,
   current,
@@ -202,6 +203,18 @@ export function AgenticProgress({
   stopping,
   preparing,
   error,
+  active,
+  actionPending,
+  cancelPending,
+  wipePending,
+  hasRun,
+  ready,
+  retryable,
+  cancelError,
+  onStart,
+  onResume,
+  onStop,
+  onWipe,
 }: {
   statusText: string;
   current: number;
@@ -212,6 +225,18 @@ export function AgenticProgress({
   stopping: boolean;
   preparing: boolean;
   error: string | null;
+  active: boolean;
+  actionPending: boolean;
+  cancelPending: boolean;
+  wipePending: boolean;
+  hasRun: boolean;
+  ready: boolean;
+  retryable: boolean;
+  cancelError: string | null;
+  onStart: () => void;
+  onResume: () => void;
+  onStop: () => void;
+  onWipe: () => void;
 }) {
   const percent = ingestionPercent(current, total);
 
@@ -222,9 +247,49 @@ export function AgenticProgress({
           Agentic AI normalization
           {successful ? <SuccessMark /> : null}
         </h3>
-        <span aria-live="polite" className="text-xs text-muted-foreground">
-          {statusText}
-        </span>
+        <div className="flex flex-wrap items-center justify-end gap-1.5">
+          <span aria-live="polite" className="text-xs text-muted-foreground">
+            {statusText}
+          </span>
+          <ActionButton
+            onClick={retryable ? onResume : onStart}
+            disabled={actionPending || active || live || (!ready && !retryable)}
+            aria-busy={actionPending}
+            aria-label={retryable ? "Resume Agentic AI" : "Start Agentic AI"}
+            title={
+              !ready && !retryable
+                ? "Complete documentation extraction before starting Agentic AI."
+                : active
+                  ? "An Agentic AI run is already active."
+                  : undefined
+            }
+          >
+            {actionPending ? (retryable ? "Resuming…" : "Starting…") : retryable ? "Resume" : "Start"}
+          </ActionButton>
+          <ActionButton
+            onClick={onStop}
+            disabled={!active || cancelPending || stopping}
+            aria-busy={cancelPending || stopping}
+            aria-label="Stop Agentic AI"
+          >
+            {cancelPending || stopping ? "Stopping…" : "Stop"}
+          </ActionButton>
+          <ActionButton
+            onClick={onWipe}
+            disabled={!hasRun || live || wipePending}
+            aria-busy={wipePending}
+            aria-label="Wipe Agentic AI"
+            title={
+              !hasRun
+                ? "There are no Agentic AI artifacts to wipe."
+                : live
+                  ? "Wait for the current run to finish before wiping."
+                  : undefined
+            }
+          >
+            {wipePending ? "Wiping…" : "Wipe"}
+          </ActionButton>
+        </div>
       </div>
       <ProgressBar
         label="AI-normalized pages"
@@ -250,18 +315,23 @@ export function AgenticProgress({
           {error}
         </p>
       ) : null}
+      {cancelError ? (
+        <p role="alert" className="mt-1 break-words text-xs text-destructive-text">
+          {cancelError}
+        </p>
+      ) : null}
       {stopping ? (
         <p aria-live="polite" className="mt-1 text-xs text-muted-foreground">
           Stop requested; active page work is draining before the run ends.
         </p>
-      ) : live ? (
+      ) : active ? (
         <p className="mt-1 text-xs text-muted-foreground">
           Stop takes effect at a safe page or graph-stage boundary. Wipe becomes available after the run
           stops.
         </p>
       ) : (
         <p className="mt-1 text-xs text-muted-foreground">
-          Agentic AI starts on its own once the documentation extraction is complete.
+          Agentic AI starts automatically after extraction. Start runs a new candidate against saved pages.
         </p>
       )}
     </section>

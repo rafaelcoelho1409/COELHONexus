@@ -3,6 +3,7 @@ from __future__ import annotations
 import domains
 from . import domain
 from .... import agents, graphs, skills
+from .. import inventory
 
 import asyncio
 import hashlib
@@ -112,9 +113,6 @@ async def repair_pages(
                     allowed_context = source_context,
                 )
                 return proposals, None, len(source_context) * attempts, attempts
-            except domain.ModelCallLimitReachedError as error:
-                last_error = str(error)[:300]
-                break
             except Exception as error:
                 last_error = str(error)[:300]
         return [], f"{role}: {last_error}", len(source_context) * attempts, attempts
@@ -131,7 +129,10 @@ async def repair_pages(
             source_sha256 = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
             if source_sha256 != page_ref["source_sha256"]:
                 raise ValueError(f"source page {page_number} changed after its quality audit")
-            oversized = len(markdown) > domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS
+            oversized = (
+                inventory.domain.effective_length(markdown)
+                > domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS
+            )
 
             issue_list = agents.schemas.PageAssessment.model_validate(
                 audits[page_number]["assessment"],

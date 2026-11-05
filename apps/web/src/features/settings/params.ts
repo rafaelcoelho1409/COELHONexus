@@ -1,3 +1,13 @@
+import type { Section } from "@/shared/layout/section";
+
+/** The title in the second navbar; Settings has no stages. */
+export const SETTINGS_SECTION: Section = {
+  href: "/settings",
+  title: "Settings",
+  description: "The LLM and embedding connections the tools call",
+  tabs: [],
+};
+
 /** The two saved connections: the chat endpoint and the embedding endpoint. */
 export type ConnectionKind = "llm" | "embedding";
 

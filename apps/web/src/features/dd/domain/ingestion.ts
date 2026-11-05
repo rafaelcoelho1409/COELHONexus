@@ -10,7 +10,7 @@ import {
   EXPLORER_SPLIT_GROUP_MIN_PAGES,
 } from "../params";
 import { tileLogos, tileName } from "./catalog";
-import { fmtAge, fmtBytes } from "./format";
+import { fmtBytes } from "./format";
 import { itemDisplayName, itemLogos } from "./library";
 
 /**
@@ -144,12 +144,11 @@ export function manifestView(m: Manifest | null): ManifestView | null {
   };
 }
 
-export function ingressSummary(m: Manifest | null): string {
+/** The one-line facts about the chosen framework's ingested documentation: "Locust · 24 pages · 213.6 KB". */
+export function frameworkInfo(m: Manifest | null): string {
   const view = manifestView(m);
   if (!view) return "";
-  const at = view.ingestedAt ? fmtAge(view.ingestedAt) : "";
-  const kind = view.tierKind ? `${view.tierKind} · ` : "";
-  return `${view.framework} · ${view.pageCount} pages · ${fmtBytes(view.totalBytes)} ${`${kind}${at}`.trim()}`;
+  return `${view.framework} · ${view.pageCount} pages · ${fmtBytes(view.totalBytes)}`;
 }
 
 /** The file name a chapter's citations use for this page: the last segment of its storage key, or else the

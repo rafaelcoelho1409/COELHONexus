@@ -331,7 +331,7 @@ function AskConversation({
             does not carry a "no sources" note. */}
         {wide && turns.length > 0 ? (
           <aside aria-label="Sources" className="min-w-0">
-            <div className="sticky top-20 max-h-[calc(100dvh-6rem)] overflow-y-auto pr-1">
+            <div className="sticky top-[calc(var(--chrome-top)+1.5rem)] max-h-[calc(100dvh-var(--chrome-top)-2.5rem)] overflow-y-auto pr-1">
               <h2 className="mt-0 mb-1 text-sm font-semibold">{railTitle}</h2>
               {shown ? (
                 <p className="mt-0 mb-2 line-clamp-2 text-xs break-words text-muted-foreground">

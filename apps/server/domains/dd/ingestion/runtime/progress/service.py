@@ -1,4 +1,5 @@
 """Per-run progress and per-framework single-flight lock (the cancel flag lives in `../cancel/`)."""
+
 from __future__ import annotations
 import domains, infra
 from . import domain, errors, keys, params
@@ -26,17 +27,21 @@ async def acquire_lock(
     return bool(ok)
 
 
-async def renew_lock(r: infra.redis.service.Redis, framework_slug: str, run_id: str) -> bool:
+async def renew_lock(
+    r: infra.redis.service.Redis, framework_slug: str, run_id: str
+) -> bool:
     """Keep this run's lock alive for another LOCK_LEASE_S: extend it while it is still ours, or take it again when it lapsed
     (a stall longer than the lease) and nobody else has it. False when another run holds it now — this run no longer owns the
     framework."""
     try:
-        if await infra.redis.service.extend_if_owner(r, keys.lock_key(framework_slug), run_id, params.LOCK_LEASE_S):
+        if await infra.redis.service.extend_if_owner(
+            r, keys.lock_key(framework_slug), run_id, params.LOCK_LEASE_S
+        ):
             return True
     except Exception as e:
         logger.warning(f"[lock] renew failed: {e}")
         return False
-    return await acquire_lock(r, framework_slug, run_id, ttl_s = params.LOCK_LEASE_S)
+    return await acquire_lock(r, framework_slug, run_id, ttl_s=params.LOCK_LEASE_S)
 
 
 async def read_lock(r: infra.redis.service.Redis, framework_slug: str) -> str | None:
@@ -57,19 +62,25 @@ async def release_lock(
 ) -> bool:
     """Release iff this run_id is the holder."""
     try:
-        return await infra.redis.service.release_if_owner(r, keys.lock_key(framework_slug), run_id)
+        return await infra.redis.service.release_if_owner(
+            r, keys.lock_key(framework_slug), run_id
+        )
     except Exception as e:
         logger.warning(f"[lock] release failed: {e}")
         return False
 
 
-async def find_other_running(r: infra.redis.service.Redis, framework_slug: str) -> tuple[str, str] | None:
+async def find_other_running(
+    r: infra.redis.service.Redis, framework_slug: str
+) -> tuple[str, str] | None:
     """`(slug, run_id)` of an ingestion running for ANOTHER framework (one ingestion at a time), else None."""
-    return await infra.redis.service.first_held(r, keys.lock_prefix(), skip=framework_slug)
+    return await infra.redis.service.first_held(
+        r, keys.lock_prefix(), skip=framework_slug
+    )
 
 
 async def list_active(r: infra.redis.service.Redis) -> list[dict]:
-    """In-flight ingestions: the lock is held AND a progress record says running / idle. A lock with no
+    """In-flight ingestions: the lock is held AND progress says queued, running, or idle. A lock with no
     progress record (a rare race) is not surfaced."""
     active: list[dict] = []
     async for slug, run_id in infra.redis.service.iter_held(r, keys.lock_prefix()):
@@ -131,40 +142,80 @@ class Progress:
             return
         try:
             await r.set(
-                keys.progress_key(self.run_id), 
-                json.dumps(self._state), 
-                ex = params.TTL_S)
+                keys.progress_key(self.run_id), json.dumps(self._state), ex=params.TTL_S
+            )
         except Exception as e:
             logger.info(f"[progress] write skipped: {e}")
 
     async def start(self, tier: str, total: int) -> None:
         await self._restore_state()
-        stage = "agentic" if tier == "agentic_normalization" else "extraction" if tier in {
-            "llms_full", "llms_txt", "sitemap", "docs", "playwright", "github",
-        } else None
+        stage = (
+            "agentic"
+            if tier == "agentic_normalization"
+            else "extraction"
+            if tier
+            in {
+                "llms_full",
+                "llms_txt",
+                "sitemap",
+                "docs",
+                "playwright",
+                "github",
+            }
+            else None
+        )
         if stage is not None:
             self._active_stage = stage
         self._state.update(
-            tier = tier,
-            total = max(0, int(total)),
-            current = 0,
-            last_url = "",
-            status = params.STATUS_RUNNING,
+            tier=tier,
+            total=max(0, int(total)),
+            current=0,
+            last_url="",
+            status=params.STATUS_RUNNING,
         )
         if stage is not None:
             phases = self._state.setdefault("stages", {})
             phase = phases.setdefault(stage, {})
             phase.update(
-                status = "running",
-                current = 0,
-                total = max(0, int(total)),
-                error = None,
+                status="running",
+                current=0,
+                total=max(0, int(total)),
+                error=None,
             )
             if stage == "extraction":
-                phase.update(tier = tier, last_url = "")
+                phase.update(tier=tier, last_url="")
             else:
-                phase.update(current_node = None, node_status = {}, node_progress = {})
-        await self._flush(force = True)
+                phase.update(current_node=None, node_status={}, node_progress={})
+        await self._flush(force=True)
+
+    async def queue_agentic(self, total: int) -> None:
+        """Publish a visible queued state before a standalone Agentic AI Celery task starts."""
+        await self._restore_state()
+        self._active_stage = "agentic"
+        page_count = max(0, int(total))
+        self._state.update(
+            tier="agentic_normalization",
+            current=0,
+            total=page_count,
+            last_url="",
+            status=params.STATUS_QUEUED,
+        )
+        stages = self._state.setdefault("stages", {})
+        extraction = stages.setdefault("extraction", {})
+        extraction.update(
+            status="done", current=page_count, total=page_count, error=None
+        )
+        agentic = stages.setdefault("agentic", {})
+        agentic.update(
+            status=params.STATUS_QUEUED,
+            current=0,
+            total=page_count,
+            current_node=None,
+            node_status={},
+            node_progress={},
+            error=None,
+        )
+        await self._flush(force=True)
 
     async def update_total(self, total: int) -> None:
         self._state["total"] = max(0, int(total))
@@ -176,8 +227,8 @@ class Progress:
 
     async def update(self, current: int, last_url: str = "") -> None:
         self._state.update(
-            current = max(0, int(current)),
-            last_url = (last_url or "")[: params.LAST_URL_MAX_CHARS],
+            current=max(0, int(current)),
+            last_url=(last_url or "")[: params.LAST_URL_MAX_CHARS],
         )
         if self._active_stage is not None:
             phase = self._state.get("stages", {}).get(self._active_stage)
@@ -185,7 +236,7 @@ class Progress:
                 phase["current"] = max(0, int(current))
                 if self._active_stage == "extraction":
                     phase["last_url"] = (last_url or "")[: params.LAST_URL_MAX_CHARS]
-        await self._flush(force = False)
+        await self._flush(force=False)
 
     async def complete_stage(
         self,
@@ -205,7 +256,7 @@ class Progress:
         elif total is not None:
             phase["current"] = max(0, int(total))
         phase["error"] = None
-        await self._flush(force = True)
+        await self._flush(force=True)
 
     async def update_agentic_node(
         self,
@@ -222,7 +273,9 @@ class Progress:
         phase.setdefault("node_status", {})
         phase.setdefault("node_progress", {})
         if status is not None:
-            phase["current_node"] = node if status == "running" else phase.get("current_node")
+            phase["current_node"] = (
+                node if status == "running" else phase.get("current_node")
+            )
             phase["node_status"][node] = status
             if status in {"done", "failed"} and phase.get("current_node") == node:
                 phase["current_node"] = None
@@ -232,7 +285,7 @@ class Progress:
                 node_progress["current"] = max(0, int(current))
             if total is not None:
                 node_progress["total"] = max(0, int(total))
-        await self._flush(force = status is not None)
+        await self._flush(force=status is not None)
 
     async def check_cancelled(self) -> bool:
         """≤1/s polling; tiers call between fetches → raise IngestCancelled."""
@@ -243,7 +296,9 @@ class Progress:
         r = await self._client()
         if r is None:
             return False
-        return await domains.dd.ingestion.runtime.cancel.service.is_cancelled(r, self.run_id)
+        return await domains.dd.ingestion.runtime.cancel.service.is_cancelled(
+            r, self.run_id
+        )
 
     async def raise_if_cancelled(self) -> None:
         if await self.check_cancelled():
@@ -266,14 +321,14 @@ class Progress:
             return
         rec = domain.url_record(
             url,
-            status = status,
-            tier = tier or self._state.get("tier"),
-            http_code = http_code,
-            fetch_ms = fetch_ms,
-            bytes_fetched = bytes_fetched,
-            extracted_chars = extracted_chars,
-            error_msg = error_msg,
-            now = time.time(),
+            status=status,
+            tier=tier or self._state.get("tier"),
+            http_code=http_code,
+            fetch_ms=fetch_ms,
+            bytes_fetched=bytes_fetched,
+            extracted_chars=extracted_chars,
+            error_msg=error_msg,
+            now=time.time(),
         )
         try:
             pipe = r.pipeline()
@@ -300,19 +355,21 @@ class Progress:
         if r is None:
             return
         payload = domain.post_summary(
-            tier = tier or self._state.get("tier"),
-            input_files = input_files,
-            input_bytes = input_bytes,
-            output_files = output_files,
-            output_bytes = output_bytes,
-            was_split = was_split,
-            stubs_dropped = stubs_dropped,
-            duplicates_dropped = duplicates_dropped,
-            notes = notes,
-            now = time.time(),
+            tier=tier or self._state.get("tier"),
+            input_files=input_files,
+            input_bytes=input_bytes,
+            output_files=output_files,
+            output_bytes=output_bytes,
+            was_split=was_split,
+            stubs_dropped=stubs_dropped,
+            duplicates_dropped=duplicates_dropped,
+            notes=notes,
+            now=time.time(),
         )
         try:
-            await r.set(keys.post_key(self.run_id), json.dumps(payload), ex=params.TTL_S)
+            await r.set(
+                keys.post_key(self.run_id), json.dumps(payload), ex=params.TTL_S
+            )
         except Exception as e:
             logger.info(f"[progress] record_post skipped: {e}")
 
@@ -323,16 +380,22 @@ class Progress:
         (2026-09-26: Qdrant Tier-1 404 failed with the reason only in the
         Celery result — the page sat on Loading… forever). Truncated to
         500 chars like url-record `error_msg`."""
+        await self._restore_state()
         self._state["status"] = status
         if error:
             self._state["error"] = error[: params.ERROR_MAX_CHARS]
         if self._active_stage is not None:
             phase = self._state.get("stages", {}).get(self._active_stage)
-            if isinstance(phase, dict) and phase.get("status") == "running":
+            if isinstance(phase, dict) and phase.get("status") in {"running", "queued"}:
                 phase["status"] = status
                 if error:
                     phase["error"] = error[: params.ERROR_MAX_CHARS]
-        await self._flush(force = True)
+        elif self._state.get("stages", {}).get("agentic", {}).get("status") == "queued":
+            phase = self._state["stages"]["agentic"]
+            phase["status"] = status
+            if error:
+                phase["error"] = error[: params.ERROR_MAX_CHARS]
+        await self._flush(force=True)
 
     async def close(self) -> None:
         if self._r is not None:
@@ -361,7 +424,10 @@ async def read_url_records(r: infra.redis.service.Redis, run_id: str) -> list[di
         raw_list = await r.lrange(keys.url_records_key(run_id), 0, -1)
     except Exception:  # noqa: BLE001 — a progress read never fails the caller
         return []
-    records = (domains.dd.ingestion.storage.domain.parse_json(raw, None) for raw in raw_list or [])
+    records = (
+        domains.dd.ingestion.storage.domain.parse_json(raw, None)
+        for raw in raw_list or []
+    )
     return [record for record in records if record is not None]
 
 

@@ -54,7 +54,8 @@ const COLUMNS = {
 } as const;
 
 /** A column that stays in view while the chapter scrolls, and scrolls on its own when it is taller than the screen. */
-const STICKY_COLUMN = "lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:self-start lg:overflow-y-auto";
+const STICKY_COLUMN =
+  "lg:sticky lg:top-[calc(var(--chrome-top)+1.5rem)] lg:max-h-[calc(100dvh-var(--chrome-top)-2.5rem)] lg:self-start lg:overflow-y-auto";
 
 /** A chapter's source files are buttons that open the ingested page; the rest of the code renders as usual. */
 function sourceComponents(onOpen: (basename: string) => void) {

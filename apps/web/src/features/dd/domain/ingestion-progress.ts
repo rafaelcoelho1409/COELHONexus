@@ -2,6 +2,7 @@
  * and the labels the two progress cards print. Pure; the run itself comes from `GET /dd/runs/{id}`. */
 
 import type { RunStatus } from "../entities";
+import type { NodeView } from "./stages";
 
 type Progress = NonNullable<RunStatus["progress"]>;
 type Stages = NonNullable<Progress["stages"]>;
@@ -68,6 +69,24 @@ export function ingestionNodeText(status: IngestionNodeStatus): string {
   if (status === "failed") return "Failed";
   if (status === "stopped") return "Stopped";
   return "Waiting";
+}
+
+/** The graph's nodes as the planner and synth graphs describe theirs, so the same graph and list draw all three. */
+export function ingestionNodeViews(agentic: AgenticStage | null, runStatus: string | null): NodeView[] {
+  return INGESTION_NODES.map((node) => ({
+    node,
+    status: ingestionNodeStatus(agentic, node.id, runStatus),
+  }));
+}
+
+/** Each page-by-page node's "12 of 40 pages audited", keyed by node id: the line under its name. */
+export function ingestionNodeKpis(agentic: AgenticStage | null): Record<string, string> {
+  const kpis: Record<string, string> = {};
+  for (const node of INGESTION_NODES) {
+    const caption = ingestionNodeCaption(agentic, node.id);
+    if (caption) kpis[node.id] = caption;
+  }
+  return kpis;
 }
 
 const CAPTION_VERBS: Readonly<Partial<Record<string, string>>> = {

@@ -24,12 +24,20 @@ import {
   postDdRunsRunIdCancel,
 } from "@/shared/api";
 
-import { fetchIngestionUsage, fetchRunPageBody } from "../api";
+import {
+  fetchIngestionUsage,
+  fetchRunPageBody,
+  resumeAgenticRun,
+  startAgenticRun,
+  wipeAgenticRun,
+} from "../api";
 import { isRunTerminal } from "../domain/ingestion";
 import {
+  type AgenticWipeResponse,
   activeRunsSchema,
   libraryListSchema,
   manifestSchema,
+  type PageVersion,
   pageBodySchema,
   resolverCatalogSchema,
   runStatusSchema,
@@ -71,6 +79,51 @@ export function useStartRun() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: getDdRunsActiveQueryKey() });
       void queryClient.invalidateQueries({ queryKey: getDdIngestionQueryKey() });
+    },
+  });
+}
+
+function startOutcome(data: ReturnType<typeof startRunResponseSchema.parse>): StartRunOutcome {
+  if (data.status === "queued") return { kind: "queued", runId: data.run_id };
+  return { kind: "locked", message: data.message };
+}
+
+/** POST /dd/ingestion/{slug}/agentic/runs — start AI from the saved extracted pages. */
+export function useStartAgenticRun() {
+  const queryClient = useQueryClient();
+  return useMutation<StartRunOutcome, unknown, string>({
+    mutationFn: async (slug) => startOutcome(await startAgenticRun(slug)),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: getDdRunsActiveQueryKey() });
+      void queryClient.invalidateQueries({ queryKey: getDdIngestionQueryKey() });
+    },
+  });
+}
+
+/** POST /dd/ingestion/{slug}/agentic/runs/{run_id}/resume. */
+export function useResumeAgenticRun() {
+  const queryClient = useQueryClient();
+  return useMutation<StartRunOutcome, unknown, { slug: string; runId: string }>({
+    mutationFn: async ({ slug, runId }) => startOutcome(await resumeAgenticRun(slug, runId)),
+    onSuccess: (_outcome, { runId }) => {
+      void queryClient.invalidateQueries({ queryKey: getDdRunsActiveQueryKey() });
+      void queryClient.invalidateQueries({ queryKey: getDdRunsRunIdQueryKey({ path: { run_id: runId } }) });
+    },
+  });
+}
+
+/** DELETE /dd/ingestion/{slug}/agentic/runs/{run_id} — remove AI-only artifacts. */
+export function useWipeAgenticRun() {
+  const queryClient = useQueryClient();
+  return useMutation<AgenticWipeResponse, unknown, { slug: string; runId: string }>({
+    mutationFn: ({ slug, runId }) => wipeAgenticRun(slug, runId),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({
+        queryKey: getDdRunsRunIdQueryKey({ path: { run_id: result.run_id } }),
+      });
+      void queryClient.invalidateQueries(getDdIngestionSlugManifestOptions({ path: { slug: result.slug } }));
+      void queryClient.invalidateQueries({ queryKey: getDdIngestionQueryKey() });
+      void queryClient.invalidateQueries({ queryKey: ["dd", "ingestion", "usage", result.run_id] });
     },
   });
 }
@@ -150,9 +203,12 @@ export function useManifest(slug: string | null) {
 }
 
 /** GET /dd/ingestion/{slug}/pages/{idx} — the explorer's page preview. */
-export function usePageBody(slug: string | null, idx: number | null) {
+export function usePageBody(slug: string | null, idx: number | null, version: PageVersion = "processed") {
   const query = useQuery({
-    ...getDdIngestionSlugPagesIdxOptions({ path: { slug: slug ?? "", idx: idx ?? 0 } }),
+    ...getDdIngestionSlugPagesIdxOptions({
+      path: { slug: slug ?? "", idx: idx ?? 0 },
+      query: { version },
+    }),
     retry: false,
     enabled: slug !== null && idx !== null,
     select: parsePageBody,
@@ -161,10 +217,15 @@ export function usePageBody(slug: string | null, idx: number | null) {
 }
 
 /** GET /dd/runs/{run_id}/pages/{idx} — page bodies from the in-flight raw-to-agentic manifest. */
-export function useRunPageBody(runId: string | null, idx: number | null, pageKey: string | null) {
+export function useRunPageBody(
+  runId: string | null,
+  idx: number | null,
+  pageKey: string | null,
+  version: PageVersion = "processed",
+) {
   const query = useQuery({
-    queryKey: ["dd", "runs", runId, "pages", idx, pageKey],
-    queryFn: () => fetchRunPageBody(runId ?? "", idx ?? 0),
+    queryKey: ["dd", "runs", runId, "pages", idx, pageKey, version],
+    queryFn: () => fetchRunPageBody(runId ?? "", idx ?? 0, version),
     retry: false,
     enabled: runId !== null && idx !== null,
   });

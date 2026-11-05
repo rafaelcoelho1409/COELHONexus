@@ -4,9 +4,19 @@ import { BrandMark } from "@/shared/ui/brand-mark";
 import { ThemeToggle } from "@/shared/ui/theme-toggle";
 
 import { AppNav } from "./app-nav";
+import { ContextBarSlot } from "./context-bar-slot";
+import type { Section } from "./section";
+import { SectionBar } from "./section-bar";
 
-/** Solid, sticky operator console chrome — same hairline treatment as the marketing header. */
-export function AppShell({ children }: { children: React.ReactNode }) {
+/** Solid, sticky operator console chrome — same hairline treatment as the marketing header — with the page's own
+ * title and stage tabs in a second bar right under it, and a slot under that for the page's own third bar. */
+export function AppShell({
+  sections,
+  children,
+}: {
+  sections: readonly Section[];
+  children: React.ReactNode;
+}) {
   return (
     <>
       <header className="sticky top-0 z-50 border-b border-border bg-background">
@@ -24,6 +34,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </header>
+      <SectionBar sections={sections} />
+      <ContextBarSlot />
       <main id="main" className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
         {children}
       </main>

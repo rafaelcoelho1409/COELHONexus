@@ -69,7 +69,10 @@ async def audit_pages(
             run_id = state.get("agentic_run_id")
             if not isinstance(run_id, str):
                 raise ValueError("the ingestion run has no agentic_run_id")
-            oversized = len(markdown) > domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS
+            oversized = (
+                inventory.domain.effective_length(markdown)
+                > domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS
+            )
             warnings = []
             deterministic_only = deterministic.page_kind in {
                 agents.schemas.PageKind.BLANK,
@@ -110,9 +113,6 @@ async def audit_pages(
                         )
                         audit_mode = "llm_reviewed"
                         audit_error = None
-                        break
-                    except page_audit.domain.ModelCallLimitReachedError as error:
-                        audit_error = error
                         break
                     except Exception as error:
                         audit_error = error

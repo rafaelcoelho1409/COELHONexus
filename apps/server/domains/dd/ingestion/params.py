@@ -5,5 +5,6 @@ from __future__ import annotations
 # a short lease the run keeps renewing (`runtime.progress.params.LOCK_LEASE_S`), so a task killed at either limit — or by a redeploy —
 # frees the framework within one lease.
 TASK_NAME = "domains.dd.ingestion.task.run_ingestion"
+AGENTIC_TASK_NAME = "domains.dd.ingestion.ai.task.run_agentic_candidate"
 SOFT_TIME_LIMIT_S = 3600
 TIME_LIMIT_S = 3660

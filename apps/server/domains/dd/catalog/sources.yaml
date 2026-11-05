@@ -1,10 +1,10 @@
-# Curated catalog of documentation sources for the Docs Distiller resolver.
+# Curated catalog of documentation sources for Docs Distiller.
 # Pivoted from the previous 6-list layout (docs_url / llms_full_txt / llms_txt /
 # sitemap_xml / github_repo / categories) into one entry per framework so each
 # fact lives in exactly one place.
 #
 # Per-entry fields (all optional except `name`):
-#   name        canonical display name (also the resolver lookup key)
+#   name        canonical display name (also the catalog lookup key)
 #   category    "Python" | "Programming Language" | "Pentest" — omit if unset
 #   docs        canonical docs landing URL
 #   llms_full   llms-full.txt bundle (Tier 1 ingestion)

@@ -1,12 +1,10 @@
 import { ConnectionCard } from "./connection-card";
 
-/** The saved connections, one per tool. Server component; the cards hydrate their own forms. */
+/** The saved connections, one per tool. Server component; the cards hydrate their own forms. The page title sits in
+ * the app's second navbar. */
 export function SettingsPage() {
   return (
     <div className="flex max-w-4xl flex-col gap-8">
-      <h1 id="page-title" className="text-3xl font-semibold tracking-tight">
-        Settings
-      </h1>
       <ConnectionCard
         kind="llm"
         title="LLM Endpoint"

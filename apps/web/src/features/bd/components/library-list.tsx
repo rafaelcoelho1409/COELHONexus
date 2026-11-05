@@ -137,7 +137,7 @@ export function LibraryPicker({
       {open ? (
         <div
           id="bd-library-options"
-          className="absolute left-0 z-40 mt-1 w-[min(24rem,calc(100vw-2rem))] rounded-md border border-border bg-card p-2 sm:left-auto sm:right-0"
+          className="absolute left-0 z-40 mt-1 w-[min(24rem,calc(100vw-2rem))] rounded-md border border-border bg-card p-2"
         >
           <label htmlFor="bd-library-search" className="mb-1 block text-xs font-medium text-muted-foreground">
             Search books

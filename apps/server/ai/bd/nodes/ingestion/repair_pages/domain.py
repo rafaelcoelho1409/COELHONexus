@@ -4,6 +4,7 @@ import domains
 from . import patterns
 from .... import agents
 
+import difflib
 import unicodedata
 from json import JSONDecodeError, JSONDecoder
 from collections.abc import Iterator
@@ -134,6 +135,7 @@ def validate_proposals(
                 ))
 
     proposals: list[agents.schemas.PatchProposal] = []
+    rejected: list[str] = []
     seen_issue_ids: set[str] = set()
     for proposal in proposals_to_validate:
         if proposal.page_number != page_number:
@@ -164,13 +166,19 @@ def validate_proposals(
         )
         if not allowed:
             raise ValueError("patch proposal issue code is outside this specialist's scope")
+        if _invents_text(proposal):
+            continue
+        # A target the page cannot support loses only its own proposal; its issue stays unresolved for review.
         if not proposal.target_text or proposal.target_text not in markdown:
-            raise ValueError("patch proposal target is not present in the source page")
+            rejected.append("patch proposal target is not present in the source page")
+            continue
         if allowed_context is not None and proposal.target_text not in allowed_context:
-            raise ValueError("patch proposal target is outside the supplied repair context")
+            rejected.append("patch proposal target is outside the supplied repair context")
+            continue
         start = markdown.find(proposal.target_text)
         if markdown.find(proposal.target_text, start + 1) >= 0:
-            raise ValueError("patch proposal target is ambiguous in the source page")
+            rejected.append("patch proposal target is ambiguous in the source page")
+            continue
         end = start + len(proposal.target_text)
         # The target is exact and unique, so the patch is fully determined; quoted anchors only disambiguate and
         # models often paraphrase them. A wrong anchor is dropped instead of discarding an otherwise valid patch.
@@ -190,7 +198,26 @@ def validate_proposals(
         seen_issue_ids.add(proposal.issue_id)
         proposals.append(proposal)
 
+    if rejected and not proposals:
+        # Nothing usable survived, so let the caller retry with the reason instead of reporting a silent no-op.
+        raise ValueError(rejected[0])
     return proposals
+
+
+def _invents_text(proposal: agents.schemas.PatchProposal) -> bool:
+    """True when a replacement adds words, links, images or markers that the page never contained."""
+    target, replacement = proposal.target_text, proposal.replacement
+    # A page may end mid-sentence because its paragraph continues on the next page; added words are invented text.
+    if replacement.startswith(target) and len(replacement[len(target):].split()) > 1:
+        return True
+    squeezed_target = patterns._SPACE_RE.sub("", target)
+    return any(
+        patterns._SPACE_RE.sub("", introduced) not in squeezed_target
+        for introduced in (
+            *patterns._LINK_DESTINATION_RE.findall(replacement),
+            *patterns._HTML_COMMENT_RE.findall(replacement),
+        )
+    )
 
 
 def build_repair_context(
@@ -245,18 +272,34 @@ def apply_proposals(
         start = markdown.find(proposal.target_text)
         spans.append((start, start + len(proposal.target_text), proposal))
     spans.sort(key = lambda span: span[0])
-    if any(current[0] < previous[1] for previous, current in zip(spans, spans[1:])):
-        raise ValueError("patch proposals contain overlapping source spans")
+    # A space-only edit is verified by the diff itself, so the model's risk label and confidence only need to
+    # rule out a guess; a letter-changing edit never qualifies.
+    eligible = [
+        span for span in spans
+        if (
+            span[2].risk == agents.schemas.PatchRisk.LOW
+            and span[2].confidence >= domains.bd.ingestion.ai.params.AUTO_APPLY_CONFIDENCE
+            and _is_mechanical_repair(span[2])
+            or span[2].risk in {agents.schemas.PatchRisk.LOW, agents.schemas.PatchRisk.MEDIUM}
+            and span[2].confidence >= domains.bd.ingestion.ai.params.SPACING_REPAIR_CONFIDENCE
+            and _is_spacing_repair(span[2], markdown, span[0], span[1])
+        )
+    ]
+    # Only two edits that could both be applied can collide; a review-only proposal never touches the page, so it must
+    # not hold back a verified repair that happens to sit inside its span.
+    overlapping_issue_ids: set[str] = set()
+    for index, current in enumerate(eligible):
+        for previous in eligible[:index]:
+            if current[0] < previous[1] and previous[0] < current[1]:
+                overlapping_issue_ids.add(current[2].issue_id)
+                overlapping_issue_ids.add(previous[2].issue_id)
+    eligible_issue_ids = {span[2].issue_id for span in eligible}
 
     normalized = markdown
     applied_issue_ids = []
     review_issue_ids = []
     for start, end, proposal in reversed(spans):
-        auto_apply = (
-            proposal.risk == agents.schemas.PatchRisk.LOW
-            and proposal.confidence >= domains.bd.ingestion.ai.params.AUTO_APPLY_CONFIDENCE
-            and _is_mechanical_repair(proposal)
-        )
+        auto_apply = proposal.issue_id in eligible_issue_ids and proposal.issue_id not in overlapping_issue_ids
         if auto_apply:
             normalized = normalized[:start] + proposal.replacement + normalized[end:]
             applied_issue_ids.append(proposal.issue_id)
@@ -495,6 +538,63 @@ def _evidence_was_changed_with_toc_cleanup(excerpt: str, changes: list[tuple[str
 
 def _is_control_noise(character: str) -> bool:
     return unicodedata.category(character) == "Cc" and character not in "\t\n\r"
+
+
+def _is_spacing_repair(proposal: agents.schemas.PatchProposal, markdown: str, start: int, end: int) -> bool:
+    """True when only spaces differ (plus intra-word hyphens in plain prose), so no word, URL or number was rewritten."""
+    if proposal.issue_code not in {
+        agents.schemas.IssueCode.SPLIT_WORD,
+        agents.schemas.IssueCode.FUSED_MARKER,
+        agents.schemas.IssueCode.TEXT_CORRUPTION,
+    }:
+        return False
+    target, replacement = proposal.target_text, proposal.replacement
+    if not any(
+        evidence.excerpt in target or target in evidence.excerpt
+        for evidence in proposal.evidence
+    ):
+        return False
+    if _inserts_space(target, replacement) and _inside_path_or_address(markdown, start, end):
+        return False
+    if (
+        target[:len(target) - len(target.lstrip())] != replacement[:len(replacement) - len(replacement.lstrip())]
+        or target[len(target.rstrip()):] != replacement[len(replacement.rstrip()):]
+        or patterns._MARKDOWN_MARKER_RE.findall(target) != patterns._MARKDOWN_MARKER_RE.findall(replacement)
+    ):
+        return False
+    squeezed_target, squeezed_replacement = (
+        patterns._SPACE_RE.sub("", text) for text in (target, replacement)
+    )
+    if squeezed_target == squeezed_replacement:
+        return True
+    if not all(patterns._PLAIN_PROSE_RE.fullmatch(text) for text in (target, replacement)):
+        return False
+    # A hyphen may be added, or dropped where the source left it dangling before a space ("engineer- ing");
+    # a hyphen that is already part of a word is never removed.
+    joined_target = patterns._DANGLING_HYPHEN_RE.sub("", target)
+    return (
+        patterns._INTRA_WORD_HYPHEN_RE.sub("", patterns._SPACE_RE.sub("", joined_target))
+        == patterns._INTRA_WORD_HYPHEN_RE.sub("", squeezed_replacement)
+        and replacement.count("-") >= joined_target.count("-")
+    )
+
+
+def _inserts_space(target: str, replacement: str) -> bool:
+    matcher = difflib.SequenceMatcher(None, target, replacement, autojunk = False)
+    return any(
+        tag in {"insert", "replace"} and patterns._SPACE_RE.search(replacement[j1:j2])
+        for tag, _, _, j1, j2 in matcher.get_opcodes()
+    )
+
+
+def _inside_path_or_address(markdown: str, start: int, end: int) -> bool:
+    """True when the unbroken text around a span holds a URL, path or address, where a space is never correct."""
+    left, right = start, end
+    while left > 0 and not markdown[left - 1].isspace():
+        left -= 1
+    while right < len(markdown) and not markdown[right].isspace():
+        right += 1
+    return any(character in markdown[left:right] for character in "/\\@")
 
 
 def _is_mechanical_repair(proposal: agents.schemas.PatchProposal) -> bool:

@@ -8,13 +8,17 @@ import { ChevronLeft, ChevronRight, ExternalLink } from "lucide-react";
 import type { ReactNode, Ref } from "react";
 
 import { pageFacts, pageTitle, sourceHref } from "../domain/materials";
-import type { ManifestEntry } from "../entities";
+import type { ManifestEntry, PageVersion } from "../entities";
 import { ActionButton } from "./action-button";
 import { ToggleGroup } from "./toggle-group";
 
 const PREVIEW_MODES = [
   { id: "rendered", label: "Rendered" },
   { id: "source", label: "Source" },
+] as const;
+const PAGE_VERSIONS = [
+  { id: "processed", label: "AI processed" },
+  { id: "original", label: "Original" },
 ] as const;
 export type PreviewMode = (typeof PREVIEW_MODES)[number]["id"];
 
@@ -25,6 +29,9 @@ export function MaterialsArticle({
   framed,
   mode,
   onMode,
+  version,
+  onVersion,
+  hasVersions,
   onPrevious,
   onNext,
   children,
@@ -37,6 +44,9 @@ export function MaterialsArticle({
   framed: boolean;
   mode: PreviewMode;
   onMode: (mode: PreviewMode) => void;
+  version: PageVersion;
+  onVersion: (version: PageVersion) => void;
+  hasVersions: boolean;
   onPrevious: (() => void) | null;
   onNext: (() => void) | null;
   /** The page's text, or the loading and error lines. */
@@ -47,7 +57,7 @@ export function MaterialsArticle({
     <section
       ref={ref}
       aria-label="Page"
-      className={`min-w-0 scroll-mt-20 ${framed ? "rounded-md border border-border bg-card p-5" : ""}`}
+      className={`min-w-0 scroll-mt-[calc(var(--chrome-top)+1.5rem)] ${framed ? "rounded-md border border-border bg-card p-5" : ""}`}
     >
       {entry ? (
         <>
@@ -81,6 +91,14 @@ export function MaterialsArticle({
               </div>
               <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
                 <ToggleGroup legend="Page shown as" options={PREVIEW_MODES} value={mode} onChange={onMode} />
+                {hasVersions ? (
+                  <ToggleGroup
+                    legend="Page version"
+                    options={PAGE_VERSIONS}
+                    value={version}
+                    onChange={onVersion}
+                  />
+                ) : null}
                 {/* The reading window has previous/next on its own bar. */}
                 {framed ? (
                   <>

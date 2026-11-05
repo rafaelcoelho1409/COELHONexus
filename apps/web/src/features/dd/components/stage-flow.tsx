@@ -1,6 +1,6 @@
 "use client";
 
-/** One stage's agent graph, drawn with React Flow: fixed positions (nothing moves when a status changes), a
+/** One agent graph (planner, synth or Agentic AI ingestion), drawn with React Flow: fixed positions (nothing moves when a status changes), a
  * button per node that opens its drawer, and — for synth — the refine loop as an amber arc that lights up when it
  * fires. Loaded lazily (`next/dynamic`), so the graph library stays out of every other page's JavaScript. */
 
@@ -20,6 +20,7 @@ import {
 } from "@xyflow/react";
 
 import {
+  type FlowStage,
   flowEdges,
   flowLayout,
   LOOP_REACH,
@@ -27,8 +28,7 @@ import {
   NODE_HEIGHT,
   NODE_WIDTH,
 } from "../domain/flow-layout";
-import type { NodeStatus, StageNodeView } from "../domain/stages";
-import type { RunStage } from "../params";
+import type { NodeStatus, NodeView } from "../domain/stages";
 import { NODE_STATUS_LABEL, StatusGlyph } from "./stage-parts";
 
 type StageNodeData = {
@@ -118,9 +118,9 @@ export function StageFlow({
   live,
   onOpen,
 }: {
-  stage: RunStage;
+  stage: FlowStage;
   title: string;
-  views: StageNodeView[];
+  views: NodeView[];
   kpis: Record<string, string>;
   liveLines: Record<string, string>;
   values: Record<string, unknown>;

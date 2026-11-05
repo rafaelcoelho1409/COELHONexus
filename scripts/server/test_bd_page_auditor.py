@@ -12,6 +12,7 @@ from deepagents.profiles.harness.harness_profiles import _get_harness_profile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
+import domains.bd.ingestion.ai  # noqa: F401  (the agent factories read its params at build time)
 from ai.bd.agents import schemas
 from ai.bd.agents.ingestion.page_auditor import agent as auditor_agent
 from ai.bd.graphs.ingestion.graph import build_page_audit_graph

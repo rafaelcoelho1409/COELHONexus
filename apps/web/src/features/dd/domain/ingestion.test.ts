@@ -6,8 +6,8 @@ import {
   explorerTierValues,
   filterEntries,
   findEntryByBasename,
+  frameworkInfo,
   groupEntries,
-  ingressSummary,
   isRunTerminal,
   manifestView,
   ROOT_GROUP,
@@ -174,8 +174,17 @@ describe("manifest view", () => {
       ingested_at: Math.floor(Date.now() / 1000) - 120,
     });
     expect(manifestView(manifest)).toMatchObject({ pageCount: 3, framework: "Example" });
-    expect(ingressSummary(manifest)).toContain("Example · 3 pages · 320 B sitemap · 2m ago");
-    expect(ingressSummary(null)).toBe("");
+    expect(frameworkInfo(manifest)).toBe("Example · 3 pages · 320 B");
+    expect(frameworkInfo(null)).toBe("");
+  });
+
+  it("sizes the framework's documentation in the unit that reads best", () => {
+    const manifest = manifestSchema.parse({
+      framework_name: "Locust",
+      entries: Array.from({ length: 24 }, (_, idx) => entry({ idx, title: `Page ${idx}` })),
+      total_bytes: 218_726,
+    });
+    expect(frameworkInfo(manifest)).toBe("Locust · 24 pages · 213.6 KB");
   });
 
   it("groups by curated section when present, root first", () => {

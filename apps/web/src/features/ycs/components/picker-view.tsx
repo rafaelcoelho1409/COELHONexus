@@ -48,7 +48,7 @@ export function PickerView({
         </p>
       </div>
 
-      <div className="z-10 flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-card px-3 py-2 sm:sticky sm:top-14">
+      <div className="z-10 flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-card px-3 py-2 sm:sticky sm:top-(--chrome-top)">
         <label className="flex min-h-9 cursor-pointer items-center gap-3 text-sm">
           <span className="flex size-9 items-center justify-center">
             <input

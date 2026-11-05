@@ -619,7 +619,7 @@ async def _run_book_harmonize_impl(
 ) -> dict:
     """Wrapped by _run_book_harmonize to keep the OTel span open across all return paths."""
     minio = infra.minio.service.get_storage()
-    entry = domains.dd.resolver.service.index_by_slug().get(slug, {})
+    entry = domains.dd.catalog.service.index_by_slug().get(slug, {})
     framework_name = entry.get("name") or entry.get("slug") or slug
 
     chapters: list[dict] = []

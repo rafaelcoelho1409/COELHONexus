@@ -223,6 +223,11 @@ def _evidence_overlaps(left: agents.schemas.PageIssue, right: agents.schemas.Pag
     return False
 
 
+def effective_length(markdown: str) -> int:
+    """Page size as the models see it: a padded table's space runs cost a token each, not a token per space."""
+    return len(patterns.SPACE_RUN_RE.sub(" ", markdown))
+
+
 def inventory_summary(
     pages: list[graphs.ingestion.state.PageInventoryResult],
 ) -> dict[str, Any]:

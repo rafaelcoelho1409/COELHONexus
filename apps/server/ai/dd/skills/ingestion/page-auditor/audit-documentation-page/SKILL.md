@@ -42,6 +42,12 @@ Docs Distiller serves stored page images at `/api/v1/dd/ingestion/<slug>/artifac
 - A navigation block repeated twice inside a long tutorial can be `duplicate_boilerplate`; a single navigation block on an index is usually expected.
 - Two copies of the same installation section can be `duplicate_section`; two sections about installation with different steps are not.
 - A line written as `##Install` may be a malformed heading when its place in the outline makes that intent clear; `## Install` is valid.
+- A valid ATX heading may be followed immediately by its content without a blank line. Do not report a missing blank line after `#` headings; CommonMark permits this, so flag only syntax that actually changes rendering or structure.
+- Backslash-escaped punctuation such as `(\*\*kwargs)` in prose is a valid CommonMark escape that renders as `(**kwargs)`; it is not a formatting defect and must not be reported.
+- Raw HTML such as `<div>`, `<iframe>` or `<a id="...">` is valid in CommonMark and GFM. Report it only when the markup itself is broken (an unclosed tag that swallows the following text).
+- A short heading used as a label, such as `#### NOTE` above a paragraph, is the converted form of a documentation admonition. It is not a defect, and turning it into a blockquote would drop the label.
+- Text inside a code fence or console output, including its escapes, quotes and line length, is content. Never report it as Markdown formatting.
+- A `---` line at the very top of the page, before the anchor or first heading, is the separator the bundle was split on. It is not front matter; do not report it.
 - A list that renders correctly but uses a different spacing style has no issue.
 - If a title looks wrong but no better title appears in the Markdown, do not invent one. Leave the title empty or retain the source-supported candidate and lower its confidence.
 

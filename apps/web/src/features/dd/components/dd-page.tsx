@@ -1,19 +1,18 @@
 "use client";
 
-/** Docs Distiller shell: stage strip + framework picker + the stage body.
- * The stage comes from the pathname; slug/run come from search params
- * (read inside a Suspense boundary per Next.js requirements). */
+/** Docs Distiller shell: the stage body. The title and stage tabs sit in the app's second navbar; the framework
+ * picker and its facts in the third (`StageBar`). The stage comes from the pathname; slug/run come from search
+ * params (read inside a Suspense boundary per Next.js requirements). */
 
 import { usePathname, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { DD_STAGES, type DdStage } from "../params";
 import { CatalogStage } from "./catalog-stage";
-import { FrameworkPicker } from "./framework-picker";
 import { IngestionStage } from "./ingestion-stage";
 import { DdOverlaysProvider } from "./overlays";
 import { PipelineView } from "./pipeline-view";
 import { PlannerView } from "./planner-view";
-import { StageNav } from "./stage-nav";
+import { StageBar } from "./stage-bar";
 import { StudyView } from "./study-view";
 import { SynthView } from "./synth-view";
 
@@ -24,10 +23,6 @@ export function DocsDistillerPage() {
   return (
     <DdOverlaysProvider>
       <div className="mx-auto w-full max-w-6xl p-4">
-        {/* The tabs and picker need the slug from the URL, which Next only gives inside a Suspense boundary. */}
-        <Suspense fallback={<StageNav stage={stage} slug={null} />}>
-          <StageHeader stage={stage} />
-        </Suspense>
         {stage === "catalog" ? (
           <CatalogStage />
         ) : (
@@ -40,21 +35,20 @@ export function DocsDistillerPage() {
   );
 }
 
-function StageHeader({ stage }: { stage: DdStage }) {
-  const slug = useSearchParams().get("slug");
-  return (
-    <StageNav
-      stage={stage}
-      slug={slug}
-      aside={stage === "catalog" ? null : <FrameworkPicker stage={stage} currentSlug={slug} />}
-    />
-  );
-}
-
 function StageWithSearchParams({ stage }: { stage: DdStage }) {
   const params = useSearchParams();
   const slug = params.get("slug");
   const runId = params.get("run");
+  return (
+    <>
+      {/* Ingestion draws its own bar: its Pipeline | Materials views sit on the right of it. */}
+      {stage === "ingestion" ? null : <StageBar stage={stage} slug={slug} />}
+      <StageBody stage={stage} slug={slug} runId={runId} />
+    </>
+  );
+}
+
+function StageBody({ stage, slug, runId }: { stage: DdStage; slug: string | null; runId: string | null }) {
   if (stage === "ingestion") {
     return <IngestionStage slug={slug} runId={runId} />;
   }

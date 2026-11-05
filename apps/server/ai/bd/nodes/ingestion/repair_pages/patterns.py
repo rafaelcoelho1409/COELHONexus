@@ -14,3 +14,10 @@ _INLINE_TOC_ROW_RE = re.compile(
     re.IGNORECASE,
 )
 _TRAILING_LEADERS_RE = re.compile(rf"\s*(?:{_DOT_LEADER})\s*$")
+_SPACE_RE = re.compile(r"[ \t­]+")
+_INTRA_WORD_HYPHEN_RE = re.compile(r"(?<=\w)-(?=\w)")
+_DANGLING_HYPHEN_RE = re.compile(r"(?<=\w)-[ \t]+(?=\w)")
+_LINK_DESTINATION_RE = re.compile(r"\]\(([^)]*)\)")
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_PLAIN_PROSE_RE = re.compile(r"[A-Za-z' ­\-]+")
+_MARKDOWN_MARKER_RE = re.compile(r"(?m)^[ \t]*(?:[-*+>]|\d+[.)]|#{1,6})[ \t]+")

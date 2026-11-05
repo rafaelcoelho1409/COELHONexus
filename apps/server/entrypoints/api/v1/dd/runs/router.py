@@ -1,19 +1,21 @@
 """In-flight ingestion lifecycle. Single-flight per slug via Redis lock;
 the running tier polls a cancel flag and surrenders cleanly."""
+
 import domains, infra
+import domains.dd.ingestion.ai.task
 import domains.dd.ingestion.task
 from . import schemas
 from .. import resolver
 
 import logging
+from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
 
 
 @router.post("")
@@ -22,7 +24,9 @@ async def start_run(body: schemas.StartRunBody) -> dict:
     acquired, Celery dispatched) / locked (another in flight)."""
     await resolver.service.get_catalog_entry(body.slug)
 
-    gate = await domains.dd.ingestion.runtime.dispatch.service.reserve_run(body.slug, body.refresh)
+    gate = await domains.dd.ingestion.runtime.dispatch.service.reserve_run(
+        body.slug, body.refresh
+    )
     if gate["status"] != "reserved":
         return gate
 
@@ -35,7 +39,9 @@ async def start_run(body: schemas.StartRunBody) -> dict:
         # doesn't replace that.
         infra.opentelemetry.service.tag_celery_task(task.id)
     except Exception:
-        await domains.dd.ingestion.runtime.dispatch.service.release_run(body.slug, run_id)
+        await domains.dd.ingestion.runtime.dispatch.service.release_run(
+            body.slug, run_id
+        )
         raise
 
     return domains.dd.ingestion.runtime.dispatch.domain.queued(body.slug, run_id)
@@ -62,20 +68,28 @@ async def get_run(run_id: str) -> dict:
     """In-flight snapshot from Redis (canonical post-finalize manifest
     lives in MinIO under /ingestion/{slug})."""
     async with infra.redis.service.client() as r:
-        progress = await domains.dd.ingestion.runtime.progress.service.read_progress(r, run_id)
-        manifest = await domains.dd.ingestion.storage.service.read_live_manifest(r, run_id)
+        progress = await domains.dd.ingestion.runtime.progress.service.read_progress(
+            r, run_id
+        )
+        manifest = await domains.dd.ingestion.storage.service.read_live_manifest(
+            r, run_id
+        )
         post = await domains.dd.ingestion.runtime.progress.service.read_post(r, run_id)
 
     if progress is None and not manifest:
         raise HTTPException(status_code=404, detail=f"run {run_id!r} not found")
 
-    return domains.dd.ingestion.runtime.dispatch.domain.run_snapshot(run_id, progress, manifest, post)
+    return domains.dd.ingestion.runtime.dispatch.domain.run_snapshot(
+        run_id, progress, manifest, post
+    )
 
 
 @router.get("/{run_id}/url-records")
 async def get_url_records(run_id: str) -> list[dict]:
     async with infra.redis.service.client() as r:
-        return await domains.dd.ingestion.runtime.progress.service.read_url_records(r, run_id)
+        return await domains.dd.ingestion.runtime.progress.service.read_url_records(
+            r, run_id
+        )
 
 
 @router.get("/{run_id}/llm-counters")
@@ -85,26 +99,35 @@ async def get_llm_counters(run_id: str) -> dict:
 
 
 @router.get("/{run_id}/pages/{idx}")
-async def get_page(run_id: str, idx: int) -> dict:
+async def get_page(
+    run_id: str,
+    idx: int,
+    version: Literal["processed", "original"] = Query(default="processed"),
+) -> dict:
     async with infra.redis.service.client() as r:
-        manifest = await domains.dd.ingestion.storage.service.read_live_manifest(r, run_id)
+        manifest = await domains.dd.ingestion.storage.service.read_live_manifest(
+            r, run_id
+        )
     entry = domains.dd.ingestion.storage.domain.entry_with_idx(manifest or [], idx)
     if entry is None:
         raise HTTPException(
             status_code=404,
             detail=f"page idx={idx} not found in run {run_id!r}",
         )
-    key = entry.get("key")
+    key = entry.get("key") if version == "processed" else entry.get("source_key")
+    minio = infra.minio.service.get_storage()
+    if version == "original" and not key:
+        key = entry.get("raw_key")
     if not key:
         raise HTTPException(
             status_code=404,
             detail=f"manifest entry has no MinIO key (idx={idx})",
         )
     try:
-        body = await infra.minio.service.get_storage().read_text(key)
+        body = await minio.read_text(key)
     except Exception as e:
         raise HTTPException(
             status_code=404,
             detail=f"page read failed: {type(e).__name__}: {e}",
         )
-    return {"run_id": run_id, "idx": idx, "body": body}
+    return {"run_id": run_id, "idx": idx, "version": version, "body": body}

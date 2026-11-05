@@ -3,6 +3,7 @@ from __future__ import annotations
 import domains
 from . import domain
 from ..page_audit import params as audit_params
+from .... import agents
 
 import json
 from typing import Any, Protocol
@@ -50,15 +51,11 @@ async def repair_page(
         lambda: repairer.ainvoke(request, config = config),
         attempts = audit_params.MAX_ATTEMPTS,
         wait_base_s = audit_params.RETRY_WAIT_BASE_S,
-        accept = lambda value: isinstance(value, dict) and value.get("structured_response") is not None,
+        accept = lambda value: agents.domain.structured_or_recovered(value, agents.schemas.PagePatchBatch) is not None,
     )
-    if isinstance(result, dict) and result.get("structured_response") is not None:
-        return domain.apply_patches(
-            markdown,
-            source_sha256,
-            assessment,
-            result["structured_response"],
-        )
+    batch = agents.domain.structured_or_recovered(result, agents.schemas.PagePatchBatch)
+    if batch is not None:
+        return domain.apply_patches(markdown, source_sha256, assessment, batch)
     raise ValueError(
         f"page repair specialist ended {audit_params.MAX_ATTEMPTS} times without a structured PagePatchBatch "
         f"for page {page['idx']}"

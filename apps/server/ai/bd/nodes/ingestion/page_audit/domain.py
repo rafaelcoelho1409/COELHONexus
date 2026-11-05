@@ -1,10 +1,12 @@
 """Validation and prompt-payload construction for page audits."""
 from __future__ import annotations
 from . import params
+from ..inventory import patterns as inventory_patterns
 from .... import agents, graphs
 
 import json
 import hashlib
+import unicodedata
 from json import JSONDecodeError, JSONDecoder
 from collections.abc import Iterator
 from typing import Any
@@ -204,9 +206,10 @@ def sanitize_assessment(
 
     valid_issues = []
     invalid_evidence_count = 0
+    invalid_code_evidence_count = 0
     dropped_issue_count = 0
     for issue in assessment.issues:
-        verified_evidence = [
+        source_verified_evidence = [
             evidence
             for evidence in issue.evidence
             if evidence.source == agents.schemas.EvidenceSource.PAGE_MARKDOWN
@@ -214,7 +217,13 @@ def sanitize_assessment(
             and len(evidence.excerpt) <= params.MAX_EVIDENCE_CHARS
             and evidence.excerpt in markdown
         ]
-        invalid_evidence_count += len(issue.evidence) - len(verified_evidence)
+        invalid_evidence_count += len(issue.evidence) - len(source_verified_evidence)
+        verified_evidence = [
+            evidence
+            for evidence in source_verified_evidence
+            if _evidence_supports_issue_code(issue.code, evidence.excerpt)
+        ]
+        invalid_code_evidence_count += len(source_verified_evidence) - len(verified_evidence)
         if not verified_evidence:
             dropped_issue_count += 1
             continue
@@ -224,10 +233,54 @@ def sanitize_assessment(
         warnings.append(
             f"Discarded {invalid_evidence_count} auditor evidence excerpt(s) that were not exact source text."
         )
+    if invalid_code_evidence_count:
+        warnings.append(
+            f"Discarded {invalid_code_evidence_count} auditor evidence excerpt(s) "
+            "that did not support the reported issue code."
+        )
     if dropped_issue_count:
-        warnings.append(f"Discarded {dropped_issue_count} auditor finding(s) without verifiable evidence.")
+        warnings.append(
+            f"Discarded {dropped_issue_count} auditor finding(s) without evidence that supports the issue code."
+        )
 
     return assessment.model_copy(update = {"issues": valid_issues}), warnings
+
+
+def _content_lines(excerpt: str) -> list[str]:
+    """Lines of an excerpt that are neither a picture marker, blank, nor a bare page number."""
+    remainder = inventory_patterns.IMAGE_PLACEHOLDER_RE.sub("", excerpt)
+    return [
+        line for line in remainder.splitlines()
+        if line.strip() and not inventory_patterns.PAGE_NUMBER_ONLY_RE.fullmatch(line)
+    ]
+
+
+def _has_page_content(excerpt: str) -> bool:
+    """A picture marker or a bare page number is page furniture, never evidence of an extraction defect."""
+    return bool(_content_lines(excerpt))
+
+
+def _evidence_supports_issue_code(issue_code: agents.schemas.IssueCode, excerpt: str) -> bool:
+    if issue_code == agents.schemas.IssueCode.CONTROL_CHARACTERS:
+        return any(
+            unicodedata.category(character) == "Cc" and character not in "\t\n\r"
+            for character in excerpt
+        )
+    if issue_code == agents.schemas.IssueCode.SOFT_HYPHEN:
+        return "\u00ad" in excerpt
+    if issue_code == agents.schemas.IssueCode.TOC_NOISE:
+        return bool(inventory_patterns.DOT_LEADER_MARKER_RE.search(excerpt))
+    if issue_code == agents.schemas.IssueCode.METADATA:
+        # Book metadata has its own stage; a page cannot evidence a defect that no repair specialist is routed.
+        return False
+    if issue_code == agents.schemas.IssueCode.NEAR_EMPTY:
+        # Sparseness is measured in code (inventory); a model calling a title or part page "empty" only adds noise.
+        return False
+    lines = _content_lines(excerpt)
+    if issue_code in {agents.schemas.IssueCode.STRUCTURE, agents.schemas.IssueCode.TABLE_OR_INDEX_LAYOUT}:
+        # Models report "a figure with a caption" as a layout finding; a caption line alone is normal Docling output.
+        return not all(inventory_patterns.CAPTION_LINE_RE.match(line) for line in lines)
+    return bool(lines)
 
 
 def _materialize_assessment(

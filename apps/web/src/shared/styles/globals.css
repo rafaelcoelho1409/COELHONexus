@@ -208,6 +208,20 @@
     }
   }
 
+  /* Where sticky and anchored content starts below the chrome: the app header (h-14), plus the section bar (h-12)
+     from `sm` up, where it sticks (a phone lets it scroll away). Sticky offsets read this instead of a literal. */
+  :root {
+    --chrome-top: 3.5rem;
+  }
+  @media (min-width: 40rem) {
+    :root:has([data-section-bar]) {
+      --chrome-top: 6.5rem;
+    }
+  }
+  :root:has([data-section-bar]) {
+    scroll-padding-top: var(--chrome-top);
+  }
+
   /* The home page is a stack of sections that the page snaps between. Native scroll snap, no script: the browser keeps
      its own wheel, touch, keyboard (arrows, Page Up/Down, Space) and scrollbar behaviour, and nothing is animated by us.
      `proximity` everywhere, so a section taller than the window (a phone) can always be read to its end; `mandatory`

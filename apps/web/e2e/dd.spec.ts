@@ -452,8 +452,8 @@ test.describe("Docs Distiller", () => {
     await mockRoutes(page);
     await page.goto("/dd/ingestion?slug=alpha");
     const tabs = page.getByRole("navigation", { name: "Docs Distiller stages" });
-    await expect(tabs.getByRole("link")).toHaveText(["Catalog", "Pipeline", "Study"]); // Ingestion is current
-    await expect(tabs.getByText("Ingestion")).toHaveAttribute("aria-current", "page");
+    await expect(tabs.getByRole("link")).toHaveText(["Catalog", "Ingestion", "Pipeline", "Study"]);
+    await expect(tabs.getByRole("link", { name: "Ingestion" })).toHaveAttribute("aria-current", "page");
     await expect(tabs.getByText("Planner")).toHaveCount(0);
     await expect(tabs.getByText("Synth")).toHaveCount(0);
   });
@@ -688,7 +688,7 @@ test.describe("Docs Distiller", () => {
     await mockRoutes(page);
     await page.goto("/dd/ingestion?slug=alpha");
 
-    await expect(page.getByText("Alpha · 2 pages · 640 B sitemap · 2m ago")).toBeVisible();
+    await expect(page.getByText("Alpha · 2 pages · 640 B")).toBeVisible();
     const extraction = page.getByRole("region", { name: "Documentation extraction progress" });
     await expect(extraction.getByText("2 of 2 pages · 100%")).toBeVisible();
     await expect(extraction.getByRole("button", { name: "Start documentation extraction" })).toBeDisabled();

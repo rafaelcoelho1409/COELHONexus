@@ -8,8 +8,12 @@ from .... import agents, graphs
 import asyncio
 import hashlib
 import json
+import logging
 from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from typing import Any, Protocol
+
+
+logger = logging.getLogger(__name__)
 
 
 PageReader = Callable[[str], Awaitable[str]]
@@ -124,28 +128,46 @@ async def normalize_pages(
                 "title": saved_normalization.get("output_title") or page["title"],
                 "source_sha256": audit["source_sha256"],
                 "assessment_key": assessment_key,
+                "repair_status": (saved_normalization.get("repair") or {}).get("status", "completed"),
             }
 
         normalized = markdown
         patch_report = {"accepted": [], "rejected": []}
-        if audit["assessment"]["issues"]:
+        # Only findings a patch could pass reach the repairer; a repair that cannot be obtained must not fail the run,
+        # because the audited original is already a valid page.
+        repair_input = page_repair.domain.repairable_assessment(audit["assessment"])
+        repair = {
+            "status": "not_needed",
+            "total_issues": len(audit["assessment"]["issues"]),
+            "eligible_issues": len(repair_input["issues"]),
+        }
+        if repair_input["issues"]:
             with domains.settings.llm_counter.service.llm_context(
                 ns = "dd",
                 run_id = run_id,
                 node_id = "page_repair",
             ):
-                normalized, patch_report = await page_repair.node.repair_page(
-                    framework_slug,
-                    page,
-                    markdown,
-                    audit["source_sha256"],
-                    audit["assessment"],
-                    repairer,
-                    files = repair_files,
-                    config = {
-                        "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
-                    },
-                )
+                try:
+                    normalized, patch_report = await page_repair.node.repair_page(
+                        framework_slug,
+                        page,
+                        markdown,
+                        audit["source_sha256"],
+                        repair_input,
+                        repairer,
+                        files = repair_files,
+                        config = {
+                            "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
+                        },
+                    )
+                    repair["status"] = "completed"
+                except Exception as error:
+                    logger.warning(
+                        f"[dd-agentic] {framework_slug}: page {page['idx']} repair unavailable, "
+                        f"kept the audited original ({type(error).__name__}: {error})"
+                    )
+                    repair["status"] = "unavailable"
+                    repair["error"] = f"{type(error).__name__}: {error}"
 
         output_title = page_repair.domain.output_title(
             normalized,
@@ -156,6 +178,7 @@ async def normalize_pages(
         final_audit = {
             **audit,
             "patches": patch_report,
+            "repair": repair,
             "normalization_status": "complete",
             "output_key": output_key,
             "output_sha256": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
@@ -179,6 +202,7 @@ async def normalize_pages(
             "title": output_title,
             "source_sha256": audit["source_sha256"],
             "assessment_key": assessment_key,
+            "repair_status": repair["status"],
         }
 
     async def normalize_one(page: graphs.ingestion.state.PageReference) -> dict[str, Any]:

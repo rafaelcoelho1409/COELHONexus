@@ -8,8 +8,12 @@ from .... import agents, graphs
 import asyncio
 import hashlib
 import json
+import logging
 from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from typing import Any, Protocol
+
+
+logger = logging.getLogger(__name__)
 
 
 PageReader = Callable[[str], Awaitable[str]]
@@ -82,26 +86,42 @@ async def audit_pages(
                 record = None
 
         if record is None:
+            # A page the auditor cannot assess is still a valid extracted page: it goes on unaudited, and the record says so.
+            audit_error = None
             with domains.settings.llm_counter.service.llm_context(
                 ns = "dd",
                 run_id = run_id,
                 node_id = "page_auditor",
             ):
-                assessment, warnings = await page_audit.node.audit_page(
-                    framework_slug,
-                    page,
-                    markdown,
-                    auditor,
-                    files = auditor_files,
-                    config = {
-                        "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
-                    },
-                )
+                try:
+                    assessment, warnings = await page_audit.node.audit_page(
+                        framework_slug,
+                        page,
+                        markdown,
+                        auditor,
+                        files = auditor_files,
+                        config = {
+                            "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
+                        },
+                    )
+                except Exception as error:
+                    audit_error = f"{type(error).__name__}: {error}"
+                    logger.warning(
+                        f"[dd-agentic] {framework_slug}: page {page['idx']} audit unavailable, "
+                        f"kept the page as extracted ({audit_error})"
+                    )
+                    assessment = agents.schemas.PageAssessment(
+                        page_kind = agents.schemas.PageKind.OTHER,
+                        confidence = 0.0,
+                    )
+                    warnings = [f"Page auditor unavailable ({audit_error}); the page was kept as extracted."]
             record = {
                 "idx": page["idx"],
                 "source_sha256": source_sha256,
                 "assessment": assessment.model_dump(mode = "json"),
                 "warnings": warnings,
+                "audit_status": "unavailable" if audit_error else "completed",
+                **({"audit_error": audit_error} if audit_error else {}),
             }
             await write_artifact(
                 audit_key,

@@ -48,10 +48,11 @@ async def audit_page(
         lambda: auditor.ainvoke(request, config = config),
         attempts = params.MAX_ATTEMPTS,
         wait_base_s = params.RETRY_WAIT_BASE_S,
-        accept = lambda value: isinstance(value, dict) and value.get("structured_response") is not None,
+        accept = lambda value: agents.domain.structured_or_recovered(value, agents.schemas.PageAssessment) is not None,
     )
-    if isinstance(result, dict) and result.get("structured_response") is not None:
-        return domain.sanitize_assessment(result["structured_response"], markdown = markdown)
+    assessment = agents.domain.structured_or_recovered(result, agents.schemas.PageAssessment)
+    if assessment is not None:
+        return domain.sanitize_assessment(assessment, markdown = markdown)
     raise ValueError(
         f"page auditor ended {params.MAX_ATTEMPTS} times without a structured PageAssessment for page {page['idx']}"
     )

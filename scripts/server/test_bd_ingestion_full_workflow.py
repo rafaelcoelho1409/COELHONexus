@@ -16,7 +16,8 @@ from ai.bd.agents import schemas
 from ai.bd.nodes.ingestion.metadata_normalization.service import _fallback_title, _matches_filename_label
 from ai.bd.nodes.ingestion.repair_pages.domain import apply_mechanical_fixes, apply_proposals
 from ai.bd.nodes.ingestion.repair_pages.domain import build_repair_context, validate_proposals
-from ai.bd.nodes.ingestion.inventory.domain import assess_page, merge_issues
+from ai.bd.nodes.ingestion.inventory.domain import assess_page, effective_length, merge_issues
+from ai.bd.nodes.ingestion.page_audit.domain import sanitize_assessment
 import domains
 import infra
 from domains.bd.ingestion.ai.service import (
@@ -282,6 +283,187 @@ unchanged, auto_applied, review_required = apply_proposals("cyber-\nwarfare", [s
 assert unchanged == "cyber-\nwarfare" and not auto_applied and review_required == ["split-word-1"]
 print("ok  uncertain text reconstruction remains review-only even at high model confidence")
 
+def spacing_proposal(
+    target: str,
+    replacement: str,
+    *,
+    confidence: float = 0.95,
+    risk = schemas.PatchRisk.LOW,
+    code = schemas.IssueCode.SPLIT_WORD,
+    evidence: str | None = None,
+) -> schemas.PatchProposal:
+    return schemas.PatchProposal(
+        page_number = 1, issue_id = "spacing-1", source_sha256 = "a" * 64, issue_code = code, risk = risk,
+        target_text = target, replacement = replacement, rationale = "Fix the extraction defect.",
+        confidence = confidence,
+        evidence = [schemas.EvidenceRef(
+            source = schemas.EvidenceSource.PAGE_MARKDOWN, excerpt = evidence or target, page_number = 1,
+        )],
+    )
+
+
+def applies(page: str, proposal: schemas.PatchProposal) -> bool:
+    patched, applied, review = apply_proposals(page, [proposal])
+    assert (applied, review) in (([proposal.issue_id], []), ([], [proposal.issue_id]))
+    assert (patched != page) == bool(applied)
+    return bool(applied)
+
+
+# Replays of proposals from the 2026-11-05 run: every one only adds or removes spaces.
+for target, replacement, code in (
+    ("I NTRODUC T I ON", "INTRODUCTION", schemas.IssueCode.SPLIT_WORD),
+    ("## ENDNOT ES", "## ENDNOTES", schemas.IssueCode.SPLIT_WORD),
+    ("NOT E", "NOTE", schemas.IssueCode.TEXT_CORRUPTION),
+    ("DoDaffiliated", "DoD affiliated", schemas.IssueCode.FUSED_MARKER),
+    ("https://research .checkpoint.com/a", "https://research.checkpoint.com/a", schemas.IssueCode.SPLIT_WORD),
+    ("denial-ofservice", "denial-of-service", schemas.IssueCode.SPLIT_WORD),
+    ("spe- cific", "specific", schemas.IssueCode.SPLIT_WORD),
+    ("social engineer- ing", "social engineering", schemas.IssueCode.SPLIT_WORD),
+    ("trade­ craft", "tradecraft", schemas.IssueCode.SPLIT_WORD),
+    ("cyber­ attacks", "cyber-attacks", schemas.IssueCode.SPLIT_WORD),
+    ("commandand-control server", "command-and-control server", schemas.IssueCode.SPLIT_WORD),
+):
+    page = f"Before.\n\n{target}\n\nAfter."
+    assert applies(page, spacing_proposal(target, replacement, code = code)), target
+print("ok  a repair that only adds or removes spaces (or plain-prose hyphens) is applied without review")
+
+assert applies("Before. I NTRODUC T I ON After.", spacing_proposal(
+    "I NTRODUC T I ON", "INTRODUCTION", confidence = 0.9, evidence = "Before. I NTRODUC T I ON After.",
+))
+for label, page, proposal in (
+    ("letters change", "see avail- able", spacing_proposal("avail-", "available")),
+    ("a line break is joined", "cyber-\nwarfare", spacing_proposal("cyber-\nwarfare", "cyberwarfare")),
+    ("confidence below the spacing floor", "NOT E x", spacing_proposal("NOT E", "NOTE", confidence = 0.7)),
+    ("risk is high", "NOT E x", spacing_proposal("NOT E", "NOTE", risk = schemas.PatchRisk.HIGH)),
+    ("a space is inserted into a URL path", "see https://x.com/a/offensesrelated-2016-election/ now", spacing_proposal(
+        "offensesrelated-2016-election", "offenses related-2016-election",
+    )),
+    ("a space is inserted into an address", "mail a.b@corp.comreports please", spacing_proposal(
+        "a.b@corp.comreports", "a.b@corp.com reports",
+    )),
+    ("an existing hyphen is removed", "a state-of-the-art tool", spacing_proposal(
+        "state-of-the-art tool", "stateoftheart tool",
+    )),
+    ("a hyphen is dropped without a dangling space", "social engineer-ing", spacing_proposal(
+        "social engineer-ing", "social engineering",
+    )),
+    ("list marker is glued to its text", "- item text", spacing_proposal("- item text", "-itemtext")),
+    ("indent is added", "see\n\ncode line", spacing_proposal("code line", "    code line")),
+    ("heading marker is glued", "## Title", spacing_proposal("## Title", "##Title")),
+    ("digits change a hyphen", "SHA-256 value", spacing_proposal("SHA-256 value", "SHA256 value")),
+    ("target is outside the issue evidence", "NOT E and I NTRODUC T I ON", spacing_proposal(
+        "NOT E", "NOTE", evidence = "I NTRODUC T I ON",
+    )),
+    ("structure code", "## A B", spacing_proposal("## A B", "## AB", code = schemas.IssueCode.STRUCTURE)),
+):
+    assert not applies(page, proposal), label
+print("ok  letter, line-break, marker, indent, low-confidence, off-evidence and structure edits stay review-only")
+
+ip_page = "Hosts: 81.169.145.82, 84.246.123.242 and 173.194.121 .36 were seen.\n"
+ip_fix = spacing_proposal("173.194.121 .36", "173.194.121.36")
+ip_rewrite = schemas.PatchProposal(**{
+    **spacing_proposal(
+        "81.169.145.82, 84.246.123.242 and 173.194.121 .36",
+        "81.169.145.82\n84.246.123.242\n173.194.121.36",
+        code = schemas.IssueCode.STRUCTURE,
+    ).model_dump(),
+    "issue_id": "rewrite-1",
+})
+patched_ips, applied_ips, reviewed_ips = apply_proposals(ip_page, [ip_rewrite, ip_fix])
+assert applied_ips == ["spacing-1"] and reviewed_ips == ["rewrite-1"] and "173.194.121.36" in patched_ips
+second_fix = schemas.PatchProposal(**{**ip_fix.model_dump(), "issue_id": "spacing-2"})
+_, applied_twice, reviewed_twice = apply_proposals(ip_page, [ip_fix, second_fix])
+assert applied_twice == [] and sorted(reviewed_twice) == ["spacing-1", "spacing-2"]
+print("ok  a review-only proposal does not block a verified repair inside its span; two competing repairs both wait")
+
+truncated_page = "In the private industry, cyber"
+invented = spacing_proposal(
+    truncated_page,
+    "In the private industry, cybersecurity firms also played a role in detecting attacks.",
+    code = schemas.IssueCode.TEXT_CORRUPTION,
+)
+assert validate_proposals(
+    schemas.PatchProposalBatch(proposals = [invented]),
+    page_number = 1, source_sha256 = "a" * 64, markdown = truncated_page,
+    assigned_issues = {"spacing-1": schemas.PageIssue(
+        issue_id = "spacing-1", code = schemas.IssueCode.TEXT_CORRUPTION, severity = schemas.IssueSeverity.HIGH,
+        description = "Page ends abruptly.", confidence = 0.9, evidence = invented.evidence,
+    )},
+    role = schemas.SpecialistRole.TEXT_REPAIR,
+) == []
+print("ok  a proposal that appends new words to a page that ends mid-sentence is dropped as invented text")
+
+
+def validated_batch(page: str, *proposals: schemas.PatchProposal) -> list[schemas.PatchProposal]:
+    return validate_proposals(
+        schemas.PatchProposalBatch(proposals = list(proposals)),
+        page_number = 1, source_sha256 = "a" * 64, markdown = page,
+        assigned_issues = {proposal.issue_id: schemas.PageIssue(
+            issue_id = proposal.issue_id, code = proposal.issue_code, severity = schemas.IssueSeverity.LOW,
+            description = "Reported.", confidence = 0.9, evidence = proposal.evidence,
+        ) for proposal in proposals},
+        role = schemas.SpecialistRole.STRUCTURE
+        if proposals[0].issue_code == schemas.IssueCode.STRUCTURE else schemas.SpecialistRole.TEXT_REPAIR,
+    )
+
+
+caption_page = "Text.\n\n<!-- image -->\n\nFigure 6-1: A blog.\n\nMore text.\n"
+for label, target, replacement in (
+    ("an image link to a made-up path", "<!-- image -->", "![Figure 6-1: A blog.](image_path.png)"),
+    ("a made-up page-break marker", "Figure 6-1: A blog.", "<!-- pagebreak -->\n\nFigure 6-1: A blog."),
+):
+    assert validated_batch(caption_page, spacing_proposal(
+        target, replacement, code = schemas.IssueCode.STRUCTURE,
+    )) == [], label
+real_link_page = "See [the post](https://a .com/x) now."
+assert len(validated_batch(real_link_page, spacing_proposal(
+    "[the post](https://a .com/x)", "[the post](https://a.com/x)",
+))) == 1
+print("ok  a replacement may repair a link or marker but never introduce a new image path, link or comment")
+
+two_issue_page = "NOT E one.\n\nL ANDSCAPE and L ANDSCAPE again.\n"
+good = spacing_proposal("NOT E", "NOTE", evidence = "NOT E one.")
+ambiguous = schemas.PatchProposal(
+    **{**spacing_proposal("L ANDSCAPE", "LANDSCAPE").model_dump(), "issue_id": "spacing-2"},
+)
+assert [proposal.issue_id for proposal in validated_batch(two_issue_page, good, ambiguous)] == ["spacing-1"]
+try:
+    validated_batch(two_issue_page, ambiguous)
+except ValueError:
+    pass
+else:
+    raise AssertionError("a batch with no usable proposal must still be rejected so it can be retried")
+print("ok  an ambiguous or absent target costs only its own proposal while the rest of the batch is kept")
+
+audit_markdown = "Body text.\n\n<!-- image -->\n\nFigure 1: A caption.\n\n17\n\nC&amp;C server.\n\n| a | b |\n"
+
+
+def audit_findings(*excerpts: str, code = schemas.IssueCode.OTHER) -> list[schemas.IssueCode]:
+    response = schemas.PageAuditResponse(
+        page_kind = schemas.PageKind.MIXED, confidence = 0.9,
+        findings = [schemas.PageAuditFinding(
+            code = code, severity = schemas.IssueSeverity.LOW, description = "Reported by the model.",
+            confidence = 0.9, evidence_excerpts = [excerpt],
+        ) for excerpt in excerpts],
+    )
+    assessment, _ = sanitize_assessment(response, page_number = 1, pictures = 1, markdown = audit_markdown)
+    return [issue.evidence[0].excerpt for issue in assessment.issues]
+
+
+assert audit_findings("<!-- image -->", "17", "\n17\n", "Figure 1: A caption.") == ["Figure 1: A caption."]
+assert audit_findings("<!-- image -->", code = schemas.IssueCode.STRUCTURE) == []
+assert audit_findings("Figure 1: A caption.", code = schemas.IssueCode.STRUCTURE) == []
+assert audit_findings("Body text.", code = schemas.IssueCode.STRUCTURE) == ["Body text."]
+assert audit_findings("Body text.", code = schemas.IssueCode.METADATA) == []
+assert audit_findings("Figure 1: A caption.", code = schemas.IssueCode.TABLE_OR_INDEX_LAYOUT) == []
+assert audit_findings("| a | b |", code = schemas.IssueCode.TABLE_OR_INDEX_LAYOUT) == ["| a | b |"]
+assert audit_findings("Body text.", code = schemas.IssueCode.NEAR_EMPTY) == []
+print("ok  a picture marker, bare page number or lone figure caption is never accepted as evidence of a defect")
+
+assert effective_length("a" * 100) == 100 and effective_length("| a" + " " * 40_000 + "|") == 5
+print("ok  table padding does not count against the page size limit")
+
+
 metadata_storage = FakeStorage(manifest, raw_pages)
 metadata_result = asyncio.run(run_ingestion_ai(
     book_id,
@@ -536,15 +718,10 @@ class FlakyTextRepair:
         if len(self.requests) == 1:
             raise ValueError("1 validation error for PatchProposalBatch: Input should be a valid dictionary")
         issue = request["assigned_issues"][0]
-        return {"structured_response": schemas.PatchProposalBatch(proposals = [schemas.PatchProposal(
-            page_number = request["page_number"], issue_id = issue["issue_id"],
-            source_sha256 = request["source_sha256"], issue_code = schemas.IssueCode.SPLIT_WORD,
-            risk = schemas.PatchRisk.LOW, target_text = "L ANDSCAPE", replacement = "LANDSCAPE",
+        return {"structured_response": schemas.PatchDraftBatch(proposals = [schemas.PatchDraft(
+            issue_id = issue["issue_id"], risk = schemas.PatchRisk.LOW,
+            target_text = "L ANDSCAPE", replacement = "LANDSCAPE",
             rationale = "Join the split heading word.", confidence = 0.9,
-            evidence = [schemas.EvidenceRef(
-                source = schemas.EvidenceSource.PAGE_MARKDOWN, excerpt = "L ANDSCAPE",
-                page_number = request["page_number"],
-            )],
         )])}
 
 
@@ -567,9 +744,82 @@ assert "previous_attempt_rejected" not in flaky.requests[0]
 assert "valid dictionary" in flaky.requests[1]["previous_attempt_rejected"]
 retry_proposals = json.loads(retry_storage.values[keys.agentic_patch_proposals_key("book-retry", "agent-run-retry", 1)])
 assert len(retry_proposals["proposals"]) == 1 and retry_proposals["errors"] == []
+assert set(retry_proposals["auto_applied_issue_ids"]) == {"p0001-split_word", "p0001-soft_hyphen"}
 assert retry_result["quality_report"]["proposals_total"] == 1
-assert retry_result["quality_status"] == "complete_with_review"
-print("ok  a rejected specialist response is retried once with the rejection reason before the page goes to review")
+assert retry_result["quality_status"] == "complete" and retry_result["quality_report"]["pages_requiring_review"] == []
+print("ok  a rejected specialist response is retried once with the rejection reason, then its space-only repair is applied")
+
+class RewritingTextRepair:
+    """A confident model that changes letters, not just spaces."""
+
+    async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
+        request = json.loads(payload["messages"][0]["content"])
+        return {"structured_response": schemas.PatchDraftBatch(proposals = [schemas.PatchDraft(
+            issue_id = request["assigned_issues"][0]["issue_id"], risk = schemas.PatchRisk.LOW,
+            target_text = "L ANDSCAPE", replacement = "LANDSCAPES",
+            rationale = "Join the split heading word.", confidence = 0.99,
+        )])}
+
+
+review_manifest, review_pages, _ = single_page_book(
+    "book-review", "An exam­ple book by A. Author\n\nL ANDSCAPE OF IDEAS\n",
+)
+review_storage = FakeStorage(review_manifest, review_pages)
+review_result = asyncio.run(run_ingestion_ai(
+    "book-review",
+    agentic_run_id = "agent-run-review",
+    storage = review_storage,
+    auditor = FakeAuditor(),
+    text_repair = RewritingTextRepair(),
+    structure_repair = FakeStructureRepair(),
+    metadata_normalizer = FakeMetadataNormalizer(),
+))
+assert review_result["quality_status"] == "complete_with_review"
+assert review_result["quality_report"]["pages_requiring_review"] == [1]
+print("ok  a repair that changes letters stays review-only however confident the model is")
+
+
+class CallLimitedAuditor:
+    """Loops past its model-call limit once, then answers like a healthy model."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
+        self.calls += 1
+        if self.calls == 1:
+            return {"messages": [{"role": "assistant", "content": "Model call limit reached"}]}
+        return await FakeAuditor().ainvoke(payload, config)
+
+
+class CallLimitedTextRepair:
+    def __init__(self):
+        self.calls = 0
+
+    async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
+        self.calls += 1
+        if self.calls == 1:
+            return {"messages": [{"role": "assistant", "content": "Model call limit reached"}]}
+        return await RewritingTextRepair().ainvoke(payload, config)
+
+
+limit_manifest, limit_pages, _ = single_page_book(
+    "book-limit", "An exam­ple book by A. Author\n\nL ANDSCAPE OF IDEAS\n",
+)
+limited_auditor, limited_repair = CallLimitedAuditor(), CallLimitedTextRepair()
+limit_result = asyncio.run(run_ingestion_ai(
+    "book-limit",
+    agentic_run_id = "agent-run-limit",
+    storage = FakeStorage(limit_manifest, limit_pages),
+    auditor = limited_auditor,
+    text_repair = limited_repair,
+    structure_repair = FakeStructureRepair(),
+    metadata_normalizer = FakeMetadataNormalizer(),
+))
+assert limited_auditor.calls == 2 and limited_repair.calls == 2
+assert limit_result["quality_report"]["unverified_pages"] == []
+assert limit_result["quality_report"]["proposals_total"] == 1
+print("ok  a specialist or auditor that hits its model-call limit is retried once before the page degrades")
 
 heading = "I NTRODUC T I ON"
 duplicate_markdown = f"Intro\n\n{heading}\n\nBody"
@@ -649,10 +899,14 @@ assert {issue["code"]: issue["resolution"] for issue in mechanical_quality["issu
     "control_characters": "auto_applied",
     "soft_hyphen": "auto_applied",
 }
-review_quality = asyncio.run(read_page_quality("book-retry", 1, storage = retry_storage))
+spacing_quality = asyncio.run(read_page_quality("book-retry", 1, storage = retry_storage))
+assert spacing_quality["status"] == "done"
+split_issue = next(issue for issue in spacing_quality["issues"] if issue["code"] == "split_word")
+assert split_issue["resolution"] == "auto_applied" and split_issue["proposal"]["replacement"] == "LANDSCAPE"
+review_quality = asyncio.run(read_page_quality("book-review", 1, storage = review_storage))
 assert review_quality["status"] == "review_required"
-split_issue = next(issue for issue in review_quality["issues"] if issue["code"] == "split_word")
-assert split_issue["resolution"] == "review" and split_issue["proposal"]["replacement"] == "LANDSCAPE"
+review_issue = next(issue for issue in review_quality["issues"] if issue["code"] == "split_word")
+assert review_issue["resolution"] == "review" and review_issue["proposal"]["replacement"] == "LANDSCAPES"
 assert asyncio.run(read_page_quality("book-mechanical", 99, storage = mechanical_storage)) is None
 assert asyncio.run(read_page_quality("book-mechanical", 1, storage = raw_only_storage)) is None
 print("ok  the page quality report says what was fixed, what needs review, and the suggested fix")

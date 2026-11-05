@@ -1,5 +1,6 @@
 """Cancel is cooperative (progress.raise_if_cancelled + watcher pre-empts blocking awaits). The framework's lock is a short lease the
 watcher keeps renewing while the run is alive, so a task that dies frees the framework within `progress.params.LOCK_LEASE_S`."""
+
 from __future__ import annotations
 import domains, infra
 from . import domain, params
@@ -16,23 +17,31 @@ logger = logging.getLogger(__name__)
 
 _TIER_MODULES = {
     "llms_full": tiers.tier1,
-    "llms_txt":  tiers.tier2,
-    "sitemap":   tiers.tier3,
-    "docs":      tiers.tier4,
-    "github":    tiers.tier5,
+    "llms_txt": tiers.tier2,
+    "sitemap": tiers.tier3,
+    "docs": tiers.tier4,
+    "github": tiers.tier5,
 }
 
 
-async def run_tier(kind: str, url: str, *, entry: dict, slug: str, progress, store, **extra) -> int:
+async def run_tier(
+    kind: str, url: str, *, entry: dict, slug: str, progress, store, **extra
+) -> int:
     """Run the tier of source `kind` on `url`, handing it what the catalog `entry` gives that tier (`domain.tier_arguments`) and
     any `extra` arguments. The one place a source kind becomes a tier call: the dispatcher and the debug route both use it."""
     return await _TIER_MODULES[kind].service.run(
-        url = url, framework_slug = slug, progress = progress, store = store,
-        **domain.tier_arguments(kind, entry), **extra,
+        url=url,
+        framework_slug=slug,
+        progress=progress,
+        store=store,
+        **domain.tier_arguments(kind, entry),
+        **extra,
     )
 
 
-async def run_source_chain(chain, progress, *, new_progress, run_tier, base_result: dict, slug: str):
+async def run_source_chain(
+    chain, progress, *, new_progress, run_tier, base_result: dict, slug: str
+):
     """Run the first source in `chain` (`[{kind, url}]`, best first) that works, and return the `Progress` the winning
     tier used. A tier that says its source is unusable — a link index instead of content, a page of links with none to
     follow, a 404 or an HTML page — hands over to the next declared source with a fresh `Progress`; any other error
@@ -51,9 +60,12 @@ async def run_source_chain(chain, progress, *, new_progress, run_tier, base_resu
                 # Tier 2 does not log its own downgrade (tier 1 does): without this marker the progress row would sit
                 # at "running" and the UI trail would lose the fact that a fallback happened at all.
                 await progress.record_url(
-                    url, status = "downgrade", tier = kind, error_msg = "zero links, falling through",
+                    url,
+                    status="downgrade",
+                    tier=kind,
+                    error_msg="zero links, falling through",
                 )
-            await progress.finish(status = "downgrade")
+            await progress.finish(status="downgrade")
             following = chain[position + 1] if position + 1 < len(chain) else None
             if following is None:
                 break
@@ -66,7 +78,7 @@ async def run_source_chain(chain, progress, *, new_progress, run_tier, base_resu
     raise RuntimeError(f"no declared source for {slug!r} worked: " + "; ".join(reasons))
 
 
-async def _cancel_watcher(
+async def cancel_watcher(
     redis_client: infra.redis.service.Redis,
     run_id: str,
     main_task: asyncio.Task,
@@ -84,7 +96,9 @@ async def _cancel_watcher(
     try:
         while not main_task.done():
             try:
-                if await domains.dd.ingestion.runtime.cancel.service.is_cancelled(redis_client, run_id):
+                if await domains.dd.ingestion.runtime.cancel.service.is_cancelled(
+                    redis_client, run_id
+                ):
                     logger.info(
                         f"[dispatch] {run_id}: cancel flag detected by "
                         f"watcher → cancelling main task"
@@ -93,8 +107,12 @@ async def _cancel_watcher(
                     return
                 if slug is not None and time.monotonic() >= renew_at:
                     renew_at = time.monotonic() + renew_every_s
-                    if not await domains.dd.ingestion.runtime.progress.service.renew_lock(redis_client, slug, run_id):
-                        logger.warning(f"[dispatch] {slug}: the lock is held by another run now (run_id={run_id})")
+                    if not await domains.dd.ingestion.runtime.progress.service.renew_lock(
+                        redis_client, slug, run_id
+                    ):
+                        logger.warning(
+                            f"[dispatch] {slug}: the lock is held by another run now (run_id={run_id})"
+                        )
             except Exception as e:  # noqa: BLE001 — the watcher must outlive a Redis hiccup
                 logger.warning(f"[dispatch] cancel watcher Redis error: {e}")
             await asyncio.sleep(poll_interval_s)
@@ -105,7 +123,9 @@ async def _cancel_watcher(
 async def _cleanup_run_staging(minio, framework_slug: str, run_id: str) -> int:
     """Delete only temporary assembly objects; raw inputs and agentic candidates are immutable run artifacts."""
     try:
-        n = await minio.delete_prefix(domains.dd.ingestion.storage.keys.stage_prefix(framework_slug, run_id))
+        n = await minio.delete_prefix(
+            domains.dd.ingestion.storage.keys.stage_prefix(framework_slug, run_id)
+        )
         logger.info(
             f"[dispatch] cleanup staging {framework_slug}/{run_id}: deleted {n} MinIO objects"
         )
@@ -133,7 +153,9 @@ async def reserve_run(slug: str, refresh: bool) -> dict:
 
         if not refresh:
             minio = infra.minio.service.get_storage()
-            cached = await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug)
+            cached = await domains.dd.ingestion.storage.service.read_framework_manifest(
+                minio, slug
+            )
             if cached:
                 return domain.cached(slug, cached)
 
@@ -144,11 +166,27 @@ async def reserve_run(slug: str, refresh: bool) -> dict:
     return domain.reserved(slug, run_id)
 
 
+async def reserve_existing_run(slug: str, run_id: str) -> bool:
+    """Reacquire a framework lock for a resumable Agentic AI candidate."""
+    progress = domains.dd.ingestion.runtime.progress.service
+    async with infra.redis.service.client() as r:
+        if await progress.find_other_running(r, slug) is not None:
+            return False
+        if await progress.read_lock(r, slug):
+            return False
+        if not await progress.acquire_lock(r, slug, run_id):
+            return False
+        await domains.dd.ingestion.runtime.cancel.service.clear_cancel(r, run_id)
+    return True
+
+
 async def release_run(slug: str, run_id: str) -> None:
     """Give the slug's lock back after a failed enqueue (best-effort: never raised, so it cannot mask the failure)."""
     try:
         async with infra.redis.service.client() as r:
-            await domains.dd.ingestion.runtime.progress.service.release_lock(r, slug, run_id)
+            await domains.dd.ingestion.runtime.progress.service.release_lock(
+                r, slug, run_id
+            )
     except Exception:
         pass
 
@@ -170,20 +208,26 @@ async def run(run_id: str, slug: str) -> dict:
     REST routes all still use the plain uuid4 hex) — this only changes
     the cosmetic label LangFuse groups spans under."""
     t0 = asyncio.get_running_loop().time()
-    with infra.langfuse.service.session(
-        params.LANGFUSE_SESSION_NAME,
-        session_id = domain.session_id(slug, run_id),
-        user_id    = slug,
-        framework  = slug,
-    ), infra.opentelemetry.service.get_tracer().start_as_current_span(
-        params.SPAN_NAME,
-        attributes = {**domain.run_attributes(run_id, slug), infra.langfuse.keys.KEEP: True},
+    with (
+        infra.langfuse.service.session(
+            params.LANGFUSE_SESSION_NAME,
+            session_id=domain.session_id(slug, run_id),
+            user_id=slug,
+            framework=slug,
+        ),
+        infra.opentelemetry.service.get_tracer().start_as_current_span(
+            params.SPAN_NAME,
+            attributes={
+                **domain.run_attributes(run_id, slug),
+                infra.langfuse.keys.KEEP: True,
+            },
+        ),
     ):
         result = await _run_inner(run_id, slug)
         await domains.settings.llm_counter.service.snapshot("dd", run_id)
     domains.dd.ingestion.observability.service.record_ingestion_run(
-        framework = slug,
-        duration_s = max(asyncio.get_running_loop().time() - t0, 0.0),
+        framework=slug,
+        duration_s=max(asyncio.get_running_loop().time() - t0, 0.0),
         **domain.run_metrics(result),
     )
     return result
@@ -191,17 +235,22 @@ async def run(run_id: str, slug: str) -> dict:
 
 async def _run_inner(run_id: str, slug: str) -> dict:
     """Framework lock held by run_id on entry (acquired in POST /runs); released in finally."""
-    catalog = domains.dd.resolver.service.index_by_slug()
+    catalog = domains.dd.catalog.service.index_by_slug()
     entry = catalog.get(slug)
     if entry is None:
         return domain.rejected_result(run_id, slug, f"unknown framework slug: {slug!r}")
 
     best = domain.pick_best(entry)
     if best is None:
-        return domain.rejected_result(run_id, slug, "no source URLs in catalog entry", framework_name = entry["name"])
+        return domain.rejected_result(
+            run_id,
+            slug,
+            "no source URLs in catalog entry",
+            framework_name=entry["name"],
+        )
 
     progress = domains.dd.ingestion.runtime.progress.service.Progress(run_id)
-    r = infra.redis.service.new_redis(op_timeout_s = params.REDIS_OP_TIMEOUT_S)
+    r = infra.redis.service.new_redis(op_timeout_s=params.REDIS_OP_TIMEOUT_S)
     minio = infra.minio.service.get_storage()
     store = domains.dd.ingestion.storage.service.Store(run_id, slug, r, minio)
 
@@ -209,45 +258,57 @@ async def _run_inner(run_id: str, slug: str) -> dict:
 
     # Spawn watcher BEFORE the main try so it's active from the first await.
     watcher_task = asyncio.create_task(
-        _cancel_watcher(r, run_id, asyncio.current_task(), slug = slug),
+        cancel_watcher(r, run_id, asyncio.current_task(), slug=slug),
     )
 
     try:
         # The lock was taken when the run was queued, with the longer queued lease: this run now keeps it alive as it goes. If another
         # run holds it by now (this one waited longer than even that lease for a free worker), this one stands down without touching
         # the framework's data — the failure handlers below would wipe the other run's partial copy.
-        if not await domains.dd.ingestion.runtime.progress.service.renew_lock(r, slug, run_id):
+        if not await domains.dd.ingestion.runtime.progress.service.renew_lock(
+            r, slug, run_id
+        ):
             return domain.rejected_result(
-                run_id, slug, "the framework's lock was taken by another run while this one waited to start",
-                framework_name = entry["name"],
+                run_id,
+                slug,
+                "the framework's lock was taken by another run while this one waited to start",
+                framework_name=entry["name"],
             )
 
         await progress.raise_if_cancelled()
 
         async def _chain_tier(kind: str, url: str, tier_progress) -> None:
-            await run_tier(kind, url, entry = entry, slug = slug, progress = tier_progress, store = store)
+            await run_tier(
+                kind, url, entry=entry, slug=slug, progress=tier_progress, store=store
+            )
 
         # The best declared source first; each lower one only if the one before turns out unusable today.
         progress = await run_source_chain(
             domain.source_chain(entry),
             progress,
-            new_progress = lambda: domains.dd.ingestion.runtime.progress.service.Progress(run_id),
-            run_tier = _chain_tier,
-            base_result = base_result,
-            slug = slug,
+            new_progress=lambda: domains.dd.ingestion.runtime.progress.service.Progress(
+                run_id
+            ),
+            run_tier=_chain_tier,
+            base_result=base_result,
+            slug=slug,
         )
 
         await progress.raise_if_cancelled()
 
         await progress.complete_stage(
             "extraction",
-            current = len(store.manifest),
-            total = len(store.manifest),
+            current=len(store.manifest),
+            total=len(store.manifest),
         )
-        await progress.start(tier = "post", total = 0)
+        await progress.start(tier="post", total=0)
 
-        post_summary = await domains.dd.ingestion.post.service.prepare_for_agentic(store)
-        await progress.record_post(**domain.post_record(base_result["tier_kind"], post_summary))
+        post_summary = await domains.dd.ingestion.post.service.prepare_for_agentic(
+            store
+        )
+        await progress.record_post(
+            **domain.post_record(base_result["tier_kind"], post_summary)
+        )
 
         await progress.raise_if_cancelled()
 
@@ -261,15 +322,16 @@ async def _run_inner(run_id: str, slug: str) -> dict:
         # Own tier + real total/current — on a large framework (400+ pages)
         # this was previously a single multi-second block with the progress
         # UI stuck showing "post" and no counter moving at all.
-        await progress.start(tier = "vault_backfill", total = post_summary["output_files"])
+        await progress.start(tier="vault_backfill", total=post_summary["output_files"])
 
         async def _on_backfill_progress(done: int, total: int) -> None:
-            await progress.update(current = done)
+            await progress.update(current=done)
 
         try:
             await domains.dd.synth.nodes.backfill.service.backfill_vaults_for_framework(
-                slug, on_progress = _on_backfill_progress,
-                page_keys = [entry.key for entry in store.manifest],
+                slug,
+                on_progress=_on_backfill_progress,
+                page_keys=[entry.key for entry in store.manifest],
             )
         except Exception as e:
             logger.warning(
@@ -277,18 +339,25 @@ async def _run_inner(run_id: str, slug: str) -> dict:
                 f"{type(e).__name__}: {e}"
             )
 
-        await progress.start(tier = "finalize", total = 0)
+        await progress.start(tier="finalize", total=0)
 
-        await store.finalize(extra = domain.finalize_extra(entry, base_result, run_id, getattr(store, "index_summary", "")))
+        await store.finalize(
+            extra=domain.finalize_extra(
+                entry, base_result, run_id, getattr(store, "index_summary", "")
+            )
+        )
 
         await _cleanup_run_staging(minio, slug, run_id)
 
-        await progress.finish(status = "done")
+        await progress.finish(status="done")
 
         base_result["agentic"] = ai_result
         return domain.done_result(base_result, store.manifest, post_summary)
 
-    except (domains.dd.ingestion.runtime.progress.errors.IngestCancelled, asyncio.CancelledError):
+    except (
+        domains.dd.ingestion.runtime.progress.errors.IngestCancelled,
+        asyncio.CancelledError,
+    ):
         logger.info(f"[dispatch] {slug}: cancelled by user (run_id={run_id})")
         # CRITICAL: stop watcher BEFORE cleanup — poll loop fires a second main_task.cancel() mid-cleanup, raising CancelledError inside delete_prefix and leaving MinIO stragglers (observed: 428).
         watcher_task.cancel()
@@ -297,14 +366,14 @@ async def _run_inner(run_id: str, slug: str) -> dict:
         except (asyncio.CancelledError, Exception):
             pass
         await _cleanup_run_staging(minio, slug, run_id)
-        await progress.finish(status = "cancelled")
+        await progress.finish(status="cancelled")
         return domain.cancelled_result(base_result)
 
     except Exception as e:
         logger.exception(f"[dispatch] {slug}: failed")
         # The previous canonical manifest remains active. Raw and partial agentic artifacts stay versioned for diagnosis/retry.
         await _cleanup_run_staging(minio, slug, run_id)
-        await progress.finish(status = "failed", error = domain.error_text(e))
+        await progress.finish(status="failed", error=domain.error_text(e))
         return domain.failed_result(base_result, e)
 
     finally:
@@ -314,7 +383,9 @@ async def _run_inner(run_id: str, slug: str) -> dict:
         except (asyncio.CancelledError, Exception):
             pass
         try:
-            await domains.dd.ingestion.runtime.progress.service.release_lock(r, slug, run_id)
+            await domains.dd.ingestion.runtime.progress.service.release_lock(
+                r, slug, run_id
+            )
         except Exception:
             pass
         try:

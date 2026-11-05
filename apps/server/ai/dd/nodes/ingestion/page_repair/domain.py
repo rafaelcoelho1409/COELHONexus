@@ -9,6 +9,24 @@ from collections.abc import Callable
 from typing import Any
 
 
+def repairable_assessment(assessment: dict[str, Any]) -> dict[str, Any]:
+    """The audit narrowed to findings a patch could pass: an eligible category the auditor is confident enough about."""
+    return {
+        **assessment,
+        "issues": [
+            issue
+            for issue in assessment["issues"]
+            if issue["category"] in params.PATCHABLE_CATEGORIES
+            and issue["confidence"] >= params.MIN_PATCH_CONFIDENCE
+        ],
+    }
+
+
+def dropped_words(target: str, replacement: str) -> set[str]:
+    """The words of `target` that `replacement` no longer has; a formatting-only edit must leave this empty."""
+    return set(re.findall(r"\w+", target.casefold())) - set(re.findall(r"\w+", replacement.casefold()))
+
+
 def apply_patches(
     markdown: str,
     source_sha256: str,
@@ -42,6 +60,11 @@ def apply_patches(
             reason = "evidence is not an exact source substring"
         elif markdown.count(patch.target_text) != 1:
             reason = "target does not occur exactly once"
+        elif (
+            known_issues[patch.issue_id]["category"] in params.WORD_PRESERVING_CATEGORIES
+            and dropped_words(patch.target_text, patch.replacement)
+        ):
+            reason = "formatting patch removes words from the page"
         else:
             start = markdown.index(patch.target_text)
             end = start + len(patch.target_text)
@@ -86,7 +109,8 @@ def output_title(
     *,
     fallback: Callable[[str, str], str],
 ) -> str:
-    proposed = str(assessment.get("title") or "").strip()
+    # The auditor is told to quote the title from the page, and some quote the heading line with its `# ` marker.
+    proposed = re.sub(r"^#{1,6}\s+", "", str(assessment.get("title") or "").strip()).strip()
     confidence = float(assessment.get("title_confidence") or 0.0)
     if (
         proposed

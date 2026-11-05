@@ -134,6 +134,9 @@ type State = {
   onCall?: (call: string) => void;
 };
 
+/** The extracted pages, chapters and reader live on the Materials view, chosen in the page's third navbar. */
+const openMaterials = (page: Page) => page.getByRole("tab", { name: "Materials" }).click();
+
 async function mockBd(page: Page, state: State) {
   const answer = (call: string) => {
     state.calls.push(call);
@@ -221,14 +224,15 @@ test.describe("Book Distiller · Ingestion", () => {
     await expect(page).toHaveURL(new RegExp(`/bd/ingestion\\?book=${BOOK}`));
     await expect(page.getByRole("heading", { level: 2, name: TITLE })).toBeVisible();
 
-    const pages = page.getByRole("list", { name: "Extracted pages" });
-    await expect(pages.getByRole("button")).toHaveCount(3);
     await expect(page.getByRole("progressbar", { name: "Pages extracted" })).toHaveAttribute(
       "aria-valuetext",
       "9 of 9 pages",
     );
     await expect(page.getByText("15.0 pages/min")).toBeVisible();
     await expect(page.getByRole("button", { name: "Extract again" })).toBeVisible();
+    await openMaterials(page);
+    const pages = page.getByRole("list", { name: "Extracted pages" });
+    await expect(pages.getByRole("button")).toHaveCount(3);
     // the stream was followed to the last page it sent
     const reader = page.getByRole("article", { name: "Page 3" });
     await expect(reader).toContainText("480 ms");
@@ -240,6 +244,7 @@ test.describe("Book Distiller · Ingestion", () => {
     await mockBd(page, stateOf({ status: "done", withPages: true }));
     await page.goto(`/bd/ingestion?book=${BOOK}`);
 
+    await openMaterials(page);
     await page.getByRole("button", { name: /^p\. 2\b/ }).click();
     const reader = page.getByRole("article", { name: "Page 2" });
     await expect(reader).toContainText("Continuing to work correctly");
@@ -298,10 +303,12 @@ test.describe("Book Distiller · Ingestion", () => {
       stateOf({ withPages: true, events: () => [STARTED, ...PAGES, SLICE] }), // still running
     );
     await page.goto(`/bd/ingestion?book=${BOOK}`);
+    await openMaterials(page);
     const pages = page.getByRole("list", { name: "Extracted pages" });
     await expect(pages.getByRole("button")).toHaveCount(3);
 
     await page.reload();
+    await openMaterials(page);
     await expect(pages.getByRole("button")).toHaveCount(3);
     await expect(page.getByRole("checkbox", { name: "Follow newest" })).toBeChecked();
     await expect(page.getByRole("button", { name: "Cancel" })).toBeVisible();
@@ -342,7 +349,21 @@ test.describe("Book Distiller · Ingestion", () => {
       name: "live",
       url: `/bd/ingestion?book=${BOOK}`,
       state: () => stateOf({ withPages: true, events: () => [STARTED, ...PAGES, SLICE] }),
-      ready: (page) => expect(page.getByRole("article", { name: "Page 3" })).toContainText("480 ms"),
+      ready: async (page) => {
+        await openMaterials(page);
+        await expect(page.getByRole("article", { name: "Page 3" })).toContainText("480 ms");
+      },
+    },
+    {
+      name: "pipeline",
+      url: `/bd/ingestion?book=${BOOK}`,
+      state: () => stateOf({ withPages: true, events: () => [STARTED, ...PAGES, SLICE] }),
+      ready: async (page) => {
+        await expect(
+          page.getByRole("figure", { name: "Book Distiller agentic ingestion graph" }),
+        ).toBeVisible();
+        await page.locator(".react-flow__edge").first().waitFor({ state: "attached" });
+      },
     },
     {
       name: "failed",
@@ -375,14 +396,34 @@ test.describe("Book Distiller · Ingestion", () => {
 
   test("never scrolls sideways and never ships text under 12px", async ({ page }) => {
     await mockBd(page, stateOf({ withPages: true, events: () => [STARTED, ...PAGES, SLICE] }));
-    for (const url of ["/bd", `/bd/ingestion?book=${BOOK}`]) {
+    const views: { name: string; url: string; ready: () => Promise<void> }[] = [
+      { name: "empty library", url: "/bd", ready: async () => {} },
+      {
+        name: "Pipeline view",
+        url: `/bd/ingestion?book=${BOOK}`,
+        ready: async () => {
+          await expect(
+            page.getByRole("figure", { name: "Book Distiller agentic ingestion graph" }),
+          ).toBeVisible();
+          // The edges draw only once React Flow has measured the nodes.
+          await page.locator(".react-flow__edge").first().waitFor({ state: "attached" });
+        },
+      },
+      {
+        name: "Materials view",
+        url: `/bd/ingestion?book=${BOOK}`,
+        ready: async () => {
+          await openMaterials(page);
+          await expect(page.getByRole("article", { name: "Page 3" })).toBeVisible();
+          await page.getByRole("button", { name: /^p\. 2\b/ }).click();
+          await expect(page.getByRole("article", { name: "Page 2" })).toBeVisible();
+        },
+      },
+    ];
+    for (const { name, url, ready } of views) {
       await page.goto(url);
       await expect(page.getByRole("heading", { level: 1, name: "Book Distiller" })).toBeVisible();
-      if (url.includes("book=")) {
-        await expect(page.getByRole("article", { name: "Page 3" })).toBeVisible();
-        await page.getByRole("button", { name: /^p\. 2\b/ }).click();
-        await expect(page.getByRole("article", { name: "Page 2" })).toBeVisible();
-      }
+      await ready();
       const { overflow, small } = await page.evaluate(() => {
         const smallText = Array.from(document.querySelectorAll<HTMLElement>("body *")).filter((element) => {
           const hasText = Array.from(element.childNodes).some(
@@ -400,8 +441,8 @@ test.describe("Book Distiller · Ingestion", () => {
           small: smallText.map((element) => `${element.tagName}.${element.className}`),
         };
       });
-      expect(overflow, `${url} scrolls sideways`).toBeLessThanOrEqual(0);
-      expect(small, `${url} has text under 12px`).toEqual([]);
+      expect(overflow, `${name} scrolls sideways`).toBeLessThanOrEqual(0);
+      expect(small, `${name} has text under 12px`).toEqual([]);
     }
   });
 });

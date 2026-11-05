@@ -123,7 +123,7 @@ async def off_topic_run(state: domains.dd.planner.state.PlannerState) -> dict:
             },
         }
 
-    entry = domains.dd.resolver.service.index_by_slug().get(slug, {})
+    entry = domains.dd.catalog.service.index_by_slug().get(slug, {})
     framework_name = entry.get("name") or entry.get("slug") or slug
     framework_category = entry.get("category") or ""
     # Tier 2 index summary via corpus_stats (corpus_load read it off the

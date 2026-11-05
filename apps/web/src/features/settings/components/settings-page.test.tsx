@@ -26,14 +26,14 @@ afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
 
 describe("SettingsPage", () => {
-  it("titles the page and gives each card its own intro and landmark", () => {
+  it("gives each card its own intro and landmark; the page title is the app's second navbar", () => {
     render(
       <QueryProvider>
         <SettingsPage />
       </QueryProvider>,
     );
 
-    expect(screen.getByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 1 })).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "LLM Endpoint" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Embedding" })).toBeInTheDocument();
     expect(screen.getByText(/this configuration wins over the deployment default/)).toBeInTheDocument();

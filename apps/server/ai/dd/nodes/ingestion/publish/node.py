@@ -1,4 +1,5 @@
 """Validate graph completeness and publish the immutable run manifest last."""
+
 from __future__ import annotations
 import domains
 from .... import graphs
@@ -21,15 +22,22 @@ async def publish(
     outputs = state.get("output_pages", [])
     expected_indices = [page["idx"] for page in pages]
     if len(assessments) != len(pages):
-        raise ValueError("cannot publish an ingestion graph with incomplete page audits")
+        raise ValueError(
+            "cannot publish an ingestion graph with incomplete page audits"
+        )
     if [item["idx"] for item in assessments] != expected_indices:
         raise ValueError("page assessments must cover every source page in order")
     if len(outputs) != len(pages):
         raise ValueError("cannot publish an incomplete normalized page set")
     if [page["idx"] for page in outputs] != expected_indices:
         raise ValueError("normalized pages must cover every source page in order")
-    if any(not page.get("key") or not page.get("raw_key") for page in outputs):
-        raise ValueError("each published page must reference its agentic and raw objects")
+    if any(
+        not page.get("key") or not page.get("source_key") or not page.get("raw_key")
+        for page in outputs
+    ):
+        raise ValueError(
+            "each published page must reference its agentic, source, and raw objects"
+        )
 
     framework_slug = state.get("framework_slug")
     run_id = state.get("run_id")
@@ -60,10 +68,23 @@ async def publish(
             for item in assessments
         ],
     }
-    manifest_key = domains.dd.ingestion.storage.keys.agentic_manifest_key(framework_slug, run_id)
+    manifest_key = domains.dd.ingestion.storage.keys.agentic_manifest_key(
+        framework_slug, run_id
+    )
     await write_artifact(
         manifest_key,
-        json.dumps(payload, ensure_ascii = False),
+        json.dumps(payload, ensure_ascii=False),
         domains.dd.ingestion.ai.params.JSON_TYPE,
     )
-    return {"summary": {"manifest_key": manifest_key, "page_count": payload["page_count"]}}
+    return {
+        "summary": {
+            "manifest_key": manifest_key,
+            "page_count": payload["page_count"],
+            "audit_unavailable_pages": [
+                item["idx"] for item in assessments if item.get("audit_status") == "unavailable"
+            ],
+            "repair_unavailable_pages": [
+                page["idx"] for page in outputs if page.get("repair_status") == "unavailable"
+            ],
+        }
+    }

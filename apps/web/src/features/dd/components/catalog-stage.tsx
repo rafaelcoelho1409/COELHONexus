@@ -6,7 +6,7 @@
 
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-
+import { ContextBar } from "@/shared/layout/context-bar";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
@@ -114,75 +114,79 @@ export function CatalogStage() {
 
   return (
     <div className="pb-28">
-      {/* One row: search, how many match, then the three filters. `relative` anchors the lists on a phone. */}
-      <div className="relative mb-4 flex flex-wrap items-center gap-x-3 gap-y-2">
-        <Input
-          value={filters.query}
-          onChange={(e) => setFilters((f) => ({ ...f, query: e.target.value }))}
-          placeholder={`Search ${entries.length} frameworks…`}
-          aria-label="Search the catalog"
-          className="h-9 w-full sm:w-64"
-        />
-        <p aria-live="polite" className="order-last text-xs text-muted-foreground sm:order-none">
-          {visible.length} of {entries.length} frameworks shown
-        </p>
-        <FilterDropdown
-          label="Category"
-          ariaLabel="Filter by category"
-          summary={filters.category}
-          multiple={false}
-          options={categories.map((category) => ({
-            value: category,
-            label: category,
-            count: category === "All" ? entries.length : (categoryTotals[category] ?? 0),
-            active: filters.category === category,
-          }))}
-          onToggle={(category) => setFilters((f) => ({ ...f, category }))}
-          onReset={() => setFilters((f) => ({ ...f, category: "All" }))}
-        />
-        <FilterDropdown
-          label="Tier"
-          ariaLabel="Filter by tier"
-          summary={facetSummary(filters.tiers)}
-          multiple
-          options={tierKeys.map((tier) => ({
-            value: tier,
-            label: tier,
-            count: counts.tier[tier] ?? 0,
-            active: filters.tiers.has(tier),
-          }))}
-          onToggle={(tier) =>
-            setFilters((f) => {
-              const tiers = new Set(f.tiers);
-              if (!tiers.delete(tier)) tiers.add(tier);
-              return { ...f, tiers };
-            })
-          }
-          onReset={() => setFilters((f) => ({ ...f, tiers: new Set() }))}
-        />
-        <FilterDropdown
-          label="Status"
-          ariaLabel="Filter by status"
-          summary={facetSummary(filters.statuses)}
-          multiple
-          options={STATUSES.map((status) => ({
-            value: status,
-            label: status,
-            count: counts.status[status] ?? 0,
-            active: filters.statuses.has(status),
-          }))}
-          onToggle={(value) => {
-            const status = STATUSES.find((candidate) => candidate === value);
-            if (!status) return;
-            setFilters((f) => {
-              const statuses = new Set(f.statuses);
-              if (!statuses.delete(status)) statuses.add(status);
-              return { ...f, statuses };
-            });
-          }}
-          onReset={() => setFilters((f) => ({ ...f, statuses: new Set() }))}
-        />
-      </div>
+      {/* The third navbar: search, how many match, then the three filters. */}
+      <ContextBar
+        start={
+          <>
+            <Input
+              value={filters.query}
+              onChange={(e) => setFilters((f) => ({ ...f, query: e.target.value }))}
+              placeholder={`Search ${entries.length} frameworks…`}
+              aria-label="Search the catalog"
+              className="h-9 w-full sm:w-64"
+            />
+            <p aria-live="polite" className="order-last text-xs text-muted-foreground sm:order-none">
+              {visible.length} of {entries.length} frameworks shown
+            </p>
+            <FilterDropdown
+              label="Category"
+              ariaLabel="Filter by category"
+              summary={filters.category}
+              multiple={false}
+              options={categories.map((category) => ({
+                value: category,
+                label: category,
+                count: category === "All" ? entries.length : (categoryTotals[category] ?? 0),
+                active: filters.category === category,
+              }))}
+              onToggle={(category) => setFilters((f) => ({ ...f, category }))}
+              onReset={() => setFilters((f) => ({ ...f, category: "All" }))}
+            />
+            <FilterDropdown
+              label="Tier"
+              ariaLabel="Filter by tier"
+              summary={facetSummary(filters.tiers)}
+              multiple
+              options={tierKeys.map((tier) => ({
+                value: tier,
+                label: tier,
+                count: counts.tier[tier] ?? 0,
+                active: filters.tiers.has(tier),
+              }))}
+              onToggle={(tier) =>
+                setFilters((f) => {
+                  const tiers = new Set(f.tiers);
+                  if (!tiers.delete(tier)) tiers.add(tier);
+                  return { ...f, tiers };
+                })
+              }
+              onReset={() => setFilters((f) => ({ ...f, tiers: new Set() }))}
+            />
+            <FilterDropdown
+              label="Status"
+              ariaLabel="Filter by status"
+              summary={facetSummary(filters.statuses)}
+              multiple
+              options={STATUSES.map((status) => ({
+                value: status,
+                label: status,
+                count: counts.status[status] ?? 0,
+                active: filters.statuses.has(status),
+              }))}
+              onToggle={(value) => {
+                const status = STATUSES.find((candidate) => candidate === value);
+                if (!status) return;
+                setFilters((f) => {
+                  const statuses = new Set(f.statuses);
+                  if (!statuses.delete(status)) statuses.add(status);
+                  return { ...f, statuses };
+                });
+              }}
+              onReset={() => setFilters((f) => ({ ...f, statuses: new Set() }))}
+            />
+          </>
+        }
+      />
 
       <ul className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
         {visible.map((entry) => (

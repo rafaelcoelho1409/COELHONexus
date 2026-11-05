@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import { runStatusSchema } from "../entities";
 import {
   ingestionNodeCaption,
+  ingestionNodeKpis,
   ingestionNodeStatus,
   ingestionNodeText,
+  ingestionNodeViews,
   ingestionPercent,
   pageProgress,
   pageProgressSummary,
@@ -96,6 +98,30 @@ describe("ingestionNodeCaption", () => {
   it("says nothing before the total is known", () => {
     expect(ingestionNodeCaption(null, "audit_pages")).toBeNull();
     expect(ingestionNodeCaption(agenticStage({ node_progress: {} }), "audit_pages")).toBeNull();
+  });
+});
+
+describe("ingestionNodeViews and ingestionNodeKpis", () => {
+  it("describe the three nodes the way the planner and synth graphs describe theirs", () => {
+    const views = ingestionNodeViews(agenticStage(), "running");
+    expect(views.map((view) => [view.node.id, view.node.label, view.status])).toEqual([
+      ["audit_pages", "Audit pages", "done"],
+      ["normalize_pages", "Normalize pages", "running"],
+      ["publish", "Publish pages", "pending"],
+    ]);
+  });
+
+  it("show a node a cancelled run left behind as stopped", () => {
+    const views = ingestionNodeViews(agenticStage(), "cancelled");
+    expect(views.find((view) => view.node.id === "normalize_pages")?.status).toBe("stopped");
+  });
+
+  it("put each page-by-page node's count under its name, and nothing under the others", () => {
+    expect(ingestionNodeKpis(agenticStage())).toEqual({
+      audit_pages: "40 of 40 pages audited",
+      normalize_pages: "4 of 40 pages normalized",
+    });
+    expect(ingestionNodeKpis(null)).toEqual({});
   });
 });
 

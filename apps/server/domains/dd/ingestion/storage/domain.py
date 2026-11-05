@@ -1,5 +1,6 @@
 """Pure helpers (no I/O) — a manifest and its entries as stored, the titles a manifest is read with, which entry a page index
 names, and the answers the snapshot calls give."""
+
 from __future__ import annotations
 import domains
 from . import entities, keys, params
@@ -24,25 +25,29 @@ def new_entry(
     anchors: list | None = None,
     key: str | None = None,
     raw_key: str = "",
+    source_key: str = "",
 ) -> entities.ManifestEntry:
     """The manifest entry of the page written as number `idx` (its key says where). A page with no title is titled by its slug."""
     return entities.ManifestEntry(
-        idx = idx,
-        slug = slug,
-        url = url,
-        tier = tier,
-        bytes = size,
-        title = title or slug,
-        key = key or keys.page_key(framework_slug, idx, slug),
-        raw_key = raw_key or "",
-        section = section or "",
-        notes = notes or "",
-        lastmod = lastmod or "",
-        anchors = list(anchors or []),
+        idx=idx,
+        slug=slug,
+        url=url,
+        tier=tier,
+        bytes=size,
+        title=title or slug,
+        key=key or keys.page_key(framework_slug, idx, slug),
+        raw_key=raw_key or "",
+        source_key=source_key or "",
+        section=section or "",
+        notes=notes or "",
+        lastmod=lastmod or "",
+        anchors=list(anchors or []),
     )
 
 
-def ordered_by_urls(entries: list[entities.ManifestEntry], url_list: list[str]) -> list[entities.ManifestEntry]:
+def ordered_by_urls(
+    entries: list[entities.ManifestEntry], url_list: list[str]
+) -> list[entities.ManifestEntry]:
     """The entries in the order of `url_list` (discovery order): a parallel fetch writes pages in the order they arrive, not the
     order of the site's chapters. A page the list does not name goes last; `entry.idx` is unchanged."""
     url_pos = {u: i for i, u in enumerate(url_list)}
@@ -52,7 +57,7 @@ def ordered_by_urls(entries: list[entities.ManifestEntry], url_list: list[str]) 
         base = (entry.url or "").split("#", 1)[0]
         return (url_pos.get(base, sentinel), entry.idx)
 
-    return sorted(entries, key = _key)
+    return sorted(entries, key=_key)
 
 
 def manifest_payload(
@@ -65,11 +70,11 @@ def manifest_payload(
 ) -> dict:
     """Canonical published manifest; `extra` carries the Agentic AI run identity and source metadata."""
     payload = {
-        "framework_slug":     framework_slug,
-        "ingested_at":        ingested_at,
-        "page_count":         len(entries),
-        "total_bytes":        sum(e.bytes for e in entries),
-        "entries":            [asdict(e) for e in entries],
+        "framework_slug": framework_slug,
+        "ingested_at": ingested_at,
+        "page_count": len(entries),
+        "total_bytes": sum(e.bytes for e in entries),
+        "entries": [asdict(e) for e in entries],
         "normalizer_version": normalizer_version,
     }
     if extra:
@@ -85,7 +90,10 @@ def live_manifest_json(entries: list[entities.ManifestEntry]) -> str:
 def entries_from_manifest(manifest: dict | None) -> list[entities.ManifestEntry]:
     """The entries of a stored manifest, ignoring any field this version of `ManifestEntry` does not have."""
     valid = {f.name for f in fields(entities.ManifestEntry)}
-    return [entities.ManifestEntry(**{k: v for k, v in e.items() if k in valid}) for e in (manifest or {}).get("entries", [])]
+    return [
+        entities.ManifestEntry(**{k: v for k, v in e.items() if k in valid})
+        for e in (manifest or {}).get("entries", [])
+    ]
 
 
 def parse_json(raw: str | bytes | None, default):
@@ -106,7 +114,11 @@ def entry_with_idx(entries: list[dict], idx: int) -> dict | None:
     for entry in entries:
         if entry.get("idx") == idx:
             return entry
-    if entries and not any("idx" in entry for entry in entries) and 0 <= idx < len(entries):
+    if (
+        entries
+        and not any("idx" in entry for entry in entries)
+        and 0 <= idx < len(entries)
+    ):
         return entries[idx]
     return None
 
@@ -120,7 +132,8 @@ def framework_slugs(folders: list[str]) -> list[str]:
     """Framework slugs among the immediate children of the `dd/` library prefix."""
     reserved = {"synth-cache"}
     return [
-        slug for slug in (f.rstrip("/").rsplit("/", 1)[-1] for f in folders if f.strip("/"))
+        slug
+        for slug in (f.rstrip("/").rsplit("/", 1)[-1] for f in folders if f.strip("/"))
         if slug not in reserved
     ]
 
@@ -130,7 +143,9 @@ def library_row(slug: str, manifest: dict, catalog_entry: dict) -> dict:
     has none."""
     return {
         "slug": slug,
-        "framework_name": manifest.get("framework_name") or catalog_entry.get("name") or slug,
+        "framework_name": manifest.get("framework_name")
+        or catalog_entry.get("name")
+        or slug,
         "logo": catalog_entry.get("logo"),
         "logos": catalog_entry.get("logos") or [],
         "ingested_at": manifest.get("ingested_at"),
@@ -144,7 +159,7 @@ def library_row(slug: str, manifest: dict, catalog_entry: dict) -> dict:
 
 def newest_ingested_first(rows: list[dict]) -> list[dict]:
     """The library rows, the most recently ingested framework first."""
-    return sorted(rows, key = lambda row: row.get("ingested_at") or 0, reverse = True)
+    return sorted(rows, key=lambda row: row.get("ingested_at") or 0, reverse=True)
 
 
 # ---- titles ---------------------------------------------------------------------------------------------------------------
@@ -154,7 +169,10 @@ def titled_by_slug(entry: dict) -> bool:
 
 def title_cache_key(framework_slug: str, manifest: dict) -> tuple[str, str]:
     """What a manifest's worked-out titles are kept under: the framework and the run that wrote it."""
-    return (framework_slug, str(manifest.get("run_id") or manifest.get("ingested_at") or ""))
+    return (
+        framework_slug,
+        str(manifest.get("run_id") or manifest.get("ingested_at") or ""),
+    )
 
 
 def with_titles(manifest: dict, titles: dict[int, str]) -> dict:
@@ -163,7 +181,9 @@ def with_titles(manifest: dict, titles: dict[int, str]) -> dict:
     return {
         **manifest,
         "entries": [
-            {**e, "title": titles.get(int(e.get("idx", 0)), e.get("title", ""))} if titled_by_slug(e) else e
+            {**e, "title": titles.get(int(e.get("idx", 0)), e.get("title", ""))}
+            if titled_by_slug(e)
+            else e
             for e in manifest.get("entries") or []
         ],
     }
@@ -173,9 +193,14 @@ def with_unique_titles(manifest: dict) -> dict:
     """The manifest, with titles that repeat told apart by the docs section of their page (post.domain.disambiguate_titles).
     Pure and cheap, so it is applied on every read — a library ingested earlier gets it without being re-ingested."""
     entries = manifest.get("entries") or []
-    plain = domains.dd.ingestion.post.domain.strip_site_suffix([e.get("title") or "" for e in entries])
+    plain = domains.dd.ingestion.post.domain.strip_site_suffix(
+        [e.get("title") or "" for e in entries]
+    )
     titles = domains.dd.ingestion.post.domain.disambiguate_titles(
-        [(title, e.get("source_path") or e.get("url") or "") for title, e in zip(plain, entries)],
+        [
+            (title, e.get("source_path") or e.get("url") or "")
+            for title, e in zip(plain, entries)
+        ],
     )
     if all(t == (e.get("title") or "") for t, e in zip(titles, entries)):
         return manifest
@@ -193,12 +218,27 @@ def outside_snapshots(object_keys: list[str]) -> list[str]:
     return [k for k in object_keys if params.SNAPSHOTS_SKIP_SUBSTRING not in k]
 
 
-def snapshot_taken(framework_slug: str, ts: str, files_copied: int, took_ms: int) -> dict:
-    return {"framework_slug": framework_slug, "ts": ts, "files_copied": files_copied, "took_ms": took_ms}
+def snapshot_taken(
+    framework_slug: str, ts: str, files_copied: int, took_ms: int
+) -> dict:
+    return {
+        "framework_slug": framework_slug,
+        "ts": ts,
+        "files_copied": files_copied,
+        "took_ms": took_ms,
+    }
 
 
-def snapshot_restored(framework_slug: str, ts: str, deleted: int, copied: int, took_ms: int) -> dict:
-    return {"framework_slug": framework_slug, "ts": ts, "deleted": deleted, "copied": copied, "took_ms": took_ms}
+def snapshot_restored(
+    framework_slug: str, ts: str, deleted: int, copied: int, took_ms: int
+) -> dict:
+    return {
+        "framework_slug": framework_slug,
+        "ts": ts,
+        "deleted": deleted,
+        "copied": copied,
+        "took_ms": took_ms,
+    }
 
 
 def snapshot_deleted(framework_slug: str, ts: str, deleted: int) -> dict:
@@ -207,4 +247,4 @@ def snapshot_deleted(framework_slug: str, ts: str, deleted: int) -> dict:
 
 def newest_first(names: list[str]) -> list[str]:
     """Snapshot or backup ids, newest first (they are timestamps, so alphabetical is chronological)."""
-    return sorted(names, reverse = True)
+    return sorted(names, reverse=True)

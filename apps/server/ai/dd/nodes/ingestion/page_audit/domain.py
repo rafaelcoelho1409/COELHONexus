@@ -29,12 +29,12 @@ def sanitize_assessment(
     *,
     markdown: str,
 ) -> tuple[agents.schemas.PageAssessment, list[str]]:
-    """Keep only auditor findings with evidence present in the source Markdown."""
+    """Keep only auditor findings with evidence present in the source Markdown, one per category and evidence."""
     assessment = agents.schemas.PageAssessment.model_validate(value)
     if len(assessment.issues) > params.MAX_ISSUES_PER_PAGE:
         raise ValueError("assessment exceeds the maximum issues per page")
 
-    accepted = []
+    accepted: dict[tuple[str, str], agents.schemas.PageIssue] = {}
     warnings = []
     for issue in assessment.issues:
         if len(issue.evidence) > params.MAX_EVIDENCE_CHARS or issue.evidence not in markdown:
@@ -42,6 +42,14 @@ def sanitize_assessment(
                 f"Discarded finding {issue.issue_id}: evidence was not a bounded exact source substring."
             )
             continue
-        accepted.append(issue)
+        # Two findings on the same text can only produce overlapping patches, so keep the more confident one.
+        kept = accepted.get((issue.category, issue.evidence))
+        if kept is not None:
+            warnings.append(
+                f"Merged finding {issue.issue_id} into {kept.issue_id}: same category and evidence."
+            )
+            if issue.confidence <= kept.confidence:
+                continue
+        accepted[(issue.category, issue.evidence)] = issue
 
-    return assessment.model_copy(update = {"issues": accepted}), warnings
+    return assessment.model_copy(update = {"issues": list(accepted.values())}), warnings

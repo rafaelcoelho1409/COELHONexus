@@ -101,14 +101,11 @@ function renderPage() {
 }
 
 describe("DocsDistillerPage", () => {
-  it("shows the catalog stage with the four stage tabs", async () => {
+  it("shows the catalog stage with no title, tabs or framework picker (those are the app's second navbar)", async () => {
     renderPage();
-    expect(screen.getByRole("heading", { level: 1, name: "Docs Distiller" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Ingestion" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Pipeline" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Study" })).toBeInTheDocument();
-    const catalog = screen.getByText("Catalog");
-    expect(catalog).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByRole("heading", { level: 1 })).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Docs Distiller stages" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /alpha/i })).not.toBeInTheDocument();
   });
 
   it("renders the ingestion explorer with groups, search shortcut and preview", async () => {
@@ -116,7 +113,7 @@ describe("DocsDistillerPage", () => {
     routerState.search = "slug=a";
     const user = userEvent.setup();
     renderPage();
-    expect(await screen.findByText("Alpha · 2 pages · 640 B sitemap · 2m ago")).toBeInTheDocument();
+    expect(await screen.findByText("Alpha · 2 pages · 640 B")).toBeInTheDocument();
     await user.click(screen.getByRole("tab", { name: "Materials" }));
 
     const pages = within(await screen.findByRole("navigation", { name: "Pages" }));

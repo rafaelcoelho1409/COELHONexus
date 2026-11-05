@@ -1,12 +1,28 @@
+import type { Section } from "@/shared/layout/section";
+
 /** Book Distiller stages. Only Ingestion exists; Distill and Research join this list when they do (the tab strip
  * and the route table are built from it). */
-export const BD_STAGES = [{ key: "ingestion", label: "Ingestion", href: "/bd/ingestion" }] as const;
+const BD_STAGES = [{ key: "ingestion", label: "Ingestion", href: "/bd/ingestion" }] as const;
 
-export type BdStage = (typeof BD_STAGES)[number]["key"];
+/** The title and stage tabs in the second navbar. `/bd` opens the Ingestion stage, so it is the current tab there. */
+export const BD_SECTION: Section = {
+  href: "/bd",
+  title: "Book Distiller",
+  description: "Upload a book, watch it being read, study what was extracted",
+  defaultTab: "ingestion",
+  tabs: BD_STAGES.map((stage) => ({ ...stage, tab: true, carry: false })),
+};
 
 /** The server refuses a larger upload (413); the dropzone says so before sending 300 MB for nothing. */
 export const MAX_UPLOAD_BYTES = 300 * 1024 * 1024;
 export const MAX_UPLOAD_LABEL = "300 MB";
+
+/** The two views of an open book, drawn as links in the page's third navbar. */
+export const BOOK_VIEWS = [
+  ["pipeline", "Pipeline"],
+  ["materials", "Materials"],
+] as const;
+export type BookViewId = (typeof BOOK_VIEWS)[number][0];
 
 /** The address parameter that names the open book. */
 export const BOOK_PARAM = "book";

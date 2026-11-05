@@ -322,11 +322,12 @@ describe("IngestionStage — stopping and how a run ends", () => {
     expect(within(card).getByText("Stopping")).toBeInTheDocument();
     expect(within(card).queryByText("Processing")).not.toBeInTheDocument();
     expect(within(card).getByRole("button", { name: "Stop documentation extraction" })).toBeDisabled();
+    // Agentic AI has not started, so it has no page work to drain: only the phase that is running says "Stopping".
     expect(
-      within(screen.getByRole("region", { name: "Agentic AI progress" })).getByText(
+      within(screen.getByRole("region", { name: "Agentic AI progress" })).queryByText(
         "Stop requested; active page work is draining before the run ends.",
       ),
-    ).toBeInTheDocument();
+    ).not.toBeInTheDocument();
   });
 
   it("says so, and gives the button back, when the cancel request itself fails", async () => {
