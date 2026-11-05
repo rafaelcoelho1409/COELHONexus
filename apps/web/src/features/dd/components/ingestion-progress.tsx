@@ -70,7 +70,6 @@ export function ExtractionProgress({
   onStart,
   onStop,
   onWipe,
-  onDismiss,
 }: {
   statusText: string;
   current: number;
@@ -91,7 +90,6 @@ export function ExtractionProgress({
   onStart: () => void;
   onStop: () => void;
   onWipe: () => void;
-  onDismiss?: () => void;
 }) {
   const percent = ingestionPercent(current, total);
 
@@ -177,13 +175,10 @@ export function ExtractionProgress({
           {cancelError}
         </p>
       ) : null}
-      {finishedText && onDismiss ? (
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-          <p role="status" aria-live="polite" className="text-xs text-muted-foreground">
-            {finishedText}
-          </p>
-          <ActionButton onClick={onDismiss}>Dismiss run</ActionButton>
-        </div>
+      {finishedText ? (
+        <p role="status" aria-live="polite" className="mt-2 text-xs text-muted-foreground">
+          {finishedText}
+        </p>
       ) : null}
       <p className="mt-2 text-xs text-muted-foreground">
         Wipe removes the ingested pages and everything built on them. The framework stays in the catalog.

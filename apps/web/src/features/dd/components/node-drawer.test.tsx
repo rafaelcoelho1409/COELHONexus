@@ -72,7 +72,7 @@ function drawerFor(
 describe("NodeDrawer", () => {
   it("adds the node's LLM usage once the run's counters load, with its busiest model", async () => {
     server.use(
-      http.get("*/api/v1/dd/planner/debug/graph/*/llm-counters", () =>
+      http.get("*/api/v1/dd/pipeline/planner/debug/graph/*/llm-counters", () =>
         HttpResponse.json({
           total: { calls: 12, tokens_in: 6000, tokens_out: 300, reasoning_tokens: 0 },
           by_node: {
@@ -140,7 +140,9 @@ describe("NodeDrawer", () => {
   });
 
   it("tabulates the node's LLM calls and tokens against the whole run", async () => {
-    server.use(http.get("*/api/v1/dd/planner/debug/graph/*/llm-counters", () => HttpResponse.json(COUNTERS)));
+    server.use(
+      http.get("*/api/v1/dd/pipeline/planner/debug/graph/*/llm-counters", () => HttpResponse.json(COUNTERS)),
+    );
     const { dialog } = drawerFor("off_topic", "done", PLANNER_FINISHED_VALUES, EVENTS, "planner/alpha/old");
 
     const table = await within(dialog).findByRole("region", { name: "LLM calls and tokens" });
@@ -158,7 +160,9 @@ describe("NodeDrawer", () => {
   });
 
   it("names each model that answered, with its calls and input, output and reasoning tokens, busiest first", async () => {
-    server.use(http.get("*/api/v1/dd/planner/debug/graph/*/llm-counters", () => HttpResponse.json(COUNTERS)));
+    server.use(
+      http.get("*/api/v1/dd/pipeline/planner/debug/graph/*/llm-counters", () => HttpResponse.json(COUNTERS)),
+    );
     const { dialog } = drawerFor("off_topic", "done", PLANNER_FINISHED_VALUES, EVENTS, "planner/alpha/old");
 
     const table = await within(dialog).findByRole("region", { name: "Usage by model" });
@@ -176,7 +180,9 @@ describe("NodeDrawer", () => {
   });
 
   it("puts the by-model table above the calls-and-tokens table", async () => {
-    server.use(http.get("*/api/v1/dd/planner/debug/graph/*/llm-counters", () => HttpResponse.json(COUNTERS)));
+    server.use(
+      http.get("*/api/v1/dd/pipeline/planner/debug/graph/*/llm-counters", () => HttpResponse.json(COUNTERS)),
+    );
     const { dialog } = drawerFor("off_topic", "done", PLANNER_FINISHED_VALUES, EVENTS, "planner/alpha/old");
     const byModel = await within(dialog).findByRole("region", { name: "Usage by model" });
     const callsAndTokens = within(dialog).getByRole("region", { name: "LLM calls and tokens" });
@@ -184,14 +190,18 @@ describe("NodeDrawer", () => {
   });
 
   it("has no by-model table for a node that made no call", async () => {
-    server.use(http.get("*/api/v1/dd/planner/debug/graph/*/llm-counters", () => HttpResponse.json(COUNTERS)));
+    server.use(
+      http.get("*/api/v1/dd/pipeline/planner/debug/graph/*/llm-counters", () => HttpResponse.json(COUNTERS)),
+    );
     const { dialog } = drawerFor("corpus_load", "done", PLANNER_FINISHED_VALUES, EVENTS, "planner/alpha/old");
     expect(await within(dialog).findByRole("heading", { name: "Corpus load" })).toBeInTheDocument();
     expect(within(dialog).queryByRole("region", { name: "Usage by model" })).not.toBeInTheDocument();
   });
 
   it("has no calls-and-tokens table before the counters load or for a node that made no call", async () => {
-    server.use(http.get("*/api/v1/dd/planner/debug/graph/*/llm-counters", () => HttpResponse.json(COUNTERS)));
+    server.use(
+      http.get("*/api/v1/dd/pipeline/planner/debug/graph/*/llm-counters", () => HttpResponse.json(COUNTERS)),
+    );
     const { dialog } = drawerFor("corpus_load", "done", PLANNER_FINISHED_VALUES, EVENTS, "planner/alpha/old");
     expect(await within(dialog).findByRole("heading", { name: "Corpus load" })).toBeInTheDocument();
     expect(within(dialog).queryByRole("region", { name: "LLM calls and tokens" })).not.toBeInTheDocument();

@@ -24,13 +24,7 @@ import type { AgenticProgress, AgenticRunStatus, AgenticUsage, ChapterRange } fr
 import { useAgenticUsage } from "../hooks/use-agentic-run";
 import { useModalDialog } from "../hooks/use-modal-dialog";
 import { ActionButton } from "./action-button";
-import {
-  AgenticNodeList,
-  AgenticPills,
-  AgenticStatusBadge,
-  type AgenticViewId,
-  AgenticViewSwitch,
-} from "./agentic-parts";
+import { AgenticNodeList, AgenticPills, AgenticStatusBadge } from "./agentic-parts";
 import { ToggleGroup } from "./toggle-group";
 
 // The graph library is only needed once a graph is on screen.
@@ -38,6 +32,11 @@ const AgenticFlow = dynamic(() => import("./agentic-flow").then((module) => modu
   ssr: false,
   loading: () => <p className="text-xs text-muted-foreground">Loading graph…</p>,
 });
+
+const MODES = [
+  { id: "graph", label: "Graph" },
+  { id: "list", label: "List" },
+] as const;
 
 const USAGE_MODES: readonly { id: AgenticUsageMode; label: string }[] = [
   { id: "agent", label: "By agent" },
@@ -291,7 +290,7 @@ export function AgenticPipelineOverview({
   const usage = useAgenticUsage(bookId, run?.agentic_run_id ?? null, live, run !== null);
   const chapterRows = chapterProgress(chapters, progress?.processed_pages ?? []);
   const chapterSummary = chapterProgressSummary(chapters, progress?.processed_pages ?? []);
-  const [mode, setMode] = useState<AgenticViewId>("graph");
+  const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const selectedNode = AGENTIC_NODES.find((node) => node.id === selectedNodeId);
   const runStatus = status ?? run?.status ?? "pending";
@@ -321,11 +320,13 @@ export function AgenticPipelineOverview({
         aria-label="Agentic pipeline stages"
         className="min-w-0 rounded-md border border-border bg-card p-3"
       >
-        <header>
-          <h3 className="text-sm font-medium">Agentic pipeline</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Open any node for what it does, what it produced and its LLM usage.
-          </p>
+        <header className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-medium">Agentic pipeline</h3>
+            <p aria-live="polite" className="mt-1 text-xs text-muted-foreground">
+              {caption}
+            </p>
+          </div>
         </header>
         {error ? (
           <p role="alert" className="mt-3 break-words text-sm text-destructive-text">
@@ -333,43 +334,31 @@ export function AgenticPipelineOverview({
           </p>
         ) : null}
         <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-[minmax(0,3fr)_minmax(16rem,1fr)]">
-          <div className="flex min-w-0 flex-col gap-2">
-            {/* One row above the graph, as on the Docs Distiller's stage graphs: where the run is on the left, the
-                Graph | List switch on the right (the switch is 36px; the caption takes two lines of 16px at most). */}
-            <div className="flex min-h-9 items-center justify-between gap-3">
-              <p
-                aria-live="polite"
-                title={caption}
-                className="line-clamp-2 min-w-0 text-xs leading-4 text-muted-foreground"
-              >
-                {caption}
-              </p>
-              <AgenticViewSwitch value={mode} onChange={setMode} />
-            </div>
+          <div className="min-w-0">
             {mode === "graph" ? (
               <AgenticFlow views={views} onOpenNode={setSelectedNodeId} />
             ) : (
               <AgenticNodeList rows={views} onOpen={setSelectedNodeId} />
             )}
           </div>
-          <div className="min-w-0">
-            {/* The row keeps its height without a run, so the chapter box always starts at the same place. */}
-            <div className="mb-1 flex min-h-10 min-w-0 items-center">
-              {run ? (
-                <ActionButton
-                  className="min-w-0 flex-1 justify-center whitespace-nowrap px-2"
-                  onClick={onOpenUsage}
-                  aria-haspopup="dialog"
-                >
-                  <ChartNoAxesColumn aria-hidden />
-                  LLM usage
-                </ActionButton>
-              ) : null}
+          <div className="flex min-w-0 flex-col">
+            {/* Always there: with no run, or after its data was wiped, the sheet says so instead of the button vanishing. */}
+            <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
+              <ActionButton
+                className="min-w-0 flex-1 justify-center whitespace-nowrap px-2"
+                onClick={onOpenUsage}
+                aria-haspopup="dialog"
+              >
+                <ChartNoAxesColumn aria-hidden />
+                LLM usage
+              </ActionButton>
+              <ToggleGroup legend="Pipeline shown as" options={MODES} value={mode} onChange={setMode} />
             </div>
-            {/* The controls and chapter box share the same column width. */}
+            {/* From xl the box is as tall as the graph beside it and nothing more: its content is taken out of flow
+             * (`absolute inset-0`), so a long list scrolls inside it instead of stretching the row. */}
             <section
               aria-label="Chapter progress"
-              className="relative min-w-0 rounded-sm border border-border bg-background xl:min-h-72"
+              className="relative min-w-0 rounded-sm border border-border bg-background xl:min-h-72 xl:flex-1"
             >
               <div className="flex min-h-0 flex-col p-3 xl:absolute xl:inset-0">
                 <header className="flex flex-wrap items-baseline justify-between gap-2">
@@ -591,12 +580,13 @@ export function AgenticUsageSheet({
 }: {
   open: boolean;
   bookId: string;
-  run: AgenticRunStatus;
+  /** Null before the first run, and again after its data was wiped: the sheet still opens and says so. */
+  run: AgenticRunStatus | null;
   live: boolean;
   onClose: () => void;
 }) {
   return open ? (
-    <UsageSheet bookId={bookId} runId={run.agentic_run_id} live={live} onClose={onClose} />
+    <UsageSheet bookId={bookId} runId={run?.agentic_run_id ?? null} live={live} onClose={onClose} />
   ) : null;
 }
 
@@ -607,12 +597,12 @@ function UsageSheet({
   onClose,
 }: {
   bookId: string;
-  runId: string;
+  runId: string | null;
   live: boolean;
   onClose: () => void;
 }) {
   const dialog = useModalDialog();
-  const usage = useAgenticUsage(bookId, runId, live, true);
+  const usage = useAgenticUsage(bookId, runId, live, runId !== null);
 
   return (
     <dialog
@@ -638,7 +628,12 @@ function UsageSheet({
         </ActionButton>
       </header>
       <div className="flex flex-col gap-4 px-5 py-4">
-        <UsageBreakdown usage={usage.data} loading={usage.isPending} failed={usage.isError} hasRun />
+        <UsageBreakdown
+          usage={usage.data}
+          loading={runId !== null && usage.isPending}
+          failed={usage.isError}
+          hasRun={runId !== null}
+        />
       </div>
     </dialog>
   );
@@ -694,7 +689,11 @@ function UsageBreakdown({
           Loading LLM usage…
         </p>
       ) : !hasRun ? (
-        <p className="text-sm text-muted-foreground">Usage will appear after this node runs.</p>
+        <p className="text-sm text-muted-foreground">
+          {nodeId
+            ? "Usage will appear after this node runs."
+            : "No Agentic AI run yet. Usage appears here once one has started."}
+        </p>
       ) : rows.length > 0 ? (
         <AgenticUsageTable rows={rows} mode={mode} caption={caption} />
       ) : (

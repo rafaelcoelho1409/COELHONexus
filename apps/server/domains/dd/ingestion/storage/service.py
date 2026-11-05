@@ -308,7 +308,7 @@ class Store:
 
 
 async def read_live_manifest(r: infra.redis.service.Redis, run_id: str) -> list[dict]:
-    """Manifest for an in-flight run (Redis), polled by /runs/{id}."""
+    """Manifest for an in-flight run (Redis), polled by /ingestion/runs/{id}."""
     try:
         raw = await r.get(keys.live_manifest_key(run_id))
     except Exception:

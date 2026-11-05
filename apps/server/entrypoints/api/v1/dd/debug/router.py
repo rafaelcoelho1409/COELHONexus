@@ -3,7 +3,7 @@ progress writes) so exceptions surface with full stack traces.
 Not gated — single-user dev cluster only."""
 import domains, infra
 from . import params
-from .. import resolver
+from .. import catalog
 
 import time
 
@@ -18,7 +18,7 @@ router = APIRouter()
 @router.post("/resolve/{slug}")
 async def debug_resolve(
     slug: str, 
-    entry: resolver.schemas.CatalogEntry) -> dict:
+    entry: catalog.schemas.CatalogEntry) -> dict:
     dispatch = domains.dd.ingestion.runtime.dispatch.domain
     return {
         "slug": slug,
@@ -32,7 +32,7 @@ async def debug_resolve(
 @router.post("/ingest/{slug}")
 async def debug_ingest_one_tier(
     slug: str,
-    entry: resolver.schemas.CatalogEntry,
+    entry: catalog.schemas.CatalogEntry,
     tier: int,
     language: str | None = None,
 ) -> dict:
@@ -89,7 +89,7 @@ async def debug_ingest_one_tier(
 @router.post("/post/{slug}")
 async def debug_post(
     slug: str, 
-    entry: resolver.schemas.CatalogEntry) -> dict:
+    entry: catalog.schemas.CatalogEntry) -> dict:
     """Re-runs post-process against current MinIO content (useful when
     tuning SPLIT_MIN_SECTION_BYTES without re-downloading)."""
     debug_run_id = f"debug-post-{slug}-{int(time.time())}"
@@ -134,7 +134,7 @@ async def debug_post(
 @router.post("/finalize/{slug}")
 async def debug_finalize(
     slug: str, 
-    entry: resolver.schemas.CatalogEntry) -> dict:
+    entry: catalog.schemas.CatalogEntry) -> dict:
     """Re-writes the canonical manifest from prior in-memory state.
     Useful when the manifest payload shape changes."""
     debug_run_id = f"debug-finalize-{slug}-{int(time.time())}"
@@ -167,7 +167,7 @@ async def debug_finalize(
 @router.post("/snapshot/{slug}")
 async def debug_take_snapshot(
     slug: str,
-    entry: resolver.schemas.CatalogEntry, 
+    entry: catalog.schemas.CatalogEntry, 
     label: str | None = None,
 ) -> dict:
     return await domains.dd.ingestion.storage.service.take_snapshot(
@@ -179,7 +179,7 @@ async def debug_take_snapshot(
 @router.get("/snapshots/{slug}")
 async def debug_list_snapshots(
     slug: str, 
-    entry: resolver.schemas.CatalogEntry) -> dict:
+    entry: catalog.schemas.CatalogEntry) -> dict:
     return {
         "slug": slug,
         "snapshots": await domains.dd.ingestion.storage.service.list_snapshots(
@@ -191,7 +191,7 @@ async def debug_list_snapshots(
 @router.post("/restore/{slug}")
 async def debug_restore_snapshot(
     slug: str, 
-    entry: resolver.schemas.CatalogEntry, 
+    entry: catalog.schemas.CatalogEntry, 
     ts: str) -> dict:
     try:
         return await domains.dd.ingestion.storage.service.restore_snapshot(
@@ -207,7 +207,7 @@ async def debug_restore_snapshot(
 @router.delete("/snapshot/{slug}")
 async def debug_delete_snapshot(
     slug: str, 
-    entry: resolver.schemas.CatalogEntry, 
+    entry: catalog.schemas.CatalogEntry, 
     ts: str) -> dict:
     return await domains.dd.ingestion.storage.service.delete_snapshot(
         infra.minio.service.get_storage(), 

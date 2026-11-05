@@ -1,8 +1,8 @@
-"""resolver service — catalog endpoint logic shared across routers.
+"""catalog service — catalog endpoint logic shared across routers.
 
 `get_catalog_entry` is the single api-side home for "slug → catalog
 dict or 404" (wrapping `domains.dd.catalog.service` with HTTP error
-mapping). `runs` calls it directly; `resolver`/`debug` consume it
+mapping). `runs` calls it directly; `catalog`/`debug` consume it
 through `schemas.CatalogEntry`.
 """
 import domains

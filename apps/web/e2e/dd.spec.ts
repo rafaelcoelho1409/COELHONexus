@@ -69,7 +69,7 @@ const json = (route: { fulfill: (o: { json: unknown }) => void }, body: unknown)
   route.fulfill({ json: body });
 
 async function mockRoutes(page: Page) {
-  await page.route("**/api/v1/dd/resolver", (route) => json(route, TILES));
+  await page.route("**/api/v1/dd/catalog", (route) => json(route, TILES));
   await page.route("https://logos.test/**", (route) =>
     route.fulfill({
       contentType: "image/svg+xml",
@@ -83,15 +83,15 @@ async function mockRoutes(page: Page) {
     }
     json(route, LIBRARY);
   });
-  await page.route("**/api/v1/dd/runs/active", (route) => json(route, { active: [] }));
-  await page.route("**/api/v1/dd/runs", (route) => {
+  await page.route("**/api/v1/dd/ingestion/runs/active", (route) => json(route, { active: [] }));
+  await page.route("**/api/v1/dd/ingestion/runs", (route) => {
     if (route.request().method() === "POST") {
       route.fulfill({ json: { status: "queued", run_id: "run-1" } });
       return;
     }
     route.continue();
   });
-  await page.route("**/api/v1/dd/runs/run-1", (route) =>
+  await page.route("**/api/v1/dd/ingestion/runs/run-1", (route) =>
     json(route, {
       progress: {
         tier: "post",
@@ -124,13 +124,13 @@ async function mockRoutes(page: Page) {
       post: null,
     }),
   );
-  await page.route("**/api/v1/dd/runs/run-1/llm-counters", (route) =>
+  await page.route("**/api/v1/dd/ingestion/runs/run-1/llm-counters", (route) =>
     json(route, {
       total: { calls: 0, tokens_in: 0, tokens_out: 0, reasoning_tokens: 0, errors: 0 },
       by_node: {},
     }),
   );
-  await page.route("**/api/v1/dd/runs/run-1/cancel", (route) => json(route, { ok: true }));
+  await page.route("**/api/v1/dd/ingestion/runs/run-1/cancel", (route) => json(route, { ok: true }));
   await page.route("**/api/v1/dd/ingestion/alpha/manifest", (route) => json(route, MANIFEST));
   await page.route("**/api/v1/dd/ingestion/beta/manifest", (route) =>
     route.fulfill({ status: 404, json: { detail: "not ingested" } }),
@@ -173,7 +173,7 @@ const PLANNER_RECOVERED_STATE = {
 async function mockPlannerRoutes(page: Page, opts: { recent?: boolean } = {}) {
   await mockRoutes(page);
   const recent = opts.recent === false ? [] : [{ slug: "alpha", thread_id: "planner/alpha/old" }];
-  await page.route("**/api/v1/dd/planner/info", (route) =>
+  await page.route("**/api/v1/dd/pipeline/planner/info", (route) =>
     json(route, {
       implemented: [
         "corpus_load",
@@ -187,21 +187,21 @@ async function mockPlannerRoutes(page: Page, opts: { recent?: boolean } = {}) {
       ],
     }),
   );
-  await page.route("**/api/v1/dd/planner/alpha/active", (route) => json(route, { active: false }));
-  await page.route("**/api/v1/dd/planner/alpha/timing", (route) =>
+  await page.route("**/api/v1/dd/pipeline/planner/alpha/active", (route) => json(route, { active: false }));
+  await page.route("**/api/v1/dd/pipeline/planner/alpha/timing", (route) =>
     json(route, { total_wall_ms: opts.recent === false ? 0 : 4200 }),
   );
-  await page.route("**/api/v1/dd/planner/recent", (route) => json(route, { recent }));
+  await page.route("**/api/v1/dd/pipeline/planner/recent", (route) => json(route, { recent }));
   // A fresh slug has no checkpoint until its run has been started; after that the plan is there.
   let runStarted = opts.recent !== false;
-  await page.route("**/api/v1/dd/planner/debug/graph/**", (route) => {
+  await page.route("**/api/v1/dd/pipeline/planner/debug/graph/**", (route) => {
     json(route, runStarted ? PLANNER_RECOVERED_STATE : { values: {}, next: [] });
   });
   await page.route("**/api/v1/dd/pipeline/active", (route) => json(route, { planner: null, synth: null }));
   await page.route("**/api/v1/dd/pipeline/alpha/state", (route) =>
     json(route, { ingestion: true, planner: true, synth: false, study: false }),
   );
-  await page.route("**/api/v1/dd/planner/alpha?*", (route) => {
+  await page.route("**/api/v1/dd/pipeline/planner/alpha?*", (route) => {
     if (route.request().method() === "POST") {
       runStarted = true;
       route.fulfill({ json: { status: "queued", thread_id: "planner/alpha/t1" } });
@@ -210,7 +210,7 @@ async function mockPlannerRoutes(page: Page, opts: { recent?: boolean } = {}) {
     route.continue();
   });
   // registered after the graph-state route above, so it wins for `…/llm-counters`
-  await page.route("**/api/v1/dd/planner/debug/graph/*/llm-counters", (route) =>
+  await page.route("**/api/v1/dd/pipeline/planner/debug/graph/*/llm-counters", (route) =>
     json(route, {
       total: { calls: 14, tokens_in: 9000, tokens_out: 2100, reasoning_tokens: 0 },
       by_node: {
@@ -219,11 +219,11 @@ async function mockPlannerRoutes(page: Page, opts: { recent?: boolean } = {}) {
       },
     }),
   );
-  await page.route("**/api/v1/dd/planner/alpha/health", (route) =>
+  await page.route("**/api/v1/dd/pipeline/planner/alpha/health", (route) =>
     json(route, { degraded: true, pipeline_health: { chapter_propose_fallback_used: true } }),
   );
   // thread ids contain slashes; the client sends them percent-encoded, so they are one path segment
-  await page.route("**/api/v1/dd/planner/*/events", (route) =>
+  await page.route("**/api/v1/dd/pipeline/planner/*/events", (route) =>
     route.fulfill({
       headers: { "content-type": "text/event-stream" },
       body:
@@ -301,18 +301,20 @@ const CHAPTER_README = [
 
 async function mockSynthRoutes(page: Page) {
   await mockRoutes(page);
-  await page.route("**/api/v1/dd/synth/info", (route) => json(route, { implemented: ["write"] }));
-  await page.route("**/api/v1/dd/synth/alpha/study/chapters", (route) => json(route, SYNTH_CHAPTERS));
-  await page.route("**/api/v1/dd/synth/alpha/active", (route) => json(route, { active: false }));
+  await page.route("**/api/v1/dd/pipeline/synth/info", (route) => json(route, { implemented: ["write"] }));
+  await page.route("**/api/v1/dd/pipeline/synth/alpha/study/chapters", (route) =>
+    json(route, SYNTH_CHAPTERS),
+  );
+  await page.route("**/api/v1/dd/pipeline/synth/alpha/active", (route) => json(route, { active: false }));
   await page.route("**/api/v1/dd/pipeline/active", (route) => json(route, { planner: null, synth: null }));
-  await page.route("**/api/v1/dd/synth/alpha?*", (route) => {
+  await page.route("**/api/v1/dd/pipeline/synth/alpha?*", (route) => {
     if (route.request().method() === "POST") {
       route.fulfill({ json: { status: "queued", thread_id: "synth/alpha/9" } });
       return;
     }
     route.continue();
   });
-  await page.route("**/api/v1/dd/synth/*/events", (route) =>
+  await page.route("**/api/v1/dd/pipeline/synth/*/events", (route) =>
     route.fulfill({
       headers: { "content-type": "text/event-stream" },
       body:
@@ -320,8 +322,10 @@ async function mockSynthRoutes(page: Page) {
         `data: ${JSON.stringify({ step: "synth", kind: "terminal", status: "done", wall_ms: 3000 })}\n\n`,
     }),
   );
-  await page.route("**/api/v1/dd/synth/debug/graph/**", (route) => json(route, { values: {}, next: [] }));
-  await page.route("**/api/v1/dd/synth/alpha/study/01_hall/artifact/README.md", (route) =>
+  await page.route("**/api/v1/dd/pipeline/synth/debug/graph/**", (route) =>
+    json(route, { values: {}, next: [] }),
+  );
+  await page.route("**/api/v1/dd/pipeline/synth/alpha/study/01_hall/artifact/README.md", (route) =>
     route.fulfill({
       headers: { "content-type": "text/plain; charset=utf-8" },
       body: CHAPTER_README,
@@ -632,7 +636,8 @@ test.describe("Docs Distiller", () => {
     await expect(pipeline.getByRole("button", { name: /Publish pages/ })).toBeVisible();
 
     const cancelRequest = page.waitForRequest(
-      (request) => request.method() === "POST" && request.url().includes("/api/v1/dd/runs/run-1/cancel"),
+      (request) =>
+        request.method() === "POST" && request.url().includes("/api/v1/dd/ingestion/runs/run-1/cancel"),
     );
     await extraction.getByRole("button", { name: "Stop documentation extraction" }).click();
     await expect(cancelRequest).resolves.toHaveProperty("url");
@@ -652,7 +657,7 @@ test.describe("Docs Distiller", () => {
   }) => {
     await mockRoutes(page);
     // Right after a run ends the cached active list can still list it; the page must not flip the address.
-    await page.route("**/api/v1/dd/runs/active", (route) =>
+    await page.route("**/api/v1/dd/ingestion/runs/active", (route) =>
       json(route, {
         active: [
           {
@@ -663,7 +668,7 @@ test.describe("Docs Distiller", () => {
         ],
       }),
     );
-    await page.route("**/api/v1/dd/runs/run-1", (route) =>
+    await page.route("**/api/v1/dd/ingestion/runs/run-1", (route) =>
       json(route, {
         progress: { tier: "finalize", status: "done", current: 0, total: 0, last_url: "" },
         post: null,
@@ -733,7 +738,7 @@ test.describe("Docs Distiller", () => {
 
   test("a book with every chapter written reads Done, with a check on each chapter", async ({ page }) => {
     await mockSynthRoutes(page);
-    await page.route("**/api/v1/dd/synth/alpha/study/chapters", (route) =>
+    await page.route("**/api/v1/dd/pipeline/synth/alpha/study/chapters", (route) =>
       json(route, {
         ...SYNTH_CHAPTERS,
         chapters: SYNTH_CHAPTERS.chapters.map((chapter) => ({
@@ -784,7 +789,7 @@ test.describe("Docs Distiller", () => {
   test("synth stage asks before re-running a synthesized chapter, then runs it to done", async ({ page }) => {
     await mockSynthRoutes(page);
     let wiped = false;
-    await page.route("**/api/v1/dd/synth/alpha/wipe?chapter_id=01_hall", (route) => {
+    await page.route("**/api/v1/dd/pipeline/synth/alpha/wipe?chapter_id=01_hall", (route) => {
       wiped = true;
       return json(route, { ok: true });
     });

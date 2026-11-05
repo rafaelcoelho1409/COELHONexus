@@ -33,7 +33,7 @@ const renderWith = (children: React.ReactNode) => render(<QueryProvider>{childre
 describe("PlannerUsageSheet", () => {
   it("shows calls and tokens, then each busy node, then each model", async () => {
     server.use(
-      http.get(`${API}/planner/debug/graph/*/llm-counters`, () =>
+      http.get(`${API}/pipeline/planner/debug/graph/*/llm-counters`, () =>
         HttpResponse.json({
           total: counts(14, 9000, 2100),
           by_node: {
@@ -67,7 +67,7 @@ describe("PlannerUsageSheet", () => {
   });
 
   it("says so when nothing was recorded", async () => {
-    server.use(http.get(`${API}/planner/debug/graph/*/llm-counters`, () => HttpResponse.json({})));
+    server.use(http.get(`${API}/pipeline/planner/debug/graph/*/llm-counters`, () => HttpResponse.json({})));
     renderWith(<PlannerUsageSheet threadId="planner/alpha/t1" live={false} onClose={vi.fn()} />);
     expect(await screen.findByText("No LLM usage recorded yet.")).toBeInTheDocument();
   });
@@ -82,7 +82,7 @@ describe("SynthUsageSheet", () => {
 
   function chapterCounters() {
     server.use(
-      http.get(`${API}/synth/debug/graph/*/llm-counters`, ({ request }) => {
+      http.get(`${API}/pipeline/synth/debug/graph/*/llm-counters`, ({ request }) => {
         const second = decodeURIComponent(request.url).includes("synth/alpha/2");
         return HttpResponse.json({
           total: second ? counts(3, 1000, 500) : counts(5, 4000, 1000, 200),
@@ -121,7 +121,7 @@ describe("SynthUsageSheet", () => {
 describe("PlanHealth", () => {
   it("names what degraded the plan", async () => {
     server.use(
-      http.get(`${API}/planner/alpha/health`, () =>
+      http.get(`${API}/pipeline/planner/alpha/health`, () =>
         HttpResponse.json({
           degraded: true,
           pipeline_health: { chapter_propose_fallback_used: true, chapter_select_n_chapters: 2 },
@@ -136,7 +136,7 @@ describe("PlanHealth", () => {
   });
 
   it("shows nothing when the server cannot say", async () => {
-    server.use(http.get(`${API}/planner/alpha/health`, () => HttpResponse.json({ degraded: null })));
+    server.use(http.get(`${API}/pipeline/planner/alpha/health`, () => HttpResponse.json({ degraded: null })));
     const { container } = renderWith(<PlanHealth slug="alpha" />);
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(container).toBeEmptyDOMElement();
@@ -162,10 +162,10 @@ describe("PipelineTotal", () => {
 
   function allCounters() {
     server.use(
-      http.get(`${API}/planner/debug/graph/*/llm-counters`, () =>
+      http.get(`${API}/pipeline/planner/debug/graph/*/llm-counters`, () =>
         HttpResponse.json({ total: counts(14, 9000, 2100), by_node: {} }),
       ),
-      http.get(`${API}/synth/debug/graph/*/llm-counters`, () =>
+      http.get(`${API}/pipeline/synth/debug/graph/*/llm-counters`, () =>
         HttpResponse.json({ total: counts(5, 4000, 1000), by_node: {} }),
       ),
     );
@@ -185,10 +185,10 @@ describe("PipelineTotal", () => {
 
   it("prints nothing until every usage has loaded, so the figure never grows", async () => {
     server.use(
-      http.get(`${API}/planner/debug/graph/*/llm-counters`, () =>
+      http.get(`${API}/pipeline/planner/debug/graph/*/llm-counters`, () =>
         HttpResponse.json({ total: counts(14, 9000, 2100), by_node: {} }),
       ),
-      http.get(`${API}/synth/debug/graph/*/llm-counters`, async () => {
+      http.get(`${API}/pipeline/synth/debug/graph/*/llm-counters`, async () => {
         await delay(300);
         return HttpResponse.json({ total: counts(5, 4000, 1000), by_node: {} });
       }),

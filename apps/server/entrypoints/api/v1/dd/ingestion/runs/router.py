@@ -5,7 +5,7 @@ import domains, infra
 import domains.dd.ingestion.ai.task
 import domains.dd.ingestion.task
 from . import schemas
-from .. import resolver
+from ... import catalog
 
 import logging
 from typing import Literal
@@ -22,7 +22,7 @@ router = APIRouter()
 async def start_run(body: schemas.StartRunBody) -> dict:
     """Status: cached (manifest present, no refresh) / queued (lock
     acquired, Celery dispatched) / locked (another in flight)."""
-    await resolver.service.get_catalog_entry(body.slug)
+    await catalog.service.get_catalog_entry(body.slug)
 
     gate = await domains.dd.ingestion.runtime.dispatch.service.reserve_run(
         body.slug, body.refresh

@@ -15,7 +15,7 @@ export const test = base.extend<{ api: (mode: ApiMode) => Promise<void> }>({
         if (path === "/api/health") return json({ status: "healthy" });
         if (path === "/api/v1/dd/ingestion") return json([{ slug: "a" }, { slug: "b" }, { slug: "c" }]);
         if (path === "/api/v1/ycs/admin/videos") return json({ items: [], total: 1204 });
-        if (path === "/api/v1/dd/runs/active") return json({ active: [] });
+        if (path === "/api/v1/dd/ingestion/runs/active") return json({ active: [] });
         return route.fulfill({ status: 404, body: "" });
       });
     });

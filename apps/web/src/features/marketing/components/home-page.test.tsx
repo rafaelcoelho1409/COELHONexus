@@ -69,7 +69,9 @@ describe("HomePage", () => {
       http.get(`${ORIGIN}/api/health`, () => HttpResponse.json({ status: "healthy" })),
       http.get(`${ORIGIN}/api/v1/dd/ingestion`, () => HttpResponse.json([{ slug: "a" }, { slug: "b" }])),
       http.get(`${ORIGIN}/api/v1/ycs/admin/videos`, () => HttpResponse.json({ items: [], total: 1204 })),
-      http.get(`${ORIGIN}/api/v1/dd/runs/active`, () => HttpResponse.json({ active: [{ id: "run-1" }] })),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/active`, () =>
+        HttpResponse.json({ active: [{ id: "run-1" }] }),
+      ),
     );
     renderPage();
 
@@ -95,7 +97,7 @@ describe("HomePage", () => {
       http.get(`${ORIGIN}/api/health`, () => HttpResponse.json({ status: "degraded" })),
       http.get(`${ORIGIN}/api/v1/dd/ingestion`, () => HttpResponse.json({ not: "a list" })),
       http.get(`${ORIGIN}/api/v1/ycs/admin/videos`, () => HttpResponse.json({ items: [] })),
-      http.get(`${ORIGIN}/api/v1/dd/runs/active`, () => HttpResponse.json({ runs: [] })),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/active`, () => HttpResponse.json({ runs: [] })),
     );
     renderPage();
 

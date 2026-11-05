@@ -4,7 +4,7 @@
 
 import { z } from "zod";
 
-/** GET /api/v1/dd/resolver — catalog tiles. */
+/** GET /api/v1/dd/catalog — catalog tiles. */
 const catalogEntrySchema = z.looseObject({
   slug: z.string(),
   name: z.string(),
@@ -15,7 +15,7 @@ const catalogEntrySchema = z.looseObject({
 });
 export type CatalogEntry = z.infer<typeof catalogEntrySchema>;
 
-/** GET /api/v1/dd/resolver — the whole catalog (array). */
+/** GET /api/v1/dd/catalog — the whole catalog (array). */
 export const resolverCatalogSchema = z.array(catalogEntrySchema);
 
 /** GET /api/v1/dd/ingestion — ingested library list. */
@@ -67,7 +67,7 @@ export type PageVersion = "processed" | "original";
 /** GET /api/v1/dd/ingestion/{slug}/pages/{idx} — page body. */
 export const pageBodySchema = z.looseObject({ body: z.string() });
 
-/** GET /api/v1/dd/runs/{run_id} — live progress + manifest snapshot.
+/** GET /api/v1/dd/ingestion/runs/{run_id} — live progress + manifest snapshot.
  * `post` is record_post's summary (split/dedup result); either field may
  * be absent on early/tier-only payloads. */
 export const runStatusSchema = z.looseObject({
@@ -134,7 +134,7 @@ export const runStatusSchema = z.looseObject({
 });
 export type RunStatus = z.infer<typeof runStatusSchema>;
 
-/** GET /api/v1/dd/runs/active — in-flight runs for page-reload recovery. */
+/** GET /api/v1/dd/ingestion/runs/active — in-flight runs for page-reload recovery. */
 export const activeRunsSchema = z.looseObject({
   active: z.array(
     z.looseObject({
@@ -145,7 +145,7 @@ export const activeRunsSchema = z.looseObject({
   ),
 });
 
-/** POST /api/v1/dd/runs — cached | queued | locked. */
+/** POST /api/v1/dd/ingestion/runs — cached | queued | locked. */
 export const startRunResponseSchema = z.looseObject({
   status: z.enum(["cached", "queued", "locked"]),
   run_id: z.string().optional(),
@@ -225,7 +225,7 @@ export const stageActiveRunSchema = z.looseObject({
 });
 export type StageActiveRun = z.infer<typeof stageActiveRunSchema>;
 
-/** GET /api/v1/dd/synth/{slug}/active — study orchestrator variant. */
+/** GET /api/v1/dd/pipeline/synth/{slug}/active — study orchestrator variant. */
 export const synthActiveRunSchema = z.looseObject({
   active: z.boolean(),
   study_thread_id: z.string().nullable().catch(null),
@@ -247,7 +247,7 @@ export const graphStateSchema = z
   .transform((state) => ({ ...state, next: state.next.length > 0 ? state.next : state.next_nodes }));
 export type GraphState = z.infer<typeof graphStateSchema>;
 
-/** GET /api/v1/dd/planner/{slug}/timing — persisted run wall-clock. */
+/** GET /api/v1/dd/pipeline/planner/{slug}/timing — persisted run wall-clock. */
 export const stageTimingSchema = z.looseObject({
   total_wall_ms: z.number().catch(0),
 });
@@ -265,7 +265,7 @@ export const stageStartResponseSchema = z.looseObject({
 // Synth — chapter plan + study orchestrator
 // ============================================================
 
-/** GET /api/v1/dd/synth/{slug}/study/chapters — plan chapters merged with
+/** GET /api/v1/dd/pipeline/synth/{slug}/study/chapters — plan chapters merged with
  * durable render status (MinIO). `ok` on this endpoint ⇔ a plan exists. */
 export const synthChaptersSchema = z.looseObject({
   chapters: z.array(
@@ -287,7 +287,7 @@ export const synthChaptersSchema = z.looseObject({
 });
 export type SynthChapters = z.infer<typeof synthChaptersSchema>;
 
-/** POST /api/v1/dd/synth/{slug} — study run dispatch (ids are upgraded to
+/** POST /api/v1/dd/pipeline/synth/{slug} — study run dispatch (ids are upgraded to
  * titles via the chapters endpoint) or single-chapter thread. */
 export const synthStartResponseSchema = z.looseObject({
   study_thread_id: z.string().optional(),
@@ -336,7 +336,7 @@ export const usagePayloadSchema = z.looseObject({
 });
 export type UsagePayload = z.infer<typeof usagePayloadSchema>;
 
-/** GET /api/v1/dd/planner/{slug}/health — how the latest plan was produced. `degraded` is the one-flag
+/** GET /api/v1/dd/pipeline/planner/{slug}/health — how the latest plan was produced. `degraded` is the one-flag
  * answer to "will this plan be any good"; null when there is no plan or it could not be read. */
 export const plannerHealthSchema = z.looseObject({
   degraded: z.boolean().nullable().catch(null),

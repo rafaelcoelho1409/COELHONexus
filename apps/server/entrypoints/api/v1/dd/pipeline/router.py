@@ -1,6 +1,7 @@
 """Cross-stage pipeline-state introspection. Per-slug cache map +
 global Planner/Synth lock status."""
 import domains, infra
+from . import planner, synth
 
 import logging
 
@@ -9,6 +10,9 @@ from fastapi import APIRouter, HTTPException
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+# The stages come first, so their paths win over this router's own `/{slug}/...` ones.
+router.include_router(planner.router, prefix="/planner")
+router.include_router(synth.router,   prefix="/synth")
 
 
 @router.get("/active")

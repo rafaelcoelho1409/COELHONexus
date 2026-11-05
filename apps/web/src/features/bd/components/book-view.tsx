@@ -477,15 +477,13 @@ function BookDetail({
         </p>
       ) : null}
 
-      {agentic.run ? (
-        <AgenticUsageSheet
-          open={usageOpen}
-          bookId={bookId}
-          run={agentic.run}
-          live={agentic.streaming}
-          onClose={() => setUsageOpen(false)}
-        />
-      ) : null}
+      <AgenticUsageSheet
+        open={usageOpen}
+        bookId={bookId}
+        run={agentic.run}
+        live={agentic.streaming}
+        onClose={() => setUsageOpen(false)}
+      />
       <div
         role="tabpanel"
         id="bd-pipeline-panel"

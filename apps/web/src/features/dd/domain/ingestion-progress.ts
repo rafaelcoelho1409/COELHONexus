@@ -1,5 +1,5 @@
 /** Docs Distiller ingestion — the Pipeline tab's picture of a run: the Agentic AI graph's nodes, what state each is in,
- * and the labels the two progress cards print. Pure; the run itself comes from `GET /dd/runs/{id}`. */
+ * and the labels the two progress cards print. Pure; the run itself comes from `GET /dd/ingestion/runs/{id}`. */
 
 import type { RunStatus } from "../entities";
 import type { NodeView } from "./stages";

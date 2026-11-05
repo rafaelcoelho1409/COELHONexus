@@ -61,7 +61,6 @@ export function IngestionPipeline({
   onResumeAgentic,
   onStopAgentic,
   onWipeAgentic,
-  onDismiss,
 }: {
   runId: string | null;
   progress: Progress | null;
@@ -83,7 +82,6 @@ export function IngestionPipeline({
   onResumeAgentic: () => void;
   onStopAgentic: () => void;
   onWipeAgentic: () => void;
-  onDismiss?: () => void;
 }) {
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -156,7 +154,6 @@ export function IngestionPipeline({
           onStart={onStart}
           onStop={onStop}
           onWipe={onWipe}
-          onDismiss={onDismiss}
         />
         <AgenticProgress
           statusText={agenticStatusText}

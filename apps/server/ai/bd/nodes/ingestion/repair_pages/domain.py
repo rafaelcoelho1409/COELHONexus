@@ -176,7 +176,11 @@ def validate_proposals(
             rejected.append("patch proposal target is outside the supplied repair context")
             continue
         start = markdown.find(proposal.target_text)
-        if markdown.find(proposal.target_text, start + 1) >= 0:
+        if markdown.find(proposal.target_text, start + 1) >= 0 and not all(
+            _is_spacing_repair(proposal, markdown, found, found + len(proposal.target_text))
+            for found in _occurrences(markdown, proposal.target_text)
+        ):
+            # Only a verified space-only repair may name a phrase that occurs more than once: it is the same fix at each.
             rejected.append("patch proposal target is ambiguous in the source page")
             continue
         end = start + len(proposal.target_text)
@@ -267,24 +271,24 @@ def apply_proposals(
     markdown: str,
     proposals: list[agents.schemas.PatchProposal],
 ) -> tuple[str, list[str], list[str]]:
-    spans = []
-    for proposal in proposals:
-        start = markdown.find(proposal.target_text)
-        spans.append((start, start + len(proposal.target_text), proposal))
-    spans.sort(key = lambda span: span[0])
-    # A space-only edit is verified by the diff itself, so the model's risk label and confidence only need to
-    # rule out a guess; a letter-changing edit never qualifies.
-    eligible = [
-        span for span in spans
-        if (
-            span[2].risk == agents.schemas.PatchRisk.LOW
-            and span[2].confidence >= domains.bd.ingestion.ai.params.AUTO_APPLY_CONFIDENCE
-            and _is_mechanical_repair(span[2])
-            or span[2].risk in {agents.schemas.PatchRisk.LOW, agents.schemas.PatchRisk.MEDIUM}
-            and span[2].confidence >= domains.bd.ingestion.ai.params.SPACING_REPAIR_CONFIDENCE
-            and _is_spacing_repair(span[2], markdown, span[0], span[1])
-        )
+    # One span per occurrence: a space-only repair of a phrase that appears twice is the same fix in both places.
+    spans = [
+        (start, start + len(proposal.target_text), proposal)
+        for proposal in proposals
+        for start in _occurrences(markdown, proposal.target_text)
     ]
+    spans.sort(key = lambda span: span[0])
+    # A proposal qualifies only if it does at every occurrence. A space-only edit is verified by the diff itself, so the
+    # model's risk label and confidence only need to rule out a guess; a letter-changing edit never qualifies.
+    eligible_issue_ids = {
+        proposal.issue_id
+        for proposal in proposals
+        if all(
+            _is_auto_applicable(proposal, markdown, start, start + len(proposal.target_text))
+            for start in _occurrences(markdown, proposal.target_text)
+        )
+    }
+    eligible = [span for span in spans if span[2].issue_id in eligible_issue_ids]
     # Only two edits that could both be applied can collide; a review-only proposal never touches the page, so it must
     # not hold back a verified repair that happens to sit inside its span.
     overlapping_issue_ids: set[str] = set()
@@ -293,19 +297,38 @@ def apply_proposals(
             if current[0] < previous[1] and previous[0] < current[1]:
                 overlapping_issue_ids.add(current[2].issue_id)
                 overlapping_issue_ids.add(previous[2].issue_id)
-    eligible_issue_ids = {span[2].issue_id for span in eligible}
 
     normalized = markdown
-    applied_issue_ids = []
-    review_issue_ids = []
+    applied_issue_ids: dict[str, None] = {}
+    review_issue_ids: dict[str, None] = {}
     for start, end, proposal in reversed(spans):
         auto_apply = proposal.issue_id in eligible_issue_ids and proposal.issue_id not in overlapping_issue_ids
         if auto_apply:
             normalized = normalized[:start] + proposal.replacement + normalized[end:]
-            applied_issue_ids.append(proposal.issue_id)
+            applied_issue_ids[proposal.issue_id] = None
         else:
-            review_issue_ids.append(proposal.issue_id)
+            review_issue_ids[proposal.issue_id] = None
     return normalized, list(reversed(applied_issue_ids)), list(reversed(review_issue_ids))
+
+
+def _occurrences(markdown: str, target: str) -> list[int]:
+    starts = []
+    start = markdown.find(target)
+    while start >= 0:
+        starts.append(start)
+        start = markdown.find(target, start + len(target))
+    return starts
+
+
+def _is_auto_applicable(proposal: agents.schemas.PatchProposal, markdown: str, start: int, end: int) -> bool:
+    return (
+        proposal.risk == agents.schemas.PatchRisk.LOW
+        and proposal.confidence >= domains.bd.ingestion.ai.params.AUTO_APPLY_CONFIDENCE
+        and _is_mechanical_repair(proposal)
+        or proposal.risk in {agents.schemas.PatchRisk.LOW, agents.schemas.PatchRisk.MEDIUM}
+        and proposal.confidence >= domains.bd.ingestion.ai.params.SPACING_REPAIR_CONFIDENCE
+        and _is_spacing_repair(proposal, markdown, start, end)
+    )
 
 
 def apply_mechanical_fixes(markdown: str) -> tuple[str, dict[str, int]]:
@@ -325,7 +348,9 @@ def apply_mechanical_fixes_for_issues(
         if issue.code in {
             agents.schemas.IssueCode.CONTROL_CHARACTERS,
             agents.schemas.IssueCode.SOFT_HYPHEN,
-        } and counts.get(issue.code.value):
+        }:
+            # The cleaned text holds none of either, whether this pass removed them or an earlier repair already had
+            # (a space-only repair can swallow the soft hyphen it sits beside).
             resolved_issue_ids.append(issue.issue_id)
             continue
         if issue.code == agents.schemas.IssueCode.TOC_NOISE:

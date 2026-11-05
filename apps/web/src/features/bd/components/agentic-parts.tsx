@@ -82,42 +82,6 @@ export function AgenticNodeList({
   );
 }
 
-const AGENTIC_VIEWS = [
-  { id: "graph", label: "Graph" },
-  { id: "list", label: "List" },
-] as const;
-export type AgenticViewId = (typeof AGENTIC_VIEWS)[number]["id"];
-
-/** The Graph | List switch, drawn as the stage graphs' own: two joined buttons, the chosen one tinted. */
-export function AgenticViewSwitch({
-  value,
-  onChange,
-}: {
-  value: AgenticViewId;
-  onChange: (view: AgenticViewId) => void;
-}) {
-  return (
-    <fieldset className="m-0 flex min-w-0 shrink-0 border-0 p-0">
-      <legend className="sr-only">Pipeline shown as</legend>
-      {AGENTIC_VIEWS.map((view) => (
-        <button
-          key={view.id}
-          type="button"
-          aria-pressed={value === view.id}
-          onClick={() => onChange(view.id)}
-          className={`min-h-9 border px-3 text-xs first:rounded-l-sm last:rounded-r-sm ${
-            value === view.id
-              ? "border-primary bg-primary/10 text-primary-text"
-              : "-ml-px border-border text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          {view.label}
-        </button>
-      ))}
-    </fieldset>
-  );
-}
-
 export function AgenticPills({ items }: { items: readonly string[] }) {
   return (
     <span className="flex flex-wrap gap-1.5">

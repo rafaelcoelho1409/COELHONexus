@@ -98,10 +98,12 @@ const CATALOG = [
 
 function serve(activeRuns: () => unknown[]) {
   server.use(
-    http.get(`${ORIGIN}/api/v1/dd/resolver`, () => HttpResponse.json(CATALOG)),
-    http.get(`${ORIGIN}/api/v1/dd/runs/active`, () => HttpResponse.json({ active: activeRuns() })),
-    http.get(`${ORIGIN}/api/v1/dd/runs/${RUN}`, () => HttpResponse.json({ progress: DONE, post: null })),
-    http.get(`${ORIGIN}/api/v1/dd/runs/*/llm-counters`, () => HttpResponse.json(NO_USAGE)),
+    http.get(`${ORIGIN}/api/v1/dd/catalog`, () => HttpResponse.json(CATALOG)),
+    http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/active`, () => HttpResponse.json({ active: activeRuns() })),
+    http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/${RUN}`, () =>
+      HttpResponse.json({ progress: DONE, post: null }),
+    ),
+    http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/*/llm-counters`, () => HttpResponse.json(NO_USAGE)),
     http.get(`${ORIGIN}/api/v1/dd/ingestion/alpha/manifest`, () => HttpResponse.json(MANIFEST)),
     http.get(`${ORIGIN}/api/v1/dd/ingestion`, () => HttpResponse.json([])),
     http.get(`${ORIGIN}/api/v1/dd/ingestion/alpha/pages/*`, () => HttpResponse.json({ body: "x" })),
@@ -124,15 +126,15 @@ describe("IngestionStage — the ?run= address", () => {
 
   it("still adopts a run that is really in flight when the page is opened without ?run=", async () => {
     server.use(
-      http.get(`${ORIGIN}/api/v1/dd/runs/active`, () =>
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/active`, () =>
         HttpResponse.json({
           active: [{ slug: "alpha", run_id: "r9", progress: { ...DONE, status: "running" } }],
         }),
       ),
-      http.get(`${ORIGIN}/api/v1/dd/runs/r9`, () =>
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/r9`, () =>
         HttpResponse.json({ progress: { ...DONE, status: "running", tier: "llms_full" }, post: null }),
       ),
-      http.get(`${ORIGIN}/api/v1/dd/runs/*/llm-counters`, () => HttpResponse.json(NO_USAGE)),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/*/llm-counters`, () => HttpResponse.json(NO_USAGE)),
       http.get(`${ORIGIN}/api/v1/dd/ingestion/alpha/manifest`, () => HttpResponse.json(MANIFEST)),
       http.get(`${ORIGIN}/api/v1/dd/ingestion`, () => HttpResponse.json([])),
       http.get(`${ORIGIN}/api/v1/dd/ingestion/alpha/pages/*`, () => HttpResponse.json({ body: "x" })),
@@ -172,15 +174,15 @@ describe("IngestionStage — the Pipeline tab", () => {
 
   it("shows the two progress cards and the Agentic AI graph of a run in flight", async () => {
     server.use(
-      http.get(`${ORIGIN}/api/v1/dd/resolver`, () => HttpResponse.json(CATALOG)),
-      http.get(`${ORIGIN}/api/v1/dd/runs/active`, () => HttpResponse.json({ active: [] })),
-      http.get(`${ORIGIN}/api/v1/dd/runs/r5`, () =>
+      http.get(`${ORIGIN}/api/v1/dd/catalog`, () => HttpResponse.json(CATALOG)),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/active`, () => HttpResponse.json({ active: [] })),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/r5`, () =>
         HttpResponse.json({
           progress: { ...DONE, status: "running", tier: "llms_full", current: 3, total: 10, stages: STAGES },
           post: null,
         }),
       ),
-      http.get(`${ORIGIN}/api/v1/dd/runs/*/llm-counters`, () => HttpResponse.json(NO_USAGE)),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/*/llm-counters`, () => HttpResponse.json(NO_USAGE)),
       http.get(`${ORIGIN}/api/v1/dd/ingestion/alpha/manifest`, () => HttpResponse.json(MANIFEST)),
       http.get(`${ORIGIN}/api/v1/dd/ingestion`, () => HttpResponse.json([])),
       http.get(`${ORIGIN}/api/v1/dd/ingestion/alpha/pages/*`, () => HttpResponse.json({ body: "x" })),
@@ -209,8 +211,10 @@ describe("IngestionStage — the Pipeline tab", () => {
   it("starts an ingestion that has never run, and follows the run it queued", async () => {
     serve(() => []);
     server.use(
-      http.post(`${ORIGIN}/api/v1/dd/runs`, () => HttpResponse.json({ status: "queued", run_id: "r1" })),
-      http.get(`${ORIGIN}/api/v1/dd/runs/r1`, () =>
+      http.post(`${ORIGIN}/api/v1/dd/ingestion/runs`, () =>
+        HttpResponse.json({ status: "queued", run_id: "r1" }),
+      ),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/r1`, () =>
         HttpResponse.json({ progress: { ...DONE, status: "running", tier: "llms_full" }, post: null }),
       ),
     );
@@ -289,14 +293,14 @@ describe("IngestionStage — stopping and how a run ends", () => {
   /** One run, whose status the test controls, and a cancel endpoint that answers like the real one. */
   function serveRun(progress: () => Record<string, unknown>, cancel?: () => Response) {
     server.use(
-      http.get(`${ORIGIN}/api/v1/dd/resolver`, () => HttpResponse.json(CATALOG)),
-      http.get(`${ORIGIN}/api/v1/dd/runs/active`, () => HttpResponse.json({ active: [] })),
-      http.get(`${ORIGIN}/api/v1/dd/runs/${RUN}`, () =>
+      http.get(`${ORIGIN}/api/v1/dd/catalog`, () => HttpResponse.json(CATALOG)),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/active`, () => HttpResponse.json({ active: [] })),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/${RUN}`, () =>
         HttpResponse.json({ progress: progress(), post: null }),
       ),
-      http.get(`${ORIGIN}/api/v1/dd/runs/*/llm-counters`, () => HttpResponse.json(NO_USAGE)),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/*/llm-counters`, () => HttpResponse.json(NO_USAGE)),
       http.post(
-        `${ORIGIN}/api/v1/dd/runs/${RUN}/cancel`,
+        `${ORIGIN}/api/v1/dd/ingestion/runs/${RUN}/cancel`,
         cancel ?? (() => HttpResponse.json({ run_id: RUN, status: "cancel_requested" })),
       ),
       http.get(`${ORIGIN}/api/v1/dd/ingestion/alpha/manifest`, () => HttpResponse.json(MANIFEST)),
@@ -348,7 +352,7 @@ describe("IngestionStage — stopping and how a run ends", () => {
     expect(button).not.toHaveTextContent("Stopping");
   });
 
-  it("announces a cancelled run and keeps it on screen until it is dismissed", async () => {
+  it("announces a cancelled run and keeps it on screen", async () => {
     serveRun(() => ({ ...RUNNING, status: "cancelled" }));
     render(<Page start={`/dd/ingestion?slug=alpha&run=${RUN}`} />);
 
@@ -359,7 +363,7 @@ describe("IngestionStage — stopping and how a run ends", () => {
     expect(within(card).getByRole("button", { name: "Retry documentation extraction" })).toBeEnabled();
   });
 
-  it("keeps a failed run on screen with its reason until it is dismissed", async () => {
+  it("keeps a failed run on screen with its reason, and offers no way to dismiss it", async () => {
     serveRun(() => ({
       ...RUNNING,
       status: "failed",
@@ -379,8 +383,7 @@ describe("IngestionStage — stopping and how a run ends", () => {
     expect(screen.getByTestId("url")).toHaveTextContent(`run=${RUN}`); // not dropped behind the reader's back
     expect(within(card).getByRole("button", { name: "Stop documentation extraction" })).toBeDisabled();
 
-    await userEvent.click(within(card).getByRole("button", { name: "Dismiss run" }));
-    await waitFor(() => expect(screen.getByTestId("url")).not.toHaveTextContent("run="));
+    expect(within(card).getByText("Ingestion failed.")).toBeInTheDocument();
     expect(within(card).queryByRole("button", { name: "Dismiss run" })).not.toBeInTheDocument();
   });
 });

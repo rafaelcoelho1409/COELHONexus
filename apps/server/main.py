@@ -274,8 +274,8 @@ async def root():
             "docs": "/docs",
             "health": "/health",
             "mcp": "/mcp",
-            "resolver": "/api/v1/dd/resolver",
-            "runs": "/api/v1/dd/runs",
+            "catalog": "/api/v1/dd/catalog",
+            "runs": "/api/v1/dd/ingestion/runs",
         },
     }
 

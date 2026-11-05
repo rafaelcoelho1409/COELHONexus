@@ -521,7 +521,7 @@ async def resume_synth_async(thread_id: str) -> dict:
             "status": "failed",
             "error": (
                 f"no checkpoints found for thread_id = {thread_id!r}; "
-                f"call POST /synth/{{slug}} to start a fresh run"
+                f"call POST /pipeline/synth/{{slug}} to start a fresh run"
             ),
         }
 

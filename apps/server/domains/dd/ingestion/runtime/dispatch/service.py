@@ -204,7 +204,7 @@ async def run(run_id: str, slug: str) -> dict:
     `docs-distiller/study/{slug}/...`) instead of the bare `run_id` —
     ingestion was the only DD stage findable in the LangFuse UI only by
     trace ID. `run_id` itself is untouched everywhere else (Redis
-    locks/progress keys, MinIO manifest paths, the `/runs/{run_id}`
+    locks/progress keys, MinIO manifest paths, the `/ingestion/runs/{run_id}`
     REST routes all still use the plain uuid4 hex) — this only changes
     the cosmetic label LangFuse groups spans under."""
     t0 = asyncio.get_running_loop().time()
@@ -234,7 +234,7 @@ async def run(run_id: str, slug: str) -> dict:
 
 
 async def _run_inner(run_id: str, slug: str) -> dict:
-    """Framework lock held by run_id on entry (acquired in POST /runs); released in finally."""
+    """Framework lock held by run_id on entry (acquired in POST /ingestion/runs); released in finally."""
     catalog = domains.dd.catalog.service.index_by_slug()
     entry = catalog.get(slug)
     if entry is None:

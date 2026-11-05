@@ -86,9 +86,13 @@ beforeEach(() => {
   nav.push.mockClear();
   nav.params = new URLSearchParams("slug=alpha&chapter=ch-1");
   server.use(
-    http.get(`${API}/synth/alpha/study/chapters`, () => HttpResponse.json(CHAPTERS)),
-    http.get(`${API}/synth/alpha/study/ch-1/artifact/README.md`, () => HttpResponse.text(CHAPTER_ONE)),
-    http.get(`${API}/synth/alpha/study/ch-2/artifact/README.md`, () => HttpResponse.text(CHAPTER_TWO)),
+    http.get(`${API}/pipeline/synth/alpha/study/chapters`, () => HttpResponse.json(CHAPTERS)),
+    http.get(`${API}/pipeline/synth/alpha/study/ch-1/artifact/README.md`, () =>
+      HttpResponse.text(CHAPTER_ONE),
+    ),
+    http.get(`${API}/pipeline/synth/alpha/study/ch-2/artifact/README.md`, () =>
+      HttpResponse.text(CHAPTER_TWO),
+    ),
     http.get(`${API}/ingestion/alpha/manifest`, () =>
       HttpResponse.json({
         framework_name: "Alpha",
@@ -218,7 +222,7 @@ describe("Study reader", () => {
   it("says so when the chapter cannot be loaded", async () => {
     server.use(
       http.get(
-        `${API}/synth/alpha/study/ch-1/artifact/README.md`,
+        `${API}/pipeline/synth/alpha/study/ch-1/artifact/README.md`,
         () => new HttpResponse(null, { status: 404 }),
       ),
     );

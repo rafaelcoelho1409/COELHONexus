@@ -1,7 +1,7 @@
 """LangGraph node that asks for and validates minimal Markdown repairs."""
 from __future__ import annotations
 import domains
-from . import domain
+from . import domain, params
 from ..page_audit import params as audit_params
 from .... import agents
 
@@ -49,7 +49,7 @@ async def repair_page(
     # Retry transient provider failures and occasional non-structured answers in one bounded loop.
     result = await domains.settings.chat.service.resilient_ainvoke(
         lambda: repairer.ainvoke(request, config = config),
-        attempts = audit_params.MAX_ATTEMPTS,
+        attempts = params.MAX_ATTEMPTS,
         wait_base_s = audit_params.RETRY_WAIT_BASE_S,
         accept = lambda value: agents.domain.structured_or_recovered(value, agents.schemas.PagePatchBatch) is not None,
     )
@@ -57,6 +57,6 @@ async def repair_page(
     if batch is not None:
         return domain.apply_patches(markdown, source_sha256, assessment, batch)
     raise ValueError(
-        f"page repair specialist ended {audit_params.MAX_ATTEMPTS} times without a structured PagePatchBatch "
+        f"page repair specialist ended {params.MAX_ATTEMPTS} times without a structured PagePatchBatch "
         f"for page {page['idx']}"
     )

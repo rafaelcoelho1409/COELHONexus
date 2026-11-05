@@ -3,7 +3,7 @@ deliberately NOT re-exported here — it imports `infra.celery`, which reads str
 env vars (REDIS_HOST/ENVIRONMENT/...) at module import time, and forcing that onto
 every bare `import domains` would break local/standalone use. Callers needing it
 use a direct `from domains.dd.pipeline.synth.task import X` (same class of exception as
-`dd/planner/task.py` and the LLM rotator's reverse-edge import).
+`dd/pipeline/planner/task.py` and the LLM rotator's reverse-edge import).
 
 `params.py`'s `STUDY_SEM` env read is lazy (`study_sem()`, not a module-level
 constant) specifically so this file has no import-time env dependency — see

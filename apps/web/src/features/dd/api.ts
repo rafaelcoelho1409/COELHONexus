@@ -4,32 +4,32 @@
 import {
   client,
   deleteDdIngestionSlugAgenticRunsRunId,
-  deleteDdPlannerSlugWipe,
-  deleteDdSynthSlugWipe,
+  deleteDdPipelinePlannerSlugWipe,
+  deleteDdPipelineSynthSlugWipe,
+  getDdIngestionRunsRunIdPagesIdx,
   getDdPipelineActive,
+  getDdPipelinePlannerDebugGraphThreadIdLlmCounters,
+  getDdPipelinePlannerDebugGraphThreadIdState,
+  getDdPipelinePlannerInfo,
+  getDdPipelinePlannerRecent,
+  getDdPipelinePlannerSlugActive,
+  getDdPipelinePlannerSlugHealth,
+  getDdPipelinePlannerSlugTiming,
   getDdPipelineSlugState,
-  getDdPlannerDebugGraphThreadIdLlmCounters,
-  getDdPlannerDebugGraphThreadIdState,
-  getDdPlannerInfo,
-  getDdPlannerRecent,
-  getDdPlannerSlugActive,
-  getDdPlannerSlugHealth,
-  getDdPlannerSlugTiming,
-  getDdRunsRunIdPagesIdx,
-  getDdSynthDebugGraphThreadIdLlmCounters,
-  getDdSynthDebugGraphThreadIdState,
-  getDdSynthInfo,
-  getDdSynthRecent,
-  getDdSynthSlugActive,
-  getDdSynthSlugStudyChapterIdArtifactArtifactName,
-  getDdSynthSlugStudyChapters,
+  getDdPipelineSynthDebugGraphThreadIdLlmCounters,
+  getDdPipelineSynthDebugGraphThreadIdState,
+  getDdPipelineSynthInfo,
+  getDdPipelineSynthRecent,
+  getDdPipelineSynthSlugActive,
+  getDdPipelineSynthSlugStudyChapterIdArtifactArtifactName,
+  getDdPipelineSynthSlugStudyChapters,
   postDdIngestionSlugAgenticRuns,
   postDdIngestionSlugAgenticRunsRunIdResume,
-  postDdPlannerSlug,
-  postDdPlannerThreadIdCancel,
-  postDdPlannerThreadIdResume,
-  postDdSynthSlug,
-  postDdSynthThreadIdCancel,
+  postDdPipelinePlannerSlug,
+  postDdPipelinePlannerThreadIdCancel,
+  postDdPipelinePlannerThreadIdResume,
+  postDdPipelineSynthSlug,
+  postDdPipelineSynthThreadIdCancel,
 } from "@/shared/api";
 
 import type {
@@ -87,8 +87,8 @@ async function orFallback<T>(read: () => Promise<T>, fallback: T): Promise<T> {
 export async function fetchStageInfo(stage: RunStage): Promise<StageInfo> {
   const result =
     stage === "planner"
-      ? await getDdPlannerInfo({ throwOnError: true })
-      : await getDdSynthInfo({ throwOnError: true });
+      ? await getDdPipelinePlannerInfo({ throwOnError: true })
+      : await getDdPipelineSynthInfo({ throwOnError: true });
   return stageInfoSchema.parse(result.data);
 }
 
@@ -97,22 +97,22 @@ export function fetchStageRecent(stage: RunStage): Promise<Array<{ slug: string;
   return orFallback(async () => {
     const result =
       stage === "planner"
-        ? await getDdPlannerRecent({ throwOnError: true })
-        : await getDdSynthRecent({ throwOnError: true });
+        ? await getDdPipelinePlannerRecent({ throwOnError: true })
+        : await getDdPipelineSynthRecent({ throwOnError: true });
     return stageRecentSchema.parse(result.data).recent;
   }, []);
 }
 
 export function fetchPlannerActive(slug: string): Promise<StageActiveRun | null> {
   return orFallback(async () => {
-    const result = await getDdPlannerSlugActive({ path: { slug }, throwOnError: true });
+    const result = await getDdPipelinePlannerSlugActive({ path: { slug }, throwOnError: true });
     return stageActiveRunSchema.parse(result.data);
   }, null);
 }
 
 export function fetchSynthActive(slug: string): Promise<SynthActiveRun | null> {
   return orFallback(async () => {
-    const result = await getDdSynthSlugActive({ path: { slug }, throwOnError: true });
+    const result = await getDdPipelineSynthSlugActive({ path: { slug }, throwOnError: true });
     return synthActiveRunSchema.parse(result.data);
   }, null);
 }
@@ -122,8 +122,8 @@ export function fetchGraphState(stage: RunStage, threadId: string): Promise<Grap
     const path = { thread_id: threadId };
     const result =
       stage === "planner"
-        ? await getDdPlannerDebugGraphThreadIdState({ path, throwOnError: true })
-        : await getDdSynthDebugGraphThreadIdState({ path, throwOnError: true });
+        ? await getDdPipelinePlannerDebugGraphThreadIdState({ path, throwOnError: true })
+        : await getDdPipelineSynthDebugGraphThreadIdState({ path, throwOnError: true });
     return graphStateSchema.parse(result.data);
   }, null);
 }
@@ -147,7 +147,7 @@ export async function fetchGraphStateRetried(
 /** Persisted wall-clock of the last planner run, in ms (0 when unknown). */
 export function fetchPlannerTotalMs(slug: string): Promise<number> {
   return orFallback(async () => {
-    const result = await getDdPlannerSlugTiming({ path: { slug }, throwOnError: true });
+    const result = await getDdPipelinePlannerSlugTiming({ path: { slug }, throwOnError: true });
     return stageTimingSchema.parse(result.data).total_wall_ms;
   }, 0);
 }
@@ -158,8 +158,8 @@ export function fetchUsage(stage: RunStage, threadId: string): Promise<UsagePayl
     const path = { thread_id: threadId };
     const result =
       stage === "planner"
-        ? await getDdPlannerDebugGraphThreadIdLlmCounters({ path, throwOnError: true })
-        : await getDdSynthDebugGraphThreadIdLlmCounters({ path, throwOnError: true });
+        ? await getDdPipelinePlannerDebugGraphThreadIdLlmCounters({ path, throwOnError: true })
+        : await getDdPipelineSynthDebugGraphThreadIdLlmCounters({ path, throwOnError: true });
     return usagePayloadSchema.parse(result.data);
   }, null);
 }
@@ -167,7 +167,7 @@ export function fetchUsage(stage: RunStage, threadId: string): Promise<UsagePayl
 /** How the latest plan of a framework was produced; null when unknown. */
 export function fetchPlannerHealth(slug: string): Promise<PlannerHealth | null> {
   return orFallback(async () => {
-    const result = await getDdPlannerSlugHealth({ path: { slug }, throwOnError: true });
+    const result = await getDdPipelinePlannerSlugHealth({ path: { slug }, throwOnError: true });
     return plannerHealthSchema.parse(result.data);
   }, null);
 }
@@ -188,14 +188,14 @@ export function fetchPipelineActive(): Promise<PipelineActive | null> {
 
 export function fetchSynthChapters(slug: string): Promise<SynthChapters | null> {
   return orFallback(async () => {
-    const result = await getDdSynthSlugStudyChapters({ path: { slug }, throwOnError: true });
+    const result = await getDdPipelineSynthSlugStudyChapters({ path: { slug }, throwOnError: true });
     return synthChaptersSchema.parse(result.data);
   }, null);
 }
 
 /** Markdown of a rendered chapter. Throws when the artifact is missing so the reader can say so. */
 export async function fetchChapterMarkdown(slug: string, chapterId: string): Promise<string> {
-  const result = await getDdSynthSlugStudyChapterIdArtifactArtifactName({
+  const result = await getDdPipelineSynthSlugStudyChapterIdArtifactArtifactName({
     path: { slug, chapter_id: chapterId, artifact_name: CHAPTER_ARTIFACT },
     throwOnError: true,
   });
@@ -206,7 +206,7 @@ export async function fetchChapterMarkdown(slug: string, chapterId: string): Pro
 export async function fetchIngestionUsage(runId: string): Promise<UsagePayload> {
   const result = await client.request({
     method: "GET",
-    url: "/api/v1/dd/runs/{run_id}/llm-counters",
+    url: "/api/v1/dd/ingestion/runs/{run_id}/llm-counters",
     path: { run_id: runId },
     throwOnError: true,
   });
@@ -243,7 +243,7 @@ export async function fetchRunPageBody(
   idx: number,
   version: "processed" | "original" = "processed",
 ): Promise<string> {
-  const result = await getDdRunsRunIdPagesIdx({
+  const result = await getDdIngestionRunsRunIdPagesIdx({
     path: { run_id: runId, idx },
     query: { version },
     throwOnError: true,
@@ -256,7 +256,9 @@ export async function fetchRunPageBody(
 export function stageEventsUrl(stage: RunStage, threadId: string): string {
   return client.buildUrl({
     url:
-      stage === "planner" ? "/api/v1/dd/planner/{thread_id}/events" : "/api/v1/dd/synth/{thread_id}/events",
+      stage === "planner"
+        ? "/api/v1/dd/pipeline/planner/{thread_id}/events"
+        : "/api/v1/dd/pipeline/synth/{thread_id}/events",
     path: { thread_id: threadId },
   });
 }
@@ -271,8 +273,8 @@ export type StartOutcome = { kind: "started" } | { kind: "locked"; message: stri
 /** An existing thread resumes (only uncached nodes run); a fresh slug starts a new thread. */
 export async function startPlanner(slug: string, threadId: string, resume: boolean): Promise<StartOutcome> {
   const result = resume
-    ? await postDdPlannerThreadIdResume({ path: { thread_id: threadId }, throwOnError: true })
-    : await postDdPlannerSlug({
+    ? await postDdPipelinePlannerThreadIdResume({ path: { thread_id: threadId }, throwOnError: true })
+    : await postDdPipelinePlannerSlug({
         path: { slug },
         query: { mode: PLANNER_MODE, thread_id: threadId },
         throwOnError: true,
@@ -289,7 +291,11 @@ export type SynthStartOutcome =
 
 /** Study mode: the orchestrator runs every chapter and skips the rendered ones, so a partial book resumes. */
 export async function startSynthStudy(slug: string): Promise<SynthStartOutcome> {
-  const result = await postDdSynthSlug({ path: { slug }, query: { mode: SYNTH_MODE }, throwOnError: true });
+  const result = await postDdPipelineSynthSlug({
+    path: { slug },
+    query: { mode: SYNTH_MODE },
+    throwOnError: true,
+  });
   const common = stageStartResponseSchema.parse(result.data);
   if (common.status === "locked") return { kind: "locked", message: common.message };
   const body = synthStartResponseSchema.parse(result.data);
@@ -300,7 +306,7 @@ export async function startSynthStudy(slug: string): Promise<SynthStartOutcome> 
 
 /** Single-chapter escape hatch. */
 export async function startSynthChapter(slug: string, chapterId: string): Promise<SynthStartOutcome> {
-  const result = await postDdSynthSlug({
+  const result = await postDdPipelineSynthSlug({
     path: { slug },
     query: { chapter_id: chapterId, mode: SYNTH_MODE },
     throwOnError: true,
@@ -319,8 +325,8 @@ export async function startSynthChapter(slug: string, chapterId: string): Promis
 export async function cancelRun(stage: RunStage, threadId: string): Promise<void> {
   try {
     const path = { thread_id: threadId };
-    if (stage === "planner") await postDdPlannerThreadIdCancel({ path });
-    else await postDdSynthThreadIdCancel({ path });
+    if (stage === "planner") await postDdPipelinePlannerThreadIdCancel({ path });
+    else await postDdPipelineSynthThreadIdCancel({ path });
   } catch {
     // the server keeps draining either way
   }
@@ -329,7 +335,7 @@ export async function cancelRun(stage: RunStage, threadId: string): Promise<void
 /** True when the cache was wiped. */
 export async function wipePlanner(slug: string): Promise<boolean> {
   return orFallback(async () => {
-    const { response } = await deleteDdPlannerSlugWipe({ path: { slug } });
+    const { response } = await deleteDdPipelinePlannerSlugWipe({ path: { slug } });
     return response?.ok ?? false;
   }, false);
 }
@@ -337,7 +343,7 @@ export async function wipePlanner(slug: string): Promise<boolean> {
 /** True when the cache was wiped. */
 export async function wipeSynth(slug: string): Promise<boolean> {
   return orFallback(async () => {
-    const { response } = await deleteDdSynthSlugWipe({ path: { slug } });
+    const { response } = await deleteDdPipelineSynthSlugWipe({ path: { slug } });
     return response?.ok ?? false;
   }, false);
 }
@@ -348,7 +354,10 @@ export async function wipeSynthChapter(
   chapterId: string,
 ): Promise<"wiped" | "busy" | "failed"> {
   return orFallback(async () => {
-    const { response } = await deleteDdSynthSlugWipe({ path: { slug }, query: { chapter_id: chapterId } });
+    const { response } = await deleteDdPipelineSynthSlugWipe({
+      path: { slug },
+      query: { chapter_id: chapterId },
+    });
     if (response?.ok) return "wiped" as const;
     return response?.status === 409 ? ("busy" as const) : ("failed" as const);
   }, "failed" as const);

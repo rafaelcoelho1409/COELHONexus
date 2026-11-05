@@ -1,5 +1,7 @@
 # Book Distiller Agentic Ingestion Assessment — workflow 1.7 run, 2026-11-05
 
+> Historical report: the latest completed run is workflow 1.8; see the [workflow 1.8 assessment](BD-INGESTION-AGENTIC-AI-ASSESSMENT-2026-11-05-WORKFLOW-1.8.md). Its fixes shipped as 1.8; the soft-hyphen regression they introduced is described and fixed there.
+
 Latest run for *The Art of Cyberwarfare*, finished 20:29 UTC, the first on the workflow 1.7 changes from the [workflow 1.6 assessment](BD-INGESTION-AGENTIC-AI-ASSESSMENT-2026-11-05-WORKFLOW-1.6.md). Read-only evidence from the live `coelhonexus-dev` API (LLM counters, all 275 per-page quality records) and the raw pages for the cases below. All 71 auto-applied model repairs were checked with a character diff, and those new since the previous run were read by hand. The fixes below are workflow **1.8**: offline-tested and statically replayed against this run, **not deployed and not measured by a new run**.
 
 ## Verdict

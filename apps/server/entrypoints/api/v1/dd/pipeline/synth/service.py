@@ -2,7 +2,7 @@
 
 `load_plan` is the api-side home for "slug → plan dict or 404" (wrapping
 `domains.dd.pipeline.planner.service.load_plan` with HTTP error mapping) — the
-same shape as `api/v1/dd/resolver/service.py`.
+same shape as `api/v1/dd/catalog/service.py`.
 
 `wipe_one_chapter` is the per-chapter wipe (MinIO only) behind the
 study wipe endpoint.
@@ -35,7 +35,7 @@ async def load_plan(slug: str) -> dict:
             status_code = 404,
             detail = (
                 f"no planner plan for {slug!r} — run the planner first "
-                f"(POST /planner/{slug})"
+                f"(POST /pipeline/planner/{slug})"
             ),
         )
     return plan

@@ -698,7 +698,7 @@ through a bare import.
 apps/server/
 ├── entrypoints/             # process entry surfaces, referenced as `entrypoints.*` (same dotted rule as `domains.*`)
 │   ├── api/                 # REST: params.py (CORS_ORIGINS, ALLOWED_HOSTS), domain.py, v1/ routers — thin, dispatch to domains
-│   │   └── v1/dd/{ingestion,pipeline/{planner,synth},runs}/   # URLs stay /dd/planner and /dd/synth; only the folders nest
+│   │   └── v1/dd/{catalog,ingestion/runs,pipeline/{planner,synth},debug}/   # the URL path is the package path: /dd/ingestion/runs, /dd/pipeline/planner, …
 │   └── mcp/tools/<family>/  # FastMCP tools, each family exposes service.register(mcp); the server itself is built in main.py
 ├── domains/                 # business logic — the bounded contexts
 │   ├── bd/                  # Book Distiller bounded context (ingestion/ so far: outline/, extract/, storage/, runtime/, task.py)
@@ -739,9 +739,17 @@ Each leaf module follows the **5–10 file convention** from §5.
 `dd/pipeline`). When a tab runs more than one stage, each stage is its own package *inside* the tab's folder
 (`dd/pipeline/planner`, `dd/pipeline/synth`) and the same nesting is mirrored in `entrypoints/api/v1/dd/pipeline/` and,
 for Agentic AI, in `ai/dd/…/pipeline/`. Only folders move: Redis keys, MinIO prefixes, thread-id prefixes, Langfuse prompt
-names and URLs keep their stage names (`coelhonexus:dd:planner:*`, `dd/{slug}/planner/`, `/api/v1/dd/synth`), because they
-are stored data or public contract, not module paths. The Celery task names *do* follow the module path, so moving a
+names and span names keep their stage names (`coelhonexus:dd:planner:*`, `dd/{slug}/planner/`, `dd.synth.*`), because they
+are stored data, not module paths. The Celery task names *do* follow the module path, so moving a
 `task.py` means updating `infra/celery/keys.py` (`TASK_INCLUDE`, `TASK_ROUTES`) and deploying the API and the workers together.
+
+**An API URL is the package path of its router** (`entrypoints/api/v1/dd/pipeline/planner/router.py` serves
+`/api/v1/dd/pipeline/planner/…`, `ingestion/runs/` serves `/api/v1/dd/ingestion/runs/…`). A feature's `router.py` includes its
+sub-packages' routers *before* its own routes, so the longer static path wins over its own `/{slug}/…` ones; the parent
+mounts each feature at its folder name and never at an alias. `scripts/server/test_api_layout.py` fails when a route lives
+under a different path than its package. Two URLs are stored inside data and must not be renamed:
+`/api/v1/dd/ingestion/{slug}/artifacts/…` (image links written into ingested Markdown). The web client is generated from
+the URL (`operationId` = method + path), so a rename is a server + web change: regenerate `openapi.json`, then the client.
 
 **`runtime/` and `observability/` are siblings** inside a bounded context
 (`domains/<ctx>/…`), not nested: `runtime/` is the machinery that runs a pipeline (dispatch,

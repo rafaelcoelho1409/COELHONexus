@@ -3,9 +3,9 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 
 import {
-  getDdPlannerDebugGraphThreadIdLlmCountersQueryKey,
-  getDdPlannerSlugHealthQueryKey,
-  getDdSynthDebugGraphThreadIdLlmCountersQueryKey,
+  getDdPipelinePlannerDebugGraphThreadIdLlmCountersQueryKey,
+  getDdPipelinePlannerSlugHealthQueryKey,
+  getDdPipelineSynthDebugGraphThreadIdLlmCountersQueryKey,
 } from "@/shared/api";
 
 import { fetchPlannerHealth, fetchUsage } from "../api";
@@ -18,8 +18,8 @@ function usageQuery(stage: RunStage, threadId: string, live: boolean) {
   return {
     queryKey:
       stage === "planner"
-        ? getDdPlannerDebugGraphThreadIdLlmCountersQueryKey({ path })
-        : getDdSynthDebugGraphThreadIdLlmCountersQueryKey({ path }),
+        ? getDdPipelinePlannerDebugGraphThreadIdLlmCountersQueryKey({ path })
+        : getDdPipelineSynthDebugGraphThreadIdLlmCountersQueryKey({ path }),
     queryFn: () => fetchUsage(stage, threadId),
     // While a run is live the counters move; afterwards they are final.
     refetchInterval: live ? USAGE_REFRESH_MS : (false as const),
@@ -60,7 +60,7 @@ export function useChapterUsage(
 /** How the latest plan of this framework was produced. */
 export function usePlannerHealth(slug: string, enabled: boolean) {
   const query = useQuery({
-    queryKey: getDdPlannerSlugHealthQueryKey({ path: { slug } }),
+    queryKey: getDdPipelinePlannerSlugHealthQueryKey({ path: { slug } }),
     queryFn: () => fetchPlannerHealth(slug),
     enabled,
     retry: false,

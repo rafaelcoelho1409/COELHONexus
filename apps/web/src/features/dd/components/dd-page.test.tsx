@@ -82,7 +82,7 @@ beforeEach(() => {
   client.setConfig({ baseUrl: ORIGIN });
   server.use(
     http.get(`${ORIGIN}/api/v1/dd/ingestion`, () => HttpResponse.json(LIBRARY)),
-    http.get(`${ORIGIN}/api/v1/dd/runs/active`, () => HttpResponse.json({ active: [] })),
+    http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/active`, () => HttpResponse.json({ active: [] })),
     http.get(`${ORIGIN}/api/v1/dd/ingestion/a/manifest`, () => HttpResponse.json(MANIFEST)),
     http.get(`${ORIGIN}/api/v1/dd/ingestion/a/pages/0`, () => HttpResponse.json({ body: "quickstart body" })),
   );

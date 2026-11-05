@@ -3,8 +3,8 @@
 import { type DefaultError, type InfiniteData, infiniteQueryOptions, queryOptions, type UseMutationOptions } from '@tanstack/react-query';
 
 import { client } from '../client.gen';
-import { deleteBdIngestionBookId, deleteBdIngestionBookIdAgenticRunsAgenticRunId, deleteBdIngestionBookIdExtraction, deleteDdDebugSnapshotSlug, deleteDdIngestionSlug, deleteDdIngestionSlugAgenticRunsRunId, deleteDdPlannerSlugWipe, deleteDdSynthSlugWipe, deleteYcsAdminVideosVideoId, deleteYcsAgentsThreadsThreadId, deleteYcsQueryHistoryEntryId, getBdIngestion, getBdIngestionActive, getBdIngestionBookId, getBdIngestionBookIdAgenticRunsAgenticRunId, getBdIngestionBookIdAgenticRunsAgenticRunIdEvents, getBdIngestionBookIdAgenticRunsAgenticRunIdLlmCounters, getBdIngestionBookIdEvents, getBdIngestionBookIdFiguresName, getBdIngestionBookIdPagesPageNo, getBdIngestionBookIdPagesPageNoQuality, getDdDebugSnapshotsSlug, getDdIngestion, getDdIngestionSlugArtifactsName, getDdIngestionSlugManifest, getDdIngestionSlugPagesIdx, getDdPipelineActive, getDdPipelineSlugState, getDdPlannerDebugGraphThreadIdHistory, getDdPlannerDebugGraphThreadIdLlmCounters, getDdPlannerDebugGraphThreadIdState, getDdPlannerInfo, getDdPlannerRecent, getDdPlannerSlugActive, getDdPlannerSlugHealth, getDdPlannerSlugTiming, getDdPlannerThreadIdEvents, getDdResolver, getDdResolverSlug, getDdRunsActive, getDdRunsRunId, getDdRunsRunIdLlmCounters, getDdRunsRunIdPagesIdx, getDdRunsRunIdUrlRecords, getDdSynthDebugGraphThreadIdHistory, getDdSynthDebugGraphThreadIdLlmCounters, getDdSynthDebugGraphThreadIdState, getDdSynthInfo, getDdSynthRecent, getDdSynthSlugActive, getDdSynthSlugStudyChapterIdArtifactArtifactName, getDdSynthSlugStudyChapters, getDdSynthThreadIdEvents, getHealth, getSettingsEmbedding, getSettingsEndpoint, getYcsAdminIngestedChannels, getYcsAdminIngestedPlaylists, getYcsAdminPipelineExtractIdLlmCounters, getYcsAdminPipelineExtractIdStreamPhase, getYcsAdminTaskTaskId, getYcsAdminVideos, getYcsAdminVideosFacets, getYcsAgentsGraphStats, getYcsAgentsHistoryThreadId, getYcsAgentsThreads, getYcsAgentsUsageThreadId, getYcsContentChannelVideos, getYcsContentEmbeddingMigrationStatus, getYcsContentPlaylistVideos, getYcsContentVideosPipelineExtractIdState, getYcsContentVideosPreview, getYcsQueryHistory, getYcsQueryNamespaces, getYcsQuerySchemaBackend, type Options, postBdIngestion, postBdIngestionBookIdAgenticRuns, postBdIngestionBookIdAgenticRunsAgenticRunIdCancel, postBdIngestionBookIdAgenticRunsAgenticRunIdResume, postBdIngestionBookIdCancel, postBdIngestionBookIdRun, postDdDebugFinalizeSlug, postDdDebugIngestSlug, postDdDebugPostSlug, postDdDebugResolveSlug, postDdDebugRestoreSlug, postDdDebugSnapshotSlug, postDdIngestionSlugAgenticRuns, postDdIngestionSlugAgenticRunsRunIdResume, postDdPlannerPrune, postDdPlannerSlug, postDdPlannerThreadIdCancel, postDdPlannerThreadIdResume, postDdRuns, postDdRunsRunIdCancel, postDdSynthSlug, postDdSynthThreadIdCancel, postDdSynthThreadIdResume, postSettingsEmbeddingTest, postSettingsEndpointTest, postYcsAdminVideosBulkDelete, postYcsAgentsEndpointPing, postYcsAgentsFeedback, postYcsAgentsIngestNeo4J, postYcsAgentsIngestQdrant, postYcsAgentsPipeline, postYcsAgentsSearch, postYcsAgentsSearchStream, postYcsAgentsThreadsThreadIdBranch, postYcsAgentsTurnsTurnIdCancel, postYcsContentChannel, postYcsContentChannelPipeline, postYcsContentEmbeddingMigrationStart, postYcsContentPlaylist, postYcsContentPlaylistPipeline, postYcsContentSearch, postYcsContentVideos, postYcsContentVideosPipeline, postYcsContentVideosPipelineExtractIdRerun, postYcsContentVideosPipelineExtractIdStop, postYcsContentVideosPipelineExtractIdWipe, postYcsQueryAiBackend, postYcsQueryElasticsearch, postYcsQueryHistory, postYcsQueryNeo4J, postYcsQueryQdrant, postYcsQueryRawElasticsearch, postYcsQueryRawNeo4J, postYcsQueryRawQdrant, putSettingsEmbedding, putSettingsEndpoint } from '../sdk.gen';
-import type { DeleteBdIngestionBookIdAgenticRunsAgenticRunIdData, DeleteBdIngestionBookIdAgenticRunsAgenticRunIdError, DeleteBdIngestionBookIdAgenticRunsAgenticRunIdResponse, DeleteBdIngestionBookIdData, DeleteBdIngestionBookIdError, DeleteBdIngestionBookIdExtractionData, DeleteBdIngestionBookIdExtractionError, DeleteBdIngestionBookIdExtractionResponse, DeleteBdIngestionBookIdResponse, DeleteDdDebugSnapshotSlugData, DeleteDdDebugSnapshotSlugError, DeleteDdDebugSnapshotSlugResponse, DeleteDdIngestionSlugAgenticRunsRunIdData, DeleteDdIngestionSlugAgenticRunsRunIdError, DeleteDdIngestionSlugAgenticRunsRunIdResponse, DeleteDdIngestionSlugData, DeleteDdIngestionSlugError, DeleteDdIngestionSlugResponse, DeleteDdPlannerSlugWipeData, DeleteDdPlannerSlugWipeError, DeleteDdPlannerSlugWipeResponse, DeleteDdSynthSlugWipeData, DeleteDdSynthSlugWipeError, DeleteDdSynthSlugWipeResponse, DeleteYcsAdminVideosVideoIdData, DeleteYcsAdminVideosVideoIdError, DeleteYcsAdminVideosVideoIdResponse, DeleteYcsAgentsThreadsThreadIdData, DeleteYcsAgentsThreadsThreadIdError, DeleteYcsAgentsThreadsThreadIdResponse, DeleteYcsQueryHistoryEntryIdData, DeleteYcsQueryHistoryEntryIdError, DeleteYcsQueryHistoryEntryIdResponse, GetBdIngestionActiveData, GetBdIngestionActiveResponse, GetBdIngestionBookIdAgenticRunsAgenticRunIdData, GetBdIngestionBookIdAgenticRunsAgenticRunIdError, GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsData, GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsError, GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersData, GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersError, GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersResponse, GetBdIngestionBookIdAgenticRunsAgenticRunIdResponse, GetBdIngestionBookIdData, GetBdIngestionBookIdError, GetBdIngestionBookIdEventsData, GetBdIngestionBookIdEventsError, GetBdIngestionBookIdFiguresNameData, GetBdIngestionBookIdFiguresNameError, GetBdIngestionBookIdPagesPageNoData, GetBdIngestionBookIdPagesPageNoError, GetBdIngestionBookIdPagesPageNoQualityData, GetBdIngestionBookIdPagesPageNoQualityError, GetBdIngestionBookIdPagesPageNoQualityResponse, GetBdIngestionBookIdPagesPageNoResponse, GetBdIngestionBookIdResponse, GetBdIngestionData, GetBdIngestionResponse, GetDdDebugSnapshotsSlugData, GetDdDebugSnapshotsSlugError, GetDdDebugSnapshotsSlugResponse, GetDdIngestionData, GetDdIngestionResponse, GetDdIngestionSlugArtifactsNameData, GetDdIngestionSlugArtifactsNameError, GetDdIngestionSlugManifestData, GetDdIngestionSlugManifestError, GetDdIngestionSlugManifestResponse, GetDdIngestionSlugPagesIdxData, GetDdIngestionSlugPagesIdxError, GetDdIngestionSlugPagesIdxResponse, GetDdPipelineActiveData, GetDdPipelineActiveResponse, GetDdPipelineSlugStateData, GetDdPipelineSlugStateError, GetDdPipelineSlugStateResponse, GetDdPlannerDebugGraphThreadIdHistoryData, GetDdPlannerDebugGraphThreadIdHistoryError, GetDdPlannerDebugGraphThreadIdHistoryResponse, GetDdPlannerDebugGraphThreadIdLlmCountersData, GetDdPlannerDebugGraphThreadIdLlmCountersError, GetDdPlannerDebugGraphThreadIdLlmCountersResponse, GetDdPlannerDebugGraphThreadIdStateData, GetDdPlannerDebugGraphThreadIdStateError, GetDdPlannerDebugGraphThreadIdStateResponse, GetDdPlannerInfoData, GetDdPlannerInfoResponse, GetDdPlannerRecentData, GetDdPlannerRecentResponse, GetDdPlannerSlugActiveData, GetDdPlannerSlugActiveError, GetDdPlannerSlugActiveResponse, GetDdPlannerSlugHealthData, GetDdPlannerSlugHealthError, GetDdPlannerSlugHealthResponse, GetDdPlannerSlugTimingData, GetDdPlannerSlugTimingError, GetDdPlannerSlugTimingResponse, GetDdPlannerThreadIdEventsData, GetDdPlannerThreadIdEventsError, GetDdResolverData, GetDdResolverResponse, GetDdResolverSlugData, GetDdResolverSlugError, GetDdResolverSlugResponse, GetDdRunsActiveData, GetDdRunsActiveResponse, GetDdRunsRunIdData, GetDdRunsRunIdError, GetDdRunsRunIdLlmCountersData, GetDdRunsRunIdLlmCountersError, GetDdRunsRunIdLlmCountersResponse, GetDdRunsRunIdPagesIdxData, GetDdRunsRunIdPagesIdxError, GetDdRunsRunIdPagesIdxResponse, GetDdRunsRunIdResponse, GetDdRunsRunIdUrlRecordsData, GetDdRunsRunIdUrlRecordsError, GetDdRunsRunIdUrlRecordsResponse, GetDdSynthDebugGraphThreadIdHistoryData, GetDdSynthDebugGraphThreadIdHistoryError, GetDdSynthDebugGraphThreadIdHistoryResponse, GetDdSynthDebugGraphThreadIdLlmCountersData, GetDdSynthDebugGraphThreadIdLlmCountersError, GetDdSynthDebugGraphThreadIdLlmCountersResponse, GetDdSynthDebugGraphThreadIdStateData, GetDdSynthDebugGraphThreadIdStateError, GetDdSynthDebugGraphThreadIdStateResponse, GetDdSynthInfoData, GetDdSynthInfoResponse, GetDdSynthRecentData, GetDdSynthRecentResponse, GetDdSynthSlugActiveData, GetDdSynthSlugActiveError, GetDdSynthSlugActiveResponse, GetDdSynthSlugStudyChapterIdArtifactArtifactNameData, GetDdSynthSlugStudyChapterIdArtifactArtifactNameError, GetDdSynthSlugStudyChaptersData, GetDdSynthSlugStudyChaptersError, GetDdSynthSlugStudyChaptersResponse, GetDdSynthThreadIdEventsData, GetDdSynthThreadIdEventsError, GetHealthData, GetSettingsEmbeddingData, GetSettingsEndpointData, GetYcsAdminIngestedChannelsData, GetYcsAdminIngestedChannelsResponse, GetYcsAdminIngestedPlaylistsData, GetYcsAdminIngestedPlaylistsResponse, GetYcsAdminPipelineExtractIdLlmCountersData, GetYcsAdminPipelineExtractIdLlmCountersError, GetYcsAdminPipelineExtractIdLlmCountersResponse, GetYcsAdminPipelineExtractIdStreamPhaseData, GetYcsAdminPipelineExtractIdStreamPhaseError, GetYcsAdminPipelineExtractIdStreamPhaseResponse, GetYcsAdminTaskTaskIdData, GetYcsAdminTaskTaskIdError, GetYcsAdminTaskTaskIdResponse, GetYcsAdminVideosData, GetYcsAdminVideosError, GetYcsAdminVideosFacetsData, GetYcsAdminVideosFacetsResponse, GetYcsAdminVideosResponse, GetYcsAgentsGraphStatsData, GetYcsAgentsGraphStatsResponse, GetYcsAgentsHistoryThreadIdData, GetYcsAgentsHistoryThreadIdError, GetYcsAgentsHistoryThreadIdResponse, GetYcsAgentsThreadsData, GetYcsAgentsThreadsResponse, GetYcsAgentsUsageThreadIdData, GetYcsAgentsUsageThreadIdError, GetYcsAgentsUsageThreadIdResponse, GetYcsContentChannelVideosData, GetYcsContentChannelVideosError, GetYcsContentChannelVideosResponse, GetYcsContentEmbeddingMigrationStatusData, GetYcsContentEmbeddingMigrationStatusResponse, GetYcsContentPlaylistVideosData, GetYcsContentPlaylistVideosError, GetYcsContentPlaylistVideosResponse, GetYcsContentVideosPipelineExtractIdStateData, GetYcsContentVideosPipelineExtractIdStateError, GetYcsContentVideosPipelineExtractIdStateResponse, GetYcsContentVideosPreviewData, GetYcsContentVideosPreviewError, GetYcsContentVideosPreviewResponse, GetYcsQueryHistoryData, GetYcsQueryHistoryError, GetYcsQueryHistoryResponse, GetYcsQueryNamespacesData, GetYcsQueryNamespacesResponse, GetYcsQuerySchemaBackendData, GetYcsQuerySchemaBackendError, GetYcsQuerySchemaBackendResponse, PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelData, PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelError, PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelResponse, PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeData, PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeError, PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeResponse, PostBdIngestionBookIdAgenticRunsData, PostBdIngestionBookIdAgenticRunsError, PostBdIngestionBookIdAgenticRunsResponse, PostBdIngestionBookIdCancelData, PostBdIngestionBookIdCancelError, PostBdIngestionBookIdCancelResponse, PostBdIngestionBookIdRunData, PostBdIngestionBookIdRunError, PostBdIngestionBookIdRunResponse, PostBdIngestionData, PostBdIngestionError, PostBdIngestionResponse, PostDdDebugFinalizeSlugData, PostDdDebugFinalizeSlugError, PostDdDebugFinalizeSlugResponse, PostDdDebugIngestSlugData, PostDdDebugIngestSlugError, PostDdDebugIngestSlugResponse, PostDdDebugPostSlugData, PostDdDebugPostSlugError, PostDdDebugPostSlugResponse, PostDdDebugResolveSlugData, PostDdDebugResolveSlugError, PostDdDebugResolveSlugResponse, PostDdDebugRestoreSlugData, PostDdDebugRestoreSlugError, PostDdDebugRestoreSlugResponse, PostDdDebugSnapshotSlugData, PostDdDebugSnapshotSlugError, PostDdDebugSnapshotSlugResponse, PostDdIngestionSlugAgenticRunsData, PostDdIngestionSlugAgenticRunsError, PostDdIngestionSlugAgenticRunsResponse, PostDdIngestionSlugAgenticRunsRunIdResumeData, PostDdIngestionSlugAgenticRunsRunIdResumeError, PostDdIngestionSlugAgenticRunsRunIdResumeResponse, PostDdPlannerPruneData, PostDdPlannerPruneError, PostDdPlannerPruneResponse, PostDdPlannerSlugData, PostDdPlannerSlugError, PostDdPlannerSlugResponse, PostDdPlannerThreadIdCancelData, PostDdPlannerThreadIdCancelError, PostDdPlannerThreadIdCancelResponse, PostDdPlannerThreadIdResumeData, PostDdPlannerThreadIdResumeError, PostDdPlannerThreadIdResumeResponse, PostDdRunsData, PostDdRunsError, PostDdRunsResponse, PostDdRunsRunIdCancelData, PostDdRunsRunIdCancelError, PostDdRunsRunIdCancelResponse, PostDdSynthSlugData, PostDdSynthSlugError, PostDdSynthSlugResponse, PostDdSynthThreadIdCancelData, PostDdSynthThreadIdCancelError, PostDdSynthThreadIdCancelResponse, PostDdSynthThreadIdResumeData, PostDdSynthThreadIdResumeError, PostDdSynthThreadIdResumeResponse, PostSettingsEmbeddingTestData, PostSettingsEndpointTestData, PostYcsAdminVideosBulkDeleteData, PostYcsAdminVideosBulkDeleteError, PostYcsAdminVideosBulkDeleteResponse, PostYcsAgentsEndpointPingData, PostYcsAgentsEndpointPingResponse, PostYcsAgentsFeedbackData, PostYcsAgentsFeedbackError, PostYcsAgentsFeedbackResponse, PostYcsAgentsIngestNeo4jData, PostYcsAgentsIngestNeo4jError, PostYcsAgentsIngestNeo4jResponse, PostYcsAgentsIngestQdrantData, PostYcsAgentsIngestQdrantError, PostYcsAgentsIngestQdrantResponse, PostYcsAgentsPipelineData, PostYcsAgentsPipelineError, PostYcsAgentsPipelineResponse, PostYcsAgentsSearchData, PostYcsAgentsSearchError, PostYcsAgentsSearchResponse, PostYcsAgentsSearchStreamData, PostYcsAgentsSearchStreamError, PostYcsAgentsThreadsThreadIdBranchData, PostYcsAgentsThreadsThreadIdBranchError, PostYcsAgentsThreadsThreadIdBranchResponse, PostYcsAgentsTurnsTurnIdCancelData, PostYcsAgentsTurnsTurnIdCancelError, PostYcsAgentsTurnsTurnIdCancelResponse, PostYcsContentChannelData, PostYcsContentChannelError, PostYcsContentChannelPipelineData, PostYcsContentChannelPipelineError, PostYcsContentChannelPipelineResponse, PostYcsContentChannelResponse, PostYcsContentEmbeddingMigrationStartData, PostYcsContentEmbeddingMigrationStartResponse, PostYcsContentPlaylistData, PostYcsContentPlaylistError, PostYcsContentPlaylistPipelineData, PostYcsContentPlaylistPipelineError, PostYcsContentPlaylistPipelineResponse, PostYcsContentPlaylistResponse, PostYcsContentSearchData, PostYcsContentSearchError, PostYcsContentSearchResponse, PostYcsContentVideosData, PostYcsContentVideosError, PostYcsContentVideosPipelineData, PostYcsContentVideosPipelineError, PostYcsContentVideosPipelineExtractIdRerunData, PostYcsContentVideosPipelineExtractIdRerunError, PostYcsContentVideosPipelineExtractIdRerunResponse, PostYcsContentVideosPipelineExtractIdStopData, PostYcsContentVideosPipelineExtractIdStopError, PostYcsContentVideosPipelineExtractIdStopResponse, PostYcsContentVideosPipelineExtractIdWipeData, PostYcsContentVideosPipelineExtractIdWipeError, PostYcsContentVideosPipelineExtractIdWipeResponse, PostYcsContentVideosPipelineResponse, PostYcsContentVideosResponse, PostYcsQueryAiBackendData, PostYcsQueryAiBackendError, PostYcsQueryElasticsearchData, PostYcsQueryElasticsearchError, PostYcsQueryElasticsearchResponse, PostYcsQueryHistoryData, PostYcsQueryHistoryResponse, PostYcsQueryNeo4jData, PostYcsQueryNeo4jError, PostYcsQueryNeo4jResponse, PostYcsQueryQdrantData, PostYcsQueryQdrantError, PostYcsQueryQdrantResponse, PostYcsQueryRawElasticsearchData, PostYcsQueryRawElasticsearchError, PostYcsQueryRawElasticsearchResponse, PostYcsQueryRawNeo4jData, PostYcsQueryRawNeo4jError, PostYcsQueryRawNeo4jResponse, PostYcsQueryRawQdrantData, PostYcsQueryRawQdrantError, PostYcsQueryRawQdrantResponse, PutSettingsEmbeddingData, PutSettingsEmbeddingError, PutSettingsEndpointData, PutSettingsEndpointError } from '../types.gen';
+import { deleteBdIngestionBookId, deleteBdIngestionBookIdAgenticRunsAgenticRunId, deleteBdIngestionBookIdExtraction, deleteDdDebugSnapshotSlug, deleteDdIngestionSlug, deleteDdIngestionSlugAgenticRunsRunId, deleteDdPipelinePlannerSlugWipe, deleteDdPipelineSynthSlugWipe, deleteYcsAdminVideosVideoId, deleteYcsAgentsThreadsThreadId, deleteYcsQueryHistoryEntryId, getBdIngestion, getBdIngestionActive, getBdIngestionBookId, getBdIngestionBookIdAgenticRunsAgenticRunId, getBdIngestionBookIdAgenticRunsAgenticRunIdEvents, getBdIngestionBookIdAgenticRunsAgenticRunIdLlmCounters, getBdIngestionBookIdEvents, getBdIngestionBookIdFiguresName, getBdIngestionBookIdPagesPageNo, getBdIngestionBookIdPagesPageNoQuality, getDdCatalog, getDdCatalogSlug, getDdDebugSnapshotsSlug, getDdIngestion, getDdIngestionRunsActive, getDdIngestionRunsRunId, getDdIngestionRunsRunIdLlmCounters, getDdIngestionRunsRunIdPagesIdx, getDdIngestionRunsRunIdUrlRecords, getDdIngestionSlugArtifactsName, getDdIngestionSlugManifest, getDdIngestionSlugPagesIdx, getDdPipelineActive, getDdPipelinePlannerDebugGraphThreadIdHistory, getDdPipelinePlannerDebugGraphThreadIdLlmCounters, getDdPipelinePlannerDebugGraphThreadIdState, getDdPipelinePlannerInfo, getDdPipelinePlannerRecent, getDdPipelinePlannerSlugActive, getDdPipelinePlannerSlugHealth, getDdPipelinePlannerSlugTiming, getDdPipelinePlannerThreadIdEvents, getDdPipelineSlugState, getDdPipelineSynthDebugGraphThreadIdHistory, getDdPipelineSynthDebugGraphThreadIdLlmCounters, getDdPipelineSynthDebugGraphThreadIdState, getDdPipelineSynthInfo, getDdPipelineSynthRecent, getDdPipelineSynthSlugActive, getDdPipelineSynthSlugStudyChapterIdArtifactArtifactName, getDdPipelineSynthSlugStudyChapters, getDdPipelineSynthThreadIdEvents, getHealth, getSettingsEmbedding, getSettingsEndpoint, getYcsAdminIngestedChannels, getYcsAdminIngestedPlaylists, getYcsAdminPipelineExtractIdLlmCounters, getYcsAdminPipelineExtractIdStreamPhase, getYcsAdminTaskTaskId, getYcsAdminVideos, getYcsAdminVideosFacets, getYcsAgentsGraphStats, getYcsAgentsHistoryThreadId, getYcsAgentsThreads, getYcsAgentsUsageThreadId, getYcsContentChannelVideos, getYcsContentEmbeddingMigrationStatus, getYcsContentPlaylistVideos, getYcsContentVideosPipelineExtractIdState, getYcsContentVideosPreview, getYcsQueryHistory, getYcsQueryNamespaces, getYcsQuerySchemaBackend, type Options, postBdIngestion, postBdIngestionBookIdAgenticRuns, postBdIngestionBookIdAgenticRunsAgenticRunIdCancel, postBdIngestionBookIdAgenticRunsAgenticRunIdResume, postBdIngestionBookIdCancel, postBdIngestionBookIdRun, postDdDebugFinalizeSlug, postDdDebugIngestSlug, postDdDebugPostSlug, postDdDebugResolveSlug, postDdDebugRestoreSlug, postDdDebugSnapshotSlug, postDdIngestionRuns, postDdIngestionRunsRunIdCancel, postDdIngestionSlugAgenticRuns, postDdIngestionSlugAgenticRunsRunIdResume, postDdPipelinePlannerPrune, postDdPipelinePlannerSlug, postDdPipelinePlannerThreadIdCancel, postDdPipelinePlannerThreadIdResume, postDdPipelineSynthSlug, postDdPipelineSynthThreadIdCancel, postDdPipelineSynthThreadIdResume, postSettingsEmbeddingTest, postSettingsEndpointTest, postYcsAdminVideosBulkDelete, postYcsAgentsEndpointPing, postYcsAgentsFeedback, postYcsAgentsIngestNeo4J, postYcsAgentsIngestQdrant, postYcsAgentsPipeline, postYcsAgentsSearch, postYcsAgentsSearchStream, postYcsAgentsThreadsThreadIdBranch, postYcsAgentsTurnsTurnIdCancel, postYcsContentChannel, postYcsContentChannelPipeline, postYcsContentEmbeddingMigrationStart, postYcsContentPlaylist, postYcsContentPlaylistPipeline, postYcsContentSearch, postYcsContentVideos, postYcsContentVideosPipeline, postYcsContentVideosPipelineExtractIdRerun, postYcsContentVideosPipelineExtractIdStop, postYcsContentVideosPipelineExtractIdWipe, postYcsQueryAiBackend, postYcsQueryElasticsearch, postYcsQueryHistory, postYcsQueryNeo4J, postYcsQueryQdrant, postYcsQueryRawElasticsearch, postYcsQueryRawNeo4J, postYcsQueryRawQdrant, putSettingsEmbedding, putSettingsEndpoint } from '../sdk.gen';
+import type { DeleteBdIngestionBookIdAgenticRunsAgenticRunIdData, DeleteBdIngestionBookIdAgenticRunsAgenticRunIdError, DeleteBdIngestionBookIdAgenticRunsAgenticRunIdResponse, DeleteBdIngestionBookIdData, DeleteBdIngestionBookIdError, DeleteBdIngestionBookIdExtractionData, DeleteBdIngestionBookIdExtractionError, DeleteBdIngestionBookIdExtractionResponse, DeleteBdIngestionBookIdResponse, DeleteDdDebugSnapshotSlugData, DeleteDdDebugSnapshotSlugError, DeleteDdDebugSnapshotSlugResponse, DeleteDdIngestionSlugAgenticRunsRunIdData, DeleteDdIngestionSlugAgenticRunsRunIdError, DeleteDdIngestionSlugAgenticRunsRunIdResponse, DeleteDdIngestionSlugData, DeleteDdIngestionSlugError, DeleteDdIngestionSlugResponse, DeleteDdPipelinePlannerSlugWipeData, DeleteDdPipelinePlannerSlugWipeError, DeleteDdPipelinePlannerSlugWipeResponse, DeleteDdPipelineSynthSlugWipeData, DeleteDdPipelineSynthSlugWipeError, DeleteDdPipelineSynthSlugWipeResponse, DeleteYcsAdminVideosVideoIdData, DeleteYcsAdminVideosVideoIdError, DeleteYcsAdminVideosVideoIdResponse, DeleteYcsAgentsThreadsThreadIdData, DeleteYcsAgentsThreadsThreadIdError, DeleteYcsAgentsThreadsThreadIdResponse, DeleteYcsQueryHistoryEntryIdData, DeleteYcsQueryHistoryEntryIdError, DeleteYcsQueryHistoryEntryIdResponse, GetBdIngestionActiveData, GetBdIngestionActiveResponse, GetBdIngestionBookIdAgenticRunsAgenticRunIdData, GetBdIngestionBookIdAgenticRunsAgenticRunIdError, GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsData, GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsError, GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersData, GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersError, GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersResponse, GetBdIngestionBookIdAgenticRunsAgenticRunIdResponse, GetBdIngestionBookIdData, GetBdIngestionBookIdError, GetBdIngestionBookIdEventsData, GetBdIngestionBookIdEventsError, GetBdIngestionBookIdFiguresNameData, GetBdIngestionBookIdFiguresNameError, GetBdIngestionBookIdPagesPageNoData, GetBdIngestionBookIdPagesPageNoError, GetBdIngestionBookIdPagesPageNoQualityData, GetBdIngestionBookIdPagesPageNoQualityError, GetBdIngestionBookIdPagesPageNoQualityResponse, GetBdIngestionBookIdPagesPageNoResponse, GetBdIngestionBookIdResponse, GetBdIngestionData, GetBdIngestionResponse, GetDdCatalogData, GetDdCatalogResponse, GetDdCatalogSlugData, GetDdCatalogSlugError, GetDdCatalogSlugResponse, GetDdDebugSnapshotsSlugData, GetDdDebugSnapshotsSlugError, GetDdDebugSnapshotsSlugResponse, GetDdIngestionData, GetDdIngestionResponse, GetDdIngestionRunsActiveData, GetDdIngestionRunsActiveResponse, GetDdIngestionRunsRunIdData, GetDdIngestionRunsRunIdError, GetDdIngestionRunsRunIdLlmCountersData, GetDdIngestionRunsRunIdLlmCountersError, GetDdIngestionRunsRunIdLlmCountersResponse, GetDdIngestionRunsRunIdPagesIdxData, GetDdIngestionRunsRunIdPagesIdxError, GetDdIngestionRunsRunIdPagesIdxResponse, GetDdIngestionRunsRunIdResponse, GetDdIngestionRunsRunIdUrlRecordsData, GetDdIngestionRunsRunIdUrlRecordsError, GetDdIngestionRunsRunIdUrlRecordsResponse, GetDdIngestionSlugArtifactsNameData, GetDdIngestionSlugArtifactsNameError, GetDdIngestionSlugManifestData, GetDdIngestionSlugManifestError, GetDdIngestionSlugManifestResponse, GetDdIngestionSlugPagesIdxData, GetDdIngestionSlugPagesIdxError, GetDdIngestionSlugPagesIdxResponse, GetDdPipelineActiveData, GetDdPipelineActiveResponse, GetDdPipelinePlannerDebugGraphThreadIdHistoryData, GetDdPipelinePlannerDebugGraphThreadIdHistoryError, GetDdPipelinePlannerDebugGraphThreadIdHistoryResponse, GetDdPipelinePlannerDebugGraphThreadIdLlmCountersData, GetDdPipelinePlannerDebugGraphThreadIdLlmCountersError, GetDdPipelinePlannerDebugGraphThreadIdLlmCountersResponse, GetDdPipelinePlannerDebugGraphThreadIdStateData, GetDdPipelinePlannerDebugGraphThreadIdStateError, GetDdPipelinePlannerDebugGraphThreadIdStateResponse, GetDdPipelinePlannerInfoData, GetDdPipelinePlannerInfoResponse, GetDdPipelinePlannerRecentData, GetDdPipelinePlannerRecentResponse, GetDdPipelinePlannerSlugActiveData, GetDdPipelinePlannerSlugActiveError, GetDdPipelinePlannerSlugActiveResponse, GetDdPipelinePlannerSlugHealthData, GetDdPipelinePlannerSlugHealthError, GetDdPipelinePlannerSlugHealthResponse, GetDdPipelinePlannerSlugTimingData, GetDdPipelinePlannerSlugTimingError, GetDdPipelinePlannerSlugTimingResponse, GetDdPipelinePlannerThreadIdEventsData, GetDdPipelinePlannerThreadIdEventsError, GetDdPipelineSlugStateData, GetDdPipelineSlugStateError, GetDdPipelineSlugStateResponse, GetDdPipelineSynthDebugGraphThreadIdHistoryData, GetDdPipelineSynthDebugGraphThreadIdHistoryError, GetDdPipelineSynthDebugGraphThreadIdHistoryResponse, GetDdPipelineSynthDebugGraphThreadIdLlmCountersData, GetDdPipelineSynthDebugGraphThreadIdLlmCountersError, GetDdPipelineSynthDebugGraphThreadIdLlmCountersResponse, GetDdPipelineSynthDebugGraphThreadIdStateData, GetDdPipelineSynthDebugGraphThreadIdStateError, GetDdPipelineSynthDebugGraphThreadIdStateResponse, GetDdPipelineSynthInfoData, GetDdPipelineSynthInfoResponse, GetDdPipelineSynthRecentData, GetDdPipelineSynthRecentResponse, GetDdPipelineSynthSlugActiveData, GetDdPipelineSynthSlugActiveError, GetDdPipelineSynthSlugActiveResponse, GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameData, GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameError, GetDdPipelineSynthSlugStudyChaptersData, GetDdPipelineSynthSlugStudyChaptersError, GetDdPipelineSynthSlugStudyChaptersResponse, GetDdPipelineSynthThreadIdEventsData, GetDdPipelineSynthThreadIdEventsError, GetHealthData, GetSettingsEmbeddingData, GetSettingsEndpointData, GetYcsAdminIngestedChannelsData, GetYcsAdminIngestedChannelsResponse, GetYcsAdminIngestedPlaylistsData, GetYcsAdminIngestedPlaylistsResponse, GetYcsAdminPipelineExtractIdLlmCountersData, GetYcsAdminPipelineExtractIdLlmCountersError, GetYcsAdminPipelineExtractIdLlmCountersResponse, GetYcsAdminPipelineExtractIdStreamPhaseData, GetYcsAdminPipelineExtractIdStreamPhaseError, GetYcsAdminPipelineExtractIdStreamPhaseResponse, GetYcsAdminTaskTaskIdData, GetYcsAdminTaskTaskIdError, GetYcsAdminTaskTaskIdResponse, GetYcsAdminVideosData, GetYcsAdminVideosError, GetYcsAdminVideosFacetsData, GetYcsAdminVideosFacetsResponse, GetYcsAdminVideosResponse, GetYcsAgentsGraphStatsData, GetYcsAgentsGraphStatsResponse, GetYcsAgentsHistoryThreadIdData, GetYcsAgentsHistoryThreadIdError, GetYcsAgentsHistoryThreadIdResponse, GetYcsAgentsThreadsData, GetYcsAgentsThreadsResponse, GetYcsAgentsUsageThreadIdData, GetYcsAgentsUsageThreadIdError, GetYcsAgentsUsageThreadIdResponse, GetYcsContentChannelVideosData, GetYcsContentChannelVideosError, GetYcsContentChannelVideosResponse, GetYcsContentEmbeddingMigrationStatusData, GetYcsContentEmbeddingMigrationStatusResponse, GetYcsContentPlaylistVideosData, GetYcsContentPlaylistVideosError, GetYcsContentPlaylistVideosResponse, GetYcsContentVideosPipelineExtractIdStateData, GetYcsContentVideosPipelineExtractIdStateError, GetYcsContentVideosPipelineExtractIdStateResponse, GetYcsContentVideosPreviewData, GetYcsContentVideosPreviewError, GetYcsContentVideosPreviewResponse, GetYcsQueryHistoryData, GetYcsQueryHistoryError, GetYcsQueryHistoryResponse, GetYcsQueryNamespacesData, GetYcsQueryNamespacesResponse, GetYcsQuerySchemaBackendData, GetYcsQuerySchemaBackendError, GetYcsQuerySchemaBackendResponse, PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelData, PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelError, PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelResponse, PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeData, PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeError, PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeResponse, PostBdIngestionBookIdAgenticRunsData, PostBdIngestionBookIdAgenticRunsError, PostBdIngestionBookIdAgenticRunsResponse, PostBdIngestionBookIdCancelData, PostBdIngestionBookIdCancelError, PostBdIngestionBookIdCancelResponse, PostBdIngestionBookIdRunData, PostBdIngestionBookIdRunError, PostBdIngestionBookIdRunResponse, PostBdIngestionData, PostBdIngestionError, PostBdIngestionResponse, PostDdDebugFinalizeSlugData, PostDdDebugFinalizeSlugError, PostDdDebugFinalizeSlugResponse, PostDdDebugIngestSlugData, PostDdDebugIngestSlugError, PostDdDebugIngestSlugResponse, PostDdDebugPostSlugData, PostDdDebugPostSlugError, PostDdDebugPostSlugResponse, PostDdDebugResolveSlugData, PostDdDebugResolveSlugError, PostDdDebugResolveSlugResponse, PostDdDebugRestoreSlugData, PostDdDebugRestoreSlugError, PostDdDebugRestoreSlugResponse, PostDdDebugSnapshotSlugData, PostDdDebugSnapshotSlugError, PostDdDebugSnapshotSlugResponse, PostDdIngestionRunsData, PostDdIngestionRunsError, PostDdIngestionRunsResponse, PostDdIngestionRunsRunIdCancelData, PostDdIngestionRunsRunIdCancelError, PostDdIngestionRunsRunIdCancelResponse, PostDdIngestionSlugAgenticRunsData, PostDdIngestionSlugAgenticRunsError, PostDdIngestionSlugAgenticRunsResponse, PostDdIngestionSlugAgenticRunsRunIdResumeData, PostDdIngestionSlugAgenticRunsRunIdResumeError, PostDdIngestionSlugAgenticRunsRunIdResumeResponse, PostDdPipelinePlannerPruneData, PostDdPipelinePlannerPruneError, PostDdPipelinePlannerPruneResponse, PostDdPipelinePlannerSlugData, PostDdPipelinePlannerSlugError, PostDdPipelinePlannerSlugResponse, PostDdPipelinePlannerThreadIdCancelData, PostDdPipelinePlannerThreadIdCancelError, PostDdPipelinePlannerThreadIdCancelResponse, PostDdPipelinePlannerThreadIdResumeData, PostDdPipelinePlannerThreadIdResumeError, PostDdPipelinePlannerThreadIdResumeResponse, PostDdPipelineSynthSlugData, PostDdPipelineSynthSlugError, PostDdPipelineSynthSlugResponse, PostDdPipelineSynthThreadIdCancelData, PostDdPipelineSynthThreadIdCancelError, PostDdPipelineSynthThreadIdCancelResponse, PostDdPipelineSynthThreadIdResumeData, PostDdPipelineSynthThreadIdResumeError, PostDdPipelineSynthThreadIdResumeResponse, PostSettingsEmbeddingTestData, PostSettingsEndpointTestData, PostYcsAdminVideosBulkDeleteData, PostYcsAdminVideosBulkDeleteError, PostYcsAdminVideosBulkDeleteResponse, PostYcsAgentsEndpointPingData, PostYcsAgentsEndpointPingResponse, PostYcsAgentsFeedbackData, PostYcsAgentsFeedbackError, PostYcsAgentsFeedbackResponse, PostYcsAgentsIngestNeo4jData, PostYcsAgentsIngestNeo4jError, PostYcsAgentsIngestNeo4jResponse, PostYcsAgentsIngestQdrantData, PostYcsAgentsIngestQdrantError, PostYcsAgentsIngestQdrantResponse, PostYcsAgentsPipelineData, PostYcsAgentsPipelineError, PostYcsAgentsPipelineResponse, PostYcsAgentsSearchData, PostYcsAgentsSearchError, PostYcsAgentsSearchResponse, PostYcsAgentsSearchStreamData, PostYcsAgentsSearchStreamError, PostYcsAgentsThreadsThreadIdBranchData, PostYcsAgentsThreadsThreadIdBranchError, PostYcsAgentsThreadsThreadIdBranchResponse, PostYcsAgentsTurnsTurnIdCancelData, PostYcsAgentsTurnsTurnIdCancelError, PostYcsAgentsTurnsTurnIdCancelResponse, PostYcsContentChannelData, PostYcsContentChannelError, PostYcsContentChannelPipelineData, PostYcsContentChannelPipelineError, PostYcsContentChannelPipelineResponse, PostYcsContentChannelResponse, PostYcsContentEmbeddingMigrationStartData, PostYcsContentEmbeddingMigrationStartResponse, PostYcsContentPlaylistData, PostYcsContentPlaylistError, PostYcsContentPlaylistPipelineData, PostYcsContentPlaylistPipelineError, PostYcsContentPlaylistPipelineResponse, PostYcsContentPlaylistResponse, PostYcsContentSearchData, PostYcsContentSearchError, PostYcsContentSearchResponse, PostYcsContentVideosData, PostYcsContentVideosError, PostYcsContentVideosPipelineData, PostYcsContentVideosPipelineError, PostYcsContentVideosPipelineExtractIdRerunData, PostYcsContentVideosPipelineExtractIdRerunError, PostYcsContentVideosPipelineExtractIdRerunResponse, PostYcsContentVideosPipelineExtractIdStopData, PostYcsContentVideosPipelineExtractIdStopError, PostYcsContentVideosPipelineExtractIdStopResponse, PostYcsContentVideosPipelineExtractIdWipeData, PostYcsContentVideosPipelineExtractIdWipeError, PostYcsContentVideosPipelineExtractIdWipeResponse, PostYcsContentVideosPipelineResponse, PostYcsContentVideosResponse, PostYcsQueryAiBackendData, PostYcsQueryAiBackendError, PostYcsQueryElasticsearchData, PostYcsQueryElasticsearchError, PostYcsQueryElasticsearchResponse, PostYcsQueryHistoryData, PostYcsQueryHistoryResponse, PostYcsQueryNeo4jData, PostYcsQueryNeo4jError, PostYcsQueryNeo4jResponse, PostYcsQueryQdrantData, PostYcsQueryQdrantError, PostYcsQueryQdrantResponse, PostYcsQueryRawElasticsearchData, PostYcsQueryRawElasticsearchError, PostYcsQueryRawElasticsearchResponse, PostYcsQueryRawNeo4jData, PostYcsQueryRawNeo4jError, PostYcsQueryRawNeo4jResponse, PostYcsQueryRawQdrantData, PostYcsQueryRawQdrantError, PostYcsQueryRawQdrantResponse, PutSettingsEmbeddingData, PutSettingsEmbeddingError, PutSettingsEndpointData, PutSettingsEndpointError } from '../types.gen';
 
 export type QueryKey<TOptions extends Options> = [
     Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {
@@ -420,6 +420,46 @@ export const postBdIngestionBookIdRunMutation = (options?: Partial<Options<PostB
     return mutationOptions;
 };
 
+export const getDdCatalogQueryKey = (options?: Options<GetDdCatalogData>) => createQueryKey('getDdCatalog', options);
+
+/**
+ * List Catalog
+ *
+ * Re-read every request so YAML edits land without a pod restart.
+ * Each entry carries its resolved `tier` (1-5, None when sourceless) so
+ * the Catalog UI can facet-filter without a second round-trip.
+ */
+export const getDdCatalogOptions = (options?: Options<GetDdCatalogData>) => queryOptions<GetDdCatalogResponse, DefaultError, GetDdCatalogResponse, ReturnType<typeof getDdCatalogQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdCatalog({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdCatalogQueryKey(options)
+});
+
+export const getDdCatalogSlugQueryKey = (options: Options<GetDdCatalogSlugData>) => createQueryKey('getDdCatalogSlug', options);
+
+/**
+ * Resolve One
+ */
+export const getDdCatalogSlugOptions = (options: Options<GetDdCatalogSlugData>) => queryOptions<GetDdCatalogSlugResponse, GetDdCatalogSlugError, GetDdCatalogSlugResponse, ReturnType<typeof getDdCatalogSlugQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdCatalogSlug({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdCatalogSlugQueryKey(options)
+});
+
 /**
  * Debug Finalize
  *
@@ -588,6 +628,141 @@ export const getDdIngestionOptions = (options?: Options<GetDdIngestionData>) => 
 });
 
 /**
+ * Start Run
+ *
+ * Status: cached (manifest present, no refresh) / queued (lock
+ * acquired, Celery dispatched) / locked (another in flight).
+ */
+export const postDdIngestionRunsMutation = (options?: Partial<Options<PostDdIngestionRunsData>>): UseMutationOptions<PostDdIngestionRunsResponse, PostDdIngestionRunsError, Options<PostDdIngestionRunsData>> => {
+    const mutationOptions: UseMutationOptions<PostDdIngestionRunsResponse, PostDdIngestionRunsError, Options<PostDdIngestionRunsData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await postDdIngestionRuns({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+export const getDdIngestionRunsActiveQueryKey = (options?: Options<GetDdIngestionRunsActiveData>) => createQueryKey('getDdIngestionRunsActive', options);
+
+/**
+ * List Active Runs
+ *
+ * Lock-held runs with progress; cross-checked so locks without a
+ * written progress record (rare race) aren't surfaced.
+ */
+export const getDdIngestionRunsActiveOptions = (options?: Options<GetDdIngestionRunsActiveData>) => queryOptions<GetDdIngestionRunsActiveResponse, DefaultError, GetDdIngestionRunsActiveResponse, ReturnType<typeof getDdIngestionRunsActiveQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdIngestionRunsActive({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdIngestionRunsActiveQueryKey(options)
+});
+
+export const getDdIngestionRunsRunIdQueryKey = (options: Options<GetDdIngestionRunsRunIdData>) => createQueryKey('getDdIngestionRunsRunId', options);
+
+/**
+ * Get Run
+ *
+ * In-flight snapshot from Redis (canonical post-finalize manifest
+ * lives in MinIO under /ingestion/{slug}).
+ */
+export const getDdIngestionRunsRunIdOptions = (options: Options<GetDdIngestionRunsRunIdData>) => queryOptions<GetDdIngestionRunsRunIdResponse, GetDdIngestionRunsRunIdError, GetDdIngestionRunsRunIdResponse, ReturnType<typeof getDdIngestionRunsRunIdQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdIngestionRunsRunId({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdIngestionRunsRunIdQueryKey(options)
+});
+
+/**
+ * Cancel Run
+ */
+export const postDdIngestionRunsRunIdCancelMutation = (options?: Partial<Options<PostDdIngestionRunsRunIdCancelData>>): UseMutationOptions<PostDdIngestionRunsRunIdCancelResponse, PostDdIngestionRunsRunIdCancelError, Options<PostDdIngestionRunsRunIdCancelData>> => {
+    const mutationOptions: UseMutationOptions<PostDdIngestionRunsRunIdCancelResponse, PostDdIngestionRunsRunIdCancelError, Options<PostDdIngestionRunsRunIdCancelData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await postDdIngestionRunsRunIdCancel({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+export const getDdIngestionRunsRunIdLlmCountersQueryKey = (options: Options<GetDdIngestionRunsRunIdLlmCountersData>) => createQueryKey('getDdIngestionRunsRunIdLlmCounters', options);
+
+/**
+ * Get Llm Counters
+ *
+ * Live ingestion usage, with the persisted snapshot as a fallback after Redis expires.
+ */
+export const getDdIngestionRunsRunIdLlmCountersOptions = (options: Options<GetDdIngestionRunsRunIdLlmCountersData>) => queryOptions<GetDdIngestionRunsRunIdLlmCountersResponse, GetDdIngestionRunsRunIdLlmCountersError, GetDdIngestionRunsRunIdLlmCountersResponse, ReturnType<typeof getDdIngestionRunsRunIdLlmCountersQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdIngestionRunsRunIdLlmCounters({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdIngestionRunsRunIdLlmCountersQueryKey(options)
+});
+
+export const getDdIngestionRunsRunIdPagesIdxQueryKey = (options: Options<GetDdIngestionRunsRunIdPagesIdxData>) => createQueryKey('getDdIngestionRunsRunIdPagesIdx', options);
+
+/**
+ * Get Page
+ */
+export const getDdIngestionRunsRunIdPagesIdxOptions = (options: Options<GetDdIngestionRunsRunIdPagesIdxData>) => queryOptions<GetDdIngestionRunsRunIdPagesIdxResponse, GetDdIngestionRunsRunIdPagesIdxError, GetDdIngestionRunsRunIdPagesIdxResponse, ReturnType<typeof getDdIngestionRunsRunIdPagesIdxQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdIngestionRunsRunIdPagesIdx({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdIngestionRunsRunIdPagesIdxQueryKey(options)
+});
+
+export const getDdIngestionRunsRunIdUrlRecordsQueryKey = (options: Options<GetDdIngestionRunsRunIdUrlRecordsData>) => createQueryKey('getDdIngestionRunsRunIdUrlRecords', options);
+
+/**
+ * Get Url Records
+ */
+export const getDdIngestionRunsRunIdUrlRecordsOptions = (options: Options<GetDdIngestionRunsRunIdUrlRecordsData>) => queryOptions<GetDdIngestionRunsRunIdUrlRecordsResponse, GetDdIngestionRunsRunIdUrlRecordsError, GetDdIngestionRunsRunIdUrlRecordsResponse, ReturnType<typeof getDdIngestionRunsRunIdUrlRecordsQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdIngestionRunsRunIdUrlRecords({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdIngestionRunsRunIdUrlRecordsQueryKey(options)
+});
+
+/**
  * Delete Framework
  *
  * Full-wipe every MinIO prefix keyed by this slug + the Redis
@@ -743,6 +918,539 @@ export const getDdPipelineActiveOptions = (options?: Options<GetDdPipelineActive
     queryKey: getDdPipelineActiveQueryKey(options)
 });
 
+export const getDdPipelinePlannerDebugGraphThreadIdHistoryQueryKey = (options: Options<GetDdPipelinePlannerDebugGraphThreadIdHistoryData>) => createQueryKey('getDdPipelinePlannerDebugGraphThreadIdHistory', options);
+
+/**
+ * Get Graph History
+ */
+export const getDdPipelinePlannerDebugGraphThreadIdHistoryOptions = (options: Options<GetDdPipelinePlannerDebugGraphThreadIdHistoryData>) => queryOptions<GetDdPipelinePlannerDebugGraphThreadIdHistoryResponse, GetDdPipelinePlannerDebugGraphThreadIdHistoryError, GetDdPipelinePlannerDebugGraphThreadIdHistoryResponse, ReturnType<typeof getDdPipelinePlannerDebugGraphThreadIdHistoryQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdPipelinePlannerDebugGraphThreadIdHistory({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdPipelinePlannerDebugGraphThreadIdHistoryQueryKey(options)
+});
+
+export const getDdPipelinePlannerDebugGraphThreadIdLlmCountersQueryKey = (options: Options<GetDdPipelinePlannerDebugGraphThreadIdLlmCountersData>) => createQueryKey('getDdPipelinePlannerDebugGraphThreadIdLlmCounters', options);
+
+/**
+ * Get Graph Llm Counters
+ */
+export const getDdPipelinePlannerDebugGraphThreadIdLlmCountersOptions = (options: Options<GetDdPipelinePlannerDebugGraphThreadIdLlmCountersData>) => queryOptions<GetDdPipelinePlannerDebugGraphThreadIdLlmCountersResponse, GetDdPipelinePlannerDebugGraphThreadIdLlmCountersError, GetDdPipelinePlannerDebugGraphThreadIdLlmCountersResponse, ReturnType<typeof getDdPipelinePlannerDebugGraphThreadIdLlmCountersQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdPipelinePlannerDebugGraphThreadIdLlmCounters({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdPipelinePlannerDebugGraphThreadIdLlmCountersQueryKey(options)
+});
+
+export const getDdPipelinePlannerDebugGraphThreadIdStateQueryKey = (options: Options<GetDdPipelinePlannerDebugGraphThreadIdStateData>) => createQueryKey('getDdPipelinePlannerDebugGraphThreadIdState', options);
+
+/**
+ * Get Graph State
+ */
+export const getDdPipelinePlannerDebugGraphThreadIdStateOptions = (options: Options<GetDdPipelinePlannerDebugGraphThreadIdStateData>) => queryOptions<GetDdPipelinePlannerDebugGraphThreadIdStateResponse, GetDdPipelinePlannerDebugGraphThreadIdStateError, GetDdPipelinePlannerDebugGraphThreadIdStateResponse, ReturnType<typeof getDdPipelinePlannerDebugGraphThreadIdStateQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdPipelinePlannerDebugGraphThreadIdState({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdPipelinePlannerDebugGraphThreadIdStateQueryKey(options)
+});
+
+export const getDdPipelinePlannerInfoQueryKey = (options?: Options<GetDdPipelinePlannerInfoData>) => createQueryKey('getDdPipelinePlannerInfo', options);
+
+/**
+ * Planner Info
+ */
+export const getDdPipelinePlannerInfoOptions = (options?: Options<GetDdPipelinePlannerInfoData>) => queryOptions<GetDdPipelinePlannerInfoResponse, DefaultError, GetDdPipelinePlannerInfoResponse, ReturnType<typeof getDdPipelinePlannerInfoQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdPipelinePlannerInfo({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdPipelinePlannerInfoQueryKey(options)
+});
+
+/**
+ * Prune Checkpoints
+ *
+ * Manual trigger for the checkpoint-retention sweep (see
+ * `runtime.checkpoint.service.prune_old_threads`). `dry_run=true`
+ * (default) previews eligible thread_ids inline, no Celery hop, no
+ * deletion. `dry_run=false` dispatches to Celery — a full-table scan
+ * across every slug can run long, and this actually deletes rows, so
+ * it shouldn't block the request or run without an explicit opt-in.
+ * Nothing in this codebase calls this on a schedule; wire it up via a
+ * k8s CronJob or celery beat if periodic pruning is wanted.
+ */
+export const postDdPipelinePlannerPruneMutation = (options?: Partial<Options<PostDdPipelinePlannerPruneData>>): UseMutationOptions<PostDdPipelinePlannerPruneResponse, PostDdPipelinePlannerPruneError, Options<PostDdPipelinePlannerPruneData>> => {
+    const mutationOptions: UseMutationOptions<PostDdPipelinePlannerPruneResponse, PostDdPipelinePlannerPruneError, Options<PostDdPipelinePlannerPruneData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await postDdPipelinePlannerPrune({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+export const getDdPipelinePlannerRecentQueryKey = (options?: Options<GetDdPipelinePlannerRecentData>) => createQueryKey('getDdPipelinePlannerRecent', options);
+
+/**
+ * List Recent Planners
+ *
+ * Per-slug thread selection prefers the thread with the MOST
+ * checkpoints — sorting by checkpoint_id alone picks abandoned threads
+ * that died early over later threads that completed all nodes.
+ */
+export const getDdPipelinePlannerRecentOptions = (options?: Options<GetDdPipelinePlannerRecentData>) => queryOptions<GetDdPipelinePlannerRecentResponse, DefaultError, GetDdPipelinePlannerRecentResponse, ReturnType<typeof getDdPipelinePlannerRecentQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdPipelinePlannerRecent({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdPipelinePlannerRecentQueryKey(options)
+});
+
+/**
+ * Start Planner
+ */
+export const postDdPipelinePlannerSlugMutation = (options?: Partial<Options<PostDdPipelinePlannerSlugData>>): UseMutationOptions<PostDdPipelinePlannerSlugResponse, PostDdPipelinePlannerSlugError, Options<PostDdPipelinePlannerSlugData>> => {
+    const mutationOptions: UseMutationOptions<PostDdPipelinePlannerSlugResponse, PostDdPipelinePlannerSlugError, Options<PostDdPipelinePlannerSlugData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await postDdPipelinePlannerSlug({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+export const getDdPipelinePlannerSlugActiveQueryKey = (options: Options<GetDdPipelinePlannerSlugActiveData>) => createQueryKey('getDdPipelinePlannerSlugActive', options);
+
+/**
+ * Planner Active
+ *
+ * Page-refresh recovery without browser localStorage.
+ */
+export const getDdPipelinePlannerSlugActiveOptions = (options: Options<GetDdPipelinePlannerSlugActiveData>) => queryOptions<GetDdPipelinePlannerSlugActiveResponse, GetDdPipelinePlannerSlugActiveError, GetDdPipelinePlannerSlugActiveResponse, ReturnType<typeof getDdPipelinePlannerSlugActiveQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdPipelinePlannerSlugActive({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdPipelinePlannerSlugActiveQueryKey(options)
+});
+
+export const getDdPipelinePlannerSlugHealthQueryKey = (options: Options<GetDdPipelinePlannerSlugHealthData>) => createQueryKey('getDdPipelinePlannerSlugHealth', options);
+
+/**
+ * Planner Health
+ *
+ * Wave H3 — pipeline health from the latest plan (no MinIO archaeology).
+ * `degraded` is the one-flag answer to 'will this plan be any good'.
+ */
+export const getDdPipelinePlannerSlugHealthOptions = (options: Options<GetDdPipelinePlannerSlugHealthData>) => queryOptions<GetDdPipelinePlannerSlugHealthResponse, GetDdPipelinePlannerSlugHealthError, GetDdPipelinePlannerSlugHealthResponse, ReturnType<typeof getDdPipelinePlannerSlugHealthQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdPipelinePlannerSlugHealth({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdPipelinePlannerSlugHealthQueryKey(options)
+});
+
+export const getDdPipelinePlannerSlugTimingQueryKey = (options: Options<GetDdPipelinePlannerSlugTimingData>) => createQueryKey('getDdPipelinePlannerSlugTiming', options);
+
+/**
+ * Planner Timing
+ */
+export const getDdPipelinePlannerSlugTimingOptions = (options: Options<GetDdPipelinePlannerSlugTimingData>) => queryOptions<GetDdPipelinePlannerSlugTimingResponse, GetDdPipelinePlannerSlugTimingError, GetDdPipelinePlannerSlugTimingResponse, ReturnType<typeof getDdPipelinePlannerSlugTimingQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdPipelinePlannerSlugTiming({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdPipelinePlannerSlugTimingQueryKey(options)
+});
+
+/**
+ * Wipe Planner
+ *
+ * Wipes MinIO dd/{slug}/planner/, Postgres checkpoints, Redis lock +
+ * active-run registry. Drops the lock so the next Start Planner click
+ * isn't rejected by a stale lock that survived the wipe.
+ */
+export const deleteDdPipelinePlannerSlugWipeMutation = (options?: Partial<Options<DeleteDdPipelinePlannerSlugWipeData>>): UseMutationOptions<DeleteDdPipelinePlannerSlugWipeResponse, DeleteDdPipelinePlannerSlugWipeError, Options<DeleteDdPipelinePlannerSlugWipeData>> => {
+    const mutationOptions: UseMutationOptions<DeleteDdPipelinePlannerSlugWipeResponse, DeleteDdPipelinePlannerSlugWipeError, Options<DeleteDdPipelinePlannerSlugWipeData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await deleteDdPipelinePlannerSlugWipe({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+/**
+ * Cancel Planner
+ */
+export const postDdPipelinePlannerThreadIdCancelMutation = (options?: Partial<Options<PostDdPipelinePlannerThreadIdCancelData>>): UseMutationOptions<PostDdPipelinePlannerThreadIdCancelResponse, PostDdPipelinePlannerThreadIdCancelError, Options<PostDdPipelinePlannerThreadIdCancelData>> => {
+    const mutationOptions: UseMutationOptions<PostDdPipelinePlannerThreadIdCancelResponse, PostDdPipelinePlannerThreadIdCancelError, Options<PostDdPipelinePlannerThreadIdCancelData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await postDdPipelinePlannerThreadIdCancel({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+export const getDdPipelinePlannerThreadIdEventsQueryKey = (options: Options<GetDdPipelinePlannerThreadIdEventsData>) => createQueryKey('getDdPipelinePlannerThreadIdEvents', options);
+
+/**
+ * Planner Events
+ *
+ * Initial `: stream open` forces proxies to flush headers (avoids
+ * first-event delay). 15s heartbeat keeps the connection alive through
+ * k3d/traefik during long off_topic/cluster gaps.
+ */
+export const getDdPipelinePlannerThreadIdEventsOptions = (options: Options<GetDdPipelinePlannerThreadIdEventsData>) => queryOptions<unknown, GetDdPipelinePlannerThreadIdEventsError, unknown, ReturnType<typeof getDdPipelinePlannerThreadIdEventsQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdPipelinePlannerThreadIdEvents({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdPipelinePlannerThreadIdEventsQueryKey(options)
+});
+
+/**
+ * Resume Planner
+ */
+export const postDdPipelinePlannerThreadIdResumeMutation = (options?: Partial<Options<PostDdPipelinePlannerThreadIdResumeData>>): UseMutationOptions<PostDdPipelinePlannerThreadIdResumeResponse, PostDdPipelinePlannerThreadIdResumeError, Options<PostDdPipelinePlannerThreadIdResumeData>> => {
+    const mutationOptions: UseMutationOptions<PostDdPipelinePlannerThreadIdResumeResponse, PostDdPipelinePlannerThreadIdResumeError, Options<PostDdPipelinePlannerThreadIdResumeData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await postDdPipelinePlannerThreadIdResume({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+export const getDdPipelineSynthDebugGraphThreadIdHistoryQueryKey = (options: Options<GetDdPipelineSynthDebugGraphThreadIdHistoryData>) => createQueryKey('getDdPipelineSynthDebugGraphThreadIdHistory', options);
+
+/**
+ * Synth History
+ */
+export const getDdPipelineSynthDebugGraphThreadIdHistoryOptions = (options: Options<GetDdPipelineSynthDebugGraphThreadIdHistoryData>) => queryOptions<GetDdPipelineSynthDebugGraphThreadIdHistoryResponse, GetDdPipelineSynthDebugGraphThreadIdHistoryError, GetDdPipelineSynthDebugGraphThreadIdHistoryResponse, ReturnType<typeof getDdPipelineSynthDebugGraphThreadIdHistoryQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdPipelineSynthDebugGraphThreadIdHistory({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdPipelineSynthDebugGraphThreadIdHistoryQueryKey(options)
+});
+
+export const getDdPipelineSynthDebugGraphThreadIdLlmCountersQueryKey = (options: Options<GetDdPipelineSynthDebugGraphThreadIdLlmCountersData>) => createQueryKey('getDdPipelineSynthDebugGraphThreadIdLlmCounters', options);
+
+/**
+ * Synth Llm Counters
+ */
+export const getDdPipelineSynthDebugGraphThreadIdLlmCountersOptions = (options: Options<GetDdPipelineSynthDebugGraphThreadIdLlmCountersData>) => queryOptions<GetDdPipelineSynthDebugGraphThreadIdLlmCountersResponse, GetDdPipelineSynthDebugGraphThreadIdLlmCountersError, GetDdPipelineSynthDebugGraphThreadIdLlmCountersResponse, ReturnType<typeof getDdPipelineSynthDebugGraphThreadIdLlmCountersQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdPipelineSynthDebugGraphThreadIdLlmCounters({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdPipelineSynthDebugGraphThreadIdLlmCountersQueryKey(options)
+});
+
+export const getDdPipelineSynthDebugGraphThreadIdStateQueryKey = (options: Options<GetDdPipelineSynthDebugGraphThreadIdStateData>) => createQueryKey('getDdPipelineSynthDebugGraphThreadIdState', options);
+
+/**
+ * Synth State
+ */
+export const getDdPipelineSynthDebugGraphThreadIdStateOptions = (options: Options<GetDdPipelineSynthDebugGraphThreadIdStateData>) => queryOptions<GetDdPipelineSynthDebugGraphThreadIdStateResponse, GetDdPipelineSynthDebugGraphThreadIdStateError, GetDdPipelineSynthDebugGraphThreadIdStateResponse, ReturnType<typeof getDdPipelineSynthDebugGraphThreadIdStateQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdPipelineSynthDebugGraphThreadIdState({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdPipelineSynthDebugGraphThreadIdStateQueryKey(options)
+});
+
+export const getDdPipelineSynthInfoQueryKey = (options?: Options<GetDdPipelineSynthInfoData>) => createQueryKey('getDdPipelineSynthInfo', options);
+
+/**
+ * Synth Info
+ */
+export const getDdPipelineSynthInfoOptions = (options?: Options<GetDdPipelineSynthInfoData>) => queryOptions<GetDdPipelineSynthInfoResponse, DefaultError, GetDdPipelineSynthInfoResponse, ReturnType<typeof getDdPipelineSynthInfoQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdPipelineSynthInfo({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdPipelineSynthInfoQueryKey(options)
+});
+
+export const getDdPipelineSynthRecentQueryKey = (options?: Options<GetDdPipelineSynthRecentData>) => createQueryKey('getDdPipelineSynthRecent', options);
+
+/**
+ * List Recent Synth
+ *
+ * Most-recent thread per slug for page-refresh recovery.
+ */
+export const getDdPipelineSynthRecentOptions = (options?: Options<GetDdPipelineSynthRecentData>) => queryOptions<GetDdPipelineSynthRecentResponse, DefaultError, GetDdPipelineSynthRecentResponse, ReturnType<typeof getDdPipelineSynthRecentQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdPipelineSynthRecent({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdPipelineSynthRecentQueryKey(options)
+});
+
+/**
+ * Start Synth
+ *
+ * No chapter_id → STUDY mode (orchestrator runs all chapters);
+ * with chapter_id → single-chapter escape hatch.
+ */
+export const postDdPipelineSynthSlugMutation = (options?: Partial<Options<PostDdPipelineSynthSlugData>>): UseMutationOptions<PostDdPipelineSynthSlugResponse, PostDdPipelineSynthSlugError, Options<PostDdPipelineSynthSlugData>> => {
+    const mutationOptions: UseMutationOptions<PostDdPipelineSynthSlugResponse, PostDdPipelineSynthSlugError, Options<PostDdPipelineSynthSlugData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await postDdPipelineSynthSlug({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+export const getDdPipelineSynthSlugActiveQueryKey = (options: Options<GetDdPipelineSynthSlugActiveData>) => createQueryKey('getDdPipelineSynthSlugActive', options);
+
+/**
+ * Synth Active
+ *
+ * Page-refresh recovery: returns the study orchestrator's thread_id
+ * so the UI can reconnect to its SSE without browser localStorage. A single-chapter run (the per-chapter ▶ button on the
+ * chapter list) has no study registry entry; its thread is the value of the slug's synth lock, returned as `chapter_thread_id`.
+ */
+export const getDdPipelineSynthSlugActiveOptions = (options: Options<GetDdPipelineSynthSlugActiveData>) => queryOptions<GetDdPipelineSynthSlugActiveResponse, GetDdPipelineSynthSlugActiveError, GetDdPipelineSynthSlugActiveResponse, ReturnType<typeof getDdPipelineSynthSlugActiveQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdPipelineSynthSlugActive({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdPipelineSynthSlugActiveQueryKey(options)
+});
+
+export const getDdPipelineSynthSlugStudyChaptersQueryKey = (options: Options<GetDdPipelineSynthSlugStudyChaptersData>) => createQueryKey('getDdPipelineSynthSlugStudyChapters', options);
+
+/**
+ * List Study Chapters
+ *
+ * Drives the Study sidebar. `rendered` flags MUST NOT be cached —
+ * a stale 200 after a wipe would show phantom synthesized chapters.
+ */
+export const getDdPipelineSynthSlugStudyChaptersOptions = (options: Options<GetDdPipelineSynthSlugStudyChaptersData>) => queryOptions<GetDdPipelineSynthSlugStudyChaptersResponse, GetDdPipelineSynthSlugStudyChaptersError, GetDdPipelineSynthSlugStudyChaptersResponse, ReturnType<typeof getDdPipelineSynthSlugStudyChaptersQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdPipelineSynthSlugStudyChapters({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdPipelineSynthSlugStudyChaptersQueryKey(options)
+});
+
+export const getDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameQueryKey = (options: Options<GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameData>) => createQueryKey('getDdPipelineSynthSlugStudyChapterIdArtifactArtifactName', options);
+
+/**
+ * Get Study Artifact
+ *
+ * VALID_ARTIFACTS allow-list prevents arbitrary MinIO key reads.
+ */
+export const getDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameOptions = (options: Options<GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameData>) => queryOptions<unknown, GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameError, unknown, ReturnType<typeof getDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdPipelineSynthSlugStudyChapterIdArtifactArtifactName({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameQueryKey(options)
+});
+
+/**
+ * Wipe Synth
+ *
+ * Wipes MinIO dd/{slug}/synth/, Postgres checkpoints for synth+study
+ * threads, Redis SSE snapshots + lock. Without the Redis sweep a wiped
+ * slug "comes back from the dead" via the cached study SSE snapshot.
+ * With `chapter_id`, wipes only that chapter's MinIO outputs (see
+ * `service.wipe_one_chapter`).
+ */
+export const deleteDdPipelineSynthSlugWipeMutation = (options?: Partial<Options<DeleteDdPipelineSynthSlugWipeData>>): UseMutationOptions<DeleteDdPipelineSynthSlugWipeResponse, DeleteDdPipelineSynthSlugWipeError, Options<DeleteDdPipelineSynthSlugWipeData>> => {
+    const mutationOptions: UseMutationOptions<DeleteDdPipelineSynthSlugWipeResponse, DeleteDdPipelineSynthSlugWipeError, Options<DeleteDdPipelineSynthSlugWipeData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await deleteDdPipelineSynthSlugWipe({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+/**
+ * Cancel Synth
+ *
+ * A STUDY thread cancel must propagate to each in-flight per-chapter
+ * thread — chapter watchers poll their own flag, not the study flag.
+ * Without propagation only the NEXT chapter is blocked; the in-flight
+ * one keeps firing LLM calls.
+ */
+export const postDdPipelineSynthThreadIdCancelMutation = (options?: Partial<Options<PostDdPipelineSynthThreadIdCancelData>>): UseMutationOptions<PostDdPipelineSynthThreadIdCancelResponse, PostDdPipelineSynthThreadIdCancelError, Options<PostDdPipelineSynthThreadIdCancelData>> => {
+    const mutationOptions: UseMutationOptions<PostDdPipelineSynthThreadIdCancelResponse, PostDdPipelineSynthThreadIdCancelError, Options<PostDdPipelineSynthThreadIdCancelData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await postDdPipelineSynthThreadIdCancel({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+export const getDdPipelineSynthThreadIdEventsQueryKey = (options: Options<GetDdPipelineSynthThreadIdEventsData>) => createQueryKey('getDdPipelineSynthThreadIdEvents', options);
+
+/**
+ * Synth Events
+ *
+ * Initial `: stream open` comment forces proxies to flush headers
+ * (avoid first-event delay). Heartbeat every 15s keeps the connection
+ * alive through k3d/traefik (default idle-stream timeout 60s) during
+ * long Synth gaps (sawc_write, book_harmonize).
+ */
+export const getDdPipelineSynthThreadIdEventsOptions = (options: Options<GetDdPipelineSynthThreadIdEventsData>) => queryOptions<unknown, GetDdPipelineSynthThreadIdEventsError, unknown, ReturnType<typeof getDdPipelineSynthThreadIdEventsQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdPipelineSynthThreadIdEvents({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdPipelineSynthThreadIdEventsQueryKey(options)
+});
+
+/**
+ * Resume Synth
+ */
+export const postDdPipelineSynthThreadIdResumeMutation = (options?: Partial<Options<PostDdPipelineSynthThreadIdResumeData>>): UseMutationOptions<PostDdPipelineSynthThreadIdResumeResponse, PostDdPipelineSynthThreadIdResumeError, Options<PostDdPipelineSynthThreadIdResumeData>> => {
+    const mutationOptions: UseMutationOptions<PostDdPipelineSynthThreadIdResumeResponse, PostDdPipelineSynthThreadIdResumeError, Options<PostDdPipelineSynthThreadIdResumeData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await postDdPipelineSynthThreadIdResume({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
 export const getDdPipelineSlugStateQueryKey = (options: Options<GetDdPipelineSlugStateData>) => createQueryKey('getDdPipelineSlugState', options);
 
 /**
@@ -762,714 +1470,6 @@ export const getDdPipelineSlugStateOptions = (options: Options<GetDdPipelineSlug
     },
     queryKey: getDdPipelineSlugStateQueryKey(options)
 });
-
-export const getDdPlannerDebugGraphThreadIdHistoryQueryKey = (options: Options<GetDdPlannerDebugGraphThreadIdHistoryData>) => createQueryKey('getDdPlannerDebugGraphThreadIdHistory', options);
-
-/**
- * Get Graph History
- */
-export const getDdPlannerDebugGraphThreadIdHistoryOptions = (options: Options<GetDdPlannerDebugGraphThreadIdHistoryData>) => queryOptions<GetDdPlannerDebugGraphThreadIdHistoryResponse, GetDdPlannerDebugGraphThreadIdHistoryError, GetDdPlannerDebugGraphThreadIdHistoryResponse, ReturnType<typeof getDdPlannerDebugGraphThreadIdHistoryQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdPlannerDebugGraphThreadIdHistory({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdPlannerDebugGraphThreadIdHistoryQueryKey(options)
-});
-
-export const getDdPlannerDebugGraphThreadIdLlmCountersQueryKey = (options: Options<GetDdPlannerDebugGraphThreadIdLlmCountersData>) => createQueryKey('getDdPlannerDebugGraphThreadIdLlmCounters', options);
-
-/**
- * Get Graph Llm Counters
- */
-export const getDdPlannerDebugGraphThreadIdLlmCountersOptions = (options: Options<GetDdPlannerDebugGraphThreadIdLlmCountersData>) => queryOptions<GetDdPlannerDebugGraphThreadIdLlmCountersResponse, GetDdPlannerDebugGraphThreadIdLlmCountersError, GetDdPlannerDebugGraphThreadIdLlmCountersResponse, ReturnType<typeof getDdPlannerDebugGraphThreadIdLlmCountersQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdPlannerDebugGraphThreadIdLlmCounters({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdPlannerDebugGraphThreadIdLlmCountersQueryKey(options)
-});
-
-export const getDdPlannerDebugGraphThreadIdStateQueryKey = (options: Options<GetDdPlannerDebugGraphThreadIdStateData>) => createQueryKey('getDdPlannerDebugGraphThreadIdState', options);
-
-/**
- * Get Graph State
- */
-export const getDdPlannerDebugGraphThreadIdStateOptions = (options: Options<GetDdPlannerDebugGraphThreadIdStateData>) => queryOptions<GetDdPlannerDebugGraphThreadIdStateResponse, GetDdPlannerDebugGraphThreadIdStateError, GetDdPlannerDebugGraphThreadIdStateResponse, ReturnType<typeof getDdPlannerDebugGraphThreadIdStateQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdPlannerDebugGraphThreadIdState({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdPlannerDebugGraphThreadIdStateQueryKey(options)
-});
-
-export const getDdPlannerInfoQueryKey = (options?: Options<GetDdPlannerInfoData>) => createQueryKey('getDdPlannerInfo', options);
-
-/**
- * Planner Info
- */
-export const getDdPlannerInfoOptions = (options?: Options<GetDdPlannerInfoData>) => queryOptions<GetDdPlannerInfoResponse, DefaultError, GetDdPlannerInfoResponse, ReturnType<typeof getDdPlannerInfoQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdPlannerInfo({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdPlannerInfoQueryKey(options)
-});
-
-/**
- * Prune Checkpoints
- *
- * Manual trigger for the checkpoint-retention sweep (see
- * `runtime.checkpoint.service.prune_old_threads`). `dry_run=true`
- * (default) previews eligible thread_ids inline, no Celery hop, no
- * deletion. `dry_run=false` dispatches to Celery — a full-table scan
- * across every slug can run long, and this actually deletes rows, so
- * it shouldn't block the request or run without an explicit opt-in.
- * Nothing in this codebase calls this on a schedule; wire it up via a
- * k8s CronJob or celery beat if periodic pruning is wanted.
- */
-export const postDdPlannerPruneMutation = (options?: Partial<Options<PostDdPlannerPruneData>>): UseMutationOptions<PostDdPlannerPruneResponse, PostDdPlannerPruneError, Options<PostDdPlannerPruneData>> => {
-    const mutationOptions: UseMutationOptions<PostDdPlannerPruneResponse, PostDdPlannerPruneError, Options<PostDdPlannerPruneData>> = {
-        mutationFn: async (fnOptions) => {
-            const { data } = await postDdPlannerPrune({
-                ...options,
-                ...fnOptions,
-                throwOnError: true
-            });
-            return data;
-        }
-    };
-    return mutationOptions;
-};
-
-export const getDdPlannerRecentQueryKey = (options?: Options<GetDdPlannerRecentData>) => createQueryKey('getDdPlannerRecent', options);
-
-/**
- * List Recent Planners
- *
- * Per-slug thread selection prefers the thread with the MOST
- * checkpoints — sorting by checkpoint_id alone picks abandoned threads
- * that died early over later threads that completed all nodes.
- */
-export const getDdPlannerRecentOptions = (options?: Options<GetDdPlannerRecentData>) => queryOptions<GetDdPlannerRecentResponse, DefaultError, GetDdPlannerRecentResponse, ReturnType<typeof getDdPlannerRecentQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdPlannerRecent({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdPlannerRecentQueryKey(options)
-});
-
-/**
- * Start Planner
- */
-export const postDdPlannerSlugMutation = (options?: Partial<Options<PostDdPlannerSlugData>>): UseMutationOptions<PostDdPlannerSlugResponse, PostDdPlannerSlugError, Options<PostDdPlannerSlugData>> => {
-    const mutationOptions: UseMutationOptions<PostDdPlannerSlugResponse, PostDdPlannerSlugError, Options<PostDdPlannerSlugData>> = {
-        mutationFn: async (fnOptions) => {
-            const { data } = await postDdPlannerSlug({
-                ...options,
-                ...fnOptions,
-                throwOnError: true
-            });
-            return data;
-        }
-    };
-    return mutationOptions;
-};
-
-export const getDdPlannerSlugActiveQueryKey = (options: Options<GetDdPlannerSlugActiveData>) => createQueryKey('getDdPlannerSlugActive', options);
-
-/**
- * Planner Active
- *
- * Page-refresh recovery without browser localStorage.
- */
-export const getDdPlannerSlugActiveOptions = (options: Options<GetDdPlannerSlugActiveData>) => queryOptions<GetDdPlannerSlugActiveResponse, GetDdPlannerSlugActiveError, GetDdPlannerSlugActiveResponse, ReturnType<typeof getDdPlannerSlugActiveQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdPlannerSlugActive({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdPlannerSlugActiveQueryKey(options)
-});
-
-export const getDdPlannerSlugHealthQueryKey = (options: Options<GetDdPlannerSlugHealthData>) => createQueryKey('getDdPlannerSlugHealth', options);
-
-/**
- * Planner Health
- *
- * Wave H3 — pipeline health from the latest plan (no MinIO archaeology).
- * `degraded` is the one-flag answer to 'will this plan be any good'.
- */
-export const getDdPlannerSlugHealthOptions = (options: Options<GetDdPlannerSlugHealthData>) => queryOptions<GetDdPlannerSlugHealthResponse, GetDdPlannerSlugHealthError, GetDdPlannerSlugHealthResponse, ReturnType<typeof getDdPlannerSlugHealthQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdPlannerSlugHealth({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdPlannerSlugHealthQueryKey(options)
-});
-
-export const getDdPlannerSlugTimingQueryKey = (options: Options<GetDdPlannerSlugTimingData>) => createQueryKey('getDdPlannerSlugTiming', options);
-
-/**
- * Planner Timing
- */
-export const getDdPlannerSlugTimingOptions = (options: Options<GetDdPlannerSlugTimingData>) => queryOptions<GetDdPlannerSlugTimingResponse, GetDdPlannerSlugTimingError, GetDdPlannerSlugTimingResponse, ReturnType<typeof getDdPlannerSlugTimingQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdPlannerSlugTiming({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdPlannerSlugTimingQueryKey(options)
-});
-
-/**
- * Wipe Planner
- *
- * Wipes MinIO dd/{slug}/planner/, Postgres checkpoints, Redis lock +
- * active-run registry. Drops the lock so the next Start Planner click
- * isn't rejected by a stale lock that survived the wipe.
- */
-export const deleteDdPlannerSlugWipeMutation = (options?: Partial<Options<DeleteDdPlannerSlugWipeData>>): UseMutationOptions<DeleteDdPlannerSlugWipeResponse, DeleteDdPlannerSlugWipeError, Options<DeleteDdPlannerSlugWipeData>> => {
-    const mutationOptions: UseMutationOptions<DeleteDdPlannerSlugWipeResponse, DeleteDdPlannerSlugWipeError, Options<DeleteDdPlannerSlugWipeData>> = {
-        mutationFn: async (fnOptions) => {
-            const { data } = await deleteDdPlannerSlugWipe({
-                ...options,
-                ...fnOptions,
-                throwOnError: true
-            });
-            return data;
-        }
-    };
-    return mutationOptions;
-};
-
-/**
- * Cancel Planner
- */
-export const postDdPlannerThreadIdCancelMutation = (options?: Partial<Options<PostDdPlannerThreadIdCancelData>>): UseMutationOptions<PostDdPlannerThreadIdCancelResponse, PostDdPlannerThreadIdCancelError, Options<PostDdPlannerThreadIdCancelData>> => {
-    const mutationOptions: UseMutationOptions<PostDdPlannerThreadIdCancelResponse, PostDdPlannerThreadIdCancelError, Options<PostDdPlannerThreadIdCancelData>> = {
-        mutationFn: async (fnOptions) => {
-            const { data } = await postDdPlannerThreadIdCancel({
-                ...options,
-                ...fnOptions,
-                throwOnError: true
-            });
-            return data;
-        }
-    };
-    return mutationOptions;
-};
-
-export const getDdPlannerThreadIdEventsQueryKey = (options: Options<GetDdPlannerThreadIdEventsData>) => createQueryKey('getDdPlannerThreadIdEvents', options);
-
-/**
- * Planner Events
- *
- * Initial `: stream open` forces proxies to flush headers (avoids
- * first-event delay). 15s heartbeat keeps the connection alive through
- * k3d/traefik during long off_topic/cluster gaps.
- */
-export const getDdPlannerThreadIdEventsOptions = (options: Options<GetDdPlannerThreadIdEventsData>) => queryOptions<unknown, GetDdPlannerThreadIdEventsError, unknown, ReturnType<typeof getDdPlannerThreadIdEventsQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdPlannerThreadIdEvents({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdPlannerThreadIdEventsQueryKey(options)
-});
-
-/**
- * Resume Planner
- */
-export const postDdPlannerThreadIdResumeMutation = (options?: Partial<Options<PostDdPlannerThreadIdResumeData>>): UseMutationOptions<PostDdPlannerThreadIdResumeResponse, PostDdPlannerThreadIdResumeError, Options<PostDdPlannerThreadIdResumeData>> => {
-    const mutationOptions: UseMutationOptions<PostDdPlannerThreadIdResumeResponse, PostDdPlannerThreadIdResumeError, Options<PostDdPlannerThreadIdResumeData>> = {
-        mutationFn: async (fnOptions) => {
-            const { data } = await postDdPlannerThreadIdResume({
-                ...options,
-                ...fnOptions,
-                throwOnError: true
-            });
-            return data;
-        }
-    };
-    return mutationOptions;
-};
-
-export const getDdResolverQueryKey = (options?: Options<GetDdResolverData>) => createQueryKey('getDdResolver', options);
-
-/**
- * List Catalog
- *
- * Re-read every request so YAML edits land without a pod restart.
- * Each entry carries its resolved `tier` (1-5, None when sourceless) so
- * the Catalog UI can facet-filter without a second round-trip.
- */
-export const getDdResolverOptions = (options?: Options<GetDdResolverData>) => queryOptions<GetDdResolverResponse, DefaultError, GetDdResolverResponse, ReturnType<typeof getDdResolverQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdResolver({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdResolverQueryKey(options)
-});
-
-export const getDdResolverSlugQueryKey = (options: Options<GetDdResolverSlugData>) => createQueryKey('getDdResolverSlug', options);
-
-/**
- * Resolve One
- */
-export const getDdResolverSlugOptions = (options: Options<GetDdResolverSlugData>) => queryOptions<GetDdResolverSlugResponse, GetDdResolverSlugError, GetDdResolverSlugResponse, ReturnType<typeof getDdResolverSlugQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdResolverSlug({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdResolverSlugQueryKey(options)
-});
-
-/**
- * Start Run
- *
- * Status: cached (manifest present, no refresh) / queued (lock
- * acquired, Celery dispatched) / locked (another in flight).
- */
-export const postDdRunsMutation = (options?: Partial<Options<PostDdRunsData>>): UseMutationOptions<PostDdRunsResponse, PostDdRunsError, Options<PostDdRunsData>> => {
-    const mutationOptions: UseMutationOptions<PostDdRunsResponse, PostDdRunsError, Options<PostDdRunsData>> = {
-        mutationFn: async (fnOptions) => {
-            const { data } = await postDdRuns({
-                ...options,
-                ...fnOptions,
-                throwOnError: true
-            });
-            return data;
-        }
-    };
-    return mutationOptions;
-};
-
-export const getDdRunsActiveQueryKey = (options?: Options<GetDdRunsActiveData>) => createQueryKey('getDdRunsActive', options);
-
-/**
- * List Active Runs
- *
- * Lock-held runs with progress; cross-checked so locks without a
- * written progress record (rare race) aren't surfaced.
- */
-export const getDdRunsActiveOptions = (options?: Options<GetDdRunsActiveData>) => queryOptions<GetDdRunsActiveResponse, DefaultError, GetDdRunsActiveResponse, ReturnType<typeof getDdRunsActiveQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdRunsActive({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdRunsActiveQueryKey(options)
-});
-
-export const getDdRunsRunIdQueryKey = (options: Options<GetDdRunsRunIdData>) => createQueryKey('getDdRunsRunId', options);
-
-/**
- * Get Run
- *
- * In-flight snapshot from Redis (canonical post-finalize manifest
- * lives in MinIO under /ingestion/{slug}).
- */
-export const getDdRunsRunIdOptions = (options: Options<GetDdRunsRunIdData>) => queryOptions<GetDdRunsRunIdResponse, GetDdRunsRunIdError, GetDdRunsRunIdResponse, ReturnType<typeof getDdRunsRunIdQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdRunsRunId({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdRunsRunIdQueryKey(options)
-});
-
-/**
- * Cancel Run
- */
-export const postDdRunsRunIdCancelMutation = (options?: Partial<Options<PostDdRunsRunIdCancelData>>): UseMutationOptions<PostDdRunsRunIdCancelResponse, PostDdRunsRunIdCancelError, Options<PostDdRunsRunIdCancelData>> => {
-    const mutationOptions: UseMutationOptions<PostDdRunsRunIdCancelResponse, PostDdRunsRunIdCancelError, Options<PostDdRunsRunIdCancelData>> = {
-        mutationFn: async (fnOptions) => {
-            const { data } = await postDdRunsRunIdCancel({
-                ...options,
-                ...fnOptions,
-                throwOnError: true
-            });
-            return data;
-        }
-    };
-    return mutationOptions;
-};
-
-export const getDdRunsRunIdLlmCountersQueryKey = (options: Options<GetDdRunsRunIdLlmCountersData>) => createQueryKey('getDdRunsRunIdLlmCounters', options);
-
-/**
- * Get Llm Counters
- *
- * Live ingestion usage, with the persisted snapshot as a fallback after Redis expires.
- */
-export const getDdRunsRunIdLlmCountersOptions = (options: Options<GetDdRunsRunIdLlmCountersData>) => queryOptions<GetDdRunsRunIdLlmCountersResponse, GetDdRunsRunIdLlmCountersError, GetDdRunsRunIdLlmCountersResponse, ReturnType<typeof getDdRunsRunIdLlmCountersQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdRunsRunIdLlmCounters({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdRunsRunIdLlmCountersQueryKey(options)
-});
-
-export const getDdRunsRunIdPagesIdxQueryKey = (options: Options<GetDdRunsRunIdPagesIdxData>) => createQueryKey('getDdRunsRunIdPagesIdx', options);
-
-/**
- * Get Page
- */
-export const getDdRunsRunIdPagesIdxOptions = (options: Options<GetDdRunsRunIdPagesIdxData>) => queryOptions<GetDdRunsRunIdPagesIdxResponse, GetDdRunsRunIdPagesIdxError, GetDdRunsRunIdPagesIdxResponse, ReturnType<typeof getDdRunsRunIdPagesIdxQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdRunsRunIdPagesIdx({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdRunsRunIdPagesIdxQueryKey(options)
-});
-
-export const getDdRunsRunIdUrlRecordsQueryKey = (options: Options<GetDdRunsRunIdUrlRecordsData>) => createQueryKey('getDdRunsRunIdUrlRecords', options);
-
-/**
- * Get Url Records
- */
-export const getDdRunsRunIdUrlRecordsOptions = (options: Options<GetDdRunsRunIdUrlRecordsData>) => queryOptions<GetDdRunsRunIdUrlRecordsResponse, GetDdRunsRunIdUrlRecordsError, GetDdRunsRunIdUrlRecordsResponse, ReturnType<typeof getDdRunsRunIdUrlRecordsQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdRunsRunIdUrlRecords({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdRunsRunIdUrlRecordsQueryKey(options)
-});
-
-export const getDdSynthDebugGraphThreadIdHistoryQueryKey = (options: Options<GetDdSynthDebugGraphThreadIdHistoryData>) => createQueryKey('getDdSynthDebugGraphThreadIdHistory', options);
-
-/**
- * Synth History
- */
-export const getDdSynthDebugGraphThreadIdHistoryOptions = (options: Options<GetDdSynthDebugGraphThreadIdHistoryData>) => queryOptions<GetDdSynthDebugGraphThreadIdHistoryResponse, GetDdSynthDebugGraphThreadIdHistoryError, GetDdSynthDebugGraphThreadIdHistoryResponse, ReturnType<typeof getDdSynthDebugGraphThreadIdHistoryQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdSynthDebugGraphThreadIdHistory({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdSynthDebugGraphThreadIdHistoryQueryKey(options)
-});
-
-export const getDdSynthDebugGraphThreadIdLlmCountersQueryKey = (options: Options<GetDdSynthDebugGraphThreadIdLlmCountersData>) => createQueryKey('getDdSynthDebugGraphThreadIdLlmCounters', options);
-
-/**
- * Synth Llm Counters
- */
-export const getDdSynthDebugGraphThreadIdLlmCountersOptions = (options: Options<GetDdSynthDebugGraphThreadIdLlmCountersData>) => queryOptions<GetDdSynthDebugGraphThreadIdLlmCountersResponse, GetDdSynthDebugGraphThreadIdLlmCountersError, GetDdSynthDebugGraphThreadIdLlmCountersResponse, ReturnType<typeof getDdSynthDebugGraphThreadIdLlmCountersQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdSynthDebugGraphThreadIdLlmCounters({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdSynthDebugGraphThreadIdLlmCountersQueryKey(options)
-});
-
-export const getDdSynthDebugGraphThreadIdStateQueryKey = (options: Options<GetDdSynthDebugGraphThreadIdStateData>) => createQueryKey('getDdSynthDebugGraphThreadIdState', options);
-
-/**
- * Synth State
- */
-export const getDdSynthDebugGraphThreadIdStateOptions = (options: Options<GetDdSynthDebugGraphThreadIdStateData>) => queryOptions<GetDdSynthDebugGraphThreadIdStateResponse, GetDdSynthDebugGraphThreadIdStateError, GetDdSynthDebugGraphThreadIdStateResponse, ReturnType<typeof getDdSynthDebugGraphThreadIdStateQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdSynthDebugGraphThreadIdState({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdSynthDebugGraphThreadIdStateQueryKey(options)
-});
-
-export const getDdSynthInfoQueryKey = (options?: Options<GetDdSynthInfoData>) => createQueryKey('getDdSynthInfo', options);
-
-/**
- * Synth Info
- */
-export const getDdSynthInfoOptions = (options?: Options<GetDdSynthInfoData>) => queryOptions<GetDdSynthInfoResponse, DefaultError, GetDdSynthInfoResponse, ReturnType<typeof getDdSynthInfoQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdSynthInfo({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdSynthInfoQueryKey(options)
-});
-
-export const getDdSynthRecentQueryKey = (options?: Options<GetDdSynthRecentData>) => createQueryKey('getDdSynthRecent', options);
-
-/**
- * List Recent Synth
- *
- * Most-recent thread per slug for page-refresh recovery.
- */
-export const getDdSynthRecentOptions = (options?: Options<GetDdSynthRecentData>) => queryOptions<GetDdSynthRecentResponse, DefaultError, GetDdSynthRecentResponse, ReturnType<typeof getDdSynthRecentQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdSynthRecent({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdSynthRecentQueryKey(options)
-});
-
-/**
- * Start Synth
- *
- * No chapter_id → STUDY mode (orchestrator runs all chapters);
- * with chapter_id → single-chapter escape hatch.
- */
-export const postDdSynthSlugMutation = (options?: Partial<Options<PostDdSynthSlugData>>): UseMutationOptions<PostDdSynthSlugResponse, PostDdSynthSlugError, Options<PostDdSynthSlugData>> => {
-    const mutationOptions: UseMutationOptions<PostDdSynthSlugResponse, PostDdSynthSlugError, Options<PostDdSynthSlugData>> = {
-        mutationFn: async (fnOptions) => {
-            const { data } = await postDdSynthSlug({
-                ...options,
-                ...fnOptions,
-                throwOnError: true
-            });
-            return data;
-        }
-    };
-    return mutationOptions;
-};
-
-export const getDdSynthSlugActiveQueryKey = (options: Options<GetDdSynthSlugActiveData>) => createQueryKey('getDdSynthSlugActive', options);
-
-/**
- * Synth Active
- *
- * Page-refresh recovery: returns the study orchestrator's thread_id
- * so the UI can reconnect to its SSE without browser localStorage. A single-chapter run (the per-chapter ▶ button on the
- * chapter list) has no study registry entry; its thread is the value of the slug's synth lock, returned as `chapter_thread_id`.
- */
-export const getDdSynthSlugActiveOptions = (options: Options<GetDdSynthSlugActiveData>) => queryOptions<GetDdSynthSlugActiveResponse, GetDdSynthSlugActiveError, GetDdSynthSlugActiveResponse, ReturnType<typeof getDdSynthSlugActiveQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdSynthSlugActive({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdSynthSlugActiveQueryKey(options)
-});
-
-export const getDdSynthSlugStudyChaptersQueryKey = (options: Options<GetDdSynthSlugStudyChaptersData>) => createQueryKey('getDdSynthSlugStudyChapters', options);
-
-/**
- * List Study Chapters
- *
- * Drives the Study sidebar. `rendered` flags MUST NOT be cached —
- * a stale 200 after a wipe would show phantom synthesized chapters.
- */
-export const getDdSynthSlugStudyChaptersOptions = (options: Options<GetDdSynthSlugStudyChaptersData>) => queryOptions<GetDdSynthSlugStudyChaptersResponse, GetDdSynthSlugStudyChaptersError, GetDdSynthSlugStudyChaptersResponse, ReturnType<typeof getDdSynthSlugStudyChaptersQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdSynthSlugStudyChapters({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdSynthSlugStudyChaptersQueryKey(options)
-});
-
-export const getDdSynthSlugStudyChapterIdArtifactArtifactNameQueryKey = (options: Options<GetDdSynthSlugStudyChapterIdArtifactArtifactNameData>) => createQueryKey('getDdSynthSlugStudyChapterIdArtifactArtifactName', options);
-
-/**
- * Get Study Artifact
- *
- * VALID_ARTIFACTS allow-list prevents arbitrary MinIO key reads.
- */
-export const getDdSynthSlugStudyChapterIdArtifactArtifactNameOptions = (options: Options<GetDdSynthSlugStudyChapterIdArtifactArtifactNameData>) => queryOptions<unknown, GetDdSynthSlugStudyChapterIdArtifactArtifactNameError, unknown, ReturnType<typeof getDdSynthSlugStudyChapterIdArtifactArtifactNameQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdSynthSlugStudyChapterIdArtifactArtifactName({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdSynthSlugStudyChapterIdArtifactArtifactNameQueryKey(options)
-});
-
-/**
- * Wipe Synth
- *
- * Wipes MinIO dd/{slug}/synth/, Postgres checkpoints for synth+study
- * threads, Redis SSE snapshots + lock. Without the Redis sweep a wiped
- * slug "comes back from the dead" via the cached study SSE snapshot.
- * With `chapter_id`, wipes only that chapter's MinIO outputs (see
- * `service.wipe_one_chapter`).
- */
-export const deleteDdSynthSlugWipeMutation = (options?: Partial<Options<DeleteDdSynthSlugWipeData>>): UseMutationOptions<DeleteDdSynthSlugWipeResponse, DeleteDdSynthSlugWipeError, Options<DeleteDdSynthSlugWipeData>> => {
-    const mutationOptions: UseMutationOptions<DeleteDdSynthSlugWipeResponse, DeleteDdSynthSlugWipeError, Options<DeleteDdSynthSlugWipeData>> = {
-        mutationFn: async (fnOptions) => {
-            const { data } = await deleteDdSynthSlugWipe({
-                ...options,
-                ...fnOptions,
-                throwOnError: true
-            });
-            return data;
-        }
-    };
-    return mutationOptions;
-};
-
-/**
- * Cancel Synth
- *
- * A STUDY thread cancel must propagate to each in-flight per-chapter
- * thread — chapter watchers poll their own flag, not the study flag.
- * Without propagation only the NEXT chapter is blocked; the in-flight
- * one keeps firing LLM calls.
- */
-export const postDdSynthThreadIdCancelMutation = (options?: Partial<Options<PostDdSynthThreadIdCancelData>>): UseMutationOptions<PostDdSynthThreadIdCancelResponse, PostDdSynthThreadIdCancelError, Options<PostDdSynthThreadIdCancelData>> => {
-    const mutationOptions: UseMutationOptions<PostDdSynthThreadIdCancelResponse, PostDdSynthThreadIdCancelError, Options<PostDdSynthThreadIdCancelData>> = {
-        mutationFn: async (fnOptions) => {
-            const { data } = await postDdSynthThreadIdCancel({
-                ...options,
-                ...fnOptions,
-                throwOnError: true
-            });
-            return data;
-        }
-    };
-    return mutationOptions;
-};
-
-export const getDdSynthThreadIdEventsQueryKey = (options: Options<GetDdSynthThreadIdEventsData>) => createQueryKey('getDdSynthThreadIdEvents', options);
-
-/**
- * Synth Events
- *
- * Initial `: stream open` comment forces proxies to flush headers
- * (avoid first-event delay). Heartbeat every 15s keeps the connection
- * alive through k3d/traefik (default idle-stream timeout 60s) during
- * long Synth gaps (sawc_write, book_harmonize).
- */
-export const getDdSynthThreadIdEventsOptions = (options: Options<GetDdSynthThreadIdEventsData>) => queryOptions<unknown, GetDdSynthThreadIdEventsError, unknown, ReturnType<typeof getDdSynthThreadIdEventsQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getDdSynthThreadIdEvents({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getDdSynthThreadIdEventsQueryKey(options)
-});
-
-/**
- * Resume Synth
- */
-export const postDdSynthThreadIdResumeMutation = (options?: Partial<Options<PostDdSynthThreadIdResumeData>>): UseMutationOptions<PostDdSynthThreadIdResumeResponse, PostDdSynthThreadIdResumeError, Options<PostDdSynthThreadIdResumeData>> => {
-    const mutationOptions: UseMutationOptions<PostDdSynthThreadIdResumeResponse, PostDdSynthThreadIdResumeError, Options<PostDdSynthThreadIdResumeData>> = {
-        mutationFn: async (fnOptions) => {
-            const { data } = await postDdSynthThreadIdResume({
-                ...options,
-                ...fnOptions,
-                throwOnError: true
-            });
-            return data;
-        }
-    };
-    return mutationOptions;
-};
 
 export const getSettingsEmbeddingQueryKey = (options?: Options<GetSettingsEmbeddingData>) => createQueryKey('getSettingsEmbedding', options);
 

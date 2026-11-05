@@ -3,6 +3,7 @@ finalize corpus). Anything here survives Redis TTL."""
 
 import domains, infra
 import domains.dd.ingestion.ai.task
+from . import runs
 
 import logging
 from typing import Literal
@@ -11,7 +12,11 @@ from fastapi import APIRouter, HTTPException, Query, Response
 
 
 logger = logging.getLogger(__name__)
+
+
 router = APIRouter()
+# The run lifecycle comes first, so its paths win over this router's own `/{slug}/...` ones.
+router.include_router(runs.router, prefix="/runs")
 
 
 @router.get("")

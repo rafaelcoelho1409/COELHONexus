@@ -14,7 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
 from ai.bd.agents import schemas
 from ai.bd.nodes.ingestion.metadata_normalization.service import _fallback_title, _matches_filename_label
-from ai.bd.nodes.ingestion.repair_pages.domain import apply_mechanical_fixes, apply_proposals
+from ai.bd.nodes.ingestion.repair_pages.domain import (
+    apply_mechanical_fixes,
+    apply_mechanical_fixes_for_issues,
+    apply_proposals,
+)
 from ai.bd.nodes.ingestion.repair_pages.domain import build_repair_context, validate_proposals
 from ai.bd.nodes.ingestion.inventory.domain import assess_page, effective_length, merge_issues
 from ai.bd.nodes.ingestion.page_audit.domain import sanitize_assessment
@@ -424,7 +428,7 @@ print("ok  a replacement may repair a link or marker but never introduce a new i
 two_issue_page = "NOT E one.\n\nL ANDSCAPE and L ANDSCAPE again.\n"
 good = spacing_proposal("NOT E", "NOTE", evidence = "NOT E one.")
 ambiguous = schemas.PatchProposal(
-    **{**spacing_proposal("L ANDSCAPE", "LANDSCAPE").model_dump(), "issue_id": "spacing-2"},
+    **{**spacing_proposal("L ANDSCAPE", "LANDSCAPES").model_dump(), "issue_id": "spacing-2"},
 )
 assert [proposal.issue_id for proposal in validated_batch(two_issue_page, good, ambiguous)] == ["spacing-1"]
 try:
@@ -435,14 +439,41 @@ else:
     raise AssertionError("a batch with no usable proposal must still be rejected so it can be retried")
 print("ok  an ambiguous or absent target costs only its own proposal while the rest of the batch is kept")
 
-audit_markdown = "Body text.\n\n<!-- image -->\n\nFigure 1: A caption.\n\n17\n\nC&amp;C server.\n\n| a | b |\n"
+repeated = spacing_proposal("L ANDSCAPE", "LANDSCAPE")
+assert [proposal.issue_id for proposal in validated_batch(two_issue_page, repeated)] == ["spacing-1"]
+patched_twice, applied_everywhere, _ = apply_proposals(two_issue_page, [repeated])
+assert applied_everywhere == ["spacing-1"] and patched_twice.count("LANDSCAPE") == 2 and "L ANDSCAPE" not in patched_twice
+url_twice = "See https://a.com/xy and again https://a.com/xy."
+_, applied_url, reviewed_url = apply_proposals(url_twice, [spacing_proposal("xy", "x y")])
+assert applied_url == [] and reviewed_url == ["spacing-1"]
+print("ok  a verified space-only repair of a phrase that occurs twice is applied at both places; inside a URL it waits")
+
+soft_hyphen_issue = schemas.PageIssue(
+    issue_id = "soft-1", code = schemas.IssueCode.SOFT_HYPHEN, severity = schemas.IssueSeverity.LOW,
+    description = "Found 1 soft hyphen(s).", confidence = 1.0,
+    evidence = [schemas.EvidenceRef(
+        source = schemas.EvidenceSource.PAGE_MARKDOWN, excerpt = "cyber­ attacks", page_number = 1,
+    )],
+)
+_, _, resolved_ids = apply_mechanical_fixes_for_issues("cyberattacks", [soft_hyphen_issue])
+assert resolved_ids == ["soft-1"]
+print("ok  a soft-hyphen finding is resolved when a space-only repair already swallowed the soft hyphen")
+
+audit_markdown = (
+    "Body text.\n\n<!-- image -->\n\nFigure 1: A caption.\n\n17\n\nC&amp;C server.\n\n| a | b |\n\n"
+    "Syria, Egypt and . . ., and also Iran.\n\n| Intro . . . . . . 7 |\n"
+)
 
 
-def audit_findings(*excerpts: str, code = schemas.IssueCode.OTHER) -> list[schemas.IssueCode]:
+def audit_findings(
+    *excerpts: str,
+    code = schemas.IssueCode.OTHER,
+    description: str = "Reported by the model.",
+) -> list[schemas.IssueCode]:
     response = schemas.PageAuditResponse(
         page_kind = schemas.PageKind.MIXED, confidence = 0.9,
         findings = [schemas.PageAuditFinding(
-            code = code, severity = schemas.IssueSeverity.LOW, description = "Reported by the model.",
+            code = code, severity = schemas.IssueSeverity.LOW, description = description,
             confidence = 0.9, evidence_excerpts = [excerpt],
         ) for excerpt in excerpts],
     )
@@ -458,6 +489,11 @@ assert audit_findings("Body text.", code = schemas.IssueCode.METADATA) == []
 assert audit_findings("Figure 1: A caption.", code = schemas.IssueCode.TABLE_OR_INDEX_LAYOUT) == []
 assert audit_findings("| a | b |", code = schemas.IssueCode.TABLE_OR_INDEX_LAYOUT) == ["| a | b |"]
 assert audit_findings("Body text.", code = schemas.IssueCode.NEAR_EMPTY) == []
+assert audit_findings("C&amp;C server.", code = schemas.IssueCode.OTHER) == []
+assert audit_findings("Body text.", code = schemas.IssueCode.STRUCTURE, description = "A figure and text, which is typical for a mixed page.") == []
+assert audit_findings("Body text.", code = schemas.IssueCode.STRUCTURE, description = "The paragraph is cut in two.") == ["Body text."]
+assert audit_findings("Syria, Egypt and . . ., and also Iran.", code = schemas.IssueCode.TOC_NOISE) == []
+assert audit_findings("| Intro . . . . . . 7 |", code = schemas.IssueCode.TOC_NOISE) == ["| Intro . . . . . . 7 |"]
 print("ok  a picture marker, bare page number or lone figure caption is never accepted as evidence of a defect")
 
 assert effective_length("a" * 100) == 100 and effective_length("| a" + " " * 40_000 + "|") == 5

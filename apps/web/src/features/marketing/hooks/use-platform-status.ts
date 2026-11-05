@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import {
   getDdIngestionOptions,
-  getDdRunsActiveOptions,
+  getDdIngestionRunsActiveOptions,
   getHealthOptions,
   getYcsAdminVideosOptions,
 } from "@/shared/api";
@@ -23,6 +23,6 @@ export function usePlatformStatus() {
     select: countDocumentationSets,
   });
   const videos = useQuery({ ...getYcsAdminVideosOptions(), ...live, select: countIndexedVideos });
-  const activeRuns = useQuery({ ...getDdRunsActiveOptions(), ...live, select: countActiveRuns });
+  const activeRuns = useQuery({ ...getDdIngestionRunsActiveOptions(), ...live, select: countActiveRuns });
   return { api, documentationSets, videos, activeRuns };
 }

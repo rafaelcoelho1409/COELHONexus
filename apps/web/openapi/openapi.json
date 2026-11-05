@@ -904,6 +904,77 @@
         }
       }
     },
+    "/api/v1/dd/catalog": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "List Catalog",
+        "description": "Re-read every request so YAML edits land without a pod restart.\nEach entry carries its resolved `tier` (1-5, None when sourceless) so\nthe Catalog UI can facet-filter without a second round-trip.",
+        "operationId": "get_dd_catalog",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response Get Dd Catalog"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/catalog/{slug}": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Resolve One",
+        "operationId": "get_dd_catalog_slug",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Catalog Slug"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dd/debug/finalize/{slug}": {
       "post": {
         "tags": [
@@ -1343,6 +1414,322 @@
         }
       }
     },
+    "/api/v1/dd/ingestion/runs": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Start Run",
+        "description": "Status: cached (manifest present, no refresh) / queued (lock\nacquired, Celery dispatched) / locked (another in flight).",
+        "operationId": "post_dd_ingestion_runs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRunBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Dd Ingestion Runs"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/ingestion/runs/active": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "List Active Runs",
+        "description": "Lock-held runs with progress; cross-checked so locks without a\nwritten progress record (rare race) aren't surfaced.",
+        "operationId": "get_dd_ingestion_runs_active",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Dd Ingestion Runs Active"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/ingestion/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Run",
+        "description": "In-flight snapshot from Redis (canonical post-finalize manifest\nlives in MinIO under /ingestion/{slug}).",
+        "operationId": "get_dd_ingestion_runs_run_id",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Ingestion Runs Run Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/ingestion/runs/{run_id}/cancel": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Cancel Run",
+        "operationId": "post_dd_ingestion_runs_run_id_cancel",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Ingestion Runs Run Id Cancel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/ingestion/runs/{run_id}/llm-counters": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Llm Counters",
+        "description": "Live ingestion usage, with the persisted snapshot as a fallback after Redis expires.",
+        "operationId": "get_dd_ingestion_runs_run_id_llm_counters",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Ingestion Runs Run Id Llm Counters"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/ingestion/runs/{run_id}/pages/{idx}": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Page",
+        "operationId": "get_dd_ingestion_runs_run_id_pages_idx",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Idx"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "processed",
+                "original"
+              ],
+              "type": "string",
+              "default": "processed",
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Ingestion Runs Run Id Pages Idx"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/ingestion/runs/{run_id}/url-records": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Url Records",
+        "operationId": "get_dd_ingestion_runs_run_id_url_records",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response Get Dd Ingestion Runs Run Id Url Records"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dd/ingestion/{slug}": {
       "delete": {
         "tags": [
@@ -1726,58 +2113,13 @@
         }
       }
     },
-    "/api/v1/dd/pipeline/{slug}/state": {
-      "get": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "Pipeline State",
-        "description": "Drives wipe-cascade dialogs (\"Wipe Planner also deletes Synth\").",
-        "operationId": "get_dd_pipeline_slug_state",
-        "parameters": [
-          {
-            "name": "slug",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Slug"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Dd Pipeline Slug State"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/planner/debug/graph/{thread_id}/history": {
+    "/api/v1/dd/pipeline/planner/debug/graph/{thread_id}/history": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Get Graph History",
-        "operationId": "get_dd_planner_debug_graph_thread_id_history",
+        "operationId": "get_dd_pipeline_planner_debug_graph_thread_id_history",
         "parameters": [
           {
             "name": "thread_id",
@@ -1797,7 +2139,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Get Dd Planner Debug Graph Thread Id History"
+                  "title": "Response Get Dd Pipeline Planner Debug Graph Thread Id History"
                 }
               }
             }
@@ -1815,13 +2157,13 @@
         }
       }
     },
-    "/api/v1/dd/planner/debug/graph/{thread_id}/llm-counters": {
+    "/api/v1/dd/pipeline/planner/debug/graph/{thread_id}/llm-counters": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Get Graph Llm Counters",
-        "operationId": "get_dd_planner_debug_graph_thread_id_llm_counters",
+        "operationId": "get_dd_pipeline_planner_debug_graph_thread_id_llm_counters",
         "parameters": [
           {
             "name": "thread_id",
@@ -1841,7 +2183,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Get Dd Planner Debug Graph Thread Id Llm Counters"
+                  "title": "Response Get Dd Pipeline Planner Debug Graph Thread Id Llm Counters"
                 }
               }
             }
@@ -1859,13 +2201,13 @@
         }
       }
     },
-    "/api/v1/dd/planner/debug/graph/{thread_id}/state": {
+    "/api/v1/dd/pipeline/planner/debug/graph/{thread_id}/state": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Get Graph State",
-        "operationId": "get_dd_planner_debug_graph_thread_id_state",
+        "operationId": "get_dd_pipeline_planner_debug_graph_thread_id_state",
         "parameters": [
           {
             "name": "thread_id",
@@ -1885,7 +2227,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Get Dd Planner Debug Graph Thread Id State"
+                  "title": "Response Get Dd Pipeline Planner Debug Graph Thread Id State"
                 }
               }
             }
@@ -1903,13 +2245,13 @@
         }
       }
     },
-    "/api/v1/dd/planner/info": {
+    "/api/v1/dd/pipeline/planner/info": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Planner Info",
-        "operationId": "get_dd_planner_info",
+        "operationId": "get_dd_pipeline_planner_info",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1918,7 +2260,7 @@
                 "schema": {
                   "additionalProperties": true,
                   "type": "object",
-                  "title": "Response Get Dd Planner Info"
+                  "title": "Response Get Dd Pipeline Planner Info"
                 }
               }
             }
@@ -1926,14 +2268,14 @@
         }
       }
     },
-    "/api/v1/dd/planner/prune": {
+    "/api/v1/dd/pipeline/planner/prune": {
       "post": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Prune Checkpoints",
         "description": "Manual trigger for the checkpoint-retention sweep (see\n`runtime.checkpoint.service.prune_old_threads`). `dry_run=true`\n(default) previews eligible thread_ids inline, no Celery hop, no\ndeletion. `dry_run=false` dispatches to Celery — a full-table scan\nacross every slug can run long, and this actually deletes rows, so\nit shouldn't block the request or run without an explicit opt-in.\nNothing in this codebase calls this on a schedule; wire it up via a\nk8s CronJob or celery beat if periodic pruning is wanted.",
-        "operationId": "post_dd_planner_prune",
+        "operationId": "post_dd_pipeline_planner_prune",
         "parameters": [
           {
             "name": "older_than_days",
@@ -1964,7 +2306,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Post Dd Planner Prune"
+                  "title": "Response Post Dd Pipeline Planner Prune"
                 }
               }
             }
@@ -1982,14 +2324,14 @@
         }
       }
     },
-    "/api/v1/dd/planner/recent": {
+    "/api/v1/dd/pipeline/planner/recent": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "List Recent Planners",
         "description": "Per-slug thread selection prefers the thread with the MOST\ncheckpoints — sorting by checkpoint_id alone picks abandoned threads\nthat died early over later threads that completed all nodes.",
-        "operationId": "get_dd_planner_recent",
+        "operationId": "get_dd_pipeline_planner_recent",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1998,7 +2340,7 @@
                 "schema": {
                   "additionalProperties": true,
                   "type": "object",
-                  "title": "Response Get Dd Planner Recent"
+                  "title": "Response Get Dd Pipeline Planner Recent"
                 }
               }
             }
@@ -2006,13 +2348,13 @@
         }
       }
     },
-    "/api/v1/dd/planner/{slug}": {
+    "/api/v1/dd/pipeline/planner/{slug}": {
       "post": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Start Planner",
-        "operationId": "post_dd_planner_slug",
+        "operationId": "post_dd_pipeline_planner_slug",
         "parameters": [
           {
             "name": "slug",
@@ -2058,7 +2400,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Post Dd Planner Slug"
+                  "title": "Response Post Dd Pipeline Planner Slug"
                 }
               }
             }
@@ -2076,14 +2418,14 @@
         }
       }
     },
-    "/api/v1/dd/planner/{slug}/active": {
+    "/api/v1/dd/pipeline/planner/{slug}/active": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Planner Active",
         "description": "Page-refresh recovery without browser localStorage.",
-        "operationId": "get_dd_planner_slug_active",
+        "operationId": "get_dd_pipeline_planner_slug_active",
         "parameters": [
           {
             "name": "slug",
@@ -2103,7 +2445,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Get Dd Planner Slug Active"
+                  "title": "Response Get Dd Pipeline Planner Slug Active"
                 }
               }
             }
@@ -2121,14 +2463,14 @@
         }
       }
     },
-    "/api/v1/dd/planner/{slug}/health": {
+    "/api/v1/dd/pipeline/planner/{slug}/health": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Planner Health",
         "description": "Wave H3 — pipeline health from the latest plan (no MinIO archaeology).\n`degraded` is the one-flag answer to 'will this plan be any good'.",
-        "operationId": "get_dd_planner_slug_health",
+        "operationId": "get_dd_pipeline_planner_slug_health",
         "parameters": [
           {
             "name": "slug",
@@ -2148,7 +2490,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Get Dd Planner Slug Health"
+                  "title": "Response Get Dd Pipeline Planner Slug Health"
                 }
               }
             }
@@ -2166,13 +2508,13 @@
         }
       }
     },
-    "/api/v1/dd/planner/{slug}/timing": {
+    "/api/v1/dd/pipeline/planner/{slug}/timing": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Planner Timing",
-        "operationId": "get_dd_planner_slug_timing",
+        "operationId": "get_dd_pipeline_planner_slug_timing",
         "parameters": [
           {
             "name": "slug",
@@ -2192,7 +2534,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Get Dd Planner Slug Timing"
+                  "title": "Response Get Dd Pipeline Planner Slug Timing"
                 }
               }
             }
@@ -2210,14 +2552,14 @@
         }
       }
     },
-    "/api/v1/dd/planner/{slug}/wipe": {
+    "/api/v1/dd/pipeline/planner/{slug}/wipe": {
       "delete": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Wipe Planner",
         "description": "Wipes MinIO dd/{slug}/planner/, Postgres checkpoints, Redis lock +\nactive-run registry. Drops the lock so the next Start Planner click\nisn't rejected by a stale lock that survived the wipe.",
-        "operationId": "delete_dd_planner_slug_wipe",
+        "operationId": "delete_dd_pipeline_planner_slug_wipe",
         "parameters": [
           {
             "name": "slug",
@@ -2237,7 +2579,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Delete Dd Planner Slug Wipe"
+                  "title": "Response Delete Dd Pipeline Planner Slug Wipe"
                 }
               }
             }
@@ -2255,13 +2597,13 @@
         }
       }
     },
-    "/api/v1/dd/planner/{thread_id}/cancel": {
+    "/api/v1/dd/pipeline/planner/{thread_id}/cancel": {
       "post": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Cancel Planner",
-        "operationId": "post_dd_planner_thread_id_cancel",
+        "operationId": "post_dd_pipeline_planner_thread_id_cancel",
         "parameters": [
           {
             "name": "thread_id",
@@ -2281,7 +2623,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Post Dd Planner Thread Id Cancel"
+                  "title": "Response Post Dd Pipeline Planner Thread Id Cancel"
                 }
               }
             }
@@ -2299,14 +2641,14 @@
         }
       }
     },
-    "/api/v1/dd/planner/{thread_id}/events": {
+    "/api/v1/dd/pipeline/planner/{thread_id}/events": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Planner Events",
         "description": "Initial `: stream open` forces proxies to flush headers (avoids\nfirst-event delay). 15s heartbeat keeps the connection alive through\nk3d/traefik during long off_topic/cluster gaps.",
-        "operationId": "get_dd_planner_thread_id_events",
+        "operationId": "get_dd_pipeline_planner_thread_id_events",
         "parameters": [
           {
             "name": "thread_id",
@@ -2340,13 +2682,13 @@
         }
       }
     },
-    "/api/v1/dd/planner/{thread_id}/resume": {
+    "/api/v1/dd/pipeline/planner/{thread_id}/resume": {
       "post": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Resume Planner",
-        "operationId": "post_dd_planner_thread_id_resume",
+        "operationId": "post_dd_pipeline_planner_thread_id_resume",
         "parameters": [
           {
             "name": "thread_id",
@@ -2366,7 +2708,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Post Dd Planner Thread Id Resume"
+                  "title": "Response Post Dd Pipeline Planner Thread Id Resume"
                 }
               }
             }
@@ -2384,400 +2726,13 @@
         }
       }
     },
-    "/api/v1/dd/resolver": {
-      "get": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "List Catalog",
-        "description": "Re-read every request so YAML edits land without a pod restart.\nEach entry carries its resolved `tier` (1-5, None when sourceless) so\nthe Catalog UI can facet-filter without a second round-trip.",
-        "operationId": "get_dd_resolver",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "type": "array",
-                  "title": "Response Get Dd Resolver"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/resolver/{slug}": {
-      "get": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "Resolve One",
-        "operationId": "get_dd_resolver_slug",
-        "parameters": [
-          {
-            "name": "slug",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Slug"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Dd Resolver Slug"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/runs": {
-      "post": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "Start Run",
-        "description": "Status: cached (manifest present, no refresh) / queued (lock\nacquired, Celery dispatched) / locked (another in flight).",
-        "operationId": "post_dd_runs",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/StartRunBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Post Dd Runs"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/runs/active": {
-      "get": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "List Active Runs",
-        "description": "Lock-held runs with progress; cross-checked so locks without a\nwritten progress record (rare race) aren't surfaced.",
-        "operationId": "get_dd_runs_active",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Get Dd Runs Active"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/runs/{run_id}": {
-      "get": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "Get Run",
-        "description": "In-flight snapshot from Redis (canonical post-finalize manifest\nlives in MinIO under /ingestion/{slug}).",
-        "operationId": "get_dd_runs_run_id",
-        "parameters": [
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Dd Runs Run Id"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/runs/{run_id}/cancel": {
-      "post": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "Cancel Run",
-        "operationId": "post_dd_runs_run_id_cancel",
-        "parameters": [
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Post Dd Runs Run Id Cancel"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/runs/{run_id}/llm-counters": {
-      "get": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "Get Llm Counters",
-        "description": "Live ingestion usage, with the persisted snapshot as a fallback after Redis expires.",
-        "operationId": "get_dd_runs_run_id_llm_counters",
-        "parameters": [
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Dd Runs Run Id Llm Counters"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/runs/{run_id}/pages/{idx}": {
-      "get": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "Get Page",
-        "operationId": "get_dd_runs_run_id_pages_idx",
-        "parameters": [
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Run Id"
-            }
-          },
-          {
-            "name": "idx",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Idx"
-            }
-          },
-          {
-            "name": "version",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "enum": [
-                "processed",
-                "original"
-              ],
-              "type": "string",
-              "default": "processed",
-              "title": "Version"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Dd Runs Run Id Pages Idx"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/runs/{run_id}/url-records": {
-      "get": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "Get Url Records",
-        "operationId": "get_dd_runs_run_id_url_records",
-        "parameters": [
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "additionalProperties": true
-                  },
-                  "title": "Response Get Dd Runs Run Id Url Records"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/synth/debug/graph/{thread_id}/history": {
+    "/api/v1/dd/pipeline/synth/debug/graph/{thread_id}/history": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Synth History",
-        "operationId": "get_dd_synth_debug_graph_thread_id_history",
+        "operationId": "get_dd_pipeline_synth_debug_graph_thread_id_history",
         "parameters": [
           {
             "name": "thread_id",
@@ -2797,7 +2752,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Get Dd Synth Debug Graph Thread Id History"
+                  "title": "Response Get Dd Pipeline Synth Debug Graph Thread Id History"
                 }
               }
             }
@@ -2815,13 +2770,13 @@
         }
       }
     },
-    "/api/v1/dd/synth/debug/graph/{thread_id}/llm-counters": {
+    "/api/v1/dd/pipeline/synth/debug/graph/{thread_id}/llm-counters": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Synth Llm Counters",
-        "operationId": "get_dd_synth_debug_graph_thread_id_llm_counters",
+        "operationId": "get_dd_pipeline_synth_debug_graph_thread_id_llm_counters",
         "parameters": [
           {
             "name": "thread_id",
@@ -2841,7 +2796,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Get Dd Synth Debug Graph Thread Id Llm Counters"
+                  "title": "Response Get Dd Pipeline Synth Debug Graph Thread Id Llm Counters"
                 }
               }
             }
@@ -2859,13 +2814,13 @@
         }
       }
     },
-    "/api/v1/dd/synth/debug/graph/{thread_id}/state": {
+    "/api/v1/dd/pipeline/synth/debug/graph/{thread_id}/state": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Synth State",
-        "operationId": "get_dd_synth_debug_graph_thread_id_state",
+        "operationId": "get_dd_pipeline_synth_debug_graph_thread_id_state",
         "parameters": [
           {
             "name": "thread_id",
@@ -2885,7 +2840,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Get Dd Synth Debug Graph Thread Id State"
+                  "title": "Response Get Dd Pipeline Synth Debug Graph Thread Id State"
                 }
               }
             }
@@ -2903,13 +2858,13 @@
         }
       }
     },
-    "/api/v1/dd/synth/info": {
+    "/api/v1/dd/pipeline/synth/info": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Synth Info",
-        "operationId": "get_dd_synth_info",
+        "operationId": "get_dd_pipeline_synth_info",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -2918,7 +2873,7 @@
                 "schema": {
                   "additionalProperties": true,
                   "type": "object",
-                  "title": "Response Get Dd Synth Info"
+                  "title": "Response Get Dd Pipeline Synth Info"
                 }
               }
             }
@@ -2926,14 +2881,14 @@
         }
       }
     },
-    "/api/v1/dd/synth/recent": {
+    "/api/v1/dd/pipeline/synth/recent": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "List Recent Synth",
         "description": "Most-recent thread per slug for page-refresh recovery.",
-        "operationId": "get_dd_synth_recent",
+        "operationId": "get_dd_pipeline_synth_recent",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -2942,7 +2897,7 @@
                 "schema": {
                   "additionalProperties": true,
                   "type": "object",
-                  "title": "Response Get Dd Synth Recent"
+                  "title": "Response Get Dd Pipeline Synth Recent"
                 }
               }
             }
@@ -2950,14 +2905,14 @@
         }
       }
     },
-    "/api/v1/dd/synth/{slug}": {
+    "/api/v1/dd/pipeline/synth/{slug}": {
       "post": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Start Synth",
         "description": "No chapter_id → STUDY mode (orchestrator runs all chapters);\nwith chapter_id → single-chapter escape hatch.",
-        "operationId": "post_dd_synth_slug",
+        "operationId": "post_dd_pipeline_synth_slug",
         "parameters": [
           {
             "name": "slug",
@@ -3019,7 +2974,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Post Dd Synth Slug"
+                  "title": "Response Post Dd Pipeline Synth Slug"
                 }
               }
             }
@@ -3037,14 +2992,14 @@
         }
       }
     },
-    "/api/v1/dd/synth/{slug}/active": {
+    "/api/v1/dd/pipeline/synth/{slug}/active": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Synth Active",
         "description": "Page-refresh recovery: returns the study orchestrator's thread_id\nso the UI can reconnect to its SSE without browser localStorage. A single-chapter run (the per-chapter ▶ button on the\nchapter list) has no study registry entry; its thread is the value of the slug's synth lock, returned as `chapter_thread_id`.",
-        "operationId": "get_dd_synth_slug_active",
+        "operationId": "get_dd_pipeline_synth_slug_active",
         "parameters": [
           {
             "name": "slug",
@@ -3064,7 +3019,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Get Dd Synth Slug Active"
+                  "title": "Response Get Dd Pipeline Synth Slug Active"
                 }
               }
             }
@@ -3082,14 +3037,14 @@
         }
       }
     },
-    "/api/v1/dd/synth/{slug}/study/chapters": {
+    "/api/v1/dd/pipeline/synth/{slug}/study/chapters": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "List Study Chapters",
         "description": "Drives the Study sidebar. `rendered` flags MUST NOT be cached —\na stale 200 after a wipe would show phantom synthesized chapters.",
-        "operationId": "get_dd_synth_slug_study_chapters",
+        "operationId": "get_dd_pipeline_synth_slug_study_chapters",
         "parameters": [
           {
             "name": "slug",
@@ -3109,7 +3064,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Get Dd Synth Slug Study Chapters"
+                  "title": "Response Get Dd Pipeline Synth Slug Study Chapters"
                 }
               }
             }
@@ -3127,14 +3082,14 @@
         }
       }
     },
-    "/api/v1/dd/synth/{slug}/study/{chapter_id}/artifact/{artifact_name}": {
+    "/api/v1/dd/pipeline/synth/{slug}/study/{chapter_id}/artifact/{artifact_name}": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Get Study Artifact",
         "description": "VALID_ARTIFACTS allow-list prevents arbitrary MinIO key reads.",
-        "operationId": "get_dd_synth_slug_study_chapter_id_artifact_artifact_name",
+        "operationId": "get_dd_pipeline_synth_slug_study_chapter_id_artifact_artifact_name",
         "parameters": [
           {
             "name": "slug",
@@ -3186,14 +3141,14 @@
         }
       }
     },
-    "/api/v1/dd/synth/{slug}/wipe": {
+    "/api/v1/dd/pipeline/synth/{slug}/wipe": {
       "delete": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Wipe Synth",
         "description": "Wipes MinIO dd/{slug}/synth/, Postgres checkpoints for synth+study\nthreads, Redis SSE snapshots + lock. Without the Redis sweep a wiped\nslug \"comes back from the dead\" via the cached study SSE snapshot.\nWith `chapter_id`, wipes only that chapter's MinIO outputs (see\n`service.wipe_one_chapter`).",
-        "operationId": "delete_dd_synth_slug_wipe",
+        "operationId": "delete_dd_pipeline_synth_slug_wipe",
         "parameters": [
           {
             "name": "slug",
@@ -3229,7 +3184,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Delete Dd Synth Slug Wipe"
+                  "title": "Response Delete Dd Pipeline Synth Slug Wipe"
                 }
               }
             }
@@ -3247,14 +3202,14 @@
         }
       }
     },
-    "/api/v1/dd/synth/{thread_id}/cancel": {
+    "/api/v1/dd/pipeline/synth/{thread_id}/cancel": {
       "post": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Cancel Synth",
         "description": "A STUDY thread cancel must propagate to each in-flight per-chapter\nthread — chapter watchers poll their own flag, not the study flag.\nWithout propagation only the NEXT chapter is blocked; the in-flight\none keeps firing LLM calls.",
-        "operationId": "post_dd_synth_thread_id_cancel",
+        "operationId": "post_dd_pipeline_synth_thread_id_cancel",
         "parameters": [
           {
             "name": "thread_id",
@@ -3274,7 +3229,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Post Dd Synth Thread Id Cancel"
+                  "title": "Response Post Dd Pipeline Synth Thread Id Cancel"
                 }
               }
             }
@@ -3292,14 +3247,14 @@
         }
       }
     },
-    "/api/v1/dd/synth/{thread_id}/events": {
+    "/api/v1/dd/pipeline/synth/{thread_id}/events": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Synth Events",
         "description": "Initial `: stream open` comment forces proxies to flush headers\n(avoid first-event delay). Heartbeat every 15s keeps the connection\nalive through k3d/traefik (default idle-stream timeout 60s) during\nlong Synth gaps (sawc_write, book_harmonize).",
-        "operationId": "get_dd_synth_thread_id_events",
+        "operationId": "get_dd_pipeline_synth_thread_id_events",
         "parameters": [
           {
             "name": "thread_id",
@@ -3333,13 +3288,13 @@
         }
       }
     },
-    "/api/v1/dd/synth/{thread_id}/resume": {
+    "/api/v1/dd/pipeline/synth/{thread_id}/resume": {
       "post": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Resume Synth",
-        "operationId": "post_dd_synth_thread_id_resume",
+        "operationId": "post_dd_pipeline_synth_thread_id_resume",
         "parameters": [
           {
             "name": "thread_id",
@@ -3359,7 +3314,52 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Post Dd Synth Thread Id Resume"
+                  "title": "Response Post Dd Pipeline Synth Thread Id Resume"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/pipeline/{slug}/state": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Pipeline State",
+        "description": "Drives wipe-cascade dialogs (\"Wipe Planner also deletes Synth\").",
+        "operationId": "get_dd_pipeline_slug_state",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Pipeline Slug State"
                 }
               }
             }

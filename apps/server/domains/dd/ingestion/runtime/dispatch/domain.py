@@ -53,7 +53,7 @@ def run_metrics(result: dict) -> dict:
     }
 
 
-# ---- the gate's answers (what POST /runs says when a run is asked for) --------------------------------------------------------
+# ---- the gate's answers (what POST /ingestion/runs says when a run is asked for) --------------------------------------------------------
 def locked_by_other(slug: str, running_slug: str, running_run_id: str) -> dict:
     return {
         "status": "locked",
@@ -98,7 +98,7 @@ def reserved(slug: str, run_id: str) -> dict:
 
 
 def queued(slug: str, run_id: str) -> dict:
-    """What POST /runs answers once the run is handed to the worker."""
+    """What POST /ingestion/runs answers once the run is handed to the worker."""
     return {"status": "queued", "slug": slug, "run_id": run_id}
 
 
@@ -107,7 +107,7 @@ def cancel_requested(run_id: str) -> dict:
 
 
 def run_snapshot(run_id: str, progress, manifest, post) -> dict:
-    """What GET /runs/{id} answers for a run in flight: its progress, the manifest so far and the post-processing summary."""
+    """What GET /ingestion/runs/{id} answers for a run in flight: its progress, the manifest so far and the post-processing summary."""
     return {"run_id": run_id, "progress": progress, "manifest": manifest, "post": post}
 
 

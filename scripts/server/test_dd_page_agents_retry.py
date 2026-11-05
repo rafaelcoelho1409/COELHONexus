@@ -60,6 +60,7 @@ markdown = "# Kubernetes Operator\n\nRuns Locust on a cluster."
 assessment = schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATION, confidence = 0.9)
 batch = schemas.PagePatchBatch()
 attempts = page_audit.params.MAX_ATTEMPTS
+repair_attempts = page_repair.params.MAX_ATTEMPTS  # an optional step: fewer tries than the audit
 
 check("both page agents use a bounded 120-second request with SDK retries disabled",
       (auditor_config.MODEL.timeout_s, repair_config.MODEL.timeout_s,
@@ -225,7 +226,8 @@ check("a repairer with an empty structured response is asked again", slips.calls
 
 never = FakeAgent({"structured_response": None})
 rejects("a repairer that never answers fails", lambda: asyncio.run(repair(never)))
-check("it is asked as many times as allowed, no more", never.calls, attempts)
+check("it is asked as many times as allowed, no more", never.calls, repair_attempts)
+check("a repair is allowed fewer tries than an audit", repair_attempts < attempts, True)
 
 # --- repair eligibility, finding dedupe, and a repairer that cannot be reached
 from ai.dd.nodes.ingestion import normalize_pages
@@ -320,7 +322,7 @@ try:
     check("the page keeps its audited original", output["bytes"], len("# Hooks\n\nUse (\\*\\*kwargs) here.".encode("utf-8")))
     check("the failure is recorded for the run summary", output["repair_status"], "unavailable")
     check("the saved audit carries the failure reason", saved["repair"]["error"].startswith("ValueError"), True)
-    check("it was asked as many times as allowed", silent.calls, attempts)
+    check("it was asked as many times as a repair is allowed", silent.calls, repair_attempts)
 finally:
     chat_service.asyncio.sleep = real_sleep
 

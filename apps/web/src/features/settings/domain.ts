@@ -1,5 +1,5 @@
 import type { EmbeddingTestResult, KeyStatus, LlmTestResult, MigrationStatus, TaskStatus } from "./entities";
-import { DEFAULT_MODELS, type ConnectionKind, type SaveBody, TERMINAL_TASK_STATES } from "./params";
+import { type ConnectionKind, DEFAULT_MODELS, type SaveBody, TERMINAL_TASK_STATES } from "./params";
 
 /** The trust-safe pill text for the API-key field — the field itself never carries the key back. */
 export function keyPillLabel(status: KeyStatus): { tone: "custom" | "env" | "none"; text: string } {

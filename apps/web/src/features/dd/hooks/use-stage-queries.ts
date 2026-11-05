@@ -3,7 +3,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 
-import { getDdPipelineActiveQueryKey, getDdPlannerInfoQueryKey, getDdSynthInfoQueryKey } from "@/shared/api";
+import {
+  getDdPipelineActiveQueryKey,
+  getDdPipelinePlannerInfoQueryKey,
+  getDdPipelineSynthInfoQueryKey,
+} from "@/shared/api";
 
 import { fetchStageInfo } from "../api";
 import { type RunStage, STAGE_INFO_STALE_MS } from "../params";
@@ -11,7 +15,7 @@ import { type RunStage, STAGE_INFO_STALE_MS } from "../params";
 /** One definition for `useStageInfo` and for the recovery code that reads the cache imperatively. */
 export function stageInfoQuery(stage: RunStage) {
   return {
-    queryKey: stage === "planner" ? getDdPlannerInfoQueryKey() : getDdSynthInfoQueryKey(),
+    queryKey: stage === "planner" ? getDdPipelinePlannerInfoQueryKey() : getDdPipelineSynthInfoQueryKey(),
     queryFn: () => fetchStageInfo(stage),
     staleTime: STAGE_INFO_STALE_MS,
     retry: false,

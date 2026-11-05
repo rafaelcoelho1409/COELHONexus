@@ -8,20 +8,20 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   deleteDdIngestionSlug,
+  getDdCatalogOptions,
+  getDdCatalogQueryKey,
   getDdIngestionOptions,
   getDdIngestionQueryKey,
+  getDdIngestionRunsActiveOptions,
+  getDdIngestionRunsActiveQueryKey,
+  getDdIngestionRunsRunIdOptions,
+  getDdIngestionRunsRunIdQueryKey,
   getDdIngestionSlugManifestOptions,
   getDdIngestionSlugManifestQueryKey,
   getDdIngestionSlugPagesIdxOptions,
   getDdIngestionSlugPagesIdxQueryKey,
-  getDdResolverOptions,
-  getDdResolverQueryKey,
-  getDdRunsActiveOptions,
-  getDdRunsActiveQueryKey,
-  getDdRunsRunIdOptions,
-  getDdRunsRunIdQueryKey,
-  postDdRuns,
-  postDdRunsRunIdCancel,
+  postDdIngestionRuns,
+  postDdIngestionRunsRunIdCancel,
 } from "@/shared/api";
 
 import {
@@ -53,9 +53,9 @@ const parseRunStatus = (raw: unknown) => runStatusSchema.parse(raw);
 const parseManifest = (raw: unknown) => manifestSchema.parse(raw);
 const parsePageBody = (raw: unknown) => pageBodySchema.parse(raw).body;
 
-/** GET /dd/resolver — catalog tiles. */
+/** GET /dd/catalog — catalog tiles. */
 export function useCatalog() {
-  return useQuery({ ...getDdResolverOptions(), retry: false, select: parseCatalog });
+  return useQuery({ ...getDdCatalogOptions(), retry: false, select: parseCatalog });
 }
 
 /** GET /dd/ingestion — the ingested library with display names. */
@@ -65,19 +65,19 @@ export function useLibrary() {
 
 export type StartRunOutcome = { kind: "cached" | "queued" | "locked"; runId?: string; message?: string };
 
-/** POST /dd/runs — start (or refresh) an ingestion. */
+/** POST /dd/ingestion/runs — start (or refresh) an ingestion. */
 export function useStartRun() {
   const queryClient = useQueryClient();
   return useMutation<StartRunOutcome, unknown, { slug: string; refresh?: boolean }>({
     mutationFn: async (body) => {
-      const result = await postDdRuns({ body, throwOnError: true });
+      const result = await postDdIngestionRuns({ body, throwOnError: true });
       const data = startRunResponseSchema.parse(result.data);
       if (data.status === "cached") return { kind: "cached" };
       if (data.status === "queued") return { kind: "queued", runId: data.run_id };
       return { kind: "locked", message: data.message };
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: getDdRunsActiveQueryKey() });
+      void queryClient.invalidateQueries({ queryKey: getDdIngestionRunsActiveQueryKey() });
       void queryClient.invalidateQueries({ queryKey: getDdIngestionQueryKey() });
     },
   });
@@ -94,7 +94,7 @@ export function useStartAgenticRun() {
   return useMutation<StartRunOutcome, unknown, string>({
     mutationFn: async (slug) => startOutcome(await startAgenticRun(slug)),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: getDdRunsActiveQueryKey() });
+      void queryClient.invalidateQueries({ queryKey: getDdIngestionRunsActiveQueryKey() });
       void queryClient.invalidateQueries({ queryKey: getDdIngestionQueryKey() });
     },
   });
@@ -106,8 +106,10 @@ export function useResumeAgenticRun() {
   return useMutation<StartRunOutcome, unknown, { slug: string; runId: string }>({
     mutationFn: async ({ slug, runId }) => startOutcome(await resumeAgenticRun(slug, runId)),
     onSuccess: (_outcome, { runId }) => {
-      void queryClient.invalidateQueries({ queryKey: getDdRunsActiveQueryKey() });
-      void queryClient.invalidateQueries({ queryKey: getDdRunsRunIdQueryKey({ path: { run_id: runId } }) });
+      void queryClient.invalidateQueries({ queryKey: getDdIngestionRunsActiveQueryKey() });
+      void queryClient.invalidateQueries({
+        queryKey: getDdIngestionRunsRunIdQueryKey({ path: { run_id: runId } }),
+      });
     },
   });
 }
@@ -119,7 +121,7 @@ export function useWipeAgenticRun() {
     mutationFn: ({ slug, runId }) => wipeAgenticRun(slug, runId),
     onSuccess: (result) => {
       void queryClient.invalidateQueries({
-        queryKey: getDdRunsRunIdQueryKey({ path: { run_id: result.run_id } }),
+        queryKey: getDdIngestionRunsRunIdQueryKey({ path: { run_id: result.run_id } }),
       });
       void queryClient.invalidateQueries(getDdIngestionSlugManifestOptions({ path: { slug: result.slug } }));
       void queryClient.invalidateQueries({ queryKey: getDdIngestionQueryKey() });
@@ -128,16 +130,18 @@ export function useWipeAgenticRun() {
   });
 }
 
-/** POST /dd/runs/{run_id}/cancel — cooperative cancel. */
+/** POST /dd/ingestion/runs/{run_id}/cancel — cooperative cancel. */
 export function useCancelRun() {
   const queryClient = useQueryClient();
   return useMutation<string, unknown, string>({
     mutationFn: async (runId) => {
-      await postDdRunsRunIdCancel({ path: { run_id: runId }, throwOnError: true });
+      await postDdIngestionRunsRunIdCancel({ path: { run_id: runId }, throwOnError: true });
       return runId;
     },
     onSuccess: (runId) => {
-      void queryClient.invalidateQueries({ queryKey: getDdRunsRunIdQueryKey({ path: { run_id: runId } }) });
+      void queryClient.invalidateQueries({
+        queryKey: getDdIngestionRunsRunIdQueryKey({ path: { run_id: runId } }),
+      });
     },
   });
 }
@@ -155,16 +159,16 @@ export function useDeleteLibrary() {
       queryClient.removeQueries({ queryKey: getDdIngestionSlugManifestQueryKey({ path: { slug } }) });
       queryClient.removeQueries({ queryKey: getDdIngestionSlugPagesIdxQueryKey({ path: { slug, idx: 0 } }) });
       void queryClient.invalidateQueries({ queryKey: getDdIngestionQueryKey() });
-      void queryClient.invalidateQueries({ queryKey: getDdResolverQueryKey() });
-      void queryClient.invalidateQueries({ queryKey: getDdRunsActiveQueryKey() });
+      void queryClient.invalidateQueries({ queryKey: getDdCatalogQueryKey() });
+      void queryClient.invalidateQueries({ queryKey: getDdIngestionRunsActiveQueryKey() });
     },
   });
 }
 
-/** GET /dd/runs/active — resumes an in-flight run after a reload. */
+/** GET /dd/ingestion/runs/active — resumes an in-flight run after a reload. */
 export function useActiveRun(enabled: boolean) {
   const query = useQuery({
-    ...getDdRunsActiveOptions(),
+    ...getDdIngestionRunsActiveOptions(),
     retry: false,
     refetchInterval: ACTIVE_RUN_REFRESH_MS,
     refetchIntervalInBackground: false,
@@ -176,10 +180,10 @@ export function useActiveRun(enabled: boolean) {
   return { run: runs[0], runs, isPending: query.isPending };
 }
 
-/** GET /dd/runs/{run_id} — the poll stops at a terminal state. */
+/** GET /dd/ingestion/runs/{run_id} — the poll stops at a terminal state. */
 export function useRunPoll(runId: string | null) {
   const query = useQuery({
-    ...getDdRunsRunIdOptions({ path: { run_id: runId ?? "" } }),
+    ...getDdIngestionRunsRunIdOptions({ path: { run_id: runId ?? "" } }),
     retry: 0,
     enabled: runId !== null,
     select: parseRunStatus,
@@ -216,7 +220,7 @@ export function usePageBody(slug: string | null, idx: number | null, version: Pa
   return { data: query.data ?? null, isPending: query.isPending, isError: query.isError };
 }
 
-/** GET /dd/runs/{run_id}/pages/{idx} — page bodies from the in-flight raw-to-agentic manifest. */
+/** GET /dd/ingestion/runs/{run_id}/pages/{idx} — page bodies from the in-flight raw-to-agentic manifest. */
 export function useRunPageBody(
   runId: string | null,
   idx: number | null,

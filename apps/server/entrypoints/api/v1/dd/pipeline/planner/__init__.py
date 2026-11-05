@@ -1,4 +1,4 @@
-"""planner router (mounted under v1/dd/planner)."""
+"""planner router (mounted under v1/dd/pipeline/planner)."""
 from .router import router
 
 

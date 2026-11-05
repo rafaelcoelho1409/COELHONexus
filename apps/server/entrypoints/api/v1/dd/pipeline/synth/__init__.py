@@ -1,4 +1,4 @@
-"""synth router (mounted under v1/dd/synth)."""
+"""synth router (mounted under v1/dd/pipeline/synth)."""
 from . import service
 from .router import router
 

@@ -19,8 +19,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 
 import {
-  getDdSynthSlugStudyChapterIdArtifactArtifactNameQueryKey,
-  getDdSynthSlugStudyChaptersQueryKey,
+  getDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameQueryKey,
+  getDdPipelineSynthSlugStudyChaptersQueryKey,
 } from "@/shared/api";
 import { useScrollSpy } from "@/shared/lib/use-scroll-spy";
 import { Markdown, markdownToc } from "@/shared/markdown";
@@ -95,7 +95,7 @@ function StudyReader({ slug }: { slug: string }) {
   const [reading, setReading] = useState<{ startId: string | null } | null>(null);
 
   const chapters = useQuery({
-    queryKey: getDdSynthSlugStudyChaptersQueryKey({ path: { slug } }),
+    queryKey: getDdPipelineSynthSlugStudyChaptersQueryKey({ path: { slug } }),
     retry: false,
     queryFn: () => fetchSynthChapters(slug),
   });
@@ -104,7 +104,7 @@ function StudyReader({ slug }: { slug: string }) {
   const currentIndex = current ? cells.findIndex((cell) => cell.id === current.id) : -1;
 
   const artifact = useQuery({
-    queryKey: getDdSynthSlugStudyChapterIdArtifactArtifactNameQueryKey({
+    queryKey: getDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameQueryKey({
       path: { slug, chapter_id: current?.id ?? "", artifact_name: CHAPTER_ARTIFACT },
     }),
     enabled: Boolean(current?.rendered),

@@ -9,9 +9,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  getDdPipelinePlannerDebugGraphThreadIdLlmCountersQueryKey,
+  getDdPipelinePlannerSlugHealthQueryKey,
   getDdPipelineSlugStateQueryKey,
-  getDdPlannerDebugGraphThreadIdLlmCountersQueryKey,
-  getDdPlannerSlugHealthQueryKey,
 } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 import { useEventStream } from "@/shared/sse";
@@ -213,9 +213,13 @@ export function usePlannerRun(
       void queryClient.invalidateQueries({ queryKey: getDdPipelineSlugStateQueryKey({ path: { slug } }) });
       // The run is over: its final usage and the plan's health are worth one more read.
       void queryClient.invalidateQueries({
-        queryKey: getDdPlannerDebugGraphThreadIdLlmCountersQueryKey({ path: { thread_id: threadId } }),
+        queryKey: getDdPipelinePlannerDebugGraphThreadIdLlmCountersQueryKey({
+          path: { thread_id: threadId },
+        }),
       });
-      void queryClient.invalidateQueries({ queryKey: getDdPlannerSlugHealthQueryKey({ path: { slug } }) });
+      void queryClient.invalidateQueries({
+        queryKey: getDdPipelinePlannerSlugHealthQueryKey({ path: { slug } }),
+      });
       onTerminal?.(status);
       // One last full snapshot so the figures mirror exactly what the cache holds now.
       void fetchGraphState("planner", threadId).then((final) => {

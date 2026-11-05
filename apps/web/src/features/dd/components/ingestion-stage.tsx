@@ -6,10 +6,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   getDdIngestionQueryKey,
+  getDdIngestionRunsActiveOptions,
+  getDdIngestionRunsRunIdOptions,
   getDdIngestionSlugManifestOptions,
   getDdIngestionSlugPagesIdxQueryKey,
-  getDdRunsActiveOptions,
-  getDdRunsRunIdOptions,
 } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 
@@ -198,8 +198,11 @@ function IngestionWorkspace({
     const keepGoing = { cancelRefetch: false };
     void queryClient.invalidateQueries({ queryKey: getDdIngestionQueryKey() }, keepGoing);
     void queryClient.invalidateQueries(getDdIngestionSlugManifestOptions({ path: { slug } }), keepGoing);
-    void queryClient.invalidateQueries(getDdRunsActiveOptions(), keepGoing);
-    void queryClient.invalidateQueries(getDdRunsRunIdOptions({ path: { run_id: runId } }), keepGoing);
+    void queryClient.invalidateQueries(getDdIngestionRunsActiveOptions(), keepGoing);
+    void queryClient.invalidateQueries(
+      getDdIngestionRunsRunIdOptions({ path: { run_id: runId } }),
+      keepGoing,
+    );
     void queryClient.invalidateQueries({ queryKey: ["dd", "ingestion", "usage", runId] }, keepGoing);
     for (const entry of statusQuery.data?.manifest ?? []) {
       void queryClient.invalidateQueries(
@@ -358,9 +361,6 @@ function IngestionWorkspace({
           onStopAgentic={stopAgenticAI}
           onWipeAgentic={() => void wipeAgenticAI()}
           onWipe={() => void wipeIngestion()}
-          onDismiss={
-            runId && terminal ? () => router.replace(ingestionHref(slug, null), { scroll: false }) : undefined
-          }
         />
       </div>
 

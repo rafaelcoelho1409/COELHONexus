@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { agenticNodeViews, EMPTY_AGENTIC_PROGRESS } from "../domain/agentic-progress";
 import { AgenticFlow } from "./agentic-flow";
-import { AgenticNodeList, AgenticViewSwitch } from "./agentic-parts";
+import { AgenticNodeList } from "./agentic-parts";
 
 const PROGRESS = {
   ...EMPTY_AGENTIC_PROGRESS,
@@ -65,16 +65,5 @@ describe("AgenticNodeList", () => {
     expect(repair).toHaveTextContent("2/4 · 1 in flight");
     await userEvent.click(repair);
     expect(onOpen).toHaveBeenCalledWith("repair_pages");
-  });
-});
-
-describe("AgenticViewSwitch", () => {
-  it("shows the chosen view as pressed and reports a change", async () => {
-    const onChange = vi.fn();
-    render(<AgenticViewSwitch value="graph" onChange={onChange} />);
-    expect(screen.getByRole("button", { name: "Graph" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "false");
-    await userEvent.click(screen.getByRole("button", { name: "List" }));
-    expect(onChange).toHaveBeenCalledWith("list");
   });
 });

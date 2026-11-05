@@ -48,7 +48,7 @@ beforeEach(() => {
     http.get(`${API}/v1/dd/pipeline/:slug/state`, () =>
       HttpResponse.json({ ingestion: true, planner: true, synth: false, study: false }),
     ),
-    http.get(`${API}/v1/dd/planner/:slug/health`, () =>
+    http.get(`${API}/v1/dd/pipeline/planner/:slug/health`, () =>
       HttpResponse.json({ slug: "alpha", degraded: false, pipeline_health: {} }),
     ),
   );
@@ -72,14 +72,18 @@ function sse(events: unknown[]): HttpResponse<string> {
 describe("Planner stage", () => {
   it("recovers the last committed plan and offers Resume", async () => {
     server.use(
-      http.get(`${API}/v1/dd/planner/info`, () => HttpResponse.json(PLANNER_IMPLEMENTED)),
-      http.get(`${API}/v1/dd/planner/alpha/active`, () => HttpResponse.json({ active: false })),
-      http.get(`${API}/v1/dd/planner/alpha/timing`, () => HttpResponse.json({ total_wall_ms: 4200 })),
-      http.get(`${API}/v1/dd/planner/recent`, () =>
+      http.get(`${API}/v1/dd/pipeline/planner/info`, () => HttpResponse.json(PLANNER_IMPLEMENTED)),
+      http.get(`${API}/v1/dd/pipeline/planner/alpha/active`, () => HttpResponse.json({ active: false })),
+      http.get(`${API}/v1/dd/pipeline/planner/alpha/timing`, () =>
+        HttpResponse.json({ total_wall_ms: 4200 }),
+      ),
+      http.get(`${API}/v1/dd/pipeline/planner/recent`, () =>
         HttpResponse.json({ recent: [{ slug: "alpha", thread_id: PLANNER_THREAD_ID }] }),
       ),
       // thread ids contain slashes; the generated client sends them percent-encoded
-      http.get(`${API}/v1/dd/planner/debug/graph/*/state`, () => HttpResponse.json(PLANNER_FINISHED_STATE)),
+      http.get(`${API}/v1/dd/pipeline/planner/debug/graph/*/state`, () =>
+        HttpResponse.json(PLANNER_FINISHED_STATE),
+      ),
     );
     renderWith(<PlannerView slug="alpha" />);
     expect(await screen.findByRole("button", { name: "Resume" })).toBeInTheDocument();
@@ -98,15 +102,17 @@ describe("Planner stage", () => {
 
   it("streams a run to done, then lands on the final plan", async () => {
     server.use(
-      http.get(`${API}/v1/dd/planner/info`, () => HttpResponse.json(PLANNER_IMPLEMENTED)),
-      http.get(`${API}/v1/dd/planner/alpha/active`, () => HttpResponse.json({ active: false })),
-      http.get(`${API}/v1/dd/planner/alpha/timing`, () => HttpResponse.json({ total_wall_ms: 0 })),
-      http.get(`${API}/v1/dd/planner/recent`, () => HttpResponse.json({ recent: [] })),
-      http.post(`${API}/v1/dd/planner/alpha`, () =>
+      http.get(`${API}/v1/dd/pipeline/planner/info`, () => HttpResponse.json(PLANNER_IMPLEMENTED)),
+      http.get(`${API}/v1/dd/pipeline/planner/alpha/active`, () => HttpResponse.json({ active: false })),
+      http.get(`${API}/v1/dd/pipeline/planner/alpha/timing`, () => HttpResponse.json({ total_wall_ms: 0 })),
+      http.get(`${API}/v1/dd/pipeline/planner/recent`, () => HttpResponse.json({ recent: [] })),
+      http.post(`${API}/v1/dd/pipeline/planner/alpha`, () =>
         HttpResponse.json({ status: "queued", thread_id: "planner/alpha/t1" }),
       ),
-      http.get(`${API}/v1/dd/planner/debug/graph/*/state`, () => HttpResponse.json(PLANNER_FINISHED_STATE)),
-      http.get(`${API}/v1/dd/planner/*/events`, () =>
+      http.get(`${API}/v1/dd/pipeline/planner/debug/graph/*/state`, () =>
+        HttpResponse.json(PLANNER_FINISHED_STATE),
+      ),
+      http.get(`${API}/v1/dd/pipeline/planner/*/events`, () =>
         sse([
           { step: "corpus_load", kind: "start" },
           { step: "plan_write", kind: "done" },
@@ -130,12 +136,12 @@ describe("Planner stage", () => {
 describe("Synth stage", () => {
   it("lists planned chapters with counters and run affordances", async () => {
     server.use(
-      http.get(`${API}/v1/dd/synth/info`, () =>
+      http.get(`${API}/v1/dd/pipeline/synth/info`, () =>
         HttpResponse.json({
           implemented: ["outline", "digest", "write", "derive", "checklist", "replan", "render"],
         }),
       ),
-      http.get(`${API}/v1/dd/synth/alpha/study/chapters`, () =>
+      http.get(`${API}/v1/dd/pipeline/synth/alpha/study/chapters`, () =>
         HttpResponse.json({
           chapters: [
             {
@@ -158,7 +164,7 @@ describe("Synth stage", () => {
           study_total_wall_ms: 4000,
         }),
       ),
-      http.get(`${API}/v1/dd/synth/alpha/active`, () => HttpResponse.json({ active: false })),
+      http.get(`${API}/v1/dd/pipeline/synth/alpha/active`, () => HttpResponse.json({ active: false })),
     );
     renderWith(<SynthView slug="alpha" />);
     expect(await screen.findByTestId("chstrip-counter")).toHaveTextContent("1 / 2");
@@ -168,8 +174,8 @@ describe("Synth stage", () => {
 
   it("runs a single chapter to done from the strip play button", async () => {
     server.use(
-      http.get(`${API}/v1/dd/synth/info`, () => HttpResponse.json({ implemented: ["write"] })),
-      http.get(`${API}/v1/dd/synth/alpha/study/chapters`, () =>
+      http.get(`${API}/v1/dd/pipeline/synth/info`, () => HttpResponse.json({ implemented: ["write"] })),
+      http.get(`${API}/v1/dd/pipeline/synth/alpha/study/chapters`, () =>
         HttpResponse.json({
           chapters: [
             {
@@ -184,15 +190,17 @@ describe("Synth stage", () => {
           study_total_wall_ms: 0,
         }),
       ),
-      http.get(`${API}/v1/dd/synth/alpha/active`, () => HttpResponse.json({ active: false })),
-      http.post(`${API}/v1/dd/synth/alpha`, ({ request }) => {
+      http.get(`${API}/v1/dd/pipeline/synth/alpha/active`, () => HttpResponse.json({ active: false })),
+      http.post(`${API}/v1/dd/pipeline/synth/alpha`, ({ request }) => {
         expect(request.url).toContain("chapter_id=01_hall");
         return HttpResponse.json({ status: "queued", thread_id: "synth/alpha/9" });
       }),
-      http.get(`${API}/v1/dd/synth/*/events`, () =>
+      http.get(`${API}/v1/dd/pipeline/synth/*/events`, () =>
         sse([{ step: "synth", kind: "terminal", status: "done", wall_ms: 3000 }]),
       ),
-      http.get(`${API}/v1/dd/synth/debug/graph/*/state`, () => HttpResponse.json({ values: {}, next: [] })),
+      http.get(`${API}/v1/dd/pipeline/synth/debug/graph/*/state`, () =>
+        HttpResponse.json({ values: {}, next: [] }),
+      ),
     );
     renderWith(<SynthView slug="alpha" />);
     const play = await screen.findByTestId("chapter-run-01_hall");
@@ -211,7 +219,7 @@ describe("Study stage", () => {
   it("renders a synthesized chapter with its heading outline", async () => {
     navParams.current = new URLSearchParams("slug=alpha&chapter=01_hall");
     server.use(
-      http.get(`${API}/v1/dd/synth/alpha/study/chapters`, () =>
+      http.get(`${API}/v1/dd/pipeline/synth/alpha/study/chapters`, () =>
         HttpResponse.json({
           chapters: [
             {
@@ -226,7 +234,7 @@ describe("Study stage", () => {
           study_total_wall_ms: 2000,
         }),
       ),
-      http.get(`${API}/v1/dd/synth/alpha/study/01_hall/artifact/README.md`, () =>
+      http.get(`${API}/v1/dd/pipeline/synth/alpha/study/01_hall/artifact/README.md`, () =>
         HttpResponse.text(
           `# Hallucinations\n\nVerifiers cut hallucination rates before collapse.\n\n- input: digest\n- output: chapter\n`,
         ),
@@ -243,15 +251,15 @@ describe("Study stage", () => {
 describe("Pipeline stage", () => {
   it("disables both start buttons when the other stage is running", async () => {
     server.use(
-      http.get(`${API}/v1/dd/planner/info`, () => HttpResponse.json(PLANNER_IMPLEMENTED)),
-      http.get(`${API}/v1/dd/planner/alpha/active`, () => HttpResponse.json({ active: false })),
-      http.get(`${API}/v1/dd/planner/alpha/timing`, () => HttpResponse.json({ total_wall_ms: 0 })),
-      http.get(`${API}/v1/dd/planner/recent`, () => HttpResponse.json({ recent: [] })),
-      http.get(`${API}/v1/dd/synth/info`, () => HttpResponse.json({ implemented: ["write"] })),
-      http.get(`${API}/v1/dd/synth/alpha/study/chapters`, () =>
+      http.get(`${API}/v1/dd/pipeline/planner/info`, () => HttpResponse.json(PLANNER_IMPLEMENTED)),
+      http.get(`${API}/v1/dd/pipeline/planner/alpha/active`, () => HttpResponse.json({ active: false })),
+      http.get(`${API}/v1/dd/pipeline/planner/alpha/timing`, () => HttpResponse.json({ total_wall_ms: 0 })),
+      http.get(`${API}/v1/dd/pipeline/planner/recent`, () => HttpResponse.json({ recent: [] })),
+      http.get(`${API}/v1/dd/pipeline/synth/info`, () => HttpResponse.json({ implemented: ["write"] })),
+      http.get(`${API}/v1/dd/pipeline/synth/alpha/study/chapters`, () =>
         HttpResponse.json({ chapters: [], study_total_wall_ms: 0 }),
       ),
-      http.get(`${API}/v1/dd/synth/alpha/active`, () => HttpResponse.json({ active: false })),
+      http.get(`${API}/v1/dd/pipeline/synth/alpha/active`, () => HttpResponse.json({ active: false })),
       http.get(`${API}/v1/dd/pipeline/active`, () =>
         HttpResponse.json({ planner: null, synth: { slug: "alpha", thread_id: "synth/alpha/z" } }),
       ),
@@ -269,7 +277,7 @@ describe("Pipeline stage", () => {
   it("gives each run bar an LLM usage button that opens that stage's usage sheet", async () => {
     mockIdlePipeline();
     server.use(
-      http.get(`${API}/v1/dd/planner/debug/graph/*/llm-counters`, () =>
+      http.get(`${API}/v1/dd/pipeline/planner/debug/graph/*/llm-counters`, () =>
         HttpResponse.json({ total: { calls: 3, tokens_in: 900, tokens_out: 90 }, by_node: {} }),
       ),
     );
@@ -287,22 +295,24 @@ describe("Pipeline stage", () => {
 
   function mockIdlePipeline() {
     server.use(
-      http.get(`${API}/v1/dd/planner/info`, () => HttpResponse.json(PLANNER_IMPLEMENTED)),
-      http.get(`${API}/v1/dd/planner/alpha/active`, () => HttpResponse.json({ active: false })),
-      http.get(`${API}/v1/dd/planner/alpha/timing`, () => HttpResponse.json({ total_wall_ms: 0 })),
-      http.get(`${API}/v1/dd/planner/recent`, () => HttpResponse.json({ recent: [] })),
-      http.get(`${API}/v1/dd/planner/debug/graph/*/state`, () => HttpResponse.json({ values: {}, next: [] })),
-      http.post(`${API}/v1/dd/planner/alpha`, () =>
+      http.get(`${API}/v1/dd/pipeline/planner/info`, () => HttpResponse.json(PLANNER_IMPLEMENTED)),
+      http.get(`${API}/v1/dd/pipeline/planner/alpha/active`, () => HttpResponse.json({ active: false })),
+      http.get(`${API}/v1/dd/pipeline/planner/alpha/timing`, () => HttpResponse.json({ total_wall_ms: 0 })),
+      http.get(`${API}/v1/dd/pipeline/planner/recent`, () => HttpResponse.json({ recent: [] })),
+      http.get(`${API}/v1/dd/pipeline/planner/debug/graph/*/state`, () =>
+        HttpResponse.json({ values: {}, next: [] }),
+      ),
+      http.post(`${API}/v1/dd/pipeline/planner/alpha`, () =>
         HttpResponse.json({ status: "queued", thread_id: "planner/alpha/t1" }),
       ),
-      http.get(`${API}/v1/dd/planner/*/events`, () =>
+      http.get(`${API}/v1/dd/pipeline/planner/*/events`, () =>
         sse([{ step: "planner", kind: "terminal", status: "done", total_wall_ms: 10 }]),
       ),
-      http.get(`${API}/v1/dd/synth/info`, () => HttpResponse.json({ implemented: ["write"] })),
-      http.get(`${API}/v1/dd/synth/alpha/study/chapters`, () =>
+      http.get(`${API}/v1/dd/pipeline/synth/info`, () => HttpResponse.json({ implemented: ["write"] })),
+      http.get(`${API}/v1/dd/pipeline/synth/alpha/study/chapters`, () =>
         HttpResponse.json({ chapters: [], study_total_wall_ms: 0 }),
       ),
-      http.get(`${API}/v1/dd/synth/alpha/active`, () => HttpResponse.json({ active: false })),
+      http.get(`${API}/v1/dd/pipeline/synth/alpha/active`, () => HttpResponse.json({ active: false })),
     );
   }
 
@@ -310,11 +320,11 @@ describe("Pipeline stage", () => {
     mockIdlePipeline();
     const synthStarts: string[] = [];
     server.use(
-      http.post(`${API}/v1/dd/synth/alpha`, ({ request }) => {
+      http.post(`${API}/v1/dd/pipeline/synth/alpha`, ({ request }) => {
         synthStarts.push(request.url);
         return HttpResponse.json({ status: "queued", study_thread_id: "synth/alpha/study", chapter_ids: [] });
       }),
-      http.get(`${API}/v1/dd/synth/*/events`, () => sse([])),
+      http.get(`${API}/v1/dd/pipeline/synth/*/events`, () => sse([])),
     );
     renderWith(<PipelineView slug="alpha" />);
 
@@ -330,7 +340,7 @@ describe("Pipeline stage", () => {
     mockIdlePipeline();
     const synthStarts: string[] = [];
     server.use(
-      http.post(`${API}/v1/dd/synth/alpha`, ({ request }) => {
+      http.post(`${API}/v1/dd/pipeline/synth/alpha`, ({ request }) => {
         synthStarts.push(request.url);
         return HttpResponse.json({ status: "queued", study_thread_id: "synth/alpha/study", chapter_ids: [] });
       }),
@@ -351,19 +361,21 @@ describe("Stopping a run", () => {
     let push: (event: unknown) => void = () => {};
     const cancels: string[] = [];
     server.use(
-      http.get(`${API}/v1/dd/planner/info`, () => HttpResponse.json(PLANNER_IMPLEMENTED)),
-      http.get(`${API}/v1/dd/planner/alpha/active`, () => HttpResponse.json({ active: false })),
-      http.get(`${API}/v1/dd/planner/alpha/timing`, () => HttpResponse.json({ total_wall_ms: 0 })),
-      http.get(`${API}/v1/dd/planner/recent`, () => HttpResponse.json({ recent: [] })),
-      http.get(`${API}/v1/dd/planner/debug/graph/*/state`, () => HttpResponse.json({ values: {}, next: [] })),
-      http.post(`${API}/v1/dd/planner/alpha`, () =>
+      http.get(`${API}/v1/dd/pipeline/planner/info`, () => HttpResponse.json(PLANNER_IMPLEMENTED)),
+      http.get(`${API}/v1/dd/pipeline/planner/alpha/active`, () => HttpResponse.json({ active: false })),
+      http.get(`${API}/v1/dd/pipeline/planner/alpha/timing`, () => HttpResponse.json({ total_wall_ms: 0 })),
+      http.get(`${API}/v1/dd/pipeline/planner/recent`, () => HttpResponse.json({ recent: [] })),
+      http.get(`${API}/v1/dd/pipeline/planner/debug/graph/*/state`, () =>
+        HttpResponse.json({ values: {}, next: [] }),
+      ),
+      http.post(`${API}/v1/dd/pipeline/planner/alpha`, () =>
         HttpResponse.json({ status: "queued", thread_id: "planner/alpha/t1" }),
       ),
-      http.post(`${API}/v1/dd/planner/*/cancel`, ({ request }) => {
+      http.post(`${API}/v1/dd/pipeline/planner/*/cancel`, ({ request }) => {
         cancels.push(request.url);
         return HttpResponse.json({ status: "cancel_requested" });
       }),
-      http.get(`${API}/v1/dd/planner/*/events`, () => {
+      http.get(`${API}/v1/dd/pipeline/planner/*/events`, () => {
         const encoder = new TextEncoder();
         const body = new ReadableStream<Uint8Array>({
           start(controller) {
@@ -410,14 +422,14 @@ describe("Re-running a synthesized chapter", () => {
   it("asks first, and leaves everything alone when declined", async () => {
     const calls: string[] = [];
     server.use(
-      http.get(`${API}/v1/dd/synth/info`, () => HttpResponse.json({ implemented: ["write"] })),
-      http.get(`${API}/v1/dd/synth/alpha/study/chapters`, () => HttpResponse.json(RENDERED)),
-      http.get(`${API}/v1/dd/synth/alpha/active`, () => HttpResponse.json({ active: false })),
-      http.delete(`${API}/v1/dd/synth/alpha/wipe`, ({ request }) => {
+      http.get(`${API}/v1/dd/pipeline/synth/info`, () => HttpResponse.json({ implemented: ["write"] })),
+      http.get(`${API}/v1/dd/pipeline/synth/alpha/study/chapters`, () => HttpResponse.json(RENDERED)),
+      http.get(`${API}/v1/dd/pipeline/synth/alpha/active`, () => HttpResponse.json({ active: false })),
+      http.delete(`${API}/v1/dd/pipeline/synth/alpha/wipe`, ({ request }) => {
         calls.push(`DELETE ${request.url}`);
         return HttpResponse.json({ ok: true });
       }),
-      http.post(`${API}/v1/dd/synth/alpha`, ({ request }) => {
+      http.post(`${API}/v1/dd/pipeline/synth/alpha`, ({ request }) => {
         calls.push(`POST ${request.url}`);
         return HttpResponse.json({ status: "queued", thread_id: "synth/alpha/9" });
       }),

@@ -992,6 +992,31 @@ describe("A book being extracted", () => {
     expect(within(pipeline).getByRole("button", { name: /Audit pages/ })).toBeInTheDocument();
   });
 
+  it("offers LLM usage beside Graph and List even with no Agentic AI run, and says there is none", async () => {
+    serveLibrary([bookRow({ status: "done", n_pages: 1, pages_done: 1 })]);
+    serveBook(snapshot({ status: "done", n_pages: 1, pages: [pageEntry(1)] }, null));
+    server.use(
+      http.get(`${API}/${BOOK_ID}/pages/1`, () =>
+        HttpResponse.json({ book_id: BOOK_ID, page: 1, markdown: "Extracted page" }),
+      ),
+    );
+    renderStage(BOOK_ID);
+
+    await openPipeline();
+    const pipeline = screen.getByRole("region", { name: "Agentic pipeline stages" });
+    const usage = within(pipeline).getByRole("button", { name: "LLM usage" });
+    const graph = within(pipeline).getByRole("button", { name: "Graph" });
+    // One row, as on the Docs Distiller's Ingestion pipeline: the usage button first, the switch after it.
+    expect(usage.parentElement).toBe(graph.closest("fieldset")?.parentElement);
+    expect(usage.compareDocumentPosition(graph) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await userEvent.click(usage);
+    const sheet = await screen.findByRole("dialog", { name: "Ingestion LLM usage" });
+    expect(sheet).toHaveTextContent("No Agentic AI run yet. Usage appears here once one has started.");
+    await userEvent.click(within(sheet).getByRole("button", { name: "Close usage" }));
+    expect(screen.queryByRole("dialog", { name: "Ingestion LLM usage" })).not.toBeInTheDocument();
+  });
+
   it("lets the user start Agentic AI separately after extraction", async () => {
     const requests: string[] = [];
     serveLibrary([bookRow({ status: "done", n_pages: 1, pages_done: 1 })]);

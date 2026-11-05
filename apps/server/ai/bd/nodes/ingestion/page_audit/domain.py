@@ -208,7 +208,11 @@ def sanitize_assessment(
     invalid_evidence_count = 0
     invalid_code_evidence_count = 0
     dropped_issue_count = 0
+    self_dismissed_count = 0
     for issue in assessment.issues:
+        if inventory_patterns.SELF_DISMISSED_RE.search(issue.description):
+            self_dismissed_count += 1
+            continue
         source_verified_evidence = [
             evidence
             for evidence in issue.evidence
@@ -242,6 +246,10 @@ def sanitize_assessment(
         warnings.append(
             f"Discarded {dropped_issue_count} auditor finding(s) without evidence that supports the issue code."
         )
+    if self_dismissed_count:
+        warnings.append(
+            f"Discarded {self_dismissed_count} auditor finding(s) that the auditor itself described as normal."
+        )
 
     return assessment.model_copy(update = {"issues": valid_issues}), warnings
 
@@ -269,7 +277,7 @@ def _evidence_supports_issue_code(issue_code: agents.schemas.IssueCode, excerpt:
     if issue_code == agents.schemas.IssueCode.SOFT_HYPHEN:
         return "\u00ad" in excerpt
     if issue_code == agents.schemas.IssueCode.TOC_NOISE:
-        return bool(inventory_patterns.DOT_LEADER_MARKER_RE.search(excerpt))
+        return bool(inventory_patterns.TOC_LEADER_ROW_RE.search(excerpt))
     if issue_code == agents.schemas.IssueCode.METADATA:
         # Book metadata has its own stage; a page cannot evidence a defect that no repair specialist is routed.
         return False
@@ -277,6 +285,9 @@ def _evidence_supports_issue_code(issue_code: agents.schemas.IssueCode, excerpt:
         # Sparseness is measured in code (inventory); a model calling a title or part page "empty" only adds noise.
         return False
     lines = _content_lines(excerpt)
+    if issue_code == agents.schemas.IssueCode.OTHER and inventory_patterns.HTML_ENTITY_RE.search(excerpt):
+        # `&amp;` is how Markdown writes an ampersand and renders as one; models still file it, then call it "not a finding".
+        return False
     if issue_code in {agents.schemas.IssueCode.STRUCTURE, agents.schemas.IssueCode.TABLE_OR_INDEX_LAYOUT}:
         # Models report "a figure with a caption" as a layout finding; a caption line alone is normal Docling output.
         return not all(inventory_patterns.CAPTION_LINE_RE.match(line) for line in lines)

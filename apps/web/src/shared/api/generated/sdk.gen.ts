@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type TDataShape } from './client';
 import { client } from './client.gen';
-import type { DeleteBdIngestionBookIdAgenticRunsAgenticRunIdData, DeleteBdIngestionBookIdAgenticRunsAgenticRunIdErrors, DeleteBdIngestionBookIdAgenticRunsAgenticRunIdResponses, DeleteBdIngestionBookIdData, DeleteBdIngestionBookIdErrors, DeleteBdIngestionBookIdExtractionData, DeleteBdIngestionBookIdExtractionErrors, DeleteBdIngestionBookIdExtractionResponses, DeleteBdIngestionBookIdResponses, DeleteDdDebugSnapshotSlugData, DeleteDdDebugSnapshotSlugErrors, DeleteDdDebugSnapshotSlugResponses, DeleteDdIngestionSlugAgenticRunsRunIdData, DeleteDdIngestionSlugAgenticRunsRunIdErrors, DeleteDdIngestionSlugAgenticRunsRunIdResponses, DeleteDdIngestionSlugData, DeleteDdIngestionSlugErrors, DeleteDdIngestionSlugResponses, DeleteDdPlannerSlugWipeData, DeleteDdPlannerSlugWipeErrors, DeleteDdPlannerSlugWipeResponses, DeleteDdSynthSlugWipeData, DeleteDdSynthSlugWipeErrors, DeleteDdSynthSlugWipeResponses, DeleteYcsAdminVideosVideoIdData, DeleteYcsAdminVideosVideoIdErrors, DeleteYcsAdminVideosVideoIdResponses, DeleteYcsAgentsThreadsThreadIdData, DeleteYcsAgentsThreadsThreadIdErrors, DeleteYcsAgentsThreadsThreadIdResponses, DeleteYcsQueryHistoryEntryIdData, DeleteYcsQueryHistoryEntryIdErrors, DeleteYcsQueryHistoryEntryIdResponses, GetBdIngestionActiveData, GetBdIngestionActiveResponses, GetBdIngestionBookIdAgenticRunsAgenticRunIdData, GetBdIngestionBookIdAgenticRunsAgenticRunIdErrors, GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsData, GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsErrors, GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsResponses, GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersData, GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersErrors, GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersResponses, GetBdIngestionBookIdAgenticRunsAgenticRunIdResponses, GetBdIngestionBookIdData, GetBdIngestionBookIdErrors, GetBdIngestionBookIdEventsData, GetBdIngestionBookIdEventsErrors, GetBdIngestionBookIdEventsResponses, GetBdIngestionBookIdFiguresNameData, GetBdIngestionBookIdFiguresNameErrors, GetBdIngestionBookIdFiguresNameResponses, GetBdIngestionBookIdPagesPageNoData, GetBdIngestionBookIdPagesPageNoErrors, GetBdIngestionBookIdPagesPageNoQualityData, GetBdIngestionBookIdPagesPageNoQualityErrors, GetBdIngestionBookIdPagesPageNoQualityResponses, GetBdIngestionBookIdPagesPageNoResponses, GetBdIngestionBookIdResponses, GetBdIngestionData, GetBdIngestionResponses, GetDdDebugSnapshotsSlugData, GetDdDebugSnapshotsSlugErrors, GetDdDebugSnapshotsSlugResponses, GetDdIngestionData, GetDdIngestionResponses, GetDdIngestionSlugArtifactsNameData, GetDdIngestionSlugArtifactsNameErrors, GetDdIngestionSlugArtifactsNameResponses, GetDdIngestionSlugManifestData, GetDdIngestionSlugManifestErrors, GetDdIngestionSlugManifestResponses, GetDdIngestionSlugPagesIdxData, GetDdIngestionSlugPagesIdxErrors, GetDdIngestionSlugPagesIdxResponses, GetDdPipelineActiveData, GetDdPipelineActiveResponses, GetDdPipelineSlugStateData, GetDdPipelineSlugStateErrors, GetDdPipelineSlugStateResponses, GetDdPlannerDebugGraphThreadIdHistoryData, GetDdPlannerDebugGraphThreadIdHistoryErrors, GetDdPlannerDebugGraphThreadIdHistoryResponses, GetDdPlannerDebugGraphThreadIdLlmCountersData, GetDdPlannerDebugGraphThreadIdLlmCountersErrors, GetDdPlannerDebugGraphThreadIdLlmCountersResponses, GetDdPlannerDebugGraphThreadIdStateData, GetDdPlannerDebugGraphThreadIdStateErrors, GetDdPlannerDebugGraphThreadIdStateResponses, GetDdPlannerInfoData, GetDdPlannerInfoResponses, GetDdPlannerRecentData, GetDdPlannerRecentResponses, GetDdPlannerSlugActiveData, GetDdPlannerSlugActiveErrors, GetDdPlannerSlugActiveResponses, GetDdPlannerSlugHealthData, GetDdPlannerSlugHealthErrors, GetDdPlannerSlugHealthResponses, GetDdPlannerSlugTimingData, GetDdPlannerSlugTimingErrors, GetDdPlannerSlugTimingResponses, GetDdPlannerThreadIdEventsData, GetDdPlannerThreadIdEventsErrors, GetDdPlannerThreadIdEventsResponses, GetDdResolverData, GetDdResolverResponses, GetDdResolverSlugData, GetDdResolverSlugErrors, GetDdResolverSlugResponses, GetDdRunsActiveData, GetDdRunsActiveResponses, GetDdRunsRunIdData, GetDdRunsRunIdErrors, GetDdRunsRunIdLlmCountersData, GetDdRunsRunIdLlmCountersErrors, GetDdRunsRunIdLlmCountersResponses, GetDdRunsRunIdPagesIdxData, GetDdRunsRunIdPagesIdxErrors, GetDdRunsRunIdPagesIdxResponses, GetDdRunsRunIdResponses, GetDdRunsRunIdUrlRecordsData, GetDdRunsRunIdUrlRecordsErrors, GetDdRunsRunIdUrlRecordsResponses, GetDdSynthDebugGraphThreadIdHistoryData, GetDdSynthDebugGraphThreadIdHistoryErrors, GetDdSynthDebugGraphThreadIdHistoryResponses, GetDdSynthDebugGraphThreadIdLlmCountersData, GetDdSynthDebugGraphThreadIdLlmCountersErrors, GetDdSynthDebugGraphThreadIdLlmCountersResponses, GetDdSynthDebugGraphThreadIdStateData, GetDdSynthDebugGraphThreadIdStateErrors, GetDdSynthDebugGraphThreadIdStateResponses, GetDdSynthInfoData, GetDdSynthInfoResponses, GetDdSynthRecentData, GetDdSynthRecentResponses, GetDdSynthSlugActiveData, GetDdSynthSlugActiveErrors, GetDdSynthSlugActiveResponses, GetDdSynthSlugStudyChapterIdArtifactArtifactNameData, GetDdSynthSlugStudyChapterIdArtifactArtifactNameErrors, GetDdSynthSlugStudyChapterIdArtifactArtifactNameResponses, GetDdSynthSlugStudyChaptersData, GetDdSynthSlugStudyChaptersErrors, GetDdSynthSlugStudyChaptersResponses, GetDdSynthThreadIdEventsData, GetDdSynthThreadIdEventsErrors, GetDdSynthThreadIdEventsResponses, GetHealthData, GetHealthResponses, GetSettingsEmbeddingData, GetSettingsEmbeddingResponses, GetSettingsEndpointData, GetSettingsEndpointResponses, GetYcsAdminIngestedChannelsData, GetYcsAdminIngestedChannelsResponses, GetYcsAdminIngestedPlaylistsData, GetYcsAdminIngestedPlaylistsResponses, GetYcsAdminPipelineExtractIdLlmCountersData, GetYcsAdminPipelineExtractIdLlmCountersErrors, GetYcsAdminPipelineExtractIdLlmCountersResponses, GetYcsAdminPipelineExtractIdStreamPhaseData, GetYcsAdminPipelineExtractIdStreamPhaseErrors, GetYcsAdminPipelineExtractIdStreamPhaseResponses, GetYcsAdminTaskTaskIdData, GetYcsAdminTaskTaskIdErrors, GetYcsAdminTaskTaskIdResponses, GetYcsAdminVideosData, GetYcsAdminVideosErrors, GetYcsAdminVideosFacetsData, GetYcsAdminVideosFacetsResponses, GetYcsAdminVideosResponses, GetYcsAgentsGraphStatsData, GetYcsAgentsGraphStatsResponses, GetYcsAgentsHistoryThreadIdData, GetYcsAgentsHistoryThreadIdErrors, GetYcsAgentsHistoryThreadIdResponses, GetYcsAgentsThreadsData, GetYcsAgentsThreadsResponses, GetYcsAgentsUsageThreadIdData, GetYcsAgentsUsageThreadIdErrors, GetYcsAgentsUsageThreadIdResponses, GetYcsContentChannelVideosData, GetYcsContentChannelVideosErrors, GetYcsContentChannelVideosResponses, GetYcsContentEmbeddingMigrationStatusData, GetYcsContentEmbeddingMigrationStatusResponses, GetYcsContentPlaylistVideosData, GetYcsContentPlaylistVideosErrors, GetYcsContentPlaylistVideosResponses, GetYcsContentVideosPipelineExtractIdStateData, GetYcsContentVideosPipelineExtractIdStateErrors, GetYcsContentVideosPipelineExtractIdStateResponses, GetYcsContentVideosPreviewData, GetYcsContentVideosPreviewErrors, GetYcsContentVideosPreviewResponses, GetYcsQueryHistoryData, GetYcsQueryHistoryErrors, GetYcsQueryHistoryResponses, GetYcsQueryNamespacesData, GetYcsQueryNamespacesResponses, GetYcsQuerySchemaBackendData, GetYcsQuerySchemaBackendErrors, GetYcsQuerySchemaBackendResponses, PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelData, PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelErrors, PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelResponses, PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeData, PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeErrors, PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeResponses, PostBdIngestionBookIdAgenticRunsData, PostBdIngestionBookIdAgenticRunsErrors, PostBdIngestionBookIdAgenticRunsResponses, PostBdIngestionBookIdCancelData, PostBdIngestionBookIdCancelErrors, PostBdIngestionBookIdCancelResponses, PostBdIngestionBookIdRunData, PostBdIngestionBookIdRunErrors, PostBdIngestionBookIdRunResponses, PostBdIngestionData, PostBdIngestionErrors, PostBdIngestionResponses, PostDdDebugFinalizeSlugData, PostDdDebugFinalizeSlugErrors, PostDdDebugFinalizeSlugResponses, PostDdDebugIngestSlugData, PostDdDebugIngestSlugErrors, PostDdDebugIngestSlugResponses, PostDdDebugPostSlugData, PostDdDebugPostSlugErrors, PostDdDebugPostSlugResponses, PostDdDebugResolveSlugData, PostDdDebugResolveSlugErrors, PostDdDebugResolveSlugResponses, PostDdDebugRestoreSlugData, PostDdDebugRestoreSlugErrors, PostDdDebugRestoreSlugResponses, PostDdDebugSnapshotSlugData, PostDdDebugSnapshotSlugErrors, PostDdDebugSnapshotSlugResponses, PostDdIngestionSlugAgenticRunsData, PostDdIngestionSlugAgenticRunsErrors, PostDdIngestionSlugAgenticRunsResponses, PostDdIngestionSlugAgenticRunsRunIdResumeData, PostDdIngestionSlugAgenticRunsRunIdResumeErrors, PostDdIngestionSlugAgenticRunsRunIdResumeResponses, PostDdPlannerPruneData, PostDdPlannerPruneErrors, PostDdPlannerPruneResponses, PostDdPlannerSlugData, PostDdPlannerSlugErrors, PostDdPlannerSlugResponses, PostDdPlannerThreadIdCancelData, PostDdPlannerThreadIdCancelErrors, PostDdPlannerThreadIdCancelResponses, PostDdPlannerThreadIdResumeData, PostDdPlannerThreadIdResumeErrors, PostDdPlannerThreadIdResumeResponses, PostDdRunsData, PostDdRunsErrors, PostDdRunsResponses, PostDdRunsRunIdCancelData, PostDdRunsRunIdCancelErrors, PostDdRunsRunIdCancelResponses, PostDdSynthSlugData, PostDdSynthSlugErrors, PostDdSynthSlugResponses, PostDdSynthThreadIdCancelData, PostDdSynthThreadIdCancelErrors, PostDdSynthThreadIdCancelResponses, PostDdSynthThreadIdResumeData, PostDdSynthThreadIdResumeErrors, PostDdSynthThreadIdResumeResponses, PostSettingsEmbeddingTestData, PostSettingsEmbeddingTestResponses, PostSettingsEndpointTestData, PostSettingsEndpointTestResponses, PostYcsAdminVideosBulkDeleteData, PostYcsAdminVideosBulkDeleteErrors, PostYcsAdminVideosBulkDeleteResponses, PostYcsAgentsEndpointPingData, PostYcsAgentsEndpointPingResponses, PostYcsAgentsFeedbackData, PostYcsAgentsFeedbackErrors, PostYcsAgentsFeedbackResponses, PostYcsAgentsIngestNeo4jData, PostYcsAgentsIngestNeo4jErrors, PostYcsAgentsIngestNeo4jResponses, PostYcsAgentsIngestQdrantData, PostYcsAgentsIngestQdrantErrors, PostYcsAgentsIngestQdrantResponses, PostYcsAgentsPipelineData, PostYcsAgentsPipelineErrors, PostYcsAgentsPipelineResponses, PostYcsAgentsSearchData, PostYcsAgentsSearchErrors, PostYcsAgentsSearchResponses, PostYcsAgentsSearchStreamData, PostYcsAgentsSearchStreamErrors, PostYcsAgentsSearchStreamResponses, PostYcsAgentsThreadsThreadIdBranchData, PostYcsAgentsThreadsThreadIdBranchErrors, PostYcsAgentsThreadsThreadIdBranchResponses, PostYcsAgentsTurnsTurnIdCancelData, PostYcsAgentsTurnsTurnIdCancelErrors, PostYcsAgentsTurnsTurnIdCancelResponses, PostYcsContentChannelData, PostYcsContentChannelErrors, PostYcsContentChannelPipelineData, PostYcsContentChannelPipelineErrors, PostYcsContentChannelPipelineResponses, PostYcsContentChannelResponses, PostYcsContentEmbeddingMigrationStartData, PostYcsContentEmbeddingMigrationStartResponses, PostYcsContentPlaylistData, PostYcsContentPlaylistErrors, PostYcsContentPlaylistPipelineData, PostYcsContentPlaylistPipelineErrors, PostYcsContentPlaylistPipelineResponses, PostYcsContentPlaylistResponses, PostYcsContentSearchData, PostYcsContentSearchErrors, PostYcsContentSearchResponses, PostYcsContentVideosData, PostYcsContentVideosErrors, PostYcsContentVideosPipelineData, PostYcsContentVideosPipelineErrors, PostYcsContentVideosPipelineExtractIdRerunData, PostYcsContentVideosPipelineExtractIdRerunErrors, PostYcsContentVideosPipelineExtractIdRerunResponses, PostYcsContentVideosPipelineExtractIdStopData, PostYcsContentVideosPipelineExtractIdStopErrors, PostYcsContentVideosPipelineExtractIdStopResponses, PostYcsContentVideosPipelineExtractIdWipeData, PostYcsContentVideosPipelineExtractIdWipeErrors, PostYcsContentVideosPipelineExtractIdWipeResponses, PostYcsContentVideosPipelineResponses, PostYcsContentVideosResponses, PostYcsQueryAiBackendData, PostYcsQueryAiBackendErrors, PostYcsQueryAiBackendResponses, PostYcsQueryElasticsearchData, PostYcsQueryElasticsearchErrors, PostYcsQueryElasticsearchResponses, PostYcsQueryHistoryData, PostYcsQueryHistoryResponses, PostYcsQueryNeo4jData, PostYcsQueryNeo4jErrors, PostYcsQueryNeo4jResponses, PostYcsQueryQdrantData, PostYcsQueryQdrantErrors, PostYcsQueryQdrantResponses, PostYcsQueryRawElasticsearchData, PostYcsQueryRawElasticsearchErrors, PostYcsQueryRawElasticsearchResponses, PostYcsQueryRawNeo4jData, PostYcsQueryRawNeo4jErrors, PostYcsQueryRawNeo4jResponses, PostYcsQueryRawQdrantData, PostYcsQueryRawQdrantErrors, PostYcsQueryRawQdrantResponses, PutSettingsEmbeddingData, PutSettingsEmbeddingErrors, PutSettingsEmbeddingResponses, PutSettingsEndpointData, PutSettingsEndpointErrors, PutSettingsEndpointResponses } from './types.gen';
+import type { DeleteBdIngestionBookIdAgenticRunsAgenticRunIdData, DeleteBdIngestionBookIdAgenticRunsAgenticRunIdErrors, DeleteBdIngestionBookIdAgenticRunsAgenticRunIdResponses, DeleteBdIngestionBookIdData, DeleteBdIngestionBookIdErrors, DeleteBdIngestionBookIdExtractionData, DeleteBdIngestionBookIdExtractionErrors, DeleteBdIngestionBookIdExtractionResponses, DeleteBdIngestionBookIdResponses, DeleteDdDebugSnapshotSlugData, DeleteDdDebugSnapshotSlugErrors, DeleteDdDebugSnapshotSlugResponses, DeleteDdIngestionSlugAgenticRunsRunIdData, DeleteDdIngestionSlugAgenticRunsRunIdErrors, DeleteDdIngestionSlugAgenticRunsRunIdResponses, DeleteDdIngestionSlugData, DeleteDdIngestionSlugErrors, DeleteDdIngestionSlugResponses, DeleteDdPipelinePlannerSlugWipeData, DeleteDdPipelinePlannerSlugWipeErrors, DeleteDdPipelinePlannerSlugWipeResponses, DeleteDdPipelineSynthSlugWipeData, DeleteDdPipelineSynthSlugWipeErrors, DeleteDdPipelineSynthSlugWipeResponses, DeleteYcsAdminVideosVideoIdData, DeleteYcsAdminVideosVideoIdErrors, DeleteYcsAdminVideosVideoIdResponses, DeleteYcsAgentsThreadsThreadIdData, DeleteYcsAgentsThreadsThreadIdErrors, DeleteYcsAgentsThreadsThreadIdResponses, DeleteYcsQueryHistoryEntryIdData, DeleteYcsQueryHistoryEntryIdErrors, DeleteYcsQueryHistoryEntryIdResponses, GetBdIngestionActiveData, GetBdIngestionActiveResponses, GetBdIngestionBookIdAgenticRunsAgenticRunIdData, GetBdIngestionBookIdAgenticRunsAgenticRunIdErrors, GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsData, GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsErrors, GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsResponses, GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersData, GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersErrors, GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersResponses, GetBdIngestionBookIdAgenticRunsAgenticRunIdResponses, GetBdIngestionBookIdData, GetBdIngestionBookIdErrors, GetBdIngestionBookIdEventsData, GetBdIngestionBookIdEventsErrors, GetBdIngestionBookIdEventsResponses, GetBdIngestionBookIdFiguresNameData, GetBdIngestionBookIdFiguresNameErrors, GetBdIngestionBookIdFiguresNameResponses, GetBdIngestionBookIdPagesPageNoData, GetBdIngestionBookIdPagesPageNoErrors, GetBdIngestionBookIdPagesPageNoQualityData, GetBdIngestionBookIdPagesPageNoQualityErrors, GetBdIngestionBookIdPagesPageNoQualityResponses, GetBdIngestionBookIdPagesPageNoResponses, GetBdIngestionBookIdResponses, GetBdIngestionData, GetBdIngestionResponses, GetDdCatalogData, GetDdCatalogResponses, GetDdCatalogSlugData, GetDdCatalogSlugErrors, GetDdCatalogSlugResponses, GetDdDebugSnapshotsSlugData, GetDdDebugSnapshotsSlugErrors, GetDdDebugSnapshotsSlugResponses, GetDdIngestionData, GetDdIngestionResponses, GetDdIngestionRunsActiveData, GetDdIngestionRunsActiveResponses, GetDdIngestionRunsRunIdData, GetDdIngestionRunsRunIdErrors, GetDdIngestionRunsRunIdLlmCountersData, GetDdIngestionRunsRunIdLlmCountersErrors, GetDdIngestionRunsRunIdLlmCountersResponses, GetDdIngestionRunsRunIdPagesIdxData, GetDdIngestionRunsRunIdPagesIdxErrors, GetDdIngestionRunsRunIdPagesIdxResponses, GetDdIngestionRunsRunIdResponses, GetDdIngestionRunsRunIdUrlRecordsData, GetDdIngestionRunsRunIdUrlRecordsErrors, GetDdIngestionRunsRunIdUrlRecordsResponses, GetDdIngestionSlugArtifactsNameData, GetDdIngestionSlugArtifactsNameErrors, GetDdIngestionSlugArtifactsNameResponses, GetDdIngestionSlugManifestData, GetDdIngestionSlugManifestErrors, GetDdIngestionSlugManifestResponses, GetDdIngestionSlugPagesIdxData, GetDdIngestionSlugPagesIdxErrors, GetDdIngestionSlugPagesIdxResponses, GetDdPipelineActiveData, GetDdPipelineActiveResponses, GetDdPipelinePlannerDebugGraphThreadIdHistoryData, GetDdPipelinePlannerDebugGraphThreadIdHistoryErrors, GetDdPipelinePlannerDebugGraphThreadIdHistoryResponses, GetDdPipelinePlannerDebugGraphThreadIdLlmCountersData, GetDdPipelinePlannerDebugGraphThreadIdLlmCountersErrors, GetDdPipelinePlannerDebugGraphThreadIdLlmCountersResponses, GetDdPipelinePlannerDebugGraphThreadIdStateData, GetDdPipelinePlannerDebugGraphThreadIdStateErrors, GetDdPipelinePlannerDebugGraphThreadIdStateResponses, GetDdPipelinePlannerInfoData, GetDdPipelinePlannerInfoResponses, GetDdPipelinePlannerRecentData, GetDdPipelinePlannerRecentResponses, GetDdPipelinePlannerSlugActiveData, GetDdPipelinePlannerSlugActiveErrors, GetDdPipelinePlannerSlugActiveResponses, GetDdPipelinePlannerSlugHealthData, GetDdPipelinePlannerSlugHealthErrors, GetDdPipelinePlannerSlugHealthResponses, GetDdPipelinePlannerSlugTimingData, GetDdPipelinePlannerSlugTimingErrors, GetDdPipelinePlannerSlugTimingResponses, GetDdPipelinePlannerThreadIdEventsData, GetDdPipelinePlannerThreadIdEventsErrors, GetDdPipelinePlannerThreadIdEventsResponses, GetDdPipelineSlugStateData, GetDdPipelineSlugStateErrors, GetDdPipelineSlugStateResponses, GetDdPipelineSynthDebugGraphThreadIdHistoryData, GetDdPipelineSynthDebugGraphThreadIdHistoryErrors, GetDdPipelineSynthDebugGraphThreadIdHistoryResponses, GetDdPipelineSynthDebugGraphThreadIdLlmCountersData, GetDdPipelineSynthDebugGraphThreadIdLlmCountersErrors, GetDdPipelineSynthDebugGraphThreadIdLlmCountersResponses, GetDdPipelineSynthDebugGraphThreadIdStateData, GetDdPipelineSynthDebugGraphThreadIdStateErrors, GetDdPipelineSynthDebugGraphThreadIdStateResponses, GetDdPipelineSynthInfoData, GetDdPipelineSynthInfoResponses, GetDdPipelineSynthRecentData, GetDdPipelineSynthRecentResponses, GetDdPipelineSynthSlugActiveData, GetDdPipelineSynthSlugActiveErrors, GetDdPipelineSynthSlugActiveResponses, GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameData, GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameErrors, GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameResponses, GetDdPipelineSynthSlugStudyChaptersData, GetDdPipelineSynthSlugStudyChaptersErrors, GetDdPipelineSynthSlugStudyChaptersResponses, GetDdPipelineSynthThreadIdEventsData, GetDdPipelineSynthThreadIdEventsErrors, GetDdPipelineSynthThreadIdEventsResponses, GetHealthData, GetHealthResponses, GetSettingsEmbeddingData, GetSettingsEmbeddingResponses, GetSettingsEndpointData, GetSettingsEndpointResponses, GetYcsAdminIngestedChannelsData, GetYcsAdminIngestedChannelsResponses, GetYcsAdminIngestedPlaylistsData, GetYcsAdminIngestedPlaylistsResponses, GetYcsAdminPipelineExtractIdLlmCountersData, GetYcsAdminPipelineExtractIdLlmCountersErrors, GetYcsAdminPipelineExtractIdLlmCountersResponses, GetYcsAdminPipelineExtractIdStreamPhaseData, GetYcsAdminPipelineExtractIdStreamPhaseErrors, GetYcsAdminPipelineExtractIdStreamPhaseResponses, GetYcsAdminTaskTaskIdData, GetYcsAdminTaskTaskIdErrors, GetYcsAdminTaskTaskIdResponses, GetYcsAdminVideosData, GetYcsAdminVideosErrors, GetYcsAdminVideosFacetsData, GetYcsAdminVideosFacetsResponses, GetYcsAdminVideosResponses, GetYcsAgentsGraphStatsData, GetYcsAgentsGraphStatsResponses, GetYcsAgentsHistoryThreadIdData, GetYcsAgentsHistoryThreadIdErrors, GetYcsAgentsHistoryThreadIdResponses, GetYcsAgentsThreadsData, GetYcsAgentsThreadsResponses, GetYcsAgentsUsageThreadIdData, GetYcsAgentsUsageThreadIdErrors, GetYcsAgentsUsageThreadIdResponses, GetYcsContentChannelVideosData, GetYcsContentChannelVideosErrors, GetYcsContentChannelVideosResponses, GetYcsContentEmbeddingMigrationStatusData, GetYcsContentEmbeddingMigrationStatusResponses, GetYcsContentPlaylistVideosData, GetYcsContentPlaylistVideosErrors, GetYcsContentPlaylistVideosResponses, GetYcsContentVideosPipelineExtractIdStateData, GetYcsContentVideosPipelineExtractIdStateErrors, GetYcsContentVideosPipelineExtractIdStateResponses, GetYcsContentVideosPreviewData, GetYcsContentVideosPreviewErrors, GetYcsContentVideosPreviewResponses, GetYcsQueryHistoryData, GetYcsQueryHistoryErrors, GetYcsQueryHistoryResponses, GetYcsQueryNamespacesData, GetYcsQueryNamespacesResponses, GetYcsQuerySchemaBackendData, GetYcsQuerySchemaBackendErrors, GetYcsQuerySchemaBackendResponses, PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelData, PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelErrors, PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelResponses, PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeData, PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeErrors, PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeResponses, PostBdIngestionBookIdAgenticRunsData, PostBdIngestionBookIdAgenticRunsErrors, PostBdIngestionBookIdAgenticRunsResponses, PostBdIngestionBookIdCancelData, PostBdIngestionBookIdCancelErrors, PostBdIngestionBookIdCancelResponses, PostBdIngestionBookIdRunData, PostBdIngestionBookIdRunErrors, PostBdIngestionBookIdRunResponses, PostBdIngestionData, PostBdIngestionErrors, PostBdIngestionResponses, PostDdDebugFinalizeSlugData, PostDdDebugFinalizeSlugErrors, PostDdDebugFinalizeSlugResponses, PostDdDebugIngestSlugData, PostDdDebugIngestSlugErrors, PostDdDebugIngestSlugResponses, PostDdDebugPostSlugData, PostDdDebugPostSlugErrors, PostDdDebugPostSlugResponses, PostDdDebugResolveSlugData, PostDdDebugResolveSlugErrors, PostDdDebugResolveSlugResponses, PostDdDebugRestoreSlugData, PostDdDebugRestoreSlugErrors, PostDdDebugRestoreSlugResponses, PostDdDebugSnapshotSlugData, PostDdDebugSnapshotSlugErrors, PostDdDebugSnapshotSlugResponses, PostDdIngestionRunsData, PostDdIngestionRunsErrors, PostDdIngestionRunsResponses, PostDdIngestionRunsRunIdCancelData, PostDdIngestionRunsRunIdCancelErrors, PostDdIngestionRunsRunIdCancelResponses, PostDdIngestionSlugAgenticRunsData, PostDdIngestionSlugAgenticRunsErrors, PostDdIngestionSlugAgenticRunsResponses, PostDdIngestionSlugAgenticRunsRunIdResumeData, PostDdIngestionSlugAgenticRunsRunIdResumeErrors, PostDdIngestionSlugAgenticRunsRunIdResumeResponses, PostDdPipelinePlannerPruneData, PostDdPipelinePlannerPruneErrors, PostDdPipelinePlannerPruneResponses, PostDdPipelinePlannerSlugData, PostDdPipelinePlannerSlugErrors, PostDdPipelinePlannerSlugResponses, PostDdPipelinePlannerThreadIdCancelData, PostDdPipelinePlannerThreadIdCancelErrors, PostDdPipelinePlannerThreadIdCancelResponses, PostDdPipelinePlannerThreadIdResumeData, PostDdPipelinePlannerThreadIdResumeErrors, PostDdPipelinePlannerThreadIdResumeResponses, PostDdPipelineSynthSlugData, PostDdPipelineSynthSlugErrors, PostDdPipelineSynthSlugResponses, PostDdPipelineSynthThreadIdCancelData, PostDdPipelineSynthThreadIdCancelErrors, PostDdPipelineSynthThreadIdCancelResponses, PostDdPipelineSynthThreadIdResumeData, PostDdPipelineSynthThreadIdResumeErrors, PostDdPipelineSynthThreadIdResumeResponses, PostSettingsEmbeddingTestData, PostSettingsEmbeddingTestResponses, PostSettingsEndpointTestData, PostSettingsEndpointTestResponses, PostYcsAdminVideosBulkDeleteData, PostYcsAdminVideosBulkDeleteErrors, PostYcsAdminVideosBulkDeleteResponses, PostYcsAgentsEndpointPingData, PostYcsAgentsEndpointPingResponses, PostYcsAgentsFeedbackData, PostYcsAgentsFeedbackErrors, PostYcsAgentsFeedbackResponses, PostYcsAgentsIngestNeo4jData, PostYcsAgentsIngestNeo4jErrors, PostYcsAgentsIngestNeo4jResponses, PostYcsAgentsIngestQdrantData, PostYcsAgentsIngestQdrantErrors, PostYcsAgentsIngestQdrantResponses, PostYcsAgentsPipelineData, PostYcsAgentsPipelineErrors, PostYcsAgentsPipelineResponses, PostYcsAgentsSearchData, PostYcsAgentsSearchErrors, PostYcsAgentsSearchResponses, PostYcsAgentsSearchStreamData, PostYcsAgentsSearchStreamErrors, PostYcsAgentsSearchStreamResponses, PostYcsAgentsThreadsThreadIdBranchData, PostYcsAgentsThreadsThreadIdBranchErrors, PostYcsAgentsThreadsThreadIdBranchResponses, PostYcsAgentsTurnsTurnIdCancelData, PostYcsAgentsTurnsTurnIdCancelErrors, PostYcsAgentsTurnsTurnIdCancelResponses, PostYcsContentChannelData, PostYcsContentChannelErrors, PostYcsContentChannelPipelineData, PostYcsContentChannelPipelineErrors, PostYcsContentChannelPipelineResponses, PostYcsContentChannelResponses, PostYcsContentEmbeddingMigrationStartData, PostYcsContentEmbeddingMigrationStartResponses, PostYcsContentPlaylistData, PostYcsContentPlaylistErrors, PostYcsContentPlaylistPipelineData, PostYcsContentPlaylistPipelineErrors, PostYcsContentPlaylistPipelineResponses, PostYcsContentPlaylistResponses, PostYcsContentSearchData, PostYcsContentSearchErrors, PostYcsContentSearchResponses, PostYcsContentVideosData, PostYcsContentVideosErrors, PostYcsContentVideosPipelineData, PostYcsContentVideosPipelineErrors, PostYcsContentVideosPipelineExtractIdRerunData, PostYcsContentVideosPipelineExtractIdRerunErrors, PostYcsContentVideosPipelineExtractIdRerunResponses, PostYcsContentVideosPipelineExtractIdStopData, PostYcsContentVideosPipelineExtractIdStopErrors, PostYcsContentVideosPipelineExtractIdStopResponses, PostYcsContentVideosPipelineExtractIdWipeData, PostYcsContentVideosPipelineExtractIdWipeErrors, PostYcsContentVideosPipelineExtractIdWipeResponses, PostYcsContentVideosPipelineResponses, PostYcsContentVideosResponses, PostYcsQueryAiBackendData, PostYcsQueryAiBackendErrors, PostYcsQueryAiBackendResponses, PostYcsQueryElasticsearchData, PostYcsQueryElasticsearchErrors, PostYcsQueryElasticsearchResponses, PostYcsQueryHistoryData, PostYcsQueryHistoryResponses, PostYcsQueryNeo4jData, PostYcsQueryNeo4jErrors, PostYcsQueryNeo4jResponses, PostYcsQueryQdrantData, PostYcsQueryQdrantErrors, PostYcsQueryQdrantResponses, PostYcsQueryRawElasticsearchData, PostYcsQueryRawElasticsearchErrors, PostYcsQueryRawElasticsearchResponses, PostYcsQueryRawNeo4jData, PostYcsQueryRawNeo4jErrors, PostYcsQueryRawNeo4jResponses, PostYcsQueryRawQdrantData, PostYcsQueryRawQdrantErrors, PostYcsQueryRawQdrantResponses, PutSettingsEmbeddingData, PutSettingsEmbeddingErrors, PutSettingsEmbeddingResponses, PutSettingsEndpointData, PutSettingsEndpointErrors, PutSettingsEndpointResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -157,6 +157,20 @@ export const getBdIngestionBookIdPagesPageNoQuality = <ThrowOnError extends bool
 export const postBdIngestionBookIdRun = <ThrowOnError extends boolean = false>(options: Options<PostBdIngestionBookIdRunData, ThrowOnError>): RequestResult<PostBdIngestionBookIdRunResponses, PostBdIngestionBookIdRunErrors, ThrowOnError> => (options.client ?? client).post<PostBdIngestionBookIdRunResponses, PostBdIngestionBookIdRunErrors, ThrowOnError>({ url: '/api/v1/bd/ingestion/{book_id}/run', ...options });
 
 /**
+ * List Catalog
+ *
+ * Re-read every request so YAML edits land without a pod restart.
+ * Each entry carries its resolved `tier` (1-5, None when sourceless) so
+ * the Catalog UI can facet-filter without a second round-trip.
+ */
+export const getDdCatalog = <ThrowOnError extends boolean = false>(options?: Options<GetDdCatalogData, ThrowOnError>): RequestResult<GetDdCatalogResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetDdCatalogResponses, unknown, ThrowOnError>({ url: '/api/v1/dd/catalog', ...options });
+
+/**
+ * Resolve One
+ */
+export const getDdCatalogSlug = <ThrowOnError extends boolean = false>(options: Options<GetDdCatalogSlugData, ThrowOnError>): RequestResult<GetDdCatalogSlugResponses, GetDdCatalogSlugErrors, ThrowOnError> => (options.client ?? client).get<GetDdCatalogSlugResponses, GetDdCatalogSlugErrors, ThrowOnError>({ url: '/api/v1/dd/catalog/{slug}', ...options });
+
+/**
  * Debug Finalize
  *
  * Re-writes the canonical manifest from prior in-memory state.
@@ -212,6 +226,59 @@ export const getDdDebugSnapshotsSlug = <ThrowOnError extends boolean = false>(op
  * so each row carries logo URL + framework metadata.
  */
 export const getDdIngestion = <ThrowOnError extends boolean = false>(options?: Options<GetDdIngestionData, ThrowOnError>): RequestResult<GetDdIngestionResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetDdIngestionResponses, unknown, ThrowOnError>({ url: '/api/v1/dd/ingestion', ...options });
+
+/**
+ * Start Run
+ *
+ * Status: cached (manifest present, no refresh) / queued (lock
+ * acquired, Celery dispatched) / locked (another in flight).
+ */
+export const postDdIngestionRuns = <ThrowOnError extends boolean = false>(options: Options<PostDdIngestionRunsData, ThrowOnError>): RequestResult<PostDdIngestionRunsResponses, PostDdIngestionRunsErrors, ThrowOnError> => (options.client ?? client).post<PostDdIngestionRunsResponses, PostDdIngestionRunsErrors, ThrowOnError>({
+    url: '/api/v1/dd/ingestion/runs',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * List Active Runs
+ *
+ * Lock-held runs with progress; cross-checked so locks without a
+ * written progress record (rare race) aren't surfaced.
+ */
+export const getDdIngestionRunsActive = <ThrowOnError extends boolean = false>(options?: Options<GetDdIngestionRunsActiveData, ThrowOnError>): RequestResult<GetDdIngestionRunsActiveResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetDdIngestionRunsActiveResponses, unknown, ThrowOnError>({ url: '/api/v1/dd/ingestion/runs/active', ...options });
+
+/**
+ * Get Run
+ *
+ * In-flight snapshot from Redis (canonical post-finalize manifest
+ * lives in MinIO under /ingestion/{slug}).
+ */
+export const getDdIngestionRunsRunId = <ThrowOnError extends boolean = false>(options: Options<GetDdIngestionRunsRunIdData, ThrowOnError>): RequestResult<GetDdIngestionRunsRunIdResponses, GetDdIngestionRunsRunIdErrors, ThrowOnError> => (options.client ?? client).get<GetDdIngestionRunsRunIdResponses, GetDdIngestionRunsRunIdErrors, ThrowOnError>({ url: '/api/v1/dd/ingestion/runs/{run_id}', ...options });
+
+/**
+ * Cancel Run
+ */
+export const postDdIngestionRunsRunIdCancel = <ThrowOnError extends boolean = false>(options: Options<PostDdIngestionRunsRunIdCancelData, ThrowOnError>): RequestResult<PostDdIngestionRunsRunIdCancelResponses, PostDdIngestionRunsRunIdCancelErrors, ThrowOnError> => (options.client ?? client).post<PostDdIngestionRunsRunIdCancelResponses, PostDdIngestionRunsRunIdCancelErrors, ThrowOnError>({ url: '/api/v1/dd/ingestion/runs/{run_id}/cancel', ...options });
+
+/**
+ * Get Llm Counters
+ *
+ * Live ingestion usage, with the persisted snapshot as a fallback after Redis expires.
+ */
+export const getDdIngestionRunsRunIdLlmCounters = <ThrowOnError extends boolean = false>(options: Options<GetDdIngestionRunsRunIdLlmCountersData, ThrowOnError>): RequestResult<GetDdIngestionRunsRunIdLlmCountersResponses, GetDdIngestionRunsRunIdLlmCountersErrors, ThrowOnError> => (options.client ?? client).get<GetDdIngestionRunsRunIdLlmCountersResponses, GetDdIngestionRunsRunIdLlmCountersErrors, ThrowOnError>({ url: '/api/v1/dd/ingestion/runs/{run_id}/llm-counters', ...options });
+
+/**
+ * Get Page
+ */
+export const getDdIngestionRunsRunIdPagesIdx = <ThrowOnError extends boolean = false>(options: Options<GetDdIngestionRunsRunIdPagesIdxData, ThrowOnError>): RequestResult<GetDdIngestionRunsRunIdPagesIdxResponses, GetDdIngestionRunsRunIdPagesIdxErrors, ThrowOnError> => (options.client ?? client).get<GetDdIngestionRunsRunIdPagesIdxResponses, GetDdIngestionRunsRunIdPagesIdxErrors, ThrowOnError>({ url: '/api/v1/dd/ingestion/runs/{run_id}/pages/{idx}', ...options });
+
+/**
+ * Get Url Records
+ */
+export const getDdIngestionRunsRunIdUrlRecords = <ThrowOnError extends boolean = false>(options: Options<GetDdIngestionRunsRunIdUrlRecordsData, ThrowOnError>): RequestResult<GetDdIngestionRunsRunIdUrlRecordsResponses, GetDdIngestionRunsRunIdUrlRecordsErrors, ThrowOnError> => (options.client ?? client).get<GetDdIngestionRunsRunIdUrlRecordsResponses, GetDdIngestionRunsRunIdUrlRecordsErrors, ThrowOnError>({ url: '/api/v1/dd/ingestion/runs/{run_id}/url-records', ...options });
 
 /**
  * Delete Framework
@@ -270,31 +337,24 @@ export const getDdIngestionSlugPagesIdx = <ThrowOnError extends boolean = false>
 export const getDdPipelineActive = <ThrowOnError extends boolean = false>(options?: Options<GetDdPipelineActiveData, ThrowOnError>): RequestResult<GetDdPipelineActiveResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetDdPipelineActiveResponses, unknown, ThrowOnError>({ url: '/api/v1/dd/pipeline/active', ...options });
 
 /**
- * Pipeline State
- *
- * Drives wipe-cascade dialogs ("Wipe Planner also deletes Synth").
- */
-export const getDdPipelineSlugState = <ThrowOnError extends boolean = false>(options: Options<GetDdPipelineSlugStateData, ThrowOnError>): RequestResult<GetDdPipelineSlugStateResponses, GetDdPipelineSlugStateErrors, ThrowOnError> => (options.client ?? client).get<GetDdPipelineSlugStateResponses, GetDdPipelineSlugStateErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/{slug}/state', ...options });
-
-/**
  * Get Graph History
  */
-export const getDdPlannerDebugGraphThreadIdHistory = <ThrowOnError extends boolean = false>(options: Options<GetDdPlannerDebugGraphThreadIdHistoryData, ThrowOnError>): RequestResult<GetDdPlannerDebugGraphThreadIdHistoryResponses, GetDdPlannerDebugGraphThreadIdHistoryErrors, ThrowOnError> => (options.client ?? client).get<GetDdPlannerDebugGraphThreadIdHistoryResponses, GetDdPlannerDebugGraphThreadIdHistoryErrors, ThrowOnError>({ url: '/api/v1/dd/planner/debug/graph/{thread_id}/history', ...options });
+export const getDdPipelinePlannerDebugGraphThreadIdHistory = <ThrowOnError extends boolean = false>(options: Options<GetDdPipelinePlannerDebugGraphThreadIdHistoryData, ThrowOnError>): RequestResult<GetDdPipelinePlannerDebugGraphThreadIdHistoryResponses, GetDdPipelinePlannerDebugGraphThreadIdHistoryErrors, ThrowOnError> => (options.client ?? client).get<GetDdPipelinePlannerDebugGraphThreadIdHistoryResponses, GetDdPipelinePlannerDebugGraphThreadIdHistoryErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/planner/debug/graph/{thread_id}/history', ...options });
 
 /**
  * Get Graph Llm Counters
  */
-export const getDdPlannerDebugGraphThreadIdLlmCounters = <ThrowOnError extends boolean = false>(options: Options<GetDdPlannerDebugGraphThreadIdLlmCountersData, ThrowOnError>): RequestResult<GetDdPlannerDebugGraphThreadIdLlmCountersResponses, GetDdPlannerDebugGraphThreadIdLlmCountersErrors, ThrowOnError> => (options.client ?? client).get<GetDdPlannerDebugGraphThreadIdLlmCountersResponses, GetDdPlannerDebugGraphThreadIdLlmCountersErrors, ThrowOnError>({ url: '/api/v1/dd/planner/debug/graph/{thread_id}/llm-counters', ...options });
+export const getDdPipelinePlannerDebugGraphThreadIdLlmCounters = <ThrowOnError extends boolean = false>(options: Options<GetDdPipelinePlannerDebugGraphThreadIdLlmCountersData, ThrowOnError>): RequestResult<GetDdPipelinePlannerDebugGraphThreadIdLlmCountersResponses, GetDdPipelinePlannerDebugGraphThreadIdLlmCountersErrors, ThrowOnError> => (options.client ?? client).get<GetDdPipelinePlannerDebugGraphThreadIdLlmCountersResponses, GetDdPipelinePlannerDebugGraphThreadIdLlmCountersErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/planner/debug/graph/{thread_id}/llm-counters', ...options });
 
 /**
  * Get Graph State
  */
-export const getDdPlannerDebugGraphThreadIdState = <ThrowOnError extends boolean = false>(options: Options<GetDdPlannerDebugGraphThreadIdStateData, ThrowOnError>): RequestResult<GetDdPlannerDebugGraphThreadIdStateResponses, GetDdPlannerDebugGraphThreadIdStateErrors, ThrowOnError> => (options.client ?? client).get<GetDdPlannerDebugGraphThreadIdStateResponses, GetDdPlannerDebugGraphThreadIdStateErrors, ThrowOnError>({ url: '/api/v1/dd/planner/debug/graph/{thread_id}/state', ...options });
+export const getDdPipelinePlannerDebugGraphThreadIdState = <ThrowOnError extends boolean = false>(options: Options<GetDdPipelinePlannerDebugGraphThreadIdStateData, ThrowOnError>): RequestResult<GetDdPipelinePlannerDebugGraphThreadIdStateResponses, GetDdPipelinePlannerDebugGraphThreadIdStateErrors, ThrowOnError> => (options.client ?? client).get<GetDdPipelinePlannerDebugGraphThreadIdStateResponses, GetDdPipelinePlannerDebugGraphThreadIdStateErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/planner/debug/graph/{thread_id}/state', ...options });
 
 /**
  * Planner Info
  */
-export const getDdPlannerInfo = <ThrowOnError extends boolean = false>(options?: Options<GetDdPlannerInfoData, ThrowOnError>): RequestResult<GetDdPlannerInfoResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetDdPlannerInfoResponses, unknown, ThrowOnError>({ url: '/api/v1/dd/planner/info', ...options });
+export const getDdPipelinePlannerInfo = <ThrowOnError extends boolean = false>(options?: Options<GetDdPipelinePlannerInfoData, ThrowOnError>): RequestResult<GetDdPipelinePlannerInfoResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetDdPipelinePlannerInfoResponses, unknown, ThrowOnError>({ url: '/api/v1/dd/pipeline/planner/info', ...options });
 
 /**
  * Prune Checkpoints
@@ -308,7 +368,7 @@ export const getDdPlannerInfo = <ThrowOnError extends boolean = false>(options?:
  * Nothing in this codebase calls this on a schedule; wire it up via a
  * k8s CronJob or celery beat if periodic pruning is wanted.
  */
-export const postDdPlannerPrune = <ThrowOnError extends boolean = false>(options?: Options<PostDdPlannerPruneData, ThrowOnError>): RequestResult<PostDdPlannerPruneResponses, PostDdPlannerPruneErrors, ThrowOnError> => (options?.client ?? client).post<PostDdPlannerPruneResponses, PostDdPlannerPruneErrors, ThrowOnError>({ url: '/api/v1/dd/planner/prune', ...options });
+export const postDdPipelinePlannerPrune = <ThrowOnError extends boolean = false>(options?: Options<PostDdPipelinePlannerPruneData, ThrowOnError>): RequestResult<PostDdPipelinePlannerPruneResponses, PostDdPipelinePlannerPruneErrors, ThrowOnError> => (options?.client ?? client).post<PostDdPipelinePlannerPruneResponses, PostDdPipelinePlannerPruneErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/planner/prune', ...options });
 
 /**
  * List Recent Planners
@@ -317,19 +377,19 @@ export const postDdPlannerPrune = <ThrowOnError extends boolean = false>(options
  * checkpoints — sorting by checkpoint_id alone picks abandoned threads
  * that died early over later threads that completed all nodes.
  */
-export const getDdPlannerRecent = <ThrowOnError extends boolean = false>(options?: Options<GetDdPlannerRecentData, ThrowOnError>): RequestResult<GetDdPlannerRecentResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetDdPlannerRecentResponses, unknown, ThrowOnError>({ url: '/api/v1/dd/planner/recent', ...options });
+export const getDdPipelinePlannerRecent = <ThrowOnError extends boolean = false>(options?: Options<GetDdPipelinePlannerRecentData, ThrowOnError>): RequestResult<GetDdPipelinePlannerRecentResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetDdPipelinePlannerRecentResponses, unknown, ThrowOnError>({ url: '/api/v1/dd/pipeline/planner/recent', ...options });
 
 /**
  * Start Planner
  */
-export const postDdPlannerSlug = <ThrowOnError extends boolean = false>(options: Options<PostDdPlannerSlugData, ThrowOnError>): RequestResult<PostDdPlannerSlugResponses, PostDdPlannerSlugErrors, ThrowOnError> => (options.client ?? client).post<PostDdPlannerSlugResponses, PostDdPlannerSlugErrors, ThrowOnError>({ url: '/api/v1/dd/planner/{slug}', ...options });
+export const postDdPipelinePlannerSlug = <ThrowOnError extends boolean = false>(options: Options<PostDdPipelinePlannerSlugData, ThrowOnError>): RequestResult<PostDdPipelinePlannerSlugResponses, PostDdPipelinePlannerSlugErrors, ThrowOnError> => (options.client ?? client).post<PostDdPipelinePlannerSlugResponses, PostDdPipelinePlannerSlugErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/planner/{slug}', ...options });
 
 /**
  * Planner Active
  *
  * Page-refresh recovery without browser localStorage.
  */
-export const getDdPlannerSlugActive = <ThrowOnError extends boolean = false>(options: Options<GetDdPlannerSlugActiveData, ThrowOnError>): RequestResult<GetDdPlannerSlugActiveResponses, GetDdPlannerSlugActiveErrors, ThrowOnError> => (options.client ?? client).get<GetDdPlannerSlugActiveResponses, GetDdPlannerSlugActiveErrors, ThrowOnError>({ url: '/api/v1/dd/planner/{slug}/active', ...options });
+export const getDdPipelinePlannerSlugActive = <ThrowOnError extends boolean = false>(options: Options<GetDdPipelinePlannerSlugActiveData, ThrowOnError>): RequestResult<GetDdPipelinePlannerSlugActiveResponses, GetDdPipelinePlannerSlugActiveErrors, ThrowOnError> => (options.client ?? client).get<GetDdPipelinePlannerSlugActiveResponses, GetDdPipelinePlannerSlugActiveErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/planner/{slug}/active', ...options });
 
 /**
  * Planner Health
@@ -337,12 +397,12 @@ export const getDdPlannerSlugActive = <ThrowOnError extends boolean = false>(opt
  * Wave H3 — pipeline health from the latest plan (no MinIO archaeology).
  * `degraded` is the one-flag answer to 'will this plan be any good'.
  */
-export const getDdPlannerSlugHealth = <ThrowOnError extends boolean = false>(options: Options<GetDdPlannerSlugHealthData, ThrowOnError>): RequestResult<GetDdPlannerSlugHealthResponses, GetDdPlannerSlugHealthErrors, ThrowOnError> => (options.client ?? client).get<GetDdPlannerSlugHealthResponses, GetDdPlannerSlugHealthErrors, ThrowOnError>({ url: '/api/v1/dd/planner/{slug}/health', ...options });
+export const getDdPipelinePlannerSlugHealth = <ThrowOnError extends boolean = false>(options: Options<GetDdPipelinePlannerSlugHealthData, ThrowOnError>): RequestResult<GetDdPipelinePlannerSlugHealthResponses, GetDdPipelinePlannerSlugHealthErrors, ThrowOnError> => (options.client ?? client).get<GetDdPipelinePlannerSlugHealthResponses, GetDdPipelinePlannerSlugHealthErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/planner/{slug}/health', ...options });
 
 /**
  * Planner Timing
  */
-export const getDdPlannerSlugTiming = <ThrowOnError extends boolean = false>(options: Options<GetDdPlannerSlugTimingData, ThrowOnError>): RequestResult<GetDdPlannerSlugTimingResponses, GetDdPlannerSlugTimingErrors, ThrowOnError> => (options.client ?? client).get<GetDdPlannerSlugTimingResponses, GetDdPlannerSlugTimingErrors, ThrowOnError>({ url: '/api/v1/dd/planner/{slug}/timing', ...options });
+export const getDdPipelinePlannerSlugTiming = <ThrowOnError extends boolean = false>(options: Options<GetDdPipelinePlannerSlugTimingData, ThrowOnError>): RequestResult<GetDdPipelinePlannerSlugTimingResponses, GetDdPipelinePlannerSlugTimingErrors, ThrowOnError> => (options.client ?? client).get<GetDdPipelinePlannerSlugTimingResponses, GetDdPipelinePlannerSlugTimingErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/planner/{slug}/timing', ...options });
 
 /**
  * Wipe Planner
@@ -351,12 +411,12 @@ export const getDdPlannerSlugTiming = <ThrowOnError extends boolean = false>(opt
  * active-run registry. Drops the lock so the next Start Planner click
  * isn't rejected by a stale lock that survived the wipe.
  */
-export const deleteDdPlannerSlugWipe = <ThrowOnError extends boolean = false>(options: Options<DeleteDdPlannerSlugWipeData, ThrowOnError>): RequestResult<DeleteDdPlannerSlugWipeResponses, DeleteDdPlannerSlugWipeErrors, ThrowOnError> => (options.client ?? client).delete<DeleteDdPlannerSlugWipeResponses, DeleteDdPlannerSlugWipeErrors, ThrowOnError>({ url: '/api/v1/dd/planner/{slug}/wipe', ...options });
+export const deleteDdPipelinePlannerSlugWipe = <ThrowOnError extends boolean = false>(options: Options<DeleteDdPipelinePlannerSlugWipeData, ThrowOnError>): RequestResult<DeleteDdPipelinePlannerSlugWipeResponses, DeleteDdPipelinePlannerSlugWipeErrors, ThrowOnError> => (options.client ?? client).delete<DeleteDdPipelinePlannerSlugWipeResponses, DeleteDdPipelinePlannerSlugWipeErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/planner/{slug}/wipe', ...options });
 
 /**
  * Cancel Planner
  */
-export const postDdPlannerThreadIdCancel = <ThrowOnError extends boolean = false>(options: Options<PostDdPlannerThreadIdCancelData, ThrowOnError>): RequestResult<PostDdPlannerThreadIdCancelResponses, PostDdPlannerThreadIdCancelErrors, ThrowOnError> => (options.client ?? client).post<PostDdPlannerThreadIdCancelResponses, PostDdPlannerThreadIdCancelErrors, ThrowOnError>({ url: '/api/v1/dd/planner/{thread_id}/cancel', ...options });
+export const postDdPipelinePlannerThreadIdCancel = <ThrowOnError extends boolean = false>(options: Options<PostDdPipelinePlannerThreadIdCancelData, ThrowOnError>): RequestResult<PostDdPipelinePlannerThreadIdCancelResponses, PostDdPipelinePlannerThreadIdCancelErrors, ThrowOnError> => (options.client ?? client).post<PostDdPipelinePlannerThreadIdCancelResponses, PostDdPipelinePlannerThreadIdCancelErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/planner/{thread_id}/cancel', ...options });
 
 /**
  * Planner Events
@@ -365,106 +425,39 @@ export const postDdPlannerThreadIdCancel = <ThrowOnError extends boolean = false
  * first-event delay). 15s heartbeat keeps the connection alive through
  * k3d/traefik during long off_topic/cluster gaps.
  */
-export const getDdPlannerThreadIdEvents = <ThrowOnError extends boolean = false>(options: Options<GetDdPlannerThreadIdEventsData, ThrowOnError>): RequestResult<GetDdPlannerThreadIdEventsResponses, GetDdPlannerThreadIdEventsErrors, ThrowOnError> => (options.client ?? client).get<GetDdPlannerThreadIdEventsResponses, GetDdPlannerThreadIdEventsErrors, ThrowOnError>({ url: '/api/v1/dd/planner/{thread_id}/events', ...options });
+export const getDdPipelinePlannerThreadIdEvents = <ThrowOnError extends boolean = false>(options: Options<GetDdPipelinePlannerThreadIdEventsData, ThrowOnError>): RequestResult<GetDdPipelinePlannerThreadIdEventsResponses, GetDdPipelinePlannerThreadIdEventsErrors, ThrowOnError> => (options.client ?? client).get<GetDdPipelinePlannerThreadIdEventsResponses, GetDdPipelinePlannerThreadIdEventsErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/planner/{thread_id}/events', ...options });
 
 /**
  * Resume Planner
  */
-export const postDdPlannerThreadIdResume = <ThrowOnError extends boolean = false>(options: Options<PostDdPlannerThreadIdResumeData, ThrowOnError>): RequestResult<PostDdPlannerThreadIdResumeResponses, PostDdPlannerThreadIdResumeErrors, ThrowOnError> => (options.client ?? client).post<PostDdPlannerThreadIdResumeResponses, PostDdPlannerThreadIdResumeErrors, ThrowOnError>({ url: '/api/v1/dd/planner/{thread_id}/resume', ...options });
-
-/**
- * List Catalog
- *
- * Re-read every request so YAML edits land without a pod restart.
- * Each entry carries its resolved `tier` (1-5, None when sourceless) so
- * the Catalog UI can facet-filter without a second round-trip.
- */
-export const getDdResolver = <ThrowOnError extends boolean = false>(options?: Options<GetDdResolverData, ThrowOnError>): RequestResult<GetDdResolverResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetDdResolverResponses, unknown, ThrowOnError>({ url: '/api/v1/dd/resolver', ...options });
-
-/**
- * Resolve One
- */
-export const getDdResolverSlug = <ThrowOnError extends boolean = false>(options: Options<GetDdResolverSlugData, ThrowOnError>): RequestResult<GetDdResolverSlugResponses, GetDdResolverSlugErrors, ThrowOnError> => (options.client ?? client).get<GetDdResolverSlugResponses, GetDdResolverSlugErrors, ThrowOnError>({ url: '/api/v1/dd/resolver/{slug}', ...options });
-
-/**
- * Start Run
- *
- * Status: cached (manifest present, no refresh) / queued (lock
- * acquired, Celery dispatched) / locked (another in flight).
- */
-export const postDdRuns = <ThrowOnError extends boolean = false>(options: Options<PostDdRunsData, ThrowOnError>): RequestResult<PostDdRunsResponses, PostDdRunsErrors, ThrowOnError> => (options.client ?? client).post<PostDdRunsResponses, PostDdRunsErrors, ThrowOnError>({
-    url: '/api/v1/dd/runs',
-    ...options,
-    headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-    }
-});
-
-/**
- * List Active Runs
- *
- * Lock-held runs with progress; cross-checked so locks without a
- * written progress record (rare race) aren't surfaced.
- */
-export const getDdRunsActive = <ThrowOnError extends boolean = false>(options?: Options<GetDdRunsActiveData, ThrowOnError>): RequestResult<GetDdRunsActiveResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetDdRunsActiveResponses, unknown, ThrowOnError>({ url: '/api/v1/dd/runs/active', ...options });
-
-/**
- * Get Run
- *
- * In-flight snapshot from Redis (canonical post-finalize manifest
- * lives in MinIO under /ingestion/{slug}).
- */
-export const getDdRunsRunId = <ThrowOnError extends boolean = false>(options: Options<GetDdRunsRunIdData, ThrowOnError>): RequestResult<GetDdRunsRunIdResponses, GetDdRunsRunIdErrors, ThrowOnError> => (options.client ?? client).get<GetDdRunsRunIdResponses, GetDdRunsRunIdErrors, ThrowOnError>({ url: '/api/v1/dd/runs/{run_id}', ...options });
-
-/**
- * Cancel Run
- */
-export const postDdRunsRunIdCancel = <ThrowOnError extends boolean = false>(options: Options<PostDdRunsRunIdCancelData, ThrowOnError>): RequestResult<PostDdRunsRunIdCancelResponses, PostDdRunsRunIdCancelErrors, ThrowOnError> => (options.client ?? client).post<PostDdRunsRunIdCancelResponses, PostDdRunsRunIdCancelErrors, ThrowOnError>({ url: '/api/v1/dd/runs/{run_id}/cancel', ...options });
-
-/**
- * Get Llm Counters
- *
- * Live ingestion usage, with the persisted snapshot as a fallback after Redis expires.
- */
-export const getDdRunsRunIdLlmCounters = <ThrowOnError extends boolean = false>(options: Options<GetDdRunsRunIdLlmCountersData, ThrowOnError>): RequestResult<GetDdRunsRunIdLlmCountersResponses, GetDdRunsRunIdLlmCountersErrors, ThrowOnError> => (options.client ?? client).get<GetDdRunsRunIdLlmCountersResponses, GetDdRunsRunIdLlmCountersErrors, ThrowOnError>({ url: '/api/v1/dd/runs/{run_id}/llm-counters', ...options });
-
-/**
- * Get Page
- */
-export const getDdRunsRunIdPagesIdx = <ThrowOnError extends boolean = false>(options: Options<GetDdRunsRunIdPagesIdxData, ThrowOnError>): RequestResult<GetDdRunsRunIdPagesIdxResponses, GetDdRunsRunIdPagesIdxErrors, ThrowOnError> => (options.client ?? client).get<GetDdRunsRunIdPagesIdxResponses, GetDdRunsRunIdPagesIdxErrors, ThrowOnError>({ url: '/api/v1/dd/runs/{run_id}/pages/{idx}', ...options });
-
-/**
- * Get Url Records
- */
-export const getDdRunsRunIdUrlRecords = <ThrowOnError extends boolean = false>(options: Options<GetDdRunsRunIdUrlRecordsData, ThrowOnError>): RequestResult<GetDdRunsRunIdUrlRecordsResponses, GetDdRunsRunIdUrlRecordsErrors, ThrowOnError> => (options.client ?? client).get<GetDdRunsRunIdUrlRecordsResponses, GetDdRunsRunIdUrlRecordsErrors, ThrowOnError>({ url: '/api/v1/dd/runs/{run_id}/url-records', ...options });
+export const postDdPipelinePlannerThreadIdResume = <ThrowOnError extends boolean = false>(options: Options<PostDdPipelinePlannerThreadIdResumeData, ThrowOnError>): RequestResult<PostDdPipelinePlannerThreadIdResumeResponses, PostDdPipelinePlannerThreadIdResumeErrors, ThrowOnError> => (options.client ?? client).post<PostDdPipelinePlannerThreadIdResumeResponses, PostDdPipelinePlannerThreadIdResumeErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/planner/{thread_id}/resume', ...options });
 
 /**
  * Synth History
  */
-export const getDdSynthDebugGraphThreadIdHistory = <ThrowOnError extends boolean = false>(options: Options<GetDdSynthDebugGraphThreadIdHistoryData, ThrowOnError>): RequestResult<GetDdSynthDebugGraphThreadIdHistoryResponses, GetDdSynthDebugGraphThreadIdHistoryErrors, ThrowOnError> => (options.client ?? client).get<GetDdSynthDebugGraphThreadIdHistoryResponses, GetDdSynthDebugGraphThreadIdHistoryErrors, ThrowOnError>({ url: '/api/v1/dd/synth/debug/graph/{thread_id}/history', ...options });
+export const getDdPipelineSynthDebugGraphThreadIdHistory = <ThrowOnError extends boolean = false>(options: Options<GetDdPipelineSynthDebugGraphThreadIdHistoryData, ThrowOnError>): RequestResult<GetDdPipelineSynthDebugGraphThreadIdHistoryResponses, GetDdPipelineSynthDebugGraphThreadIdHistoryErrors, ThrowOnError> => (options.client ?? client).get<GetDdPipelineSynthDebugGraphThreadIdHistoryResponses, GetDdPipelineSynthDebugGraphThreadIdHistoryErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/synth/debug/graph/{thread_id}/history', ...options });
 
 /**
  * Synth Llm Counters
  */
-export const getDdSynthDebugGraphThreadIdLlmCounters = <ThrowOnError extends boolean = false>(options: Options<GetDdSynthDebugGraphThreadIdLlmCountersData, ThrowOnError>): RequestResult<GetDdSynthDebugGraphThreadIdLlmCountersResponses, GetDdSynthDebugGraphThreadIdLlmCountersErrors, ThrowOnError> => (options.client ?? client).get<GetDdSynthDebugGraphThreadIdLlmCountersResponses, GetDdSynthDebugGraphThreadIdLlmCountersErrors, ThrowOnError>({ url: '/api/v1/dd/synth/debug/graph/{thread_id}/llm-counters', ...options });
+export const getDdPipelineSynthDebugGraphThreadIdLlmCounters = <ThrowOnError extends boolean = false>(options: Options<GetDdPipelineSynthDebugGraphThreadIdLlmCountersData, ThrowOnError>): RequestResult<GetDdPipelineSynthDebugGraphThreadIdLlmCountersResponses, GetDdPipelineSynthDebugGraphThreadIdLlmCountersErrors, ThrowOnError> => (options.client ?? client).get<GetDdPipelineSynthDebugGraphThreadIdLlmCountersResponses, GetDdPipelineSynthDebugGraphThreadIdLlmCountersErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/synth/debug/graph/{thread_id}/llm-counters', ...options });
 
 /**
  * Synth State
  */
-export const getDdSynthDebugGraphThreadIdState = <ThrowOnError extends boolean = false>(options: Options<GetDdSynthDebugGraphThreadIdStateData, ThrowOnError>): RequestResult<GetDdSynthDebugGraphThreadIdStateResponses, GetDdSynthDebugGraphThreadIdStateErrors, ThrowOnError> => (options.client ?? client).get<GetDdSynthDebugGraphThreadIdStateResponses, GetDdSynthDebugGraphThreadIdStateErrors, ThrowOnError>({ url: '/api/v1/dd/synth/debug/graph/{thread_id}/state', ...options });
+export const getDdPipelineSynthDebugGraphThreadIdState = <ThrowOnError extends boolean = false>(options: Options<GetDdPipelineSynthDebugGraphThreadIdStateData, ThrowOnError>): RequestResult<GetDdPipelineSynthDebugGraphThreadIdStateResponses, GetDdPipelineSynthDebugGraphThreadIdStateErrors, ThrowOnError> => (options.client ?? client).get<GetDdPipelineSynthDebugGraphThreadIdStateResponses, GetDdPipelineSynthDebugGraphThreadIdStateErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/synth/debug/graph/{thread_id}/state', ...options });
 
 /**
  * Synth Info
  */
-export const getDdSynthInfo = <ThrowOnError extends boolean = false>(options?: Options<GetDdSynthInfoData, ThrowOnError>): RequestResult<GetDdSynthInfoResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetDdSynthInfoResponses, unknown, ThrowOnError>({ url: '/api/v1/dd/synth/info', ...options });
+export const getDdPipelineSynthInfo = <ThrowOnError extends boolean = false>(options?: Options<GetDdPipelineSynthInfoData, ThrowOnError>): RequestResult<GetDdPipelineSynthInfoResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetDdPipelineSynthInfoResponses, unknown, ThrowOnError>({ url: '/api/v1/dd/pipeline/synth/info', ...options });
 
 /**
  * List Recent Synth
  *
  * Most-recent thread per slug for page-refresh recovery.
  */
-export const getDdSynthRecent = <ThrowOnError extends boolean = false>(options?: Options<GetDdSynthRecentData, ThrowOnError>): RequestResult<GetDdSynthRecentResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetDdSynthRecentResponses, unknown, ThrowOnError>({ url: '/api/v1/dd/synth/recent', ...options });
+export const getDdPipelineSynthRecent = <ThrowOnError extends boolean = false>(options?: Options<GetDdPipelineSynthRecentData, ThrowOnError>): RequestResult<GetDdPipelineSynthRecentResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetDdPipelineSynthRecentResponses, unknown, ThrowOnError>({ url: '/api/v1/dd/pipeline/synth/recent', ...options });
 
 /**
  * Start Synth
@@ -472,7 +465,7 @@ export const getDdSynthRecent = <ThrowOnError extends boolean = false>(options?:
  * No chapter_id → STUDY mode (orchestrator runs all chapters);
  * with chapter_id → single-chapter escape hatch.
  */
-export const postDdSynthSlug = <ThrowOnError extends boolean = false>(options: Options<PostDdSynthSlugData, ThrowOnError>): RequestResult<PostDdSynthSlugResponses, PostDdSynthSlugErrors, ThrowOnError> => (options.client ?? client).post<PostDdSynthSlugResponses, PostDdSynthSlugErrors, ThrowOnError>({ url: '/api/v1/dd/synth/{slug}', ...options });
+export const postDdPipelineSynthSlug = <ThrowOnError extends boolean = false>(options: Options<PostDdPipelineSynthSlugData, ThrowOnError>): RequestResult<PostDdPipelineSynthSlugResponses, PostDdPipelineSynthSlugErrors, ThrowOnError> => (options.client ?? client).post<PostDdPipelineSynthSlugResponses, PostDdPipelineSynthSlugErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/synth/{slug}', ...options });
 
 /**
  * Synth Active
@@ -481,7 +474,7 @@ export const postDdSynthSlug = <ThrowOnError extends boolean = false>(options: O
  * so the UI can reconnect to its SSE without browser localStorage. A single-chapter run (the per-chapter ▶ button on the
  * chapter list) has no study registry entry; its thread is the value of the slug's synth lock, returned as `chapter_thread_id`.
  */
-export const getDdSynthSlugActive = <ThrowOnError extends boolean = false>(options: Options<GetDdSynthSlugActiveData, ThrowOnError>): RequestResult<GetDdSynthSlugActiveResponses, GetDdSynthSlugActiveErrors, ThrowOnError> => (options.client ?? client).get<GetDdSynthSlugActiveResponses, GetDdSynthSlugActiveErrors, ThrowOnError>({ url: '/api/v1/dd/synth/{slug}/active', ...options });
+export const getDdPipelineSynthSlugActive = <ThrowOnError extends boolean = false>(options: Options<GetDdPipelineSynthSlugActiveData, ThrowOnError>): RequestResult<GetDdPipelineSynthSlugActiveResponses, GetDdPipelineSynthSlugActiveErrors, ThrowOnError> => (options.client ?? client).get<GetDdPipelineSynthSlugActiveResponses, GetDdPipelineSynthSlugActiveErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/synth/{slug}/active', ...options });
 
 /**
  * List Study Chapters
@@ -489,14 +482,14 @@ export const getDdSynthSlugActive = <ThrowOnError extends boolean = false>(optio
  * Drives the Study sidebar. `rendered` flags MUST NOT be cached —
  * a stale 200 after a wipe would show phantom synthesized chapters.
  */
-export const getDdSynthSlugStudyChapters = <ThrowOnError extends boolean = false>(options: Options<GetDdSynthSlugStudyChaptersData, ThrowOnError>): RequestResult<GetDdSynthSlugStudyChaptersResponses, GetDdSynthSlugStudyChaptersErrors, ThrowOnError> => (options.client ?? client).get<GetDdSynthSlugStudyChaptersResponses, GetDdSynthSlugStudyChaptersErrors, ThrowOnError>({ url: '/api/v1/dd/synth/{slug}/study/chapters', ...options });
+export const getDdPipelineSynthSlugStudyChapters = <ThrowOnError extends boolean = false>(options: Options<GetDdPipelineSynthSlugStudyChaptersData, ThrowOnError>): RequestResult<GetDdPipelineSynthSlugStudyChaptersResponses, GetDdPipelineSynthSlugStudyChaptersErrors, ThrowOnError> => (options.client ?? client).get<GetDdPipelineSynthSlugStudyChaptersResponses, GetDdPipelineSynthSlugStudyChaptersErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/synth/{slug}/study/chapters', ...options });
 
 /**
  * Get Study Artifact
  *
  * VALID_ARTIFACTS allow-list prevents arbitrary MinIO key reads.
  */
-export const getDdSynthSlugStudyChapterIdArtifactArtifactName = <ThrowOnError extends boolean = false>(options: Options<GetDdSynthSlugStudyChapterIdArtifactArtifactNameData, ThrowOnError>): RequestResult<GetDdSynthSlugStudyChapterIdArtifactArtifactNameResponses, GetDdSynthSlugStudyChapterIdArtifactArtifactNameErrors, ThrowOnError> => (options.client ?? client).get<GetDdSynthSlugStudyChapterIdArtifactArtifactNameResponses, GetDdSynthSlugStudyChapterIdArtifactArtifactNameErrors, ThrowOnError>({ url: '/api/v1/dd/synth/{slug}/study/{chapter_id}/artifact/{artifact_name}', ...options });
+export const getDdPipelineSynthSlugStudyChapterIdArtifactArtifactName = <ThrowOnError extends boolean = false>(options: Options<GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameData, ThrowOnError>): RequestResult<GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameResponses, GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameErrors, ThrowOnError> => (options.client ?? client).get<GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameResponses, GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/synth/{slug}/study/{chapter_id}/artifact/{artifact_name}', ...options });
 
 /**
  * Wipe Synth
@@ -507,7 +500,7 @@ export const getDdSynthSlugStudyChapterIdArtifactArtifactName = <ThrowOnError ex
  * With `chapter_id`, wipes only that chapter's MinIO outputs (see
  * `service.wipe_one_chapter`).
  */
-export const deleteDdSynthSlugWipe = <ThrowOnError extends boolean = false>(options: Options<DeleteDdSynthSlugWipeData, ThrowOnError>): RequestResult<DeleteDdSynthSlugWipeResponses, DeleteDdSynthSlugWipeErrors, ThrowOnError> => (options.client ?? client).delete<DeleteDdSynthSlugWipeResponses, DeleteDdSynthSlugWipeErrors, ThrowOnError>({ url: '/api/v1/dd/synth/{slug}/wipe', ...options });
+export const deleteDdPipelineSynthSlugWipe = <ThrowOnError extends boolean = false>(options: Options<DeleteDdPipelineSynthSlugWipeData, ThrowOnError>): RequestResult<DeleteDdPipelineSynthSlugWipeResponses, DeleteDdPipelineSynthSlugWipeErrors, ThrowOnError> => (options.client ?? client).delete<DeleteDdPipelineSynthSlugWipeResponses, DeleteDdPipelineSynthSlugWipeErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/synth/{slug}/wipe', ...options });
 
 /**
  * Cancel Synth
@@ -517,7 +510,7 @@ export const deleteDdSynthSlugWipe = <ThrowOnError extends boolean = false>(opti
  * Without propagation only the NEXT chapter is blocked; the in-flight
  * one keeps firing LLM calls.
  */
-export const postDdSynthThreadIdCancel = <ThrowOnError extends boolean = false>(options: Options<PostDdSynthThreadIdCancelData, ThrowOnError>): RequestResult<PostDdSynthThreadIdCancelResponses, PostDdSynthThreadIdCancelErrors, ThrowOnError> => (options.client ?? client).post<PostDdSynthThreadIdCancelResponses, PostDdSynthThreadIdCancelErrors, ThrowOnError>({ url: '/api/v1/dd/synth/{thread_id}/cancel', ...options });
+export const postDdPipelineSynthThreadIdCancel = <ThrowOnError extends boolean = false>(options: Options<PostDdPipelineSynthThreadIdCancelData, ThrowOnError>): RequestResult<PostDdPipelineSynthThreadIdCancelResponses, PostDdPipelineSynthThreadIdCancelErrors, ThrowOnError> => (options.client ?? client).post<PostDdPipelineSynthThreadIdCancelResponses, PostDdPipelineSynthThreadIdCancelErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/synth/{thread_id}/cancel', ...options });
 
 /**
  * Synth Events
@@ -527,12 +520,19 @@ export const postDdSynthThreadIdCancel = <ThrowOnError extends boolean = false>(
  * alive through k3d/traefik (default idle-stream timeout 60s) during
  * long Synth gaps (sawc_write, book_harmonize).
  */
-export const getDdSynthThreadIdEvents = <ThrowOnError extends boolean = false>(options: Options<GetDdSynthThreadIdEventsData, ThrowOnError>): RequestResult<GetDdSynthThreadIdEventsResponses, GetDdSynthThreadIdEventsErrors, ThrowOnError> => (options.client ?? client).get<GetDdSynthThreadIdEventsResponses, GetDdSynthThreadIdEventsErrors, ThrowOnError>({ url: '/api/v1/dd/synth/{thread_id}/events', ...options });
+export const getDdPipelineSynthThreadIdEvents = <ThrowOnError extends boolean = false>(options: Options<GetDdPipelineSynthThreadIdEventsData, ThrowOnError>): RequestResult<GetDdPipelineSynthThreadIdEventsResponses, GetDdPipelineSynthThreadIdEventsErrors, ThrowOnError> => (options.client ?? client).get<GetDdPipelineSynthThreadIdEventsResponses, GetDdPipelineSynthThreadIdEventsErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/synth/{thread_id}/events', ...options });
 
 /**
  * Resume Synth
  */
-export const postDdSynthThreadIdResume = <ThrowOnError extends boolean = false>(options: Options<PostDdSynthThreadIdResumeData, ThrowOnError>): RequestResult<PostDdSynthThreadIdResumeResponses, PostDdSynthThreadIdResumeErrors, ThrowOnError> => (options.client ?? client).post<PostDdSynthThreadIdResumeResponses, PostDdSynthThreadIdResumeErrors, ThrowOnError>({ url: '/api/v1/dd/synth/{thread_id}/resume', ...options });
+export const postDdPipelineSynthThreadIdResume = <ThrowOnError extends boolean = false>(options: Options<PostDdPipelineSynthThreadIdResumeData, ThrowOnError>): RequestResult<PostDdPipelineSynthThreadIdResumeResponses, PostDdPipelineSynthThreadIdResumeErrors, ThrowOnError> => (options.client ?? client).post<PostDdPipelineSynthThreadIdResumeResponses, PostDdPipelineSynthThreadIdResumeErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/synth/{thread_id}/resume', ...options });
+
+/**
+ * Pipeline State
+ *
+ * Drives wipe-cascade dialogs ("Wipe Planner also deletes Synth").
+ */
+export const getDdPipelineSlugState = <ThrowOnError extends boolean = false>(options: Options<GetDdPipelineSlugStateData, ThrowOnError>): RequestResult<GetDdPipelineSlugStateResponses, GetDdPipelineSlugStateErrors, ThrowOnError> => (options.client ?? client).get<GetDdPipelineSlugStateResponses, GetDdPipelineSlugStateErrors, ThrowOnError>({ url: '/api/v1/dd/pipeline/{slug}/state', ...options });
 
 /**
  * Get Embedding
