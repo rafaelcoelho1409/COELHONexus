@@ -133,6 +133,28 @@ class PageAssessment(BaseModel):
         return self
 
 
+class PageAuditFinding(BaseModel):
+    """Minimal model-facing finding; page locators and evidence objects are added by the application."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    code: IssueCode
+    severity: IssueSeverity
+    description: NonEmptyText
+    confidence: Confidence
+    evidence_excerpts: list[NonEmptyText] = Field(min_length = 1, max_length = 8)
+
+
+class PageAuditResponse(BaseModel):
+    """Minimal model-facing response for one physical page."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    page_kind: PageKind
+    confidence: Confidence
+    findings: list[PageAuditFinding] = Field(default_factory = list, max_length = 32)
+
+
 class WorkIssueRef(BaseModel):
     """A specialist assignment's exact page-local finding reference."""
 
@@ -220,6 +242,35 @@ class PatchProposal(BaseModel):
         return self
 
 
+class PatchDraft(BaseModel):
+    """Model-facing patch fields; page identity, issue code, and evidence are filled from trusted input."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    issue_id: NonEmptyText
+    risk: PatchRisk
+    context_before: str = ""
+    target_text: NonEmptyText
+    context_after: str = ""
+    replacement: str
+    rationale: NonEmptyText
+    confidence: Confidence
+
+    @model_validator(mode = "after")
+    def _reject_no_op(self) -> PatchDraft:
+        if self.target_text == self.replacement:
+            raise ValueError("replacement must change target_text")
+        return self
+
+
+class PatchDraftBatch(BaseModel):
+    """Bounded minimal specialist output for one physical page."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    proposals: list[PatchDraft] = Field(default_factory = list, max_length = 32)
+
+
 class PatchProposalBatch(BaseModel):
     """Bounded specialist output for one physical page."""
 
@@ -267,9 +318,13 @@ __all__ = [
     "IssueCode",
     "IssueSeverity",
     "PageAssessment",
+    "PageAuditFinding",
+    "PageAuditResponse",
     "PageIssue",
     "PageKind",
     "PatchProposalBatch",
+    "PatchDraftBatch",
+    "PatchDraft",
     "PatchProposal",
     "PatchRisk",
     "ReviewDecision",

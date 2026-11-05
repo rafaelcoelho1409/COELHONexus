@@ -14,7 +14,7 @@ import { QueryProvider } from "@/shared/providers/query-provider";
 
 import type { AgenticProgress } from "../entities";
 import { agenticRunStatusSchema } from "../entities";
-import { AUTO_CHAIN_STORAGE_KEY } from "../params";
+import { AUTO_CHAIN_STORAGE_KEY, LAST_PAGE_STORAGE_PREFIX, READER_LAYOUT_STORAGE_KEY } from "../params";
 import {
   agenticRun,
   BOOK_ID,
@@ -47,6 +47,8 @@ beforeAll(() => server.listen({ onUnhandledFrame: "error" }));
 beforeEach(() => {
   push.mockClear();
   window.localStorage.removeItem(AUTO_CHAIN_STORAGE_KEY);
+  window.localStorage.removeItem(READER_LAYOUT_STORAGE_KEY);
+  window.localStorage.removeItem(`${LAST_PAGE_STORAGE_PREFIX}${BOOK_ID}`);
   client.setConfig({ baseUrl: ORIGIN });
 });
 afterEach(() => server.resetHandlers());
@@ -657,6 +659,11 @@ describe("A book being extracted", () => {
         delivered_page_count: 0,
         discarded_blank_page_count: 0,
         review_page_count: 0,
+        review_pages: [],
+        unverified_page_count: 0,
+        unverified_pages: [],
+        discarded_pages: [],
+        image_only_pages: [],
         progress,
         created_at: 1,
         updated_at: 2,
@@ -704,7 +711,7 @@ describe("A book being extracted", () => {
     const reader = await screen.findByRole("article", { name: "Page 1" });
     expect(await within(reader).findByText("Docling body")).toBeInTheDocument();
     expect(within(reader).getByText("Docling extraction")).toBeInTheDocument();
-    expect(screen.getByText("1 page needs review")).toBeInTheDocument();
+    expect(screen.getByText("Audit warnings on 1 page.")).toBeInTheDocument();
     stream.send({
       kind: "page_repair",
       page: 1,
@@ -768,6 +775,11 @@ describe("A book being extracted", () => {
         delivered_page_count: 1,
         discarded_blank_page_count: 0,
         review_page_count: 0,
+        review_pages: [],
+        unverified_page_count: 0,
+        unverified_pages: [],
+        discarded_pages: [],
+        image_only_pages: [],
         progress: {
           current_node: null,
           node_status: {
@@ -860,7 +872,9 @@ describe("A book being extracted", () => {
     await openPipeline();
     const progressBox = screen.getByRole("region", { name: "Agentic AI progress" });
     expect(
-      within(progressBox).getByText("Review required · 1 page · 1 delivered · 0 blank excluded"),
+      within(progressBox).getByText(
+        "Run needs attention · 1 page needs review · 0 audits unverified · 1 delivered · 0 blank excluded",
+      ),
     ).toBeInTheDocument();
     expect(within(progressBox).getByRole("img", { name: "Completed successfully" })).toBeInTheDocument();
   });
@@ -1210,9 +1224,9 @@ describe("A finished book", () => {
     const outline = screen.getByRole("navigation", { name: "On this page" });
     expect(outline).toHaveTextContent("Methods");
     expect(outline).toHaveTextContent("Results");
-    await userEvent.click(screen.getByRole("button", { name: "Hide page outline" }));
+    await userEvent.click(screen.getByRole("button", { name: "Hide outline" }));
     expect(screen.queryByRole("navigation", { name: "On this page" })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Show page outline" }));
+    await userEvent.click(screen.getByRole("button", { name: "Show outline" }));
     expect(screen.queryByRole("button", { name: "Extract again" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: BOOK_TITLE }));
     expect(screen.getByRole("button", { name: `Refresh ${BOOK_TITLE}` })).toBeEnabled();
@@ -1229,6 +1243,160 @@ describe("A finished book", () => {
     renderStage(BOOK_ID);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("book not found");
+  });
+
+  describe("reader", () => {
+    const reviewRun = () =>
+      agenticRun({
+        quality_status: "complete_with_review",
+        expected_page_count: 3,
+        published_page_count: 3,
+        delivered_page_count: 2,
+        discarded_blank_page_count: 1,
+        review_page_count: 1,
+        review_pages: [2],
+        discarded_pages: [3],
+      });
+
+    function serveAgenticBook() {
+      serveLibrary([bookRow({ status: "done", n_pages: 3, pages_done: 3 })]);
+      serveBook(
+        snapshot(
+          { status: "done", n_pages: 3, pages: [pageEntry(1), pageEntry(2), pageEntry(3)] },
+          null,
+          reviewRun(),
+        ),
+      );
+      server.use(
+        http.get(`${API}/${BOOK_ID}/pages/:page`, ({ request, params }) => {
+          const raw = new URL(request.url).searchParams.get("source") === "docling";
+          const page = Number(params.page);
+          return HttpResponse.json({
+            book_id: BOOK_ID,
+            page,
+            markdown: raw ? `## I NTRODUC T I ON\n\nBody ${page}.` : `## INTRODUCTION\n\nBody ${page}.`,
+            content_source: raw ? "docling" : "agentic",
+          });
+        }),
+        http.get(`${API}/${BOOK_ID}/pages/2/quality`, () =>
+          HttpResponse.json({
+            book_id: BOOK_ID,
+            agentic_run_id: "agentic-1",
+            page: 2,
+            page_kind: "text",
+            status: "review_required",
+            delivery_disposition: "include",
+            issues: [
+              {
+                issue_id: "p0002-split_word",
+                code: "split_word",
+                severity: "medium",
+                description: "An uppercase heading contains separated word fragments.",
+                evidence: ["I NTRODUC T I ON"],
+                resolution: "review",
+                proposal: {
+                  target_text: "I NTRODUC T I ON",
+                  replacement: "INTRODUCTION",
+                  rationale: "Join the fragments.",
+                  confidence: 0.9,
+                  risk: "low",
+                },
+              },
+            ],
+            mechanical_fixes: { control_characters: 1 },
+            audit_warnings: [],
+            errors: [],
+          }),
+        ),
+        http.get(`${API}/${BOOK_ID}/agentic/runs/agentic-1/llm-counters`, () =>
+          HttpResponse.json({
+            total: { calls: 0, tokens_in: 0, tokens_out: 0, reasoning_tokens: 0, errors: 0 },
+            by_node: {},
+          }),
+        ),
+      );
+    }
+
+    it("compares the raw Docling page with the AI-processed one and shows what changed", async () => {
+      serveAgenticBook();
+      renderStage(BOOK_ID);
+
+      await openMaterials();
+      const reader = await screen.findByRole("article", { name: "Page 1" });
+      expect(await within(reader).findByText("INTRODUCTION")).toBeInTheDocument();
+      await userEvent.click(within(reader).getByRole("button", { name: "Docling raw" }));
+      expect(await within(reader).findByText("I NTRODUC T I ON")).toBeInTheDocument();
+      await userEvent.click(within(reader).getByRole("button", { name: "Changes" }));
+      const changes = await within(reader).findByRole("region", { name: "Changes made by Agentic AI" });
+      expect(changes).toHaveTextContent("2 changed lines");
+      expect(within(changes).getByText("Removed:", { exact: false })).toBeInTheDocument();
+      expect(within(changes).getByText("Added:", { exact: false })).toBeInTheDocument();
+    });
+
+    it("shows what the Agentic AI step found on a page, with the fix it would suggest", async () => {
+      serveAgenticBook();
+      renderStage(BOOK_ID);
+
+      await openMaterials();
+      await userEvent.click(await screen.findByRole("button", { name: /^p\. 2\b/ }));
+      const quality = await screen.findByRole("region", { name: "Page quality" });
+      expect(quality).toHaveTextContent("Needs review");
+      expect(quality).toHaveTextContent("Removed 1 control character automatically.");
+      const issues = within(quality).getByRole("list", { name: "Issues found" });
+      expect(issues).toHaveTextContent("Split word");
+      expect(issues).toHaveTextContent("Needs review");
+      expect(issues).toHaveTextContent("Suggested fix: I NTRODUC T I ON → replaced by INTRODUCTION");
+    });
+
+    it("marks the pages the run left for review or out of the text, filters to review, and jumps to the next one", async () => {
+      serveAgenticBook();
+      renderStage(BOOK_ID);
+
+      await openMaterials();
+      const list = await screen.findByRole("list", { name: "Extracted pages" });
+      expect(within(list).getByRole("button", { name: /^p\. 2\b/ })).toHaveTextContent("Needs review");
+      expect(within(list).getByRole("button", { name: /^p\. 3\b/ })).toHaveTextContent(
+        "Blank · not delivered",
+      );
+      await userEvent.click(screen.getByRole("checkbox", { name: /Only pages that need review · 1/ }));
+      expect(within(list).getAllByRole("button")).toHaveLength(1);
+      await userEvent.click(screen.getByRole("button", { name: /^Next to review/ }));
+      expect(await screen.findByRole("article", { name: "Page 2" })).toBeInTheDocument();
+    });
+
+    it("remembers which side columns are folded and the page the book was left on", async () => {
+      serveAgenticBook();
+      const first = renderStage(BOOK_ID);
+
+      await openMaterials();
+      await userEvent.click(await screen.findByRole("button", { name: /^p\. 3\b/ }));
+      await userEvent.click(screen.getByRole("button", { name: "Hide contents" }));
+      expect(screen.queryByRole("list", { name: "Extracted pages" })).not.toBeInTheDocument();
+      expect(JSON.parse(window.localStorage.getItem(READER_LAYOUT_STORAGE_KEY) ?? "{}")).toMatchObject({
+        contents: false,
+      });
+      first.unmount();
+
+      renderStage(BOOK_ID);
+      await openMaterials();
+      expect(await screen.findByRole("article", { name: "Page 3" })).toBeInTheDocument();
+      expect(screen.queryByRole("list", { name: "Extracted pages" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Show contents" })).toBeInTheDocument();
+    });
+
+    it("keeps the reading window's text width across openings", async () => {
+      serveAgenticBook();
+      renderStage(BOOK_ID);
+
+      await openMaterials();
+      await userEvent.click(await screen.findByRole("button", { name: "Reading mode" }));
+      const dialog = await screen.findByRole("dialog", { name: BOOK_TITLE });
+      await userEvent.click(within(dialog).getByRole("button", { name: /Wide/ }));
+      expect(JSON.parse(window.localStorage.getItem(READER_LAYOUT_STORAGE_KEY) ?? "{}")).toMatchObject({
+        width: "wide",
+      });
+      expect(within(dialog).getByRole("button", { name: /Wide/ })).toHaveAttribute("aria-pressed", "true");
+    });
   });
 
   it("shows a queued book as waiting, with Stop, and a book with no outline plainly", async () => {

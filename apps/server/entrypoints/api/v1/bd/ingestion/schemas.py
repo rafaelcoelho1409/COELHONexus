@@ -92,6 +92,11 @@ class AgenticRunStatus(BaseModel):
     delivered_page_count: int = 0
     discarded_blank_page_count: int = 0
     review_page_count: int = 0
+    review_pages: list[int] = []
+    unverified_page_count: int = 0
+    unverified_pages: list[int] = []
+    discarded_pages: list[int] = []
+    image_only_pages: list[int] = []
     progress: AgenticProgress
     created_at: float
     updated_at: float
@@ -129,6 +134,39 @@ class PageBody(BaseModel):
     page: int
     markdown: str
     content_source: Literal["docling", "agentic"] = "docling"
+
+
+class PatchSuggestion(BaseModel):
+    target_text: str
+    replacement: str
+    rationale: str
+    confidence: float
+    risk: str
+
+
+class PageIssueView(BaseModel):
+    issue_id: str
+    code: str
+    severity: str
+    description: str
+    evidence: list[str]
+    resolution: Literal["auto_applied", "review", "none"]
+    proposal: PatchSuggestion | None = None
+
+
+class PageQuality(BaseModel):
+    """What the current Agentic AI run found on one page and what it did about it."""
+
+    book_id: str
+    agentic_run_id: str
+    page: int
+    page_kind: str
+    status: Literal["done", "review_required"]
+    delivery_disposition: Literal["include", "discarded_blank", "image_only"]
+    issues: list[PageIssueView]
+    mechanical_fixes: dict[str, int]
+    audit_warnings: list[str]
+    errors: list[str]
 
 
 class CancelResponse(BaseModel):

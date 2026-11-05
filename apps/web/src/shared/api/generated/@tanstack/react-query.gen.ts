@@ -3,8 +3,8 @@
 import { type DefaultError, type InfiniteData, infiniteQueryOptions, queryOptions, type UseMutationOptions } from '@tanstack/react-query';
 
 import { client } from '../client.gen';
-import { deleteBdIngestionBookId, deleteDdDebugSnapshotSlug, deleteDdIngestionSlug, deleteDdPlannerSlugWipe, deleteDdSynthSlugWipe, deleteYcsAdminVideosVideoId, deleteYcsAgentsThreadsThreadId, deleteYcsQueryHistoryEntryId, getBdIngestion, getBdIngestionActive, getBdIngestionBookId, getBdIngestionBookIdEvents, getBdIngestionBookIdFiguresName, getBdIngestionBookIdPagesPageNo, getDdDebugSnapshotsSlug, getDdIngestion, getDdIngestionSlugArtifactsName, getDdIngestionSlugManifest, getDdIngestionSlugPagesIdx, getDdPipelineActive, getDdPipelineSlugState, getDdPlannerDebugGraphThreadIdHistory, getDdPlannerDebugGraphThreadIdLlmCounters, getDdPlannerDebugGraphThreadIdState, getDdPlannerInfo, getDdPlannerRecent, getDdPlannerSlugActive, getDdPlannerSlugHealth, getDdPlannerSlugTiming, getDdPlannerThreadIdEvents, getDdResolver, getDdResolverSlug, getDdRunsActive, getDdRunsRunId, getDdRunsRunIdPagesIdx, getDdRunsRunIdUrlRecords, getDdSynthDebugGraphThreadIdHistory, getDdSynthDebugGraphThreadIdLlmCounters, getDdSynthDebugGraphThreadIdState, getDdSynthInfo, getDdSynthRecent, getDdSynthSlugActive, getDdSynthSlugStudyChapterIdArtifactArtifactName, getDdSynthSlugStudyChapters, getDdSynthThreadIdEvents, getHealth, getSettingsEmbedding, getSettingsEndpoint, getYcsAdminIngestedChannels, getYcsAdminIngestedPlaylists, getYcsAdminPipelineExtractIdLlmCounters, getYcsAdminPipelineExtractIdStreamPhase, getYcsAdminTaskTaskId, getYcsAdminVideos, getYcsAdminVideosFacets, getYcsAgentsGraphStats, getYcsAgentsHistoryThreadId, getYcsAgentsThreads, getYcsAgentsUsageThreadId, getYcsContentChannelVideos, getYcsContentEmbeddingMigrationStatus, getYcsContentPlaylistVideos, getYcsContentVideosPipelineExtractIdState, getYcsContentVideosPreview, getYcsQueryHistory, getYcsQueryNamespaces, getYcsQuerySchemaBackend, type Options, postBdIngestion, postBdIngestionBookIdCancel, postBdIngestionBookIdRun, postDdDebugFinalizeSlug, postDdDebugIngestSlug, postDdDebugPostSlug, postDdDebugResolveSlug, postDdDebugRestoreSlug, postDdDebugSnapshotSlug, postDdPlannerPrune, postDdPlannerSlug, postDdPlannerThreadIdCancel, postDdPlannerThreadIdResume, postDdRuns, postDdRunsRunIdCancel, postDdSynthSlug, postDdSynthThreadIdCancel, postDdSynthThreadIdResume, postSettingsEmbeddingTest, postSettingsEndpointTest, postYcsAdminVideosBulkDelete, postYcsAgentsEndpointPing, postYcsAgentsFeedback, postYcsAgentsIngestNeo4J, postYcsAgentsIngestQdrant, postYcsAgentsPipeline, postYcsAgentsSearch, postYcsAgentsSearchStream, postYcsAgentsThreadsThreadIdBranch, postYcsAgentsTurnsTurnIdCancel, postYcsContentChannel, postYcsContentChannelPipeline, postYcsContentEmbeddingMigrationStart, postYcsContentPlaylist, postYcsContentPlaylistPipeline, postYcsContentSearch, postYcsContentVideos, postYcsContentVideosPipeline, postYcsContentVideosPipelineExtractIdRerun, postYcsContentVideosPipelineExtractIdStop, postYcsContentVideosPipelineExtractIdWipe, postYcsQueryAiBackend, postYcsQueryElasticsearch, postYcsQueryHistory, postYcsQueryNeo4J, postYcsQueryQdrant, postYcsQueryRawElasticsearch, postYcsQueryRawNeo4J, postYcsQueryRawQdrant, putSettingsEmbedding, putSettingsEndpoint } from '../sdk.gen';
-import type { DeleteBdIngestionBookIdData, DeleteBdIngestionBookIdError, DeleteBdIngestionBookIdResponse, DeleteDdDebugSnapshotSlugData, DeleteDdDebugSnapshotSlugError, DeleteDdDebugSnapshotSlugResponse, DeleteDdIngestionSlugData, DeleteDdIngestionSlugError, DeleteDdIngestionSlugResponse, DeleteDdPlannerSlugWipeData, DeleteDdPlannerSlugWipeError, DeleteDdPlannerSlugWipeResponse, DeleteDdSynthSlugWipeData, DeleteDdSynthSlugWipeError, DeleteDdSynthSlugWipeResponse, DeleteYcsAdminVideosVideoIdData, DeleteYcsAdminVideosVideoIdError, DeleteYcsAdminVideosVideoIdResponse, DeleteYcsAgentsThreadsThreadIdData, DeleteYcsAgentsThreadsThreadIdError, DeleteYcsAgentsThreadsThreadIdResponse, DeleteYcsQueryHistoryEntryIdData, DeleteYcsQueryHistoryEntryIdError, DeleteYcsQueryHistoryEntryIdResponse, GetBdIngestionActiveData, GetBdIngestionActiveResponse, GetBdIngestionBookIdData, GetBdIngestionBookIdError, GetBdIngestionBookIdEventsData, GetBdIngestionBookIdEventsError, GetBdIngestionBookIdFiguresNameData, GetBdIngestionBookIdFiguresNameError, GetBdIngestionBookIdPagesPageNoData, GetBdIngestionBookIdPagesPageNoError, GetBdIngestionBookIdPagesPageNoResponse, GetBdIngestionBookIdResponse, GetBdIngestionData, GetBdIngestionResponse, GetDdDebugSnapshotsSlugData, GetDdDebugSnapshotsSlugError, GetDdDebugSnapshotsSlugResponse, GetDdIngestionData, GetDdIngestionResponse, GetDdIngestionSlugArtifactsNameData, GetDdIngestionSlugArtifactsNameError, GetDdIngestionSlugManifestData, GetDdIngestionSlugManifestError, GetDdIngestionSlugManifestResponse, GetDdIngestionSlugPagesIdxData, GetDdIngestionSlugPagesIdxError, GetDdIngestionSlugPagesIdxResponse, GetDdPipelineActiveData, GetDdPipelineActiveResponse, GetDdPipelineSlugStateData, GetDdPipelineSlugStateError, GetDdPipelineSlugStateResponse, GetDdPlannerDebugGraphThreadIdHistoryData, GetDdPlannerDebugGraphThreadIdHistoryError, GetDdPlannerDebugGraphThreadIdHistoryResponse, GetDdPlannerDebugGraphThreadIdLlmCountersData, GetDdPlannerDebugGraphThreadIdLlmCountersError, GetDdPlannerDebugGraphThreadIdLlmCountersResponse, GetDdPlannerDebugGraphThreadIdStateData, GetDdPlannerDebugGraphThreadIdStateError, GetDdPlannerDebugGraphThreadIdStateResponse, GetDdPlannerInfoData, GetDdPlannerInfoResponse, GetDdPlannerRecentData, GetDdPlannerRecentResponse, GetDdPlannerSlugActiveData, GetDdPlannerSlugActiveError, GetDdPlannerSlugActiveResponse, GetDdPlannerSlugHealthData, GetDdPlannerSlugHealthError, GetDdPlannerSlugHealthResponse, GetDdPlannerSlugTimingData, GetDdPlannerSlugTimingError, GetDdPlannerSlugTimingResponse, GetDdPlannerThreadIdEventsData, GetDdPlannerThreadIdEventsError, GetDdResolverData, GetDdResolverResponse, GetDdResolverSlugData, GetDdResolverSlugError, GetDdResolverSlugResponse, GetDdRunsActiveData, GetDdRunsActiveResponse, GetDdRunsRunIdData, GetDdRunsRunIdError, GetDdRunsRunIdPagesIdxData, GetDdRunsRunIdPagesIdxError, GetDdRunsRunIdPagesIdxResponse, GetDdRunsRunIdResponse, GetDdRunsRunIdUrlRecordsData, GetDdRunsRunIdUrlRecordsError, GetDdRunsRunIdUrlRecordsResponse, GetDdSynthDebugGraphThreadIdHistoryData, GetDdSynthDebugGraphThreadIdHistoryError, GetDdSynthDebugGraphThreadIdHistoryResponse, GetDdSynthDebugGraphThreadIdLlmCountersData, GetDdSynthDebugGraphThreadIdLlmCountersError, GetDdSynthDebugGraphThreadIdLlmCountersResponse, GetDdSynthDebugGraphThreadIdStateData, GetDdSynthDebugGraphThreadIdStateError, GetDdSynthDebugGraphThreadIdStateResponse, GetDdSynthInfoData, GetDdSynthInfoResponse, GetDdSynthRecentData, GetDdSynthRecentResponse, GetDdSynthSlugActiveData, GetDdSynthSlugActiveError, GetDdSynthSlugActiveResponse, GetDdSynthSlugStudyChapterIdArtifactArtifactNameData, GetDdSynthSlugStudyChapterIdArtifactArtifactNameError, GetDdSynthSlugStudyChaptersData, GetDdSynthSlugStudyChaptersError, GetDdSynthSlugStudyChaptersResponse, GetDdSynthThreadIdEventsData, GetDdSynthThreadIdEventsError, GetHealthData, GetSettingsEmbeddingData, GetSettingsEndpointData, GetYcsAdminIngestedChannelsData, GetYcsAdminIngestedChannelsResponse, GetYcsAdminIngestedPlaylistsData, GetYcsAdminIngestedPlaylistsResponse, GetYcsAdminPipelineExtractIdLlmCountersData, GetYcsAdminPipelineExtractIdLlmCountersError, GetYcsAdminPipelineExtractIdLlmCountersResponse, GetYcsAdminPipelineExtractIdStreamPhaseData, GetYcsAdminPipelineExtractIdStreamPhaseError, GetYcsAdminPipelineExtractIdStreamPhaseResponse, GetYcsAdminTaskTaskIdData, GetYcsAdminTaskTaskIdError, GetYcsAdminTaskTaskIdResponse, GetYcsAdminVideosData, GetYcsAdminVideosError, GetYcsAdminVideosFacetsData, GetYcsAdminVideosFacetsResponse, GetYcsAdminVideosResponse, GetYcsAgentsGraphStatsData, GetYcsAgentsGraphStatsResponse, GetYcsAgentsHistoryThreadIdData, GetYcsAgentsHistoryThreadIdError, GetYcsAgentsHistoryThreadIdResponse, GetYcsAgentsThreadsData, GetYcsAgentsThreadsResponse, GetYcsAgentsUsageThreadIdData, GetYcsAgentsUsageThreadIdError, GetYcsAgentsUsageThreadIdResponse, GetYcsContentChannelVideosData, GetYcsContentChannelVideosError, GetYcsContentChannelVideosResponse, GetYcsContentEmbeddingMigrationStatusData, GetYcsContentEmbeddingMigrationStatusResponse, GetYcsContentPlaylistVideosData, GetYcsContentPlaylistVideosError, GetYcsContentPlaylistVideosResponse, GetYcsContentVideosPipelineExtractIdStateData, GetYcsContentVideosPipelineExtractIdStateError, GetYcsContentVideosPipelineExtractIdStateResponse, GetYcsContentVideosPreviewData, GetYcsContentVideosPreviewError, GetYcsContentVideosPreviewResponse, GetYcsQueryHistoryData, GetYcsQueryHistoryError, GetYcsQueryHistoryResponse, GetYcsQueryNamespacesData, GetYcsQueryNamespacesResponse, GetYcsQuerySchemaBackendData, GetYcsQuerySchemaBackendError, GetYcsQuerySchemaBackendResponse, PostBdIngestionBookIdCancelData, PostBdIngestionBookIdCancelError, PostBdIngestionBookIdCancelResponse, PostBdIngestionBookIdRunData, PostBdIngestionBookIdRunError, PostBdIngestionBookIdRunResponse, PostBdIngestionData, PostBdIngestionError, PostBdIngestionResponse, PostDdDebugFinalizeSlugData, PostDdDebugFinalizeSlugError, PostDdDebugFinalizeSlugResponse, PostDdDebugIngestSlugData, PostDdDebugIngestSlugError, PostDdDebugIngestSlugResponse, PostDdDebugPostSlugData, PostDdDebugPostSlugError, PostDdDebugPostSlugResponse, PostDdDebugResolveSlugData, PostDdDebugResolveSlugError, PostDdDebugResolveSlugResponse, PostDdDebugRestoreSlugData, PostDdDebugRestoreSlugError, PostDdDebugRestoreSlugResponse, PostDdDebugSnapshotSlugData, PostDdDebugSnapshotSlugError, PostDdDebugSnapshotSlugResponse, PostDdPlannerPruneData, PostDdPlannerPruneError, PostDdPlannerPruneResponse, PostDdPlannerSlugData, PostDdPlannerSlugError, PostDdPlannerSlugResponse, PostDdPlannerThreadIdCancelData, PostDdPlannerThreadIdCancelError, PostDdPlannerThreadIdCancelResponse, PostDdPlannerThreadIdResumeData, PostDdPlannerThreadIdResumeError, PostDdPlannerThreadIdResumeResponse, PostDdRunsData, PostDdRunsError, PostDdRunsResponse, PostDdRunsRunIdCancelData, PostDdRunsRunIdCancelError, PostDdRunsRunIdCancelResponse, PostDdSynthSlugData, PostDdSynthSlugError, PostDdSynthSlugResponse, PostDdSynthThreadIdCancelData, PostDdSynthThreadIdCancelError, PostDdSynthThreadIdCancelResponse, PostDdSynthThreadIdResumeData, PostDdSynthThreadIdResumeError, PostDdSynthThreadIdResumeResponse, PostSettingsEmbeddingTestData, PostSettingsEndpointTestData, PostYcsAdminVideosBulkDeleteData, PostYcsAdminVideosBulkDeleteError, PostYcsAdminVideosBulkDeleteResponse, PostYcsAgentsEndpointPingData, PostYcsAgentsEndpointPingResponse, PostYcsAgentsFeedbackData, PostYcsAgentsFeedbackError, PostYcsAgentsFeedbackResponse, PostYcsAgentsIngestNeo4jData, PostYcsAgentsIngestNeo4jError, PostYcsAgentsIngestNeo4jResponse, PostYcsAgentsIngestQdrantData, PostYcsAgentsIngestQdrantError, PostYcsAgentsIngestQdrantResponse, PostYcsAgentsPipelineData, PostYcsAgentsPipelineError, PostYcsAgentsPipelineResponse, PostYcsAgentsSearchData, PostYcsAgentsSearchError, PostYcsAgentsSearchResponse, PostYcsAgentsSearchStreamData, PostYcsAgentsSearchStreamError, PostYcsAgentsThreadsThreadIdBranchData, PostYcsAgentsThreadsThreadIdBranchError, PostYcsAgentsThreadsThreadIdBranchResponse, PostYcsAgentsTurnsTurnIdCancelData, PostYcsAgentsTurnsTurnIdCancelError, PostYcsAgentsTurnsTurnIdCancelResponse, PostYcsContentChannelData, PostYcsContentChannelError, PostYcsContentChannelPipelineData, PostYcsContentChannelPipelineError, PostYcsContentChannelPipelineResponse, PostYcsContentChannelResponse, PostYcsContentEmbeddingMigrationStartData, PostYcsContentEmbeddingMigrationStartResponse, PostYcsContentPlaylistData, PostYcsContentPlaylistError, PostYcsContentPlaylistPipelineData, PostYcsContentPlaylistPipelineError, PostYcsContentPlaylistPipelineResponse, PostYcsContentPlaylistResponse, PostYcsContentSearchData, PostYcsContentSearchError, PostYcsContentSearchResponse, PostYcsContentVideosData, PostYcsContentVideosError, PostYcsContentVideosPipelineData, PostYcsContentVideosPipelineError, PostYcsContentVideosPipelineExtractIdRerunData, PostYcsContentVideosPipelineExtractIdRerunError, PostYcsContentVideosPipelineExtractIdRerunResponse, PostYcsContentVideosPipelineExtractIdStopData, PostYcsContentVideosPipelineExtractIdStopError, PostYcsContentVideosPipelineExtractIdStopResponse, PostYcsContentVideosPipelineExtractIdWipeData, PostYcsContentVideosPipelineExtractIdWipeError, PostYcsContentVideosPipelineExtractIdWipeResponse, PostYcsContentVideosPipelineResponse, PostYcsContentVideosResponse, PostYcsQueryAiBackendData, PostYcsQueryAiBackendError, PostYcsQueryElasticsearchData, PostYcsQueryElasticsearchError, PostYcsQueryElasticsearchResponse, PostYcsQueryHistoryData, PostYcsQueryHistoryResponse, PostYcsQueryNeo4jData, PostYcsQueryNeo4jError, PostYcsQueryNeo4jResponse, PostYcsQueryQdrantData, PostYcsQueryQdrantError, PostYcsQueryQdrantResponse, PostYcsQueryRawElasticsearchData, PostYcsQueryRawElasticsearchError, PostYcsQueryRawElasticsearchResponse, PostYcsQueryRawNeo4jData, PostYcsQueryRawNeo4jError, PostYcsQueryRawNeo4jResponse, PostYcsQueryRawQdrantData, PostYcsQueryRawQdrantError, PostYcsQueryRawQdrantResponse, PutSettingsEmbeddingData, PutSettingsEmbeddingError, PutSettingsEndpointData, PutSettingsEndpointError } from '../types.gen';
+import { deleteBdIngestionBookId, deleteBdIngestionBookIdAgenticRunsAgenticRunId, deleteBdIngestionBookIdExtraction, deleteDdDebugSnapshotSlug, deleteDdIngestionSlug, deleteDdPlannerSlugWipe, deleteDdSynthSlugWipe, deleteYcsAdminVideosVideoId, deleteYcsAgentsThreadsThreadId, deleteYcsQueryHistoryEntryId, getBdIngestion, getBdIngestionActive, getBdIngestionBookId, getBdIngestionBookIdAgenticRunsAgenticRunId, getBdIngestionBookIdAgenticRunsAgenticRunIdEvents, getBdIngestionBookIdAgenticRunsAgenticRunIdLlmCounters, getBdIngestionBookIdEvents, getBdIngestionBookIdFiguresName, getBdIngestionBookIdPagesPageNo, getBdIngestionBookIdPagesPageNoQuality, getDdDebugSnapshotsSlug, getDdIngestion, getDdIngestionSlugArtifactsName, getDdIngestionSlugManifest, getDdIngestionSlugPagesIdx, getDdPipelineActive, getDdPipelineSlugState, getDdPlannerDebugGraphThreadIdHistory, getDdPlannerDebugGraphThreadIdLlmCounters, getDdPlannerDebugGraphThreadIdState, getDdPlannerInfo, getDdPlannerRecent, getDdPlannerSlugActive, getDdPlannerSlugHealth, getDdPlannerSlugTiming, getDdPlannerThreadIdEvents, getDdResolver, getDdResolverSlug, getDdRunsActive, getDdRunsRunId, getDdRunsRunIdLlmCounters, getDdRunsRunIdPagesIdx, getDdRunsRunIdUrlRecords, getDdSynthDebugGraphThreadIdHistory, getDdSynthDebugGraphThreadIdLlmCounters, getDdSynthDebugGraphThreadIdState, getDdSynthInfo, getDdSynthRecent, getDdSynthSlugActive, getDdSynthSlugStudyChapterIdArtifactArtifactName, getDdSynthSlugStudyChapters, getDdSynthThreadIdEvents, getHealth, getSettingsEmbedding, getSettingsEndpoint, getYcsAdminIngestedChannels, getYcsAdminIngestedPlaylists, getYcsAdminPipelineExtractIdLlmCounters, getYcsAdminPipelineExtractIdStreamPhase, getYcsAdminTaskTaskId, getYcsAdminVideos, getYcsAdminVideosFacets, getYcsAgentsGraphStats, getYcsAgentsHistoryThreadId, getYcsAgentsThreads, getYcsAgentsUsageThreadId, getYcsContentChannelVideos, getYcsContentEmbeddingMigrationStatus, getYcsContentPlaylistVideos, getYcsContentVideosPipelineExtractIdState, getYcsContentVideosPreview, getYcsQueryHistory, getYcsQueryNamespaces, getYcsQuerySchemaBackend, type Options, postBdIngestion, postBdIngestionBookIdAgenticRuns, postBdIngestionBookIdAgenticRunsAgenticRunIdCancel, postBdIngestionBookIdAgenticRunsAgenticRunIdResume, postBdIngestionBookIdCancel, postBdIngestionBookIdRun, postDdDebugFinalizeSlug, postDdDebugIngestSlug, postDdDebugPostSlug, postDdDebugResolveSlug, postDdDebugRestoreSlug, postDdDebugSnapshotSlug, postDdPlannerPrune, postDdPlannerSlug, postDdPlannerThreadIdCancel, postDdPlannerThreadIdResume, postDdRuns, postDdRunsRunIdCancel, postDdSynthSlug, postDdSynthThreadIdCancel, postDdSynthThreadIdResume, postSettingsEmbeddingTest, postSettingsEndpointTest, postYcsAdminVideosBulkDelete, postYcsAgentsEndpointPing, postYcsAgentsFeedback, postYcsAgentsIngestNeo4J, postYcsAgentsIngestQdrant, postYcsAgentsPipeline, postYcsAgentsSearch, postYcsAgentsSearchStream, postYcsAgentsThreadsThreadIdBranch, postYcsAgentsTurnsTurnIdCancel, postYcsContentChannel, postYcsContentChannelPipeline, postYcsContentEmbeddingMigrationStart, postYcsContentPlaylist, postYcsContentPlaylistPipeline, postYcsContentSearch, postYcsContentVideos, postYcsContentVideosPipeline, postYcsContentVideosPipelineExtractIdRerun, postYcsContentVideosPipelineExtractIdStop, postYcsContentVideosPipelineExtractIdWipe, postYcsQueryAiBackend, postYcsQueryElasticsearch, postYcsQueryHistory, postYcsQueryNeo4J, postYcsQueryQdrant, postYcsQueryRawElasticsearch, postYcsQueryRawNeo4J, postYcsQueryRawQdrant, putSettingsEmbedding, putSettingsEndpoint } from '../sdk.gen';
+import type { DeleteBdIngestionBookIdAgenticRunsAgenticRunIdData, DeleteBdIngestionBookIdAgenticRunsAgenticRunIdError, DeleteBdIngestionBookIdAgenticRunsAgenticRunIdResponse, DeleteBdIngestionBookIdData, DeleteBdIngestionBookIdError, DeleteBdIngestionBookIdExtractionData, DeleteBdIngestionBookIdExtractionError, DeleteBdIngestionBookIdExtractionResponse, DeleteBdIngestionBookIdResponse, DeleteDdDebugSnapshotSlugData, DeleteDdDebugSnapshotSlugError, DeleteDdDebugSnapshotSlugResponse, DeleteDdIngestionSlugData, DeleteDdIngestionSlugError, DeleteDdIngestionSlugResponse, DeleteDdPlannerSlugWipeData, DeleteDdPlannerSlugWipeError, DeleteDdPlannerSlugWipeResponse, DeleteDdSynthSlugWipeData, DeleteDdSynthSlugWipeError, DeleteDdSynthSlugWipeResponse, DeleteYcsAdminVideosVideoIdData, DeleteYcsAdminVideosVideoIdError, DeleteYcsAdminVideosVideoIdResponse, DeleteYcsAgentsThreadsThreadIdData, DeleteYcsAgentsThreadsThreadIdError, DeleteYcsAgentsThreadsThreadIdResponse, DeleteYcsQueryHistoryEntryIdData, DeleteYcsQueryHistoryEntryIdError, DeleteYcsQueryHistoryEntryIdResponse, GetBdIngestionActiveData, GetBdIngestionActiveResponse, GetBdIngestionBookIdAgenticRunsAgenticRunIdData, GetBdIngestionBookIdAgenticRunsAgenticRunIdError, GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsData, GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsError, GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersData, GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersError, GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersResponse, GetBdIngestionBookIdAgenticRunsAgenticRunIdResponse, GetBdIngestionBookIdData, GetBdIngestionBookIdError, GetBdIngestionBookIdEventsData, GetBdIngestionBookIdEventsError, GetBdIngestionBookIdFiguresNameData, GetBdIngestionBookIdFiguresNameError, GetBdIngestionBookIdPagesPageNoData, GetBdIngestionBookIdPagesPageNoError, GetBdIngestionBookIdPagesPageNoQualityData, GetBdIngestionBookIdPagesPageNoQualityError, GetBdIngestionBookIdPagesPageNoQualityResponse, GetBdIngestionBookIdPagesPageNoResponse, GetBdIngestionBookIdResponse, GetBdIngestionData, GetBdIngestionResponse, GetDdDebugSnapshotsSlugData, GetDdDebugSnapshotsSlugError, GetDdDebugSnapshotsSlugResponse, GetDdIngestionData, GetDdIngestionResponse, GetDdIngestionSlugArtifactsNameData, GetDdIngestionSlugArtifactsNameError, GetDdIngestionSlugManifestData, GetDdIngestionSlugManifestError, GetDdIngestionSlugManifestResponse, GetDdIngestionSlugPagesIdxData, GetDdIngestionSlugPagesIdxError, GetDdIngestionSlugPagesIdxResponse, GetDdPipelineActiveData, GetDdPipelineActiveResponse, GetDdPipelineSlugStateData, GetDdPipelineSlugStateError, GetDdPipelineSlugStateResponse, GetDdPlannerDebugGraphThreadIdHistoryData, GetDdPlannerDebugGraphThreadIdHistoryError, GetDdPlannerDebugGraphThreadIdHistoryResponse, GetDdPlannerDebugGraphThreadIdLlmCountersData, GetDdPlannerDebugGraphThreadIdLlmCountersError, GetDdPlannerDebugGraphThreadIdLlmCountersResponse, GetDdPlannerDebugGraphThreadIdStateData, GetDdPlannerDebugGraphThreadIdStateError, GetDdPlannerDebugGraphThreadIdStateResponse, GetDdPlannerInfoData, GetDdPlannerInfoResponse, GetDdPlannerRecentData, GetDdPlannerRecentResponse, GetDdPlannerSlugActiveData, GetDdPlannerSlugActiveError, GetDdPlannerSlugActiveResponse, GetDdPlannerSlugHealthData, GetDdPlannerSlugHealthError, GetDdPlannerSlugHealthResponse, GetDdPlannerSlugTimingData, GetDdPlannerSlugTimingError, GetDdPlannerSlugTimingResponse, GetDdPlannerThreadIdEventsData, GetDdPlannerThreadIdEventsError, GetDdResolverData, GetDdResolverResponse, GetDdResolverSlugData, GetDdResolverSlugError, GetDdResolverSlugResponse, GetDdRunsActiveData, GetDdRunsActiveResponse, GetDdRunsRunIdData, GetDdRunsRunIdError, GetDdRunsRunIdLlmCountersData, GetDdRunsRunIdLlmCountersError, GetDdRunsRunIdLlmCountersResponse, GetDdRunsRunIdPagesIdxData, GetDdRunsRunIdPagesIdxError, GetDdRunsRunIdPagesIdxResponse, GetDdRunsRunIdResponse, GetDdRunsRunIdUrlRecordsData, GetDdRunsRunIdUrlRecordsError, GetDdRunsRunIdUrlRecordsResponse, GetDdSynthDebugGraphThreadIdHistoryData, GetDdSynthDebugGraphThreadIdHistoryError, GetDdSynthDebugGraphThreadIdHistoryResponse, GetDdSynthDebugGraphThreadIdLlmCountersData, GetDdSynthDebugGraphThreadIdLlmCountersError, GetDdSynthDebugGraphThreadIdLlmCountersResponse, GetDdSynthDebugGraphThreadIdStateData, GetDdSynthDebugGraphThreadIdStateError, GetDdSynthDebugGraphThreadIdStateResponse, GetDdSynthInfoData, GetDdSynthInfoResponse, GetDdSynthRecentData, GetDdSynthRecentResponse, GetDdSynthSlugActiveData, GetDdSynthSlugActiveError, GetDdSynthSlugActiveResponse, GetDdSynthSlugStudyChapterIdArtifactArtifactNameData, GetDdSynthSlugStudyChapterIdArtifactArtifactNameError, GetDdSynthSlugStudyChaptersData, GetDdSynthSlugStudyChaptersError, GetDdSynthSlugStudyChaptersResponse, GetDdSynthThreadIdEventsData, GetDdSynthThreadIdEventsError, GetHealthData, GetSettingsEmbeddingData, GetSettingsEndpointData, GetYcsAdminIngestedChannelsData, GetYcsAdminIngestedChannelsResponse, GetYcsAdminIngestedPlaylistsData, GetYcsAdminIngestedPlaylistsResponse, GetYcsAdminPipelineExtractIdLlmCountersData, GetYcsAdminPipelineExtractIdLlmCountersError, GetYcsAdminPipelineExtractIdLlmCountersResponse, GetYcsAdminPipelineExtractIdStreamPhaseData, GetYcsAdminPipelineExtractIdStreamPhaseError, GetYcsAdminPipelineExtractIdStreamPhaseResponse, GetYcsAdminTaskTaskIdData, GetYcsAdminTaskTaskIdError, GetYcsAdminTaskTaskIdResponse, GetYcsAdminVideosData, GetYcsAdminVideosError, GetYcsAdminVideosFacetsData, GetYcsAdminVideosFacetsResponse, GetYcsAdminVideosResponse, GetYcsAgentsGraphStatsData, GetYcsAgentsGraphStatsResponse, GetYcsAgentsHistoryThreadIdData, GetYcsAgentsHistoryThreadIdError, GetYcsAgentsHistoryThreadIdResponse, GetYcsAgentsThreadsData, GetYcsAgentsThreadsResponse, GetYcsAgentsUsageThreadIdData, GetYcsAgentsUsageThreadIdError, GetYcsAgentsUsageThreadIdResponse, GetYcsContentChannelVideosData, GetYcsContentChannelVideosError, GetYcsContentChannelVideosResponse, GetYcsContentEmbeddingMigrationStatusData, GetYcsContentEmbeddingMigrationStatusResponse, GetYcsContentPlaylistVideosData, GetYcsContentPlaylistVideosError, GetYcsContentPlaylistVideosResponse, GetYcsContentVideosPipelineExtractIdStateData, GetYcsContentVideosPipelineExtractIdStateError, GetYcsContentVideosPipelineExtractIdStateResponse, GetYcsContentVideosPreviewData, GetYcsContentVideosPreviewError, GetYcsContentVideosPreviewResponse, GetYcsQueryHistoryData, GetYcsQueryHistoryError, GetYcsQueryHistoryResponse, GetYcsQueryNamespacesData, GetYcsQueryNamespacesResponse, GetYcsQuerySchemaBackendData, GetYcsQuerySchemaBackendError, GetYcsQuerySchemaBackendResponse, PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelData, PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelError, PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelResponse, PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeData, PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeError, PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeResponse, PostBdIngestionBookIdAgenticRunsData, PostBdIngestionBookIdAgenticRunsError, PostBdIngestionBookIdAgenticRunsResponse, PostBdIngestionBookIdCancelData, PostBdIngestionBookIdCancelError, PostBdIngestionBookIdCancelResponse, PostBdIngestionBookIdRunData, PostBdIngestionBookIdRunError, PostBdIngestionBookIdRunResponse, PostBdIngestionData, PostBdIngestionError, PostBdIngestionResponse, PostDdDebugFinalizeSlugData, PostDdDebugFinalizeSlugError, PostDdDebugFinalizeSlugResponse, PostDdDebugIngestSlugData, PostDdDebugIngestSlugError, PostDdDebugIngestSlugResponse, PostDdDebugPostSlugData, PostDdDebugPostSlugError, PostDdDebugPostSlugResponse, PostDdDebugResolveSlugData, PostDdDebugResolveSlugError, PostDdDebugResolveSlugResponse, PostDdDebugRestoreSlugData, PostDdDebugRestoreSlugError, PostDdDebugRestoreSlugResponse, PostDdDebugSnapshotSlugData, PostDdDebugSnapshotSlugError, PostDdDebugSnapshotSlugResponse, PostDdPlannerPruneData, PostDdPlannerPruneError, PostDdPlannerPruneResponse, PostDdPlannerSlugData, PostDdPlannerSlugError, PostDdPlannerSlugResponse, PostDdPlannerThreadIdCancelData, PostDdPlannerThreadIdCancelError, PostDdPlannerThreadIdCancelResponse, PostDdPlannerThreadIdResumeData, PostDdPlannerThreadIdResumeError, PostDdPlannerThreadIdResumeResponse, PostDdRunsData, PostDdRunsError, PostDdRunsResponse, PostDdRunsRunIdCancelData, PostDdRunsRunIdCancelError, PostDdRunsRunIdCancelResponse, PostDdSynthSlugData, PostDdSynthSlugError, PostDdSynthSlugResponse, PostDdSynthThreadIdCancelData, PostDdSynthThreadIdCancelError, PostDdSynthThreadIdCancelResponse, PostDdSynthThreadIdResumeData, PostDdSynthThreadIdResumeError, PostDdSynthThreadIdResumeResponse, PostSettingsEmbeddingTestData, PostSettingsEndpointTestData, PostYcsAdminVideosBulkDeleteData, PostYcsAdminVideosBulkDeleteError, PostYcsAdminVideosBulkDeleteResponse, PostYcsAgentsEndpointPingData, PostYcsAgentsEndpointPingResponse, PostYcsAgentsFeedbackData, PostYcsAgentsFeedbackError, PostYcsAgentsFeedbackResponse, PostYcsAgentsIngestNeo4jData, PostYcsAgentsIngestNeo4jError, PostYcsAgentsIngestNeo4jResponse, PostYcsAgentsIngestQdrantData, PostYcsAgentsIngestQdrantError, PostYcsAgentsIngestQdrantResponse, PostYcsAgentsPipelineData, PostYcsAgentsPipelineError, PostYcsAgentsPipelineResponse, PostYcsAgentsSearchData, PostYcsAgentsSearchError, PostYcsAgentsSearchResponse, PostYcsAgentsSearchStreamData, PostYcsAgentsSearchStreamError, PostYcsAgentsThreadsThreadIdBranchData, PostYcsAgentsThreadsThreadIdBranchError, PostYcsAgentsThreadsThreadIdBranchResponse, PostYcsAgentsTurnsTurnIdCancelData, PostYcsAgentsTurnsTurnIdCancelError, PostYcsAgentsTurnsTurnIdCancelResponse, PostYcsContentChannelData, PostYcsContentChannelError, PostYcsContentChannelPipelineData, PostYcsContentChannelPipelineError, PostYcsContentChannelPipelineResponse, PostYcsContentChannelResponse, PostYcsContentEmbeddingMigrationStartData, PostYcsContentEmbeddingMigrationStartResponse, PostYcsContentPlaylistData, PostYcsContentPlaylistError, PostYcsContentPlaylistPipelineData, PostYcsContentPlaylistPipelineError, PostYcsContentPlaylistPipelineResponse, PostYcsContentPlaylistResponse, PostYcsContentSearchData, PostYcsContentSearchError, PostYcsContentSearchResponse, PostYcsContentVideosData, PostYcsContentVideosError, PostYcsContentVideosPipelineData, PostYcsContentVideosPipelineError, PostYcsContentVideosPipelineExtractIdRerunData, PostYcsContentVideosPipelineExtractIdRerunError, PostYcsContentVideosPipelineExtractIdRerunResponse, PostYcsContentVideosPipelineExtractIdStopData, PostYcsContentVideosPipelineExtractIdStopError, PostYcsContentVideosPipelineExtractIdStopResponse, PostYcsContentVideosPipelineExtractIdWipeData, PostYcsContentVideosPipelineExtractIdWipeError, PostYcsContentVideosPipelineExtractIdWipeResponse, PostYcsContentVideosPipelineResponse, PostYcsContentVideosResponse, PostYcsQueryAiBackendData, PostYcsQueryAiBackendError, PostYcsQueryElasticsearchData, PostYcsQueryElasticsearchError, PostYcsQueryElasticsearchResponse, PostYcsQueryHistoryData, PostYcsQueryHistoryResponse, PostYcsQueryNeo4jData, PostYcsQueryNeo4jError, PostYcsQueryNeo4jResponse, PostYcsQueryQdrantData, PostYcsQueryQdrantError, PostYcsQueryQdrantResponse, PostYcsQueryRawElasticsearchData, PostYcsQueryRawElasticsearchError, PostYcsQueryRawElasticsearchResponse, PostYcsQueryRawNeo4jData, PostYcsQueryRawNeo4jError, PostYcsQueryRawNeo4jResponse, PostYcsQueryRawQdrantData, PostYcsQueryRawQdrantError, PostYcsQueryRawQdrantResponse, PutSettingsEmbeddingData, PutSettingsEmbeddingError, PutSettingsEndpointData, PutSettingsEndpointError } from '../types.gen';
 
 export type QueryKey<TOptions extends Options> = [
     Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {
@@ -151,6 +151,140 @@ export const getBdIngestionBookIdOptions = (options: Options<GetBdIngestionBookI
 });
 
 /**
+ * Start Agentic Run
+ *
+ * Queue one manual candidate run against the book's current completed extraction.
+ */
+export const postBdIngestionBookIdAgenticRunsMutation = (options?: Partial<Options<PostBdIngestionBookIdAgenticRunsData>>): UseMutationOptions<PostBdIngestionBookIdAgenticRunsResponse, PostBdIngestionBookIdAgenticRunsError, Options<PostBdIngestionBookIdAgenticRunsData>> => {
+    const mutationOptions: UseMutationOptions<PostBdIngestionBookIdAgenticRunsResponse, PostBdIngestionBookIdAgenticRunsError, Options<PostBdIngestionBookIdAgenticRunsData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await postBdIngestionBookIdAgenticRuns({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+/**
+ * Wipe Agentic Run
+ *
+ * Delete one stopped/finished Agentic candidate without touching Docling extraction.
+ */
+export const deleteBdIngestionBookIdAgenticRunsAgenticRunIdMutation = (options?: Partial<Options<DeleteBdIngestionBookIdAgenticRunsAgenticRunIdData>>): UseMutationOptions<DeleteBdIngestionBookIdAgenticRunsAgenticRunIdResponse, DeleteBdIngestionBookIdAgenticRunsAgenticRunIdError, Options<DeleteBdIngestionBookIdAgenticRunsAgenticRunIdData>> => {
+    const mutationOptions: UseMutationOptions<DeleteBdIngestionBookIdAgenticRunsAgenticRunIdResponse, DeleteBdIngestionBookIdAgenticRunsAgenticRunIdError, Options<DeleteBdIngestionBookIdAgenticRunsAgenticRunIdData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await deleteBdIngestionBookIdAgenticRunsAgenticRunId({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+export const getBdIngestionBookIdAgenticRunsAgenticRunIdQueryKey = (options: Options<GetBdIngestionBookIdAgenticRunsAgenticRunIdData>) => createQueryKey('getBdIngestionBookIdAgenticRunsAgenticRunId', options);
+
+/**
+ * Get Agentic Run
+ *
+ * Read queued/running/completed candidate status from its durable MinIO manifest.
+ */
+export const getBdIngestionBookIdAgenticRunsAgenticRunIdOptions = (options: Options<GetBdIngestionBookIdAgenticRunsAgenticRunIdData>) => queryOptions<GetBdIngestionBookIdAgenticRunsAgenticRunIdResponse, GetBdIngestionBookIdAgenticRunsAgenticRunIdError, GetBdIngestionBookIdAgenticRunsAgenticRunIdResponse, ReturnType<typeof getBdIngestionBookIdAgenticRunsAgenticRunIdQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getBdIngestionBookIdAgenticRunsAgenticRunId({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getBdIngestionBookIdAgenticRunsAgenticRunIdQueryKey(options)
+});
+
+/**
+ * Cancel Agentic Run
+ *
+ * Request a cooperative Agentic AI stop at the next safe page or graph-node boundary.
+ */
+export const postBdIngestionBookIdAgenticRunsAgenticRunIdCancelMutation = (options?: Partial<Options<PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelData>>): UseMutationOptions<PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelResponse, PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelError, Options<PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelData>> => {
+    const mutationOptions: UseMutationOptions<PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelResponse, PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelError, Options<PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await postBdIngestionBookIdAgenticRunsAgenticRunIdCancel({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+export const getBdIngestionBookIdAgenticRunsAgenticRunIdEventsQueryKey = (options: Options<GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsData>) => createQueryKey('getBdIngestionBookIdAgenticRunsAgenticRunIdEvents', options);
+
+/**
+ * Agentic Run Events
+ *
+ * Replay and stream graph-node and per-page progress for one candidate run.
+ */
+export const getBdIngestionBookIdAgenticRunsAgenticRunIdEventsOptions = (options: Options<GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsData>) => queryOptions<unknown, GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsError, unknown, ReturnType<typeof getBdIngestionBookIdAgenticRunsAgenticRunIdEventsQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getBdIngestionBookIdAgenticRunsAgenticRunIdEvents({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getBdIngestionBookIdAgenticRunsAgenticRunIdEventsQueryKey(options)
+});
+
+export const getBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersQueryKey = (options: Options<GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersData>) => createQueryKey('getBdIngestionBookIdAgenticRunsAgenticRunIdLlmCounters', options);
+
+/**
+ * Get Agentic Llm Counters
+ */
+export const getBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersOptions = (options: Options<GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersData>) => queryOptions<GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersResponse, GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersError, GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersResponse, ReturnType<typeof getBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getBdIngestionBookIdAgenticRunsAgenticRunIdLlmCounters({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersQueryKey(options)
+});
+
+/**
+ * Resume Agentic Run
+ *
+ * Requeue a failed or cancelled candidate, preserving its source and LangGraph thread identity.
+ */
+export const postBdIngestionBookIdAgenticRunsAgenticRunIdResumeMutation = (options?: Partial<Options<PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeData>>): UseMutationOptions<PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeResponse, PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeError, Options<PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeData>> => {
+    const mutationOptions: UseMutationOptions<PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeResponse, PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeError, Options<PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await postBdIngestionBookIdAgenticRunsAgenticRunIdResume({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+/**
  * Cancel Book
  */
 export const postBdIngestionBookIdCancelMutation = (options?: Partial<Options<PostBdIngestionBookIdCancelData>>): UseMutationOptions<PostBdIngestionBookIdCancelResponse, PostBdIngestionBookIdCancelError, Options<PostBdIngestionBookIdCancelData>> => {
@@ -188,6 +322,25 @@ export const getBdIngestionBookIdEventsOptions = (options: Options<GetBdIngestio
     queryKey: getBdIngestionBookIdEventsQueryKey(options)
 });
 
+/**
+ * Wipe Extraction
+ *
+ * Delete extracted and derived artifacts while preserving the uploaded source book.
+ */
+export const deleteBdIngestionBookIdExtractionMutation = (options?: Partial<Options<DeleteBdIngestionBookIdExtractionData>>): UseMutationOptions<DeleteBdIngestionBookIdExtractionResponse, DeleteBdIngestionBookIdExtractionError, Options<DeleteBdIngestionBookIdExtractionData>> => {
+    const mutationOptions: UseMutationOptions<DeleteBdIngestionBookIdExtractionResponse, DeleteBdIngestionBookIdExtractionError, Options<DeleteBdIngestionBookIdExtractionData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await deleteBdIngestionBookIdExtraction({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
 export const getBdIngestionBookIdFiguresNameQueryKey = (options: Options<GetBdIngestionBookIdFiguresNameData>) => createQueryKey('getBdIngestionBookIdFiguresName', options);
 
 /**
@@ -210,6 +363,9 @@ export const getBdIngestionBookIdPagesPageNoQueryKey = (options: Options<GetBdIn
 
 /**
  * Get Page
+ *
+ * The page as the reader shows it: the AI page when the current run has one, else the raw Docling page.
+ * `source` pins one side, so the reader can compare the raw page with the AI-processed one.
  */
 export const getBdIngestionBookIdPagesPageNoOptions = (options: Options<GetBdIngestionBookIdPagesPageNoData>) => queryOptions<GetBdIngestionBookIdPagesPageNoResponse, GetBdIngestionBookIdPagesPageNoError, GetBdIngestionBookIdPagesPageNoResponse, ReturnType<typeof getBdIngestionBookIdPagesPageNoQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {
@@ -224,10 +380,30 @@ export const getBdIngestionBookIdPagesPageNoOptions = (options: Options<GetBdIng
     queryKey: getBdIngestionBookIdPagesPageNoQueryKey(options)
 });
 
+export const getBdIngestionBookIdPagesPageNoQualityQueryKey = (options: Options<GetBdIngestionBookIdPagesPageNoQualityData>) => createQueryKey('getBdIngestionBookIdPagesPageNoQuality', options);
+
+/**
+ * Get Page Quality
+ *
+ * What the current Agentic AI run found on this page (issues, fixes applied, what still needs a reviewer).
+ */
+export const getBdIngestionBookIdPagesPageNoQualityOptions = (options: Options<GetBdIngestionBookIdPagesPageNoQualityData>) => queryOptions<GetBdIngestionBookIdPagesPageNoQualityResponse, GetBdIngestionBookIdPagesPageNoQualityError, GetBdIngestionBookIdPagesPageNoQualityResponse, ReturnType<typeof getBdIngestionBookIdPagesPageNoQualityQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getBdIngestionBookIdPagesPageNoQuality({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getBdIngestionBookIdPagesPageNoQualityQueryKey(options)
+});
+
 /**
  * Run Book
  *
- * Start (or continue) the extraction of a book already stored, from its stored PDF: the way to resume a cancelled or failed
+ * Start (or continue) the extraction of a stored book: the way to resume a cancelled or failed
  * book, or with `refresh` to extract it again, without uploading it again. Same answers as the upload.
  */
 export const postBdIngestionBookIdRunMutation = (options?: Partial<Options<PostBdIngestionBookIdRunData>>): UseMutationOptions<PostBdIngestionBookIdRunResponse, PostBdIngestionBookIdRunError, Options<PostBdIngestionBookIdRunData>> => {
@@ -729,7 +905,7 @@ export const getDdPlannerSlugTimingOptions = (options: Options<GetDdPlannerSlugT
 /**
  * Wipe Planner
  *
- * Wipes MinIO planner/{slug}/, Postgres checkpoints, Redis lock +
+ * Wipes MinIO dd/{slug}/planner/, Postgres checkpoints, Redis lock +
  * active-run registry. Drops the lock so the next Start Planner click
  * isn't rejected by a stale lock that survived the wipe.
  */
@@ -921,6 +1097,26 @@ export const postDdRunsRunIdCancelMutation = (options?: Partial<Options<PostDdRu
     };
     return mutationOptions;
 };
+
+export const getDdRunsRunIdLlmCountersQueryKey = (options: Options<GetDdRunsRunIdLlmCountersData>) => createQueryKey('getDdRunsRunIdLlmCounters', options);
+
+/**
+ * Get Llm Counters
+ *
+ * Live ingestion usage, with the persisted snapshot as a fallback after Redis expires.
+ */
+export const getDdRunsRunIdLlmCountersOptions = (options: Options<GetDdRunsRunIdLlmCountersData>) => queryOptions<GetDdRunsRunIdLlmCountersResponse, GetDdRunsRunIdLlmCountersError, GetDdRunsRunIdLlmCountersResponse, ReturnType<typeof getDdRunsRunIdLlmCountersQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getDdRunsRunIdLlmCounters({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getDdRunsRunIdLlmCountersQueryKey(options)
+});
 
 export const getDdRunsRunIdPagesIdxQueryKey = (options: Options<GetDdRunsRunIdPagesIdxData>) => createQueryKey('getDdRunsRunIdPagesIdx', options);
 
@@ -1136,7 +1332,7 @@ export const getDdSynthSlugStudyChapterIdArtifactArtifactNameOptions = (options:
 /**
  * Wipe Synth
  *
- * Wipes MinIO synth/{slug}/, Postgres checkpoints for synth+study
+ * Wipes MinIO dd/{slug}/synth/, Postgres checkpoints for synth+study
  * threads, Redis SSE snapshots + lock. Without the Redis sweep a wiped
  * slug "comes back from the dead" via the cached study SSE snapshot.
  * With `chapter_id`, wipes only that chapter's MinIO outputs (see

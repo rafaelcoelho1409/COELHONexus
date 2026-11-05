@@ -39,11 +39,10 @@ async def audit_page(
         }],
         "files": skills.service.files_for("page_auditor"),
     })
-    if not isinstance(result, dict) or "structured_response" not in result:
-        raise ValueError("page auditor returned no structured PageAssessment")
+    response = domain.extract_assessment_response(result)
 
     assessment, warnings = domain.sanitize_assessment(
-        result["structured_response"],
+        response,
         page_number = page_number,
         pictures = pictures,
         markdown = markdown,

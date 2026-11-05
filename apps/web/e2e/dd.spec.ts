@@ -487,6 +487,136 @@ test.describe("Docs Distiller", () => {
     await expect(preview.getByText(/\*\*alpha\*\* quickstart body/)).toBeVisible();
   });
 
+  /** A page as crawled: headings, a code line and a table far wider than any column, so the reader's layout is tested with real widths. */
+  const MATERIALS_BODY = [
+    "# Quickstart",
+    "",
+    "Intro text for the quickstart.",
+    "",
+    "## Install",
+    "",
+    "Run the installer.",
+    "",
+    "```bash",
+    `pip install ${"very-long-package-name-".repeat(12)}`,
+    "```",
+    "",
+    "## Usage",
+    "",
+    "Use it. A unique-needle lives here.",
+    "",
+    "| a | b |",
+    "| - | - |",
+    `| ${"wide-cell-".repeat(30)} | 2 |`,
+    "",
+  ].join("\n");
+
+  async function openMaterials(page: Page) {
+    await mockRoutes(page);
+    await page.route("**/api/v1/dd/ingestion/alpha/pages/*", (route) =>
+      json(route, { body: MATERIALS_BODY }),
+    );
+    await page.goto("/dd/ingestion?slug=alpha");
+    await page.getByRole("tab", { name: "Materials" }).click();
+    const library = page.getByRole("region", { name: "Ingested library" });
+    await expect(library.getByText("Intro text for the quickstart.")).toBeVisible();
+    return library;
+  }
+
+  test("materials read an ingested page like a chapter: outline, search and reading mode", async ({
+    page,
+  }, testInfo) => {
+    const library = await openMaterials(page);
+    await expect(library.getByRole("heading", { name: "Quickstart" })).toHaveCount(1); // the title, once
+    if (testInfo.project.name === "desktop") {
+      const outline = library.getByRole("navigation", { name: "On this page" });
+      await expect(outline.getByRole("link", { name: "Install" })).toHaveAttribute("href", "#install");
+      await expect(outline.getByRole("link", { name: "Usage" })).toHaveAttribute("href", "#usage");
+    }
+
+    // Ctrl+K searches every page: the hit shows the words around the match and opens that page.
+    await page.keyboard.press("Control+k");
+    const search = page.getByRole("dialog", { name: "Search all pages" });
+    await search.getByRole("combobox").fill("needle");
+    const hit = search.getByRole("option").first();
+    await expect(hit).toContainText("unique-needle");
+    await hit.click();
+    await expect(search).toHaveCount(0);
+
+    // The reading window turns pages and Escape leaves it.
+    await library.getByRole("button", { name: "Reading mode" }).click();
+    const reading = page.getByRole("dialog", { name: "Quickstart" });
+    await expect(reading.getByText("Page 1 / 2")).toBeVisible();
+    await reading.getByRole("button", { name: "Next page" }).click();
+    await expect(page.getByRole("dialog", { name: "CLI" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(library.getByTestId("materials-title")).toHaveText("CLI");
+  });
+
+  test("materials do not scroll sideways or ship text under 12px, on the page and in the reading window", async ({
+    page,
+  }) => {
+    const library = await openMaterials(page);
+    const measure = () =>
+      page.evaluate(() => {
+        const small = Array.from(
+          document.querySelectorAll<HTMLElement>("dialog[open] *, [aria-label='Ingested library'] *"),
+        )
+          .filter(
+            (element) =>
+              Array.from(element.childNodes).some(
+                (node) => node.nodeType === Node.TEXT_NODE && (node.textContent ?? "").trim() !== "",
+              ) &&
+              !element.closest(".katex") &&
+              element.getClientRects().length > 0 &&
+              Number.parseFloat(getComputedStyle(element).fontSize) < 12,
+          )
+          .map((element) => `${element.tagName}.${element.className}`);
+        return {
+          overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          small,
+        };
+      });
+
+    expect(await measure()).toEqual({ overflow: expect.any(Number), small: [] });
+    expect((await measure()).overflow).toBeLessThanOrEqual(0);
+    await library.getByRole("button", { name: "Reading mode" }).click();
+    await expect(page.getByRole("dialog", { name: "Quickstart" })).toBeVisible();
+    const reading = await measure();
+    expect(reading.small).toEqual([]);
+    expect(reading.overflow).toBeLessThanOrEqual(0);
+  });
+
+  for (const scheme of ["dark", "light"] as const) {
+    test(`the materials page, search and reading window have no WCAG 2.2 AA violations (${scheme})`, async ({
+      page,
+    }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      const library = await openMaterials(page);
+      const check = async (label: string) => {
+        const results = await new AxeBuilder({ page }).withTags(WCAG).analyze();
+        expect(
+          results.violations,
+          `${label}: ${JSON.stringify(results.violations.map((v) => [v.id, v.nodes.map((n) => n.target)]))}`,
+        ).toEqual([]);
+      };
+
+      await check("page");
+      await page.keyboard.press("Control+k");
+      const search = page.getByRole("dialog", { name: "Search all pages" });
+      await search.getByRole("combobox").fill("needle");
+      await expect(search.getByRole("option").first()).toBeVisible();
+      await check("search");
+      await page.keyboard.press("Escape"); // a search field clears first,
+      await page.keyboard.press("Escape"); // then the dialog closes
+      await expect(search).toHaveCount(0);
+      await library.getByRole("button", { name: "Reading mode" }).click();
+      await expect(page.getByRole("dialog", { name: "Quickstart" })).toBeVisible();
+      await check("reading window");
+    });
+  }
+
   test("ingestion stage shows the Pipeline cards and graph, and stops the run", async ({ page }) => {
     await mockRoutes(page);
     await page.goto("/dd/ingestion?slug=alpha&run=run-1");

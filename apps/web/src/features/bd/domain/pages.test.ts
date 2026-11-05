@@ -6,12 +6,53 @@ import {
   breadcrumb,
   filterPageRows,
   mergePages,
+  neighbourReviewPage,
   type PageRow,
   pageChips,
+  pageFlags,
   readableMarkdown,
   shownPage,
 } from "./pages";
 import { EMPTY_RUN, runReducer } from "./run-state";
+
+describe("pageFlags", () => {
+  it("flags review, blank and image-only pages, and lets review win", () => {
+    const flags = pageFlags({
+      review_pages: [3, 9],
+      unverified_pages: [],
+      discarded_pages: [2, 9],
+      image_only_pages: [229],
+    });
+    expect(flags.get(3)).toBe("review");
+    expect(flags.get(9)).toBe("review");
+    expect(flags.get(2)).toBe("blank");
+    expect(flags.get(229)).toBe("image");
+    expect(flags.get(4)).toBeUndefined();
+    expect(pageFlags(null).size).toBe(0);
+  });
+});
+
+describe("neighbourReviewPage", () => {
+  const review = [40, 6, 120];
+  it("steps to the next and the previous page that needs review", () => {
+    expect(neighbourReviewPage(review, 6, 1)).toBe(40);
+    expect(neighbourReviewPage(review, 7, 1)).toBe(40);
+    expect(neighbourReviewPage(review, 40, -1)).toBe(6);
+    expect(neighbourReviewPage(review, 41, -1)).toBe(40);
+  });
+
+  it("wraps around the book", () => {
+    expect(neighbourReviewPage(review, 120, 1)).toBe(6);
+    expect(neighbourReviewPage(review, 6, -1)).toBe(120);
+  });
+
+  it("has nowhere to go when nothing else needs review", () => {
+    expect(neighbourReviewPage([], 5, 1)).toBeNull();
+    expect(neighbourReviewPage([5], 5, 1)).toBeNull();
+    expect(neighbourReviewPage([5], 9, 1)).toBe(5);
+    expect(neighbourReviewPage(review, null, 1)).toBe(6);
+  });
+});
 
 describe("mergePages", () => {
   it("lists the manifest's pages and the stream's together, ascending, the stream winning", () => {

@@ -12,6 +12,11 @@ export const MAX_UPLOAD_LABEL = "300 MB";
 export const BOOK_PARAM = "book";
 export const AUTO_CHAIN_STORAGE_KEY = "bd-ingestion-auto-chain";
 
+/** The reader's layout (which side columns are open, how wide the text runs) and the page each book was left on are
+ * per-browser preferences. */
+export const READER_LAYOUT_STORAGE_KEY = "bd:reader:layout";
+export const LAST_PAGE_STORAGE_PREFIX = "bd:reader:page:";
+
 /** While any book is being extracted the library list is re-read this often (the open book's stream is live anyway). */
 export const LIBRARY_REFRESH_MS = 4_000;
 

@@ -23,7 +23,9 @@ from domains.bd.ingestion.ai.service import (
     create_ingestion_ai_run,
     mark_ingestion_ai_run_failed,
     queue_ingestion_ai_resume,
+    read_display_page,
     read_ingestion_ai_run,
+    read_page_quality,
     run_ingestion_ai,
 )
 from domains.bd.ingestion.storage import keys
@@ -413,7 +415,7 @@ fallback_manifest = json.loads(fallback_storage.values[keys.agentic_manifest_key
 assert fallback_manifest["status"] == "done"
 assert fallback_manifest["quality_status"] == "complete_with_review"
 assert fallback_result["quality_report"]["structured_output_fallback_pages"] == [1]
-print("ok  invalid structured audits are counted, fall back safely, and require review")
+print("ok  invalid structured audits are counted and fall back safely as unverified pages")
 
 
 # --- Fixes from the 2026-11-05 assessment ---
@@ -620,5 +622,37 @@ assert warning_result["quality_report"]["audit_warning_count"] == 2  # discarded
 assert warning_result["quality_report"]["pages_requiring_review"] == []
 assert warning_result["quality_status"] == "complete"
 print("ok  a handled audit warning is reported but does not by itself send the page to review")
-assert fallback_result["quality_report"]["review_reasons"] == {"degraded_audit": 1}
+assert fallback_result["quality_report"]["review_reasons"] == {}
 print("ok  review pages are broken down by reason")
+
+# --- What the reader can ask for ---
+display_ai, display_ai_source = asyncio.run(read_display_page("book-mechanical", 1, storage = mechanical_storage))
+assert display_ai_source == "agentic" and display_ai == "An example book by A. Author \n"
+display_raw, display_raw_source = asyncio.run(
+    read_display_page("book-mechanical", 1, storage = mechanical_storage, source = "docling"),
+)
+assert display_raw_source == "docling" and display_raw == "An exam­ple book by A. Author \x07\n"
+pinned_ai, pinned_ai_source = asyncio.run(
+    read_display_page("book-mechanical", 1, storage = mechanical_storage, source = "agentic"),
+)
+assert pinned_ai_source == "agentic" and pinned_ai == display_ai
+raw_only_storage = FakeStorage(mechanical_manifest, mechanical_pages)
+assert asyncio.run(
+    read_display_page("book-mechanical", 1, storage = raw_only_storage, source = "agentic"),
+) == (None, "agentic")
+print("ok  a page can be read raw, AI-processed, or as the server chooses, and a missing AI page is not faked")
+
+mechanical_quality = asyncio.run(read_page_quality("book-mechanical", 1, storage = mechanical_storage))
+assert mechanical_quality["status"] == "done" and mechanical_quality["delivery_disposition"] == "include"
+assert mechanical_quality["mechanical_fixes"] == {"control_characters": 1, "soft_hyphen": 1}
+assert {issue["code"]: issue["resolution"] for issue in mechanical_quality["issues"]} == {
+    "control_characters": "auto_applied",
+    "soft_hyphen": "auto_applied",
+}
+review_quality = asyncio.run(read_page_quality("book-retry", 1, storage = retry_storage))
+assert review_quality["status"] == "review_required"
+split_issue = next(issue for issue in review_quality["issues"] if issue["code"] == "split_word")
+assert split_issue["resolution"] == "review" and split_issue["proposal"]["replacement"] == "LANDSCAPE"
+assert asyncio.run(read_page_quality("book-mechanical", 99, storage = mechanical_storage)) is None
+assert asyncio.run(read_page_quality("book-mechanical", 1, storage = raw_only_storage)) is None
+print("ok  the page quality report says what was fixed, what needs review, and the suggested fix")

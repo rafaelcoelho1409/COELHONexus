@@ -67,11 +67,15 @@ async def repair_pages(
             return [], f"{role}: assigned issue evidence was not found in the source page", 0, 0
         payload = {
             "task": "Propose minimal evidence-backed patches only within the supplied source context for these assigned issues.",
-            "page_number": page_number,
-            "source_sha256": source_sha256,
             "role": role,
             "markdown": source_context,
-            "assigned_issues": [issue.model_dump(mode = "json") for issue in assigned.values()],
+            "assigned_issues": [{
+                "issue_id": issue.issue_id,
+                "code": issue.code.value,
+                "severity": issue.severity.value,
+                "description": issue.description,
+                "evidence_excerpts": [evidence.excerpt for evidence in issue.evidence],
+            } for issue in assigned.values()],
         }
         run_id = state.get("agentic_run_id")
         if not isinstance(run_id, str):
@@ -85,7 +89,7 @@ async def repair_pages(
             request = payload if not last_error else {
                 **payload,
                 "previous_attempt_rejected": last_error,
-                "response_contract": "Return one JSON object with a `proposals` array; copy target_text verbatim from `markdown`.",
+                "response_contract": "Return PatchDraftBatch JSON with a `proposals` array; copy target_text verbatim from `markdown`.",
             }
             try:
                 with domains.settings.llm_counter.service.llm_context(
@@ -97,10 +101,9 @@ async def repair_pages(
                     }], "files": skills.service.files_for(skill_role)}, config = {
                         "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
                     })
-                if not isinstance(response, dict) or "structured_response" not in response:
-                    raise ValueError("specialist returned no structured PatchProposalBatch")
+                structured = domain.extract_patch_response(response, role = role)
                 proposals = domain.validate_proposals(
-                    response["structured_response"],
+                    structured,
                     page_number = page_number,
                     source_sha256 = source_sha256,
                     markdown = markdown,
@@ -109,6 +112,9 @@ async def repair_pages(
                     allowed_context = source_context,
                 )
                 return proposals, None, len(source_context) * attempts, attempts
+            except domain.ModelCallLimitReachedError as error:
+                last_error = str(error)[:300]
+                break
             except Exception as error:
                 last_error = str(error)[:300]
         return [], f"{role}: {last_error}", len(source_context) * attempts, attempts
@@ -131,7 +137,19 @@ async def repair_pages(
                 audits[page_number]["assessment"],
             ).issues
             issues = {issue.issue_id: issue for issue in issue_list}
-            assigned_items = work_by_page.get(page_number, [])
+            _, _, mechanically_resolved_before_repair = domain.apply_mechanical_fixes_for_issues(
+                markdown,
+                issue_list,
+            )
+            mechanically_resolved = set(mechanically_resolved_before_repair)
+            assigned_items = []
+            for item in work_by_page.get(page_number, []):
+                remaining_refs = [
+                    reference for reference in item["issue_refs"]
+                    if reference["issue_id"] not in mechanically_resolved
+                ]
+                if remaining_refs:
+                    assigned_items.append({**item, "issue_refs": remaining_refs})
             responses = [] if oversized else await asyncio.gather(*(
                 run_specialist(item, markdown, page_number, source_sha256, issues)
                 for item in assigned_items
@@ -152,13 +170,12 @@ async def repair_pages(
                 proposal_reviews = [proposal.issue_id for proposal in proposals]
                 errors.append(str(error))
 
-            # Invisible noise is removed in code after the model patches, so no patch anchor ever sees a changed page.
-            normalized, mechanical_counts = domain.apply_mechanical_fixes(normalized)
-            mechanical_ids = sorted(
-                issue.issue_id for issue in issue_list
-                if mechanical_counts.get(issue.code.value)
+            # Mechanical normalization follows model patches, so specialist anchors always refer to the source page.
+            normalized, mechanical_counts, mechanical_ids = domain.apply_mechanical_fixes_for_issues(
+                normalized,
+                issue_list,
             )
-            auto_applied = auto_applied + mechanical_ids
+            auto_applied = auto_applied + sorted(mechanical_ids)
 
             represented = {proposal.issue_id for proposal in proposals}
             assigned_ids = {
@@ -169,10 +186,6 @@ async def repair_pages(
             unresolved = (assigned_ids - represented) | set(proposal_reviews)
             unsupported = set(issues) - assigned_ids - set(mechanical_ids)
             review_ids = sorted(unresolved | unsupported)
-            audit_degraded = (
-                audits[page_number].get("structured_output_fallback") is True
-                or audits[page_number].get("audit_mode") == "deterministic_limit"
-            )
             normalized_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
             assessment_content = json.dumps(
                 audits[page_number]["assessment"], ensure_ascii = False,
@@ -218,7 +231,7 @@ async def repair_pages(
                 "repair_call_count": sum(attempts for _, _, _, attempts in responses),
                 "mechanical_fix_counts": mechanical_counts,
                 "audit_warnings": audit_warnings,
-                "status": "review_required" if review_ids or errors or audit_degraded else "done",
+                "status": "review_required" if review_ids or errors else "done",
                 "error": "; ".join(errors) if errors else "",
             }
             await _report(progress_callback, kind = "page_repair", page = page_number, status = "done")

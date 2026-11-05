@@ -1,63 +1,61 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, PanelRightClose, PanelRightOpen, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import Image from "next/image";
-import { Children, isValidElement, useId, useMemo, useState } from "react";
+import { Children, isValidElement, type ReactNode, useId, useMemo, useState } from "react";
 import type { Components } from "react-markdown";
 
-import { useScrollSpy } from "@/shared/lib/use-scroll-spy";
-import { Markdown, markdownToc } from "@/shared/markdown";
+import { Markdown } from "@/shared/markdown";
 
 import { figureUrl } from "../api";
 import type { BookUnits } from "../domain/books";
 import { breadcrumb, type PageRow, pageChips, readableMarkdown } from "../domain/pages";
-import type { LivePage } from "../domain/run-state";
-import { usePageBody } from "../hooks/use-bd-data";
 import { useModalDialog } from "../hooks/use-modal-dialog";
+import type { PageContent, PageVersion } from "../hooks/use-page-content";
 import { ActionButton } from "./action-button";
+import { PageChanges } from "./page-changes";
+import { PageQualityPanel } from "./page-quality";
 import { ToggleGroup } from "./toggle-group";
 
 const PREVIEW_MODES = [
   { id: "rendered", label: "Rendered" },
   { id: "source", label: "Markdown source" },
 ] as const;
+const VERSIONS: readonly { id: PageVersion; label: string }[] = [
+  { id: "ai", label: "AI-processed" },
+  { id: "docling", label: "Docling raw" },
+  { id: "changes", label: "Changes" },
+];
 const EMPTY_FIGURES: readonly string[] = [];
 
-/** One extracted content unit: its section path, what it contains, its markdown and its figures. The text comes from the
- * stream while it is complete; a cut page (`truncated`) and a page known only from the manifest (after a reload)
- * are read from `GET …/pages/{n}`. */
+/** One extracted content unit: its section path, what it contains, what the Agentic AI step did to it, its text and its
+ * figures. The text itself (and the outline drawn beside it) comes from `usePageContent`, one level up, so the page, the
+ * outline column and the reading window all show the same thing. The page frames it as a card; the reading window
+ * shows it bare. */
 export function PageReader({
   bookId,
   page,
   row,
-  livePage,
-  agenticRunAvailable = false,
   nPages,
   units,
-  readingMode = false,
+  content,
+  framed = true,
+  toolbar,
 }: {
   bookId: string;
   page: number | null;
   row: PageRow | undefined;
-  livePage: LivePage | undefined;
-  agenticRunAvailable?: boolean;
   nPages: number;
   units: BookUnits;
-  readingMode?: boolean;
+  content: PageContent;
+  framed?: boolean;
+  /** Buttons on the right of the header. */
+  toolbar?: ReactNode;
 }) {
   const [previewMode, setPreviewMode] = useState<(typeof PREVIEW_MODES)[number]["id"]>("rendered");
-  const [outlineOpen, setOutlineOpen] = useState(true);
-  const needsBody =
-    row !== undefined &&
-    (agenticRunAvailable || livePage === undefined || livePage.truncated || livePage.markdown === "");
-  const body = usePageBody(bookId, page, needsBody);
   const [selectedFigure, setSelectedFigure] = useState<number | null>(null);
   const figures = row?.figures ?? EMPTY_FIGURES;
-  const source = body.data?.markdown ?? livePage?.markdown ?? "";
-  const contentSource = body.data?.content_source ?? "docling";
-  const outline = useMemo(() => markdownToc(source), [source]);
-  const outlineIds = useMemo(() => outline.map((entry) => entry.id), [outline]);
-  const activeHeading = useScrollSpy(outlineIds, page);
+  const { body, raw, hasAi, version, source } = content;
   const renderedText = useMemo(
     () => inlineFigures(source, figures, bookId, page ?? 0, units.singular),
     [source, figures, bookId, page, units.singular],
@@ -100,68 +98,85 @@ export function PageReader({
     );
   }
 
-  const content = previewMode === "rendered" ? renderedText : source;
+  const unitName = `${units.singular[0]?.toUpperCase()}${units.singular.slice(1)}`;
+  const display = previewMode === "rendered" ? renderedText : source;
   const chips = pageChips(row);
   const trail = breadcrumb(row.sectionPath);
+  const loadingVersion = version !== "ai" && raw.isPending && raw.fetchStatus !== "idle";
 
   return (
     <article
-      aria-label={`${units.singular[0]?.toUpperCase()}${units.singular.slice(1)} ${page}`}
-      className={`min-w-0 ${readingMode ? "" : "rounded-md border border-border bg-card p-4 sm:p-5"}`}
+      aria-label={`${unitName} ${page}`}
+      className={`min-w-0 ${framed ? "rounded-md border border-border bg-card p-4 sm:p-5" : ""}`}
     >
-      <header>
-        <p className="mono-label">
-          {units.singular[0]?.toUpperCase()}
-          {units.singular.slice(1)} {page}
-          {nPages > 0 ? ` of ${nPages}` : ""}
-        </p>
-        <p className="mt-1 text-xs text-muted-foreground" aria-live="polite">
-          {contentSource === "agentic" ? "AI-processed content" : "Docling extraction"}
-        </p>
-        {trail ? <p className="mt-1 text-sm text-muted-foreground">{trail}</p> : null}
-        {chips.length > 0 ? (
-          <ul aria-label={`What the ${units.singular} contains`} className="mt-2 flex flex-wrap gap-2">
-            {chips.map((chip) => (
-              <li
-                key={chip}
-                className="rounded-sm border border-border px-2 py-0.5 text-xs text-muted-foreground"
-              >
-                {chip}
-              </li>
-            ))}
-          </ul>
-        ) : null}
+      <header className="mb-4 border-b border-border pb-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-48 flex-1">
+            <p className="mono-label">
+              {unitName} {page}
+              {nPages > 0 ? ` of ${nPages}` : ""}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground" aria-live="polite">
+              {hasAi
+                ? version === "docling"
+                  ? "Docling extraction (before Agentic AI)"
+                  : version === "changes"
+                    ? "Docling extraction compared with AI-processed content"
+                    : "AI-processed content"
+                : "Docling extraction"}
+            </p>
+            {trail ? <p className="mt-1 text-sm text-muted-foreground">{trail}</p> : null}
+            {chips.length > 0 ? (
+              <ul aria-label={`What the ${units.singular} contains`} className="mt-2 flex flex-wrap gap-2">
+                {chips.map((chip) => (
+                  <li
+                    key={chip}
+                    className="rounded-sm border border-border px-2 py-0.5 text-xs text-muted-foreground"
+                  >
+                    {chip}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+          {toolbar}
+        </div>
+        <PageQualityPanel bookId={bookId} page={page} unit={unitName} enabled={hasAi} defaultOpen={framed} />
       </header>
-      <div className="mt-4 flex justify-end">
-        <div className="flex w-full items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {version === "changes" ? (
+          <span />
+        ) : (
           <ToggleGroup
             legend="Content view"
             options={PREVIEW_MODES}
             value={previewMode}
             onChange={setPreviewMode}
           />
-          {outline.length > 1 ? (
-            <ActionButton
-              iconOnly
-              className="hidden lg:inline-flex"
-              aria-expanded={outlineOpen}
-              aria-label={outlineOpen ? "Hide page outline" : "Show page outline"}
-              title={outlineOpen ? "Hide page outline" : "Show page outline"}
-              onClick={() => setOutlineOpen(!outlineOpen)}
-            >
-              {outlineOpen ? <PanelRightClose aria-hidden /> : <PanelRightOpen aria-hidden />}
-            </ActionButton>
-          ) : null}
-        </div>
+        )}
+        {hasAi ? (
+          <ToggleGroup
+            legend="Version of this page"
+            options={VERSIONS}
+            value={version}
+            onChange={content.setVersion}
+          />
+        ) : null}
       </div>
-      <div
-        className={`mt-2 grid grid-cols-1 gap-5 ${outlineOpen && outline.length > 1 ? "lg:grid-cols-[minmax(0,1fr)_14rem]" : ""}`}
-      >
+      <div className="mt-4">
         <section
-          aria-label={previewMode === "rendered" ? "Rendered content" : "Markdown source"}
+          aria-label={
+            version === "changes"
+              ? "Changes"
+              : previewMode === "rendered"
+                ? "Rendered content"
+                : "Markdown source"
+          }
           className="min-w-0"
         >
-          {content ? (
+          {version === "changes" ? (
+            <PageChanges diff={content.diff} loading={loadingVersion} failed={raw.isError} />
+          ) : display ? (
             previewMode === "rendered" ? (
               <Markdown text={renderedText} components={markdownComponents} />
             ) : (
@@ -169,45 +184,16 @@ export function PageReader({
                 {source}
               </pre>
             )
-          ) : body.isError ? (
+          ) : body.isError || (version === "docling" && raw.isError) ? (
             <p role="alert" className="text-sm text-destructive-text">
               This {units.singular} could not be loaded.
             </p>
-          ) : body.isPending ? (
+          ) : body.isPending || loadingVersion ? (
             <p className="text-sm text-muted-foreground">Loading the {units.singular}…</p>
           ) : (
             <p className="text-sm text-muted-foreground">No readable text in this {units.singular}.</p>
           )}
-          {livePage?.truncated && body.isPending && source ? (
-            <p className="mt-2 text-xs text-muted-foreground">Loading the rest of the {units.singular}…</p>
-          ) : null}
         </section>
-        {outlineOpen && outline.length > 1 ? (
-          <aside className="hidden lg:block">
-            <nav aria-label="On this page" className="sticky top-20 text-sm">
-              <p className="mb-2 text-xs font-medium text-muted-foreground">On this page</p>
-              <ul className="flex flex-col border-l border-border">
-                {outline.map((entry) => (
-                  <li key={entry.id}>
-                    <a
-                      href={`#${entry.id}`}
-                      aria-current={activeHeading === entry.id ? "location" : undefined}
-                      className={`-ml-px block min-h-9 border-l-2 py-1.5 pr-2 leading-snug ${
-                        entry.level === 3 ? "pl-6" : "pl-3"
-                      } ${
-                        activeHeading === entry.id
-                          ? "border-primary font-medium text-foreground"
-                          : "border-transparent text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      {entry.text}
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </nav>
-          </aside>
-        ) : null}
       </div>
       {row.figures.length > 0 ? (
         <details className="mt-4 rounded-sm border border-border p-2">

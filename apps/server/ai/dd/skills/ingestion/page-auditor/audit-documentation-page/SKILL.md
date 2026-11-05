@@ -25,6 +25,10 @@ Produce one `PageAssessment` for the supplied page. Read the complete Markdown b
 - `encoding_artifact`: text contains clear mojibake or replacement-character damage whose intended text is recoverable from the same source. Do not “correct” unusual but intentional characters.
 - `other`: a concrete, material normalization defect that does not fit the categories above. This is for review; it is not eligible for automatic repair.
 
+## Valid application asset paths
+
+Docs Distiller serves stored page images at `/api/v1/dd/ingestion/<slug>/artifacts/<path>`. Treat these as valid image references; do not flag them solely because they use an application API path. Only report a defect when the Markdown syntax itself is malformed or the supplied source gives direct evidence that the reference is broken.
+
 ## Evidence and calibration
 
 - `evidence` must be copied exactly from the Markdown and be short enough to locate the issue. For a duplicate, quote the affected source text once; explain the repetition in `description`.

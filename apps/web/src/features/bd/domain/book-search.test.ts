@@ -21,6 +21,12 @@ describe("searchBookPages", () => {
     });
   });
 
+  it("carries the heading to scroll to for a heading hit, and none for a title or body hit", () => {
+    expect(searchBookPages(index, "durability", 30)[0]).toMatchObject({ page: 4, headingId: "durability" });
+    expect(searchBookPages(index, "reliability", 30)[0]?.headingId).toBeUndefined();
+    expect(searchBookPages(index, "committed records", 30)[0]?.headingId).toBeUndefined();
+  });
+
   it("requires every term in a title or body and caps results", () => {
     expect(searchBookPages(index, "storage not-present", 30)).toEqual([]);
     expect(searchBookPages(index, "system", 1)).toHaveLength(1);

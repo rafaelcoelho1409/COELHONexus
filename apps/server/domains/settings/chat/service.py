@@ -31,17 +31,20 @@ import logging
 import os
 import re
 import time
+from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
 import httpx
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
+from openai import APITimeoutError
 from pydantic import BaseModel, ValidationError
 
 
 logger = logging.getLogger(__name__)
 
 _SchemaT = TypeVar("_SchemaT", bound=BaseModel)
+_ResultT = TypeVar("_ResultT")
 
 
 # ---------------------------------------------------------------------------
@@ -236,12 +239,10 @@ def build_chat_model(
     retry themselves.
 
     `max_retries` is overridable (still defaults to 0 — every existing
-    caller is unaffected) for callers with NO retry protection of their
-    own: an agent framework such as DeepAgents takes the bare model
-    object, so such callers can't use `resilient_ainvoke` (wrapping the
-    model breaks the framework's `isinstance(model, BaseChatModel)`
-    check). SDK-level retry is the only retry mechanism that doesn't
-    touch the model's class.
+    caller is unaffected) for frameworks that have no outer invocation
+    boundary to retry. When the caller can wrap its agent invocation with
+    `resilient_ainvoke`, the model stays a bare `BaseChatModel` and retries
+    remain visible at the caller's operation boundary.
 
     Every instance shares ONE module-level pooled `httpx.AsyncClient`
     (same pool shape as the raw hot path's client). Per-request
@@ -277,6 +278,40 @@ def build_chat_model(
 # ------------------------------------------------------------------
 # Chat — real LangChain `ChatOpenAI.ainvoke()`, pooled transport underneath
 # ------------------------------------------------------------------
+
+def _is_transient_provider_error(error: Exception) -> bool:
+    """Return whether a provider timeout, rate limit, or server error can be retried."""
+    if isinstance(error, (TimeoutError, APITimeoutError, httpx.TimeoutException)):
+        return True
+    status_code = getattr(error, "status_code", None)
+    return status_code in (408, 429) or (isinstance(status_code, int) and 500 <= status_code <= 599)
+
+
+async def resilient_ainvoke(
+    invoke: Callable[[], Awaitable[_ResultT]],
+    *,
+    attempts: int,
+    wait_base_s: float,
+    accept: Callable[[_ResultT], bool] | None = None,
+) -> _ResultT:
+    """Retry transient provider failures with linear backoff and optionally re-ask unusable answers."""
+    if attempts < 1:
+        raise ValueError("attempts must be at least one")
+
+    for attempt in range(1, attempts + 1):
+        try:
+            result = await invoke()
+        except Exception as error:
+            if attempt >= attempts or not _is_transient_provider_error(error):
+                raise
+            await asyncio.sleep(wait_base_s * attempt)
+            continue
+
+        if accept is None or accept(result) or attempt >= attempts:
+            return result
+
+    raise AssertionError("unreachable retry state")
+
 
 async def chat_judge_async(
     prompt: str,

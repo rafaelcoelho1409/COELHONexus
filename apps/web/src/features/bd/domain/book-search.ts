@@ -13,6 +13,8 @@ export type BookSearchHit = {
   page: number;
   title: string;
   sub: string;
+  /** The heading to scroll to, when the hit is a heading. */
+  headingId?: string;
   score: number;
 };
 
@@ -43,7 +45,7 @@ export function searchBookPages(
 
     if (titleHit) hits.push({ page: page.page, title: page.title, sub: page.title, score: 3 });
     for (const heading of headingHits) {
-      hits.push({ page: page.page, title: page.title, sub: heading.text, score: 2 });
+      hits.push({ page: page.page, title: page.title, sub: heading.text, headingId: heading.id, score: 2 });
     }
     if (!titleHit && headingHits.length === 0 && bodyHit) {
       hits.push({ page: page.page, title: page.title, sub: "Match in the text", score: 1 });

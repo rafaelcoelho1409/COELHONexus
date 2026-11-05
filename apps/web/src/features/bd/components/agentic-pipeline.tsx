@@ -49,6 +49,7 @@ export function AgenticProgressBar({
   deliveredPageCount,
   discardedBlankPageCount,
   reviewPageCount,
+  unverifiedPageCount,
   streamStatus,
   actionPending,
   cancelPending,
@@ -72,6 +73,7 @@ export function AgenticProgressBar({
   deliveredPageCount: number;
   discardedBlankPageCount: number;
   reviewPageCount: number;
+  unverifiedPageCount: number;
   streamStatus: StreamStatus;
   actionPending: boolean;
   cancelPending: boolean;
@@ -87,6 +89,10 @@ export function AgenticProgressBar({
   const completed = progress?.processed_pages.length ?? 0;
   const percent = agenticPercent(completed, total);
   const chapterSummary = chapterProgressSummary(chapters, progress?.processed_pages ?? []);
+  const activeWork = [
+    progress?.active_audit_pages.length ? `${progress.active_audit_pages.length} auditing` : null,
+    progress?.active_repair_pages.length ? `${progress.active_repair_pages.length} repairing` : null,
+  ].filter((item) => item !== null);
   const statusText = cancelRequested
     ? "Stopping"
     : status === null
@@ -181,34 +187,38 @@ export function AgenticProgressBar({
       >
         <div className="h-full bg-primary" style={{ width: `${percent ?? 0}%` }} />
       </div>
-      <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-        <span className="tabular-nums">
-          {completed} of {total > 0 ? total : "?"} {units.plural} processed
-          {percent !== null ? ` · ${percent}%` : ""}
-        </span>
-        {progress ? <span className="tabular-nums">{progress.audited_pages.length} audited</span> : null}
-        {progress && progress.audit_warning_pages.length > 0 ? (
-          <span className="tabular-nums text-warning-text">
-            {progress.audit_warning_pages.length}{" "}
-            {progress.audit_warning_pages.length === 1 ? "page needs" : "pages need"} review
-          </span>
-        ) : null}
-        {chapterSummary ? (
-          <span className="tabular-nums">
-            {chapterSummary.completed} of {chapterSummary.total} chapters
-          </span>
-        ) : null}
-        {progress && progress.active_audit_pages.length > 0 ? (
-          <span>{progress.active_audit_pages.length} auditing</span>
-        ) : null}
-        {progress && progress.active_repair_pages.length > 0 ? (
-          <span>{progress.active_repair_pages.length} repairing</span>
-        ) : null}
-      </p>
+      <dl className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3 xl:grid-cols-6">
+        <ProgressMetric
+          label="Processed"
+          value={`${completed} / ${total > 0 ? total : "?"}${percent !== null ? ` · ${percent}%` : ""}`}
+        />
+        <ProgressMetric label="Audited" value={progress ? String(progress.audited_pages.length) : "—"} />
+        <ProgressMetric
+          label="Needs review"
+          value={status === "done" ? String(reviewPageCount) : hasRun ? "Pending" : "—"}
+        />
+        <ProgressMetric
+          label="Unverified audits"
+          value={status === "done" ? String(unverifiedPageCount) : hasRun ? "Pending" : "—"}
+        />
+        <ProgressMetric
+          label="Chapters"
+          value={chapterSummary ? `${chapterSummary.completed} / ${chapterSummary.total}` : "—"}
+        />
+        <ProgressMetric label="Active work" value={activeWork.length ? activeWork.join(" · ") : "Idle"} />
+      </dl>
+      {progress && progress.audit_warning_pages.length > 0 ? (
+        <p className="mt-1 text-xs text-warning-text">
+          Audit warnings on {progress.audit_warning_pages.length}{" "}
+          {progress.audit_warning_pages.length === 1 ? units.singular : units.plural}.
+        </p>
+      ) : null}
       {qualityStatus === "complete_with_review" ? (
         <p className="mt-1 text-xs text-warning-text">
-          Review required · {reviewPageCount} {reviewPageCount === 1 ? "page" : "pages"} ·{" "}
-          {deliveredPageCount} delivered · {discardedBlankPageCount} blank excluded
+          Run needs attention · {reviewPageCount}{" "}
+          {reviewPageCount === 1 ? "page needs review" : "pages need review"} · {unverifiedPageCount}{" "}
+          {unverifiedPageCount === 1 ? "audit unverified" : "audits unverified"} · {deliveredPageCount}{" "}
+          delivered · {discardedBlankPageCount} blank excluded
         </p>
       ) : qualityStatus === "complete" ? (
         <p className="mt-1 text-xs text-success-text">
@@ -237,6 +247,15 @@ export function AgenticProgressBar({
           stops.
         </p>
       ) : null}
+    </div>
+  );
+}
+
+function ProgressMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-sm border border-border bg-background px-2.5 py-1.5">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="break-words font-medium tabular-nums text-foreground">{value}</dd>
     </div>
   );
 }
@@ -284,15 +303,6 @@ export function AgenticPipelineOverview({
                 ? `Run ${runStatus} · ${progress?.processed_pages.length ?? 0} of ${run.expected_page_count} ${units.plural} processed`
                 : "Agentic AI is ready to run after extraction."}
             </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {run ? (
-              <ActionButton onClick={onOpenUsage} aria-haspopup="dialog">
-                <ChartNoAxesColumn aria-hidden />
-                LLM usage
-              </ActionButton>
-            ) : null}
-            <ToggleGroup legend="Pipeline shown as" options={MODES} value={mode} onChange={setMode} />
           </div>
         </header>
         {error ? (
@@ -348,64 +358,78 @@ export function AgenticPipelineOverview({
               </ol>
             )}
           </div>
-          {/* From xl the box is as tall as the graph beside it and nothing more: its content is taken out of flow
-           * (`absolute inset-0`), so a long chapter list scrolls inside it instead of stretching the row. */}
-          <section
-            aria-label="Chapter progress"
-            className="relative min-w-0 rounded-sm border border-border bg-background xl:min-h-72"
-          >
-            <div className="flex min-h-0 flex-col p-3 xl:absolute xl:inset-0">
-              <header className="flex flex-wrap items-baseline justify-between gap-2">
-                <h4 className="text-sm font-medium">Chapter progress</h4>
-                {chapterSummary ? (
-                  <span className="text-xs tabular-nums text-muted-foreground">
-                    {chapterSummary.completed} of {chapterSummary.total} complete
-                  </span>
-                ) : null}
-              </header>
-              {chapterRows.length > 0 ? (
-                <ol
-                  aria-label="Chapter progress entries"
-                  // biome-ignore lint/a11y/noNoninteractiveTabindex: a long chapter list scrolls, so keyboard users must be able to focus it to scroll it (WCAG 2.1.1)
-                  tabIndex={0}
-                  className="mt-3 flex max-h-[34rem] min-h-0 flex-col gap-3 overflow-y-auto xl:max-h-none xl:flex-1"
+          <div className="min-w-0">
+            <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
+              {run ? (
+                <ActionButton
+                  className="min-w-0 flex-1 justify-center whitespace-nowrap px-2"
+                  onClick={onOpenUsage}
+                  aria-haspopup="dialog"
                 >
-                  {chapterRows.map((chapter) => {
-                    const percent = agenticPercent(chapter.processed, chapter.total);
-                    return (
-                      <li key={`${chapter.first_page}:${chapter.last_page}`} className="min-w-0">
-                        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                          <span className="min-w-0 break-words">{chapter.title}</span>
-                          <span className="shrink-0 tabular-nums text-muted-foreground">
-                            {chapter.processed}/{chapter.total} {units.plural}
-                          </span>
-                        </div>
-                        <div
-                          role="progressbar"
-                          aria-label={`${chapter.title} progress`}
-                          aria-valuemin={0}
-                          aria-valuemax={chapter.total}
-                          aria-valuenow={chapter.processed}
-                          className="mt-1 h-1 w-full overflow-hidden rounded-sm bg-muted"
-                        >
-                          <div className="h-full bg-primary" style={{ width: `${percent ?? 0}%` }} />
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ol>
-              ) : (
-                <p className="mt-3 text-xs text-muted-foreground">
-                  Chapter ranges are not available for this book.
-                </p>
-              )}
+                  <ChartNoAxesColumn aria-hidden />
+                  LLM usage
+                </ActionButton>
+              ) : null}
+              <ToggleGroup legend="Pipeline shown as" options={MODES} value={mode} onChange={setMode} />
             </div>
-          </section>
+            {/* The controls and chapter box share the same column width. */}
+            <section
+              aria-label="Chapter progress"
+              className="relative min-w-0 rounded-sm border border-border bg-background xl:min-h-72"
+            >
+              <div className="flex min-h-0 flex-col p-3 xl:absolute xl:inset-0">
+                <header className="flex flex-wrap items-baseline justify-between gap-2">
+                  <h4 className="text-sm font-medium">Chapter progress</h4>
+                  {chapterSummary ? (
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      {chapterSummary.completed} of {chapterSummary.total} complete
+                    </span>
+                  ) : null}
+                </header>
+                {chapterRows.length > 0 ? (
+                  <ol
+                    aria-label="Chapter progress entries"
+                    // biome-ignore lint/a11y/noNoninteractiveTabindex: a long chapter list scrolls, so keyboard users must be able to focus it to scroll it (WCAG 2.1.1)
+                    tabIndex={0}
+                    className="mt-3 flex max-h-[34rem] min-h-0 flex-col gap-3 overflow-y-auto xl:max-h-none xl:flex-1"
+                  >
+                    {chapterRows.map((chapter) => {
+                      const percent = agenticPercent(chapter.processed, chapter.total);
+                      return (
+                        <li key={`${chapter.first_page}:${chapter.last_page}`} className="min-w-0">
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                            <span className="min-w-0 break-words">{chapter.title}</span>
+                            <span className="shrink-0 tabular-nums text-muted-foreground">
+                              {chapter.processed}/{chapter.total} {units.plural}
+                            </span>
+                          </div>
+                          <div
+                            role="progressbar"
+                            aria-label={`${chapter.title} progress`}
+                            aria-valuemin={0}
+                            aria-valuemax={chapter.total}
+                            aria-valuenow={chapter.processed}
+                            className="mt-1 h-1 w-full overflow-hidden rounded-sm bg-muted"
+                          >
+                            <div className="h-full bg-primary" style={{ width: `${percent ?? 0}%` }} />
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                ) : (
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    Chapter ranges are not available for this book.
+                  </p>
+                )}
+              </div>
+            </section>
+          </div>
         </div>
         {progress && progress.audit_warning_pages.length > 0 ? (
           <p className="mt-3 text-xs text-warning-text">
-            {progress.audit_warning_pages.length}{" "}
-            {progress.audit_warning_pages.length === 1 ? "page needs" : "pages need"} review · Pages{" "}
+            Audit warnings · {progress.audit_warning_pages.length}{" "}
+            {progress.audit_warning_pages.length === 1 ? "page" : "pages"} · Pages{" "}
             {progress.audit_warning_pages.join(", ")}
           </p>
         ) : null}

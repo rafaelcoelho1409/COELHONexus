@@ -23,6 +23,7 @@ ingestion = domains.dd.ingestion
 tier1 = ingestion.tiers.tier1
 errors = ingestion.tiers.errors
 dispatch = ingestion.runtime.dispatch
+post = ingestion.post.domain
 
 
 def check(label: str, got, want) -> None:
@@ -38,6 +39,15 @@ check("Retry-After in seconds", tier1.domain.retry_after_seconds("7"), 7.0)
 check("Retry-After is capped", tier1.domain.retry_after_seconds("86400"), tier1.params.RETRY_AFTER_MAX_S)
 check("an HTTP-date Retry-After is ignored", tier1.domain.retry_after_seconds("Wed, 21 Oct 2026 07:28:00 GMT"), None)
 check("no Retry-After", tier1.domain.retry_after_seconds(None), None)
+
+anchor_sections = post.split_markdown_by_headings(
+    "# Intro\n\nStart here.\n\n---\n<a id=\"install\"></a>\n<a id=\"installation\"></a>\n\n# Install\n\nRun setup.\n",
+    split_levels = (1,),
+)
+check("an H1 split keeps its separator and all adjacent HTML anchors with the heading",
+      ("---\n<a id=\"install\"></a>\n<a id=\"installation\"></a>\n\n# Install" in anchor_sections[1][2],
+       "install\"" not in anchor_sections[0][2]),
+      (True, True))
 
 entry = {"name": "X", "llms_full": "https://x/llms-full.txt", "sitemap": "https://x/sitemap.xml", "docs": "https://x/docs", "github": "https://github.com/x/x"}
 check("the source chain lists every declared source, best first",

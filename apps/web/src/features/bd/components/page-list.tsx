@@ -3,7 +3,21 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { BookUnits } from "../domain/books";
-import { breadcrumb, filterPageRows, type PageRow, pageChips } from "../domain/pages";
+import {
+  breadcrumb,
+  filterPageRows,
+  PAGE_FLAG_LABELS,
+  type PageFlag,
+  type PageRow,
+  pageChips,
+} from "../domain/pages";
+
+const FLAG_STYLE: Record<PageFlag, string> = {
+  review: "text-warning-text",
+  unverified: "text-warning-text",
+  blank: "text-muted-foreground",
+  image: "text-muted-foreground",
+};
 
 /** The extracted content units, in book order, filling in as the stream delivers them. Following keeps the newest unit in
  * view (the list scrolls itself, never the document). Choosing a page stops the following. */
@@ -14,6 +28,7 @@ export function PageList({
   shown,
   following,
   live,
+  flags,
   onFollow,
   onPick,
 }: {
@@ -24,13 +39,19 @@ export function PageList({
   following: boolean;
   /** A run is in flight, so there is something to follow. */
   live: boolean;
+  /** Whether the page needs review, has an unverified audit, is blank, or contains only an image. */
+  flags: ReadonlyMap<number, PageFlag>;
   onFollow: (follow: boolean) => void;
   onPick: (page: number) => void;
 }) {
   const list = useRef<HTMLOListElement | null>(null);
   const [query, setQuery] = useState("");
+  const [onlyReview, setOnlyReview] = useState(false);
   const count = rows.length;
-  const visibleRows = filterPageRows(rows, query);
+  const reviewCount = rows.filter((row) => flags.get(row.page) === "review").length;
+  const searched = filterPageRows(rows, query);
+  const visibleRows =
+    onlyReview && reviewCount > 0 ? searched.filter((row) => flags.get(row.page) === "review") : searched;
 
   useEffect(() => {
     const element = list.current;
@@ -60,7 +81,17 @@ export function PageList({
         onChange={(event) => setQuery(event.target.value)}
         className="mt-2 h-9 w-full min-w-0 rounded-sm border border-border bg-background px-2 text-sm"
       />
-      {query.trim() ? (
+      {reviewCount > 0 ? (
+        <label className="mt-2 flex min-h-9 items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={onlyReview}
+            onChange={(event) => setOnlyReview(event.target.checked)}
+          />
+          Only {units.plural} that need review · {reviewCount}
+        </label>
+      ) : null}
+      {query.trim() || (onlyReview && reviewCount > 0) ? (
         <p role="status" className="mt-1 text-xs text-muted-foreground">
           Showing {visibleRows.length} of {count} {units.plural}
         </p>
@@ -76,6 +107,7 @@ export function PageList({
           {visibleRows.map((row) => {
             const chips = pageChips(row);
             const where = row.sectionPath.at(-1);
+            const flag = flags.get(row.page);
             return (
               <li key={row.page}>
                 <button
@@ -97,6 +129,11 @@ export function PageList({
                   </span>{" "}
                   {chips.length > 0 ? (
                     <span className="text-xs text-muted-foreground">{chips.join(" · ")}</span>
+                  ) : null}
+                  {flag ? (
+                    <span className={`text-xs font-medium ${FLAG_STYLE[flag]}`}>
+                      {PAGE_FLAG_LABELS[flag]}
+                    </span>
                   ) : null}
                 </button>
               </li>

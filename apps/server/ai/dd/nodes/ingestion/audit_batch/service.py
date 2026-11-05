@@ -116,9 +116,8 @@ async def audit_pages(
         async with semaphore:
             return await audit_page(page)
 
-    audits = await _gather_cancel_on_failure(
-        audit_one(page) for page in state.get("pages", [])
-    )
+    pages = sorted(state.get("pages", []), key = lambda page: page["bytes"], reverse = True)
+    audits = await _gather_cancel_on_failure(audit_one(page) for page in pages)
     return {"assessments": sorted(audits, key = lambda item: item["idx"])}
 
 

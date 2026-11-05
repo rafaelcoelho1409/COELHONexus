@@ -17,6 +17,12 @@ VERSION_SEGMENT_RE = re.compile(r"^v?\d+(?:\.(?:\d+|x))*(?:[-.]?(?:rc|alpha|beta
 # The horizontal rule(s) that end a section of a page: the line that separated it from the next one.
 TRAILING_RULE_RE = re.compile(r"(?:\s*\n[ \t]*-{3,}[ \t]*)+\Z")
 
+# Empty HTML anchor placed immediately before a heading by some llms-full.txt sources.
+_HEADING_ANCHOR_RE = re.compile(
+    r"^\s*<a\b(?=[^>]*\bid\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s>]+))[^>]*(?:/\s*>|>\s*</a\s*>)\s*$",
+    re.IGNORECASE,
+)
+
 
 # A fenced code block's opening line (backticks or tildes), whatever it sits inside.
 CODE_FENCE_RE = re.compile(r"^[ \t>]*(?:`{3,}|~{3,})", re.MULTILINE)

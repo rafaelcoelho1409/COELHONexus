@@ -1,6 +1,6 @@
 """Connect Docs Distiller page ingestion to its Agentic AI graph."""
 from __future__ import annotations
-import domains
+import ai, domains
 from . import params
 
 import hashlib
@@ -10,10 +10,10 @@ from typing import Any
 
 async def run_ingestion_agentic(store, *, progress = None, checkpointer = None) -> dict:
     """Freeze assembled page inputs, run the graph, then update the in-memory manifest."""
-    import ai
+    # A worker resolves the LLM endpoint once at import, before the Settings store may answer; the agents below are
+    # built from that cached value, so read the Settings-page endpoint again before building them.
+    domains.settings.chat.service.refresh_endpoint(force = True)
 
-    dd_ai = ai.dd
-    storage_keys = domains.dd.ingestion.storage.keys
     entries = store.manifest
     minio = store.minio
     page_refs: list[dict[str, Any]] = []
@@ -21,7 +21,7 @@ async def run_ingestion_agentic(store, *, progress = None, checkpointer = None) 
     # The graph only receives immutable object references and compact metadata.
     for entry in entries:
         source = await minio.read_text(entry.key)
-        input_key = storage_keys.agentic_input_key(
+        input_key = domains.dd.ingestion.storage.keys.agentic_input_key(
             store.framework_slug,
             store.run_id,
             entry.idx,
@@ -57,10 +57,10 @@ async def run_ingestion_agentic(store, *, progress = None, checkpointer = None) 
     if progress is not None:
         await progress.start(tier = "agentic_normalization", total = len(page_refs))
 
-    auditor = dd_ai.agents.ingestion.page_auditor.agent.page_auditor()
-    repairer = dd_ai.agents.ingestion.page_repair.agent.page_repair()
-    auditor_files = dd_ai.skills.service.files_for("page_auditor")
-    repair_files = dd_ai.skills.service.files_for("page_repair")
+    auditor = ai.dd.agents.ingestion.page_auditor.agent.page_auditor()
+    repairer = ai.dd.agents.ingestion.page_repair.agent.page_repair()
+    auditor_files = ai.dd.skills.service.files_for("page_auditor")
+    repair_files = ai.dd.skills.service.files_for("page_repair")
 
     async def read_page(key: str) -> str:
         return await minio.read_text(key)
@@ -73,7 +73,7 @@ async def run_ingestion_agentic(store, *, progress = None, checkpointer = None) 
             content_type,
         )
 
-    graph = dd_ai.graphs.ingestion.graph.build_ingestion_graph(
+    graph = ai.dd.graphs.ingestion.graph.build_ingestion_graph(
         read_page = read_page,
         artifact_exists = minio.exists,
         read_artifact = minio.read_text,

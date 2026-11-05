@@ -50,7 +50,22 @@ def split_markdown_by_headings(
         heading_text = ""
         if i + 1 < len(tokens) and tokens[i + 1].type == "inline":
             heading_text = (tokens[i + 1].content or "").strip()
-        boundaries.append((tok.map[0], level, heading_text))
+        start = tok.map[0]
+        cursor = start - 1
+        found_anchor = False
+        while cursor >= 0:
+            if not lines[cursor].strip():
+                cursor -= 1
+                continue
+            if patterns._HEADING_ANCHOR_RE.match(lines[cursor]):
+                found_anchor = True
+                start = cursor
+                cursor -= 1
+                continue
+            break
+        if found_anchor and cursor >= 0 and lines[cursor].strip() == "---":
+            start = cursor
+        boundaries.append((start, level, heading_text))
     if not boundaries:
         return [("", "", text, "")] if text else []
     sections: list[tuple[str, str, str, str]] = []

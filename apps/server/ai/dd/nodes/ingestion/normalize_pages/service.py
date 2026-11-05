@@ -185,9 +185,8 @@ async def normalize_pages(
         async with semaphore:
             return await normalize_page(page)
 
-    outputs = await _gather_cancel_on_failure(
-        normalize_one(page) for page in state.get("pages", [])
-    )
+    pages = sorted(state.get("pages", []), key = lambda page: page["bytes"], reverse = True)
+    outputs = await _gather_cancel_on_failure(normalize_one(page) for page in pages)
     outputs.sort(key = lambda item: item["idx"])
     post_domain = domains.dd.ingestion.post.domain
     plain_titles = post_domain.strip_site_suffix([page["title"] for page in outputs])

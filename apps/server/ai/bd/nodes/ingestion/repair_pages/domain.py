@@ -1,10 +1,93 @@
 """Pure validation and safe application rules for specialist patch proposals."""
 from __future__ import annotations
 import domains
+from . import patterns
 from .... import agents
 
 import unicodedata
+from json import JSONDecodeError, JSONDecoder
+from collections.abc import Iterator
 from typing import Any
+from pydantic import ValidationError
+
+
+class ModelCallLimitReachedError(ValueError):
+    """A specialist stopped at its configured model-call limit."""
+
+
+def extract_patch_response(
+    result: Any,
+    *,
+    role: str,
+) -> agents.schemas.PatchDraftBatch | agents.schemas.PatchProposalBatch:
+    """Validate structured specialist output or recover a JSON response from its last message."""
+    structured = result.get("structured_response") if isinstance(result, dict) else None
+    if structured is not None:
+        return _validate_patch_response(structured)
+
+    messages = result.get("messages") if isinstance(result, dict) else None
+    content = _last_assistant_content(messages)
+    if content is None:
+        raise ValueError(f"{role} specialist returned no structured response or assistant message")
+    if "model call limit" in content.casefold():
+        raise ModelCallLimitReachedError(f"{role} specialist reached its model-call limit")
+
+    last_error: ValidationError | None = None
+    for value in _json_objects(content):
+        try:
+            return _validate_patch_response(value)
+        except ValidationError as error:
+            last_error = error
+    if last_error is not None:
+        raise ValueError(f"{role} specialist returned JSON that did not match its response schema") from last_error
+    raise ValueError(f"{role} specialist returned no structured response and no JSON object")
+
+
+def _validate_patch_response(
+    value: Any,
+) -> agents.schemas.PatchDraftBatch | agents.schemas.PatchProposalBatch:
+    try:
+        return agents.schemas.PatchDraftBatch.model_validate(value)
+    except ValidationError:
+        return agents.schemas.PatchProposalBatch.model_validate(value)
+
+
+def _last_assistant_content(messages: Any) -> str | None:
+    if not isinstance(messages, list):
+        return None
+    for message in reversed(messages):
+        if isinstance(message, dict):
+            message_type = message.get("role") or message.get("type")
+            content = message.get("content")
+        else:
+            message_type = getattr(message, "type", None)
+            content = getattr(message, "content", None)
+        if message_type not in {"assistant", "ai", "AIMessage"}:
+            continue
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = [
+                block["text"]
+                for block in content
+                if isinstance(block, dict) and isinstance(block.get("text"), str)
+            ]
+            if parts:
+                return "\n".join(parts)
+    return None
+
+
+def _json_objects(content: str) -> Iterator[dict[str, Any]]:
+    decoder = JSONDecoder()
+    for start, character in enumerate(content):
+        if character != "{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(content[start:])
+        except JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            yield value
 
 
 def validate_proposals(
@@ -18,13 +101,41 @@ def validate_proposals(
     allowed_context: str | None = None,
 ) -> list[agents.schemas.PatchProposal]:
     if isinstance(value, agents.schemas.PatchProposalBatch):
-        batch = value
+        proposals_to_validate = value.proposals
     else:
-        batch = agents.schemas.PatchProposalBatch.model_validate(value)
+        try:
+            drafts = (
+                value
+                if isinstance(value, agents.schemas.PatchDraftBatch)
+                else agents.schemas.PatchDraftBatch.model_validate(value)
+            )
+        except ValidationError:
+            # Keep stored runs and local callers using the previous full proposal shape readable.
+            proposals_to_validate = agents.schemas.PatchProposalBatch.model_validate(value).proposals
+        else:
+            proposals_to_validate = []
+            for draft in drafts.proposals:
+                issue = assigned_issues.get(draft.issue_id)
+                if issue is None:
+                    raise ValueError("patch draft references an issue not assigned to this specialist")
+                proposals_to_validate.append(agents.schemas.PatchProposal(
+                    page_number = page_number,
+                    issue_id = draft.issue_id,
+                    source_sha256 = source_sha256,
+                    issue_code = issue.code,
+                    risk = draft.risk,
+                    context_before = draft.context_before,
+                    target_text = draft.target_text,
+                    context_after = draft.context_after,
+                    replacement = draft.replacement,
+                    rationale = draft.rationale,
+                    confidence = draft.confidence,
+                    evidence = issue.evidence,
+                ))
 
     proposals: list[agents.schemas.PatchProposal] = []
     seen_issue_ids: set[str] = set()
-    for proposal in batch.proposals:
+    for proposal in proposals_to_validate:
         if proposal.page_number != page_number:
             raise ValueError("patch proposal page does not match its source page")
         if proposal.source_sha256 != source_sha256:
@@ -154,20 +265,226 @@ def apply_proposals(
 
 
 def apply_mechanical_fixes(markdown: str) -> tuple[str, dict[str, int]]:
-    """Remove soft hyphens and non-whitespace control characters, which are invisible noise and never content."""
+    """Normalize invisible noise and safe Markdown table formatting."""
+    cleaned, counts, _ = _apply_mechanical_fixes(markdown)
+    return cleaned, counts
+
+
+def apply_mechanical_fixes_for_issues(
+    markdown: str,
+    issues: list[agents.schemas.PageIssue],
+) -> tuple[str, dict[str, int], list[str]]:
+    """Normalize deterministic defects and return only findings whose source evidence was actually repaired."""
+    cleaned, counts, table_changes = _apply_mechanical_fixes(markdown)
+    resolved_issue_ids = []
+    for issue in issues:
+        if issue.code in {
+            agents.schemas.IssueCode.CONTROL_CHARACTERS,
+            agents.schemas.IssueCode.SOFT_HYPHEN,
+        } and counts.get(issue.code.value):
+            resolved_issue_ids.append(issue.issue_id)
+            continue
+        if issue.code == agents.schemas.IssueCode.TOC_NOISE:
+            covered = all(
+                _evidence_was_changed_with_toc_cleanup(evidence.excerpt, table_changes)
+                for evidence in issue.evidence
+            )
+            if covered:
+                resolved_issue_ids.append(issue.issue_id)
+        elif issue.code == agents.schemas.IssueCode.TABLE_OR_INDEX_LAYOUT:
+            covered = all(
+                _evidence_was_changed_in_table(evidence.excerpt, table_changes)
+                for evidence in issue.evidence
+            )
+            if covered:
+                resolved_issue_ids.append(issue.issue_id)
+    return cleaned, counts, resolved_issue_ids
+
+
+def _apply_mechanical_fixes(markdown: str) -> tuple[str, dict[str, int], list[tuple[str, str]]]:
+    """Return cleaned text, operation counts, and changed table blocks for evidence matching."""
     control_characters = sum(_is_control_noise(character) for character in markdown)
     soft_hyphens = markdown.count("­")
-    if not control_characters and not soft_hyphens:
-        return markdown, {}
     cleaned = "".join(
         character for character in markdown
         if character != "­" and not _is_control_noise(character)
     )
+    cleaned, table_count, table_changes = _normalize_markdown_tables(cleaned)
     counts = {
         agents.schemas.IssueCode.CONTROL_CHARACTERS.value: control_characters,
         agents.schemas.IssueCode.SOFT_HYPHEN.value: soft_hyphens,
+        "table_cleanup": table_count,
     }
-    return cleaned, {code: count for code, count in counts.items() if count}
+    return cleaned, {code: count for code, count in counts.items() if count}, table_changes
+
+
+def _normalize_markdown_tables(markdown: str) -> tuple[str, int, list[tuple[str, str]]]:
+    lines = markdown.splitlines(keepends = True)
+    blocks: list[tuple[int, int]] = []
+    in_fence = False
+    index = 0
+    while index < len(lines):
+        stripped = lines[index].lstrip()
+        if stripped.startswith(("```", "~~~")):
+            in_fence = not in_fence
+            index += 1
+            continue
+        if in_fence or index == 0:
+            index += 1
+            continue
+        separator = _split_table_cells(lines[index])
+        header = _split_table_cells(lines[index - 1])
+        if len(separator) < 2 or len(header) != len(separator) or not all(
+            patterns._TABLE_SEPARATOR_CELL_RE.fullmatch(cell) for cell in separator
+        ):
+            index += 1
+            continue
+        start = index - 1
+        end = index + 1
+        while end < len(lines) and lines[end].strip() and "|" in lines[end]:
+            end += 1
+        blocks.append((start, end))
+        index = end
+
+    changes: list[tuple[str, str]] = []
+    for start, end in reversed(blocks):
+        original_lines = lines[start:end]
+        transformed_lines = _normalize_table_block(original_lines)
+        original = "".join(original_lines)
+        transformed = "".join(transformed_lines)
+        if original == transformed:
+            continue
+        changes.append((original, transformed))
+        lines[start:end] = transformed_lines
+
+    changes.reverse()
+    return "".join(lines), len(changes), changes
+
+
+def _normalize_table_block(lines: list[str]) -> list[str]:
+    newline = "\r\n" if any(line.endswith("\r\n") for line in lines) else "\n"
+    final_newline = lines[-1].endswith(("\n", "\r"))
+    rows = [_split_table_cells(line) for line in lines]
+    expected_columns = len(rows[1])
+    if any(len(row) != expected_columns for row in rows):
+        return lines
+
+    header, separator, *body = rows
+    body = [row for row in body if any(cell.strip() for cell in row)]
+    rows = [header, separator, *body]
+    rows = _remove_table_toc_leaders(rows)
+    header, separator, *body = rows
+    body = [row for row in body if any(cell.strip() for cell in row)]
+    rows = [header, separator, *body]
+
+    removable = {
+        column
+        for column in range(expected_columns)
+        if all(not row[column].strip() for row in [header, *body])
+    }
+    if len(removable) == expected_columns:
+        return []
+    if removable:
+        rows = [[cell for column, cell in enumerate(row) if column not in removable] for row in rows]
+
+    duplicate_columns = set()
+    for column in range(1, len(rows[0])):
+        if (
+            len(rows[0]) - len(duplicate_columns) > 1
+            and all(row[column].strip() == row[column - 1].strip() for row in [rows[0], *rows[2:]])
+        ):
+            if any(row[column].strip() for row in [rows[0], *rows[2:]]):
+                duplicate_columns.add(column)
+    if duplicate_columns:
+        rows = [[cell for column, cell in enumerate(row) if column not in duplicate_columns] for row in rows]
+
+    formatted = ["| " + " | ".join(cell.strip() for cell in row) + " |" for row in rows]
+    if final_newline:
+        formatted[-1] += newline
+    return [line + newline for line in formatted[:-1]] + formatted[-1:]
+
+
+def _remove_table_toc_leaders(rows: list[list[str]]) -> list[list[str]]:
+    cleaned = [row.copy() for row in rows]
+    if not cleaned:
+        return cleaned
+    for row in cleaned[2:]:
+        nonempty = [index for index, cell in enumerate(row) if cell.strip()]
+        if not nonempty:
+            continue
+        last = nonempty[-1]
+        last_cell = row[last].strip()
+        if patterns._PAGE_REFERENCE_RE.fullmatch(last_cell):
+            for column in nonempty[:-1]:
+                title = patterns._TRAILING_LEADERS_RE.sub("", row[column]).rstrip()
+                if title != row[column].strip():
+                    row[column] = title
+        for column, cell in enumerate(row):
+            match = patterns._INLINE_TOC_ROW_RE.fullmatch(cell.strip())
+            if match:
+                row[column] = f"{match.group('title').rstrip()} {match.group('page')}"
+    return cleaned
+
+
+def _split_table_cells(line: str) -> list[str]:
+    stripped = line.strip()
+    if "|" not in stripped:
+        return []
+    cells: list[str] = []
+    current: list[str] = []
+    escaped = False
+    code_ticks = 0
+    index = 0
+    while index < len(stripped):
+        character = stripped[index]
+        if escaped:
+            current.append(character)
+            escaped = False
+            index += 1
+            continue
+        if character == "\\":
+            current.append(character)
+            escaped = True
+            index += 1
+            continue
+        if character == "`":
+            run_end = index + 1
+            while run_end < len(stripped) and stripped[run_end] == "`":
+                run_end += 1
+            run = run_end - index
+            if code_ticks == 0:
+                code_ticks = run
+            elif code_ticks == run:
+                code_ticks = 0
+            current.extend(stripped[index:run_end])
+            index = run_end
+            continue
+        if character == "|" and code_ticks == 0:
+            cells.append("".join(current).strip())
+            current = []
+        else:
+            current.append(character)
+        index += 1
+    cells.append("".join(current).strip())
+    if stripped.startswith("|") and cells:
+        cells.pop(0)
+    if stripped.endswith("|") and cells:
+        cells.pop()
+    return cells
+
+
+def _evidence_was_changed_in_table(excerpt: str, changes: list[tuple[str, str]]) -> bool:
+    return any(excerpt in original and excerpt not in transformed for original, transformed in changes)
+
+
+def _evidence_was_changed_with_toc_cleanup(excerpt: str, changes: list[tuple[str, str]]) -> bool:
+    return (
+        bool(
+            patterns._TRAILING_LEADERS_RE.search(excerpt)
+            or patterns._INLINE_TOC_ROW_RE.fullmatch(excerpt.strip())
+        )
+        and _evidence_was_changed_in_table(excerpt, changes)
+    )
 
 
 def _is_control_noise(character: str) -> bool:

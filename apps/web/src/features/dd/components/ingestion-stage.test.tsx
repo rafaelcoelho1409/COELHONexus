@@ -145,7 +145,7 @@ describe("IngestionStage — the ?run= address", () => {
   it("does not adopt a run of another framework", async () => {
     serve(() => [{ slug: "beta", run_id: "r7", progress: { ...DONE, status: "running" } }]);
     render(<Page start="/dd/ingestion?slug=alpha" />);
-    await screen.findByLabelText("Search pages");
+    await screen.findByLabelText("Filter pages");
     expect(replace).not.toHaveBeenCalled();
   });
 });

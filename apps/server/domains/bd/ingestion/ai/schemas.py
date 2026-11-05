@@ -82,7 +82,7 @@ class IngestionAIRunManifest(BaseModel):
 
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0", "1.1"] = versions.MANIFEST_SCHEMA_VERSION
+    schema_version: Literal["1.0", "1.1", "1.2"] = versions.MANIFEST_SCHEMA_VERSION
     workflow_version: NonEmptyText = versions.WORKFLOW_VERSION
     agentic_run_id: SafeSegment
     book_id: SafeSegment
@@ -101,6 +101,8 @@ class IngestionAIRunManifest(BaseModel):
     delivered_page_count: int = Field(default = 0, ge = 0, strict = True)
     discarded_blank_page_count: int = Field(default = 0, ge = 0, strict = True)
     review_page_count: int = Field(default = 0, ge = 0, strict = True)
+    unverified_page_count: int = Field(default = 0, ge = 0, strict = True)
+    unverified_pages: list[int] = Field(default_factory = list)
     created_at: float = Field(gt = 0, allow_inf_nan = False)
     updated_at: float = Field(gt = 0, allow_inf_nan = False)
     finished_at: float | None = Field(default = None, gt = 0, allow_inf_nan = False)
@@ -145,7 +147,7 @@ class IngestionAIRunManifest(BaseModel):
                 raise ValueError("completed runs may contain only completed or review-required pages")
             if self.book_metadata_sha256 is None or self.quality_report_sha256 is None:
                 raise ValueError("completed runs must include hashes for book metadata and quality report")
-            if self.schema_version == "1.1":
+            if self.schema_version in {"1.1", "1.2"}:
                 if self.quality_status is None:
                     raise ValueError("completed 1.1 runs must include a quality status")
                 if self.delivered_page_count != sum(
@@ -160,6 +162,13 @@ class IngestionAIRunManifest(BaseModel):
                     page.status == AgenticPageStatus.REVIEW_REQUIRED for page in self.pages
                 ):
                     raise ValueError("review_page_count must match page review statuses")
+            if self.schema_version == "1.2":
+                if len(self.unverified_pages) != self.unverified_page_count:
+                    raise ValueError("unverified_page_count must match unverified_pages")
+                if len(self.unverified_pages) != len(set(self.unverified_pages)):
+                    raise ValueError("unverified_pages must contain unique page numbers")
+                if any(page_number < 1 or page_number > self.expected_page_count for page_number in self.unverified_pages):
+                    raise ValueError("unverified_pages must be within the expected page range")
 
         return self
 

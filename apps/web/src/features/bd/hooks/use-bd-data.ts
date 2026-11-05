@@ -11,6 +11,7 @@ import {
   getBdIngestionActiveQueryKey,
   getBdIngestionBookIdOptions,
   getBdIngestionBookIdPagesPageNoOptions,
+  getBdIngestionBookIdPagesPageNoQualityOptions,
   getBdIngestionBookIdQueryKey,
   getBdIngestionOptions,
   getBdIngestionQueryKey,
@@ -33,6 +34,7 @@ import {
   type BookSnapshot,
   type ExtractionWipeResponse,
   pageBodySchema,
+  pageQualitySchema,
   type StartResponse,
   startResponseSchema,
 } from "../entities";
@@ -73,13 +75,32 @@ export function useSnapshot(bookId: string) {
 
 /** GET /bd/ingestion/{id}/pages/{n} — the whole markdown of one reader unit (a streamed unit may be cut; a unit loaded
  * from the manifest has no text at all). */
-export function usePageBody(bookId: string, page: number | null, enabled: boolean) {
+export function usePageBody(
+  bookId: string,
+  page: number | null,
+  enabled: boolean,
+  /** Pin one side: the raw Docling page, or the AI-processed one. Without it the server shows the AI page when it has one. */
+  source?: "docling" | "agentic",
+) {
   return useQuery({
-    ...getBdIngestionBookIdPagesPageNoOptions({ path: { book_id: bookId, page_no: page ?? 0 } }),
+    ...getBdIngestionBookIdPagesPageNoOptions({
+      path: { book_id: bookId, page_no: page ?? 0 },
+      ...(source ? { query: { source } } : {}),
+    }),
     enabled: enabled && page !== null,
     retry: false,
     staleTime: Number.POSITIVE_INFINITY, // an extracted page does not change until the book is extracted again
     select: (data) => pageBodySchema.parse(data),
+  });
+}
+
+/** GET /bd/ingestion/{id}/pages/{n}/quality — what the current Agentic AI run found on one page and did about it. */
+export function usePageQuality(bookId: string, page: number | null, enabled: boolean) {
+  return useQuery({
+    ...getBdIngestionBookIdPagesPageNoQualityOptions({ path: { book_id: bookId, page_no: page ?? 0 } }),
+    enabled: enabled && page !== null,
+    retry: false,
+    select: (data) => pageQualitySchema.parse(data),
   });
 }
 
@@ -108,7 +129,8 @@ function isBookPageQuery(queryKey: readonly unknown[], bookId: string): boolean 
   if (typeof entry !== "object" || entry === null || !("_id" in entry) || !("path" in entry)) return false;
   const path = entry.path;
   return (
-    entry._id === "getBdIngestionBookIdPagesPageNo" &&
+    (entry._id === "getBdIngestionBookIdPagesPageNo" ||
+      entry._id === "getBdIngestionBookIdPagesPageNoQuality") &&
     typeof path === "object" &&
     path !== null &&
     "book_id" in path &&

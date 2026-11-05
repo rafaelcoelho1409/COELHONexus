@@ -4,12 +4,13 @@ import { useSyncExternalStore } from "react";
 
 import { parseStudyLayout, storeStudyLayout } from "../domain/study-layout";
 import type { StudyLayout } from "../entities";
-import { STUDY_LAYOUT_STORAGE_KEY } from "../params";
+import { MATERIALS_LAYOUT_STORAGE_KEY, STUDY_LAYOUT_STORAGE_KEY } from "../params";
 
-// The layout lives in localStorage; this store keeps every reader of it (and other tabs) in sync. `refused` holds the
-// choice for a browser that will not take it (storage blocked or full), so a toggle still works for the rest of the page view.
+// A layout lives in localStorage under its own key; this store keeps every reader of it (and other tabs) in sync.
+// `refused` holds the choice for a browser that will not take it (storage blocked or full), so a toggle still works
+// for the rest of the page view.
 const listeners = new Set<() => void>();
-let refused: string | undefined;
+const refused = new Map<string, string>();
 
 function subscribe(listener: () => void) {
   listeners.add(listener);
@@ -20,29 +21,47 @@ function subscribe(listener: () => void) {
   };
 }
 
-function read(): string | null {
-  if (refused !== undefined) return refused;
+function read(key: string): string | null {
+  const kept = refused.get(key);
+  if (kept !== undefined) return kept;
   try {
-    return window.localStorage.getItem(STUDY_LAYOUT_STORAGE_KEY);
+    return window.localStorage.getItem(key);
   } catch {
     return null; // storage blocked: the default layout
   }
 }
 
-function write(value: string) {
+function write(key: string, value: string) {
   try {
-    window.localStorage.setItem(STUDY_LAYOUT_STORAGE_KEY, value);
+    window.localStorage.setItem(key, value);
   } catch {
-    refused = value; // not remembered across visits, still applies to this page view
+    refused.set(key, value); // not remembered across visits, still applies to this page view
   }
   for (const listener of listeners) listener();
 }
 
-/** The reader's layout preference and a way to change part of it. Server render and first paint use the default. */
-export function useStudyLayout(): { layout: StudyLayout; update: (patch: Partial<StudyLayout>) => void } {
-  const raw = useSyncExternalStore(subscribe, read, () => null);
+/** The reader's layout preference stored under `key`, and a way to change part of it. Server render and first paint use the default. */
+function useStoredLayout(key: string): {
+  layout: StudyLayout;
+  update: (patch: Partial<StudyLayout>) => void;
+} {
+  const raw = useSyncExternalStore(
+    subscribe,
+    () => read(key),
+    () => null,
+  );
   return {
     layout: parseStudyLayout(raw),
-    update: (patch) => write(storeStudyLayout(parseStudyLayout(read()), patch)),
+    update: (patch) => write(key, storeStudyLayout(parseStudyLayout(read(key)), patch)),
   };
+}
+
+/** The Study tab's layout. */
+export function useStudyLayout() {
+  return useStoredLayout(STUDY_LAYOUT_STORAGE_KEY);
+}
+
+/** The Ingestion tab's Materials reader: the same layout, with the page list as its left column. */
+export function useMaterialsLayout() {
+  return useStoredLayout(MATERIALS_LAYOUT_STORAGE_KEY);
 }

@@ -4,7 +4,88 @@ from . import params
 from .... import agents, graphs
 
 import json
+import hashlib
+from json import JSONDecodeError, JSONDecoder
+from collections.abc import Iterator
 from typing import Any
+from pydantic import ValidationError
+
+
+class ModelCallLimitReachedError(ValueError):
+    """The page auditor stopped at its configured model-call limit."""
+
+
+def extract_assessment_response(
+    result: Any,
+) -> agents.schemas.PageAuditResponse | agents.schemas.PageAssessment:
+    """Validate structured auditor output or recover a JSON response from its last message."""
+    structured = result.get("structured_response") if isinstance(result, dict) else None
+    if structured is not None:
+        return _validate_assessment_response(structured)
+
+    messages = result.get("messages") if isinstance(result, dict) else None
+    content = _last_assistant_content(messages)
+    if content is None:
+        raise ValueError("page auditor returned no structured response or assistant message")
+    if "model call limit" in content.casefold():
+        raise ModelCallLimitReachedError("page auditor reached its model-call limit")
+
+    last_error: ValidationError | None = None
+    for value in _json_objects(content):
+        try:
+            return _validate_assessment_response(value)
+        except ValidationError as error:
+            last_error = error
+    if last_error is not None:
+        raise ValueError("page auditor returned JSON that did not match its response schema") from last_error
+    raise ValueError("page auditor returned no structured response and no JSON object")
+
+
+def _validate_assessment_response(
+    value: Any,
+) -> agents.schemas.PageAuditResponse | agents.schemas.PageAssessment:
+    try:
+        return agents.schemas.PageAuditResponse.model_validate(value)
+    except ValidationError:
+        return agents.schemas.PageAssessment.model_validate(value)
+
+
+def _last_assistant_content(messages: Any) -> str | None:
+    if not isinstance(messages, list):
+        return None
+    for message in reversed(messages):
+        if isinstance(message, dict):
+            role = message.get("role") or message.get("type")
+            content = message.get("content")
+        else:
+            role = getattr(message, "type", None)
+            content = getattr(message, "content", None)
+        if role not in {"assistant", "ai", "AIMessage"}:
+            continue
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = [
+                block["text"]
+                for block in content
+                if isinstance(block, dict) and isinstance(block.get("text"), str)
+            ]
+            if parts:
+                return "\n".join(parts)
+    return None
+
+
+def _json_objects(content: str) -> Iterator[dict[str, Any]]:
+    decoder = JSONDecoder()
+    for start, character in enumerate(content):
+        if character != "{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(content[start:])
+        except JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            yield value
 
 
 def validate_request(
@@ -98,7 +179,16 @@ def sanitize_assessment(
     markdown: str,
 ) -> tuple[agents.schemas.PageAssessment, list[str]]:
     """Keep only auditor findings whose evidence can be verified against this page."""
-    assessment = agents.schemas.PageAssessment.model_validate(value)
+    if isinstance(value, agents.schemas.PageAuditResponse):
+        response = value
+    elif isinstance(value, dict) and "page_number" not in value:
+        response = agents.schemas.PageAuditResponse.model_validate(value)
+    else:
+        response = None
+    if response is not None:
+        assessment = _materialize_assessment(response, page_number)
+    else:
+        assessment = agents.schemas.PageAssessment.model_validate(value)
     if assessment.page_number != page_number:
         raise ValueError("assessment page_number does not match the requested page")
     if len(assessment.issues) > params.MAX_ISSUES_PER_PAGE:
@@ -138,6 +228,40 @@ def sanitize_assessment(
         warnings.append(f"Discarded {dropped_issue_count} auditor finding(s) without verifiable evidence.")
 
     return assessment.model_copy(update = {"issues": valid_issues}), warnings
+
+
+def _materialize_assessment(
+    response: agents.schemas.PageAuditResponse,
+    page_number: int,
+) -> agents.schemas.PageAssessment:
+    issues = []
+    seen_ids: dict[str, int] = {}
+    for finding in response.findings:
+        evidence = [agents.schemas.EvidenceRef(
+            source = agents.schemas.EvidenceSource.PAGE_MARKDOWN,
+            excerpt = excerpt,
+            page_number = page_number,
+        ) for excerpt in finding.evidence_excerpts]
+        signature = "\0".join((finding.code.value, finding.description, *finding.evidence_excerpts))
+        digest = hashlib.sha256(signature.encode("utf-8")).hexdigest()[:16]
+        base_id = f"{finding.code.value}:{digest}"
+        ordinal = seen_ids.get(base_id, 0) + 1
+        seen_ids[base_id] = ordinal
+        issue_id = base_id if ordinal == 1 else f"{base_id}:{ordinal}"
+        issues.append(agents.schemas.PageIssue(
+            issue_id = issue_id,
+            code = finding.code,
+            severity = finding.severity,
+            description = finding.description,
+            confidence = finding.confidence,
+            evidence = evidence,
+        ))
+    return agents.schemas.PageAssessment(
+        page_number = page_number,
+        page_kind = response.page_kind,
+        confidence = response.confidence,
+        issues = issues,
+    )
 
 
 def _is_safe_segment(value: object) -> bool:

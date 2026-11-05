@@ -35,6 +35,11 @@ async def publish(
     issue_counts = Counter(issue.code.value for assessment in assessments for issue in assessment.issues)
     page_kinds = Counter(assessment.page_kind.value for assessment in assessments)
     review_pages = [page["page"] for page in page_results if page["status"] == "review_required"]
+    unverified_pages = [
+        page["page"] for page in state["page_audits"]
+        if page.get("structured_output_fallback") is True
+        or page.get("audit_mode") == "deterministic_limit"
+    ]
     delivered_page_numbers = [
         page["page"] for page in page_results
         if page.get("delivery_disposition", "include") != "discarded_blank"
@@ -62,12 +67,11 @@ async def publish(
         "complete_with_review"
         if (
             review_pages
+            or unverified_pages
             or state["book_metadata"].get("review_required")
-            or audit_fallback_pages
         )
         else "complete"
     )
-    fallback_page_set = set(audit_fallback_pages)
     review_reasons = Counter()
     mechanical_fixes = Counter()
     for page in page_results:
@@ -78,8 +82,6 @@ async def publish(
             review_reasons["unresolved_issues"] += 1
         if page.get("error"):
             review_reasons["repair_errors"] += 1
-        if page["page"] in fallback_page_set:
-            review_reasons["degraded_audit"] += 1
     quality_report = {
         "book_id": state["book_id"],
         "extraction_run_id": state["extraction_run_id"],
@@ -92,6 +94,8 @@ async def publish(
         "discarded_blank_pages": discarded_blank_pages,
         "discarded_blank_page_count": len(discarded_blank_pages),
         "pages_requiring_review": review_pages,
+        "unverified_pages": unverified_pages,
+        "unverified_page_count": len(unverified_pages),
         "review_reasons": dict(sorted(review_reasons.items())),
         "mechanical_fixes": dict(sorted(mechanical_fixes.items())),
         "pages_with_audit_warnings": [
@@ -166,6 +170,8 @@ async def publish(
         delivered_page_count = len(delivered_page_numbers),
         discarded_blank_page_count = len(discarded_blank_pages),
         review_page_count = len(review_pages),
+        unverified_page_count = len(unverified_pages),
+        unverified_pages = unverified_pages,
         created_at = state["run_created_at"],
         updated_at = finished_at,
         finished_at = finished_at,

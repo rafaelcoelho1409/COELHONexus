@@ -20,6 +20,7 @@ def page_auditor(model = None):
     """Build the configured DeepAgent for evidence-grounded page audits."""
     if model is None:
         model = domains.settings.chat.service.build_chat_model(
+            timeout_s = config.MODEL.timeout_s,
             max_tokens = config.MODEL.max_output_tokens,
             temperature = config.MODEL.temperature,
             max_retries = config.MODEL.max_retries,

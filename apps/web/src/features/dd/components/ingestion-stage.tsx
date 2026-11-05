@@ -28,8 +28,8 @@ import {
 } from "../hooks/use-dd-data";
 import { useDdOverlays } from "../hooks/use-overlays";
 import { ingestionHref } from "../params";
-import { Explorer } from "./explorer";
 import { IngestionPipeline } from "./ingestion-pipeline";
+import { MaterialsView } from "./materials-view";
 
 type IngestionView = "pipeline" | "materials";
 
@@ -241,7 +241,12 @@ function IngestionWorkspace({
         hidden={activeView !== "materials"}
         className="mt-4"
       >
-        <Explorer slug={slug} manifest={activeManifest} runId={explorerRunId} />
+        <MaterialsView
+          slug={slug}
+          manifest={activeManifest}
+          runId={explorerRunId}
+          active={activeView === "materials"}
+        />
       </div>
     </div>
   );

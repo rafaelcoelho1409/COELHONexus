@@ -22,6 +22,52 @@ export const pageBodySchema = z.object({
   content_source: z.enum(["docling", "agentic"]).catch("docling"),
 });
 
+/** What the stored reader layout holds. Every field falls back on its own, so a value from an older version or a
+ * hand-edited one still gives a usable layout. */
+export const readerLayoutSchema = z.object({
+  /** The page's left column (chapters and pages) and right column ("On this page"). */
+  contents: z.boolean().catch(true),
+  outline: z.boolean().catch(true),
+  /** The same two columns inside the reading window, which opens with both closed so the text has the screen. */
+  readingContents: z.boolean().catch(false),
+  readingOutline: z.boolean().catch(false),
+  /** How wide the text runs in the reading window. */
+  width: z.enum(["comfortable", "wide"]).catch("comfortable"),
+});
+export type ReaderLayout = z.infer<typeof readerLayoutSchema>;
+
+const patchSuggestionSchema = z.object({
+  target_text: z.string(),
+  replacement: z.string(),
+  rationale: z.string().catch(""),
+  confidence: z.number().catch(0),
+  risk: z.string().catch(""),
+});
+
+const pageIssueSchema = z.object({
+  issue_id: z.string(),
+  code: z.string(),
+  severity: z.string().catch(""),
+  description: z.string().catch(""),
+  evidence: z.array(z.string()).catch([]),
+  resolution: z.enum(["auto_applied", "review", "none"]).catch("none"),
+  proposal: patchSuggestionSchema.nullable().catch(null),
+});
+/** What the current Agentic AI run found on one page and what it did about it (`GET …/pages/{n}/quality`). */
+export const pageQualitySchema = z.object({
+  book_id: z.string(),
+  agentic_run_id: z.string(),
+  page: z.number(),
+  page_kind: z.string().catch("text"),
+  status: z.enum(["done", "review_required"]).catch("review_required"),
+  delivery_disposition: z.enum(["include", "discarded_blank", "image_only"]).catch("include"),
+  issues: z.array(pageIssueSchema).catch([]),
+  mechanical_fixes: z.record(z.string(), z.number()).catch({}),
+  audit_warnings: z.array(z.string()).catch([]),
+  errors: z.array(z.string()).catch([]),
+});
+export type PageQuality = z.infer<typeof pageQualitySchema>;
+
 const agenticProgressSchema = z.looseObject({
   current_node: z.string().nullable().catch(null),
   node_status: z.record(z.string(), z.enum(["pending", "running", "done", "failed"])).catch({}),
@@ -43,6 +89,11 @@ export const agenticRunStatusSchema = z.looseObject({
   delivered_page_count: z.number().catch(0),
   discarded_blank_page_count: z.number().catch(0),
   review_page_count: z.number().catch(0),
+  review_pages: z.array(z.number()).catch([]),
+  unverified_page_count: z.number().catch(0),
+  unverified_pages: z.array(z.number()).catch([]),
+  discarded_pages: z.array(z.number()).catch([]),
+  image_only_pages: z.array(z.number()).catch([]),
   progress: agenticProgressSchema,
   created_at: z.number().catch(0),
   updated_at: z.number().catch(0),

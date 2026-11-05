@@ -4,13 +4,26 @@
  * (`GET /bd/ingestion/{id}`) restores the picture after a reload; the event stream, which replays its history, fills
  * in the rest and keeps it live. */
 
-import { Maximize2, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Maximize2,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  Search,
+  TriangleAlert,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { apiErrorMessage } from "@/shared/lib/api-error";
+import { useScrollSpy } from "@/shared/lib/use-scroll-spy";
 import { bookUnits, fmtBytes, isLive } from "../domain/books";
 import { chapterTree } from "../domain/outline";
-import { mergePages, shownPage } from "../domain/pages";
+import { mergePages, neighbourReviewPage, pageFlags, shownPage } from "../domain/pages";
 import type { BookSnapshot } from "../entities";
+import { readRememberedPage, rememberPage } from "../hooks/remembered-page";
 import { useAgenticRun } from "../hooks/use-agentic-run";
 import {
   useCancelAgenticRun,
@@ -24,6 +37,8 @@ import {
 } from "../hooks/use-bd-data";
 import { useBookRun } from "../hooks/use-book-run";
 import { useBdOverlays } from "../hooks/use-overlays";
+import { usePageContent } from "../hooks/use-page-content";
+import { useReaderLayout } from "../hooks/use-reader-layout";
 import { ActionButton } from "./action-button";
 import { AgenticPipelineOverview, AgenticProgressBar, AgenticUsageSheet } from "./agentic-pipeline";
 import { BookReadingMode } from "./book-reading-mode";
@@ -31,9 +46,21 @@ import { BookReadingProgress } from "./book-reading-progress";
 import { BookSearch } from "./book-search";
 import { ChapterTree } from "./chapter-tree";
 import { PageList } from "./page-list";
+import { PageOutline } from "./page-outline";
 import { PageReader } from "./page-reader";
 import { RunProgress } from "./run-progress";
 import { StatusChip } from "./status-chip";
+
+/** The page's grid from 1024px up for each way of folding the two side columns (whole class names, so Tailwind sees them). */
+const COLUMNS = {
+  both: "lg:grid-cols-[16rem_minmax(0,1fr)_14rem]",
+  contentsOnly: "lg:grid-cols-[16rem_minmax(0,1fr)]",
+  outlineOnly: "lg:grid-cols-[minmax(0,1fr)_14rem]",
+  neither: "lg:grid-cols-[minmax(0,1fr)]",
+} as const;
+
+/** A column that stays in view while the page scrolls, and scrolls on its own when it is taller than the screen. */
+const STICKY_COLUMN = "lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:self-start lg:overflow-y-auto";
 
 export function BookView({ bookId, autoChain }: { bookId: string; autoChain: boolean }) {
   const snapshot = useSnapshot(bookId);
@@ -96,20 +123,51 @@ function BookDetail({
   );
 
   // Follow the newest page while the run is live when the book is opened; a reader's own choice turns it off.
-  const [view, setView] = useState<{ follow: boolean; picked: number | null }>({
-    follow: live,
-    picked: null,
+  const [view, setView] = useState<{ follow: boolean; picked: number | null }>(() => {
+    const remembered = live ? null : readRememberedPage(bookId, manifest.n_pages);
+    return {
+      follow: live,
+      picked:
+        remembered !== null && rows.some((candidate) => candidate.page === remembered) ? remembered : null,
+    };
   });
   const page = shownPage(view, state.newest, rows);
   const row = rows.find((candidate) => candidate.page === page);
-  const [navigationOpen, setNavigationOpen] = useState(true);
-  const [reading, setReading] = useState(false);
+  const { layout, update: updateLayout } = useReaderLayout();
+  // The reading window: null while closed, else the heading the reader was at on the page.
+  const [reading, setReading] = useState<{ startId: string | null } | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   const [activeView, setActiveView] = useState<"pipeline" | "materials">("pipeline");
   const currentIndex = rows.findIndex((candidate) => candidate.page === page);
   const previousPage = currentIndex > 0 ? (rows[currentIndex - 1]?.page ?? null) : null;
   const nextPage = currentIndex >= 0 ? (rows[currentIndex + 1]?.page ?? null) : null;
+
+  // The page's text and everything drawn from it is read once here: the article, the outline column and the reading
+  // window all show the same copy. The outline watches the headings of whichever of them is on screen.
+  const content = usePageContent({
+    bookId,
+    page,
+    row,
+    livePage: page === null ? undefined : state.pages[page],
+    agenticRunAvailable: agentic.run !== null,
+  });
+  const activeHeading = useScrollSpy(content.outlineIds, `${reading !== null}:${page}:${content.version}`);
+  const hasOutline = content.outline.length >= 2;
+  const flags = pageFlags(agentic.run);
+  const reviewPages = agentic.run?.review_pages ?? [];
+  const nextReview = neighbourReviewPage(reviewPages, page, 1);
+
+  // After a search jumps to a heading on another page, scroll there once that page has rendered.
+  const pendingHeading = useRef<string | null>(null);
+  useEffect(() => {
+    const id = pendingHeading.current;
+    if (id === null || page === null || content.source === "") return;
+    const element = document.getElementById(id);
+    if (!element) return;
+    pendingHeading.current = null;
+    element.scrollIntoView({ block: "start" });
+  }, [page, content.source]);
 
   useEffect(() => {
     if (rows.length === 0) return;
@@ -224,11 +282,19 @@ function BookDetail({
       onError: (error) => notice(apiErrorMessage(error), "error"),
     });
   };
-  const choosePage = (target: number) => setView({ follow: false, picked: target });
+  const choosePage = (target: number) => {
+    rememberPage(bookId, target);
+    setView({ follow: false, picked: target });
+  };
   const openReadingMode = () => {
     if (page === null) return;
     choosePage(page);
-    setReading(true);
+    setReading({ startId: activeHeading });
+  };
+  // Leaving the reading window lands the page on the heading the reader reached in it (the page's text is drawn again first).
+  const exitReading = () => {
+    flushSync(() => setReading(null));
+    if (activeHeading) document.getElementById(activeHeading)?.scrollIntoView?.({ block: "start" });
   };
   const navigation = (
     <>
@@ -249,6 +315,7 @@ function BookDetail({
           shown={page}
           following={view.follow}
           live={live}
+          flags={flags}
           onFollow={(follow) => setView({ follow, picked: null })}
           onPick={choosePage}
         />
@@ -256,6 +323,91 @@ function BookDetail({
     </>
   );
   const position = `${page ?? 0} / ${nPages > 0 ? nPages : total || rows.length}`;
+  const unitLabel = `${units.singular[0]?.toUpperCase()}${units.singular.slice(1)}`;
+  const outlineView = hasOutline ? <PageOutline entries={content.outline} activeId={activeHeading} /> : null;
+  const showOutlineColumn = layout.outline && hasOutline;
+  const columns = layout.contents
+    ? showOutlineColumn
+      ? COLUMNS.both
+      : COLUMNS.contentsOnly
+    : showOutlineColumn
+      ? COLUMNS.outlineOnly
+      : COLUMNS.neither;
+
+  // On the right of the page's header: step through the book, fold either side column, or read on the whole screen.
+  const toolbar = (
+    <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+      <ActionButton
+        iconOnly
+        aria-label={`Previous ${units.singular}`}
+        title={`Previous ${units.singular}`}
+        disabled={previousPage === null}
+        onClick={() => previousPage !== null && choosePage(previousPage)}
+      >
+        <ChevronLeft aria-hidden />
+      </ActionButton>
+      <ActionButton
+        iconOnly
+        aria-label={`Next ${units.singular}`}
+        title={`Next ${units.singular}`}
+        disabled={nextPage === null}
+        onClick={() => nextPage !== null && choosePage(nextPage)}
+      >
+        <ChevronRight aria-hidden />
+      </ActionButton>
+      {reviewPages.length > 0 ? (
+        <ActionButton
+          aria-label={`Next to review: the next ${units.singular} that needs review`}
+          title={`Jump to the next ${units.singular} that needs review`}
+          disabled={nextReview === null}
+          onClick={() => nextReview !== null && choosePage(nextReview)}
+        >
+          <TriangleAlert aria-hidden />
+          <span className="hidden sm:inline">Next to review</span>
+        </ActionButton>
+      ) : null}
+      {layout.contents ? null : (
+        <ActionButton
+          iconOnly
+          aria-label="Search this book"
+          title="Search this book"
+          onClick={() => setSearchOpen(true)}
+        >
+          <Search aria-hidden />
+        </ActionButton>
+      )}
+      <ActionButton
+        iconOnly
+        aria-expanded={layout.contents}
+        aria-label={layout.contents ? "Hide contents" : "Show contents"}
+        title={layout.contents ? "Hide contents" : "Show contents"}
+        onClick={() => updateLayout({ contents: !layout.contents })}
+      >
+        {layout.contents ? <PanelLeftClose aria-hidden /> : <PanelLeftOpen aria-hidden />}
+      </ActionButton>
+      {hasOutline ? (
+        <ActionButton
+          iconOnly
+          className="hidden lg:inline-flex"
+          aria-expanded={layout.outline}
+          aria-label={layout.outline ? "Hide outline" : "Show outline"}
+          title={layout.outline ? "Hide outline" : "Show outline"}
+          onClick={() => updateLayout({ outline: !layout.outline })}
+        >
+          {layout.outline ? <PanelRightClose aria-hidden /> : <PanelRightOpen aria-hidden />}
+        </ActionButton>
+      ) : null}
+      <ActionButton
+        aria-haspopup="dialog"
+        title={`Read this ${units.singular} on the whole screen`}
+        onClick={openReadingMode}
+        disabled={page === null}
+      >
+        <Maximize2 aria-hidden />
+        Reading mode
+      </ActionButton>
+    </div>
+  );
 
   return (
     <section aria-label={title} className="min-w-0">
@@ -455,6 +607,7 @@ function BookDetail({
               deliveredPageCount={agentic.run?.delivered_page_count ?? 0}
               discardedBlankPageCount={agentic.run?.discarded_blank_page_count ?? 0}
               reviewPageCount={agentic.run?.review_page_count ?? 0}
+              unverifiedPageCount={agentic.run?.unverified_page_count ?? 0}
               streamStatus={agentic.streamStatus}
               actionPending={agenticActionPending}
               cancelPending={agenticCancelPending}
@@ -487,70 +640,66 @@ function BookDetail({
         hidden={activeView !== "materials"}
         className="mt-4"
       >
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <ActionButton onClick={() => setSearchOpen(true)} disabled={rows.length === 0}>
-            <Search aria-hidden />
-            Search book
-            <kbd className="ml-1 font-mono text-xs text-muted-foreground">Ctrl K</kbd>
-          </ActionButton>
-          <ActionButton
-            iconOnly
-            aria-expanded={navigationOpen}
-            aria-label={navigationOpen ? "Hide contents" : "Show contents"}
-            title={navigationOpen ? "Hide contents" : "Show contents"}
-            onClick={() => setNavigationOpen(!navigationOpen)}
-          >
-            {navigationOpen ? <PanelLeftClose aria-hidden /> : <PanelLeftOpen aria-hidden />}
-          </ActionButton>
-          <ActionButton onClick={openReadingMode} disabled={page === null}>
-            <Maximize2 aria-hidden />
-            Reading mode
-          </ActionButton>
-        </div>
-
         {!reading ? (
-          <div
-            className={`mt-4 grid grid-cols-1 gap-4 ${
-              navigationOpen ? "lg:grid-cols-[15rem_minmax(0,1fr)]" : "lg:grid-cols-[minmax(0,1fr)]"
-            }`}
-          >
-            {navigationOpen ? (
-              <aside className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:self-start lg:overflow-y-auto">
+          <div className={`flex flex-col gap-4 lg:grid ${columns}`}>
+            {layout.contents ? (
+              <aside className={`flex min-w-0 flex-col gap-3 ${STICKY_COLUMN}`}>
+                <ActionButton
+                  className="w-full justify-start"
+                  onClick={() => setSearchOpen(true)}
+                  aria-haspopup="dialog"
+                  disabled={rows.length === 0}
+                >
+                  <Search aria-hidden />
+                  Search book
+                  <kbd className="ml-auto font-mono text-xs text-muted-foreground">Ctrl K</kbd>
+                </ActionButton>
                 {navigation}
               </aside>
             ) : null}
+
+            {/* In the reading window the text is drawn there, not here: one copy at a time, so a heading's id is never twice on the page. */}
             <PageReader
               bookId={bookId}
               page={page}
               row={row}
-              livePage={page === null ? undefined : state.pages[page]}
-              agenticRunAvailable={agentic.run !== null}
               nPages={nPages}
               units={units}
+              content={content}
+              toolbar={toolbar}
             />
+
+            {showOutlineColumn ? (
+              <div className="hidden lg:block">
+                <div className={STICKY_COLUMN}>{outlineView}</div>
+              </div>
+            ) : null}
           </div>
         ) : page !== null ? (
           <BookReadingMode
             title={title}
-            unitLabel={units.singular[0]?.toUpperCase() + units.singular.slice(1)}
+            unitLabel={unitLabel}
             position={position}
             page={page}
             previousPage={previousPage}
             nextPage={nextPage}
             navigation={navigation}
+            outline={outlineView}
+            layout={layout}
+            onLayout={updateLayout}
+            startId={reading.startId}
             onPage={choosePage}
             onSearch={() => setSearchOpen(true)}
-            onExit={() => setReading(false)}
+            onExit={exitReading}
           >
             <PageReader
               bookId={bookId}
               page={page}
               row={row}
-              livePage={state.pages[page]}
-              agenticRunAvailable={agentic.run !== null}
               nPages={nPages}
               units={units}
-              readingMode
+              content={content}
+              framed={false}
             />
           </BookReadingMode>
         ) : null}
@@ -558,9 +707,10 @@ function BookDetail({
         {searchOpen ? (
           <BookSearch
             bookId={bookId}
-            unitLabel={units.singular[0]?.toUpperCase() + units.singular.slice(1)}
+            unitLabel={unitLabel}
             rows={rows}
             onChoose={(hit) => {
+              pendingHeading.current = hit.headingId ?? null;
               choosePage(hit.page);
               setSearchOpen(false);
             }}

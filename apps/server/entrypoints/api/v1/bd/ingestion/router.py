@@ -8,6 +8,7 @@ from . import params, schemas
 import asyncio
 import json
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from starlette.responses import StreamingResponse
@@ -226,23 +227,7 @@ async def get_agentic_run(book_id: str, agentic_run_id: str) -> dict:
         raise HTTPException(status_code = 404, detail = str(error)) from error
     if manifest is None:
         raise HTTPException(status_code = 404, detail = "Agentic ingestion run not found")
-    return {
-        "book_id": manifest["book_id"],
-        "extraction_run_id": manifest["extraction_run_id"],
-        "agentic_run_id": manifest["agentic_run_id"],
-        "status": manifest["status"],
-        "expected_page_count": manifest["expected_page_count"],
-        "published_page_count": len(manifest["progress"]["processed_pages"]),
-        "quality_status": manifest.get("quality_status"),
-        "delivered_page_count": manifest.get("delivered_page_count", 0),
-        "discarded_blank_page_count": manifest.get("discarded_blank_page_count", 0),
-        "review_page_count": manifest.get("review_page_count", 0),
-        "progress": manifest["progress"],
-        "created_at": manifest["created_at"],
-        "updated_at": manifest["updated_at"],
-        "finished_at": manifest["finished_at"],
-        "error": manifest["error"],
-    }
+    return _agentic_status(manifest)
 
 
 @router.get("/{book_id}/agentic/runs/{agentic_run_id}/events")
@@ -309,18 +294,42 @@ async def agentic_run_events(book_id: str, agentic_run_id: str) -> StreamingResp
 
 
 @router.get("/{book_id}/pages/{page_no}", response_model = schemas.PageBody)
-async def get_page(book_id: str, page_no: int) -> dict:
+async def get_page(
+    book_id: str,
+    page_no: int,
+    source: Literal["docling", "agentic"] | None = None,
+) -> dict:
+    """The page as the reader shows it: the AI page when the current run has one, else the raw Docling page.
+    `source` pins one side, so the reader can compare the raw page with the AI-processed one."""
     markdown, content_source = await domains.bd.ingestion.ai.service.read_display_page(
-        book_id, page_no, storage = infra.minio.service.get_storage(),
+        book_id, page_no, storage = infra.minio.service.get_storage(), source = source,
     )
     if markdown is None:
-        raise HTTPException(status_code = 404, detail = f"page {page_no} of book {book_id!r} is not extracted")
+        raise HTTPException(
+            status_code = 404,
+            detail = (
+                f"page {page_no} of book {book_id!r} has no AI-processed version"
+                if source == "agentic"
+                else f"page {page_no} of book {book_id!r} is not extracted"
+            ),
+        )
     return {
         "book_id": book_id,
         "page": page_no,
         "markdown": markdown,
         "content_source": content_source,
     }
+
+
+@router.get("/{book_id}/pages/{page_no}/quality", response_model = schemas.PageQuality)
+async def get_page_quality(book_id: str, page_no: int) -> dict:
+    """What the current Agentic AI run found on this page (issues, fixes applied, what still needs a reviewer)."""
+    quality = await domains.bd.ingestion.ai.service.read_page_quality(
+        book_id, page_no, storage = infra.minio.service.get_storage(),
+    )
+    if quality is None:
+        raise HTTPException(status_code = 404, detail = f"no Agentic AI result for page {page_no} of book {book_id!r}")
+    return quality
 
 
 @router.get("/{book_id}/figures/{name}")
@@ -405,6 +414,10 @@ async def wipe_extraction(book_id: str) -> dict:
         raise HTTPException(status_code = 409, detail = str(error)) from error
 
 
+def _pages_where(manifest: dict, keep) -> list[int]:
+    return sorted(page["page_number"] for page in manifest.get("pages", []) if keep(page))
+
+
 def _agentic_status(manifest: dict) -> dict:
     progress = manifest["progress"]
     return {
@@ -418,6 +431,11 @@ def _agentic_status(manifest: dict) -> dict:
         "delivered_page_count": manifest.get("delivered_page_count", 0),
         "discarded_blank_page_count": manifest.get("discarded_blank_page_count", 0),
         "review_page_count": manifest.get("review_page_count", 0),
+        "review_pages": _pages_where(manifest, lambda page: page["status"] == "review_required"),
+        "unverified_page_count": manifest.get("unverified_page_count", 0),
+        "unverified_pages": manifest.get("unverified_pages", []),
+        "discarded_pages": _pages_where(manifest, lambda page: page["delivery_disposition"] == "discarded_blank"),
+        "image_only_pages": _pages_where(manifest, lambda page: page["delivery_disposition"] == "image_only"),
         "progress": progress,
         "created_at": manifest["created_at"],
         "updated_at": manifest["updated_at"],

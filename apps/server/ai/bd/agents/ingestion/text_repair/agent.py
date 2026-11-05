@@ -13,6 +13,7 @@ from deepagents import (
     register_harness_profile,
 )
 from deepagents.backends import StateBackend
+from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain_openai import ChatOpenAI
 
 
@@ -43,7 +44,11 @@ def text_repair(model = None):
         model = model,
         tools = [],
         system_prompt = prompts.ingestion.text_repair.prompts.SYSTEM_PROMPT,
-        response_format = schemas.PatchProposalBatch,
+        middleware = [ModelCallLimitMiddleware(
+            run_limit = domains.bd.ingestion.ai.params.AGENT_MODEL_CALL_LIMIT,
+            exit_behavior = "end",
+        )],
+        response_format = schemas.PatchDraftBatch,
         permissions = [
             FilesystemPermission(
                 operations = ["read"],

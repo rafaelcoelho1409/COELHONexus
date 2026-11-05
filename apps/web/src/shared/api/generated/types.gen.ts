@@ -53,6 +53,183 @@ export type ActiveRuns = {
 };
 
 /**
+ * AgenticProgress
+ */
+export type AgenticProgress = {
+    /**
+     * Current Node
+     */
+    current_node: string | null;
+    /**
+     * Node Status
+     */
+    node_status: {
+        [key: string]: string;
+    };
+    /**
+     * Audited Pages
+     */
+    audited_pages: Array<number>;
+    /**
+     * Processed Pages
+     */
+    processed_pages: Array<number>;
+    /**
+     * Active Audit Pages
+     */
+    active_audit_pages: Array<number>;
+    /**
+     * Active Repair Pages
+     */
+    active_repair_pages: Array<number>;
+};
+
+/**
+ * AgenticRunCancelResponse
+ */
+export type AgenticRunCancelResponse = {
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Agentic Run Id
+     */
+    agentic_run_id: string;
+    /**
+     * Status
+     */
+    status: string;
+};
+
+/**
+ * AgenticRunStart
+ */
+export type AgenticRunStart = {
+    /**
+     * Status
+     */
+    status: 'queued';
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Extraction Run Id
+     */
+    extraction_run_id: string;
+    /**
+     * Agentic Run Id
+     */
+    agentic_run_id: string;
+};
+
+/**
+ * AgenticRunStatus
+ */
+export type AgenticRunStatus = {
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Extraction Run Id
+     */
+    extraction_run_id: string;
+    /**
+     * Agentic Run Id
+     */
+    agentic_run_id: string;
+    /**
+     * Status
+     */
+    status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+    /**
+     * Expected Page Count
+     */
+    expected_page_count: number;
+    /**
+     * Published Page Count
+     */
+    published_page_count: number;
+    /**
+     * Quality Status
+     */
+    quality_status?: 'complete' | 'complete_with_review' | null;
+    /**
+     * Delivered Page Count
+     */
+    delivered_page_count?: number;
+    /**
+     * Discarded Blank Page Count
+     */
+    discarded_blank_page_count?: number;
+    /**
+     * Review Page Count
+     */
+    review_page_count?: number;
+    /**
+     * Review Pages
+     */
+    review_pages?: Array<number>;
+    /**
+     * Unverified Page Count
+     */
+    unverified_page_count?: number;
+    /**
+     * Unverified Pages
+     */
+    unverified_pages?: Array<number>;
+    /**
+     * Discarded Pages
+     */
+    discarded_pages?: Array<number>;
+    /**
+     * Image Only Pages
+     */
+    image_only_pages?: Array<number>;
+    progress: AgenticProgress;
+    /**
+     * Created At
+     */
+    created_at: number;
+    /**
+     * Updated At
+     */
+    updated_at: number;
+    /**
+     * Finished At
+     */
+    finished_at: number | null;
+    /**
+     * Error
+     */
+    error: string | null;
+};
+
+/**
+ * AgenticRunWipeResponse
+ */
+export type AgenticRunWipeResponse = {
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Agentic Run Id
+     */
+    agentic_run_id: string;
+    /**
+     * Wiped
+     */
+    wiped: boolean;
+    /**
+     * Objects Deleted
+     */
+    objects_deleted: number;
+};
+
+/**
  * AskFeedbackRequest
  *
  * User rating for an ask turn. `trace_id` is the 32-hex OTel trace id
@@ -86,6 +263,10 @@ export type BodyPostBdIngestion = {
      * Refresh
      */
     refresh?: boolean;
+    /**
+     * Auto Chain
+     */
+    auto_chain?: boolean;
 };
 
 /**
@@ -279,7 +460,7 @@ export type EndpointBody = {
     /**
      * Model
      */
-    model?: string;
+    model?: string | null;
     /**
      * Api Key
      */
@@ -336,6 +517,24 @@ export type EnumerationResponse = {
      * Items
      */
     items: Array<VideoSnippet>;
+};
+
+/**
+ * ExtractionWipeResponse
+ */
+export type ExtractionWipeResponse = {
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Wiped
+     */
+    wiped: boolean;
+    /**
+     * Objects Deleted
+     */
+    objects_deleted: number;
 };
 
 /**
@@ -518,6 +717,10 @@ export type PageBody = {
      * Markdown
      */
     markdown: string;
+    /**
+     * Content Source
+     */
+    content_source?: 'docling' | 'agentic';
 };
 
 /**
@@ -560,6 +763,113 @@ export type PageEntry = {
      * Section Path
      */
     section_path: Array<string>;
+};
+
+/**
+ * PageIssueView
+ */
+export type PageIssueView = {
+    /**
+     * Issue Id
+     */
+    issue_id: string;
+    /**
+     * Code
+     */
+    code: string;
+    /**
+     * Severity
+     */
+    severity: string;
+    /**
+     * Description
+     */
+    description: string;
+    /**
+     * Evidence
+     */
+    evidence: Array<string>;
+    /**
+     * Resolution
+     */
+    resolution: 'auto_applied' | 'review' | 'none';
+    proposal?: PatchSuggestion | null;
+};
+
+/**
+ * PageQuality
+ *
+ * What the current Agentic AI run found on one page and what it did about it.
+ */
+export type PageQuality = {
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Agentic Run Id
+     */
+    agentic_run_id: string;
+    /**
+     * Page
+     */
+    page: number;
+    /**
+     * Page Kind
+     */
+    page_kind: string;
+    /**
+     * Status
+     */
+    status: 'done' | 'review_required';
+    /**
+     * Delivery Disposition
+     */
+    delivery_disposition: 'include' | 'discarded_blank' | 'image_only';
+    /**
+     * Issues
+     */
+    issues: Array<PageIssueView>;
+    /**
+     * Mechanical Fixes
+     */
+    mechanical_fixes: {
+        [key: string]: number;
+    };
+    /**
+     * Audit Warnings
+     */
+    audit_warnings: Array<string>;
+    /**
+     * Errors
+     */
+    errors: Array<string>;
+};
+
+/**
+ * PatchSuggestion
+ */
+export type PatchSuggestion = {
+    /**
+     * Target Text
+     */
+    target_text: string;
+    /**
+     * Replacement
+     */
+    replacement: string;
+    /**
+     * Rationale
+     */
+    rationale: string;
+    /**
+     * Confidence
+     */
+    confidence: number;
+    /**
+     * Risk
+     */
+    risk: string;
 };
 
 /**
@@ -1051,6 +1361,7 @@ export type SearchResponse = {
 export type Snapshot = {
     manifest: Manifest;
     progress: Progress | null;
+    agentic?: AgenticRunStatus | null;
 };
 
 /**
@@ -1363,6 +1674,242 @@ export type GetBdIngestionBookIdResponses = {
 
 export type GetBdIngestionBookIdResponse = GetBdIngestionBookIdResponses[keyof GetBdIngestionBookIdResponses];
 
+export type PostBdIngestionBookIdAgenticRunsData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}/agentic/runs';
+};
+
+export type PostBdIngestionBookIdAgenticRunsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBdIngestionBookIdAgenticRunsError = PostBdIngestionBookIdAgenticRunsErrors[keyof PostBdIngestionBookIdAgenticRunsErrors];
+
+export type PostBdIngestionBookIdAgenticRunsResponses = {
+    /**
+     * Successful Response
+     */
+    202: AgenticRunStart;
+};
+
+export type PostBdIngestionBookIdAgenticRunsResponse = PostBdIngestionBookIdAgenticRunsResponses[keyof PostBdIngestionBookIdAgenticRunsResponses];
+
+export type DeleteBdIngestionBookIdAgenticRunsAgenticRunIdData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Agentic Run Id
+         */
+        agentic_run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}';
+};
+
+export type DeleteBdIngestionBookIdAgenticRunsAgenticRunIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteBdIngestionBookIdAgenticRunsAgenticRunIdError = DeleteBdIngestionBookIdAgenticRunsAgenticRunIdErrors[keyof DeleteBdIngestionBookIdAgenticRunsAgenticRunIdErrors];
+
+export type DeleteBdIngestionBookIdAgenticRunsAgenticRunIdResponses = {
+    /**
+     * Successful Response
+     */
+    200: AgenticRunWipeResponse;
+};
+
+export type DeleteBdIngestionBookIdAgenticRunsAgenticRunIdResponse = DeleteBdIngestionBookIdAgenticRunsAgenticRunIdResponses[keyof DeleteBdIngestionBookIdAgenticRunsAgenticRunIdResponses];
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Agentic Run Id
+         */
+        agentic_run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}';
+};
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdError = GetBdIngestionBookIdAgenticRunsAgenticRunIdErrors[keyof GetBdIngestionBookIdAgenticRunsAgenticRunIdErrors];
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdResponses = {
+    /**
+     * Successful Response
+     */
+    200: AgenticRunStatus;
+};
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdResponse = GetBdIngestionBookIdAgenticRunsAgenticRunIdResponses[keyof GetBdIngestionBookIdAgenticRunsAgenticRunIdResponses];
+
+export type PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Agentic Run Id
+         */
+        agentic_run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/cancel';
+};
+
+export type PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelError = PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelErrors[keyof PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelErrors];
+
+export type PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelResponses = {
+    /**
+     * Successful Response
+     */
+    200: AgenticRunCancelResponse;
+};
+
+export type PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelResponse = PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelResponses[keyof PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelResponses];
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Agentic Run Id
+         */
+        agentic_run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/events';
+};
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsError = GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsErrors[keyof GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsErrors];
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Agentic Run Id
+         */
+        agentic_run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/llm-counters';
+};
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersError = GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersErrors[keyof GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersErrors];
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersResponses = {
+    /**
+     * Response Get Bd Ingestion Book Id Agentic Runs Agentic Run Id Llm Counters
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersResponse = GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersResponses[keyof GetBdIngestionBookIdAgenticRunsAgenticRunIdLlmCountersResponses];
+
+export type PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Agentic Run Id
+         */
+        agentic_run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/resume';
+};
+
+export type PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeError = PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeErrors[keyof PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeErrors];
+
+export type PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeResponses = {
+    /**
+     * Successful Response
+     */
+    202: AgenticRunStart;
+};
+
+export type PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeResponse = PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeResponses[keyof PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeResponses];
+
 export type PostBdIngestionBookIdCancelData = {
     body?: never;
     path: {
@@ -1421,6 +1968,36 @@ export type GetBdIngestionBookIdEventsResponses = {
     200: unknown;
 };
 
+export type DeleteBdIngestionBookIdExtractionData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}/extraction';
+};
+
+export type DeleteBdIngestionBookIdExtractionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteBdIngestionBookIdExtractionError = DeleteBdIngestionBookIdExtractionErrors[keyof DeleteBdIngestionBookIdExtractionErrors];
+
+export type DeleteBdIngestionBookIdExtractionResponses = {
+    /**
+     * Successful Response
+     */
+    200: ExtractionWipeResponse;
+};
+
+export type DeleteBdIngestionBookIdExtractionResponse = DeleteBdIngestionBookIdExtractionResponses[keyof DeleteBdIngestionBookIdExtractionResponses];
+
 export type GetBdIngestionBookIdFiguresNameData = {
     body?: never;
     path: {
@@ -1465,7 +2042,12 @@ export type GetBdIngestionBookIdPagesPageNoData = {
          */
         page_no: number;
     };
-    query?: never;
+    query?: {
+        /**
+         * Source
+         */
+        source?: 'docling' | 'agentic' | null;
+    };
     url: '/api/v1/bd/ingestion/{book_id}/pages/{page_no}';
 };
 
@@ -1487,6 +2069,40 @@ export type GetBdIngestionBookIdPagesPageNoResponses = {
 
 export type GetBdIngestionBookIdPagesPageNoResponse = GetBdIngestionBookIdPagesPageNoResponses[keyof GetBdIngestionBookIdPagesPageNoResponses];
 
+export type GetBdIngestionBookIdPagesPageNoQualityData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Page No
+         */
+        page_no: number;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}/pages/{page_no}/quality';
+};
+
+export type GetBdIngestionBookIdPagesPageNoQualityErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetBdIngestionBookIdPagesPageNoQualityError = GetBdIngestionBookIdPagesPageNoQualityErrors[keyof GetBdIngestionBookIdPagesPageNoQualityErrors];
+
+export type GetBdIngestionBookIdPagesPageNoQualityResponses = {
+    /**
+     * Successful Response
+     */
+    200: PageQuality;
+};
+
+export type GetBdIngestionBookIdPagesPageNoQualityResponse = GetBdIngestionBookIdPagesPageNoQualityResponses[keyof GetBdIngestionBookIdPagesPageNoQualityResponses];
+
 export type PostBdIngestionBookIdRunData = {
     body?: never;
     path: {
@@ -1500,6 +2116,10 @@ export type PostBdIngestionBookIdRunData = {
          * Refresh
          */
         refresh?: boolean;
+        /**
+         * Auto Chain
+         */
+        auto_chain?: boolean;
     };
     url: '/api/v1/bd/ingestion/{book_id}/run';
 };
@@ -2655,6 +3275,40 @@ export type PostDdRunsRunIdCancelResponses = {
 };
 
 export type PostDdRunsRunIdCancelResponse = PostDdRunsRunIdCancelResponses[keyof PostDdRunsRunIdCancelResponses];
+
+export type GetDdRunsRunIdLlmCountersData = {
+    body?: never;
+    path: {
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/dd/runs/{run_id}/llm-counters';
+};
+
+export type GetDdRunsRunIdLlmCountersErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetDdRunsRunIdLlmCountersError = GetDdRunsRunIdLlmCountersErrors[keyof GetDdRunsRunIdLlmCountersErrors];
+
+export type GetDdRunsRunIdLlmCountersResponses = {
+    /**
+     * Response Get Dd Runs Run Id Llm Counters
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetDdRunsRunIdLlmCountersResponse = GetDdRunsRunIdLlmCountersResponses[keyof GetDdRunsRunIdLlmCountersResponses];
 
 export type GetDdRunsRunIdPagesIdxData = {
     body?: never;

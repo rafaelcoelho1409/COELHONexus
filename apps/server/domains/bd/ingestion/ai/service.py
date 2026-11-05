@@ -334,21 +334,89 @@ async def read_display_page(
     page_number: int,
     *,
     storage: infra.minio.service.MinIOStorage | None = None,
+    source: str | None = None,
 ) -> tuple[str | None, str]:
-    """Return a completed automatic AI page when available, otherwise the immutable Docling page."""
+    """Return a completed automatic AI page when available, otherwise the immutable Docling page.
+
+    `source` pins one side for comparison: "docling" always reads the raw page; "agentic" reads the AI page or nothing."""
+    if storage is None:
+        storage = infra.minio.service.get_storage()
+    if source != "docling":
+        run = await read_current_ingestion_ai_run(book_id, storage = storage)
+        if run is not None and page_number in run["progress"]["processed_pages"]:
+            normalized_key = domains.bd.ingestion.storage.keys.agentic_page_key(
+                book_id, run["agentic_run_id"], page_number,
+            )
+            try:
+                return await storage.read_text(normalized_key), "agentic"
+            except FileNotFoundError:
+                pass
+        if source == "agentic":
+            return None, "agentic"
+    markdown = await domains.bd.ingestion.storage.service.read_page(storage, book_id, page_number)
+    return markdown, "docling"
+
+
+async def read_page_quality(
+    book_id: str,
+    page_number: int,
+    *,
+    storage: infra.minio.service.MinIOStorage | None = None,
+) -> dict[str, Any] | None:
+    """What the current Agentic AI run found and did on one page, or None when no run covered it."""
     if storage is None:
         storage = infra.minio.service.get_storage()
     run = await read_current_ingestion_ai_run(book_id, storage = storage)
-    if run is not None and page_number in run["progress"]["processed_pages"]:
-        normalized_key = domains.bd.ingestion.storage.keys.agentic_page_key(
-            book_id, run["agentic_run_id"], page_number,
-        )
-        try:
-            return await storage.read_text(normalized_key), "agentic"
-        except FileNotFoundError:
-            pass
-    markdown = await domains.bd.ingestion.storage.service.read_page(storage, book_id, page_number)
-    return markdown, "docling"
+    if run is None:
+        return None
+    artifact = next((page for page in run["pages"] if page["page_number"] == page_number), None)
+    if artifact is None or artifact["status"] not in {"done", "review_required"}:
+        return None
+    try:
+        assessment = json.loads(await storage.read_text(artifact["assessment_key"]))
+        proposals = json.loads(await storage.read_text(artifact["patch_proposals_key"]))
+    except FileNotFoundError:
+        return None
+    auto_applied = set(proposals.get("auto_applied_issue_ids", []))
+    review_required = set(proposals.get("review_required_issue_ids", []))
+    proposal_by_issue = {proposal["issue_id"]: proposal for proposal in proposals.get("proposals", [])}
+    return {
+        "book_id": book_id,
+        "agentic_run_id": run["agentic_run_id"],
+        "page": page_number,
+        "page_kind": assessment["page_kind"],
+        "status": artifact["status"],
+        "delivery_disposition": artifact["delivery_disposition"],
+        "issues": [
+            {
+                "issue_id": issue["issue_id"],
+                "code": issue["code"],
+                "severity": issue["severity"],
+                "description": issue["description"],
+                "evidence": [evidence["excerpt"] for evidence in issue["evidence"]],
+                "resolution": (
+                    "auto_applied" if issue["issue_id"] in auto_applied
+                    else "review" if issue["issue_id"] in review_required
+                    else "none"
+                ),
+                "proposal": (
+                    {
+                        "target_text": proposal["target_text"],
+                        "replacement": proposal["replacement"],
+                        "rationale": proposal["rationale"],
+                        "confidence": proposal["confidence"],
+                        "risk": proposal["risk"],
+                    }
+                    if (proposal := proposal_by_issue.get(issue["issue_id"])) is not None
+                    else None
+                ),
+            }
+            for issue in assessment["issues"]
+        ],
+        "mechanical_fixes": proposals.get("mechanical_fixes", {}),
+        "audit_warnings": proposals.get("audit_warnings", []),
+        "errors": proposals.get("errors", []),
+    }
 
 
 async def read_ingestion_ai_run(

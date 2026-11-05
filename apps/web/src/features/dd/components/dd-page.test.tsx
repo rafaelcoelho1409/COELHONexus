@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { setupServer } from "msw/node";
@@ -116,16 +116,13 @@ describe("DocsDistillerPage", () => {
     routerState.search = "slug=a";
     const user = userEvent.setup();
     renderPage();
-    expect(await screen.findByText("Docs")).toBeInTheDocument();
-    expect(screen.getByText("Alpha · 2 pages · 640 B sitemap · 2m ago")).toBeInTheDocument();
-    expect(screen.getAllByText("Quickstart").length).toBeGreaterThan(0);
-    expect(screen.getByText("2 of 2 pages")).toBeInTheDocument();
+    expect(await screen.findByText("Alpha · 2 pages · 640 B sitemap · 2m ago")).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Materials" }));
 
-    const quickstart = screen.getAllByText("Quickstart")[0];
-    if (!quickstart) {
-      throw new Error("Quickstart row missing");
-    }
-    await user.click(quickstart.closest("button") as HTMLElement);
+    const pages = within(await screen.findByRole("navigation", { name: "Pages" }));
+    expect(pages.getByText("Docs")).toBeInTheDocument();
+    expect(pages.getByText("2 of 2 pages")).toBeInTheDocument();
+    await user.click(pages.getByRole("button", { name: /Quickstart/ }));
     await waitFor(() => expect(screen.getByText("quickstart body")).toBeInTheDocument());
   });
 

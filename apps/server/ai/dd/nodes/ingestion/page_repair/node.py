@@ -1,5 +1,6 @@
 """LangGraph node that asks for and validates minimal Markdown repairs."""
 from __future__ import annotations
+import domains
 from . import domain
 from ..page_audit import params as audit_params
 
@@ -40,16 +41,25 @@ async def repair_page(
         "assessment": assessment,
         "markdown": markdown,
     }, ensure_ascii = False)
-    result = await repairer.ainvoke({
+    request = {
         "messages": [{"role": "user", "content": prompt}],
         "files": files,
-    }, config = config)
-    if not isinstance(result, dict) or "structured_response" not in result:
-        raise ValueError("page repair specialist returned no structured PagePatchBatch")
-
-    return domain.apply_patches(
-        markdown,
-        source_sha256,
-        assessment,
-        result["structured_response"],
+    }
+    # Retry transient provider failures and occasional non-structured answers in one bounded loop.
+    result = await domains.settings.chat.service.resilient_ainvoke(
+        lambda: repairer.ainvoke(request, config = config),
+        attempts = audit_params.MAX_ATTEMPTS,
+        wait_base_s = audit_params.RETRY_WAIT_BASE_S,
+        accept = lambda value: isinstance(value, dict) and value.get("structured_response") is not None,
+    )
+    if isinstance(result, dict) and result.get("structured_response") is not None:
+        return domain.apply_patches(
+            markdown,
+            source_sha256,
+            assessment,
+            result["structured_response"],
+        )
+    raise ValueError(
+        f"page repair specialist ended {audit_params.MAX_ATTEMPTS} times without a structured PagePatchBatch "
+        f"for page {page['idx']}"
     )

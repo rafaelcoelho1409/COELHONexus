@@ -78,6 +78,16 @@ export const AUTO_CHAIN_STORAGE_KEY = "dd:pipeline:autochain";
 /** How the reader of the Study tab wants it laid out (side columns open or closed, text width), remembered per browser. */
 export const STUDY_LAYOUT_STORAGE_KEY = "dd:study:layout";
 
+/** The same layout for the Ingestion tab's Materials reader (its left column is the page list), kept apart from the Study's. */
+export const MATERIALS_LAYOUT_STORAGE_KEY = "dd:materials:layout";
+
+/** Searching the materials reads the pages' text this many at a time, and keeps what it read for this long. */
+export const MATERIALS_SEARCH_BATCH_SIZE = 8;
+export const MATERIALS_SEARCH_STALE_MS = 60_000;
+export const MATERIALS_SEARCH_MAX_HITS = 30;
+/** How much text a search hit shows on each side of the match. */
+export const MATERIALS_SNIPPET_CONTEXT_CHARS = 48;
+
 /**
  * The explorer groups pages by their section or first folder. When one group would hold this share of the pages — at least
  * `EXPLORER_REGROUP_MIN_PAGES` of them — that grouping tells nothing (every page of a docs site under one folder), so the

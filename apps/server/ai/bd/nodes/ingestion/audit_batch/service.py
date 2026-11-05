@@ -101,16 +101,18 @@ async def audit_pages(
                             }], "files": skills.service.files_for("page_auditor")}, config = {
                                 "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
                             })
-                        if not isinstance(result, dict) or "structured_response" not in result:
-                            raise ValueError("page auditor returned no structured assessment")
+                        response = page_audit.domain.extract_assessment_response(result)
                         proposed, warnings = page_audit.domain.sanitize_assessment(
-                            result["structured_response"],
+                            response,
                             page_number = page_ref["page"],
                             pictures = page_ref["pictures"],
                             markdown = markdown,
                         )
                         audit_mode = "llm_reviewed"
                         audit_error = None
+                        break
+                    except page_audit.domain.ModelCallLimitReachedError as error:
+                        audit_error = error
                         break
                     except Exception as error:
                         audit_error = error

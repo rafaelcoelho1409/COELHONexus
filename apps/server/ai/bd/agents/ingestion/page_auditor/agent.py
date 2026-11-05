@@ -13,6 +13,7 @@ from deepagents import (
     register_harness_profile,
 )
 from deepagents.backends import StateBackend
+from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain_openai import ChatOpenAI
 
 
@@ -42,7 +43,11 @@ def page_auditor(model=None):
         model = model,
         tools = [],
         system_prompt = prompts.ingestion.page_auditor.prompts.SYSTEM_PROMPT,
-        response_format = schemas.PageAssessment,
+        middleware = [ModelCallLimitMiddleware(
+            run_limit = domains.bd.ingestion.ai.params.AGENT_MODEL_CALL_LIMIT,
+            exit_behavior = "end",
+        )],
+        response_format = schemas.PageAuditResponse,
         permissions = [
             FilesystemPermission(
                 operations = ["read"],
