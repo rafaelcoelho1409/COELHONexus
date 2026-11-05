@@ -53,7 +53,7 @@ async def repair_pages(
         page_number: int,
         source_sha256: str,
         issues: dict[str, agents.schemas.PageIssue],
-    ) -> tuple[list[agents.schemas.PatchProposal], str | None, int]:
+    ) -> tuple[list[agents.schemas.PatchProposal], str | None, int, int]:
         role = item["role"]
         assigned_ids = [entry["issue_id"] for entry in item["issue_refs"]]
         assigned = {issue_id: issues[issue_id] for issue_id in assigned_ids}
@@ -64,7 +64,7 @@ async def repair_pages(
             max_chars = domains.bd.ingestion.ai.params.MAX_REPAIR_CONTEXT_CHARS,
         )
         if not source_context:
-            return [], f"{role}: assigned issue evidence was not found in the source page", 0
+            return [], f"{role}: assigned issue evidence was not found in the source page", 0, 0
         payload = {
             "task": "Propose minimal evidence-backed patches only within the supplied source context for these assigned issues.",
             "page_number": page_number,
@@ -73,35 +73,45 @@ async def repair_pages(
             "markdown": source_context,
             "assigned_issues": [issue.model_dump(mode = "json") for issue in assigned.values()],
         }
-        try:
-            run_id = state.get("agentic_run_id")
-            if not isinstance(run_id, str):
-                raise ValueError("the ingestion run has no agentic_run_id")
-            node_id = "structure_repair" if role == "structure" else "text_repair"
-            skill_role = "structure_repair" if role == "structure" else role
-            with domains.settings.llm_counter.service.llm_context(
-                ns = "bd", run_id = run_id, node_id = node_id,
-            ):
-                response = await specialists[role].ainvoke({"messages": [{
-                    "role": "user",
-                    "content": json.dumps(payload, ensure_ascii = False),
-                }], "files": skills.service.files_for(skill_role)}, config = {
-                    "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
-                })
-            if not isinstance(response, dict) or "structured_response" not in response:
-                raise ValueError("specialist returned no structured PatchProposalBatch")
-            proposals = domain.validate_proposals(
-                response["structured_response"],
-                page_number = page_number,
-                source_sha256 = source_sha256,
-                markdown = markdown,
-                assigned_issues = assigned,
-                role = agents.schemas.SpecialistRole(role),
-                allowed_context = source_context,
-            )
-            return proposals, None, len(source_context)
-        except Exception as error:
-            return [], f"{role}: {str(error)[:500]}", len(source_context)
+        run_id = state.get("agentic_run_id")
+        if not isinstance(run_id, str):
+            return [], f"{role}: the ingestion run has no agentic_run_id", len(source_context), 0
+        node_id = "structure_repair" if role == "structure" else "text_repair"
+        skill_role = "structure_repair" if role == "structure" else role
+        last_error = ""
+        attempts = 0
+        for attempt in range(1, domains.bd.ingestion.ai.params.SPECIALIST_ATTEMPTS + 1):
+            attempts = attempt
+            request = payload if not last_error else {
+                **payload,
+                "previous_attempt_rejected": last_error,
+                "response_contract": "Return one JSON object with a `proposals` array; copy target_text verbatim from `markdown`.",
+            }
+            try:
+                with domains.settings.llm_counter.service.llm_context(
+                    ns = "bd", run_id = run_id, node_id = node_id,
+                ):
+                    response = await specialists[role].ainvoke({"messages": [{
+                        "role": "user",
+                        "content": json.dumps(request, ensure_ascii = False),
+                    }], "files": skills.service.files_for(skill_role)}, config = {
+                        "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
+                    })
+                if not isinstance(response, dict) or "structured_response" not in response:
+                    raise ValueError("specialist returned no structured PatchProposalBatch")
+                proposals = domain.validate_proposals(
+                    response["structured_response"],
+                    page_number = page_number,
+                    source_sha256 = source_sha256,
+                    markdown = markdown,
+                    assigned_issues = assigned,
+                    role = agents.schemas.SpecialistRole(role),
+                    allowed_context = source_context,
+                )
+                return proposals, None, len(source_context) * attempts, attempts
+            except Exception as error:
+                last_error = str(error)[:300]
+        return [], f"{role}: {last_error}", len(source_context) * attempts, attempts
 
     async def process(page_ref: graphs.ingestion.state.IngestionPageReference) -> dict:
         async with semaphore:
@@ -126,11 +136,9 @@ async def repair_pages(
                 run_specialist(item, markdown, page_number, source_sha256, issues)
                 for item in assigned_items
             ))
-            proposals = [proposal for batch, _, _ in responses for proposal in batch]
-            errors = [
-                f"Page audit: {warning}"
-                for warning in audits[page_number].get("warnings", [])
-            ] + [error for _, error, _ in responses if error]
+            proposals = [proposal for batch, _, _, _ in responses for proposal in batch]
+            audit_warnings = list(audits[page_number].get("warnings", []))
+            errors = [error for _, error, _, _ in responses if error]
             if oversized:
                 errors.append(
                     f"Page exceeds the {domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS}-character "
@@ -144,6 +152,14 @@ async def repair_pages(
                 proposal_reviews = [proposal.issue_id for proposal in proposals]
                 errors.append(str(error))
 
+            # Invisible noise is removed in code after the model patches, so no patch anchor ever sees a changed page.
+            normalized, mechanical_counts = domain.apply_mechanical_fixes(normalized)
+            mechanical_ids = sorted(
+                issue.issue_id for issue in issue_list
+                if mechanical_counts.get(issue.code.value)
+            )
+            auto_applied = auto_applied + mechanical_ids
+
             represented = {proposal.issue_id for proposal in proposals}
             assigned_ids = {
                 ref["issue_id"]
@@ -151,8 +167,12 @@ async def repair_pages(
                 for ref in item["issue_refs"]
             }
             unresolved = (assigned_ids - represented) | set(proposal_reviews)
-            unsupported = set(issues) - assigned_ids
+            unsupported = set(issues) - assigned_ids - set(mechanical_ids)
             review_ids = sorted(unresolved | unsupported)
+            audit_degraded = (
+                audits[page_number].get("structured_output_fallback") is True
+                or audits[page_number].get("audit_mode") == "deterministic_limit"
+            )
             normalized_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
             assessment_content = json.dumps(
                 audits[page_number]["assessment"], ensure_ascii = False,
@@ -164,6 +184,8 @@ async def repair_pages(
                 "proposals": [proposal.model_dump(mode = "json") for proposal in proposals],
                 "auto_applied_issue_ids": auto_applied,
                 "review_required_issue_ids": review_ids,
+                "mechanical_fixes": mechanical_counts,
+                "audit_warnings": audit_warnings,
                 "errors": errors,
             }
             proposal_content = json.dumps(
@@ -192,9 +214,11 @@ async def repair_pages(
                     if audits[page_number]["assessment"].get("page_kind") == "image_only"
                     else "include"
                 ),
-                "repair_context_chars": sum(context_chars for _, _, context_chars in responses),
-                "repair_call_count": len(responses),
-                "status": "review_required" if review_ids or errors else "done",
+                "repair_context_chars": sum(context_chars for _, _, context_chars, _ in responses),
+                "repair_call_count": sum(attempts for _, _, _, attempts in responses),
+                "mechanical_fix_counts": mechanical_counts,
+                "audit_warnings": audit_warnings,
+                "status": "review_required" if review_ids or errors or audit_degraded else "done",
                 "error": "; ".join(errors) if errors else "",
             }
             await _report(progress_callback, kind = "page_repair", page = page_number, status = "done")

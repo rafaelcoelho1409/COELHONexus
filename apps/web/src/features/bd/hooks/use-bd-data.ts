@@ -27,9 +27,9 @@ import {
 } from "../api";
 import { isLive, libraryHasLiveBook, toBookStatus } from "../domain/books";
 import {
-  agenticRunStatusSchema,
   type AgenticRunCancelResponse,
   type AgenticRunWipeResponse,
+  agenticRunStatusSchema,
   type BookSnapshot,
   type ExtractionWipeResponse,
   pageBodySchema,
@@ -177,11 +177,7 @@ export function useResumeAgenticRun() {
 
 export function useCancelAgenticRun() {
   const refresh = useRefreshBook();
-  return useMutation<
-    AgenticRunCancelResponse,
-    unknown,
-    { bookId: string; agenticRunId: string }
-  >({
+  return useMutation<AgenticRunCancelResponse, unknown, { bookId: string; agenticRunId: string }>({
     mutationFn: ({ bookId, agenticRunId }) => cancelAgenticRun(bookId, agenticRunId),
     onSuccess: (_result, { bookId }) => refresh(bookId),
     onError: (_error, { bookId }) => refresh(bookId),
@@ -190,11 +186,7 @@ export function useCancelAgenticRun() {
 
 export function useWipeAgenticRun() {
   const refresh = useRefreshBook();
-  return useMutation<
-    AgenticRunWipeResponse,
-    unknown,
-    { bookId: string; agenticRunId: string }
-  >({
+  return useMutation<AgenticRunWipeResponse, unknown, { bookId: string; agenticRunId: string }>({
     mutationFn: ({ bookId, agenticRunId }) => wipeAgenticRun(bookId, agenticRunId),
     onSuccess: (_result, { bookId }) => refresh(bookId),
     onError: (_error, { bookId }) => refresh(bookId),

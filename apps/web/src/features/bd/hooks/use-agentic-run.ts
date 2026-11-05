@@ -109,11 +109,11 @@ export function useAgenticRun(bookId: string, snapshot: BookSnapshot): AgenticRu
             ? "failed"
             : event.kind === "run_cancelled"
               ? "cancelled"
-            : event.kind === "run_queued"
-              ? "queued"
-              : event.kind === "run_cancelling"
-                ? current.status
-                : "running";
+              : event.kind === "run_queued"
+                ? "queued"
+                : event.kind === "run_cancelling"
+                  ? current.status
+                  : "running";
       return {
         ...current,
         status: nextStatus,

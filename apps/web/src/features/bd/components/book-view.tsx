@@ -7,7 +7,6 @@
 import { Maximize2, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { apiErrorMessage } from "@/shared/lib/api-error";
-import { Button } from "@/shared/ui/button";
 import { bookUnits, fmtBytes, isLive } from "../domain/books";
 import { chapterTree } from "../domain/outline";
 import { mergePages, shownPage } from "../domain/pages";
@@ -25,6 +24,7 @@ import {
 } from "../hooks/use-bd-data";
 import { useBookRun } from "../hooks/use-book-run";
 import { useBdOverlays } from "../hooks/use-overlays";
+import { ActionButton } from "./action-button";
 import { AgenticPipelineOverview, AgenticProgressBar, AgenticUsageSheet } from "./agentic-pipeline";
 import { BookReadingMode } from "./book-reading-mode";
 import { BookReadingProgress } from "./book-reading-progress";
@@ -34,9 +34,6 @@ import { PageList } from "./page-list";
 import { PageReader } from "./page-reader";
 import { RunProgress } from "./run-progress";
 import { StatusChip } from "./status-chip";
-
-const BUTTON =
-  "min-h-9 rounded-sm border border-border px-3 text-sm text-foreground hover:border-neutral-8 disabled:opacity-50";
 
 export function BookView({ bookId, autoChain }: { bookId: string; autoChain: boolean }) {
   const snapshot = useSnapshot(bookId);
@@ -53,9 +50,9 @@ export function BookView({ bookId, autoChain }: { bookId: string; autoChain: boo
         <p className="text-destructive-text">
           This book could not be opened — {apiErrorMessage(snapshot.error)}
         </p>
-        <button type="button" onClick={() => void snapshot.refetch()} className={`mt-3 ${BUTTON}`}>
-          Try again
-        </button>
+        <div className="mt-3">
+          <ActionButton onClick={() => void snapshot.refetch()}>Try again</ActionButton>
+        </div>
       </section>
     );
   }
@@ -277,9 +274,9 @@ function BookDetail({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {status === "cancelled" || status === "failed" ? (
-            <button type="button" onClick={start} disabled={runBook.isPending} className={BUTTON}>
+            <ActionButton onClick={start} disabled={runBook.isPending}>
               {runBook.isPending ? "Starting…" : "Resume"}
-            </button>
+            </ActionButton>
           ) : null}
         </div>
       </header>
@@ -384,9 +381,7 @@ function BookDetail({
               successful={status === "done" && run.error === null}
               action={
                 <div className="flex flex-wrap items-center justify-end gap-1.5">
-                  <Button
-                    variant="outline"
-                    size="default"
+                  <ActionButton
                     onClick={start}
                     disabled={live || runBook.isPending || status === "done"}
                     title={
@@ -408,10 +403,8 @@ function BookDetail({
                       : status === "failed" || status === "cancelled"
                         ? "Resume"
                         : "Start"}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="default"
+                  </ActionButton>
+                  <ActionButton
                     onClick={cancel}
                     disabled={!live || cancelling}
                     aria-busy={cancelling}
@@ -419,10 +412,8 @@ function BookDetail({
                     title={live ? undefined : "There is no active Docling extraction to stop."}
                   >
                     {cancelling ? "Stopping…" : "Stop"}
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    size="default"
+                  </ActionButton>
+                  <ActionButton
                     onClick={() => void wipeDoclingExtraction()}
                     disabled={
                       live ||
@@ -439,7 +430,7 @@ function BookDetail({
                     }
                   >
                     {wipeExtraction.isPending ? "Wiping…" : "Wipe"}
-                  </Button>
+                  </ActionButton>
                 </div>
               }
               className="mt-0"
@@ -459,7 +450,7 @@ function BookDetail({
               error={agentic.error}
               units={units}
               extractionDone={status === "done"}
-              successful={agentic.status === "done" && agentic.run?.quality_status === "complete"}
+              successful={agentic.status === "done"}
               qualityStatus={agentic.run?.quality_status ?? null}
               deliveredPageCount={agentic.run?.delivered_page_count ?? 0}
               discardedBlankPageCount={agentic.run?.discarded_blank_page_count ?? 0}
@@ -497,30 +488,24 @@ function BookDetail({
         className="mt-4"
       >
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button
-            variant="outline"
-            size="lg"
-            onClick={() => setSearchOpen(true)}
-            disabled={rows.length === 0}
-          >
+          <ActionButton onClick={() => setSearchOpen(true)} disabled={rows.length === 0}>
             <Search aria-hidden />
             Search book
             <kbd className="ml-1 font-mono text-xs text-muted-foreground">Ctrl K</kbd>
-          </Button>
-          <Button
-            variant="outline"
-            size="icon-lg"
+          </ActionButton>
+          <ActionButton
+            iconOnly
             aria-expanded={navigationOpen}
             aria-label={navigationOpen ? "Hide contents" : "Show contents"}
             title={navigationOpen ? "Hide contents" : "Show contents"}
             onClick={() => setNavigationOpen(!navigationOpen)}
           >
             {navigationOpen ? <PanelLeftClose aria-hidden /> : <PanelLeftOpen aria-hidden />}
-          </Button>
-          <Button variant="outline" size="lg" onClick={openReadingMode} disabled={page === null}>
+          </ActionButton>
+          <ActionButton onClick={openReadingMode} disabled={page === null}>
             <Maximize2 aria-hidden />
             Reading mode
-          </Button>
+          </ActionButton>
         </div>
 
         {!reading ? (

@@ -5,10 +5,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { BookRow } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
-
 import { bookFormat, bookUnits, fmtBytes, isLive, newestFirst, toBookStatus } from "../domain/books";
 import { useDeleteBook, useLibrary, useRunBook } from "../hooks/use-bd-data";
 import { useBdOverlays } from "../hooks/use-overlays";
+import { ActionButton } from "./action-button";
 import { StatusChip } from "./status-chip";
 
 const titleOf = (row: BookRow) => row.title.trim() || row.filename;
@@ -118,23 +118,22 @@ export function LibraryPicker({
 
   return (
     <div className="relative min-w-0" ref={boxRef}>
-      <button
+      <ActionButton
         ref={triggerRef}
-        type="button"
+        className="max-w-[min(24rem,calc(100vw-2rem))]"
         aria-haspopup="true"
         aria-expanded={open}
         aria-controls={open ? "bd-library-options" : undefined}
         onClick={() => setOpen((value) => !value)}
-        className="min-h-9 max-w-[min(24rem,calc(100vw-2rem))] rounded-sm border border-border bg-card px-3 py-1.5 text-sm text-foreground hover:border-foreground/40"
       >
-        <span className="inline-flex max-w-72 items-center gap-2 truncate font-medium">
+        <span className="inline-flex max-w-72 items-center gap-2 truncate">
           {currentBook ? titleOf(currentBook) : `Library${library.data ? ` · ${rows.length}` : ""}`}
           <ChevronDown
             className={`size-4 shrink-0 text-muted-foreground ${open ? "rotate-180" : ""}`}
             aria-hidden="true"
           />
         </span>
-      </button>
+      </ActionButton>
       {open ? (
         <div
           id="bd-library-options"
@@ -156,13 +155,9 @@ export function LibraryPicker({
           {library.isError ? (
             <div role="alert" className="p-2 text-sm text-destructive-text">
               <p>The library could not be loaded.</p>
-              <button
-                type="button"
-                onClick={() => void library.refetch()}
-                className="mt-1 min-h-9 rounded-sm border border-border px-3 text-foreground hover:border-neutral-8"
-              >
-                Try again
-              </button>
+              <div className="mt-1">
+                <ActionButton onClick={() => void library.refetch()}>Try again</ActionButton>
+              </div>
             </div>
           ) : (
             <ul aria-label="Ingested books" className="max-h-64 overflow-auto">
@@ -195,26 +190,24 @@ export function LibraryPicker({
                         </span>
                       </span>
                     </button>
-                    <button
-                      type="button"
+                    <ActionButton
+                      iconOnly
                       aria-label={`Refresh ${titleOf(row)}`}
                       title="Refresh extraction"
                       disabled={busy || isLive(status)}
                       onClick={() => refreshBook(row)}
-                      className="inline-flex size-9 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
                     >
-                      <RotateCw className="size-4" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
+                      <RotateCw aria-hidden="true" />
+                    </ActionButton>
+                    <ActionButton
+                      iconOnly
                       aria-label={`Delete ${titleOf(row)}`}
                       title={isLive(status) ? "Cancel the extraction first" : "Delete"}
                       disabled={busy || isLive(status)}
                       onClick={() => void remove(row)}
-                      className="inline-flex size-9 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-destructive-text disabled:opacity-50"
                     >
-                      <Trash2 className="size-4" aria-hidden="true" />
-                    </button>
+                      <Trash2 aria-hidden="true" />
+                    </ActionButton>
                   </li>
                 );
               })}

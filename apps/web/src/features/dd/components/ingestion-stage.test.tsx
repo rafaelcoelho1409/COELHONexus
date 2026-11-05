@@ -43,7 +43,21 @@ const MANIFEST = {
     },
   ],
 };
+const LIBRARY_ITEM = {
+  slug: "alpha",
+  framework_name: "Alpha Framework",
+  framework_slug: "alpha",
+  page_count: 1,
+  ingested_at: Math.floor(Date.now() / 1000) - 60,
+  tier_kind: "llms_full",
+  logo: null,
+  logos: null,
+};
 const DONE = { phase: "ingest", tier: "finalize", current: 0, total: 0, last_url: "", status: "done" };
+const NO_USAGE = {
+  total: { calls: 0, tokens_in: 0, tokens_out: 0, reasoning_tokens: 0, errors: 0 },
+  by_node: {},
+};
 
 const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledFrame: "error" }));
@@ -87,24 +101,25 @@ function serve(activeRuns: () => unknown[]) {
     http.get(`${ORIGIN}/api/v1/dd/resolver`, () => HttpResponse.json(CATALOG)),
     http.get(`${ORIGIN}/api/v1/dd/runs/active`, () => HttpResponse.json({ active: activeRuns() })),
     http.get(`${ORIGIN}/api/v1/dd/runs/${RUN}`, () => HttpResponse.json({ progress: DONE, post: null })),
+    http.get(`${ORIGIN}/api/v1/dd/runs/*/llm-counters`, () => HttpResponse.json(NO_USAGE)),
     http.get(`${ORIGIN}/api/v1/dd/ingestion/alpha/manifest`, () => HttpResponse.json(MANIFEST)),
     http.get(`${ORIGIN}/api/v1/dd/ingestion`, () => HttpResponse.json([])),
     http.get(`${ORIGIN}/api/v1/dd/ingestion/alpha/pages/*`, () => HttpResponse.json({ body: "x" })),
   );
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 describe("IngestionStage — the ?run= address", () => {
-  it("drops ?run= once the run is done, and stays put even while the active list still names that run", async () => {
+  it("keeps a finished run on screen, and does not adopt it again while the active list still names it", async () => {
     // The active list is cached for a few seconds, so right after a run ends it can still list the run.
     serve(() => [{ slug: "alpha", run_id: RUN, progress: { ...DONE, status: "running" } }]);
     render(<Page start={`/dd/ingestion?slug=alpha&run=${RUN}`} />);
 
-    await waitFor(() => expect(screen.getByTestId("url")).toHaveTextContent("/dd/ingestion?slug=alpha"));
-    await waitFor(() => expect(screen.getByTestId("url")).not.toHaveTextContent("run="));
-    // … and it stays: no put-back, no flicker.
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    expect(screen.getByTestId("url")).not.toHaveTextContent("run=");
-    expect(replace.mock.calls.length).toBeLessThanOrEqual(1);
+    expect(await screen.findByText("Ingestion complete.")).toBeInTheDocument();
+    await sleep(600);
+    expect(screen.getByTestId("url")).toHaveTextContent(`run=${RUN}`);
+    expect(replace).not.toHaveBeenCalled();
   });
 
   it("still adopts a run that is really in flight when the page is opened without ?run=", async () => {
@@ -117,6 +132,7 @@ describe("IngestionStage — the ?run= address", () => {
       http.get(`${ORIGIN}/api/v1/dd/runs/r9`, () =>
         HttpResponse.json({ progress: { ...DONE, status: "running", tier: "llms_full" }, post: null }),
       ),
+      http.get(`${ORIGIN}/api/v1/dd/runs/*/llm-counters`, () => HttpResponse.json(NO_USAGE)),
       http.get(`${ORIGIN}/api/v1/dd/ingestion/alpha/manifest`, () => HttpResponse.json(MANIFEST)),
       http.get(`${ORIGIN}/api/v1/dd/ingestion`, () => HttpResponse.json([])),
       http.get(`${ORIGIN}/api/v1/dd/ingestion/alpha/pages/*`, () => HttpResponse.json({ body: "x" })),
@@ -124,25 +140,6 @@ describe("IngestionStage — the ?run= address", () => {
     render(<Page start="/dd/ingestion?slug=alpha" />);
     await waitFor(() => expect(screen.getByTestId("url")).toHaveTextContent("run=r9"));
     expect(replace).toHaveBeenCalledTimes(1);
-  });
-
-  it("names the framework on the progress box, with its logo, before it has ever been ingested", async () => {
-    server.use(
-      http.get(`${ORIGIN}/api/v1/dd/resolver`, () => HttpResponse.json(CATALOG)),
-      http.get(`${ORIGIN}/api/v1/dd/runs/active`, () => HttpResponse.json({ active: [] })),
-      http.get(`${ORIGIN}/api/v1/dd/runs/r5`, () =>
-        HttpResponse.json({ progress: { ...DONE, status: "running", tier: "llms_full" }, post: null }),
-      ),
-      http.get(`${ORIGIN}/api/v1/dd/ingestion/alpha/manifest`, () => HttpResponse.json(MANIFEST)),
-      http.get(`${ORIGIN}/api/v1/dd/ingestion`, () => HttpResponse.json([])), // nothing in the library yet
-      http.get(`${ORIGIN}/api/v1/dd/ingestion/alpha/pages/*`, () => HttpResponse.json({ body: "x" })),
-    );
-    render(<Page start="/dd/ingestion?slug=alpha&run=r5" />);
-
-    const box = await screen.findByRole("region", { name: "Ingestion progress" });
-    expect(await within(box).findByText("Alpha Framework")).toBeInTheDocument();
-    expect(box.querySelector("img")).toHaveAttribute("src", "https://logos.test/alpha.svg");
-    expect(within(box).getByText("Fetching documentation bundle")).toBeInTheDocument();
   });
 
   it("does not adopt a run of another framework", async () => {
@@ -153,7 +150,122 @@ describe("IngestionStage — the ?run= address", () => {
   });
 });
 
-describe("IngestionStage — cancelling and how a run ends", () => {
+describe("IngestionStage — the Pipeline tab", () => {
+  const STAGES = {
+    extraction: {
+      status: "running",
+      tier: "llms_full",
+      current: 3,
+      total: 10,
+      last_url: "https://docs.test/intro",
+      error: null,
+    },
+    agentic: {
+      status: "waiting",
+      current: 0,
+      total: 0,
+      current_node: null,
+      node_status: {},
+      node_progress: {},
+    },
+  };
+
+  it("shows the two progress cards and the Agentic AI graph of a run in flight", async () => {
+    server.use(
+      http.get(`${ORIGIN}/api/v1/dd/resolver`, () => HttpResponse.json(CATALOG)),
+      http.get(`${ORIGIN}/api/v1/dd/runs/active`, () => HttpResponse.json({ active: [] })),
+      http.get(`${ORIGIN}/api/v1/dd/runs/r5`, () =>
+        HttpResponse.json({
+          progress: { ...DONE, status: "running", tier: "llms_full", current: 3, total: 10, stages: STAGES },
+          post: null,
+        }),
+      ),
+      http.get(`${ORIGIN}/api/v1/dd/runs/*/llm-counters`, () => HttpResponse.json(NO_USAGE)),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/alpha/manifest`, () => HttpResponse.json(MANIFEST)),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion`, () => HttpResponse.json([])),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/alpha/pages/*`, () => HttpResponse.json({ body: "x" })),
+    );
+    render(<Page start="/dd/ingestion?slug=alpha&run=r5" />);
+
+    const extraction = await screen.findByRole("region", { name: "Documentation extraction progress" });
+    expect(await within(extraction).findByText("Processing")).toBeInTheDocument();
+    expect(within(extraction).getByText("3 of 10 pages · 30%")).toBeInTheDocument();
+    expect(within(extraction).getByText("Fetching documentation bundle")).toBeInTheDocument();
+    expect(within(extraction).getByText("https://docs.test/intro")).toBeInTheDocument();
+    expect(within(extraction).getByRole("button", { name: "Start documentation extraction" })).toBeDisabled();
+    expect(within(extraction).getByRole("button", { name: "Stop documentation extraction" })).toBeEnabled();
+
+    const agentic = screen.getByRole("region", { name: "Agentic AI progress" });
+    expect(within(agentic).getByText("Waiting")).toBeInTheDocument();
+
+    const pipeline = screen.getByRole("region", { name: "Agentic pipeline stages" });
+    await userEvent.click(within(pipeline).getByRole("button", { name: "List" }));
+    const nodes = within(pipeline).getByRole("list", { name: "Agentic pipeline nodes" });
+    expect(within(nodes).getAllByRole("listitem")).toHaveLength(3);
+    expect(within(nodes).getByRole("button", { name: /Audit pages/ })).toBeInTheDocument();
+    expect(within(pipeline).getByRole("region", { name: "Page progress" })).toBeInTheDocument();
+  });
+
+  it("starts an ingestion that has never run, and follows the run it queued", async () => {
+    serve(() => []);
+    server.use(
+      http.post(`${ORIGIN}/api/v1/dd/runs`, () => HttpResponse.json({ status: "queued", run_id: "r1" })),
+      http.get(`${ORIGIN}/api/v1/dd/runs/r1`, () =>
+        HttpResponse.json({ progress: { ...DONE, status: "running", tier: "llms_full" }, post: null }),
+      ),
+    );
+    render(<Page start="/dd/ingestion?slug=alpha" />);
+
+    const extraction = await screen.findByRole("region", { name: "Documentation extraction progress" });
+    const start = within(extraction).getByRole("button", { name: "Start documentation extraction" });
+    expect(start).toBeEnabled();
+    expect(within(extraction).getByRole("button", { name: "Wipe ingested documentation" })).toBeDisabled();
+    await userEvent.click(start);
+
+    await waitFor(() => expect(screen.getByTestId("url")).toHaveTextContent("run=r1"));
+  });
+
+  it("will not start again over a framework that is already in the library", async () => {
+    serve(() => []);
+    server.use(http.get(`${ORIGIN}/api/v1/dd/ingestion`, () => HttpResponse.json([LIBRARY_ITEM])));
+    render(<Page start="/dd/ingestion?slug=alpha" />);
+
+    const extraction = await screen.findByRole("region", { name: "Documentation extraction progress" });
+    await waitFor(() =>
+      expect(
+        within(extraction).getByRole("button", { name: "Start documentation extraction" }),
+      ).toBeDisabled(),
+    );
+    expect(within(extraction).getByText("Complete")).toBeInTheDocument();
+    expect(within(extraction).getByText("1 of 1 pages · 100%")).toBeInTheDocument();
+  });
+
+  it("wipes the ingested documentation after a confirmation", async () => {
+    serve(() => []);
+    let deleted = false;
+    server.use(
+      http.get(`${ORIGIN}/api/v1/dd/ingestion`, () => HttpResponse.json([LIBRARY_ITEM])),
+      http.delete(`${ORIGIN}/api/v1/dd/ingestion/alpha`, () => {
+        deleted = true;
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+    render(<Page start="/dd/ingestion?slug=alpha" />);
+
+    const extraction = await screen.findByRole("region", { name: "Documentation extraction progress" });
+    const wipe = within(extraction).getByRole("button", { name: "Wipe ingested documentation" });
+    await waitFor(() => expect(wipe).toBeEnabled());
+    await userEvent.click(wipe);
+
+    expect(await screen.findByText("Wipe ingested documentation?")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Wipe" }));
+
+    expect(await screen.findByText("Wiped Alpha Framework's ingested documentation.")).toBeInTheDocument();
+    expect(deleted).toBe(true);
+  });
+});
+
+describe("IngestionStage — stopping and how a run ends", () => {
   const RUNNING = {
     phase: "ingest",
     tier: "llms_full",
@@ -161,6 +273,17 @@ describe("IngestionStage — cancelling and how a run ends", () => {
     total: 1,
     last_url: "",
     status: "running",
+    stages: {
+      extraction: { status: "running", tier: "llms_full", current: 0, total: 1, last_url: "", error: null },
+      agentic: {
+        status: "waiting",
+        current: 0,
+        total: 0,
+        current_node: null,
+        node_status: {},
+        node_progress: {},
+      },
+    },
   };
 
   /** One run, whose status the test controls, and a cancel endpoint that answers like the real one. */
@@ -171,6 +294,7 @@ describe("IngestionStage — cancelling and how a run ends", () => {
       http.get(`${ORIGIN}/api/v1/dd/runs/${RUN}`, () =>
         HttpResponse.json({ progress: progress(), post: null }),
       ),
+      http.get(`${ORIGIN}/api/v1/dd/runs/*/llm-counters`, () => HttpResponse.json(NO_USAGE)),
       http.post(
         `${ORIGIN}/api/v1/dd/runs/${RUN}/cancel`,
         cancel ?? (() => HttpResponse.json({ run_id: RUN, status: "cancel_requested" })),
@@ -181,23 +305,28 @@ describe("IngestionStage — cancelling and how a run ends", () => {
     );
   }
 
-  it("says 'Cancelling…' from the click until the run really ends, not only while the request is in flight", async () => {
+  it("says 'Stopping…' from the click until the run really ends, not only while the request is in flight", async () => {
     // The worker takes a while to stop: the status still reads "running" after the cancel request has returned.
     serveRun(() => RUNNING);
     render(<Page start={`/dd/ingestion?slug=alpha&run=${RUN}`} />);
-    const box = await screen.findByRole("region", { name: "Ingestion progress" });
-    expect(await within(box).findByText("running")).toBeInTheDocument();
+    const card = await screen.findByRole("region", { name: "Documentation extraction progress" });
+    expect(await within(card).findByText("Processing")).toBeInTheDocument();
 
-    await userEvent.click(within(box).getByRole("button", { name: "Cancel run" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Stop documentation extraction" }));
 
-    const button = await within(box).findByRole("button", { name: "Cancelling…" });
+    const button = await within(card).findByRole("button", { name: "Stop documentation extraction" });
+    expect(button).toHaveTextContent("Stopping…");
     expect(button).toBeDisabled();
-    expect(within(box).getByTestId("run-cancelling")).toHaveTextContent("Cancelling");
     // Long after the request has returned (the status poll runs every 1.5 s) it must not fall back to "running".
-    await new Promise((resolve) => setTimeout(resolve, 1_700));
-    expect(within(box).getByText("cancelling…")).toBeInTheDocument();
-    expect(within(box).queryByText("running")).not.toBeInTheDocument();
-    expect(within(box).getByRole("button", { name: "Cancelling…" })).toBeDisabled();
+    await sleep(1_700);
+    expect(within(card).getByText("Stopping")).toBeInTheDocument();
+    expect(within(card).queryByText("Processing")).not.toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Stop documentation extraction" })).toBeDisabled();
+    expect(
+      within(screen.getByRole("region", { name: "Agentic AI progress" })).getByText(
+        "Stop requested; active page work is draining before the run ends.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("says so, and gives the button back, when the cancel request itself fails", async () => {
@@ -206,37 +335,51 @@ describe("IngestionStage — cancelling and how a run ends", () => {
       () => HttpResponse.json({ detail: "redis unavailable" }, { status: 503 }),
     );
     render(<Page start={`/dd/ingestion?slug=alpha&run=${RUN}`} />);
-    const box = await screen.findByRole("region", { name: "Ingestion progress" });
-    await userEvent.click(await within(box).findByRole("button", { name: "Cancel run" }));
+    const card = await screen.findByRole("region", { name: "Documentation extraction progress" });
+    await userEvent.click(await within(card).findByRole("button", { name: "Stop documentation extraction" }));
 
-    expect(await within(box).findByRole("alert")).toHaveTextContent(
+    expect(await within(card).findByRole("alert")).toHaveTextContent(
       "Could not cancel the run — redis unavailable",
     );
-    expect(within(box).getByRole("button", { name: "Cancel run" })).toBeEnabled();
-    expect(within(box).queryByTestId("run-cancelling")).not.toBeInTheDocument();
+    const button = within(card).getByRole("button", { name: "Stop documentation extraction" });
+    expect(button).toBeEnabled();
+    expect(button).toHaveTextContent("Stop");
+    expect(button).not.toHaveTextContent("Stopping");
   });
 
-  it("announces a cancelled run and leaves ?run=", async () => {
+  it("announces a cancelled run and keeps it on screen until it is dismissed", async () => {
     serveRun(() => ({ ...RUNNING, status: "cancelled" }));
     render(<Page start={`/dd/ingestion?slug=alpha&run=${RUN}`} />);
 
-    await waitFor(() => expect(screen.getByTestId("url")).not.toHaveTextContent("run="));
-    expect(await screen.findByText("Ingestion cancelled.")).toBeInTheDocument();
+    // The notice and the card's own line.
+    expect(await screen.findAllByText("Ingestion cancelled.")).toHaveLength(2);
+    expect(screen.getByTestId("url")).toHaveTextContent(`run=${RUN}`);
+    const card = screen.getByRole("region", { name: "Documentation extraction progress" });
+    expect(within(card).getByRole("button", { name: "Retry documentation extraction" })).toBeEnabled();
   });
 
   it("keeps a failed run on screen with its reason until it is dismissed", async () => {
-    serveRun(() => ({ ...RUNNING, status: "failed", error: "RuntimeError: no declared source worked" }));
+    serveRun(() => ({
+      ...RUNNING,
+      status: "failed",
+      error: "RuntimeError: no declared source worked",
+      stages: {
+        ...RUNNING.stages,
+        extraction: { ...RUNNING.stages.extraction, status: "failed" },
+      },
+    }));
     render(<Page start={`/dd/ingestion?slug=alpha&run=${RUN}`} />);
 
-    const box = await screen.findByRole("region", { name: "Ingestion progress" });
-    expect(await within(box).findByText("RuntimeError: no declared source worked")).toBeInTheDocument();
-    expect(within(box).getByText("failed")).toBeInTheDocument();
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    const agentic = await screen.findByRole("region", { name: "Agentic AI progress" });
+    expect(await within(agentic).findByText("RuntimeError: no declared source worked")).toBeInTheDocument();
+    const card = screen.getByRole("region", { name: "Documentation extraction progress" });
+    expect(within(card).getByText("Failed")).toBeInTheDocument();
+    await sleep(400);
     expect(screen.getByTestId("url")).toHaveTextContent(`run=${RUN}`); // not dropped behind the reader's back
-    expect(within(box).queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Stop documentation extraction" })).toBeDisabled();
 
-    await userEvent.click(within(box).getByRole("button", { name: "Dismiss" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Dismiss run" }));
     await waitFor(() => expect(screen.getByTestId("url")).not.toHaveTextContent("run="));
-    expect(screen.queryByRole("region", { name: "Ingestion progress" })).not.toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Dismiss run" })).not.toBeInTheDocument();
   });
 });

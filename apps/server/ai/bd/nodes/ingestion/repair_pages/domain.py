@@ -60,10 +60,12 @@ def validate_proposals(
         if markdown.find(proposal.target_text, start + 1) >= 0:
             raise ValueError("patch proposal target is ambiguous in the source page")
         end = start + len(proposal.target_text)
-        if proposal.context_before and markdown[:start].endswith(proposal.context_before) is False:
-            raise ValueError("patch proposal context_before does not match the source page")
+        # The target is exact and unique, so the patch is fully determined; quoted anchors only disambiguate and
+        # models often paraphrase them. A wrong anchor is dropped instead of discarding an otherwise valid patch.
+        if proposal.context_before and not markdown[:start].endswith(proposal.context_before):
+            proposal = proposal.model_copy(update = {"context_before": ""})
         if proposal.context_after and not markdown[end:].startswith(proposal.context_after):
-            raise ValueError("patch proposal context_after does not match the source page")
+            proposal = proposal.model_copy(update = {"context_after": ""})
         if allowed_context is not None:
             anchored_text = f"{proposal.context_before}{proposal.target_text}{proposal.context_after}"
             if anchored_text not in allowed_context:
@@ -149,6 +151,27 @@ def apply_proposals(
         else:
             review_issue_ids.append(proposal.issue_id)
     return normalized, list(reversed(applied_issue_ids)), list(reversed(review_issue_ids))
+
+
+def apply_mechanical_fixes(markdown: str) -> tuple[str, dict[str, int]]:
+    """Remove soft hyphens and non-whitespace control characters, which are invisible noise and never content."""
+    control_characters = sum(_is_control_noise(character) for character in markdown)
+    soft_hyphens = markdown.count("­")
+    if not control_characters and not soft_hyphens:
+        return markdown, {}
+    cleaned = "".join(
+        character for character in markdown
+        if character != "­" and not _is_control_noise(character)
+    )
+    counts = {
+        agents.schemas.IssueCode.CONTROL_CHARACTERS.value: control_characters,
+        agents.schemas.IssueCode.SOFT_HYPHEN.value: soft_hyphens,
+    }
+    return cleaned, {code: count for code, count in counts.items() if count}
+
+
+def _is_control_noise(character: str) -> bool:
+    return unicodedata.category(character) == "Cc" and character not in "\t\n\r"
 
 
 def _is_mechanical_repair(proposal: agents.schemas.PatchProposal) -> bool:

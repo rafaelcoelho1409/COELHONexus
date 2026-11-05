@@ -56,16 +56,30 @@ async def publish(
         markdown_chars_by_page.get(page["page"], 0) * page.get("repair_call_count", 0)
         for page in page_results
     )
+    # Audit warnings are informational (a discarded excerpt or label conflict was already handled); only an unverified
+    # page, an unresolved issue or unreviewed metadata keeps the run from being fully accepted.
     quality_status = (
         "complete_with_review"
         if (
             review_pages
             or state["book_metadata"].get("review_required")
-            or audit_warning_count
             or audit_fallback_pages
         )
         else "complete"
     )
+    fallback_page_set = set(audit_fallback_pages)
+    review_reasons = Counter()
+    mechanical_fixes = Counter()
+    for page in page_results:
+        mechanical_fixes.update(page.get("mechanical_fix_counts", {}))
+        if page["status"] != "review_required":
+            continue
+        if page["review_required_issue_ids"]:
+            review_reasons["unresolved_issues"] += 1
+        if page.get("error"):
+            review_reasons["repair_errors"] += 1
+        if page["page"] in fallback_page_set:
+            review_reasons["degraded_audit"] += 1
     quality_report = {
         "book_id": state["book_id"],
         "extraction_run_id": state["extraction_run_id"],
@@ -78,6 +92,8 @@ async def publish(
         "discarded_blank_pages": discarded_blank_pages,
         "discarded_blank_page_count": len(discarded_blank_pages),
         "pages_requiring_review": review_pages,
+        "review_reasons": dict(sorted(review_reasons.items())),
+        "mechanical_fixes": dict(sorted(mechanical_fixes.items())),
         "pages_with_audit_warnings": [
             page["page"] for page in state["page_audits"] if page.get("warnings")
         ],

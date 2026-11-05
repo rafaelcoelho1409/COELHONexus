@@ -834,7 +834,7 @@ describe("A book being extracted", () => {
     expect(screen.queryByRole("progressbar", { name: "AI-processed pages" })).not.toBeInTheDocument();
   });
 
-  it("shows review-required quality separately from successful completion", async () => {
+  it("shows the finished check on a run that needs review, with the quality result beside it", async () => {
     serveLibrary([bookRow({ status: "done", n_pages: 1, pages_done: 1 })]);
     const reviewedRun = agenticRun({
       quality_status: "complete_with_review",
@@ -843,11 +843,35 @@ describe("A book being extracted", () => {
       review_page_count: 1,
     });
     expect(agenticRunStatusSchema.parse(reviewedRun).quality_status).toBe("complete_with_review");
+    serveBook(snapshot({ status: "done", n_pages: 1, pages: [pageEntry(1)] }, null, reviewedRun));
+    server.use(
+      http.get(`${API}/${BOOK_ID}/pages/1`, () =>
+        HttpResponse.json({ book_id: BOOK_ID, page: 1, markdown: "AI page", content_source: "agentic" }),
+      ),
+      http.get(`${API}/${BOOK_ID}/agentic/runs/agentic-1/llm-counters`, () =>
+        HttpResponse.json({
+          total: { calls: 0, tokens_in: 0, tokens_out: 0, reasoning_tokens: 0, errors: 0 },
+          by_node: {},
+        }),
+      ),
+    );
+    renderStage(BOOK_ID);
+
+    await openPipeline();
+    const progressBox = screen.getByRole("region", { name: "Agentic AI progress" });
+    expect(
+      within(progressBox).getByText("Review required · 1 page · 1 delivered · 0 blank excluded"),
+    ).toBeInTheDocument();
+    expect(within(progressBox).getByRole("img", { name: "Completed successfully" })).toBeInTheDocument();
+  });
+
+  it("shows no finished check on an agentic run that did not finish", async () => {
+    serveLibrary([bookRow({ status: "done", n_pages: 1, pages_done: 1 })]);
     serveBook(
       snapshot(
         { status: "done", n_pages: 1, pages: [pageEntry(1)] },
         null,
-        reviewedRun,
+        agenticRun({ status: "cancelled", quality_status: null }),
       ),
     );
     server.use(
@@ -865,9 +889,9 @@ describe("A book being extracted", () => {
 
     await openPipeline();
     const progressBox = screen.getByRole("region", { name: "Agentic AI progress" });
-    expect(within(progressBox).getByText("Review required · 1 page · 1 delivered · 0 blank excluded"))
-      .toBeInTheDocument();
-    expect(within(progressBox).queryByRole("img", { name: "Completed successfully" })).not.toBeInTheDocument();
+    expect(
+      within(progressBox).queryByRole("img", { name: "Completed successfully" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows the agentic graph and selectable nodes before an Agentic AI run exists", async () => {

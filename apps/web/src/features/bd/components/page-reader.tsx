@@ -7,7 +7,6 @@ import type { Components } from "react-markdown";
 
 import { useScrollSpy } from "@/shared/lib/use-scroll-spy";
 import { Markdown, markdownToc } from "@/shared/markdown";
-import { Button } from "@/shared/ui/button";
 
 import { figureUrl } from "../api";
 import type { BookUnits } from "../domain/books";
@@ -15,6 +14,8 @@ import { breadcrumb, type PageRow, pageChips, readableMarkdown } from "../domain
 import type { LivePage } from "../domain/run-state";
 import { usePageBody } from "../hooks/use-bd-data";
 import { useModalDialog } from "../hooks/use-modal-dialog";
+import { ActionButton } from "./action-button";
+import { ToggleGroup } from "./toggle-group";
 
 const PREVIEW_MODES = [
   { id: "rendered", label: "Rendered" },
@@ -133,28 +134,15 @@ export function PageReader({
       </header>
       <div className="mt-4 flex justify-end">
         <div className="flex w-full items-center justify-between gap-2">
-          <fieldset className="m-0 flex min-w-0 border-0 p-0">
-            <legend className="sr-only">Content view</legend>
-            {PREVIEW_MODES.map((mode) => (
-              <button
-                key={mode.id}
-                type="button"
-                aria-pressed={previewMode === mode.id}
-                onClick={() => setPreviewMode(mode.id)}
-                className={`min-h-9 border px-3 text-xs first:rounded-l-sm last:rounded-r-sm ${
-                  previewMode === mode.id
-                    ? "border-primary bg-primary/10 text-primary-text"
-                    : "-ml-px border-border text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {mode.label}
-              </button>
-            ))}
-          </fieldset>
+          <ToggleGroup
+            legend="Content view"
+            options={PREVIEW_MODES}
+            value={previewMode}
+            onChange={setPreviewMode}
+          />
           {outline.length > 1 ? (
-            <Button
-              variant="ghost"
-              size="icon-lg"
+            <ActionButton
+              iconOnly
               className="hidden lg:inline-flex"
               aria-expanded={outlineOpen}
               aria-label={outlineOpen ? "Hide page outline" : "Show page outline"}
@@ -162,7 +150,7 @@ export function PageReader({
               onClick={() => setOutlineOpen(!outlineOpen)}
             >
               {outlineOpen ? <PanelRightClose aria-hidden /> : <PanelRightOpen aria-hidden />}
-            </Button>
+            </ActionButton>
           ) : null}
         </div>
       </div>
@@ -400,15 +388,9 @@ function FigureViewer({
             {location} · <span className="font-mono">{name}</span>
           </p>
         </div>
-        <button
-          type="button"
-          aria-label="Close figure viewer"
-          title="Close"
-          onClick={onClose}
-          className="inline-flex size-9 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-        >
-          <X className="size-4" aria-hidden="true" />
-        </button>
+        <ActionButton iconOnly aria-label="Close figure viewer" title="Close" onClick={onClose}>
+          <X aria-hidden="true" />
+        </ActionButton>
       </header>
       {failedImage === name ? (
         <p role="alert" className="border border-border p-4 text-sm text-destructive-text">
@@ -434,29 +416,21 @@ function FigureViewer({
         </figure>
       )}
       <nav aria-label="Figure navigation" className="mt-3 flex items-center justify-between gap-2">
-        <button
-          type="button"
-          aria-label="Previous figure"
-          disabled={index === 0}
-          onClick={() => onSelect(index - 1)}
-          className="inline-flex min-h-9 items-center gap-1 rounded-sm border border-border px-3 text-sm disabled:opacity-50"
-        >
-          <ChevronLeft className="size-4" aria-hidden="true" />
+        <ActionButton aria-label="Previous figure" disabled={index === 0} onClick={() => onSelect(index - 1)}>
+          <ChevronLeft aria-hidden="true" />
           Previous
-        </button>
+        </ActionButton>
         <span className="text-xs tabular-nums text-muted-foreground">
           {index + 1} / {figures.length}
         </span>
-        <button
-          type="button"
+        <ActionButton
           aria-label="Next figure"
           disabled={index === figures.length - 1}
           onClick={() => onSelect(index + 1)}
-          className="inline-flex min-h-9 items-center gap-1 rounded-sm border border-border px-3 text-sm disabled:opacity-50"
         >
           Next
-          <ChevronRight className="size-4" aria-hidden="true" />
-        </button>
+          <ChevronRight aria-hidden="true" />
+        </ActionButton>
       </nav>
     </dialog>
   );

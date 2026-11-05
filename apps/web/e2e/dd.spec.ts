@@ -101,8 +101,33 @@ async function mockRoutes(page: Page) {
         last_url: null,
         error: null,
         updated_at: null,
+        stages: {
+          extraction: {
+            status: "running",
+            tier: "llms_full",
+            current: 2,
+            total: 3,
+            last_url: null,
+            error: null,
+          },
+          agentic: {
+            status: "waiting",
+            current: 0,
+            total: 0,
+            current_node: null,
+            node_status: {},
+            node_progress: {},
+            error: null,
+          },
+        },
       },
       post: null,
+    }),
+  );
+  await page.route("**/api/v1/dd/runs/run-1/llm-counters", (route) =>
+    json(route, {
+      total: { calls: 0, tokens_in: 0, tokens_out: 0, reasoning_tokens: 0, errors: 0 },
+      by_node: {},
     }),
   );
   await page.route("**/api/v1/dd/runs/run-1/cancel", (route) => json(route, { ok: true }));
@@ -436,6 +461,7 @@ test.describe("Docs Distiller", () => {
   test("the sidebar lists pages by title, in the order of the original documentation", async ({ page }) => {
     await mockRoutes(page);
     await page.goto("/dd/ingestion?slug=alpha");
+    await page.getByRole("tab", { name: "Materials" }).click();
     const tree = page.getByRole("region", { name: "Ingested library" });
     // the manifest holds Quickstart before CLI; sorted by name CLI would come first
     const titles = tree.locator("li button").filter({ hasText: /Quickstart|CLI/ });
@@ -449,6 +475,7 @@ test.describe("Docs Distiller", () => {
   test("the ingestion preview renders the page, and Source shows the raw text", async ({ page }) => {
     await mockRoutes(page);
     await page.goto("/dd/ingestion?slug=alpha");
+    await page.getByRole("tab", { name: "Materials" }).click();
     const preview = page.getByRole("region", { name: "Ingested library" });
 
     await expect(preview.getByRole("button", { name: "Rendered" })).toHaveAttribute("aria-pressed", "true");
@@ -460,42 +487,41 @@ test.describe("Docs Distiller", () => {
     await expect(preview.getByText(/\*\*alpha\*\* quickstart body/)).toBeVisible();
   });
 
-  test("ingestion stage shows the run progress box and cancels", async ({ page }) => {
+  test("ingestion stage shows the Pipeline cards and graph, and stops the run", async ({ page }) => {
     await mockRoutes(page);
     await page.goto("/dd/ingestion?slug=alpha&run=run-1");
 
-    const box = page.getByRole("region", { name: "Ingestion progress" });
-    await expect(box).toBeVisible();
-    // Whose run it is: the framework's name and its logo, from the catalog.
-    await expect(box.getByTestId("run-framework")).toHaveText("Alpha");
-    await expect(box.locator("img")).toHaveCount(1);
-    await expect
-      .poll(() => box.locator("img").evaluate((img) => (img as HTMLImageElement).naturalWidth))
-      .toBeGreaterThan(0);
-    await expect(page.getByText(/Splitting & deduplicating pages/i)).toBeVisible();
-    await expect(page.getByText("2 / 3 (67%)")).toBeVisible();
-    await expect(page.getByText("starting…")).toBeVisible();
+    const extraction = page.getByRole("region", { name: "Documentation extraction progress" });
+    await expect(extraction).toBeVisible();
+    await expect(extraction.getByText("2 of 3 pages · 67%")).toBeVisible();
+    await expect(extraction.getByText("Fetching documentation bundle")).toBeVisible();
+    const agentic = page.getByRole("region", { name: "Agentic AI progress" });
+    await expect(agentic.getByText("Preparing page boundaries for Agentic AI.")).toBeVisible();
+    const pipeline = page.getByRole("region", { name: "Agentic pipeline stages" });
+    await expect(pipeline.getByRole("button", { name: /Audit pages/ })).toBeVisible();
+    await expect(pipeline.getByRole("button", { name: /Publish pages/ })).toBeVisible();
 
     const cancelRequest = page.waitForRequest(
       (request) => request.method() === "POST" && request.url().includes("/api/v1/dd/runs/run-1/cancel"),
     );
-    await page.getByRole("button", { name: "Cancel run" }).click();
+    await extraction.getByRole("button", { name: "Stop documentation extraction" }).click();
     await expect(cancelRequest).resolves.toHaveProperty("url");
 
-    // The run keeps reporting "running" while the worker winds down; the box must say it is cancelling, and keep
+    // The run keeps reporting "running" while the worker winds down; the card must say it is stopping, and keep
     // saying so (the request itself returns in milliseconds).
-    await expect(box.getByTestId("run-cancelling")).toBeVisible();
-    await expect(box.getByRole("button", { name: "Cancelling…" })).toBeDisabled();
+    const stop = extraction.getByRole("button", { name: "Stop documentation extraction" });
+    await expect(stop).toHaveText("Stopping…");
+    await expect(stop).toBeDisabled();
     await page.waitForTimeout(2_000); // past a status poll
-    await expect(box.getByText("cancelling…", { exact: true })).toBeVisible();
-    await expect(box.getByText("running", { exact: true })).toHaveCount(0);
+    await expect(extraction.getByText("Stopping", { exact: true })).toBeVisible();
+    await expect(extraction.getByText("Processing", { exact: true })).toHaveCount(0);
   });
 
-  test("a finished run's address settles on ?slug= and stays there, even if the active list still names the run", async ({
+  test("a finished run stays on screen with its address, even if the active list still names the run", async ({
     page,
   }) => {
     await mockRoutes(page);
-    // Right after a run ends the cached active list can still list it; the page must not put ?run= back.
+    // Right after a run ends the cached active list can still list it; the page must not flip the address.
     await page.route("**/api/v1/dd/runs/active", (route) =>
       json(route, {
         active: [
@@ -519,9 +545,9 @@ test.describe("Docs Distiller", () => {
     });
 
     await page.goto("/dd/ingestion?slug=alpha&run=run-1");
-    await expect(page).toHaveURL(/\/dd\/ingestion\?slug=alpha$/);
+    await expect(page.getByText("Ingestion complete.")).toBeVisible();
     await page.waitForTimeout(1500); // long enough for a flicker to show itself
-    await expect(page).toHaveURL(/\/dd\/ingestion\?slug=alpha$/);
+    await expect(page).toHaveURL(/\/dd\/ingestion\?slug=alpha&run=run-1$/);
     expect(
       addresses.length,
       `the address changed ${addresses.length} times: ${addresses.join(" → ")}`,
@@ -533,7 +559,9 @@ test.describe("Docs Distiller", () => {
     await page.goto("/dd/ingestion?slug=alpha");
 
     await expect(page.getByText("Alpha · 2 pages · 640 B sitemap · 2m ago")).toBeVisible();
-    await expect(page.getByText("2 of 2 pages")).toBeVisible();
+    const extraction = page.getByRole("region", { name: "Documentation extraction progress" });
+    await expect(extraction.getByText("2 of 2 pages · 100%")).toBeVisible();
+    await expect(extraction.getByRole("button", { name: "Start documentation extraction" })).toBeDisabled();
   });
 
   test("planner stage recovers a committed plan and offers Resume", async ({ page }) => {
@@ -995,7 +1023,12 @@ test.describe("Docs Distiller", () => {
     { route: "/dd", ready: (page) => expect(page.getByText("2 of 2 frameworks shown")).toBeVisible() },
     {
       route: "/dd/ingestion?slug=alpha",
-      ready: (page) => expect(page.getByText("2 of 2 pages")).toBeVisible(),
+      ready: (page) =>
+        expect(
+          page
+            .getByRole("region", { name: "Documentation extraction progress" })
+            .getByText("2 of 2 pages · 100%"),
+        ).toBeVisible(),
     },
     {
       route: "/dd/pipeline?slug=alpha",

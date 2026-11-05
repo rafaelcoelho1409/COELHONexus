@@ -11,9 +11,8 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 
-import { Button } from "@/shared/ui/button";
-
 import { useModalDialog } from "../hooks/use-modal-dialog";
+import { ActionButton } from "./action-button";
 import { BookReadingProgress } from "./book-reading-progress";
 
 export function BookReadingMode({
@@ -67,9 +66,8 @@ export function BookReadingMode({
       <div className="flex h-full flex-col">
         <header className="relative flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5 sm:gap-2 sm:px-3">
           <BookReadingProgress scroller={scroller} className="absolute inset-x-0 -bottom-px z-10 h-0.5" />
-          <Button
-            variant="ghost"
-            size="icon-lg"
+          <ActionButton
+            iconOnly
             className="hidden md:inline-flex"
             aria-expanded={navigationOpen}
             aria-label={navigationOpen ? "Hide contents" : "Show contents"}
@@ -77,7 +75,7 @@ export function BookReadingMode({
             onClick={() => setNavigationOpen(!navigationOpen)}
           >
             {navigationOpen ? <PanelLeftClose aria-hidden /> : <PanelLeftOpen aria-hidden />}
-          </Button>
+          </ActionButton>
           <div className="min-w-0 flex-1 px-1">
             <h2 id={titleId} className="truncate text-sm font-medium">
               {title}
@@ -86,38 +84,28 @@ export function BookReadingMode({
               {unitLabel} {position}
             </p>
           </div>
-          <Button
-            variant="ghost"
-            size="icon-lg"
+          <ActionButton
+            iconOnly
             aria-label="Previous page"
             title="Previous page"
             disabled={previousPage === null}
             onClick={() => previousPage !== null && onPage(previousPage)}
           >
             <ChevronLeft aria-hidden />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-lg"
+          </ActionButton>
+          <ActionButton
+            iconOnly
             aria-label="Next page"
             title="Next page"
             disabled={nextPage === null}
             onClick={() => nextPage !== null && onPage(nextPage)}
           >
             <ChevronRight aria-hidden />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-lg"
-            aria-label="Search this book"
-            title="Search this book"
-            onClick={onSearch}
-          >
+          </ActionButton>
+          <ActionButton iconOnly aria-label="Search this book" title="Search this book" onClick={onSearch}>
             <Search aria-hidden />
-          </Button>
-          <Button
-            variant={wide ? "secondary" : "ghost"}
-            size="lg"
+          </ActionButton>
+          <ActionButton
             className="hidden sm:inline-flex"
             aria-pressed={wide}
             title="Let the text run across most of the screen"
@@ -125,11 +113,11 @@ export function BookReadingMode({
           >
             <MoveHorizontal aria-hidden />
             Wide
-          </Button>
-          <Button variant="outline" size="lg" aria-label="Exit reading mode" onClick={onExit}>
+          </ActionButton>
+          <ActionButton aria-label="Exit reading mode" onClick={onExit}>
             <Minimize2 aria-hidden />
             <span className="hidden sm:inline">Exit</span>
-          </Button>
+          </ActionButton>
         </header>
 
         <div className="flex min-h-0 flex-1">

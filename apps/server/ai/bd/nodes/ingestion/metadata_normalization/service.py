@@ -1,6 +1,7 @@
 """Read bounded front matter and persist evidence-grounded book metadata."""
 from __future__ import annotations
 import domains
+from . import patterns
 from .... import agents, graphs, skills
 
 import hashlib
@@ -107,7 +108,7 @@ async def normalize_metadata(
     confident = (
         proposal_validated
         and proposal is not None
-        and proposal.confidence >= domains.bd.ingestion.ai.params.AUTO_APPLY_CONFIDENCE
+        and proposal.confidence >= domains.bd.ingestion.ai.params.METADATA_ACCEPT_CONFIDENCE
     )
     fallback_subtitle = source_metadata.get("subtitle")
     if not isinstance(fallback_subtitle, str):
@@ -183,7 +184,7 @@ def _fallback_title(metadata: dict[str, object], sources: list[dict[str, Any]]) 
             if candidate.casefold() not in {"introduction", "contents", "table of contents", "preface"}:
                 return candidate
 
-    return filename_title or "Untitled book"
+    return _strip_source_site_tags(filename_title) if filename_title else "Untitled book"
 
 
 def _filename_title(value: object) -> str:
@@ -193,10 +194,20 @@ def _filename_title(value: object) -> str:
     return re.sub(r"\s+", " ", title.replace("_", " ")).strip()
 
 
+def _strip_source_site_tags(title: str) -> str:
+    """Drop trailing "(z-library.sk, 1lib.sk)"-style download-site tags from a filename-derived title."""
+    cleaned = patterns.SOURCE_SITE_TAG_RE.sub("", title)
+    return re.sub(r"\s+", " ", cleaned).strip() or title
+
+
 def _matches_filename_label(value: str, filename_title: str) -> bool:
     normalize = lambda text: re.sub(r"[^\w]+", " ", text).casefold().split()
-    title_without_extension = PurePath(value.replace("\\", "/")).stem
-    return bool(filename_title) and normalize(title_without_extension) == normalize(filename_title)
+    if not filename_title:
+        return False
+    # A dot inside a title ("z-lib.sk)") is not a file extension, so only a real document suffix is removed.
+    value_without_suffix = patterns.DOCUMENT_SUFFIX_RE.sub("", value.strip())
+    label = normalize(filename_title)
+    return normalize(value) == label or normalize(value_without_suffix) == label
 
 
 def _metadata_value_is_grounded(value: str, evidence_text: str) -> bool:

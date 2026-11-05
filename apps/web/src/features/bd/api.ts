@@ -6,15 +6,15 @@ import { client } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 
 import {
-  type AgenticRunStart,
   type AgenticRunCancelResponse,
+  type AgenticRunStart,
   type AgenticRunWipeResponse,
   type AgenticUsage,
-  type ExtractionWipeResponse,
   agenticRunCancelResponseSchema,
   agenticRunStartSchema,
   agenticRunWipeResponseSchema,
   agenticUsageSchema,
+  type ExtractionWipeResponse,
   extractionWipeResponseSchema,
   type StartResponse,
   startResponseSchema,
@@ -76,10 +76,7 @@ export async function cancelAgenticRun(
   return agenticRunCancelResponseSchema.parse(result.data);
 }
 
-export async function wipeAgenticRun(
-  bookId: string,
-  agenticRunId: string,
-): Promise<AgenticRunWipeResponse> {
+export async function wipeAgenticRun(bookId: string, agenticRunId: string): Promise<AgenticRunWipeResponse> {
   const result = await client.request({
     method: "DELETE",
     url: "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}",

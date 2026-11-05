@@ -13,10 +13,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
 from ai.bd.agents import schemas
-from ai.bd.nodes.ingestion.metadata_normalization.service import _fallback_title
-from ai.bd.nodes.ingestion.repair_pages.domain import apply_proposals
-from ai.bd.nodes.ingestion.repair_pages.domain import build_repair_context
-from ai.bd.nodes.ingestion.inventory.domain import assess_page
+from ai.bd.nodes.ingestion.metadata_normalization.service import _fallback_title, _matches_filename_label
+from ai.bd.nodes.ingestion.repair_pages.domain import apply_mechanical_fixes, apply_proposals
+from ai.bd.nodes.ingestion.repair_pages.domain import build_repair_context, validate_proposals
+from ai.bd.nodes.ingestion.inventory.domain import assess_page, merge_issues
 import domains
 import infra
 from domains.bd.ingestion.ai.service import (
@@ -414,3 +414,211 @@ assert fallback_manifest["status"] == "done"
 assert fallback_manifest["quality_status"] == "complete_with_review"
 assert fallback_result["quality_report"]["structured_output_fallback_pages"] == [1]
 print("ok  invalid structured audits are counted, fall back safely, and require review")
+
+
+# --- Fixes from the 2026-11-05 assessment ---
+site_filename = "The Art of Cyberwarfare An Investigators Guide (Jon DiMaggio) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
+site_stem = site_filename[:-4]
+assert _matches_filename_label(site_stem, site_stem) and _matches_filename_label(site_filename, site_stem)
+assert _fallback_title(
+    {"filename": site_filename, "title": site_stem},
+    [{"page_number": 1, "markdown": "<!-- image -->\n\n## The Art of Cyberwarfare\n\nGuide"}],
+) == "The Art of Cyberwarfare"
+assert _fallback_title({"filename": site_filename, "title": site_stem}, []) == (
+    "The Art of Cyberwarfare An Investigators Guide (Jon DiMaggio)"
+)
+print("ok  a dotted download-site tag is not mistaken for a file extension and is stripped from filename titles")
+
+
+def single_page_book(book: str, text: str) -> tuple[dict, dict[str, str], str]:
+    extraction = "extract-single"
+    page_key = keys.page_key(book, 1, extraction)
+    return {
+        "book_id": book, "extraction_id": extraction, "status": "done", "n_pages": 1,
+        "filename": "an_example_book.epub",
+        "pages": [{"page": 1, "key": page_key, "pictures": 0}],
+    }, {page_key: text}, extraction
+
+
+class ModerateMetadataNormalizer(FakeMetadataNormalizer):
+    async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
+        response = await super().ainvoke(payload, config)
+        return {"structured_response": response["structured_response"].model_copy(update = {"confidence": 0.9})}
+
+
+moderate_manifest, moderate_pages, _ = single_page_book("book-moderate", "An exam­ple book by A. Author\n")
+moderate_result = asyncio.run(run_ingestion_ai(
+    "book-moderate",
+    agentic_run_id = "agent-run-moderate",
+    storage = FakeStorage(moderate_manifest, moderate_pages),
+    auditor = FakeAuditor(),
+    text_repair = FakeTextRepair(),
+    structure_repair = FakeStructureRepair(),
+    metadata_normalizer = ModerateMetadataNormalizer(),
+))
+assert moderate_result["book_metadata"]["title"] == "An Example Book"
+assert moderate_result["book_metadata"]["review_required"] is False
+print("ok  a grounded metadata proposal at 0.9 confidence is accepted without the page-patch threshold")
+
+noisy, noisy_counts = apply_mechanical_fixes("a\x07b ex­ample\n\tok")
+assert noisy == "ab example\n\tok" and noisy_counts == {"control_characters": 1, "soft_hyphen": 1}
+assert apply_mechanical_fixes("clean text") == ("clean text", {})
+mechanical_manifest, mechanical_pages, mechanical_extraction = single_page_book(
+    "book-mechanical", "An exam­ple book by A. Author \x07\n",
+)
+mechanical_storage = FakeStorage(mechanical_manifest, mechanical_pages)
+mechanical_text_repair = FakeTextRepair()
+mechanical_result = asyncio.run(run_ingestion_ai(
+    "book-mechanical",
+    agentic_run_id = "agent-run-mechanical",
+    storage = mechanical_storage,
+    auditor = FakeAuditor(),
+    text_repair = mechanical_text_repair,
+    structure_repair = FakeStructureRepair(),
+    metadata_normalizer = FakeMetadataNormalizer(),
+))
+assert mechanical_text_repair.calls == 0
+assert mechanical_result["quality_report"]["patches_auto_applied"] == 2
+assert mechanical_result["quality_report"]["mechanical_fixes"] == {"control_characters": 1, "soft_hyphen": 1}
+assert mechanical_result["quality_status"] == "complete"
+assert mechanical_storage.values[keys.agentic_page_key("book-mechanical", "agent-run-mechanical", 1)] == (
+    "An example book by A. Author \n"
+)
+assert mechanical_storage.values[keys.page_key("book-mechanical", 1, mechanical_extraction)].count("\x07") == 1
+print("ok  control characters and soft hyphens are removed in code, never sent to a specialist, and the raw page is kept")
+
+anchor_page = "## PART I\n\n## AN ADVANCED L ANDSCAPE\n"
+anchor_evidence = schemas.EvidenceRef(
+    source = schemas.EvidenceSource.PAGE_MARKDOWN, excerpt = "L ANDSCAPE", page_number = 1,
+)
+anchor_issue = schemas.PageIssue(
+    issue_id = "i1", code = schemas.IssueCode.SPLIT_WORD, severity = schemas.IssueSeverity.MEDIUM,
+    description = "A heading word is split.", confidence = 1.0, evidence = [anchor_evidence],
+)
+
+
+def anchored(target: str, context_before: str = "") -> schemas.PatchProposalBatch:
+    return schemas.PatchProposalBatch(proposals = [schemas.PatchProposal(
+        page_number = 1, issue_id = "i1", source_sha256 = "a" * 64, issue_code = schemas.IssueCode.SPLIT_WORD,
+        risk = schemas.PatchRisk.LOW, context_before = context_before, target_text = target,
+        replacement = "LANDSCAPE", rationale = "Join the split heading word.", confidence = 0.9,
+        evidence = [anchor_evidence],
+    )])
+
+
+def validated(batch: schemas.PatchProposalBatch) -> list[schemas.PatchProposal]:
+    return validate_proposals(
+        batch, page_number = 1, source_sha256 = "a" * 64, markdown = anchor_page,
+        assigned_issues = {"i1": anchor_issue}, role = schemas.SpecialistRole.TEXT_REPAIR,
+    )
+
+
+kept = validated(anchored("L ANDSCAPE", context_before = "A PARAPHRASED "))
+assert len(kept) == 1 and kept[0].context_before == "" and kept[0].target_text == "L ANDSCAPE"
+try:
+    validated(anchored("L ANDSCAPES"))
+except ValueError:
+    pass
+else:
+    raise AssertionError("a target that is not on the page must still be rejected")
+print("ok  a paraphrased patch anchor is dropped while an absent target is still rejected")
+
+
+class FlakyTextRepair:
+    def __init__(self):
+        self.requests: list[dict] = []
+
+    async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
+        request = json.loads(payload["messages"][0]["content"])
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            raise ValueError("1 validation error for PatchProposalBatch: Input should be a valid dictionary")
+        issue = request["assigned_issues"][0]
+        return {"structured_response": schemas.PatchProposalBatch(proposals = [schemas.PatchProposal(
+            page_number = request["page_number"], issue_id = issue["issue_id"],
+            source_sha256 = request["source_sha256"], issue_code = schemas.IssueCode.SPLIT_WORD,
+            risk = schemas.PatchRisk.LOW, target_text = "L ANDSCAPE", replacement = "LANDSCAPE",
+            rationale = "Join the split heading word.", confidence = 0.9,
+            evidence = [schemas.EvidenceRef(
+                source = schemas.EvidenceSource.PAGE_MARKDOWN, excerpt = "L ANDSCAPE",
+                page_number = request["page_number"],
+            )],
+        )])}
+
+
+retry_manifest, retry_pages, _ = single_page_book(
+    "book-retry", "An exam­ple book by A. Author\n\nL ANDSCAPE OF IDEAS\n",
+)
+retry_storage = FakeStorage(retry_manifest, retry_pages)
+flaky = FlakyTextRepair()
+retry_result = asyncio.run(run_ingestion_ai(
+    "book-retry",
+    agentic_run_id = "agent-run-retry",
+    storage = retry_storage,
+    auditor = FakeAuditor(),
+    text_repair = flaky,
+    structure_repair = FakeStructureRepair(),
+    metadata_normalizer = FakeMetadataNormalizer(),
+))
+assert len(flaky.requests) == 2
+assert "previous_attempt_rejected" not in flaky.requests[0]
+assert "valid dictionary" in flaky.requests[1]["previous_attempt_rejected"]
+retry_proposals = json.loads(retry_storage.values[keys.agentic_patch_proposals_key("book-retry", "agent-run-retry", 1)])
+assert len(retry_proposals["proposals"]) == 1 and retry_proposals["errors"] == []
+assert retry_result["quality_report"]["proposals_total"] == 1
+assert retry_result["quality_status"] == "complete_with_review"
+print("ok  a rejected specialist response is retried once with the rejection reason before the page goes to review")
+
+heading = "I NTRODUC T I ON"
+duplicate_markdown = f"Intro\n\n{heading}\n\nBody"
+split_evidence = lambda excerpt: [schemas.EvidenceRef(
+    source = schemas.EvidenceSource.PAGE_MARKDOWN, excerpt = excerpt, page_number = 1,
+)]
+issue_of = lambda issue_id, code, excerpt: schemas.PageIssue(
+    issue_id = issue_id, code = code, severity = schemas.IssueSeverity.LOW, description = "x",
+    confidence = 0.9, evidence = split_evidence(excerpt),
+)
+merged_issues = merge_issues(
+    [issue_of("p0001-split_word", schemas.IssueCode.SPLIT_WORD, heading)],
+    [
+        issue_of("llm-1", schemas.IssueCode.SPLIT_WORD, "NTRODUC T"),
+        issue_of("llm-2", schemas.IssueCode.OTHER, "Body"),
+        issue_of("llm-3", schemas.IssueCode.TOC_NOISE, "Intro"),
+        issue_of("llm-4", schemas.IssueCode.TOC_NOISE, "Body"),
+    ],
+    duplicate_markdown,
+)
+assert [issue.issue_id for issue in merged_issues] == ["p0001-split_word", "llm-2", "llm-3"]
+assert [evidence.excerpt for evidence in merged_issues[2].evidence] == ["Intro", "Body"]
+print("ok  an auditor finding overlapping a deterministic one is merged and contents noise collapses to one issue")
+
+
+class UngroundedAuditor:
+    async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
+        request = json.loads(payload["messages"][0]["content"])
+        return {"structured_response": schemas.PageAssessment(
+            page_number = request["page_number"], page_kind = schemas.PageKind.TEXT, confidence = 0.9,
+            issues = [schemas.PageIssue(
+                issue_id = "llm-ungrounded", code = schemas.IssueCode.OTHER,
+                severity = schemas.IssueSeverity.LOW, description = "An invented defect.", confidence = 0.9,
+                evidence = split_evidence("this text is not on the page"),
+            )],
+        )}
+
+
+warning_manifest, warning_pages, _ = single_page_book("book-warning", "An exam­ple book by A. Author\n")
+warning_result = asyncio.run(run_ingestion_ai(
+    "book-warning",
+    agentic_run_id = "agent-run-warning",
+    storage = FakeStorage(warning_manifest, warning_pages),
+    auditor = UngroundedAuditor(),
+    text_repair = FakeTextRepair(),
+    structure_repair = FakeStructureRepair(),
+    metadata_normalizer = FakeMetadataNormalizer(),
+))
+assert warning_result["quality_report"]["audit_warning_count"] == 2  # discarded excerpt + discarded finding
+assert warning_result["quality_report"]["pages_requiring_review"] == []
+assert warning_result["quality_status"] == "complete"
+print("ok  a handled audit warning is reported but does not by itself send the page to review")
+assert fallback_result["quality_report"]["review_reasons"] == {"degraded_audit": 1}
+print("ok  review pages are broken down by reason")

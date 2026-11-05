@@ -52,6 +52,15 @@ function addModelCounts(left: ModelCounts, right: ModelCounts): ModelCounts {
   };
 }
 
+/** Busiest first: LLM calls, then input tokens, then output tokens, each descending. A tie on one key falls through
+ * to the next; a full tie returns 0 so the caller can chain its own tiebreak. */
+export function compareUsageDescending(
+  left: Pick<ModelCounts, "calls" | "tokens_in" | "tokens_out">,
+  right: Pick<ModelCounts, "calls" | "tokens_in" | "tokens_out">,
+): number {
+  return right.calls - left.calls || right.tokens_in - left.tokens_in || right.tokens_out - left.tokens_out;
+}
+
 function splitModelId(modelId: string): { provider: string; model: string } {
   const separator = modelId.indexOf("/");
   if (separator < 0) return { provider: "—", model: modelId };
@@ -85,7 +94,10 @@ export function agenticUsageRows(
         tokens_out: counts.tokens_out,
         reasoning_tokens: counts.reasoning_tokens,
       }))
-      .sort((left, right) => (left.agent ?? "").localeCompare(right.agent ?? ""));
+      .sort(
+        (left, right) =>
+          compareUsageDescending(left, right) || (left.agent ?? "").localeCompare(right.agent ?? ""),
+      );
   }
 
   if (mode === "agent_model") {
@@ -102,6 +114,7 @@ export function agenticUsageRows(
       )
       .sort(
         (left, right) =>
+          compareUsageDescending(left, right) ||
           (left.agent ?? "").localeCompare(right.agent ?? "") ||
           (left.provider ?? "").localeCompare(right.provider ?? "") ||
           (left.model ?? "").localeCompare(right.model ?? ""),
@@ -125,6 +138,7 @@ export function agenticUsageRows(
     }))
     .sort(
       (left, right) =>
+        compareUsageDescending(left, right) ||
         (left.provider ?? "").localeCompare(right.provider ?? "") ||
         (left.model ?? "").localeCompare(right.model ?? ""),
     );
@@ -176,8 +190,4 @@ export function agenticModelUsageRows(
         right.calls - left.calls ||
         left.model.localeCompare(right.model),
     );
-}
-
-export function agenticUsageAgentLabel(counterId: string): string {
-  return AGENT_LABELS[counterId] ?? counterId;
 }

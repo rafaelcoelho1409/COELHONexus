@@ -9,6 +9,7 @@ import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useStat
 import { useModalDialog } from "../hooks/use-modal-dialog";
 import { type ConfirmOptions, OverlaysContext, type OverlaysValue } from "../hooks/use-overlays";
 import { NOTICE_MS } from "../params";
+import { ActionButton } from "./action-button";
 
 type Notice = { message: string; tone: "info" | "error" };
 type ConfirmRequest = { options: ConfirmOptions; resolve: (accepted: boolean) => void };
@@ -38,20 +39,8 @@ function ConfirmDialog({
       </h2>
       <p className="mt-2 text-sm text-muted-foreground">{options.message}</p>
       <div className="mt-4 flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={() => onClose(false)}
-          className="min-h-9 rounded-sm px-3 text-sm text-muted-foreground hover:text-foreground"
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          onClick={() => onClose(true)}
-          className="min-h-9 rounded-sm bg-destructive px-3 text-sm text-destructive-foreground"
-        >
-          {options.confirmLabel}
-        </button>
+        <ActionButton onClick={() => onClose(false)}>Cancel</ActionButton>
+        <ActionButton onClick={() => onClose(true)}>{options.confirmLabel}</ActionButton>
       </div>
     </dialog>
   );

@@ -179,6 +179,50 @@ def assess_page(
     )
 
 
+def merge_issues(
+    deterministic: list[agents.schemas.PageIssue],
+    proposed: list[agents.schemas.PageIssue],
+    markdown: str,
+) -> list[agents.schemas.PageIssue]:
+    """Combine deterministic and auditor findings without double-counting one defect.
+
+    An auditor finding is a duplicate when a kept finding has the same code and its evidence overlaps in the page;
+    contents-noise findings collapse to one page-level issue that carries every distinct excerpt."""
+    merged = list(deterministic)
+    for issue in proposed:
+        if any(kept.issue_id == issue.issue_id for kept in merged):
+            continue
+        same_code = [kept for kept in merged if kept.code == issue.code]
+        if issue.code == agents.schemas.IssueCode.TOC_NOISE and same_code:
+            kept = same_code[0]
+            known = {evidence.excerpt for evidence in kept.evidence}
+            extra = [evidence for evidence in issue.evidence if evidence.excerpt not in known]
+            if extra:
+                merged[merged.index(kept)] = kept.model_copy(update = {"evidence": kept.evidence + extra})
+            continue
+        if any(_evidence_overlaps(kept, issue, markdown) for kept in same_code):
+            continue
+        merged.append(issue)
+    return merged
+
+
+def _evidence_overlaps(left: agents.schemas.PageIssue, right: agents.schemas.PageIssue, markdown: str) -> bool:
+    for first in left.evidence:
+        first_start = markdown.find(first.excerpt)
+        for second in right.evidence:
+            second_start = markdown.find(second.excerpt)
+            if first_start < 0 or second_start < 0:
+                if first.excerpt in second.excerpt or second.excerpt in first.excerpt:
+                    return True
+                continue
+            if (
+                first_start < second_start + len(second.excerpt)
+                and second_start < first_start + len(first.excerpt)
+            ):
+                return True
+    return False
+
+
 def inventory_summary(
     pages: list[graphs.ingestion.state.PageInventoryResult],
 ) -> dict[str, Any]:

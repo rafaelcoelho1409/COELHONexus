@@ -87,42 +87,46 @@ async def audit_pages(
                     "audit limit; deterministic findings were retained and manual review is required."
                 )
             else:
-                try:
-                    with domains.settings.llm_counter.service.llm_context(
-                        ns = "bd", run_id = run_id, node_id = "page_auditor",
-                    ):
-                        result = await auditor.ainvoke({"messages": [{
-                            "role": "user",
-                            "content": page_audit.domain.user_payload(
-                                page_ref["page"], page_ref["pictures"], markdown,
-                            ),
-                        }], "files": skills.service.files_for("page_auditor")}, config = {
-                            "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
-                        })
-                    if not isinstance(result, dict) or "structured_response" not in result:
-                        raise ValueError("page auditor returned no structured assessment")
-                    proposed, warnings = page_audit.domain.sanitize_assessment(
-                        result["structured_response"],
-                        page_number = page_ref["page"],
-                        pictures = page_ref["pictures"],
-                        markdown = markdown,
-                    )
-                    audit_mode = "llm_reviewed"
-                except Exception as error:
+                audit_error: Exception | None = None
+                for _ in range(domains.bd.ingestion.ai.params.PAGE_AUDIT_ATTEMPTS):
+                    try:
+                        with domains.settings.llm_counter.service.llm_context(
+                            ns = "bd", run_id = run_id, node_id = "page_auditor",
+                        ):
+                            result = await auditor.ainvoke({"messages": [{
+                                "role": "user",
+                                "content": page_audit.domain.user_payload(
+                                    page_ref["page"], page_ref["pictures"], markdown,
+                                ),
+                            }], "files": skills.service.files_for("page_auditor")}, config = {
+                                "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
+                            })
+                        if not isinstance(result, dict) or "structured_response" not in result:
+                            raise ValueError("page auditor returned no structured assessment")
+                        proposed, warnings = page_audit.domain.sanitize_assessment(
+                            result["structured_response"],
+                            page_number = page_ref["page"],
+                            pictures = page_ref["pictures"],
+                            markdown = markdown,
+                        )
+                        audit_mode = "llm_reviewed"
+                        audit_error = None
+                        break
+                    except Exception as error:
+                        audit_error = error
+                if audit_error is not None:
                     logger.warning(
                         f"[bd-page-audit] page {page_ref['page']} degraded to deterministic findings "
-                        f"({type(error).__name__})",
+                        f"({type(audit_error).__name__})",
                     )
                     proposed = deterministic
                     audit_mode = "deterministic_fallback"
                     structured_output_fallback = True
                     warnings = [
-                        f"Page auditor was unavailable or returned an invalid assessment ({type(error).__name__}); "
+                        f"Page auditor was unavailable or returned an invalid assessment ({type(audit_error).__name__}); "
                         "deterministic findings were retained for review."
                     ]
-            known_ids = {issue.issue_id for issue in deterministic.issues}
-            merged_issues = list(deterministic.issues)
-            merged_issues.extend(issue for issue in proposed.issues if issue.issue_id not in known_ids)
+            merged_issues = inventory.domain.merge_issues(deterministic.issues, proposed.issues, markdown)
             assessment = agents.schemas.PageAssessment(
                 page_number = page_ref["page"],
                 page_kind = deterministic.page_kind,

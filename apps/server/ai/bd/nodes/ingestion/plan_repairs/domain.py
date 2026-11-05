@@ -3,10 +3,9 @@ from __future__ import annotations
 from .... import agents, graphs
 
 
+# Control characters and soft hyphens are removed in code by repair_pages, so no specialist is asked about them.
 TEXT_ISSUES = frozenset({
-    agents.schemas.IssueCode.CONTROL_CHARACTERS,
     agents.schemas.IssueCode.SPLIT_WORD,
-    agents.schemas.IssueCode.SOFT_HYPHEN,
     agents.schemas.IssueCode.FUSED_MARKER,
     agents.schemas.IssueCode.TEXT_CORRUPTION,
 })

@@ -4,7 +4,6 @@ import { ChartNoAxesColumn, Check, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useState } from "react";
 import type { StreamStatus } from "@/shared/sse";
-import { Button } from "@/shared/ui/button";
 import {
   AGENTIC_NODES,
   agenticNodeCaption,
@@ -19,6 +18,8 @@ import type { BookUnits } from "../domain/books";
 import type { AgenticProgress, AgenticRunStatus, AgenticUsage, ChapterRange } from "../entities";
 import { useAgenticUsage } from "../hooks/use-agentic-run";
 import { useModalDialog } from "../hooks/use-modal-dialog";
+import { ActionButton } from "./action-button";
+import { ToggleGroup } from "./toggle-group";
 
 const AgenticFlow = dynamic(() => import("./agentic-flow").then((module) => module.AgenticFlow), {
   ssr: false,
@@ -120,9 +121,7 @@ export function AgenticProgressBar({
           <span aria-live="polite" className="text-xs text-muted-foreground">
             {statusText}
           </span>
-          <Button
-            variant="outline"
-            size="default"
+          <ActionButton
             onClick={resumable ? onResume : onStart}
             disabled={startDisabled}
             aria-busy={actionPending}
@@ -138,10 +137,8 @@ export function AgenticProgressBar({
             }
           >
             {actionPending ? (resumable ? "Resuming…" : "Starting…") : resumable ? "Resume" : "Start"}
-          </Button>
-          <Button
-            variant="outline"
-            size="default"
+          </ActionButton>
+          <ActionButton
             onClick={onStop}
             disabled={!(status === "queued" || status === "running") || cancelPending || cancelRequested}
             aria-busy={cancelPending || cancelRequested}
@@ -155,10 +152,8 @@ export function AgenticProgressBar({
             }
           >
             {cancelPending || cancelRequested ? "Stopping…" : "Stop"}
-          </Button>
-          <Button
-            variant="destructive"
-            size="default"
+          </ActionButton>
+          <ActionButton
             onClick={onWipe}
             disabled={!hasRun || status === "queued" || status === "running" || wipePending}
             aria-busy={wipePending}
@@ -172,7 +167,7 @@ export function AgenticProgressBar({
             }
           >
             {wipePending ? "Wiping…" : "Wipe"}
-          </Button>
+          </ActionButton>
         </div>
       </div>
       <div
@@ -212,7 +207,8 @@ export function AgenticProgressBar({
       </p>
       {qualityStatus === "complete_with_review" ? (
         <p className="mt-1 text-xs text-warning-text">
-          Review required · {reviewPageCount} {reviewPageCount === 1 ? "page" : "pages"} · {deliveredPageCount} delivered · {discardedBlankPageCount} blank excluded
+          Review required · {reviewPageCount} {reviewPageCount === 1 ? "page" : "pages"} ·{" "}
+          {deliveredPageCount} delivered · {discardedBlankPageCount} blank excluded
         </p>
       ) : qualityStatus === "complete" ? (
         <p className="mt-1 text-xs text-success-text">
@@ -291,29 +287,12 @@ export function AgenticPipelineOverview({
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {run ? (
-              <Button variant="outline" size="default" onClick={onOpenUsage} aria-haspopup="dialog">
+              <ActionButton onClick={onOpenUsage} aria-haspopup="dialog">
                 <ChartNoAxesColumn aria-hidden />
                 LLM usage
-              </Button>
+              </ActionButton>
             ) : null}
-            <fieldset className="m-0 flex border-0 p-0">
-              <legend className="sr-only">Pipeline shown as</legend>
-              {MODES.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  aria-pressed={mode === item.id}
-                  onClick={() => setMode(item.id)}
-                  className={`min-h-9 border px-3 text-xs first:rounded-l-sm last:rounded-r-sm ${
-                    mode === item.id
-                      ? "border-primary bg-primary/10 text-primary-text"
-                      : "-ml-px border-border text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </fieldset>
+            <ToggleGroup legend="Pipeline shown as" options={MODES} value={mode} onChange={setMode} />
           </div>
         </header>
         {error ? (
@@ -369,52 +348,58 @@ export function AgenticPipelineOverview({
               </ol>
             )}
           </div>
+          {/* From xl the box is as tall as the graph beside it and nothing more: its content is taken out of flow
+           * (`absolute inset-0`), so a long chapter list scrolls inside it instead of stretching the row. */}
           <section
             aria-label="Chapter progress"
-            className="min-w-0 rounded-sm border border-border bg-background p-3"
+            className="relative min-w-0 rounded-sm border border-border bg-background xl:min-h-72"
           >
-            <header className="flex flex-wrap items-baseline justify-between gap-2">
-              <h4 className="text-sm font-medium">Chapter progress</h4>
-              {chapterSummary ? (
-                <span className="text-xs tabular-nums text-muted-foreground">
-                  {chapterSummary.completed} of {chapterSummary.total} complete
-                </span>
-              ) : null}
-            </header>
-            {chapterRows.length > 0 ? (
-              <ol
-                aria-label="Chapter progress entries"
-                className="mt-3 flex max-h-[34rem] flex-col gap-3 overflow-y-auto"
-              >
-                {chapterRows.map((chapter) => {
-                  const percent = agenticPercent(chapter.processed, chapter.total);
-                  return (
-                    <li key={`${chapter.first_page}:${chapter.last_page}`} className="min-w-0">
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                        <span className="min-w-0 break-words">{chapter.title}</span>
-                        <span className="shrink-0 tabular-nums text-muted-foreground">
-                          {chapter.processed}/{chapter.total} {units.plural}
-                        </span>
-                      </div>
-                      <div
-                        role="progressbar"
-                        aria-label={`${chapter.title} progress`}
-                        aria-valuemin={0}
-                        aria-valuemax={chapter.total}
-                        aria-valuenow={chapter.processed}
-                        className="mt-1 h-1 w-full overflow-hidden rounded-sm bg-muted"
-                      >
-                        <div className="h-full bg-primary" style={{ width: `${percent ?? 0}%` }} />
-                      </div>
-                    </li>
-                  );
-                })}
-              </ol>
-            ) : (
-              <p className="mt-3 text-xs text-muted-foreground">
-                Chapter ranges are not available for this book.
-              </p>
-            )}
+            <div className="flex min-h-0 flex-col p-3 xl:absolute xl:inset-0">
+              <header className="flex flex-wrap items-baseline justify-between gap-2">
+                <h4 className="text-sm font-medium">Chapter progress</h4>
+                {chapterSummary ? (
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {chapterSummary.completed} of {chapterSummary.total} complete
+                  </span>
+                ) : null}
+              </header>
+              {chapterRows.length > 0 ? (
+                <ol
+                  aria-label="Chapter progress entries"
+                  // biome-ignore lint/a11y/noNoninteractiveTabindex: a long chapter list scrolls, so keyboard users must be able to focus it to scroll it (WCAG 2.1.1)
+                  tabIndex={0}
+                  className="mt-3 flex max-h-[34rem] min-h-0 flex-col gap-3 overflow-y-auto xl:max-h-none xl:flex-1"
+                >
+                  {chapterRows.map((chapter) => {
+                    const percent = agenticPercent(chapter.processed, chapter.total);
+                    return (
+                      <li key={`${chapter.first_page}:${chapter.last_page}`} className="min-w-0">
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                          <span className="min-w-0 break-words">{chapter.title}</span>
+                          <span className="shrink-0 tabular-nums text-muted-foreground">
+                            {chapter.processed}/{chapter.total} {units.plural}
+                          </span>
+                        </div>
+                        <div
+                          role="progressbar"
+                          aria-label={`${chapter.title} progress`}
+                          aria-valuemin={0}
+                          aria-valuemax={chapter.total}
+                          aria-valuenow={chapter.processed}
+                          className="mt-1 h-1 w-full overflow-hidden rounded-sm bg-muted"
+                        >
+                          <div className="h-full bg-primary" style={{ width: `${percent ?? 0}%` }} />
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ol>
+              ) : (
+                <p className="mt-3 text-xs text-muted-foreground">
+                  Chapter ranges are not available for this book.
+                </p>
+              )}
+            </div>
           </section>
         </div>
         {progress && progress.audit_warning_pages.length > 0 ? (
@@ -495,9 +480,9 @@ function AgenticNodeSheet({
             {caption ? <span>{caption}</span> : null}
           </p>
         </div>
-        <Button variant="ghost" size="icon-lg" onClick={onClose} aria-label="Close node usage">
+        <ActionButton iconOnly onClick={onClose} aria-label="Close node usage">
           <X aria-hidden />
-        </Button>
+        </ActionButton>
       </header>
       <div className="flex flex-col gap-4 px-5 py-4">
         <UsageBreakdown usage={usage} nodeId={node.id} loading={loading} failed={failed} hasRun={hasRun} />
@@ -600,9 +585,9 @@ function UsageSheet({
             Calls and token counts, grouped by processing node.
           </p>
         </div>
-        <Button variant="ghost" size="icon-lg" onClick={onClose} aria-label="Close usage">
+        <ActionButton iconOnly onClick={onClose} aria-label="Close usage">
           <X aria-hidden />
-        </Button>
+        </ActionButton>
       </header>
       <div className="flex flex-col gap-4 px-5 py-4">
         <UsageBreakdown usage={usage.data} loading={usage.isPending} failed={usage.isError} hasRun />
@@ -650,24 +635,7 @@ function UsageBreakdown({
         </dl>
       ) : null}
       {hasRun ? (
-        <fieldset className="m-0 flex flex-wrap items-center gap-2 border-0 p-0">
-          <legend className="sr-only">Group usage by</legend>
-          {USAGE_MODES.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              aria-pressed={mode === item.id}
-              onClick={() => setMode(item.id)}
-              className={`min-h-9 rounded-sm border px-3 text-xs ${
-                mode === item.id
-                  ? "border-primary bg-primary/10 text-primary-text"
-                  : "border-border text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {item.label}
-            </button>
-          ))}
-        </fieldset>
+        <ToggleGroup legend="Group usage by" options={USAGE_MODES} value={mode} onChange={setMode} />
       ) : null}
       {failed ? (
         <p role="alert" className="text-sm text-destructive-text">

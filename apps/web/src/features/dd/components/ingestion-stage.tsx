@@ -14,14 +14,17 @@ import {
 import { apiErrorMessage } from "@/shared/lib/api-error";
 
 import { ingressSummary, isRunTerminal, runFramework, runToAdopt } from "../domain/ingestion";
+import { deleteCascadeText } from "../domain/library";
 import type { Manifest } from "../entities";
 import {
   useActiveRun,
   useCancelRun,
   useCatalog,
+  useDeleteLibrary,
   useLibrary,
   useManifest,
   useRunPoll,
+  useStartRun,
 } from "../hooks/use-dd-data";
 import { useDdOverlays } from "../hooks/use-overlays";
 import { ingestionHref } from "../params";
@@ -74,9 +77,11 @@ function IngestionWorkspace({
   const manifestQuery = useManifest(slug);
   const statusQuery = useRunPoll(runId);
   const cancel = useCancelRun();
+  const start = useStartRun();
+  const wipe = useDeleteLibrary();
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { notice } = useDdOverlays();
+  const { notice, toast, confirm } = useDdOverlays();
   const noticeRef = useRef(notice);
   const catalog = useCatalog();
   const library = useLibrary();
@@ -121,7 +126,45 @@ function IngestionWorkspace({
       }
     : manifestQuery.data;
   const explorerRunId = showLiveManifest ? runId : null;
-  const cancelling = cancel.isPending || cancel.isSuccess || status === "cancelling";
+  // A cancel that was sent for an earlier run says nothing about this one.
+  const cancelRequested =
+    status === "cancelling" || ((cancel.isPending || cancel.isSuccess) && cancel.variables === runId);
+  const ingested = (library.data ?? []).some((item) => item.slug === slug);
+
+  const startIngestion = () =>
+    start.mutate(
+      { slug },
+      {
+        onSuccess: (outcome) => {
+          if (outcome.kind === "queued") {
+            setActiveView("pipeline");
+            notice(`Ingesting ${framework.name}…`);
+            router.replace(ingestionHref(slug, outcome.runId ?? null), { scroll: false });
+          } else if (outcome.kind === "locked") {
+            toast(outcome.message ?? "A run is already active for this framework.");
+          } else {
+            notice("Already up to date.");
+          }
+        },
+        onError: (error) => toast(apiErrorMessage(error)),
+      },
+    );
+
+  const wipeIngestion = async () => {
+    const confirmed = await confirm({
+      title: "Wipe ingested documentation?",
+      message: `Deletes ${framework.name}'s ingested pages and Agentic AI results permanently.${deleteCascadeText({ planner: true, synth: true }, "")} The framework stays in the catalog so you can ingest it again.`,
+      confirmLabel: "Wipe",
+    });
+    if (!confirmed) return;
+    wipe.mutate(slug, {
+      onSuccess: () => {
+        notice(`Wiped ${framework.name}'s ingested documentation.`);
+        router.replace(ingestionHref(slug, null), { scroll: false });
+      },
+      onError: (error) => toast(apiErrorMessage(error)),
+    });
+  };
 
   return (
     <div>
@@ -173,13 +216,21 @@ function IngestionWorkspace({
         <IngestionPipeline
           runId={runId}
           progress={progress}
-          onCancel={runId && !terminal ? () => cancel.mutate(runId) : undefined}
+          ingested={ingested}
+          ingestedPages={manifestQuery.data?.entries.length ?? 0}
+          startPending={start.isPending}
+          wipePending={wipe.isPending}
+          cancelRequested={cancelRequested}
+          cancelError={cancel.isError ? `Could not cancel the run — ${apiErrorMessage(cancel.error)}` : null}
+          statusUnavailable={runId !== null && statusQuery.isError}
+          onStart={startIngestion}
+          onStop={() => {
+            if (runId) cancel.mutate(runId);
+          }}
+          onWipe={() => void wipeIngestion()}
           onDismiss={
             runId && terminal ? () => router.replace(ingestionHref(slug, null), { scroll: false }) : undefined
           }
-          cancelling={cancelling}
-          cancelError={cancel.isError ? apiErrorMessage(cancel.error) : null}
-          statusUnavailable={runId !== null && statusQuery.isError}
         />
       </div>
 
