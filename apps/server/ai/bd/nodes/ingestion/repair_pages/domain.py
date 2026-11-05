@@ -143,7 +143,8 @@ def validate_proposals(
         if proposal.issue_id not in assigned_issues:
             raise ValueError("patch proposal references an issue not assigned to this specialist")
         if proposal.issue_id in seen_issue_ids:
-            raise ValueError("a specialist may propose at most one patch per assigned issue")
+            # Keep the first source-validated proposal; a duplicate must not discard the whole batch.
+            continue
         if proposal.issue_code != assigned_issues[proposal.issue_id].code:
             raise ValueError("patch proposal issue code does not match its assigned issue")
         allowed = (
@@ -414,6 +415,10 @@ def _remove_table_toc_leaders(rows: list[list[str]]) -> list[list[str]]:
             continue
         last = nonempty[-1]
         last_cell = row[last].strip()
+        leader_page = patterns._LEADING_DOT_LEADER_PAGE_REFERENCE_RE.fullmatch(last_cell)
+        if leader_page:
+            row[last] = leader_page.group("page")
+            last_cell = row[last]
         if patterns._PAGE_REFERENCE_RE.fullmatch(last_cell):
             for column in nonempty[:-1]:
                 title = patterns._TRAILING_LEADERS_RE.sub("", row[column]).rstrip()
@@ -478,13 +483,14 @@ def _evidence_was_changed_in_table(excerpt: str, changes: list[tuple[str, str]])
 
 
 def _evidence_was_changed_with_toc_cleanup(excerpt: str, changes: list[tuple[str, str]]) -> bool:
-    return (
-        bool(
-            patterns._TRAILING_LEADERS_RE.search(excerpt)
-            or patterns._INLINE_TOC_ROW_RE.fullmatch(excerpt.strip())
-        )
-        and _evidence_was_changed_in_table(excerpt, changes)
+    cells = _split_table_cells(excerpt) if "|" in excerpt else [excerpt]
+    has_toc_markers = any(
+        patterns._TRAILING_LEADERS_RE.search(cell)
+        or patterns._INLINE_TOC_ROW_RE.fullmatch(cell.strip())
+        or patterns._LEADING_DOT_LEADER_PAGE_REFERENCE_RE.fullmatch(cell.strip())
+        for cell in cells
     )
+    return bool(has_toc_markers) and _evidence_was_changed_in_table(excerpt, changes)
 
 
 def _is_control_noise(character: str) -> bool:

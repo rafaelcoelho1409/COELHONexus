@@ -120,7 +120,7 @@ export function useActiveRun(enabled: boolean) {
   });
   const runs = query.data?.active ?? [];
   // `run` is the first one (enough to know "something is running"); `runs` lets a page find its own framework's.
-  return { run: runs[0], runs };
+  return { run: runs[0], runs, isPending: query.isPending };
 }
 
 /** GET /dd/runs/{run_id} — the poll stops at a terminal state. */

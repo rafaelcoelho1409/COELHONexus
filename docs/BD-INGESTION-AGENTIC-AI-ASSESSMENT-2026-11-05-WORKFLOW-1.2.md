@@ -97,7 +97,7 @@ Applied after the assessment; this changes the workflow to **1.3** and the persi
 5. **Update the reader controls.** Graph/List and Rendered/Markdown source are segmented toggles. Pipeline controls sit above the Chapter progress panel at the same width. The Agentic AI progress box groups processed, audited, review, unverified, chapter and active-work counts; audit warnings are labeled separately.
 6. **Increase bounded concurrency.** With the retry cap in place, page audit concurrency is 16 and repair concurrency is 8 (up from 4 each) to reduce the time spent waiting on independent pages.
 
-The expected call and token savings are still estimates. The changed workflow has not yet been run against this book, and no tests or browser checks were run during this implementation pass. Static validation passed: Python syntax parsing for the changed backend modules, frontend typecheck, generated API client and contract checks, targeted Biome and ESLint checks, and `git diff --check`.
+At the time of this implementation update, the expected call and token savings were estimates and the changed workflow had not yet been run against this book. The subsequent workflow 1.3 live run is assessed in [the follow-up report](BD-INGESTION-AGENTIC-AI-ASSESSMENT-2026-11-05-WORKFLOW-1.3.md). No tests or browser checks were run during that earlier implementation pass. Static validation passed: Python syntax parsing for the changed backend modules, frontend typecheck, generated API client and contract checks, targeted Biome and ESLint checks, and `git diff --check`.
 
 ## Still open outside this assessment
 

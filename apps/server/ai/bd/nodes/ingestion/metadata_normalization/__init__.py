@@ -1,3 +1,3 @@
-from . import node, service
+from . import domain, node, service
 
-__all__ = ["node", "service"]
+__all__ = ["domain", "node", "service"]

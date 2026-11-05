@@ -13,17 +13,29 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { getDdIngestionQueryKey } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 
+import { tileLogos, tileName } from "../domain/catalog";
 import { fmtAge } from "../domain/format";
+import { isRunTerminal } from "../domain/ingestion";
 import { deleteCascadeText, itemDisplayName, itemLogos } from "../domain/library";
 import type { LibraryItem } from "../entities";
-import { useDeleteLibrary, useLibrary, useStartRun } from "../hooks/use-dd-data";
+import { useActiveRun, useCatalog, useDeleteLibrary, useLibrary, useStartRun } from "../hooks/use-dd-data";
 import { useDdOverlays } from "../hooks/use-overlays";
 import { type DdStage, ingestionHref, stageHref } from "../params";
 import { LogoStrip } from "./logo-strip";
 
+type FrameworkOption = {
+  slug: string;
+  name: string;
+  logos: string[];
+  libraryItem: LibraryItem | null;
+  activeRunId: string | null;
+};
+
 export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; currentSlug: string | null }) {
   const libraryQuery = useLibrary();
   const items: LibraryItem[] = useMemo(() => libraryQuery.data ?? [], [libraryQuery.data]);
+  const catalogQuery = useCatalog();
+  const { runs: activeRuns, isPending: activeRunsPending } = useActiveRun(true);
   const router = useRouter();
   const { confirm, toast, notice } = useDdOverlays();
   const start = useStartRun();
@@ -34,6 +46,36 @@ export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; curren
   const [query, setQuery] = useState("");
   const boxRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
+
+  const options = useMemo(() => {
+    const seen = new Set<string>();
+    const activeOptions: FrameworkOption[] = [];
+    for (const run of activeRuns) {
+      if (!run.slug || isRunTerminal(run.progress?.status) || seen.has(run.slug)) continue;
+      seen.add(run.slug);
+      const libraryItem = items.find((item) => item.slug === run.slug) ?? null;
+      const catalogEntry = catalogQuery.data?.find((entry) => entry.slug === run.slug);
+      activeOptions.push({
+        slug: run.slug,
+        name: libraryItem ? itemDisplayName(libraryItem) : catalogEntry ? tileName(catalogEntry) : run.slug,
+        logos: libraryItem ? itemLogos(libraryItem) : catalogEntry ? tileLogos(catalogEntry) : [],
+        libraryItem,
+        activeRunId: run.run_id,
+      });
+    }
+
+    const libraryOptions = items
+      .filter((item) => !seen.has(item.slug))
+      .map((item) => ({
+        slug: item.slug,
+        name: itemDisplayName(item),
+        logos: itemLogos(item),
+        libraryItem: item,
+        activeRunId: null,
+      }));
+
+    return [...activeOptions, ...libraryOptions];
+  }, [activeRuns, catalogQuery.data, items]);
 
   useEffect(() => {
     if (!open) {
@@ -66,17 +108,22 @@ export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; curren
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) {
-      return items;
+      return options;
     }
-    return items.filter((item) => itemDisplayName(item).toLowerCase().includes(q));
-  }, [items, query]);
+    return options.filter((item) => item.name.toLowerCase().includes(q));
+  }, [options, query]);
 
   const busy = start.isPending || del.isPending;
-  const currentItem = currentSlug ? (items.find((item) => item.slug === currentSlug) ?? null) : null;
+  const currentItem = currentSlug ? (options.find((item) => item.slug === currentSlug) ?? null) : null;
 
   const pick = (slug: string) => {
     setOpen(false);
     setQuery("");
+    const option = options.find((item) => item.slug === slug);
+    if (option?.activeRunId) {
+      router.push(ingestionHref(slug, option.activeRunId));
+      return;
+    }
     if (slug === currentSlug) {
       return;
     }
@@ -134,8 +181,8 @@ export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; curren
       >
         {currentItem ? (
           <span className="flex items-center gap-2">
-            <LogoStrip logos={itemLogos(currentItem)} name={itemDisplayName(currentItem)} max={1} size="sm" />
-            <span className="max-w-56 truncate font-medium">{itemDisplayName(currentItem)}</span>
+            <LogoStrip logos={currentItem.logos} name={currentItem.name} max={1} size="sm" />
+            <span className="max-w-56 truncate font-medium">{currentItem.name}</span>
             <ChevronDown className="size-4 text-muted-foreground" aria-hidden />
           </span>
         ) : (
@@ -157,7 +204,7 @@ export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; curren
             aria-label="Search frameworks"
             className="mb-1 h-9 w-full rounded-sm border border-border bg-background px-2 text-sm"
           />
-          <ul aria-label="Ingested frameworks" className="max-h-64 overflow-auto">
+          <ul aria-label="Frameworks" className="max-h-64 overflow-auto">
             {filtered.map((item) => {
               return (
                 <li key={item.slug} className="group flex items-center gap-1 rounded-sm px-1 hover:bg-muted">
@@ -170,44 +217,46 @@ export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; curren
                       aria-hidden="true"
                       className="flex h-8 w-20 shrink-0 items-center justify-start overflow-hidden"
                     >
-                      <LogoStrip logos={itemLogos(item)} name={itemDisplayName(item)} max={1} size="sm" />
+                      <LogoStrip logos={item.logos} name={item.name} max={1} size="sm" />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium">{itemDisplayName(item)}</span>
-                      <span className="block truncate text-xs text-muted-foreground">{itemMeta(item)}</span>
+                      <span className="block truncate font-medium">{item.name}</span>
+                      <span className="block truncate text-xs text-muted-foreground">{optionMeta(item)}</span>
                     </span>
                   </button>
-                  <button
-                    type="button"
-                    aria-label={`Refresh ${itemDisplayName(item)}`}
-                    disabled={busy}
-                    onClick={() => refresh(item.slug)}
-                    title="Re-ingest (fresh crawls)"
-                    className="inline-flex size-9 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
-                  >
-                    <RotateCw className="size-4" aria-hidden />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={`Delete ${itemDisplayName(item)}`}
-                    disabled={busy}
-                    onClick={() => remove(item.slug)}
-                    title="Delete"
-                    className="inline-flex size-9 items-center justify-center rounded-sm text-muted-foreground hover:text-destructive-text disabled:opacity-50"
-                  >
-                    <Trash2 className="size-4" aria-hidden />
-                  </button>
+                  {item.libraryItem ? (
+                    <>
+                      <button
+                        type="button"
+                        aria-label={`Refresh ${item.name}`}
+                        disabled={busy}
+                        onClick={() => refresh(item.slug)}
+                        title="Re-ingest (fresh crawls)"
+                        className="inline-flex size-9 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
+                      >
+                        <RotateCw className="size-4" aria-hidden />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Delete ${item.name}`}
+                        disabled={busy}
+                        onClick={() => remove(item.slug)}
+                        title="Delete"
+                        className="inline-flex size-9 items-center justify-center rounded-sm text-muted-foreground hover:text-destructive-text disabled:opacity-50"
+                      >
+                        <Trash2 className="size-4" aria-hidden />
+                      </button>
+                    </>
+                  ) : null}
                 </li>
               );
             })}
             {filtered.length === 0 ? (
               <li className="px-2 py-3 text-sm text-muted-foreground">
-                {items.length > 0
-                  ? query
-                    ? "No match."
-                    : "No frameworks selected."
-                  : libraryQuery.isPending
-                    ? "Loading library…"
+                {options.length > 0
+                  ? "No match."
+                  : libraryQuery.isPending || activeRunsPending
+                    ? "Loading frameworks…"
                     : "Ingest something first."}
               </li>
             ) : null}
@@ -221,6 +270,11 @@ export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; curren
 function nameForSlug(items: LibraryItem[], slug: string): string {
   const found = items.find((item) => item.slug === slug);
   return found ? itemDisplayName(found) : slug;
+}
+
+function optionMeta(option: FrameworkOption): string {
+  const pages = option.libraryItem ? itemMeta(option.libraryItem) : "";
+  return [pages, option.activeRunId ? "Ingestion running" : ""].filter(Boolean).join(" · ");
 }
 
 function itemMeta(item: Pick<LibraryItem, "page_count" | "ingested_at">): string {

@@ -1,7 +1,7 @@
 """Read bounded front matter and persist evidence-grounded book metadata."""
 from __future__ import annotations
 import domains
-from . import patterns
+from . import domain, patterns
 from .... import agents, graphs, skills
 
 import hashlib
@@ -78,9 +78,7 @@ async def normalize_metadata(
             }], "files": skills.service.files_for("metadata_normalizer")}, config = {
                 "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
             })
-        if not isinstance(response, dict) or "structured_response" not in response:
-            raise ValueError("metadata normalizer returned no structured BookMetadataProposal")
-        proposal = agents.schemas.BookMetadataProposal.model_validate(response["structured_response"])
+        proposal = domain.extract_proposal(response)
         for evidence in proposal.evidence:
             if evidence.source == agents.schemas.EvidenceSource.PAGE_MARKDOWN:
                 matching_sources = [
