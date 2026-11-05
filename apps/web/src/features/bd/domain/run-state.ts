@@ -45,10 +45,12 @@ export type RunAction =
   | { type: "event"; event: BdEvent }
   /** A new run was requested: forget the last run's ending (the pages stay; the replay re-sends them anyway). */
   | { type: "restart" }
+  | { type: "clear" }
   | { type: "canceling" }
   | { type: "cancel-timeout" };
 
 export function runReducer(state: RunState, action: RunAction): RunState {
+  if (action.type === "clear") return EMPTY_RUN;
   if (action.type === "restart") return { ...state, terminal: null, canceling: false };
   if (action.type === "canceling") return { ...state, canceling: true };
   if (action.type === "cancel-timeout") return { ...state, canceling: false };

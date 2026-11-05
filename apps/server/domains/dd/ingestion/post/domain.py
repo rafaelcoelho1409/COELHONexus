@@ -446,10 +446,13 @@ def split_by_source_markers(text: str) -> list[tuple[str, str, str, str]] | None
 def split_monolith(
     body: str,
     parent_slug: str,
+    *,
+    cleanup: bool = True,
 ) -> tuple[list[tuple[str, str, str]], int, int]:
     """→ (writes, stubs_dropped, dupes_dropped) where writes is
     [(slug, body, source_path), ...]. Pure — caller persists. Below
-    MONOLITH_SPLIT_THRESHOLD_BYTES returns body unchanged."""
+    MONOLITH_SPLIT_THRESHOLD_BYTES returns body unchanged. `cleanup=False`
+    keeps short and duplicate source sections for Agentic AI to inspect."""
     if len(body.encode("utf-8")) < params.MONOLITH_SPLIT_THRESHOLD_BYTES:
         return [(parent_slug, body, "")], 0, 0
     sections = split_by_source_markers(body)
@@ -467,23 +470,25 @@ def split_monolith(
         expanded = _h2_subsplit_oversized([(parent_slug, body, "")], parent_slug)
         if len(expanded) <= 1:
             return [(parent_slug, body, "")], 0, 0
-        # Cross-level dedup — recursion can split footers into duplicates.
-        seen: set[str] = set()
-        deduped: list[tuple[str, str, str]] = []
-        dropped = 0
-        for s, b, sp in expanded:
-            h = hashlib.sha256(b.encode("utf-8")).hexdigest()
-            if h in seen:
-                dropped += 1
-                continue
-            seen.add(h)
-            deduped.append((s, b, sp))
-        if dropped:
-            logger.info(
-                f"[post] fall-through dedup: -{dropped} dupes; "
-                f"{len(deduped)} survive (was {len(expanded)})"
-            )
-        return _disambiguate_duplicate_slugs(deduped), 0, dropped
+        if cleanup:
+            # Cross-level dedup — recursion can split footers into duplicates.
+            seen: set[str] = set()
+            deduped: list[tuple[str, str, str]] = []
+            dropped = 0
+            for s, b, sp in expanded:
+                h = hashlib.sha256(b.encode("utf-8")).hexdigest()
+                if h in seen:
+                    dropped += 1
+                    continue
+                seen.add(h)
+                deduped.append((s, b, sp))
+            if dropped:
+                logger.info(
+                    f"[post] fall-through dedup: -{dropped} dupes; "
+                    f"{len(deduped)} survive (was {len(expanded)})"
+                )
+            expanded = deduped
+        return _disambiguate_duplicate_slugs(expanded), 0, 0
     logger.info(
         f"[post] split_monolith: {strategy} → {len(sections)} sections "
         f"(input {len(body)//1024} KB)"
@@ -502,20 +507,22 @@ def split_monolith(
         # Each section knows its own URL, which a bundle's `./x` and `../x` links are relative to.
         writes.append((base, absolutize_links(sec_body, source_url) if source_url else sec_body, source_url))
     pre = len(writes)
-    delimited = strategy == "source-markers"
-    writes = [(s, b, sp) for s, b, sp in writes if worth_keeping(b, delimited = delimited)]
-    stubs_dropped = pre - len(writes)
-    seen: set[str] = set()
-    deduped: list[tuple[str, str, str]] = []
+    stubs_dropped = 0
     duplicates_dropped = 0
-    for s, b, sp in writes:
-        h = hashlib.sha256(b.encode("utf-8")).hexdigest()
-        if h in seen:
-            duplicates_dropped += 1
-            continue
-        seen.add(h)
-        deduped.append((s, b, sp))
-    writes = deduped
+    if cleanup:
+        delimited = strategy == "source-markers"
+        writes = [(s, b, sp) for s, b, sp in writes if worth_keeping(b, delimited = delimited)]
+        stubs_dropped = pre - len(writes)
+        seen: set[str] = set()
+        deduped: list[tuple[str, str, str]] = []
+        for s, b, sp in writes:
+            h = hashlib.sha256(b.encode("utf-8")).hexdigest()
+            if h in seen:
+                duplicates_dropped += 1
+                continue
+            seen.add(h)
+            deduped.append((s, b, sp))
+        writes = deduped
     if stubs_dropped or duplicates_dropped:
         logger.info(
             f"[post] split cleanup: -{stubs_dropped} stubs, "
@@ -702,6 +709,8 @@ def split_oversized_page(
     slug: str,
     body: str,
     max_bytes: int,
+    *,
+    deduplicate: bool = True,
 ) -> list[tuple[str, str, str]]:
     """Split ONE oversized page from a multi-page corpus on H2/H3 (same
     atomic-fence machinery as the monolith path, parent H1 prepended for
@@ -717,16 +726,17 @@ def split_oversized_page(
         slug, body, "", h1_prefix = h1_prefix, levels = params.SUBSPLIT_LEVELS,
         max_bytes = max_bytes,
     )
-    # A heading that occurs twice in the page (Diffusers' LoRA page documents `LoraBaseMixin` in two places) gives two
-    # identical sections — and `dedup_pages` already ran, before the split could make them.
-    seen: set[str] = set()
-    distinct: list[tuple[str, str, str]] = []
-    for section in out:
-        digest = hashlib.sha256(section[1].strip().encode("utf-8")).hexdigest()
-        if digest not in seen:
-            seen.add(digest)
-            distinct.append(section)
-    out = distinct
+    if deduplicate:
+        # A heading that occurs twice in the page (Diffusers' LoRA page documents `LoraBaseMixin` in two places) gives two
+        # identical sections — and `dedup_pages` already ran, before the split could make them.
+        seen: set[str] = set()
+        distinct: list[tuple[str, str, str]] = []
+        for section in out:
+            digest = hashlib.sha256(section[1].strip().encode("utf-8")).hexdigest()
+            if digest not in seen:
+                seen.add(digest)
+                distinct.append(section)
+        out = distinct
     if len(out) <= 1:
         return [(slug, body, "")]
     return _disambiguate_duplicate_slugs(out)
@@ -756,6 +766,8 @@ def dedup_pages(
 def presplit_oversized(
     pages: list[tuple[str, str, str]],
     max_bytes: int,
+    *,
+    deduplicate: bool = True,
 ) -> tuple[list[tuple[str, str, str, tuple[str, str]]], list[tuple[str, int, int]]]:
     """[(slug, url, body), ...] → (expanded, report). Each page of `max_bytes` or more is cut on its H2/H3
     (`split_oversized_page`) into children that share its URL; one with no clean split passes through intact, never dropped.
@@ -766,7 +778,7 @@ def presplit_oversized(
     for slug, url, body in pages:
         size = len(body.encode("utf-8"))
         if size >= max_bytes:
-            children = split_oversized_page(slug, body, max_bytes)
+            children = split_oversized_page(slug, body, max_bytes, deduplicate = deduplicate)
             if len(children) > 1:
                 expanded.extend((child_slug, url, child_body, (slug, url)) for child_slug, child_body, _source in children)
                 report.append((slug, size // 1024, len(children)))
@@ -780,13 +792,14 @@ def split_manifest(
     parent: domains.dd.ingestion.storage.entities.ManifestEntry,
     writes: list[tuple[str, str, str]],
     sections: list[str],
+    key_factory=None,
 ) -> tuple[list[domains.dd.ingestion.storage.entities.ManifestEntry], list[tuple[str, str, str]]]:
     """The manifest entries, and the `(key, body, content type)` to write for each, of the pages a monolith `parent` was split
     into (`writes`: [(slug, body, source_path), ...], `sections`: the section of each)."""
     entries: list[domains.dd.ingestion.storage.entities.ManifestEntry] = []
     batch: list[tuple[str, str, str]] = []
     for idx, (slug, body, source_path) in enumerate(writes):
-        key = domains.dd.ingestion.storage.keys.page_key(framework_slug, idx, slug)
+        key = key_factory(idx, slug) if key_factory else domains.dd.ingestion.storage.keys.page_key(framework_slug, idx, slug)
         batch.append((key, body, params.PAGE_CONTENT_TYPE))
         # A changelog-release sub-page (`_split_changelog_releases`) gets its own tier so corpus_load can drop it from the
         # Planner/Synth path — every other split page keeps the parent's tier.
@@ -800,6 +813,7 @@ def split_manifest(
             # The page's own heading (the explorer lists pages by title); the slug only if it has none.
             title = display_title(body, slug),
             key = key,
+            raw_key = parent.raw_key,
             source_path = source_path,
             section = sections[idx],
         ))
@@ -810,10 +824,13 @@ def dedup_manifest(
     framework_slug: str,
     current: list[domains.dd.ingestion.storage.entities.ManifestEntry],
     pages: list[tuple[str, str, str, tuple[str, str]]],
+    key_factory=None,
 ) -> tuple[list[domains.dd.ingestion.storage.entities.ManifestEntry], list[tuple[str, str, str]]]:
-    """The manifest entries, and the `(key, body, content type)` to write for each, of a multi-page corpus once it has been
-    deduplicated and its oversized pages cut (`pages`: what `presplit_oversized` returns). What the entry of the page a page
-    came from (`current`, matched on URL and slug) knew — tier, section, notes, lastmod, anchors — carries on to it."""
+    """Build manifest entries and page writes from multi-page inputs after oversized pages are segmented.
+
+    The helper keeps its legacy name; it does not itself remove duplicate pages. Metadata from the matching parent entry
+    (`current`, matched on URL and slug) carries to each page or child.
+    """
     previous: dict[tuple[str, str], domains.dd.ingestion.storage.entities.ManifestEntry] = {}
     for entry in current:
         previous.setdefault((entry.url, entry.slug), entry)
@@ -822,7 +839,7 @@ def dedup_manifest(
     batch: list[tuple[str, str, str]] = []
     for idx, (slug, url, body, (parent_slug, parent_url)) in enumerate(pages):
         prev = previous.get((parent_url, parent_slug))
-        key = domains.dd.ingestion.storage.keys.page_key(framework_slug, idx, slug)
+        key = key_factory(idx, slug) if key_factory else domains.dd.ingestion.storage.keys.page_key(framework_slug, idx, slug)
         batch.append((key, body, params.PAGE_CONTENT_TYPE))
         entries.append(domains.dd.ingestion.storage.entities.ManifestEntry(
             idx = idx,
@@ -834,6 +851,7 @@ def dedup_manifest(
             # untouched pages keep the parent title.
             title = prev.title if (prev and slug == parent_slug) else display_title(body, slug),
             key = key,
+            raw_key = prev.raw_key if prev else "",
             # Already distinct per page here (unlike the monolith split) — mirrored so downstream consumers can always
             # read source_path without a url fallback.
             source_path = url,

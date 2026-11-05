@@ -5,8 +5,8 @@ from . import params
 
 
 def sawc_latest_key(slug: str, chapter_id: str) -> str:
-    return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/sawc-latest.json"
+    return f"dd/{slug}/synth/{chapter_id}/sawc-latest.json"
 
 
 def derive_latest_key(slug: str, chapter_id: str) -> str:
-    return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/sawc_derive-latest.json"
+    return f"dd/{slug}/synth/{chapter_id}/sawc_derive-latest.json"

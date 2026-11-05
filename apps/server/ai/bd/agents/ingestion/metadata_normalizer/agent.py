@@ -3,7 +3,7 @@ from __future__ import annotations
 import domains
 from . import config, params
 from ... import schemas
-from .... import prompts
+from .... import prompts, skills
 
 from deepagents import (
     FilesystemPermission,
@@ -44,16 +44,37 @@ def metadata_normalizer(model = None):
         tools = [],
         system_prompt = prompts.ingestion.metadata_normalizer.prompts.SYSTEM_PROMPT,
         response_format = schemas.BookMetadataProposal,
-        permissions = [FilesystemPermission(
-            operations = ["read", "write"],
-            paths = ["/**"],
-            mode = "deny",
-        )],
+        permissions = [
+            FilesystemPermission(
+                operations = ["read"],
+                paths = ["/skills/**"],
+                mode = "allow",
+            ),
+            FilesystemPermission(
+                operations = ["read"],
+                paths = ["/**"],
+                mode = "deny",
+            ),
+            FilesystemPermission(
+                operations = ["write"],
+                paths = ["/**"],
+                mode = "deny",
+            ),
+        ],
         backend = StateBackend(),
+        skills = [skills.domain.source_for("metadata_normalizer")],
         name = "bd_metadata_normalizer",
     )
     tool_node = agent.nodes.get("tools")
     available_tools = getattr(getattr(tool_node, "bound", None), "_tools_by_name", None)
-    if not isinstance(available_tools, dict) or set(available_tools) - params.EXCLUDED_TOOLS:
-        raise RuntimeError("DeepAgents exposed an unreviewed tool to the metadata normalizer")
+    error_message = "DeepAgents exposed an unreviewed tool to the metadata normalizer"
+    if not isinstance(available_tools, dict):
+        raise RuntimeError(error_message)
+    unreviewed_tools = (
+        set(available_tools)
+        - params.EXCLUDED_TOOLS
+        - skills.params.ALLOWED_TOOL_NAMES
+    )
+    if unreviewed_tools:
+        raise RuntimeError(error_message)
     return agent

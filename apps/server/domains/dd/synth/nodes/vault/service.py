@@ -17,8 +17,10 @@ async def get_or_build_source_vault(
     basename = source_key.rstrip("/").rsplit("/", 1)[-1]
     if basename.endswith(".md"):
         basename = basename[:-3]
-    vault_key = f"synth-vault/{slug}/pages/{basename}.vault.json"
-    sentinel_key = f"synth-vault/{slug}/pages/{basename}.sentinelized.md"
+    run_id = domains.dd.ingestion.storage.keys.run_id_from_page_key(source_key)
+    vault_prefix = domains.dd.ingestion.storage.keys.vault_prefix(slug, run_id)
+    vault_key = f"{vault_prefix}pages/{basename}.vault.json"
+    sentinel_key = f"{vault_prefix}pages/{basename}.sentinelized.md"
 
     # 1. Try pre-built artifacts.
     if await minio.exists(vault_key) and await minio.exists(sentinel_key):

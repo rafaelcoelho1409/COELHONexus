@@ -3,6 +3,7 @@ import { Ban, Check, Circle, CircleDot, Clock, X } from "lucide-react";
 import { type BookStatus, STATUS_LABEL } from "../domain/books";
 
 const GLYPH = {
+  ready: Circle,
   queued: Clock,
   extracting: CircleDot,
   done: Check,
@@ -12,6 +13,7 @@ const GLYPH = {
 } as const;
 
 const TONE: Record<BookStatus, string> = {
+  ready: "text-muted-foreground",
   queued: "text-muted-foreground",
   extracting: "text-running-text",
   done: "text-success-text",

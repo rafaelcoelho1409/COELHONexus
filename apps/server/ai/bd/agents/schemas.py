@@ -28,6 +28,7 @@ class PageKind(StrEnum):
 
 class IssueCode(StrEnum):
     CONTROL_CHARACTERS = "control_characters"
+    NEAR_EMPTY = "near_empty"
     SPLIT_WORD = "split_word"
     SOFT_HYPHEN = "soft_hyphen"
     TOC_NOISE = "toc_noise"

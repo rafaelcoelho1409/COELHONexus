@@ -47,7 +47,18 @@ async def run_book(book_id: str, refresh: bool = False, auto_chain: bool = False
 
 @router.get("", response_model = list[schemas.BookRow])
 async def list_books() -> list[dict]:
-    return await domains.bd.ingestion.storage.service.list_library(infra.minio.service.get_storage())
+    storage = infra.minio.service.get_storage()
+    books = await domains.bd.ingestion.storage.service.list_library(storage)
+    semaphore = asyncio.Semaphore(8)
+
+    async def _with_normalized_title(book: dict) -> dict:
+        async with semaphore:
+            metadata = await domains.bd.ingestion.ai.service.read_current_ingestion_ai_metadata(
+                book["book_id"], storage = storage,
+            )
+        return {**book, "title": metadata["title"]} if metadata else book
+
+    return await asyncio.gather(*(_with_normalized_title(book) for book in books))
 
 
 @router.get("/active", response_model = schemas.ActiveRuns)
@@ -63,6 +74,9 @@ async def get_book(book_id: str) -> dict:
         raise HTTPException(status_code = 404, detail = f"book {book_id!r} not found")
     agentic_run = await domains.bd.ingestion.ai.service.read_current_ingestion_ai_run(book_id)
     snapshot["agentic"] = _agentic_status(agentic_run) if agentic_run is not None else None
+    metadata = await domains.bd.ingestion.ai.service.read_current_ingestion_ai_metadata(book_id)
+    if metadata is not None:
+        snapshot["manifest"]["title"] = metadata["title"]
     return snapshot
 
 
@@ -110,7 +124,7 @@ async def start_agentic_run(book_id: str) -> dict:
     status_code = 202,
 )
 async def resume_agentic_run(book_id: str, agentic_run_id: str) -> dict:
-    """Requeue a failed candidate, preserving its source and LangGraph thread identity."""
+    """Requeue a failed or cancelled candidate, preserving its source and LangGraph thread identity."""
     try:
         manifest = await domains.bd.ingestion.ai.service.queue_ingestion_ai_resume(
             book_id, agentic_run_id,
@@ -158,6 +172,34 @@ async def resume_agentic_run(book_id: str, agentic_run_id: str) -> dict:
     }
 
 
+@router.post(
+    "/{book_id}/agentic/runs/{agentic_run_id}/cancel",
+    response_model = schemas.AgenticRunCancelResponse,
+)
+async def cancel_agentic_run(book_id: str, agentic_run_id: str) -> dict:
+    """Request a cooperative Agentic AI stop at the next safe page or graph-node boundary."""
+    try:
+        return await domains.bd.ingestion.ai.service.cancel_ingestion_ai_run(book_id, agentic_run_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code = 404, detail = str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code = 409, detail = str(error)) from error
+
+
+@router.delete(
+    "/{book_id}/agentic/runs/{agentic_run_id}",
+    response_model = schemas.AgenticRunWipeResponse,
+)
+async def wipe_agentic_run(book_id: str, agentic_run_id: str) -> dict:
+    """Delete one stopped/finished Agentic candidate without touching Docling extraction."""
+    try:
+        return await domains.bd.ingestion.ai.service.wipe_ingestion_ai_run(book_id, agentic_run_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code = 404, detail = str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code = 409, detail = str(error)) from error
+
+
 @router.get(
     "/{book_id}/agentic/runs/{agentic_run_id}/llm-counters",
 )
@@ -191,6 +233,10 @@ async def get_agentic_run(book_id: str, agentic_run_id: str) -> dict:
         "status": manifest["status"],
         "expected_page_count": manifest["expected_page_count"],
         "published_page_count": len(manifest["progress"]["processed_pages"]),
+        "quality_status": manifest.get("quality_status"),
+        "delivered_page_count": manifest.get("delivered_page_count", 0),
+        "discarded_blank_page_count": manifest.get("discarded_blank_page_count", 0),
+        "review_page_count": manifest.get("review_page_count", 0),
         "progress": manifest["progress"],
         "created_at": manifest["created_at"],
         "updated_at": manifest["updated_at"],
@@ -240,7 +286,7 @@ async def agentic_run_events(book_id: str, agentic_run_id: str) -> StreamingResp
                 if event is done:
                     return
                 yield f"data: {json.dumps(event, default = str)}\n\n".encode("utf-8")
-                if event.get("kind") in {"run_done", "run_failed"}:
+                if event.get("kind") in {"run_done", "run_failed", "run_cancelled"}:
                     return
         except asyncio.CancelledError:
             return
@@ -348,6 +394,17 @@ async def delete_book(book_id: str) -> dict:
     return await domains.bd.ingestion.runtime.dispatch.service.wipe_book(book_id)
 
 
+@router.delete("/{book_id}/extraction", response_model = schemas.ExtractionWipeResponse)
+async def wipe_extraction(book_id: str) -> dict:
+    """Delete extracted and derived artifacts while preserving the uploaded source book."""
+    try:
+        return await domains.bd.ingestion.runtime.dispatch.service.wipe_extraction(book_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code = 404, detail = str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code = 409, detail = str(error)) from error
+
+
 def _agentic_status(manifest: dict) -> dict:
     progress = manifest["progress"]
     return {
@@ -357,6 +414,10 @@ def _agentic_status(manifest: dict) -> dict:
         "status": manifest["status"],
         "expected_page_count": manifest["expected_page_count"],
         "published_page_count": len(progress["processed_pages"]),
+        "quality_status": manifest.get("quality_status"),
+        "delivered_page_count": manifest.get("delivered_page_count", 0),
+        "discarded_blank_page_count": manifest.get("discarded_blank_page_count", 0),
+        "review_page_count": manifest.get("review_page_count", 0),
         "progress": progress,
         "created_at": manifest["created_at"],
         "updated_at": manifest["updated_at"],

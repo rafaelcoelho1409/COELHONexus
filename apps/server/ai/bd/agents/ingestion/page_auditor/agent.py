@@ -3,7 +3,7 @@ from __future__ import annotations
 import domains
 from . import config, domain, params
 from ... import schemas
-from .... import prompts
+from .... import prompts, skills
 
 from deepagents import (
     FilesystemPermission,
@@ -43,12 +43,25 @@ def page_auditor(model=None):
         tools = [],
         system_prompt = prompts.ingestion.page_auditor.prompts.SYSTEM_PROMPT,
         response_format = schemas.PageAssessment,
-        permissions = [FilesystemPermission(
-            operations = ["read", "write"],
-            paths = ["/**"],
-            mode = "deny",
-        )],
+        permissions = [
+            FilesystemPermission(
+                operations = ["read"],
+                paths = ["/skills/**"],
+                mode = "allow",
+            ),
+            FilesystemPermission(
+                operations = ["read"],
+                paths = ["/**"],
+                mode = "deny",
+            ),
+            FilesystemPermission(
+                operations = ["write"],
+                paths = ["/**"],
+                mode = "deny",
+            ),
+        ],
         backend = StateBackend(),
+        skills = [skills.domain.source_for("page_auditor")],
         name = "bd_page_auditor",
     )
     tool_node = agent.nodes.get("tools")

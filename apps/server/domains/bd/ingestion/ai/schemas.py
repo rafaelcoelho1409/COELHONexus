@@ -63,6 +63,7 @@ class IngestionPageArtifact(BaseModel):
     assessment_sha256: Sha256Hex | None = None
     patch_proposals_sha256: Sha256Hex | None = None
     status: AgenticPageStatus = AgenticPageStatus.PENDING
+    delivery_disposition: Literal["include", "discarded_blank", "image_only"] = "include"
 
     @model_validator(mode = "after")
     def _validate_completed_artifacts(self) -> IngestionPageArtifact:
@@ -81,7 +82,7 @@ class IngestionAIRunManifest(BaseModel):
 
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0"] = versions.MANIFEST_SCHEMA_VERSION
+    schema_version: Literal["1.0", "1.1"] = versions.MANIFEST_SCHEMA_VERSION
     workflow_version: NonEmptyText = versions.WORKFLOW_VERSION
     agentic_run_id: SafeSegment
     book_id: SafeSegment
@@ -96,6 +97,10 @@ class IngestionAIRunManifest(BaseModel):
     book_metadata_sha256: Sha256Hex | None = None
     quality_report_key: ObjectKey
     quality_report_sha256: Sha256Hex | None = None
+    quality_status: Literal["complete", "complete_with_review"] | None = None
+    delivered_page_count: int = Field(default = 0, ge = 0, strict = True)
+    discarded_blank_page_count: int = Field(default = 0, ge = 0, strict = True)
+    review_page_count: int = Field(default = 0, ge = 0, strict = True)
     created_at: float = Field(gt = 0, allow_inf_nan = False)
     updated_at: float = Field(gt = 0, allow_inf_nan = False)
     finished_at: float | None = Field(default = None, gt = 0, allow_inf_nan = False)
@@ -140,6 +145,21 @@ class IngestionAIRunManifest(BaseModel):
                 raise ValueError("completed runs may contain only completed or review-required pages")
             if self.book_metadata_sha256 is None or self.quality_report_sha256 is None:
                 raise ValueError("completed runs must include hashes for book metadata and quality report")
+            if self.schema_version == "1.1":
+                if self.quality_status is None:
+                    raise ValueError("completed 1.1 runs must include a quality status")
+                if self.delivered_page_count != sum(
+                    page.delivery_disposition != "discarded_blank" for page in self.pages
+                ):
+                    raise ValueError("delivered_page_count must match non-blank page dispositions")
+                if self.discarded_blank_page_count != sum(
+                    page.delivery_disposition == "discarded_blank" for page in self.pages
+                ):
+                    raise ValueError("discarded_blank_page_count must match page dispositions")
+                if self.review_page_count != sum(
+                    page.status == AgenticPageStatus.REVIEW_REQUIRED for page in self.pages
+                ):
+                    raise ValueError("review_page_count must match page review statuses")
 
         return self
 

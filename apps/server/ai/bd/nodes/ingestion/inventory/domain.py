@@ -64,6 +64,9 @@ def assess_page(
     if pictures > 0:
         markdown_without_images = patterns.MARKDOWN_IMAGE_RE.sub("", markdown_without_images)
         markdown_without_images = patterns.HTML_IMAGE_RE.sub("", markdown_without_images)
+    markdown_without_images = patterns.IMAGE_PLACEHOLDER_RE.sub("", markdown_without_images)
+    if patterns.PAGE_NUMBER_ONLY_RE.fullmatch(markdown_without_images):
+        markdown_without_images = ""
     has_text = bool(markdown_without_images.strip())
     has_media = pictures > 0
 
@@ -77,6 +80,24 @@ def assess_page(
         page_kind = agents.schemas.PageKind.BLANK
 
     issues: list[agents.schemas.PageIssue] = []
+    alphanumeric_chars = sum(character.isalnum() for character in markdown_without_images)
+    if (
+        page_kind == agents.schemas.PageKind.TEXT
+        and alphanumeric_chars < params.MIN_TEXT_ALPHANUMERIC_CHARS
+    ):
+        issues.append(_issue(
+            page_number = page_number,
+            code = agents.schemas.IssueCode.NEAR_EMPTY,
+            severity = agents.schemas.IssueSeverity.LOW,
+            description = (
+                f"Page contains only {alphanumeric_chars} alphanumeric text character(s); "
+                "verify whether it is intentionally sparse."
+            ),
+            markdown = markdown,
+            offset = 0,
+            locator = "page start",
+        ))
+
     control_offsets = [
         index
         for index, character in enumerate(markdown)
@@ -103,6 +124,51 @@ def assess_page(
             markdown = markdown,
             offset = soft_hyphen_offsets[0],
             locator = "character offset",
+        ))
+
+    dotted_leader_match = patterns.TOC_DOTTED_LEADER_RE.search(markdown)
+    if dotted_leader_match:
+        issues.append(_issue(
+            page_number = page_number,
+            code = agents.schemas.IssueCode.TOC_NOISE,
+            severity = agents.schemas.IssueSeverity.LOW,
+            description = "Contents-like dotted leaders may need a clearer Markdown representation.",
+            markdown = markdown,
+            offset = dotted_leader_match.start(),
+            locator = "table-of-contents row",
+            evidence_end = dotted_leader_match.end(),
+        ))
+
+    malformed_table = _first_malformed_table_row(markdown)
+    if malformed_table:
+        row_start, row_end = malformed_table
+        issues.append(_issue(
+            page_number = page_number,
+            code = agents.schemas.IssueCode.TABLE_OR_INDEX_LAYOUT,
+            severity = agents.schemas.IssueSeverity.MEDIUM,
+            description = "A Markdown table-like block has inconsistent column counts; verify its structure.",
+            markdown = markdown,
+            offset = row_start,
+            locator = "markdown table row",
+            evidence_end = row_end,
+        ))
+
+    heading_match = next((
+        match for match in patterns.HEADING_RE.finditer(markdown)
+        if _has_suspicious_heading_fragment(match.group(1))
+    ), None)
+    if heading_match:
+        heading_start = heading_match.start(1)
+        heading_end = heading_match.end(1)
+        issues.append(_issue(
+            page_number = page_number,
+            code = agents.schemas.IssueCode.SPLIT_WORD,
+            severity = agents.schemas.IssueSeverity.MEDIUM,
+            description = "An uppercase heading contains suspiciously separated word fragments; verify against the source.",
+            markdown = markdown,
+            offset = heading_start,
+            locator = "heading character offset",
+            evidence_end = heading_end,
         ))
 
     return agents.schemas.PageAssessment(
@@ -148,9 +214,14 @@ def _issue(
     markdown: str,
     offset: int,
     locator: str,
+    evidence_end: int | None = None,
 ) -> agents.schemas.PageIssue:
     radius = params.EVIDENCE_CONTEXT_CHARS // 2
-    excerpt = markdown[max(0, offset - radius):min(len(markdown), offset + radius)]
+    start = max(0, offset - radius)
+    end = min(len(markdown), max(offset + radius, evidence_end or offset))
+    if evidence_end is not None and evidence_end - start > params.MAX_DETERMINISTIC_EVIDENCE_CHARS:
+        end = start + params.MAX_DETERMINISTIC_EVIDENCE_CHARS
+    excerpt = markdown[start:end]
     return agents.schemas.PageIssue(
         issue_id = f"p{page_number:04d}-{code.value}",
         code = code,
@@ -171,3 +242,57 @@ def _is_safe_segment(value: str) -> bool:
         character.isascii() and (character.isalnum() or character in "-_")
         for character in value
     )
+
+
+def _has_suspicious_heading_fragment(heading: str) -> bool:
+    standalone_letters = len(patterns.STANDALONE_LETTER_RE.findall(heading))
+    for match in patterns.HEADING_FRAGMENT_RE.finditer(heading):
+        if heading[:match.start()].strip() == "A":
+            continue
+        # "A"/"I" are real words, so a lone one is only suspicious when the heading is fragmented elsewhere.
+        if heading[match.start()] in "AI" and standalone_letters < 2:
+            continue
+        return True
+    return False
+
+
+def _first_malformed_table_row(markdown: str) -> tuple[int, int] | None:
+    lines = markdown.splitlines(keepends = True)
+    offsets = []
+    offset = 0
+    for line in lines:
+        offsets.append(offset)
+        offset += len(line)
+
+    for index, line in enumerate(lines):
+        separator_cells = _table_cells(line)
+        if len(separator_cells) < 2 or not all(
+            patterns.TABLE_SEPARATOR_CELL_RE.fullmatch(cell) for cell in separator_cells
+        ):
+            continue
+
+        expected_columns = len(separator_cells)
+        header_index = index - 1
+        if header_index < 0 or len(_table_cells(lines[header_index])) != expected_columns:
+            malformed_index = header_index if header_index >= 0 and "|" in lines[header_index] else index
+            return offsets[malformed_index], offsets[malformed_index] + len(lines[malformed_index].rstrip("\r\n"))
+
+        for row_index in range(index + 1, len(lines)):
+            row = lines[row_index]
+            if not row.strip() or "|" not in row:
+                break
+            if len(_table_cells(row)) != expected_columns:
+                return offsets[row_index], offsets[row_index] + len(row.rstrip("\r\n"))
+
+    return None
+
+
+def _table_cells(line: str) -> list[str]:
+    stripped = line.strip()
+    if "|" not in stripped:
+        return []
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    return [cell.strip() for cell in stripped.split("|")]

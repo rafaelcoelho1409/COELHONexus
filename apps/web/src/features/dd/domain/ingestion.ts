@@ -36,6 +36,7 @@ const TIER_LABELS: Record<string, string> = {
   llms_txt: "Fetching page index",
   sitemap: "Crawling sitemap",
   docs: "Crawling documentation site",
+  playwright: "Rendering documentation pages",
   github: "Fetching GitHub repository",
   post: "Splitting & deduplicating pages",
   vault_backfill: "Building citation index",

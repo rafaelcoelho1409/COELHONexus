@@ -17,6 +17,7 @@ type AgenticFlowData = {
   label: string;
   status: AgenticNodeStatus;
   caption: string | null;
+  onOpen: () => void;
 };
 type AgenticFlowNode = Node<AgenticFlowData, "agentic">;
 
@@ -45,18 +46,23 @@ function AgenticNode({ data }: NodeProps<AgenticFlowNode>) {
   return (
     <>
       <Handle type="target" position={Position.Top} isConnectable={false} />
-      <div
+      <button
+        type="button"
+        onClick={data.onOpen}
+        aria-haspopup="dialog"
         data-status={data.status}
-        className={`flex h-full w-full flex-col justify-center overflow-hidden rounded-md border bg-card px-3 py-2 ${border}`}
+        style={{ width: NODE_WIDTH, height: NODE_HEIGHT, pointerEvents: "auto" }}
+        className={`nodrag nopan flex flex-col justify-center overflow-hidden rounded-md border bg-card px-3 py-2 text-left transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ${border}`}
       >
         <span className="flex items-center justify-between gap-3">
           <span className="min-w-0 truncate text-sm font-medium">{data.label}</span>
           <span className="shrink-0 text-xs text-muted-foreground">{text}</span>
+          <span className="sr-only">— {text}</span>
         </span>
         {data.caption ? (
           <span className="mt-1 truncate text-xs text-muted-foreground">{data.caption}</span>
         ) : null}
-      </div>
+      </button>
       <Handle type="source" position={Position.Bottom} isConnectable={false} />
     </>
   );
@@ -67,11 +73,13 @@ export function AgenticFlow({
   status,
   total,
   unitPlural,
+  onOpenNode,
 }: {
   progress: AgenticProgress;
   status: string;
   total: number;
   unitPlural: string;
+  onOpenNode: (nodeId: string) => void;
 }) {
   const nodes: AgenticFlowNode[] = AGENTIC_NODES.map((node, index) => ({
     id: node.id,
@@ -83,6 +91,7 @@ export function AgenticFlow({
       label: node.label,
       status: agenticNodeStatus(progress, node.id, status),
       caption: agenticNodeCaption(progress, node.id, total, unitPlural),
+      onOpen: () => onOpenNode(node.id),
     },
   }));
   const edges = AGENTIC_NODES.slice(0, -1).map((node, index) => ({

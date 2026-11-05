@@ -22,6 +22,8 @@ def new_entry(
     notes: str = "",
     lastmod: str = "",
     anchors: list | None = None,
+    key: str | None = None,
+    raw_key: str = "",
 ) -> entities.ManifestEntry:
     """The manifest entry of the page written as number `idx` (its key says where). A page with no title is titled by its slug."""
     return entities.ManifestEntry(
@@ -31,7 +33,8 @@ def new_entry(
         tier = tier,
         bytes = size,
         title = title or slug,
-        key = keys.page_key(framework_slug, idx, slug),
+        key = key or keys.page_key(framework_slug, idx, slug),
+        raw_key = raw_key or "",
         section = section or "",
         notes = notes or "",
         lastmod = lastmod or "",
@@ -60,8 +63,7 @@ def manifest_payload(
     normalizer_version: int,
     extra: dict | None = None,
 ) -> dict:
-    """The canonical manifest of a finished run. The pages were written through the normalizer at `normalizer_version`, which
-    Synth's `ensure_framework_normalized` compares against; `extra` (framework name, tier, run id, …) is laid over the rest."""
+    """Canonical published manifest; `extra` carries the Agentic AI run identity and source metadata."""
     payload = {
         "framework_slug":     framework_slug,
         "ingested_at":        ingested_at,
@@ -115,8 +117,12 @@ def entry_key(framework_slug: str, entry: dict, idx: int) -> str:
 
 
 def framework_slugs(folders: list[str]) -> list[str]:
-    """The frameworks among the immediate folders of `ingestion/`: every folder but the raw copies'."""
-    return [f.rstrip("/").rsplit("/", 1)[-1] for f in folders if f.rstrip("/").rsplit("/", 1)[-1] != params.RAW_FOLDER]
+    """Framework slugs among the immediate children of the `dd/` library prefix."""
+    reserved = {"synth-cache"}
+    return [
+        slug for slug in (f.rstrip("/").rsplit("/", 1)[-1] for f in folders if f.strip("/"))
+        if slug not in reserved
+    ]
 
 
 def library_row(slug: str, manifest: dict, catalog_entry: dict) -> dict:

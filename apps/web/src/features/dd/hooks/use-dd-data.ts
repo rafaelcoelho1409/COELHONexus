@@ -24,6 +24,7 @@ import {
   postDdRunsRunIdCancel,
 } from "@/shared/api";
 
+import { fetchIngestionUsage, fetchRunPageBody } from "../api";
 import { isRunTerminal } from "../domain/ingestion";
 import {
   activeRunsSchema,
@@ -33,8 +34,9 @@ import {
   resolverCatalogSchema,
   runStatusSchema,
   startRunResponseSchema,
+  usagePayloadSchema,
 } from "../entities";
-import { ACTIVE_RUN_REFRESH_MS, RUN_POLL_MS } from "../params";
+import { ACTIVE_RUN_REFRESH_MS, RUN_POLL_MS, USAGE_REFRESH_MS } from "../params";
 
 const parseCatalog = (raw: unknown) => resolverCatalogSchema.parse(raw);
 const parseLibrary = (raw: unknown) => libraryListSchema.parse(raw);
@@ -156,4 +158,27 @@ export function usePageBody(slug: string | null, idx: number | null) {
     select: parsePageBody,
   });
   return { data: query.data ?? null, isPending: query.isPending, isError: query.isError };
+}
+
+/** GET /dd/runs/{run_id}/pages/{idx} — page bodies from the in-flight raw-to-agentic manifest. */
+export function useRunPageBody(runId: string | null, idx: number | null, pageKey: string | null) {
+  const query = useQuery({
+    queryKey: ["dd", "runs", runId, "pages", idx, pageKey],
+    queryFn: () => fetchRunPageBody(runId ?? "", idx ?? 0),
+    retry: false,
+    enabled: runId !== null && idx !== null,
+  });
+  return { data: query.data ?? null, isPending: query.isPending, isError: query.isError };
+}
+
+/** Live while ingestion runs; the endpoint switches to its MinIO snapshot after Redis expires. */
+export function useIngestionUsage(runId: string | null, live: boolean) {
+  return useQuery({
+    queryKey: ["dd", "ingestion", "usage", runId],
+    queryFn: () => fetchIngestionUsage(runId ?? ""),
+    enabled: runId !== null,
+    retry: false,
+    refetchInterval: live ? USAGE_REFRESH_MS : false,
+    select: (raw: unknown) => usagePayloadSchema.parse(raw),
+  });
 }

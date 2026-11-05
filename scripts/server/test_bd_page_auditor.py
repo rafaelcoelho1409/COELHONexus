@@ -102,10 +102,9 @@ check("the audit returns a compact completion status", result["status"], "comple
 
 ungrounded = assessment.model_copy(deep = True)
 ungrounded.issues[0].evidence[0].excerpt = "not present in the page"
-rejects(
-    "ungrounded evidence is rejected",
-    lambda: asyncio.run(build_page_audit_graph(read_page, FakeAuditor(ungrounded)).ainvoke(initial_state)),
-)
+ungrounded_result = asyncio.run(build_page_audit_graph(read_page, FakeAuditor(ungrounded)).ainvoke(initial_state))
+check("findings with ungrounded evidence are dropped", ungrounded_result["assessment"]["issues"], [])
+check("dropped ungrounded evidence is reported as a warning", len(ungrounded_result["warnings"]), 2)
 
 wrong_page = assessment.model_copy(update = {"page_number": 2})
 rejects(
@@ -114,10 +113,8 @@ rejects(
 )
 
 media_contradiction = assessment.model_copy(update = {"page_kind": schemas.PageKind.IMAGE_ONLY})
-rejects(
-    "media classifications contradicting extraction metadata are rejected",
-    lambda: asyncio.run(build_page_audit_graph(read_page, FakeAuditor(media_contradiction)).ainvoke(initial_state)),
-)
+media_result = asyncio.run(build_page_audit_graph(read_page, FakeAuditor(media_contradiction)).ainvoke(initial_state))
+check("media classifications contradicting extraction metadata are reported as a warning", len(media_result["warnings"]), 1)
 
 invalid_key_state = {
     **initial_state,
@@ -152,7 +149,11 @@ rejects_runtime_error(
     "unreviewed tools are rejected",
     lambda: auditor_agent.domain.validate_tool_names({"unreviewed_tool"}),
 )
-check("all registered DeepAgent tools are from the explicitly excluded set", sorted(tool_names - auditor_agent.params.EXCLUDED_TOOLS), [])
+check(
+    "registered DeepAgent tools are excluded or the read-only skill reader",
+    sorted(tool_names - auditor_agent.params.EXCLUDED_TOOLS),
+    ["read_file"],
+)
 profile = _get_harness_profile(f"openai:{model.model_name}")
 check("the general-purpose tool-using subagent is disabled", profile.general_purpose_subagent.enabled, False)
 check("DeepAgents hides every built-in tool from the model", profile.excluded_tools, auditor_agent.params.EXCLUDED_TOOLS)

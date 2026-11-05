@@ -67,6 +67,8 @@ export const pageBodySchema = z.looseObject({ body: z.string() });
  * `post` is record_post's summary (split/dedup result); either field may
  * be absent on early/tier-only payloads. */
 export const runStatusSchema = z.looseObject({
+  run_id: z.string().optional(),
+  manifest: z.array(manifestEntrySchema).nullish().catch(null),
   progress: z
     .looseObject({
       tier: z.string().nullable().catch(null),
@@ -76,6 +78,42 @@ export const runStatusSchema = z.looseObject({
       last_url: z.string().nullable().catch(null),
       error: z.string().nullable().catch(null),
       updated_at: z.number().nullable().catch(null),
+      stages: z
+        .looseObject({
+          extraction: z
+            .looseObject({
+              status: z.string().nullable().catch(null),
+              tier: z.string().nullable().catch(null),
+              current: z.number().nullable().catch(null),
+              total: z.number().nullable().catch(null),
+              last_url: z.string().nullable().catch(null),
+              error: z.string().nullable().catch(null),
+            })
+            .nullish()
+            .catch(null),
+          agentic: z
+            .looseObject({
+              status: z.string().nullable().catch(null),
+              current: z.number().nullable().catch(null),
+              total: z.number().nullable().catch(null),
+              current_node: z.string().nullable().catch(null),
+              node_status: z.record(z.string(), z.string()).catch({}),
+              node_progress: z
+                .record(
+                  z.string(),
+                  z.looseObject({
+                    current: z.number().nullable().catch(null),
+                    total: z.number().nullable().catch(null),
+                  }),
+                )
+                .catch({}),
+              error: z.string().nullable().catch(null),
+            })
+            .nullish()
+            .catch(null),
+        })
+        .nullish()
+        .catch(null),
     })
     .nullish()
     .catch(null),

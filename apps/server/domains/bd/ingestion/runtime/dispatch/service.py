@@ -60,6 +60,18 @@ async def accept_restart(book_id: str, refresh: bool = False, auto_chain: bool =
 
 
 async def reserve_run(book_id: str, refresh: bool = False, auto_chain: bool = False) -> dict:
+    async with (
+        infra.redis.service.client() as redis,
+        redis.lock(
+            domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+            timeout = 120,
+            blocking_timeout = 30,
+        ),
+    ):
+        return await _reserve_run_unlocked(book_id, refresh, auto_chain)
+
+
+async def _reserve_run_unlocked(book_id: str, refresh: bool = False, auto_chain: bool = False) -> dict:
     """The start gate. `cached` when the book is fully extracted (and `refresh` is off), `locked` when a run holds it, else
     `reserved` with a new run id: the lock is taken, the last run's cancel flag and events are cleared."""
     storage = infra.minio.service.get_storage()
@@ -132,12 +144,102 @@ async def read_snapshot(book_id: str) -> dict | None:
 
 async def wipe_book(book_id: str) -> dict:
     """Delete a book — its objects, its progress and its events — unless a run holds it."""
-    async with infra.redis.service.client() as r:
+    async with (
+        infra.redis.service.client() as r,
+        r.lock(
+            domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+            timeout = 3600,
+            blocking_timeout = 30,
+        ),
+    ):
         if await domains.bd.ingestion.runtime.progress.service.read_lock(r, book_id):
             return {"book_id": book_id, "deleted": False, "reason": "an extraction is running"}
+        active_agentic = await _active_agentic_run(book_id)
+        if active_agentic is not None:
+            return {"book_id": book_id, "deleted": False, "reason": "an Agentic AI run is running"}
         await infra.redis.service.delete_matching(r, domains.bd.ingestion.runtime.progress.keys.book_keys_pattern(book_id))
-    removed = await domains.bd.ingestion.storage.service.wipe_book(infra.minio.service.get_storage(), book_id)
-    return {"book_id": book_id, "deleted": True, "objects": removed}
+        removed = await domains.bd.ingestion.storage.service.wipe_book(infra.minio.service.get_storage(), book_id)
+        return {"book_id": book_id, "deleted": True, "objects": removed}
+
+
+async def wipe_extraction(book_id: str) -> dict:
+    """Clear extraction and derived AI artifacts while retaining the uploaded source and book record."""
+    storage = infra.minio.service.get_storage()
+    async with (
+        infra.redis.service.client() as redis,
+        redis.lock(
+            domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+            timeout = 3600,
+            blocking_timeout = 30,
+        ),
+    ):
+        manifest = await domains.bd.ingestion.storage.service.ensure_current_layout(storage, book_id)
+        if manifest is None:
+            raise FileNotFoundError(f"book {book_id!r} not found")
+        if await domains.bd.ingestion.runtime.progress.service.read_lock(redis, book_id):
+            raise ValueError("stop Docling extraction and wait for it to finish before wiping")
+        agentic_runs = await _agentic_runs(book_id)
+        active_agentic = next(
+            (
+                run for run in agentic_runs
+                if run["status"] in {
+                    domains.bd.ingestion.ai.schemas.AgenticRunStatus.QUEUED.value,
+                    domains.bd.ingestion.ai.schemas.AgenticRunStatus.RUNNING.value,
+                }
+            ),
+            None,
+        )
+        if active_agentic is not None:
+            raise ValueError("stop Agentic AI and wait for it to finish before wiping Docling extraction")
+
+        await domains.bd.ingestion.ai.service.delete_ingestion_ai_checkpoints(
+            agentic_runs,
+            include_inventory = True,
+        )
+        for run in agentic_runs:
+            await domains.settings.llm_counter.service.delete_run("bd", run["agentic_run_id"])
+        removed = await storage.delete_prefix(
+            domains.bd.ingestion.storage.keys.ingestion_prefix(book_id),
+        )
+        await infra.redis.service.delete_matching(
+            redis,
+            domains.bd.ingestion.runtime.progress.keys.book_keys_pattern(book_id),
+        )
+        await redis.delete(domains.bd.ingestion.runtime.progress.keys.cancel_key(book_id))
+        now = time.time()
+        reset = {
+            **manifest,
+            "title": domains.bd.ingestion.storage.domain.book_title(manifest.get("filename", ""), ""),
+            "n_pages": 0,
+            "status": domains.bd.ingestion.storage.params.STATUS_READY,
+            "error": None,
+            "outline": [],
+            "chapters": [],
+            "pages": [],
+            "extraction_id": None,
+            "updated_at": now,
+        }
+        await domains.bd.ingestion.storage.service.write_manifest(storage, reset)
+        return {"book_id": book_id, "wiped": True, "objects_deleted": removed}
+
+
+async def _agentic_runs(book_id: str) -> list[dict]:
+    storage = infra.minio.service.get_storage()
+    run_ids = await storage.list_subfolders(domains.bd.ingestion.storage.keys.agentic_runs_prefix(book_id))
+    runs = await asyncio.gather(*(
+        domains.bd.ingestion.ai.service.read_ingestion_ai_run(book_id, run_id, storage = storage)
+        for run_id in run_ids
+        if run_id != "current"
+    ))
+    return [run for run in runs if run is not None]
+
+
+async def _active_agentic_run(book_id: str) -> dict | None:
+    active_statuses = {
+        domains.bd.ingestion.ai.schemas.AgenticRunStatus.QUEUED.value,
+        domains.bd.ingestion.ai.schemas.AgenticRunStatus.RUNNING.value,
+    }
+    return next((run for run in await _agentic_runs(book_id) if run["status"] in active_statuses), None)
 
 
 async def run(book_id: str, run_id: str, refresh: bool = False) -> dict:

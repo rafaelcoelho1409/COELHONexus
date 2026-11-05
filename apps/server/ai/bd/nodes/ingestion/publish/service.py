@@ -35,6 +35,37 @@ async def publish(
     issue_counts = Counter(issue.code.value for assessment in assessments for issue in assessment.issues)
     page_kinds = Counter(assessment.page_kind.value for assessment in assessments)
     review_pages = [page["page"] for page in page_results if page["status"] == "review_required"]
+    delivered_page_numbers = [
+        page["page"] for page in page_results
+        if page.get("delivery_disposition", "include") != "discarded_blank"
+    ]
+    discarded_blank_pages = [
+        page["page"] for page in page_results
+        if page.get("delivery_disposition") == "discarded_blank"
+    ]
+    audit_fallback_pages = [
+        page["page"] for page in state["page_audits"]
+        if page.get("structured_output_fallback") is True
+    ]
+    audit_warning_count = sum(len(page.get("warnings", [])) for page in state["page_audits"])
+    repair_context_chars = sum(page.get("repair_context_chars", 0) for page in page_results)
+    markdown_chars_by_page = {
+        page["page"]: page["markdown_chars"] for page in state["page_audits"]
+    }
+    unbounded_repair_context_chars = sum(
+        markdown_chars_by_page.get(page["page"], 0) * page.get("repair_call_count", 0)
+        for page in page_results
+    )
+    quality_status = (
+        "complete_with_review"
+        if (
+            review_pages
+            or state["book_metadata"].get("review_required")
+            or audit_warning_count
+            or audit_fallback_pages
+        )
+        else "complete"
+    )
     quality_report = {
         "book_id": state["book_id"],
         "extraction_run_id": state["extraction_run_id"],
@@ -42,13 +73,21 @@ async def publish(
         "workflow_version": state["workflow_version"],
         "pages_total": expected_page_count,
         "pages_completed": len(page_results),
+        "delivered_page_numbers": delivered_page_numbers,
+        "delivered_page_count": len(delivered_page_numbers),
+        "discarded_blank_pages": discarded_blank_pages,
+        "discarded_blank_page_count": len(discarded_blank_pages),
         "pages_requiring_review": review_pages,
         "pages_with_audit_warnings": [
             page["page"] for page in state["page_audits"] if page.get("warnings")
         ],
-        "audit_warning_count": sum(
-            len(page.get("warnings", [])) for page in state["page_audits"]
-        ),
+        "audit_warning_count": audit_warning_count,
+        "structured_output_fallback_pages": audit_fallback_pages,
+        "structured_output_fallback_count": len(audit_fallback_pages),
+        "deterministic_only_audit_pages": [
+            page["page"] for page in state["page_audits"]
+            if page.get("audit_mode") == "deterministic_only"
+        ],
         "page_kinds": dict(sorted(page_kinds.items())),
         "blank_pages": [assessment.page_number for assessment in assessments if assessment.page_kind.value == "blank"],
         "image_only_pages": [
@@ -60,16 +99,15 @@ async def publish(
         "proposals_total": sum(page["patch_proposal_count"] for page in page_results),
         "patches_auto_applied": sum(len(page["auto_applied_issue_ids"]) for page in page_results),
         "unresolved_issue_count": sum(len(page["review_required_issue_ids"]) for page in page_results),
+        "repair_context_chars": repair_context_chars,
+        "estimated_unbounded_repair_context_chars": unbounded_repair_context_chars,
+        "estimated_repair_context_chars_saved": max(0, unbounded_repair_context_chars - repair_context_chars),
         "media_pages": [
             page["page"] for page in page_results
             if page["assessment"].get("page_kind") in {"mixed", "image_only"}
         ],
         "book_metadata_review_required": state["book_metadata"].get("review_required", True),
-        "status": (
-            "complete_with_review"
-            if review_pages or state["book_metadata"].get("review_required")
-            else "complete"
-        ),
+        "status": quality_status,
     }
     report_content = _json(quality_report)
     report_sha256 = hashlib.sha256(report_content.encode("utf-8")).hexdigest()
@@ -89,6 +127,7 @@ async def publish(
         assessment_sha256 = page["assessment_sha256"],
         patch_proposals_sha256 = page["patch_proposals_sha256"],
         status = domains.bd.ingestion.ai.schemas.AgenticPageStatus(page["status"]),
+        delivery_disposition = page.get("delivery_disposition", "include"),
     ) for page in page_results]
     finished_at = time.time()
     manifest = domains.bd.ingestion.ai.schemas.IngestionAIRunManifest(
@@ -107,6 +146,10 @@ async def publish(
         book_metadata_sha256 = state["book_metadata_sha256"],
         quality_report_key = report_key,
         quality_report_sha256 = report_sha256,
+        quality_status = quality_status,
+        delivered_page_count = len(delivered_page_numbers),
+        discarded_blank_page_count = len(discarded_blank_pages),
+        review_page_count = len(review_pages),
         created_at = state["run_created_at"],
         updated_at = finished_at,
         finished_at = finished_at,
@@ -120,6 +163,7 @@ async def publish(
         "quality_report": quality_report,
         "quality_report_sha256": report_sha256,
         "status": "complete",
+        "quality_status": quality_status,
     }
 
 

@@ -13,8 +13,10 @@ import { client } from "@/shared/api";
 import { QueryProvider } from "@/shared/providers/query-provider";
 
 import type { AgenticProgress } from "../entities";
+import { agenticRunStatusSchema } from "../entities";
 import { AUTO_CHAIN_STORAGE_KEY } from "../params";
 import {
+  agenticRun,
   BOOK_ID,
   BOOK_TITLE,
   bookRow,
@@ -61,6 +63,14 @@ function renderStage(book?: string) {
   );
 }
 
+async function openPipeline() {
+  await userEvent.click(await screen.findByRole("tab", { name: "Pipeline" }));
+}
+
+async function openMaterials() {
+  await userEvent.click(await screen.findByRole("tab", { name: "Materials" }));
+}
+
 /** An event stream the test pushes into, as the server does while a run is live. */
 function liveStream() {
   const encoder = new TextEncoder();
@@ -103,18 +113,39 @@ describe("Library", () => {
     renderStage();
 
     await userEvent.click(await screen.findByRole("button", { name: "Library · 3" }));
-    const list = await screen.findByRole("list", { name: "Books" });
+    const list = await screen.findByRole("list", { name: "Ingested books" });
     const items = within(list).getAllByRole("listitem");
-    expect(items[0]).toHaveTextContent("A Newer Book");
+    const firstItem = items[0];
+    if (!firstItem) throw new Error("Expected the newest library option.");
+    expect(firstItem).toHaveTextContent("A Newer Book");
     expect(items[1]).toHaveTextContent("A Broken Book");
     expect(items[2]).toHaveTextContent("An Older Book");
-    expect(items[0]).toHaveTextContent("extracting");
-    expect(items[0]).toHaveTextContent("3/9 pages");
+    expect(firstItem).toHaveClass("grid-cols-[minmax(0,1fr)_auto_auto]");
+    expect(within(firstItem).getByRole("button", { name: /^A Newer Book/ })).toHaveClass("min-w-0");
+    expect(firstItem).toHaveTextContent("extracting");
+    expect(firstItem).toHaveTextContent("3/9 pages");
+    expect(firstItem).toHaveTextContent("PDF · 3/9 pages · 18 MB");
     expect(items[1]).toHaveTextContent("failed");
     expect(within(list).getByRole("button", { name: "Refresh A Newer Book" })).toBeDisabled();
     expect(within(list).getByRole("button", { name: "Refresh An Older Book" })).toBeEnabled();
     await userEvent.click(within(list).getByRole("button", { name: /^A Newer Book/ }));
     expect(push).toHaveBeenCalledWith("/bd/ingestion?book=new", { scroll: false });
+  });
+
+  it("shows EPUB format, section count and file size in a library option", async () => {
+    serveLibrary([
+      bookRow({
+        filename: "field-notes.epub",
+        size_bytes: 1_536,
+        n_pages: 2,
+        pages_done: 1,
+      }),
+    ]);
+    renderStage();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Library · 1" }));
+    const list = await screen.findByRole("list", { name: "Ingested books" });
+    expect(within(list).getByRole("listitem")).toHaveTextContent("EPUB · 1/2 sections · 1.5 KB");
   });
 
   it("filters the searchable book picker and closes it with Escape", async () => {
@@ -129,7 +160,7 @@ describe("Library", () => {
     const search = screen.getByRole("searchbox", { name: "Search books" });
     await userEvent.type(search, "field-notes.pdf");
 
-    const list = screen.getByRole("list", { name: "Books" });
+    const list = screen.getByRole("list", { name: "Ingested books" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(1);
     expect(within(list).getByRole("button", { name: /^Field Notes/ })).toBeInTheDocument();
     expect(within(list).queryByRole("button", { name: /The Quiet Archive/ })).not.toBeInTheDocument();
@@ -306,12 +337,14 @@ describe("A book being extracted", () => {
     );
     renderStage(BOOK_ID);
 
+    await openPipeline();
     expect(await screen.findByRole("progressbar", { name: "Sections extracted" })).toHaveAttribute(
       "aria-valuetext",
       "1 of 2 sections",
     );
+    await userEvent.click(screen.getByRole("tab", { name: "Materials" }));
     await userEvent.click(screen.getByRole("button", { name: BOOK_TITLE }));
-    expect(screen.getByText("1/2 sections")).toBeInTheDocument();
+    expect(await screen.findByText("EPUB · 1/2 sections · 18 MB")).toBeInTheDocument();
     expect(await screen.findByRole("article", { name: "Section 1" })).toHaveTextContent(
       "The opening section.",
     );
@@ -331,6 +364,7 @@ describe("A book being extracted", () => {
     );
     renderStage(BOOK_ID);
 
+    await openMaterials();
     const pages = await screen.findByRole("list", { name: "Extracted pages" });
     const search = screen.getByRole("searchbox", { name: "Search pages" });
     await userEvent.type(search, "Scalability");
@@ -361,6 +395,7 @@ describe("A book being extracted", () => {
     );
     renderStage(BOOK_ID);
 
+    await openMaterials();
     await userEvent.click(await screen.findByRole("button", { name: /Search book/ }));
     const dialog = await screen.findByRole("dialog", { name: "Search this book" });
     const search = within(dialog).getByRole("combobox", {
@@ -391,6 +426,7 @@ describe("A book being extracted", () => {
     );
     renderStage(BOOK_ID);
 
+    await openMaterials();
     await userEvent.click(await screen.findByRole("button", { name: "Reading mode" }));
     const dialog = await screen.findByRole("dialog", { name: BOOK_TITLE });
     expect(within(dialog).getByText("Page 1 / 2")).toBeInTheDocument();
@@ -423,6 +459,7 @@ describe("A book being extracted", () => {
     );
     renderStage(BOOK_ID);
 
+    await openMaterials();
     const reader = await screen.findByRole("article", { name: "Page 2" });
     expect(await within(reader).findByText("Extracted paragraph.")).toBeInTheDocument();
     await userEvent.click(within(reader).getByRole("button", { name: "Markdown source" }));
@@ -457,10 +494,8 @@ describe("A book being extracted", () => {
     stream.send(pageEvent(2));
     stream.send(sliceDone);
 
-    const bar = await screen.findByRole("progressbar", { name: "Pages extracted" });
-    await waitFor(() => expect(bar).toHaveAttribute("aria-valuetext", "2 of 9 pages"));
-    expect(screen.getByText("15.0 pages/min")).toBeInTheDocument();
-
+    await openMaterials();
+    await screen.findByRole("article", { name: "Page 2" });
     const pages = screen.getByRole("list", { name: "Extracted pages" });
     expect(within(pages).getAllByRole("button")).toHaveLength(2);
     // following: the reader shows the newest page, its section path, its counts and its figure
@@ -481,7 +516,17 @@ describe("A book being extracted", () => {
       "aria-current",
       "true",
     );
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+    await openPipeline();
+    const bar = await screen.findByRole("progressbar", { name: "Pages extracted" });
+    await waitFor(() => expect(bar).toHaveAttribute("aria-valuetext", "2 of 9 pages"));
+    expect(screen.getByText("15.0 pages/min")).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Docling extraction progress" })).getByRole("button", {
+        name: "Stop Docling extraction",
+      }),
+    ).toBeEnabled();
+    await userEvent.click(screen.getByRole("tab", { name: "Materials" }));
+    expect(screen.getByRole("list", { name: "Extracted pages" })).toBeInTheDocument();
   });
 
   it("follows the newest page until the reader picks one, and again when asked", async () => {
@@ -491,6 +536,7 @@ describe("A book being extracted", () => {
     renderStage(BOOK_ID);
     await screen.findByRole("heading", { name: BOOK_TITLE, level: 2 });
 
+    await openMaterials();
     stream.send(startedEvent);
     stream.send(pageEvent(1));
     stream.send(pageEvent(2));
@@ -515,6 +561,7 @@ describe("A book being extracted", () => {
     );
     renderStage(BOOK_ID);
 
+    await openPipeline();
     expect(await screen.findByRole("progressbar", { name: "Pages extracted" })).toHaveAttribute(
       "aria-valuetext",
       "9 of 9 pages",
@@ -522,7 +569,13 @@ describe("A book being extracted", () => {
     expect(screen.queryByRole("button", { name: "Extract again" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: BOOK_TITLE }));
     expect(screen.getByRole("button", { name: `Refresh ${BOOK_TITLE}` })).toBeEnabled();
-    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: BOOK_TITLE }));
+    expect(
+      within(screen.getByRole("region", { name: "Docling extraction progress" })).getByRole("button", {
+        name: "Stop Docling extraction",
+      }),
+    ).toBeDisabled();
+    await userEvent.click(screen.getByRole("tab", { name: "Materials" }));
     expect(screen.queryByRole("checkbox", { name: "Follow newest" })).not.toBeInTheDocument();
   });
 
@@ -535,14 +588,25 @@ describe("A book being extracted", () => {
       ),
       () => sse([startedEvent, pageEvent(1), pageEvent(2), pageEvent(3), sliceDone]),
     );
+    server.use(
+      http.get(`${API}/${BOOK_ID}/pages/:page`, ({ params }) =>
+        HttpResponse.json({ book_id: BOOK_ID, page: Number(params.page), markdown: `Page ${params.page}` }),
+      ),
+    );
     renderStage(BOOK_ID);
 
+    await openMaterials();
     await screen.findByRole("article", { name: "Page 3" });
     expect(within(screen.getByRole("list", { name: "Extracted pages" })).getAllByRole("button")).toHaveLength(
       3,
     );
     expect(screen.getByRole("checkbox", { name: "Follow newest" })).toBeChecked();
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    await openPipeline();
+    expect(
+      within(screen.getByRole("region", { name: "Docling extraction progress" })).getByRole("button", {
+        name: "Stop Docling extraction",
+      }),
+    ).toBeInTheDocument();
   });
 
   it("reads the whole page when the stream cut it", async () => {
@@ -563,6 +627,7 @@ describe("A book being extracted", () => {
     );
     renderStage(BOOK_ID);
 
+    await openMaterials();
     expect(await screen.findByText(/and its very long end/)).toBeInTheDocument();
     expect(fetched).toEqual(["1"]);
   });
@@ -588,6 +653,10 @@ describe("A book being extracted", () => {
         status: "running",
         expected_page_count: 1,
         published_page_count: 0,
+        quality_status: null,
+        delivered_page_count: 0,
+        discarded_blank_page_count: 0,
+        review_page_count: 0,
         progress,
         created_at: 1,
         updated_at: 2,
@@ -609,12 +678,29 @@ describe("A book being extracted", () => {
       http.get(`${API}/${BOOK_ID}/agentic/runs/agentic-1/llm-counters`, () =>
         HttpResponse.json({
           total: { calls: 1, tokens_in: 20, tokens_out: 8, reasoning_tokens: 2, errors: 0 },
-          by_node: {},
+          by_node: {
+            page_auditor: {
+              calls: 1,
+              tokens_in: 20,
+              tokens_out: 8,
+              reasoning_tokens: 2,
+              errors: 0,
+              by_model: {
+                "vendor-a/model-x": {
+                  calls: 1,
+                  tokens_in: 20,
+                  tokens_out: 8,
+                  reasoning_tokens: 2,
+                },
+              },
+            },
+          },
         }),
       ),
     );
     renderStage(BOOK_ID);
 
+    await openMaterials();
     const reader = await screen.findByRole("article", { name: "Page 1" });
     expect(await within(reader).findByText("Docling body")).toBeInTheDocument();
     expect(within(reader).getByText("Docling extraction")).toBeInTheDocument();
@@ -629,15 +715,189 @@ describe("A book being extracted", () => {
     expect(await within(reader).findByText("AI repaired body")).toBeInTheDocument();
     expect(within(reader).getByText("AI-processed content")).toBeInTheDocument();
     expect(pageReads).toBe(2);
+    expect(screen.queryByRole("progressbar", { name: "AI-processed pages" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Agentic pipeline" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "Pipeline" }));
     expect(screen.getByRole("progressbar", { name: "AI-processed pages" })).toHaveAttribute(
       "aria-valuenow",
       "1",
     );
-    expect(screen.queryByRole("dialog", { name: "Agentic pipeline" })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "View pipeline" }));
-    const pipeline = await screen.findByRole("dialog", { name: "Agentic pipeline" });
-    await userEvent.click(within(pipeline).getByRole("button", { name: "LLM Usage" }));
-    expect(await screen.findByRole("dialog", { name: "Ingestion LLM usage" })).toBeInTheDocument();
+    const pipeline = screen.getByRole("region", { name: "Agentic pipeline stages" });
+    await userEvent.click(within(pipeline).getByRole("button", { name: "List" }));
+    await userEvent.click(within(pipeline).getByRole("button", { name: /Audit pages/ }));
+    const nodeDetails = await screen.findByRole("dialog", { name: "Ingestion LLM usage" });
+    expect(nodeDetails).toHaveTextContent("Audit pages");
+    expect(nodeDetails).toHaveTextContent("Input tokens");
+    expect(nodeDetails).toHaveTextContent("20");
+    const nodeUsage = within(nodeDetails).getByRole("region", { name: "Usage by agent and model" });
+    expect(nodeUsage).toHaveTextContent("vendor-a");
+    expect(nodeUsage).toHaveTextContent("model-x");
+    expect(nodeUsage).toHaveTextContent("Output tokens");
+    await userEvent.click(within(nodeDetails).getByRole("button", { name: "By model" }));
+    expect(within(nodeDetails).getByRole("region", { name: "Usage by model" })).toHaveTextContent("vendor-a");
+    await userEvent.click(within(nodeDetails).getByRole("button", { name: "By agent" }));
+    expect(within(nodeDetails).getByRole("region", { name: "Usage by agent" })).toHaveTextContent(
+      "Page auditor",
+    );
+    expect(within(nodeDetails).queryByText("Provider")).not.toBeInTheDocument();
+    await userEvent.click(within(nodeDetails).getByRole("button", { name: "By agent + model" }));
+    await userEvent.click(within(nodeDetails).getByRole("button", { name: "Close node usage" }));
+    const progressBox = screen.getByRole("region", { name: "Agentic AI progress" });
+    expect(within(progressBox).queryByRole("button", { name: "LLM usage" })).not.toBeInTheDocument();
+    expect(within(progressBox).queryByRole("button", { name: "Pipeline" })).not.toBeInTheDocument();
+    await userEvent.click(within(pipeline).getByRole("button", { name: "LLM usage" }));
+    const usageSheet = await screen.findByRole("dialog", { name: "Ingestion LLM usage" });
+    const usageByModel = within(usageSheet).getByRole("region", { name: "Usage by agent and model" });
+    expect(usageByModel).toHaveTextContent("vendor-a");
+    expect(usageByModel).toHaveTextContent("model-x");
+    expect(usageByModel).toHaveTextContent("Page auditor");
+    expect(usageByModel).toHaveTextContent("20");
+  });
+
+  it("shows extraction progress inside Pipeline, not Materials", async () => {
+    serveLibrary([bookRow({ status: "done", n_pages: 1, pages_done: 1 })]);
+    serveBook(
+      snapshot({ status: "done", n_pages: 1, pages: [pageEntry(1)] }, null, {
+        book_id: BOOK_ID,
+        extraction_run_id: "extract-1",
+        agentic_run_id: "agentic-1",
+        status: "done",
+        expected_page_count: 1,
+        published_page_count: 1,
+        quality_status: "complete",
+        delivered_page_count: 1,
+        discarded_blank_page_count: 0,
+        review_page_count: 0,
+        progress: {
+          current_node: null,
+          node_status: {
+            audit_batch: "done",
+            plan_repairs: "done",
+            repair_pages: "done",
+            normalize_metadata: "done",
+            publish: "done",
+          },
+          audited_pages: [1],
+          audit_warning_pages: [],
+          processed_pages: [1],
+          active_audit_pages: [],
+          active_repair_pages: [],
+        },
+        created_at: 1,
+        updated_at: 2,
+        finished_at: 3,
+        error: null,
+      }),
+    );
+    server.use(
+      http.get(`${API}/${BOOK_ID}/pages/1`, () =>
+        HttpResponse.json({
+          book_id: BOOK_ID,
+          page: 1,
+          markdown: "AI-repaired first page",
+          content_source: "agentic",
+        }),
+      ),
+      http.get(`${API}/${BOOK_ID}/agentic/runs/agentic-1/llm-counters`, () =>
+        HttpResponse.json({
+          total: { calls: 4, tokens_in: 120, tokens_out: 45, reasoning_tokens: 8, errors: 0 },
+          by_node: {},
+        }),
+      ),
+    );
+    renderStage(BOOK_ID);
+
+    await openPipeline();
+    expect(screen.getByRole("tab", { name: "Pipeline" })).toHaveAttribute("aria-selected", "true");
+    const extractedProgress = screen.getByRole("progressbar", { name: "Pages extracted" });
+    const agenticProgress = screen.getByRole("progressbar", { name: "AI-processed pages" });
+    expect(extractedProgress).toHaveAttribute("aria-valuetext", "1 of 1 pages");
+    expect(agenticProgress).toHaveAttribute("aria-valuenow", "1");
+    expect(screen.getAllByRole("img", { name: "Completed successfully" })).toHaveLength(2);
+    expect(screen.getByText("Quality checks passed · 1 delivered · 0 blank excluded")).toBeInTheDocument();
+    const pipelineUsage = screen.getByRole("region", { name: "Pipeline usage" });
+    expect(pipelineUsage).toHaveTextContent("4");
+    expect(pipelineUsage.querySelector("dl")).toHaveClass("grid-cols-1");
+    expect(pipelineUsage.querySelector("dl")).not.toHaveClass("grid-cols-2");
+    const agenticPipeline = screen.getByRole("region", { name: "Agentic pipeline stages" });
+    expect(agenticPipeline).toHaveTextContent("Publish results");
+    expect(within(agenticPipeline).getByRole("region", { name: "Chapter progress" })).toBeInTheDocument();
+    expect(extractedProgress).toBeInTheDocument();
+    expect(agenticProgress).toBeInTheDocument();
+    expect(screen.queryByRole("article", { name: "Page 1" })).not.toBeInTheDocument();
+
+    await openMaterials();
+    expect(
+      await within(screen.getByRole("article", { name: "Page 1" })).findByText("AI-repaired first page"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar", { name: "Pages extracted" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("progressbar", { name: "AI-processed pages" })).not.toBeInTheDocument();
+  });
+
+  it("shows review-required quality separately from successful completion", async () => {
+    serveLibrary([bookRow({ status: "done", n_pages: 1, pages_done: 1 })]);
+    const reviewedRun = agenticRun({
+      quality_status: "complete_with_review",
+      delivered_page_count: 1,
+      discarded_blank_page_count: 0,
+      review_page_count: 1,
+    });
+    expect(agenticRunStatusSchema.parse(reviewedRun).quality_status).toBe("complete_with_review");
+    serveBook(
+      snapshot(
+        { status: "done", n_pages: 1, pages: [pageEntry(1)] },
+        null,
+        reviewedRun,
+      ),
+    );
+    server.use(
+      http.get(`${API}/${BOOK_ID}/pages/1`, () =>
+        HttpResponse.json({ book_id: BOOK_ID, page: 1, markdown: "AI page", content_source: "agentic" }),
+      ),
+      http.get(`${API}/${BOOK_ID}/agentic/runs/agentic-1/llm-counters`, () =>
+        HttpResponse.json({
+          total: { calls: 0, tokens_in: 0, tokens_out: 0, reasoning_tokens: 0, errors: 0 },
+          by_node: {},
+        }),
+      ),
+    );
+    renderStage(BOOK_ID);
+
+    await openPipeline();
+    const progressBox = screen.getByRole("region", { name: "Agentic AI progress" });
+    expect(within(progressBox).getByText("Review required · 1 page · 1 delivered · 0 blank excluded"))
+      .toBeInTheDocument();
+    expect(within(progressBox).queryByRole("img", { name: "Completed successfully" })).not.toBeInTheDocument();
+  });
+
+  it("shows the agentic graph and selectable nodes before an Agentic AI run exists", async () => {
+    serveLibrary([bookRow({ status: "done", n_pages: 1, pages_done: 1 })]);
+    serveBook(snapshot({ status: "done", n_pages: 1, pages: [pageEntry(1)] }, null));
+    server.use(
+      http.get(`${API}/${BOOK_ID}/pages/1`, () =>
+        HttpResponse.json({ book_id: BOOK_ID, page: 1, markdown: "Extracted page" }),
+      ),
+    );
+    renderStage(BOOK_ID);
+
+    await openPipeline();
+    expect(screen.getByRole("region", { name: "Pipeline usage" })).toHaveTextContent(
+      "No Agentic AI run yet.",
+    );
+    expect(screen.getByRole("tab", { name: "Pipeline" })).toHaveAttribute("aria-selected", "true");
+    expect(
+      within(screen.getByRole("region", { name: "Agentic pipeline stages" })).getByRole("region", {
+        name: "Chapter progress",
+      }),
+    ).toBeInTheDocument();
+    await openPipeline();
+    const pipeline = screen.getByRole("region", { name: "Agentic pipeline stages" });
+    expect(within(pipeline).getByRole("button", { name: "Graph" })).toBeInTheDocument();
+    await userEvent.click(within(pipeline).getByRole("button", { name: "List" }));
+    const auditNode = within(pipeline).getByRole("button", { name: /Audit pages/ });
+    expect(auditNode).toHaveTextContent("pending");
+    await userEvent.click(within(pipeline).getByRole("button", { name: "Graph" }));
+    expect(within(pipeline).getByRole("button", { name: /Audit pages/ })).toBeInTheDocument();
   });
 
   it("lets the user start Agentic AI separately after extraction", async () => {
@@ -645,6 +905,9 @@ describe("A book being extracted", () => {
     serveLibrary([bookRow({ status: "done", n_pages: 1, pages_done: 1 })]);
     serveBook(snapshot({ status: "done", n_pages: 1, pages: [pageEntry(1)] }, null));
     server.use(
+      http.get(`${API}/${BOOK_ID}/pages/1`, () =>
+        HttpResponse.json({ book_id: BOOK_ID, page: 1, markdown: "Extracted page" }),
+      ),
       http.post(`${API}/${BOOK_ID}/agentic/runs`, ({ request }) => {
         requests.push(request.method);
         return HttpResponse.json({
@@ -658,10 +921,149 @@ describe("A book being extracted", () => {
     renderStage(BOOK_ID);
 
     expect(screen.queryByRole("dialog", { name: "Agentic pipeline" })).not.toBeInTheDocument();
-    await userEvent.click(await screen.findByRole("button", { name: "Run Agentic AI" }));
+    await openPipeline();
+    await userEvent.click(await screen.findByRole("button", { name: "Start Agentic AI" }));
 
     await waitFor(() => expect(requests).toEqual(["POST"]));
     expect(await screen.findByText("Agentic ingestion queued.")).toBeInTheDocument();
+  });
+
+  it("starts a fresh candidate after a completed Agentic run while preserving its history", async () => {
+    const requests: string[] = [];
+    serveLibrary([bookRow({ status: "done", n_pages: 1, pages_done: 1 })]);
+    serveBook(snapshot({ status: "done", n_pages: 1, pages: [pageEntry(1)] }, null, agenticRun()));
+    server.use(
+      http.get(`${API}/${BOOK_ID}/pages/1`, () =>
+        HttpResponse.json({ book_id: BOOK_ID, page: 1, markdown: "Previous AI result" }),
+      ),
+      http.get(`${API}/${BOOK_ID}/agentic/runs/agentic-1/llm-counters`, () =>
+        HttpResponse.json({ total: {}, by_node: {} }),
+      ),
+      http.post(`${API}/${BOOK_ID}/agentic/runs`, ({ request }) => {
+        requests.push(request.method);
+        return HttpResponse.json({
+          status: "queued",
+          book_id: BOOK_ID,
+          extraction_run_id: "extract-1",
+          agentic_run_id: "agentic-2",
+        });
+      }),
+    );
+    renderStage(BOOK_ID);
+
+    await openPipeline();
+    const start = await screen.findByRole("button", { name: "Start Agentic AI" });
+    expect(start).toBeEnabled();
+    expect(start).toHaveAttribute(
+      "title",
+      expect.stringContaining("completed run and its artifacts are preserved"),
+    );
+    await userEvent.click(start);
+
+    await waitFor(() => expect(requests).toEqual(["POST"]));
+    expect(await screen.findByText("Agentic ingestion queued.")).toBeInTheDocument();
+  });
+
+  it("stops Agentic AI cooperatively and offers Resume after the terminal event", async () => {
+    const stream = liveStream();
+    const requests: string[] = [];
+    serveLibrary([bookRow({ status: "done", n_pages: 1, pages_done: 1 })]);
+    serveBook(
+      snapshot(
+        { status: "done", n_pages: 1, pages: [pageEntry(1)] },
+        null,
+        agenticRun({ status: "running", finished_at: null, updated_at: 3 }),
+      ),
+      () => stream.response,
+    );
+    server.use(
+      http.get(`${API}/${BOOK_ID}/agentic/runs/agentic-1/events`, () => stream.response),
+      http.get(`${API}/${BOOK_ID}/pages/1`, () =>
+        HttpResponse.json({ book_id: BOOK_ID, page: 1, markdown: "Extracted page" }),
+      ),
+      http.get(`${API}/${BOOK_ID}/agentic/runs/agentic-1/llm-counters`, () =>
+        HttpResponse.json({ total: {}, by_node: {} }),
+      ),
+      http.post(`${API}/${BOOK_ID}/agentic/runs/agentic-1/cancel`, ({ request }) => {
+        requests.push(request.method);
+        return HttpResponse.json({
+          book_id: BOOK_ID,
+          agentic_run_id: "agentic-1",
+          status: "cancelling",
+        });
+      }),
+    );
+    renderStage(BOOK_ID);
+
+    await openPipeline();
+    await userEvent.click(await screen.findByRole("button", { name: "Stop Agentic AI" }));
+    expect(requests).toEqual(["POST"]);
+    expect(await screen.findByText(/Stop requested; active page work is draining/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop Agentic AI" })).toBeDisabled();
+
+    stream.send({ kind: "run_cancelled", status: "cancelled" });
+    expect(await screen.findByRole("button", { name: "Resume Agentic AI" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Wipe Agentic AI" })).toBeEnabled();
+  });
+
+  it("wipes only Agentic artifacts after confirmation", async () => {
+    const requests: string[] = [];
+    serveLibrary([bookRow({ status: "done", n_pages: 1, pages_done: 1 })]);
+    serveBook(snapshot({ status: "done", n_pages: 1, pages: [pageEntry(1)] }, null, agenticRun()));
+    server.use(
+      http.get(`${API}/${BOOK_ID}/pages/1`, () =>
+        HttpResponse.json({ book_id: BOOK_ID, page: 1, markdown: "Extracted page" }),
+      ),
+      http.get(`${API}/${BOOK_ID}/agentic/runs/agentic-1/llm-counters`, () =>
+        HttpResponse.json({ total: {}, by_node: {} }),
+      ),
+      http.delete(`${API}/${BOOK_ID}/agentic/runs/agentic-1`, ({ request }) => {
+        requests.push(request.method);
+        return HttpResponse.json({
+          book_id: BOOK_ID,
+          agentic_run_id: "agentic-1",
+          wiped: true,
+          objects_deleted: 4,
+        });
+      }),
+    );
+    renderStage(BOOK_ID);
+
+    await openPipeline();
+    await userEvent.click(await screen.findByRole("button", { name: "Wipe Agentic AI" }));
+    expect(await screen.findByRole("dialog", { name: "Wipe Agentic AI run?" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Wipe" }));
+
+    await waitFor(() => expect(requests).toEqual(["DELETE"]));
+    expect(
+      await screen.findByText("Agentic AI artifacts wiped. Docling extraction is unchanged."),
+    ).toBeInTheDocument();
+  });
+
+  it("wipes extracted materials while retaining the selected book", async () => {
+    const requests: string[] = [];
+    serveLibrary([bookRow({ status: "done", n_pages: 1, pages_done: 1 })]);
+    serveBook(snapshot({ status: "done", n_pages: 1, pages: [pageEntry(1)] }, null));
+    server.use(
+      http.get(`${API}/${BOOK_ID}/pages/1`, () =>
+        HttpResponse.json({ book_id: BOOK_ID, page: 1, markdown: "Extracted page" }),
+      ),
+      http.delete(`${API}/${BOOK_ID}/extraction`, ({ request }) => {
+        requests.push(request.method);
+        return HttpResponse.json({ book_id: BOOK_ID, wiped: true, objects_deleted: 8 });
+      }),
+    );
+    renderStage(BOOK_ID);
+
+    await openPipeline();
+    await userEvent.click(await screen.findByRole("button", { name: "Wipe Docling extraction" }));
+    expect(await screen.findByRole("dialog", { name: "Wipe extracted materials?" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Wipe" }));
+
+    await waitFor(() => expect(requests).toEqual(["DELETE"]));
+    expect(
+      await screen.findByText("Extracted materials wiped. The uploaded book is preserved."),
+    ).toBeInTheDocument();
   });
 
   it("cancels: asks the server, says it is stopping, then shows the cancelled state and offers Resume", async () => {
@@ -676,16 +1078,18 @@ describe("A book being extracted", () => {
       }),
     );
     renderStage(BOOK_ID);
+    await openPipeline();
     stream.send(startedEvent);
     stream.send(pageEvent(1));
 
-    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
-    expect(await screen.findByRole("button", { name: "Cancelling…" })).toBeDisabled();
+    await userEvent.click(await screen.findByRole("button", { name: "Stop Docling extraction" }));
+    expect(screen.getByRole("button", { name: "Stop Docling extraction" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Stop Docling extraction" })).toHaveTextContent("Stopping…");
     expect(requests).toEqual(["cancel"]);
     expect(await screen.findByText(/the run stops between slices/)).toBeInTheDocument();
 
     stream.send(terminalEvent("cancelled"));
-    expect(await screen.findByRole("button", { name: "Resume" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Resume Docling extraction" })).toBeEnabled();
     expect(screen.queryByText(/the run stops between slices/)).not.toBeInTheDocument();
   });
 
@@ -707,8 +1111,9 @@ describe("A book being extracted", () => {
     );
     renderStage(BOOK_ID);
 
+    await openPipeline();
     expect(await screen.findByRole("alert")).toHaveTextContent("the converter ran out of memory on page 4");
-    await userEvent.click(screen.getByRole("button", { name: "Resume" }));
+    await userEvent.click(screen.getByRole("button", { name: "Resume Docling extraction" }));
     await waitFor(() => expect(runs).toEqual([""]));
     expect(await screen.findByText(/Resuming the extraction where it stopped/)).toBeInTheDocument();
   });
@@ -746,6 +1151,7 @@ describe("A book being extracted", () => {
     });
     renderStage(BOOK_ID);
 
+    await openMaterials();
     await screen.findByRole("article", { name: "Page 2" });
     expect(connections).toBeGreaterThanOrEqual(2);
     expect(within(screen.getByRole("list", { name: "Extracted pages" })).getAllByRole("button")).toHaveLength(
@@ -767,13 +1173,22 @@ describe("A finished book", () => {
           book_id: BOOK_ID,
           page: Number(params.page),
           markdown:
-            params.page === "3" ? "| Percentile | Latency |\n|---|---|\n| p99 | 480 ms |" : "Intro text",
+            params.page === "3"
+              ? "| Percentile | Latency |\n|---|---|\n| p99 | 480 ms |"
+              : "# Intro\n\nIntro text\n\n## Methods\n\nBody.\n\n## Results\n\nEnd.",
         });
       }),
     );
     renderStage(BOOK_ID);
 
+    await openMaterials();
     expect(await screen.findByText("Intro text")).toBeInTheDocument(); // the first page, not the last
+    const outline = screen.getByRole("navigation", { name: "On this page" });
+    expect(outline).toHaveTextContent("Methods");
+    expect(outline).toHaveTextContent("Results");
+    await userEvent.click(screen.getByRole("button", { name: "Hide page outline" }));
+    expect(screen.queryByRole("navigation", { name: "On this page" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Show page outline" }));
     expect(screen.queryByRole("button", { name: "Extract again" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: BOOK_TITLE }));
     expect(screen.getByRole("button", { name: `Refresh ${BOOK_TITLE}` })).toBeEnabled();
@@ -792,7 +1207,7 @@ describe("A finished book", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("book not found");
   });
 
-  it("shows a queued book as waiting, with Cancel, and a book with no outline plainly", async () => {
+  it("shows a queued book as waiting, with Stop, and a book with no outline plainly", async () => {
     serveLibrary([bookRow({ status: "queued", pages_done: 0 })]);
     serveBook(
       snapshot({ status: "queued", outline: [], chapters: [] }, { status: "queued" }),
@@ -800,9 +1215,15 @@ describe("A finished book", () => {
     );
     renderStage(BOOK_ID);
 
+    await openMaterials();
     expect(await screen.findByText(/Queued — waiting for a worker/)).toBeInTheDocument();
     expect(screen.getByText("This book has no outline.")).toBeInTheDocument();
     expect(screen.getByText("Waiting for the first page…")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    await openPipeline();
+    expect(
+      within(screen.getByRole("region", { name: "Docling extraction progress" })).getByRole("button", {
+        name: "Stop Docling extraction",
+      }),
+    ).toBeInTheDocument();
   });
 });

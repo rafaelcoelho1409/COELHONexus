@@ -1,3 +1,4 @@
+import { Check } from "lucide-react";
 import type { ReactNode } from "react";
 import type { StreamStatus } from "@/shared/sse";
 
@@ -13,6 +14,7 @@ export function RunProgress({
   streaming,
   streamStatus,
   statusText,
+  successful = false,
   action,
   className = "mt-4",
 }: {
@@ -23,6 +25,7 @@ export function RunProgress({
   streaming: boolean;
   streamStatus: StreamStatus;
   statusText: string;
+  successful?: boolean;
   action?: ReactNode;
   className?: string;
 }) {
@@ -30,7 +33,19 @@ export function RunProgress({
   return (
     <div className={className}>
       <div className="flex min-h-9 flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-medium">Docling extraction</h3>
+        <h3 className="flex items-center gap-1.5 text-sm font-medium">
+          Docling extraction
+          {successful ? (
+            <span
+              role="img"
+              aria-label="Completed successfully"
+              title="Completed successfully"
+              className="inline-flex text-success-text"
+            >
+              <Check className="size-4" aria-hidden="true" />
+            </span>
+          ) : null}
+        </h3>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <span aria-live="polite" className="text-xs text-muted-foreground">
             {statusText}

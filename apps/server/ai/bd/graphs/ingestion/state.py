@@ -39,6 +39,9 @@ class IngestionPageResult(TypedDict, total = False):
     patch_proposal_count: int
     auto_applied_issue_ids: list[str]
     review_required_issue_ids: list[str]
+    delivery_disposition: str
+    repair_context_chars: int
+    repair_call_count: int
     status: str
     error: str
 
@@ -50,6 +53,8 @@ class IngestionPageAuditResult(TypedDict):
     pictures: int
     assessment: dict[str, object]
     warnings: NotRequired[list[str]]
+    audit_mode: NotRequired[str]
+    structured_output_fallback: NotRequired[bool]
 
 
 class PageInventoryResult(TypedDict):
@@ -109,5 +114,6 @@ class IngestionRunState(TypedDict, total = False):
     book_metadata_sha256: str
     quality_report: dict[str, object]
     quality_report_sha256: str
+    quality_status: str
     status: str
     error: str

@@ -5,4 +5,4 @@ from . import params
 
 
 def blob_key(slug: str, manifest_hash: str) -> str:
-    return f"{params.BLOB_PREFIX}/{slug}/order/{manifest_hash}.json"
+    return f"dd/{slug}/planner/order/{manifest_hash}.json"

@@ -236,7 +236,7 @@ async def run(
     ) as client:
         # What the run fetches is kept as it comes — the sitemaps and every page — and is what a transform starts from.
         writer = domains.dd.ingestion.capture.service.Writer(
-            store.minio, framework_slug, params.TIER_KIND, url,
+            store.minio, framework_slug, params.TIER_KIND, url, run_id=store.run_id,
             capture_params = {
                 "path_filter": path_filter, "code_language": code_language or "", "language": language, "framework_name": framework_name or "",
             },

@@ -53,25 +53,33 @@ def active_chapters_key(study_thread_id: str) -> str:
 
 def minio_prefix(slug: str) -> str:
     """Every MinIO object of a framework's synth output (what a full wipe of the framework removes)."""
-    return f"synth/{slug}/"
+    return f"dd/{slug}/synth/"
+
+
+def chapter_prefix(slug: str, chapter_id: str) -> str:
+    return f"{minio_prefix(slug)}{chapter_id}/"
 
 
 def study_timing_key(slug: str) -> str:
     """MinIO key for study timing roll-up — persisted so totals survive a UI refresh."""
-    return f"synth/{slug}/study-timing-latest.json"
+    return f"dd/{slug}/synth/study-timing-latest.json"
 
 
 def chapter_readme_key(slug: str, chapter_id: str) -> str:
-    return f"synth/{slug}/{chapter_id}/README.md"
+    return f"dd/{slug}/synth/{chapter_id}/README.md"
 
 
 def chapter_render_latest_key(slug: str, chapter_id: str) -> str:
-    return f"synth/{slug}/{chapter_id}/render-latest.json"
+    return f"dd/{slug}/synth/{chapter_id}/render-latest.json"
+
+
+def chapter_artifact_key(slug: str, chapter_id: str, artifact_name: str) -> str:
+    return f"{chapter_prefix(slug, chapter_id)}{artifact_name}"
 
 
 def book_harmonize_versioned_key(slug: str, manifest_hash: str) -> str:
-    return f"synth/{slug}/book_harmonize/{manifest_hash}.json"
+    return f"dd/{slug}/synth/book_harmonize/{manifest_hash}.json"
 
 
 def book_harmonize_latest_key(slug: str) -> str:
-    return f"synth/{slug}/book_harmonize-latest.json"
+    return f"dd/{slug}/synth/book_harmonize-latest.json"

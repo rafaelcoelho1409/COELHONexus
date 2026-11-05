@@ -88,6 +88,8 @@ class Progress:
         self._last_flush = 0.0
         self._last_cancel_check = 0.0
         self._state: dict = domain.initial_state(time.time())
+        self._restored = False
+        self._active_stage: str | None = None
 
     async def _client(self) -> infra.redis.service.Redis | None:
         if self._r is None:
@@ -97,6 +99,26 @@ class Progress:
                 logger.warning(f"[progress] Redis init failed: {e}")
                 return None
         return self._r
+
+    async def _restore_state(self) -> None:
+        """Keep phase snapshots when source fallback creates a fresh Progress for the same run."""
+        if self._restored:
+            return
+        self._restored = True
+        r = await self._client()
+        if r is None:
+            return
+        saved = await _read_json(r, keys.progress_key(self.run_id))
+        if not isinstance(saved, dict):
+            return
+        restored = domain.initial_state(time.time())
+        restored.update(saved)
+        saved_stages = saved.get("stages")
+        if isinstance(saved_stages, dict):
+            for name, phase in saved_stages.items():
+                if name in restored["stages"] and isinstance(phase, dict):
+                    restored["stages"][name].update(phase)
+        self._state = restored
 
     async def _flush(self, force: bool = False) -> None:
         now = time.time()
@@ -116,6 +138,12 @@ class Progress:
             logger.info(f"[progress] write skipped: {e}")
 
     async def start(self, tier: str, total: int) -> None:
+        await self._restore_state()
+        stage = "agentic" if tier == "agentic_normalization" else "extraction" if tier in {
+            "llms_full", "llms_txt", "sitemap", "docs", "playwright", "github",
+        } else None
+        if stage is not None:
+            self._active_stage = stage
         self._state.update(
             tier = tier,
             total = max(0, int(total)),
@@ -123,10 +151,27 @@ class Progress:
             last_url = "",
             status = params.STATUS_RUNNING,
         )
+        if stage is not None:
+            phases = self._state.setdefault("stages", {})
+            phase = phases.setdefault(stage, {})
+            phase.update(
+                status = "running",
+                current = 0,
+                total = max(0, int(total)),
+                error = None,
+            )
+            if stage == "extraction":
+                phase.update(tier = tier, last_url = "")
+            else:
+                phase.update(current_node = None, node_status = {}, node_progress = {})
         await self._flush(force = True)
 
     async def update_total(self, total: int) -> None:
         self._state["total"] = max(0, int(total))
+        if self._active_stage is not None:
+            phase = self._state.get("stages", {}).get(self._active_stage)
+            if isinstance(phase, dict):
+                phase["total"] = max(0, int(total))
         await self._flush(force=True)
 
     async def update(self, current: int, last_url: str = "") -> None:
@@ -134,7 +179,60 @@ class Progress:
             current = max(0, int(current)),
             last_url = (last_url or "")[: params.LAST_URL_MAX_CHARS],
         )
+        if self._active_stage is not None:
+            phase = self._state.get("stages", {}).get(self._active_stage)
+            if isinstance(phase, dict):
+                phase["current"] = max(0, int(current))
+                if self._active_stage == "extraction":
+                    phase["last_url"] = (last_url or "")[: params.LAST_URL_MAX_CHARS]
         await self._flush(force = False)
+
+    async def complete_stage(
+        self,
+        stage: str,
+        *,
+        current: int | None = None,
+        total: int | None = None,
+    ) -> None:
+        """Mark one visible pipeline phase complete without changing the overall run status."""
+        await self._restore_state()
+        phase = self._state.setdefault("stages", {}).setdefault(stage, {})
+        phase["status"] = "done"
+        if total is not None:
+            phase["total"] = max(0, int(total))
+        if current is not None:
+            phase["current"] = max(0, int(current))
+        elif total is not None:
+            phase["current"] = max(0, int(total))
+        phase["error"] = None
+        await self._flush(force = True)
+
+    async def update_agentic_node(
+        self,
+        node: str,
+        *,
+        status: str | None = None,
+        current: int | None = None,
+        total: int | None = None,
+    ) -> None:
+        """Persist graph-node status and per-node page counts for the ingestion Pipeline tab."""
+        await self._restore_state()
+        phases = self._state.setdefault("stages", {})
+        phase = phases.setdefault("agentic", {})
+        phase.setdefault("node_status", {})
+        phase.setdefault("node_progress", {})
+        if status is not None:
+            phase["current_node"] = node if status == "running" else phase.get("current_node")
+            phase["node_status"][node] = status
+            if status in {"done", "failed"} and phase.get("current_node") == node:
+                phase["current_node"] = None
+        if current is not None or total is not None:
+            node_progress = phase["node_progress"].setdefault(node, {})
+            if current is not None:
+                node_progress["current"] = max(0, int(current))
+            if total is not None:
+                node_progress["total"] = max(0, int(total))
+        await self._flush(force = status is not None)
 
     async def check_cancelled(self) -> bool:
         """≤1/s polling; tiers call between fetches → raise IngestCancelled."""
@@ -228,6 +326,12 @@ class Progress:
         self._state["status"] = status
         if error:
             self._state["error"] = error[: params.ERROR_MAX_CHARS]
+        if self._active_stage is not None:
+            phase = self._state.get("stages", {}).get(self._active_stage)
+            if isinstance(phase, dict) and phase.get("status") == "running":
+                phase["status"] = status
+                if error:
+                    phase["error"] = error[: params.ERROR_MAX_CHARS]
         await self._flush(force = True)
 
     async def close(self) -> None:

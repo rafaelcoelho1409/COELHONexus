@@ -5,8 +5,8 @@ from . import params
 
 
 def versioned_key(slug: str, manifest: str) -> str:
-    return f"{params.BLOB_PREFIX}/{slug}/doc_distill/{manifest}.json"
+    return f"dd/{slug}/planner/doc_distill/{manifest}.json"
 
 
 def latest_key(slug: str) -> str:
-    return f"{params.BLOB_PREFIX}/{slug}/doc_distill-latest.json"
+    return f"dd/{slug}/planner/doc_distill-latest.json"

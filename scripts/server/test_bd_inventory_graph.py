@@ -84,12 +84,12 @@ check(
     [PageKind.TEXT, PageKind.MIXED],
 )
 check(
-    "the inventory surfaces only deterministic control-character and soft-hyphen findings",
+    "the inventory surfaces only deterministic near-empty, control-character and soft-hyphen findings",
     [
         [issue.code for issue in assessment.issues]
         for assessment in assessments[4:]
     ],
-    [[IssueCode.SOFT_HYPHEN], [IssueCode.CONTROL_CHARACTERS], []],
+    [[IssueCode.NEAR_EMPTY, IssueCode.SOFT_HYPHEN], [IssueCode.CONTROL_CHARACTERS], []],
 )
 check("image syntax in a code sample is not mistaken for extracted media",
       assessments[6].page_kind, PageKind.TEXT)

@@ -12,6 +12,25 @@ def initial_state(now: float) -> dict:
         "total":      0,
         "last_url":   "",
         "status":     params.STATUS_IDLE,
+        "stages": {
+            "extraction": {
+                "status": "idle",
+                "tier": None,
+                "current": 0,
+                "total": 0,
+                "last_url": "",
+                "error": None,
+            },
+            "agentic": {
+                "status": "waiting",
+                "current": 0,
+                "total": 0,
+                "current_node": None,
+                "node_status": {},
+                "node_progress": {},
+                "error": None,
+            },
+        },
         "updated_at": now,
     }
 

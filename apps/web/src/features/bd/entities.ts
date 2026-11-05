@@ -1,6 +1,5 @@
-/** Book Distiller — zod schemas for what the generated client does not type: the SSE events of an extraction and the
- * upload's answer (read outside the generated client, which has no upload progress). Every field the UI relies on has
- * a fallback, so one malformed value never breaks a stream. */
+/** Book Distiller — zod schemas for streamed events, upload answers, and agentic lifecycle responses not yet typed by
+ * the generated client. Every field the UI relies on has a fallback, so malformed stream data never breaks the view. */
 
 import { z } from "zod";
 import type { Snapshot } from "@/shared/api";
@@ -40,6 +39,10 @@ export const agenticRunStatusSchema = z.looseObject({
   status: z.enum(["queued", "running", "done", "failed", "cancelled"]),
   expected_page_count: z.number().catch(0),
   published_page_count: z.number().catch(0),
+  quality_status: z.enum(["complete", "complete_with_review"]).nullable().catch(null),
+  delivered_page_count: z.number().catch(0),
+  discarded_blank_page_count: z.number().catch(0),
+  review_page_count: z.number().catch(0),
   progress: agenticProgressSchema,
   created_at: z.number().catch(0),
   updated_at: z.number().catch(0),
@@ -58,8 +61,39 @@ export const agenticRunStartSchema = z.object({
 });
 export type AgenticRunStart = z.infer<typeof agenticRunStartSchema>;
 
+export const agenticRunCancelResponseSchema = z.object({
+  book_id: z.string(),
+  agentic_run_id: z.string(),
+  status: z.enum(["cancelling", "cancelled", "done", "failed"]),
+});
+export type AgenticRunCancelResponse = z.infer<typeof agenticRunCancelResponseSchema>;
+
+export const agenticRunWipeResponseSchema = z.object({
+  book_id: z.string(),
+  agentic_run_id: z.string(),
+  wiped: z.boolean(),
+  objects_deleted: count,
+});
+export type AgenticRunWipeResponse = z.infer<typeof agenticRunWipeResponseSchema>;
+
+export const extractionWipeResponseSchema = z.object({
+  book_id: z.string(),
+  wiped: z.boolean(),
+  objects_deleted: count,
+});
+export type ExtractionWipeResponse = z.infer<typeof extractionWipeResponseSchema>;
+
 export const agenticEventSchema = z.looseObject({
-  kind: z.enum(["run_queued", "node", "page_audit", "page_repair", "run_done", "run_failed"]),
+  kind: z.enum([
+    "run_queued",
+    "run_cancelling",
+    "node",
+    "page_audit",
+    "page_repair",
+    "run_done",
+    "run_failed",
+    "run_cancelled",
+  ]),
   ts: z.number().optional(),
   node: z.string().optional(),
   status: z.string().optional(),

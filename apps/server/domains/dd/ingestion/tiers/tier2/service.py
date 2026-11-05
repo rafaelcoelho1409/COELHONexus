@@ -249,7 +249,7 @@ async def run(
         # From here the run fetches pages: keep the index and every response as they come (the transform starts from these).
         raw = domains.dd.ingestion.capture
         writer = raw.service.Writer(
-            store.minio, framework_slug, params.TIER_KIND, url,
+            store.minio, framework_slug, params.TIER_KIND, url, run_id=store.run_id,
             capture_params = {"path_filter": path_filter, "code_language": code_language or "", "sitemap_url": sitemap_url},
         )
         await writer.begin()

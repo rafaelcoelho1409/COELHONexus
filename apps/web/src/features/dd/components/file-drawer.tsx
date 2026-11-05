@@ -11,7 +11,7 @@ import { Button } from "@/shared/ui/button";
 
 import { fmtBytes } from "../domain/format";
 import type { ManifestEntry } from "../entities";
-import { usePageBody } from "../hooks/use-dd-data";
+import { usePageBody, useRunPageBody } from "../hooks/use-dd-data";
 import { SideSheet } from "./side-sheet";
 
 /** Arrow keys step through pages, unless the reader is typing somewhere. */
@@ -24,12 +24,14 @@ function isTyping(target: EventTarget | null): boolean {
 
 export function FileDrawer({
   slug,
+  runId = null,
   entries,
   position,
   onMove,
   onClose,
 }: {
   slug: string;
+  runId?: string | null;
   entries: readonly ManifestEntry[];
   /** Index in `entries` of the page shown. */
   position: number;
@@ -37,7 +39,9 @@ export function FileDrawer({
   onClose: () => void;
 }) {
   const entry = entries[position];
-  const page = usePageBody(slug, entry?.idx ?? null);
+  const canonicalPage = usePageBody(runId ? null : slug, entry?.idx ?? null);
+  const runPage = useRunPageBody(runId, entry?.idx ?? null, entry?.key ?? null);
+  const page = runId ? runPage : canonicalPage;
   const last = entries.length - 1;
 
   useEffect(() => {

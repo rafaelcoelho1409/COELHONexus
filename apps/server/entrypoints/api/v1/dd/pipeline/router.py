@@ -46,11 +46,12 @@ async def pipeline_state(slug: str) -> dict:
 
     ingestion = await _exists(domains.dd.ingestion.storage.keys.manifest_key(slug))
     planner   = await _exists(domains.dd.planner.keys.plan_latest_key(slug))
-    synth     = await _has_any(f"synth/{slug}/")
+    synth_prefix = domains.dd.synth.keys.minio_prefix(slug)
+    synth     = await _has_any(synth_prefix)
     study = False
     if synth:
         try:
-            keys = await minio.list(f"synth/{slug}/")
+            keys = await minio.list(synth_prefix)
             study = any(k.endswith("/render-latest.json") for k in keys)
         except Exception as e:
             logger.info(f"[pipeline-state] study probe failed: {e}")

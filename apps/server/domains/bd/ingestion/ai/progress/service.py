@@ -25,6 +25,20 @@ async def clear_events(book_id: str, agentic_run_id: str) -> None:
         await redis.delete(keys.snapshot_key(book_id, agentic_run_id))
 
 
+async def request_cancel(book_id: str, agentic_run_id: str) -> None:
+    async with infra.redis.service.client() as redis:
+        await redis.set(keys.cancel_key(book_id, agentic_run_id), "1", ex = params.SNAPSHOT_TTL_S)
+
+
+async def cancel_requested(redis: infra.redis.service.Redis, book_id: str, agentic_run_id: str) -> bool:
+    return await infra.redis.service.flag_is_set(redis, keys.cancel_key(book_id, agentic_run_id))
+
+
+async def clear_cancel(book_id: str, agentic_run_id: str) -> None:
+    async with infra.redis.service.client() as redis:
+        await redis.delete(keys.cancel_key(book_id, agentic_run_id))
+
+
 def subscribe(
     book_id: str,
     agentic_run_id: str,

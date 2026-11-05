@@ -14,15 +14,18 @@ import { mergePages, shownPage } from "../domain/pages";
 import type { BookSnapshot } from "../entities";
 import { useAgenticRun } from "../hooks/use-agentic-run";
 import {
+  useCancelAgenticRun,
   useCancelBook,
   useResumeAgenticRun,
   useRunBook,
   useSnapshot,
   useStartAgenticRun,
+  useWipeAgenticRun,
+  useWipeExtraction,
 } from "../hooks/use-bd-data";
 import { useBookRun } from "../hooks/use-book-run";
 import { useBdOverlays } from "../hooks/use-overlays";
-import { AgenticPipeline, AgenticProgressBar } from "./agentic-pipeline";
+import { AgenticPipelineOverview, AgenticProgressBar, AgenticUsageSheet } from "./agentic-pipeline";
 import { BookReadingMode } from "./book-reading-mode";
 import { BookReadingProgress } from "./book-reading-progress";
 import { BookSearch } from "./book-search";
@@ -72,9 +75,12 @@ function BookDetail({
   const agentic = useAgenticRun(bookId, snapshot);
   const runBook = useRunBook();
   const cancelBook = useCancelBook();
+  const cancelAgentic = useCancelAgenticRun();
   const startAgentic = useStartAgenticRun();
   const resumeAgentic = useResumeAgenticRun();
-  const { notice } = useBdOverlays();
+  const wipeAgentic = useWipeAgenticRun();
+  const wipeExtraction = useWipeExtraction();
+  const { confirm, notice } = useBdOverlays();
   const { manifest } = snapshot;
   const units = bookUnits(manifest.filename);
   const { state, status } = run;
@@ -102,7 +108,8 @@ function BookDetail({
   const [navigationOpen, setNavigationOpen] = useState(true);
   const [reading, setReading] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [pipelineOpen, setPipelineOpen] = useState(false);
+  const [usageOpen, setUsageOpen] = useState(false);
+  const [activeView, setActiveView] = useState<"pipeline" | "materials">("pipeline");
   const currentIndex = rows.findIndex((candidate) => candidate.page === page);
   const previousPage = currentIndex > 0 ? (rows[currentIndex - 1]?.page ?? null) : null;
   const nextPage = currentIndex >= 0 ? (rows[currentIndex + 1]?.page ?? null) : null;
@@ -124,6 +131,7 @@ function BookDetail({
       { bookId, autoChain },
       {
         onSuccess: (result) => {
+          setActiveView("pipeline");
           run.restart();
           setView({ follow: true, picked: null });
           if (result.status === "locked")
@@ -143,9 +151,14 @@ function BookDetail({
 
   const cancelling = state.canceling || cancelBook.isPending;
   const agenticActionPending = startAgentic.isPending || resumeAgentic.isPending;
+  const agenticCancelPending = cancelAgentic.isPending;
+  const agenticWipePending = wipeAgentic.isPending;
   const startAgenticProcessing = () =>
     startAgentic.mutate(bookId, {
-      onSuccess: () => notice("Agentic ingestion queued."),
+      onSuccess: () => {
+        setActiveView("pipeline");
+        notice("Agentic ingestion queued.");
+      },
       onError: (error) => notice(apiErrorMessage(error), "error"),
     });
   const retryAgenticProcessing = () => {
@@ -154,12 +167,65 @@ function BookDetail({
       { bookId, agenticRunId: agentic.run.agentic_run_id },
       {
         onSuccess: () => {
+          setActiveView("pipeline");
           agentic.restart();
           notice("Agentic ingestion retry queued.");
         },
         onError: (error) => notice(apiErrorMessage(error), "error"),
       },
     );
+  };
+  const stopAgenticProcessing = () => {
+    if (!agentic.run) return;
+    cancelAgentic.mutate(
+      { bookId, agenticRunId: agentic.run.agentic_run_id },
+      {
+        onSuccess: (result) => {
+          if (result.status === "cancelling") {
+            agentic.markCanceling();
+            notice("Agentic AI stop requested; active page work is draining.");
+          } else {
+            notice(`Agentic AI run is already ${result.status}.`);
+          }
+        },
+        onError: (error) => notice(apiErrorMessage(error), "error"),
+      },
+    );
+  };
+  const wipeAgenticProcessing = async () => {
+    if (!agentic.run) return;
+    const confirmed = await confirm({
+      title: "Wipe Agentic AI run?",
+      message:
+        "Deletes this run’s processed pages, assessments, proposals, usage counters, and checkpoints. The uploaded book and Docling extraction are preserved. This cannot be undone.",
+      confirmLabel: "Wipe",
+    });
+    if (!confirmed) return;
+    wipeAgentic.mutate(
+      { bookId, agenticRunId: agentic.run.agentic_run_id },
+      {
+        onSuccess: () => notice("Agentic AI artifacts wiped. Docling extraction is unchanged."),
+        onError: (error) => notice(apiErrorMessage(error), "error"),
+      },
+    );
+  };
+  const wipeDoclingExtraction = async () => {
+    const confirmed = await confirm({
+      title: "Wipe extracted materials?",
+      message:
+        "Deletes Docling pages, figures, and all Agentic AI results derived from them. The uploaded book stays in your library so you can extract it again. This cannot be undone.",
+      confirmLabel: "Wipe",
+    });
+    if (!confirmed) return;
+    wipeExtraction.mutate(bookId, {
+      onSuccess: () => {
+        run.clear();
+        setView({ follow: false, picked: null });
+        setActiveView("materials");
+        notice("Extracted materials wiped. The uploaded book is preserved.");
+      },
+      onError: (error) => notice(apiErrorMessage(error), "error"),
+    });
   };
   const choosePage = (target: number) => setView({ follow: false, picked: target });
   const openReadingMode = () => {
@@ -169,23 +235,27 @@ function BookDetail({
   };
   const navigation = (
     <>
-      <ChapterTree
-        tree={tree}
-        activePage={page}
-        unitLabel={units.singular}
-        isExtracted={(candidate) => extracted.has(candidate)}
-        onOpenPage={choosePage}
-      />
-      <PageList
-        rows={rows}
-        total={total}
-        units={units}
-        shown={page}
-        following={view.follow}
-        live={live}
-        onFollow={(follow) => setView({ follow, picked: null })}
-        onPick={choosePage}
-      />
+      <div className="rounded-md border border-border bg-card p-3">
+        <ChapterTree
+          tree={tree}
+          activePage={page}
+          unitLabel={units.singular}
+          isExtracted={(candidate) => extracted.has(candidate)}
+          onOpenPage={choosePage}
+        />
+      </div>
+      <div className="rounded-md border border-border bg-card p-3">
+        <PageList
+          rows={rows}
+          total={total}
+          units={units}
+          shown={page}
+          following={view.follow}
+          live={live}
+          onFollow={(follow) => setView({ follow, picked: null })}
+          onPick={choosePage}
+        />
+      </div>
     </>
   );
   const position = `${page ?? 0} / ${nPages > 0 ? nPages : total || rows.length}`;
@@ -235,54 +305,180 @@ function BookDetail({
         </p>
       ) : null}
 
-      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <RunProgress
-          completed={completed}
-          total={total}
-          units={units}
-          ratePerMinute={units.singular === "page" ? run.pagesPerMinute : null}
-          streaming={run.streaming}
-          streamStatus={run.streamStatus}
-          statusText={
-            status === "extracting"
-              ? "Processing"
-              : status === "queued"
-                ? "Queued"
-                : status === "done"
-                  ? "Complete"
-                  : status === "failed"
-                    ? "Failed"
-                    : status === "cancelled"
-                      ? "Cancelled"
-                      : "Waiting"
-          }
-          action={
-            live ? (
-              <Button variant="outline" size="default" onClick={cancel} disabled={cancelling}>
-                {cancelling ? "Cancelling…" : "Cancel"}
-              </Button>
-            ) : null
-          }
-          className="mt-0"
+      {agentic.run ? (
+        <AgenticUsageSheet
+          open={usageOpen}
+          bookId={bookId}
+          run={agentic.run}
+          live={agentic.streaming}
+          onClose={() => setUsageOpen(false)}
         />
-        <AgenticProgressBar
-          status={agentic.status}
-          progress={agentic.progress}
-          total={nPages}
-          error={agentic.error}
-          units={units}
-          extractionDone={status === "done"}
-          streamStatus={agentic.streamStatus}
-          actionPending={agenticActionPending}
-          onStart={startAgenticProcessing}
-          onResume={retryAgenticProcessing}
-          onOpenPipeline={() => setPipelineOpen(true)}
-          chapters={state.chapters.length > 0 ? state.chapters : manifest.chapters}
-        />
+      ) : null}
+      <div role="tablist" aria-label="Book views" className="mt-5 border-b border-border">
+        {(
+          [
+            ["pipeline", "Pipeline"],
+            ["materials", "Materials"],
+          ] as const
+        ).map(([viewId, label]) => (
+          <button
+            key={viewId}
+            id={`bd-${viewId}-tab`}
+            type="button"
+            role="tab"
+            aria-selected={activeView === viewId}
+            aria-controls={`bd-${viewId}-panel`}
+            tabIndex={activeView === viewId ? 0 : -1}
+            onClick={() => setActiveView(viewId)}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                event.preventDefault();
+                const nextView = viewId === "pipeline" ? "materials" : "pipeline";
+                setActiveView(nextView);
+                document.getElementById(`bd-${nextView}-tab`)?.focus();
+              }
+            }}
+            className={`-mb-px border-b-2 px-3 py-2 text-sm ${
+              activeView === viewId
+                ? "border-primary font-medium text-primary-text"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
-      {agentic.run && agentic.status && agentic.progress ? (
-        <AgenticPipeline
+      <div
+        role="tabpanel"
+        id="bd-pipeline-panel"
+        aria-labelledby="bd-pipeline-tab"
+        hidden={activeView !== "pipeline"}
+        className="mt-4"
+      >
+        <div className="mb-4 grid grid-cols-1 items-stretch gap-3 lg:grid-cols-2">
+          <section
+            aria-label="Docling extraction progress"
+            className="min-w-0 rounded-md border border-border bg-card p-3"
+          >
+            <RunProgress
+              completed={completed}
+              total={total}
+              units={units}
+              ratePerMinute={units.singular === "page" ? run.pagesPerMinute : null}
+              streaming={run.streaming}
+              streamStatus={run.streamStatus}
+              statusText={
+                status === "extracting"
+                  ? "Processing"
+                  : status === "queued"
+                    ? "Queued"
+                    : status === "done"
+                      ? "Complete"
+                      : status === "failed"
+                        ? "Failed"
+                        : status === "cancelled"
+                          ? "Cancelled"
+                          : "Waiting"
+              }
+              successful={status === "done" && run.error === null}
+              action={
+                <div className="flex flex-wrap items-center justify-end gap-1.5">
+                  <Button
+                    variant="outline"
+                    size="default"
+                    onClick={start}
+                    disabled={live || runBook.isPending || status === "done"}
+                    title={
+                      status === "done"
+                        ? "Use Refresh in the library menu to extract this book again."
+                        : live
+                          ? "Docling extraction is already running."
+                          : undefined
+                    }
+                    aria-busy={runBook.isPending}
+                    aria-label={
+                      status === "failed" || status === "cancelled"
+                        ? "Resume Docling extraction"
+                        : "Start Docling extraction"
+                    }
+                  >
+                    {runBook.isPending
+                      ? "Starting…"
+                      : status === "failed" || status === "cancelled"
+                        ? "Resume"
+                        : "Start"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="default"
+                    onClick={cancel}
+                    disabled={!live || cancelling}
+                    aria-busy={cancelling}
+                    aria-label="Stop Docling extraction"
+                    title={live ? undefined : "There is no active Docling extraction to stop."}
+                  >
+                    {cancelling ? "Stopping…" : "Stop"}
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="default"
+                    onClick={() => void wipeDoclingExtraction()}
+                    disabled={
+                      live ||
+                      agentic.status === "queued" ||
+                      agentic.status === "running" ||
+                      wipeExtraction.isPending
+                    }
+                    aria-busy={wipeExtraction.isPending}
+                    aria-label="Wipe Docling extraction"
+                    title={
+                      live || agentic.status === "queued" || agentic.status === "running"
+                        ? "Stop both pipelines and wait for them to finish before wiping."
+                        : undefined
+                    }
+                  >
+                    {wipeExtraction.isPending ? "Wiping…" : "Wipe"}
+                  </Button>
+                </div>
+              }
+              className="mt-0"
+            />
+            <p className="mt-2 text-xs text-muted-foreground">
+              Wipe clears extracted materials and derived AI results but keeps the uploaded book.
+            </p>
+          </section>
+          <section
+            aria-label="Agentic AI progress"
+            className="min-w-0 rounded-md border border-border bg-card p-3"
+          >
+            <AgenticProgressBar
+              status={agentic.status}
+              progress={agentic.progress}
+              total={nPages}
+              error={agentic.error}
+              units={units}
+              extractionDone={status === "done"}
+              successful={agentic.status === "done" && agentic.run?.quality_status === "complete"}
+              qualityStatus={agentic.run?.quality_status ?? null}
+              deliveredPageCount={agentic.run?.delivered_page_count ?? 0}
+              discardedBlankPageCount={agentic.run?.discarded_blank_page_count ?? 0}
+              reviewPageCount={agentic.run?.review_page_count ?? 0}
+              streamStatus={agentic.streamStatus}
+              actionPending={agenticActionPending}
+              cancelPending={agenticCancelPending}
+              wipePending={agenticWipePending}
+              hasRun={agentic.run !== null}
+              cancelRequested={agentic.cancelRequested}
+              onStart={startAgenticProcessing}
+              onResume={retryAgenticProcessing}
+              onStop={stopAgenticProcessing}
+              onWipe={() => void wipeAgenticProcessing()}
+              chapters={state.chapters.length > 0 ? state.chapters : manifest.chapters}
+            />
+          </section>
+        </div>
+        <AgenticPipelineOverview
           bookId={bookId}
           run={agentic.run}
           status={agentic.status}
@@ -290,92 +486,103 @@ function BookDetail({
           error={agentic.error}
           units={units}
           chapters={state.chapters.length > 0 ? state.chapters : manifest.chapters}
-          open={pipelineOpen}
-          onClose={() => setPipelineOpen(false)}
+          onOpenUsage={() => setUsageOpen(true)}
         />
-      ) : null}
-
-      <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
-        <Button variant="outline" size="lg" onClick={() => setSearchOpen(true)} disabled={rows.length === 0}>
-          <Search aria-hidden />
-          Search book
-          <kbd className="ml-1 font-mono text-xs text-muted-foreground">Ctrl K</kbd>
-        </Button>
-        <Button
-          variant="outline"
-          size="icon-lg"
-          aria-expanded={navigationOpen}
-          aria-label={navigationOpen ? "Hide contents" : "Show contents"}
-          title={navigationOpen ? "Hide contents" : "Show contents"}
-          onClick={() => setNavigationOpen(!navigationOpen)}
-        >
-          {navigationOpen ? <PanelLeftClose aria-hidden /> : <PanelLeftOpen aria-hidden />}
-        </Button>
-        <Button variant="outline" size="lg" onClick={openReadingMode} disabled={page === null}>
-          <Maximize2 aria-hidden />
-          Reading mode
-        </Button>
       </div>
-
-      {!reading ? (
-        <div
-          className={`mt-4 grid grid-cols-1 gap-4 ${
-            navigationOpen ? "lg:grid-cols-[15rem_minmax(0,1fr)]" : "lg:grid-cols-[minmax(0,1fr)]"
-          }`}
-        >
-          {navigationOpen ? (
-            <aside className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:self-start lg:overflow-y-auto">
-              {navigation}
-            </aside>
-          ) : null}
-          <PageReader
-            bookId={bookId}
-            page={page}
-            row={row}
-            livePage={page === null ? undefined : state.pages[page]}
-            agenticRunAvailable={agentic.run !== null}
-            nPages={nPages}
-            units={units}
-          />
+      <div
+        role="tabpanel"
+        id="bd-materials-panel"
+        aria-labelledby="bd-materials-tab"
+        hidden={activeView !== "materials"}
+        className="mt-4"
+      >
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button
+            variant="outline"
+            size="lg"
+            onClick={() => setSearchOpen(true)}
+            disabled={rows.length === 0}
+          >
+            <Search aria-hidden />
+            Search book
+            <kbd className="ml-1 font-mono text-xs text-muted-foreground">Ctrl K</kbd>
+          </Button>
+          <Button
+            variant="outline"
+            size="icon-lg"
+            aria-expanded={navigationOpen}
+            aria-label={navigationOpen ? "Hide contents" : "Show contents"}
+            title={navigationOpen ? "Hide contents" : "Show contents"}
+            onClick={() => setNavigationOpen(!navigationOpen)}
+          >
+            {navigationOpen ? <PanelLeftClose aria-hidden /> : <PanelLeftOpen aria-hidden />}
+          </Button>
+          <Button variant="outline" size="lg" onClick={openReadingMode} disabled={page === null}>
+            <Maximize2 aria-hidden />
+            Reading mode
+          </Button>
         </div>
-      ) : page !== null ? (
-        <BookReadingMode
-          title={title}
-          unitLabel={units.singular[0]?.toUpperCase() + units.singular.slice(1)}
-          position={position}
-          page={page}
-          previousPage={previousPage}
-          nextPage={nextPage}
-          navigation={navigation}
-          onPage={choosePage}
-          onSearch={() => setSearchOpen(true)}
-          onExit={() => setReading(false)}
-        >
-          <PageReader
-            bookId={bookId}
-            page={page}
-            row={row}
-            livePage={state.pages[page]}
-            agenticRunAvailable={agentic.run !== null}
-            nPages={nPages}
-            units={units}
-            readingMode
-          />
-        </BookReadingMode>
-      ) : null}
 
-      {searchOpen ? (
-        <BookSearch
-          bookId={bookId}
-          unitLabel={units.singular[0]?.toUpperCase() + units.singular.slice(1)}
-          rows={rows}
-          onChoose={(hit) => {
-            choosePage(hit.page);
-            setSearchOpen(false);
-          }}
-          onClose={() => setSearchOpen(false)}
-        />
-      ) : null}
+        {!reading ? (
+          <div
+            className={`mt-4 grid grid-cols-1 gap-4 ${
+              navigationOpen ? "lg:grid-cols-[15rem_minmax(0,1fr)]" : "lg:grid-cols-[minmax(0,1fr)]"
+            }`}
+          >
+            {navigationOpen ? (
+              <aside className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:self-start lg:overflow-y-auto">
+                {navigation}
+              </aside>
+            ) : null}
+            <PageReader
+              bookId={bookId}
+              page={page}
+              row={row}
+              livePage={page === null ? undefined : state.pages[page]}
+              agenticRunAvailable={agentic.run !== null}
+              nPages={nPages}
+              units={units}
+            />
+          </div>
+        ) : page !== null ? (
+          <BookReadingMode
+            title={title}
+            unitLabel={units.singular[0]?.toUpperCase() + units.singular.slice(1)}
+            position={position}
+            page={page}
+            previousPage={previousPage}
+            nextPage={nextPage}
+            navigation={navigation}
+            onPage={choosePage}
+            onSearch={() => setSearchOpen(true)}
+            onExit={() => setReading(false)}
+          >
+            <PageReader
+              bookId={bookId}
+              page={page}
+              row={row}
+              livePage={state.pages[page]}
+              agenticRunAvailable={agentic.run !== null}
+              nPages={nPages}
+              units={units}
+              readingMode
+            />
+          </BookReadingMode>
+        ) : null}
+
+        {searchOpen ? (
+          <BookSearch
+            bookId={bookId}
+            unitLabel={units.singular[0]?.toUpperCase() + units.singular.slice(1)}
+            rows={rows}
+            onChoose={(hit) => {
+              choosePage(hit.page);
+              setSearchOpen(false);
+            }}
+            onClose={() => setSearchOpen(false)}
+          />
+        ) : null}
+      </div>
     </section>
   );
 }

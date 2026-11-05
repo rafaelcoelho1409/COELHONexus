@@ -1,14 +1,14 @@
 """Read-only coordination for bounded full-book page audits."""
 from __future__ import annotations
 import domains
-from .... import agents, graphs
+from .... import agents, graphs, skills
 from .. import inventory, page_audit
 
 import asyncio
 import hashlib
 import inspect
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from typing import Any, Protocol
 
 
@@ -71,8 +71,17 @@ async def audit_pages(
                 raise ValueError("the ingestion run has no agentic_run_id")
             oversized = len(markdown) > domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS
             warnings = []
-            if oversized:
+            deterministic_only = deterministic.page_kind in {
+                agents.schemas.PageKind.BLANK,
+                agents.schemas.PageKind.IMAGE_ONLY,
+            }
+            structured_output_fallback = False
+            if deterministic_only:
                 proposed = deterministic
+                audit_mode = "deterministic_only"
+            elif oversized:
+                proposed = deterministic
+                audit_mode = "deterministic_limit"
                 warnings.append(
                     f"Page exceeds the {domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS}-character "
                     "audit limit; deterministic findings were retained and manual review is required."
@@ -87,7 +96,9 @@ async def audit_pages(
                             "content": page_audit.domain.user_payload(
                                 page_ref["page"], page_ref["pictures"], markdown,
                             ),
-                        }]}, config = {"callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()]})
+                        }], "files": skills.service.files_for("page_auditor")}, config = {
+                            "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
+                        })
                     if not isinstance(result, dict) or "structured_response" not in result:
                         raise ValueError("page auditor returned no structured assessment")
                     proposed, warnings = page_audit.domain.sanitize_assessment(
@@ -96,12 +107,15 @@ async def audit_pages(
                         pictures = page_ref["pictures"],
                         markdown = markdown,
                     )
+                    audit_mode = "llm_reviewed"
                 except Exception as error:
                     logger.warning(
                         f"[bd-page-audit] page {page_ref['page']} degraded to deterministic findings "
                         f"({type(error).__name__})",
                     )
                     proposed = deterministic
+                    audit_mode = "deterministic_fallback"
+                    structured_output_fallback = True
                     warnings = [
                         f"Page auditor was unavailable or returned an invalid assessment ({type(error).__name__}); "
                         "deterministic findings were retained for review."
@@ -145,6 +159,8 @@ async def audit_pages(
                 "pictures": page_ref["pictures"],
                 "assessment": assessment.model_dump(mode = "json"),
                 "warnings": warnings,
+                "audit_mode": audit_mode,
+                "structured_output_fallback": structured_output_fallback,
             }
             await _report(
                 progress_callback,
@@ -155,9 +171,21 @@ async def audit_pages(
             )
             return output_ref, audit
 
-    results = await asyncio.gather(*(audit_one(page_ref) for page_ref in validated_refs))
+    results = await _gather_cancel_on_failure(audit_one(page_ref) for page_ref in validated_refs)
     return {
         "page_refs": [result[0] for result in results],
         "page_audits": [result[1] for result in results],
         "status": "audited",
     }
+
+
+async def _gather_cancel_on_failure(awaitables: Iterable[Coroutine[Any, Any, Any]]) -> list[Any]:
+    tasks = [asyncio.create_task(awaitable) for awaitable in awaitables]
+    try:
+        return await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions = True)
+        raise

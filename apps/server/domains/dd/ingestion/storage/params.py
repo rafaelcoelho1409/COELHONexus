@@ -9,10 +9,6 @@ TTL_S = 7200
 # blew past Celery's 30-min soft_time_limit on Docker's Tier 3 run.
 LIVE_MANIFEST_THROTTLE_S = 1.0
 
-# The folder of raw copies inside `ingestion/` (`ingestion/raw/{slug}/`). It is a sibling of the frameworks, so it is never a
-# framework's slug: listings of `ingestion/` skip it (domain.framework_slugs).
-RAW_FOLDER = "raw"
-
 # Snapshot subdirectory name. Kept under each framework_prefix so snapshots
 # travel with the framework but are excluded from `take()` / `restore()` body
 # operations to avoid recursive snapshotting.

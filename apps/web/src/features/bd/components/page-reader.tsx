@@ -1,11 +1,13 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, PanelRightClose, PanelRightOpen, X } from "lucide-react";
 import Image from "next/image";
 import { Children, isValidElement, useId, useMemo, useState } from "react";
 import type { Components } from "react-markdown";
 
-import { Markdown } from "@/shared/markdown";
+import { useScrollSpy } from "@/shared/lib/use-scroll-spy";
+import { Markdown, markdownToc } from "@/shared/markdown";
+import { Button } from "@/shared/ui/button";
 
 import { figureUrl } from "../api";
 import type { BookUnits } from "../domain/books";
@@ -43,6 +45,7 @@ export function PageReader({
   readingMode?: boolean;
 }) {
   const [previewMode, setPreviewMode] = useState<(typeof PREVIEW_MODES)[number]["id"]>("rendered");
+  const [outlineOpen, setOutlineOpen] = useState(true);
   const needsBody =
     row !== undefined &&
     (agenticRunAvailable || livePage === undefined || livePage.truncated || livePage.markdown === "");
@@ -51,6 +54,9 @@ export function PageReader({
   const figures = row?.figures ?? EMPTY_FIGURES;
   const source = body.data?.markdown ?? livePage?.markdown ?? "";
   const contentSource = body.data?.content_source ?? "docling";
+  const outline = useMemo(() => markdownToc(source), [source]);
+  const outlineIds = useMemo(() => outline.map((entry) => entry.id), [outline]);
+  const activeHeading = useScrollSpy(outlineIds, page);
   const renderedText = useMemo(
     () => inlineFigures(source, figures, bookId, page ?? 0, units.singular),
     [source, figures, bookId, page, units.singular],
@@ -126,48 +132,95 @@ export function PageReader({
         ) : null}
       </header>
       <div className="mt-4 flex justify-end">
-        <fieldset className="m-0 flex min-w-0 border-0 p-0">
-          <legend className="sr-only">Content view</legend>
-          {PREVIEW_MODES.map((mode) => (
-            <button
-              key={mode.id}
-              type="button"
-              aria-pressed={previewMode === mode.id}
-              onClick={() => setPreviewMode(mode.id)}
-              className={`min-h-9 border px-3 text-xs first:rounded-l-sm last:rounded-r-sm ${
-                previewMode === mode.id
-                  ? "border-primary bg-primary/10 text-primary-text"
-                  : "-ml-px border-border text-muted-foreground hover:text-foreground"
-              }`}
+        <div className="flex w-full items-center justify-between gap-2">
+          <fieldset className="m-0 flex min-w-0 border-0 p-0">
+            <legend className="sr-only">Content view</legend>
+            {PREVIEW_MODES.map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
+                aria-pressed={previewMode === mode.id}
+                onClick={() => setPreviewMode(mode.id)}
+                className={`min-h-9 border px-3 text-xs first:rounded-l-sm last:rounded-r-sm ${
+                  previewMode === mode.id
+                    ? "border-primary bg-primary/10 text-primary-text"
+                    : "-ml-px border-border text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </fieldset>
+          {outline.length > 1 ? (
+            <Button
+              variant="ghost"
+              size="icon-lg"
+              className="hidden lg:inline-flex"
+              aria-expanded={outlineOpen}
+              aria-label={outlineOpen ? "Hide page outline" : "Show page outline"}
+              title={outlineOpen ? "Hide page outline" : "Show page outline"}
+              onClick={() => setOutlineOpen(!outlineOpen)}
             >
-              {mode.label}
-            </button>
-          ))}
-        </fieldset>
+              {outlineOpen ? <PanelRightClose aria-hidden /> : <PanelRightOpen aria-hidden />}
+            </Button>
+          ) : null}
+        </div>
       </div>
-      <section
-        aria-label={previewMode === "rendered" ? "Rendered content" : "Markdown source"}
-        className="mt-2 min-w-0"
+      <div
+        className={`mt-2 grid grid-cols-1 gap-5 ${outlineOpen && outline.length > 1 ? "lg:grid-cols-[minmax(0,1fr)_14rem]" : ""}`}
       >
-        {content ? (
-          previewMode === "rendered" ? (
-            <Markdown text={renderedText} components={markdownComponents} />
+        <section
+          aria-label={previewMode === "rendered" ? "Rendered content" : "Markdown source"}
+          className="min-w-0"
+        >
+          {content ? (
+            previewMode === "rendered" ? (
+              <Markdown text={renderedText} components={markdownComponents} />
+            ) : (
+              <pre className="break-words whitespace-pre-wrap font-mono text-xs text-foreground">
+                {source}
+              </pre>
+            )
+          ) : body.isError ? (
+            <p role="alert" className="text-sm text-destructive-text">
+              This {units.singular} could not be loaded.
+            </p>
+          ) : body.isPending ? (
+            <p className="text-sm text-muted-foreground">Loading the {units.singular}…</p>
           ) : (
-            <pre className="break-words whitespace-pre-wrap font-mono text-xs text-foreground">{source}</pre>
-          )
-        ) : body.isError ? (
-          <p role="alert" className="text-sm text-destructive-text">
-            This {units.singular} could not be loaded.
-          </p>
-        ) : body.isPending ? (
-          <p className="text-sm text-muted-foreground">Loading the {units.singular}…</p>
-        ) : (
-          <p className="text-sm text-muted-foreground">No readable text in this {units.singular}.</p>
-        )}
-        {livePage?.truncated && body.isPending && source ? (
-          <p className="mt-2 text-xs text-muted-foreground">Loading the rest of the {units.singular}…</p>
+            <p className="text-sm text-muted-foreground">No readable text in this {units.singular}.</p>
+          )}
+          {livePage?.truncated && body.isPending && source ? (
+            <p className="mt-2 text-xs text-muted-foreground">Loading the rest of the {units.singular}…</p>
+          ) : null}
+        </section>
+        {outlineOpen && outline.length > 1 ? (
+          <aside className="hidden lg:block">
+            <nav aria-label="On this page" className="sticky top-20 text-sm">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">On this page</p>
+              <ul className="flex flex-col border-l border-border">
+                {outline.map((entry) => (
+                  <li key={entry.id}>
+                    <a
+                      href={`#${entry.id}`}
+                      aria-current={activeHeading === entry.id ? "location" : undefined}
+                      className={`-ml-px block min-h-9 border-l-2 py-1.5 pr-2 leading-snug ${
+                        entry.level === 3 ? "pl-6" : "pl-3"
+                      } ${
+                        activeHeading === entry.id
+                          ? "border-primary font-medium text-foreground"
+                          : "border-transparent text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {entry.text}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+          </aside>
         ) : null}
-      </section>
+      </div>
       {row.figures.length > 0 ? (
         <details className="mt-4 rounded-sm border border-border p-2">
           <summary className="flex min-h-9 cursor-pointer items-center text-sm font-medium">

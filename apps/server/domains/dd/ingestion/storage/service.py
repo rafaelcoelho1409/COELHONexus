@@ -1,4 +1,4 @@
-"""Per-framework Store over the shared MinIO adapter (`infra.minio`). Redis manifest keyed by run_id (live); MinIO manifest keyed by framework_slug (canonical on finalize)."""
+"""Per-run immutable Store over the shared MinIO adapter; Redis is live state and the MinIO manifest is the publish pointer."""
 from __future__ import annotations
 import domains, infra
 from . import domain, entities, keys, params
@@ -15,6 +15,21 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+async def write_immutable(
+    minio: infra.minio.service.MinIOStorage,
+    key: str,
+    content: str | bytes,
+    content_type: str,
+) -> None:
+    """Write a versioned object once; retries may confirm identical bytes but cannot replace the captured input."""
+    expected = content.encode("utf-8") if isinstance(content, str) else content
+    if await minio.exists(key):
+        if await minio.read_bytes(key) != expected:
+            raise RuntimeError(f"immutable MinIO object conflict at {key}")
+        return
+    await minio.write(key, expected, content_type=content_type)
+
+
 async def _cpu_bound(fn, *args, size: int, **kwargs):
     if size < params.CPU_THREAD_THRESHOLD_CHARS:
         return fn(*args, **kwargs)
@@ -22,7 +37,7 @@ async def _cpu_bound(fn, *args, size: int, **kwargs):
 
 
 class Store:
-    """Per-framework store; re-runs overwrite canonical MinIO path in place. Redis manifest keyed by run_id (live); MinIO manifest written on finalize (canonical)."""
+    """Per-run store; raw and published pages are immutable, canonical manifest is switched last."""
     def __init__(
         self,
         run_id: str,
@@ -35,6 +50,7 @@ class Store:
         self.r = r
         self.minio = minio
         self._cached_manifest: list[entities.ManifestEntry] = []
+        self._next_idx = 0
         # idx-assign region atomic; slow MinIO PUT outside the lock.
         self._add_lock = asyncio.Lock()
         self._live_last_flush = 0.0
@@ -68,14 +84,22 @@ class Store:
         relative_links: bool = True,
         keep_raw: bool = True,
     ) -> entities.ManifestEntry:
-        """Stream page to store. idx-assign+manifest append are locked; MinIO PUT is not (concurrent writes to distinct keys). Raw body also → ingestion/raw/ for normalizer-version reversibility — unless `keep_raw` is off, for a tier whose run keeps what it fetched as a `capture` (Tier 1).
+        """Capture extracted Markdown, stage deterministic page assembly, then hand it to the page agent.
 
-        `defer_vault`: skip the page's vault now. For a bundle that is about to be split into pages: its own vault would
-        be built (seconds, ~10 MB) and then orphaned, while the dispatcher's vault backfill builds one per final page
-        (and skips any page that already has one), so nothing is lost.
+        The raw object is written before artifact rewriting, URL rewriting, or AI enhancement. `keep_raw` is retained for
+        call compatibility; every tier now captures every extracted page.
+
+        `defer_vault` remains accepted for tier compatibility; vaults are built only after the final Agentic AI page is published.
 
         The stored copy has its site-relative links made absolute against `url`. `relative_links=False` limits that to
         `/x` links (a bundle's `./x` is relative to each section's own URL, which the split knows and `url` does not)."""
+        # First durable page-level copy: before artifact rewriting or any normalization.
+        async with self._add_lock:
+            idx = self._next_idx
+            self._next_idx += 1
+        raw_key = keys.raw_page_key(self.framework_slug, idx, slug, self.run_id, tier)
+        await write_immutable(self.minio, raw_key, body, params.MARKDOWN_TYPE)
+
         # Markdown-side artifact hook for tiers 1/2/3/5 (tier4 uses HTML-stage).
         if url:
             try:
@@ -97,48 +121,24 @@ class Store:
                     f"[store] md-artifact extraction failed for slug={slug!r}: "
                     f"{type(e).__name__}: {e}"
                 )
-        # Normalize before MinIO write; best-effort fall-through on bug.
-        normalized_body = body
-        try:
-            normalized_body = (
-                await _cpu_bound(domains.dd.synth.nodes.corpus_normalize.domain.normalize_doc, body, size = len(body))
-            ).body
-        except Exception as e:
-            logger.warning(
-                f"[store] normalize_doc failed for slug={slug!r}: "
-                f"{type(e).__name__}: {e}; falling back to raw body"
-            )
+        # This is only deterministic assembly for the page agent (artifact references and absolute URLs).
+        staged_body = body
         if url:
-            normalized_body = await _cpu_bound(
-                domains.dd.ingestion.post.domain.absolutize_links, normalized_body, url,
-                size = len(normalized_body), relative = relative_links,
+            staged_body = await _cpu_bound(
+                domains.dd.ingestion.post.domain.absolutize_links, staged_body, url,
+                size = len(staged_body), relative = relative_links,
             )
-        normalized_bytes = len(normalized_body.encode("utf-8"))
+        staged_bytes = len(staged_body.encode("utf-8"))
         async with self._add_lock:
-            idx = len(self._cached_manifest)
             entry = domain.new_entry(
-                self.framework_slug, idx,
-                slug = slug, url = url, tier = tier, size = normalized_bytes,
+                self.framework_slug, idx, key=keys.stage_page_key(self.framework_slug, self.run_id, idx, slug),
+                slug = slug, url = url, tier = tier, size = staged_bytes,
                 title = title, section = section, notes = notes, lastmod = lastmod, anchors = anchors,
+                raw_key = raw_key,
             )
             self._cached_manifest.append(entry)
-        await asyncio.gather(
-            self.minio.write(entry.key, normalized_body, content_type = params.MARKDOWN_TYPE),
-            *(
-                [self.minio.write(keys.raw_page_key(self.framework_slug, idx, slug), body, content_type = params.MARKDOWN_TYPE)]
-                if keep_raw else []
-            ),
-        )
-        # Vault sees the same bytes synth will see; best-effort.
-        body = normalized_body
-        if not defer_vault:
-            try:
-                await self._build_and_persist_vault(idx, slug, body)
-            except Exception as e:  # noqa: BLE001 — the vault is best-effort; the page is already stored
-                logger.warning(
-                    f"[store] vault build failed for idx={idx} slug={slug!r}: "
-                    f"{type(e).__name__}: {e}"
-                )
+            self._cached_manifest.sort(key=lambda item: item.idx)
+        await self.minio.write(entry.key, staged_body, content_type=params.MARKDOWN_TYPE)
         await self._write_live_manifest()
         return entry
 
@@ -198,7 +198,7 @@ class Store:
     ) -> None:
         """Sentinelize body + persist vault manifest + sentinelized text.
         Empty vaults still get written so synth has a uniform read path."""
-        source_key = keys.page_key(self.framework_slug, idx, slug)
+        source_key = keys.stage_page_key(self.framework_slug, self.run_id, idx, slug)
         sentinelized, manifest = await _cpu_bound(
             domains.dd.synth.nodes.vault.domain.build_manifest,
             framework = self.framework_slug,
@@ -206,8 +206,8 @@ class Store:
             md_text = body,
             size = len(body),
         )
-        vk = keys.vault_manifest_key(self.framework_slug, idx, slug)
-        sk = keys.vault_sentinelized_key(self.framework_slug, idx, slug)
+        vk = keys.vault_manifest_key(self.framework_slug, idx, slug, self.run_id)
+        sk = keys.vault_sentinelized_key(self.framework_slug, idx, slug, self.run_id)
         await asyncio.gather(
             self.minio.write(
                 vk,
@@ -234,6 +234,7 @@ class Store:
     async def replace_manifest(self, entries: list[entities.ManifestEntry]) -> None:
         """Atomically replace the manifest. Caller writes new bodies first."""
         self._cached_manifest = list(entries)
+        self._next_idx = max((e.idx for e in entries), default=-1) + 1
         await self._write_live_manifest(force=True)
 
     async def read_body_by_key(self, key: str) -> str:
@@ -256,13 +257,13 @@ class Store:
             await self.delete_body_by_key(key)
 
     async def finalize(self, extra: dict | None = None) -> None:
-        """Write the canonical MinIO manifest (once per run, after post)."""
+        """Write the canonical MinIO manifest only after page normalization and vault generation finish."""
         payload = domain.manifest_payload(
             self.framework_slug,
             self._cached_manifest,
             ingested_at = time.time(),
-            normalizer_version = domains.dd.synth.nodes.corpus_normalize.versions.NORMALIZER_VERSION,
-            extra = extra,
+            normalizer_version = 1,
+            extra = {**(extra or {}), "normalizer": "dd-ingestion-agentic-v1", "agentic_run_id": self.run_id},
         )
         try:
             await self.minio.write(
@@ -270,8 +271,9 @@ class Store:
                 json.dumps(payload, separators = params.MANIFEST_JSON_SEPARATORS),
                 content_type = params.JSON_TYPE,
             )
-        except Exception as e:
-            logger.warning(f"[store] manifest write to MinIO failed: {e}")
+        except Exception:
+            logger.exception("[store] canonical manifest publish failed")
+            raise
 
     async def _write_live_manifest(self, force: bool = False) -> None:
         now = time.monotonic()
@@ -406,7 +408,7 @@ async def take_snapshot(
 ) -> dict:
     """Copy the current canonical content into `_snapshots/{ts}/`. Skips
     the `_snapshots/` subtree itself so we don't snapshot snapshots."""
-    src = keys.framework_prefix(framework_slug)
+    src = keys.ingestion_prefix(framework_slug)
     ts = domain.snapshot_id(_snapshot_now_ts(), label)
     dst = keys.snapshot_prefix(framework_slug, ts)
     t0 = time.monotonic()
@@ -422,7 +424,7 @@ async def list_snapshots(
     minio: infra.minio.service.MinIOStorage, framework_slug: str,
 ) -> list[str]:
     """Return snapshot timestamps for `slug`, newest first."""
-    snaps_prefix = keys.framework_prefix(framework_slug) + params.SNAPSHOTS_SUBDIR
+    snaps_prefix = keys.ingestion_prefix(framework_slug) + params.SNAPSHOTS_SUBDIR
     return domain.newest_first(await minio.list_subfolders(snaps_prefix))
 
 
@@ -440,7 +442,7 @@ async def restore_snapshot(
             f"snapshot {ts!r} not found for {framework_slug!r}"
         )
 
-    canonical_prefix = keys.framework_prefix(framework_slug)
+    canonical_prefix = keys.ingestion_prefix(framework_slug)
     cur = domain.outside_snapshots(await minio.list(canonical_prefix))
     deleted = 0
     if cur:
@@ -468,51 +470,3 @@ async def delete_snapshot(
     prefix = keys.snapshot_prefix(framework_slug, ts)
     n = await minio.delete_prefix(prefix)
     return domain.snapshot_deleted(framework_slug, ts, n)
-
-
-# --- The copy a re-ingestion replaces, kept until the new one is done. A refresh used to wipe the old copy first, so a
-# failed or cancelled run left nothing (Diffusers was a 404 for 18 minutes; a failure would have been permanent). ---
-
-async def stash_old_copy(minio: infra.minio.service.MinIOStorage, framework_slug: str) -> str | None:
-    """Make room for a re-ingestion of `framework_slug`: copy the finalized copy aside, then empty its three prefixes. Returns
-    the backup's id (what `restore_old_copy` / `drop_old_copy` take), or None when there was nothing worth keeping.
-    A copy that is not finalized (a run that crashed) is not backed up over a backup an earlier run left: that backup is
-    kept and returned instead."""
-    older = domain.newest_first(await minio.list_subfolders(keys.backup_root(framework_slug)))
-    backup_id: str | None = older[0] if older else None
-    if await read_framework_manifest(minio, framework_slug) is not None:
-        backup_id = _snapshot_now_ts()
-        base = keys.backup_prefix(framework_slug, backup_id)
-        for part, prefix in keys.framework_parts(framework_slug):
-            await minio.copy_prefix(prefix, f"{base}{part}/", skip_substring = params.SNAPSHOTS_SKIP_SUBSTRING)
-        for stale in older:
-            if stale != backup_id:  # a backup made in the same second as an older one shares its id: it is not the stale one
-                await minio.delete_prefix(keys.backup_prefix(framework_slug, stale))
-    for _part, prefix in keys.framework_parts(framework_slug):
-        await minio.delete_prefix(prefix)
-    return backup_id
-
-
-async def restore_old_copy(minio: infra.minio.service.MinIOStorage, framework_slug: str, backup_id: str) -> int:
-    """Put a backup back as the framework's copy, in place of whatever a failed or cancelled run left. Returns the objects
-    restored (0 when the backup is gone, in which case nothing is touched)."""
-    base = keys.backup_prefix(framework_slug, backup_id)
-    if not await minio.list(base):
-        return 0
-    restored = 0
-    for part, prefix in keys.framework_parts(framework_slug):
-        await minio.delete_prefix(prefix)
-        restored += await minio.copy_prefix(f"{base}{part}/", prefix)
-    return restored
-
-
-async def latest_backup(minio: infra.minio.service.MinIOStorage, framework_slug: str) -> str | None:
-    """The newest backup of `framework_slug`'s previous copy, if one is waiting (a run in flight, or one that crashed)."""
-    found = domain.newest_first(await minio.list_subfolders(keys.backup_root(framework_slug)))
-    return found[0] if found else None
-
-
-async def drop_old_copy(minio: infra.minio.service.MinIOStorage, framework_slug: str, backup_id: str | None = None) -> int:
-    """The new copy is finished: the backup of the old one is not needed. Without an id, every backup of the framework goes."""
-    prefix = keys.backup_prefix(framework_slug, backup_id) if backup_id else keys.backup_root(framework_slug)
-    return await minio.delete_prefix(prefix)

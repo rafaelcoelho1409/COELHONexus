@@ -1,7 +1,7 @@
 """Read-only LangGraph node for structured auditing of one raw page."""
 from __future__ import annotations
 from . import domain, params
-from .... import graphs
+from .... import graphs, skills
 
 import hashlib
 import inspect
@@ -37,6 +37,7 @@ async def audit_page(
             "role": "user",
             "content": domain.user_payload(page_number, pictures, markdown),
         }],
+        "files": skills.service.files_for("page_auditor"),
     })
     if not isinstance(result, dict) or "structured_response" not in result:
         raise ValueError("page auditor returned no structured PageAssessment")

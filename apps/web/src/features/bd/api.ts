@@ -1,15 +1,21 @@
-/** Book Distiller — the calls the generated client cannot make: the SSE address, figure addresses (an `<img src>`),
- * and the upload, which goes through `XMLHttpRequest` because `fetch` reports no upload progress. Everything else
- * uses the generated client from `@/shared/api` (see `hooks/use-bd-data.ts`). */
+/** Book Distiller — stream/figure URL helpers, upload, and agentic lifecycle routes not yet present in the generated
+ * API spec. Upload uses `XMLHttpRequest` because `fetch` reports no upload progress. Generated operations use
+ * `@/shared/api` directly (see `hooks/use-bd-data.ts`). */
 
 import { client } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 
 import {
   type AgenticRunStart,
+  type AgenticRunCancelResponse,
+  type AgenticRunWipeResponse,
   type AgenticUsage,
+  type ExtractionWipeResponse,
+  agenticRunCancelResponseSchema,
   agenticRunStartSchema,
+  agenticRunWipeResponseSchema,
   agenticUsageSchema,
+  extractionWipeResponseSchema,
   type StartResponse,
   startResponseSchema,
 } from "./entities";
@@ -55,6 +61,42 @@ export async function resumeAgenticRun(bookId: string, agenticRunId: string): Pr
     throwOnError: true,
   });
   return agenticRunStartSchema.parse(result.data);
+}
+
+export async function cancelAgenticRun(
+  bookId: string,
+  agenticRunId: string,
+): Promise<AgenticRunCancelResponse> {
+  const result = await client.request({
+    method: "POST",
+    url: "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/cancel",
+    path: { book_id: bookId, agentic_run_id: agenticRunId },
+    throwOnError: true,
+  });
+  return agenticRunCancelResponseSchema.parse(result.data);
+}
+
+export async function wipeAgenticRun(
+  bookId: string,
+  agenticRunId: string,
+): Promise<AgenticRunWipeResponse> {
+  const result = await client.request({
+    method: "DELETE",
+    url: "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}",
+    path: { book_id: bookId, agentic_run_id: agenticRunId },
+    throwOnError: true,
+  });
+  return agenticRunWipeResponseSchema.parse(result.data);
+}
+
+export async function wipeExtraction(bookId: string): Promise<ExtractionWipeResponse> {
+  const result = await client.request({
+    method: "DELETE",
+    url: "/api/v1/bd/ingestion/{book_id}/extraction",
+    path: { book_id: bookId },
+    throwOnError: true,
+  });
+  return extractionWipeResponseSchema.parse(result.data);
 }
 
 /** A figure cropped from a page, as PNG. */

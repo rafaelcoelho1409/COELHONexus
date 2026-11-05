@@ -1,88 +1,132 @@
-"""Key builders: ingestion/{slug}/ (normalized), ingestion/raw/{slug}/ (what each tier fetched, as it came: reversibility across normalizer bumps), synth-vault/ (wipeable without affecting ingestion)."""
+"""Versioned object keys for Docs Distiller's ``coelhonexus`` bucket."""
 from __future__ import annotations
 from . import params
 
 
-
 def framework_prefix(framework_slug: str) -> str:
-    return f"ingestion/{framework_slug.strip().strip('/')}/"
+    return f"dd/{framework_slug.strip().strip('/')}/"
+
+
+def library_prefix() -> str:
+    return "dd/"
+
+
+def ingestion_prefix(framework_slug: str) -> str:
+    return f"{framework_prefix(framework_slug)}ingestion/"
 
 
 def manifest_key(framework_slug: str) -> str:
-    return f"{framework_prefix(framework_slug)}manifest.json"
+    return f"{ingestion_prefix(framework_slug)}manifest.json"
 
 
-def page_key(framework_slug: str, idx: int, slug: str) -> str:
-    """Zero-padded ordinal makes alphabetical MinIO listing equal document order
-    — every downstream consumer (inspect UI, synth) relies on this."""
+def page_key(framework_slug: str, idx: int, slug: str, run_id: str = "") -> str:
+    """Mutable working key retained for legacy callers; published pages are immutable agentic run objects."""
     safe_slug = (slug or "page").strip().strip("/")[:80]
-    return f"{framework_prefix(framework_slug)}pages/{idx:04d}-{safe_slug}.md"
+    return f"{ingestion_prefix(framework_slug)}pages/{idx:04d}-{safe_slug}.md"
 
 
-def raw_prefix(framework_slug: str) -> str:
-    """The raw copies sit beside the frameworks, under the reserved folder name `params.RAW_FOLDER` — not inside any framework's own
-    prefix, so wiping or listing `ingestion/{slug}/` never touches them."""
-    return f"ingestion/{params.RAW_FOLDER}/{framework_slug.strip().strip('/')}/"
+def stage_prefix(framework_slug: str, run_id: str) -> str:
+    return f"{ingestion_prefix(framework_slug)}staging/{run_id}/"
 
 
-def raw_page_key(framework_slug: str, idx: int, slug: str) -> str:
+def stage_page_key(framework_slug: str, run_id: str, idx: int, slug: str) -> str:
     safe_slug = (slug or "page").strip().strip("/")[:80]
-    return f"{raw_prefix(framework_slug)}pages/{idx:04d}-{safe_slug}.md"
+    return f"{stage_prefix(framework_slug, run_id)}pages/{idx:04d}-{safe_slug}.md"
 
 
-def raw_capture_key(framework_slug: str) -> str:
-    """What a capture says about itself (`capture.entities.Capture`); written last, so a capture without one is unfinished."""
-    return f"{raw_prefix(framework_slug)}capture.json"
+def raw_prefix(framework_slug: str, run_id: str | None = None) -> str:
+    base = f"{ingestion_prefix(framework_slug)}raw/"
+    return f"{base}{run_id}/" if run_id else base
 
 
-def raw_file_key(framework_slug: str, name: str) -> str:
-    """A file of the capture — a bundle, an index, a page — under the name `capture.domain` gave it."""
+def raw_tier_prefix(framework_slug: str, run_id: str, tier: str) -> str:
+    safe_tier = (tier or "unknown").strip().strip("/")[:32]
+    return f"{raw_prefix(framework_slug, run_id)}{safe_tier}/"
+
+
+def raw_page_key(framework_slug: str, idx: int, slug: str, run_id: str = "", tier: str = "") -> str:
+    safe_slug = (slug or "page").strip().strip("/")[:80]
+    prefix = raw_tier_prefix(framework_slug, run_id, tier) if run_id and tier else raw_prefix(framework_slug, run_id or None)
+    return f"{prefix}pages/{idx:04d}-{safe_slug}.md"
+
+
+def agentic_input_key(framework_slug: str, run_id: str, idx: int, slug: str) -> str:
+    safe_slug = (slug or "page").strip().strip("/")[:80]
+    return f"{agentic_prefix(framework_slug, run_id)}inputs/pages/{idx:04d}-{safe_slug}.md"
+
+
+def raw_capture_key(framework_slug: str, run_id: str | None = None, tier: str = "") -> str:
+    if run_id and tier:
+        return f"{raw_tier_prefix(framework_slug, run_id, tier)}capture.json"
+    if run_id:
+        return f"{raw_prefix(framework_slug, run_id)}capture.json"
+    return f"{raw_prefix(framework_slug)}capture-latest.json"
+
+
+def raw_file_key(framework_slug: str, name: str, run_id: str = "", tier: str = "") -> str:
     safe_name = (name or "file").strip().strip("/").replace("..", "")[:120]
-    return f"{raw_prefix(framework_slug)}files/{safe_name}"
+    prefix = raw_tier_prefix(framework_slug, run_id, tier) if run_id and tier else raw_prefix(framework_slug, run_id or None)
+    return f"{prefix}files/{safe_name}"
 
 
-def vault_prefix(framework_slug: str) -> str:
-    return f"synth-vault/{framework_slug.strip().strip('/')}/"
+def agentic_prefix(framework_slug: str, run_id: str) -> str:
+    return f"{ingestion_prefix(framework_slug)}agentic/{run_id}/"
 
 
-def vault_manifest_key(framework_slug: str, idx: int, slug: str) -> str:
+def agentic_page_key(framework_slug: str, run_id: str, idx: int, slug: str) -> str:
     safe_slug = (slug or "page").strip().strip("/")[:80]
-    return f"{vault_prefix(framework_slug)}pages/{idx:04d}-{safe_slug}.vault.json"
+    return f"{agentic_prefix(framework_slug, run_id)}pages/{idx:04d}-{safe_slug}.md"
 
 
-def vault_sentinelized_key(framework_slug: str, idx: int, slug: str) -> str:
+def agentic_assessment_key(framework_slug: str, run_id: str, idx: int) -> str:
+    return f"{agentic_prefix(framework_slug, run_id)}assessments/{idx:04d}.json"
+
+
+def agentic_audit_key(framework_slug: str, run_id: str, idx: int) -> str:
+    return f"{agentic_prefix(framework_slug, run_id)}audit/{idx:04d}.json"
+
+
+def agentic_manifest_key(framework_slug: str, run_id: str) -> str:
+    return f"{agentic_prefix(framework_slug, run_id)}manifest.json"
+
+
+def vault_prefix(framework_slug: str, run_id: str = "") -> str:
+    if run_id:
+        return f"{agentic_prefix(framework_slug, run_id)}vault/"
+    return f"{ingestion_prefix(framework_slug)}vault/"
+
+
+def vault_manifest_key(framework_slug: str, idx: int, slug: str, run_id: str = "") -> str:
     safe_slug = (slug or "page").strip().strip("/")[:80]
-    return f"{vault_prefix(framework_slug)}pages/{idx:04d}-{safe_slug}.sentinelized.md"
+    return f"{vault_prefix(framework_slug, run_id)}pages/{idx:04d}-{safe_slug}.vault.json"
+
+
+def vault_sentinelized_key(framework_slug: str, idx: int, slug: str, run_id: str = "") -> str:
+    safe_slug = (slug or "page").strip().strip("/")[:80]
+    return f"{vault_prefix(framework_slug, run_id)}pages/{idx:04d}-{safe_slug}.sentinelized.md"
+
+
+def run_id_from_page_key(page_key: str) -> str:
+    """Extract the immutable agentic run segment from a published page key."""
+    parts = page_key.strip("/").split("/")
+    for index in range(len(parts) - 2):
+        if parts[index:index + 2] == ["ingestion", "agentic"]:
+            return parts[index + 2]
+    return ""
 
 
 def live_manifest_key(run_id: str) -> str:
     return f"coelhonexus:dd:runs:{run_id}:manifest"
 
 
-# Content-addressed (`{sha256[:16]}.{ext}`) → auto-dedup across pages + reingest.
 def artifact_key(framework_slug: str, name: str) -> str:
     safe_name = (name or "").strip().strip("/").replace("..", "")[:120]
-    return f"{framework_prefix(framework_slug)}artifacts/{safe_name}"
+    return f"{ingestion_prefix(framework_slug)}artifacts/{safe_name}"
 
 
 def snapshot_prefix(framework_slug: str, ts: str) -> str:
-    return f"{framework_prefix(framework_slug)}{params.SNAPSHOTS_SUBDIR}{ts}/"
-
-
-def backup_root(framework_slug: str) -> str:
-    """Where the copy a re-ingestion replaces waits until the new one is finished (see service.stash_old_copy)."""
-    return f"ingestion-backup/{framework_slug.strip().strip('/')}/"
-
-
-def backup_prefix(framework_slug: str, backup_id: str) -> str:
-    return f"{backup_root(framework_slug)}{backup_id}/"
+    return f"{ingestion_prefix(framework_slug)}{params.SNAPSHOTS_SUBDIR}{ts}/"
 
 
 def framework_parts(framework_slug: str) -> tuple[tuple[str, str], ...]:
-    """The three places a framework's stored copy lives, as `(part, prefix)`: the pages and manifest, the raw copies, the citation
-    vaults. A backup keeps each under its part's name."""
-    return (
-        ("pages", framework_prefix(framework_slug)),
-        ("raw", raw_prefix(framework_slug)),
-        ("vault", vault_prefix(framework_slug)),
-    )
+    return (("ingestion", ingestion_prefix(framework_slug)),)

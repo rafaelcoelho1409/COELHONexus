@@ -1,7 +1,7 @@
 """Read bounded front matter and persist evidence-grounded book metadata."""
 from __future__ import annotations
 import domains
-from .... import agents, graphs
+from .... import agents, graphs, skills
 
 import hashlib
 import inspect
@@ -74,7 +74,9 @@ async def normalize_metadata(
             response = await normalizer.ainvoke({"messages": [{
                 "role": "user",
                 "content": json.dumps(payload, ensure_ascii = False),
-            }]}, config = {"callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()]})
+            }], "files": skills.service.files_for("metadata_normalizer")}, config = {
+                "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
+            })
         if not isinstance(response, dict) or "structured_response" not in response:
             raise ValueError("metadata normalizer returned no structured BookMetadataProposal")
         proposal = agents.schemas.BookMetadataProposal.model_validate(response["structured_response"])
@@ -101,7 +103,7 @@ async def normalize_metadata(
     except Exception as error:
         errors.append(str(error)[:500])
 
-    fallback_title = _fallback_title(source_metadata)
+    fallback_title = _fallback_title(source_metadata, sources)
     confident = (
         proposal_validated
         and proposal is not None
@@ -160,13 +162,41 @@ def _metadata_values(value: object) -> list[str]:
     return []
 
 
-def _fallback_title(metadata: dict[str, object]) -> str:
-    for key in ("title", "filename", "source_filename"):
-        value = metadata.get(key)
-        if isinstance(value, str) and value.strip():
-            title = PurePath(value.strip()).stem
-            return re.sub(r"\s+", " ", re.sub(r"[_-]+", " ", title)).strip()
-    return "Untitled book"
+def _fallback_title(metadata: dict[str, object], sources: list[dict[str, Any]]) -> str:
+    filename = metadata.get("filename") or metadata.get("source_filename")
+    filename_title = _filename_title(filename)
+    supplied_title = metadata.get("title")
+    if isinstance(supplied_title, str) and supplied_title.strip():
+        title = " ".join(supplied_title.split())
+        if not _matches_filename_label(title, filename_title):
+            return title
+
+    for source in sources:
+        if source.get("page_number") != 1:
+            continue
+        markdown = source.get("markdown")
+        if not isinstance(markdown, str):
+            continue
+        heading = re.search(r"(?m)^\s{0,3}#{1,2}\s+([^\n]{3,180})\s*#*\s*$", markdown)
+        if heading:
+            candidate = " ".join(heading.group(1).split())
+            if candidate.casefold() not in {"introduction", "contents", "table of contents", "preface"}:
+                return candidate
+
+    return filename_title or "Untitled book"
+
+
+def _filename_title(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    title = PurePath(value.strip().replace("\\", "/")).stem
+    return re.sub(r"\s+", " ", title.replace("_", " ")).strip()
+
+
+def _matches_filename_label(value: str, filename_title: str) -> bool:
+    normalize = lambda text: re.sub(r"[^\w]+", " ", text).casefold().split()
+    title_without_extension = PurePath(value.replace("\\", "/")).stem
+    return bool(filename_title) and normalize(title_without_extension) == normalize(filename_title)
 
 
 def _metadata_value_is_grounded(value: str, evidence_text: str) -> bool:

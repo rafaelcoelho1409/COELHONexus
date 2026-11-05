@@ -446,7 +446,7 @@ async def run(
     # Everything the crawl fetches — each page, the browser's rendering of those it could not read, Sphinx's inventory — is kept as it
     # comes; so are the decisions it took from the network (which pages, in what order, which anchors).
     writer = domains.dd.ingestion.capture.service.Writer(
-        store.minio, framework_slug, params.TIER_KIND, url,
+        store.minio, framework_slug, params.TIER_KIND, url, run_id=store.run_id,
         capture_params = {
             "path_filter": path_filter, "code_language": code_language, "language": language, "framework_name": framework_name or "",
         },

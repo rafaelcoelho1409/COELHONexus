@@ -197,7 +197,7 @@ async def list_recent_planners() -> dict:
 
 @router.delete("/{slug}/wipe")
 async def wipe_planner(slug: str) -> dict:
-    """Wipes MinIO planner/{slug}/, Postgres checkpoints, Redis lock +
+    """Wipes MinIO dd/{slug}/planner/, Postgres checkpoints, Redis lock +
     active-run registry. Drops the lock so the next Start Planner click
     isn't rejected by a stale lock that survived the wipe."""
     if not slug or "/" in slug:
@@ -208,7 +208,7 @@ async def wipe_planner(slug: str) -> dict:
 
     minio = infra.minio.service.get_storage()
     try:
-        n_minio = await minio.delete_prefix(f"planner/{slug}/")
+        n_minio = await minio.delete_prefix(domains.dd.planner.keys.minio_prefix(slug))
     except Exception as e:
         logger.warning(f"[planner-wipe] MinIO delete failed for {slug!r}: {e}")
         n_minio = -1

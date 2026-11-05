@@ -6,6 +6,7 @@ from . import domain, params
 import logging
 import time
 from urllib.parse import urlparse
+import uuid
 
 import httpx
 
@@ -50,6 +51,7 @@ async def _capture(
     nav_url: str | None,
     nav: httpx.Response | None,
     path_filter: dict | None,
+    run_id: str | None = None,
 ) -> domains.dd.ingestion.capture.entities.Capture:
     """Keep what was fetched exactly as it came (the bundle — each part of a paginated one — and the index when there is one) under
     `ingestion/raw/`: the input every transform of this bundle starts from, so changing the transform never needs the site again."""
@@ -69,7 +71,7 @@ async def _capture(
         ))
         texts[params.NAV_FILE] = nav.text
     kept = raw.domain.new_capture(
-        framework_slug, params.TIER_KIND, url, files, capture_params = {"path_filter": path_filter, "nav_url": nav_url},
+        framework_slug, params.TIER_KIND, url, files, capture_params = {"path_filter": path_filter, "nav_url": nav_url, "run_id": run_id or uuid.uuid4().hex},
     )
     await raw.service.save(minio, kept, texts)
     return kept
@@ -105,6 +107,7 @@ async def capture(
     framework_slug: str,
     path_filter: dict | None = None,
     nav_url: str | None = None,
+    run_id: str | None = None,
 ) -> domains.dd.ingestion.capture.entities.Capture:
     """Fetch the bundle (and the site's index) and keep it as it came — no page is made, nothing is stored but the capture: what the
     A/B harness starts a transform from. `run` does the same on the way to making pages. Raises TierUnavailable for an unusable URL."""
@@ -121,7 +124,7 @@ async def capture(
             raise domains.dd.ingestion.tiers.errors.TierUnavailable(f"{url}: {gap}")
         nav = await _fetch_nav(client, nav_url) if nav_url else None
         return await _capture(
-            minio, framework_slug = framework_slug, url = url, parts = parts, nav_url = nav_url, nav = nav, path_filter = path_filter,
+            minio, framework_slug = framework_slug, url = url, parts = parts, nav_url = nav_url, nav = nav, path_filter = path_filter, run_id = run_id,
         )
 
 
@@ -230,6 +233,7 @@ async def run(
         nav = await _fetch_nav(client, nav_url) if nav_url and will_split else None
         await _capture(
             store.minio, framework_slug = framework_slug, url = url, parts = parts, nav_url = nav_url, nav = nav, path_filter = path_filter,
+            run_id = store.run_id,
         )
         if nav_url and will_split:
             store.nav_index = domain.nav_index(nav.text if nav is not None else "", nav_url)

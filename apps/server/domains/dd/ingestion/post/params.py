@@ -116,6 +116,7 @@ UNKNOWN_TIER = "unknown"
 # The `kind` of the summary `apply_to_store` returns (what the run's progress records).
 SUMMARY_KIND_SPLIT = "split"
 SUMMARY_KIND_DEDUP = "dedup"
+SUMMARY_KIND_PREPARE = "prepare"
 
 # 32 amortizes latency without overwhelming the MinIO pool (serial was 75s/1500 pages).
 READ_CONCURRENCY = 32

@@ -13,7 +13,7 @@ import { Button } from "@/shared/ui/button";
 import { fmtBytes } from "../domain/format";
 import { explorerTierValues, filterEntries, groupEntries, ROOT_GROUP } from "../domain/ingestion";
 import type { Manifest } from "../entities";
-import { usePageBody } from "../hooks/use-dd-data";
+import { usePageBody, useRunPageBody } from "../hooks/use-dd-data";
 import { FileDrawer } from "./file-drawer";
 
 const PREVIEW_MODES = [
@@ -21,7 +21,15 @@ const PREVIEW_MODES = [
   { id: "source", label: "Source" },
 ] as const;
 
-export function Explorer({ slug, manifest }: { slug: string; manifest: Manifest | null }) {
+export function Explorer({
+  slug,
+  manifest,
+  runId = null,
+}: {
+  slug: string;
+  manifest: Manifest | null;
+  runId?: string | null;
+}) {
   const [previewMode, setPreviewMode] = useState<(typeof PREVIEW_MODES)[number]["id"]>("rendered");
   const [query, setQuery] = useState("");
   const [tiers, setTiers] = useState<ReadonlySet<string>>(new Set());
@@ -43,7 +51,10 @@ export function Explorer({ slug, manifest }: { slug: string; manifest: Manifest 
     return filtered[0]?.idx ?? null;
   }, [entries, filtered, selectedIdx]);
 
-  const page = usePageBody(slug, selected);
+  const selectedEntry = entries.find((entry) => entry.idx === selected);
+  const canonicalPage = usePageBody(runId ? null : slug, selected);
+  const runPage = useRunPageBody(runId, selected, selectedEntry?.key ?? null);
+  const page = runId ? runPage : canonicalPage;
 
   const onRootKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === "/" && document.activeElement !== searchRef.current) {
@@ -218,6 +229,7 @@ export function Explorer({ slug, manifest }: { slug: string; manifest: Manifest 
       {drawerPosition !== null && drawerPosition >= 0 ? (
         <FileDrawer
           slug={slug}
+          runId={runId}
           entries={entries}
           position={drawerPosition}
           onMove={setDrawerPosition}

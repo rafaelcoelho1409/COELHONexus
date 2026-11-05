@@ -27,7 +27,6 @@ export function IngestionStage() {
     <div className="min-w-0">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-card p-2">
         <UploadDropzone onOpen={open} autoChain={autoChain} />
-        <LibraryPicker selected={bookId} onOpen={open} onRefresh={refresh} autoChain={autoChain} />
         <label className="flex min-h-9 items-center gap-2 px-2 text-xs text-muted-foreground">
           <input
             type="checkbox"
@@ -37,6 +36,7 @@ export function IngestionStage() {
           />
           Run Agentic AI after extraction
         </label>
+        <LibraryPicker selected={bookId} onOpen={open} onRefresh={refresh} autoChain={autoChain} />
       </div>
       <div className="min-w-0">
         {bookId ? (

@@ -21,10 +21,12 @@ type EventState = {
   status: AgenticRunStatus["status"];
   progress: AgenticProgress;
   error: string | null;
+  cancelRequested: boolean;
 };
 
 const parseEvent = (data: unknown): AgenticEvent => agenticEventSchema.parse(data);
-const terminalEvent = (event: AgenticEvent) => event.kind === "run_done" || event.kind === "run_failed";
+const terminalEvent = (event: AgenticEvent) =>
+  event.kind === "run_done" || event.kind === "run_failed" || event.kind === "run_cancelled";
 
 export type AgenticRunController = {
   run: AgenticRunStatus | null;
@@ -33,7 +35,9 @@ export type AgenticRunController = {
   streaming: boolean;
   streamStatus: ReturnType<typeof useEventStream<AgenticEvent>>["status"];
   error: string | null;
+  cancelRequested: boolean;
   restart: () => void;
+  markCanceling: () => void;
 };
 
 export function useAgenticRun(bookId: string, snapshot: BookSnapshot): AgenticRunController {
@@ -48,7 +52,18 @@ export function useAgenticRun(bookId: string, snapshot: BookSnapshot): AgenticRu
       status: "queued",
       progress: initial.progress,
       error: null,
+      cancelRequested: false,
     });
+  }, [initial]);
+  const markCanceling = useCallback(() => {
+    if (!initial) return;
+    setEventState((previous) => ({
+      runId: initial.agentic_run_id,
+      status: previous?.runId === initial.agentic_run_id ? previous.status : initial.status,
+      progress: previous?.runId === initial.agentic_run_id ? previous.progress : initial.progress,
+      error: previous?.runId === initial.agentic_run_id ? previous.error : initial.error,
+      cancelRequested: true,
+    }));
   }, [initial]);
   const activeEventState = eventState?.runId === runId ? eventState : null;
   const status = activeEventState?.status ?? initial?.status ?? null;
@@ -85,25 +100,38 @@ export function useAgenticRun(bookId: string, snapshot: BookSnapshot): AgenticRu
                 active_repair_pages: [],
               },
               error: null,
+              cancelRequested: false,
             };
       const nextStatus =
         event.kind === "run_done"
           ? "done"
           : event.kind === "run_failed"
             ? "failed"
+            : event.kind === "run_cancelled"
+              ? "cancelled"
             : event.kind === "run_queued"
               ? "queued"
-              : "running";
+              : event.kind === "run_cancelling"
+                ? current.status
+                : "running";
       return {
         ...current,
         status: nextStatus,
         progress: event.progress ?? current.progress,
+        cancelRequested:
+          event.kind === "run_cancelling"
+            ? true
+            : terminalEvent(event) || event.kind === "run_queued"
+              ? false
+              : current.cancelRequested,
         error:
           event.kind === "run_queued"
             ? null
             : event.kind === "run_failed"
               ? (event.error ?? "Agentic processing failed.")
-              : current.error,
+              : event.kind === "run_cancelled"
+                ? null
+                : current.error,
       };
     });
 
@@ -128,7 +156,9 @@ export function useAgenticRun(bookId: string, snapshot: BookSnapshot): AgenticRu
     streaming,
     streamStatus,
     error: activeEventState ? activeEventState.error : (initial?.error ?? null),
+    cancelRequested: activeEventState?.cancelRequested ?? false,
     restart,
+    markCanceling,
   };
 }
 

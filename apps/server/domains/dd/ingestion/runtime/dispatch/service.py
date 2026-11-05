@@ -102,12 +102,12 @@ async def _cancel_watcher(
         return
 
 
-async def _cleanup_framework(minio, framework_slug: str) -> int:
-    """Wipe `ingestion/{slug}/` so partial corpora aren't reused."""
+async def _cleanup_run_staging(minio, framework_slug: str, run_id: str) -> int:
+    """Delete only temporary assembly objects; raw inputs and agentic candidates are immutable run artifacts."""
     try:
-        n = await minio.delete_prefix(domains.dd.ingestion.storage.keys.framework_prefix(framework_slug))
+        n = await minio.delete_prefix(domains.dd.ingestion.storage.keys.stage_prefix(framework_slug, run_id))
         logger.info(
-            f"[dispatch] cleanup {framework_slug}: deleted {n} MinIO objects"
+            f"[dispatch] cleanup staging {framework_slug}/{run_id}: deleted {n} MinIO objects"
         )
         return n
     except Exception as e:
@@ -115,29 +115,12 @@ async def _cleanup_framework(minio, framework_slug: str) -> int:
         return 0
 
 
-async def _restore_old_copy(minio, slug: str) -> None:
-    """After a failed or cancelled run: the copy it replaced (set aside when it started) goes back. Never raises — it runs in an
-    error path and must not hide the error; a copy that cannot be put back is logged."""
-    storage = domains.dd.ingestion.storage.service
-    try:
-        backup_id = await storage.latest_backup(minio, slug)
-        if backup_id is None:
-            return
-        n = await storage.restore_old_copy(minio, slug, backup_id)
-        if n:
-            await storage.drop_old_copy(minio, slug)
-        logger.info(f"[dispatch] {slug}: the run did not finish — the previous copy is back ({n} objects)")
-    except Exception as e:  # noqa: BLE001 — runs in an error path and must not hide the error
-        logger.warning(f"[dispatch] {slug}: could not put the previous copy back: {type(e).__name__}: {e}")
-
-
 async def reserve_run(slug: str, refresh: bool) -> dict:
     """Single-flight gate for starting an ingestion of `slug`. Returns a terminal response — `locked` (another
     ingestion is running, this slug's lock is held, or a concurrent start won the lock) or `cached` (a manifest
     exists and no refresh was asked) — or `{"status": "reserved", "run_id": ...}` with the slug's lock held and the
     cancel flag cleared: the caller enqueues the run and calls `release_run` if that fails. A refresh does not touch the
-    stored copy here: the run itself sets the old copy aside when it starts (`storage.service.stash_old_copy`) and puts it
-    back if it fails or is cancelled."""
+    stored copy here: each run writes immutable raw/agentic artifacts and replaces the canonical manifest only after publish."""
     progress = domains.dd.ingestion.runtime.progress.service
     async with infra.redis.service.client() as r:
         other = await progress.find_other_running(r, slug)
@@ -197,6 +180,7 @@ async def run(run_id: str, slug: str) -> dict:
         attributes = {**domain.run_attributes(run_id, slug), infra.langfuse.keys.KEEP: True},
     ):
         result = await _run_inner(run_id, slug)
+        await domains.settings.llm_counter.service.snapshot("dd", run_id)
     domains.dd.ingestion.observability.service.record_ingestion_run(
         framework = slug,
         duration_s = max(asyncio.get_running_loop().time() - t0, 0.0),
@@ -240,12 +224,6 @@ async def _run_inner(run_id: str, slug: str) -> dict:
 
         await progress.raise_if_cancelled()
 
-        # A re-ingestion sets the copy it replaces aside (and empties the slug's prefixes) before it writes anything; the copy
-        # comes back if the run fails or is cancelled, and is dropped once the new one is finalized.
-        backup_id = await domains.dd.ingestion.storage.service.stash_old_copy(minio, slug)
-        if backup_id:
-            logger.info(f"[dispatch] {slug}: the previous copy is set aside ({backup_id}) until this run is done")
-
         async def _chain_tier(kind: str, url: str, tier_progress) -> None:
             await run_tier(kind, url, entry = entry, slug = slug, progress = tier_progress, store = store)
 
@@ -261,18 +239,25 @@ async def _run_inner(run_id: str, slug: str) -> dict:
 
         await progress.raise_if_cancelled()
 
+        await progress.complete_stage(
+            "extraction",
+            current = len(store.manifest),
+            total = len(store.manifest),
+        )
         await progress.start(tier = "post", total = 0)
 
-        post_summary = await domains.dd.ingestion.post.service.apply_to_store(store)
+        post_summary = await domains.dd.ingestion.post.service.prepare_for_agentic(store)
         await progress.record_post(**domain.post_record(base_result["tier_kind"], post_summary))
 
         await progress.raise_if_cancelled()
 
-        # split_monolith/dedup_pages rewrite the manifest with fresh idx/keys
-        # (post.service.apply_to_store) — the vaults Store.add_page built at
-        # fetch time are keyed off the PRE-split idx/slug and are now orphaned;
-        # every new entry has none. Idempotent (skips entries that already
-        # have both vault blobs), so this is cheap even when nothing changed.
+        ai_result = await domains.dd.ingestion.ai.service.run_ingestion_agentic(
+            store,
+            progress=progress,
+            checkpointer=infra.postgres.service.get_checkpointer(),
+        )
+
+        # Vaults are derived from the final agentic page version and live beneath that agentic run.
         # Own tier + real total/current — on a large framework (400+ pages)
         # this was previously a single multi-second block with the progress
         # UI stuck showing "post" and no counter moving at all.
@@ -284,6 +269,7 @@ async def _run_inner(run_id: str, slug: str) -> dict:
         try:
             await domains.dd.synth.nodes.backfill.service.backfill_vaults_for_framework(
                 slug, on_progress = _on_backfill_progress,
+                page_keys = [entry.key for entry in store.manifest],
             )
         except Exception as e:
             logger.warning(
@@ -295,13 +281,11 @@ async def _run_inner(run_id: str, slug: str) -> dict:
 
         await store.finalize(extra = domain.finalize_extra(entry, base_result, run_id, getattr(store, "index_summary", "")))
 
+        await _cleanup_run_staging(minio, slug, run_id)
+
         await progress.finish(status = "done")
 
-        try:
-            await domains.dd.ingestion.storage.service.drop_old_copy(minio, slug)
-        except Exception as e:  # noqa: BLE001 — the run is done; a backup that cannot be dropped is only logged
-            logger.warning(f"[dispatch] {slug}: could not drop the previous copy's backup: {type(e).__name__}: {e}")
-
+        base_result["agentic"] = ai_result
         return domain.done_result(base_result, store.manifest, post_summary)
 
     except (domains.dd.ingestion.runtime.progress.errors.IngestCancelled, asyncio.CancelledError):
@@ -312,24 +296,14 @@ async def _run_inner(run_id: str, slug: str) -> dict:
             await watcher_task
         except (asyncio.CancelledError, Exception):
             pass
-        # Two-pass cleanup: in-flight MinIO writes complete after cancel but before gather unwinds; settle gap lets them finish, second sweep catches stragglers.
-        n1 = await _cleanup_framework(minio, slug)
-        await asyncio.sleep(params.CLEANUP_SETTLE_S)
-        n2 = await _cleanup_framework(minio, slug)
-        if n2 > 0:
-            logger.info(
-                f"[dispatch] {slug}: cleanup pass 2 caught {n2} straggler "
-                f"objects (pass 1 deleted {n1})"
-            )
-        await _restore_old_copy(minio, slug)
+        await _cleanup_run_staging(minio, slug, run_id)
         await progress.finish(status = "cancelled")
         return domain.cancelled_result(base_result)
 
     except Exception as e:
         logger.exception(f"[dispatch] {slug}: failed")
-        # Wipe partial state so the next cached-check sees nothing — then the previous copy, if there was one, goes back.
-        await _cleanup_framework(minio, slug)
-        await _restore_old_copy(minio, slug)
+        # The previous canonical manifest remains active. Raw and partial agentic artifacts stay versioned for diagnosis/retry.
+        await _cleanup_run_staging(minio, slug, run_id)
         await progress.finish(status = "failed", error = domain.error_text(e))
         return domain.failed_result(base_result, e)
 

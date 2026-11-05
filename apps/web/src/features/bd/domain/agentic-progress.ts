@@ -10,6 +10,16 @@ export const AGENTIC_NODES = [
 
 export type AgenticNodeStatus = "pending" | "running" | "done" | "failed";
 
+export const EMPTY_AGENTIC_PROGRESS: AgenticProgress = {
+  current_node: null,
+  node_status: {},
+  audited_pages: [],
+  audit_warning_pages: [],
+  processed_pages: [],
+  active_audit_pages: [],
+  active_repair_pages: [],
+};
+
 export type ChapterProgress = ChapterRange & { processed: number; total: number };
 
 export function chapterProgress(
@@ -62,6 +72,7 @@ export function agenticNodeCaption(
   total: number,
   unitPlural = "pages",
 ): string | null {
+  if (total <= 0) return null;
   if (nodeId === "audit_batch") {
     const done = progress.audited_pages.length;
     const active = progress.active_audit_pages.length;

@@ -17,11 +17,21 @@ import {
   postBdIngestionBookIdCancel,
 } from "@/shared/api";
 
-import { resumeAgenticRun, startAgenticRun, uploadBook } from "../api";
+import {
+  cancelAgenticRun,
+  resumeAgenticRun,
+  startAgenticRun,
+  uploadBook,
+  wipeAgenticRun,
+  wipeExtraction,
+} from "../api";
 import { isLive, libraryHasLiveBook, toBookStatus } from "../domain/books";
 import {
   agenticRunStatusSchema,
+  type AgenticRunCancelResponse,
+  type AgenticRunWipeResponse,
   type BookSnapshot,
+  type ExtractionWipeResponse,
   pageBodySchema,
   type StartResponse,
   startResponseSchema,
@@ -162,6 +172,41 @@ export function useResumeAgenticRun() {
       resumeAgenticRun(bookId, agenticRunId),
     onSuccess: (_result, { bookId }) => refresh(bookId),
     onError: (_error, { bookId }) => refresh(bookId),
+  });
+}
+
+export function useCancelAgenticRun() {
+  const refresh = useRefreshBook();
+  return useMutation<
+    AgenticRunCancelResponse,
+    unknown,
+    { bookId: string; agenticRunId: string }
+  >({
+    mutationFn: ({ bookId, agenticRunId }) => cancelAgenticRun(bookId, agenticRunId),
+    onSuccess: (_result, { bookId }) => refresh(bookId),
+    onError: (_error, { bookId }) => refresh(bookId),
+  });
+}
+
+export function useWipeAgenticRun() {
+  const refresh = useRefreshBook();
+  return useMutation<
+    AgenticRunWipeResponse,
+    unknown,
+    { bookId: string; agenticRunId: string }
+  >({
+    mutationFn: ({ bookId, agenticRunId }) => wipeAgenticRun(bookId, agenticRunId),
+    onSuccess: (_result, { bookId }) => refresh(bookId),
+    onError: (_error, { bookId }) => refresh(bookId),
+  });
+}
+
+export function useWipeExtraction() {
+  const refresh = useRefreshBook();
+  return useMutation<ExtractionWipeResponse, unknown, string>({
+    mutationFn: wipeExtraction,
+    onSuccess: (_result, bookId) => refresh(bookId),
+    onError: (_error, bookId) => refresh(bookId),
   });
 }
 

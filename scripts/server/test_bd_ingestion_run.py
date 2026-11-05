@@ -35,6 +35,7 @@ os.environ.update(REDIS_HOST="127.0.0.1", REDIS_PORT=str(PORT), REDIS_PASSWORD="
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
 import domains
+import domains.bd.ingestion.ai  # the API router loads this; the start gate's per-book mutation lock key lives here
 import infra
 
 R = infra.redis.service

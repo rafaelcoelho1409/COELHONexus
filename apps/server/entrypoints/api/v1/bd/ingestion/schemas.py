@@ -88,6 +88,10 @@ class AgenticRunStatus(BaseModel):
     status: Literal["queued", "running", "done", "failed", "cancelled"]
     expected_page_count: int
     published_page_count: int
+    quality_status: Literal["complete", "complete_with_review"] | None = None
+    delivered_page_count: int = 0
+    discarded_blank_page_count: int = 0
+    review_page_count: int = 0
     progress: AgenticProgress
     created_at: float
     updated_at: float
@@ -130,6 +134,25 @@ class PageBody(BaseModel):
 class CancelResponse(BaseModel):
     book_id: str
     status: str
+
+
+class AgenticRunCancelResponse(BaseModel):
+    book_id: str
+    agentic_run_id: str
+    status: str
+
+
+class AgenticRunWipeResponse(BaseModel):
+    book_id: str
+    agentic_run_id: str
+    wiped: bool
+    objects_deleted: int
+
+
+class ExtractionWipeResponse(BaseModel):
+    book_id: str
+    wiped: bool
+    objects_deleted: int
 
 
 class DeleteResponse(BaseModel):

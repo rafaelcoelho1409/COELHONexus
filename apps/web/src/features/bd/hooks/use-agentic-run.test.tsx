@@ -39,6 +39,10 @@ function snapshot(status: "failed" | "running", progress = emptyProgress): BookS
       status,
       expected_page_count: 275,
       published_page_count: 0,
+      quality_status: null,
+      delivered_page_count: 0,
+      discarded_blank_page_count: 0,
+      review_page_count: 0,
       progress,
       created_at: 1,
       updated_at: status === "failed" ? 2 : 3,
@@ -98,5 +102,31 @@ describe("useAgenticRun retry state", () => {
       } satisfies AgenticEvent);
     });
     expect(result.current.status).toBe("running");
+  });
+
+  it("shows a requested stop until the run reports its cancelled terminal state", () => {
+    const { result } = renderHook(() => useAgenticRun("book", snapshot("running")));
+
+    act(() => {
+      streamState.onEvent?.({
+        kind: "run_cancelling",
+        status: "cancelling",
+        progress: emptyProgress,
+      } satisfies AgenticEvent);
+    });
+    expect(result.current.status).toBe("running");
+    expect(result.current.cancelRequested).toBe(true);
+    expect(result.current.streaming).toBe(true);
+
+    act(() => {
+      streamState.onEvent?.({
+        kind: "run_cancelled",
+        status: "cancelled",
+        progress: emptyProgress,
+      } satisfies AgenticEvent);
+    });
+    expect(result.current.status).toBe("cancelled");
+    expect(result.current.cancelRequested).toBe(false);
+    expect(result.current.streaming).toBe(false);
   });
 });

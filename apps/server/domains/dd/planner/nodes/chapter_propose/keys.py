@@ -5,8 +5,8 @@ from . import params
 
 
 def versioned_key(slug: str, manifest: str) -> str:
-    return f"{params.BLOB_PREFIX}/{slug}/chapter_propose/{manifest}.json"
+    return f"dd/{slug}/planner/chapter_propose/{manifest}.json"
 
 
 def latest_key(slug: str) -> str:
-    return f"{params.BLOB_PREFIX}/{slug}/chapter_propose-latest.json"
+    return f"dd/{slug}/planner/chapter_propose-latest.json"

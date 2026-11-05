@@ -63,9 +63,7 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
         cid = (ch or {}).get("id")
         if not cid:
             continue
-        render_key = (
-            f"synth/{slug}/{cid}/render-latest.json"
-        )
+        render_key = domains.dd.synth.keys.chapter_render_latest_key(slug, cid)
         rendered = await minio.exists(render_key)
         entry: dict = {
             "id":         cid,
@@ -129,7 +127,7 @@ async def get_study_artifact(
                 f"{sorted(params.VALID_ARTIFACTS)}"
             ),
         )
-    key = f"synth/{slug}/{chapter_id}/{artifact_name}"
+    key = domains.dd.synth.keys.chapter_artifact_key(slug, chapter_id, artifact_name)
     minio = infra.minio.service.get_storage()
     if not await minio.exists(key):
         raise HTTPException(
@@ -462,7 +460,7 @@ async def synth_history(thread_id: str) -> dict:
 
 @router.delete("/{slug}/wipe")
 async def wipe_synth(slug: str, chapter_id: str | None = Query(default=None)) -> dict:
-    """Wipes MinIO synth/{slug}/, Postgres checkpoints for synth+study
+    """Wipes MinIO dd/{slug}/synth/, Postgres checkpoints for synth+study
     threads, Redis SSE snapshots + lock. Without the Redis sweep a wiped
     slug "comes back from the dead" via the cached study SSE snapshot.
     With `chapter_id`, wipes only that chapter's MinIO outputs (see
@@ -477,7 +475,7 @@ async def wipe_synth(slug: str, chapter_id: str | None = Query(default=None)) ->
 
     minio = infra.minio.service.get_storage()
     try:
-        n_minio = await minio.delete_prefix(f"synth/{slug}/")
+        n_minio = await minio.delete_prefix(domains.dd.synth.keys.minio_prefix(slug))
     except Exception as e:
         logger.warning(f"[synth-wipe] MinIO delete failed for {slug!r}: {e}")
         n_minio = -1

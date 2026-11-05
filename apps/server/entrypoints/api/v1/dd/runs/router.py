@@ -78,6 +78,12 @@ async def get_url_records(run_id: str) -> list[dict]:
         return await domains.dd.ingestion.runtime.progress.service.read_url_records(r, run_id)
 
 
+@router.get("/{run_id}/llm-counters")
+async def get_llm_counters(run_id: str) -> dict:
+    """Live ingestion usage, with the persisted snapshot as a fallback after Redis expires."""
+    return await domains.settings.llm_counter.service.read_counters("dd", run_id)
+
+
 @router.get("/{run_id}/pages/{idx}")
 async def get_page(run_id: str, idx: int) -> dict:
     async with infra.redis.service.client() as r:

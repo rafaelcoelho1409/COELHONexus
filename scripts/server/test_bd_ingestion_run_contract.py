@@ -79,6 +79,9 @@ def manifest(*, status=schemas.AgenticRunStatus.QUEUED, pages=None, **overrides)
         "book_metadata_sha256": "f" * 64 if status == schemas.AgenticRunStatus.DONE else None,
         "quality_report_key": keys.agentic_quality_report_key(BOOK_ID, AGENTIC_RUN_ID),
         "quality_report_sha256": "1" * 64 if status == schemas.AgenticRunStatus.DONE else None,
+        "quality_status": "complete_with_review" if status == schemas.AgenticRunStatus.DONE else None,
+        "delivered_page_count": 2 if status == schemas.AgenticRunStatus.DONE else 0,
+        "review_page_count": 1 if status == schemas.AgenticRunStatus.DONE else 0,
         "created_at": 100.0,
         "updated_at": 100.0,
     }
@@ -116,7 +119,7 @@ check(
 queued = manifest(pages = [page_artifact(1), page_artifact(2)])
 check("queued manifests can pin source hashes before outputs are generated",
       queued.pages[0].source_sha256, SOURCE_SHA256)
-check("manifest serialization carries a schema version", queued.model_dump(mode = "json")["schema_version"], "1.0")
+check("new manifests carry the current schema version", queued.model_dump(mode = "json")["schema_version"], "1.1")
 
 completed = manifest(
     status = schemas.AgenticRunStatus.DONE,
@@ -132,6 +135,22 @@ check("completed manifests preserve review-required pages", completed.pages[1].s
 check("completed manifest round-trips as JSON", schemas.IngestionAIRunManifest.model_validate_json(
     completed.model_dump_json(),
 ).agentic_run_id, AGENTIC_RUN_ID)
+check("completed manifest reports the candidate's human-review status", completed.quality_status,
+      "complete_with_review")
+legacy_completed = manifest(
+    status = schemas.AgenticRunStatus.DONE,
+    schema_version = "1.0",
+    quality_status = None,
+    delivered_page_count = 0,
+    review_page_count = 0,
+    pages = [
+        page_artifact(1, schemas.AgenticPageStatus.DONE),
+        page_artifact(2, schemas.AgenticPageStatus.REVIEW_REQUIRED),
+    ],
+    updated_at = 120.0,
+    finished_at = 120.0,
+)
+check("existing 1.0 completed manifests remain readable", legacy_completed.schema_version, "1.0")
 
 rejects(
     "completed manifests require every physical page",

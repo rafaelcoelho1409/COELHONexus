@@ -3,8 +3,8 @@ sitemaps gzipped), a note of the requests that gave nothing, the decisions taken
 
     cd apps/server && .venv/bin/python ../../scripts/server/test_ingestion_capture.py
 
-An in-process HTTP transport stands in for the sites, in-memory fakes for MinIO. Tier 1's capture is pinned in `test_ingestion_tier1.py`
-and `test_ingestion_ab.py`; the Playwright phase of Tier 4 needs a browser, so only what it hands the capture is checked."""
+An in-process HTTP transport stands in for the sites, in-memory fakes for MinIO. Tier 1's capture is pinned in `test_ingestion_tier1.py`;
+the Playwright phase of Tier 4 needs a browser, so only what it hands the capture is checked."""
 import asyncio
 import gzip
 import json

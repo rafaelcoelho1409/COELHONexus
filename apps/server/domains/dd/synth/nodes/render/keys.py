@@ -6,27 +6,27 @@ from . import params, versions
 
 
 def normalize_cache_key(slug: str, vault_hash: str) -> str:
-    return f"synth-vault/{slug}/normalized/{versions.NORMALIZE_PROMPT_VERSION}/{vault_hash}.txt"
+    return f"dd/{slug}/synth-cache/normalized/{versions.NORMALIZE_PROMPT_VERSION}/{vault_hash}.txt"
 
 
 def versioned_blob_key(slug: str, chapter_id: str, manifest_hash: str) -> str:
-    return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/render/{manifest_hash}.json"
+    return f"dd/{slug}/synth/{chapter_id}/render/{manifest_hash}.json"
 
 
 def latest_blob_key(slug: str, chapter_id: str) -> str:
-    return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/render-latest.json"
+    return f"dd/{slug}/synth/{chapter_id}/render-latest.json"
 
 
 def artifact_key(slug: str, chapter_id: str, artifact_name: str) -> str:
-    return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/{artifact_name}"
+    return f"dd/{slug}/synth/{chapter_id}/{artifact_name}"
 
 
 def sawc_latest_key(slug: str, chapter_id: str) -> str:
-    return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/sawc-latest.json"
+    return f"dd/{slug}/synth/{chapter_id}/sawc-latest.json"
 
 
 def mgsr_latest_key(slug: str, chapter_id: str) -> str:
-    return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/mgsr-latest.json"
+    return f"dd/{slug}/synth/{chapter_id}/mgsr-latest.json"
 
 
 def planner_latest_key(slug: str) -> str:
@@ -40,4 +40,6 @@ def source_key_to_vault_key(source_key: str, framework_slug: str) -> str:
     basename = source_key.rstrip("/").rsplit("/", 1)[-1]
     if basename.endswith(".md"):
         basename = basename[:-3]
-    return f"synth-vault/{framework_slug}/pages/{basename}.vault.json"
+    run_id = domains.dd.ingestion.storage.keys.run_id_from_page_key(source_key)
+    prefix = domains.dd.ingestion.storage.keys.vault_prefix(framework_slug, run_id)
+    return f"{prefix}pages/{basename}.vault.json"

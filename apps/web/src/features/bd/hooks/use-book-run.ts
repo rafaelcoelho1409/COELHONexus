@@ -27,6 +27,7 @@ export type BookRunController = {
   error: string | null;
   /** A new run was requested: forget the last run's ending so its stream can connect. */
   restart: () => void;
+  clear: () => void;
   /** Cancel was requested: say so until the run really stops (or the safety time passes). */
   markCanceling: () => void;
 };
@@ -67,6 +68,7 @@ export function useBookRun(bookId: string, snapshot: Snapshot): BookRunControlle
     pagesPerMinute: pagesPerMinute(state.slices),
     error: status === "failed" ? (state.terminal?.error ?? snapshot.manifest.error) : null,
     restart: () => dispatch({ type: "restart" }),
+    clear: () => dispatch({ type: "clear" }),
     markCanceling: () => dispatch({ type: "canceling" }),
   };
 }

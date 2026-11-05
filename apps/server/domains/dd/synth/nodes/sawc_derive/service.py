@@ -37,7 +37,7 @@ async def _load_referenced_vault_entries(
     if not needed_hashes:
         return found
     for source_key in source_keys:
-        if not source_key or not source_key.startswith("ingestion/"):
+        if not source_key or "/ingestion/agentic/" not in source_key:
             continue
         try:
             raw = await minio.read_text(source_key)

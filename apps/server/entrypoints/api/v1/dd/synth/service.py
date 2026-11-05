@@ -70,7 +70,7 @@ async def wipe_one_chapter(slug: str, chapter_id: str) -> dict:
 
     minio = infra.minio.service.get_storage()
     try:
-        n_minio = await minio.delete_prefix(f"synth/{slug}/{chapter_id}/")
+        n_minio = await minio.delete_prefix(domains.dd.synth.keys.chapter_prefix(slug, chapter_id))
     except Exception as e:
         logger.warning(f"[synth-wipe] MinIO delete failed for {slug}/{chapter_id}: {e}")
         n_minio = -1

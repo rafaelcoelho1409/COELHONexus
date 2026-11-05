@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { bookRow } from "../test-fixtures";
 import {
-  fmtBytes,
   bookFileProblem,
+  bookFormat,
   bookUnits,
+  fmtBytes,
   isLive,
   libraryHasLiveBook,
   newestFirst,
@@ -75,6 +76,14 @@ describe("bookUnits", () => {
     expect(bookUnits("novel.EPUB")).toEqual({ singular: "section", plural: "sections" });
     expect(bookUnits("scan.pdf")).toEqual({ singular: "page", plural: "pages" });
     expect(bookUnits("older-book")).toEqual({ singular: "page", plural: "pages" });
+  });
+});
+
+describe("bookFormat", () => {
+  it("shows supported file formats without depending on filename case", () => {
+    expect(bookFormat("guide.PDF")).toBe("PDF");
+    expect(bookFormat("novel.epub")).toBe("EPUB");
+    expect(bookFormat("unknown.docx")).toBe("Unknown");
   });
 });
 

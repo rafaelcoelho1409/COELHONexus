@@ -4,7 +4,7 @@
 import { HttpResponse } from "msw";
 
 import type { BookRow, Manifest, PageEntry, Progress } from "@/shared/api";
-import type { AgenticRunStatus, BookSnapshot } from "./entities";
+import type { AgenticProgress, AgenticRunStatus, BookSnapshot } from "./entities";
 
 export const BOOK_ID = "9f8e7d6c5b4a3210";
 export const BOOK_TITLE =
@@ -95,6 +95,36 @@ export function snapshot(
     manifest: manifest(manifestOver),
     progress: progressOver === null ? null : progress(progressOver),
     agentic,
+  };
+}
+
+export function agenticRun(over: Partial<AgenticRunStatus> = {}): AgenticRunStatus {
+  const progress: AgenticProgress = {
+    current_node: null,
+    node_status: {},
+    audited_pages: [],
+    audit_warning_pages: [],
+    processed_pages: [],
+    active_audit_pages: [],
+    active_repair_pages: [],
+  };
+  return {
+    book_id: BOOK_ID,
+    extraction_run_id: "extract-1",
+    agentic_run_id: "agentic-1",
+    status: "done",
+    expected_page_count: 1,
+    published_page_count: 1,
+    quality_status: "complete",
+    delivered_page_count: 1,
+    discarded_blank_page_count: 0,
+    review_page_count: 0,
+    progress,
+    created_at: 1,
+    updated_at: 2,
+    finished_at: 2,
+    error: null,
+    ...over,
   };
 }
 

@@ -26,7 +26,7 @@ class CapturedFile:
 @dataclass
 class Capture:
     """What one run of one tier fetched, and nothing it did with it: the input of every transform (arm A, arm B, a future
-    normalizer). Lives under `ingestion/raw/{framework_slug}/`: `capture.json` (this) beside `files/{name}`."""
+    normalizer). Lives in `dd/{framework_slug}/ingestion/raw/{run_id}/{tier}/`."""
     framework_slug: str
     tier:           str          # the catalog kind that was run: `llms_full`
     source_url:     str

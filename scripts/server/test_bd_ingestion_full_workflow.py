@@ -5,6 +5,7 @@
 import asyncio
 import json
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -12,7 +13,12 @@ from langgraph.checkpoint.memory import InMemorySaver
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
 from ai.bd.agents import schemas
+from ai.bd.nodes.ingestion.metadata_normalization.service import _fallback_title
 from ai.bd.nodes.ingestion.repair_pages.domain import apply_proposals
+from ai.bd.nodes.ingestion.repair_pages.domain import build_repair_context
+from ai.bd.nodes.ingestion.inventory.domain import assess_page
+import domains
+import infra
 from domains.bd.ingestion.ai.service import (
     create_ingestion_ai_run,
     mark_ingestion_ai_run_failed,
@@ -21,6 +27,37 @@ from domains.bd.ingestion.ai.service import (
     run_ingestion_ai,
 )
 from domains.bd.ingestion.storage import keys
+
+
+async def no_progress(*_args, **_kwargs):
+    return None
+
+
+domains.bd.ingestion.ai.progress.service.emit = no_progress
+domains.settings.llm_counter.service.snapshot = no_progress
+domains.bd.ingestion.ai.progress.service.clear_cancel = no_progress
+domains.bd.ingestion.ai.progress.service.clear_events = no_progress
+
+
+class FakeLock:
+    async def __aenter__(self):
+        return True
+
+    async def __aexit__(self, *_args):
+        return False
+
+
+class FakeRedis:
+    def lock(self, *_args, **_kwargs):
+        return FakeLock()
+
+
+@asynccontextmanager
+async def fake_redis_client():
+    yield FakeRedis()
+
+
+infra.redis.service.client = fake_redis_client
 
 
 class FakeStorage:
@@ -48,12 +85,19 @@ class FakeStorage:
     async def exists(self, key: str) -> bool:
         return key in self.values
 
+    async def list_subfolders(self, prefix: str) -> list[str]:
+        return sorted({
+            key[len(prefix):].split("/", 1)[0]
+            for key in self.values
+            if key.startswith(prefix) and key[len(prefix):]
+        })
+
 
 class FakeAuditor:
     def __init__(self):
         self.calls = 0
 
-    async def ainvoke(self, payload: dict) -> dict:
+    async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
         self.calls += 1
         request = json.loads(payload["messages"][0]["content"])
         page_number = request["page_number"]
@@ -71,7 +115,7 @@ class FakeTextRepair:
     def __init__(self):
         self.calls = 0
 
-    async def ainvoke(self, payload: dict) -> dict:
+    async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
         self.calls += 1
         request = json.loads(payload["messages"][0]["content"])
         issue = request["assigned_issues"][0]
@@ -100,7 +144,7 @@ class FakeStructureRepair:
     def __init__(self):
         self.calls = 0
 
-    async def ainvoke(self, payload: dict) -> dict:
+    async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
         self.calls += 1
         return {"structured_response": schemas.PatchProposalBatch(proposals=[])}
 
@@ -109,7 +153,7 @@ class FakeMetadataNormalizer:
     def __init__(self):
         self.calls = 0
 
-    async def ainvoke(self, payload: dict) -> dict:
+    async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
         self.calls += 1
         return {"structured_response": schemas.BookMetadataProposal(
             title = "An Example Book",
@@ -125,7 +169,7 @@ class FakeMetadataNormalizer:
 
 
 class UnsupportedMetadataNormalizer:
-    async def ainvoke(self, payload: dict) -> dict:
+    async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
         return {"structured_response": schemas.BookMetadataProposal(
             title = "Fabricated Title",
             confidence = 0.999,
@@ -139,7 +183,7 @@ class UnsupportedMetadataNormalizer:
 
 
 class InvalidAuditor:
-    async def ainvoke(self, payload: dict) -> dict:
+    async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
         return {"structured_response": schemas.PageAssessment(
             page_number = 999,
             page_kind = schemas.PageKind.TEXT,
@@ -166,17 +210,22 @@ manifest = {
     ],
 }
 storage = FakeStorage(manifest, raw_pages)
+auditor = FakeAuditor()
 result = asyncio.run(run_ingestion_ai(
     book_id,
     agentic_run_id = "agent-run-001",
     storage = storage,
-    auditor = FakeAuditor(),
+    auditor = auditor,
     text_repair = FakeTextRepair(),
     structure_repair = FakeStructureRepair(),
     metadata_normalizer = FakeMetadataNormalizer(),
 ))
 assert result["status"] == "complete"
+assert result["quality_status"] == "complete"
 assert result["quality_report"]["blank_pages"] == [2]
+assert result["quality_report"]["delivered_page_numbers"] == [1]
+assert result["quality_report"]["discarded_blank_pages"] == [2]
+assert auditor.calls == 1
 assert result["quality_report"]["patches_auto_applied"] == 1
 assert result["book_metadata"]["title"] == "An Example Book"
 assert storage.values[keys.page_key(book_id, 1, extraction_id)] == "An exam\u00adple book by A. Author\n"
@@ -185,12 +234,15 @@ assert storage.values[keys.agentic_page_key(book_id, "agent-run-001", 2)] == "  
 final_manifest = json.loads(storage.values[keys.agentic_manifest_key(book_id, "agent-run-001")])
 assert final_manifest["status"] == "done"
 assert len(final_manifest["pages"]) == 2
+assert final_manifest["pages"][1]["delivery_disposition"] == "discarded_blank"
+assert final_manifest["delivered_page_count"] == 1
 assert storage.writes[-1][0] == keys.agentic_manifest_key(book_id, "agent-run-001")
 assert [key for key, _, _ in storage.writes[:2]] == [
     keys.agentic_manifest_key(book_id, "agent-run-001"),
     keys.agentic_manifest_key(book_id, "agent-run-001"),
 ]
 print("ok  end-to-end fake-agent run writes versioned artifacts without mutating raw pages")
+print("ok  blank pages are deterministically classified without an unnecessary auditor call")
 write_count = len(storage.writes)
 try:
     asyncio.run(run_ingestion_ai(
@@ -240,7 +292,56 @@ metadata_result = asyncio.run(run_ingestion_ai(
 ))
 assert metadata_result["book_metadata"]["title"] == "an example book"
 assert metadata_result["book_metadata"]["review_required"] is True
-print("ok  unsupported metadata proposals fall back to the source title for review")
+print("ok  unsupported metadata proposals fall back to a filename-derived title for review")
+fallback_title = _fallback_title(
+    {"filename": "art-of-cyberwarfare-(source-copy).pdf", "title": "art-of-cyberwarfare-(source-copy).pdf"},
+    [{"page_number": 1, "markdown": "# The Art of Cyberwarfare\n\nOther front matter."}],
+)
+assert fallback_title == "The Art of Cyberwarfare"
+print("ok  metadata fallback prefers a clear book-title heading over a filename label")
+
+blank_page = assess_page(3, "<!-- image -->\n", 0)
+image_only_page = assess_page(4, "<!-- image -->\n", 1)
+number_only_page = assess_page(5, "  17  \n", 0)
+heading_page = assess_page(6, "L ANDSCAPE\n\nBody text with enough content to avoid the sparse-page warning.\n", 0)
+normal_heading_page = assess_page(8, "A LANDSCAPE OF IDEAS\n", 0)
+introduction_heading_page = assess_page(9, "I NTRODUC T I ON\n\nOpening text.\n", 0)
+toc_page = assess_page(7, "Chapter One ........ 12\nChapter Two ........ 34\nChapter Three ........ 56\n", 0)
+near_empty_page = assess_page(10, "Copyright.\n", 0)
+normal_table_page = assess_page(11, "| Name | Pages |\n| --- | --- |\n| Introduction | 1 |\n| Conclusion | 9 |\n", 0)
+malformed_table_page = assess_page(12, "| Name | Pages |\n| --- | --- |\n| Introduction | 1 | Extra |\n| Conclusion | 9 |\n", 0)
+assert blank_page.page_kind == schemas.PageKind.BLANK
+assert image_only_page.page_kind == schemas.PageKind.IMAGE_ONLY
+assert number_only_page.page_kind == schemas.PageKind.BLANK
+assert [issue.code for issue in heading_page.issues] == [schemas.IssueCode.SPLIT_WORD]
+assert not normal_heading_page.issues
+assert schemas.IssueCode.SPLIT_WORD in {issue.code for issue in introduction_heading_page.issues}
+assert [issue.code for issue in toc_page.issues] == [schemas.IssueCode.TOC_NOISE]
+assert [issue.code for issue in near_empty_page.issues] == [schemas.IssueCode.NEAR_EMPTY]
+assert not normal_table_page.issues
+assert [issue.code for issue in malformed_table_page.issues] == [schemas.IssueCode.TABLE_OR_INDEX_LAYOUT]
+print("ok  deterministic checks distinguish blank, image-only, near-empty, split-heading, table, and TOC pages")
+
+source_context = build_repair_context(
+    "Before " + "x" * 3000 + " CORRUPT heading " + "y" * 3000 + " after",
+    [schemas.PageIssue(
+        issue_id = "focus",
+        code = schemas.IssueCode.TEXT_CORRUPTION,
+        severity = schemas.IssueSeverity.MEDIUM,
+        description = "A damaged span needs review.",
+        confidence = 1.0,
+        evidence=[schemas.EvidenceRef(
+            source = schemas.EvidenceSource.PAGE_MARKDOWN,
+            excerpt = "CORRUPT heading",
+            page_number = 1,
+        )],
+    )],
+    per_issue_chars = 500,
+    max_chars = 1000,
+)
+assert "CORRUPT heading" in source_context and len(source_context) < 1000
+assert "x" * 2000 not in source_context and "y" * 2000 not in source_context
+print("ok  specialist prompts receive bounded, source-exact issue context")
 
 resume_run_id = "agent-run-resume"
 resume_storage = FakeStorage(manifest, raw_pages)
@@ -298,21 +399,18 @@ resumed_queue = asyncio.run(queue_ingestion_ai_resume(
 assert resumed_queue["status"] == "queued" and resumed_queue["finished_at"] is None
 print("ok  manual-dispatch preparation persists a pollable queued manifest")
 
-failed_storage = FakeStorage(manifest, raw_pages)
-try:
-    asyncio.run(run_ingestion_ai(
-        book_id,
-        agentic_run_id = "agent-run-003",
-        storage = failed_storage,
-        auditor = InvalidAuditor(),
-        text_repair = FakeTextRepair(),
-        structure_repair = FakeStructureRepair(),
-        metadata_normalizer = FakeMetadataNormalizer(),
-    ))
-except ValueError:
-    failed_manifest = json.loads(failed_storage.values[keys.agentic_manifest_key(book_id, "agent-run-003")])
-    assert failed_manifest["status"] == "failed"
-    assert failed_manifest["error"]
-else:
-    raise AssertionError("invalid page assessments should fail the run")
-print("ok  invalid audits produce a terminal failed manifest")
+fallback_storage = FakeStorage(manifest, raw_pages)
+fallback_result = asyncio.run(run_ingestion_ai(
+    book_id,
+    agentic_run_id = "agent-run-003",
+    storage = fallback_storage,
+    auditor = InvalidAuditor(),
+    text_repair = FakeTextRepair(),
+    structure_repair = FakeStructureRepair(),
+    metadata_normalizer = FakeMetadataNormalizer(),
+))
+fallback_manifest = json.loads(fallback_storage.values[keys.agentic_manifest_key(book_id, "agent-run-003")])
+assert fallback_manifest["status"] == "done"
+assert fallback_manifest["quality_status"] == "complete_with_review"
+assert fallback_result["quality_report"]["structured_output_fallback_pages"] == [1]
+print("ok  invalid structured audits are counted, fall back safely, and require review")

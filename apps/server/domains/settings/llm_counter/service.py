@@ -225,6 +225,15 @@ async def snapshot(ns: str, run_id: str) -> bool:
         return False
 
 
+async def delete_run(ns: str, run_id: str) -> None:
+    """Remove live Redis counters and the finished usage snapshot for one run."""
+    if not ns or not run_id:
+        return
+    async with infra.redis.service.client() as redis:
+        await infra.redis.service.delete_matching(redis, f"coelhonexus:{ns}:{run_id}:llm:*")
+    await infra.minio.service.get_storage().delete(keys.snapshot_key(ns, run_id))
+
+
 # ---------------------------------------------------------------------------
 # LangChain callback
 # ---------------------------------------------------------------------------

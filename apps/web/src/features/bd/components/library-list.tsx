@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { BookRow } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 
-import { bookUnits, fmtBytes, isLive, newestFirst, toBookStatus } from "../domain/books";
+import { bookFormat, bookUnits, fmtBytes, isLive, newestFirst, toBookStatus } from "../domain/books";
 import { useDeleteBook, useLibrary, useRunBook } from "../hooks/use-bd-data";
 import { useBdOverlays } from "../hooks/use-overlays";
 import { StatusChip } from "./status-chip";
@@ -121,20 +121,24 @@ export function LibraryPicker({
       <button
         ref={triggerRef}
         type="button"
+        aria-haspopup="true"
         aria-expanded={open}
-        aria-controls="bd-library-options"
+        aria-controls={open ? "bd-library-options" : undefined}
         onClick={() => setOpen((value) => !value)}
-        className="flex min-h-10 max-w-[min(24rem,calc(100vw-2rem))] min-w-0 items-center gap-2 rounded-sm border border-border bg-background px-3 text-sm text-foreground hover:border-neutral-8"
+        className="min-h-9 max-w-[min(24rem,calc(100vw-2rem))] rounded-sm border border-border bg-card px-3 py-1.5 text-sm text-foreground hover:border-foreground/40"
       >
-        <span className="max-w-72 truncate font-medium">
+        <span className="inline-flex max-w-72 items-center gap-2 truncate font-medium">
           {currentBook ? titleOf(currentBook) : `Library${library.data ? ` · ${rows.length}` : ""}`}
+          <ChevronDown
+            className={`size-4 shrink-0 text-muted-foreground ${open ? "rotate-180" : ""}`}
+            aria-hidden="true"
+          />
         </span>
-        <ChevronDown className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       </button>
       {open ? (
         <div
           id="bd-library-options"
-          className="absolute right-0 z-40 mt-1 w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border bg-card p-2"
+          className="absolute left-0 z-40 mt-1 w-[min(24rem,calc(100vw-2rem))] rounded-md border border-border bg-card p-2 sm:left-auto sm:right-0"
         >
           <label htmlFor="bd-library-search" className="mb-1 block text-xs font-medium text-muted-foreground">
             Search books
@@ -145,6 +149,8 @@ export function LibraryPicker({
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search books…"
+            aria-label="Search books"
             className="mb-1 h-9 w-full rounded-sm border border-border bg-background px-2 text-sm"
           />
           {library.isError ? (
@@ -159,7 +165,7 @@ export function LibraryPicker({
               </button>
             </div>
           ) : (
-            <ul aria-label="Books" className="max-h-80 overflow-auto">
+            <ul aria-label="Ingested books" className="max-h-64 overflow-auto">
               {filtered.map((row) => {
                 const status = toBookStatus(row.status);
                 const units = bookUnits(row.filename);
@@ -167,9 +173,7 @@ export function LibraryPicker({
                 return (
                   <li
                     key={row.book_id}
-                    className={`group flex items-center gap-1 rounded-sm border-l-2 px-1 ${
-                      current ? "border-primary bg-muted" : "border-transparent hover:bg-muted"
-                    }`}
+                    className={`group grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-1 rounded-sm px-1 ${current ? "bg-muted" : "hover:bg-muted"}`}
                   >
                     <button
                       type="button"
@@ -178,15 +182,17 @@ export function LibraryPicker({
                         close();
                         onOpen(row.book_id);
                       }}
-                      className="flex min-h-14 min-w-0 flex-1 flex-col justify-center gap-0.5 px-2 py-1 text-left text-sm"
+                      className="flex min-h-12 min-w-0 flex-col justify-center gap-0.5 px-2 py-1 text-left text-sm"
                     >
-                      <span className="truncate font-medium">{titleOf(row)}</span>
-                      <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                      <span title={titleOf(row)} className="block w-full min-w-0 truncate font-medium">
+                        {titleOf(row)}
+                      </span>
+                      <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
                         <StatusChip status={status} />
                         <span className="tabular">
-                          {row.pages_done}/{row.n_pages} {units.plural}
+                          {bookFormat(row.filename)} · {row.pages_done}/{row.n_pages} {units.plural} ·{" "}
+                          {fmtBytes(row.size_bytes)}
                         </span>
-                        <span>{fmtBytes(row.size_bytes)}</span>
                       </span>
                     </button>
                     <button

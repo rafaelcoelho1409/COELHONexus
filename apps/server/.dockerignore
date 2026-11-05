@@ -46,8 +46,10 @@
 .env
 .env.*
 
-# Docs not needed at runtime. If a domain ever reads .md files at import time
-# (agent skills, memory), whitelist them back below: in a Docker .dockerignore
-# a later `!negation` overrides an earlier ignore.
+# Docs not needed at runtime. Whitelist Markdown read by runtime prompts/skills
+# below; in a Docker .dockerignore a later `!negation` overrides an earlier ignore.
 **/*.md
 !ai/bd/prompts/ingestion/**/SYSTEM.md
+!ai/bd/skills/ingestion/**/*.md
+!ai/dd/prompts/ingestion/**/SYSTEM.md
+!ai/dd/skills/ingestion/**/*.md

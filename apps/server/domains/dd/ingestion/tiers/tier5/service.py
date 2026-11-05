@@ -211,7 +211,7 @@ async def run(
         # The repository's tree (as the API answered) and every file fetched are kept as they come: what a transform starts from.
         raw = domains.dd.ingestion.capture
         writer = raw.service.Writer(
-            store.minio, framework_slug, params.TIER_KIND, url,
+            store.minio, framework_slug, params.TIER_KIND, url, run_id=store.run_id,
             capture_params = {"org": org, "repo": repo, "branch": branch, "paths": keep},
         )
         await writer.begin()

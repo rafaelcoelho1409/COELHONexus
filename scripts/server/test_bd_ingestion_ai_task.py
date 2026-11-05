@@ -45,6 +45,7 @@ async def run_ingestion_ai(
     agentic_run_id,
     checkpointer: object,
     resume: bool,
+    cancel_check = None,
 ):
     calls.append((book_id, expected_extraction_id, agentic_run_id, checkpointer, resume))
     return {"status": "complete", "agentic_run_id": agentic_run_id}
@@ -92,6 +93,15 @@ manifest = {
     "extraction_run_id": "extract-test",
     "status": "queued",
     "expected_page_count": 3,
+    "progress": {
+        "current_node": None,
+        "node_status": {},
+        "audited_pages": [],
+        "audit_warning_pages": [],
+        "processed_pages": [],
+        "active_audit_pages": [],
+        "active_repair_pages": [],
+    },
     "pages": [],
     "created_at": 1.0,
     "updated_at": 1.0,
@@ -104,6 +114,7 @@ original_read = ai_service.read_ingestion_ai_run
 original_resume = ai_service.queue_ingestion_ai_resume
 original_apply_async = task.run_ingestion_ai.apply_async
 original_tag = router.infra.opentelemetry.service.tag_celery_task
+original_emit = router.domains.bd.ingestion.ai.progress.service.emit
 
 
 async def create_run(book_id):
@@ -125,11 +136,16 @@ def apply_async(*, args):
     return SimpleNamespace(id = "celery-task-test")
 
 
+async def emit_event(*_args, **_kwargs):
+    return None
+
+
 ai_service.create_ingestion_ai_run = create_run
 ai_service.read_ingestion_ai_run = read_run
 ai_service.queue_ingestion_ai_resume = resume_run
 task.run_ingestion_ai.apply_async = apply_async
 router.infra.opentelemetry.service.tag_celery_task = lambda task_id: None
+router.domains.bd.ingestion.ai.progress.service.emit = emit_event
 try:
     start_result = asyncio.run(router.start_agentic_run("book-test"))
     status_result = asyncio.run(router.get_agentic_run("book-test", "agentic-test"))
@@ -140,6 +156,7 @@ finally:
     ai_service.queue_ingestion_ai_resume = original_resume
     task.run_ingestion_ai.apply_async = original_apply_async
     router.infra.opentelemetry.service.tag_celery_task = original_tag
+    router.domains.bd.ingestion.ai.progress.service.emit = original_emit
 
 assert start_result["status"] == "queued"
 assert status_result["status"] == "queued" and status_result["expected_page_count"] == 3

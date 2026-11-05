@@ -5,16 +5,16 @@ from . import params
 
 
 def versioned_blob_key(slug: str, chapter_id: str, manifest_hash: str) -> str:
-    return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/sawc/{manifest_hash}.json"
+    return f"dd/{slug}/synth/{chapter_id}/sawc/{manifest_hash}.json"
 
 
 def latest_blob_key(slug: str, chapter_id: str) -> str:
-    return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/sawc-latest.json"
+    return f"dd/{slug}/synth/{chapter_id}/sawc-latest.json"
 
 
 def outline_latest_key(slug: str, chapter_id: str) -> str:
-    return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/outline-latest.json"
+    return f"dd/{slug}/synth/{chapter_id}/outline-latest.json"
 
 
 def digest_latest_key(slug: str, chapter_id: str) -> str:
-    return f"{params.BLOB_PREFIX}/{slug}/{chapter_id}/digest-latest.json"
+    return f"dd/{slug}/synth/{chapter_id}/digest-latest.json"

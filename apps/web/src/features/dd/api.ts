@@ -14,6 +14,7 @@ import {
   getDdPlannerSlugActive,
   getDdPlannerSlugHealth,
   getDdPlannerSlugTiming,
+  getDdRunsRunIdPagesIdx,
   getDdSynthDebugGraphThreadIdLlmCounters,
   getDdSynthDebugGraphThreadIdState,
   getDdSynthInfo,
@@ -41,6 +42,7 @@ import type {
 } from "./entities";
 import {
   graphStateSchema,
+  pageBodySchema,
   pipelineActiveSchema,
   pipelineStateSchema,
   plannerHealthSchema,
@@ -191,6 +193,26 @@ export async function fetchChapterMarkdown(slug: string, chapterId: string): Pro
     throwOnError: true,
   });
   return typeof result.data === "string" ? result.data : "";
+}
+
+/** Live or snapshotted LLM calls for a DD ingestion run. */
+export async function fetchIngestionUsage(runId: string): Promise<UsagePayload> {
+  const result = await client.request({
+    method: "GET",
+    url: "/api/v1/dd/runs/{run_id}/llm-counters",
+    path: { run_id: runId },
+    throwOnError: true,
+  });
+  return usagePayloadSchema.parse(result.data);
+}
+
+/** Read a page from the current live run manifest. `pageKey` is used by the query cache to refresh the body when AI publish swaps it. */
+export async function fetchRunPageBody(runId: string, idx: number): Promise<string> {
+  const result = await getDdRunsRunIdPagesIdx({
+    path: { run_id: runId, idx },
+    throwOnError: true,
+  });
+  return pageBodySchema.parse(result.data).body;
 }
 
 /** SSE endpoint of a run. Streams are not typed in the OpenAPI spec, so `shared/sse` reads this URL;

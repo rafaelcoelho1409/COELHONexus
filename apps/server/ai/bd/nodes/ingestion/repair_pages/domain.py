@@ -15,6 +15,7 @@ def validate_proposals(
     markdown: str,
     assigned_issues: dict[str, agents.schemas.PageIssue],
     role: agents.schemas.SpecialistRole,
+    allowed_context: str | None = None,
 ) -> list[agents.schemas.PatchProposal]:
     if isinstance(value, agents.schemas.PatchProposalBatch):
         batch = value
@@ -53,6 +54,8 @@ def validate_proposals(
             raise ValueError("patch proposal issue code is outside this specialist's scope")
         if not proposal.target_text or proposal.target_text not in markdown:
             raise ValueError("patch proposal target is not present in the source page")
+        if allowed_context is not None and proposal.target_text not in allowed_context:
+            raise ValueError("patch proposal target is outside the supplied repair context")
         start = markdown.find(proposal.target_text)
         if markdown.find(proposal.target_text, start + 1) >= 0:
             raise ValueError("patch proposal target is ambiguous in the source page")
@@ -61,6 +64,10 @@ def validate_proposals(
             raise ValueError("patch proposal context_before does not match the source page")
         if proposal.context_after and not markdown[end:].startswith(proposal.context_after):
             raise ValueError("patch proposal context_after does not match the source page")
+        if allowed_context is not None:
+            anchored_text = f"{proposal.context_before}{proposal.target_text}{proposal.context_after}"
+            if anchored_text not in allowed_context:
+                raise ValueError("patch proposal anchor is outside the supplied repair context")
         for evidence in proposal.evidence:
             if evidence.source != agents.schemas.EvidenceSource.PAGE_MARKDOWN:
                 raise ValueError("patch evidence must come from the supplied Markdown page")
@@ -70,6 +77,49 @@ def validate_proposals(
         proposals.append(proposal)
 
     return proposals
+
+
+def build_repair_context(
+    markdown: str,
+    issues: list[agents.schemas.PageIssue],
+    *,
+    per_issue_chars: int,
+    max_chars: int,
+) -> str:
+    """Return source-exact windows around issue evidence, bounded before model invocation."""
+    windows: list[tuple[int, int]] = []
+    for issue in issues:
+        for evidence in issue.evidence:
+            evidence_start = markdown.find(evidence.excerpt)
+            if evidence_start < 0:
+                continue
+            evidence_end = evidence_start + len(evidence.excerpt)
+            budget = max(per_issue_chars, len(evidence.excerpt))
+            radius = max(0, (budget - len(evidence.excerpt)) // 2)
+            start = max(0, evidence_start - radius)
+            end = min(len(markdown), evidence_end + radius)
+            windows.append((start, end))
+
+    if not windows:
+        return ""
+
+    merged: list[list[int]] = []
+    for start, end in sorted(windows):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+
+    excerpts: list[str] = []
+    remaining = max_chars
+    for start, end in merged:
+        if remaining <= 0:
+            break
+        excerpt = markdown[start:min(end, start + remaining)]
+        if excerpt:
+            excerpts.append(excerpt)
+            remaining -= len(excerpt)
+    return "\n…\n".join(excerpts)
 
 
 def apply_proposals(

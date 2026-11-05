@@ -2,8 +2,9 @@ import type { BookRow } from "@/shared/api";
 
 import { MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL } from "../params";
 
-export type BookStatus = "queued" | "extracting" | "done" | "failed" | "cancelled" | "unknown";
+export type BookStatus = "ready" | "queued" | "extracting" | "done" | "failed" | "cancelled" | "unknown";
 export type BookUnits = { singular: "page" | "section"; plural: "pages" | "sections" };
+export type BookFormat = "PDF" | "EPUB" | "Unknown";
 
 const PDF_UNITS: BookUnits = { singular: "page", plural: "pages" };
 const EPUB_UNITS: BookUnits = { singular: "section", plural: "sections" };
@@ -12,11 +13,18 @@ export function bookUnits(filename: string): BookUnits {
   return /\.epub$/i.test(filename) ? EPUB_UNITS : PDF_UNITS;
 }
 
+export function bookFormat(filename: string): BookFormat {
+  if (/\.pdf$/i.test(filename)) return "PDF";
+  if (/\.epub$/i.test(filename)) return "EPUB";
+  return "Unknown";
+}
+
 /** The server's manifest status (`queued|extracting|done|failed|cancelled`) and its run progress status
  * (`queued|running|…`) folded into one vocabulary. Anything unrecognised is shown as such, never as a guess. */
 export function toBookStatus(raw: string | null | undefined): BookStatus {
   switch (raw) {
     case "queued":
+    case "ready":
     case "done":
     case "failed":
     case "cancelled":
@@ -31,6 +39,7 @@ export function toBookStatus(raw: string | null | undefined): BookStatus {
 }
 
 export const STATUS_LABEL: Record<BookStatus, string> = {
+  ready: "ready",
   queued: "queued",
   extracting: "extracting",
   done: "done",

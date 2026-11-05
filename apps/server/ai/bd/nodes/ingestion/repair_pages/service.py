@@ -2,13 +2,13 @@
 from __future__ import annotations
 import domains
 from . import domain
-from .... import agents, graphs
+from .... import agents, graphs, skills
 
 import asyncio
 import hashlib
 import inspect
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from typing import Any, Protocol
 
 
@@ -53,16 +53,24 @@ async def repair_pages(
         page_number: int,
         source_sha256: str,
         issues: dict[str, agents.schemas.PageIssue],
-    ) -> tuple[list[agents.schemas.PatchProposal], str | None]:
+    ) -> tuple[list[agents.schemas.PatchProposal], str | None, int]:
         role = item["role"]
         assigned_ids = [entry["issue_id"] for entry in item["issue_refs"]]
         assigned = {issue_id: issues[issue_id] for issue_id in assigned_ids}
+        source_context = domain.build_repair_context(
+            markdown,
+            list(assigned.values()),
+            per_issue_chars = domains.bd.ingestion.ai.params.REPAIR_CONTEXT_CHARS_PER_ISSUE,
+            max_chars = domains.bd.ingestion.ai.params.MAX_REPAIR_CONTEXT_CHARS,
+        )
+        if not source_context:
+            return [], f"{role}: assigned issue evidence was not found in the source page", 0
         payload = {
-            "task": "Propose minimal evidence-backed patches only for these assigned issues.",
+            "task": "Propose minimal evidence-backed patches only within the supplied source context for these assigned issues.",
             "page_number": page_number,
             "source_sha256": source_sha256,
             "role": role,
-            "markdown": markdown,
+            "markdown": source_context,
             "assigned_issues": [issue.model_dump(mode = "json") for issue in assigned.values()],
         }
         try:
@@ -70,13 +78,16 @@ async def repair_pages(
             if not isinstance(run_id, str):
                 raise ValueError("the ingestion run has no agentic_run_id")
             node_id = "structure_repair" if role == "structure" else "text_repair"
+            skill_role = "structure_repair" if role == "structure" else role
             with domains.settings.llm_counter.service.llm_context(
                 ns = "bd", run_id = run_id, node_id = node_id,
             ):
                 response = await specialists[role].ainvoke({"messages": [{
                     "role": "user",
                     "content": json.dumps(payload, ensure_ascii = False),
-                }]}, config = {"callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()]})
+                }], "files": skills.service.files_for(skill_role)}, config = {
+                    "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
+                })
             if not isinstance(response, dict) or "structured_response" not in response:
                 raise ValueError("specialist returned no structured PatchProposalBatch")
             proposals = domain.validate_proposals(
@@ -86,10 +97,11 @@ async def repair_pages(
                 markdown = markdown,
                 assigned_issues = assigned,
                 role = agents.schemas.SpecialistRole(role),
+                allowed_context = source_context,
             )
-            return proposals, None
+            return proposals, None, len(source_context)
         except Exception as error:
-            return [], f"{role}: {str(error)[:500]}"
+            return [], f"{role}: {str(error)[:500]}", len(source_context)
 
     async def process(page_ref: graphs.ingestion.state.IngestionPageReference) -> dict:
         async with semaphore:
@@ -114,11 +126,11 @@ async def repair_pages(
                 run_specialist(item, markdown, page_number, source_sha256, issues)
                 for item in assigned_items
             ))
-            proposals = [proposal for batch, _ in responses for proposal in batch]
+            proposals = [proposal for batch, _, _ in responses for proposal in batch]
             errors = [
                 f"Page audit: {warning}"
                 for warning in audits[page_number].get("warnings", [])
-            ] + [error for _, error in responses if error]
+            ] + [error for _, error, _ in responses if error]
             if oversized:
                 errors.append(
                     f"Page exceeds the {domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS}-character "
@@ -173,13 +185,22 @@ async def repair_pages(
                 "patch_proposal_count": len(proposals),
                 "auto_applied_issue_ids": auto_applied,
                 "review_required_issue_ids": review_ids,
+                "delivery_disposition": (
+                    "discarded_blank"
+                    if audits[page_number]["assessment"].get("page_kind") == "blank"
+                    else "image_only"
+                    if audits[page_number]["assessment"].get("page_kind") == "image_only"
+                    else "include"
+                ),
+                "repair_context_chars": sum(context_chars for _, _, context_chars in responses),
+                "repair_call_count": len(responses),
                 "status": "review_required" if review_ids or errors else "done",
                 "error": "; ".join(errors) if errors else "",
             }
             await _report(progress_callback, kind = "page_repair", page = page_number, status = "done")
             return result
 
-    page_results = await asyncio.gather(*(process(page_ref) for page_ref in page_refs))
+    page_results = await _gather_cancel_on_failure(process(page_ref) for page_ref in page_refs)
     return {"page_results": page_results, "status": "repaired"}
 
 
@@ -187,3 +208,15 @@ async def _write(writer: ArtifactWriter, key: str, content: str, content_type: s
     result = writer(key, content, content_type)
     if inspect.isawaitable(result):
         await result
+
+
+async def _gather_cancel_on_failure(awaitables: Iterable[Coroutine[Any, Any, Any]]) -> list[Any]:
+    tasks = [asyncio.create_task(awaitable) for awaitable in awaitables]
+    try:
+        return await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions = True)
+        raise

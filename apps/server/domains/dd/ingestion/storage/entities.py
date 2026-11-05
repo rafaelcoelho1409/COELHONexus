@@ -21,6 +21,7 @@ class ManifestEntry:
     bytes: int
     title: str = ""
     key:   str = ""        # MinIO key — populated once written
+    raw_key: str = ""     # Immutable extracted/agent-input object for this page and ingestion run
     # Per-section `Source: <url>` line found inside a split monolith page
     # (post.domain.split_by_source_markers) — `url` above stays the ORIGINAL
     # bundle URL shared by every split sibling, so this is the only field
