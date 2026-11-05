@@ -1,0 +1,530 @@
+"""mgsr — service functions (prompts, validators, halt logic, orchestrator)."""
+from __future__ import annotations
+import domains, infra
+from . import domain, keys, params, prompts, schemas, versions
+
+import asyncio
+import json
+import logging
+import random
+import time
+from typing import Optional
+
+
+
+
+
+logger = logging.getLogger(__name__)
+
+
+async def _run_llm_replan(
+    *,
+    thread_id: str,
+    framework: str,
+    chapter_id: str,
+    chapter_title: str,
+    pass_rate: float,
+    chapter_passed: bool,
+    failed_feedback: list[str],
+    outline_sections: list[dict],
+    valid_section_ids: set[str],
+) -> tuple[Optional[schemas.LLMReplanPayload], Optional[str], bool, int]:
+    """Fire replan LLM call → parse → Pydantic → cross-ref → repair if needed. Returns (payload, deployment, was_repaired, wall_ms); None payload → caller uses fallback_decision."""
+    t0 = time.monotonic()
+    prompt = prompts.build_replan_prompt(
+        framework=framework,
+        chapter_id=chapter_id,
+        chapter_title=chapter_title,
+        pass_rate=pass_rate,
+        chapter_passed=chapter_passed,
+        failed_feedback=failed_feedback,
+        outline_sections=outline_sections,
+    )
+
+    deployment: Optional[str] = None
+    last_error: Optional[Exception] = None
+    for call_attempt in range(params.MAX_CALL_ATTEMPTS):
+        try:
+            response, meta = await domains.settings.chat.service.chat_text_async(
+                prompt,
+                max_tokens=params.MAX_TOKENS_REPLAN,
+                temperature=params.TEMPERATURE_REPLAN,
+                timeout_s=params.TIMEOUT_S_REPLAN,
+            )
+            deployment = (meta or {}).get("deployment")
+            last_error = None
+            break
+        except Exception as e:
+            last_error = e
+            if call_attempt < params.MAX_CALL_ATTEMPTS - 1:
+                # This node fires once per chapter per CoRefine iteration
+                # (not per-source/per-section like its siblings), so a
+                # cheap retry costs little — same idiom as
+                # outline_sdp/digest_construct/sawc_write/checklist_eval.
+                # The prompt here is small/bounded (compact outline
+                # metadata only, no vault bodies), so this only needs a
+                # plain backoff, not a context-overflow-aware rebuild.
+                await asyncio.sleep(1.0 + random.random())
+    if last_error is not None:
+        wall_ms = int((time.monotonic() - t0) * 1000)
+        logger.warning(
+            f"[mgsr_replan] LLM call failed after {params.MAX_CALL_ATTEMPTS} "
+            f"attempt(s): {type(last_error).__name__}: {last_error}"
+        )
+        return None, None, False, wall_ms
+
+    parsed = domain.parse_json_response(response)
+    payload: Optional[schemas.LLMReplanPayload] = None
+    err: Optional[str] = None
+    repaired = False
+
+    if parsed is not None:
+        payload, err = domain.try_parse_payload(parsed)
+
+    # First repair: if parse OR Pydantic failed
+    if payload is None and params.MAX_REPAIR_ATTEMPTS > 0:
+        repair_issues = [
+            err if err else "previous response was not parseable JSON"
+        ]
+        current_json = json.dumps(parsed or {"_raw": (response or "")[:400]})
+        repair_prompt = prompts.build_repair_prompt(
+            framework=framework,
+            chapter_id=chapter_id,
+            chapter_title=chapter_title,
+            pass_rate=pass_rate,
+            chapter_passed=chapter_passed,
+            failed_feedback=failed_feedback,
+            outline_sections=outline_sections,
+            current_json=current_json,
+            issues=repair_issues,
+        )
+        try:
+            rr, rm = await domains.settings.chat.service.chat_text_async(
+                repair_prompt,
+                max_tokens=params.MAX_TOKENS_REPAIR,
+                temperature=params.TEMPERATURE_REPAIR,
+                timeout_s=params.TIMEOUT_S_REPAIR,
+            )
+            deployment = (rm or {}).get("deployment") or deployment
+            rp = domain.parse_json_response(rr)
+            if rp is not None:
+                payload, err = domain.try_parse_payload(rp)
+                if payload is not None:
+                    repaired = True
+        except Exception as e:
+            logger.warning(
+                f"[mgsr_replan] repair (parse/pydantic) failed: "
+                f"{type(e).__name__}: {e}"
+            )
+
+    if payload is None:
+        wall_ms = int((time.monotonic() - t0) * 1000)
+        return None, deployment, False, wall_ms
+
+    # Second-stage validation: cross-ref actions against outline
+    issues = domain.validate_actions_against_outline(
+        payload.actions, valid_section_ids=valid_section_ids,
+    )
+    if issues and params.MAX_REPAIR_ATTEMPTS > 0:
+        repair_prompt = prompts.build_repair_prompt(
+            framework=framework,
+            chapter_id=chapter_id,
+            chapter_title=chapter_title,
+            pass_rate=pass_rate,
+            chapter_passed=chapter_passed,
+            failed_feedback=failed_feedback,
+            outline_sections=outline_sections,
+            current_json=json.dumps(payload.model_dump()),
+            issues=issues,
+        )
+        try:
+            rr, rm = await domains.settings.chat.service.chat_text_async(
+                repair_prompt,
+                max_tokens=params.MAX_TOKENS_REPAIR,
+                temperature=params.TEMPERATURE_REPAIR,
+                timeout_s=params.TIMEOUT_S_REPAIR,
+            )
+            deployment = (rm or {}).get("deployment") or deployment
+            rp = domain.parse_json_response(rr)
+            if rp is not None:
+                new_payload, new_err = domain.try_parse_payload(rp)
+                if new_payload is not None:
+                    new_issues = domain.validate_actions_against_outline(
+                        new_payload.actions,
+                        valid_section_ids=valid_section_ids,
+                    )
+                    # Accept only if strict improvement
+                    if len(new_issues) < len(issues):
+                        payload = new_payload
+                        repaired = True
+                        issues = new_issues
+        except Exception as e:
+            logger.warning(
+                f"[mgsr_replan] repair (cross-ref) failed: "
+                f"{type(e).__name__}: {e}"
+            )
+
+    # If issues STILL remain after repair, drop the offending actions
+    # rather than ship invalid actions. Surface in rationale.
+    if issues:
+        kept_actions: list[schemas.ReplanAction] = []
+        available = set(valid_section_ids)
+        for a in payload.actions:
+            ok = True
+            for t in a.targets:
+                if t not in available:
+                    ok = False
+                    break
+            if a.insert_after and a.insert_after not in available:
+                ok = False
+            if a.insert_before and a.insert_before not in available:
+                ok = False
+            if ok:
+                kept_actions.append(a)
+                if a.action == "delete":
+                    available -= set(a.targets)
+                elif a.action == "merge" and len(a.targets) >= 2:
+                    available -= set(a.targets[1:])
+        # Reconstruct payload with filtered actions + appended rationale
+        dropped = len(payload.actions) - len(kept_actions)
+        if dropped:
+            logger.info(
+                f"[mgsr_replan] dropped {dropped} action(s) with "
+                f"unresolved cross-ref issues: {issues[:2]}"
+            )
+        payload = schemas.LLMReplanPayload(
+            actions=kept_actions,
+            halt=payload.halt,
+            confidence=payload.confidence,
+            rationale_overall=(
+                payload.rationale_overall
+                + f" [Note: {dropped} action(s) auto-dropped by mgsr_replan "
+                  f"for unresolved cross-ref issues.]"
+            )[:800],
+        )
+
+    wall_ms = int((time.monotonic() - t0) * 1000)
+    return payload, deployment, repaired, wall_ms
+
+
+async def mgsr_replan_run(state: domains.dd.pipeline.synth.state.SynthState) -> dict:
+    """Run the Memory-Guided Structure Replanner for one chapter."""
+    slug = state.get("framework_slug")
+    chapter_id = state.get("chapter_id")
+    thread_id = state.get("thread_id") or ""
+
+    if not slug or not chapter_id:
+        return {
+            "mgsr_path":  "",
+            "mgsr_stats": {
+                "skipped": "no_slug_or_chapter_id", "wall_ms": 0,
+            },
+            "status": "failed",
+            "error":  "framework_slug or chapter_id missing from SynthState",
+        }
+
+    t0 = time.monotonic()
+    minio = infra.minio.service.get_storage()
+
+    # ── Load checklist + outline ───────────────────────────────────────
+    checklist_key = keys.checklist_latest_key(slug, chapter_id)
+    outline_key = keys.outline_latest_key(slug, chapter_id)
+
+    if not await minio.exists(checklist_key):
+        return {
+            "mgsr_path":  "",
+            "mgsr_stats": {
+                "skipped":       "checklist_not_found",
+                "checklist_key": checklist_key,
+                "wall_ms":       int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"checklist {checklist_key!r} not in MinIO — run "
+                      f"checklist_eval first",
+        }
+    if not await minio.exists(outline_key):
+        return {
+            "mgsr_path":  "",
+            "mgsr_stats": {
+                "skipped":     "outline_not_found",
+                "outline_key": outline_key,
+                "wall_ms":     int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"outline {outline_key!r} not in MinIO — run "
+                      f"outline_sdp first",
+        }
+
+    try:
+        checklist_text = await minio.read_text(checklist_key)
+        checklist = json.loads(checklist_text)
+        outline_text = await minio.read_text(outline_key)
+        outline_payload = json.loads(outline_text)
+    except Exception as e:
+        return {
+            "mgsr_path":  "",
+            "mgsr_stats": {
+                "skipped": "inputs_unreadable",
+                "wall_ms": int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"checklist/outline unreadable: {type(e).__name__}: {e}",
+        }
+
+    chapter_title = (
+        checklist.get("chapter_title")
+        or outline_payload.get("chapter_title")
+        or chapter_id
+    )
+    pass_rate = float(checklist.get("pass_rate", 0.0))
+    chapter_passed = bool(checklist.get("chapter_passed", False))
+    infra.langfuse.service.record_score(
+        "mgsr.pass_rate", pass_rate, comment = f"chapter={chapter_id}",
+    )
+    infra.langfuse.service.record_score(
+        "mgsr.chapter_passed", 1.0 if chapter_passed else 0.0,
+        comment = f"chapter={chapter_id}",
+    )
+    failed_feedback = list(checklist.get("failed_feedback") or [])
+    n_failed = len(failed_feedback)
+    failed_names = [
+        c.get("name", "?")
+        for c in (checklist.get("criteria") or [])
+        if not c.get("passed", False)
+    ]
+    checklist_manifest_hash = (
+        checklist.get("checklist_manifest_hash") or ""
+    )
+    outline_manifest_hash = outline_payload.get("manifest_hash") or ""
+
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        thread_id, "mgsr_replan", "start",
+        chapter_id=chapter_id,
+        chapter_title=chapter_title,
+        pass_rate=pass_rate,
+        chapter_passed=chapter_passed,
+        n_failed_criteria=n_failed,
+    )
+
+    # ── Cache fast-path ────────────────────────────────────────────────
+    manifest_hash = domain.compute_manifest_hash(
+        checklist_manifest_hash=checklist_manifest_hash,
+        outline_manifest_hash=outline_manifest_hash,
+    )
+    versioned_key = keys.versioned_blob_key(slug, chapter_id, manifest_hash)
+    latest_key    = keys.latest_blob_key(slug, chapter_id)
+
+    if await minio.exists(versioned_key) and await minio.exists(latest_key):
+        try:
+            cached_text = await minio.read_text(versioned_key)
+            cached = json.loads(cached_text)
+            decision = (cached or {}).get("decision") or {}
+            elapsed = int((time.monotonic() - t0) * 1000)
+            stats = {
+                "halt":              decision.get("halt", True),
+                "halt_reason":       decision.get("halt_reason", "?"),
+                "confidence":        decision.get("confidence", 0.0),
+                "n_actions":         len(decision.get("actions") or []),
+                "chapter_passed":    cached.get("checklist_chapter_passed", False),
+                "pass_rate":         cached.get("checklist_pass_rate", 0.0),
+                "wall_ms":           elapsed,
+                "store_path":        latest_key,
+                "versioned_path":    versioned_key,
+                "manifest_hash":     manifest_hash,
+                "cache_hit":         True,
+                "prompt_version":    cached.get("prompt_version"),
+            }
+            await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+                thread_id, "mgsr_replan", "done",
+                halt=stats["halt"],
+                halt_reason=stats["halt_reason"],
+                n_actions=stats["n_actions"],
+                confidence=stats["confidence"],
+                wall_ms=elapsed, cache_hit=True,
+            )
+            logger.info(
+                f"[mgsr_replan] {slug}/{chapter_id}: CACHE HIT — "
+                f"halt={stats['halt']} reason={stats['halt_reason']!r} "
+                f"actions={stats['n_actions']} conf={stats['confidence']:.2f} "
+                f"{elapsed} ms"
+            )
+            return {"mgsr_path": latest_key, "mgsr_stats": stats}
+        except Exception as e:
+            logger.warning(
+                f"[mgsr_replan] {slug}/{chapter_id}: cached blob "
+                f"{versioned_key!r} unreadable ({type(e).__name__}: {e}); "
+                f"recomputing"
+            )
+
+    # ── Fast path: chapter already passed checklist (no LLM call) ──────
+    if domain.is_trivial_pass(checklist):
+        decision = domain.build_trivial_pass_decision(pass_rate)
+        await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+            thread_id, "mgsr_replan", "trivial_pass",
+            pass_rate=pass_rate,
+        )
+        replan = schemas.MGSRReplan(
+            chapter_id=chapter_id,
+            chapter_title=chapter_title,
+            framework_slug=slug,
+            iteration=0,
+            decision=decision,
+            deployment=None,
+            wall_ms=int((time.monotonic() - t0) * 1000),
+            checklist_pass_rate=pass_rate,
+            checklist_chapter_passed=chapter_passed,
+            n_failed_criteria=n_failed,
+            failed_criteria_names=failed_names,
+        )
+        payload = replan.model_dump()
+        payload["checklist_manifest_hash"] = checklist_manifest_hash
+        payload["outline_manifest_hash"]   = outline_manifest_hash
+        payload["mgsr_manifest_hash"]      = manifest_hash
+
+        blob_bytes = json.dumps(payload, indent=2, ensure_ascii=False)
+        await minio.write(
+            versioned_key, blob_bytes, content_type="application/json",
+        )
+        await minio.write(
+            latest_key, blob_bytes, content_type="application/json",
+        )
+
+        elapsed = int((time.monotonic() - t0) * 1000)
+        stats = {
+            "halt":           True,
+            "halt_reason":    "chapter_passed",
+            "confidence":     1.0,
+            "n_actions":      0,
+            "chapter_passed": chapter_passed,
+            "pass_rate":      pass_rate,
+            "n_failed_criteria": n_failed,
+            "wall_ms":        elapsed,
+            "store_path":     latest_key,
+            "versioned_path": versioned_key,
+            "manifest_hash":  manifest_hash,
+            "cache_hit":      False,
+            "prompt_version": versions.MGSR_PROMPT_VERSION,
+            "trivial_pass":   True,
+        }
+        await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+            thread_id, "mgsr_replan", "done",
+            halt=True,
+            halt_reason="chapter_passed",
+            n_actions=0,
+            confidence=1.0,
+            wall_ms=elapsed,
+        )
+        logger.info(
+            f"[mgsr_replan] {slug}/{chapter_id}: TRIVIAL PASS "
+            f"(pass_rate={pass_rate:.2%} ≥ 0.80), no LLM call, "
+            f"{elapsed} ms"
+        )
+        return {"mgsr_path": latest_key, "mgsr_stats": stats}
+
+    # ── Slow path, issue #19 (2026-09-07): SKIPPED, not fired ───────────
+    # `_run_llm_replan`'s entire output — the analyzed `actions` list,
+    # confidence, rationale — was confirmed to have zero downstream
+    # consumers: `_route_after_mgsr` (graph.py) decides RETHINK-vs-halt
+    # from checklist_stats alone, never from mgsr_stats, and the only
+    # other reader (runtime/dispatch/service.py) pulls just the
+    # `halt_reason` string for a telemetry label. This call could cost
+    # up to TIMEOUT_S_REPLAN(90s) x params.MAX_CALL_ATTEMPTS(2) plus real
+    # generation time — observed as long as 210,770ms (3.5 min) in one
+    # logged run — analyzing content that then gets thrown away every
+    # time. Reusing the existing "LLM unavailable" fallback path
+    # unconditionally, rather than calling the LLM at all, is behavior-
+    # identical from the router's perspective (already tolerated in
+    # production whenever the real call fails) at zero LLM cost.
+    # Re-enable by restoring the call to `_run_llm_replan` below IF the
+    # "v2 loop" (wiring `actions` into a targeted sawc_write re-draft,
+    # scoped in this package's own schema comments) is ever implemented
+    # — at that point the output would finally have a real consumer.
+    deployment: Optional[str] = None
+    repaired = False
+    decision = domain.fallback_decision(
+        "mgsr_replan LLM call skipped (issue #19) — its analysis has no "
+        "consumer until the v2 targeted-retry loop is implemented"
+    )
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        thread_id, "mgsr_replan", "llm_done",
+        n_actions=0,
+        halt=decision.halt,
+        halt_reason=decision.halt_reason,
+        confidence=decision.confidence,
+        wall_ms=0,
+        deployment=None,
+        repaired=False,
+        skipped="unused_output",
+    )
+
+    # ── Persist ────────────────────────────────────────────────────────
+    elapsed = int((time.monotonic() - t0) * 1000)
+    replan = schemas.MGSRReplan(
+        chapter_id=chapter_id,
+        chapter_title=chapter_title,
+        framework_slug=slug,
+        iteration=0,
+        decision=decision,
+        deployment=deployment,
+        wall_ms=elapsed,
+        checklist_pass_rate=pass_rate,
+        checklist_chapter_passed=chapter_passed,
+        n_failed_criteria=n_failed,
+        failed_criteria_names=failed_names,
+    )
+    payload = replan.model_dump()
+    payload["checklist_manifest_hash"] = checklist_manifest_hash
+    payload["outline_manifest_hash"]   = outline_manifest_hash
+    payload["mgsr_manifest_hash"]      = manifest_hash
+
+    blob_bytes = json.dumps(payload, indent=2, ensure_ascii=False)
+    await minio.write(
+        versioned_key, blob_bytes, content_type="application/json",
+    )
+    await minio.write(
+        latest_key, blob_bytes, content_type="application/json",
+    )
+
+    stats = {
+        "halt":            decision.halt,
+        "halt_reason":     decision.halt_reason,
+        "confidence":      decision.confidence,
+        "n_actions":       len(decision.actions),
+        "chapter_passed":  chapter_passed,
+        "pass_rate":       pass_rate,
+        "n_failed_criteria": n_failed,
+        "wall_ms":         elapsed,
+        "store_path":      latest_key,
+        "versioned_path":  versioned_key,
+        "manifest_hash":   manifest_hash,
+        "cache_hit":       False,
+        "prompt_version":  versions.MGSR_PROMPT_VERSION,
+        "deployment":      deployment,
+        "repaired":        repaired,
+        "trivial_pass":    False,
+        # Issue #19/#20: this branch no longer fires the real LLM call, so
+        # `halt` above is `fallback_decision`'s hardcoded conservative
+        # value — NOT a prediction of what `_route_after_mgsr` will
+        # actually decide (that's computed independently from
+        # checklist_stats and can just as easily be a RETHINK loop). Flag
+        # it so any consumer — the FastHTML dashboard included — displays
+        # this as "not computed" rather than a real (and possibly wrong)
+        # halt/loop verdict.
+        "skipped":         True,
+    }
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        thread_id, "mgsr_replan", "done",
+        halt=decision.halt,
+        halt_reason=decision.halt_reason,
+        n_actions=len(decision.actions),
+        confidence=decision.confidence,
+        wall_ms=elapsed,
+    )
+    logger.info(
+        f"[mgsr_replan] {slug}/{chapter_id}: "
+        f"halt={decision.halt} reason={decision.halt_reason!r} "
+        f"actions={len(decision.actions)} conf={decision.confidence:.2f} "
+        f"(pass_rate={pass_rate:.2%}, {n_failed} failed criteria); "
+        f"{elapsed} ms"
+    )
+    return {"mgsr_path": latest_key, "mgsr_stats": stats}

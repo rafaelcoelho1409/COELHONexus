@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import domains, infra  # noqa: E402
 
-nodes = domains.dd.planner.nodes
+nodes = domains.dd.pipeline.planner.nodes
 SEL = nodes.chapter_select.domain
 PR, OT = nodes.chapter_propose, nodes.off_topic
 chat = domains.settings.chat
@@ -78,7 +78,7 @@ async def run_propose(sample_for):
         return {"entries": []}
     domains.dd.ingestion.storage.service.read_framework_manifest = _manifest
     chat.service.wait_for_rotator_settle = _settle
-    domains.dd.planner.runtime.progress.service.emit_progress = _noop
+    domains.dd.pipeline.planner.runtime.progress.service.emit_progress = _noop
     async def _dist(m, slug):
         return DOCS
     nodes.doc_distill.service.load_distillates = _dist

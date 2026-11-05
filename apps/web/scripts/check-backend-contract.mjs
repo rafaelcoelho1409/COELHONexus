@@ -51,8 +51,8 @@ function webNodes(source, table) {
 const stages = read(join(web, "src/features/dd/domain/stages.ts"));
 
 for (const [name, table, stateClass, statePath, graphPath] of [
-  ["planner", "PLANNER_NODES", "PlannerState", "planner/state.py", "planner/graph.py"],
-  ["synth", "SYNTH_NODES", "SynthState", "synth/state.py", "synth/graph.py"],
+  ["planner", "PLANNER_NODES", "PlannerState", "pipeline/planner/state.py", "pipeline/planner/graph.py"],
+  ["synth", "SYNTH_NODES", "SynthState", "pipeline/synth/state.py", "pipeline/synth/graph.py"],
 ]) {
   const keys = typedDictKeys(read(join(server, statePath)), stateClass);
   const nodes = webNodes(stages, table);
@@ -71,7 +71,7 @@ for (const [name, table, stateClass, statePath, graphPath] of [
   }
 }
 
-const backendPrefix = read(join(server, "planner/runtime/dispatch/keys.py")).match(
+const backendPrefix = read(join(server, "pipeline/planner/runtime/dispatch/keys.py")).match(
   /^THREAD_PREFIX = "([^"]+)"/m,
 )?.[1];
 const webPrefix = read(join(web, "src/features/dd/params.ts")).match(/THREAD_PREFIX = "([^"]+)"/)?.[1];

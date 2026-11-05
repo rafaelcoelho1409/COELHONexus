@@ -16,8 +16,8 @@ async def pipeline_active() -> dict:
     """Drives the cross-stage proactive gate. Ingestion omitted — it's
     orthogonal to the Planner/Synth lock block."""
     return {
-        "planner": await domains.dd.planner.runtime.dispatch.service.active_lock(),
-        "synth":   await domains.dd.synth.runtime.dispatch.service.active_lock(),
+        "planner": await domains.dd.pipeline.planner.runtime.dispatch.service.active_lock(),
+        "synth":   await domains.dd.pipeline.synth.runtime.dispatch.service.active_lock(),
     }
 
 
@@ -45,8 +45,8 @@ async def pipeline_state(slug: str) -> dict:
         return bool(keys)
 
     ingestion = await _exists(domains.dd.ingestion.storage.keys.manifest_key(slug))
-    planner   = await _exists(domains.dd.planner.keys.plan_latest_key(slug))
-    synth_prefix = domains.dd.synth.keys.minio_prefix(slug)
+    planner   = await _exists(domains.dd.pipeline.planner.keys.plan_latest_key(slug))
+    synth_prefix = domains.dd.pipeline.synth.keys.minio_prefix(slug)
     synth     = await _has_any(synth_prefix)
     study = False
     if synth:

@@ -114,7 +114,7 @@ describe("DocsDistillerPage", () => {
     const user = userEvent.setup();
     renderPage();
     expect(await screen.findByText("Alpha · 2 pages · 640 B")).toBeInTheDocument();
-    await user.click(screen.getByRole("tab", { name: "Materials" }));
+    await user.click(screen.getByRole("tab", { name: "Pages" }));
 
     const pages = within(await screen.findByRole("navigation", { name: "Pages" }));
     expect(pages.getByText("Docs")).toBeInTheDocument();

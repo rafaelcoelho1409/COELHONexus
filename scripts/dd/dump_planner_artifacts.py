@@ -25,7 +25,7 @@ async def _read(minio, key):
 
 async def main() -> None:
     minio = infra.minio.service.get_storage()
-    nodes = domains.dd.planner.nodes
+    nodes = domains.dd.pipeline.planner.nodes
     slugs = sorted(
         s.rstrip("/").split("/")[-1] for s in await minio.list_subfolders("planner/")
     )

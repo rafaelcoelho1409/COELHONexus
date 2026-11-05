@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
-nodes = domains.dd.planner.nodes
+nodes = domains.dd.pipeline.planner.nodes
 SEL, SELS = nodes.chapter_select.domain, nodes.chapter_select
 ORD, PR, CA = nodes.order_chapters, nodes.chapter_propose, nodes.chapter_assign
 chat = domains.settings.chat

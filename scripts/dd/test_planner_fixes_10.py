@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
-sel = domains.dd.planner.nodes.chapter_select.domain
+sel = domains.dd.pipeline.planner.nodes.chapter_select.domain
 
 
 def corpus(catalog_overviews):

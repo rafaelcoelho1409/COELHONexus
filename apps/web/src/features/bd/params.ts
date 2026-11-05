@@ -19,8 +19,8 @@ export const MAX_UPLOAD_LABEL = "300 MB";
 
 /** The two views of an open book, drawn as links in the page's third navbar. */
 export const BOOK_VIEWS = [
-  ["pipeline", "Pipeline"],
-  ["materials", "Materials"],
+  ["pipeline", "Agents"],
+  ["materials", "Pages"],
 ] as const;
 export type BookViewId = (typeof BOOK_VIEWS)[number][0];
 

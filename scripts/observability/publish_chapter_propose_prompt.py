@@ -1,7 +1,7 @@
 """One-shot uploader — publish `dd.planner.chapter_propose` to LangFuse.
 
 The template MIRRORS the local f-string in
-`apps/server/domains/dd/planner/nodes/chapter_propose/prompts.py`. Keep
+`apps/server/domains/dd/pipeline/planner/nodes/chapter_propose/prompts.py`. Keep
 them in sync: if the local builder changes, re-run this script to push
 the new shape with a fresh label.
 

@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
-N = domains.dd.synth.nodes
+N = domains.dd.pipeline.synth.nodes
 OL, DG, CK, SW = N.outline, N.digest, N.checklist, N.sawc
 SWS, SWD, SWP = SW.schemas, SW.domain, SW.params
 chat = domains.settings.chat.service

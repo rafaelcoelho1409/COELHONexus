@@ -7,8 +7,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
-SEL = domains.dd.planner.nodes.chapter_select.domain
-P = domains.dd.planner.nodes.chapter_select.params
+SEL = domains.dd.pipeline.planner.nodes.chapter_select.domain
+P = domains.dd.pipeline.planner.nodes.chapter_select.params
 
 
 def chap(title, n, **kw):
@@ -71,7 +71,7 @@ assert P.SPLIT_MAX_BLOCKS == 200 and P.SPLIT_BLOCKS_PER_PART == 140
 # 5) the parts of a split are re-checked for the block cap (langfuse: 102 pages -> 7 parts, one with 35 pages and 376 blocks stayed whole) ----------------------------
 import asyncio  # noqa: E402
 
-SERV = domains.dd.planner.nodes.chapter_select.service
+SERV = domains.dd.pipeline.planner.nodes.chapter_select.service
 only = SEL.plan_splits([chap("Part", 40, origin="proposal")] + [chap(f"Small {i}", 6) for i in range(8)],
                        doc_blocks={k: 7 for k in chap("Part", 40)["member_doc_keys"]}, blocks_only=True)
 assert only == [(0, 2)], only                                                        # 280 blocks -> 2 parts

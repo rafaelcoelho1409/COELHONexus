@@ -1,0 +1,1296 @@
+"""Async orchestration: per-chapter, resume, strict-order study-loop, and book_harmonize (co-located so the Celery study task can run it in-process)."""
+from __future__ import annotations
+import domains, infra
+from . import domain, keys, params
+
+import asyncio
+import json
+import logging
+import time
+
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Run gate + registry — what the API does around enqueueing a run: single-flight
+# lock, cross-stage block, study registry, cancel propagation, wipe.
+# ---------------------------------------------------------------------------
+
+async def reserve_start(slug: str, thread_id: str) -> dict | None:
+    """Single-flight gate for starting a synth run (a whole study or one chapter) on `slug`. Returns the `locked`
+    response when a planner is running (planner and synth share the LLM resources), another slug's synth is, or this
+    slug's synth lock is held; else None, with the slug's lock taken for `thread_id` and its cancel flag cleared —
+    the caller then enqueues the run and calls `release_start` if that fails."""
+    redis = infra.redis.service
+    async with redis.client() as r:
+        planner = await redis.first_held(r, domains.dd.pipeline.planner.keys.lock_prefix())
+        if planner is not None:
+            planner_slug, planner_thread = planner
+            return {
+                "status": "locked",
+                "slug": planner_slug,
+                "thread_id": planner_thread,
+                "stage": "planner",
+                "message": (
+                    f"A planner is running ({planner_slug!r}, "
+                    f"thread_id={planner_thread}). Planner and "
+                    f"Synth share the same LLM resources — running "
+                    f"both at once degrades quality on each. Wait "
+                    f"for the planner to finish or cancel it before "
+                    f"starting a synth."
+                ),
+            }
+        other = await redis.first_held(r, domains.dd.pipeline.synth.keys.lock_prefix(), skip=slug)
+        if other is not None:
+            other_slug, other_thread = other
+            return {
+                "status": "locked",
+                "slug": other_slug,
+                "thread_id": other_thread,
+                "stage": "synth",
+                "message": (
+                    f"Another synth is running ({other_slug!r}, "
+                    f"thread_id={other_thread}). Wait for it to "
+                    f"finish or cancel it before starting {slug!r}."
+                ),
+            }
+        acquired, existing = await redis.try_lock(
+            r, domains.dd.pipeline.synth.keys.lock_key(slug), thread_id, domains.dd.pipeline.synth.params.LOCK_TTL_S,
+        )
+        if not acquired:
+            return {
+                "status": "locked",
+                "slug": slug,
+                "thread_id": existing,
+                "stage": "synth",
+                "message": (
+                    f"A synth of {slug!r} is already running "
+                    f"(thread_id={existing}). Wait for it to finish "
+                    f"or cancel it before retrying."
+                ),
+            }
+        await domains.dd.pipeline.synth.runtime.cancel.service.clear_cancel(r, thread_id)
+    return None
+
+
+async def release_start(slug: str) -> None:
+    """Drop the slug's synth lock after a failed enqueue (best-effort: never raised)."""
+    try:
+        async with infra.redis.service.client() as r:
+            await r.delete(domains.dd.pipeline.synth.keys.lock_key(slug))
+    except Exception:
+        pass
+
+
+async def register_active_study(slug: str, study_thread_id: str) -> None:
+    """Record the live study so a page refresh can reconnect to it (best-effort: logged, never raised)."""
+    try:
+        async with infra.redis.service.client() as r:
+            await r.set(
+                domains.dd.pipeline.synth.keys.active_study_key(slug),
+                json.dumps({"study_thread_id": study_thread_id, "started_ts": time.time()}),
+                ex = domains.dd.pipeline.synth.params.ACTIVE_STUDY_TTL_S,
+            )
+    except Exception as e:
+        logger.warning(
+            f"[synth-study] {slug}: active-run register failed: "
+            f"{type(e).__name__}: {e}"
+        )
+
+
+async def read_active(slug: str) -> dict:
+    """Page-refresh recovery: the live study's thread id, or — for a single-chapter run, which has no study registry
+    entry — the chapter thread holding the slug's synth lock (`chapter_thread_id`); `{"active": False}` when neither
+    (also when Redis is unreachable)."""
+    chapter_tid = None
+    try:
+        async with infra.redis.service.client() as r:
+            sid = await r.get(domains.dd.pipeline.synth.keys.active_study_key(slug))
+            if not sid:
+                held = await r.get(domains.dd.pipeline.synth.keys.lock_key(slug))
+                if isinstance(held, (bytes, bytearray)):
+                    held = held.decode("utf-8", "replace")
+                if held and not str(held).startswith(f"{keys.STUDY_THREAD_PREFIX}/"):
+                    chapter_tid = str(held)
+    except Exception:
+        return {"active": False}
+    if chapter_tid:
+        return {"active": True, "chapter_thread_id": chapter_tid, "study_thread_id": None, "started_ts": None}
+    if not sid:
+        return {"active": False}
+    if isinstance(sid, (bytes, bytearray)):
+        sid = sid.decode("utf-8", "replace")
+    try:
+        data = json.loads(sid)
+        return {
+            "active": True,
+            "study_thread_id": data.get("study_thread_id"),
+            "started_ts": data.get("started_ts"),
+        }
+    except Exception:
+        return {"active": True, "study_thread_id": str(sid), "started_ts": None}
+
+
+async def run_in_flight(slug: str) -> bool:
+    """True while a synth run holds the slug: a study registry entry, or — for a single-chapter run — the slug's synth
+    lock. Raises when Redis is unreachable; the caller decides what that means."""
+    async with infra.redis.service.client() as r:
+        running = await r.get(domains.dd.pipeline.synth.keys.active_study_key(slug))
+        held = await r.get(domains.dd.pipeline.synth.keys.lock_key(slug)) if not running else None
+    return bool(running or held)
+
+
+async def active_lock() -> dict | None:
+    """The synth run holding a lock right now — `{"slug", "thread_id"}` — or None."""
+    async with infra.redis.service.client() as r:
+        held = await infra.redis.service.first_held(r, domains.dd.pipeline.synth.keys.lock_prefix())
+    return None if held is None else {"slug": held[0], "thread_id": held[1]}
+
+
+async def cancel_run(thread_id: str) -> list[str]:
+    """Raise the thread's cancel flag. A STUDY thread's cancel must propagate to each in-flight per-chapter thread —
+    chapter watchers poll their own flag, not the study flag; without propagation only the NEXT chapter is blocked and
+    the in-flight one keeps firing LLM calls. Returns the chapter threads it propagated to."""
+    cancel = domains.dd.pipeline.synth.runtime.cancel.service
+    propagated_to: list[str] = []
+    async with infra.redis.service.client() as r:
+        await cancel.request_cancel(r, thread_id)
+        parts = thread_id.split("/")
+        if len(parts) >= 4 and parts[1] == "study":
+            slug = parts[2]
+            seen: set[str] = set()
+            # SADDs before spawn → catches chapters that just started but haven't emitted a progress event yet (invisible to snapshot scan).
+            try:
+                members = await r.smembers(domains.dd.pipeline.synth.keys.active_chapters_key(thread_id))
+                for raw in members or []:
+                    ch_tid = raw.decode() if isinstance(raw, bytes) else raw
+                    if ch_tid and ch_tid not in seen:
+                        await cancel.request_cancel(r, ch_tid)
+                        propagated_to.append(ch_tid)
+                        seen.add(ch_tid)
+            except Exception as e:
+                logger.warning(
+                    f"[cancel_synth] active_chapters read failed for "
+                    f"{thread_id!r}: {type(e).__name__}: {e}"
+                )
+            # BELT-AND-SUSPENDERS — scan progress snapshots. Covers any chapter that emitted progress but never landed
+            # in the set (e.g., upgraded mid-run from an older dispatch that didn't SADD). Idempotent: de-duped via `seen`.
+            scan_pattern = domains.dd.pipeline.synth.keys.snapshot_pattern(f"{keys.CHAPTER_THREAD_PREFIX}/{slug}/")
+            try:
+                async for key in r.scan_iter(match=scan_pattern, count=200):
+                    if isinstance(key, bytes):
+                        key = key.decode()
+                    ch_tid = domains.dd.pipeline.synth.keys.thread_id_from_snapshot_key(key)
+                    if ch_tid in seen:
+                        continue
+                    await cancel.request_cancel(r, ch_tid)
+                    propagated_to.append(ch_tid)
+                    seen.add(ch_tid)
+            except Exception as e:
+                logger.warning(
+                    f"[cancel_synth] scan/propagate failed for {thread_id!r}: "
+                    f"{type(e).__name__}: {e}"
+                )
+
+    progress = domains.dd.pipeline.synth.runtime.progress.service
+    await progress.emit_progress(thread_id, "synth", "cancel_requested")
+    for ch_tid in propagated_to:
+        try:
+            await progress.emit_progress(ch_tid, "synth", "cancel_requested")
+        except Exception:
+            pass
+    logger.info(
+        f"[cancel_synth] {thread_id}: flag set; "
+        f"propagated to {len(propagated_to)} chapter thread(s)"
+    )
+    return propagated_to
+
+
+async def wipe_redis(slug: str) -> int:
+    """Delete the slug's SSE snapshots, thread state, study registry and lock — without the sweep a wiped slug "comes
+    back from the dead" via the cached study SSE snapshot. Returns how many keys went (-1 when Redis fails — logged)."""
+    n_redis = 0
+    try:
+        async with infra.redis.service.client() as r:
+            for prefix in (keys.CHAPTER_THREAD_PREFIX, keys.STUDY_THREAD_PREFIX):
+                n_redis += await infra.redis.service.delete_matching(
+                    r, domains.dd.pipeline.synth.keys.thread_state_pattern(f"{prefix}/{slug}/"),
+                )
+            n_redis += await r.delete(
+                domains.dd.pipeline.synth.keys.active_study_key(slug),
+                domains.dd.pipeline.synth.keys.lock_key(slug),
+            )
+    except Exception as e:
+        logger.warning(f"[synth-wipe] Redis delete failed for {slug!r}: {e}")
+        return -1
+    return n_redis
+
+
+async def _record_terminal_metrics(graph, config: dict, status: str) -> None:
+    if status != "done":
+        return
+    try:
+        snap = await graph.aget_state(config)
+        state = dict(snap.values or {})
+        slug = str(state.get("framework_slug") or "")
+        chapter_id = str(state.get("chapter_id") or "")
+        chapter_num = domain.chapter_number_from_id(chapter_id)
+        chapter_stats = state.get("chapter_stats") or {}
+        mgsr_stats = state.get("mgsr_stats") or {}
+        if not slug or not chapter_id or chapter_num <= 0 or not chapter_stats:
+            return
+        wall_ms = int(chapter_stats.get("wall_ms", 0) or 0)
+        refine_iter = int(state.get("refine_iter", 0) or 0)
+        halt_reason = str(mgsr_stats.get("halt_reason") or "")
+        audit_passed = bool(chapter_stats.get("audit_passed", False))
+        outcome = "accept" if halt_reason == "chapter_passed" else "debt_below"
+        domains.dd.pipeline.synth.observability.service.record_chapter_outcome(
+            outcome = outcome,
+            framework = slug,
+            chapter_number = chapter_num,
+            duration_s = max(wall_ms / 1000.0, 0.0),
+            iterations = max(refine_iter, 0),
+        )
+        n_code_refs = int(chapter_stats.get("n_code_refs", 0) or 0)
+        n_missing = int(chapter_stats.get("n_missing", 0) or 0)
+        missing_ratio = (
+            float(n_missing) / float(n_code_refs)
+            if n_code_refs > 0 else
+            (1.0 if not audit_passed else 0.0)
+        )
+        domains.dd.pipeline.synth.observability.service.record_audit_missing(
+            framework = slug,
+            chapter_number = chapter_num,
+            iteration = max(refine_iter, 0),
+            missing_ratio = max(0.0, min(missing_ratio, 1.0)),
+        )
+    except Exception as e:
+        logger.warning(
+            f"[synth] terminal metric emit failed: {type(e).__name__}: {e}"
+        )
+
+
+async def _await_with_watcher(
+    graph,
+    config: dict,
+    main_task: asyncio.Task,
+    watcher_task: asyncio.Task,
+    thread_id: str,
+) -> dict:
+    """Await main_task, write terminal status, cancel watcher, emit SSE."""
+    terminal_patch: dict = {}
+    try:
+        await main_task
+        terminal_patch["status"] = "done"
+        logger.info(f"[synth] {thread_id}: done")
+    except asyncio.CancelledError:
+        terminal_patch["status"] = "cancelled"
+        logger.info(f"[synth] {thread_id}: cancelled by user")
+    except Exception as e:
+        terminal_patch["status"] = "failed"
+        terminal_patch["error"] = f"{type(e).__name__}: {e}"
+        logger.exception(
+            f"[synth] {thread_id}: run failed ({type(e).__name__}: {e})"
+        )
+    finally:
+        watcher_task.cancel()
+        try:
+            await watcher_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    try:
+        await graph.aupdate_state(config, terminal_patch)
+    except Exception as e:
+        logger.warning(
+            f"[synth] {thread_id}: aupdate_state failed for terminal "
+            f"patch {terminal_patch!r}: {type(e).__name__}: {e}"
+        )
+    await _record_terminal_metrics(
+        graph,
+        config,
+        terminal_patch.get("status", "unknown"),
+    )
+
+    try:
+        await domains.settings.llm_counter.service.snapshot("dd", thread_id)
+    except Exception as e:
+        logger.warning(
+            f"[synth] {thread_id}: llm-counter snapshot failed "
+            f"({type(e).__name__}: {e})"
+        )
+
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        thread_id, "synth", "terminal",
+        status = terminal_patch.get("status", "unknown"),
+        error = terminal_patch.get("error"),
+    )
+
+    return {
+        "thread_id": thread_id,
+        "status": terminal_patch.get("status", "unknown"),
+        "error": terminal_patch.get("error"),
+    }
+
+
+async def _ensure_corpus_current(slug: str) -> None:
+    """Re-normalize the slug's stored pages if the normalizer has moved on since ingestion (no-op otherwise). Never blocks a Synth run."""
+    try:
+        await domains.dd.pipeline.synth.nodes.backfill.service.ensure_framework_normalized(slug)
+    except Exception as e:
+        logger.warning(
+            f"[synth] {slug}: ensure_framework_normalized failed "
+            f"({type(e).__name__}: {e}) — continuing on stored pages"
+        )
+
+
+async def run_single_chapter_async(
+    thread_id: str,
+    slug: str,
+    chapter_id: str,
+    mode: str = "quality",
+) -> dict:
+    """Fresh per-chapter run. Builds initial state + graph, spawns cancel
+    watcher, awaits terminal."""
+    with infra.langfuse.service.session(
+        "dd-synth",
+        session_id = thread_id,
+        user_id    = slug,
+        chapter_id = chapter_id,
+        framework  = slug,
+    ):
+        with infra.opentelemetry.service.get_tracer().start_as_current_span(
+            "dd.synth.chapter.run",
+            attributes = {
+                infra.langfuse.keys.KEEP:  True,
+                infra.langfuse.keys.KIND:  "workflow_root",
+                infra.langfuse.keys.TRACE_NAME:  "dd.synth.chapter.run",
+                "dd.domain":            "synth",
+                "dd.run.kind":          "chapter",
+                "synth.thread_id":      thread_id,
+                "synth.framework_slug": slug,
+                "synth.chapter_id":     chapter_id,
+                "synth.mode":           mode,
+                infra.langfuse.keys.OBS_META_WORKFLOW: "dd_synth",
+            },
+        ):
+            infra.langfuse.service.set_current_span_langfuse_io(input_data = {
+                "framework_slug": slug,
+                "chapter_id": chapter_id,
+                "mode": mode,
+                "thread_id": thread_id,
+            })
+            infra.langfuse.service.set_current_span_langfuse_trace_metadata({
+                "pipeline": "dd_synth",
+                "run_kind": "chapter",
+                "framework_slug": slug,
+                "chapter_id": chapter_id,
+                "mode": mode,
+                "thread_id": thread_id,
+            })
+            infra.langfuse.service.set_current_span_langfuse_observation_metadata({
+                "framework_slug": slug,
+                "chapter_id": chapter_id,
+                "mode": mode,
+            })
+            await _ensure_corpus_current(slug)
+            graph = domains.dd.pipeline.synth.graph.build_graph()
+            config = {
+                "configurable": {"thread_id": thread_id},
+                "callbacks": [c for c in (infra.langfuse.service.build_langchain_callback(),) if c is not None],
+            }
+
+            async with infra.redis.service.client() as r:
+                await domains.dd.pipeline.synth.runtime.cancel.service.clear_cancel(r, thread_id)
+
+            initial_state = {
+                "framework_slug": slug,
+                "chapter_id":     chapter_id,
+                "thread_id":      thread_id,
+                "synth_mode":     mode,
+                "status":         "running",
+                # Wall-clock RETHINK gate (graph.py _route_after_mgsr) reads
+                # this against SINGLE_CHAPTER_SOFT_TIME_LIMIT_S.
+                "run_started_at": time.time(),
+            }
+
+            # durability="sync" — checkpoint written before the next
+            # super-step, not the library default "async". See
+            # planner/runtime/dispatch/service.py::run_planner_async for
+            # the full rationale (crash-window risk vs. LLM-call-
+            # dominated node runtime making sync overhead immaterial).
+            chapter_t0 = time.monotonic()
+            main_task = asyncio.create_task(
+                graph.ainvoke(initial_state, config, durability = "sync"),
+            )
+            watcher_task = asyncio.create_task(domains.dd.pipeline.synth.runtime.cancel.service.watcher(thread_id, main_task))
+            result = await _await_with_watcher(
+                graph, config, main_task, watcher_task, thread_id,
+            )
+            if result.get("status") == "done":
+                await _persist_chapter_timing(slug, chapter_id, int((time.monotonic() - chapter_t0) * 1000))
+            infra.langfuse.service.set_current_span_langfuse_io(output_data = {
+                "status": result.get("status", "unknown"),
+                "error": result.get("error"),
+                "framework_slug": slug,
+                "chapter_id": chapter_id,
+                "mode": mode,
+            })
+            return result
+
+
+async def run_missing_nodes_async(
+    thread_id: str,
+    missing: list[str],
+) -> dict:
+    """Catch-up — invoke missing IMPLEMENTED nodes via NODE_REGISTRY directly.
+    Needed when a thread reached END BEFORE a new IMPLEMENTED node was added
+    (ainvoke(None) would short-circuit the consumed END marker)."""
+    graph = domains.dd.pipeline.synth.graph.build_graph()
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "callbacks": [c for c in (infra.langfuse.service.build_langchain_callback(),) if c is not None],
+    }
+
+    terminal_patch: dict = {"status": "done"}
+    try:
+        for name in missing:
+            node_fn = domains.dd.pipeline.synth.graph.NODE_REGISTRY.get(name)
+            if node_fn is None:
+                continue
+            snap = await graph.aget_state(config)
+            state = dict(snap.values or {})
+            state["thread_id"] = thread_id
+            result = await node_fn(state)
+            if not isinstance(result, dict):
+                continue
+            await graph.aupdate_state(config, result)
+            logger.info(
+                f"[synth] {thread_id}: catch-up ran missing node "
+                f"{name!r} → fields {sorted(result.keys())}"
+            )
+    except Exception as e:
+        terminal_patch = {"status": "failed",
+                          "error": f"{type(e).__name__}: {e}"}
+        logger.exception(
+            f"[synth] {thread_id}: catch-up failed: {type(e).__name__}: {e}"
+        )
+
+    try:
+        await graph.aupdate_state(config, terminal_patch)
+    except Exception as e:
+        logger.warning(
+            f"[synth] {thread_id}: aupdate_state failed for catch-up "
+            f"terminal patch {terminal_patch!r}: {type(e).__name__}: {e}"
+        )
+
+    try:
+        await domains.settings.llm_counter.service.snapshot("dd", thread_id)
+    except Exception as e:
+        logger.warning(
+            f"[synth] {thread_id}: catch-up llm-counter snapshot failed "
+            f"({type(e).__name__}: {e})"
+        )
+
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        thread_id, "synth", "terminal",
+        status = terminal_patch.get("status", "unknown"),
+        error = terminal_patch.get("error"),
+    )
+
+    return {
+        "thread_id": thread_id,
+        "status": terminal_patch.get("status", "unknown"),
+        "error": terminal_patch.get("error"),
+    }
+
+
+async def resume_synth_async(thread_id: str) -> dict:
+    """Resume from last checkpoint. Three sub-paths handled inline."""
+    graph = domains.dd.pipeline.synth.graph.build_graph()
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "callbacks": [c for c in (infra.langfuse.service.build_langchain_callback(),) if c is not None],
+    }
+
+    snap = await graph.aget_state(config)
+    if snap.values == {}:
+        return {
+            "thread_id": thread_id,
+            "status": "failed",
+            "error": (
+                f"no checkpoints found for thread_id = {thread_id!r}; "
+                f"call POST /synth/{{slug}} to start a fresh run"
+            ),
+        }
+
+    async with infra.redis.service.client() as r:
+        await domains.dd.pipeline.synth.runtime.cancel.service.clear_cancel(r, thread_id)
+
+    state = dict(snap.values or {})
+    if state.get("status") == "done":
+        missing = domain.missing_implemented_nodes(state)
+        if missing:
+            await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+                thread_id, "synth", "catch_up",
+                missing = missing,
+            )
+            try:
+                await graph.aupdate_state(config, {"status": "running"})
+            except Exception as e:
+                logger.warning(
+                    f"[synth] {thread_id}: pre-catch-up status reset "
+                    f"failed: {type(e).__name__}: {e}"
+                )
+            return await run_missing_nodes_async(thread_id, missing)
+        await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+            thread_id, "synth", "terminal",
+            status = "done", error = None,
+        )
+        return {
+            "thread_id": thread_id,
+            "status": "done",
+            "error": None,
+        }
+
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        thread_id, "synth", "resumed",
+        next_nodes = list(snap.next or []),
+    )
+    # Fresh wall-clock start for the wall-clock RETHINK gate (graph.py
+    # _route_after_mgsr) — this resume is its own Celery task execution
+    # with its own soft_time_limit clock, independent of when the original
+    # (interrupted) run started.
+    try:
+        await graph.aupdate_state(config, {"run_started_at": time.time()})
+    except Exception as e:
+        logger.warning(
+            f"[synth] {thread_id}: run_started_at reset on resume failed "
+            f"(wall-clock RETHINK gate will use the stale value): "
+            f"{type(e).__name__}: {e}"
+        )
+    # durability="sync" — see rationale in run_single_chapter_async above.
+    main_task = asyncio.create_task(
+        graph.ainvoke(None, config, durability = "sync"),
+    )
+    watcher_task = asyncio.create_task(domains.dd.pipeline.synth.runtime.cancel.service.watcher(thread_id, main_task))
+    return await _await_with_watcher(
+        graph, config, main_task, watcher_task, thread_id,
+    )
+
+
+async def _run_book_harmonize(
+    *,
+    slug: str,
+    study_thread_id: str,
+    chapter_ids: list[str],
+) -> dict:
+    """Post-study cross-chapter coherence pass. Loads each README.md,
+    runs harmonize_book(), overwrites validated patches. Content-addressed
+    cache skips work on identical inputs. Returns telemetry dict."""
+    tracer = infra.opentelemetry.service.get_tracer()
+    span_attrs = {
+        infra.langfuse.keys.KEEP: True,
+        infra.langfuse.keys.KIND: "workflow_node",
+        "synth.node":           "book_harmonize",
+        "synth.framework_slug": slug,
+        "synth.thread_id":      study_thread_id,
+        "synth.chapter_count":  len(chapter_ids),
+        infra.langfuse.keys.OBS_META_WORKFLOW: "dd_synth",
+        infra.langfuse.keys.OBS_META_NODE_NAME: "book_harmonize",
+        infra.langfuse.keys.OBS_META_STAGE: "synth",
+    }
+    with tracer.start_as_current_span(
+        "dd.synth.node.book_harmonize", attributes = span_attrs,
+    ):
+        return await _run_book_harmonize_impl(
+            slug = slug,
+            study_thread_id = study_thread_id,
+            chapter_ids = chapter_ids,
+        )
+
+
+async def _run_book_harmonize_impl(
+    *,
+    slug: str,
+    study_thread_id: str,
+    chapter_ids: list[str],
+) -> dict:
+    """Wrapped by _run_book_harmonize to keep the OTel span open across all return paths."""
+    minio = infra.minio.service.get_storage()
+    entry = domains.dd.catalog.service.index_by_slug().get(slug, {})
+    framework_name = entry.get("name") or entry.get("slug") or slug
+
+    chapters: list[dict] = []
+    skipped_missing: list[str] = []
+    skipped_audit_failed: list[str] = []
+    for cid in chapter_ids:
+        # A chapter whose render audit failed must not feed cross-chapter
+        # harmonization — its prose can be a literal unfilled placeholder,
+        # and harmonize_book would treat it as an equally-trustworthy
+        # sibling when extracting claims / patching other chapters.
+        try:
+            render_blob = json.loads(
+                await minio.read_text(domains.dd.pipeline.synth.keys.chapter_render_latest_key(slug, cid))
+            )
+            if not (render_blob.get("audit") or {}).get("audit_passed", True):
+                skipped_audit_failed.append(cid)
+                continue
+        except Exception:
+            pass   # no render stats yet — fall through to the README check below
+        key = domains.dd.pipeline.synth.keys.chapter_readme_key(slug, cid)
+        try:
+            blob = await minio.read_bytes(key)
+        except Exception:
+            skipped_missing.append(cid)
+            continue
+        chapters.append({
+            "chapter_id": cid,
+            "title":      cid,
+            "prose":      blob.decode("utf-8", errors = "replace"),
+        })
+
+    if len(chapters) < params.BOOK_HARMONIZE_MIN_CHAPTERS:
+        await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+            study_thread_id, "study", "book_harmonize_skipped",
+            reason = "fewer_than_2_rendered_chapters",
+            n_rendered = len(chapters),
+        )
+        return {
+            "skipped": "fewer_than_2_rendered_chapters",
+            "n_rendered_chapters": len(chapters),
+            "missing_chapters": skipped_missing,
+            "audit_failed_chapters": skipped_audit_failed,
+        }
+
+    manifest_hash = domains.dd.pipeline.synth.nodes.book_harmonize.domain.compute_harmonize_manifest_hash(chapters)
+    cache_key = domains.dd.pipeline.synth.keys.book_harmonize_versioned_key(slug, manifest_hash)
+    latest_key = domains.dd.pipeline.synth.keys.book_harmonize_latest_key(slug)
+    if await minio.exists(cache_key):
+        try:
+            cached_blob = await minio.read_bytes(cache_key)
+            cached = json.loads(cached_blob.decode("utf-8"))
+            cached["cache_hit"] = True
+            cached["manifest_hash"] = manifest_hash
+            await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+                study_thread_id, "study", "book_harmonize_done",
+                n_chapters = cached.get("n_chapters", 0),
+                n_atomic_claims = cached.get("n_atomic_claims", 0),
+                n_canonical_terms = cached.get("n_canonical_terms", 0),
+                n_chapters_with_issues = cached.get(
+                    "n_chapters_with_issues", 0,
+                ),
+                n_chapters_patched = cached.get("n_chapters_patched", 0),
+                n_chapters_overwritten = cached.get(
+                    "n_chapters_overwritten", 0,
+                ),
+                elapsed_ms = cached.get("elapsed_ms", 0),
+                cache_hit = True,
+            )
+            logger.info(
+                f"[book_harmonize] {slug}: CACHE HIT — manifest_hash = "
+                f"{manifest_hash}"
+            )
+            return cached
+        except Exception as e:
+            logger.warning(
+                f"[book_harmonize] cache read failed at {cache_key!r}: "
+                f"{type(e).__name__}: {e} — recomputing"
+            )
+
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        study_thread_id, "study", "book_harmonize_start",
+        n_chapters = len(chapters),
+    )
+
+    try:
+        # harmonize_book requires framework_slug (canonical-terms blob paths);
+        # earlier BU/CC studies crashed when this was omitted.
+        result = await domains.dd.pipeline.synth.nodes.book_harmonize.service.harmonize_book(
+            framework_slug = slug,
+            framework_name = framework_name,
+            chapters = chapters,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[book_harmonize] {slug}: harmonize_book crashed "
+            f"({type(e).__name__}: {e})"
+        )
+        return {
+            "skipped": f"crash: {type(e).__name__}",
+            "error": str(e)[:240],
+        }
+
+    # harmonize_book returns "patches" not "patched_chapters"; wrong key = writeback loop never ran.
+    n_overwritten = 0
+    for patched in (result.get("patches") or []):
+        if not patched.get("patched"):
+            continue
+        cid = patched.get("chapter_id")
+        new_prose = patched.get("new_prose")
+        if not cid or not new_prose:
+            continue
+        try:
+            await minio.write(
+                domains.dd.pipeline.synth.keys.chapter_readme_key(slug, cid),
+                domains.dd.pipeline.synth.nodes.render.domain.strip_outer_wrapper_fences(new_prose).rstrip() + "\n",
+                content_type = "text/markdown",
+            )
+            n_overwritten += 1
+        except Exception as e:
+            logger.warning(
+                f"[book_harmonize] {slug}/{cid}: overwrite failed "
+                f"({type(e).__name__}: {e})"
+            )
+
+    payload = {
+        **result,
+        "manifest_hash":         manifest_hash,
+        "n_chapters_overwritten": n_overwritten,
+        "cache_hit":             False,
+    }
+    try:
+        blob = json.dumps(payload, ensure_ascii = False).encode("utf-8")
+        await minio.write(cache_key, blob, content_type = "application/json")
+        await minio.write(latest_key, blob, content_type = "application/json")
+    except Exception as e:
+        logger.warning(
+            f"[book_harmonize] {slug}: cache write failed "
+            f"({type(e).__name__}: {e})"
+        )
+
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        study_thread_id, "study", "book_harmonize_done",
+        n_chapters = payload.get("n_chapters", 0),
+        n_atomic_claims = payload.get("n_atomic_claims", 0),
+        n_canonical_terms = payload.get("n_canonical_terms", 0),
+        n_chapters_with_issues = payload.get("n_chapters_with_issues", 0),
+        n_chapters_patched = payload.get("n_chapters_patched", 0),
+        n_chapters_overwritten = n_overwritten,
+        elapsed_ms = payload.get("elapsed_ms", 0),
+        cache_hit = False,
+    )
+    return payload
+
+
+async def _study_cancelled(study_thread_id: str) -> bool:
+    """Per-study cancel flag set via `/synth/{study_thread_id}/cancel`."""
+    async with infra.redis.service.client() as r:
+        try:
+            return await domains.dd.pipeline.synth.runtime.cancel.service.is_cancelled(r, study_thread_id)
+        except Exception:
+            return False
+
+
+async def _persist_study_timing(
+    slug: str,
+    *,
+    per_chapter_ms: dict[str, int],
+    harmonize_ms: int,
+    session_wall_ms: int,
+    finished_ts: float,
+) -> None:
+    """Best-effort write of study timing; total = cumulative chapter wall + harmonize (resume-stable)."""
+    total = sum(int(v) for v in per_chapter_ms.values()) + int(harmonize_ms)
+    payload = {
+        "slug":            slug,
+        "total_wall_ms":   total,
+        "per_chapter_ms":  {k: int(v) for k, v in per_chapter_ms.items()},
+        "harmonize_ms":    int(harmonize_ms),
+        "session_wall_ms": int(session_wall_ms),
+        "finished_ts":     finished_ts,
+    }
+    try:
+        await infra.minio.service.get_storage().write(
+            domains.dd.pipeline.synth.keys.study_timing_key(slug),
+            json.dumps(payload, indent = 2),
+            content_type = "application/json",
+        )
+    except Exception as e:
+        logger.warning(
+            f"[study-orchestrator] {slug}: timing persist failed "
+            f"({type(e).__name__}: {e})"
+        )
+
+
+async def _persist_chapter_timing(slug: str, chapter_id: str, wall_ms: int) -> None:
+    """Best-effort merge of one finished chapter's wall time into the study timing blob (a single-chapter ▶ run leaves the
+    other chapters' times, the harmonize time and the session fields as they were)."""
+    storage = infra.minio.service.get_storage()
+    key = domains.dd.pipeline.synth.keys.study_timing_key(slug)
+    try:
+        prior = json.loads(await storage.read_text(key))
+    except Exception:
+        prior = {}
+    per_chapter_ms = {str(k): int(v) for k, v in (prior.get("per_chapter_ms") or {}).items()}
+    per_chapter_ms[chapter_id] = int(wall_ms)
+    harmonize_ms = int(prior.get("harmonize_ms") or 0)
+    payload = {
+        "slug":            slug,
+        "total_wall_ms":   sum(per_chapter_ms.values()) + harmonize_ms,
+        "per_chapter_ms":  per_chapter_ms,
+        "harmonize_ms":    harmonize_ms,
+        "session_wall_ms": int(prior.get("session_wall_ms") or wall_ms),
+        "finished_ts":     time.time(),
+    }
+    try:
+        await storage.write(key, json.dumps(payload, indent = 2), content_type = "application/json")
+    except Exception as e:
+        logger.warning(f"[synth] {slug}/{chapter_id}: chapter timing persist failed ({type(e).__name__}: {e})")
+
+
+async def run_study_async(
+    study_thread_id: str,
+    slug: str,
+    chapter_ids: list[str],
+    mode: str = "quality",
+) -> dict:
+    """Strict-order study orchestrator; emits chapter_ready per render so UI shows each chapter as it completes (TTFR ~10-15 min vs ~2h batch).     Runs book_harmonize post-loop if ≥2 done."""
+    with infra.langfuse.service.session(
+        "dd",
+        session_id = study_thread_id,
+        user_id    = slug,
+        study_id   = study_thread_id,
+        framework  = slug,
+    ):
+        with infra.opentelemetry.service.get_tracer().start_as_current_span(
+            "dd.synth.study.run",
+            attributes = {
+                infra.langfuse.keys.KEEP:  True,
+                infra.langfuse.keys.KIND:  "workflow_root",
+                infra.langfuse.keys.TRACE_NAME:  "dd.synth.study.run",
+                "dd.domain":            "synth",
+                "dd.run.kind":          "study",
+                "study.thread_id":      study_thread_id,
+                "study.framework_slug": slug,
+                "study.mode":           mode,
+                "study.chapter_count":  len(chapter_ids),
+                infra.langfuse.keys.OBS_META_WORKFLOW: "dd_synth",
+            },
+        ):
+            infra.langfuse.service.set_current_span_langfuse_io(input_data = {
+                "framework_slug": slug,
+                "mode": mode,
+                "requested_chapter_count": len(chapter_ids),
+                "chapter_ids_preview": chapter_ids[:5],
+                "thread_id": study_thread_id,
+            })
+            infra.langfuse.service.set_current_span_langfuse_trace_metadata({
+                "pipeline": "dd_synth",
+                "run_kind": "study",
+                "framework_slug": slug,
+                "mode": mode,
+                "thread_id": study_thread_id,
+                "requested_chapter_count": len(chapter_ids),
+            })
+            infra.langfuse.service.set_current_span_langfuse_observation_metadata({
+                "framework_slug": slug,
+                "mode": mode,
+                "requested_chapter_count": len(chapter_ids),
+            })
+            result = await _run_study_async_inner(
+                study_thread_id, slug, chapter_ids, mode,
+            )
+            infra.langfuse.service.set_current_span_langfuse_io(output_data = {
+                "status": result.get("final_status", "unknown"),
+                "framework_slug": slug,
+                "mode": mode,
+                "requested_chapter_count": result.get("n_total", len(chapter_ids)),
+                "completed_chapter_count": result.get("n_completed", 0),
+                "failed_chapter_count": result.get("n_failed", 0),
+                "harmonize_status": (
+                    lambda bh: (
+                        "done" if bh and not bh.get("skipped")
+                        else (bh.get("skipped") or "not_run")
+                    )
+                )(result.get("book_harmonize") or {}),
+            })
+            return result
+
+
+async def _run_study_async_inner(
+    study_thread_id: str,
+    slug: str,
+    chapter_ids: list[str],
+    mode: str = "quality",
+) -> dict:
+    n_total = len(chapter_ids)
+    study_t0 = time.monotonic()
+    await _ensure_corpus_current(slug)
+    # Seed from prior blob so skipped-on-resume chapters keep their measured time.
+    chapter_ms: dict[str, int] = {}
+    try:
+        _prior = json.loads(await infra.minio.service.get_storage().read_text(domains.dd.pipeline.synth.keys.study_timing_key(slug)))
+        chapter_ms.update(
+            {str(k): int(v)
+             for k, v in (_prior.get("per_chapter_ms") or {}).items()}
+        )
+    except Exception:
+        pass
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        study_thread_id, "study", "study_start",
+        slug = slug,
+        n_chapters = n_total,
+        chapter_ids = chapter_ids,
+        mode = mode,
+        concurrency = domains.dd.pipeline.synth.params.study_sem(),
+    )
+
+    counters = {"completed": 0, "needs_review": 0, "failed": 0, "cancelled": False}
+    sem = asyncio.Semaphore(domains.dd.pipeline.synth.params.study_sem())
+
+    # Current plan's chapters by id, for the stale-render check (fail-soft:
+    # without the plan no render is ever judged stale).
+    plan_chapters: dict[str, dict] = {}
+    try:
+        _plan = json.loads(await infra.minio.service.get_storage().read_text(
+            domains.dd.pipeline.synth.nodes.render.keys.planner_latest_key(slug),
+        ))
+        plan_chapters = {
+            c["id"]: c for c in (_plan.get("chapters") or []) if (c or {}).get("id")
+        }
+    except Exception as e:
+        logger.info(f"[study-orchestrator] {slug}: plan unreadable for stale-render check ({type(e).__name__})")
+
+    async def _run_one(position: int, chapter_id: str) -> None:
+        if await _study_cancelled(study_thread_id):
+            counters["cancelled"] = True
+            return
+
+        try:
+            _minio = infra.minio.service.get_storage()
+            _render_key = domains.dd.pipeline.synth.keys.chapter_render_latest_key(slug, chapter_id)
+            if await _minio.exists(_render_key):
+                _prior_audit_passed = True
+                try:
+                    _prior_render = json.loads(await _minio.read_text(_render_key))
+                    _prior_audit_passed = bool(
+                        (_prior_render.get("audit") or {}).get("audit_passed", True)
+                    )
+                    if _prior_audit_passed and domains.dd.pipeline.synth.nodes.render.domain.render_is_stale(
+                        _prior_render, plan_chapters.get(chapter_id),
+                    ):
+                        # Built under an older plan (re-plan changed this
+                        # chapter's title/sources) — never "already done".
+                        logger.info(
+                            f"[study-orchestrator] {slug}/{chapter_id}: prior "
+                            f"render belongs to an older plan — not skipping, re-running"
+                        )
+                        _prior_audit_passed = False
+                except Exception as e:
+                    logger.warning(
+                        f"[study-orchestrator] {slug}/{chapter_id}: "
+                        f"prior render blob unreadable for resume-skip "
+                        f"check ({type(e).__name__}: {e}) — rendering anyway"
+                    )
+                    _prior_audit_passed = False
+                if not _prior_audit_passed:
+                    # A prior run left content whose audit FAILED — resuming
+                    # must not treat that as "already done" forever, or a
+                    # chapter that shipped broken once never gets retried.
+                    logger.info(
+                        f"[study-orchestrator] {slug}/{chapter_id}: prior "
+                        f"render failed its audit — not skipping, re-running"
+                    )
+                else:
+                    counters["completed"] += 1
+                    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+                        study_thread_id, "study", "chapter_done",
+                        chapter_id = chapter_id, position = position, n_total = n_total,
+                        status = "done", skipped = True,
+                        wall_ms = chapter_ms.get(chapter_id, 0),
+                    )
+                    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+                        study_thread_id, "study", "chapter_ready",
+                        chapter_id = chapter_id, position = position, n_total = n_total,
+                        render_path = domains.dd.pipeline.synth.keys.chapter_readme_key(slug, chapter_id),
+                    )
+                    logger.info(
+                        f"[study-orchestrator] {slug}/{chapter_id}: "
+                        f"SKIP (already rendered) ({position}/{n_total})"
+                    )
+                    return
+        except Exception as e:
+            logger.warning(
+                f"[study-orchestrator] {slug}/{chapter_id}: resume-skip "
+                f"check failed ({type(e).__name__}: {e}) — rendering anyway"
+            )
+
+        async with sem:
+            if await _study_cancelled(study_thread_id):
+                counters["cancelled"] = True
+                return
+
+            chapter_thread_id = keys.make_thread_id(slug)
+            ch_t0 = time.monotonic()
+            await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+                study_thread_id, "study", "chapter_running",
+                chapter_id = chapter_id,
+                chapter_thread_id = chapter_thread_id,
+                position = position,
+                n_total = n_total,
+            )
+
+            try:
+                graph = domains.dd.pipeline.synth.graph.build_graph()
+            except RuntimeError as e:
+                counters["failed"] += 1
+                await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+                    study_thread_id, "study", "chapter_done",
+                    chapter_id = chapter_id,
+                    position = position, n_total = n_total,
+                    status = "failed", error = str(e),
+                )
+                return
+
+            async with infra.redis.service.client() as r:
+                await domains.dd.pipeline.synth.runtime.cancel.service.clear_cancel(r, chapter_thread_id)
+                try:
+                    await r.sadd(
+                        domains.dd.pipeline.synth.keys.active_chapters_key(study_thread_id),
+                        chapter_thread_id,
+                    )
+                    await r.expire(
+                        domains.dd.pipeline.synth.keys.active_chapters_key(study_thread_id),
+                        86400,
+                    )
+                except Exception as _e:
+                    logger.warning(
+                        f"[study-orchestrator] active_chapters SADD "
+                        f"failed for {chapter_thread_id!r}: {_e}"
+                    )
+
+            initial_state = {
+                "framework_slug": slug,
+                "chapter_id":     chapter_id,
+                "thread_id":      chapter_thread_id,
+                "synth_mode":     mode,
+                "status":         "running",
+            }
+            config = {
+                "configurable": {"thread_id": chapter_thread_id},
+                "callbacks": [c for c in (infra.langfuse.service.build_langchain_callback(),) if c is not None],
+            }
+
+            # durability="sync" — see rationale in run_single_chapter_async
+            # above; this is the same fan-out-per-chapter path within a
+            # full study run.
+            main_task = asyncio.create_task(
+                graph.ainvoke(initial_state, config, durability = "sync"),
+            )
+            watcher_task = asyncio.create_task(
+                domains.dd.pipeline.synth.runtime.cancel.service.watcher(chapter_thread_id, main_task),
+            )
+
+            chapter_status = "done"
+            chapter_error: str | None = None
+            try:
+                final_state = await main_task
+                # graph.ainvoke succeeding is not the same as the chapter
+                # being fit to ship — render_audit_write signals a failed
+                # audit via state["status"], not an exception, so it was
+                # previously discarded here and every chapter read as "done".
+                graph_status = (final_state or {}).get("status")
+                if graph_status == "audit_failed":
+                    chapter_status = "needs_review"
+                    chapter_error = (final_state or {}).get("error") or (
+                        "render audit failed — content persisted for "
+                        "review but not marked done"
+                    )
+            except asyncio.CancelledError:
+                chapter_status = "cancelled"
+            except Exception as e:
+                chapter_status = "failed"
+                chapter_error = f"{type(e).__name__}: {e}"
+                logger.exception(
+                    f"[study-orchestrator] {slug}/{chapter_id}: chapter "
+                    f"run failed ({type(e).__name__}: {e})"
+                )
+            finally:
+                watcher_task.cancel()
+                try:
+                    await watcher_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                async with infra.redis.service.client() as _rc:
+                    try:
+                        await _rc.srem(
+                            domains.dd.pipeline.synth.keys.active_chapters_key(study_thread_id),
+                            chapter_thread_id,
+                        )
+                    except Exception:
+                        pass
+
+            try:
+                await graph.aupdate_state(
+                    config,
+                    {"status": chapter_status, "error": chapter_error},
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[study-orchestrator] {slug}/{chapter_id}: "
+                    f"aupdate_state failed: {type(e).__name__}: {e}"
+                )
+
+            try:
+                await domains.settings.llm_counter.service.snapshot("dd", chapter_thread_id)
+            except Exception as e:
+                logger.warning(
+                    f"[study-orchestrator] {slug}/{chapter_id}: "
+                    f"llm-counter snapshot failed: {type(e).__name__}: {e}"
+                )
+
+            await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+                chapter_thread_id, "synth", "terminal",
+                status = chapter_status, error = chapter_error,
+            )
+
+            ch_wall_ms = int((time.monotonic() - ch_t0) * 1000)
+            if chapter_status == "done":
+                counters["completed"] += 1
+                chapter_ms[chapter_id] = ch_wall_ms
+            elif chapter_status == "needs_review":
+                counters["needs_review"] += 1
+            else:
+                counters["failed"] += 1
+            await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+                study_thread_id, "study", "chapter_done",
+                chapter_id = chapter_id,
+                chapter_thread_id = chapter_thread_id,
+                position = position,
+                n_total = n_total,
+                status = chapter_status,
+                error = chapter_error,
+                wall_ms = ch_wall_ms,
+            )
+            if chapter_status == "done":
+                await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+                    study_thread_id, "study", "chapter_ready",
+                    chapter_id = chapter_id,
+                    chapter_thread_id = chapter_thread_id,
+                    position = position,
+                    n_total = n_total,
+                    wall_ms = ch_wall_ms,
+                    render_path = domains.dd.pipeline.synth.keys.chapter_readme_key(slug, chapter_id),
+                )
+            logger.info(
+                f"[study-orchestrator] {slug}/{chapter_id}: "
+                f"{chapter_status} ({position}/{n_total})"
+            )
+
+    for i, cid in enumerate(chapter_ids):
+        try:
+            await _run_one(i + 1, cid)
+        except Exception as e:
+            counters["failed"] += 1
+            logger.error(
+                f"[study-orchestrator] {slug}: chapter {cid} task raised "
+                f"unexpectedly: {type(e).__name__}: {e}"
+            )
+            continue
+        if counters.get("cancelled"):
+            break
+
+    n_completed = counters["completed"]
+    n_needs_review = counters["needs_review"]
+    n_failed = counters["failed"]
+    cancelled = counters["cancelled"]
+    final_status = (
+        "cancelled" if cancelled
+        else "failed" if n_failed and not n_completed
+        # A study isn't cleanly "done" while any chapter shipped with a
+        # failed render audit — surface it distinctly rather than
+        # reporting blanket success.
+        else "needs_review" if n_needs_review
+        else "done"
+    )
+
+    harmonize_stats: dict | None = None
+    if (
+        not cancelled
+        and n_completed >= params.BOOK_HARMONIZE_MIN_CHAPTERS
+        and final_status != "failed"
+    ):
+        try:
+            harmonize_stats = await _run_book_harmonize(
+                slug = slug,
+                study_thread_id = study_thread_id,
+                chapter_ids = chapter_ids,
+            )
+        except Exception as e:
+            logger.warning(
+                f"[study-orchestrator] {slug}: book_harmonize crashed "
+                f"({type(e).__name__}: {e}) — proceeding without it"
+            )
+            harmonize_stats = {"skipped": f"crash: {type(e).__name__}"}
+
+    harmonize_ms = int((harmonize_stats or {}).get("elapsed_ms", 0) or 0)
+    session_wall_ms = int((time.monotonic() - study_t0) * 1000)
+    total_wall_ms = sum(int(v) for v in chapter_ms.values()) + harmonize_ms
+    await _persist_study_timing(
+        slug,
+        per_chapter_ms = chapter_ms,
+        harmonize_ms = harmonize_ms,
+        session_wall_ms = session_wall_ms,
+        finished_ts = time.time(),
+    )
+
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        study_thread_id, "study", "study_done",
+        n_completed = n_completed,
+        n_needs_review = n_needs_review,
+        n_failed = n_failed,
+        n_total = n_total,
+        final_status = final_status,
+        book_harmonize = harmonize_stats,
+        total_wall_ms = total_wall_ms,
+        harmonize_ms = harmonize_ms,
+        session_wall_ms = session_wall_ms,
+        per_chapter_ms = chapter_ms,
+    )
+    # Mirror to `synth` terminal so EventSource handlers close cleanly.
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        study_thread_id, "synth", "terminal",
+        status = final_status,
+        error = None,
+        n_completed = n_completed,
+        n_needs_review = n_needs_review,
+        n_failed = n_failed,
+        n_total = n_total,
+    )
+    try:
+        async with infra.redis.service.client() as _rc:
+            await _rc.delete(domains.dd.pipeline.synth.keys.active_study_key(slug))
+    except Exception as e:
+        logger.warning(
+            f"[study-orchestrator] {slug}: active-run clear failed: "
+            f"{type(e).__name__}: {e}"
+        )
+    logger.info(
+        f"[study-orchestrator] {slug}: done — "
+        f"{n_completed}/{n_total} completed, {n_failed} failed, "
+        f"final_status = {final_status}"
+    )
+    try:
+        domains.dd.pipeline.synth.observability.service.record_study_completion(
+            framework = slug,
+            duration_s = max(total_wall_ms / 1000.0, 0.0),
+            n_accepted = n_completed,
+            n_total = n_total,
+            outcome = final_status,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[study-orchestrator] {slug}: study metric emit failed "
+            f"({type(e).__name__}: {e})"
+        )
+    return {
+        "thread_id":      study_thread_id,
+        "slug":           slug,
+        "n_completed":    n_completed,
+        "n_failed":       n_failed,
+        "n_total":        n_total,
+        "final_status":   final_status,
+        "book_harmonize": harmonize_stats,
+    }

@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains, infra  # noqa: E402
 
-nodes = domains.dd.planner.nodes
+nodes = domains.dd.pipeline.planner.nodes
 chat = domains.settings.chat
 
 
@@ -48,7 +48,7 @@ def patch(row, minio):
         return row["manifest"]
     domains.dd.ingestion.storage.service.read_framework_manifest = _manifest
     domains.settings.chat.service.wait_for_rotator_settle = _settle
-    domains.dd.planner.runtime.progress.service.emit_progress = _noop
+    domains.dd.pipeline.planner.runtime.progress.service.emit_progress = _noop
 
     async def _dist(m, slug):
         return row["distillates"]

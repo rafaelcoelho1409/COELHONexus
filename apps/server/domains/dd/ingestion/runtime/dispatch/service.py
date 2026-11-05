@@ -328,7 +328,7 @@ async def _run_inner(run_id: str, slug: str) -> dict:
             await progress.update(current=done)
 
         try:
-            await domains.dd.synth.nodes.backfill.service.backfill_vaults_for_framework(
+            await domains.dd.pipeline.synth.nodes.backfill.service.backfill_vaults_for_framework(
                 slug,
                 on_progress=_on_backfill_progress,
                 page_keys=[entry.key for entry in store.manifest],

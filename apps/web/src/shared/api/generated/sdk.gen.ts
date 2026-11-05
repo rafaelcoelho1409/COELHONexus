@@ -208,7 +208,7 @@ export const getDdDebugSnapshotsSlug = <ThrowOnError extends boolean = false>(op
 /**
  * List Library
  *
- * Sidebar data source; joins MinIO manifests with resolver catalog
+ * Sidebar data source; joins MinIO manifests with the framework catalog
  * so each row carries logo URL + framework metadata.
  */
 export const getDdIngestion = <ThrowOnError extends boolean = false>(options?: Options<GetDdIngestionData, ThrowOnError>): RequestResult<GetDdIngestionResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetDdIngestionResponses, unknown, ThrowOnError>({ url: '/api/v1/dd/ingestion', ...options });

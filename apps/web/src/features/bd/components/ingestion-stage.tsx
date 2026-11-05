@@ -1,7 +1,7 @@
 "use client";
 
 /** The Ingestion tab. The page's third navbar holds the library picker, the upload control and the auto-chain choice on
- * the left and the open book's Pipeline | Materials views on the right. The open book is the `?book=` parameter —
+ * the left and the open book's Agents | Pages views on the right. The open book is the `?book=` parameter —
  * written only by the handlers below (never by an effect), so there is nothing to chase. */
 
 import { useRouter, useSearchParams } from "next/navigation";
@@ -22,7 +22,7 @@ export function IngestionStage() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [autoChain, setAutoChain] = useAutoChainPreference();
   // The chosen view belongs to one opening of one book: another book, or the same one extracted again, starts on
-  // Pipeline. Deriving that from the key keeps it out of an effect.
+  // Agents. Deriving that from the key keeps it out of an effect.
   const openingKey = `${bookId}-${refreshKey}`;
   const [chosen, setChosen] = useState<{ openingKey: string; view: BookViewId } | null>(null);
   const view = chosen?.openingKey === openingKey ? chosen.view : "pipeline";

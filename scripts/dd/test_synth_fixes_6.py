@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
-OL = domains.dd.synth.nodes.outline
+OL = domains.dd.pipeline.synth.nodes.outline
 count = OL.domain.count_code_blocks
 
 
@@ -22,7 +22,7 @@ assert count([page(a, b), page(b, c)]) == 3
 assert count([]) == 0 and count(["", "no code here"]) == 0
 
 # 2) sentinelized bodies count their sentinels -----------------------------------------------------------------------------------------------
-sent, _ = domains.dd.synth.nodes.vault.domain.sentinelize_doc(page(a, b))
+sent, _ = domains.dd.pipeline.synth.nodes.vault.domain.sentinelize_doc(page(a, b))
 assert count([sent]) == 2, count([sent])
 assert count([sent, page(c)]) == 3
 
@@ -125,7 +125,7 @@ chat.asyncio.sleep = real_sleep
 # 6) a section whose coverage top-up calls all failed is asked once more in a salvage pass --------------------------------------------------------
 import json as _json  # noqa: E402
 
-SV, SCH = domains.dd.synth.nodes.sawc.service, domains.dd.synth.nodes.sawc.schemas
+SV, SCH = domains.dd.pipeline.synth.nodes.sawc.service, domains.dd.pipeline.synth.nodes.sawc.schemas
 CODE = {c: f"```python\nvalue_{c} = compute_{c}({c!r})\nprint(value_{c})\n```" for c in "abc"}
 vault = {c * 16: {"hash": c * 16, "fence_text": CODE[c], "lang": "python", "info_string": "python"} for c in "abc"}
 sec = SCH.Section(section_id="s1", heading="Compute things", intro="x" * 70,
@@ -180,7 +180,7 @@ assert D.flatten_prerequisites(shallow, D.derive_dag(shallow.sections), OL.param
 
 
 # 8) outline sections no source was routed to are folded away, not written from the whole chapter ------------------------------------------------------
-DG = domains.dd.synth.nodes.digest
+DG = domains.dd.pipeline.synth.nodes.digest
 DS = DG.schemas
 
 
@@ -204,7 +204,7 @@ assert DG.domain.drop_empty_sections([], outline8, {}) == {}                    
 
 
 # 9) near-copies of a printed block count as covered; a harsh judge gets a second opinion --------------------------------------------------------------
-SWD, CK = domains.dd.synth.nodes.sawc.domain, domains.dd.synth.nodes.checklist
+SWD, CK = domains.dd.pipeline.synth.nodes.sawc.domain, domains.dd.pipeline.synth.nodes.checklist
 base = "fastmcp install claude-code server.py --server-name Demo --with pandas --python 3.12"
 bodies9 = {"a" * 16: base, "b" * 16: base.replace("pandas", "numpy"), "c" * 16: "import asyncio\nasync def main():\n    await asyncio.sleep(1)\nasyncio.run(main())",
            "d" * 16: "x = 1", "e" * 16: base.replace("claude-code", "cursor")}

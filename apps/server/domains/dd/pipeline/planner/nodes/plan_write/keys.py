@@ -1,0 +1,15 @@
+"""plan_write — MinIO key builders."""
+from __future__ import annotations
+import domains
+from . import params
+
+
+
+def versioned_blob_key(slug: str, manifest_hash: str) -> str:
+    return f"dd/{slug}/planner/plan/{manifest_hash}.json"
+
+
+def latest_blob_key(slug: str) -> str:
+    """The latest-plan pointer this node writes — the same key synth and the
+    API read (canonical builder: domains.dd.pipeline.planner.keys)."""
+    return domains.dd.pipeline.planner.keys.plan_latest_key(slug)

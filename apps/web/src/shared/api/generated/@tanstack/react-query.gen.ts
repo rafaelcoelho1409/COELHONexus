@@ -571,7 +571,7 @@ export const getDdIngestionQueryKey = (options?: Options<GetDdIngestionData>) =>
 /**
  * List Library
  *
- * Sidebar data source; joins MinIO manifests with resolver catalog
+ * Sidebar data source; joins MinIO manifests with the framework catalog
  * so each row carries logo URL + framework metadata.
  */
 export const getDdIngestionOptions = (options?: Options<GetDdIngestionData>) => queryOptions<GetDdIngestionResponse, DefaultError, GetDdIngestionResponse, ReturnType<typeof getDdIngestionQueryKey>>({

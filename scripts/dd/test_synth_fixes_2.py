@@ -10,11 +10,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
-DG = domains.dd.synth.nodes.digest.domain
-DS = domains.dd.synth.nodes.digest.schemas
-CK = domains.dd.synth.nodes.checklist.domain
-SW = domains.dd.synth.nodes.sawc.domain
-BH = domains.dd.synth.nodes.book_harmonize
+DG = domains.dd.pipeline.synth.nodes.digest.domain
+DS = domains.dd.pipeline.synth.nodes.digest.schemas
+CK = domains.dd.pipeline.synth.nodes.checklist.domain
+SW = domains.dd.pipeline.synth.nodes.sawc.domain
+BH = domains.dd.pipeline.synth.nodes.book_harmonize
 BHD = BH.domain
 BHS = BH.service
 
@@ -194,7 +194,7 @@ noend = "word " * 90
 t2 = SW.trim_intro(noend)
 assert len(t2) <= SW.params.INTRO_CHARS_MAX and t2.endswith(".")
 assert SW.trim_intro("Short intro that is fine and long enough to pass.") == "Short intro that is fine and long enough to pass."
-SCH2 = domains.dd.synth.nodes.sawc.schemas
+SCH2 = domains.dd.pipeline.synth.nodes.sawc.schemas
 raw = {"heading": "H", "intro": long_intro, "subtopics": [{"code_ref_hash": "", "subheading": f"Topic {i}", "explanation": "word " * 10} for i in range(3)],
        "citations": [{"source_key": "k", "claim": "a claim that is long enough"}]}
 d, err = SW.try_parse_draft(raw, expected_heading="H")
@@ -210,7 +210,7 @@ vault10 = {f"{100 + i:016x}": {"fence_text": f"```python\nawait thing_{i}()\n```
 seen10 = []
 _orig_prompt = SW.build_topup_prompt
 SW.build_topup_prompt = lambda **kw: (seen10.append(kw["max_new"]), "p")[1]
-SV = domains.dd.synth.nodes.sawc.service
+SV = domains.dd.pipeline.synth.nodes.sawc.service
 async def _chat10(prompt, **kw):
     return _json.dumps({"subtopics": []}), {}
 domains.settings.chat.service.chat_text_async = _chat10
@@ -220,9 +220,9 @@ assert seen10 == [5], seen10                          # 16 - 11 = 5 (was 12 - 11
 print("10 coverage top-up capacity ok")
 
 # 11) a judge outage is retried with a cool-off, and a chapter whose judge never answers is scored on its gates, not rewritten -----------------
-CKS = domains.dd.synth.nodes.checklist.service
-CKP = domains.dd.synth.nodes.checklist.params
-CKSC = domains.dd.synth.nodes.checklist.schemas
+CKS = domains.dd.pipeline.synth.nodes.checklist.service
+CKP = domains.dd.pipeline.synth.nodes.checklist.params
+CKSC = domains.dd.pipeline.synth.nodes.checklist.schemas
 calls11 = []
 sleeps11 = []
 async def _down(prompt, schema, **kw):
@@ -286,8 +286,8 @@ assert sub14 and sub14[0].subheading == "Platform-Specific Limitations" and "non
 print("14 typography normalized ok")
 
 # 15) the saved evaluation is the shipped iteration's --------------------------------------------------------------------------------------------------
-RS = domains.dd.synth.nodes.render.service
-CKK = domains.dd.synth.nodes.checklist.keys
+RS = domains.dd.pipeline.synth.nodes.render.service
+CKK = domains.dd.pipeline.synth.nodes.checklist.keys
 class FakeMinio:
     def __init__(self, files): self.files = dict(files)
     async def exists(self, k): return k in self.files
@@ -310,8 +310,8 @@ import os
 os.environ.setdefault("REDIS_HOST", "localhost")   # infra.celery's broker URL needs it at import (RuntimeError, not KeyError)
 for _ in range(30):                 # the router's module-level config reads env vars the cluster sets; give missing ones a dummy
     try:
-        R = importlib.import_module("entrypoints.api.v1.dd.synth.router")
-        S = importlib.import_module("entrypoints.api.v1.dd.synth.service")
+        R = importlib.import_module("entrypoints.api.v1.dd.pipeline.synth.router")
+        S = importlib.import_module("entrypoints.api.v1.dd.pipeline.synth.service")
         break
     except KeyError as e:
         os.environ.setdefault(str(e.args[0]), "localhost")
@@ -325,7 +325,7 @@ import infra
 def active_with(kv):
     infra.redis.service.new_redis = lambda *a, **k: FakeRedis(kv)
     return asyncio.run(R.synth_active("asyncio", Response()))
-KEYS = domains.dd.synth.keys
+KEYS = domains.dd.pipeline.synth.keys
 assert active_with({}) == {"active": False}
 study = active_with({KEYS.active_study_key("asyncio"): '{"study_thread_id": "docs-distiller/study/asyncio/S1", "started_ts": 12.5}'})
 assert study["active"] and study["study_thread_id"] == "docs-distiller/study/asyncio/S1" and study["started_ts"] == 12.5 and "chapter_thread_id" not in study

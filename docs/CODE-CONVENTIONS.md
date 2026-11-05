@@ -464,11 +464,11 @@ import domains
 
 domains.dd.ingestion.artifacts.params.MAX_ARTIFACT_BYTES          # constant
 domains.dd.ingestion.artifacts.domain.compute_manifest_hash(...)  # function
-domains.dd.planner.entities.Chapter(title="...", sources=[...])   # class
+domains.dd.pipeline.planner.entities.Chapter(title="...", sources=[...])   # class
 ```
 
 Never `from domains.dd.ingestion.artifacts import domain` and never
-`from domains.dd.planner.entities import Chapter`. A bare imported name
+`from domains.dd.pipeline.planner.entities import Chapter`. A bare imported name
 loses its path the moment it's read three lines below the import block.
 The dotted chain carries its own provenance everywhere it appears — import
 line, call site, grep result, stack trace — with no need to scroll up.
@@ -586,11 +586,11 @@ though it's a legitimate part of that package. Adding it would mean a bare
 `import domains` anywhere in the app — including a standalone script, a
 test, or a REPL — suddenly requires production secrets to succeed.
 
-Known instances: `dd/planner/task.py` and `dd/synth/task.py` do
+Known instances: `dd/pipeline/planner/task.py` and `dd/pipeline/synth/task.py` do
 `from infra.celery import app`, which transitively requires
 `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD`/`ENVIRONMENT` (never re-exported
 from `planner/__init__.py`/`synth/__init__.py` — callers reach it with a
-direct `from domains.dd.planner.task import X`, same shape as any normal
+direct `from domains.dd.pipeline.planner.task import X`, same shape as any normal
 Python import, and the same class of exception as the LLM rotator's
 reverse-edge import above).
 
@@ -599,7 +599,7 @@ the shared server image, but their `__init__.py` files leave `service` out so AP
 heavy libraries at startup. `bd/ingestion/task.py` imports the services only inside the extraction run; the router imports the task and
 calls `.delay()`, and the task is included in `infra/celery/keys.py::TASK_INCLUDE` for worker discovery.
 
-`dd/synth`'s `params.py` originally did `STUDY_SEM = int(os.environ["KD_STUDY_SEM"])`
+`dd/pipeline/synth`'s `params.py` originally did `STUDY_SEM = int(os.environ["KD_STUDY_SEM"])`
 at module scope — a hard eager read that would have forced this same exception
 onto `params`, `graph`, and most of `runtime` (all pull constants from
 `params.py`, and Python re-executes a whole module on any import of it, not
@@ -608,7 +608,7 @@ exception: turned it into `study_sem() -> int: return
 int(os.environ["KD_STUDY_SEM"])` — a function, read lazily inside whichever
 function body needs it, same as any other deferred `domains.*` reference.
 Zero behavior change (still one `os.environ` read per call site, just later),
-and it let `dd/synth` join the eager `dd/__init__.py` chain outright instead
+and it let `dd/pipeline/synth` join the eager `dd/__init__.py` chain outright instead
 of carrying its own exception. Prefer this fix — de-lazy the read — over a
 wider `__init__.py` exclusion whenever the env-dependent value doesn't
 actually need to be read at import time.
@@ -633,7 +633,7 @@ attribute 'dd'`:
 # BROKEN — decorator runs at import time, mid-bootstrap
 import domains
 
-@domains.dd.planner.observability.service.traced("corpus_load")
+@domains.dd.pipeline.planner.observability.service.traced("corpus_load")
 async def corpus_load(state) -> dict: ...
 ```
 
@@ -645,10 +645,10 @@ the attribute chain at runtime):
 
 ```python
 import domains
-from domains.dd.planner.observability.service import traced
+from domains.dd.pipeline.planner.observability.service import traced
 
 @traced("corpus_load")
-async def corpus_load(state: domains.dd.planner.state.PlannerState) -> dict: ...
+async def corpus_load(state: domains.dd.pipeline.planner.state.PlannerState) -> dict: ...
 ```
 
 Same reasoning applies to `graph.py`'s `NODE_REGISTRY` dict — its values
@@ -687,7 +687,7 @@ safe — that import already blocked until `x` was fully ready.
 Nothing here changes §2–§5: `entities.py` domain objects, stateful
 clients, anything with real invariants or state stays a real class,
 instantiated normally — just referenced through the same dotted path as
-everything else (`domains.dd.planner.entities.Chapter(...)`), never
+everything else (`domains.dd.pipeline.planner.entities.Chapter(...)`), never
 through a bare import.
 
 ---
@@ -698,7 +698,7 @@ through a bare import.
 apps/server/
 ├── entrypoints/             # process entry surfaces, referenced as `entrypoints.*` (same dotted rule as `domains.*`)
 │   ├── api/                 # REST: params.py (CORS_ORIGINS, ALLOWED_HOSTS), domain.py, v1/ routers — thin, dispatch to domains
-│   │   └── v1/dd/{planner,synth,ingestion,pipeline,runs}.py
+│   │   └── v1/dd/{ingestion,pipeline/{planner,synth},runs}/   # URLs stay /dd/planner and /dd/synth; only the folders nest
 │   └── mcp/tools/<family>/  # FastMCP tools, each family exposes service.register(mcp); the server itself is built in main.py
 ├── domains/                 # business logic — the bounded contexts
 │   ├── bd/                  # Book Distiller bounded context (ingestion/ so far: outline/, extract/, storage/, runtime/, task.py)
@@ -710,24 +710,16 @@ apps/server/
 │   │   │   ├── filters/
 │   │   │   ├── post/
 │   │   │   └── ...
-│   │   ├── planner/         # LangGraph planner — one dir per node
-│   │   │   ├── corpus_load/
-│   │   │   ├── embed_corpus/
-│   │   │   ├── off_topic/
-│   │   │   ├── doc_distill/
-│   │   │   ├── chapter_propose/
-│   │   │   ├── chapter_assign/
-│   │   │   ├── chapter_select/
-│   │   │   ├── order_chapters/
-│   │   │   ├── plan_write/
-│   │   │   ├── observability/   # service.py: @traced + metric recorders (sibling of runtime/)
-│   │   │   ├── runtime/         # cancel/ checkpoint/ dispatch/ progress/ — thin wrappers over infra
-│   │   │   ├── graph.py     # node wiring — single file
-│   │   │   ├── state.py     # PlannerState TypedDict
-│   │   │   ├── dispatch.py  # async runners
-│   │   │   ├── task.py      # Celery wrappers
-│   │   │   └── ...
-│   │   └── synth/           # LangGraph synth — same shape as planner
+│   │   └── pipeline/        # the Pipeline tab: its two stages are sibling packages
+│   │       ├── planner/     # LangGraph planner — one dir per node
+│   │       │   ├── nodes/       # corpus_load/ off_topic/ doc_distill/ chapter_propose/ chapter_assign/ chapter_select/ order_chapters/ plan_write/
+│   │       │   ├── observability/   # service.py: @traced + metric recorders (sibling of runtime/)
+│   │       │   ├── runtime/         # cancel/ checkpoint/ dispatch/ progress/ — thin wrappers over infra
+│   │       │   ├── graph.py     # node wiring — single file
+│   │       │   ├── state.py     # PlannerState TypedDict
+│   │       │   ├── task.py      # Celery wrappers
+│   │       │   └── ...
+│   │       └── synth/       # LangGraph synth — same shape as planner
 │   └── settings/            # external endpoints + credential store
 │       ├── chat/{domain,service,params}.py        # chat endpoint adapter
 │       ├── embeddings/{domain,service,params}.py  # embedding endpoint adapter
@@ -742,6 +734,14 @@ apps/server/
 ```
 
 Each leaf module follows the **5–10 file convention** from §5.
+
+**One folder per feature, named like its tab.** A bounded context's top-level folders are the web tabs (`dd/ingestion`,
+`dd/pipeline`). When a tab runs more than one stage, each stage is its own package *inside* the tab's folder
+(`dd/pipeline/planner`, `dd/pipeline/synth`) and the same nesting is mirrored in `entrypoints/api/v1/dd/pipeline/` and,
+for Agentic AI, in `ai/dd/…/pipeline/`. Only folders move: Redis keys, MinIO prefixes, thread-id prefixes, Langfuse prompt
+names and URLs keep their stage names (`coelhonexus:dd:planner:*`, `dd/{slug}/planner/`, `/api/v1/dd/synth`), because they
+are stored data or public contract, not module paths. The Celery task names *do* follow the module path, so moving a
+`task.py` means updating `infra/celery/keys.py` (`TASK_INCLUDE`, `TASK_ROUTES`) and deploying the API and the workers together.
 
 **`runtime/` and `observability/` are siblings** inside a bounded context
 (`domains/<ctx>/…`), not nested: `runtime/` is the machinery that runs a pipeline (dispatch,

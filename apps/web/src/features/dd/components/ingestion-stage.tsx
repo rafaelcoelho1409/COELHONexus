@@ -38,11 +38,11 @@ import { StageBar } from "./stage-bar";
 type IngestionView = "pipeline" | "materials";
 
 const INGESTION_VIEWS = [
-  ["pipeline", "Pipeline"],
-  ["materials", "Materials"],
+  ["pipeline", "Agents"],
+  ["materials", "Pages"],
 ] as const;
 
-/** The Pipeline | Materials choice, drawn like the app's other navbar links. */
+/** The Agents | Pages choice, drawn like the app's other navbar links. */
 function IngestionViewTabs({
   view,
   onChange,

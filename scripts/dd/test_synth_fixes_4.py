@@ -11,11 +11,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains, infra  # noqa: E402
 
-SW = domains.dd.synth.nodes.sawc.domain
-SS = domains.dd.synth.nodes.sawc.schemas
-P = domains.dd.synth.nodes.sawc.params
-SWP = domains.dd.synth.nodes.sawc.patterns
-DSP = domains.dd.synth.runtime.dispatch.service
+SW = domains.dd.pipeline.synth.nodes.sawc.domain
+SS = domains.dd.pipeline.synth.nodes.sawc.schemas
+P = domains.dd.pipeline.synth.nodes.sawc.params
+SWP = domains.dd.pipeline.synth.nodes.sawc.patterns
+DSP = domains.dd.pipeline.synth.runtime.dispatch.service
 
 H1, H2, H3, H4 = "1" * 16, "2" * 16, "3" * 16, "4" * 16
 
@@ -162,7 +162,7 @@ assert SWP.META_FRAMING_RE.search("This page describes the limit argument") and 
 print("6 filler dropped ok")
 
 # 7) a top-up call that fails, or answers nothing valid, is asked again --------------------------------------------------------------------------------
-SV = domains.dd.synth.nodes.sawc.service
+SV = domains.dd.pipeline.synth.nodes.sawc.service
 chat = domains.settings.chat.service
 
 
@@ -204,7 +204,7 @@ assert calls7 == P.TOPUP_ATTEMPTS == 2 and n7 == 0                              
 print("7 top-up retried, bounded ok")
 
 # 8) a judge reply whose verdicts are JSON strings is accepted --------------------------------------------------------------------------------------
-CKS = domains.dd.synth.nodes.checklist.schemas
+CKS = domains.dd.pipeline.synth.nodes.checklist.schemas
 names = ["chapter_reads_coherently", "claims_grounded_in_sources", "terminology_consistent", "prose_code_first_not_meta_framing", "code_refs_introduced_in_prose"]
 wrapped = {n: '{"passed": true, "feedback": ""}' for n in names}
 wrapped["terminology_consistent"] = '{"passed": false, "feedback": "Mixes Process and process object across the section."}'
@@ -219,8 +219,8 @@ except ValueError:
 print("8 stringified judge verdicts accepted ok")
 
 # 9) a digest contribution with too many / out-of-bounds key facts is trimmed, not rejected ----------------------------------------------------------
-DGD = domains.dd.synth.nodes.digest.domain
-DGP = domains.dd.synth.nodes.digest.params
+DGD = domains.dd.pipeline.synth.nodes.digest.domain
+DGP = domains.dd.pipeline.synth.nodes.digest.params
 def payload(facts):
     return {"source_title": "MCP JSON configuration", "overall_summary": "How the mcp.json configuration file is structured and generated for the supported clients.",
             "contributes_to": [{"section_id": "s1", "source_key": "k", "relevance": "primary", "summary": "The page shows the mcp.json shape used by clients.", "key_facts": facts, "code_refs": []}],
@@ -238,7 +238,7 @@ assert DGD.try_parse_payload(payload(["no", "x"]))[0] is None                   
 print("9 digest key facts trimmed ok")
 
 # 10) the outline's section cap follows the chapter's code-block count ----------------------------------------------------------------------------------
-OL = domains.dd.synth.nodes.outline
+OL = domains.dd.pipeline.synth.nodes.outline
 assert OL.params.max_h2_for_n_sources(18) == 4 and OL.params.max_h2_for_n_sources(18, 0) == 4         # unchanged without a block count
 assert OL.params.max_h2_for_n_sources(18, 135) == 12                                                    # fastmcp ch-01: 135 blocks -> 12 sections, not 4
 assert OL.params.max_h2_for_n_sources(18, 30) == 4 and OL.params.max_h2_for_n_sources(23, 35) == 5     # asyncio ch-01 (23 sources, 35 blocks): the source cap still wins

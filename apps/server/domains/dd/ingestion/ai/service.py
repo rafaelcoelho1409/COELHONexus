@@ -220,7 +220,7 @@ async def run_candidate(run_id: str, slug: str) -> dict:
             checkpointer=infra.postgres.service.get_checkpointer(),
         )
         try:
-            await domains.dd.synth.nodes.backfill.service.backfill_vaults_for_framework(
+            await domains.dd.pipeline.synth.nodes.backfill.service.backfill_vaults_for_framework(
                 slug,
                 page_keys=[entry.key for entry in store.manifest],
             )
@@ -396,7 +396,7 @@ async def wipe_candidate(slug: str, run_id: str) -> dict:
 
             if restored_entries:
                 try:
-                    await domains.dd.synth.nodes.backfill.service.backfill_vaults_for_framework(
+                    await domains.dd.pipeline.synth.nodes.backfill.service.backfill_vaults_for_framework(
                         slug,
                         page_keys=[entry.key for entry in restored_entries],
                     )

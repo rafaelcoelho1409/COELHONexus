@@ -1,0 +1,677 @@
+"""Render + audit + persist for one chapter. Vault sentinels prevent SAWC from copying code — byte-exact guarantee holds at materialization.
+LLM normalization pass (cached per-content-hash) fixes ingestion-time drift; plain-text/output blocks bypass it."""
+from __future__ import annotations
+import domains, infra
+from . import domain, keys, params, prompts, schemas, versions
+
+import asyncio
+import json
+import logging
+import os
+import random
+import time
+
+
+logger = logging.getLogger(__name__)
+
+
+async def _llm_normalize_body(
+    *, body: str, lang: str, prompt: str,
+) -> str | None:
+    """Single LLM normalize call → fence-stripped body or None. Handles prompt-following failures: strip outer fences, extract largest inner block if markers remain, reject if no code found."""
+    last_error: Exception | None = None
+    response: str | None = None
+    for call_attempt in range(params.NORMALIZE_MAX_CALL_ATTEMPTS):
+        try:
+            response, _meta = await domains.settings.chat.service.chat_text_async(
+                prompt,
+                max_tokens = min(8000, max(512, 2 * len(body))),
+                temperature = 0.0,
+                timeout_s = 60.0,
+            )
+            last_error = None
+            break
+        except Exception as e:
+            last_error = e
+            if call_attempt < params.NORMALIZE_MAX_CALL_ATTEMPTS - 1:
+                await asyncio.sleep(1.0 + random.random())
+    if last_error is not None:
+        # Lower stakes than sibling nodes: a failure here just means the
+        # ORIGINAL (possibly slightly mangled) code ships verbatim — it
+        # still passes the byte-exact audit — and the next chapter that
+        # cites this same vault hash will retry fresh (nothing gets
+        # cached on failure). The retry above is cheap insurance against
+        # losing a normalize pass to a one-off transient error anyway.
+        logger.warning(
+            f"[render-normalize] LLM call failed lang={lang!r} after "
+            f"{params.NORMALIZE_MAX_CALL_ATTEMPTS} attempt(s): "
+            f"{type(last_error).__name__}: {last_error}"
+        )
+        return None
+
+    fixed = domain.strip_code_fences(response or "")
+
+    # Recovery path: residual ``` / ~~~ markers mean the LLM nested a
+    # fenced code block inside its response (often after a "this looks
+    # correct" preamble). Pull the largest inner block's body.
+    if "```" in fixed or "~~~" in fixed:
+        inner = domain.extract_largest_fenced_body(response or "")
+        if inner and inner.strip():
+            fixed = inner
+        else:
+            logger.info(
+                f"[render-normalize] response had residual fence "
+                f"markers + no extractable inner block (lang={lang!r}) "
+                f"— rejecting (caller keeps original)"
+            )
+            return None
+
+    return fixed if fixed.strip() else None
+
+
+async def _normalize_code_block(
+    *,
+    minio,
+    slug: str,
+    vault_hash: str,
+    fence_text: str,
+) -> tuple[str, bool]:
+    """Normalize one vault entry's code body via LLM rotator. was_modified=True suppresses byte-drift audit for that hash (intentional rewrite ≠ drift)."""
+    if not fence_text or len(fence_text) > 12_000:
+        # Empty / oversized — skip (cache blow-out + diminishing returns).
+        return fence_text, False
+
+    parts = domain.split_fence(fence_text)
+    if parts is None:
+        return fence_text, False
+    open_marker, info_string, body, close_marker = parts
+    lang = domain.lang_from_info(info_string)
+    if lang in params.SKIP_LANGS:
+        return fence_text, False
+    if not body.strip():
+        return fence_text, False
+
+    cache_key = keys.normalize_cache_key(slug, vault_hash)
+    try:
+        if await minio.exists(cache_key):
+            cached = await minio.read_text(cache_key)
+            return cached, (cached != fence_text)
+    except Exception as e:
+        logger.warning(
+            f"[render-normalize] cache read failed for {cache_key!r}: "
+            f"{type(e).__name__}: {e}"
+        )
+
+    fixed_body = await _llm_normalize_body(
+        body = body, lang = lang,
+        prompt = prompts.build_normalize_base(
+            lang = lang or "code", body = body,
+        ),
+    )
+    if fixed_body is None:
+        return fence_text, False
+
+    # Python AST retry: re-prompt with parser error to rescue Mintlify-flatten cases (small models return body unchanged).
+    if lang in params.PYTHON_LANGS:
+        ok, err = domain.python_ast_valid(fixed_body)
+        if not ok:
+            retry = await _llm_normalize_body(
+                body = body, lang = lang,
+                prompt = prompts.build_normalize_python_retry(
+                    body = fixed_body, error = err,
+                ),
+            )
+            if retry is not None:
+                retry_ok, _ = domain.python_ast_valid(retry)
+                if retry_ok or len(retry) >= len(fixed_body):
+                    fixed_body = retry
+            else:
+                logger.info(
+                    f"[render-normalize] hash={vault_hash} python AST "
+                    f"still invalid after retry ({err}) — keeping "
+                    f"best-effort output"
+                )
+
+    fixed = f"{open_marker}{info_string}\n{fixed_body}\n{close_marker}"
+    try:
+        await minio.write(
+            cache_key, fixed, content_type = "text/plain; charset=utf-8",
+        )
+    except Exception as e:
+        logger.warning(
+            f"[render-normalize] cache write failed for {cache_key!r}: "
+            f"{type(e).__name__}: {e}"
+        )
+    return fixed, (fixed != fence_text)
+
+
+async def _normalize_vault_codes(
+    *,
+    minio,
+    slug: str,
+    vault: dict,
+) -> tuple[dict, set[str], int, int]:
+    """Normalize every vault entry in parallel. normalized_hashes suppresses byte-drift false-positives in build_section_context (intentional rewrites ≠ hallucinated)."""
+    if not vault:
+        return vault, set(), 0, 0
+
+    items = list(vault.items())
+    coros = [
+        _normalize_code_block(
+            minio = minio, slug = slug,
+            vault_hash = h,
+            fence_text = ft if isinstance(ft, str) else str(ft or ""),
+        )
+        for h, ft in items
+    ]
+    results = await asyncio.gather(*coros, return_exceptions = True)
+
+    normalized_hashes: set[str] = set()
+    n_norm = 0
+    n_skip = 0
+    for (h, orig), result in zip(items, results):
+        if isinstance(result, Exception):
+            logger.warning(
+                f"[render-normalize] task failed for hash={h}: "
+                f"{type(result).__name__}: {result}"
+            )
+            n_skip += 1
+            continue
+        new_text, was_modified = result
+        if not was_modified:
+            n_skip += 1
+            continue
+        vault[h] = new_text
+        normalized_hashes.add(h)
+        n_norm += 1
+    return vault, normalized_hashes, n_norm, n_skip
+
+
+async def _load_per_source_vaults(
+    minio,
+    slug: str,
+    source_keys: list[str],
+) -> tuple[dict[str, str], int, int]:
+    """Load + merge per-source vault manifests; falls back to runtime sentinelization when per-source vault is missing (otherwise n_resolved=0 and zero code blocks in the chapter)."""
+    manifests: list[dict] = []
+    n_skipped = 0
+    n_runtime = 0
+    for source_key in source_keys:
+        vault_key = keys.source_key_to_vault_key(source_key, slug)
+        if await minio.exists(vault_key):
+            try:
+                text = await minio.read_text(vault_key)
+                manifests.append(json.loads(text))
+                continue
+            except Exception as e:
+                logger.warning(
+                    f"[render_audit_write] vault {vault_key!r} unreadable: "
+                    f"{type(e).__name__}: {e} — falling back to runtime"
+                )
+
+        # Runtime fallback: read raw ingestion page + sentinelize on-the-fly.
+        try:
+            raw = await minio.read_text(source_key)
+            if not raw or "<code-ref hash=" in raw:
+                n_skipped += 1
+                continue
+            _, entries = domains.dd.pipeline.synth.nodes.vault.domain.sentinelize_doc(raw)
+            if entries:
+                # merge_vault_entries expects (entries dict keyed by hash).
+                manifests.append({
+                    "entries": {
+                        h: (e.model_dump() if hasattr(e, "model_dump") else dict(e))
+                        for h, e in entries.items()
+                    },
+                })
+                n_runtime += 1
+            else:
+                n_skipped += 1
+        except Exception as e:
+            n_skipped += 1
+            logger.warning(
+                f"[render_audit_write] runtime-sentinelize failed for "
+                f"{source_key!r}: {type(e).__name__}: {e}"
+            )
+
+    merged = domain.merge_vault_entries(manifests)
+    if n_runtime:
+        logger.info(
+            f"[render_audit_write] {slug}: runtime-sentinelized "
+            f"{n_runtime} sources at vault-load time (no pre-built "
+            f"vaults found); merged vault has {len(merged)} entries total"
+        )
+    return merged, len(manifests), n_skipped
+
+
+async def _verify_cache_hit_artifacts(
+    minio,
+    slug: str,
+    chapter_id: str,
+    artifacts: list[dict],
+) -> bool:
+    """Cache hit only valid when all 3 content artifacts also exist —
+    defense against partial-write crash state."""
+    for art in artifacts:
+        key = art.get("minio_key") or ""
+        if not key or not await minio.exists(key):
+            return False
+    return True
+
+
+async def _publish_best_checklist(minio, slug: str, chapter_id: str) -> bool:
+    """checklist-latest.json is the evaluation of whatever iteration ran LAST, but render ships the best-seen one (asyncio ch-05: the page
+    showed 15/17 with "all sections present" failing for a README that has all four). Once the chapter is rendered nothing re-reads the
+    pointer for feedback, so it is replaced by the shipped iteration's evaluation. Fail-soft."""
+    ck = domains.dd.pipeline.synth.nodes.checklist.keys
+    try:
+        best_key = ck.best_blob_key(slug, chapter_id)
+        if not await minio.exists(best_key):
+            return False
+        await minio.write(ck.latest_blob_key(slug, chapter_id), await minio.read_text(best_key), content_type = "application/json")
+        return True
+    except Exception as e:
+        logger.warning(f"[render_audit_write] {slug}/{chapter_id}: could not publish the best-seen evaluation: {type(e).__name__}: {e}")
+        return False
+
+
+async def render_audit_write_run(state: domains.dd.pipeline.synth.state.SynthState) -> dict:
+    """Render + audit + persist for one chapter. The render/audit/persist
+    path itself is deterministic (zero LLM calls); the vault-normalize
+    pass it calls into hits the Rotator once per unique code hash ever
+    seen, then serves every subsequent chapter from cache."""
+    slug = state.get("framework_slug")
+    chapter_id = state.get("chapter_id")
+    thread_id = state.get("thread_id") or ""
+
+    if not slug or not chapter_id:
+        return {
+            "chapter_path":  "",
+            "chapter_stats": {
+                "skipped": "no_slug_or_chapter_id", "wall_ms": 0,
+            },
+            "status": "failed",
+            "error":  "framework_slug or chapter_id missing from SynthState",
+        }
+
+    t0 = time.monotonic()
+    minio = infra.minio.service.get_storage()
+
+    # Prefer the best-seen iteration over whatever ran last. Fixed
+    # 2026-09-05 — this used to always read the latest pointer, so a
+    # RETHINK loop that regressed (a later iteration scoring worse than an
+    # earlier one) silently shipped the worse draft while every halt log
+    # claimed "best-seen-rescue applies." best_seen_sawc_path is a
+    # content-addressed versioned key (same content shape as -latest.json,
+    # just an immutable path), so reading from it instead is a drop-in
+    # swap — falls back to the latest pointer if best-seen was never set
+    # (e.g. a graph resumed mid-run from an older checkpoint).
+    best_seen_path = state.get("best_seen_sawc_path")
+    sawc_key = best_seen_path or keys.sawc_latest_key(slug, chapter_id)
+    mgsr_key = keys.mgsr_latest_key(slug, chapter_id)
+
+    if not await minio.exists(sawc_key):
+        return {
+            "chapter_path":  "",
+            "chapter_stats": {
+                "skipped":  "sawc_not_found",
+                "sawc_key": sawc_key,
+                "wall_ms":  int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"sawc {sawc_key!r} not in MinIO — run sawc_write first",
+        }
+    if not await minio.exists(mgsr_key):
+        return {
+            "chapter_path":  "",
+            "chapter_stats": {
+                "skipped":  "mgsr_not_found",
+                "mgsr_key": mgsr_key,
+                "wall_ms":  int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"mgsr {mgsr_key!r} not in MinIO — run mgsr_replan first",
+        }
+
+    try:
+        sawc_text = await minio.read_text(sawc_key)
+        sawc = json.loads(sawc_text)
+        mgsr_text = await minio.read_text(mgsr_key)
+        mgsr = json.loads(mgsr_text)
+    except Exception as e:
+        return {
+            "chapter_path":  "",
+            "chapter_stats": {
+                "skipped": "inputs_unreadable",
+                "wall_ms": int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"sawc/mgsr unreadable: {type(e).__name__}: {e}",
+        }
+
+    # v1 doesn't loop; abort cleanly if mgsr didn't halt (shouldn't happen).
+    mgsr_decision = (mgsr or {}).get("decision") or {}
+    if not mgsr_decision.get("halt", True):
+        return {
+            "chapter_path":  "",
+            "chapter_stats": {
+                "skipped":     "mgsr_not_halted",
+                "halt_reason": mgsr_decision.get("halt_reason"),
+                "wall_ms":     int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  (
+                "mgsr_replan says halt = false (v2 loop required); v1 "
+                "doesn't loop back to sawc yet"
+            ),
+        }
+
+    chapter_title = sawc.get("chapter_title") or chapter_id
+    sections = sawc.get("sections") or []
+    sawc_manifest_hash = sawc.get("sawc_manifest_hash") or ""
+    mgsr_manifest_hash = mgsr.get("mgsr_manifest_hash") or ""
+
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        thread_id, "render_audit_write", "start",
+        chapter_id = chapter_id,
+        chapter_title = chapter_title,
+        n_sections = len(sections),
+        mgsr_halt = mgsr_decision.get("halt", True),
+        mgsr_halt_reason = mgsr_decision.get("halt_reason", "?"),
+    )
+
+    manifest_hash = domain.compute_manifest_hash(
+        sawc_manifest_hash = sawc_manifest_hash,
+        mgsr_manifest_hash = mgsr_manifest_hash,
+    )
+    versioned_key = keys.versioned_blob_key(slug, chapter_id, manifest_hash)
+    latest_key    = keys.latest_blob_key(slug, chapter_id)
+
+    if await minio.exists(versioned_key) and await minio.exists(latest_key):
+        try:
+            cached_text = await minio.read_text(versioned_key)
+            cached = json.loads(cached_text)
+            arts = cached.get("artifacts") or []
+            if await _verify_cache_hit_artifacts(minio, slug, chapter_id, arts):
+                audit = cached.get("audit") or {}
+                elapsed = int((time.monotonic() - t0) * 1000)
+                readme_key = keys.artifact_key(slug, chapter_id, "README.md")
+                stats = {
+                    "audit_passed":         audit.get("audit_passed", False),
+                    "n_artifacts":          len(arts),
+                    "n_code_refs":          audit.get("n_code_refs_referenced", 0),
+                    "n_resolved":           audit.get("n_resolved", 0),
+                    "n_missing":            len(audit.get("n_missing") or []),
+                    "n_byte_drift":         len(audit.get("n_byte_drift") or []),
+                    "sentinels_in_output":  audit.get("sentinels_in_output", 0),
+                    "rendered_chars":       cached.get("rendered_chars", 0),
+                    "wall_ms":              elapsed,
+                    "store_path":           latest_key,
+                    "versioned_path":       versioned_key,
+                    "readme_path":          readme_key,
+                    "manifest_hash":        manifest_hash,
+                    "cache_hit":            True,
+                    "template_version":     cached.get("template_version"),
+                }
+                await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+                    thread_id, "render_audit_write", "done",
+                    audit_passed = stats["audit_passed"],
+                    n_artifacts = stats["n_artifacts"],
+                    n_code_refs = stats["n_code_refs"],
+                    n_resolved = stats["n_resolved"],
+                    n_missing = stats["n_missing"],
+                    n_byte_drift = stats["n_byte_drift"],
+                    sentinels_in_output = stats["sentinels_in_output"],
+                    rendered_chars = stats["rendered_chars"],
+                    wall_ms = elapsed, cache_hit = True,
+                )
+                logger.info(
+                    f"[render_audit_write] {slug}/{chapter_id}: CACHE HIT — "
+                    f"audit_passed = {stats['audit_passed']}, "
+                    f"refs = {stats['n_resolved']}/{stats['n_code_refs']}, "
+                    f"{elapsed} ms"
+                )
+                return {"chapter_path": readme_key, "chapter_stats": stats}
+            else:
+                logger.warning(
+                    f"[render_audit_write] cached render_result exists but "
+                    f"artifacts missing — re-rendering"
+                )
+        except Exception as e:
+            logger.warning(
+                f"[render_audit_write] {slug}/{chapter_id}: cached blob "
+                f"{versioned_key!r} unreadable ({type(e).__name__}: {e}); "
+                f"recomputing"
+            )
+
+    plan_key = keys.planner_latest_key(slug)
+    source_keys: list[str] = []
+    if await minio.exists(plan_key):
+        try:
+            plan_text = await minio.read_text(plan_key)
+            plan = json.loads(plan_text)
+            for ch in (plan.get("chapters") or []):
+                if (ch or {}).get("id") == chapter_id:
+                    source_keys = sorted(ch.get("sources") or [])
+                    break
+        except Exception as e:
+            logger.warning(
+                f"[render_audit_write] plan {plan_key!r} unreadable: "
+                f"{type(e).__name__}: {e}"
+            )
+
+    vault, n_loaded, n_skipped = await _load_per_source_vaults(
+        minio, slug, source_keys,
+    )
+    # LLM normalize pass: fixes ingestion-time drift (Mintlify MDX flatten, smart quotes, stripped tabs). Cached per-content-hash; failures fall through to original.
+    vault, normalized_hashes, n_norm, n_skip_norm = await _normalize_vault_codes(
+        minio = minio, slug = slug, vault = vault,
+    )
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        thread_id, "render_audit_write", "inputs_loaded",
+        n_sources = len(source_keys),
+        n_vault_files_loaded = n_loaded,
+        n_vault_files_skipped = n_skipped,
+        n_vault_entries = len(vault),
+        n_codes_normalized = n_norm,
+        n_codes_unchanged = n_skip_norm,
+    )
+
+    resolution_log: list[schemas.CodeRefResolution] = []
+    sections_ctx = [
+        domain.build_section_context(
+            s, vault = vault, resolution_log = resolution_log,
+            normalized_hashes = normalized_hashes,
+        )
+        for s in sections
+    ]
+    # Cross-reference within-chapter recycled code blocks + omit misrouted ones (audit-safe: only rewrites code_block strings).
+    dedup_stats = domain.dedupe_and_align_sections(
+        sections_ctx,
+        drop_mismatch = os.environ.get(
+            "KD_RENDER_DROP_MISMATCH", "true",
+        ).lower() not in ("0", "false", "no"),
+    )
+    if dedup_stats["n_dedup"] or dedup_stats["n_mismatch"]:
+        logger.info(
+            f"[render_audit_write] {slug}/{chapter_id}: write-path pass — "
+            f"{dedup_stats['n_dedup']} recycled code block(s) cross-referenced, "
+            f"{dedup_stats['n_mismatch']} misrouted block(s) omitted"
+        )
+
+    # v2 schema uses n_subtopics_total (not legacy n_paragraphs_total) — wrong name raises ValidationError.
+    n_subtopics_total = sum(len(s.get("subtopics") or []) for s in sections)
+    n_citations_total = sum(len(s.get("citations") or []) for s in sections)
+
+    chapter_md = domain.render_chapter_md(chapter_title, sections_ctx)
+
+    # Audit AFTER rendering — sentinels_in_output is measured on the rendered MD.
+    audit = domain.compute_audit(
+        resolution_log = resolution_log,
+        vault = vault,
+        rendered_chapter_md = chapter_md,
+    )
+
+    coverage = domain.coverage_metrics(
+        sections, source_keys, len(vault), len(audit.n_orphan_unused),
+    )
+    logger.info(
+        f"[render_audit_write] {slug}/{chapter_id}: coverage — cited "
+        f"{coverage['n_sources_cited']}/{coverage['n_sources_total']} sources, "
+        f"{coverage['n_code_used']}/{coverage['n_code_available']} code blocks used"
+    )
+
+    # CONTENT-PRESENT GATE: empty sections (0 subtopics) pass byte-audit since they have no code refs — masked ch-07/ch-08. Fail audit explicitly so Study sidebar shows not-ready.
+    n_placeholder_sections = sum(
+        1 for s in sections_ctx if not (s.get("subtopics"))
+    )
+    if n_placeholder_sections:
+        audit = audit.model_copy(update = {"audit_passed": False})
+        logger.warning(
+            f"[render_audit_write] {slug}/{chapter_id}: "
+            f"{n_placeholder_sections}/{len(sections_ctx)} section(s) are EMPTY "
+            f"placeholders (writer produced 0 subtopics) — failing audit. The "
+            f"prose path should prevent this; investigate the section's sources."
+        )
+
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        thread_id, "render_audit_write", "rendered",
+        chapter_chars = len(chapter_md),
+        n_sections_rendered = len(sections_ctx),
+        n_placeholder_sections = n_placeholder_sections,
+        n_code_refs_resolved = audit.n_resolved,
+        n_code_refs_missing = len(audit.n_missing),
+        n_code_refs_drift = len(audit.n_byte_drift),
+        sentinels_in_output = audit.sentinels_in_output,
+        audit_passed = audit.audit_passed,
+        n_code_deduped = dedup_stats["n_dedup"],
+        n_code_mismatch_omitted = dedup_stats["n_mismatch"],
+    )
+
+    readme_key = keys.artifact_key(slug, chapter_id, "README.md")
+
+    await minio.write(
+        readme_key, chapter_md,
+        content_type = "text/markdown; charset=utf-8",
+    )
+
+    artifacts = [
+        schemas.RenderedArtifact(
+            name = "README.md",
+            minio_key = readme_key,
+            size_bytes = len(chapter_md.encode("utf-8")),
+            sha256 = domain.sha256_bytes(chapter_md),
+        ),
+    ]
+
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        thread_id, "render_audit_write", "artifacts_written",
+        n_artifacts = len(artifacts),
+        total_bytes = sum(a.size_bytes for a in artifacts),
+        artifact_names = [a.name for a in artifacts],
+    )
+
+    # Fingerprint of the plan chapter this render was built from (fail-soft: a
+    # missing/unreadable plan just leaves it empty, i.e. "valid").
+    plan_hash = ""
+    try:
+        plan = json.loads(await minio.read_text(keys.planner_latest_key(slug)))
+        plan_hash = domain.plan_sources_hash(
+            domains.dd.pipeline.synth.nodes.outline.domain.find_chapter(plan, chapter_id),
+        )
+    except Exception as e:
+        logger.info(
+            f"[render_audit_write] {slug}/{chapter_id}: plan fingerprint "
+            f"unavailable ({type(e).__name__}) — render stays unfingerprinted"
+        )
+
+    elapsed = int((time.monotonic() - t0) * 1000)
+    result = schemas.RenderResult(
+        chapter_id = chapter_id,
+        chapter_title = chapter_title,
+        framework_slug = slug,
+        artifacts = artifacts,
+        audit = audit,
+        rendered_chars = len(chapter_md),
+        n_sections = len(sections),
+        n_subtopics_total = n_subtopics_total,
+        n_citations_total = n_citations_total,
+        sawc_manifest_hash = sawc_manifest_hash,
+        mgsr_manifest_hash = mgsr_manifest_hash,
+        render_manifest_hash = manifest_hash,
+        wall_ms = elapsed,
+        # Must pass explicitly — schema default "" causes chapters API to return None, breaking LangGraph canvas repaint after page refresh.
+        thread_id = thread_id,
+        plan_sources_hash = plan_hash,
+        **coverage,
+    )
+    payload = result.model_dump()
+    blob_bytes = json.dumps(payload, indent = 2, ensure_ascii = False)
+    await minio.write(
+        versioned_key, blob_bytes, content_type = "application/json",
+    )
+    await minio.write(
+        latest_key, blob_bytes, content_type = "application/json",
+    )
+
+    stats = {
+        "audit_passed":          audit.audit_passed,
+        "n_artifacts":           len(artifacts),
+        "n_code_refs":           audit.n_code_refs_referenced,
+        "n_resolved":            audit.n_resolved,
+        "n_missing":             len(audit.n_missing),
+        "n_byte_drift":          len(audit.n_byte_drift),
+        "n_orphan_unused":       len(audit.n_orphan_unused),
+        "sentinels_in_output":   audit.sentinels_in_output,
+        "rendered_chars":        len(chapter_md),
+        "n_sections":            len(sections),
+        "n_subtopics_total":    n_subtopics_total,
+        "n_citations_total":     n_citations_total,
+        "n_vault_files_loaded":  n_loaded,
+        "n_vault_files_skipped": n_skipped,
+        "n_vault_entries":       len(vault),
+        **coverage,
+        "wall_ms":               elapsed,
+        "store_path":            latest_key,
+        "versioned_path":        versioned_key,
+        "readme_path":           readme_key,
+        "manifest_hash":         manifest_hash,
+        "cache_hit":             False,
+        "template_version":      versions.RENDER_TEMPLATE_VERSION,
+    }
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        thread_id, "render_audit_write", "done",
+        audit_passed = audit.audit_passed,
+        n_artifacts = len(artifacts),
+        n_code_refs = audit.n_code_refs_referenced,
+        n_resolved = audit.n_resolved,
+        n_missing = len(audit.n_missing),
+        n_byte_drift = len(audit.n_byte_drift),
+        sentinels_in_output = audit.sentinels_in_output,
+        rendered_chars = len(chapter_md),
+        wall_ms = elapsed,
+    )
+    logger.info(
+        f"[render_audit_write] {slug}/{chapter_id}: "
+        f"sawc source = {'best-seen' if best_seen_path else 'latest'}, "
+        f"audit_passed = {audit.audit_passed}, "
+        f"{audit.n_resolved}/{audit.n_code_refs_referenced} code_refs "
+        f"resolved, {len(audit.n_missing)} missing, "
+        f"{len(audit.n_byte_drift)} drift, "
+        f"{audit.sentinels_in_output} sentinels left; "
+        f"{len(artifacts)} artifact(s) written "
+        f"({sum(a.size_bytes for a in artifacts)} bytes); "
+        f"{elapsed} ms"
+    )
+    if best_seen_path:
+        await _publish_best_checklist(minio, slug, chapter_id)
+    state_status = "audit_failed" if not audit.audit_passed else None
+    state_patch = {"chapter_path": readme_key, "chapter_stats": stats}
+    if state_status:
+        state_patch["status"] = state_status
+        state_patch["error"] = (
+            f"render audit failed: missing = {len(audit.n_missing)} "
+            f"drift = {len(audit.n_byte_drift)} "
+            f"unresolved_sentinels = {audit.sentinels_in_output}"
+        )
+    return state_patch

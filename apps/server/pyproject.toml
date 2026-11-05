@@ -89,7 +89,7 @@ DEP002 = [
 
 [tool.ruff.lint.per-file-ignores]
 # __init__.py's `from . import sibling_module` is a side-effecting namespace
-# populate for the dotted-path convention (domains.dd.planner.foo()) — not dead code.
+# populate for the dotted-path convention (domains.dd.pipeline.planner.foo()) — not dead code.
 "__init__.py" = ["F401"]
 
 [tool.uv]

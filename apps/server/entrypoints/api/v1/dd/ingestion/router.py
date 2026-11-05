@@ -234,8 +234,8 @@ async def delete_framework(slug: str) -> dict:
             prefix
             for _part, prefix in domains.dd.ingestion.storage.keys.framework_parts(slug)
         ),
-        domains.dd.planner.keys.minio_prefix(slug),
-        domains.dd.synth.keys.minio_prefix(slug),
+        domains.dd.pipeline.planner.keys.minio_prefix(slug),
+        domains.dd.pipeline.synth.keys.minio_prefix(slug),
     )
     deleted = 0
     failed: list[str] = []

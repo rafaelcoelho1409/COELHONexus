@@ -41,7 +41,7 @@ function StageWithSearchParams({ stage }: { stage: DdStage }) {
   const runId = params.get("run");
   return (
     <>
-      {/* Ingestion draws its own bar: its Pipeline | Materials views sit on the right of it. */}
+      {/* Ingestion draws its own bar: its Agents | Pages views sit on the right of it. */}
       {stage === "ingestion" ? null : <StageBar stage={stage} slug={slug} />}
       <StageBody stage={stage} slug={slug} runId={runId} />
     </>

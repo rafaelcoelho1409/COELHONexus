@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
-DG = domains.dd.synth.nodes.digest
+DG = domains.dd.pipeline.synth.nodes.digest
 DOM, SV, DS, P = DG.domain, DG.service, DG.schemas, DG.params
 
 
@@ -103,7 +103,7 @@ assert err is None and len(calls) == 1                                          
 SV._digest_one_source = real
 
 # 4) outline repair acceptance: a repair that clears the section floor is kept even with a few more issues --------------------------------------
-OL = domains.dd.synth.nodes.outline
+OL = domains.dd.pipeline.synth.nodes.outline
 FLOOR = OL.params.FLOOR_ISSUE_PREFIX + " 5 H2 sections for 160 blocks"
 assert OL.domain.is_floor_issue(FLOOR)
 assert OL.domain.accept_repair([FLOOR], ["a", "b"], 2)                       # floor cleared, one more issue than before: kept (qdrant ch-10: 20 sections, 2 issues)

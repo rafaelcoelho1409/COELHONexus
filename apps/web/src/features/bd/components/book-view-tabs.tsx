@@ -2,7 +2,7 @@
 
 import { BOOK_VIEWS, type BookViewId } from "../params";
 
-/** The Pipeline | Materials choice, drawn like the app's other navbar links. The panels it controls are in `BookView`. */
+/** The Agents | Pages choice, drawn like the app's other navbar links. The panels it controls are in `BookView`. */
 export function BookViewTabs({ view, onChange }: { view: BookViewId; onChange: (view: BookViewId) => void }) {
   return (
     <div role="tablist" aria-label="Book views" className="flex items-center">

@@ -8,8 +8,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
-SW = domains.dd.synth.nodes.sawc.domain
-RD = domains.dd.synth.nodes.render.domain
+SW = domains.dd.pipeline.synth.nodes.sawc.domain
+RD = domains.dd.pipeline.synth.nodes.render.domain
 
 # 1) a section's chapter-wide padding must skip blocks routed to ANOTHER section --------------------------------------------
 idx = {
@@ -42,7 +42,7 @@ ctx2 = RD.build_section_context(
 assert ctx2["subtopics"][0]["code_block"] == flush                # already flush left: untouched
 print("2 vault code blocks render flush left ok")
 # 3) a subheading naming `asyncio.gather()` over a block without it gets the block that has it -------------------------------
-SCH = domains.dd.synth.nodes.sawc.schemas
+SCH = domains.dd.pipeline.synth.nodes.sawc.schemas
 seq = "```python\nasync def main():\n    await say_after(1, 'hello')\n    await say_after(2, 'world')\n```"
 gat = "```python\nasync def main():\n    L = await asyncio.gather(factorial('A', 2), factorial('B', 3))\n```"
 oth = "```python\nasync with asyncio.TaskGroup() as tg:\n    tg.create_task(job())\n```"
@@ -132,7 +132,7 @@ assert st8["n_mismatch"] == 1 and ctx8[0]["subtopics"][0]["code_block"].startswi
 print("8 misrouted block hidden in an HTML comment ok")
 # 9) coverage top-up: unused routed blocks get subtopics; invalid answers are filtered --------------------------------------
 import asyncio, json as _json
-SV = domains.dd.synth.nodes.sawc.service
+SV = domains.dd.pipeline.synth.nodes.sawc.service
 blk = lambda body: {"fence_text": "```python\n" + body + "\n```"}
 vlt = {
     "a" * 16: blk("lock = asyncio.Lock()\nasync with lock:\n    shared += 1\n    asyncio.sleep(0)"),
@@ -181,7 +181,7 @@ assert nc == 2 and len(capped.subtopics) == 3                                   
 assert SW.cap_prose_subtopics(prose_d, 21)[1] == 0 and SW.cap_prose_subtopics(fx10, 2)[1] == 0     # enough facts / has code: untouched
 print("10 misaligned code stripped, prose-only sections capped ok")
 # 11) checklist: coverage + alignment gates, best-seen prefers a clean iteration -----------------------------------------------
-CK = domains.dd.synth.nodes.checklist.domain
+CK = domains.dd.pipeline.synth.nodes.checklist.domain
 def csec(hs, cites):
     return {"section_id": "s1", "heading": "H", "subtopics": [{"code_ref_hash": h, "subheading": f"Sub {i}", "explanation": "x"} for i, h in enumerate(hs)],
             "citations": [{"source_key": k, "claim": "c"} for k in cites]}
@@ -204,7 +204,7 @@ n_chk = len(CK.DETERMINISTIC_CHECKS)
 assert CK.best_seen_key(0.73, n_chk) > CK.best_seen_key(0.87, n_chk - 1) and CK.best_seen_key(0.9, n_chk) > CK.best_seen_key(0.8, n_chk)
 print("11 coverage / alignment gates + clean-first best-seen ok")
 # 12) harmonize: a call cut at its token budget is retried with double the budget -------------------------------------------
-BH = domains.dd.synth.nodes.book_harmonize
+BH = domains.dd.pipeline.synth.nodes.book_harmonize
 seen12 = []
 async def _chat12(prompt, **kw):
     seen12.append(kw.get("max_tokens"))
@@ -234,7 +234,7 @@ async def _go13():
     return ok, no
 assert asyncio.run(_go13()) == (True, False) and posted == [("req-1", 0.1)]
 assert CS.report_quality({"rotator_request_id": "x"}, 0.5) is False                          # no running loop: nothing to report on
-CA = domains.dd.planner.nodes.chapter_assign
+CA = domains.dd.pipeline.planner.nodes.chapter_assign
 reported = []
 CS.report_quality = lambda meta, q: reported.append((meta.get("rotator_request_id"), q)) or True
 zero = CA.schemas.DocAssignment(scores=[CA.schemas.ChapterScore(chapter_idx=i, confidence=0.0) for i in range(3)])

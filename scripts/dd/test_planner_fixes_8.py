@@ -11,8 +11,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
-SEL = domains.dd.planner.nodes.chapter_select.domain
-P = domains.dd.planner.nodes.chapter_select.params
+SEL = domains.dd.pipeline.planner.nodes.chapter_select.domain
+P = domains.dd.pipeline.planner.nodes.chapter_select.params
 
 
 def build(n_fit_per, n_nofit):
@@ -74,7 +74,7 @@ assert res["stats"]["n_leftover_dir_owned"] == 0 and res["stats"]["n_leftover_pl
 print("3b directory-owned strays ok")
 
 # 3c) assign prompt: the page's URL path is shown when known, the static prefix is unchanged otherwise -------------------
-CA = domains.dd.planner.nodes.chapter_assign
+CA = domains.dd.pipeline.planner.nodes.chapter_assign
 props = [{"title": f"C{i}", "description": "d", "key_concepts": []} for i in range(14)]
 kw = dict(framework="fw", source_key="ingestion/fw/pages/0001-x-fw.md", doc_summary="s", doc_terms=["t"], doc_body="", proposals=props)
 with_path = CA.prompts.build_prompt(**kw, doc_path="integrations/frameworks/agno-agents")
@@ -92,7 +92,7 @@ assert up == {"a": "integrations/frameworks/agno-agents", "b": "3/library/asynci
 print("3c assign prompt carries the URL path ok")
 
 # 3d) order: chapters made of a catalog directory's sub-directories share one home and end up adjacent ----------------------
-OC = domains.dd.planner.nodes.order_chapters.domain
+OC = domains.dd.pipeline.planner.nodes.order_chapters.domain
 def mk(title, dirs, **kw):
     return {"title": title, "member_doc_keys": [f"k/{title}/{i}" for i in range(len(dirs))], **kw}, {f"k/{title}/{i}": d for i, d in enumerate(dirs)}
 parts = [

@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
-nodes = domains.dd.planner.nodes
+nodes = domains.dd.pipeline.planner.nodes
 fx = json.load(open(sys.argv[1]))
 entries = fx["entries"]
 

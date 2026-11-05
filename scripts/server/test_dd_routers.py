@@ -96,15 +96,15 @@ def _stub(name):
 
 
 import domains.dd.ingestion.task  # noqa: E402,F401
-import domains.dd.planner.task  # noqa: E402,F401
-import domains.dd.synth.task  # noqa: E402,F401
+import domains.dd.pipeline.planner.task  # noqa: E402,F401
+import domains.dd.pipeline.synth.task  # noqa: E402,F401
 
 domains.dd.ingestion.task.run_ingestion.delay = _stub("run_ingestion")
-domains.dd.planner.task.run_planner.delay = _stub("run_planner")
-domains.dd.planner.task.resume_planner.delay = _stub("resume_planner")
-domains.dd.synth.task.run_study.delay = _stub("run_study")
-domains.dd.synth.task.run_single_chapter.delay = _stub("run_single_chapter")
-domains.dd.synth.task.resume_synth.delay = _stub("resume_synth")
+domains.dd.pipeline.planner.task.run_planner.delay = _stub("run_planner")
+domains.dd.pipeline.planner.task.resume_planner.delay = _stub("resume_planner")
+domains.dd.pipeline.synth.task.run_study.delay = _stub("run_study")
+domains.dd.pipeline.synth.task.run_single_chapter.delay = _stub("run_single_chapter")
+domains.dd.pipeline.synth.task.resume_synth.delay = _stub("resume_synth")
 
 
 async def _no_catalog_check(slug):
@@ -181,7 +181,7 @@ def reset():
 
 
 def seed_plan(slug, chapter_ids=("ch-1", "ch-2")):
-    MINIO.objects[domains.dd.planner.keys.plan_latest_key(slug)] = json.dumps({"chapters": [{"id": c, "title": c} for c in chapter_ids]})
+    MINIO.objects[domains.dd.pipeline.planner.keys.plan_latest_key(slug)] = json.dumps({"chapters": [{"id": c, "title": c} for c in chapter_ids]})
 
 
 def seed_manifest(slug):
@@ -224,18 +224,18 @@ seed_manifest("pg")
 step("planner: start without a manifest", "POST", "/planner/nomf")
 step("planner: invalid mode", "POST", "/planner/pf", params={"mode": "bogus"})
 step("planner: start pf", "POST", "/planner/pf")
-planner_tid = val(domains.dd.planner.keys.lock_key("pf"))
+planner_tid = val(domains.dd.pipeline.planner.keys.lock_key("pf"))
 step("planner: start pf again (same slug locked)", "POST", "/planner/pf")
 step("planner: start pg (other planner locked)", "POST", "/planner/pg")
 step("planner: active pf", "GET", "/planner/pf/active")
 step("planner: active unknown slug", "GET", "/planner/unknown/active")
-rs.set(domains.dd.synth.keys.lock_key("sx"), "docs-distiller/study/sx/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", ex=600)
+rs.set(domains.dd.pipeline.synth.keys.lock_key("sx"), "docs-distiller/study/sx/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", ex=600)
 step("planner: start pg (synth running)", "POST", "/planner/pg")
 step("pipeline: active locks", "GET", "/pipeline/active")
 step("planner: cancel", "POST", f"/planner/{planner_tid}/cancel")
 step("planner: resume", "POST", f"/planner/{planner_tid}/resume")
 step("planner: wipe", "DELETE", "/planner/pf/wipe")
-rs.delete(domains.dd.synth.keys.lock_key("sx"))
+rs.delete(domains.dd.pipeline.synth.keys.lock_key("sx"))
 step("planner: start with a given thread id", "POST", "/planner/pg", params={"thread_id": "docs-distiller/pg/fixed"})
 step("planner: wipe pg (frees the lock)", "DELETE", "/planner/pg/wipe")
 step("planner: wipe with a slash", "DELETE", "/planner/a%2Fb/wipe")
@@ -247,30 +247,30 @@ seed_plan("sg")
 step("synth: invalid mode", "POST", "/synth/sf", params={"mode": "bogus"})
 step("synth: study without a plan", "POST", "/synth/nopl")
 step("synth: start study sf", "POST", "/synth/sf")
-study_tid = val(domains.dd.synth.keys.lock_key("sf"))
+study_tid = val(domains.dd.pipeline.synth.keys.lock_key("sf"))
 step("synth: start study sf again (same slug locked)", "POST", "/synth/sf")
 step("synth: start study sg (other synth locked)", "POST", "/synth/sg")
 step("synth: active sf (study)", "GET", "/synth/sf/active")
 step("synth: active unknown", "GET", "/synth/unknown/active")
-rs.sadd(domains.dd.synth.keys.active_chapters_key(study_tid), "docs-distiller/synth/sf/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+rs.sadd(domains.dd.pipeline.synth.keys.active_chapters_key(study_tid), "docs-distiller/synth/sf/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 rs.rpush("coelhonexus:dd:synth:docs-distiller/synth/sf/cccccccc-cccc-cccc-cccc-cccccccccccc:events:snapshot", "{}")
 step("synth: wipe one chapter while a study runs", "DELETE", "/synth/sf/wipe", params={"chapter_id": "ch-1"})
 step("synth: cancel study (propagates)", "POST", f"/synth/{study_tid}/cancel")
 step("synth: resume", "POST", f"/synth/{study_tid}/resume")
 step("synth: wipe sf", "DELETE", "/synth/sf/wipe")
-rs.set(domains.dd.planner.keys.lock_key("pl"), "docs-distiller/pl/dddddddd-dddd-dddd-dddd-dddddddddddd", ex=600)
+rs.set(domains.dd.pipeline.planner.keys.lock_key("pl"), "docs-distiller/pl/dddddddd-dddd-dddd-dddd-dddddddddddd", ex=600)
 step("synth: start study sg (planner running)", "POST", "/synth/sg")
 step("synth: start chapter sg ch-1 (planner running)", "POST", "/synth/sg", params={"chapter_id": "ch-1"})
 reset()
 seed_plan("sf")
 step("synth: chapter not in plan", "POST", "/synth/sf", params={"chapter_id": "ch-9"})
 step("synth: start chapter ch-1", "POST", "/synth/sf", params={"chapter_id": "ch-1"})
-chapter_tid = val(domains.dd.synth.keys.lock_key("sf"))
+chapter_tid = val(domains.dd.pipeline.synth.keys.lock_key("sf"))
 step("synth: active sf (single chapter)", "GET", "/synth/sf/active")
 step("synth: start chapter ch-2 (slug locked)", "POST", "/synth/sf", params={"chapter_id": "ch-2"})
 step("synth: wipe one chapter while a chapter runs", "DELETE", "/synth/sf/wipe", params={"chapter_id": "ch-1"})
 step("synth: cancel chapter thread", "POST", f"/synth/{chapter_tid}/cancel")
-rs.delete(domains.dd.synth.keys.lock_key("sf"))
+rs.delete(domains.dd.pipeline.synth.keys.lock_key("sf"))
 MINIO.objects["synth/sf/ch-1/render-latest.json"] = "{}"
 step("synth: wipe one chapter when idle", "DELETE", "/synth/sf/wipe", params={"chapter_id": "ch-1"})
 step("synth: wipe one chapter, bad id", "DELETE", "/synth/sf/wipe", params={"chapter_id": "x"})

@@ -169,7 +169,7 @@ export function ExtractionProgress({
       {lastUrl ? <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{lastUrl}</p> : null}
       {statusUnavailable ? (
         <p role="status" className="mt-1 text-xs text-warning-text">
-          Run progress is unavailable. The saved library remains available in Materials.
+          Run progress is unavailable. The saved library remains available in Pages.
         </p>
       ) : null}
       {cancelError ? (

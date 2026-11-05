@@ -21,7 +21,7 @@ import domains
 ingestion = domains.dd.ingestion
 post = ingestion.post
 tier1 = ingestion.tiers.tier1
-normalize = domains.dd.synth.nodes.corpus_normalize
+normalize = domains.dd.pipeline.synth.nodes.corpus_normalize
 
 
 def check(label: str, got, want) -> None:

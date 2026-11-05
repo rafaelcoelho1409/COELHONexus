@@ -134,8 +134,8 @@ type State = {
   onCall?: (call: string) => void;
 };
 
-/** The extracted pages, chapters and reader live on the Materials view, chosen in the page's third navbar. */
-const openMaterials = (page: Page) => page.getByRole("tab", { name: "Materials" }).click();
+/** The extracted pages, chapters and reader live on the Pages view, chosen in the page's third navbar. */
+const openMaterials = (page: Page) => page.getByRole("tab", { name: "Pages" }).click();
 
 async function mockBd(page: Page, state: State) {
   const answer = (call: string) => {
@@ -399,7 +399,7 @@ test.describe("Book Distiller · Ingestion", () => {
     const views: { name: string; url: string; ready: () => Promise<void> }[] = [
       { name: "empty library", url: "/bd", ready: async () => {} },
       {
-        name: "Pipeline view",
+        name: "Agents view",
         url: `/bd/ingestion?book=${BOOK}`,
         ready: async () => {
           await expect(
@@ -410,7 +410,7 @@ test.describe("Book Distiller · Ingestion", () => {
         },
       },
       {
-        name: "Materials view",
+        name: "Pages view",
         url: `/bd/ingestion?book=${BOOK}`,
         ready: async () => {
           await openMaterials(page);

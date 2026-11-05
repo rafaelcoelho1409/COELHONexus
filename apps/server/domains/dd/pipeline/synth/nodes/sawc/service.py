@@ -1,0 +1,1507 @@
+"""SAWC — Section-Aware Writer-Critic. v2 cookbook: {heading, intro, subtopics: [{subheading, explanation, code_ref_hash}], citations}.
+Best-of-N writer drafts + critic-picker (MAMM-Refine arXiv 2503.15272); 2-attempt repair loop for alignment violations."""
+from __future__ import annotations
+import domains, infra
+from . import domain, keys, params, prompts, schemas, versions
+
+import asyncio
+import json
+import logging
+import random
+import time
+from typing import Optional
+
+
+logger = logging.getLogger(__name__)
+
+
+async def _load_chapter_vault_rich(
+    minio,
+    slug: str,
+    source_keys: list[str],
+) -> tuple[dict[str, domains.dd.pipeline.synth.nodes.vault.schemas.VaultEntry], int, int]:
+    """Returns (vault, n_loaded, n_skipped). VaultEntry values (not just fence text) enable Visible Vault with lang+line_count. Mirrors digest's per-source fallback so both nodes have identical vault visibility."""
+    rich_vault: dict[str, domains.dd.pipeline.synth.nodes.vault.schemas.VaultEntry] = {}
+    n_loaded = 0
+    n_skipped = 0
+    for source_key in source_keys:
+        vault_key = domains.dd.pipeline.synth.nodes.render.keys.source_key_to_vault_key(source_key, slug)
+        used_runtime = False
+        if await minio.exists(vault_key):
+            try:
+                text = await minio.read_text(vault_key)
+                manifest = json.loads(text)
+                entries = (manifest or {}).get("entries") or {}
+                for h, entry_dict in entries.items():
+                    if not isinstance(entry_dict, dict):
+                        continue
+                    try:
+                        rich_vault[h] = domains.dd.pipeline.synth.nodes.vault.schemas.VaultEntry(**entry_dict)
+                    except Exception:
+                        if entry_dict.get("fence_text"):
+                            rich_vault[h] = domains.dd.pipeline.synth.nodes.vault.schemas.VaultEntry(
+                                hash=h,
+                                fence_text=entry_dict.get("fence_text", ""),
+                                info_string=entry_dict.get("info_string", ""),
+                                lang=entry_dict.get("lang", ""),
+                                line_count=int(entry_dict.get("line_count") or 0),
+                                char_count=int(entry_dict.get("char_count") or 0),
+                                sentinel_kind=entry_dict.get(
+                                    "sentinel_kind", "fence_backtick",
+                                ),
+                            )
+                n_loaded += 1
+                continue
+            except Exception as e:
+                logger.warning(
+                    f"[sawc_write] vault {vault_key!r} unreadable: "
+                    f"{type(e).__name__}: {e} — falling back to runtime"
+                )
+                used_runtime = True
+        else:
+            used_runtime = True
+
+        # Runtime fallback: read raw ingestion page + sentinelize on-the-fly.
+        # This is the path the fastmcp/etc corpora use today because
+        # ingestion only built one consolidated vault for llms-full.
+        if used_runtime:
+            try:
+                raw = await minio.read_text(source_key)
+                if not raw or "<code-ref hash=" in raw:
+                    n_skipped += 1
+                    continue
+                _, entries = domains.dd.pipeline.synth.nodes.vault.domain.sentinelize_doc(raw)
+                if entries:
+                    for h, e in entries.items():
+                        if h not in rich_vault:
+                            rich_vault[h] = e
+                    n_loaded += 1
+                else:
+                    n_skipped += 1
+            except Exception as e:
+                n_skipped += 1
+                logger.warning(
+                    f"[sawc_write] runtime-sentinelize failed for "
+                    f"{source_key!r}: {type(e).__name__}: {e}"
+                )
+    return rich_vault, n_loaded, n_skipped
+
+
+async def _write_section_best_of_n(
+    *,
+    sem: asyncio.Semaphore,
+    section_id: str,
+    section_heading: str,
+    section_description: str,
+    section_prerequisites: list[str],
+    contributions: list[dict],
+    allowed_hashes: list[str],
+    vault_rich: dict | None = None,
+    valid_source_keys: list[str],
+    memory: list[dict],
+    n_primary_contribs: int,
+    framework: str,
+    chapter_id: str,
+    chapter_title: str,
+    thread_id: str,
+    prose_mode: bool = False,
+    mixed_mode: bool = False,
+    already_shown_hashes: set[str] | None = None,
+    citation_fallback: bool = False,
+    prior_feedback: list[str] | None = None,
+    vault_char_budget: int | None = None,
+) -> schemas.Section:
+    """N drafts → critic-pick → Section. Optimal-Stopping BoN (arXiv 2510.01394): fire draft 1 first; ship directly if it passes zero-violations gate, else parallel fan-out + tournament. Disabled via KD_SAWC_OPTIMAL_STOPPING=false."""
+    async with sem:
+        t0 = time.monotonic()
+
+        def _make_draft_coro(idx: int):
+            return _draft_one_section(
+                draft_idx=idx,
+                n_total=params.N_DRAFTS,
+                thread_id=thread_id,
+                framework=framework,
+                chapter_id=chapter_id,
+                chapter_title=chapter_title,
+                section_id=section_id,
+                section_heading=section_heading,
+                section_description=section_description,
+                section_prerequisites=section_prerequisites,
+                contributions=contributions,
+                allowed_hashes=allowed_hashes,
+                valid_source_keys=valid_source_keys,
+                memory=memory,
+                n_primary_contribs=n_primary_contribs,
+                vault_rich=vault_rich,
+                prose_mode=prose_mode,
+                mixed_mode=mixed_mode,
+                already_shown_hashes=already_shown_hashes,
+                prior_feedback=prior_feedback,
+                vault_char_budget=vault_char_budget,
+            )
+
+        if params.OPTIMAL_STOPPING_ENABLED and params.N_DRAFTS >= 2:
+            # Fire draft 1 first, decide whether to fire the rest
+            r0 = await _make_draft_coro(0)
+            results = [r0]
+            draft1, _dep1, _wall1, _repairs1, _err1 = r0
+            good_enough = False
+            if draft1 is not None:
+                issues_1 = domain.validate_section_against_inputs(
+                    draft1,
+                    expected_heading=section_heading,
+                    allowed_hashes=set(allowed_hashes),
+                    valid_source_keys=set(valid_source_keys),
+                    vault_rich=vault_rich,
+                )
+                if (
+                    len(issues_1) == 0
+                    and len(draft1.subtopics) >= params.OPTIMAL_STOPPING_MIN_SUBTOPICS
+                    and len(draft1.citations) >= params.OPTIMAL_STOPPING_MIN_CITATIONS
+                ):
+                    good_enough = True
+            if not good_enough:
+                # Fan out remaining drafts in parallel
+                remaining = await asyncio.gather(*[
+                    _make_draft_coro(i) for i in range(1, params.N_DRAFTS)
+                ])
+                results.extend(remaining)
+        else:
+            # Original parallel fan-out (kill switch or N=1)
+            results = await asyncio.gather(*[
+                _make_draft_coro(i) for i in range(params.N_DRAFTS)
+            ])
+
+        valid: list[tuple[int, schemas.LLMSectionDraft, str, int, int]] = []
+        draft_errors: list[str] = []
+        for i, (draft, dep, wall, repairs, err) in enumerate(results):
+            if draft is not None:
+                valid.append((i, draft, dep or "", wall, repairs))
+            elif err:
+                draft_errors.append(err)
+
+        if not valid:
+            # ALL drafts failed → placeholder. Tag WHY in .issues (same
+            # convention as "placeholder"/"citation_fallback") so
+            # sawc_write_run can aggregate an error_breakdown per chapter
+            # — before this, a total section failure was undiagnosable
+            # from logs alone (digest_construct already had this for
+            # per-source failures; sawc_write never did).
+            error_summary = ",".join(draft_errors) if draft_errors else "unknown"
+            logger.warning(
+                f"[sawc_write] {section_id}: ALL {len(results)} draft "
+                f"attempt(s) failed ({error_summary}) — emitting placeholder"
+            )
+            await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+                thread_id, "sawc_write", "section_picked",
+                section_id=section_id, chosen_idx=-1,
+                n_violations=0, fallback="all_drafts_failed",
+                structural_score=0.0,
+            )
+            await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+                thread_id, "sawc_write", "section_done",
+                section_id=section_id, n_subtopics=0,
+                n_citations=0, total_explanation_chars=0,
+                n_repairs=sum(r[3] for r in results),
+                wall_ms=int((time.monotonic() - t0) * 1000),
+                fallback="placeholder",
+            )
+            return domain.placeholder_section(
+                section_id=section_id,
+                heading=section_heading,
+                n_repairs=sum(r[3] for r in results),
+                deployment_writer=(
+                    next((d for _, _, d, _, _ in valid), None)
+                    if valid else None
+                ),
+                error_tags=draft_errors,
+            )
+
+        # Critic picker over valid drafts (rerank, not regenerate)
+        chosen_idx, dep_critic, fallback, structural_score = (
+            await _critic_pick_best(
+                section_id=section_id,
+                section_heading=section_heading,
+                n_primary_contribs=n_primary_contribs,
+                candidates=[d for _, d, _, _, _ in valid],
+                expected_heading=section_heading,
+                allowed_hashes=set(allowed_hashes),
+                valid_source_keys=set(valid_source_keys),
+                thread_id=thread_id,
+                vault_rich=vault_rich,
+            )
+        )
+
+        original_draft_idx = valid[chosen_idx][0]
+        chosen_draft = valid[chosen_idx][1]
+        dep_writer = valid[chosen_idx][2]
+        chosen_repairs = valid[chosen_idx][4]
+
+        # Re-validate the chosen draft so `issues` is accurate (in case
+        # the picker chose one with remaining violations after repair
+        # exhaustion)
+        chosen_issues = domain.validate_section_against_inputs(
+            chosen_draft,
+            expected_heading=section_heading,
+            allowed_hashes=set(allowed_hashes),
+            valid_source_keys=set(valid_source_keys),
+            vault_rich=vault_rich,
+        )
+
+        await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+            thread_id, "sawc_write", "section_picked",
+            section_id=section_id,
+            chosen_idx=original_draft_idx,
+            n_violations=len(chosen_issues),
+            fallback=fallback,
+            structural_score=structural_score,
+            deployment_critic=dep_critic,
+        )
+
+        section = schemas.Section(
+            section_id=section_id,
+            heading=chosen_draft.heading,
+            intro=chosen_draft.intro,
+            subtopics=chosen_draft.subtopics,
+            citations=chosen_draft.citations,
+            wall_ms=int((time.monotonic() - t0) * 1000),
+            deployment_writer=dep_writer,
+            deployment_critic=dep_critic,
+            n_drafts_tried=params.N_DRAFTS,
+            n_repairs=chosen_repairs,
+            chosen_draft_idx=original_draft_idx,
+            structural_score=structural_score,
+            fallback_picker=fallback,
+            issues=(
+                chosen_issues + ["citation_fallback"]
+                if citation_fallback else chosen_issues
+            ),
+        )
+
+        total_expl_chars = sum(
+            len(st.explanation) for st in section.subtopics
+        )
+        await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+            thread_id, "sawc_write", "section_done",
+            section_id=section_id,
+            n_subtopics=len(section.subtopics),
+            n_citations=len(section.citations),
+            total_explanation_chars=total_expl_chars,
+            n_repairs=chosen_repairs,
+            wall_ms=section.wall_ms,
+        )
+        return section
+
+
+async def _draft_one_section(
+    *,
+    draft_idx: int,
+    n_total: int,
+    thread_id: str,
+    framework: str,
+    chapter_id: str,
+    chapter_title: str,
+    section_id: str,
+    section_heading: str,
+    section_description: str,
+    section_prerequisites: list[str],
+    contributions: list[dict],
+    allowed_hashes: list[str],
+    valid_source_keys: list[str],
+    memory: list[dict],
+    n_primary_contribs: int,
+    vault_rich: dict | None = None,
+    prose_mode: bool = False,
+    mixed_mode: bool = False,
+    already_shown_hashes: set[str] | None = None,
+    prior_feedback: list[str] | None = None,
+    vault_char_budget: int | None = None,
+) -> tuple[Optional[schemas.LLMSectionDraft], Optional[str], int, int, Optional[str]]:
+    """One writer call → parse → Pydantic → cross-ref → repair. Returns
+    (draft, deployment, wall_ms, n_repairs, error_reason); draft=None on
+    irrecoverable failure, with error_reason set so the caller can
+    aggregate WHY (mirrors digest_construct's error_breakdown — before
+    this, a section's total draft failure was undiagnosable from logs)."""
+    t0 = time.monotonic()
+    allowed_hash_set = set(allowed_hashes)
+    valid_source_set = set(valid_source_keys)
+
+    def _build_prompt(vault_char_budget: int | None) -> str:
+        return domain.build_writer_prompt(
+            framework=framework,
+            chapter_id=chapter_id,
+            chapter_title=chapter_title,
+            section_id=section_id,
+            section_heading=section_heading,
+            section_description=section_description,
+            section_prerequisites=section_prerequisites,
+            contributions=contributions,
+            allowed_hashes=allowed_hashes,
+            valid_source_keys=valid_source_keys,
+            memory=memory,
+            n_primary_contribs=n_primary_contribs,
+            vault_rich=vault_rich,
+            prose_mode=prose_mode,
+                mixed_mode=mixed_mode,
+            already_shown_hashes=already_shown_hashes,
+            vault_char_budget=vault_char_budget,
+            prior_feedback=prior_feedback,
+        )
+
+    prompt = _build_prompt(vault_char_budget)
+
+    deployment: Optional[str] = None
+    response: Optional[str] = None
+    last_error: Optional[Exception] = None
+    for call_attempt in range(params.MAX_CALL_ATTEMPTS):
+        try:
+            # NIM/Mistral accept response_format=json_schema server-side; Gemini handled by repair loop.
+            response, meta = await domains.settings.chat.service.chat_text_async(
+                prompt,
+                max_tokens=params.DRAFT_MAX_TOKENS,
+                temperature=params.DRAFT_TEMPERATURE,
+                response_format=schemas.SAWC_DRAFT_RESPONSE_FORMAT,
+                timeout_s=params.DRAFT_TIMEOUT_S,
+            )
+            deployment = (meta or {}).get("deployment")
+            last_error = None
+            break
+        except Exception as e:
+            last_error = e
+            if call_attempt < params.MAX_CALL_ATTEMPTS - 1:
+                # The vault-bank cap above should keep this rare, but a
+                # content-heavy section (many allowed_hashes, each
+                # capped) can still add up — the Rotator has no context
+                # -length-aware arm filtering, so retry at half the
+                # vault budget rather than just reproducing the failure.
+                if domain.is_context_overflow_error(e):
+                    prompt = _build_prompt((vault_char_budget or params.MAX_VAULT_CHARS_TOTAL) // 2)
+                await asyncio.sleep(1.0 + random.random())
+    if last_error is not None:
+        wall_ms = int((time.monotonic() - t0) * 1000)
+        error_tag = (
+            "context_overflow" if domain.is_context_overflow_error(last_error)
+            else type(last_error).__name__
+        )
+        await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+            thread_id, "sawc_write", "section_draft_done",
+            section_id=section_id, draft_idx=draft_idx, n_total=n_total,
+            ok=False, error=f"{type(last_error).__name__}: {str(last_error)[:120]}",
+            wall_ms=wall_ms,
+        )
+        logger.warning(
+            f"[sawc_write] {section_id} draft {draft_idx}: LLM call "
+            f"failed after {params.MAX_CALL_ATTEMPTS} attempt(s): "
+            f"{type(last_error).__name__}: {last_error}"
+        )
+        return None, None, wall_ms, 0, error_tag
+
+    parsed = domain.parse_json_response(response)
+    if not parsed:
+        wall_ms = int((time.monotonic() - t0) * 1000)
+        await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+            thread_id, "sawc_write", "section_draft_done",
+            section_id=section_id, draft_idx=draft_idx, n_total=n_total,
+            ok=False, error="parse_failed", wall_ms=wall_ms,
+            deployment=deployment,
+        )
+        logger.info(
+            f"[sawc_write] {section_id} draft {draft_idx}: response not "
+            f"parseable as JSON"
+        )
+        return None, deployment, wall_ms, 0, "parse_failed"
+
+    draft, err = domain.try_parse_draft(parsed, expected_heading=section_heading)
+    n_repairs = 0
+    current = parsed
+
+    # Pydantic-fail repair loop
+    while draft is None and n_repairs < params.MAX_REPAIR_ATTEMPTS:
+        n_repairs += 1
+        issues = [f"Pydantic schema rejected the previous output: {err}"]
+        repair_prompt = prompts.build_repair_prompt(
+            framework=framework,
+            chapter_id=chapter_id,
+            chapter_title=chapter_title,
+            section_id=section_id,
+            section_heading=section_heading,
+            section_description=section_description,
+            section_prerequisites=section_prerequisites,
+            contributions=contributions,
+            allowed_hashes=allowed_hashes,
+            valid_source_keys=valid_source_keys,
+            memory=memory,
+            current_json=json.dumps(current, indent=2),
+            issues=issues,
+            prose_mode=prose_mode,
+                mixed_mode=mixed_mode,
+        )
+        try:
+            rr, rm = await domains.settings.chat.service.chat_text_async(
+                repair_prompt,
+                max_tokens=params.REPAIR_MAX_TOKENS,
+                temperature=params.REPAIR_TEMPERATURE,
+                timeout_s=params.REPAIR_TIMEOUT_S,
+            )
+            deployment = (rm or {}).get("deployment") or deployment
+            rp = domain.parse_json_response(rr)
+            if rp:
+                current = rp
+                draft, err = domain.try_parse_draft(rp, expected_heading=section_heading)
+        except Exception as e:
+            logger.warning(
+                f"[sawc_write] {section_id} draft {draft_idx}: repair "
+                f"attempt {n_repairs} failed: {type(e).__name__}: {e}"
+            )
+            break
+
+    if draft is None:
+        wall_ms = int((time.monotonic() - t0) * 1000)
+        await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+            thread_id, "sawc_write", "section_draft_done",
+            section_id=section_id, draft_idx=draft_idx, n_total=n_total,
+            ok=False, error=f"pydantic_fail: {err}",
+            wall_ms=wall_ms, deployment=deployment,
+        )
+        logger.info(
+            f"[sawc_write] {section_id} draft {draft_idx}: pydantic-reject "
+            f"after {n_repairs} repair(s): {err}"
+        )
+        return None, deployment, wall_ms, n_repairs, "pydantic_fail"
+
+    # Cross-ref validation (heading/hashes/citations alignment).
+    issues = domain.validate_section_against_inputs(
+        draft,
+        expected_heading=section_heading,
+        allowed_hashes=allowed_hash_set,
+        valid_source_keys=valid_source_set,
+        vault_rich=vault_rich,
+    )
+    # Repair on HARD issues only; soft issues (subheading/explanation↔code mismatch) still ship in .issues but skip repair — LLM can't close them reliably.
+    while domain.hard_issues(issues) and n_repairs < params.MAX_REPAIR_ATTEMPTS:
+        n_repairs += 1
+        repair_prompt = prompts.build_repair_prompt(
+            framework=framework,
+            chapter_id=chapter_id,
+            chapter_title=chapter_title,
+            section_id=section_id,
+            section_heading=section_heading,
+            section_description=section_description,
+            section_prerequisites=section_prerequisites,
+            contributions=contributions,
+            allowed_hashes=allowed_hashes,
+            valid_source_keys=valid_source_keys,
+            memory=memory,
+            current_json=json.dumps(draft.model_dump(), indent=2),
+            issues=issues,
+            prose_mode=prose_mode,
+                mixed_mode=mixed_mode,
+        )
+        try:
+            rr, rm = await domains.settings.chat.service.chat_text_async(
+                repair_prompt,
+                max_tokens=params.REPAIR_MAX_TOKENS,
+                temperature=params.REPAIR_TEMPERATURE,
+                timeout_s=params.REPAIR_TIMEOUT_S,
+            )
+            deployment = (rm or {}).get("deployment") or deployment
+            rp = domain.parse_json_response(rr)
+            if not rp:
+                break
+            new_draft, new_err = domain.try_parse_draft(rp, expected_heading=section_heading)
+            if new_draft is None:
+                break
+            new_issues = domain.validate_section_against_inputs(
+                new_draft,
+                expected_heading=section_heading,
+                allowed_hashes=allowed_hash_set,
+                valid_source_keys=valid_source_set,
+                vault_rich=vault_rich,
+            )
+            if len(domain.hard_issues(new_issues)) < len(domain.hard_issues(issues)):
+                draft = new_draft
+                issues = new_issues
+            else:
+                break
+        except Exception as e:
+            logger.warning(
+                f"[sawc_write] {section_id} draft {draft_idx}: cross-ref "
+                f"repair attempt {n_repairs} failed: "
+                f"{type(e).__name__}: {e}"
+            )
+            break
+
+    draft, n_realigned = domain.realign_api_subheadings(draft, vault_rich, allowed_hash_set)
+    draft, n_bad_derived = domain.strip_invalid_derived(draft)
+    if n_bad_derived:
+        logger.warning(f"[sawc_write] {section_id} draft {draft_idx}: {n_bad_derived} writer-authored derived code block(s) that do not parse as Python stripped (prose kept)")
+    draft, n_by_overlap = domain.realign_code_by_overlap(draft, vault_rich, allowed_hash_set)
+    draft, n_misaligned = domain.strip_misaligned_code(draft, vault_rich)
+    if n_misaligned:
+        logger.info(f"[sawc_write] {section_id} draft {draft_idx}: {n_misaligned} code block(s) sharing no identifier with their prose turned into prose subtopics")
+    if prose_mode:
+        draft, n_capped = domain.cap_prose_subtopics(draft, sum(len(c.get("key_facts") or []) for c in contributions))
+        if n_capped:
+            logger.info(f"[sawc_write] {section_id} draft {draft_idx}: {n_capped} padded prose subtopic(s) beyond the section's key facts dropped")
+    if n_by_overlap:
+        logger.info(f"[sawc_write] {section_id} draft {draft_idx}: {n_by_overlap} subtopic(s) whose prose barely mentioned their code block got the block they describe")
+    n_realigned += n_by_overlap
+    if n_realigned:
+        logger.info(f"[sawc_write] {section_id} draft {draft_idx}: {n_realigned} subheading(s) named an API absent from their block — swapped in the block that has it")
+    # Last resort after the repair loops: never ship an invented code hash.
+    draft, n_invented = domain.drop_unknown_code_refs(draft, allowed_hash_set)
+    if n_invented:
+        logger.warning(
+            f"[sawc_write] {section_id} draft {draft_idx}: {n_invented} "
+            f"code_ref_hash(es) not in the allowed bank survived repair — "
+            f"converted to prose subtopic(s)"
+        )
+
+    wall_ms = int((time.monotonic() - t0) * 1000)
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        thread_id, "sawc_write", "section_draft_done",
+        section_id=section_id, draft_idx=draft_idx, n_total=n_total,
+        ok=True, wall_ms=wall_ms, deployment=deployment,
+        n_subtopics=len(draft.subtopics),
+        n_citations=len(draft.citations),
+        n_violations=len(issues),
+    )
+    return draft, deployment, wall_ms, n_repairs, None
+
+async def _critic_pick_best(
+    *,
+    section_id: str,
+    section_heading: str,
+    n_primary_contribs: int,
+    candidates: list[schemas.LLMSectionDraft],
+    expected_heading: str,
+    allowed_hashes: set[str],
+    valid_source_keys: set[str],
+    thread_id: str,
+    vault_rich: dict | None = None,
+) -> tuple[int, Optional[str], Optional[str], float]:
+    """Pairwise tournament picker. fallback_used=None means at least one match got a clean LLM verdict; "structural_score" means all fell back to tiebreak. Returns (chosen_idx, deployment_critic, fallback_used, structural_score)."""
+    summaries = [
+        domain.summarize_candidate(
+            c,
+            expected_heading=expected_heading,
+            allowed_hashes=allowed_hashes,
+            valid_source_keys=valid_source_keys,
+            n_primary_contribs=n_primary_contribs,
+            vault_rich=vault_rich,
+        )
+        for c in candidates
+    ]
+
+    if len(candidates) <= 1:
+        score = summaries[0]["structural_score"] if summaries else 0.0
+        return 0, None, None, score
+
+    # Knockout: indices represent positions in `candidates`. Each match
+    # picks between two positions; the winner advances.
+    n = len(candidates)
+    advancing = list(range(n))
+    deployment_critic: Optional[str] = None
+    n_llm_picks = 0
+
+    # Pairwise knockout — log_2(N) rounds, but for N=3 it's just 2 matches:
+    # round 1: cand[0] vs cand[1]; round 2: winner vs cand[2].
+    while len(advancing) > 1:
+        next_round: list[int] = []
+        # Pair the front: idx_a vs idx_b → winner. Carry odd survivor forward.
+        i = 0
+        while i + 1 < len(advancing):
+            idx_a, idx_b = advancing[i], advancing[i + 1]
+            winner_letter, dep = await _pairwise_judge_match(
+                section_id=section_id,
+                section_heading=section_heading,
+                n_primary_contribs=n_primary_contribs,
+                summary_a=summaries[idx_a],
+                summary_b=summaries[idx_b],
+            )
+            if dep is not None:
+                deployment_critic = dep
+                n_llm_picks += 1
+            next_round.append(idx_a if winner_letter == "A" else idx_b)
+            i += 2
+        if i < len(advancing):
+            next_round.append(advancing[i])  # bye for odd survivor
+        advancing = next_round
+
+    winner_idx = advancing[0]
+    fallback_used = None if n_llm_picks > 0 else "structural_score"
+    return (
+        winner_idx,
+        deployment_critic,
+        fallback_used,
+        summaries[winner_idx]["structural_score"],
+    )
+
+
+async def _pairwise_judge_match(
+    *,
+    section_id: str,
+    section_heading: str,
+    n_primary_contribs: int,
+    summary_a: dict,
+    summary_b: dict,
+) -> tuple[str, Optional[str]]:
+    """One pairwise match → (winner_letter ∈ {"A","B"}, deployment_critic). Any parse/call failure falls back to structural-score tiebreak; tournament never aborts."""
+    # Compact JSON-stringified summary keeps the prompt token-light.
+    def _fmt_summary(s: dict) -> str:
+        return json.dumps(
+            {
+                "structural_score": s.get("structural_score"),
+                "n_paragraphs":     s.get("n_paragraphs"),
+                "total_chars":      s.get("total_chars"),
+                "n_code_refs":      s.get("n_code_refs"),
+                "n_citations":      s.get("n_citations"),
+                "heading_matches":  s.get("heading_matches"),
+                "n_unknown_hashes": s.get("n_unknown_hashes"),
+                "n_unknown_keys":   s.get("n_unknown_keys"),
+            },
+            indent=2,
+        )
+
+    prompt = prompts.PAIRWISE_PICKER_PROMPT.format(
+        section_heading=section_heading,
+        n_primary_contribs=n_primary_contribs,
+        summary_a=_fmt_summary(summary_a),
+        summary_b=_fmt_summary(summary_b),
+    )
+
+    try:
+        result, meta = await domains.settings.chat.service.chat_structured_async(
+            prompt,
+            schemas.PairwiseWinner,
+            max_tokens=params.CRITIC_MAX_TOKENS,
+            temperature=params.CRITIC_TEMPERATURE,
+            timeout_s=params.CRITIC_TIMEOUT_S,
+        )
+        return result.winner, (meta or {}).get("deployment")
+    except Exception as e:
+        logger.warning(
+            f"[sawc_write] {section_id}: pairwise match failed: "
+            f"{type(e).__name__}: {e} — structural tiebreak"
+        )
+
+    # Structural tiebreak — never abort the tournament.
+    s_a = summary_a.get("structural_score", 0.0)
+    s_b = summary_b.get("structural_score", 0.0)
+    return ("A" if s_a >= s_b else "B"), None
+
+
+async def _topup_coverage(
+    *, final_sections: list[schemas.Section], per_section_index: dict[str, list[dict]], vault_rich: dict,
+    sections_by_id: dict[str, dict], framework: str, chapter_id: str, chapter_title: str,
+) -> tuple[list[schemas.Section], int, int]:
+    """Extra calls for sections that have routed-but-unused code blocks: ask for subtopics covering them and merge what validates
+    (see domain.parse_topup). A section that gained subtopics and still has unused blocks and room is asked again, up to TOPUP_ROUNDS
+    rounds (fastmcp ch-01: one round of 8 left sections of 22-46 blocks at 5-13 subtopics); a section whose calls failed is asked once more
+    in a final salvage pass (fastmcp ch-01: two 504s left a 21-block section at 5 subtopics). Returns (sections, n_subtopics_added, n_sections_topped_up). Fail-soft: a failed call leaves the section as written."""
+    sem = asyncio.Semaphore(params.TOPUP_CONCURRENCY)
+    sections, total_added, touched, failed, empty = list(final_sections), 0, set(), set(), set()
+
+    async def _one(sec: schemas.Section, unused: dict, required: dict) -> tuple[schemas.Section, int]:
+        need = required.get(sec.section_id) or []
+        un = need + [h for h in unused.get(sec.section_id) or [] if h not in need]
+        n_new = min(len(un), params.TOPUP_SECTION_MAX - len(sec.subtopics), params.TOPUP_MAX_NEW)
+        if (len(un) < params.TOPUP_MIN_UNUSED and not need) or n_new < 1:
+            return sec, 0
+        contribs = per_section_index.get(sec.section_id) or []
+        facts = [f for c in contribs for f in (c.get("key_facts") or [])]
+        sources = list({c["source_key"]: (c["source_key"], c.get("summary") or "") for c in contribs if c.get("source_key")}.values())
+        outline_sec = sections_by_id.get(sec.section_id) or {}
+        prompt = domain.build_topup_prompt(
+            framework = framework, chapter_title = chapter_title, section_heading = sec.heading,
+            section_description = outline_sec.get("description") or "",
+            existing_subheadings = [st.subheading for st in sec.subtopics],
+            blocks = [(h, domain._fence_body(vault_rich.get(h))) for h in un if domain._fence_body(vault_rich.get(h))],
+            facts = facts, sources = sources, max_new = n_new, required = set(need),
+        )
+        raised = 0
+        for attempt in range(1, params.TOPUP_ATTEMPTS + 1):
+            async with sem:
+                try:
+                    raw, _meta = await domains.settings.chat.service.chat_text_async(
+                        prompt, max_tokens = params.TOPUP_MAX_TOKENS, temperature = 0.3,
+                        response_format = {"type": "json_object"}, timeout_s = params.TOPUP_TIMEOUT_S,
+                    )
+                except Exception as e:
+                    raised += 1
+                    logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: coverage top-up call {attempt}/{params.TOPUP_ATTEMPTS} failed ({type(e).__name__})")
+                    continue
+            rejects: dict[str, int] = {}
+            subs, cites = domain.parse_topup(
+                domain.parse_json_response(raw), unused = set(un), vault_rich = vault_rich,
+                valid_source_keys = {x[0] for x in sources} | {c.source_key for c in sec.citations},
+                existing_subheads = {st.subheading for st in sec.subtopics}, max_new = n_new, rejects = rejects,
+            )
+            if not subs:
+                logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: coverage top-up call {attempt}/{params.TOPUP_ATTEMPTS} held no valid subtopic "
+                            f"(rejected: {rejects or 'nothing proposed'})")
+                continue
+            have = {(c.source_key, c.claim) for c in sec.citations}
+            merged = list(sec.citations) + [c for c in cites if (c.source_key, c.claim) not in have]
+            return sec.model_copy(update = {
+                "subtopics": list(sec.subtopics) + subs, "citations": merged[:params.TOPUP_CITATIONS_MAX],
+            }), len(subs)
+        # Every call raising (capacity, 504s) is salvageable later; a model that answered without a valid subtopic is not asked again.
+        (failed if raised == params.TOPUP_ATTEMPTS else empty).add(sec.section_id)
+        return sec, 0
+
+    exhausted, gained_late = False, set()
+    for rnd in list(range(1, params.TOPUP_ROUNDS + 1)) + ["salvage", "after-salvage"]:
+        salvage = rnd == "salvage"
+        if rnd == "after-salvage":
+            # A salvaged section usually still has most of its bank unused (one call adds at most TOPUP_MAX_NEW): one more round for those.
+            if not gained_late:
+                break
+            ids = set(gained_late)
+        elif salvage:
+            # A section whose calls all failed (capacity, 504s) is not a verdict on the section: ask again once the other sections are done.
+            if not failed:
+                break
+            ids, failed = set(failed), set()
+        elif exhausted:
+            continue
+        else:
+            ids = {s.section_id for s in sections} - failed - empty
+        unused = domain.unused_routed_hashes(per_section_index, sections)
+        printed = sorted({st.code_ref_hash for sec in sections for st in sec.subtopics if st.code_ref_hash})
+        dups = domain.near_duplicate_hashes(
+            sorted({h for hs in unused.values() for h in hs}), printed, {h: domain._fence_body(vault_rich.get(h)) for h in vault_rich},
+        )
+        if dups:
+            unused = {sid: [h for h in hs if h not in dups] for sid, hs in unused.items()}
+            unused = {sid: hs for sid, hs in unused.items() if hs}
+        required = domain.dependency_blocks(sections, unused, vault_rich)
+        todo = [s for s in sections if s.section_id in ids]
+        done = {d[0].section_id: d for d in await asyncio.gather(*[_one(s, unused, required) for s in todo])}
+        sections = [done[s.section_id][0] if s.section_id in done else s for s in sections]
+        added = sum(d[1] for d in done.values())
+        touched |= {sid for sid, d in done.items() if d[1]}
+        total_added += added
+        if salvage:
+            gained_late = {sid for sid, d in done.items() if d[1]}
+            logger.info(f"[sawc_write] {chapter_id}: coverage top-up salvage pass over {len(ids)} section(s) that had failed: +{added} subtopic(s)")
+        elif isinstance(rnd, int) and rnd > 1 and added:
+            logger.info(f"[sawc_write] {chapter_id}: coverage top-up round {rnd} added {added} subtopic(s)")
+        if not added and rnd not in ("salvage", "after-salvage"):
+            exhausted = True
+    return sections, total_added, len(touched)
+
+
+async def _topup_sources(
+    *, final_sections: list[schemas.Section], per_section_index: dict[str, list[dict]],
+    sections_by_id: dict[str, dict], framework: str, chapter_id: str, chapter_title: str,
+) -> tuple[list[schemas.Section], int, int]:
+    """One call per section that was routed sources the chapter never cites: prose subtopics grounded in their key facts
+    (see domain.parse_source_topup), and for cited sources the chapter prose leaves unsaid (key facts with no words in the
+    chapter). Returns (sections, n_subtopics_added, n_sections_topped_up). Fail-soft."""
+    pending = domain.source_gaps(per_section_index, final_sections, domain.chapter_prose_tokens(final_sections))
+    sem = asyncio.Semaphore(params.TOPUP_CONCURRENCY)
+
+    async def _one(sec: schemas.Section) -> tuple[schemas.Section, int]:
+        srcs = pending.get(sec.section_id) or []
+        n_new = min(params.TOPUP_SRC_MAX_NEW, params.TOPUP_SECTION_MAX + params.TOPUP_SRC_EXTRA - len(sec.subtopics))
+        if not srcs or n_new < 1:
+            return sec, 0
+        prompt = domain.build_source_topup_prompt(
+            framework = framework, chapter_title = chapter_title, section_heading = sec.heading,
+            section_description = (sections_by_id.get(sec.section_id) or {}).get("description") or "",
+            existing_subheadings = [f"{st.subheading} — {st.explanation[:160]}" for st in sec.subtopics], sources = srcs, max_new = n_new,
+        )
+        for attempt in range(1, params.TOPUP_ATTEMPTS + 1):
+            async with sem:
+                try:
+                    raw, _meta = await domains.settings.chat.service.chat_text_async(
+                        prompt, max_tokens = params.TOPUP_MAX_TOKENS, temperature = 0.3,
+                        response_format = {"type": "json_object"}, timeout_s = params.TOPUP_TIMEOUT_S,
+                    )
+                except Exception as e:
+                    logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: source top-up call {attempt}/{params.TOPUP_ATTEMPTS} failed ({type(e).__name__})")
+                    continue
+            rejects: dict[str, int] = {}
+            subs, cites = domain.parse_source_topup(
+                domain.parse_json_response(raw), sources = srcs, existing_subheads = {st.subheading for st in sec.subtopics}, max_new = n_new,
+                rejects = rejects,
+            )
+            if not subs:
+                logger.info(f"[sawc_write] {chapter_id}/{sec.section_id}: source top-up call {attempt}/{params.TOPUP_ATTEMPTS} held no valid subtopic "
+                            f"(rejected: {rejects or 'nothing proposed'})")
+                continue
+            have = {(c.source_key, c.claim) for c in sec.citations}
+            merged = list(sec.citations) + [c for c in cites if (c.source_key, c.claim) not in have]
+            return sec.model_copy(update = {"subtopics": list(sec.subtopics) + subs, "citations": merged[:params.TOPUP_CITATIONS_MAX]}), len(subs)
+        return sec, 0
+
+    done = await asyncio.gather(*[_one(sec) for sec in final_sections])
+    return [d[0] for d in done], sum(d[1] for d in done), sum(1 for d in done if d[1])
+
+
+async def _late_retry_sections(
+    *, section_ids: list[str], run_section, completed_sections: dict[str, schemas.Section], memory_ledger: list[schemas.MemoryEntry],
+    chapter_used_hashes: set[str], per_section_index: dict[str, list[dict]], known_section_ids: set[str], label: str,
+) -> list[str]:
+    """One more writer pass, at a lighter vault budget, for every section that shipped as a placeholder because all its drafts failed. A section
+    that comes back with content replaces the placeholder (and its memory entry); one that fails again stays as it was. Returns the recovered ids."""
+    lost = [
+        sid for sid in section_ids
+        if sid in completed_sections and sid in known_section_ids and "placeholder" in (completed_sections[sid].issues or [])
+    ]
+    if not lost:
+        return []
+    logger.info(f"[sawc_write] {label}: {len(lost)} section(s) lost every draft {lost} — one late retry at a "
+                f"{params.LATE_RETRY_VAULT_CHARS}-char vault budget")
+    retried = await asyncio.gather(*(run_section(sid, vault_char_budget = params.LATE_RETRY_VAULT_CHARS) for sid in lost), return_exceptions = True)
+    recovered: list[str] = []
+    for sid, res in zip(lost, retried):
+        if isinstance(res, BaseException) or "placeholder" in (res.issues or []):
+            continue
+        completed_sections[sid] = res
+        try:
+            entry = domain.extract_memory_entry(res, section_contributions = per_section_index.get(sid) or [], section_heading = res.heading)
+            memory_ledger[:] = [m for m in memory_ledger if m.section_id != sid] + [entry]
+        except Exception as e:
+            logger.warning(f"[sawc_write] late-retry memory extract failed for {sid}: {type(e).__name__}: {e}")
+        for st in (res.subtopics or []):
+            if st.code_ref_hash:
+                chapter_used_hashes.add(st.code_ref_hash)
+        recovered.append(sid)
+        logger.info(f"[sawc_write] {sid}: recovered by the late retry ({len(res.subtopics)} subtopics)")
+    return recovered
+
+
+async def sawc_write_run(state: domains.dd.pipeline.synth.state.SynthState) -> dict:
+    """Run the Section-Aware Writer-Critic for one chapter."""
+    slug = state.get("framework_slug")
+    chapter_id = state.get("chapter_id")
+    thread_id = state.get("thread_id") or ""
+
+    if not slug or not chapter_id:
+        return {
+            "sawc_path":  "",
+            "sawc_stats": {"skipped": "no_slug_or_chapter_id", "wall_ms": 0},
+            "status": "failed",
+            "error":  "framework_slug or chapter_id missing from SynthState",
+        }
+
+    t0 = time.monotonic()
+    minio = infra.minio.service.get_storage()
+
+    outline_key = keys.outline_latest_key(slug, chapter_id)
+    digest_key = keys.digest_latest_key(slug, chapter_id)
+
+    if not await minio.exists(outline_key):
+        return {
+            "sawc_path":  "",
+            "sawc_stats": {
+                "skipped":     "outline_not_found",
+                "outline_key": outline_key,
+                "wall_ms":     int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"outline {outline_key!r} not in MinIO — run outline_sdp first",
+        }
+    if not await minio.exists(digest_key):
+        return {
+            "sawc_path":  "",
+            "sawc_stats": {
+                "skipped":    "digest_not_found",
+                "digest_key": digest_key,
+                "wall_ms":    int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"digest {digest_key!r} not in MinIO — run digest_construct first",
+        }
+
+    try:
+        outline_text = await minio.read_text(outline_key)
+        outline_payload = json.loads(outline_text)
+        digest_text = await minio.read_text(digest_key)
+        digest_payload = json.loads(digest_text)
+    except Exception as e:
+        return {
+            "sawc_path":  "",
+            "sawc_stats": {
+                "skipped": "inputs_unreadable",
+                "wall_ms": int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"outline/digest unreadable: {type(e).__name__}: {e}",
+        }
+
+    outline_data = outline_payload.get("outline") or {}
+    outline_sections = outline_data.get("sections") or []
+    dag = outline_payload.get("dag") or {}
+    stages_raw = dag.get("stages") or {}
+    chapter_title = outline_payload.get("chapter_title") or chapter_id
+    outline_manifest_hash = outline_payload.get("manifest_hash") or ""
+
+    per_section_index: dict[str, list[dict]] = (
+        digest_payload.get("per_section") or {}
+    )
+    # Cross-section vault-hash uniqueness — digest allows the same hash
+    # for different sections; without dedup CLI corpora recycle 3-5 H2s.
+    n_hashes_deduped, n_refs_removed = domain.dedupe_vault_hashes_across_sections(
+        per_section_index,
+    )
+    if n_hashes_deduped:
+        logger.info(
+            f"[sawc_write] {slug}/{chapter_id}: cross-section dedup — "
+            f"{n_hashes_deduped} hashes claimed by multiple sections; "
+            f"removed {n_refs_removed} duplicate code_ref entries"
+        )
+    per_source_list: list[dict] = digest_payload.get("per_source") or []
+    valid_source_keys: list[str] = sorted({
+        s.get("source_key", "") for s in per_source_list
+        if s.get("source_key")
+    })
+    digest_manifest_hash = digest_payload.get("digest_manifest_hash") or ""
+
+    if not outline_sections or not stages_raw:
+        return {
+            "sawc_path":  "",
+            "sawc_stats": {
+                "skipped":    "empty_outline_or_stages",
+                "n_sections": len(outline_sections),
+                "n_stages":   len(stages_raw),
+                "wall_ms":    int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"outline has {len(outline_sections)} sections, dag "
+                      f"has {len(stages_raw)} stages — both must be >0",
+        }
+
+    sections_by_id: dict[str, dict] = {
+        s["section_id"]: s for s in outline_sections
+    }
+    # Normalize stage keys to int and sort
+    stages: dict[int, list[str]] = {
+        int(k): list(v) for k, v in stages_raw.items()
+    }
+    # contributions are re-tagged to the winner; writing them produces a
+    # hollow shell that bank-padding then back-fills with canonical code.
+    merged_away: set[str] = set(
+        (digest_payload.get("merged_sections") or {}).keys()
+    )
+    if merged_away:
+        stages = {
+            k: [sid for sid in v if sid not in merged_away]
+            for k, v in stages.items()
+        }
+        stages = {k: v for k, v in stages.items() if v}
+        logger.info(
+            f"[sawc_write] {slug}/{chapter_id}: skipping "
+            f"{len(merged_away)} digest-merged section(s) "
+            f"{sorted(merged_away)}"
+        )
+    sorted_stage_indices = sorted(stages.keys())
+    n_sections = sum(len(v) for v in stages.values())
+    n_stages = len(sorted_stage_indices)
+
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        thread_id, "sawc_write", "start",
+        chapter_id = chapter_id,
+        chapter_title = chapter_title,
+        n_stages = n_stages,
+        n_sections = n_sections,
+        n_total_drafts = n_sections * params.N_DRAFTS,
+    )
+
+    # Track the iteration counter for the CoRefine loop .
+    # Each sawc_write invocation bumps it by 1; refine_iter is part of the
+    # manifest hash so loop iterations don't cache-hit each other.
+    incoming_refine_iter = int(state.get("refine_iter") or 0)
+    refine_iter = incoming_refine_iter + 1
+
+    # Close the self-refine loop on a RETHINK iteration — previously a
+    # RETHINK just reran the writer prompt unchanged, with zero signal
+    # about what checklist_eval actually flagged, so some iterations
+    # regressed instead of improving (confirmed live this session:
+    # chapters 3 and 6 both scored worse on iteration 2 than iteration 1).
+    prior_feedback: list[str] | None = None
+    if incoming_refine_iter > 0:
+        prior_feedback = (
+            state.get("checklist_stats") or {}
+        ).get("failed_feedback") or None
+
+    # Best-seen iteration tracking. Fixed 2026-09-05 — this used to just
+    # forward whatever iteration 1 wrote, forever, unconditionally (the
+    # "checklist score updated in mgsr_replan after sawc returns" this
+    # comment used to promise never actually happened: mgsr_replan has
+    # zero references to either field). render_audit_write reads
+    # best_seen_sawc_path directly now, so this comparison is what makes
+    # "best-seen-rescue" actually rescue the best iteration instead of
+    # silently shipping whichever one happened to run last — including
+    # ones that regressed after a RETHINK loop made things worse.
+    incoming_best_score = state.get("best_seen_score")
+    incoming_best_path = state.get("best_seen_sawc_path")
+    # Plateau detection (graph._route_after_mgsr) needs THIS iteration's
+    # decision to compare against the score from the iteration that just
+    # finished. checklist_eval is about to overwrite checklist_stats with
+    # a fresh pass_rate — so the LAST iteration's value must be captured
+    # here, before that happens, and carried forward as prev_checklist_score.
+    # (Previously read as `state.get("prev_checklist_score")` — always None,
+    # since nothing ever wrote that field; the plateau halt could never fire.)
+    carried_prev_score = (state.get("checklist_stats") or {}).get("pass_rate")
+
+    if incoming_refine_iter > 0 and carried_prev_score is not None:
+        # The iteration that JUST finished (N-1) has a real score now —
+        # reconstruct its own versioned key (content-addressed, so this is
+        # exact, not a guess) and promote it to best-seen if it beats the
+        # running record.
+        prev_iter_versioned_key = keys.versioned_blob_key(
+            slug, chapter_id,
+            domain.compute_manifest_hash(
+                outline_manifest_hash = outline_manifest_hash,
+                digest_manifest_hash = digest_manifest_hash,
+                refine_iter = incoming_refine_iter,
+            ),
+        )
+        if incoming_best_score is None or carried_prev_score > incoming_best_score:
+            if incoming_best_score is not None:
+                logger.info(
+                    f"[sawc_write] {slug}/{chapter_id}: new best-seen "
+                    f"iteration {incoming_refine_iter} "
+                    f"(score {carried_prev_score:.2%} > prior best "
+                    f"{incoming_best_score:.2%})"
+                )
+            incoming_best_score = carried_prev_score
+            incoming_best_path = prev_iter_versioned_key
+
+    manifest_hash = domain.compute_manifest_hash(
+        outline_manifest_hash = outline_manifest_hash,
+        digest_manifest_hash = digest_manifest_hash,
+        refine_iter = refine_iter,
+    )
+    versioned_key = keys.versioned_blob_key(slug, chapter_id, manifest_hash)
+    latest_key    = keys.latest_blob_key(slug, chapter_id)
+
+    if await minio.exists(versioned_key) and await minio.exists(latest_key):
+        try:
+            cached_text = await minio.read_text(versioned_key)
+            cached = json.loads(cached_text)
+            cov = (cached or {}).get("coverage_stats") or {}
+            elapsed = int((time.monotonic() - t0) * 1000)
+            stats = {
+                "n_sections":      cov.get("n_sections", 0),
+                "n_completed":     cov.get("n_sections_completed", 0),
+                "n_fallback":      cov.get("n_sections_fallback", 0),
+                "n_repairs":       cov.get("n_repairs", 0),
+                "n_stages":        cov.get("n_stages", 0),
+                "n_total_drafts_fired": cov.get("n_total_drafts_fired", 0),
+                "n_picker_fallbacks":   cov.get("n_picker_fallbacks", 0),
+                "wall_ms":         elapsed,
+                "store_path":      latest_key,
+                "versioned_path":  versioned_key,
+                "manifest_hash":   manifest_hash,
+                "cache_hit":       True,
+                "prompt_version":  cached.get("prompt_version"),
+            }
+            await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+                thread_id, "sawc_write", "done",
+                n_sections = stats["n_sections"],
+                n_completed = stats["n_completed"],
+                n_fallback = stats["n_fallback"],
+                n_repairs = stats["n_repairs"],
+                total_drafts_fired = stats["n_total_drafts_fired"],
+                wall_ms = elapsed, cache_hit = True,
+            )
+            logger.info(
+                f"[sawc_write] {slug}/{chapter_id}: CACHE HIT — "
+                f"{stats['n_completed']}/{stats['n_sections']} sections, "
+                f"{stats['n_repairs']} repairs, {elapsed} ms"
+            )
+            # Cache hit preserves best-seen — same draft, unchanged tracking.
+            patch = {
+                "sawc_path":   latest_key,
+                "sawc_stats":  stats,
+                "refine_iter": refine_iter,
+            }
+            if incoming_best_path:
+                patch["best_seen_sawc_path"] = incoming_best_path
+            if incoming_best_score is not None:
+                patch["best_seen_score"] = incoming_best_score
+            if carried_prev_score is not None:
+                patch["prev_checklist_score"] = carried_prev_score
+            return patch
+        except Exception as e:
+            logger.warning(
+                f"[sawc_write] {slug}/{chapter_id}: cached blob "
+                f"{versioned_key!r} unreadable ({type(e).__name__}: {e}); "
+                f"recomputing"
+            )
+
+    # Visible Vault (arXiv 2601.03640): LLM sees actual code bodies; render substitutes via hash → byte-perfect fidelity preserved.
+    vault_rich, n_vaults_loaded, n_vaults_skipped = await _load_chapter_vault_rich(
+        minio, slug, valid_source_keys,
+    )
+    logger.info(
+        f"[sawc_write] {slug}/{chapter_id}: visible vault loaded — "
+        f"{len(vault_rich)} entries across {n_vaults_loaded} sources "
+        f"(skipped {n_vaults_skipped})"
+    )
+
+    sem = asyncio.Semaphore(params.CONCURRENCY)
+    memory_ledger: list[schemas.MemoryEntry] = []
+    completed_sections: dict[str, schemas.Section] = {}
+    chapter_used_hashes: set[str] = set()
+    n_total_drafts_fired = 0
+    n_critic_picks = 0
+    n_picker_fallbacks = 0
+
+    for stage_idx in sorted_stage_indices:
+        stage_section_ids = stages[stage_idx]
+        stage_t0 = time.monotonic()
+        await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+            thread_id, "sawc_write", "stage_start",
+            stage_idx = stage_idx,
+            n_sections_in_stage = len(stage_section_ids),
+            section_ids = stage_section_ids,
+        )
+
+        # SurveyGen-I §3.2.2: memory accumulates between stages, not within — all sections in this stage see the same snapshot.
+        memory_snapshot = [m.model_dump() for m in memory_ledger]
+
+        async def _run_section(sid: str, vault_char_budget: int | None = None) -> schemas.Section:
+            outline_sec = sections_by_id.get(sid)
+            if not outline_sec:
+                logger.warning(
+                    f"[sawc_write] section_id {sid!r} in stages but not in "
+                    f"outline.sections — emitting placeholder"
+                )
+                return domain.placeholder_section(
+                    section_id = sid,
+                    heading = sid,
+                    n_repairs = 0,
+                    deployment_writer = None,
+                )
+            contributions = per_section_index.get(sid) or []
+            allowed_hashes_set: set[str] = set()
+            for c in contributions:
+                for h in (c.get("code_refs") or []):
+                    allowed_hashes_set.add(h)
+            # Gate prose_mode on pre-pad count — post-pad would pull stray hashes into a no-code section.
+            n_routed_hashes = len(allowed_hashes_set)
+            _MIN_BANK_SIZE = 6
+            _BANK_PAD_TO = 20
+            # Chapter-wide blocks the digest never routed here but whose
+            # vocabulary this section's own text covers — keeps a section of a
+            # multi-topic code page out of prose mode (see params.RELEVANT_PAD_*).
+            # Blocks the digest routed to ANOTHER section (after the cross-section dedup) are not padding for this one:
+            # asyncio ch-01 padded "Awaitable Objects and Futures" with the cancel / timeout / shield snippets of
+            # "Task Cancellation and Error Handling", so both sections printed the same three blocks.
+            claimed_elsewhere = domain.hashes_claimed_elsewhere(per_section_index, sid)
+            if vault_rich and n_routed_hashes < _MIN_BANK_SIZE:
+                scored = domains.dd.pipeline.synth.nodes.vault.domain.rank_hashes_by_relevance(
+                    [h for h in vault_rich if h not in allowed_hashes_set and h not in claimed_elsewhere],
+                    vault_rich,
+                    domain.section_relevance_query(outline_sec, contributions),
+                )
+                relevant = [h for h, sc in scored if sc >= params.RELEVANT_PAD_MIN_SCORE]
+                if n_routed_hashes + len(relevant) >= params.RELEVANT_PAD_MIN_BLOCKS:
+                    relevant = relevant[:_BANK_PAD_TO - n_routed_hashes]
+                    allowed_hashes_set.update(relevant)
+                    n_routed_hashes += len(relevant)
+                    if relevant:
+                        logger.info(
+                            f"[sawc_write] {sid}: digest routed few/no code blocks; "
+                            f"{len(relevant)} chapter-wide block(s) matched this "
+                            f"section by relevance → bank {len(allowed_hashes_set)}"
+                        )
+            if vault_rich and len(allowed_hashes_set) < _MIN_BANK_SIZE:
+                chapter_wide = list(vault_rich.keys())
+                ranked_chapter = domains.dd.pipeline.synth.nodes.vault.domain.rank_hashes_by_pedagogy(
+                    chapter_wide, vault_rich,
+                )
+                needed = _BANK_PAD_TO - len(allowed_hashes_set)
+                pads = [
+                    h for h in ranked_chapter
+                    if h not in allowed_hashes_set and h not in claimed_elsewhere
+                ][:needed]
+                if len(allowed_hashes_set) + len(pads) < params.BANK_SHARE_BELOW:       # nothing unclaimed left: share rather than starve
+                    pads += [
+                        h for h in ranked_chapter
+                        if h not in allowed_hashes_set and h not in pads
+                    ][:needed - len(pads)]
+                if pads:
+                    allowed_hashes_set.update(pads)
+                    logger.info(
+                        f"[sawc_write] {sid}: digest-routed bank had "
+                        f"{len(allowed_hashes_set) - len(pads)} hashes < "
+                        f"{_MIN_BANK_SIZE}; padded with {len(pads)} pedagogically-"
+                        f"ranked chapter-wide hashes → bank size now "
+                        f"{len(allowed_hashes_set)}"
+                    )
+
+            if vault_rich:
+                allowed_hashes = domains.dd.pipeline.synth.nodes.vault.domain.rank_hashes_by_pedagogy(
+                    sorted(allowed_hashes_set), vault_rich,
+                )
+            else:
+                allowed_hashes = sorted(allowed_hashes_set)
+            n_primary_contribs = sum(
+                1 for c in contributions if c.get("relevance") == "primary"
+            )
+            # Restrict citations to sources digest_construct routed to THIS section (not chapter-wide) to prevent cross-section drift. Fail-safe: zero-routed sections fall back to chapter-wide.
+            section_source_keys: list[str] = sorted({
+                c.get("source_key", "") for c in contributions
+                if c.get("source_key")
+            })
+            citation_fallback = not section_source_keys
+            if citation_fallback:
+                section_source_keys = valid_source_keys
+                logger.info(
+                    f"[sawc_write] {sid}: digest routed 0 sources to "
+                    f"this section; falling back to chapter-wide "
+                    f"({len(valid_source_keys)} sources) for citations"
+                )
+            # PROSE PATH: gate on pre-pad n_routed_hashes (not padded bank) so a no-code section with stray chapter hashes stays prose instead of failing to placeholder.
+            prose_mode = n_routed_hashes == 0
+            # 1-2 code blocks (fewer than SUBTOPICS_MIN): used to force the whole
+            # section prose and drop the only examples there are (asyncio Queues:
+            # 1 block, Policies: 2 — both chapters shipped with no code). Mixed
+            # mode anchors a subtopic to each block and fills the rest with prose.
+            mixed_mode = (not prose_mode) and len(allowed_hashes) < params.SUBTOPICS_MIN
+            return await _write_section_best_of_n(
+                sem = sem,
+                section_id = sid,
+                section_heading = outline_sec.get("heading") or sid,
+                section_description = outline_sec.get("description") or "",
+                section_prerequisites = (
+                    outline_sec.get("prerequisites") or []
+                ),
+                contributions = contributions,
+                allowed_hashes = allowed_hashes,
+                vault_rich = vault_rich,
+                valid_source_keys = section_source_keys,
+                memory = memory_snapshot,
+                n_primary_contribs = n_primary_contribs,
+                framework = slug,
+                chapter_id = chapter_id,
+                chapter_title = chapter_title,
+                thread_id = thread_id,
+                prose_mode = prose_mode,
+                mixed_mode = mixed_mode,
+                already_shown_hashes = set(chapter_used_hashes),
+                citation_fallback = citation_fallback,
+                prior_feedback = prior_feedback,
+                vault_char_budget = vault_char_budget,
+            )
+
+        section_results = await asyncio.gather(
+            *(_run_section(sid) for sid in stage_section_ids),
+            return_exceptions = True,
+        )
+
+        n_stage_completed = 0
+        n_stage_failed = 0
+        for sid, result in zip(stage_section_ids, section_results):
+            if isinstance(result, BaseException):
+                logger.warning(
+                    f"[sawc_write] {sid}: gather raised "
+                    f"{type(result).__name__}: {result} — emitting placeholder"
+                )
+                completed_sections[sid] = domain.placeholder_section(
+                    section_id = sid,
+                    heading = sections_by_id.get(sid, {}).get("heading", sid),
+                    n_repairs = 0,
+                    deployment_writer = None,
+                )
+                n_stage_failed += 1
+            else:
+                completed_sections[sid] = result
+                # All non-placeholder sections count toward drafts fired
+                n_total_drafts_fired += params.N_DRAFTS
+                n_critic_picks += 1
+                if result.fallback_picker == "structural_score":
+                    n_picker_fallbacks += 1
+                if "placeholder" in result.issues:
+                    n_stage_failed += 1
+                else:
+                    n_stage_completed += 1
+
+            # Accumulate memory entry deterministically
+            sec = completed_sections[sid]
+            contribs = per_section_index.get(sid) or []
+            try:
+                memory_ledger.append(domain.extract_memory_entry(
+                    sec,
+                    section_contributions = contribs,
+                    section_heading = sec.heading,
+                ))
+            except Exception as e:
+                logger.warning(
+                    f"[sawc_write] memory extract failed for {sid}: "
+                    f"{type(e).__name__}: {e}"
+                )
+
+            for st in (getattr(sec, "subtopics", None) or []):
+                h = getattr(st, "code_ref_hash", "")
+                if h:
+                    chapter_used_hashes.add(h)
+
+        stage_ms = int((time.monotonic() - stage_t0) * 1000)
+        await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+            thread_id, "sawc_write", "stage_done",
+            stage_idx = stage_idx,
+            n_completed = n_stage_completed,
+            n_failed = n_stage_failed,
+            wall_ms = stage_ms,
+        )
+
+    # Late retry: a section whose drafts ALL failed (a 504 storm while its stage ran) gets one more go now that the other sections are done and the
+    # pool has had time to recover, with a lighter prompt (fastmcp ch-01: s1 lost both drafts and shipped as a placeholder; the same pool answered
+    # the other sections' calls minutes later).
+    if params.LATE_RETRY_ENABLED and sorted_stage_indices:
+        memory_snapshot = [m.model_dump() for m in memory_ledger]       # what the last stage's `_run_section` closure reads
+        await _late_retry_sections(
+            section_ids = [s_["section_id"] for s_ in outline_sections], run_section = _run_section, completed_sections = completed_sections,
+            memory_ledger = memory_ledger, chapter_used_hashes = chapter_used_hashes, per_section_index = per_section_index,
+            known_section_ids = set(sections_by_id), label = f"{slug}/{chapter_id}",
+        )
+
+    # Preserve outline order so downstream consumers can iterate sections
+    # in reading order (sawc returns stage-grouped order; flatten back)
+    section_order = [s["section_id"] for s in outline_sections]
+    final_sections = [
+        completed_sections[sid] for sid in section_order
+        if sid in completed_sections
+    ]
+    # Copies of a block another section prints go BEFORE the top-ups: the freed room is refilled from blocks and facts nobody
+    # states yet instead of staying as a prose echo (asyncio ch-04).
+    final_sections, n_repeated = domain.drop_repeated_code_blocks(final_sections, vault_rich)
+    if n_repeated:
+        logger.info(f"[sawc_write] {slug}/{chapter_id}: {n_repeated} subtopic(s) repeating a code block printed in an earlier section dropped or stripped")
+    if params.TOPUP_ENABLED and vault_rich:
+        final_sections, n_topup, n_topped = await _topup_coverage(
+            final_sections = final_sections, per_section_index = per_section_index, vault_rich = vault_rich,
+            sections_by_id = sections_by_id, framework = slug, chapter_id = chapter_id, chapter_title = chapter_title,
+        )
+        if n_topup:
+            logger.info(f"[sawc_write] {slug}/{chapter_id}: coverage top-up added {n_topup} subtopic(s) to {n_topped} section(s)")
+    if params.TOPUP_SRC_ENABLED:
+        final_sections, n_src, n_src_secs = await _topup_sources(
+            final_sections = final_sections, per_section_index = per_section_index, sections_by_id = sections_by_id,
+            framework = slug, chapter_id = chapter_id, chapter_title = chapter_title,
+        )
+        if n_src:
+            logger.info(f"[sawc_write] {slug}/{chapter_id}: source top-up added {n_src} prose subtopic(s) to {n_src_secs} section(s)")
+    final_sections, n_ordered = domain.order_by_code_dependencies(final_sections, vault_rich)
+    if n_ordered:
+        logger.info(f"[sawc_write] {slug}/{chapter_id}: {n_ordered} section(s) reordered so a block that defines a helper comes before the blocks that call it")
+    final_sections, n_echo = domain.drop_prose_echoes(final_sections)
+    if n_echo:
+        logger.info(f"[sawc_write] {slug}/{chapter_id}: {n_echo} prose subtopic(s) repeating another subtopic of the chapter dropped")
+
+    coverage = domain.compute_sawc_stats(
+        sections = final_sections,
+        n_stages = n_stages,
+        n_total_drafts_fired = n_total_drafts_fired,
+        n_critic_picks = n_critic_picks,
+        n_picker_fallbacks = n_picker_fallbacks,
+    )
+
+    # Aggregate WHY any section went fully empty — same idea as
+    # digest_construct's error_breakdown, applied to sawc's own draft
+    # failures (previously invisible: a total section failure only ever
+    # showed up as "0/N sections written," with no reason attached).
+    error_breakdown: dict[str, int] = {}
+    for s in final_sections:
+        for tag in (s.issues or []):
+            if tag.startswith("draft_fail:"):
+                kind = tag.split(":", 1)[1] or "unknown"
+                error_breakdown[kind] = error_breakdown.get(kind, 0) + 1
+
+    chapter_draft = schemas.ChapterDraft(
+        chapter_id = chapter_id,
+        chapter_title = chapter_title,
+        framework_slug = slug,
+        sections = final_sections,
+        memory_final = memory_ledger,
+        coverage_stats = coverage,
+    )
+
+    payload = chapter_draft.model_dump()
+    payload["outline_manifest_hash"] = outline_manifest_hash
+    payload["digest_manifest_hash"]  = digest_manifest_hash
+    payload["sawc_manifest_hash"]    = manifest_hash
+
+    blob_bytes = json.dumps(payload, indent = 2, ensure_ascii = False)
+    await minio.write(
+        versioned_key, blob_bytes, content_type = "application/json",
+    )
+    await minio.write(
+        latest_key, blob_bytes, content_type = "application/json",
+    )
+
+    elapsed = int((time.monotonic() - t0) * 1000)
+    stats = {
+        "n_sections":            coverage.n_sections,
+        "n_completed":           coverage.n_sections_completed,
+        "n_fallback":            coverage.n_sections_fallback,
+        "n_citation_fallback":   coverage.n_sections_citation_fallback,
+        "n_stages":              coverage.n_stages,
+        "n_total_drafts_fired":  coverage.n_total_drafts_fired,
+        "n_critic_picks":        coverage.n_critic_picks,
+        "n_picker_fallbacks":    coverage.n_picker_fallbacks,
+        "n_repairs":             coverage.n_repairs,
+        "total_subtopics":       coverage.total_subtopics,
+        "total_citations":       coverage.total_citations,
+        "avg_subtopics_per_section": coverage.avg_subtopics_per_section,
+        "avg_explanation_words":     coverage.avg_explanation_words,
+        "error_breakdown":       error_breakdown,
+        "wall_ms":               elapsed,
+        "store_path":            latest_key,
+        "versioned_path":        versioned_key,
+        "manifest_hash":         manifest_hash,
+        "cache_hit":             False,
+        "prompt_version":        versions.SAWC_PROMPT_VERSION,
+    }
+    await domains.dd.pipeline.synth.runtime.progress.service.emit_progress(
+        thread_id, "sawc_write", "done",
+        n_sections = stats["n_sections"],
+        n_completed = stats["n_completed"],
+        n_fallback = stats["n_fallback"],
+        n_citation_fallback = stats["n_citation_fallback"],
+        n_repairs = stats["n_repairs"],
+        total_drafts_fired = stats["n_total_drafts_fired"],
+        wall_ms = elapsed,
+    )
+    logger.info(
+        f"[sawc_write] {slug}/{chapter_id}: "
+        f"{stats['n_completed']}/{stats['n_sections']} sections written, "
+        f"{stats['n_fallback']} fallbacks "
+        f"(failed = {dict(sorted(error_breakdown.items()))}), "
+        f"{stats['n_citation_fallback']} citation-fallback (chapter-wide), "
+        f"{stats['n_repairs']} repairs, "
+        f"{stats['n_total_drafts_fired']} drafts fired, "
+        f"{stats['n_picker_fallbacks']} picker fallbacks, "
+        f"refine_iter = {refine_iter}, {elapsed} ms"
+    )
+    # Best-seen comparison already happened above (see carried_prev_score);
+    # this just forwards whatever incoming_best_score/incoming_best_path
+    # ended up being — either the running record, or this call's own
+    # promotion of the iteration that just finished.
+    patch = {
+        "sawc_path":   latest_key,
+        "sawc_stats":  stats,
+        "refine_iter": refine_iter,
+    }
+    if incoming_best_path:
+        patch["best_seen_sawc_path"] = incoming_best_path
+    else:
+        # First iteration — current sawc IS the best-seen. We track the
+        # VERSIONED key (immutable) not the latest pointer, so render can
+        # overwrite latest_key.
+        patch["best_seen_sawc_path"] = versioned_key
+    if incoming_best_score is not None:
+        patch["best_seen_score"] = incoming_best_score
+    if carried_prev_score is not None:
+        patch["prev_checklist_score"] = carried_prev_score
+    return patch
+
+
+# Convenience loader for downstream nodes

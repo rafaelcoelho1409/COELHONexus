@@ -15,8 +15,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
-sel = domains.dd.planner.nodes.chapter_select.domain
-P = domains.dd.planner.nodes.chapter_select.params
+sel = domains.dd.pipeline.planner.nodes.chapter_select.domain
+P = domains.dd.pipeline.planner.nodes.chapter_select.params
 
 fx = json.load(open(sys.argv[1]))
 entries, proposals = fx["entries"], fx["proposals"]

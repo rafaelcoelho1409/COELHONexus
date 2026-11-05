@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
-N = domains.dd.synth.nodes
+N = domains.dd.pipeline.synth.nodes
 SW, CK = N.sawc.domain, N.checklist.domain
 
 

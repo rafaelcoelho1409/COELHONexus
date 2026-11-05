@@ -461,7 +461,7 @@ test.describe("Docs Distiller", () => {
   test("the sidebar lists pages by title, in the order of the original documentation", async ({ page }) => {
     await mockRoutes(page);
     await page.goto("/dd/ingestion?slug=alpha");
-    await page.getByRole("tab", { name: "Materials" }).click();
+    await page.getByRole("tab", { name: "Pages" }).click();
     const tree = page.getByRole("region", { name: "Ingested library" });
     // the manifest holds Quickstart before CLI; sorted by name CLI would come first
     const titles = tree.locator("li button").filter({ hasText: /Quickstart|CLI/ });
@@ -475,7 +475,7 @@ test.describe("Docs Distiller", () => {
   test("the ingestion preview renders the page, and Source shows the raw text", async ({ page }) => {
     await mockRoutes(page);
     await page.goto("/dd/ingestion?slug=alpha");
-    await page.getByRole("tab", { name: "Materials" }).click();
+    await page.getByRole("tab", { name: "Pages" }).click();
     const preview = page.getByRole("region", { name: "Ingested library" });
 
     await expect(preview.getByRole("button", { name: "Rendered" })).toHaveAttribute("aria-pressed", "true");
@@ -517,7 +517,7 @@ test.describe("Docs Distiller", () => {
       json(route, { body: MATERIALS_BODY }),
     );
     await page.goto("/dd/ingestion?slug=alpha");
-    await page.getByRole("tab", { name: "Materials" }).click();
+    await page.getByRole("tab", { name: "Pages" }).click();
     const library = page.getByRole("region", { name: "Ingested library" });
     await expect(library.getByText("Intro text for the quickstart.")).toBeVisible();
     return library;

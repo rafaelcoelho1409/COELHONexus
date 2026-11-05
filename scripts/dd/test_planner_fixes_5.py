@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains, infra  # noqa: E402
 
-nodes = domains.dd.planner.nodes
+nodes = domains.dd.pipeline.planner.nodes
 SEL, SELS = nodes.chapter_select.domain, nodes.chapter_select
 PR, CA = nodes.chapter_propose, nodes.chapter_assign
 chat = domains.settings.chat
@@ -158,7 +158,7 @@ async def run_propose(fail_idx):
         return {"entries": []}
     domains.dd.ingestion.storage.service.read_framework_manifest = _manifest
     chat.service.wait_for_rotator_settle = _settle
-    domains.dd.planner.runtime.progress.service.emit_progress = _noop
+    domains.dd.pipeline.planner.runtime.progress.service.emit_progress = _noop
     async def _dist(m, slug):
         return {f"k{i}": {"summary": f"summary {i}", "key_terms": ["t"]} for i in range(30)}
     nodes.doc_distill.service.load_distillates = _dist

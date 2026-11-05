@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains  # noqa: E402
 
-CA = domains.dd.planner.nodes.chapter_assign
+CA = domains.dd.pipeline.planner.nodes.chapter_assign
 S, P = CA.service, CA.params
 OK = [{"chapter_idx": 2, "confidence": 0.9}]
 FB = [{"chapter_idx": 0, "confidence": 0.5}]
@@ -73,7 +73,7 @@ P.SWEEP_ENABLED = False
 assert asyncio.run(S.sweep_failed(first_pass(3), t, 20))[1:] == (0, 0)
 print("5 kill switch ok")
 # 6) select: pages filed under a migrate / upgrade / changelog URL directory go to the migration chapter ------------------
-SEL = domains.dd.planner.nodes.chapter_select.domain
+SEL = domains.dd.pipeline.planner.nodes.chapter_select.domain
 def doc(i): return f"ingestion/fw/pages/{i:04d}-page-{i}.md"
 sdk = [doc(i) for i in range(4)]                                                   # `docs/sdk/upgrade-path/<version pair>` pages
 rest = [doc(i) for i in range(4, 40)]
@@ -145,7 +145,7 @@ chs[0]["member_doc_keys"] = chs[0]["member_doc_keys"][:38]
 assert not [p for p in SEL.plan_splits(chs) if p[0] == 0]                           # 38 pages, 14%: untouched
 print("8 absolute chapter cap + directory-seeded split ok:", [len(g) for g in groups])
 # 9) order: a catalog family (the integrations block) leaves no gap -------------------------------------------------------
-OC = domains.dd.planner.nodes.order_chapters.domain
+OC = domains.dd.pipeline.planner.nodes.order_chapters.domain
 cat = lambda t, n: {"title": t, "member_doc_keys": [f"ingestion/fw/pages/{i:04d}-{t[:4]}-{i}.md" for i in range(n)]}
 chs9 = [cat("Foundations", 8), cat("Frameworks", 6), cat("Providers", 6), cat("Dashboards", 12), cat("Gateways", 6), cat("Prompts", 12)]
 kd9 = {k: ("integrations", "x") for c in chs9[1:3] + chs9[4:5] for k in c["member_doc_keys"]} | {k: ("docs", "obs") for c in (chs9[0], chs9[3], chs9[5]) for k in c["member_doc_keys"]}

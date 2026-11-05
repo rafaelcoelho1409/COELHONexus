@@ -66,11 +66,11 @@ function renderStage(book?: string) {
 }
 
 async function openPipeline() {
-  await userEvent.click(await screen.findByRole("tab", { name: "Pipeline" }));
+  await userEvent.click(await screen.findByRole("tab", { name: "Agents" }));
 }
 
 async function openMaterials() {
-  await userEvent.click(await screen.findByRole("tab", { name: "Materials" }));
+  await userEvent.click(await screen.findByRole("tab", { name: "Pages" }));
 }
 
 /** An event stream the test pushes into, as the server does while a run is live. */
@@ -111,8 +111,8 @@ describe("The third navbar", () => {
     serveBook(snapshot({ status: "done", n_pages: 1, pages: [pageEntry(1)] }));
     renderStage(BOOK_ID);
 
-    const pipeline = await screen.findByRole("tab", { name: "Pipeline" });
-    const materials = screen.getByRole("tab", { name: "Materials" });
+    const pipeline = await screen.findByRole("tab", { name: "Agents" });
+    const materials = screen.getByRole("tab", { name: "Pages" });
     const picker = screen.getByRole("button", { name: /Library|Book/ });
     const upload = screen.getByText("Upload book");
     const hint = screen.getByText(/PDF or EPUB · up to 300 MB/);
@@ -135,7 +135,7 @@ describe("The third navbar", () => {
     renderStage();
 
     expect(await screen.findByText("Upload book")).toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "Pipeline" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Agents" })).not.toBeInTheDocument();
   });
 
   it("returns to Pipeline when another book is opened", async () => {
@@ -144,7 +144,7 @@ describe("The third navbar", () => {
     const view = renderStage(BOOK_ID);
 
     await openMaterials();
-    expect(screen.getByRole("tab", { name: "Materials" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Pages" })).toHaveAttribute("aria-selected", "true");
     search = "book=other-book";
     view.rerender(
       <QueryProvider>
@@ -153,7 +153,7 @@ describe("The third navbar", () => {
         </BdOverlaysProvider>
       </QueryProvider>,
     );
-    expect(await screen.findByRole("tab", { name: "Pipeline" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("tab", { name: "Agents" })).toHaveAttribute("aria-selected", "true");
   });
 });
 
@@ -396,7 +396,7 @@ describe("A book being extracted", () => {
       "aria-valuetext",
       "1 of 2 sections",
     );
-    await userEvent.click(screen.getByRole("tab", { name: "Materials" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Pages" }));
     await userEvent.click(screen.getByRole("button", { name: BOOK_TITLE }));
     expect(await screen.findByText("EPUB · 1/2 sections · 18 MB")).toBeInTheDocument();
     expect(await screen.findByRole("article", { name: "Section 1" })).toHaveTextContent(
@@ -579,7 +579,7 @@ describe("A book being extracted", () => {
         name: "Stop Docling extraction",
       }),
     ).toBeEnabled();
-    await userEvent.click(screen.getByRole("tab", { name: "Materials" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Pages" }));
     expect(screen.getByRole("list", { name: "Extracted pages" })).toBeInTheDocument();
   });
 
@@ -629,7 +629,7 @@ describe("A book being extracted", () => {
         name: "Stop Docling extraction",
       }),
     ).toBeDisabled();
-    await userEvent.click(screen.getByRole("tab", { name: "Materials" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Pages" }));
     expect(screen.queryByRole("checkbox", { name: "Follow newest" })).not.toBeInTheDocument();
   });
 
@@ -776,7 +776,7 @@ describe("A book being extracted", () => {
     expect(pageReads).toBe(2);
     expect(screen.queryByRole("progressbar", { name: "AI-processed pages" })).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Agentic pipeline" })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("tab", { name: "Pipeline" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Agents" }));
     expect(screen.getByRole("progressbar", { name: "AI-processed pages" })).toHaveAttribute(
       "aria-valuenow",
       "1",
@@ -805,7 +805,7 @@ describe("A book being extracted", () => {
     await userEvent.click(within(nodeDetails).getByRole("button", { name: "Close node details" }));
     const progressBox = screen.getByRole("region", { name: "Agentic AI progress" });
     expect(within(progressBox).queryByRole("button", { name: "LLM usage" })).not.toBeInTheDocument();
-    expect(within(progressBox).queryByRole("button", { name: "Pipeline" })).not.toBeInTheDocument();
+    expect(within(progressBox).queryByRole("button", { name: "Agents" })).not.toBeInTheDocument();
     await userEvent.click(within(pipeline).getByRole("button", { name: "LLM usage" }));
     const usageSheet = await screen.findByRole("dialog", { name: "Ingestion LLM usage" });
     const usageByModel = within(usageSheet).getByRole("region", { name: "Usage by agent and model" });
@@ -815,7 +815,7 @@ describe("A book being extracted", () => {
     expect(usageByModel).toHaveTextContent("20");
   });
 
-  it("shows extraction progress inside Pipeline, not Materials", async () => {
+  it("shows extraction progress inside Agents, not Pages", async () => {
     serveLibrary([bookRow({ status: "done", n_pages: 1, pages_done: 1 })]);
     serveBook(
       snapshot({ status: "done", n_pages: 1, pages: [pageEntry(1)] }, null, {
@@ -874,7 +874,7 @@ describe("A book being extracted", () => {
     renderStage(BOOK_ID);
 
     await openPipeline();
-    expect(screen.getByRole("tab", { name: "Pipeline" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Agents" })).toHaveAttribute("aria-selected", "true");
     const extractedProgress = screen.getByRole("progressbar", { name: "Pages extracted" });
     const agenticProgress = screen.getByRole("progressbar", { name: "AI-processed pages" });
     expect(extractedProgress).toHaveAttribute("aria-valuetext", "1 of 1 pages");
@@ -976,7 +976,7 @@ describe("A book being extracted", () => {
     expect(screen.getByRole("region", { name: "Pipeline usage" })).toHaveTextContent(
       "No Agentic AI run yet.",
     );
-    expect(screen.getByRole("tab", { name: "Pipeline" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Agents" })).toHaveAttribute("aria-selected", "true");
     expect(
       within(screen.getByRole("region", { name: "Agentic pipeline stages" })).getByRole("region", {
         name: "Chapter progress",
