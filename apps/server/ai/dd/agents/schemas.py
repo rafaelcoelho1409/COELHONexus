@@ -54,6 +54,10 @@ class PageIssue(BaseModel):
     severity: IssueSeverity
     description: NonEmptyText
     evidence: NonEmptyText
+    other_evidence: str = Field(
+        default = "",
+        description = "For a duplicate: the second copy of the evidence, copied exactly from a different place on the page. Empty otherwise.",
+    )
     confidence: Confidence
 
 

@@ -180,19 +180,29 @@ export function useActiveRun(enabled: boolean) {
   return { run: runs[0], runs, isPending: query.isPending };
 }
 
-/** GET /dd/ingestion/runs/{run_id} — the poll stops at a terminal state. */
-export function useRunPoll(runId: string | null) {
+/** GET /dd/ingestion/runs/{run_id} — the poll stops at a terminal state. `live` says the run is in flight (the address names it): only then is it
+ * asked about again, even while the server does not know it yet (a worker that has not picked the run up has not written its status). The status of a
+ * finished run expires from the server, so for it the answer, found or gone, is read once.
+ *
+ * `isError` stays true from the first failed answer until the run is found. A query with no data goes back to "pending" while it is refetched, which
+ * made `isError` (and with it the whole screen) flip once per poll. */
+export function useRunPoll(runId: string | null, live: boolean) {
   const query = useQuery({
     ...getDdIngestionRunsRunIdOptions({ path: { run_id: runId ?? "" } }),
     retry: 0,
     enabled: runId !== null,
     select: parseRunStatus,
     refetchInterval: (current) => {
+      if (!live) return false;
       const status = runStatusSchema.safeParse(current.state.data);
       return status.success && isRunTerminal(status.data.progress?.status) ? false : RUN_POLL_MS;
     },
   });
-  return { data: query.data ?? null, isPending: query.isPending, isError: query.isError };
+  return {
+    data: query.data ?? null,
+    isPending: query.isPending,
+    isError: query.isError || (query.errorUpdateCount > 0 && query.data === undefined),
+  };
 }
 
 /** GET /dd/ingestion/{slug}/manifest. */

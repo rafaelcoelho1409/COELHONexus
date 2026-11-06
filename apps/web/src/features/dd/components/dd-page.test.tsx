@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { client } from "@/shared/api";
 import { QueryProvider } from "@/shared/providers/query-provider";
 
+import { AUTO_CHAIN_STORAGE_KEY } from "../params";
 import { DocsDistillerPage } from "./dd-page";
 
 const ORIGIN = "http://nexus.test";
@@ -132,6 +133,37 @@ describe("DocsDistillerPage", () => {
     await userEvent.click(trigger);
     expect(screen.getByLabelText("Search frameworks")).toBeInTheDocument();
     expect(screen.getByLabelText("Delete Alpha")).toBeInTheDocument();
+  });
+
+  it("keeps Auto-chain in the pipeline's navbar, next to the framework, and remembers the choice", async () => {
+    localStorage.clear();
+    routerState.pathname = "/dd/pipeline";
+    routerState.search = "slug=a";
+    renderPage();
+    const toggle = await screen.findByRole("checkbox", { name: "Auto-chain" });
+    expect(toggle).not.toBeChecked();
+    expect(screen.getAllByLabelText("Auto-chain")).toHaveLength(1); // the page body no longer holds a second one
+
+    await userEvent.click(toggle);
+    expect(toggle).toBeChecked();
+    expect(localStorage.getItem(AUTO_CHAIN_STORAGE_KEY)).toBe("1");
+    await userEvent.click(toggle);
+    expect(localStorage.getItem(AUTO_CHAIN_STORAGE_KEY)).toBe("0");
+  });
+
+  it("offers no Auto-chain on the other stages or before a framework is picked", async () => {
+    routerState.pathname = "/dd/synth";
+    routerState.search = "slug=a";
+    const { unmount } = renderPage();
+    expect(await screen.findByText("Alpha")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Auto-chain")).not.toBeInTheDocument();
+    unmount();
+
+    routerState.pathname = "/dd/pipeline";
+    routerState.search = "";
+    renderPage();
+    expect(await screen.findByText("No framework selected")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Auto-chain")).not.toBeInTheDocument();
   });
 
   it("renders the study stage shell for frameworks", () => {

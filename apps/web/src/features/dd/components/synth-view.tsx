@@ -53,18 +53,16 @@ export function SynthRunPanel({
       </RunBar>
       <div className="flex min-w-0 flex-col gap-4">
         {synth.views.length > 0 ? (
-          <section aria-label="Chapter pipeline">
-            <StageNodeBoard
-              stage="synth"
-              views={synth.views}
-              values={synth.values}
-              liveLines={synth.liveLines}
-              events={synth.events}
-              threadId={synth.canvasThreadId}
-              live={synth.running}
-              caption={nodeBoardCaption(synth)}
-            />
-          </section>
+          <StageNodeBoard
+            stage="synth"
+            views={synth.views}
+            values={synth.values}
+            liveLines={synth.liveLines}
+            events={synth.events}
+            threadId={synth.canvasThreadId}
+            live={synth.running}
+            caption={nodeBoardCaption(synth)}
+          />
         ) : null}
         {synth.error ? (
           <p role="alert" className="text-xs text-destructive-text">

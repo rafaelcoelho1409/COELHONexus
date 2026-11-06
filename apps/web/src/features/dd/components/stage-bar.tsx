@@ -10,17 +10,20 @@ import type { DdStage } from "../params";
 import { FrameworkPicker } from "./framework-picker";
 
 /** The third navbar of every stage that works on one framework: the framework picker and its facts on the left
- * ("Locust · 24 pages · 213.6 KB"), the stage's own views (`end`) on the right. A stage that already holds the
- * manifest it shows passes the facts as `info`; the others read them from the library. */
+ * ("Locust · 24 pages · 213.6 KB") followed by the stage's own choices (`controls`, an on/off switch), the stage's own
+ * views (`end`) on the right. A stage that already holds the manifest it shows passes the facts as `info`; the others
+ * read them from the library. */
 export function StageBar({
   stage,
   slug,
   info,
+  controls,
   end,
 }: {
   stage: DdStage;
   slug: string | null;
   info?: string;
+  controls?: ReactNode;
   end?: ReactNode;
 }) {
   return (
@@ -29,6 +32,7 @@ export function StageBar({
         <>
           <FrameworkPicker stage={stage} currentSlug={slug} />
           {slug ? info === undefined ? <LibraryFacts slug={slug} /> : <Facts text={info} /> : null}
+          {slug ? controls : null}
         </>
       }
       end={end}

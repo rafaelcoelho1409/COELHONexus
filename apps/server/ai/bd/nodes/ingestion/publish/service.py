@@ -1,23 +1,66 @@
 """Quality reporting and manifest-last publication for an agentic ingestion run."""
 from __future__ import annotations
 import domains
+from . import domain
 from .... import agents, graphs
 
+import asyncio
 import hashlib
 import inspect
 import json
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 
 ArtifactWriter = Callable[[str, str, str], Any]
+PageReader = Callable[[str], str | None | Awaitable[str | None]]
+
+
+async def verify_pages(
+    state: graphs.ingestion.state.IngestionRunState,
+    read_page: PageReader,
+) -> dict[str, object]:
+    """Re-read every delivered page's source and output and check them against each other, outside any agent."""
+    source_keys = {ref["page"]: ref["source_key"] for ref in state["page_refs"]}
+    semaphore = asyncio.Semaphore(domains.bd.ingestion.ai.params.VERIFY_CONCURRENCY)
+
+    async def read(key: str) -> str:
+        text = read_page(key)
+        if inspect.isawaitable(text):
+            text = await text
+        if not isinstance(text, str):
+            raise ValueError(f"{key} could not be read as Markdown text")
+        return text
+
+    async def check(page: dict[str, Any]) -> tuple[int, bool, int]:
+        async with semaphore:
+            source, normalized = await asyncio.gather(
+                read(source_keys[page["page"]]), read(page["normalized_key"]),
+            )
+        return (
+            page["page"],
+            domain.sha256_matches(normalized, page["normalized_sha256"]),
+            domain.lost_alphanumeric(source, normalized),
+        )
+
+    delivered = [
+        page for page in state["page_results"]
+        if page.get("delivery_disposition", "include") != "discarded_blank"
+    ]
+    rows = await asyncio.gather(*(check(page) for page in delivered))
+    return domain.summarize(
+        len(rows),
+        [number for number, intact, _ in rows if not intact],
+        {number: lost for number, _, lost in rows if lost},
+    )
 
 
 async def publish(
     state: graphs.ingestion.state.IngestionRunState,
     write_artifact: ArtifactWriter,
+    read_page: PageReader | None = None,
 ) -> dict:
     """Write the quality report and the completed run manifest as the final object write."""
     page_results = state.get("page_results")
@@ -30,6 +73,12 @@ async def publish(
         raise ValueError("cannot publish a page with a failed or pending status")
     if not state.get("book_metadata_sha256"):
         raise ValueError("book metadata must be persisted before run publication")
+
+    verification = await verify_pages(state, read_page) if read_page is not None else None
+    if verification is not None and verification["integrity_failure_pages"]:
+        raise ValueError(
+            f"pages {verification['integrity_failure_pages']} do not match the hash recorded when they were written"
+        )
 
     assessments = [agents.schemas.PageAssessment.model_validate(page["assessment"]) for page in page_results]
     issue_counts = Counter(issue.code.value for assessment in assessments for issue in assessment.issues)
@@ -69,6 +118,7 @@ async def publish(
             review_pages
             or unverified_pages
             or state["book_metadata"].get("review_required")
+            or (verification is not None and verification["text_loss_pages"])
         )
         else "complete"
     )
@@ -127,6 +177,7 @@ async def publish(
             if page["assessment"].get("page_kind") in {"mixed", "image_only"}
         ],
         "book_metadata_review_required": state["book_metadata"].get("review_required", True),
+        "verification": verification,
         "status": quality_status,
     }
     report_content = _json(quality_report)
@@ -183,7 +234,6 @@ async def publish(
     await _write(write_artifact, manifest_key, manifest_content, "application/json")
     return {
         "quality_report": quality_report,
-        "quality_report_sha256": report_sha256,
         "status": "complete",
         "quality_status": quality_status,
     }

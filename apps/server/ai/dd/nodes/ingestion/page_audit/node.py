@@ -1,7 +1,7 @@
 """Read-only LangGraph node for one evidence-grounded page audit."""
 from __future__ import annotations
 import domains
-from . import domain, params
+from . import detectors, domain, params
 from .... import agents
 
 from typing import Any, Protocol
@@ -21,7 +21,6 @@ async def audit_page(
     markdown: str,
     auditor: PageAuditor,
     *,
-    files: dict[str, Any],
     config: dict[str, Any] | None = None,
 ) -> tuple[agents.schemas.PageAssessment, list[str]]:
     if len(markdown) > params.MAX_PAGE_MARKDOWN_CHARS:
@@ -39,9 +38,9 @@ async def audit_page(
                 page["url"],
                 page["title"],
                 markdown,
+                detectors.candidates(markdown),
             ),
         }],
-        "files": files,
     }
     # Retry transient provider failures and occasional non-structured answers in one bounded loop.
     result = await domains.settings.chat.service.resilient_ainvoke(

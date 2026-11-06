@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { HttpResponse, http } from "msw";
+import { delay, HttpResponse, http } from "msw";
 import { setupServer } from "msw/node";
 import { useEffect, useState } from "react";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -149,6 +149,60 @@ describe("IngestionStage — the ?run= address", () => {
     render(<Page start="/dd/ingestion?slug=alpha" />);
     await screen.findByLabelText("Filter pages");
     expect(replace).not.toHaveBeenCalled();
+  });
+});
+
+describe("IngestionStage — a run whose status is gone from the server", () => {
+  const OLD_RUN = "0ld0ld0ld0ld0ld0ld0ld0ld0ld0ld0";
+  const notFound = () => HttpResponse.json({ detail: `run '${OLD_RUN}' not found` }, { status: 404 });
+
+  function serveGone(manifestRunId: string | null) {
+    const polls = { count: 0 };
+    server.use(
+      http.get(`${ORIGIN}/api/v1/dd/catalog`, () => HttpResponse.json(CATALOG)),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/active`, () => HttpResponse.json({ active: [] })),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/${OLD_RUN}`, async () => {
+        polls.count += 1;
+        await delay(120); // a real request takes time, and that is the window in which the screen used to flip
+        return notFound();
+      }),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/*/llm-counters`, () => HttpResponse.json(NO_USAGE)),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/alpha/manifest`, () =>
+        HttpResponse.json({ ...MANIFEST, agentic_run_id: manifestRunId }),
+      ),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion`, () => HttpResponse.json([LIBRARY_ITEM])),
+      http.get(`${ORIGIN}/api/v1/dd/ingestion/alpha/pages/*`, () => HttpResponse.json({ body: "x" })),
+    );
+    return polls;
+  }
+
+  it("asks once for the status of the saved run, instead of every poll for ever", async () => {
+    const polls = serveGone(OLD_RUN);
+    render(<Page start="/dd/ingestion?slug=alpha" />);
+
+    expect(await screen.findByText("Ingestion complete.")).toBeInTheDocument();
+    await sleep(1_800);
+    expect(polls.count).toBe(1);
+    expect(screen.getByText("Ingestion complete.")).toBeInTheDocument();
+  });
+
+  it("keeps saying the progress is unavailable between polls, without flipping back to a blank state", async () => {
+    const polls = serveGone(null);
+    render(<Page start={`/dd/ingestion?slug=alpha&run=${OLD_RUN}`} />);
+
+    const unavailable = await screen.findByText(/Run progress is unavailable/);
+    expect(unavailable).toBeInTheDocument();
+    // Two poll intervals: every look at the screen in between still finds the message (a refetch of a query with no data
+    // used to reset it to pending, which blanked the message and brought the "in flight" graph back, once per poll).
+    const until = Date.now() + 3_200;
+    let looks = 0;
+    while (Date.now() < until) {
+      expect(screen.queryByText(/Run progress is unavailable/)).toBeInTheDocument();
+      looks += 1;
+      await sleep(25);
+    }
+    expect(looks).toBeGreaterThan(10);
+    expect(polls.count).toBeGreaterThan(1);
   });
 });
 

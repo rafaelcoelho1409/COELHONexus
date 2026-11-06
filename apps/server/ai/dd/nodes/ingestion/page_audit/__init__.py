@@ -1,6 +1,6 @@
 """Read-only quality assessment for one extracted documentation page."""
 from __future__ import annotations
 
-from . import domain, node, params, patterns
+from . import detectors, domain, node, params
 
-__all__ = ["domain", "node", "params", "patterns"]
+__all__ = ["detectors", "domain", "node", "params"]

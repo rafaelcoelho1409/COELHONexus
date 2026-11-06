@@ -1,17 +1,9 @@
-from . import params
-
-
-AGENT_SKILL_FOLDERS = {
-    "page_auditor": "page-auditor",
-    "text_repair": "text-repair",
-    "structure_repair": "structure-repair",
-    "metadata_normalizer": "metadata-normalizer",
-}
+from . import keys, params
 
 
 def folder_for(agent_name: str) -> str:
     try:
-        return AGENT_SKILL_FOLDERS[agent_name]
+        return keys.AGENT_SKILL_FOLDERS[agent_name]
     except KeyError as error:
         raise ValueError(f"unknown Book Distiller skill role: {agent_name}") from error
 

@@ -144,7 +144,6 @@ async def normalize_metadata(
     if inspect.isawaitable(result):
         await result
     return {
-        "metadata_proposal": proposal_payload or {},
         "book_metadata": normalized_metadata,
         "book_metadata_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
         "status": "metadata_normalized",

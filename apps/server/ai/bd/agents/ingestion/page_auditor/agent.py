@@ -2,22 +2,16 @@
 from __future__ import annotations
 import domains
 from . import config, domain, params
-from ... import schemas
-from .... import prompts, skills
+from ... import schemas, service
+from .... import middleware, prompts, skills
 
-from deepagents import (
-    FilesystemPermission,
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
+from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import StateBackend
 from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain_openai import ChatOpenAI
 
 
-def page_auditor(model=None):
+def page_auditor(model = None):
     """Build the configured DeepAgent for evidence-grounded page audits."""
     if model is None:
         model = domains.settings.chat.service.build_chat_model(
@@ -31,19 +25,12 @@ def page_auditor(model=None):
     if not isinstance(model, ChatOpenAI):
         raise TypeError("the page auditor must use the COELHO Rotator ChatOpenAI model")
 
-    register_harness_profile(
-        f"openai:{model_name}",
-        HarnessProfile(
-            base_system_prompt = "",
-            excluded_tools = params.EXCLUDED_TOOLS,
-            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
-        ),
-    )
+    service.isolate_harness_profile(model_name)
     agent = create_deep_agent(
         model = model,
         tools = [],
         system_prompt = prompts.ingestion.page_auditor.prompts.SYSTEM_PROMPT,
-        middleware = [ModelCallLimitMiddleware(
+        middleware = [middleware.service.ToolAllowlistMiddleware(frozenset({"read_file"})), ModelCallLimitMiddleware(
             run_limit = domains.bd.ingestion.ai.params.AGENT_MODEL_CALL_LIMIT,
             exit_behavior = "end",
         )],

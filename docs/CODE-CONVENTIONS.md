@@ -94,8 +94,8 @@ split into one of the above files OR a dataclass.
 | New name | Trigger (create the file iff) | What goes in it |
 |---|---|---|
 | `schemas.py` | the module defines ≥1 boundary shape | Shapes at system boundaries — Pydantic `BaseModel` classes for validated boundaries (LLM I/O, HTTP bodies) AND external-service schema definitions (ES index mappings, Qdrant payload shapes). If it describes what a datastore or wire format accepts, it lives here, not in `service.py` |
-| `entities.py` | the module manipulates ≥1 value object, or ≥2 scalars form a frozen group | Plain `@dataclass` value objects — the "things" the domain manipulates (`ManifestEntry`, `Section`, `MemoryEntry`) |
-| `state.py` | the module owns LangGraph state | LangGraph `TypedDict`s (planner uses this name already; standardize) |
+| `entities.py` | the module manipulates ≥1 value object, or ≥2 scalars form a frozen group | Plain value objects — the "things" the domain manipulates (`ManifestEntry`, `Section`, `MemoryEntry`). `@dataclass` by default; a `TypedDict` instead when the value is kept as a plain dict inside LangGraph state or a JSON artifact (the items of a state's lists: page references, per-page results) |
+| `state.py` | the module owns LangGraph state | Only the schemas passed to `StateGraph` (state, and input/output/private schemas if the graph has them), as `TypedDict`s. Their item shapes go in `entities.py` |
 | `errors.py` | the module defines ≥1 exception class | Exception classes (`IngestCancelled`, etc.) |
 | inline (no file) | one-off `TypeAlias` / `Literal` | Put them in the module that uses them, no separate file needed |
 

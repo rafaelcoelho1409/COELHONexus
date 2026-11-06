@@ -68,6 +68,7 @@ def _arguments() -> argparse.Namespace:
 async def _evaluate(arguments: argparse.Namespace) -> int:
     storage = infra.minio.service.get_storage()
     auditor = ai.bd.agents.ingestion.page_auditor.agent.page_auditor()
+    finding_verifier = ai.bd.agents.ingestion.finding_verifier.agent.finding_verifier()
     results = []
 
     for page_number in arguments.pages:
@@ -78,10 +79,13 @@ async def _evaluate(arguments: argparse.Namespace) -> int:
                 expected_extraction_id = arguments.extraction_id,
                 storage = storage,
                 auditor = auditor,
+                finding_verifier = finding_verifier,
             )
             results.append({
                 "page_number": page_number,
                 "source_sha256": result["source_sha256"],
+                "audit_mode": result["audit_mode"],
+                "warnings": result["warnings"],
                 "assessment": result["assessment"],
             })
         except Exception as error:
@@ -100,6 +104,7 @@ async def _evaluate(arguments: argparse.Namespace) -> int:
         for issue in result["assessment"]["issues"]
     )
     page_kinds = Counter(result["assessment"]["page_kind"] for result in completed)
+    audit_modes = Counter(result["audit_mode"] for result in completed)
     report = {
         "book_id": arguments.book_id,
         "extraction_run_id": arguments.extraction_id,
@@ -109,11 +114,13 @@ async def _evaluate(arguments: argparse.Namespace) -> int:
             "failed": len(results) - len(completed),
             "page_kinds": dict(sorted(page_kinds.items())),
             "issue_codes": dict(sorted(issue_codes.items())),
+            "audit_modes": dict(sorted(audit_modes.items())),
         },
         "results": results,
     }
     print(json.dumps(report, ensure_ascii = False, indent = 2))
-    return int(len(completed) != len(results))
+    # A page the model could not answer falls back to the code's findings and still "completes"; it is not a scored audit.
+    return int(len(completed) != len(results) or audit_modes["deterministic_fallback"] > 0)
 
 
 def main() -> int:

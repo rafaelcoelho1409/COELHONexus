@@ -1,20 +1,6 @@
-import { Check } from "lucide-react";
-
 import { ingestionPercent } from "../domain/ingestion-progress";
 import { ActionButton } from "./action-button";
-
-function SuccessMark() {
-  return (
-    <span
-      role="img"
-      aria-label="Completed successfully"
-      title="Completed successfully"
-      className="inline-flex text-success-text"
-    >
-      <Check className="size-4" aria-hidden="true" />
-    </span>
-  );
-}
+import { SuccessMark } from "./success-mark";
 
 function ProgressBar({
   label,

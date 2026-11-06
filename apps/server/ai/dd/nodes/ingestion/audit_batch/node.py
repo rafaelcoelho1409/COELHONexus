@@ -14,7 +14,6 @@ async def audit_pages(
     read_artifact: service.ArtifactReader,
     write_artifact: service.ArtifactWriter,
     auditor: service.Auditor,
-    auditor_files: dict[str, Any],
     progress: service.CancellationCheck | None,
     page_done: service.PageProgress,
 ) -> dict[str, Any]:
@@ -26,7 +25,6 @@ async def audit_pages(
         read_artifact,
         write_artifact,
         auditor,
-        auditor_files,
         progress,
         page_done,
     )

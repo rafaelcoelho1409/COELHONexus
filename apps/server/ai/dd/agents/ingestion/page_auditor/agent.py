@@ -2,22 +2,18 @@
 from __future__ import annotations
 import domains
 from . import config, domain, params
-from ... import schemas
-from .... import prompts, skills
+from ... import schemas, service
+from .... import middleware
 
-from deepagents import (
-    FilesystemPermission,
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
+from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import StateBackend
+from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain_openai import ChatOpenAI
 
 
 def page_auditor(model = None):
-    """Build the configured DeepAgent for evidence-grounded page audits."""
+    """Build the configured DeepAgent for evidence-grounded page audits. It has no tool: the page and the scan leads come in the request,
+    the rules are in its prompt, and it answers with a `PageAssessment`."""
     if model is None:
         model = domains.settings.chat.service.build_chat_model(
             timeout_s = config.MODEL.timeout_s,
@@ -31,50 +27,26 @@ def page_auditor(model = None):
     if not isinstance(model, ChatOpenAI):
         raise TypeError("the page auditor must use the COELHO Rotator ChatOpenAI model")
 
-    register_harness_profile(
-        f"openai:{model_name}",
-        HarnessProfile(
-            base_system_prompt = "",
-            excluded_tools = params.EXCLUDED_TOOLS,
-            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
-        ),
-    )
+    service.isolate_harness_profile(model_name)
     agent = create_deep_agent(
         model = model,
         tools = [],
-        system_prompt = prompts.ingestion.page_auditor.prompts.SYSTEM_PROMPT,
+        system_prompt = domain.system_prompt(),
         response_format = schemas.PageAssessment,
         permissions = [
-            FilesystemPermission(
-                operations = ["read"],
-                paths = ["/skills/**"],
-                mode = "allow",
-            ),
-            FilesystemPermission(
-                operations = ["read"],
-                paths = ["/**"],
-                mode = "deny",
-            ),
-            FilesystemPermission(
-                operations = ["write"],
-                paths = ["/**"],
-                mode = "deny",
-            ),
+            FilesystemPermission(operations = ["read"], paths = ["/**"], mode = "deny"),
+            FilesystemPermission(operations = ["write"], paths = ["/**"], mode = "deny"),
         ],
         backend = StateBackend(),
-        skills = [skills.domain.source_for("page_auditor")],
+        middleware = [
+            ModelCallLimitMiddleware(run_limit = params.MODEL_CALLS, exit_behavior = "end"),
+            middleware.service.ToolAllowlistMiddleware(frozenset()),
+        ],
         name = "dd_page_auditor",
     )
     tool_node = agent.nodes.get("tools")
     available_tools = getattr(getattr(tool_node, "bound", None), "_tools_by_name", None)
-    error_message = "DeepAgents exposed an unreviewed tool to the page auditor"
     if not isinstance(available_tools, dict):
-        raise RuntimeError(error_message)
-    unreviewed_tools = (
-        set(available_tools)
-        - params.EXCLUDED_TOOLS
-        - skills.params.ALLOWED_TOOL_NAMES
-    )
-    if unreviewed_tools:
-        raise RuntimeError(error_message)
+        raise RuntimeError("DeepAgents exposed an unreviewed tool to the page auditor")
+    domain.validate_tool_names(set(available_tools))
     return agent

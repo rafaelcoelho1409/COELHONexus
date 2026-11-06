@@ -7,6 +7,7 @@
 import { usePathname, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { DD_STAGES, type DdStage } from "../params";
+import { AutoChainToggle } from "./auto-chain-toggle";
 import { CatalogStage } from "./catalog-stage";
 import { IngestionStage } from "./ingestion-stage";
 import { DdOverlaysProvider } from "./overlays";
@@ -42,7 +43,13 @@ function StageWithSearchParams({ stage }: { stage: DdStage }) {
   return (
     <>
       {/* Ingestion draws its own bar: its Agents | Pages views sit on the right of it. */}
-      {stage === "ingestion" ? null : <StageBar stage={stage} slug={slug} />}
+      {stage === "ingestion" ? null : (
+        <StageBar
+          stage={stage}
+          slug={slug}
+          controls={stage === "pipeline" ? <AutoChainToggle /> : undefined}
+        />
+      )}
       <StageBody stage={stage} slug={slug} runId={runId} />
     </>
   );

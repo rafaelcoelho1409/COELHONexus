@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { client } from "@/shared/api";
 import { QueryProvider } from "@/shared/providers/query-provider";
 
+import { AUTO_CHAIN_STORAGE_KEY } from "../params";
 import { PLANNER_FINISHED_STATE, PLANNER_IMPLEMENTED, PLANNER_THREAD_ID } from "../test-fixtures";
 import { DdOverlaysProvider } from "./overlays";
 import { PipelineView } from "./pipeline-view";
@@ -326,10 +327,9 @@ describe("Pipeline stage", () => {
       }),
       http.get(`${API}/v1/dd/pipeline/synth/*/events`, () => sse([])),
     );
+    localStorage.setItem(AUTO_CHAIN_STORAGE_KEY, "1"); // chosen in the third navbar (see dd-page.test.tsx)
     renderWith(<PipelineView slug="alpha" />);
 
-    await userEvent.click(await screen.findByLabelText("Auto-chain"));
-    expect(localStorage.getItem("dd:pipeline:autochain")).toBe("1");
     await userEvent.click(await screen.findByTestId("planner-start"));
 
     await waitFor(() => expect(synthStarts).toHaveLength(1), { timeout: 8_000 });

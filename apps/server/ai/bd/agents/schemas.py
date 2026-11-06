@@ -40,6 +40,25 @@ class IssueCode(StrEnum):
     OTHER = "other"
 
 
+class AuditIssueCode(StrEnum):
+    """What the page auditor may report: sparseness is measured in code, and book metadata has its own stage."""
+
+    CONTROL_CHARACTERS = "control_characters"
+    SPLIT_WORD = "split_word"
+    SOFT_HYPHEN = "soft_hyphen"
+    TOC_NOISE = "toc_noise"
+    FUSED_MARKER = "fused_marker"
+    TEXT_CORRUPTION = "text_corruption"
+    STRUCTURE = "structure"
+    TABLE_OR_INDEX_LAYOUT = "table_or_index_layout"
+    OTHER = "other"
+
+
+class FindingVerdict(StrEnum):
+    DEFECT = "defect"
+    NOT_A_DEFECT = "not_a_defect"
+
+
 class IssueSeverity(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
@@ -49,9 +68,7 @@ class IssueSeverity(StrEnum):
 
 class EvidenceSource(StrEnum):
     PAGE_MARKDOWN = "page_markdown"
-    DOCLING_STRUCTURED = "docling_structured"
     BOOK_METADATA = "book_metadata"
-    SOURCE_DOCUMENT = "source_document"
 
 
 class PatchRisk(StrEnum):
@@ -61,21 +78,16 @@ class PatchRisk(StrEnum):
     CRITICAL = "critical"
 
 
-class ReviewDisposition(StrEnum):
-    ACCEPT = "accept"
-    REJECT = "reject"
-    EDIT = "edit"
-    ESCALATE = "escalate"
-
-
 class SpecialistRole(StrEnum):
-    METADATA = "metadata"
     TEXT_REPAIR = "text_repair"
     STRUCTURE = "structure"
 
 
-_ALLOWED_ISSUES_BY_ROLE = {
-    SpecialistRole.METADATA: frozenset({IssueCode.METADATA}),
+# Findings that code fixes by itself, so no specialist is asked about them.
+MECHANICAL_ISSUES = frozenset({IssueCode.CONTROL_CHARACTERS, IssueCode.SOFT_HYPHEN})
+
+# The issue codes each specialist may be assigned and may propose patches for.
+ALLOWED_ISSUES_BY_ROLE = {
     SpecialistRole.TEXT_REPAIR: frozenset({
         IssueCode.CONTROL_CHARACTERS,
         IssueCode.SPLIT_WORD,
@@ -138,11 +150,31 @@ class PageAuditFinding(BaseModel):
 
     model_config = ConfigDict(extra = "forbid")
 
-    code: IssueCode
+    code: AuditIssueCode
     severity: IssueSeverity
     description: NonEmptyText
     confidence: Confidence
     evidence_excerpts: list[NonEmptyText] = Field(min_length = 1, max_length = 8)
+    # Decided last, after the evidence is written: a finding that on reflection is normal Docling output is marked so.
+    verdict: FindingVerdict
+
+
+class FindingCheck(BaseModel):
+    """A second reader's decision on one finding."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    issue_id: NonEmptyText
+    verdict: FindingVerdict
+    reason: NonEmptyText
+
+
+class FindingCheckBatch(BaseModel):
+    """The verifier's decisions, one per finding it was shown."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    checks: list[FindingCheck] = Field(default_factory = list, max_length = 32)
 
 
 class PageAuditResponse(BaseModel):
@@ -177,7 +209,7 @@ class WorkItem(BaseModel):
 
     @model_validator(mode = "after")
     def _validate_role_issue_codes(self) -> WorkItem:
-        allowed = _ALLOWED_ISSUES_BY_ROLE[self.role]
+        allowed = ALLOWED_ISSUES_BY_ROLE[self.role]
         issue_refs = [
             (issue_ref.page_number, issue_ref.issue_id)
             for issue_ref in self.issue_refs
@@ -188,25 +220,6 @@ class WorkItem(BaseModel):
         if unsupported:
             values = ", ".join(sorted(issue.value for issue in unsupported))
             raise ValueError(f"{self.role.value} cannot handle issue codes: {values}")
-        return self
-
-
-class WorkPlan(BaseModel):
-    """A bounded coordinator plan; an empty plan means no specialist work is needed."""
-
-    model_config = ConfigDict(extra = "forbid")
-
-    work_items: list[WorkItem] = Field(default_factory = list, max_length = 64)
-
-    @model_validator(mode = "after")
-    def _validate_unique_issue_assignments(self) -> WorkPlan:
-        issue_refs = [
-            (issue_ref.page_number, issue_ref.issue_id)
-            for work_item in self.work_items
-            for issue_ref in work_item.issue_refs
-        ]
-        if len(issue_refs) != len(set(issue_refs)):
-            raise ValueError("a page-local issue reference can be assigned only once")
         return self
 
 
@@ -292,31 +305,18 @@ class BookMetadataProposal(BaseModel):
     evidence: list[EvidenceRef] = Field(min_length = 1, max_length = 16)
 
 
-class ReviewDecision(BaseModel):
-    """A human or independent reviewer decision tied to one proposal."""
-
-    model_config = ConfigDict(extra = "forbid")
-
-    proposal_id: NonEmptyText
-    disposition: ReviewDisposition
-    rationale: NonEmptyText
-    edited_replacement: str | None = None
-
-    @model_validator(mode = "after")
-    def _validate_edit(self) -> ReviewDecision:
-        if self.disposition == ReviewDisposition.EDIT and self.edited_replacement is None:
-            raise ValueError("edited_replacement is required for an edit disposition")
-        if self.disposition != ReviewDisposition.EDIT and self.edited_replacement is not None:
-            raise ValueError("edited_replacement is only valid for an edit disposition")
-        return self
-
-
 __all__ = [
+    "ALLOWED_ISSUES_BY_ROLE",
+    "AuditIssueCode",
     "EvidenceRef",
     "EvidenceSource",
     "BookMetadataProposal",
+    "FindingCheck",
+    "FindingCheckBatch",
+    "FindingVerdict",
     "IssueCode",
     "IssueSeverity",
+    "MECHANICAL_ISSUES",
     "PageAssessment",
     "PageAuditFinding",
     "PageAuditResponse",
@@ -327,10 +327,7 @@ __all__ = [
     "PatchDraft",
     "PatchProposal",
     "PatchRisk",
-    "ReviewDecision",
-    "ReviewDisposition",
     "SpecialistRole",
     "WorkIssueRef",
     "WorkItem",
-    "WorkPlan",
 ]

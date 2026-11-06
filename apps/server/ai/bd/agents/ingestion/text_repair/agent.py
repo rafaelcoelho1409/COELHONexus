@@ -2,16 +2,10 @@
 from __future__ import annotations
 import domains
 from . import config, params
-from ... import schemas
-from .... import prompts, skills
+from ... import schemas, service
+from .... import middleware, prompts, skills, tools
 
-from deepagents import (
-    FilesystemPermission,
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
+from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import StateBackend
 from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain_openai import ChatOpenAI
@@ -32,20 +26,21 @@ def text_repair(model = None):
     if not isinstance(model, ChatOpenAI):
         raise TypeError("the text-repair specialist must use the COELHO Rotator ChatOpenAI model")
 
-    register_harness_profile(
-        f"openai:{model_name}",
-        HarnessProfile(
-            base_system_prompt = "",
-            excluded_tools = params.EXCLUDED_TOOLS,
-            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
-        ),
-    )
+    service.isolate_harness_profile(model_name)
+    repair_tools = [
+        tools.patch.service.check_patch,
+        tools.book.service.book_term_frequency,
+        tools.book.service.adjacent_page_edges,
+    ]
     agent = create_deep_agent(
         model = model,
-        tools = [],
+        tools = repair_tools,
         system_prompt = prompts.ingestion.text_repair.prompts.SYSTEM_PROMPT,
-        middleware = [ModelCallLimitMiddleware(
-            run_limit = domains.bd.ingestion.ai.params.AGENT_MODEL_CALL_LIMIT,
+        context_schema = domains.bd.ingestion.ai.entities.SpecialistContext,
+        middleware = [middleware.service.ToolAllowlistMiddleware(
+            frozenset({"read_file", *(tool.name for tool in repair_tools)}),
+        ), ModelCallLimitMiddleware(
+            run_limit = domains.bd.ingestion.ai.params.SPECIALIST_MODEL_CALL_LIMIT,
             exit_behavior = "end",
         )],
         response_format = schemas.PatchDraftBatch,
@@ -79,6 +74,7 @@ def text_repair(model = None):
         set(available_tools)
         - params.EXCLUDED_TOOLS
         - skills.params.ALLOWED_TOOL_NAMES
+        - {tool.name for tool in repair_tools}
     )
     if unreviewed_tools:
         raise RuntimeError(error_message)

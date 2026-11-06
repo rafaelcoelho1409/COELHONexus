@@ -7,12 +7,10 @@ import json
 import sys
 from pathlib import Path
 
-from langgraph.checkpoint.memory import InMemorySaver
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
 from ai.bd.agents import schemas
-from domains.bd.ingestion.ai.service import run_inventory, run_page_audit
+from domains.bd.ingestion.ai.service import run_page_audit
 from domains.bd.ingestion.storage.keys import manifest_key, page_key
 
 
@@ -39,7 +37,7 @@ class FakeAuditor:
         self.response = response
         self.calls = []
 
-    async def ainvoke(self, payload):
+    async def ainvoke(self, payload, config = None):
         self.calls.append(payload)
         return {"structured_response": self.response}
 
@@ -74,16 +72,6 @@ manifest = {
         {"page": 2, "key": page_key(book_id, 2, extraction_id), "pictures": 0},
     ],
 }
-
-storage = FakeStorage(book_id, manifest)
-storage.values.update(page_contents)
-result = asyncio.run(run_inventory(
-    book_id, expected_extraction_id = extraction_id, storage = storage,
-))
-check("the integration returns a completed inventory", result["status"], "complete")
-check("every page in the manifest is inventoried", result["inventory_summary"]["pages_total"], 2)
-check("the exact run-specific page objects are read", storage.reads[1:], list(page_contents))
-check("the integration does not write to MinIO", storage.writes, 0)
 
 page_auditor = FakeAuditor(schemas.PageAssessment(
     page_number = 2,
@@ -125,7 +113,9 @@ rejects(
 
 rejects(
     "stale extraction IDs are rejected",
-    lambda: run_inventory(book_id, expected_extraction_id = "old-run", storage = storage),
+    lambda: run_page_audit(
+        book_id, 2, expected_extraction_id = "old-run", storage = audit_storage, auditor = page_auditor,
+    ),
     ValueError,
 )
 
@@ -133,7 +123,7 @@ incomplete_manifest = {**manifest, "status": "extracting"}
 incomplete_storage = FakeStorage(book_id, incomplete_manifest)
 rejects(
     "unfinished extraction runs are rejected",
-    lambda: run_inventory(book_id, storage = incomplete_storage),
+    lambda: run_page_audit(book_id, 2, storage = incomplete_storage, auditor = page_auditor),
     ValueError,
 )
 check("unfinished runs are rejected before page reads", len(incomplete_storage.reads), 1)
@@ -142,20 +132,19 @@ short_manifest = {**manifest, "pages": manifest["pages"][:1]}
 short_storage = FakeStorage(book_id, short_manifest)
 rejects(
     "incomplete page manifests are rejected",
-    lambda: run_inventory(book_id, storage = short_storage),
+    lambda: run_page_audit(book_id, 1, storage = short_storage, auditor = page_auditor),
     ValueError,
 )
 
-checkpoint_storage = FakeStorage(book_id, manifest)
-checkpoint_storage.values.update(page_contents)
-checkpointer = InMemorySaver()
-first_result = asyncio.run(run_inventory(
-    book_id, storage = checkpoint_storage, checkpointer = checkpointer,
-))
-page_read_keys = [key for key in checkpoint_storage.reads if key != manifest_key(book_id)]
-resumed_result = asyncio.run(run_inventory(
-    book_id, storage = checkpoint_storage, checkpointer = checkpointer,
-))
-check("a completed checkpoint returns its inventory", resumed_result["status"], first_result["status"])
-check("a completed checkpoint does not reread page objects",
-      [key for key in checkpoint_storage.reads if key != manifest_key(book_id)], page_read_keys)
+foreign_key_manifest = {
+    **manifest,
+    "pages": [manifest["pages"][0], {**manifest["pages"][1], "key": "outside/pages/0002.md"}],
+}
+foreign_key_storage = FakeStorage(book_id, foreign_key_manifest)
+rejects(
+    "noncanonical object keys are rejected before any page is read",
+    lambda: run_page_audit(book_id, 2, storage = foreign_key_storage, auditor = page_auditor),
+    ValueError,
+)
+check("noncanonical keys cause no page read", len(foreign_key_storage.reads), 1)
+check("the audit says how it was reached", audit_result["audit_mode"], "llm_reviewed")

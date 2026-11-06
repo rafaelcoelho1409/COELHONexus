@@ -1,3 +1,11 @@
-from . import ingestion, schemas
+from . import (
+    ingestion, 
+    schemas, 
+    service
+)
 
-__all__ = ["ingestion", "schemas"]
+__all__ = [
+    "ingestion", 
+    "schemas", 
+    "service"
+]

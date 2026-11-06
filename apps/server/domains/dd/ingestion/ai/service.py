@@ -68,9 +68,9 @@ async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> d
         await progress.start(tier="agentic_normalization", total=len(page_refs))
 
     auditor = ai.dd.agents.ingestion.page_auditor.agent.page_auditor()
-    repairer = ai.dd.agents.ingestion.page_repair.agent.page_repair()
-    auditor_files = ai.dd.skills.service.files_for("page_auditor")
-    repair_files = ai.dd.skills.service.files_for("page_repair")
+    repairer = ai.dd.agents.ingestion.page_repair.agent.page_repair(
+        check = ai.dd.nodes.ingestion.page_repair.domain.check_patch,
+    )
 
     async def read_page(key: str) -> str:
         return await minio.read_text(key)
@@ -90,8 +90,6 @@ async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> d
         write_artifact=write_artifact,
         auditor=auditor,
         repairer=repairer,
-        auditor_files=auditor_files,
-        repair_files=repair_files,
         progress=progress,
         checkpointer=checkpointer,
     )

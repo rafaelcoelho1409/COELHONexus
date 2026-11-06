@@ -1,8 +1,8 @@
 """Read-only coordination for bounded full-book page audits."""
 from __future__ import annotations
 import domains
+from . import domain
 from .... import agents, graphs, skills
-from .. import inventory, page_audit
 
 import asyncio
 import hashlib
@@ -24,12 +24,149 @@ class Auditor(Protocol):
     ) -> dict[str, Any]: ...
 
 
-async def _report(progress_callback, **event: Any) -> None:
-    if progress_callback is None:
-        return
-    result = progress_callback(event)
-    if inspect.isawaitable(result):
-        await result
+class Verifier(Protocol):
+    async def ainvoke(
+        self,
+        input: dict[str, Any],
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
+
+
+async def verify_findings(
+    verifier: Verifier,
+    *,
+    run_id: str,
+    page_number: int,
+    markdown: str,
+    issues: list[agents.schemas.PageIssue],
+) -> tuple[list[agents.schemas.PageIssue], list[str]]:
+    """Have a second reader check one page's judgement-call findings; fail safe by keeping every finding."""
+    candidates = domain.select_candidates(issues)
+    if not candidates:
+        return issues, []
+    try:
+        with domains.settings.llm_counter.service.llm_context(
+            ns = "bd", run_id = run_id, node_id = "finding_verifier",
+        ):
+            result = await verifier.ainvoke({"messages": [{
+                "role": "user",
+                "content": domain.build_verification_payload(page_number, candidates, markdown),
+            }]}, config = {
+                "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
+            })
+        return domain.apply_checks(issues, candidates, domain.extract_checks(result))
+    except Exception as error:
+        # An unreadable or failed second opinion is no reason to lose a finding: the reviewer still sees it.
+        return issues, [
+            f"The finding verifier was unavailable ({type(error).__name__}); the findings were kept for review."
+        ]
+
+
+async def audit_page(
+    page_ref: graphs.ingestion.entities.PageReference,
+    markdown: str,
+    auditor: Auditor,
+    *,
+    run_id: str,
+    verifier: Verifier | None = None,
+) -> dict[str, Any]:
+    """Audit one page: the deterministic inventory, the model's findings (retried, then checked by a second reader) and
+    their merge. A model that fails every attempt degrades to the deterministic findings instead of raising, and the
+    result says so in `audit_mode`. The full-book audit and the auditor evaluation both call this."""
+    deterministic = domains.bd.ingestion.ai.inventory.domain.assess_page(
+        page_ref["page"], markdown, page_ref["pictures"],
+    )
+    oversized = (
+        domains.bd.ingestion.ai.inventory.domain.effective_length(markdown)
+        > domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS
+    )
+    warnings = []
+    deterministic_only = deterministic.page_kind in {
+        agents.schemas.PageKind.BLANK,
+        agents.schemas.PageKind.IMAGE_ONLY,
+    }
+    structured_output_fallback = False
+    if deterministic_only:
+        proposed = deterministic
+        audit_mode = "deterministic_only"
+    elif oversized:
+        proposed = deterministic
+        audit_mode = "deterministic_limit"
+        warnings.append(
+            f"Page exceeds the {domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS}-character "
+            "audit limit; deterministic findings were retained and manual review is required."
+        )
+    else:
+        audit_error: Exception | None = None
+        for _ in range(domains.bd.ingestion.ai.params.PAGE_AUDIT_ATTEMPTS):
+            try:
+                with domains.settings.llm_counter.service.llm_context(
+                    ns = "bd", run_id = run_id, node_id = "page_auditor",
+                ):
+                    result = await auditor.ainvoke({"messages": [{
+                        "role": "user",
+                        "content": domain.user_payload(
+                            page_ref["page"], page_ref["pictures"], markdown,
+                        ),
+                    }], "files": skills.service.files_for("page_auditor")}, config = {
+                        "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
+                    })
+                response = domain.extract_assessment_response(result)
+                proposed, warnings = domain.sanitize_assessment(
+                    response,
+                    page_number = page_ref["page"],
+                    pictures = page_ref["pictures"],
+                    markdown = markdown,
+                )
+                audit_mode = "llm_reviewed"
+                audit_error = None
+                if verifier is not None:
+                    checked_issues, check_warnings = await verify_findings(
+                        verifier,
+                        run_id = run_id,
+                        page_number = page_ref["page"],
+                        markdown = markdown,
+                        issues = proposed.issues,
+                    )
+                    proposed = proposed.model_copy(update = {"issues": checked_issues})
+                    warnings = warnings + check_warnings
+                break
+            except Exception as error:
+                audit_error = error
+        if audit_error is not None:
+            logger.warning(
+                f"[bd-page-audit] page {page_ref['page']} degraded to deterministic findings "
+                f"({type(audit_error).__name__})",
+            )
+            proposed = deterministic
+            audit_mode = "deterministic_fallback"
+            structured_output_fallback = True
+            warnings = [
+                f"Page auditor was unavailable or returned an invalid assessment ({type(audit_error).__name__}); "
+                "deterministic findings were retained for review."
+            ]
+    merged_issues = domains.bd.ingestion.ai.inventory.domain.merge_issues(
+        deterministic.issues, 
+        proposed.issues, 
+        markdown)
+    assessment = agents.schemas.PageAssessment(
+        page_number = page_ref["page"],
+        page_kind = deterministic.page_kind,
+        confidence = proposed.confidence,
+        issues = merged_issues,
+    )
+    domain.validate_assessment(
+        assessment,
+        page_number = page_ref["page"],
+        pictures = page_ref["pictures"],
+        markdown = markdown,
+    )
+    return {
+        "assessment": assessment,
+        "warnings": warnings,
+        "audit_mode": audit_mode,
+        "structured_output_fallback": structured_output_fallback,
+    }
 
 
 async def audit_pages(
@@ -37,6 +174,7 @@ async def audit_pages(
     read_page: PageReader,
     auditor: Auditor,
     progress_callback = None,
+    verifier: Verifier | None = None,
 ) -> dict:
     """Audit all manifest pages concurrently while keeping Markdown out of graph state."""
     page_refs = state.get("source_page_refs")
@@ -45,102 +183,28 @@ async def audit_pages(
     expected_page_count = state.get("expected_page_count")
     if not isinstance(book_id, str) or not isinstance(extraction_run_id, str):
         raise ValueError("the ingestion run has no book or extraction identity")
-    base_state: graphs.ingestion.state.IngestionInventoryState = {
-        "book_id": book_id,
-        "extraction_run_id": extraction_run_id,
-        "extraction_status": "done",
-        "expected_page_count": expected_page_count,
-        "page_refs": page_refs,
-    }
-    _, _, validated_refs = inventory.domain.validate_request(base_state)
+    request = domains.bd.ingestion.ai.schemas.ExtractionRequest(
+        book_id = book_id,
+        extraction_run_id = extraction_run_id,
+        extraction_status = "done",
+        expected_page_count = expected_page_count,
+        page_refs = page_refs,
+    )
+    validated_refs = request.page_references()
     semaphore = asyncio.Semaphore(domains.bd.ingestion.ai.params.PAGE_AUDIT_CONCURRENCY)
 
-    async def audit_one(page_ref: graphs.ingestion.state.PageReference) -> tuple[dict, dict]:
+    async def audit_one(page_ref: graphs.ingestion.entities.PageReference) -> tuple[dict, dict]:
         async with semaphore:
-            await _report(progress_callback, kind = "page_audit", page = page_ref["page"], status = "running")
+            await graphs.service.report(progress_callback, kind = "page_audit", page = page_ref["page"], status = "running")
             markdown = read_page(page_ref["key"])
             if inspect.isawaitable(markdown):
                 markdown = await markdown
             if not isinstance(markdown, str):
                 raise ValueError(f"page {page_ref['page']} could not be read as Markdown text")
-            deterministic = inventory.domain.assess_page(
-                page_ref["page"], markdown, page_ref["pictures"],
-            )
             run_id = state.get("agentic_run_id")
             if not isinstance(run_id, str):
                 raise ValueError("the ingestion run has no agentic_run_id")
-            oversized = (
-                inventory.domain.effective_length(markdown)
-                > domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS
-            )
-            warnings = []
-            deterministic_only = deterministic.page_kind in {
-                agents.schemas.PageKind.BLANK,
-                agents.schemas.PageKind.IMAGE_ONLY,
-            }
-            structured_output_fallback = False
-            if deterministic_only:
-                proposed = deterministic
-                audit_mode = "deterministic_only"
-            elif oversized:
-                proposed = deterministic
-                audit_mode = "deterministic_limit"
-                warnings.append(
-                    f"Page exceeds the {domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS}-character "
-                    "audit limit; deterministic findings were retained and manual review is required."
-                )
-            else:
-                audit_error: Exception | None = None
-                for _ in range(domains.bd.ingestion.ai.params.PAGE_AUDIT_ATTEMPTS):
-                    try:
-                        with domains.settings.llm_counter.service.llm_context(
-                            ns = "bd", run_id = run_id, node_id = "page_auditor",
-                        ):
-                            result = await auditor.ainvoke({"messages": [{
-                                "role": "user",
-                                "content": page_audit.domain.user_payload(
-                                    page_ref["page"], page_ref["pictures"], markdown,
-                                ),
-                            }], "files": skills.service.files_for("page_auditor")}, config = {
-                                "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
-                            })
-                        response = page_audit.domain.extract_assessment_response(result)
-                        proposed, warnings = page_audit.domain.sanitize_assessment(
-                            response,
-                            page_number = page_ref["page"],
-                            pictures = page_ref["pictures"],
-                            markdown = markdown,
-                        )
-                        audit_mode = "llm_reviewed"
-                        audit_error = None
-                        break
-                    except Exception as error:
-                        audit_error = error
-                if audit_error is not None:
-                    logger.warning(
-                        f"[bd-page-audit] page {page_ref['page']} degraded to deterministic findings "
-                        f"({type(audit_error).__name__})",
-                    )
-                    proposed = deterministic
-                    audit_mode = "deterministic_fallback"
-                    structured_output_fallback = True
-                    warnings = [
-                        f"Page auditor was unavailable or returned an invalid assessment ({type(audit_error).__name__}); "
-                        "deterministic findings were retained for review."
-                    ]
-            merged_issues = inventory.domain.merge_issues(deterministic.issues, proposed.issues, markdown)
-            assessment = agents.schemas.PageAssessment(
-                page_number = page_ref["page"],
-                page_kind = deterministic.page_kind,
-                confidence = proposed.confidence,
-                issues = merged_issues,
-            )
-            page_audit.domain.validate_assessment(
-                assessment,
-                page_number = page_ref["page"],
-                pictures = page_ref["pictures"],
-                markdown = markdown,
-            )
+            audited = await audit_page(page_ref, markdown, auditor, run_id = run_id, verifier = verifier)
             source_sha256 = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
             page_number = page_ref["page"]
             output_ref = {
@@ -163,17 +227,17 @@ async def audit_pages(
                 "source_sha256": source_sha256,
                 "markdown_chars": len(markdown),
                 "pictures": page_ref["pictures"],
-                "assessment": assessment.model_dump(mode = "json"),
-                "warnings": warnings,
-                "audit_mode": audit_mode,
-                "structured_output_fallback": structured_output_fallback,
+                "assessment": audited["assessment"].model_dump(mode = "json"),
+                "warnings": audited["warnings"],
+                "audit_mode": audited["audit_mode"],
+                "structured_output_fallback": audited["structured_output_fallback"],
             }
-            await _report(
+            await graphs.service.report(
                 progress_callback,
                 kind = "page_audit",
                 page = page_number,
                 status = "done",
-                warning = bool(warnings),
+                warning = bool(audited["warnings"]),
             )
             return output_ref, audit
 

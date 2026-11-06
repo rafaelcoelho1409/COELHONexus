@@ -1003,7 +1003,7 @@ test.describe("Docs Distiller", () => {
       // The two bars share grid rows, so they are one height.
       const [plannerBar, synthBar] = await Promise.all(
         ["planner", "synth"].map((stage) =>
-          page.getByTestId(`${stage}-usage`).locator("xpath=ancestor::header").boundingBox(),
+          page.getByTestId(`${stage}-usage`).locator("xpath=ancestor::section[1]").boundingBox(),
         ),
       );
       if (!plannerBar || !synthBar) throw new Error("run bars have no box");

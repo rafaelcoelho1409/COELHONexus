@@ -32,10 +32,10 @@ async def _load_run_source(
     source_manifest = await domains.bd.ingestion.storage.service.read_manifest(storage, book_id)
     if source_manifest is None:
         raise FileNotFoundError(f"book {book_id} has no ingestion manifest")
-    extraction_id, inventory_state = _inventory_state(
+    extraction_id, request = _extraction_request(
         book_id, source_manifest, expected_extraction_id,
     )
-    _, _, source_page_refs = ai.bd.nodes.ingestion.inventory.domain.validate_request(inventory_state)
+    source_page_refs = request.page_references()
     source_manifest_key = domains.bd.ingestion.storage.keys.manifest_key(book_id)
     source_manifest_json = json.dumps(
         source_manifest, ensure_ascii = False, separators = (",", ":"), sort_keys = True,
@@ -732,11 +732,11 @@ async def mark_ingestion_ai_run_failed(
     )
 
 
-def _inventory_state(
+def _extraction_request(
     book_id: str,
     manifest: dict,
     expected_extraction_id: str | None,
-) -> tuple[str, ai.bd.graphs.ingestion.state.IngestionInventoryState]:
+) -> tuple[str, domains.bd.ingestion.ai.schemas.ExtractionRequest]:
     if manifest.get("book_id") != book_id:
         raise ValueError("the manifest book_id does not match the requested book")
 
@@ -757,12 +757,12 @@ def _inventory_state(
     if any(not isinstance(page, dict) for page in pages):
         raise ValueError("every manifest page entry must be an object")
 
-    graph_state: ai.bd.graphs.ingestion.state.IngestionInventoryState = {
-        "book_id": book_id,
-        "extraction_run_id": extraction_id,
-        "extraction_status": manifest["status"],
-        "expected_page_count": page_count,
-        "page_refs": [
+    request = domains.bd.ingestion.ai.schemas.ExtractionRequest(
+        book_id = book_id,
+        extraction_run_id = extraction_id,
+        extraction_status = manifest["status"],
+        expected_page_count = page_count,
+        page_refs = [
             {
                 "page": page.get("page"),
                 "key": page.get("key"),
@@ -770,71 +770,8 @@ def _inventory_state(
             }
             for page in pages
         ],
-    }
-    return extraction_id, graph_state
-
-
-def _page_audit_state(
-    book_id: str,
-    manifest: dict,
-    page_number: int,
-    expected_extraction_id: str | None,
-) -> tuple[str, ai.bd.graphs.ingestion.state.PageAuditState]:
-    if type(page_number) is not int or page_number <= 0:
-        raise ValueError("page_number must be a positive integer")
-
-    extraction_id, inventory_state = _inventory_state(
-        book_id,
-        manifest,
-        expected_extraction_id,
     )
-    page_refs = inventory_state["page_refs"]
-    if page_number > len(page_refs):
-        raise ValueError("page_number is outside the completed extraction")
-    page_ref = page_refs[page_number - 1]
-    if page_ref["page"] != page_number:
-        raise ValueError("the manifest page entries must be in physical page order")
-
-    graph_state: ai.bd.graphs.ingestion.state.PageAuditState = {
-        "book_id": book_id,
-        "extraction_run_id": extraction_id,
-        "extraction_status": manifest["status"],
-        "page_ref": page_ref,
-    }
-    return extraction_id, graph_state
-
-
-async def run_inventory(
-    book_id: str,
-    *,
-    expected_extraction_id: str | None = None,
-    storage: infra.minio.service.MinIOStorage | None = None,
-    checkpointer: Any | None = None,
-) -> dict[str, Any]:
-    """Inventory the current completed extraction, reading only its canonical raw page objects."""
-    if not _safe_segment(book_id):
-        raise ValueError("book_id must be a safe path segment")
-    if expected_extraction_id is not None and not _safe_segment(expected_extraction_id):
-        raise ValueError("expected_extraction_id must be a safe path segment")
-    if storage is None:
-        storage = infra.minio.service.get_storage()
-
-    manifest = await domains.bd.ingestion.storage.service.read_manifest(storage, book_id)
-    if manifest is None:
-        raise FileNotFoundError(f"book {book_id} has no ingestion manifest")
-
-    extraction_id, graph_state = _inventory_state(book_id, manifest, expected_extraction_id)
-    graph = ai.bd.graphs.ingestion.graph.build_inventory_graph(
-        storage.read_text, checkpointer = checkpointer,
-    )
-    if checkpointer is None:
-        return await graph.ainvoke(graph_state)
-
-    config = {"configurable": {"thread_id": f"bd-ingestion-inventory:{book_id}:{extraction_id}"}}
-    snapshot = await graph.aget_state(config)
-    if snapshot.values.get("status") == "complete":
-        return snapshot.values
-    return await graph.ainvoke(graph_state, config = config)
+    return extraction_id, request
 
 
 async def run_page_audit(
@@ -844,9 +781,12 @@ async def run_page_audit(
     expected_extraction_id: str | None = None,
     storage: infra.minio.service.MinIOStorage | None = None,
     auditor: Any | None = None,
-    checkpointer: Any | None = None,
+    finding_verifier: Any | None = None,
 ) -> dict[str, Any]:
-    """Audit one page from the current completed extraction without checkpointing its Markdown."""
+    """Audit one page of the current completed extraction the way the full run does, and write nothing.
+
+    It calls the same `audit_page` as the full-book audit, so the auditor evaluation measures the real path. Pass
+    `finding_verifier` to include the second reader."""
     if not _safe_segment(book_id):
         raise ValueError("book_id must be a safe path segment")
     if expected_extraction_id is not None and not _safe_segment(expected_extraction_id):
@@ -860,32 +800,29 @@ async def run_page_audit(
     if manifest is None:
         raise FileNotFoundError(f"book {book_id} has no ingestion manifest")
 
-    extraction_id, graph_state = _page_audit_state(
-        book_id,
-        manifest,
-        page_number,
-        expected_extraction_id,
-    )
+    _, request = _extraction_request(book_id, manifest, expected_extraction_id)
+    page_refs = request.page_references()
+    if page_number > len(page_refs):
+        raise ValueError("page_number is outside the completed extraction")
+    page_ref = page_refs[page_number - 1]
+    markdown = await storage.read_text(page_ref["key"])
     if auditor is None:
         auditor = ai.bd.agents.ingestion.page_auditor.agent.page_auditor()
 
-    graph = ai.bd.graphs.ingestion.graph.build_page_audit_graph(
-        storage.read_text,
+    audited = await ai.bd.nodes.ingestion.audit_batch.service.audit_page(
+        page_ref,
+        markdown,
         auditor,
-        checkpointer = checkpointer,
+        run_id = domains.bd.ingestion.ai.params.PAGE_AUDIT_EVALUATION_RUN_ID,
+        verifier = finding_verifier,
     )
-    if checkpointer is None:
-        return await graph.ainvoke(graph_state)
-
-    config = {
-        "configurable": {
-            "thread_id": f"bd-ingestion-page-audit:{book_id}:{extraction_id}:{page_number}",
-        },
+    return {
+        "assessment": audited["assessment"].model_dump(mode = "json"),
+        "source_sha256": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+        "status": "complete",
+        "warnings": audited["warnings"],
+        "audit_mode": audited["audit_mode"],
     }
-    snapshot = await graph.aget_state(config)
-    if snapshot.values.get("status") == "complete":
-        return snapshot.values
-    return await graph.ainvoke(graph_state, config = config)
 
 
 async def run_ingestion_ai(
@@ -898,11 +835,15 @@ async def run_ingestion_ai(
     text_repair: Any | None = None,
     structure_repair: Any | None = None,
     metadata_normalizer: Any | None = None,
+    finding_verifier: Any | None = None,
     checkpointer: Any | None = None,
     resume: bool = False,
     cancel_check: Callable[[], Awaitable[bool]] | None = None,
 ) -> dict[str, Any]:
-    """Run the full versioned AI workflow against the current immutable Docling extraction."""
+    """Run the full versioned AI workflow against the current immutable Docling extraction.
+
+    A caller that supplies its own auditor owns the whole agent set, so the second-reader verifier is built only for the
+    default agents or when passed in."""
     if not _safe_segment(book_id):
         raise ValueError("book_id must be a safe path segment")
     if expected_extraction_id is not None and not _safe_segment(expected_extraction_id):
@@ -1061,6 +1002,8 @@ async def run_ingestion_ai(
     await persist_manifest(domains.bd.ingestion.ai.schemas.AgenticRunStatus.RUNNING)
 
     try:
+        if auditor is None and finding_verifier is None:
+            finding_verifier = ai.bd.agents.ingestion.finding_verifier.agent.finding_verifier()
         if auditor is None:
             auditor = ai.bd.agents.ingestion.page_auditor.agent.page_auditor()
         if text_repair is None:
@@ -1103,7 +1046,7 @@ async def run_ingestion_ai(
             "source_metadata": source_metadata,
             "status": "running",
         }
-        graph = ai.bd.graphs.ingestion.graph.build_ingestion_graph(
+        graph = ai.bd.graphs.ingestion.graph.ingestion_graph(
             storage.read_text,
             write_artifact,
             auditor,
@@ -1111,6 +1054,7 @@ async def run_ingestion_ai(
             metadata_normalizer,
             checkpointer = checkpointer,
             progress_callback = report_progress,
+            finding_verifier = finding_verifier,
         )
         config = {"configurable": {
             "thread_id": f"bd-ingestion-agentic:{book_id}:{extraction_id}:{agentic_run_id}",

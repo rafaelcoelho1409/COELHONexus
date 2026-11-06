@@ -15,6 +15,8 @@ from openai import APITimeoutError
 
 from ai.dd.agents import schemas
 from ai.dd.agents.ingestion.page_auditor import config as auditor_config
+from ai.dd.agents.ingestion.page_auditor import domain as auditor_domain
+from ai.dd.agents.ingestion.page_auditor import patterns as auditor_patterns
 from ai.dd.agents.ingestion.page_repair import config as repair_config
 from ai.dd.nodes.ingestion import audit_batch, page_audit, page_repair
 from domains.settings.chat import service as chat_service
@@ -69,12 +71,12 @@ check("both page agents use a bounded 120-second request with SDK retries disabl
 
 
 async def audit(agent):
-    return await page_audit.node.audit_page("locust", page, markdown, agent, files = {})
+    return await page_audit.node.audit_page("locust", page, markdown, agent)
 
 
 async def repair(agent):
     return await page_repair.node.repair_page(
-        "locust", page, markdown, "0" * 64, {"issues": []}, agent, files = {},
+        "locust", page, markdown, "0" * 64, {"issues": []}, agent,
     )
 
 
@@ -133,7 +135,6 @@ async def audit_batch_order() -> tuple[list[int], list[int]]:
             read_artifact,
             write_artifact,
             OrderedAgent(),
-            {},
             None,
             page_done,
         )
@@ -302,7 +303,7 @@ async def normalize_with(agent, issues: list[dict]) -> tuple[dict, dict]:
         }],
     }
     result = await normalize_pages.service.normalize_pages(
-        state, read_page, artifact_exists, read_artifact, write_artifact, agent, {}, None, page_done,
+        state, read_page, artifact_exists, read_artifact, write_artifact, agent, None, page_done,
     )
     saved = json.loads(next(v for k, v in written.items() if "assessments/" in k))
     return result["output_pages"][0], saved
@@ -384,7 +385,7 @@ async def audit_pages_with(agent) -> tuple[dict, dict]:
 
     state = {"framework_slug": "locust", "run_id": "run-1", "pages": [page_ref]}
     result = await audit_batch.service.audit_pages(
-        state, read_page, artifact_exists, read_artifact, write_artifact, agent, {}, None, page_done,
+        state, read_page, artifact_exists, read_artifact, write_artifact, agent, None, page_done,
     )
     return result["assessments"][0], json.loads(next(iter(written.values())))
 
@@ -472,7 +473,8 @@ check("removing one of two copies leaves the other",
       page_repair.domain.duplicate_survives(twice, SENTENCE, f"{SENTENCE}\n\n## More\n\n{SENTENCE}", f"{SENTENCE}\n\n## More\n\n"), True)
 
 convention_page = (
-    "```python theme={null}\nimport os\n```\n\n<Note>\n  A note.\n</Note>\n\n<img alt=\"\" />\n\nplain ```python theme={null} text\n"
+    "```python theme={null}\nimport os\n```\n\n<Note>\n  A note.\n</Note>\n\n<img alt=\"\" />\n\n"
+    "<Note>\n  A note.\n</Note>\n\nOnly here.\n\nplain ```python theme={null} text\n"
 )
 
 
@@ -486,6 +488,7 @@ raw_assessment = schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATI
     finding_on("markdown_formatting", "<Note>\n  A note.\n</Note>", "note"),
     finding_on("other", "<img alt=\"\" />", "img"),
     finding_on("duplicate_boilerplate", "<Note>\n  A note.\n</Note>", "dup"),
+    finding_on("duplicate_section", "Only here.", "single"),
     finding_on("markdown_formatting", "plain ```python theme={null} text", "prose"),
 ])
 kept, notes = page_audit.domain.sanitize_assessment(raw_assessment, markdown = convention_page)
@@ -494,7 +497,12 @@ check(
     [issue.issue_id for issue in kept.issues],
     ["dup", "prose"],
 )
-check("each dropped finding is explained", len(notes), 3)
+check(
+    "a repeat finding whose evidence occurs once is dropped as well",
+    [note for note in notes if "nothing is repeated" in note],
+    ["Discarded finding single: its evidence occurs once on the page and no second copy was found, so nothing is repeated."],
+)
+check("each dropped finding is explained", len(notes), 4)
 
 
 async def titles_for(entries: list[tuple[str, str]]) -> list[str]:
@@ -533,7 +541,7 @@ async def titles_for(entries: list[tuple[str, str]]) -> list[str]:
                          "assessment": {"page_kind": "documentation", "issues": []}} for page in pages],
     }
     result = await normalize_pages.service.normalize_pages(
-        state, read_page, artifact_exists, read_artifact, write_artifact, FakeAgent({"structured_response": batch}), {}, None, page_done,
+        state, read_page, artifact_exists, read_artifact, write_artifact, FakeAgent({"structured_response": batch}), None, page_done,
     )
     return [page["title"] for page in result["output_pages"]]
 
@@ -545,3 +553,78 @@ distinct = asyncio.run(titles_for([
 ]))
 check("pages split from one bundle with the same title are told apart by their own address", len(set(distinct)), 3)
 check("the repeats say where they live", (distinct[0].endswith("Overview"), distinct[0] != distinct[1]), (True, True))
+
+
+# --- a second copy named by the auditor, the page scans, the export-convention table, and the repairer's patch check
+def repeat_issue(evidence: str, other: str = ""):
+    return schemas.PageIssue(issue_id = "r", category = "duplicate_section", severity = "low", description = "d",
+                             evidence = evidence, other_evidence = other, confidence = 0.9)
+
+
+COPY = "Run the checks before you deploy the service to production."
+spaced = f"# T\n\n{COPY}\n\n## More\n\nRun the checks   before you\ndeploy the service to production.\n"
+check("a copy that differs only in whitespace is a repeat when the auditor names it",
+      page_audit.domain.is_repeat(spaced, COPY, "Run the checks   before you\ndeploy the service to production."), True)
+check("a second copy that is not the same text is not a repeat",
+      page_audit.domain.is_repeat(spaced, COPY, "## More"), False)
+check("the same place named twice is not a repeat",
+      page_audit.domain.is_repeat(f"# T\n\n{COPY}\n", COPY, COPY), False)
+check("evidence that occurs twice needs no named copy",
+      page_audit.domain.is_repeat(f"{COPY}\n\n{COPY}\n", COPY, ""), True)
+
+FENCED = (
+    "# Setup\n\n##Install\n\nRun the installer on every node of the cluster before continuing.\n\n"
+    "```bash\n##NotAHeading\nÃ© inside code\n```\n\n#\n\nCaf\u00c3\u00a9 is on the menu today, as it always is.\n\n"
+    "Run the installer on every node of the cluster before continuing.\n\n"
+    "```\nRun the installer on every node of the cluster before continuing.\n```\n\n"
+    "    ```text\n    ##Nested\n    ```\n"
+)
+leads = page_audit.detectors.candidates(FENCED)
+check("the scans find a heading without a space, an empty heading, damaged characters and a repeated block",
+      sorted(lead["kind"] for lead in leads),
+      ["damaged_characters", "empty_heading", "heading_without_space", "repeated_block"])
+check("code inside a fence, nested or not, is never scanned",
+      [lead["evidence"] for lead in leads if lead["kind"] == "heading_without_space"], ["##Install"])
+check("every lead quotes the page exactly", all(lead["evidence"] in FENCED and (not lead.get("other_evidence") or lead["other_evidence"] in FENCED) for lead in leads), True)
+check("leads are numbered in reading order", [lead["candidate_id"] for lead in leads], ["c1", "c2", "c3", "c4"])
+check("a clean page has no leads", page_audit.detectors.candidates("# Title\n\nA clean page with one paragraph of text in it.\n"), [])
+
+check("every export convention example matches the pattern the audit drops",
+      [example for _, examples in auditor_patterns.EXPORT_CONVENTIONS for example in examples
+       if not auditor_patterns.EXPORT_CONVENTION_RE.match(example)], [])
+rendered = auditor_domain.system_prompt()
+check("the auditor prompt carries every example and no placeholder",
+      (auditor_domain.CONVENTIONS_MARKER in rendered, all(example in rendered for _, examples in auditor_patterns.EXPORT_CONVENTIONS for example in examples)),
+      (False, True))
+
+REPAIR_PAGE = "# T\n\nA line.\n\nSee the guide.\n\nA line.\n"
+repair_assessment = {"issues": [{"issue_id": "d", "category": "duplicate_boilerplate", "severity": "low", "description": "d",
+                                  "evidence": "A line.", "confidence": 0.95}]}
+repair_sha = hashlib.sha256(REPAIR_PAGE.encode("utf-8")).hexdigest()
+
+
+def patch_fields(**changes):
+    fields = {"issue_id": "d", "evidence": "A line.", "target_text": "A line.\n\nSee the guide.", "replacement": "",
+              "confidence": 0.95, "context_before": "\n\n", "context_after": "\n\nA line.\n"}
+    return {**fields, **changes}
+
+
+check("a patch the final gate would apply passes the check",
+      page_repair.domain.check_patch(REPAIR_PAGE, repair_sha, repair_assessment, patch_fields()), "")
+non_unique = page_repair.domain.check_patch(REPAIR_PAGE, repair_sha, repair_assessment, patch_fields(target_text = "A line."))
+check("a target that repeats is refused with the count and what to do",
+      ("occurs 2 times" in non_unique, "Extend target_text" in non_unique), (True, True))
+check("a patch that deletes the only copy is refused",
+      page_repair.domain.check_patch("# T\n\nA line.\n", hashlib.sha256(b"# T\n\nA line.\n").hexdigest(), repair_assessment,
+                                     patch_fields(target_text = "A line.", context_before = "\n\n", context_after = "\n")).startswith("removing it would leave no copy"),
+      True)
+check("a patch that changes nothing is explained, not raised",
+      "replacement must change target_text" in page_repair.domain.check_patch(REPAIR_PAGE, repair_sha, repair_assessment, patch_fields(replacement = "A line.\n\nSee the guide.")),
+      True)
+_, gate = page_repair.domain.apply_patches(
+    REPAIR_PAGE, repair_sha, repair_assessment,
+    schemas.PagePatchBatch(patches = [schemas.PagePatch(source_sha256 = repair_sha, rationale = "r", **patch_fields())]),
+)
+check("the final gate agrees with the check", (len(gate["accepted"]), len(gate["rejected"])), (1, 0))
+check("every refusal the gate can give has a hint for the model",
+      sorted(reason for reason in page_repair.params.REJECTION_HINTS if not page_repair.params.REJECTION_HINTS[reason].strip()), [])

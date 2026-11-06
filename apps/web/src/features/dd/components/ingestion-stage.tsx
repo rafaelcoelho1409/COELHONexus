@@ -165,7 +165,8 @@ function IngestionWorkspace({
   const [activeView, setActiveView] = useState<IngestionView>("pipeline");
   const manifestQuery = useManifest(slug);
   const effectiveRunId = runId ?? manifestQuery.data?.agentic_run_id ?? null;
-  const statusQuery = useRunPoll(effectiveRunId);
+  // A run named in the address is in flight (or just ended); the run saved with the library is finished, and its status is read once.
+  const statusQuery = useRunPoll(effectiveRunId, runId !== null);
   const cancel = useCancelRun();
   const start = useStartRun();
   const startAgentic = useStartAgenticRun();

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from . import params
-from .... import skills
+from ... import params as agent_params
 
 
 def validate_model_name(model_name: object) -> str:
@@ -10,6 +9,6 @@ def validate_model_name(model_name: object) -> str:
     return model_name
 
 
-def validate_tool_names(tool_names: set[str]) -> None:
-    if tool_names - params.EXCLUDED_TOOLS - skills.params.ALLOWED_TOOL_NAMES:
+def validate_tool_names(tool_names: set[str], custom_names: set[str]) -> None:
+    if tool_names - agent_params.STACK_TOOLS - custom_names:
         raise RuntimeError("DeepAgents exposed an unreviewed tool to the page repair specialist")

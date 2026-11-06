@@ -1,6 +1,6 @@
 "use client";
 
-/** How the latest plan was produced, beside the planner's status in its run bar (a flex-wrap row): one short
+/** How the latest plan was produced, under the title row of the planner's run box (a flex-wrap row): one short
  * "Plan health: healthy" item, and — only when it ran on deterministic fallbacks — a full-width line saying so with
  * the reasons under it. */
 

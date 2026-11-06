@@ -42,7 +42,6 @@ async def audit_pages(
     read_artifact: ArtifactReader,
     write_artifact: ArtifactWriter,
     auditor: Auditor,
-    auditor_files: dict[str, Any],
     progress: CancellationCheck | None,
     page_done: PageProgress,
 ) -> dict[str, Any]:
@@ -99,7 +98,6 @@ async def audit_pages(
                         page,
                         markdown,
                         auditor,
-                        files = auditor_files,
                         config = {
                             "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
                         },

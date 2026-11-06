@@ -3,7 +3,6 @@ from __future__ import annotations
 import domains
 from . import domain
 from .... import agents, graphs, skills
-from .. import inventory
 
 import asyncio
 import hashlib
@@ -22,15 +21,59 @@ class Specialist(Protocol):
         self,
         input: dict[str, Any],
         config: dict[str, Any] | None = None,
+        *,
+        context: domains.bd.ingestion.ai.entities.SpecialistContext | None = None,
     ) -> dict[str, Any]: ...
 
 
-async def _report(progress_callback, **event: Any) -> None:
-    if progress_callback is None:
-        return
-    result = progress_callback(event)
-    if inspect.isawaitable(result):
-        await result
+class BookIndex:
+    """The book's source pages for the specialists' lookup tools: read once, and only if a specialist asks."""
+
+    def __init__(self, read_page: PageReader, page_refs: list[dict[str, Any]]):
+        self._read_page = read_page
+        self._keys = {ref["page"]: ref["source_key"] for ref in page_refs}
+        self._pages: dict[int, str] | None = None
+        self._lock = asyncio.Lock()
+
+    async def _all(self) -> dict[int, str]:
+        async with self._lock:
+            if self._pages is None:
+                async def read(key: str) -> str:
+                    text = self._read_page(key)
+                    if inspect.isawaitable(text):
+                        text = await text
+                    return text if isinstance(text, str) else ""
+
+                numbers = sorted(self._keys)
+                texts = await asyncio.gather(*(read(self._keys[number]) for number in numbers))
+                self._pages = dict(zip(numbers, texts))
+            return self._pages
+
+    async def term_counts(self, variants: list[str]) -> str:
+        pages = await self._all()
+        return domain.count_variants(
+            "\n".join(pages[number] for number in sorted(pages)),
+            variants,
+            max_variants = domains.bd.ingestion.ai.params.MAX_TERM_VARIANTS,
+            max_chars = domains.bd.ingestion.ai.params.MAX_TERM_CHARS,
+        )
+
+    async def page_edges(self, page_number: int, lines: int) -> str:
+        params = domains.bd.ingestion.ai.params
+        lines = max(1, min(lines, params.EDGE_LINES_MAX))
+        pages = await self._all()
+        parts = []
+        for label, number, from_end in (
+            ("previous", page_number - 1, True),
+            ("next", page_number + 1, False),
+        ):
+            if number not in pages:
+                parts.append(f"{label} page: none")
+                continue
+            shown = domain.edge_lines(pages[number], lines, from_end = from_end, max_chars = params.EDGE_LINE_CHARS)
+            heading = f"{label} page ({number}), {'last' if from_end else 'first'} lines:"
+            parts.append("\n".join([heading, *shown]) if shown else f"{label} page ({number}): empty")
+        return "\n\n".join(parts)
 
 
 async def repair_pages(
@@ -47,6 +90,7 @@ async def repair_pages(
     for item in state.get("work_items", []):
         work_by_page.setdefault(item["page"], []).append(item)
     semaphore = asyncio.Semaphore(domains.bd.ingestion.ai.params.PAGE_REPAIR_CONCURRENCY)
+    book = BookIndex(read_page, page_refs)
 
     async def run_specialist(
         item: dict[str, object],
@@ -58,7 +102,7 @@ async def repair_pages(
         role = item["role"]
         assigned_ids = [entry["issue_id"] for entry in item["issue_refs"]]
         assigned = {issue_id: issues[issue_id] for issue_id in assigned_ids}
-        source_context = domain.build_repair_context(
+        source_context = domains.bd.ingestion.ai.inventory.domain.build_repair_context(
             markdown,
             list(assigned.values()),
             per_issue_chars = domains.bd.ingestion.ai.params.REPAIR_CONTEXT_CHARS_PER_ISSUE,
@@ -83,6 +127,21 @@ async def repair_pages(
             return [], f"{role}: the ingestion run has no agentic_run_id", len(source_context), 0
         node_id = "structure_repair" if role == "structure" else "text_repair"
         skill_role = "structure_repair" if role == "structure" else role
+        specialist_context = domains.bd.ingestion.ai.entities.SpecialistContext(
+            check_patch = lambda issue_id, target_text, replacement: domain.check_draft(
+                issue_id = issue_id,
+                target_text = target_text,
+                replacement = replacement,
+                markdown = markdown,
+                page_number = page_number,
+                source_sha256 = source_sha256,
+                assigned_issues = assigned,
+                role = agents.schemas.SpecialistRole(role),
+                allowed_context = source_context,
+            ),
+            term_counts = book.term_counts,
+            page_edges = book.page_edges,
+        )
         last_error = ""
         attempts = 0
         for attempt in range(1, domains.bd.ingestion.ai.params.SPECIALIST_ATTEMPTS + 1):
@@ -101,7 +160,7 @@ async def repair_pages(
                         "content": json.dumps(request, ensure_ascii = False),
                     }], "files": skills.service.files_for(skill_role)}, config = {
                         "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
-                    })
+                    }, context = specialist_context)
                 structured = domain.extract_patch_response(response, role = role)
                 proposals = domain.validate_proposals(
                     structured,
@@ -117,10 +176,10 @@ async def repair_pages(
                 last_error = str(error)[:300]
         return [], f"{role}: {last_error}", len(source_context) * attempts, attempts
 
-    async def process(page_ref: graphs.ingestion.state.IngestionPageReference) -> dict:
+    async def process(page_ref: graphs.ingestion.entities.IngestionPageReference) -> dict:
         async with semaphore:
             page_number = page_ref["page"]
-            await _report(progress_callback, kind = "page_repair", page = page_number, status = "running")
+            await graphs.service.report(progress_callback, kind = "page_repair", page = page_number, status = "running")
             markdown = read_page(page_ref["source_key"])
             if inspect.isawaitable(markdown):
                 markdown = await markdown
@@ -130,7 +189,7 @@ async def repair_pages(
             if source_sha256 != page_ref["source_sha256"]:
                 raise ValueError(f"source page {page_number} changed after its quality audit")
             oversized = (
-                inventory.domain.effective_length(markdown)
+                domains.bd.ingestion.ai.inventory.domain.effective_length(markdown)
                 > domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS
             )
 
@@ -235,7 +294,7 @@ async def repair_pages(
                 "status": "review_required" if review_ids or errors else "done",
                 "error": "; ".join(errors) if errors else "",
             }
-            await _report(progress_callback, kind = "page_repair", page = page_number, status = "done")
+            await graphs.service.report(progress_callback, kind = "page_repair", page = page_number, status = "done")
             return result
 
     page_results = await _gather_cancel_on_failure(process(page_ref) for page_ref in page_refs)

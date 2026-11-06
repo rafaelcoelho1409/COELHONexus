@@ -12,13 +12,23 @@ PATCHABLE_CATEGORIES = frozenset({
     "generated_title",
     "encoding_artifact",
 })
-# A repair in these categories removes a repeat: the text it removes must still be on the page afterwards.
-DUPLICATE_CATEGORIES = frozenset({
-    "duplicate_boilerplate",
-    "duplicate_section",
-})
 # A repair in these categories changes syntax, never wording: its replacement keeps every word of its target.
 WORD_PRESERVING_CATEGORIES = frozenset({
     "malformed_heading",
     "markdown_formatting",
 })
+# What the repairer's `check_patch` tool tells the model to do about each reason a patch is refused.
+REJECTION_HINTS = {
+    "source hash mismatch": "Copy source_sha256 from the request exactly in your answer.",
+    "patch does not reference an accepted finding": "Use an issue_id from the supplied assessment, or drop the patch.",
+    "patch evidence does not match its audited finding": "Copy the finding's evidence exactly as the assessment gives it.",
+    "patch target does not overlap its audited evidence": "target_text must contain the finding's evidence, or lie inside it.",
+    "finding category is not eligible for automatic repair": "Drop the patch; this category is review-only.",
+    "confidence below the automatic-apply threshold": "Drop the patch unless you are at least 0.90 sure of it.",
+    "evidence is not an exact source substring": "Drop the patch; the evidence is not on the page.",
+    "target does not occur exactly once": "Extend target_text with the adjacent page text until it occurs exactly once.",
+    "formatting patch removes words from the page": "Keep every word of the target in the replacement, or drop the patch.",
+    "removing it would leave no copy of the text": "Drop the patch; this is the only copy on the page.",
+    "patch target overlaps a fenced code block": "Drop the patch; code is never edited.",
+    "surrounding context mismatch": "Copy context_before and context_after exactly from the page text around target_text.",
+}

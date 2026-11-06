@@ -1,7 +1,7 @@
 "use client";
 
-/** The pipeline stage: planner and synth on one page, with the opt-in "Auto-chain" that starts synth as
- * soon as the planner finishes cleanly. The two stages never run at the same time. */
+/** The pipeline stage: planner and synth on one page, with the opt-in "Auto-chain" (chosen in the third navbar) that
+ * starts synth as soon as the planner finishes cleanly. The two stages never run at the same time. */
 
 import { proposedTitles } from "../domain/chapters";
 import { useAutoChain } from "../hooks/use-auto-chain";
@@ -28,26 +28,6 @@ function PipelineWorkbench({ slug }: { slug: string }) {
 
   return (
     <div className="flex flex-col gap-6" data-testid="pipeline-workbench">
-      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
-        <p className="max-w-prose text-xs text-muted-foreground">
-          Plan first, then chapters are synthesized in order and harmonized. The two stages never run
-          concurrently. Open any node for its inputs, outputs and LLM usage.
-        </p>
-        <label
-          htmlFor="dd-auto-chain"
-          className="flex min-h-9 items-center gap-2 text-sm"
-          title="When the planner finishes successfully, synth starts by itself. Off by default."
-        >
-          <input
-            id="dd-auto-chain"
-            type="checkbox"
-            checked={chain.enabled}
-            onChange={(event) => chain.setEnabled(event.target.checked)}
-            className="size-4 accent-primary"
-          />
-          Auto-chain
-        </label>
-      </div>
       <PipelineTotal planner={planner} synth={synth} />
       {/* Three columns, left to right as the work flows: the planner's graph, the synth graph of one chapter, and the chapters
           the planner proposes (the original's chapter strip). From 768px the planner and synth each take two grid rows — their

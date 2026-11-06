@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 from . import params
+from ..page_audit import params as audit_params
 from .... import agents
 
 import re
 from collections.abc import Callable
 from typing import Any
+
+from pydantic import ValidationError
 
 
 def repairable_assessment(assessment: dict[str, Any]) -> dict[str, Any]:
@@ -33,6 +36,64 @@ def duplicate_survives(markdown: str, evidence: str, target: str, replacement: s
     return evidence.strip() in markdown.replace(target, replacement, 1)
 
 
+def patch_rejection(
+    markdown: str,
+    source_sha256: str,
+    known_issues: dict[str, dict[str, Any]],
+    patch: agents.schemas.PagePatch,
+) -> tuple[str, int, int]:
+    """Why `patch` cannot be applied to `markdown` on its own ("" when it can) and the span it would replace. The same rules decide
+    a patch for the final gate (`apply_patches`) and for the repairer's `check_patch` tool, so a patch the tool accepts is a patch the gate
+    accepts."""
+    category = known_issues[patch.issue_id]["category"] if patch.issue_id in known_issues else ""
+    if patch.source_sha256 != source_sha256:
+        return "source hash mismatch", 0, 0
+    if patch.issue_id not in known_issues:
+        return "patch does not reference an accepted finding", 0, 0
+    if patch.evidence != known_issues[patch.issue_id]["evidence"]:
+        return "patch evidence does not match its audited finding", 0, 0
+    if not (patch.evidence in patch.target_text or patch.target_text in patch.evidence):
+        return "patch target does not overlap its audited evidence", 0, 0
+    if category not in params.PATCHABLE_CATEGORIES:
+        return "finding category is not eligible for automatic repair", 0, 0
+    if patch.confidence < params.MIN_PATCH_CONFIDENCE:
+        return "confidence below the automatic-apply threshold", 0, 0
+    if patch.evidence not in markdown:
+        return "evidence is not an exact source substring", 0, 0
+    if markdown.count(patch.target_text) != 1:
+        return "target does not occur exactly once", 0, 0
+    if category in params.WORD_PRESERVING_CATEGORIES and dropped_words(patch.target_text, patch.replacement):
+        return "formatting patch removes words from the page", 0, 0
+    if category in audit_params.DUPLICATE_CATEGORIES and not duplicate_survives(
+        markdown, patch.evidence, patch.target_text, patch.replacement
+    ):
+        return "removing it would leave no copy of the text", 0, 0
+    start = markdown.index(patch.target_text)
+    end = start + len(patch.target_text)
+    if overlaps_fenced_code(markdown, start, end):
+        return "patch target overlaps a fenced code block", start, end
+    before = markdown[max(0, start - len(patch.context_before)):start]
+    after = markdown[end:end + len(patch.context_after)]
+    if before != patch.context_before or after != patch.context_after:
+        return "surrounding context mismatch", start, end
+    return "", start, end
+
+
+def check_patch(markdown: str, source_sha256: str, assessment: dict[str, Any], fields: dict[str, Any]) -> str:
+    """Why a patch built from `fields` would not be applied to `markdown`, with what to change ("" when it would be). This is the repairer's
+    `check_patch` tool; the final gate (`apply_patches`) applies the same rules to its answer."""
+    try:
+        patch = agents.schemas.PagePatch(source_sha256 = source_sha256, rationale = "checked by the repairer", **fields)
+    except ValidationError as error:
+        return "; ".join(f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}" for item in error.errors())
+    known_issues = {issue["issue_id"]: issue for issue in assessment.get("issues", [])}
+    reason, _, _ = patch_rejection(markdown, source_sha256, known_issues, patch)
+    if not reason:
+        return ""
+    detail = f" (it occurs {markdown.count(patch.target_text)} times)" if reason == "target does not occur exactly once" else ""
+    return f"{reason}{detail}. {params.REJECTION_HINTS.get(reason, '')}".strip()
+
+
 def apply_patches(
     markdown: str,
     source_sha256: str,
@@ -46,50 +107,9 @@ def apply_patches(
     spans = []
 
     for patch in batch.patches:
-        reason = ""
-        if patch.source_sha256 != source_sha256:
-            reason = "source hash mismatch"
-        elif patch.issue_id not in known_issues:
-            reason = "patch does not reference an accepted finding"
-        elif patch.evidence != known_issues[patch.issue_id]["evidence"]:
-            reason = "patch evidence does not match its audited finding"
-        elif not (
-            patch.evidence in patch.target_text
-            or patch.target_text in patch.evidence
-        ):
-            reason = "patch target does not overlap its audited evidence"
-        elif known_issues[patch.issue_id]["category"] not in params.PATCHABLE_CATEGORIES:
-            reason = "finding category is not eligible for automatic repair"
-        elif patch.confidence < params.MIN_PATCH_CONFIDENCE:
-            reason = "confidence below the automatic-apply threshold"
-        elif patch.evidence not in markdown:
-            reason = "evidence is not an exact source substring"
-        elif markdown.count(patch.target_text) != 1:
-            reason = "target does not occur exactly once"
-        elif (
-            known_issues[patch.issue_id]["category"] in params.WORD_PRESERVING_CATEGORIES
-            and dropped_words(patch.target_text, patch.replacement)
-        ):
-            reason = "formatting patch removes words from the page"
-        elif (
-            known_issues[patch.issue_id]["category"] in params.DUPLICATE_CATEGORIES
-            and not duplicate_survives(markdown, patch.evidence, patch.target_text, patch.replacement)
-        ):
-            reason = "removing it would leave no copy of the text"
-        else:
-            start = markdown.index(patch.target_text)
-            end = start + len(patch.target_text)
-            if overlaps_fenced_code(markdown, start, end):
-                reason = "patch target overlaps a fenced code block"
-            before = markdown[max(0, start - len(patch.context_before)):start]
-            after = markdown[end:end + len(patch.context_after)]
-            if not reason and (before != patch.context_before or after != patch.context_after):
-                reason = "surrounding context mismatch"
-            elif not reason and any(
-                start < previous_end and end > previous_start
-                for previous_start, previous_end in spans
-            ):
-                reason = "overlapping patch target"
+        reason, start, end = patch_rejection(markdown, source_sha256, known_issues, patch)
+        if not reason and any(start < previous_end and end > previous_start for previous_start, previous_end in spans):
+            reason = "overlapping patch target"
 
         if reason:
             rejected.append({

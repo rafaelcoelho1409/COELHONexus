@@ -42,7 +42,6 @@ async def normalize_pages(
     read_artifact: ArtifactReader,
     write_artifact: ArtifactWriter,
     repairer: Repairer,
-    repair_files: dict[str, Any],
     progress: CancellationCheck | None,
     page_done: PageProgress,
 ) -> dict[str, Any]:
@@ -155,7 +154,6 @@ async def normalize_pages(
                         audit["source_sha256"],
                         repair_input,
                         repairer,
-                        files = repair_files,
                         config = {
                             "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
                         },

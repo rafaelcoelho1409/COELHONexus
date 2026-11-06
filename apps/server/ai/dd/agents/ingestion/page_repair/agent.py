@@ -2,22 +2,18 @@
 from __future__ import annotations
 import domains
 from . import config, domain, params
-from ... import schemas
-from .... import prompts, skills
+from ... import schemas, service
+from .... import middleware, prompts, tools
 
-from deepagents import (
-    FilesystemPermission,
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
+from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import StateBackend
+from langchain.agents.middleware import ModelCallLimitMiddleware, ToolCallLimitMiddleware, ToolErrorMiddleware
 from langchain_openai import ChatOpenAI
 
 
-def page_repair(model = None):
-    """Build the configured DeepAgent for evidence-bound page repair proposals."""
+def page_repair(*, check: tools.ingestion.check_patch.service.Check, model = None):
+    """Build the configured DeepAgent for evidence-bound page repair proposals. Its one tool, `check_patch`, runs `check` (the
+    application's own patch rules) on a patch before the agent answers; the application still applies the same rules to the answer."""
     if model is None:
         model = domains.settings.chat.service.build_chat_model(
             timeout_s = config.MODEL.timeout_s,
@@ -31,50 +27,29 @@ def page_repair(model = None):
     if not isinstance(model, ChatOpenAI):
         raise TypeError("the page repair specialist must use the COELHO Rotator ChatOpenAI model")
 
-    register_harness_profile(
-        f"openai:{model_name}",
-        HarnessProfile(
-            base_system_prompt = "",
-            excluded_tools = params.EXCLUDED_TOOLS,
-            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
-        ),
-    )
+    check_patch = tools.ingestion.check_patch.service.tool(check)
+    service.isolate_harness_profile(model_name)
     agent = create_deep_agent(
         model = model,
-        tools = [],
+        tools = [check_patch],
         system_prompt = prompts.ingestion.page_repair.prompts.SYSTEM_PROMPT,
         response_format = schemas.PagePatchBatch,
         permissions = [
-            FilesystemPermission(
-                operations = ["read"],
-                paths = ["/skills/**"],
-                mode = "allow",
-            ),
-            FilesystemPermission(
-                operations = ["read"],
-                paths = ["/**"],
-                mode = "deny",
-            ),
-            FilesystemPermission(
-                operations = ["write"],
-                paths = ["/**"],
-                mode = "deny",
-            ),
+            FilesystemPermission(operations = ["read"], paths = ["/**"], mode = "deny"),
+            FilesystemPermission(operations = ["write"], paths = ["/**"], mode = "deny"),
         ],
         backend = StateBackend(),
-        skills = [skills.domain.source_for("page_repair")],
+        middleware = [
+            ModelCallLimitMiddleware(run_limit = params.MODEL_CALLS, exit_behavior = "end"),
+            ToolCallLimitMiddleware(tool_name = check_patch.name, run_limit = params.CHECK_CALLS, exit_behavior = "continue"),
+            ToolErrorMiddleware(lambda error, request: f"`{request.tool_call['name']}` failed with {type(error).__name__}: {str(error)[:300]}"),
+            middleware.service.ToolAllowlistMiddleware(frozenset({check_patch.name})),
+        ],
         name = "dd_page_repair",
     )
     tool_node = agent.nodes.get("tools")
     available_tools = getattr(getattr(tool_node, "bound", None), "_tools_by_name", None)
-    error_message = "DeepAgents exposed an unreviewed tool to the page repair specialist"
     if not isinstance(available_tools, dict):
-        raise RuntimeError(error_message)
-    unreviewed_tools = (
-        set(available_tools)
-        - params.EXCLUDED_TOOLS
-        - skills.params.ALLOWED_TOOL_NAMES
-    )
-    if unreviewed_tools:
-        raise RuntimeError(error_message)
+        raise RuntimeError("DeepAgents exposed an unreviewed tool to the page repair specialist")
+    domain.validate_tool_names(set(available_tools), {check_patch.name})
     return agent

@@ -19,12 +19,9 @@ from ai.bd.agents.schemas import (  # noqa: E402
     PageKind,
     PatchProposal,
     PatchRisk,
-    ReviewDecision,
-    ReviewDisposition,
     SpecialistRole,
     WorkIssueRef,
     WorkItem,
-    WorkPlan,
 )
 
 
@@ -104,10 +101,8 @@ text_repair_work = WorkItem(
     evidence = [evidence(5, "Invest igator's"), evidence(37, "cyber\u00ad attacks")],
     rationale = "Review the exact extracted spans against their cited source evidence.",
 )
-work_plan = WorkPlan(work_items = [text_repair_work])
-check("a work plan assigns bounded evidence-backed work to an allowed specialist",
-      work_plan.work_items[0].role, SpecialistRole.TEXT_REPAIR)
-check("an empty work plan represents no specialist work", WorkPlan().work_items, [])
+check("a work item assigns bounded evidence-backed work to an allowed specialist",
+      text_repair_work.role, SpecialistRole.TEXT_REPAIR)
 rejects(
     "a work-item issue reference requires a positive page number",
     lambda: WorkItem(
@@ -136,7 +131,7 @@ rejects(
 rejects(
     "specialist roles cannot be assigned unsupported issue categories",
     lambda: WorkItem(
-        role = SpecialistRole.METADATA,
+        role = SpecialistRole.STRUCTURE,
         issue_refs = [
             WorkIssueRef(issue_id = "p0005-i1", page_number = 5, issue_code = IssueCode.SPLIT_WORD),
         ],
@@ -159,14 +154,6 @@ rejects(
         evidence = [evidence(1, "Invest igator's")],
         rationale = "Review a bounded range.",
     ),
-)
-rejects(
-    "a work plan is limited to 64 work items",
-    lambda: WorkPlan(work_items = [text_repair_work] * 65),
-)
-rejects(
-    "an issue can be assigned to only one specialist work item",
-    lambda: WorkPlan(work_items = [text_repair_work, text_repair_work]),
 )
 rejects(
     "issue identifiers must be unique within a page assessment",
@@ -233,32 +220,5 @@ rejects(
     lambda: PatchProposal(**{**patch_values, "evidence": []}),
 )
 
-decision = ReviewDecision(
-    proposal_id = "proposal-1",
-    disposition = ReviewDisposition.EDIT,
-    rationale = "Keep the possessive punctuation from the source.",
-    edited_replacement = "Investigator's",
-)
-check("an edit review carries the revised replacement", decision.edited_replacement, "Investigator's")
-rejects(
-    "an edit decision requires an edited replacement",
-    lambda: ReviewDecision(
-        proposal_id = "proposal-1",
-        disposition = ReviewDisposition.EDIT,
-        rationale = "Change the proposal.",
-    ),
-)
-rejects(
-    "non-edit decisions cannot carry an edited replacement",
-    lambda: ReviewDecision(
-        proposal_id = "proposal-1",
-        disposition = ReviewDisposition.ACCEPT,
-        rationale = "Accept as proposed.",
-        edited_replacement = "unexpected",
-    ),
-)
-
 check("assessment schema exports as JSON Schema for later structured-output integration",
       "page_kind" in PageAssessment.model_json_schema()["properties"], True)
-check("work-plan JSON Schema exposes its item bound",
-      WorkPlan.model_json_schema()["properties"]["work_items"]["maxItems"], 64)

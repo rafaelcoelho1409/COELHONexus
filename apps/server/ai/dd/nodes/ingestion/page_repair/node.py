@@ -3,7 +3,7 @@ from __future__ import annotations
 import domains
 from . import domain, params
 from ..page_audit import params as audit_params
-from .... import agents
+from .... import agents, tools
 
 import json
 from typing import Any, Protocol
@@ -25,7 +25,6 @@ async def repair_page(
     assessment: dict[str, Any],
     repairer: PageRepairer,
     *,
-    files: dict[str, Any],
     config: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     if len(markdown) > audit_params.MAX_PAGE_MARKDOWN_CHARS:
@@ -42,9 +41,13 @@ async def repair_page(
         "assessment": assessment,
         "markdown": markdown,
     }, ensure_ascii = False)
+    # The page and its audit also go in the agent's files, where its `check_patch` tool reads them.
     request = {
         "messages": [{"role": "user", "content": prompt}],
-        "files": files,
+        "files": {
+            tools.ingestion.check_patch.params.PAGE_PATH: agents.service.file(markdown),
+            tools.ingestion.check_patch.params.ASSESSMENT_PATH: agents.service.file(json.dumps(assessment, ensure_ascii = False)),
+        },
     }
     # Retry transient provider failures and occasional non-structured answers in one bounded loop.
     result = await domains.settings.chat.service.resilient_ainvoke(

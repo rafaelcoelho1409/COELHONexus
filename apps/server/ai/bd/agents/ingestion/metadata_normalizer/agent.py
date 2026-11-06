@@ -2,16 +2,10 @@
 from __future__ import annotations
 import domains
 from . import config, params
-from ... import schemas
-from .... import prompts, skills
+from ... import schemas, service
+from .... import middleware, prompts, skills
 
-from deepagents import (
-    FilesystemPermission,
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
+from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import StateBackend
 from langchain_openai import ChatOpenAI
 
@@ -31,18 +25,12 @@ def metadata_normalizer(model = None):
     if not isinstance(model, ChatOpenAI):
         raise TypeError("the metadata normalizer must use the COELHO Rotator ChatOpenAI model")
 
-    register_harness_profile(
-        f"openai:{model_name}",
-        HarnessProfile(
-            base_system_prompt = "",
-            excluded_tools = params.EXCLUDED_TOOLS,
-            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
-        ),
-    )
+    service.isolate_harness_profile(model_name)
     agent = create_deep_agent(
         model = model,
         tools = [],
         system_prompt = prompts.ingestion.metadata_normalizer.prompts.SYSTEM_PROMPT,
+        middleware = [middleware.service.ToolAllowlistMiddleware(frozenset({"read_file"}))],
         response_format = schemas.BookMetadataProposal,
         permissions = [
             FilesystemPermission(

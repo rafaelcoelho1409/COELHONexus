@@ -19,9 +19,9 @@ from ai.bd.nodes.ingestion.repair_pages.domain import (
     apply_mechanical_fixes_for_issues,
     apply_proposals,
 )
-from ai.bd.nodes.ingestion.repair_pages.domain import build_repair_context, validate_proposals
-from ai.bd.nodes.ingestion.inventory.domain import assess_page, effective_length, merge_issues
-from ai.bd.nodes.ingestion.page_audit.domain import sanitize_assessment
+from ai.bd.nodes.ingestion.repair_pages.domain import validate_proposals
+from ai.bd.nodes.ingestion.audit_batch.domain import sanitize_assessment
+from domains.bd.ingestion.ai.inventory.domain import assess_page, build_repair_context, effective_length, merge_issues
 import domains
 import infra
 from domains.bd.ingestion.ai.service import (
@@ -122,7 +122,7 @@ class FakeTextRepair:
     def __init__(self):
         self.calls = 0
 
-    async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
+    async def ainvoke(self, payload: dict, config: dict | None = None, context = None) -> dict:
         self.calls += 1
         request = json.loads(payload["messages"][0]["content"])
         issue = request["assigned_issues"][0]
@@ -151,7 +151,7 @@ class FakeStructureRepair:
     def __init__(self):
         self.calls = 0
 
-    async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
+    async def ainvoke(self, payload: dict, config: dict | None = None, context = None) -> dict:
         self.calls += 1
         return {"structured_response": schemas.PatchProposalBatch(proposals=[])}
 
@@ -329,7 +329,7 @@ for target, replacement, code in (
         "https://www.wired.com/images_blogs/threatlevel/2013/hidden_lynx_final.pdf",
         schemas.IssueCode.SPLIT_WORD,
     ),
-    ("cyber­ attacks", "cyber-attacks", schemas.IssueCode.SPLIT_WORD),
+    ("cyber­ attacks", "cyberattacks", schemas.IssueCode.SPLIT_WORD),
     ("commandand-control server", "command-and-control server", schemas.IssueCode.SPLIT_WORD),
 ):
     page = f"Before.\n\n{target}\n\nAfter."
@@ -361,6 +361,9 @@ for label, page, proposal in (
     )),
     ("an existing hyphen is removed", "a state-of-the-art tool", spacing_proposal(
         "state-of-the-art tool", "stateoftheart tool",
+    )),
+    ("a soft hyphen becomes a visible hyphen", "the cyber­ attacks grew", spacing_proposal(
+        "cyber­ attacks", "cyber-attacks",
     )),
     ("a hyphen is dropped without a dangling space", "social engineer-ing", spacing_proposal(
         "social engineer-ing", "social engineering",
@@ -483,12 +486,13 @@ def audit_findings(
     *excerpts: str,
     code = schemas.IssueCode.OTHER,
     description: str = "Reported by the model.",
+    verdict = schemas.FindingVerdict.DEFECT,
 ) -> list[schemas.IssueCode]:
     response = schemas.PageAuditResponse(
         page_kind = schemas.PageKind.MIXED, confidence = 0.9,
         findings = [schemas.PageAuditFinding(
-            code = code, severity = schemas.IssueSeverity.LOW, description = description,
-            confidence = 0.9, evidence_excerpts = [excerpt],
+            code = schemas.AuditIssueCode(code.value), severity = schemas.IssueSeverity.LOW, description = description,
+            confidence = 0.9, evidence_excerpts = [excerpt], verdict = verdict,
         ) for excerpt in excerpts],
     )
     assessment, _ = sanitize_assessment(response, page_number = 1, pictures = 1, markdown = audit_markdown)
@@ -499,13 +503,29 @@ assert audit_findings("<!-- image -->", "17", "\n17\n", "Figure 1: A caption.") 
 assert audit_findings("<!-- image -->", code = schemas.IssueCode.STRUCTURE) == []
 assert audit_findings("Figure 1: A caption.", code = schemas.IssueCode.STRUCTURE) == []
 assert audit_findings("Body text.", code = schemas.IssueCode.STRUCTURE) == ["Body text."]
-assert audit_findings("Body text.", code = schemas.IssueCode.METADATA) == []
+for code_the_auditor_may_not_report in (schemas.IssueCode.METADATA, schemas.IssueCode.NEAR_EMPTY):
+    # Sparseness is measured in code and metadata has its own stage, so the response schema does not allow either code.
+    try:
+        audit_findings("Body text.", code = code_the_auditor_may_not_report)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(f"the auditor schema accepted {code_the_auditor_may_not_report}")
+assert audit_findings("Body text.", code = schemas.IssueCode.OTHER, verdict = schemas.FindingVerdict.NOT_A_DEFECT) == []
+assert audit_findings("Body text.", code = schemas.IssueCode.OTHER, verdict = schemas.FindingVerdict.DEFECT) == ["Body text."]
 assert audit_findings("Figure 1: A caption.", code = schemas.IssueCode.TABLE_OR_INDEX_LAYOUT) == []
 assert audit_findings("| a | b |", code = schemas.IssueCode.TABLE_OR_INDEX_LAYOUT) == ["| a | b |"]
-assert audit_findings("Body text.", code = schemas.IssueCode.NEAR_EMPTY) == []
 assert audit_findings("C&amp;C server.", code = schemas.IssueCode.OTHER) == []
 assert audit_findings("Body text.", code = schemas.IssueCode.STRUCTURE, description = "A figure and text, which is typical for a mixed page.") == []
 assert audit_findings("Body text.", code = schemas.IssueCode.STRUCTURE, description = "The paragraph is cut in two.") == ["Body text."]
+for placement in (
+    "The page contains a mix of text and an image, but the image is not properly integrated into the flow of the text.",
+    "The page contains a mix of textual content and a single embedded image (Figure 7-4).",
+    "The image is not rendered or described in the markdown.",
+):
+    assert audit_findings("Body text.", code = schemas.IssueCode.STRUCTURE, description = placement) == [], placement
+    assert audit_findings("Body text.", code = schemas.IssueCode.OTHER, description = placement) == [], placement
+assert audit_findings("Body text.", code = schemas.IssueCode.SPLIT_WORD, description = "A mix of text and an image, a word is split.") == ["Body text."]
 assert audit_findings("Syria, Egypt and . . ., and also Iran.", code = schemas.IssueCode.TOC_NOISE) == []
 assert audit_findings("| Intro . . . . . . 7 |", code = schemas.IssueCode.TOC_NOISE) == ["| Intro . . . . . . 7 |"]
 print("ok  a picture marker, bare page number or lone figure caption is never accepted as evidence of a defect")
@@ -762,7 +782,7 @@ class FlakyTextRepair:
     def __init__(self):
         self.requests: list[dict] = []
 
-    async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
+    async def ainvoke(self, payload: dict, config: dict | None = None, context = None) -> dict:
         request = json.loads(payload["messages"][0]["content"])
         self.requests.append(request)
         if len(self.requests) == 1:
@@ -802,7 +822,7 @@ print("ok  a rejected specialist response is retried once with the rejection rea
 class RewritingTextRepair:
     """A confident model that changes letters, not just spaces."""
 
-    async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
+    async def ainvoke(self, payload: dict, config: dict | None = None, context = None) -> dict:
         request = json.loads(payload["messages"][0]["content"])
         return {"structured_response": schemas.PatchDraftBatch(proposals = [schemas.PatchDraft(
             issue_id = request["assigned_issues"][0]["issue_id"], risk = schemas.PatchRisk.LOW,
@@ -846,11 +866,11 @@ class CallLimitedTextRepair:
     def __init__(self):
         self.calls = 0
 
-    async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
+    async def ainvoke(self, payload: dict, config: dict | None = None, context = None) -> dict:
         self.calls += 1
         if self.calls == 1:
             return {"messages": [{"role": "assistant", "content": "Model call limit reached"}]}
-        return await RewritingTextRepair().ainvoke(payload, config)
+        return await RewritingTextRepair().ainvoke(payload, config, context)
 
 
 limit_manifest, limit_pages, _ = single_page_book(

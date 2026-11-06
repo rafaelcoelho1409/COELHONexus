@@ -14,7 +14,6 @@ async def normalize_pages(
     read_artifact: service.ArtifactReader,
     write_artifact: service.ArtifactWriter,
     repairer: service.Repairer,
-    repair_files: dict[str, Any],
     progress: service.CancellationCheck | None,
     page_done: service.PageProgress,
 ) -> dict[str, Any]:
@@ -26,7 +25,6 @@ async def normalize_pages(
         read_artifact,
         write_artifact,
         repairer,
-        repair_files,
         progress,
         page_done,
     )

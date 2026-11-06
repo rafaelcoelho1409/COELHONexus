@@ -12,6 +12,7 @@ import type { StageEvent } from "../entities";
 import type { RunStage } from "../params";
 import { NodeDrawer } from "./node-drawer";
 import { StageNodes } from "./stage-parts";
+import { ToggleGroup } from "./toggle-group";
 
 // The graph library is only needed once a graph is on screen.
 const StageFlow = dynamic(() => import("./stage-flow").then((module) => module.StageFlow), {
@@ -67,7 +68,11 @@ export function StageNodeBoard({
 
   return (
     <>
-      <div className="flex flex-col gap-2">
+      {/* The graph sits in a box like Ingestion's "Agentic pipeline", with the same Graph | List switch. */}
+      <section
+        aria-label={`${STAGE_TITLE[stage]} pipeline`}
+        className="flex min-w-0 flex-1 flex-col gap-3 rounded-md border border-border bg-card p-3"
+      >
         {/* One row, the same height in both stages (the switch is 36px; the caption takes two lines of 16px at most), so
             the planner's graph and the synth graph start at the same height. */}
         <div className="flex min-h-9 items-center justify-between gap-3">
@@ -78,24 +83,14 @@ export function StageNodeBoard({
           >
             {caption}
           </p>
-          <fieldset className="m-0 flex min-w-0 shrink-0 border-0 p-0">
-            <legend className="sr-only">{STAGE_TITLE[stage]} nodes shown as</legend>
-            {VIEWS.map((view) => (
-              <button
-                key={view.id}
-                type="button"
-                aria-pressed={mode === view.id}
-                onClick={() => setMode(view.id)}
-                className={`min-h-9 border px-3 text-xs first:rounded-l-sm last:rounded-r-sm ${
-                  mode === view.id
-                    ? "border-primary bg-primary/10 text-primary-text"
-                    : "-ml-px border-border text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {view.label}
-              </button>
-            ))}
-          </fieldset>
+          <div className="shrink-0">
+            <ToggleGroup
+              legend={`${STAGE_TITLE[stage]} nodes shown as`}
+              options={VIEWS}
+              value={mode}
+              onChange={setMode}
+            />
+          </div>
         </div>
         {mode === "graph" ? (
           <StageFlow
@@ -111,7 +106,7 @@ export function StageNodeBoard({
         ) : (
           <StageNodes views={views} liveLines={liveLines} kpis={kpis} onOpen={openNode} />
         )}
-      </div>
+      </section>
       {open ? (
         <NodeDrawer
           key={open.node.id}

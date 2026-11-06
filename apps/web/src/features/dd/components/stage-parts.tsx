@@ -5,7 +5,7 @@
 import {
   Ban,
   BookOpen,
-  ChartColumn,
+  ChartNoAxesColumn,
   Check,
   Circle,
   CircleDot,
@@ -18,11 +18,11 @@ import {
 import Link from "next/link";
 import type { ReactNode } from "react";
 
-import { Button } from "@/shared/ui/button";
-
 import type { ChapterCell } from "../domain/chapters";
 import { fmtMs } from "../domain/format";
 import type { NodeStatus, NodeView, StagePillState } from "../domain/stages";
+import { ActionButton } from "./action-button";
+import { SuccessMark } from "./success-mark";
 
 const PILL_LABEL: Record<StagePillState["status"], string> = {
   idle: "Idle",
@@ -285,9 +285,10 @@ export type RunControls = {
   wipe: () => Promise<void>;
 };
 
-/** Title and status on top; below, the LLM usage button on the left and Start / Stop / Wipe on the right. Both bars
- * of the pipeline page are this one shape, so their graphs start at the same height. `testId` prefixes the button
- * test ids. `children` sit beside the status (a health or audit line). */
+/** A stage's box, drawn as Ingestion draws its two: title (with a check once it finished cleanly) and status on top; below,
+ * the LLM usage button on the left and Start / Stop / Wipe on the right, all in the Ingestion button look. Both boxes of
+ * the pipeline page are this one shape, so their graphs start at the same height. `testId` prefixes the button test ids.
+ * `children` sit under the title row (a health or audit line). */
 export function RunBar({
   title,
   testId,
@@ -307,14 +308,22 @@ export function RunBar({
 }) {
   const busy = controls.running || controls.starting;
   return (
-    // `justify-between`: when a neighbouring bar is taller (the pipeline page gives both bars one height), the buttons stay at the bottom edge.
-    <header className="flex flex-col justify-between gap-3 rounded-md border border-border bg-card p-3">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <h2 className="text-sm font-medium">{title}</h2>
-        <StagePill pill={controls.pill} elapsedMs={controls.elapsedMs} />
-        {children}
+    // `justify-between`: when a neighbouring box is taller (the pipeline page gives both one height), the buttons stay at the bottom edge.
+    <section
+      aria-label={`${title} run`}
+      className="flex min-w-0 flex-col justify-between gap-2 rounded-md border border-border bg-card p-3"
+    >
+      <div>
+        <div className="flex min-h-9 flex-wrap items-center justify-between gap-2">
+          <h3 className="flex items-center gap-1.5 text-sm font-medium">
+            {title}
+            {controls.pill.status === "done" ? <SuccessMark /> : null}
+          </h3>
+          <StagePill pill={controls.pill} elapsedMs={controls.elapsedMs} />
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 empty:hidden">{children}</div>
         {blockedMessage ? (
-          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
             <Clock3 className="size-4 shrink-0" aria-hidden />
             {blockedMessage}
           </p>
@@ -322,20 +331,17 @@ export function RunBar({
       </div>
       {/* Tight padding and gaps: in the narrowest column beside the graphs (320px) all four fit on one row. */}
       <div className="flex flex-wrap items-center gap-1.5">
-        <Button
-          size="lg"
-          variant="outline"
+        <ActionButton
           className="px-2"
           data-testid={`${testId}-usage`}
           onClick={onOpenUsage}
           aria-haspopup="dialog"
         >
-          <ChartColumn aria-hidden />
+          <ChartNoAxesColumn aria-hidden />
           LLM usage
-        </Button>
+        </ActionButton>
         <div className="ml-auto flex items-center gap-1.5">
-          <Button
-            size="lg"
+          <ActionButton
             className="px-2"
             data-testid={`${testId}-start`}
             onClick={() => void controls.start()}
@@ -343,10 +349,8 @@ export function RunBar({
             aria-busy={controls.starting}
           >
             {controls.startLabel}
-          </Button>
-          <Button
-            size="lg"
-            variant="outline"
+          </ActionButton>
+          <ActionButton
             className="px-2"
             data-testid={`${testId}-stop`}
             onClick={() => void controls.cancel()}
@@ -354,20 +358,18 @@ export function RunBar({
             aria-busy={controls.canceling}
           >
             {controls.canceling ? "Stopping…" : "Stop"}
-          </Button>
-          <Button
-            size="lg"
-            variant="destructive"
+          </ActionButton>
+          <ActionButton
             className="px-2"
             data-testid={`${testId}-wipe`}
             onClick={() => void controls.wipe()}
             disabled={busy}
           >
             Wipe
-          </Button>
+          </ActionButton>
         </div>
       </div>
-    </header>
+    </section>
   );
 }
 

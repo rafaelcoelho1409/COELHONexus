@@ -1,19 +1,16 @@
 """Pure validation and safe application rules for specialist patch proposals."""
 from __future__ import annotations
 import domains
-from . import patterns
+from . import errors, patterns
 from .... import agents
 
 import difflib
+import re
 import unicodedata
 from json import JSONDecodeError, JSONDecoder
 from collections.abc import Iterator
 from typing import Any
 from pydantic import ValidationError
-
-
-class ModelCallLimitReachedError(ValueError):
-    """A specialist stopped at its configured model-call limit."""
 
 
 def extract_patch_response(
@@ -31,7 +28,7 @@ def extract_patch_response(
     if content is None:
         raise ValueError(f"{role} specialist returned no structured response or assistant message")
     if "model call limit" in content.casefold():
-        raise ModelCallLimitReachedError(f"{role} specialist reached its model-call limit")
+        raise errors.ModelCallLimitReachedError(f"{role} specialist reached its model-call limit")
 
     last_error: ValidationError | None = None
     for value in _json_objects(content):
@@ -149,22 +146,7 @@ def validate_proposals(
             continue
         if proposal.issue_code != assigned_issues[proposal.issue_id].code:
             raise ValueError("patch proposal issue code does not match its assigned issue")
-        allowed = (
-            proposal.issue_code in {
-                agents.schemas.IssueCode.CONTROL_CHARACTERS,
-                agents.schemas.IssueCode.SPLIT_WORD,
-                agents.schemas.IssueCode.SOFT_HYPHEN,
-                agents.schemas.IssueCode.FUSED_MARKER,
-                agents.schemas.IssueCode.TEXT_CORRUPTION,
-            }
-            if role == agents.schemas.SpecialistRole.TEXT_REPAIR
-            else proposal.issue_code in {
-                agents.schemas.IssueCode.STRUCTURE,
-                agents.schemas.IssueCode.TOC_NOISE,
-                agents.schemas.IssueCode.TABLE_OR_INDEX_LAYOUT,
-            }
-        )
-        if not allowed:
+        if proposal.issue_code not in agents.schemas.ALLOWED_ISSUES_BY_ROLE[role]:
             raise ValueError("patch proposal issue code is outside this specialist's scope")
         if _invents_text(proposal):
             continue
@@ -224,47 +206,79 @@ def _invents_text(proposal: agents.schemas.PatchProposal) -> bool:
     )
 
 
-def build_repair_context(
-    markdown: str,
-    issues: list[agents.schemas.PageIssue],
+def check_draft(
     *,
-    per_issue_chars: int,
-    max_chars: int,
+    issue_id: str,
+    target_text: str,
+    replacement: str,
+    markdown: str,
+    page_number: int,
+    source_sha256: str,
+    assigned_issues: dict[str, agents.schemas.PageIssue],
+    role: agents.schemas.SpecialistRole,
+    allowed_context: str,
 ) -> str:
-    """Return source-exact windows around issue evidence, bounded before model invocation."""
-    windows: list[tuple[int, int]] = []
-    for issue in issues:
-        for evidence in issue.evidence:
-            evidence_start = markdown.find(evidence.excerpt)
-            if evidence_start < 0:
-                continue
-            evidence_end = evidence_start + len(evidence.excerpt)
-            budget = max(per_issue_chars, len(evidence.excerpt))
-            radius = max(0, (budget - len(evidence.excerpt)) // 2)
-            start = max(0, evidence_start - radius)
-            end = min(len(markdown), evidence_end + radius)
-            windows.append((start, end))
+    """Tell a specialist, before it answers, what the gates would do with one patch: the same checks, nothing applied."""
+    if issue_id not in assigned_issues:
+        return f"rejected: {issue_id!r} is not one of your assigned issues ({', '.join(assigned_issues)})"
+    try:
+        draft = agents.schemas.PatchDraft(
+            issue_id = issue_id,
+            risk = agents.schemas.PatchRisk.LOW,
+            target_text = target_text,
+            replacement = replacement,
+            rationale = "pre-flight check",
+            confidence = 1.0,
+        )
+        accepted = validate_proposals(
+            agents.schemas.PatchDraftBatch(proposals = [draft]),
+            page_number = page_number,
+            source_sha256 = source_sha256,
+            markdown = markdown,
+            assigned_issues = assigned_issues,
+            role = role,
+            allowed_context = allowed_context,
+        )
+    except ValueError as error:
+        return f"rejected: {str(error)[:300]}"
+    if not accepted:
+        return "rejected: the replacement adds words, a link or a marker that the page does not contain"
+    proposal = accepted[0]
+    starts = _occurrences(markdown, proposal.target_text)
+    if all(
+        _is_mechanical_repair(proposal)
+        or _is_spacing_repair(proposal, markdown, start, start + len(proposal.target_text))
+        for start in starts
+    ):
+        return "ok: only spaces (or invisible characters) change, so the application applies it automatically"
+    return (
+        "ok: valid, but it changes letters or punctuation, so it is kept for human review "
+        "rather than applied; send it only if you are sure of the correction"
+    )
 
-    if not windows:
-        return ""
 
-    merged: list[list[int]] = []
-    for start, end in sorted(windows):
-        if merged and start <= merged[-1][1]:
-            merged[-1][1] = max(merged[-1][1], end)
-        else:
-            merged.append([start, end])
+def count_variants(text: str, variants: list[str], *, max_variants: int, max_chars: int) -> str:
+    """Whole-word, case-insensitive counts of each spelling in `text` (the whole book)."""
+    squeezed = _squeeze(text)
+    lines = []
+    for variant in variants[:max_variants]:
+        wanted = _squeeze(variant)[:max_chars]
+        if not wanted:
+            continue
+        count = len(re.findall(rf"(?<!\w){re.escape(wanted)}(?!\w)", squeezed))
+        lines.append(f"{wanted!r}: {count}")
+    return "\n".join(lines) or "no spelling was given"
 
-    excerpts: list[str] = []
-    remaining = max_chars
-    for start, end in merged:
-        if remaining <= 0:
-            break
-        excerpt = markdown[start:min(end, start + remaining)]
-        if excerpt:
-            excerpts.append(excerpt)
-            remaining -= len(excerpt)
-    return "\n…\n".join(excerpts)
+
+def edge_lines(markdown: str, lines: int, *, from_end: bool, max_chars: int) -> list[str]:
+    """The first (or last) non-empty lines of a page, each cut to `max_chars`."""
+    kept = [line.strip()[:max_chars] for line in markdown.splitlines() if line.strip()]
+    return kept[-lines:] if from_end else kept[:lines]
+
+
+def _squeeze(text: str) -> str:
+    """Casefold, drop soft hyphens, and collapse every whitespace run, so a line break reads as a space."""
+    return re.sub(r"\s+", " ", text.replace("­", "")).strip().casefold()
 
 
 def apply_proposals(
@@ -597,6 +611,9 @@ def _is_spacing_repair(proposal: agents.schemas.PatchProposal, markdown: str, st
         # nothing a reader sees; inside code the backslash is a real character and stays.
         return not _inside_code(markdown, start)
     if not all(patterns._PLAIN_PROSE_RE.fullmatch(text) for text in (target, replacement)):
+        return False
+    if "­" in target and replacement.count("-") > target.count("-"):
+        # A soft hyphen only marks where a line may break; turning it into a visible hyphen claims a compound the page never showed.
         return False
     # A hyphen may be added, or dropped where the source left it dangling before a space ("engineer- ing");
     # a hyphen that is already part of a word is never removed.

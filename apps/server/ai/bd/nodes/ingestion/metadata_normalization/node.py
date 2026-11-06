@@ -4,5 +4,13 @@ from . import service
 from .... import graphs
 
 
-async def normalize_metadata(graph_state: graphs.ingestion.state.IngestionRunState, read_page, write_artifact, normalizer) -> dict:
-    return await service.normalize_metadata(graph_state, read_page, write_artifact, normalizer)
+async def normalize_metadata(
+    graph_state: graphs.ingestion.state.IngestionRunState, 
+    read_page, 
+    write_artifact, 
+    normalizer) -> dict:
+    return await service.normalize_metadata(
+        graph_state, 
+        read_page, 
+        write_artifact, 
+        normalizer)

@@ -12,6 +12,32 @@ from langchain.agents.middleware import AgentMiddleware, AgentState
 logger = logging.getLogger(__name__)
 
 
+class ToolAllowlistMiddleware(AgentMiddleware[AgentState, Any, Any]):
+    """Shows the model only the tools its role may use, and no others.
+
+    A role's reach is its own: the filter belongs to the agent, not to the process. Deep Agents' harness profile is keyed by the
+    model, which is the same Rotator model for every role, and its excluded tools union across registrations, so a tool hidden
+    for one role would be hidden from every role built after it."""
+
+    def __init__(self, allowed: frozenset[str]) -> None:
+        super().__init__()
+        self._allowed = frozenset(allowed)
+
+    @staticmethod
+    def _name(tool: Any) -> str | None:
+        name = tool.get("name") if isinstance(tool, dict) else getattr(tool, "name", None)
+        return name if isinstance(name, str) else None
+
+    def _restricted(self, request):
+        return request.override(tools = [tool for tool in request.tools if self._name(tool) in self._allowed])
+
+    def wrap_model_call(self, request, handler):
+        return handler(self._restricted(request))
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(self._restricted(request))
+
+
 class CapacityWaitMiddleware(AgentMiddleware[AgentState, Any, Any]):
     """When the Rotator reports it has no usable arm right now, waits out its Retry-After (bounded) and calls the model again.
 

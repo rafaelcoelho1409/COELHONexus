@@ -3,17 +3,16 @@ from __future__ import annotations
 from .... import agents, graphs
 
 
-# Control characters and soft hyphens are removed in code by repair_pages, so no specialist is asked about them.
-TEXT_ISSUES = frozenset({
-    agents.schemas.IssueCode.SPLIT_WORD,
-    agents.schemas.IssueCode.FUSED_MARKER,
-    agents.schemas.IssueCode.TEXT_CORRUPTION,
-})
-STRUCTURE_ISSUES = frozenset({
-    agents.schemas.IssueCode.STRUCTURE,
-    agents.schemas.IssueCode.TOC_NOISE,
-    agents.schemas.IssueCode.TABLE_OR_INDEX_LAYOUT,
-})
+# What a specialist may be assigned is what it may patch, less the findings code fixes by itself (repair_pages removes
+# control characters and soft hyphens), so no specialist is asked about those.
+TEXT_ISSUES = (
+    agents.schemas.ALLOWED_ISSUES_BY_ROLE[agents.schemas.SpecialistRole.TEXT_REPAIR]
+    - agents.schemas.MECHANICAL_ISSUES
+)
+STRUCTURE_ISSUES = (
+    agents.schemas.ALLOWED_ISSUES_BY_ROLE[agents.schemas.SpecialistRole.STRUCTURE]
+    - agents.schemas.MECHANICAL_ISSUES
+)
 
 
 def plan_repairs(state: graphs.ingestion.state.IngestionRunState) -> dict:
@@ -34,13 +33,13 @@ def plan_repairs(state: graphs.ingestion.state.IngestionRunState) -> dict:
                 continue
             item = agents.schemas.WorkItem(
                 role = role,
-                issue_refs=[agents.schemas.WorkIssueRef(
+                issue_refs = [agents.schemas.WorkIssueRef(
                     issue_id = issue.issue_id,
                     page_number = assessment.page_number,
                     issue_code = issue.code,
                 ) for issue in selected],
-                evidence=[evidence for issue in selected for evidence in issue.evidence],
-                rationale=f"Repair assigned {role.value} issues on page {assessment.page_number}.",
+                evidence = [evidence for issue in selected for evidence in issue.evidence],
+                rationale = f"Repair assigned {role.value} issues on page {assessment.page_number}.",
             )
             work_items.append({
                 "page": assessment.page_number,
