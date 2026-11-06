@@ -21,7 +21,7 @@ async def pipeline_active() -> dict:
     orthogonal to the Planner/Synth lock block."""
     return {
         "planner": await domains.dd.pipeline.runtime.dispatch.service.active_lock(),
-        "synth":   await domains.dd.pipeline.synth.runtime.dispatch.service.active_lock(),
+        "synth":   await domains.dd.pipeline.runtime.dispatch.service.synth_active_lock(),
     }
 
 
@@ -50,7 +50,7 @@ async def pipeline_state(slug: str) -> dict:
 
     ingestion = await _exists(domains.dd.ingestion.storage.keys.manifest_key(slug))
     planner   = await _exists(domains.dd.pipeline.storage.keys.plan_latest_key(slug))
-    synth_prefix = domains.dd.pipeline.synth.keys.minio_prefix(slug)
+    synth_prefix = domains.dd.pipeline.storage.keys.synth_prefix(slug)
     synth     = await _has_any(synth_prefix)
     study = False
     if synth:

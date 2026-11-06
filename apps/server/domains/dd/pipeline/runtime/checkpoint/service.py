@@ -55,7 +55,7 @@ async def prune_old_threads(
             candidate_ids = [row[0] for row in await cur.fetchall()]
 
     planner_graph = domains.dd.pipeline.ai.service.planner_graph()
-    synth_graph = domains.dd.pipeline.synth.graph.build_graph()
+    synth_graph = domains.dd.pipeline.ai.synth.service.synth_graph()
 
     to_delete: list[str] = []
     skipped_active = 0

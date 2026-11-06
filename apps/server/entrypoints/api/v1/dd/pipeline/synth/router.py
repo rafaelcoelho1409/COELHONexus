@@ -2,8 +2,8 @@
 (queue `synth-{env}`). thread_id = `docs-distiller/synth/{slug}/{uuid}`;
 chapter_id lives in SynthState, not the thread_id."""
 from __future__ import annotations
-import domains, infra
-import domains.dd.pipeline.synth.task
+import ai, domains, infra
+import domains.dd.pipeline.ai.task
 from . import params, service
 
 import asyncio
@@ -23,13 +23,13 @@ router = APIRouter()
 @router.get("/info")
 async def synth_info() -> dict:
     return {
-        "node_order":  list(domains.dd.pipeline.synth.graph.NODE_ORDER),
-        "implemented": list(domains.dd.pipeline.synth.graph.IMPLEMENTED),
+        "node_order":  list(domains.dd.pipeline.ai.synth.service.node_order()),
+        "implemented": list(domains.dd.pipeline.ai.synth.service.node_order()),
         "modes": [
             {"key": "quality", "label": "Quality (default)", "enabled": True},
             {"key": "fast",    "label": "Fast (3 iters)",    "enabled": False},
         ],
-        "status": "live" if domains.dd.pipeline.synth.graph.IMPLEMENTED else "scaffolding",
+        "status": "live",
     }
 
 
@@ -51,7 +51,7 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
     study_total_wall_ms = 0
     try:
         _t = json.loads(
-            await minio.read_text(domains.dd.pipeline.synth.keys.study_timing_key(slug))
+            await minio.read_text(domains.dd.pipeline.storage.keys.study_timing_key(slug))
         )
         per_chapter_ms = _t.get("per_chapter_ms") or {}
         study_total_wall_ms = int(_t.get("total_wall_ms") or 0)
@@ -63,7 +63,7 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
         cid = (ch or {}).get("id")
         if not cid:
             continue
-        render_key = domains.dd.pipeline.synth.keys.chapter_render_latest_key(slug, cid)
+        render_key = domains.dd.pipeline.storage.keys.chapter_render_latest_key(slug, cid)
         rendered = await minio.exists(render_key)
         entry: dict = {
             "id":         cid,
@@ -79,7 +79,7 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
             try:
                 text = await minio.read_text(render_key)
                 rp = json.loads(text)
-                if domains.dd.pipeline.synth.nodes.render.domain.render_is_stale(rp, ch):
+                if ai.dd.nodes.pipeline.synth.render.domain.render_is_stale(rp, ch):
                     # Built under an older plan: don't present it as this chapter.
                     entry["rendered"] = False
                     entry["render_path"] = None
@@ -111,7 +111,7 @@ async def synth_active(slug: str, response: Response) -> dict:
     so the UI can reconnect to its SSE without browser localStorage. A single-chapter run (the per-chapter ▶ button on the
     chapter list) has no study registry entry; its thread is the value of the slug's synth lock, returned as `chapter_thread_id`."""
     response.headers["Cache-Control"] = "no-store"
-    return await domains.dd.pipeline.synth.runtime.dispatch.service.read_active(slug)
+    return await domains.dd.pipeline.runtime.dispatch.service.read_active_synth(slug)
 
 
 @router.get("/{slug}/study/{chapter_id}/artifact/{artifact_name}")
@@ -127,7 +127,7 @@ async def get_study_artifact(
                 f"{sorted(params.VALID_ARTIFACTS)}"
             ),
         )
-    key = domains.dd.pipeline.synth.keys.chapter_artifact_key(slug, chapter_id, artifact_name)
+    key = domains.dd.pipeline.storage.keys.chapter_artifact_key(slug, chapter_id, artifact_name)
     minio = infra.minio.service.get_storage()
     if not await minio.exists(key):
         raise HTTPException(
@@ -224,19 +224,19 @@ async def start_synth(
         )
 
     if chapter_id is None:
-        study_thread_id = thread_id or domains.dd.pipeline.synth.runtime.dispatch.keys.make_study_thread_id(slug)
+        study_thread_id = thread_id or domains.dd.pipeline.runtime.dispatch.domain.make_study_thread_id(slug)
 
-        gate = await domains.dd.pipeline.synth.runtime.dispatch.service.reserve_start(slug, study_thread_id)
+        gate = await domains.dd.pipeline.runtime.dispatch.service.reserve_synth_start(slug, study_thread_id)
         if gate is not None:
             return gate
 
         try:
-            async_result = domains.dd.pipeline.synth.task.run_study.delay(
+            async_result = domains.dd.pipeline.ai.task.run_study.delay(
                 study_thread_id, slug, plan_chapter_ids, mode,
             )
             infra.opentelemetry.service.tag_celery_task(async_result.id)
         except Exception as e:
-            await domains.dd.pipeline.synth.runtime.dispatch.service.release_start(slug)
+            await domains.dd.pipeline.runtime.dispatch.service.release_synth_start(slug)
             logger.exception(
                 f"[synth-study] {study_thread_id}: celery dispatch "
                 f"failed: {type(e).__name__}: {e}"
@@ -249,7 +249,7 @@ async def start_synth(
                 ),
             )
 
-        await domains.dd.pipeline.synth.runtime.dispatch.service.register_active_study(slug, study_thread_id)
+        await domains.dd.pipeline.runtime.dispatch.service.register_active_study(slug, study_thread_id)
 
         return {
             "study_thread_id": study_thread_id,
@@ -257,7 +257,7 @@ async def start_synth(
             "n_chapters":      len(plan_chapter_ids),
             "chapter_ids":     plan_chapter_ids,
             "mode":            mode,
-            "concurrency":     domains.dd.pipeline.synth.params.study_sem(),
+            "concurrency":     ai.dd.graphs.pipeline.synth.params.study_sem(),
             "status":          "queued",
             "celery_task_id":  async_result.id,
             "latency_ms":      0,
@@ -273,19 +273,19 @@ async def start_synth(
         )
 
     if not thread_id:
-        thread_id = domains.dd.pipeline.synth.runtime.dispatch.keys.make_thread_id(slug)
+        thread_id = domains.dd.pipeline.runtime.dispatch.domain.make_chapter_thread_id(slug)
 
-    gate = await domains.dd.pipeline.synth.runtime.dispatch.service.reserve_start(slug, thread_id)
+    gate = await domains.dd.pipeline.runtime.dispatch.service.reserve_synth_start(slug, thread_id)
     if gate is not None:
         return gate
 
     try:
-        async_result = domains.dd.pipeline.synth.task.run_single_chapter.delay(
+        async_result = domains.dd.pipeline.ai.task.run_single_chapter.delay(
             thread_id, slug, chapter_id, mode,
         )
         infra.opentelemetry.service.tag_celery_task(async_result.id)
     except Exception as e:
-        await domains.dd.pipeline.synth.runtime.dispatch.service.release_start(slug)
+        await domains.dd.pipeline.runtime.dispatch.service.release_synth_start(slug)
         logger.exception(
             f"[synth] {thread_id}: celery dispatch failed: "
             f"{type(e).__name__}: {e}"
@@ -309,10 +309,10 @@ async def start_synth(
 @router.post("/{thread_id:path}/resume")
 async def resume_synth(thread_id: str) -> dict:
     async with infra.redis.service.client() as r:
-        await domains.dd.pipeline.synth.runtime.cancel.service.clear_cancel(r, thread_id)
+        await domains.dd.pipeline.runtime.cancel.service.clear_cancel(r, thread_id)
 
     try:
-        async_result = domains.dd.pipeline.synth.task.resume_synth.delay(thread_id)
+        async_result = domains.dd.pipeline.ai.task.resume_synth.delay(thread_id)
         infra.opentelemetry.service.tag_celery_task(async_result.id)
     except Exception as e:
         logger.exception(
@@ -337,7 +337,7 @@ async def cancel_synth(thread_id: str) -> dict:
     thread — chapter watchers poll their own flag, not the study flag.
     Without propagation only the NEXT chapter is blocked; the in-flight
     one keeps firing LLM calls."""
-    propagated_to = await domains.dd.pipeline.synth.runtime.dispatch.service.cancel_run(thread_id)
+    propagated_to = await domains.dd.pipeline.runtime.dispatch.service.cancel_synth_run(thread_id)
     return {
         "thread_id":     thread_id,
         "status":        "cancel_requested",
@@ -360,7 +360,7 @@ async def synth_events(thread_id: str) -> StreamingResponse:
 
         async def _pump():
             try:
-                async for event in domains.dd.pipeline.synth.runtime.progress.service.subscribe_progress(thread_id):
+                async for event in domains.dd.pipeline.runtime.progress.service.subscribe_progress(thread_id):
                     await queue.put(event)
             except asyncio.CancelledError:
                 pass
@@ -412,7 +412,7 @@ async def synth_events(thread_id: str) -> StreamingResponse:
 @router.get("/debug/graph/{thread_id:path}/state")
 async def synth_state(thread_id: str) -> dict:
     try:
-        graph = domains.dd.pipeline.synth.graph.build_graph()
+        graph = domains.dd.pipeline.ai.synth.service.synth_graph()
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     config = {"configurable": {"thread_id": thread_id}}
@@ -440,7 +440,7 @@ async def synth_llm_counters(thread_id: str) -> dict:
 @router.get("/debug/graph/{thread_id:path}/history")
 async def synth_history(thread_id: str) -> dict:
     try:
-        graph = domains.dd.pipeline.synth.graph.build_graph()
+        graph = domains.dd.pipeline.ai.synth.service.synth_graph()
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     config = {"configurable": {"thread_id": thread_id}}
@@ -475,7 +475,7 @@ async def wipe_synth(slug: str, chapter_id: str | None = Query(default=None)) ->
 
     minio = infra.minio.service.get_storage()
     try:
-        n_minio = await minio.delete_prefix(domains.dd.pipeline.synth.keys.minio_prefix(slug))
+        n_minio = await minio.delete_prefix(domains.dd.pipeline.storage.keys.synth_prefix(slug))
     except Exception as e:
         logger.warning(f"[synth-wipe] MinIO delete failed for {slug!r}: {e}")
         n_minio = -1
@@ -507,7 +507,7 @@ async def wipe_synth(slug: str, chapter_id: str | None = Query(default=None)) ->
         logger.warning(f"[synth-wipe] Postgres delete failed for {slug!r}: {e}")
         counts["error"] = f"{type(e).__name__}: {e}"
 
-    n_redis = await domains.dd.pipeline.synth.runtime.dispatch.service.wipe_redis(slug)
+    n_redis = await domains.dd.pipeline.runtime.dispatch.service.wipe_synth_redis(slug)
 
     logger.info(
         f"[synth-wipe] {slug}: minio={n_minio} blobs, postgres={counts}, "

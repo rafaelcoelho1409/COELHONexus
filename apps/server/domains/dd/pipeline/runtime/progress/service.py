@@ -1,4 +1,4 @@
-"""Planner progress events — Redis pub/sub for mid-node events (LangGraph checkpoints only fire between nodes, so this fills the gap for the UI). The stream mechanics live in `infra.redis.service`; this binds them to the planner's keys."""
+"""Pipeline progress events — Redis pub/sub for mid-node events (LangGraph checkpoints only fire between nodes, so this fills the gap for the UI); snapshot list at the thread's `…:events:snapshot` so late SSE subscribers catch up before live. The stream mechanics live in `infra.redis.service`; this binds them to the thread's keys (planner or synth, by its id)."""
 from __future__ import annotations
 import domains, infra
 
@@ -18,9 +18,9 @@ async def emit_progress(
         domains.dd.pipeline.runtime.keys.snapshot_key(thread_id),
         {"step": step, "kind": kind, "ts": time.time(), **fields},
         snapshot_max_events = domains.dd.pipeline.runtime.params.SNAPSHOT_MAX_EVENTS,
-        snapshot_ttl_s      = domains.dd.pipeline.runtime.params.SNAPSHOT_TTL_S,
+        snapshot_ttl_s      = domains.dd.pipeline.runtime.params.snapshot_ttl_s(thread_id),
         error_label         = (
-            f"[planner-progress] emit failed for {thread_id} step={step!r} kind={kind!r}"
+            f"[{domains.dd.pipeline.runtime.keys.stage_of(thread_id)}-progress] emit failed for {thread_id} step={step!r} kind={kind!r}"
         ),
     )
 

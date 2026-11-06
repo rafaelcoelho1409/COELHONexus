@@ -1,7 +1,8 @@
-"""Pure helpers of the planner's run machinery — thread-id parsing and the Langfuse trace-output summary."""
+"""Pure helpers of the pipeline's run machinery — thread-id parsing and the Langfuse trace-output summary of a planner run."""
 from __future__ import annotations
 import domains
 
+import re
 import uuid
 
 
@@ -53,3 +54,27 @@ def derive_langfuse_output(
     if chapter_titles:
         output["chapter_titles"] = list(chapter_titles)[:12]
     return output
+
+
+def make_chapter_thread_id(slug: str) -> str:
+    """Per-chapter synth thread id; the web pre-generates ids in the same shape."""
+    return f"{domains.dd.pipeline.runtime.dispatch.keys.CHAPTER_THREAD_PREFIX}/{slug}/{uuid.uuid4()}"
+
+
+def make_study_thread_id(slug: str) -> str:
+    """Per-study synth thread id, with a prefix distinct from a chapter's."""
+    return f"{domains.dd.pipeline.runtime.dispatch.keys.STUDY_THREAD_PREFIX}/{slug}/{uuid.uuid4()}"
+
+
+def slug_from_synth_thread_id(thread_id: str) -> str | None:
+    """`docs-distiller/synth|study/{slug}/{uuid}` → slug. None on a format mismatch."""
+    parts = (thread_id or "").split("/", 3)
+    if len(parts) >= 3 and parts[0] == domains.dd.pipeline.runtime.dispatch.keys.THREAD_PREFIX and parts[1] in ("synth", "study"):
+        return parts[2] or None
+    return None
+
+
+def chapter_number_from_id(chapter_id: str) -> int:
+    """`ch-03-runtime` → 3; 0 when the id has no number."""
+    match = re.match(r"^ch-(\d+)", chapter_id or "")
+    return int(match.group(1)) if match else 0

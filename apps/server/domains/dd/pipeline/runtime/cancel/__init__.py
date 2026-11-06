@@ -1,4 +1,4 @@
-"""Planner cancel — Redis flag + asyncio.Task watcher."""
+"""Pipeline cancel — Redis flag + asyncio.Task watcher."""
 from . import service
 
 

@@ -80,3 +80,29 @@ async def write_item(minio, slug: str, node: str, version: str, digest: str, res
         json.dumps(result, ensure_ascii = False),
         content_type = JSON_TYPE,
     )
+
+
+async def read_chapter_items(minio, slug: str, chapter_id: str, node: str, version: str, digests: list[str]) -> dict[str, dict]:
+    """The per-item results a synth chapter already stored for `digests` (`{digest: result}`); same one-listing, one-bulk-read shape as `read_items`."""
+    prefix = f"{keys.synth_item_prefix(slug, chapter_id, node)}{version}/"
+    stored = set(await minio.list(prefix))
+    hits = [(digest, keys.synth_item_key(slug, chapter_id, node, version, digest)) for digest in digests]
+    hits = [(digest, key) for digest, key in hits if key in stored]
+    if not hits:
+        return {}
+    bodies = await minio.read_many([key for _, key in hits])
+    out: dict[str, dict] = {}
+    for (digest, key), body in zip(hits, bodies):
+        try:
+            out[digest] = json.loads(body)
+        except ValueError:
+            logger.warning(f"[synth-items] unreadable result {key!r}; the item will be recomputed")
+    return out
+
+
+async def write_chapter_item(minio, slug: str, chapter_id: str, node: str, version: str, digest: str, result: dict) -> None:
+    await minio.write(
+        keys.synth_item_key(slug, chapter_id, node, version, digest),
+        json.dumps(result, ensure_ascii = False),
+        content_type = JSON_TYPE,
+    )

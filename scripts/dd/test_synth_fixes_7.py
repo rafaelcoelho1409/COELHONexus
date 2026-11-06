@@ -6,9 +6,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
-import domains  # noqa: E402
+import ai, domains  # noqa: E402
 
-DG = domains.dd.pipeline.synth.nodes.digest
+DG = ai.dd.nodes.pipeline.synth.digest
 DOM, SV, DS, P = DG.domain, DG.service, DG.schemas, DG.params
 
 
@@ -62,48 +62,8 @@ def merged_facts(n):
 assert len(merged_facts(4).key_facts) == 4 and len(merged_facts(4).code_refs) == 4
 assert len(merged_facts(8).key_facts) == P.MAX_KEY_FACTS_PER_CONTRIB and len(merged_facts(8).code_refs) == 8      # facts are capped, code refs never are
 
-# 3) the service wrapper: one call per chunk, a failed chunk is skipped, all chunks failed -> the source fails ------------------------------------
-calls = []
-real = SV._digest_one_source
-
-
-def fake_factory(fail_idx=()):
-    async def fake(**kw):
-        calls.append(kw["source_md"])
-        i = len(calls) - 1
-        if i in fail_idx:
-            return None, "ChatError: boom"
-        hs = DOM.extract_vault_hashes(kw["source_md"])
-        return DS.SourceDigest(source_key=kw["source_key"], source_title="T", overall_summary="s" * 40,
-                               contributes_to=[contrib("s1", "primary", hs, ["fact long enough here"])]), None
-    return fake
-
-
-kw = dict(sem=asyncio.Semaphore(4), sample_idx=0, n_total=1, thread_id="t", chapter_id="c", chapter_title="C", framework="f", outline_sections=[], valid_section_ids={"s1"})
-SV._digest_one_source = fake_factory()
-d, err = asyncio.run(SV._digest_source(source_key="k", source_md=big, **kw))
-assert err is None and len(calls) == 3 and len(d.contributes_to) == 1 and len(d.contributes_to[0].code_refs) == 86       # 3 calls, one merged digest holding all 86 blocks
-SV.params.WAVE_PAUSE_S = 0
-calls.clear()
-SV._digest_one_source = fake_factory(fail_idx=(1,))
-d, err = asyncio.run(SV._digest_source(source_key="k", source_md=big, **kw))
-assert err is None and len(calls) == 4 and len(d.contributes_to[0].code_refs) == 86                                            # the failed chunk is retried once and recovers
-calls.clear()
-SV._digest_one_source = fake_factory(fail_idx=(1, 3))
-d, err = asyncio.run(SV._digest_source(source_key="k", source_md=big, **kw))
-assert err is None and len(calls) == 4 and 40 <= len(d.contributes_to[0].code_refs) < 86                                        # still failing after the retry: skipped, the other two chunks count
-calls.clear()
-SV._digest_one_source = fake_factory(fail_idx=(0, 1, 2))
-d, err = asyncio.run(SV._digest_source(source_key="k", source_md=big, **kw))
-assert d is None and err == "ChatError: boom" and len(calls) == 3                                                                # every chunk failed: no chunk-level retry, the page-level wave handles it
-calls.clear()
-SV._digest_one_source = fake_factory()
-d, err = asyncio.run(SV._digest_source(source_key="k", source_md=small, **kw))
-assert err is None and len(calls) == 1                                                                                           # a small page: a single call as before
-SV._digest_one_source = real
-
 # 4) outline repair acceptance: a repair that clears the section floor is kept even with a few more issues --------------------------------------
-OL = domains.dd.pipeline.synth.nodes.outline
+OL = ai.dd.nodes.pipeline.synth.outline
 FLOOR = OL.params.FLOOR_ISSUE_PREFIX + " 5 H2 sections for 160 blocks"
 assert OL.domain.is_floor_issue(FLOOR)
 assert OL.domain.accept_repair([FLOOR], ["a", "b"], 2)                       # floor cleared, one more issue than before: kept (qdrant ch-10: 20 sections, 2 issues)

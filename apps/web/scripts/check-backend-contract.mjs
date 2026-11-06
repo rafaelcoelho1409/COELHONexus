@@ -62,8 +62,8 @@ for (const [name, table, stateClass, statePath, graphPath] of [
     "synth",
     "SYNTH_NODES",
     "SynthState",
-    "domains/dd/pipeline/synth/state.py",
-    "domains/dd/pipeline/synth/graph.py",
+    "ai/dd/graphs/pipeline/synth/state.py",
+    "ai/dd/graphs/pipeline/synth/graph.py",
   ],
 ]) {
   const keys = typedDictKeys(read(join(server, statePath)), stateClass);

@@ -1,4 +1,4 @@
-"""Planner progress channel — Redis pub/sub + SSE bridge."""
+"""Pipeline progress channel — Redis pub/sub + SSE bridge."""
 from . import service
 
 

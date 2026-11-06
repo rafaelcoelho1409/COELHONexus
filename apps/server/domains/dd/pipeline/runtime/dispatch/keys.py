@@ -7,3 +7,8 @@ from __future__ import annotations
 
 
 THREAD_PREFIX = "docs-distiller"
+
+# Synth thread ids: `docs-distiller/synth/{slug}/{uuid}` is one chapter's run, `docs-distiller/study/{slug}/{uuid}` a whole study's. Distinct prefixes so SQL and
+# Redis pattern matchers can tell them apart (the web pre-generates the chapter ids in the same shape).
+CHAPTER_THREAD_PREFIX = "docs-distiller/synth"
+STUDY_THREAD_PREFIX = "docs-distiller/study"

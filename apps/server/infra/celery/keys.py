@@ -26,7 +26,6 @@ TASK_INCLUDE = [
     "domains.dd.ingestion.task",
     "domains.dd.ingestion.ai.task",
     "domains.dd.pipeline.ai.task",
-    "domains.dd.pipeline.synth.task",
     "domains.ycs.extract.task",
     "domains.ycs.qdrant_task.task",
     "domains.ycs.neo4j_task.task",
@@ -41,7 +40,10 @@ TASK_ROUTES = {
     "domains.bd.ingestion.ai.task.*": {"queue": Q_BD},
     "domains.dd.ingestion.task.*": {"queue": Q_CRAWLER},
     "domains.dd.ingestion.ai.task.*": {"queue": Q_CRAWLER},
-    "domains.dd.pipeline.ai.task.*":        {"queue": Q_PLANNER},
-    "domains.dd.pipeline.synth.task.*":     {"queue": Q_SYNTH},
+    # One task module serves both stages: the synth's three tasks are named first (the first matching route wins), the rest of the module is the planner's.
+    "domains.dd.pipeline.ai.task.run_single_chapter": {"queue": Q_SYNTH},
+    "domains.dd.pipeline.ai.task.resume_synth":       {"queue": Q_SYNTH},
+    "domains.dd.pipeline.ai.task.run_study":          {"queue": Q_SYNTH},
+    "domains.dd.pipeline.ai.task.*":                  {"queue": Q_PLANNER},
     "domains.ycs.*":               {"queue": Q_YCS},
 }

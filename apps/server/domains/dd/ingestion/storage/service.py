@@ -200,7 +200,7 @@ class Store:
         Empty vaults still get written so synth has a uniform read path."""
         source_key = keys.stage_page_key(self.framework_slug, self.run_id, idx, slug)
         sentinelized, manifest = await _cpu_bound(
-            domains.dd.pipeline.synth.nodes.vault.domain.build_manifest,
+            domains.dd.ingestion.vault.domain.build_manifest,
             framework = self.framework_slug,
             source_key = source_key,
             md_text = body,

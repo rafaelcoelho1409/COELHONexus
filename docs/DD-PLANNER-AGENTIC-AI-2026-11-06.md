@@ -60,7 +60,9 @@ ai/dd/middleware/service.py                                  CapacityWaitMiddlew
 ai/dd/graphs/pipeline/planner/{graph,state,context}.py       parent graph, PlannerState, PlannerContext/PlannerAgents
 ai/dd/graphs/pipeline/planner/<stage>/{graph,state}.py       the subgraphs
 ai/dd/nodes/pipeline/planner/<stage>/{node,service,domain,params,versions}.py
-domains/dd/pipeline/{ai,runtime,storage,observability}/      composition root + Celery tasks, Redis plumbing, MinIO keys, spans
+ai/dd/graphs/pipeline/planner/service.py                     a run/resume and its end (metrics, usage, timing, live-run registry, Langfuse output)
+ai/dd/graphs/pipeline/runner/{entities,service}.py           shared with the synth: Binding, drive() over astream, launch with the cancel watcher, settle
+domains/dd/pipeline/{ai,runtime,storage,observability}/      the binding (graph over the checkpointer, MinIO, context) + Celery tasks, Redis plumbing, MinIO keys, spans
 ```
 
 ## Behaviour that changed on purpose

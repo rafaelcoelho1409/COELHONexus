@@ -82,7 +82,7 @@ def pages_from_bundle(
     will_split = post.domain.will_be_split(body)
     title = post.domain.display_title(body, slug)
     try:
-        normalized = domains.dd.pipeline.synth.nodes.corpus_normalize.domain.normalize_doc(body).body
+        normalized = domains.dd.ingestion.corpus_normalize.domain.normalize_doc(body).body
     except Exception as e:  # noqa: BLE001 — the page is stored as it came, as `Store.add_page` does
         logger.warning(f"[tier-1] normalize_doc failed for {slug!r}: {type(e).__name__}: {e}; keeping the bundle as it came")
         normalized = body

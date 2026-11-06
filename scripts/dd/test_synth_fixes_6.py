@@ -6,9 +6,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
-import domains  # noqa: E402
+import ai, domains  # noqa: E402
 
-OL = domains.dd.pipeline.synth.nodes.outline
+OL = ai.dd.nodes.pipeline.synth.outline
 count = OL.domain.count_code_blocks
 
 
@@ -22,7 +22,7 @@ assert count([page(a, b), page(b, c)]) == 3
 assert count([]) == 0 and count(["", "no code here"]) == 0
 
 # 2) sentinelized bodies count their sentinels -----------------------------------------------------------------------------------------------
-sent, _ = domains.dd.pipeline.synth.nodes.vault.domain.sentinelize_doc(page(a, b))
+sent, _ = domains.dd.ingestion.vault.domain.sentinelize_doc(page(a, b))
 assert count([sent]) == 2, count([sent])
 assert count([sent, page(c)]) == 3
 
@@ -122,36 +122,6 @@ asyncio.run(run())
 chat.asyncio.sleep = real_sleep
 
 
-# 6) a section whose coverage top-up calls all failed is asked once more in a salvage pass --------------------------------------------------------
-import json as _json  # noqa: E402
-
-SV, SCH = domains.dd.pipeline.synth.nodes.sawc.service, domains.dd.pipeline.synth.nodes.sawc.schemas
-CODE = {c: f"```python\nvalue_{c} = compute_{c}({c!r})\nprint(value_{c})\n```" for c in "abc"}
-vault = {c * 16: {"hash": c * 16, "fence_text": CODE[c], "lang": "python", "info_string": "python"} for c in "abc"}
-sec = SCH.Section(section_id="s1", heading="Compute things", intro="x" * 70,
-                  subtopics=[SCH.Subtopic(code_ref_hash="", subheading=f"Prose {i}", explanation="The compute helper wraps a value so the caller can print it after the call returns normally.") for i in range(2)],
-                  citations=[SCH.Citation(source_key="k1", claim="compute wraps values")])
-index = {"s1": [{"source_key": "k1", "summary": "compute", "key_facts": [], "code_refs": [c * 16 for c in "abc"]}]}
-reply = {"subtopics": [{"code_ref_hash": c * 16, "subheading": f"Compute {c}", "explanation": f"value_{c} = compute_{c}({c!r}) builds the value and print(value_{c}) shows it to the caller."} for c in "abc"],
-         "citations": [{"source_key": "k1", "claim": "compute prints values"}]}
-state = {"n": 0}
-
-
-async def flaky_chat(prompt, **kw):
-    state["n"] += 1
-    if state["n"] <= SV.params.TOPUP_ATTEMPTS:            # every call of the first round fails
-        raise RuntimeError("Error code: 504 - TimeoutError")
-    return _json.dumps(reply), {}
-
-real_chat = domains.settings.chat.service.chat_text_async
-domains.settings.chat.service.chat_text_async = flaky_chat
-out, added, touched = asyncio.run(SV._topup_coverage(final_sections=[sec], per_section_index=index, vault_rich=vault, sections_by_id={"s1": {"description": "d"}},
-                                                      framework="f", chapter_id="c", chapter_title="t"))
-domains.settings.chat.service.chat_text_async = real_chat
-assert (added, touched) == (3, 1) and len(out[0].subtopics) == 5, (added, touched, len(out[0].subtopics))   # recovered by the salvage pass
-assert state["n"] == SV.params.TOPUP_ATTEMPTS + 1                                                               # first call of the salvage pass succeeded
-
-
 # 7) an over-deep prerequisite chain is flattened deterministically -----------------------------------------------------------------------------------
 HEAD = ["Claude Code setup", "Cursor workspace files", "Goose deeplinks", "Gemini command line", "Stdio transport flags", "Environment variable handling",
         "Remote server auth", "Dependency flags", "JSON configuration output", "Workspace scoped installs", "Deeplink generation", "Client registry"]
@@ -180,7 +150,7 @@ assert D.flatten_prerequisites(shallow, D.derive_dag(shallow.sections), OL.param
 
 
 # 8) outline sections no source was routed to are folded away, not written from the whole chapter ------------------------------------------------------
-DG = domains.dd.pipeline.synth.nodes.digest
+DG = ai.dd.nodes.pipeline.synth.digest
 DS = DG.schemas
 
 
@@ -204,7 +174,7 @@ assert DG.domain.drop_empty_sections([], outline8, {}) == {}                    
 
 
 # 9) near-copies of a printed block count as covered; a harsh judge gets a second opinion --------------------------------------------------------------
-SWD, CK = domains.dd.pipeline.synth.nodes.sawc.domain, domains.dd.pipeline.synth.nodes.checklist
+SWD, CK = ai.dd.nodes.pipeline.synth.sawc.domain, ai.dd.nodes.pipeline.synth.checklist
 base = "fastmcp install claude-code server.py --server-name Demo --with pandas --python 3.12"
 bodies9 = {"a" * 16: base, "b" * 16: base.replace("pandas", "numpy"), "c" * 16: "import asyncio\nasync def main():\n    await asyncio.sleep(1)\nasyncio.run(main())",
            "d" * 16: "x = 1", "e" * 16: base.replace("claude-code", "cursor")}
@@ -227,47 +197,13 @@ mj = CK.domain.majority_verdicts([run(False, False, False, False, False), run(Tr
 assert [r.passed for r in mj] == [True, False, True, False, True] and mj[1].feedback == "c2 is bad" and mj[0].feedback == "", mj
 assert [r.passed for r in CK.domain.majority_verdicts([run(False, False, False, False, False), run(True, True, True, True, True)])] == [False] * 5   # a tie is not a pass
 
-calls9 = []
-real_judge = CK.service._run_llm_judge
-answers9 = [(run(True, True, True, True, False), "m2", False, 5), (run(True, True, False, True, True), "m3", False, 5)]
-
-
-async def fake_judge(**kw):
-    calls9.append(kw)
-    return answers9[len(calls9) - 1]
-CK.service._run_llm_judge = fake_judge
-jk = dict(thread_id="t", chapter_id="c", chapter_title="t", framework="f", sawc={}, digest={}, rendered_chapter="x", rendered_digest="y", truncated=False)
-out9 = asyncio.run(CK.service._judge_second_opinion(run(False, False, False, False, False), judge_kwargs=jk, label="f/c"))
-assert len(calls9) == 2 and [r.passed for r in out9] == [True, True, False, True, False], ([r.passed for r in out9], len(calls9))   # 2 of 3 runs decide each criterion
-calls9.clear()
-mild = run(True, True, False, False, False)                                    # 3 failures: not harsh enough to ask again
-assert asyncio.run(CK.service._judge_second_opinion(mild, judge_kwargs=jk, label="f/c")) is mild and not calls9
+W = CK.domain.wants_second_opinions
+assert W(run(False, False, False, False, False))                               # harsh: >= JUDGE_HARSH_FAILS failures
+assert not W(run(True, True, False, False, False))                             # 3 failures: not harsh enough to ask again
 down = [R(name=n, passed=False, kind="llm_judge", feedback="judge_unavailable: x") for n in names]
-assert asyncio.run(CK.service._judge_second_opinion(down, judge_kwargs=jk, label="f/c")) is down and not calls9
-CK.service._run_llm_judge = real_judge
-
-
-# 11) a judge verdict that alone sends the chapter to a rewrite gets a second opinion, even with only 3 of 5 failures ------------------------------------
-calls11 = []
-answers11 = [(run(True, True, True, True, True), "m2", False, 5), (run(True, False, True, True, True), "m3", False, 5)]
-
-
-async def fake_judge11(**kw):
-    calls11.append(kw)
-    return answers11[len(calls11) - 1]
-CK.service._run_llm_judge = fake_judge11
-three_fail = run(True, True, False, False, False)                                      # 2/5 pass
-# gates 12/12 + 2/5 judge = 14/17 = 82% >= 80%: this verdict does not cause a rewrite -> no second opinion
-assert asyncio.run(CK.service._judge_second_opinion(three_fail, judge_kwargs=jk, label="f/c", pre_passed=12, pre_total=12)) is three_fail and not calls11
-# gates 11/12 + 2/5 judge = 13/17 = 76% < 80% (langchain ch-04): rewrite -> two more judge runs, majority decides
-out11 = asyncio.run(CK.service._judge_second_opinion(three_fail, judge_kwargs=jk, label="f/c", pre_passed=11, pre_total=12))
-assert len(calls11) == 2 and [r.passed for r in out11] == [True] * 5, [r.passed for r in out11]   # each of c3..c5 passes in 2 of the 3 runs -> the chapter clears the bar
-CK.service._run_llm_judge = real_judge
-
-
-# 12) a cached verdict without the LLM judge is not reused -----------------------------------------------------------------------------------------------
-import inspect  # noqa: E402
-
-src12 = inspect.getsource(CK.service.checklist_eval_run)
-assert 'get("judge_unavailable")' in src12 and "cache_usable = False" in src12 and "if cache_usable:" in src12   # the cache branch checks the flag before reusing
+assert not W(down) and not W([])                                               # an outage is not a verdict
+# 11) a judge verdict that alone sends the chapter to a rewrite gets a second opinion, even with only 3 of 5 failures
+three_fail = run(True, True, False, False, False)                              # 2/5 pass
+assert not W(three_fail, pre_passed=12, pre_total=12)                          # gates 12/12 + 2/5 judge = 14/17 = 82% >= 80%: this verdict does not cause a rewrite
+assert W(three_fail, pre_passed=11, pre_total=12)                              # gates 11/12 + 2/5 judge = 13/17 = 76% < 80% (langchain ch-04): rewrite -> more runs
 print("ALL OK")

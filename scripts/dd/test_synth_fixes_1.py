@@ -8,8 +8,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import ai, domains  # noqa: E402
 
-SW = domains.dd.pipeline.synth.nodes.sawc.domain
-RD = domains.dd.pipeline.synth.nodes.render.domain
+SW = ai.dd.nodes.pipeline.synth.sawc.domain
+RD = ai.dd.nodes.pipeline.synth.render.domain
 
 # 1) a section's chapter-wide padding must skip blocks routed to ANOTHER section --------------------------------------------
 idx = {
@@ -42,7 +42,7 @@ ctx2 = RD.build_section_context(
 assert ctx2["subtopics"][0]["code_block"] == flush                # already flush left: untouched
 print("2 vault code blocks render flush left ok")
 # 3) a subheading naming `asyncio.gather()` over a block without it gets the block that has it -------------------------------
-SCH = domains.dd.pipeline.synth.nodes.sawc.schemas
+SCH = ai.dd.nodes.pipeline.synth.sawc.schemas
 seq = "```python\nasync def main():\n    await say_after(1, 'hello')\n    await say_after(2, 'world')\n```"
 gat = "```python\nasync def main():\n    L = await asyncio.gather(factorial('A', 2), factorial('B', 3))\n```"
 oth = "```python\nasync with asyncio.TaskGroup() as tg:\n    tg.create_task(job())\n```"
@@ -132,7 +132,6 @@ assert st8["n_mismatch"] == 1 and ctx8[0]["subtopics"][0]["code_block"].startswi
 print("8 misrouted block hidden in an HTML comment ok")
 # 9) coverage top-up: unused routed blocks get subtopics; invalid answers are filtered --------------------------------------
 import asyncio, json as _json
-SV = domains.dd.pipeline.synth.nodes.sawc.service
 blk = lambda body: {"fence_text": "```python\n" + body + "\n```"}
 vlt = {
     "a" * 16: blk("lock = asyncio.Lock()\nasync with lock:\n    shared += 1\n    asyncio.sleep(0)"),
@@ -153,17 +152,6 @@ good = {"subtopics": [
 ], "citations": [{"source_key": "k1", "claim": "Semaphore limits concurrency to n tasks"}, {"source_key": "nope", "claim": "not a routed source at all"}]}
 subs9, cites9 = SW.parse_topup(good, unused={"b" * 16, "c" * 16, "d" * 16}, vault_rich=vlt, valid_source_keys={"k1"}, existing_subheads={"Lock usage"}, max_new=6)
 assert [x.code_ref_hash[0] for x in subs9] == ["b", "c"] and [c.source_key for c in cites9] == ["k1"], ([x.code_ref_hash[0] for x in subs9], cites9)
-calls9 = []
-async def _chat9(prompt, **kw):
-    calls9.append(prompt)
-    return _json.dumps(good), {}
-domains.settings.chat.service.chat_text_async = _chat9
-out9, n9, k9 = asyncio.run(SV._topup_coverage(final_sections=[sec1], per_section_index=idx, vault_rich=vlt, sections_by_id={"s1": {"description": "locks and friends"}}, framework="asyncio", chapter_id="ch", chapter_title="Sync"))
-assert (n9, k9) == (2, 1) and len(out9[0].subtopics) == 5 and len(out9[0].citations) == 2 and len(calls9) == 1
-assert "[b" + "b" * 15 + "]" in calls9[0] and "Lock usage" in calls9[0] and "lock = asyncio.Lock()" not in calls9[0]   # only unused blocks are shown
-SV.params.TOPUP_MIN_UNUSED = 9
-assert asyncio.run(SV._topup_coverage(final_sections=[sec1], per_section_index=idx, vault_rich=vlt, sections_by_id={}, framework="a", chapter_id="c", chapter_title="t"))[1] == 0 and len(calls9) == 1
-SV.params.TOPUP_MIN_UNUSED = 2
 print("9 coverage top-up ok")
 
 # 10) misaligned code -> prose; prose-only sections capped by key facts ------------------------------------------------------
@@ -181,7 +169,7 @@ assert nc == 2 and len(capped.subtopics) == 3                                   
 assert SW.cap_prose_subtopics(prose_d, 21)[1] == 0 and SW.cap_prose_subtopics(fx10, 2)[1] == 0     # enough facts / has code: untouched
 print("10 misaligned code stripped, prose-only sections capped ok")
 # 11) checklist: coverage + alignment gates, best-seen prefers a clean iteration -----------------------------------------------
-CK = domains.dd.pipeline.synth.nodes.checklist.domain
+CK = ai.dd.nodes.pipeline.synth.checklist.domain
 def csec(hs, cites):
     return {"section_id": "s1", "heading": "H", "subtopics": [{"code_ref_hash": h, "subheading": f"Sub {i}", "explanation": "x"} for i, h in enumerate(hs)],
             "citations": [{"source_key": k, "claim": "c"} for k in cites]}
@@ -203,24 +191,6 @@ assert CK.check_code_prose_alignment({"sections": al["sections"]}).passed       
 n_chk = len(CK.DETERMINISTIC_CHECKS)
 assert CK.best_seen_key(0.73, n_chk) > CK.best_seen_key(0.87, n_chk - 1) and CK.best_seen_key(0.9, n_chk) > CK.best_seen_key(0.8, n_chk)
 print("11 coverage / alignment gates + clean-first best-seen ok")
-# 12) harmonize: a call cut at its token budget is retried with double the budget -------------------------------------------
-BH = domains.dd.pipeline.synth.nodes.book_harmonize
-seen12 = []
-async def _chat12(prompt, **kw):
-    seen12.append(kw.get("max_tokens"))
-    if len(seen12) < 3:
-        raise RuntimeError("LengthFinishReasonError: Could not parse response content as the length limit was reached")
-    return "{}", {}
-domains.settings.chat.service.chat_text_async = _chat12
-raw12, err12 = asyncio.run(BH.service._call_with_retry("p", max_tokens=1500))
-assert raw12 == "{}" and err12 is None and seen12 == [1500, 3000, 6000], seen12
-seen12.clear()
-async def _chat12b(prompt, **kw):
-    seen12.append(kw.get("max_tokens")); raise RuntimeError("LengthFinishReasonError: length limit was reached")
-domains.settings.chat.service.chat_text_async = _chat12b
-raw12b, err12b = asyncio.run(BH.service._call_with_retry("p", max_tokens=5000))
-assert raw12b is None and err12b is not None and seen12 == [5000, 8000, 8000], seen12     # capped at LENGTH_RETRY_CAP
-print("12 harmonize length retry ok")
 # 13) quality feedback to the Rotator: id read from the response headers, empty assign vectors / rescues reported ---------------
 CS = domains.settings.chat.service
 posted = []
@@ -278,26 +248,5 @@ good15 = {"subtopics": [
 ]}
 subs15, cites15 = SW.parse_source_topup(good15, sources=pend["s1"], existing_subheads=set(), max_new=4)
 assert [x.subheading for x in subs15] == ["Getting the running loop"] and [c.source_key for c in cites15] == ["k_get"] and not subs15[0].code_ref_hash, (subs15, cites15)
-calls15 = []
-async def _chat15(prompt, **kw):
-    calls15.append(prompt)
-    return _json.dumps(good15 if "get_running_loop" in prompt else {"subtopics": []}), {}
-domains.settings.chat.service.chat_text_async = _chat15
-out15, n15, k15 = asyncio.run(SV._topup_sources(final_sections=secs15, per_section_index=idx15, sections_by_id={}, framework="asyncio", chapter_id="ch", chapter_title="Loops"))
-assert (n15, k15) == (1, 1) and len(out15[0].subtopics) == 4 and len(out15[1].subtopics) == 3 and len(calls15) == 3     # s2's empty answer is asked once more (TOPUP_ATTEMPTS)
-assert any(c.source_key == "k_get" for c in out15[0].citations) and len(out15[0].citations) == 2
-SV.params.TOPUP_SECTION_MAX, SV.params.TOPUP_SRC_EXTRA = 3, 0
-assert asyncio.run(SV._topup_sources(final_sections=secs15, per_section_index=idx15, sections_by_id={}, framework="a", chapter_id="c", chapter_title="t"))[1] == 0   # full sections are not grown
-SV.params.TOPUP_SRC_EXTRA = 2
-out15x, n15x, _ = asyncio.run(SV._topup_sources(final_sections=secs15, per_section_index=idx15, sections_by_id={}, framework="a", chapter_id="c", chapter_title="t"))
-assert n15x == 1 and len(out15x[0].subtopics) == 4                                       # a section at the cap still takes the source top-up's extra slots (so its uncited sources get cited)
-SV.params.TOPUP_SECTION_MAX, SV.params.TOPUP_SRC_EXTRA = 16, 3
 print("15 source top-up ok")
-# 16) a section already at the writer's citation cap still gets the new sources cited ----------------------------------------
-full_c = SCH.Section(section_id="s1", heading="Sec s1", intro="x" * 70, subtopics=[sub(c * 16, f"s1 {c}") for c in "abc"],
-                     citations=[SCH.Citation(source_key=f"old{i}", claim="a claim that is long enough") for i in range(SW.params.CITATIONS_MAX)])
-idx16 = {"s1": [{"source_key": "k_get", "relevance": "primary", "summary": "get_running_loop returns the running event loop", "key_facts": ["asyncio.get_running_loop() returns the running event loop of the current OS thread"], "code_refs": []}]}
-out16, n16, _ = asyncio.run(SV._topup_sources(final_sections=[full_c], per_section_index=idx16, sections_by_id={}, framework="asyncio", chapter_id="ch", chapter_title="Loops"))
-assert n16 == 1 and "k_get" in {c.source_key for c in out16[0].citations} and len(out16[0].citations) == SW.params.CITATIONS_MAX + 1
-print("16 new sources are cited past the writer cap ok")
 print("ALL OK")

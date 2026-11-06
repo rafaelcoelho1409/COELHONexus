@@ -44,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-import domains, entrypoints, infra  # noqa: E402
+import ai, domains, entrypoints, infra  # noqa: E402
 import entrypoints.api.v1.router as v1  # noqa: E402
 
 rs = infra.redis.service.new_redis_sync()
@@ -97,14 +97,14 @@ def _stub(name):
 
 import domains.dd.ingestion.task  # noqa: E402,F401
 import domains.dd.pipeline.ai.task  # noqa: E402,F401
-import domains.dd.pipeline.synth.task  # noqa: E402,F401
+# (the synth tasks live in the pipeline task module imported above)
 
 domains.dd.ingestion.task.run_ingestion.delay = _stub("run_ingestion")
 domains.dd.pipeline.ai.task.run_planner.delay = _stub("run_planner")
 domains.dd.pipeline.ai.task.resume_planner.delay = _stub("resume_planner")
-domains.dd.pipeline.synth.task.run_study.delay = _stub("run_study")
-domains.dd.pipeline.synth.task.run_single_chapter.delay = _stub("run_single_chapter")
-domains.dd.pipeline.synth.task.resume_synth.delay = _stub("resume_synth")
+domains.dd.pipeline.ai.task.run_study.delay = _stub("run_study")
+domains.dd.pipeline.ai.task.run_single_chapter.delay = _stub("run_single_chapter")
+domains.dd.pipeline.ai.task.resume_synth.delay = _stub("resume_synth")
 
 
 async def _no_catalog_check(slug):
@@ -229,13 +229,13 @@ step("planner: start pf again (same slug locked)", "POST", "/pipeline/planner/pf
 step("planner: start pg (other planner locked)", "POST", "/pipeline/planner/pg")
 step("planner: active pf", "GET", "/pipeline/planner/pf/active")
 step("planner: active unknown slug", "GET", "/pipeline/planner/unknown/active")
-rs.set(domains.dd.pipeline.synth.keys.lock_key("sx"), "docs-distiller/study/sx/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", ex=600)
+rs.set(domains.dd.pipeline.runtime.keys.synth_lock_key("sx"), "docs-distiller/study/sx/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", ex=600)
 step("planner: start pg (synth running)", "POST", "/pipeline/planner/pg")
 step("pipeline: active locks", "GET", "/pipeline/active")
 step("planner: cancel", "POST", f"/pipeline/planner/{planner_tid}/cancel")
 step("planner: resume", "POST", f"/pipeline/planner/{planner_tid}/resume")
 step("planner: wipe", "DELETE", "/pipeline/planner/pf/wipe")
-rs.delete(domains.dd.pipeline.synth.keys.lock_key("sx"))
+rs.delete(domains.dd.pipeline.runtime.keys.synth_lock_key("sx"))
 step("planner: start with a given thread id", "POST", "/pipeline/planner/pg", params={"thread_id": "docs-distiller/pg/fixed"})
 step("planner: wipe pg (frees the lock)", "DELETE", "/pipeline/planner/pg/wipe")
 step("planner: wipe with a slash", "DELETE", "/pipeline/planner/a%2Fb/wipe")
@@ -247,12 +247,12 @@ seed_plan("sg")
 step("synth: invalid mode", "POST", "/pipeline/synth/sf", params={"mode": "bogus"})
 step("synth: study without a plan", "POST", "/pipeline/synth/nopl")
 step("synth: start study sf", "POST", "/pipeline/synth/sf")
-study_tid = val(domains.dd.pipeline.synth.keys.lock_key("sf"))
+study_tid = val(domains.dd.pipeline.runtime.keys.synth_lock_key("sf"))
 step("synth: start study sf again (same slug locked)", "POST", "/pipeline/synth/sf")
 step("synth: start study sg (other synth locked)", "POST", "/pipeline/synth/sg")
 step("synth: active sf (study)", "GET", "/pipeline/synth/sf/active")
 step("synth: active unknown", "GET", "/pipeline/synth/unknown/active")
-rs.sadd(domains.dd.pipeline.synth.keys.active_chapters_key(study_tid), "docs-distiller/synth/sf/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+rs.sadd(domains.dd.pipeline.runtime.keys.active_chapters_key(study_tid), "docs-distiller/synth/sf/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 rs.rpush("coelhonexus:dd:synth:docs-distiller/synth/sf/cccccccc-cccc-cccc-cccc-cccccccccccc:events:snapshot", "{}")
 step("synth: wipe one chapter while a study runs", "DELETE", "/pipeline/synth/sf/wipe", params={"chapter_id": "ch-1"})
 step("synth: cancel study (propagates)", "POST", f"/pipeline/synth/{study_tid}/cancel")
@@ -265,13 +265,13 @@ reset()
 seed_plan("sf")
 step("synth: chapter not in plan", "POST", "/pipeline/synth/sf", params={"chapter_id": "ch-9"})
 step("synth: start chapter ch-1", "POST", "/pipeline/synth/sf", params={"chapter_id": "ch-1"})
-chapter_tid = val(domains.dd.pipeline.synth.keys.lock_key("sf"))
+chapter_tid = val(domains.dd.pipeline.runtime.keys.synth_lock_key("sf"))
 step("synth: active sf (single chapter)", "GET", "/pipeline/synth/sf/active")
 step("synth: start chapter ch-2 (slug locked)", "POST", "/pipeline/synth/sf", params={"chapter_id": "ch-2"})
 step("synth: wipe one chapter while a chapter runs", "DELETE", "/pipeline/synth/sf/wipe", params={"chapter_id": "ch-1"})
 step("synth: cancel chapter thread", "POST", f"/pipeline/synth/{chapter_tid}/cancel")
-rs.delete(domains.dd.pipeline.synth.keys.lock_key("sf"))
-MINIO.objects[domains.dd.pipeline.synth.nodes.render.keys.latest_blob_key("sf", "ch-1")] = "{}"
+rs.delete(domains.dd.pipeline.runtime.keys.synth_lock_key("sf"))
+MINIO.objects[ai.dd.nodes.pipeline.synth.render.keys.latest_blob_key("sf", "ch-1")] = "{}"
 step("synth: wipe one chapter when idle", "DELETE", "/pipeline/synth/sf/wipe", params={"chapter_id": "ch-1"})
 step("synth: wipe one chapter, bad id", "DELETE", "/pipeline/synth/sf/wipe", params={"chapter_id": "x"})
 

@@ -58,7 +58,7 @@ async def wipe_one_chapter(slug: str, chapter_id: str) -> dict:
     # Never delete outputs a running study is still writing.
     try:
         # A single-chapter run (the strip's ▶ button) holds only the slug's synth lock, no study registry entry.
-        if await domains.dd.pipeline.synth.runtime.dispatch.service.run_in_flight(slug):
+        if await domains.dd.pipeline.runtime.dispatch.service.synth_in_flight(slug):
             raise HTTPException(
                 status_code=409,
                 detail=f"a synth run for {slug!r} is in flight — cancel it before wiping a chapter",
@@ -70,14 +70,14 @@ async def wipe_one_chapter(slug: str, chapter_id: str) -> dict:
 
     minio = infra.minio.service.get_storage()
     try:
-        n_minio = await minio.delete_prefix(domains.dd.pipeline.synth.keys.chapter_prefix(slug, chapter_id))
+        n_minio = await minio.delete_prefix(domains.dd.pipeline.storage.keys.synth_chapter_prefix(slug, chapter_id))
     except Exception as e:
         logger.warning(f"[synth-wipe] MinIO delete failed for {slug}/{chapter_id}: {e}")
         n_minio = -1
 
     # Keep the persisted timing roll-up consistent with the chapter being gone.
     try:
-        tkey = domains.dd.pipeline.synth.keys.study_timing_key(slug)
+        tkey = domains.dd.pipeline.storage.keys.study_timing_key(slug)
         t = json.loads(await minio.read_text(tkey))
         gone = int((t.get("per_chapter_ms") or {}).pop(chapter_id, 0) or 0)
         if gone:

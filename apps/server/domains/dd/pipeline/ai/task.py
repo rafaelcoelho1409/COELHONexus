@@ -1,7 +1,7 @@
-"""Celery tasks wrapping the async LangGraph planner; progress streams over Redis pub/sub from the worker process."""
-import domains
+"""Celery tasks wrapping the async LangGraph planner and synth runs; progress streams over Redis pub/sub from the worker process."""
+import ai, domains
 import infra.celery
-from . import service
+from . import service, synth
 
 import asyncio
 import logging
@@ -86,3 +86,82 @@ def prune_old_checkpoints(self, older_than_days: int = 30, dry_run: bool = False
             "status": "failed",
             "error": f"{type(error).__name__}: {error}",
         }
+
+
+# ---- synth -----------------------------------------------------------------------------------------------------------------------------------
+
+# Per-chapter synth runs typically 10-24 min; the 60 min soft limit gives 2-3x headroom for slow chapters that hit the CoRefine budget. The hard limit is 5 min past
+# the soft one (Celery's documented minimum gap for a task to reliably clean up after the soft limit fires); the graph's wall-clock RETHINK gate is the primary defense,
+# these are the last-resort backstop. The values live with the graph that reads the soft limit too.
+@infra.celery.service.app.task(
+    name = "domains.dd.pipeline.ai.task.run_single_chapter",
+    bind = True,
+    acks_late = False,
+    track_started = True,
+    soft_time_limit = ai.dd.graphs.pipeline.synth.params.SINGLE_CHAPTER_SOFT_TIME_LIMIT_S,
+    time_limit = ai.dd.graphs.pipeline.synth.params.SINGLE_CHAPTER_HARD_TIME_LIMIT_S,
+)
+def run_single_chapter(self, thread_id: str, slug: str, chapter_id: str, mode: str = "quality") -> dict:
+    """Run a single-chapter synth pass; releases the slug's synth lock on exit."""
+    logger.info(f"[task] run_single_chapter thread_id={thread_id} slug={slug} chapter_id={chapter_id} mode={mode}")
+    try:
+        try:
+            return asyncio.run(service.init_and_run(synth.service.run_single_chapter_async(thread_id, slug, chapter_id, mode)))
+        except Exception as error:
+            logger.exception(f"[task] run_single_chapter failed: {error}")
+            return {
+                "thread_id": thread_id,
+                "slug": slug,
+                "chapter_id": chapter_id,
+                "mode": mode,
+                "status": "failed",
+                "error": f"{type(error).__name__}: {error}",
+            }
+    finally:
+        synth.service.release_synth_lock(slug, thread_id)
+
+
+@infra.celery.service.app.task(
+    name = "domains.dd.pipeline.ai.task.resume_synth",
+    bind = True,
+    acks_late = False,
+    track_started = True,
+    soft_time_limit = ai.dd.graphs.pipeline.synth.params.SINGLE_CHAPTER_SOFT_TIME_LIMIT_S,
+    time_limit = ai.dd.graphs.pipeline.synth.params.SINGLE_CHAPTER_HARD_TIME_LIMIT_S,
+)
+def resume_synth(self, thread_id: str) -> dict:
+    """Resume from the last checkpoint; CAD-releases the lock so a racing fresh start is safe."""
+    logger.info(f"[task] resume_synth thread_id={thread_id}")
+    slug = domains.dd.pipeline.runtime.dispatch.domain.slug_from_synth_thread_id(thread_id)
+    try:
+        try:
+            return asyncio.run(service.init_and_run(synth.service.resume_synth_async(thread_id)))
+        except Exception as error:
+            logger.exception(f"[task] resume_synth failed: {error}")
+            return {"thread_id": thread_id, "status": "failed", "error": f"{type(error).__name__}: {error}"}
+    finally:
+        if slug:
+            synth.service.release_synth_lock(slug, thread_id)
+
+
+# The study runs N chapters back-to-back and then the harmonize pass: a 8-chapter FastMCP study is ~120 min, a 6-chapter Claude Code one ~100 min. 6 h soft / 6 h 05 min
+# hard gives 3x headroom even for 12-chapter books.
+@infra.celery.service.app.task(
+    name = "domains.dd.pipeline.ai.task.run_study",
+    bind = True,
+    acks_late = False,
+    track_started = True,
+    soft_time_limit = 21600,
+    time_limit = 21900,
+)
+def run_study(self, study_thread_id: str, slug: str, chapter_ids: list[str], mode: str = "quality") -> dict:
+    """Run the strict-order study orchestrator; releases the slug's synth lock on exit."""
+    logger.info(f"[task] run_study study_thread_id={study_thread_id} slug={slug} n_chapters={len(chapter_ids)} mode={mode}")
+    try:
+        try:
+            return asyncio.run(service.init_and_run(synth.service.run_study_async(study_thread_id, slug, chapter_ids, mode)))
+        except Exception as error:
+            logger.exception(f"[task] run_study failed: {error}")
+            return {"thread_id": study_thread_id, "slug": slug, "final_status": "failed", "error": f"{type(error).__name__}: {error}"}
+    finally:
+        synth.service.release_synth_lock(slug, study_thread_id)

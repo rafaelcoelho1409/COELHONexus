@@ -73,3 +73,49 @@ def item_prefix(slug: str, node: str) -> str:
 
 def item_key(slug: str, node: str, version: str, digest: str) -> str:
     return f"{item_prefix(slug, node)}{version}/{digest}.json"
+
+
+# ---- synth: `dd/{slug}/synth/...` (stored data, so the keys keep the stage name) ----------------------------------------------------------
+
+def synth_prefix(slug: str) -> str:
+    """Every MinIO object of a framework's synth output (what a full wipe of the framework removes)."""
+    return f"dd/{slug}/synth/"
+
+
+def synth_chapter_prefix(slug: str, chapter_id: str) -> str:
+    return f"{synth_prefix(slug)}{chapter_id}/"
+
+
+def synth_item_prefix(slug: str, chapter_id: str, node: str) -> str:
+    """The per-item results of a synth fan-out node (one JSON per source, section or code block), content-addressed so a resumed
+    chapter reuses what an interrupted run finished. Under the chapter's prefix: a chapter wipe removes them."""
+    return f"{synth_chapter_prefix(slug, chapter_id)}items/{node}/"
+
+
+def synth_item_key(slug: str, chapter_id: str, node: str, version: str, digest: str) -> str:
+    return f"{synth_item_prefix(slug, chapter_id, node)}{version}/{digest}.json"
+
+
+def study_timing_key(slug: str) -> str:
+    """MinIO key for study timing roll-up — persisted so totals survive a UI refresh."""
+    return f"{synth_prefix(slug)}study-timing-latest.json"
+
+
+def chapter_readme_key(slug: str, chapter_id: str) -> str:
+    return f"{synth_chapter_prefix(slug, chapter_id)}README.md"
+
+
+def chapter_render_latest_key(slug: str, chapter_id: str) -> str:
+    return f"{synth_chapter_prefix(slug, chapter_id)}render-latest.json"
+
+
+def chapter_artifact_key(slug: str, chapter_id: str, artifact_name: str) -> str:
+    return f"{synth_chapter_prefix(slug, chapter_id)}{artifact_name}"
+
+
+def book_harmonize_versioned_key(slug: str, manifest_hash: str) -> str:
+    return f"{synth_prefix(slug)}book_harmonize/{manifest_hash}.json"
+
+
+def book_harmonize_latest_key(slug: str) -> str:
+    return f"{synth_prefix(slug)}book_harmonize-latest.json"

@@ -9,9 +9,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
-import domains  # noqa: E402
+import ai, domains  # noqa: E402
 
-N = domains.dd.pipeline.synth.nodes
+N = ai.dd.nodes.pipeline.synth
 OL, DG, CK, SW = N.outline, N.digest, N.checklist, N.sawc
 SWS, SWD, SWP = SW.schemas, SW.domain, SW.params
 chat = domains.settings.chat.service
@@ -33,24 +33,7 @@ iss4 = OL.domain.validate_outline_structure(o4, OL.domain.derive_dag(o4.sections
 iss7 = OL.domain.validate_outline_structure(o7, OL.domain.derive_dag(o7.sections), n_sources=18, n_blocks=135)[1]
 assert any("AT LEAST 7 sections" in x for x in iss4) and not any("AT LEAST" in x for x in iss7), (iss4, iss7)
 assert not any("AT LEAST" in x for x in OL.domain.validate_outline_structure(o4, OL.domain.derive_dag(o4.sections), n_sources=18)[1])   # no block count: no floor
-cands = [(o4, OL.domain.derive_dag(o4.sections), ["a violation"]), (o7, OL.domain.derive_dag(o7.sections), []), (o4, OL.domain.derive_dag(o4.sections), [])]
-assert OL.domain.fallback_candidate_index(cands, 12) == 1                                     # fewest issues, then most sections
-cands2 = [(o4, OL.domain.derive_dag(o4.sections), []), (o7, OL.domain.derive_dag(o7.sections), [])]
-assert OL.domain.fallback_candidate_index(cands2, 12) == 1 and OL.domain.fallback_candidate_index(cands2, 5) == 1 and OL.domain.fallback_candidate_index([cands2[0]], 12) == 0
-# the picker itself: a failing LLM call returns the fallback, not 0
-OS = OL.service
-
-
-async def boom(*a, **k):
-    raise RuntimeError("504")
-
-orig_struct = chat.chat_structured_async
-chat.chat_structured_async = boom
-try:
-    assert asyncio.run(OS._usc_pick(cands, "ch-01", "Install", 12)) == 1
-finally:
-    chat.chat_structured_async = orig_struct
-print("1 outline floor + best-validated fallback ok")
+print("1 outline section floor follows the block count ok")
 
 # 2) digest: a source whose digest failed keeps its title and ALL its code blocks, placed by overlap ------------------------------------------------
 md = ('# MCP JSON configuration\n\nHow the mcp.json file is generated for each client and which keys it holds for the server entry.\n\n'
@@ -63,109 +46,24 @@ outline_secs = [{"section_id": "s1", "heading": "Install basics", "description":
                 {"section_id": "s2", "heading": "Generating MCP JSON", "description": "mcp.json configuration for each client"}]
 placed, routed = DG.domain.route_unrouted_sources([stub], outline_secs, {stub.source_key: md})
 assert routed == [stub.source_key] and placed[0].contributes_to[0].section_id == "s2" and placed[0].contributes_to[0].code_refs == ["aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"], placed
-assert DG.params.WAVE_PAUSE_S >= 30
+assert N.shared.params.WAVE_PAUSE_S >= 30
 print("2 failed digest sources kept as stubs ok")
-
-# 3) judge: its total wait is bounded, and the first failure re-renders a lighter prompt ---------------------------------------------------------------------
-CS = CK.service
-calls, renders = [], []
-
-
-async def judge_fail(prompt, schema, **kw):
-    calls.append(len(prompt))
-    raise RuntimeError("InternalServerError: Error code: 504")
-
-real_render = CK.domain.render_chapter_for_judge
-
-
-def spy_render(sawc, *, char_cap=CK.params.MAX_RENDERED_CHAPTER_CHARS):
-    renders.append(char_cap)
-    return real_render(sawc, char_cap=char_cap)
-
-
-async def no_sleep(*a, **k):
-    return None
-
-sawc_blob = {"sections": [{"section_id": "s1", "heading": "H", "intro": "i", "subtopics": [{"subheading": "t", "explanation": "e " * 20, "code_ref_hash": ""}], "citations": []}]}
-
-
-def run_judge():
-    return asyncio.run(CS._run_llm_judge(
-        thread_id="t", chapter_id="ch-01", chapter_title="T", framework="f", sawc=sawc_blob, digest={}, rendered_chapter="x" * 5000,
-        rendered_digest="y" * 500, truncated=False,
-    ))
-
-
-chat.chat_structured_async = judge_fail
-CK.domain.render_chapter_for_judge = spy_render
-real_sleep = asyncio.sleep
-CS.asyncio.sleep = no_sleep
-old_budget, old_cool = CK.params.JUDGE_TOTAL_BUDGET_S, CK.params.JUDGE_COOLOFF_S
-try:
-    CK.params.JUDGE_COOLOFF_S = 0.0
-    CK.params.JUDGE_TOTAL_BUDGET_S = 10_000.0
-    calls.clear(); renders.clear()
-    out = run_judge()
-    assert len(calls) == CK.params.MAX_CALL_ATTEMPTS + CK.params.JUDGE_EXTRA_ATTEMPTS == 4, len(calls)     # roomy budget: every attempt is used
-    assert renders and renders[0] == CK.params.MAX_RENDERED_CHAPTER_CHARS // 2 and calls[1] < calls[0], (renders, calls)   # after the 1st failure: a lighter prompt
-    CK.params.JUDGE_TOTAL_BUDGET_S = 1.0                                                                    # tight budget: a retry that cannot finish is not started
-    calls.clear()
-    out = run_judge()
-    assert len(calls) == 1, len(calls)
-    assert out[0] and all(not r.passed for r in out[0])                                                     # the conservative fallback verdicts, as before
-finally:
-    chat.chat_structured_async = orig_struct
-    CK.domain.render_chapter_for_judge = real_render
-    CS.asyncio.sleep = real_sleep
-    CK.params.JUDGE_TOTAL_BUDGET_S, CK.params.JUDGE_COOLOFF_S = old_budget, old_cool
-print("3 judge wait budget ok")
-
-# 4) a section that lost every draft is written once more, lighter; a recovered one replaces the placeholder and its memory entry ----------------------
-SV = SW.service
-
-
-def real_section(sid, n=3):
-    return SWS.Section(section_id=sid, heading=f"Heading {sid}", intro="An intro sentence that is long enough to pass.",
-                       subtopics=[SWS.Subtopic(code_ref_hash=f"{i}".ljust(16, "a") if sid == "s1" else "", subheading=f"Topic {sid} {i}",
-                                               explanation="A distinct explanation sentence for this subtopic that has enough words in it.") for i in range(n)],
-                       citations=[SWS.Citation(source_key="k", claim="a claim that is long enough")])
-
-
-ph = lambda sid: SWD.placeholder_section(section_id=sid, heading=f"Heading {sid}", n_repairs=0, deployment_writer=None, error_tags=["ChatError"])
-completed = {"s1": ph("s1"), "s2": real_section("s2"), "s3": ph("s3")}
-ledger = [SWD.extract_memory_entry(completed["s1"], section_contributions=[], section_heading="Heading s1"), SWD.extract_memory_entry(completed["s2"], section_contributions=[], section_heading="Heading s2")]
-used: set[str] = set()
-seen_budget = []
-
-
-async def run_section(sid, vault_char_budget=None):
-    seen_budget.append((sid, vault_char_budget))
-    return real_section(sid) if sid == "s1" else ph(sid)                  # s1 comes back, s3 fails again
-
-recovered = asyncio.run(SV._late_retry_sections(section_ids=["s1", "s2", "s3", "s9"], run_section=run_section, completed_sections=completed, memory_ledger=ledger,
-                                                chapter_used_hashes=used, per_section_index={}, known_section_ids={"s1", "s2", "s3"}, label="t"))
-assert recovered == ["s1"] and sorted(seen_budget) == [("s1", SWP.LATE_RETRY_VAULT_CHARS), ("s3", SWP.LATE_RETRY_VAULT_CHARS)]
-assert "placeholder" not in completed["s1"].issues and "placeholder" in completed["s3"].issues and len(completed["s1"].subtopics) == 3
-assert [m.section_id for m in ledger].count("s1") == 1 and len(ledger) == 2 and used                  # one entry per section; recovered blocks counted as used
-assert asyncio.run(SV._late_retry_sections(section_ids=["s2"], run_section=run_section, completed_sections=completed, memory_ledger=ledger,
-                                           chapter_used_hashes=used, per_section_index={}, known_section_ids={"s2"}, label="t")) == []   # nothing lost: no calls
-assert SV._draft_one_section.__kwdefaults__.get("vault_char_budget", "missing") is None
-print("4 late retry of lost sections ok")
 
 # 5) the writer prompt asks for what the validator requires -----------------------------------------------------------------------------------------
 assert [SWD.writer_subtopic_range(n)[0] for n in (0, 9, 10, 19, 20, 46)] == ["3-8", "3-8", "4-7", "4-7", "6-9", "6-9"]
 assert SWD.code_density_floor(26) == 6 and SWD.code_density_floor(12) == 4 and SWD.code_density_floor(7) == 3 and SWD.code_density_floor(1) == SWP.SUBTOPICS_MIN
-VE = N.vault.schemas.VaultEntry
+VE = domains.dd.ingestion.vault.schemas.VaultEntry
 vr = {f"{i:016x}": VE(hash=f"{i:016x}", fence_text=f"```python\nvalue_{i} = compute_{i}()\n```", info_string="python", lang="python", line_count=1, char_count=30, sentinel_kind="fence_backtick") for i in range(26)}
-big = SWD.build_writer_prompt(framework="f", chapter_id="ch", chapter_title="T", section_id="s1", section_heading="H", section_description="d", section_prerequisites=[],
-                              contributions=[], allowed_hashes=sorted(vr), valid_source_keys=["k"], memory=[], n_primary_contribs=1, vault_rich=vr)
-small = SWD.build_writer_prompt(framework="f", chapter_id="ch", chapter_title="T", section_id="s1", section_heading="H", section_description="d", section_prerequisites=[],
-                                contributions=[], allowed_hashes=sorted(vr)[:5], valid_source_keys=["k"], memory=[], n_primary_contribs=1, vault_rich=vr)
-assert "6-9 BEST ONES" in big and "aim for 6-9" in big and "6-9 times per section" in big, big[big.index("PICK") - 30: big.index("PICK") + 60]
-assert "3-8 BEST ONES" in small and "aim for 4-6" in small
-light = SWD.build_writer_prompt(framework="f", chapter_id="ch", chapter_title="T", section_id="s1", section_heading="H", section_description="d", section_prerequisites=[],
-                                contributions=[], allowed_hashes=sorted(vr), valid_source_keys=["k"], memory=[], n_primary_contribs=1, vault_rich=vr, vault_char_budget=400)
-assert len(light) < len(big)
+ask = dict(framework="f", chapter_id="ch", chapter_title="T", section_id="s1", section_heading="H", section_description="d", section_prerequisites=[],
+           contributions=[], valid_source_keys=["k"], memory=[], n_primary_contribs=1, vault_rich=vr)
+big = SWD.writer_request(allowed_hashes=sorted(vr), **ask)
+small = SWD.writer_request(allowed_hashes=sorted(vr)[:5], **ask)
+assert big["aim"] == "6-9" and "Pick 6-9 of the bank" in big["mode_note"] and "pattern 6-9 times" in big["mode_note"], big["mode_note"]
+assert small["aim"] == "4-6" and "Pick 3-8 of the bank" in small["mode_note"]
+light = SWD.writer_request(allowed_hashes=sorted(vr), vault_char_budget=400, **ask)
+assert len(light["code_bank"]) < len(big["code_bank"])
+assert SWD.writer_request(allowed_hashes=[], prose_mode=True, **ask)["mode"] == "prose" and SWD.writer_request(allowed_hashes=sorted(vr)[:2], mixed_mode=True, **ask)["mode"] == "mixed"
+assert sorted(SWD.vault_files(sorted(vr)[:2], vr)) == [f"/{h}.md" for h in sorted(vr)[:2]]            # the writer's /vault/ files
 print("5 writer subtopic range follows the validator ok")
 
 # 6) top-up answers say why they were rejected ---------------------------------------------------------------------------------------------------

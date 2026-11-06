@@ -228,17 +228,17 @@ const SYNTH_DETAILS: Record<string, NodeDetails> = {
     subtitle: "Builds a typed section graph for one chapter.",
     kind: "LLM planner",
     actions: [
-      "Asks the outline planner for sections and their prerequisites.",
-      "Derives a dependency graph, stage indices, cycle repairs and structural validation.",
-      "Hands same-stage parallelism to the writer node.",
+      "An outliner agent reads the chapter's source pages and drafts sections with their prerequisites.",
+      "It checks its outline with a validation tool and fixes what the tool reports before answering.",
+      "Code derives the dependency graph, stage indices and cycle repairs, and hands same-stage parallelism to the writer node.",
     ],
     inputs: ["framework_slug", "chapter_id"],
     outputs: ["outline_path", "outline_stats"],
-    llm: "An LLM outline call plus deterministic graph derivation.",
+    llm: "An outliner agent with a skill and a validation tool, plus deterministic graph derivation.",
     metrics: (values) => {
       const s = statsOf(values, "outline_stats");
       return [
-        metric("samples", num(s, "n_samples", 1)),
+        metric("agent runs", num(s, "n_samples", 1)),
         metric("sections", num(s, "n_sections")),
         metric("violations", num(s, "n_violations")),
       ];
@@ -255,7 +255,7 @@ const SYNTH_DETAILS: Record<string, NodeDetails> = {
     ],
     inputs: ["outline_path"],
     outputs: ["digest_path", "digest_stats"],
-    llm: "LLM-assisted routing where configured; deterministic aggregation produces the coverage stats.",
+    llm: "A router agent per source page (long pages in chunks); deterministic aggregation produces the coverage stats.",
     metrics: (values) => {
       const s = statsOf(values, "digest_stats");
       return [
@@ -267,32 +267,32 @@ const SYNTH_DETAILS: Record<string, NodeDetails> = {
   },
   sawc_write: {
     title: "SAWC write (section-aware writer-critic)",
-    subtitle: "Writes chapter sections with staged drafts, critic selection and repairs.",
-    kind: "LLM writer/critic",
+    subtitle: "Writes chapter sections stage by stage, then tops up coverage and repairs.",
+    kind: "LLM writer",
     actions: [
-      "Runs stage-parallel best-of-N section drafts against the outline and digest.",
-      "Has a critic pick the best draft and records fallback decisions.",
-      "Extracts memory for later sections and re-enters when the replanner asks for refinement.",
+      "A writer agent drafts each section of a stage in parallel, reading the code blocks it routes in full and checking its draft with a validation tool.",
+      "Code checks every draft against the vault, retries a failed section, and tops up blocks and sources the draft left out.",
+      "When the replanner names sections to rewrite, only those are written again and the rest are reused.",
     ],
     inputs: ["outline_path", "digest_path"],
     outputs: ["sawc_path", "sawc_stats"],
-    llm: "A section-level writer plus a critic-picker for the material.",
+    llm: "A section writer agent, plus coverage and source extender agents for the top-ups.",
     metrics: (values) => {
       const s = statsOf(values, "sawc_stats");
       return [
-        metric("draft calls", num(s, "n_total_drafts_fired")),
-        metric("critic picks", num(s, "n_critic_picks")),
+        metric("writer runs", num(s, "n_total_drafts_fired")),
+        metric("fallbacks", num(s, "n_fallback")),
         metric("repairs", num(s, "n_repairs")),
       ];
     },
   },
   sawc_derive: {
     title: "SAWC derive",
-    subtitle: "Optionally derives extra analogical code examples for subtopics.",
+    subtitle: "Optionally derives a fuller code example for blocks that are only a signature.",
     kind: "optional LLM expansion",
     actions: [
-      "Attempts analogical code generation for eligible subtopics.",
-      "Rejects candidates that fail the syntax, length or quality gates.",
+      "A deriver agent expands each thin block into a short runnable example.",
+      "Code rejects candidates that fail the syntax or length gates.",
       "Promotes accepted examples into the chapter.",
     ],
     inputs: ["sawc_path"],
@@ -320,12 +320,12 @@ const SYNTH_DETAILS: Record<string, NodeDetails> = {
     kind: "hybrid evaluator",
     actions: [
       "Runs pre-gate deterministic checks before spending judge calls.",
-      "Uses an LLM judge for the criteria that need semantic reading.",
-      "Produces the pass/fail feedback the replanner uses.",
+      "A judge agent reads the chapter for the criteria that need semantic reading; a hard failure gets a second opinion.",
+      "Produces the pass/fail feedback the replanner uses, and remembers the best draft seen so far.",
     ],
     inputs: ["sawc_path"],
     outputs: ["checklist_path", "checklist_stats"],
-    llm: "LLM judge calls only for the criteria that survive the pre-gate.",
+    llm: "A judge agent, only for the criteria that survive the pre-gate.",
     metrics: (values) => {
       const s = statsOf(values, "checklist_stats");
       const rate = maybeNum(s, "pass_rate");
@@ -342,19 +342,19 @@ const SYNTH_DETAILS: Record<string, NodeDetails> = {
     kind: "LLM replan",
     actions: [
       "Short-circuits without an LLM call when the checklist already passes.",
-      "Otherwise asks for typed refinement actions aimed at the failed criteria.",
-      "Routes the graph either to render and audit, or back to the writer.",
+      "Otherwise a reviewer agent inspects the failing sections and names the ones to rewrite, or halts when a rewrite would not help.",
+      "Routes the graph either to render and audit (the best draft seen ships), or back to the writer.",
     ],
     inputs: ["checklist_path", "sawc_path"],
     outputs: ["mgsr_path", "mgsr_stats"],
-    llm: "The fast path makes no LLM call; the replan path makes one structured call.",
+    llm: "The fast path makes no LLM call; the replan path runs a reviewer agent.",
     metrics: (values) => {
       const s = statsOf(values, "mgsr_stats");
       const halt = flag(s, "halt");
       return [
         metric("decision", halt === undefined ? "pending" : halt ? "halt" : "loop"),
         metric("LLM path", flag(s, "trivial_pass") ? "0 calls" : halt === undefined ? "pending" : "1 call"),
-        metric("actions", num(s, "n_actions")),
+        metric("rewrites", num(s, "n_revisions")),
       ];
     },
   },

@@ -163,7 +163,7 @@ describe("synth overviews", () => {
       n_llm_passed: 4,
       n_llm_total: 5,
     },
-    mgsr_stats: { halt: false, n_actions: 2, n_failed_criteria: 2, pass_rate: 0.8 },
+    mgsr_stats: { halt: false, n_revisions: 2, n_failed_criteria: 2, pass_rate: 0.8 },
     chapter_stats: {
       n_artifacts: 3,
       audit_passed: true,

@@ -464,11 +464,11 @@ import domains
 
 domains.dd.ingestion.artifacts.params.MAX_ARTIFACT_BYTES          # constant
 domains.dd.ingestion.artifacts.domain.compute_manifest_hash(...)  # function
-domains.dd.pipeline.synth.entities.Chapter(title="...", sources=[...])   # class
+ai.dd.agents.entities.Role(name="...", ...)                        # class
 ```
 
 Never `from domains.dd.ingestion.artifacts import domain` and never
-`from domains.dd.pipeline.synth.entities import Chapter`. A bare imported name
+`from ai.dd.agents.entities import Role`. A bare imported name
 loses its path the moment it's read three lines below the import block.
 The dotted chain carries its own provenance everywhere it appears — import
 line, call site, grep result, stack trace — with no need to scroll up.
@@ -586,10 +586,10 @@ though it's a legitimate part of that package. Adding it would mean a bare
 `import domains` anywhere in the app — including a standalone script, a
 test, or a REPL — suddenly requires production secrets to succeed.
 
-Known instances: `dd/pipeline/ai/task.py` and `dd/pipeline/synth/task.py` do
+Known instances: `dd/pipeline/ai/task.py` (the planner's and the synth's tasks) does
 `from infra.celery import app`, which transitively requires
 `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD`/`ENVIRONMENT` (never re-exported
-from `ai/__init__.py`/`synth/__init__.py` — callers reach it with a
+from `ai/__init__.py` — callers reach it with a
 direct `from domains.dd.pipeline.ai.task import X`, same shape as any normal
 Python import, and the same class of exception as the LLM rotator's
 reverse-edge import above).
@@ -687,7 +687,7 @@ safe — that import already blocked until `x` was fully ready.
 Nothing here changes §2–§5: `entities.py` domain objects, stateful
 clients, anything with real invariants or state stays a real class,
 instantiated normally — just referenced through the same dotted path as
-everything else (`domains.dd.pipeline.synth.entities.Chapter(...)`), never
+everything else (`ai.dd.agents.entities.Role(...)`), never
 through a bare import.
 
 ---
@@ -710,14 +710,13 @@ apps/server/
 │   │   │   ├── filters/
 │   │   │   ├── post/
 │   │   │   └── ...
-│   │   └── pipeline/        # the Pipeline tab. The planner is agentic (ai/dd/…/pipeline/planner); what runs it lives here
-│   │       ├── ai/          # the planner's composition root (service.py) and its Celery tasks (task.py), like dd/ingestion/ai
+│   │   └── pipeline/        # the Pipeline tab. The planner and the synth are agentic (ai/dd/…/pipeline/{planner,synth}); what runs them lives here
+│   │       ├── ai/          # the composition roots (planner service.py, synth/service.py) and the Celery tasks of both stages (task.py), like dd/ingestion/ai
 │   │       ├── runtime/     # keys, params, cancel/ checkpoint/ dispatch/ progress/ — thin wrappers over infra
-│   │       ├── storage/     # keys.py + service.py: the planner's MinIO blobs, their readers, the per-page result cache
-│   │       ├── observability/   # service.py: @traced + metric recorders (sibling of runtime/)
-│   │       └── synth/       # LangGraph synth — still a package of its own (graph, nodes, runtime, task)
+│   │       ├── storage/     # keys.py + service.py: both stages' MinIO blobs, their readers, the per-page result cache
+│   │       └── observability/   # service.py: @traced + metric recorders (sibling of runtime/)
 ├── ai/                      # Agentic AI: agents/ graphs/ nodes/ prompts/ skills/ tools/ backends/ middleware/ per context (ai/dd, ai/bd)
-│   └── dd/…/pipeline/planner/   # agents/<role>/, graphs/ (parent + one subgraph per stage), nodes/<stage>/, prompts/<role>/, skills/<role>/, tools/, backends/corpus
+│   └── dd/…/pipeline/{planner,synth}/   # agents/<role>/, graphs/ (parent + one subgraph per stage), nodes/<stage>/, prompts/<role>/, skills/<role>/, tools/, backends/{corpus,files}
 │   └── settings/            # external endpoints + credential store
 │       ├── chat/{domain,service,params}.py        # chat endpoint adapter
 │       ├── embeddings/{domain,service,params}.py  # embedding endpoint adapter
@@ -736,7 +735,7 @@ Each leaf module follows the **5–10 file convention** from §5.
 **One folder per feature, named like its tab.** A bounded context's top-level folders are the web tabs (`dd/ingestion`,
 `dd/pipeline`). When a tab runs more than one stage, each stage is its own package *inside* the tab's folder
 (`dd/pipeline/planner`, `dd/pipeline/synth`) and the same nesting is mirrored in `entrypoints/api/v1/dd/pipeline/` and,
-for Agentic AI, in `ai/dd/…/pipeline/` (the planner has no package under `domains/dd/pipeline/` any more: its code is in `ai/`, its
+for Agentic AI, in `ai/dd/…/pipeline/` (neither stage has a package under `domains/dd/pipeline/` any more: their code is in `ai/`, their
 run plumbing in `domains/dd/pipeline/{ai,runtime,storage,observability}`). Only folders move: Redis keys, MinIO prefixes, thread-id prefixes, Langfuse prompt
 names and span names keep their stage names (`coelhonexus:dd:planner:*`, `dd/{slug}/planner/`, `dd.synth.*`), because they
 are stored data, not module paths. The Celery task names *do* follow the module path, so moving a
@@ -745,8 +744,12 @@ are stored data, not module paths. The Celery task names *do* follow the module 
 **Agentic AI lives in `ai/`, its run plumbing in `domains/`.** `ai/` (agents, graphs, nodes, prompts, skills, tools, backends,
 middleware) never imports `infra` (`scripts/server/test_infra_boundary.py`, rule `ai-no-infra`): it reaches COELHO Cloud through
 `domains` (the chat adapter, the LLM counter, storage keys) and through the *context* a run hands its graph (`PlannerContext`:
-object storage and the agent registry). The composition root that binds `infra` to the graph, and the Celery task, live in
-`domains/<ctx>/<tab>/ai/` (`service.py`, `task.py`). The planner is the reference:
+object storage and the agent registry; `SynthContext` adds a `scratch` dict for data shared across a run's branches, rebuilt by each stage's
+`prepare`). Running a graph (start, resume, progress forwarding, the cancel watcher, how a run ends, the study loop) is `ai` code too
+(`graphs/<tab>/runner` and `graphs/<tab>/<stage>/{service,study}.py`): it is handed a `Binding` (graph over the checkpointer, object storage, a
+context factory) and reaches Redis, Langfuse and OpenTelemetry through `domains/<ctx>/<tab>/{runtime,observability}`. Only the composition root that
+builds that binding from `infra`, and the Celery task, live in `domains/<ctx>/<tab>/ai/` (`service.py`, `task.py`: thin). The planner is the reference, the
+synth follows it:
 
 - Every agent is a `create_deep_agent` built by the one factory `ai/dd/agents/service.py::build` (model, harness profile, file permissions,
   resilience middleware, unreviewed-tool guard) and asked with `service.ask` (structured answer, retries, usage counted). A role is

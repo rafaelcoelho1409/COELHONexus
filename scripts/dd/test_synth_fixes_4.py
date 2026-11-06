@@ -9,13 +9,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
-import domains, infra  # noqa: E402
+import ai, domains  # noqa: E402
 
-SW = domains.dd.pipeline.synth.nodes.sawc.domain
-SS = domains.dd.pipeline.synth.nodes.sawc.schemas
-P = domains.dd.pipeline.synth.nodes.sawc.params
-SWP = domains.dd.pipeline.synth.nodes.sawc.patterns
-DSP = domains.dd.pipeline.synth.runtime.dispatch.service
+SW = ai.dd.nodes.pipeline.synth.sawc.domain
+SS = ai.dd.nodes.pipeline.synth.sawc.schemas
+P = ai.dd.nodes.pipeline.synth.sawc.params
+SWP = ai.dd.nodes.pipeline.synth.sawc.patterns
 
 H1, H2, H3, H4 = "1" * 16, "2" * 16, "3" * 16, "4" * 16
 
@@ -83,9 +82,11 @@ assert set(got) == {"k_exec", "k_new"}, got                                     
 assert got["k_exec"] == exec_facts[:3] and got["k_new"] == ["Process.wait returns the exit code once the child ends."], got
 assert {k for _, l in SW.uncited_routed_sources(idx, chapter).items() for k, _, _ in l} == {"k_new"}           # citation-only view unchanged
 assert SW.source_gaps(idx, chapter) == SW.uncited_routed_sources(idx, chapter)
-prompt = SW.build_source_topup_prompt(framework="asyncio", chapter_title="Subprocess", section_heading="Spawning", section_description="d",
-                                      existing_subheadings=["Spawning"], sources=gaps["s1"], max_new=4)
-assert "DOES NOT STATE YET" in prompt and "limit (default 65536)" in prompt and "garbage collected" in prompt
+request = SW.source_request(framework="asyncio", chapter_title="Subprocess", section_heading="Spawning", section_description="d",
+                            existing_subheadings=["Spawning"], sources=gaps["s1"], max_new=4)
+assert [x["key"] for x in request["sources"]] == ["k_exec", "k_new"]
+assert "limit (default 65536)" in " ".join(request["sources"][0]["facts"]) and "garbage collected" in " ".join(request["sources"][0]["facts"])
+assert "does not state yet" in ai.dd.prompts.pipeline.synth.source_extender.prompts.SYSTEM_PROMPT       # the instruction is the agent's system prompt
 print("3 fact gaps of cited sources reach the source top-up ok")
 
 # 4) a finished single chapter merges its wall time into the study timing blob -------------------------------------------------------------------------
@@ -105,12 +106,7 @@ class FakeStore:
 
 def persist(blob):
     store = FakeStore(blob)
-    orig = infra.minio.service.get_storage
-    infra.minio.service.get_storage = lambda: store
-    try:
-        asyncio.run(DSP._persist_chapter_timing("asyncio", "ch-04", 2040000))
-    finally:
-        infra.minio.service.get_storage = orig
+    asyncio.run(ai.dd.graphs.pipeline.synth.service.persist_chapter_timing(store, "asyncio", "ch-04", 2040000))
     return store.written
 
 
@@ -145,11 +141,11 @@ assert SW.dependency_blocks(nogather, {"s1": [H2, H3]}, vr) == {"s1": [H2]}     
 assert SW.dependency_blocks(nogather, {"s1": [H2]}, vr) == {}                                 # nothing calls it
 assert SW.dependency_blocks(nogather, {"s1": [H3]}, vr) == {}                                 # a caller alone requires nothing
 assert SW.order_by_code_dependencies(printed, None)[1] == 0
-req_prompt = SW.build_topup_prompt(framework="asyncio", chapter_title="c", section_heading="h", section_description="d", existing_subheadings=[],
-                                   blocks=[(H2, RUN_DEF)], facts=[], sources=[], max_new=2, required={H2})
-assert "REQUIRED" in req_prompt and f"[{H2}] (REQUIRED" in req_prompt
-assert "(REQUIRED" not in SW.build_topup_prompt(framework="asyncio", chapter_title="c", section_heading="h", section_description="d", existing_subheadings=[],
-                                               blocks=[(H2, RUN_DEF)], facts=[], sources=[], max_new=2)
+req = SW.coverage_request(framework="asyncio", chapter_title="c", section_heading="h", section_description="d", existing_subheadings=[],
+                          blocks=[(H2, RUN_DEF)], facts=[], sources=[], max_new=2, required={H2})
+assert req["blocks"] == [{"hash": H2, "required": True, "code": RUN_DEF}]
+assert SW.coverage_request(framework="asyncio", chapter_title="c", section_heading="h", section_description="d", existing_subheadings=[],
+                           blocks=[(H2, RUN_DEF)], facts=[], sources=[], max_new=2)["blocks"][0]["required"] is False
 print("5 define-before-use ordering and required blocks ok")
 
 # 6) "the documentation provides ..." filler is dropped from the source top-up -------------------------------------------------------------------------
@@ -161,50 +157,9 @@ assert SW.parse_source_topup(filler, sources=src6, existing_subheads=set(), max_
 assert SWP.META_FRAMING_RE.search("This page describes the limit argument") and not SWP.META_FRAMING_RE.search("The loop parameter was removed in Python 3.10 and the page below shows")
 print("6 filler dropped ok")
 
-# 7) a top-up call that fails, or answers nothing valid, is asked again --------------------------------------------------------------------------------
-SV = domains.dd.pipeline.synth.nodes.sawc.service
-chat = domains.settings.chat.service
-
-
-def run_topup(answers):
-    calls = []
-
-    async def fake(prompt, **kw):
-        calls.append(prompt)
-        a = answers[min(len(calls) - 1, len(answers) - 1)]
-        if isinstance(a, Exception):
-            raise a
-        return json.dumps(a), {}
-
-    orig = chat.chat_text_async
-    chat.chat_text_async = fake
-    try:
-        sections = [sec("s1", [st("Date", "The get_date coroutine reads the interpreter output from a pipe.", H1), st("Gather", "asyncio.gather runs two run() calls concurrently and waits for both.", H3), st("Plain", "A prose subtopic that stands alone in this section here.")])]
-        idx = {"s1": [{"section_id": "s1", "source_key": "k1", "relevance": "primary", "summary": "s", "key_facts": ["a fact"], "code_refs": [H1, H2, H3]}]}
-        out = asyncio.run(SV._topup_coverage(final_sections=sections, per_section_index=idx, vault_rich=vr, sections_by_id={"s1": {"description": "d"}},
-                                             framework="asyncio", chapter_id="ch-04", chapter_title="Subprocess"))
-    finally:
-        chat.chat_text_async = orig
-    return out, len(calls)
-
-
-valid = {"subtopics": [{"code_ref_hash": H2, "subheading": "The run helper", "explanation": "The run coroutine wraps create_subprocess_shell and awaits communicate() to collect the output of the command."}], "citations": []}
-(secs7, n7, _), calls7 = run_topup([RuntimeError("504"), valid])
-assert calls7 == 2 and n7 == 1 and secs7[0].subtopics[-1].code_ref_hash == H2, (calls7, n7)         # one unused block is enough when it is REQUIRED
-(secs7, n7, _), calls7 = run_topup([{"subtopics": [], "citations": []}, valid])
-assert calls7 == 2 and n7 == 1
-(secs7, n7, _), calls7 = run_topup([valid])
-assert calls7 == 1 and n7 == 1
-(secs7, n7, _), calls7 = run_topup([RuntimeError("504"), RuntimeError("504"), valid])
-assert calls7 == P.TOPUP_ATTEMPTS + 1 == 3 and n7 == 1                                               # every call raised: one salvage call recovers it
-(secs7, n7, _), calls7 = run_topup([RuntimeError("504")] * 4 + [valid])
-assert calls7 == 2 * P.TOPUP_ATTEMPTS == 4 and n7 == 0                                               # bounded: fail-soft after the salvage attempts
-(secs7, n7, _), calls7 = run_topup([{"subtopics": [], "citations": []}] * 4 + [valid])
-assert calls7 == P.TOPUP_ATTEMPTS == 2 and n7 == 0                                                   # answered but nothing valid: not salvaged
-print("7 top-up retried, bounded ok")
 
 # 8) a judge reply whose verdicts are JSON strings is accepted --------------------------------------------------------------------------------------
-CKS = domains.dd.pipeline.synth.nodes.checklist.schemas
+CKS = ai.dd.nodes.pipeline.synth.checklist.schemas
 names = ["chapter_reads_coherently", "claims_grounded_in_sources", "terminology_consistent", "prose_code_first_not_meta_framing", "code_refs_introduced_in_prose"]
 wrapped = {n: '{"passed": true, "feedback": ""}' for n in names}
 wrapped["terminology_consistent"] = '{"passed": false, "feedback": "Mixes Process and process object across the section."}'
@@ -219,8 +174,8 @@ except ValueError:
 print("8 stringified judge verdicts accepted ok")
 
 # 9) a digest contribution with too many / out-of-bounds key facts is trimmed, not rejected ----------------------------------------------------------
-DGD = domains.dd.pipeline.synth.nodes.digest.domain
-DGP = domains.dd.pipeline.synth.nodes.digest.params
+DGD = ai.dd.nodes.pipeline.synth.digest.domain
+DGP = ai.dd.nodes.pipeline.synth.digest.params
 def payload(facts):
     return {"source_title": "MCP JSON configuration", "overall_summary": "How the mcp.json configuration file is structured and generated for the supported clients.",
             "contributes_to": [{"section_id": "s1", "source_key": "k", "relevance": "primary", "summary": "The page shows the mcp.json shape used by clients.", "key_facts": facts, "code_refs": []}],
@@ -238,13 +193,12 @@ assert DGD.try_parse_payload(payload(["no", "x"]))[0] is None                   
 print("9 digest key facts trimmed ok")
 
 # 10) the outline's section cap follows the chapter's code-block count ----------------------------------------------------------------------------------
-OL = domains.dd.pipeline.synth.nodes.outline
+OL = ai.dd.nodes.pipeline.synth.outline
 assert OL.params.max_h2_for_n_sources(18) == 4 and OL.params.max_h2_for_n_sources(18, 0) == 4         # unchanged without a block count
 assert OL.params.max_h2_for_n_sources(18, 135) == 12                                                    # fastmcp ch-01: 135 blocks -> 12 sections, not 4
 assert OL.params.max_h2_for_n_sources(18, 30) == 4 and OL.params.max_h2_for_n_sources(23, 35) == 5     # asyncio ch-01 (23 sources, 35 blocks): the source cap still wins
 assert OL.params.max_h2_for_n_sources(40, 60) == 10 and OL.params.max_h2_for_n_sources(0, 50) == 5
 assert OL.params.max_h2_for_n_sources(4, 200) == OL.params.OUTLINE_BLOCK_CEILING == 12                  # never above the block ceiling
-assert OL.domain.outline_optimal_stopping_min(18, 135) == 8 and OL.domain.outline_optimal_stopping_min(18) == 5
 secs10 = [OL.schemas.OutlineSection(section_id=f"s{i + 1}", heading=f"Install for client number {chr(65 + i)}", description="Installing the server for one specific client and its configuration file.", prerequisites=[]) for i in range(8)]
 ol10 = OL.schemas.ChapterOutline(sections=secs10)
 dag10 = OL.domain.derive_dag(ol10.sections)
@@ -252,41 +206,4 @@ assert any("adaptive cap is 4" in x for x in OL.domain.validate_outline_structur
 assert not any("adaptive cap" in x for x in OL.domain.validate_outline_structure(ol10, dag10, n_sources=18, n_blocks=135)[1])
 print("10 outline cap follows block count ok")
 
-# 11) the coverage top-up runs a second round for sections that gained subtopics, never re-asks a section whose calls failed ------------------------------
-def run_rounds(answer_for, n_blocks=20, subs_per_section=3):
-    hs = [f"{i:016x}" for i in range(n_blocks)]
-    vr11 = {h: {"fence_text": f"```python\nresult_{i} = widget_{i}.compute_{i}(value_{i})\n```"} for i, h in enumerate(hs)}
-    sections11 = [sec(f"s{k}", [st(f"Topic {k} {j}", f"widget_{k}{j} compute_{k}{j} explanation words here for {k} {j} only.") for j in range(subs_per_section)]) for k in (1, 2)]
-    idx11 = {f"s{k}": [{"section_id": f"s{k}", "source_key": "k1", "relevance": "primary", "summary": "s", "key_facts": ["a fact"], "code_refs": hs[(k - 1) * 10: k * 10]}] for k in (1, 2)}
-    calls = []
-
-    async def fake(prompt, **kw):
-        calls.append(prompt)
-        sid = "s1" if "'Heading s1'" in prompt else "s2"
-        return json.dumps(answer_for(sid, prompt, len(calls))), {}
-
-    orig = chat.chat_text_async
-    chat.chat_text_async = fake
-    try:
-        out = asyncio.run(SV._topup_coverage(final_sections=sections11, per_section_index=idx11, vault_rich=vr11, sections_by_id={}, framework="a", chapter_id="c", chapter_title="t"))
-    finally:
-        chat.chat_text_async = orig
-    return out, calls, vr11
-
-
-def answer(sid, prompt, n):
-    import re as _re
-    shown = _re.findall(r"^\[([0-9a-f]{16})\]", prompt, _re.M)[:4]
-    return {"subtopics": [{"code_ref_hash": h, "subheading": f"New topic {sid} {h[-3:]}", "explanation": f"The widget_{int(h, 16)} object runs compute_{int(h, 16)} on value_{int(h, 16)} and returns result_{int(h, 16)} here."} for h in shown], "citations": []}
-
-
-(out11, calls11, _), = [run_rounds(answer)[:3]]
-assert len(calls11) == 4, len(calls11)                                                     # 2 sections x 2 rounds
-assert [len(x.subtopics) for x in out11[0]] == [11, 11] and out11[1] == 16 and out11[2] == 2, (out11[0], out11[1], out11[2])   # 4 per call, 2 rounds
-failing = lambda sid, prompt, n: (_ for _ in ()).throw(RuntimeError("504")) if sid == "s1" else answer(sid, prompt, n)
-out11b, calls11b, _ = run_rounds(failing)
-s1_calls = [c for c in calls11b if "'Heading s1'" in c]
-assert len(s1_calls) == 2 * P.TOPUP_ATTEMPTS == 4, len(s1_calls)                         # s1 raised on both attempts: skipped in round 2, asked once more in the salvage pass
-assert len(out11b[0][0].subtopics) == 3 and len(out11b[0][1].subtopics) > 3
-print("11 coverage top-up rounds ok")
 print("ALL OK")

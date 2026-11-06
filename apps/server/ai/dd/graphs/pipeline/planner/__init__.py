@@ -4,6 +4,7 @@ from __future__ import annotations
 from . import context, state
 from . import chapter_assign, chapter_propose, chapter_select, doc_distill, off_topic, order_chapters
 from . import graph
+from . import service
 
 __all__ = [
     "chapter_assign",
@@ -14,5 +15,6 @@ __all__ = [
     "graph",
     "off_topic",
     "order_chapters",
+    "service",
     "state",
 ]

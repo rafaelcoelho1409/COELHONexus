@@ -71,7 +71,7 @@ function outline(values: Record<string, unknown>): NodeOverview {
           ]
         : [],
     footer: compact([
-      `${num(s, "n_samples", 1)} samples · vote`,
+      `${num(s, "n_samples", 1)} outliner run${num(s, "n_samples", 1) === 1 ? "" : "s"}`,
       `vault hashes referenced ${num(s, "n_vault_hashes")}`,
       flag(s, "truncated") ? "corpus truncated" : null,
       coldOrHit(s),
@@ -130,7 +130,6 @@ function sawc(values: Record<string, unknown>): NodeOverview {
   const completed = num(s, "n_completed");
   const total = num(s, "n_sections");
   const repairs = num(s, "n_repairs");
-  const pickerFallbacks = num(s, "n_picker_fallbacks");
   const density = (
     [
       ["subtopics", maybeNum(s, "total_subtopics"), (n: number) => String(n)],
@@ -151,18 +150,13 @@ function sawc(values: Record<string, unknown>): NodeOverview {
         iteration > 0 ? `iter ${iteration}/5` : "first pass",
         iteration > 1 ? "refinement loop active" : "no replan yet",
       ),
-      card(
-        "Fallbacks",
-        String(num(s, "n_fallback")),
-        pickerFallbacks ? `${pickerFallbacks} picker fallbacks` : undefined,
-      ),
+      card("Fallbacks", String(num(s, "n_fallback")), "placeholder sections"),
       card("Repairs", String(repairs), repairs ? "auto-fix passes" : "clean"),
     ],
     sections: density.length > 0 ? [{ kind: "figures", title: "Content density", cells: density }] : [],
     footer: compact([
       `stages ${num(s, "n_stages")}`,
-      `drafts fired ${num(s, "n_total_drafts_fired")}`,
-      `critic picks ${num(s, "n_critic_picks")}`,
+      `writer runs ${num(s, "n_total_drafts_fired")}`,
       coldOrHit(s),
       wall(s),
       hashNote(s),
@@ -182,7 +176,7 @@ function derive(values: Record<string, unknown>): NodeOverview {
       ],
       sections: [],
       footer: [
-        "This is the optional pass that derives extra analogical code examples; it is off in this deployment.",
+        "This is the optional pass that derives code examples for thin blocks; it is off in this deployment.",
       ],
     };
   }
@@ -234,7 +228,6 @@ function checklist(values: Record<string, unknown>): NodeOverview {
   const total = num(s, "n_total");
   const verdict = flag(s, "chapter_passed");
   const failed = texts(s, "names_failed");
-  const repaired = num(s, "judge_repaired");
   const judgeMs = maybeNum(s, "judge_wall_ms");
   return {
     cards: [
@@ -248,7 +241,7 @@ function checklist(values: Record<string, unknown>): NodeOverview {
       card(
         "LLM judged",
         `${num(s, "n_llm_passed")}/${num(s, "n_llm_total")}`,
-        repaired ? `${repaired} repaired` : undefined,
+        flag(s, "infra_degraded") ? "judge unavailable" : undefined,
       ),
     ],
     sections:
@@ -270,35 +263,19 @@ function mgsr(values: Record<string, unknown>): NodeOverview {
   const halt = flag(s, "halt");
   if (halt === undefined && !flag(s, "cache_hit")) return emptyOverview("No replan stats reported yet.");
   const rate = maybeNum(s, "pass_rate");
-  if (flag(s, "skipped") === true) {
-    return {
-      cards: [
-        card("Analysis", "skipped"),
-        card("Pass rate", rate === undefined ? "—" : percent(rate), "from the checklist"),
-      ],
-      sections: [
-        {
-          kind: "note",
-          title: "Decision summary",
-          text: "The corrective-actions analysis is currently skipped (nothing consumes its output). The retry-or-stop decision is made by the synth graph itself from the checklist's pass rate; the checklist node's log line shows what happens next.",
-        },
-      ],
-      footer: compact([wall(s), hashNote(s)]),
-    };
-  }
   const confidence = maybeNum(s, "confidence");
   const iteration = num(values, "refine_iter", 1);
-  const actions = num(s, "n_actions");
+  const revisions = num(s, "n_revisions");
   return {
     cards: [
-      card("Decision", halt ? "halt" : "loop", halt ? "chapter accepted" : "re-enter the writer"),
+      card("Decision", halt ? "halt" : "loop", halt ? "best draft ships" : "rewrite the named sections"),
       card(
         "Reason",
         text(s, "halt_reason", "—"),
         flag(s, "trivial_pass") ? "trivial-pass shortcut" : undefined,
       ),
-      card("Confidence", confidence === undefined ? "—" : percent(confidence), "judge confidence"),
-      card("Actions", String(actions), `${num(s, "n_failed_criteria")} failed criteria addressed`),
+      card("Confidence", confidence === undefined ? "—" : percent(confidence), "reviewer confidence"),
+      card("Rewrites", String(revisions), `${num(s, "n_failed_criteria")} failed criteria addressed`),
     ],
     sections: [
       {
@@ -306,7 +283,7 @@ function mgsr(values: Record<string, unknown>): NodeOverview {
         title: "Decision summary",
         text: halt
           ? `Chapter halted at iteration ${iteration}/5 with confidence ${confidence === undefined ? "—" : percent(confidence)}${flag(s, "chapter_passed") === true ? "; it passed the checklist gate" : ""}. Reason: ${text(s, "halt_reason", "?")}.`
-          : `Chapter loops back to the writer (iteration ${iteration}/5). Pass rate ${rate === undefined ? "—" : percent(rate)}; ${actions} refine action(s) queued.`,
+          : `Chapter loops back to the writer (iteration ${iteration}/5). Pass rate ${rate === undefined ? "—" : percent(rate)}; ${revisions} section(s) queued for a rewrite.`,
       },
     ],
     footer: compact([coldOrHit(s), wall(s), hashNote(s)]),
