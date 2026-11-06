@@ -592,6 +592,10 @@ def _is_spacing_repair(proposal: agents.schemas.PatchProposal, markdown: str, st
     )
     if squeezed_target == squeezed_replacement:
         return True
+    if "\\_" in squeezed_target and squeezed_target.replace("\\_", "_") == squeezed_replacement:
+        # Markdown renders "\_" as "_", so dropping the backslash (and the stray space beside it) in a reference URL changes
+        # nothing a reader sees; inside code the backslash is a real character and stays.
+        return not _inside_code(markdown, start)
     if not all(patterns._PLAIN_PROSE_RE.fullmatch(text) for text in (target, replacement)):
         return False
     # A hyphen may be added, or dropped where the source left it dangling before a space ("engineer- ing");
@@ -610,6 +614,14 @@ def _inserts_space(target: str, replacement: str) -> bool:
         tag in {"insert", "replace"} and patterns._SPACE_RE.search(replacement[j1:j2])
         for tag, _, _, j1, j2 in matcher.get_opcodes()
     )
+
+
+def _inside_code(markdown: str, start: int) -> bool:
+    """True in a fenced block, or on a line that holds an inline code span."""
+    line_start = markdown.rfind("\n", 0, start) + 1
+    line_end = markdown.find("\n", start)
+    line = markdown[line_start:line_end if line_end >= 0 else len(markdown)]
+    return markdown.count("```", 0, start) % 2 == 1 or "`" in line
 
 
 def _inside_path_or_address(markdown: str, start: int, end: int) -> bool:

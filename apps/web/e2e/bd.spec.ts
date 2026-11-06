@@ -136,6 +136,7 @@ type State = {
 
 /** The extracted pages, chapters and reader live on the Pages view, chosen in the page's third navbar. */
 const openMaterials = (page: Page) => page.getByRole("tab", { name: "Pages" }).click();
+const doclingBar = (page: Page) => page.getByRole("region", { name: "Docling extraction progress" });
 
 async function mockBd(page: Page, state: State) {
   const answer = (call: string) => {
@@ -229,7 +230,7 @@ test.describe("Book Distiller · Ingestion", () => {
       "9 of 9 pages",
     );
     await expect(page.getByText("15.0 pages/min")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Extract again" })).toBeVisible();
+    await expect(doclingBar(page)).toContainText("Complete");
     await openMaterials(page);
     const pages = page.getByRole("list", { name: "Extracted pages" });
     await expect(pages.getByRole("button")).toHaveCount(3);
@@ -249,7 +250,9 @@ test.describe("Book Distiller · Ingestion", () => {
     const reader = page.getByRole("article", { name: "Page 2" });
     await expect(reader).toContainText("Continuing to work correctly");
     await expect(reader.getByRole("list", { name: "What the page contains" })).toContainText("1 picture");
-    const figure = reader.getByRole("img", { name: /^Figure p0002/ });
+    // Figures sit in a collapsed gallery until it is opened.
+    await reader.getByText(/^Figure gallery/).click();
+    const figure = reader.getByRole("button", { name: /^View figure 1 from page 2/ }).locator("img");
     await expect(figure).toBeVisible();
     await expect.poll(() => figure.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
     await expect(page.getByRole("button", { name: /^Foundations of Data Systems/ })).toHaveAttribute(
@@ -272,14 +275,14 @@ test.describe("Book Distiller · Ingestion", () => {
     await mockBd(page, state);
     await page.goto(`/bd/ingestion?book=${BOOK}`);
 
-    await page.getByRole("button", { name: "Cancel" }).click();
-    await expect(page.getByRole("button", { name: "Resume" })).toBeVisible();
-    await expect(page.getByText("cancelled", { exact: true }).first()).toBeVisible();
+    await page.getByRole("button", { name: "Stop Docling extraction" }).click();
+    await expect(page.getByRole("button", { name: "Resume Docling extraction" })).toBeVisible();
+    await expect(doclingBar(page)).toContainText("Cancelled");
     expect(state.calls).toContain("cancel");
 
     state.status = "cancelled";
-    await page.getByRole("button", { name: "Resume" }).click();
-    await expect(page.getByRole("button", { name: "Extract again" })).toBeVisible();
+    await page.getByRole("button", { name: "Resume Docling extraction" }).click();
+    await expect(doclingBar(page)).toContainText("Complete");
     expect(state.calls).toContain("run");
   });
 
@@ -292,7 +295,7 @@ test.describe("Book Distiller · Ingestion", () => {
     await page.goto(`/bd/ingestion?book=${BOOK}`);
 
     await expect(page.getByText(message)).toBeVisible();
-    await expect(page.getByRole("button", { name: "Resume" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Resume Docling extraction" })).toBeVisible();
   });
 
   test("a reload in the middle of a run restores the pages from the manifest and the replay", async ({
@@ -308,10 +311,11 @@ test.describe("Book Distiller · Ingestion", () => {
     await expect(pages.getByRole("button")).toHaveCount(3);
 
     await page.reload();
+    // The run's controls are on the Agents view, which a reload opens first.
+    await expect(page.getByRole("button", { name: "Stop Docling extraction" })).toBeEnabled();
     await openMaterials(page);
     await expect(pages.getByRole("button")).toHaveCount(3);
     await expect(page.getByRole("checkbox", { name: "Follow newest" })).toBeChecked();
-    await expect(page.getByRole("button", { name: "Cancel" })).toBeVisible();
   });
 
   test("deleting a book asks first", async ({ page }) => {
@@ -329,8 +333,11 @@ test.describe("Book Distiller · Ingestion", () => {
     await page.getByRole("button", { name: `Delete ${TITLE}` }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
     expect(state.calls).toEqual([]);
+    // Clicking inside the confirmation is outside the library menu, so the menu closed; open it again.
+    await page.getByRole("button", { name: "Library · 1" }).click();
     await page.getByRole("button", { name: `Delete ${TITLE}` }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+    await page.getByRole("button", { name: "Library · 0" }).click();
     await expect(page.getByText("No books yet. Upload a PDF or EPUB to start.")).toBeVisible();
     expect(state.calls).toEqual(["delete"]);
   });
@@ -375,7 +382,7 @@ test.describe("Book Distiller · Ingestion", () => {
       name: "finished",
       url: `/bd/ingestion?book=${BOOK}`,
       state: () => stateOf({ status: "done", withPages: true }),
-      ready: (page) => expect(page.getByRole("button", { name: "Extract again" })).toBeVisible(),
+      ready: (page) => expect(doclingBar(page)).toContainText("Complete"),
     },
   ];
 

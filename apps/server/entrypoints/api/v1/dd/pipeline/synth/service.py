@@ -1,7 +1,7 @@
 """synth API helpers — plan loading and chapter wipes with HTTP error mapping.
 
 `load_plan` is the api-side home for "slug → plan dict or 404" (wrapping
-`domains.dd.pipeline.planner.service.load_plan` with HTTP error mapping) — the
+`domains.dd.pipeline.storage.service.load_plan` with HTTP error mapping) — the
 same shape as `api/v1/dd/catalog/service.py`.
 
 `wipe_one_chapter` is the per-chapter wipe (MinIO only) behind the
@@ -22,9 +22,9 @@ logger = logging.getLogger(__name__)
 async def load_plan(slug: str) -> dict:
     """The latest planner plan for `slug`. 404 when the planner never ran,
     500 when the plan blob exists but cannot be read."""
-    key = domains.dd.pipeline.planner.keys.plan_latest_key(slug)
+    key = domains.dd.pipeline.storage.keys.plan_latest_key(slug)
     try:
-        plan = await domains.dd.pipeline.planner.service.load_plan(slug)
+        plan = await domains.dd.pipeline.storage.service.load_plan(slug)
     except Exception as e:
         raise HTTPException(
             status_code = 500,

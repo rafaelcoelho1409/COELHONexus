@@ -1,7 +1,7 @@
 """Validation and prompt-payload construction for documentation page audits."""
 from __future__ import annotations
 
-from . import params
+from . import params, patterns
 from .... import agents
 
 import json
@@ -40,6 +40,12 @@ def sanitize_assessment(
         if len(issue.evidence) > params.MAX_EVIDENCE_CHARS or issue.evidence not in markdown:
             warnings.append(
                 f"Discarded finding {issue.issue_id}: evidence was not a bounded exact source substring."
+            )
+            continue
+        if issue.category in params.CONVENTION_CATEGORIES and patterns.EXPORT_CONVENTION_RE.match(issue.evidence):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: its evidence is a documentation-export convention "
+                "(JSX component, HTML media tag or fence attribute), not a page defect."
             )
             continue
         # Two findings on the same text can only produce overlapping patches, so keep the more confident one.

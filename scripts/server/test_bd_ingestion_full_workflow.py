@@ -324,6 +324,11 @@ for target, replacement, code in (
     ("spe- cific", "specific", schemas.IssueCode.SPLIT_WORD),
     ("social engineer- ing", "social engineering", schemas.IssueCode.SPLIT_WORD),
     ("trade­ craft", "tradecraft", schemas.IssueCode.SPLIT_WORD),
+    (
+        "https://www.wired.com/ images\\_blogs/threatlevel/2013/hidden\\_lynx\\_final.pdf",
+        "https://www.wired.com/images_blogs/threatlevel/2013/hidden_lynx_final.pdf",
+        schemas.IssueCode.SPLIT_WORD,
+    ),
     ("cyber­ attacks", "cyber-attacks", schemas.IssueCode.SPLIT_WORD),
     ("commandand-control server", "command-and-control server", schemas.IssueCode.SPLIT_WORD),
 ):
@@ -344,6 +349,15 @@ for label, page, proposal in (
     )),
     ("a space is inserted into an address", "mail a.b@corp.comreports please", spacing_proposal(
         "a.b@corp.comreports", "a.b@corp.com reports",
+    )),
+    ("an escaped underscore is dropped inside inline code", "run `curl https://a.com/x\\_y` now", spacing_proposal(
+        "x\\_y", "x_y",
+    )),
+    ("an escaped underscore is dropped inside a code fence", "```\nhttps://a.com/x\\_y\n```", spacing_proposal(
+        "x\\_y", "x_y",
+    )),
+    ("an escape and a letter change together", "see https://a.com/x\\_y now", spacing_proposal(
+        "x\\_y", "X_y",
     )),
     ("an existing hyphen is removed", "a state-of-the-art tool", spacing_proposal(
         "state-of-the-art tool", "stateoftheart tool",

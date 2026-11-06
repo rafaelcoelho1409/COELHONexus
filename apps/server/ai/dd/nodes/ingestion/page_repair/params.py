@@ -12,6 +12,11 @@ PATCHABLE_CATEGORIES = frozenset({
     "generated_title",
     "encoding_artifact",
 })
+# A repair in these categories removes a repeat: the text it removes must still be on the page afterwards.
+DUPLICATE_CATEGORIES = frozenset({
+    "duplicate_boilerplate",
+    "duplicate_section",
+})
 # A repair in these categories changes syntax, never wording: its replacement keeps every word of its target.
 WORD_PRESERVING_CATEGORIES = frozenset({
     "malformed_heading",

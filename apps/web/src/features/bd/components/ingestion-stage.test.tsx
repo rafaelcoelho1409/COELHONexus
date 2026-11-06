@@ -1424,7 +1424,9 @@ describe("A finished book", () => {
       const issues = within(quality).getByRole("list", { name: "Issues found" });
       expect(issues).toHaveTextContent("Split word");
       expect(issues).toHaveTextContent("Needs review");
-      expect(issues).toHaveTextContent("Suggested fix: I NTRODUC T I ON → replaced by INTRODUCTION");
+      expect(issues).toHaveTextContent(
+        "Suggested fix, not applied: I NTRODUC T I ON → replaced by INTRODUCTION",
+      );
     });
 
     it("marks the pages the run left for review or out of the text, filters to review, and jumps to the next one", async () => {

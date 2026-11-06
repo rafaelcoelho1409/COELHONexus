@@ -13,10 +13,10 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
-import domains  # noqa: E402
+import ai  # noqa: E402
 
-sel = domains.dd.pipeline.planner.nodes.chapter_select.domain
-P = domains.dd.pipeline.planner.nodes.chapter_select.params
+sel = ai.dd.nodes.pipeline.planner.chapter_select.domain
+P = ai.dd.nodes.pipeline.planner.chapter_select.params
 
 fx = json.load(open(sys.argv[1]))
 entries, proposals = fx["entries"], fx["proposals"]

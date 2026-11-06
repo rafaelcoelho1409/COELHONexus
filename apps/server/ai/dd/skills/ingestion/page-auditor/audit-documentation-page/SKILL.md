@@ -47,6 +47,8 @@ Docs Distiller serves stored page images at `/api/v1/dd/ingestion/<slug>/artifac
 - Raw HTML such as `<div>`, `<iframe>` or `<a id="...">` is valid in CommonMark and GFM. Report it only when the markup itself is broken (an unclosed tag that swallows the following text).
 - A short heading used as a label, such as `#### NOTE` above a paragraph, is the converted form of a documentation admonition. It is not a defect, and turning it into a blockquote would drop the label.
 - Text inside a code fence or console output, including its escapes, quotes and line length, is content. Never report it as Markdown formatting.
+- MDX-site exports keep their components: `<Note>`, `<Info>`, `<Warning>`, `<Tip>`, `<Check>`, `<Tabs>`/`<Tab>`, `<Card>`/`<CardGroup>`, `<Steps>`, `<Accordion>`, `<img alt="" />` placeholders and fence openers such as `` ```python theme={null} ``. A later stage converts all of them, so they are not findings, however non-standard they look.
+- Padded table columns, bold text inside a heading (`## **Telemetry**`), a `Source: <url>` line under the page's H1 and a commented-out line (`# ws.delete_project(...)`) inside a code block are all valid; do not report them.
 - A `---` line at the very top of the page, before the anchor or first heading, is the separator the bundle was split on. It is not front matter; do not report it.
 - A list that renders correctly but uses a different spacing style has no issue.
 - If a title looks wrong but no better title appears in the Markdown, do not invent one. Leave the title empty or retain the source-supported candidate and lower its confidence.

@@ -47,7 +47,7 @@ describe("planner overviews on a finished checkpoint", () => {
       kind: "list",
       items: ["Getting started", "Core concepts", "Deployment"],
     });
-    expect(cardValue(propose, "Samples OK")).toBe("3/3");
+    expect(cardValue(propose, "Architect")).toBe("1 round");
 
     const assign = buildOverview("planner", "chapter_assign", PLANNER_FINISHED_VALUES);
     const bars = assign.sections[0];

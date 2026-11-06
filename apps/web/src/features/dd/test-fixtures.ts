@@ -50,8 +50,10 @@ export const PLANNER_FINISHED_VALUES: Record<string, unknown> = {
   chapter_proposals_ref: "planner/alpha/proposals.json",
   propose_stats: {
     n_proposals: 3,
-    n_samples_valid: 3,
-    chosen_idx: 1,
+    n_sections: 2,
+    n_sketches_valid: 2,
+    architect_rounds: 1,
+    score: 0.86,
     n_files: 10,
     wall_ms: 5_000,
     titles: ["Getting started", "Core concepts", "Deployment"],

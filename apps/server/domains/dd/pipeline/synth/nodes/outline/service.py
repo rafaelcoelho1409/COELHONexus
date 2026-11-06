@@ -269,9 +269,9 @@ async def outline_sdp_run(state: domains.dd.pipeline.synth.state.SynthState) -> 
     t0 = time.monotonic()
     minio = infra.minio.service.get_storage()
 
-    plan_key = domains.dd.pipeline.planner.keys.plan_latest_key(slug)
+    plan_key = domains.dd.pipeline.storage.keys.plan_latest_key(slug)
     try:
-        plan = await domains.dd.pipeline.planner.service.load_plan(slug)
+        plan = await domains.dd.pipeline.storage.service.load_plan(slug)
     except Exception as e:
         return {
             "outline_path":  "",

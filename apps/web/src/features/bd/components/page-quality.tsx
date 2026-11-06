@@ -95,7 +95,7 @@ export function PageQualityPanel({
                   ))}
                   {issue.proposal && issue.resolution !== "auto_applied" ? (
                     <p className="mt-1 break-words text-xs">
-                      <span className="text-muted-foreground">Suggested fix: </span>
+                      <span className="text-muted-foreground">Suggested fix, not applied: </span>
                       <del className="font-mono text-destructive-text">{issue.proposal.target_text}</del>
                       <span aria-hidden="true"> → </span>
                       <span className="sr-only"> replaced by </span>

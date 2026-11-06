@@ -77,6 +77,10 @@ Page 219 repeats `Sofacy/ Sednit`; the validator rejects any target that occurs 
 
 Replay against this run: soft-hyphen pages 37 and 127, page 41 (leaders), pages 48, 81, 82 (entity) and pages 93, 207 (self-dismissed) clear: **32 → 24 review pages**. Page 219 should also clear next run (its repair is now accepted); that is not counted.
 
+### Later the same day: workflow 1.10
+
+Labeling the suggestions left in review ([labels and decision](BD-INGESTION-REVIEW-SUGGESTIONS-LABELS-2026-11-05.md)) showed five correct ones were one provable class: a reference URL with a stray space and a `\_` escape. Workflow 1.10 auto-applies that class (never inside code) and leaves everything else in review; on this run it also clears pages 240 and 251. The same labeling found 12 of the 38 remaining suggestions wrong, 10 of them at confidence 0.9 or higher, so letting the AI accept the rest was ruled out.
+
 ### Tests
 
 `scripts/server/test_bd_ingestion_full_workflow.py` adds: a soft-hyphen finding resolved after a space-only repair, a repeated phrase repaired at both places (and refused inside a URL), the ambiguity test now using a letter-changing proposal, entity, prose-ellipsis and self-dismissal evidence rejected while a real contents row passes. All BD offline tests pass.

@@ -9,10 +9,10 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
-import domains  # noqa: E402
+import ai  # noqa: E402
 
-SEL = domains.dd.pipeline.planner.nodes.chapter_select.domain
-P = domains.dd.pipeline.planner.nodes.chapter_select.params
+SEL = ai.dd.nodes.pipeline.planner.chapter_select.domain
+P = ai.dd.nodes.pipeline.planner.chapter_select.params
 
 
 def build(n_fit_per, n_nofit):
@@ -73,15 +73,12 @@ res = run(10, 5)
 assert res["stats"]["n_leftover_dir_owned"] == 0 and res["stats"]["n_leftover_placed"] == 5          # no directories known -> as before
 print("3b directory-owned strays ok")
 
-# 3c) assign prompt: the page's URL path is shown when known, the static prefix is unchanged otherwise -------------------
-CA = domains.dd.pipeline.planner.nodes.chapter_assign
-props = [{"title": f"C{i}", "description": "d", "key_concepts": []} for i in range(14)]
-kw = dict(framework="fw", source_key="ingestion/fw/pages/0001-x-fw.md", doc_summary="s", doc_terms=["t"], doc_body="", proposals=props)
-with_path = CA.prompts.build_prompt(**kw, doc_path="integrations/frameworks/agno-agents")
-without = CA.prompts.build_prompt(**kw)
-assert "PAGE URL PATH: integrations/frameworks/agno-agents" in with_path and "PAGE URL PATH" not in without
-assert with_path.rindex("PAGE URL PATH") > with_path.index("== FILE:") and CA.prompts.PATH_RUBRIC in with_path
-assert "EXACTLY 14 keys" in CA.prompts.to_fixed_key_prompt(with_path, 14)
+# 3c) the scorer's request carries the page's URL path when known, and not otherwise -------------------------------------------
+CA = ai.dd.nodes.pipeline.planner.chapter_assign
+req = dict(framework="fw", source_key="ingestion/fw/pages/0001-x-fw.md", summary="s", terms=["t"], body="")
+with_path = json.loads(CA.domain.score_payload(**req, doc_path="integrations/frameworks/agno-agents"))
+without = json.loads(CA.domain.score_payload(**req, doc_path=""))
+assert with_path["page_url_path"] == "integrations/frameworks/agno-agents" and "page_url_path" not in without
 up = CA.domain.url_paths([
     {"key": "a", "url": "https://langfuse.com/integrations/frameworks/agno-agents#sec"},
     {"key": "b", "url": "https://docs.python.org/3/library/asyncio-task.html?x=1"},
@@ -89,10 +86,10 @@ up = CA.domain.url_paths([
     {"key": "d", "url": "https://x.dev/"}, {"url": "https://x.dev/z"},
 ])
 assert up == {"a": "integrations/frameworks/agno-agents", "b": "3/library/asyncio-task", "c": "docs/api"}, up
-print("3c assign prompt carries the URL path ok")
+print("3c the scorer's request carries the URL path ok")
 
 # 3d) order: chapters made of a catalog directory's sub-directories share one home and end up adjacent ----------------------
-OC = domains.dd.pipeline.planner.nodes.order_chapters.domain
+OC = ai.dd.nodes.pipeline.planner.order_chapters.domain
 def mk(title, dirs, **kw):
     return {"title": title, "member_doc_keys": [f"k/{title}/{i}" for i in range(len(dirs))], **kw}, {f"k/{title}/{i}": d for i, d in enumerate(dirs)}
 parts = [

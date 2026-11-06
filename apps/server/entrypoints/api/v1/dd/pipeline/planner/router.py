@@ -3,7 +3,7 @@ is the HTTP/SSE layer. SSE via Redis pub/sub, cancel via Redis flag,
 checkpoints in Postgres."""
 from __future__ import annotations
 import domains, infra
-import domains.dd.pipeline.planner.task
+import domains.dd.pipeline.ai.task
 from . import params
 
 import asyncio
@@ -23,8 +23,8 @@ router = APIRouter()
 @router.get("/info")
 async def planner_info() -> dict:
     return {
-        "node_order": list(domains.dd.pipeline.planner.graph.NODE_ORDER),
-        "implemented": list(domains.dd.pipeline.planner.graph.IMPLEMENTED),
+        "node_order": list(domains.dd.pipeline.ai.service.node_order()),
+        "implemented": list(domains.dd.pipeline.ai.service.node_order()),
         "modes": [
             {"key": "llm",       "label": "LLM-only",        "enabled": True},
             {"key": "classical", "label": "Classical + LLM", "enabled": False},
@@ -38,7 +38,7 @@ async def planner_health(slug: str, response: Response) -> dict:
     `degraded` is the one-flag answer to 'will this plan be any good'."""
     response.headers["Cache-Control"] = "no-store"
     try:
-        key = domains.dd.pipeline.planner.nodes.plan_write.keys.latest_blob_key(slug)
+        key = domains.dd.pipeline.storage.keys.plan_latest_key(slug)
         raw = await infra.minio.service.get_storage().read_text(key)
         plan = json.loads(raw)
         stats = plan.get("stats") or {}
@@ -59,7 +59,7 @@ async def planner_health(slug: str, response: Response) -> dict:
 async def planner_timing(slug: str, response: Response) -> dict:
     response.headers["Cache-Control"] = "no-store"
     try:
-        raw = await infra.minio.service.get_storage().read_text(domains.dd.pipeline.planner.keys.planner_timing_key(slug))
+        raw = await infra.minio.service.get_storage().read_text(domains.dd.pipeline.storage.keys.planner_timing_key(slug))
         data = json.loads(raw)
         return {
             "total_wall_ms": int(data.get("total_wall_ms") or 0),
@@ -90,17 +90,17 @@ async def start_planner(
         )
 
     if not thread_id:
-        thread_id = domains.dd.pipeline.planner.runtime.dispatch.keys.make_thread_id(slug)
+        thread_id = domains.dd.pipeline.runtime.dispatch.domain.make_thread_id(slug)
 
-    gate = await domains.dd.pipeline.planner.runtime.dispatch.service.reserve_start(slug, thread_id)
+    gate = await domains.dd.pipeline.runtime.dispatch.service.reserve_start(slug, thread_id)
     if gate is not None:
         return gate
 
     try:
-        async_result = domains.dd.pipeline.planner.task.run_planner.delay(thread_id, slug, mode)
+        async_result = domains.dd.pipeline.ai.task.run_planner.delay(thread_id, slug, mode)
         infra.opentelemetry.service.tag_celery_task(async_result.id)
     except Exception as e:
-        await domains.dd.pipeline.planner.runtime.dispatch.service.release_start(slug)
+        await domains.dd.pipeline.runtime.dispatch.service.release_start(slug)
         logger.exception(
             f"[planner] {thread_id}: celery dispatch failed: "
             f"{type(e).__name__}: {e}"
@@ -110,7 +110,7 @@ async def start_planner(
             detail=f"celery dispatch failed: {type(e).__name__}: {e}",
         )
 
-    await domains.dd.pipeline.planner.runtime.dispatch.service.register_active_run(slug, thread_id)
+    await domains.dd.pipeline.runtime.dispatch.service.register_active_run(slug, thread_id)
 
     return {
         "thread_id":      thread_id,
@@ -126,16 +126,16 @@ async def start_planner(
 async def planner_active(slug: str, response: Response) -> dict:
     """Page-refresh recovery without browser localStorage."""
     response.headers["Cache-Control"] = "no-store"
-    return await domains.dd.pipeline.planner.runtime.dispatch.service.read_active_run(slug)
+    return await domains.dd.pipeline.runtime.dispatch.service.read_active_run(slug)
 
 
 @router.post("/{thread_id:path}/resume")
 async def resume_planner(thread_id: str) -> dict:
     async with infra.redis.service.client() as r:
-        await domains.dd.pipeline.planner.runtime.cancel.service.clear_cancel(r, thread_id)
+        await domains.dd.pipeline.runtime.cancel.service.clear_cancel(r, thread_id)
 
     try:
-        async_result = domains.dd.pipeline.planner.task.resume_planner.delay(thread_id)
+        async_result = domains.dd.pipeline.ai.task.resume_planner.delay(thread_id)
         infra.opentelemetry.service.tag_celery_task(async_result.id)
     except Exception as e:
         logger.exception(
@@ -208,7 +208,7 @@ async def wipe_planner(slug: str) -> dict:
 
     minio = infra.minio.service.get_storage()
     try:
-        n_minio = await minio.delete_prefix(domains.dd.pipeline.planner.keys.minio_prefix(slug))
+        n_minio = await minio.delete_prefix(domains.dd.pipeline.storage.keys.planner_prefix(slug))
     except Exception as e:
         logger.warning(f"[planner-wipe] MinIO delete failed for {slug!r}: {e}")
         n_minio = -1
@@ -234,7 +234,7 @@ async def wipe_planner(slug: str) -> dict:
         logger.warning(f"[planner-wipe] Postgres delete failed for {slug!r}: {e}")
         counts["error"] = f"{type(e).__name__}: {e}"
 
-    n_redis = await domains.dd.pipeline.planner.runtime.dispatch.service.wipe_redis(slug)
+    n_redis = await domains.dd.pipeline.runtime.dispatch.service.wipe_redis(slug)
 
     logger.info(
         f"[planner-wipe] {slug}: minio={n_minio} blobs, postgres={counts}, "
@@ -259,11 +259,11 @@ async def prune_checkpoints(older_than_days: int = 30, dry_run: bool = True) -> 
     Nothing in this codebase calls this on a schedule; wire it up via a
     k8s CronJob or celery beat if periodic pruning is wanted."""
     if dry_run:
-        result = await domains.dd.pipeline.planner.runtime.checkpoint.service.prune_old_threads(
+        result = await domains.dd.pipeline.runtime.checkpoint.service.prune_old_threads(
             older_than_days = older_than_days, dry_run = True,
         )
         return result
-    async_result = domains.dd.pipeline.planner.task.prune_old_checkpoints.delay(
+    async_result = domains.dd.pipeline.ai.task.prune_old_checkpoints.delay(
         older_than_days, False,
     )
     return {
@@ -287,7 +287,7 @@ async def planner_events(thread_id: str) -> StreamingResponse:
 
         async def _pump():
             try:
-                async for event in domains.dd.pipeline.planner.runtime.progress.service.subscribe_progress(thread_id):
+                async for event in domains.dd.pipeline.runtime.progress.service.subscribe_progress(thread_id):
                     await queue.put(event)
             except asyncio.CancelledError:
                 pass
@@ -338,14 +338,14 @@ async def planner_events(thread_id: str) -> StreamingResponse:
 
 @router.post("/{thread_id:path}/cancel")
 async def cancel_planner(thread_id: str) -> dict:
-    await domains.dd.pipeline.planner.runtime.dispatch.service.cancel_run(thread_id)
+    await domains.dd.pipeline.runtime.dispatch.service.cancel_run(thread_id)
     return {"thread_id": thread_id, "status": "cancel_requested"}
 
 
 @router.get("/debug/graph/{thread_id:path}/state")
 async def get_graph_state(thread_id: str) -> dict:
     try:
-        graph = domains.dd.pipeline.planner.graph.build_graph()
+        graph = domains.dd.pipeline.ai.service.planner_graph()
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
@@ -373,7 +373,7 @@ async def get_graph_llm_counters(thread_id: str) -> dict:
 @router.get("/debug/graph/{thread_id:path}/history")
 async def get_graph_history(thread_id: str) -> dict:
     try:
-        graph = domains.dd.pipeline.planner.graph.build_graph()
+        graph = domains.dd.pipeline.ai.service.planner_graph()
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
 

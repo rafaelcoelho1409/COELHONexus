@@ -11,6 +11,7 @@ class PageReference(TypedDict):
     idx: int
     slug: str
     url: str
+    source_path: NotRequired[str]
     tier: str
     title: str
     section: str

@@ -8,9 +8,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const web = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const server = resolve(web, "../server/domains/dd");
+const server = resolve(web, "../server");
 
-if (!existsSync(server)) {
+if (!existsSync(join(server, "domains/dd"))) {
   console.log("skip backend contract check: apps/server is not next to apps/web in this checkout");
   process.exit(0);
 }
@@ -51,8 +51,20 @@ function webNodes(source, table) {
 const stages = read(join(web, "src/features/dd/domain/stages.ts"));
 
 for (const [name, table, stateClass, statePath, graphPath] of [
-  ["planner", "PLANNER_NODES", "PlannerState", "pipeline/planner/state.py", "pipeline/planner/graph.py"],
-  ["synth", "SYNTH_NODES", "SynthState", "pipeline/synth/state.py", "pipeline/synth/graph.py"],
+  [
+    "planner",
+    "PLANNER_NODES",
+    "PlannerState",
+    "ai/dd/graphs/pipeline/planner/state.py",
+    "ai/dd/graphs/pipeline/planner/graph.py",
+  ],
+  [
+    "synth",
+    "SYNTH_NODES",
+    "SynthState",
+    "domains/dd/pipeline/synth/state.py",
+    "domains/dd/pipeline/synth/graph.py",
+  ],
 ]) {
   const keys = typedDictKeys(read(join(server, statePath)), stateClass);
   const nodes = webNodes(stages, table);
@@ -71,7 +83,7 @@ for (const [name, table, stateClass, statePath, graphPath] of [
   }
 }
 
-const backendPrefix = read(join(server, "pipeline/planner/runtime/dispatch/keys.py")).match(
+const backendPrefix = read(join(server, "domains/dd/pipeline/runtime/dispatch/keys.py")).match(
   /^THREAD_PREFIX = "([^"]+)"/m,
 )?.[1];
 const webPrefix = read(join(web, "src/features/dd/params.ts")).match(/THREAD_PREFIX = "([^"]+)"/)?.[1];

@@ -422,7 +422,19 @@ body, report = one_patch("b", "[Troubleshooting Installation]()", "[Troubleshoot
 check("a formatting patch that only adds a destination is applied", (len(report["accepted"]), "(#troubleshooting-installation)" in body), (1, True))
 
 body, report = one_patch("c", "#### NOTE\nBecause it matters.", "Because it matters.", "\n\n", "\n\nSee", category = "duplicate_boilerplate")
-check("removing a redundant block may drop words", len(report["accepted"]), 1)
+check("a repeat removal is rejected when the page holds only one copy",
+      (len(report["accepted"]), report["rejected"][0]["reason"]), (0, "removing it would leave no copy of the text"))
+
+TWICE_SOURCE = "# T\n\nIntro.\n\nSee docs.\n\nMiddle.\n\nSee docs.\n"
+twice_sha = hashlib.sha256(TWICE_SOURCE.encode("utf-8")).hexdigest()
+twice_patch = schemas.PagePatch(
+    issue_id = "d", source_sha256 = twice_sha, context_before = "\n\n", target_text = "Middle.\n\nSee docs.",
+    context_after = "\n", replacement = "Middle.", rationale = "r", evidence = "See docs.", confidence = 0.95,
+)
+twice_issue = [{"issue_id": "d", "category": "duplicate_boilerplate", "severity": "low", "description": "d",
+                "evidence": "See docs.", "confidence": 0.95}]
+body, report = page_repair.domain.apply_patches(TWICE_SOURCE, twice_sha, {"issues": twice_issue}, schemas.PagePatchBatch(patches = [twice_patch]))
+check("a repeat removal is applied when another copy stays", (len(report["accepted"]), body.count("See docs.")), (1, 1))
 
 titled = {"title": "# aiolocust / asyncio", "title_confidence": 0.9}
 check(
@@ -430,3 +442,106 @@ check(
     page_repair.domain.output_title("# aiolocust / asyncio\n\nBody", "aiolocust", titled, fallback = lambda markdown, slug: slug),
     "aiolocust / asyncio",
 )
+
+# --- fences inside MDX components, duplicate removals, export conventions, and titles of pages split from one bundle
+NESTED = (
+    "# Projects\n\n<Tabs>\n  <Tab title=\"Python\">\n    To delete the Project:\n\n    ```\n"
+    "    # ws.delete_project(\"PROJECT ID\")\n    ```\n  </Tab>\n</Tabs>\n"
+)
+nested_sha = hashlib.sha256(NESTED.encode("utf-8")).hexdigest()
+nested_issue = [{"issue_id": "n", "category": "markdown_formatting", "severity": "low", "description": "d",
+                 "evidence": "# ws.delete_project(\"PROJECT ID\")", "confidence": 0.95}]
+nested_patch = schemas.PagePatch(
+    issue_id = "n", source_sha256 = nested_sha, context_before = "    ", target_text = "# ws.delete_project(\"PROJECT ID\")",
+    context_after = "\n", replacement = "ws.delete_project(\"PROJECT ID\")", rationale = "r",
+    evidence = "# ws.delete_project(\"PROJECT ID\")", confidence = 0.95,
+)
+body, report = page_repair.domain.apply_patches(NESTED, nested_sha, {"issues": nested_issue}, schemas.PagePatchBatch(patches = [nested_patch]))
+check(
+    "code inside a fence nested four spaces deep in a component is never edited",
+    (body == NESTED, report["rejected"][0]["reason"]),
+    (True, "patch target overlaps a fenced code block"),
+)
+
+SENTENCE = "Use the menu on the left to explore other questions."
+once = f"# FAQ\n\n{SENTENCE}\n"
+twice = f"# FAQ\n\n{SENTENCE}\n\n## More\n\n{SENTENCE}\n"
+check("removing the only copy of a text is not a deduplication",
+      page_repair.domain.duplicate_survives(once, SENTENCE, SENTENCE, ""), False)
+check("removing one of two copies leaves the other",
+      page_repair.domain.duplicate_survives(twice, SENTENCE, f"{SENTENCE}\n\n## More\n\n{SENTENCE}", f"{SENTENCE}\n\n## More\n\n"), True)
+
+convention_page = (
+    "```python theme={null}\nimport os\n```\n\n<Note>\n  A note.\n</Note>\n\n<img alt=\"\" />\n\nplain ```python theme={null} text\n"
+)
+
+
+def finding_on(category: str, evidence: str, issue_id: str):
+    return schemas.PageIssue(issue_id = issue_id, category = category, severity = "low", description = "d",
+                             evidence = evidence, confidence = 0.9)
+
+
+raw_assessment = schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATION, confidence = 0.9, issues = [
+    finding_on("markdown_formatting", "```python theme={null}\nimport os\n```", "fence"),
+    finding_on("markdown_formatting", "<Note>\n  A note.\n</Note>", "note"),
+    finding_on("other", "<img alt=\"\" />", "img"),
+    finding_on("duplicate_boilerplate", "<Note>\n  A note.\n</Note>", "dup"),
+    finding_on("markdown_formatting", "plain ```python theme={null} text", "prose"),
+])
+kept, notes = page_audit.domain.sanitize_assessment(raw_assessment, markdown = convention_page)
+check(
+    "findings that quote an export convention are dropped; a repeat finding and prose are kept",
+    [issue.issue_id for issue in kept.issues],
+    ["dup", "prose"],
+)
+check("each dropped finding is explained", len(notes), 3)
+
+
+async def titles_for(entries: list[tuple[str, str]]) -> list[str]:
+    pages = []
+    written = {}
+    bodies = {}
+    for idx, (title, source_path) in enumerate(entries):
+        body = f"# {title}\nSource: {source_path}\n\nBody {idx}."
+        key = f"src/{idx}"
+        bodies[key] = body
+        pages.append({
+            "idx": idx, "slug": f"p{idx}", "url": "https://docs.test/llms-full.txt", "source_path": source_path,
+            "tier": "llms_full", "title": title, "section": "", "notes": "", "lastmod": "", "anchors": [],
+            "bytes": len(body), "source_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+            "source_key": key, "raw_key": f"raw/{idx}",
+        })
+
+    async def read_page(key):
+        return bodies[key]
+
+    async def artifact_exists(key):
+        return False
+
+    async def read_artifact(key):
+        raise AssertionError("nothing was saved")
+
+    async def write_artifact(key, value, content_type):
+        written[key] = value
+
+    async def page_done():
+        return None
+
+    state = {
+        "framework_slug": "evidently", "run_id": "run-1", "pages": pages,
+        "assessments": [{"idx": page["idx"], "source_sha256": page["source_sha256"],
+                         "assessment": {"page_kind": "documentation", "issues": []}} for page in pages],
+    }
+    result = await normalize_pages.service.normalize_pages(
+        state, read_page, artifact_exists, read_artifact, write_artifact, FakeAgent({"structured_response": batch}), {}, None, page_done,
+    )
+    return [page["title"] for page in result["output_pages"]]
+
+
+distinct = asyncio.run(titles_for([
+    ("Overview", "https://docs.test/docs/platform/overview"),
+    ("Overview", "https://docs.test/docs/library/overview"),
+    ("Tracing", "https://docs.test/quickstart_tracing"),
+]))
+check("pages split from one bundle with the same title are told apart by their own address", len(set(distinct)), 3)
+check("the repeats say where they live", (distinct[0].endswith("Overview"), distinct[0] != distinct[1]), (True, True))

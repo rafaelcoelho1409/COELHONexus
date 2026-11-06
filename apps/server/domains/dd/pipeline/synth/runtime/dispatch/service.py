@@ -24,7 +24,7 @@ async def reserve_start(slug: str, thread_id: str) -> dict | None:
     the caller then enqueues the run and calls `release_start` if that fails."""
     redis = infra.redis.service
     async with redis.client() as r:
-        planner = await redis.first_held(r, domains.dd.pipeline.planner.keys.lock_prefix())
+        planner = await redis.first_held(r, domains.dd.pipeline.runtime.keys.lock_prefix())
         if planner is not None:
             planner_slug, planner_thread = planner
             return {

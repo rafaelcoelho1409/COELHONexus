@@ -1,14 +1,37 @@
-"""Pure readers for what an agent answered: its structured response, or the JSON it wrote as plain text instead."""
+"""Pure readers for what an agent answered (its structured response, or the JSON it wrote as plain text instead) and for how a model call failed."""
 from __future__ import annotations
 
 from collections.abc import Iterator
 from json import JSONDecodeError, JSONDecoder
 from typing import Any, TypeVar
 
+import httpx
+from openai import APIConnectionError
 from pydantic import BaseModel, ValidationError
 
 
 Schema = TypeVar("Schema", bound = BaseModel)
+
+
+def is_transient(error: BaseException) -> bool:
+    """Whether a model call failed for a reason a new call can fix: a timeout, a dropped connection, a rate limit or a provider 5xx."""
+    if isinstance(error, (TimeoutError, APIConnectionError, httpx.TransportError)):
+        return True
+    status_code = getattr(error, "status_code", None)
+    return status_code in (408, 429) or (isinstance(status_code, int) and 500 <= status_code <= 599)
+
+
+def rotator_meta(result: Any) -> dict[str, Any]:
+    """What the Rotator told us about the call that produced `result`: its request id (a response header on the last assistant
+    message), which `report_quality` needs to tell the Rotator how good the answer was. {} when the endpoint is not a Rotator."""
+    messages = result.get("messages") if isinstance(result, dict) else None
+    for message in reversed(messages or []):
+        if getattr(message, "type", None) not in {"ai", "assistant"}:
+            continue
+        headers = (getattr(message, "response_metadata", None) or {}).get("headers") or {}
+        request_id = headers.get("x-rotator-request-id") if isinstance(headers, dict) else None
+        return {"rotator_request_id": request_id} if request_id else {}
+    return {}
 
 
 def structured_or_recovered(result: Any, schema: type[Schema]) -> Schema | None:

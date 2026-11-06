@@ -31,8 +31,8 @@ def mgsr_latest_key(slug: str, chapter_id: str) -> str:
 
 def planner_latest_key(slug: str) -> str:
     """The planner's latest plan blob — same key the planner writes and the
-    synth/api read (canonical builder: domains.dd.pipeline.planner.keys)."""
-    return domains.dd.pipeline.planner.keys.plan_latest_key(slug)
+    synth/api read (canonical builder: domains.dd.pipeline.storage.keys)."""
+    return domains.dd.pipeline.storage.keys.plan_latest_key(slug)
 
 
 def source_key_to_vault_key(source_key: str, framework_slug: str) -> str:

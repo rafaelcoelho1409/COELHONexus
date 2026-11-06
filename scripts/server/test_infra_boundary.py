@@ -140,10 +140,27 @@ def llm_counter_homes() -> list[str]:
     return found
 
 
+def ai_without_infra() -> list[str]:
+    """`ai/` (agents, graphs, nodes, prompts, skills, tools, backends) never imports `infra`: it reaches COELHO Cloud services through
+    `domains` (the chat adapter, the LLM counter, the storage keys) and the ports a run hands its graph. The composition roots under
+    `domains/` are where `infra` is bound to an agentic graph."""
+    found = []
+    for path in sorted((SERVER / "ai").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding = "utf-8"))
+        for node in ast.walk(tree):
+            names = [alias.name for alias in node.names] if isinstance(node, ast.Import) else (
+                [node.module or ""] if isinstance(node, ast.ImportFrom) and not node.level else []
+            )
+            if any(name == "infra" or name.startswith("infra.") for name in names):
+                found.append(f"{path.relative_to(SERVER)}:{node.lineno} imports infra")
+    return found
+
+
 EXTRA_CHECKS = {
     "env-params": env_outside_params,
     "entrypoint-redis": entrypoint_redis,
     "llm-counter": llm_counter_homes,
+    "ai-no-infra": ai_without_infra,
 }
 
 

@@ -44,7 +44,12 @@ export function plannerLiveText(ev: StageEvent): string {
       return "";
     case "chapter_propose":
       if (kind === "start") return "· loading distillates + extracting structural seeds…";
-      if (kind === "sampling") return `· firing N=${num(ev, "n_samples") || 3} proposals…`;
+      if (kind === "sampling") {
+        const sections = num(ev, "n_sections");
+        return sections > 0
+          ? `· ${fmtInt(sections)} sections read by analysts, then the architect…`
+          : "· the architect is reading the corpus…";
+      }
       if (kind === "done") {
         const titles = stringList(ev.titles).slice(0, 3);
         const tail = titles.length > 0 ? `: ${titles.join(", ")}` : "";

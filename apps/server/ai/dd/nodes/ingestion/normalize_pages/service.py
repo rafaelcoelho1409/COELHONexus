@@ -214,8 +214,12 @@ async def normalize_pages(
     outputs.sort(key = lambda item: item["idx"])
     post_domain = domains.dd.ingestion.post.domain
     plain_titles = post_domain.strip_site_suffix([page["title"] for page in outputs])
+    # A page split out of one bundle (llms-full.txt) shares the bundle's `url`; its own address is its `source_path`.
     unique_titles = post_domain.disambiguate_titles(
-        [(title, page.get("url") or "") for title, page in zip(plain_titles, outputs)]
+        [
+            (title, page.get("source_path") or page.get("url") or "")
+            for title, page in zip(plain_titles, outputs)
+        ]
     )
     for page, title in zip(outputs, unique_titles):
         page["title"] = title

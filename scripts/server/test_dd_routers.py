@@ -96,12 +96,12 @@ def _stub(name):
 
 
 import domains.dd.ingestion.task  # noqa: E402,F401
-import domains.dd.pipeline.planner.task  # noqa: E402,F401
+import domains.dd.pipeline.ai.task  # noqa: E402,F401
 import domains.dd.pipeline.synth.task  # noqa: E402,F401
 
 domains.dd.ingestion.task.run_ingestion.delay = _stub("run_ingestion")
-domains.dd.pipeline.planner.task.run_planner.delay = _stub("run_planner")
-domains.dd.pipeline.planner.task.resume_planner.delay = _stub("resume_planner")
+domains.dd.pipeline.ai.task.run_planner.delay = _stub("run_planner")
+domains.dd.pipeline.ai.task.resume_planner.delay = _stub("resume_planner")
 domains.dd.pipeline.synth.task.run_study.delay = _stub("run_study")
 domains.dd.pipeline.synth.task.run_single_chapter.delay = _stub("run_single_chapter")
 domains.dd.pipeline.synth.task.resume_synth.delay = _stub("resume_synth")
@@ -181,7 +181,7 @@ def reset():
 
 
 def seed_plan(slug, chapter_ids=("ch-1", "ch-2")):
-    MINIO.objects[domains.dd.pipeline.planner.keys.plan_latest_key(slug)] = json.dumps({"chapters": [{"id": c, "title": c} for c in chapter_ids]})
+    MINIO.objects[domains.dd.pipeline.storage.keys.plan_latest_key(slug)] = json.dumps({"chapters": [{"id": c, "title": c} for c in chapter_ids]})
 
 
 def seed_manifest(slug):
@@ -224,7 +224,7 @@ seed_manifest("pg")
 step("planner: start without a manifest", "POST", "/pipeline/planner/nomf")
 step("planner: invalid mode", "POST", "/pipeline/planner/pf", params={"mode": "bogus"})
 step("planner: start pf", "POST", "/pipeline/planner/pf")
-planner_tid = val(domains.dd.pipeline.planner.keys.lock_key("pf"))
+planner_tid = val(domains.dd.pipeline.runtime.keys.lock_key("pf"))
 step("planner: start pf again (same slug locked)", "POST", "/pipeline/planner/pf")
 step("planner: start pg (other planner locked)", "POST", "/pipeline/planner/pg")
 step("planner: active pf", "GET", "/pipeline/planner/pf/active")
@@ -258,7 +258,7 @@ step("synth: wipe one chapter while a study runs", "DELETE", "/pipeline/synth/sf
 step("synth: cancel study (propagates)", "POST", f"/pipeline/synth/{study_tid}/cancel")
 step("synth: resume", "POST", f"/pipeline/synth/{study_tid}/resume")
 step("synth: wipe sf", "DELETE", "/pipeline/synth/sf/wipe")
-rs.set(domains.dd.pipeline.planner.keys.lock_key("pl"), "docs-distiller/pl/dddddddd-dddd-dddd-dddd-dddddddddddd", ex=600)
+rs.set(domains.dd.pipeline.runtime.keys.lock_key("pl"), "docs-distiller/pl/dddddddd-dddd-dddd-dddd-dddddddddddd", ex=600)
 step("synth: start study sg (planner running)", "POST", "/pipeline/synth/sg")
 step("synth: start chapter sg ch-1 (planner running)", "POST", "/pipeline/synth/sg", params={"chapter_id": "ch-1"})
 reset()

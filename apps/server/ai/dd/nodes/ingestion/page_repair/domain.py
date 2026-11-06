@@ -27,6 +27,12 @@ def dropped_words(target: str, replacement: str) -> set[str]:
     return set(re.findall(r"\w+", target.casefold())) - set(re.findall(r"\w+", replacement.casefold()))
 
 
+def duplicate_survives(markdown: str, evidence: str, target: str, replacement: str) -> bool:
+    """Whether the text a removal claims is repeated is still on the page once the patch is applied: a duplicate has a
+    surviving copy, and an edit that deletes the only one is a deletion, not a deduplication."""
+    return evidence.strip() in markdown.replace(target, replacement, 1)
+
+
 def apply_patches(
     markdown: str,
     source_sha256: str,
@@ -65,6 +71,11 @@ def apply_patches(
             and dropped_words(patch.target_text, patch.replacement)
         ):
             reason = "formatting patch removes words from the page"
+        elif (
+            known_issues[patch.issue_id]["category"] in params.DUPLICATE_CATEGORIES
+            and not duplicate_survives(markdown, patch.evidence, patch.target_text, patch.replacement)
+        ):
+            reason = "removing it would leave no copy of the text"
         else:
             start = markdown.index(patch.target_text)
             end = start + len(patch.target_text)
@@ -126,13 +137,13 @@ def output_title(
 
 
 def overlaps_fenced_code(markdown: str, start: int, end: int) -> bool:
-    """Conservatively protect fenced code, including opening and closing lines."""
+    """Conservatively protect fenced code, including opening and closing lines. A fence counts at any indentation:
+    MDX sources nest code inside components (`<Tab>`, `<Step>`), where the fence sits four or more spaces in."""
     offset = 0
     opening: tuple[str, int, int] | None = None
     for line in markdown.splitlines(keepends = True):
-        stripped = line.lstrip(" ")
-        indent = len(line) - len(stripped)
-        fence = re.match(r"(`{3,}|~{3,})", stripped) if indent <= 3 else None
+        stripped = line.lstrip(" \t")
+        fence = re.match(r"(`{3,}|~{3,})", stripped)
         if opening is None and fence:
             opening = (fence.group(1)[0], len(fence.group(1)), offset)
             line_start, line_end = offset, offset + len(line)

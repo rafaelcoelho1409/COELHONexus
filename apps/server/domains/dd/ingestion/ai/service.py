@@ -47,6 +47,7 @@ async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> d
                 "idx": entry.idx,
                 "slug": entry.slug,
                 "url": entry.url,
+                "source_path": entry.source_path,
                 "tier": entry.tier,
                 "title": entry.title,
                 "section": entry.section,

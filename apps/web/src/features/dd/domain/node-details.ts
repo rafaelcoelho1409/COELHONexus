@@ -106,23 +106,31 @@ const PLANNER_DETAILS: Record<string, NodeDetails> = {
   },
   chapter_propose: {
     title: "Chapter propose",
-    subtitle: "Asks the LLM to propose candidate study chapters.",
-    kind: "LLM synthesis",
+    subtitle: "A small team of agents designs the study chapters.",
+    kind: "LLM agents",
     actions: [
-      "Builds a long-context planning prompt from distillates, headings and the file-tree structure.",
-      "Samples candidate chapter sets and picks the best with a consistency vote.",
-      "Writes the proposals with their provenance.",
+      "Section analysts read the page summaries of each part of the docs in parallel and sketch the chapters it supports.",
+      "The architect merges the sketches against the whole corpus, checks the outline with a coverage score and has a critic review it.",
+      "A weak score sends the architect back once with the pages it left uncovered; the best outline is written with its provenance.",
     ],
     inputs: ["doc_distill_ref", "relevant_files"],
     outputs: ["chapter_proposals_ref", "propose_stats"],
-    llm: "Long-context LLM sampling, plus vote and repair calls when needed.",
+    llm: "Section analysts in parallel, then an architect agent that reads the corpus, scores its outline and consults a critic.",
     metrics: (values) => {
       const s = statsOf(values, "propose_stats");
-      const valid = maybeNum(s, "n_samples_valid");
+      const sections = maybeNum(s, "n_sections");
+      const valid = maybeNum(s, "n_sketches_valid");
       return [
         metric("proposals", num(s, "n_proposals")),
-        metric("valid samples", valid === undefined ? "pending" : `${valid}/3`),
-        metric("chosen sample", maybeNum(s, "chosen_idx") ?? "pending"),
+        metric(
+          "sections read",
+          sections === undefined || valid === undefined
+            ? "pending"
+            : sections === 0
+              ? "direct"
+              : `${valid}/${sections}`,
+        ),
+        metric("outline score", maybeNum(s, "score") ?? "pending"),
       ];
     },
   },

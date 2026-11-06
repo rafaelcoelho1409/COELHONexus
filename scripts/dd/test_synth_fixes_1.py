@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
-import domains  # noqa: E402
+import ai, domains  # noqa: E402
 
 SW = domains.dd.pipeline.synth.nodes.sawc.domain
 RD = domains.dd.pipeline.synth.nodes.render.domain
@@ -234,14 +234,14 @@ async def _go13():
     return ok, no
 assert asyncio.run(_go13()) == (True, False) and posted == [("req-1", 0.1)]
 assert CS.report_quality({"rotator_request_id": "x"}, 0.5) is False                          # no running loop: nothing to report on
-CA = domains.dd.pipeline.planner.nodes.chapter_assign
+CA = ai.dd.nodes.pipeline.planner.chapter_assign
 reported = []
 CS.report_quality = lambda meta, q: reported.append((meta.get("rotator_request_id"), q)) or True
-zero = CA.schemas.DocAssignment(scores=[CA.schemas.ChapterScore(chapter_idx=i, confidence=0.0) for i in range(3)])
-good = CA.schemas.DocAssignment(scores=[CA.schemas.ChapterScore(chapter_idx=0, confidence=0.9)])
-CA.service._report_vector_quality({"rotator_request_id": "r0"}, zero, False)
-CA.service._report_vector_quality({"rotator_request_id": "r1"}, good, False)                 # a normal first answer: nothing to say
-CA.service._report_vector_quality({"rotator_request_id": "r2"}, good, True)                  # the re-ask rescued it
+zero = [{"chapter_idx": i, "confidence": 0.0} for i in range(3)]
+good = [{"chapter_idx": 0, "confidence": 0.9}]
+CA.service._report_quality({"rotator_request_id": "r0"}, zero, False)
+CA.service._report_quality({"rotator_request_id": "r1"}, good, False)                        # a normal first answer: nothing to say
+CA.service._report_quality({"rotator_request_id": "r2"}, good, True)                         # the re-ask rescued it
 assert reported == [("r0", CA.params.FEEDBACK_EMPTY_QUALITY), ("r2", CA.params.FEEDBACK_RESCUE_QUALITY)], reported
 print("13 Rotator quality feedback ok")
 # 14) the named Rotator task reaches the request body (Rotator endpoints only) -------------------------------------------------

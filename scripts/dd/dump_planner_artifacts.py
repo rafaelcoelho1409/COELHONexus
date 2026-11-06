@@ -25,21 +25,21 @@ async def _read(minio, key):
 
 async def main() -> None:
     minio = infra.minio.service.get_storage()
-    nodes = domains.dd.pipeline.planner.nodes
+    keys = domains.dd.pipeline.storage.keys
     slugs = sorted(
         s.rstrip("/").split("/")[-1] for s in await minio.list_subfolders("planner/")
     )
     for slug in slugs:
-        assign = await _read(minio, nodes.chapter_assign.keys.latest_key(slug))
+        assign = await _read(minio, keys.assignments_latest_key(slug))
         if not assign or not assign.get("assignments"):
             continue
         row = {
             "slug": slug,
             "manifest": await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug),
-            "distillates": ((await _read(minio, nodes.doc_distill.keys.latest_key(slug))) or {}).get("distillates") or {},
-            "proposals": ((await _read(minio, nodes.chapter_propose.keys.latest_key(slug))) or {}).get("proposals") or [],
+            "distillates": ((await _read(minio, keys.distill_latest_key(slug))) or {}).get("distillates") or {},
+            "proposals": ((await _read(minio, keys.proposals_latest_key(slug))) or {}).get("proposals") or [],
             "assignments": assign["assignments"],
-            "plan": await _read(minio, nodes.chapter_select.keys.select_latest_key(slug)),
+            "plan": await _read(minio, keys.select_latest_key(slug)),
         }
         sys.stdout.write(json.dumps(row, ensure_ascii=False) + "\n")
         sys.stdout.flush()

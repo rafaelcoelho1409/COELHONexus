@@ -166,21 +166,28 @@ function chapterPropose(values: Record<string, unknown>): NodeOverview {
   const titles = texts(s, "titles");
   if (!num(s, "n_proposals") && titles.length === 0)
     return emptyOverview("No chapter-propose stats reported yet.");
-  const valid = maybeNum(s, "n_samples_valid");
+  const sections = maybeNum(s, "n_sections");
+  const rounds = maybeNum(s, "architect_rounds");
   return {
     cards: [
       card("Proposals", String(num(s, "n_proposals")), "candidate chapters"),
       card(
-        "Samples OK",
-        valid === undefined ? "?" : `${valid}/3`,
-        `voted winner: sample ${maybeNum(s, "chosen_idx") ?? "?"}`,
+        "Architect",
+        rounds === undefined ? "?" : `${rounds} ${rounds === 1 ? "round" : "rounds"}`,
+        `outline score ${maybeNum(s, "score") ?? "?"}`,
       ),
       card("From docs", int(num(s, "n_files")), "distillates + structural seeds"),
       card("Wall", wall(s), cacheLabel(s, "cold")),
     ],
-    sections:
-      titles.length > 0 ? [{ kind: "list", title: "Proposed chapters (chosen sample)", items: titles }] : [],
-    footer: compact([hashNote(s), "long-context LLM call", "3 samples + vote"]),
+    sections: titles.length > 0 ? [{ kind: "list", title: "Proposed chapters", items: titles }] : [],
+    footer: compact([
+      hashNote(s),
+      sections === undefined
+        ? null
+        : sections === 0
+          ? "architect reads the corpus"
+          : `${sections} section analysts + architect`,
+    ]),
   };
 }
 

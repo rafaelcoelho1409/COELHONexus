@@ -25,7 +25,7 @@ TASK_INCLUDE = [
     "domains.bd.ingestion.ai.task",
     "domains.dd.ingestion.task",
     "domains.dd.ingestion.ai.task",
-    "domains.dd.pipeline.planner.task",
+    "domains.dd.pipeline.ai.task",
     "domains.dd.pipeline.synth.task",
     "domains.ycs.extract.task",
     "domains.ycs.qdrant_task.task",
@@ -41,7 +41,7 @@ TASK_ROUTES = {
     "domains.bd.ingestion.ai.task.*": {"queue": Q_BD},
     "domains.dd.ingestion.task.*": {"queue": Q_CRAWLER},
     "domains.dd.ingestion.ai.task.*": {"queue": Q_CRAWLER},
-    "domains.dd.pipeline.planner.task.*":   {"queue": Q_PLANNER},
+    "domains.dd.pipeline.ai.task.*":        {"queue": Q_PLANNER},
     "domains.dd.pipeline.synth.task.*":     {"queue": Q_SYNTH},
     "domains.ycs.*":               {"queue": Q_YCS},
 }
