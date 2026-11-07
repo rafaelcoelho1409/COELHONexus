@@ -4,8 +4,8 @@ A code block that is only a bare signature teaches nothing, so a code_deriver ag
 that goes with it. The agent checks its code with `check_code` (it parses; its body is inside the length band) before answering, so a bad example is
 repaired inside the run, not discarded after N samples. The chapter draft is updated in place with the derived code."""
 from __future__ import annotations
+import domains
 from . import domain, keys, params, schemas
-from .. import shared
 from ..... import agents, graphs, tools
 
 import json
@@ -17,15 +17,14 @@ from langgraph.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
-Context = graphs.pipeline.synth.context.SynthContext
-STEP = "sawc_derive"
+Context = graphs.pipeline.synth.entities.SynthContext
 
 
 def skipped(reason: str, started: float, **extra) -> dict:
-    return {"finished": True, "derive_stats": {"skipped": reason, "wall_ms": shared.service.elapsed_ms(started), **extra}}
+    return {"finished": True, "derive_stats": {"skipped": reason, "wall_ms": graphs.service.elapsed_ms(started), **extra}}
 
 
-async def prepare(state: graphs.pipeline.synth.sawc_derive.state.DeriveState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.synth.sawc_derive.states.DeriveState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
@@ -37,11 +36,11 @@ async def prepare(state: graphs.pipeline.synth.sawc_derive.state.DeriveState, ru
     sawc_key = keys.sawc_latest_key(slug, chapter_id)
     if not await blobs.exists(sawc_key):
         # sawc_write failed or hasn't run — nothing to do.
-        shared.service.emit(STEP, "skipped", chapter_id = chapter_id, reason = "sawc_latest_missing")
+        graphs.service.emit(params.STEP, "skipped", chapter_id = chapter_id, reason = "sawc_latest_missing")
         return skipped("sawc_latest_missing", started)
-    sawc_payload = await shared.service.load_json(blobs, sawc_key)
+    sawc_payload = await domains.dd.pipeline.storage.service.load_json(blobs, sawc_key)
     if sawc_payload is None:
-        shared.service.emit(STEP, "skipped", chapter_id = chapter_id, reason = "sawc_unreadable")
+        graphs.service.emit(params.STEP, "skipped", chapter_id = chapter_id, reason = "sawc_unreadable")
         return skipped("sawc_unreadable", started)
 
     sections: list[dict] = sawc_payload.get("sections") or []
@@ -49,7 +48,7 @@ async def prepare(state: graphs.pipeline.synth.sawc_derive.state.DeriveState, ru
     framework = sawc_payload.get("framework_slug") or slug
     n_subtopics_total = sum(len(s.get("subtopics") or []) for s in sections)
     enabled = params.enabled()
-    shared.service.emit(STEP, "start", chapter_id = chapter_id, enabled = enabled, n_subtopics_total = n_subtopics_total)
+    graphs.service.emit(params.STEP, "start", chapter_id = chapter_id, enabled = enabled, n_subtopics_total = n_subtopics_total)
 
     if not enabled:
         attempts = [
@@ -61,10 +60,10 @@ async def prepare(state: graphs.pipeline.synth.sawc_derive.state.DeriveState, ru
         ]
         stats = schemas.DeriveStats(
             chapter_id = chapter_id, framework_slug = framework, enabled = False, n_subtopics_total = n_subtopics_total, n_candidates_thin = 0, n_promoted = 0,
-            n_rejected_ast = 0, n_rejected_len = 0, n_rotator_fail = 0, wall_ms = shared.service.elapsed_ms(started), attempts = attempts,
+            n_rejected_ast = 0, n_rejected_len = 0, n_rotator_fail = 0, wall_ms = graphs.service.elapsed_ms(started), attempts = attempts,
         )
         await blobs.write(keys.derive_latest_key(slug, chapter_id), json.dumps(stats.model_dump(), indent = 2), content_type = "application/json")
-        shared.service.emit(STEP, "done", chapter_id = chapter_id, **stats.model_dump(exclude = {"attempts"}))
+        graphs.service.emit(params.STEP, "done", chapter_id = chapter_id, **stats.model_dump(exclude = {"attempts"}))
         return {"finished": True, "derive_stats": stats.model_dump()}
 
     # Verbatim subtopics anchored to a vault block: candidates when the block is too thin to teach.
@@ -74,11 +73,11 @@ async def prepare(state: graphs.pipeline.synth.sawc_derive.state.DeriveState, ru
             if isinstance(st, dict) and st.get("code_source") != "derived" and st.get("code_ref_hash"):
                 candidates.append((section, st, st["code_ref_hash"]))
     # The vault of every source of the chapter (the digest's list), not only the ones the draft cites: a thin block can sit in a page the draft never cites.
-    digest = await shared.service.load_json(blobs, keys.digest_latest_key(slug, chapter_id)) or {}
+    digest = await domains.dd.pipeline.storage.service.load_json(blobs, keys.digest_latest_key(slug, chapter_id)) or {}
     source_keys = sorted({k for k in (digest.get("source_keys") or []) if k} or {
         c.get("source_key") for s in sections for c in (s.get("citations") or []) if c.get("source_key")
     })
-    vault, _, _ = await shared.service.load_vault_rich(blobs, slug, source_keys)
+    vault, _, _ = await domains.dd.ingestion.vault.service.load_rich(blobs, slug, source_keys)
     thin: list[tuple[dict, dict, str, str]] = []
     for section, st, h in candidates:
         entry = vault.get(h)
@@ -86,9 +85,9 @@ async def prepare(state: graphs.pipeline.synth.sawc_derive.state.DeriveState, ru
         if body and domain.is_thin_block(body):
             thin.append((section, st, h, body))
     thin = thin[:params.MAX_DERIVES_PER_CHAPTER]
-    shared.service.emit(STEP, "candidates_identified", n_candidates_thin = len(thin), n_subtopics_total = n_subtopics_total, vault_entries_loaded = len(vault))
+    graphs.service.emit(params.STEP, "candidates_identified", n_candidates_thin = len(thin), n_subtopics_total = n_subtopics_total, vault_entries_loaded = len(vault))
 
-    context.scratch[STEP] = {
+    context.scratch[params.STEP] = {
         "payload": sawc_payload, "sawc_key": sawc_key, "thin": thin, "candidates": candidates, "vault": vault,
         "framework": framework, "chapter_title": chapter_title, "n_subtopics_total": n_subtopics_total,
     }
@@ -125,7 +124,7 @@ def derive_issues(code: str) -> list[str]:
 async def derive_subtopic(state: dict, runtime: Runtime[Context]) -> dict:
     """Derive one subtopic's example. Mutates the subtopic of the chapter draft in place on success; returns the attempt either way."""
     context = runtime.context
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     section, subtopic, _hash, original = data["thin"][state["index"]]
     meta = {
         "section_id": str(section.get("section_id") or ""),
@@ -139,7 +138,7 @@ async def derive_subtopic(state: dict, runtime: Runtime[Context]) -> dict:
     async def check(candidate: dict) -> list[str]:
         return derive_issues(candidate.get("code") or "")
 
-    role = context.agents.code_deriver(tools = [tools.pipeline.synth.check.service.check_code_tool(check)])
+    role = context.agents.code_deriver(tools = [tools.pipeline.synth.check.tool.check_code_tool(check)])
     request = {
         "framework": data["framework"],
         "chapter": data["chapter_title"],
@@ -165,7 +164,7 @@ async def derive_subtopic(state: dict, runtime: Runtime[Context]) -> dict:
     except Exception as error:
         logger.debug(f"[sawc_derive] derive failed: {type(error).__name__}: {error}")
 
-    wall_ms = shared.service.elapsed_ms(t0)
+    wall_ms = graphs.service.elapsed_ms(t0)
     if decision != "promoted":
         return {"attempts": [schemas.DeriveAttempt(decision = decision, n_samples_tried = 1, n_samples_valid = 0, wall_ms = wall_ms, **meta).model_dump()]}
     subtopic["code_source"] = "derived"
@@ -180,9 +179,9 @@ async def derive_subtopic(state: dict, runtime: Runtime[Context]) -> dict:
     ).model_dump()]}
 
 
-async def finalize(state: graphs.pipeline.synth.sawc_derive.state.DeriveState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.synth.sawc_derive.states.DeriveState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     slug, chapter_id = state["framework_slug"], state["chapter_id"]
     results = [schemas.DeriveAttempt.model_validate(a) for a in state.get("attempts") or []]
     thin_ids = {id(st) for _, st, _, _ in data["thin"]}
@@ -218,15 +217,15 @@ async def finalize(state: graphs.pipeline.synth.sawc_derive.state.DeriveState, r
         n_rejected_ast = sum(1 for a in results if a.decision == "rejected_ast"),
         n_rejected_len = sum(1 for a in results if a.decision == "rejected_len"),
         n_rotator_fail = sum(1 for a in results if a.decision == "rotator_fail"),
-        wall_ms = shared.service.elapsed_ms(started),
+        wall_ms = graphs.service.elapsed_ms(started),
         attempts = list(results) + skipped_attempts,
     )
     try:
         await context.blobs.write(keys.derive_latest_key(slug, chapter_id), json.dumps(stats.model_dump(), indent = 2), content_type = "application/json")
     except Exception as error:
         logger.warning(f"[sawc_derive] failed to persist derive-latest: {type(error).__name__}: {error}")
-    shared.service.emit(
-        STEP, "done",
+    graphs.service.emit(
+        params.STEP, "done",
         chapter_id = chapter_id, n_subtopics_total = stats.n_subtopics_total, n_candidates_thin = stats.n_candidates_thin, n_promoted = n_promoted,
         n_rejected_ast = stats.n_rejected_ast, n_rejected_len = stats.n_rejected_len, n_rotator_fail = stats.n_rotator_fail, wall_ms = stats.wall_ms,
     )

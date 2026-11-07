@@ -2,7 +2,6 @@
 from __future__ import annotations
 import domains
 from . import domain
-from .. import shared
 from ..... import graphs
 
 import logging
@@ -13,7 +12,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-async def corpus_load_run(state: graphs.pipeline.planner.state.PlannerState, blobs: Any) -> dict:
+async def corpus_load_run(state: graphs.pipeline.planner.states.PlannerState, blobs: Any) -> dict:
     """Inventory the framework's ingested corpus: the page keys that go to the planner and the corpus stats.
 
     Changelog-release pages, course pages (`/course/`) and blog posts (`/blog/`) are kept in storage (still browsable in the
@@ -25,7 +24,7 @@ async def corpus_load_run(state: graphs.pipeline.planner.state.PlannerState, blo
         raise ValueError("planner state missing framework_slug")
 
     t0 = time.monotonic()
-    shared.service.emit("corpus_load", "start", slug = slug)
+    graphs.service.emit("corpus_load", "start", slug = slug)
     manifest = await domains.dd.ingestion.storage.service.read_framework_manifest(blobs, slug)
     if not manifest:
         raise RuntimeError(f"no finalized ingestion for {slug!r} — run ingestion first")
@@ -48,7 +47,7 @@ async def corpus_load_run(state: graphs.pipeline.planner.state.PlannerState, blo
         keys.append(entry.get("key") or domains.dd.ingestion.storage.keys.page_key(slug, idx, entry.get("slug") or ""))
         byte_sizes.append(int(entry.get("bytes") or 0))
 
-    load_ms = shared.service.elapsed_ms(t0)
+    load_ms = graphs.service.elapsed_ms(t0)
     stats = domain.build_corpus_stats(
         byte_sizes, manifest, load_ms,
         excluded_changelog = n_changelog,
@@ -62,7 +61,7 @@ async def corpus_load_run(state: graphs.pipeline.planner.state.PlannerState, blo
         f"{stats['total_bytes'] // 1024} KB total, p10/p50/p90 = {stats['p10_bytes']}/{stats['median_bytes']}/"
         f"{stats['p90_bytes']} B, load={load_ms}ms"
     )
-    shared.service.emit(
+    graphs.service.emit(
         "corpus_load", "done",
         files = stats["total_files"],
         excluded_changelog = n_changelog,

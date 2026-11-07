@@ -16,6 +16,7 @@ from openai import APITimeoutError
 from ai.dd.agents import schemas
 from ai.dd.agents.ingestion.page_auditor import config as auditor_config
 from ai.dd.agents.ingestion.page_auditor import domain as auditor_domain
+from ai.dd.agents.ingestion.page_auditor import params as auditor_params
 from ai.dd.agents.ingestion.page_auditor import patterns as auditor_patterns
 from ai.dd.agents.ingestion.page_repair import config as repair_config
 from ai.dd.nodes.ingestion import audit_batch, page_audit, page_repair
@@ -579,7 +580,7 @@ FENCED = (
     "```\nRun the installer on every node of the cluster before continuing.\n```\n\n"
     "    ```text\n    ##Nested\n    ```\n"
 )
-leads = page_audit.detectors.candidates(FENCED)
+leads = page_audit.domain.candidates(FENCED)
 check("the scans find a heading without a space, an empty heading, damaged characters and a repeated block",
       sorted(lead["kind"] for lead in leads),
       ["damaged_characters", "empty_heading", "heading_without_space", "repeated_block"])
@@ -587,14 +588,14 @@ check("code inside a fence, nested or not, is never scanned",
       [lead["evidence"] for lead in leads if lead["kind"] == "heading_without_space"], ["##Install"])
 check("every lead quotes the page exactly", all(lead["evidence"] in FENCED and (not lead.get("other_evidence") or lead["other_evidence"] in FENCED) for lead in leads), True)
 check("leads are numbered in reading order", [lead["candidate_id"] for lead in leads], ["c1", "c2", "c3", "c4"])
-check("a clean page has no leads", page_audit.detectors.candidates("# Title\n\nA clean page with one paragraph of text in it.\n"), [])
+check("a clean page has no leads", page_audit.domain.candidates("# Title\n\nA clean page with one paragraph of text in it.\n"), [])
 
 check("every export convention example matches the pattern the audit drops",
       [example for _, examples in auditor_patterns.EXPORT_CONVENTIONS for example in examples
        if not auditor_patterns.EXPORT_CONVENTION_RE.match(example)], [])
 rendered = auditor_domain.system_prompt()
 check("the auditor prompt carries every example and no placeholder",
-      (auditor_domain.CONVENTIONS_MARKER in rendered, all(example in rendered for _, examples in auditor_patterns.EXPORT_CONVENTIONS for example in examples)),
+      (auditor_params.CONVENTIONS_MARKER in rendered, all(example in rendered for _, examples in auditor_patterns.EXPORT_CONVENTIONS for example in examples)),
       (False, True))
 
 REPAIR_PAGE = "# T\n\nA line.\n\nSee the guide.\n\nA line.\n"

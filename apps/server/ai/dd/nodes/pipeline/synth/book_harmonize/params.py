@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 
+# The name this stage reports its progress events, scratch data and trace under.
+STEP = "book_harmonize"
+
+
 # Rendered chapters a study needs for the pass to mean anything: one chapter has nothing to agree with.
 MIN_CHAPTERS = 2
 MAX_CLAIMS_PER_CHAPTER = 20

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 
+# The name this stage reports its progress events and scratch data under.
+STEP = "chapter_select"
 BLOB_PREFIX = "planner"
 
 # Greedy coverage tuning.
@@ -75,8 +77,6 @@ SPLIT_MAX_ROUNDS     = 3       # a part of a split can itself be over the block 
 CURATOR_CONCURRENCY = 4
 CURATOR_ATTEMPTS = 2
 CURATOR_RETRY_WAIT_S = 20.0
-SPLIT_MAX_TOKENS     = 3000
-SPLIT_TIMEOUT_S      = 120.0
 SPLIT_UNIT_SUMMARY_CHARS = 220
 SPLIT_SETTLE_CAP_S   = 130.0   # cap of the Rotator-recovery wait before the split call(s)
 
@@ -122,8 +122,6 @@ GAP_APPENDIX_LISTED    = 8      # member titles quoted in the appendix descripti
 # small clusters merged into their nearest neighbour until every group reaches the size floor,
 # no group above this share of the chapter — and the LLM only NAMES the groups.
 SPLIT_CLUSTER_MAX_SHARE = 0.60
-SPLIT_NAME_MAX_TOKENS   = 1500
-SPLIT_NAME_LISTED       = 14     # member titles shown per group in the naming prompt
 SPLIT_NAME_FALLBACK_TERMS = 3    # words of a deterministic title when the model cannot name a group
 
 # The catch-all "Additional Topics" chapter (gap pages that fit no proposal) is not a topic: above
@@ -184,8 +182,6 @@ MICRO_MERGE_MAX_DOCS = 4
 MICRO_MERGE_DIR_SHARE = 0.6
 MICRO_MERGE_MAX_SHARE = 0.30
 MICRO_MERGE_TRUNK_SHARE = 0.5     # a directory holding more of the corpus than this (asyncio: all of library/) is no 'home'
-SPLIT_NAME_SUMMARIES  = 3        # page summaries quoted per group in the naming prompt
-SPLIT_NAME_SUMMARY_CHARS = 170
 
 # Migration / upgrade / changelog pages are for readers who already know an older version: they
 # close the book. Pages whose slug or title says so are pulled out of the topical chapters they were

@@ -27,7 +27,7 @@ class Normalizer(Protocol):
 
 
 async def normalize_metadata(
-    state: graphs.ingestion.state.IngestionRunState,
+    state: graphs.ingestion.states.IngestionRunState,
     read_page: PageReader,
     write_artifact: ArtifactWriter,
     normalizer: Normalizer,

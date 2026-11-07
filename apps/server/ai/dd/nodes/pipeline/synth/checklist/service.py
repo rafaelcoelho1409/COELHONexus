@@ -5,10 +5,9 @@ The chapter is scored on 11 deterministic gates plus the five LLM criteria of th
 per-criterion majority stands. A judge that never answers leaves the chapter scored on its gates and does not send it back for the outage. The
 best-seen iteration (every gate passing first, then the score) is tracked here, so the render step ships it even when the loop stops on a worse one."""
 from __future__ import annotations
+import ai
 import domains
 from . import domain, keys, params, schemas, versions
-from .. import sawc as sawc_stage
-from .. import shared
 from ..... import agents, graphs
 
 import asyncio
@@ -22,8 +21,7 @@ from langgraph.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
-Context = graphs.pipeline.synth.context.SynthContext
-STEP = "checklist_eval"
+Context = graphs.pipeline.synth.entities.SynthContext
 
 
 def emit_criterion_scores(framework: str, criteria: list[dict | schemas.CriterionResult]) -> None:
@@ -80,7 +78,7 @@ async def run_judge(context: Context, frame: dict) -> dict:
                     chapter, truncated = domain.render_chapter_for_judge(frame["sawc"], char_cap = params.MAX_RENDERED_CHAPTER_CHARS // 2)
                     grounding = domain.render_digest_for_grounding(frame["digest"], char_cap = 10_000)
                 await asyncio.sleep(params.JUDGE_COOLOFF_S if attempt == params.MAX_CALL_ATTEMPTS - 1 else 1.0)
-    wall_ms = shared.service.elapsed_ms(t0)
+    wall_ms = graphs.service.elapsed_ms(t0)
     if last_error is not None:
         logger.warning(f"[checklist_eval] LLM judge call failed after {n_attempts} attempt(s): {type(last_error).__name__}: {last_error}")
         return {"results": [r.model_dump() for r in domain.fallback_llm_verdicts(type(last_error).__name__)], "answered": False, "repaired": False, "wall_ms": wall_ms, "meta": {}}
@@ -111,37 +109,37 @@ async def run_judge(context: Context, frame: dict) -> dict:
     return {"results": [r.model_dump() for r in results], "answered": True, "repaired": False, "wall_ms": wall_ms, "meta": meta}
 
 
-async def prepare(state: graphs.pipeline.synth.checklist.state.ChecklistState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
     chapter_id = state.get("chapter_id")
     started = time.monotonic()
     if not slug or not chapter_id:
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "checklist_path", "checklist_stats", "no_slug_or_chapter_id", "framework_slug or chapter_id missing from SynthState", started,
         )}
 
     sawc_key = keys.sawc_latest_key(slug, chapter_id)
     digest_key = keys.digest_latest_key(slug, chapter_id)
     if not await blobs.exists(sawc_key):
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "checklist_path", "checklist_stats", "sawc_not_found", f"sawc {sawc_key!r} not in MinIO — run sawc_write first", started, sawc_key = sawc_key,
         )}
     if not await blobs.exists(digest_key):
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "checklist_path", "checklist_stats", "digest_not_found", f"digest {digest_key!r} not in MinIO — run digest_construct first", started, digest_key = digest_key,
         )}
-    sawc = await shared.service.load_json(blobs, sawc_key)
-    digest = await shared.service.load_json(blobs, digest_key)
+    sawc = await domains.dd.pipeline.storage.service.load_json(blobs, sawc_key)
+    digest = await domains.dd.pipeline.storage.service.load_json(blobs, digest_key)
     if sawc is None or digest is None:
-        return {"finished": True, **shared.service.failure("checklist_path", "checklist_stats", "inputs_unreadable", "sawc/digest unreadable", started)}
+        return {"finished": True, **graphs.pipeline.synth.service.failure("checklist_path", "checklist_stats", "inputs_unreadable", "sawc/digest unreadable", started)}
 
     chapter_title = sawc.get("chapter_title") or chapter_id
     sawc_manifest_hash = sawc.get("sawc_manifest_hash") or ""
     digest_manifest_hash = digest.get("digest_manifest_hash") or ""
-    shared.service.emit(
-        STEP, "start",
+    graphs.service.emit(
+        params.STEP, "start",
         chapter_id = chapter_id, chapter_title = chapter_title, n_total_criteria = len(domain.DETERMINISTIC_CHECKS) + len(params.LLM_CRITERIA), pass_threshold = params.PASS_THRESHOLD,
     )
     manifest_hash = domain.compute_manifest_hash(sawc_manifest_hash = sawc_manifest_hash, digest_manifest_hash = digest_manifest_hash)
@@ -160,7 +158,7 @@ async def prepare(state: graphs.pipeline.synth.checklist.state.ChecklistState, r
     if cache_usable:
         try:
             cached = json.loads(await blobs.read_text(versioned_key))
-            elapsed = shared.service.elapsed_ms(started)
+            elapsed = graphs.service.elapsed_ms(started)
             stats = {
                 "n_total": cached.get("n_total", 0),
                 "n_passed": cached.get("n_passed", 0),
@@ -176,8 +174,8 @@ async def prepare(state: graphs.pipeline.synth.checklist.state.ChecklistState, r
                 "prompt_version": cached.get("prompt_version"),
                 "infra_degraded": False,   # a cached result is a completed prior run
             }
-            shared.service.emit(
-                STEP, "done",
+            graphs.service.emit(
+                params.STEP, "done",
                 n_total = stats["n_total"], n_passed = stats["n_passed"], pass_rate = stats["pass_rate"], chapter_passed = stats["chapter_passed"],
                 n_failed_feedback = stats["n_failed_feedback"], wall_ms = elapsed, cache_hit = True,
             )
@@ -195,7 +193,9 @@ async def prepare(state: graphs.pipeline.synth.checklist.state.ChecklistState, r
             if incoming_score is None or domain.best_seen_key(stats["pass_rate"], n_pregate_passed) > domain.best_seen_key(incoming_score, incoming_pregate or 0):
                 patch.update({
                     "best_seen_score": stats["pass_rate"], "best_seen_pregate": n_pregate_passed,
-                    "best_seen_sawc_path": sawc_stage.keys.versioned_blob_key(slug, chapter_id, sawc_manifest_hash),
+                    "best_seen_sawc_path": ai.dd.nodes.pipeline.synth.sawc.keys.versioned_blob_key(
+                        slug, chapter_id, sawc_manifest_hash,
+                    ),
                 })
             return patch
         except Exception as error:
@@ -208,7 +208,7 @@ async def prepare(state: graphs.pipeline.synth.checklist.state.ChecklistState, r
     vault_bodies: dict[str, str] = {}
     if used_hashes:
         try:
-            rich, _, _ = await shared.service.load_vault_rich(blobs, slug, list(digest.get("source_keys") or []))
+            rich, _, _ = await domains.dd.ingestion.vault.service.load_rich(blobs, slug, list(digest.get("source_keys") or []))
             vault_bodies = {h: e.fence_text for h, e in rich.items() if h in (used_hashes | routed) and getattr(e, "fence_text", "")}
         except Exception as error:
             logger.info(f"[checklist_eval] {slug}/{chapter_id}: vault bodies unavailable for the alignment gate ({type(error).__name__})")
@@ -228,13 +228,13 @@ async def prepare(state: graphs.pipeline.synth.checklist.state.ChecklistState, r
             pre.append(schemas.CriterionResult(
                 name = check.__name__.replace("check_", ""), passed = False, kind = "deterministic", feedback = f"pre_gate_crashed: {type(error).__name__}",
             ))
-    shared.service.emit(
-        STEP, "pregates_done", n_pregate = len(pre), n_passed = sum(1 for r in pre if r.passed), names_failed = [r.name for r in pre if not r.passed],
+    graphs.service.emit(
+        params.STEP, "pregates_done", n_pregate = len(pre), n_passed = sum(1 for r in pre if r.passed), names_failed = [r.name for r in pre if not r.passed],
     )
     chapter, truncated = domain.render_chapter_for_judge(sawc)
     grounding = domain.render_digest_for_grounding(digest)
-    shared.service.emit(STEP, "judge_request", chapter_chars = len(chapter), digest_chars = len(grounding), truncated = truncated)
-    context.scratch[STEP] = {
+    graphs.service.emit(params.STEP, "judge_request", chapter_chars = len(chapter), digest_chars = len(grounding), truncated = truncated)
+    context.scratch[params.STEP] = {
         "frame": {
             "chapter_id": chapter_id, "chapter_title": chapter_title, "framework": slug, "sawc": sawc, "digest": digest,
             "chapter": chapter, "grounding": grounding, "truncated": truncated,
@@ -253,11 +253,11 @@ async def prepare(state: graphs.pipeline.synth.checklist.state.ChecklistState, r
     }
 
 
-async def judge(state: graphs.pipeline.synth.checklist.state.ChecklistState, runtime: Runtime[Context]) -> dict:
-    run = await run_judge(runtime.context, runtime.context.scratch[STEP]["frame"])
+async def judge(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: Runtime[Context]) -> dict:
+    run = await run_judge(runtime.context, runtime.context.scratch[params.STEP]["frame"])
     results = run["results"]
-    shared.service.emit(
-        STEP, "judge_done",
+    graphs.service.emit(
+        params.STEP, "judge_done",
         n_llm = len(results), n_passed = sum(1 for r in results if r["passed"]), names_failed = [r["name"] for r in results if not r["passed"]],
         wall_ms = run["wall_ms"], answered = run["answered"],
     )
@@ -266,10 +266,10 @@ async def judge(state: graphs.pipeline.synth.checklist.state.ChecklistState, run
 
 async def judge_again(state: dict, runtime: Runtime[Context]) -> dict:
     """A further opinion on a chapter the first judge failed (the Rotator may route it to another model)."""
-    return {"opinions": [await run_judge(runtime.context, runtime.context.scratch[STEP]["frame"])]}
+    return {"opinions": [await run_judge(runtime.context, runtime.context.scratch[params.STEP]["frame"])]}
 
 
-async def majority(state: graphs.pipeline.synth.checklist.state.ChecklistState, runtime: Runtime[Context]) -> dict:
+async def majority(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: Runtime[Context]) -> dict:
     first = [schemas.CriterionResult.model_validate(r) for r in state["judge"]["results"]]
     runs = [first] + [
         [schemas.CriterionResult.model_validate(r) for r in o["results"]] for o in state.get("opinions") or [] if o["answered"] and not unavailable([schemas.CriterionResult.model_validate(r) for r in o["results"]])
@@ -284,7 +284,7 @@ async def majority(state: graphs.pipeline.synth.checklist.state.ChecklistState, 
     return {"merged": [r.model_dump() for r in merged]}
 
 
-async def finalize(state: graphs.pipeline.synth.checklist.state.ChecklistState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     slug, chapter_id = state["framework_slug"], state["chapter_id"]
     run = state["judge"]
@@ -316,7 +316,7 @@ async def finalize(state: graphs.pipeline.synth.checklist.state.ChecklistState, 
     is_better = incoming_score is None or domain.best_seen_key(pass_rate, n_pre_passed) > domain.best_seen_key(incoming_score, incoming_pregate or 0)
     if is_better:
         best_score, best_pregate = pass_rate, n_pre_passed
-        best_path = sawc_stage.keys.versioned_blob_key(slug, chapter_id, sawc_manifest_hash)
+        best_path = ai.dd.nodes.pipeline.synth.sawc.keys.versioned_blob_key(slug, chapter_id, sawc_manifest_hash)
 
     answered = bool(run["answered"])
     evaluation = schemas.ChecklistEvaluation(
@@ -331,7 +331,7 @@ async def finalize(state: graphs.pipeline.synth.checklist.state.ChecklistState, 
         failed_feedback = failed_feedback,
         n_llm_judge_repairs = 0,
         judge_unavailable = judge_unavailable,
-        wall_ms = shared.service.elapsed_ms(state["started"]),
+        wall_ms = graphs.service.elapsed_ms(state["started"]),
     )
     payload = evaluation.model_dump()
     payload["sawc_manifest_hash"] = sawc_manifest_hash
@@ -347,7 +347,7 @@ async def finalize(state: graphs.pipeline.synth.checklist.state.ChecklistState, 
         logger.warning(f"[checklist_eval] {slug}/{chapter_id}: evaluation persist timed out after {params.TIMEOUT_S_PERSIST_WRITE}s — MinIO likely degraded; re-raising")
         raise
 
-    elapsed = shared.service.elapsed_ms(state["started"])
+    elapsed = graphs.service.elapsed_ms(state["started"])
     # A low pass rate driven by the judge infrastructure itself failing (not by the judge reviewing the chapter and rejecting it) is a different signal than
     # genuine content quality; so is a writer whose runs failed for infrastructure reasons (anything in the sawc error breakdown but a model-output-quality issue).
     sawc_breakdown = (state.get("sawc_stats") or {}).get("error_breakdown") or {}
@@ -381,8 +381,8 @@ async def finalize(state: graphs.pipeline.synth.checklist.state.ChecklistState, 
         "cache_hit": False,
         "prompt_version": versions.CHECKLIST_PROMPT_VERSION,
     }
-    shared.service.emit(
-        STEP, "done",
+    graphs.service.emit(
+        params.STEP, "done",
         n_total = n_total, n_passed = n_passed, pass_rate = pass_rate, chapter_passed = chapter_passed, n_failed_feedback = len(failed_feedback), wall_ms = elapsed,
     )
     logger.info(

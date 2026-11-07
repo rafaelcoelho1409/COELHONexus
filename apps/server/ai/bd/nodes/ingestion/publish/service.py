@@ -19,7 +19,7 @@ PageReader = Callable[[str], str | None | Awaitable[str | None]]
 
 
 async def verify_pages(
-    state: graphs.ingestion.state.IngestionRunState,
+    state: graphs.ingestion.states.IngestionRunState,
     read_page: PageReader,
 ) -> dict[str, object]:
     """Re-read every delivered page's source and output and check them against each other, outside any agent."""
@@ -58,7 +58,7 @@ async def verify_pages(
 
 
 async def publish(
-    state: graphs.ingestion.state.IngestionRunState,
+    state: graphs.ingestion.states.IngestionRunState,
     write_artifact: ArtifactWriter,
     read_page: PageReader | None = None,
 ) -> dict:

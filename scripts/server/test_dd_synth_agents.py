@@ -1,4 +1,4 @@
-"""Offline checks of the synth's DeepAgents: each role builds on the shared factory (harness profile, permissions, middleware, the unreviewed-tool guard),
+"""Offline checks of the synth's DeepAgents: each role is built by its own factory (harness profile, permissions, middleware, the unreviewed-tool guard),
 reads its skill and its read-only files through its backend, calls its check tools, and answers with its schema.
 
     cd apps/server && .venv/bin/python ../../scripts/server/test_dd_synth_agents.py
@@ -65,8 +65,8 @@ def tool_texts(scripted: Scripted, turn: int) -> list[str]:
     return [str(m.content) for m in scripted.seen[turn] if getattr(m, "type", "") == "tool"]
 
 
-async def ask(role, schema, scripted, request = "{}"):
-    return await service.ask(role, schema, request, attempts = 1, wait_base_s = 0)
+async def ask(role, schema, scripted, request = "{}", files = None):
+    return await service.ask(role, schema, request, attempts = 1, wait_base_s = 0, files = files)
 
 
 async def main() -> None:
@@ -117,7 +117,7 @@ async def main() -> None:
         call("check_digest", {**digest, "contributes_to": [{**contribution, "section_id": "s1"}]}, "d2"),
         call("DigestAnswer", {**digest, "contributes_to": [{**contribution, "section_id": "s1"}]}, "d3"),
     )
-    router = source_router.agent.source_router(tools = [check_tools.service.check_digest_tool(validate_digest)], model = router_model)
+    router = source_router.agent.source_router(tools = [check_tools.tool.check_digest_tool(validate_digest)], model = router_model)
     routed = await ask(router, schemas.DigestAnswer, router_model)
     check("source_router: answers with its schema", routed.contributes_to[0].section_id, "s1")
     truthy("source_router: the tool reported the bad section", any("not in the outline" in t and "1 issue(s)" in t for t in tool_texts(router_model, 1)))
@@ -136,7 +136,7 @@ async def main() -> None:
         call("SectionAnswer", {**section, "heading": "Alpha Client"}, "w5"),
     )
     backend_w = files.service.mounted({"/" + "a" * 16 + ".md": "```python\nclient = AlphaClient(url='x')\n```"}, "/vault/")
-    writer = section_writer.agent.section_writer(backend = backend_w, tools = [check_tools.service.check_section_tool(check_section)], model = writer_model)
+    writer = section_writer.agent.section_writer(backend = backend_w, tools = [check_tools.tool.check_section_tool(check_section)], model = writer_model)
     written = await ask(writer, schemas.SectionAnswer, writer_model)
     check("section_writer: answers with its schema", written.heading, "Alpha Client")
     truthy("section_writer: it read the block in full", any("AlphaClient(url='x')" in t for t in tool_texts(writer_model, 1)))
@@ -158,10 +158,11 @@ async def main() -> None:
     )
     outliner = chapter_outliner.agent.chapter_outliner(
         backend = files.service.mounted({"/1-alpha.md": "# Alpha\n\nAlphaClient docs\n"}, "/sources/"),
-        tools = [check_tools.service.validate_outline_tool(validate_outline)], model = outliner_model,
+        tools = [check_tools.tool.validate_outline_tool(validate_outline)], model = outliner_model,
     )
-    truthy("chapter_outliner: its skill files travel with the role", skill in outliner.files)
-    outlined = await ask(outliner, schemas.OutlineAnswer, outliner_model)
+    outliner_files = ai.dd.skills.service.files_for("chapter_outliner")
+    truthy("chapter_outliner: its skill files are found for the call", skill in outliner_files)
+    outlined = await ask(outliner, schemas.OutlineAnswer, outliner_model, files = outliner_files)
     check("chapter_outliner: answers with its schema", outlined.sections[0].heading, "Alpha Client")
     truthy("chapter_outliner: it read its SKILL.md", any("Design a chapter outline" in t for t in tool_texts(outliner_model, 1)))
     truthy("chapter_outliner: it read a source page", any("AlphaClient docs" in t for t in tool_texts(outliner_model, 2)))
@@ -174,8 +175,8 @@ async def main() -> None:
         call("inspect_section", {"section_id": "s9"}, "r3"),
         call("RevisionAnswer", {"halt": False, "confidence": 0.8, "rationale": "s1 is filler", "revisions": [{"section_id": "s1", "instruction": "Open with the API."}]}, "r4"),
     )
-    reviewer = chapter_reviewer.agent.chapter_reviewer(tools = [view.service.inspect_section_tool(lambda sid: "## Client\nfiller text" if sid == "s1" else None)], model = reviewer_model)
-    revised = await ask(reviewer, schemas.RevisionAnswer, reviewer_model)
+    reviewer = chapter_reviewer.agent.chapter_reviewer(tools = [view.tool.inspect_section_tool(lambda sid: "## Client\nfiller text" if sid == "s1" else None)], model = reviewer_model)
+    revised = await ask(reviewer, schemas.RevisionAnswer, reviewer_model, files = ai.dd.skills.service.files_for("chapter_reviewer"))
     check("chapter_reviewer: answers with its schema", revised.revisions[0].section_id, "s1")
     truthy("chapter_reviewer: it read the section", any("filler text" in t for t in tool_texts(reviewer_model, 2)))
     truthy("chapter_reviewer: an unknown section is reported, not invented", any("No section" in t for t in tool_texts(reviewer_model, 3)))
@@ -189,7 +190,7 @@ async def main() -> None:
     detector = drift_detector.agent.drift_detector(
         backend = files.service.mounted({"/ch-01.md": "The timeout is ten seconds.\n", "/ch-02.md": "other\n"}, "/chapters/"), model = detector_model,
     )
-    audited = await ask(detector, schemas.ViolationsAnswer, detector_model)
+    audited = await ask(detector, schemas.ViolationsAnswer, detector_model, files = ai.dd.skills.service.files_for("drift_detector"))
     check("drift_detector: answers with its schema", audited.has_violations, False)
     truthy("drift_detector: grep found the sibling chapter", any("/ch-01.md" in t for t in tool_texts(detector_model, 1)))
     truthy("drift_detector: it cannot write", any("permission" in t.lower() or "read-only" in t.lower() for t in tool_texts(detector_model, 2)))
@@ -206,14 +207,14 @@ async def main() -> None:
         call("check_code", {"code": "import alpha\nprint(alpha)\n"}, "c2"),
         call("DerivedCodeAnswer", {"code": "import alpha\nprint(alpha)\n", "explanation": "Imports alpha and prints it."}, "c3"),
     )
-    deriver = code_deriver.agent.code_deriver(tools = [check_tools.service.check_code_tool(check_code)], model = deriver_model)
+    deriver = code_deriver.agent.code_deriver(tools = [check_tools.tool.check_code_tool(check_code)], model = deriver_model)
     derived = await ask(deriver, schemas.DerivedCodeAnswer, deriver_model)
     check("code_deriver: answers with its schema", derived.code.startswith("import alpha"), True)
     truthy("code_deriver: the parser tool rejected broken code", any("does not parse" in t for t in tool_texts(deriver_model, 1)))
     check("code_deriver: the derive gate is the same function the node uses", sawc_derive.domain.python_ast_valid("import alpha\nprint(alpha)\n"), True)
 
     normalizer_model = model(call("NormalizedCodeAnswer", {"code": "x = 1\n"}))
-    normalizer = code_normalizer.agent.code_normalizer(tools = [check_tools.service.check_code_tool(check_code)], model = normalizer_model)
+    normalizer = code_normalizer.agent.code_normalizer(tools = [check_tools.tool.check_code_tool(check_code)], model = normalizer_model)
     check("code_normalizer answers with its schema", (await ask(normalizer, schemas.NormalizedCodeAnswer, normalizer_model)).code, "x = 1\n")
 
     # --- the check tools' own report

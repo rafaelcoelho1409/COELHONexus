@@ -2,16 +2,27 @@
 from __future__ import annotations
 import domains
 from . import config, domain, params
-from ... import schemas, service
-from .... import middleware, prompts, tools
+from ... import schemas
+from .... import middlewares, prompts, tools
 
-from deepagents import FilesystemPermission, create_deep_agent
+from deepagents import (
+    FilesystemPermission,
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    create_deep_agent,
+    register_harness_profile,
+)
 from deepagents.backends import StateBackend
-from langchain.agents.middleware import ModelCallLimitMiddleware, ToolCallLimitMiddleware, ToolErrorMiddleware
+from deepagents.profiles.harness import harness_profiles
+from langchain.agents.middleware import (
+    ModelCallLimitMiddleware, 
+    ToolCallLimitMiddleware, 
+    ToolErrorMiddleware
+)
 from langchain_openai import ChatOpenAI
 
 
-def page_repair(*, check: tools.ingestion.check_patch.service.Check, model = None):
+def page_repair(*, check: tools.ingestion.check_patch.entities.Check, model = None):
     """Build the configured DeepAgent for evidence-bound page repair proposals. Its one tool, `check_patch`, runs `check` (the
     application's own patch rules) on a patch before the agent answers; the application still applies the same rules to the answer."""
     if model is None:
@@ -27,23 +38,44 @@ def page_repair(*, check: tools.ingestion.check_patch.service.Check, model = Non
     if not isinstance(model, ChatOpenAI):
         raise TypeError("the page repair specialist must use the COELHO Rotator ChatOpenAI model")
 
-    check_patch = tools.ingestion.check_patch.service.tool(check)
-    service.isolate_harness_profile(model_name)
+    check_patch = tools.ingestion.check_patch.tool.check_patch_tool(check)
+    # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
+    # before (by another role or other code in the process) hides tools from this agent.
+    key = f"openai:{model_name}"
+    harness_profiles._HARNESS_PROFILES.pop(key, None)
+    register_harness_profile(
+        key,
+        HarnessProfile(
+            base_system_prompt = "",
+            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
+        ),
+    )
     agent = create_deep_agent(
         model = model,
         tools = [check_patch],
         system_prompt = prompts.ingestion.page_repair.prompts.SYSTEM_PROMPT,
         response_format = schemas.PagePatchBatch,
         permissions = [
-            FilesystemPermission(operations = ["read"], paths = ["/**"], mode = "deny"),
-            FilesystemPermission(operations = ["write"], paths = ["/**"], mode = "deny"),
+            FilesystemPermission(
+                operations = ["read"], 
+                paths = ["/**"], 
+                mode = "deny"),
+            FilesystemPermission(
+                operations = ["write"], 
+                paths = ["/**"], 
+                mode = "deny"),
         ],
         backend = StateBackend(),
         middleware = [
-            ModelCallLimitMiddleware(run_limit = params.MODEL_CALLS, exit_behavior = "end"),
-            ToolCallLimitMiddleware(tool_name = check_patch.name, run_limit = params.CHECK_CALLS, exit_behavior = "continue"),
+            ModelCallLimitMiddleware(
+                run_limit = params.MODEL_CALLS, 
+                exit_behavior = "end"),
+            ToolCallLimitMiddleware(
+                tool_name = check_patch.name, 
+                run_limit = params.CHECK_CALLS, 
+                exit_behavior = "continue"),
             ToolErrorMiddleware(lambda error, request: f"`{request.tool_call['name']}` failed with {type(error).__name__}: {str(error)[:300]}"),
-            middleware.service.ToolAllowlistMiddleware(frozenset({check_patch.name})),
+            middlewares.middleware.ToolAllowlistMiddleware(frozenset({check_patch.name})),
         ],
         name = "dd_page_repair",
     )

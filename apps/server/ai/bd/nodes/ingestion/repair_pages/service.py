@@ -77,7 +77,7 @@ class BookIndex:
 
 
 async def repair_pages(
-    state: graphs.ingestion.state.IngestionRunState,
+    state: graphs.ingestion.states.IngestionRunState,
     read_page: PageReader,
     write_artifact: ArtifactWriter,
     specialists: dict[str, Specialist],

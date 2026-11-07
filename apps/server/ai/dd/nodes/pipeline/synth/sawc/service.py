@@ -9,7 +9,6 @@ passes (alignment realignment, stripping, top-ups, de-duplication, reordering) a
 from __future__ import annotations
 import domains
 from . import domain, keys, params, schemas, versions
-from .. import shared
 from ..... import agents, backends, graphs, tools
 
 import asyncio
@@ -22,39 +21,38 @@ from langgraph.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
-Context = graphs.pipeline.synth.context.SynthContext
-STEP = "sawc_write"
+Context = graphs.pipeline.synth.entities.SynthContext
 
 
 def _vault():
     return domains.dd.ingestion.vault
 
 
-async def prepare(state: graphs.pipeline.synth.sawc.state.SawcState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
     chapter_id = state.get("chapter_id")
     started = time.monotonic()
     if not slug or not chapter_id:
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "sawc_path", "sawc_stats", "no_slug_or_chapter_id", "framework_slug or chapter_id missing from SynthState", started,
         )}
 
     outline_key = keys.outline_latest_key(slug, chapter_id)
     digest_key = keys.digest_latest_key(slug, chapter_id)
     if not await blobs.exists(outline_key):
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "sawc_path", "sawc_stats", "outline_not_found", f"outline {outline_key!r} not in MinIO — run outline_sdp first", started, outline_key = outline_key,
         )}
     if not await blobs.exists(digest_key):
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "sawc_path", "sawc_stats", "digest_not_found", f"digest {digest_key!r} not in MinIO — run digest_construct first", started, digest_key = digest_key,
         )}
-    outline_payload = await shared.service.load_json(blobs, outline_key)
-    digest_payload = await shared.service.load_json(blobs, digest_key)
+    outline_payload = await domains.dd.pipeline.storage.service.load_json(blobs, outline_key)
+    digest_payload = await domains.dd.pipeline.storage.service.load_json(blobs, digest_key)
     if outline_payload is None or digest_payload is None:
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "sawc_path", "sawc_stats", "inputs_unreadable", "outline/digest unreadable", started,
         )}
 
@@ -70,7 +68,7 @@ async def prepare(state: graphs.pipeline.synth.sawc.state.SawcState, runtime: Ru
     valid_source_keys = sorted({s.get("source_key", "") for s in (digest_payload.get("per_source") or []) if s.get("source_key")})
     digest_manifest_hash = digest_payload.get("digest_manifest_hash") or ""
     if not outline_sections or not stages_raw:
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "sawc_path", "sawc_stats", "empty_outline_or_stages",
             f"outline has {len(outline_sections)} sections, dag has {len(stages_raw)} stages — both must be >0", started,
             n_sections = len(outline_sections), n_stages = len(stages_raw),
@@ -86,8 +84,8 @@ async def prepare(state: graphs.pipeline.synth.sawc.state.SawcState, runtime: Ru
         logger.info(f"[sawc_write] {slug}/{chapter_id}: skipping {len(merged_away)} digest-merged section(s) {sorted(merged_away)}")
     ordered_stages = [stages[k] for k in sorted(stages)]
     n_sections = sum(len(v) for v in ordered_stages)
-    shared.service.emit(
-        STEP, "start",
+    graphs.service.emit(
+        params.STEP, "start",
         chapter_id = chapter_id, chapter_title = chapter_title, n_stages = len(ordered_stages), n_sections = n_sections, n_total_drafts = n_sections,
     )
 
@@ -130,7 +128,7 @@ async def prepare(state: graphs.pipeline.synth.sawc.state.SawcState, runtime: Ru
         try:
             cached = json.loads(await blobs.read_text(versioned_key))
             cov = (cached or {}).get("coverage_stats") or {}
-            elapsed = shared.service.elapsed_ms(started)
+            elapsed = graphs.service.elapsed_ms(started)
             stats = {
                 "n_sections": cov.get("n_sections", 0),
                 "n_completed": cov.get("n_sections_completed", 0),
@@ -146,8 +144,8 @@ async def prepare(state: graphs.pipeline.synth.sawc.state.SawcState, runtime: Ru
                 "cache_hit": True,
                 "prompt_version": cached.get("prompt_version"),
             }
-            shared.service.emit(
-                STEP, "done",
+            graphs.service.emit(
+                params.STEP, "done",
                 n_sections = stats["n_sections"], n_completed = stats["n_completed"], n_fallback = stats["n_fallback"], n_repairs = stats["n_repairs"],
                 total_drafts_fired = stats["n_total_drafts_fired"], wall_ms = elapsed, cache_hit = True,
             )
@@ -157,7 +155,7 @@ async def prepare(state: graphs.pipeline.synth.sawc.state.SawcState, runtime: Ru
             logger.warning(f"[sawc_write] {slug}/{chapter_id}: cached blob {versioned_key!r} unreadable ({type(error).__name__}: {error}); recomputing")
 
     # Visible Vault (arXiv 2601.03640): the writer sees actual code bodies; render substitutes by hash, so the shipped code stays byte-exact.
-    vault_rich, n_loaded, n_skipped = await shared.service.load_vault_rich(blobs, slug, valid_source_keys)
+    vault_rich, n_loaded, n_skipped = await domains.dd.ingestion.vault.service.load_rich(blobs, slug, valid_source_keys)
     logger.info(f"[sawc_write] {slug}/{chapter_id}: visible vault loaded — {len(vault_rich)} entries across {n_loaded} sources (skipped {n_skipped})")
 
     # A RETHINK iteration rewrites only the sections the reviewer named; the others come back from the iteration before.
@@ -165,7 +163,7 @@ async def prepare(state: graphs.pipeline.synth.sawc.state.SawcState, runtime: Ru
     feedback_for: dict[str, list[str]] = {}
     revisions = await revisions_of(blobs, slug, chapter_id, incoming_refine_iter, set(sections_by_id) - merged_away)
     if revisions:
-        previous = await shared.service.load_json(blobs, latest_key)
+        previous = await domains.dd.pipeline.storage.service.load_json(blobs, latest_key)
         if previous:
             for raw in previous.get("sections") or []:
                 sid = raw.get("section_id")
@@ -178,9 +176,9 @@ async def prepare(state: graphs.pipeline.synth.sawc.state.SawcState, runtime: Ru
             logger.info(
                 f"[sawc_write] {slug}/{chapter_id}: iteration {refine_iter} rewrites {sorted(revisions)} and reuses {len(completed)} section(s) of the iteration before"
             )
-            shared.service.emit(STEP, "revising", n_revised = len(revisions), n_reused = len(completed), section_ids = sorted(revisions))
+            graphs.service.emit(params.STEP, "revising", n_revised = len(revisions), n_reused = len(completed), section_ids = sorted(revisions))
 
-    context.scratch[STEP] = {
+    context.scratch[params.STEP] = {
         "slug": slug,
         "chapter_id": chapter_id,
         "chapter_title": chapter_title,
@@ -234,7 +232,7 @@ async def revisions_of(blobs, slug: str, chapter_id: str, incoming_refine_iter: 
     """`{section id: instruction}` the chapter reviewer asked to rewrite after the iteration that just failed (empty on the first iteration, or when it asked for a whole-chapter rewrite)."""
     if incoming_refine_iter <= 0:
         return {}
-    blob = await shared.service.load_json(blobs, keys.mgsr_latest_key(slug, chapter_id))
+    blob = await domains.dd.pipeline.storage.service.load_json(blobs, keys.mgsr_latest_key(slug, chapter_id))
     out: dict[str, str] = {}
     for item in ((blob or {}).get("decision") or {}).get("revisions") or []:
         if isinstance(item, dict) and item.get("section_id") in known and (item.get("instruction") or "").strip():
@@ -325,7 +323,7 @@ def finish_draft(draft, inputs: dict, data: dict):
 
 async def write_one(context: Context, sid: str, budget: int | None) -> dict:
     """Write one section: the writer agent (again with its hard issues, when it left some), then the deterministic passes. Returns the stage's result row."""
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     slug, chapter_id = data["slug"], data["chapter_id"]
     outline_sec = data["sections_by_id"].get(sid)
     if not outline_sec:
@@ -356,11 +354,11 @@ async def write_one(context: Context, sid: str, budget: int | None) -> dict:
         return built
 
     first = request(feedback, budget, None)
-    item = shared.service.digest(versions.SAWC_PROMPT_VERSION, sid, json.dumps(first, sort_keys = True, ensure_ascii = False))
-    stored = await domains.dd.pipeline.storage.service.read_chapter_items(context.blobs, slug, chapter_id, STEP, versions.SAWC_PROMPT_VERSION, [item])
+    item = domains.dd.pipeline.storage.domain.digest(versions.SAWC_PROMPT_VERSION, sid, json.dumps(first, sort_keys = True, ensure_ascii = False))
+    stored = await domains.dd.pipeline.storage.service.read_chapter_items(context.blobs, slug, chapter_id, params.STEP, versions.SAWC_PROMPT_VERSION, [item])
     if item in stored:
         data["completed"][sid] = schemas.Section.model_validate(stored[item])
-        shared.service.emit(STEP, "section_done", section_id = sid, n_subtopics = len(data["completed"][sid].subtopics), n_citations = len(data["completed"][sid].citations), cached = True)
+        graphs.service.emit(params.STEP, "section_done", section_id = sid, n_subtopics = len(data["completed"][sid].subtopics), n_citations = len(data["completed"][sid].citations), cached = True)
         return {"sid": sid, "attempts": 0, "placeholder": False}
 
     def check_issues(candidate: dict) -> tuple[object, list[str]]:
@@ -388,7 +386,7 @@ async def write_one(context: Context, sid: str, budget: int | None) -> dict:
 
         role = context.agents.section_writer(
             backend = backends.files.service.mounted(files, agents.pipeline.synth.params.VAULT_ROUTE),
-            tools = [tools.pipeline.synth.check.service.check_section_tool(check)],
+            tools = [tools.pipeline.synth.check.tool.check_section_tool(check)],
         )
         body = request(feedback, budget, best[0].model_dump() if best is not None and attempt > 1 else None)
         try:
@@ -421,11 +419,11 @@ async def write_one(context: Context, sid: str, budget: int | None) -> dict:
             break
         feedback = hard
 
-    wall_ms = shared.service.elapsed_ms(t0)
+    wall_ms = graphs.service.elapsed_ms(t0)
     if best is None:
         summary = ",".join(errors) or "unknown"
         logger.warning(f"[sawc_write] {sid}: every writer run failed ({summary}) — emitting placeholder")
-        shared.service.emit(STEP, "section_done", section_id = sid, n_subtopics = 0, n_citations = 0, total_explanation_chars = 0, n_repairs = n_repairs, wall_ms = wall_ms, fallback = "placeholder")
+        graphs.service.emit(params.STEP, "section_done", section_id = sid, n_subtopics = 0, n_citations = 0, total_explanation_chars = 0, n_repairs = n_repairs, wall_ms = wall_ms, fallback = "placeholder")
         if data["completed"].get(sid) is None:       # a late retry that fails again leaves the placeholder it had
             data["completed"][sid] = domain.placeholder_section(section_id = sid, heading = heading, n_repairs = n_repairs, deployment_writer = None, error_tags = errors)
         return {"sid": sid, "attempts": attempts, "placeholder": True}
@@ -452,27 +450,27 @@ async def write_one(context: Context, sid: str, budget: int | None) -> dict:
     data["completed"][sid] = section
     try:
         await domains.dd.pipeline.storage.service.write_chapter_item(
-            context.blobs, slug, chapter_id, STEP, versions.SAWC_PROMPT_VERSION, item, section.model_dump(),
+            context.blobs, slug, chapter_id, params.STEP, versions.SAWC_PROMPT_VERSION, item, section.model_dump(),
         )
     except Exception as error:
         logger.warning(f"[sawc_write] section {sid} not stored ({type(error).__name__}: {error})")
-    shared.service.emit(
-        STEP, "section_done",
+    graphs.service.emit(
+        params.STEP, "section_done",
         section_id = sid, n_subtopics = len(section.subtopics), n_citations = len(section.citations),
         total_explanation_chars = sum(len(st.explanation) for st in section.subtopics), n_repairs = n_repairs, wall_ms = wall_ms,
     )
     return {"sid": sid, "attempts": attempts, "placeholder": False}
 
 
-async def start_stage(state: graphs.pipeline.synth.sawc.state.SawcState, runtime: Runtime[Context]) -> dict:
+async def start_stage(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: Runtime[Context]) -> dict:
     """Open the next stage: the sections of a stage all see the memory and the printed hashes of the stages before it. After the last stage, the late retry."""
-    data = runtime.context.scratch[STEP]
+    data = runtime.context.scratch[params.STEP]
     pos = state.get("stage_pos", 0)
     stages = state["stages"]
     data["snapshot"] = {"memory": [m.model_dump() for m in data["memory"]], "used": set(data["used"])}
     if pos < len(stages):
         sids = stages[pos]
-        shared.service.emit(STEP, "stage_start", stage_idx = pos, n_sections_in_stage = len(sids), section_ids = sids)
+        graphs.service.emit(params.STEP, "stage_start", stage_idx = pos, n_sections_in_stage = len(sids), section_ids = sids)
         data["stage_started"] = time.monotonic()
         return {"phase": "stage", "todo": [{"sid": sid} for sid in sids if sid not in data["completed"]]}
     # Late retry: a section whose runs ALL failed (a 504 storm while its stage ran) gets one more go now that the others are done and the pool has recovered, with a lighter vault.
@@ -502,8 +500,8 @@ def remember(data: dict, sid: str) -> None:
             data["used"].add(st.code_ref_hash)
 
 
-async def finish_stage(state: graphs.pipeline.synth.sawc.state.SawcState, runtime: Runtime[Context]) -> dict:
-    data = runtime.context.scratch[STEP]
+async def finish_stage(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: Runtime[Context]) -> dict:
+    data = runtime.context.scratch[params.STEP]
     pos = state.get("stage_pos", 0)
     if state.get("phase") == "late":
         recovered = [t["sid"] for t in state.get("todo") or [] if "placeholder" not in (data["completed"][t["sid"]].issues or [])]
@@ -530,8 +528,8 @@ async def finish_stage(state: graphs.pipeline.synth.sawc.state.SawcState, runtim
         else:
             n_done += 1
         remember(data, sid)
-    shared.service.emit(
-        STEP, "stage_done", stage_idx = pos, n_completed = n_done, n_failed = n_failed, wall_ms = shared.service.elapsed_ms(data["stage_started"]),
+    graphs.service.emit(
+        params.STEP, "stage_done", stage_idx = pos, n_completed = n_done, n_failed = n_failed, wall_ms = graphs.service.elapsed_ms(data["stage_started"]),
     )
     return {"stage_pos": pos + 1, "todo": []}
 
@@ -542,10 +540,10 @@ def ordered_sections(data: dict) -> list[schemas.Section]:
     return [data["completed"][s["section_id"]] for s in data["outline_sections"] if data["completed"].get(s["section_id"]) is not None]
 
 
-async def plan_coverage(state: graphs.pipeline.synth.sawc.state.SawcState, runtime: Runtime[Context]) -> dict:
+async def plan_coverage(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: Runtime[Context]) -> dict:
     """The next coverage round that has work: code blocks routed to a section but not printed get an extra call (rounds 1-2, a salvage pass for sections whose
     calls all failed, and one more round for what the salvage gained). A block that is a near-copy of a printed one counts as covered."""
-    data = runtime.context.scratch[STEP]
+    data = runtime.context.scratch[params.STEP]
     sections = ordered_sections(data)
     steps: list = [*range(1, params.TOPUP_ROUNDS + 1), "salvage", "after-salvage"]
     cursor = state.get("topup_cursor", 0)
@@ -589,7 +587,7 @@ async def plan_coverage(state: graphs.pipeline.synth.sawc.state.SawcState, runti
 async def extend_coverage(state: dict, runtime: Runtime[Context]) -> dict:
     """Extra subtopics for one section's unused routed code blocks (the coverage_extender agent), merged when they validate."""
     context = runtime.context
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     sid = state["sid"]
     sec = data["completed"][sid]
     unused, required = data["topup"]["unused"], data["topup"]["required"]
@@ -638,8 +636,8 @@ async def extend_coverage(state: dict, runtime: Runtime[Context]) -> dict:
     return {"extends": [{"sid": sid, "added": 0, "outcome": "failed" if raised == params.TOPUP_ATTEMPTS else "empty"}]}
 
 
-async def merge_coverage(state: graphs.pipeline.synth.sawc.state.SawcState, runtime: Runtime[Context]) -> dict:
-    data = runtime.context.scratch[STEP]
+async def merge_coverage(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: Runtime[Context]) -> dict:
+    data = runtime.context.scratch[params.STEP]
     steps: list = [*range(1, params.TOPUP_ROUNDS + 1), "salvage", "after-salvage"]
     cursor = state.get("topup_cursor", 0)
     step = steps[cursor]
@@ -671,9 +669,9 @@ async def merge_coverage(state: graphs.pipeline.synth.sawc.state.SawcState, runt
     }
 
 
-async def plan_sources(state: graphs.pipeline.synth.sawc.state.SawcState, runtime: Runtime[Context]) -> dict:
+async def plan_sources(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: Runtime[Context]) -> dict:
     """One call per section that was routed sources the chapter never cites: prose subtopics grounded in their key facts, and for cited sources the prose leaves unsaid."""
-    data = runtime.context.scratch[STEP]
+    data = runtime.context.scratch[params.STEP]
     if not params.TOPUP_SRC_ENABLED:
         return {"extend_todo": []}
     sections = ordered_sections(data)
@@ -684,7 +682,7 @@ async def plan_sources(state: graphs.pipeline.synth.sawc.state.SawcState, runtim
 
 async def extend_sources(state: dict, runtime: Runtime[Context]) -> dict:
     context = runtime.context
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     sid = state["sid"]
     sec = data["completed"][sid]
     sources = data["source_gaps"].get(sid) or []
@@ -722,9 +720,9 @@ async def extend_sources(state: dict, runtime: Runtime[Context]) -> dict:
 
 # ---- finalize ----------------------------------------------------------------------------------------------------------------------------
 
-async def finalize(state: graphs.pipeline.synth.sawc.state.SawcState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     slug, chapter_id = data["slug"], data["chapter_id"]
     vault_rich = data["vault_rich"]
     final_sections = ordered_sections(data)
@@ -766,7 +764,7 @@ async def finalize(state: graphs.pipeline.synth.sawc.state.SawcState, runtime: R
     await context.blobs.write(state["versioned_key"], body, content_type = "application/json")
     await context.blobs.write(state["latest_key"], body, content_type = "application/json")
 
-    elapsed = shared.service.elapsed_ms(state["started"])
+    elapsed = graphs.service.elapsed_ms(state["started"])
     stats = {
         "n_sections": coverage.n_sections,
         "n_completed": coverage.n_sections_completed,
@@ -789,8 +787,8 @@ async def finalize(state: graphs.pipeline.synth.sawc.state.SawcState, runtime: R
         "cache_hit": False,
         "prompt_version": versions.SAWC_PROMPT_VERSION,
     }
-    shared.service.emit(
-        STEP, "done",
+    graphs.service.emit(
+        params.STEP, "done",
         n_sections = stats["n_sections"], n_completed = stats["n_completed"], n_fallback = stats["n_fallback"], n_citation_fallback = stats["n_citation_fallback"],
         n_repairs = stats["n_repairs"], total_drafts_fired = stats["n_total_drafts_fired"], wall_ms = elapsed,
     )

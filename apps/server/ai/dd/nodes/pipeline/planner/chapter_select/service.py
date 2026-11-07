@@ -8,8 +8,7 @@ the deterministic pipeline produced it. The parts of a split that are still over
 from __future__ import annotations
 import domains
 from . import domain, params, versions
-from .. import shared
-from ..... import agents, graphs, tools
+from ..... import agents, graphs, skills, tools
 
 import logging
 import time
@@ -19,11 +18,10 @@ from langgraph.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
-Context = graphs.pipeline.planner.context.PlannerContext
-STEP = "chapter_select"
+Context = graphs.pipeline.planner.entities.PlannerContext
 
 
-async def prepare(state: graphs.pipeline.planner.chapter_select.state.SelectState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.planner.chapter_select.states.SelectState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
@@ -59,8 +57,8 @@ async def prepare(state: graphs.pipeline.planner.chapter_select.state.SelectStat
     except Exception:
         distillates = {}
 
-    shared.service.emit(
-        STEP, "start",
+    graphs.service.emit(
+        params.STEP, "start",
         n_proposals = len(proposals), n_docs = len(assignments), n_pinned = len(domain.detect_pinned_indices(proposals, seeds)),
     )
     result = domain.select_pipeline(
@@ -80,7 +78,7 @@ async def prepare(state: graphs.pipeline.planner.chapter_select.state.SelectStat
     doc_blocks: dict[str, int] = {}
     try:
         member_keys = [k for c in out_chapters for k in c["member_doc_keys"]]
-        bodies = await shared.service.read_all(blobs, member_keys)
+        bodies = await domains.dd.pipeline.storage.service.read_all(blobs, member_keys)
         doc_blocks = {k: domain.code_block_count(b) for k, b in zip(member_keys, bodies) if b}
     except Exception as error:
         logger.info(f"[chapter_select] {slug}: code-block counts unavailable, pages decide the split alone ({type(error).__name__}: {error})")
@@ -89,11 +87,11 @@ async def prepare(state: graphs.pipeline.planner.chapter_select.state.SelectStat
     if plans:
         # The preceding node, chapter_assign, just burst the Rotator's pool: wait for it to recover before the curators.
         try:
-            await shared.service.settle(STEP, params.SPLIT_SETTLE_CAP_S)
+            await graphs.service.settle(params.STEP, params.SPLIT_SETTLE_CAP_S)
         except Exception as error:
             logger.info(f"[chapter_select] settle wait skipped ({type(error).__name__}: {error})")
 
-    context.scratch[STEP] = {
+    context.scratch[params.STEP] = {
         "slug": slug,
         "proposals": proposals,
         "assignments": assignments,
@@ -113,10 +111,10 @@ async def prepare(state: graphs.pipeline.planner.chapter_select.state.SelectStat
     return {"finished": False, "manifest_hash": manifest, "plans": plans, "round": 1, "started": started}
 
 
-async def curate_chapter(state: graphs.pipeline.planner.chapter_select.state.CurateInput, runtime: Runtime[Context]) -> dict:
+async def curate_chapter(state: graphs.pipeline.planner.chapter_select.entities.CurateInput, runtime: Runtime[Context]) -> dict:
     """Split one oversize chapter with a curator agent. Fail-soft: any problem leaves the chapter as it is."""
     context = runtime.context
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     pos, k, round_ = state["pos"], state["n_parts"], state["round"]
     chapter = data["chapters"][pos]
     title = chapter["title"]
@@ -140,8 +138,8 @@ async def curate_chapter(state: graphs.pipeline.planner.chapter_select.state.Cur
             return domain.validate_split(domain.normalize_split(groups, units), units, taken, max_parts = max_parts)
 
         curator = context.agents.chapter_curator(tools = [
-            tools.pipeline.planner.split.service.cluster_units_tool(cluster, lambda ids: domain.describe_units(units, ids)),
-            tools.pipeline.planner.split.service.validate_split_tool(check),
+            tools.pipeline.planner.split.tool.cluster_units_tool(cluster, lambda ids: domain.describe_units(units, ids)),
+            tools.pipeline.planner.split.tool.validate_split_tool(check),
         ])
         plan = await agents.service.ask(
             curator,
@@ -149,6 +147,7 @@ async def curate_chapter(state: graphs.pipeline.planner.chapter_select.state.Cur
             domain.split_request(state["framework_slug"], chapter, units, k, other_titles),
             attempts = params.CURATOR_ATTEMPTS,
             wait_base_s = params.CURATOR_RETRY_WAIT_S,
+            files = skills.service.files_for("chapter_curator"),
         )
         parts = domain.normalize_split([g.model_dump() for g in plan.groups], units)
         ok, reason = domain.validate_split(parts, units, taken, max_parts = max_parts)
@@ -172,9 +171,9 @@ async def curate_chapter(state: graphs.pipeline.planner.chapter_select.state.Cur
         return {"outcomes": [{"round": round_, "pos": pos, "chapters": None, "reason": f"{type(error).__name__}: {str(error)[:120]}"}]}
 
 
-def apply(state: graphs.pipeline.planner.chapter_select.state.SelectState, runtime: Runtime[Context]) -> dict:
+def apply(state: graphs.pipeline.planner.chapter_select.states.SelectState, runtime: Runtime[Context]) -> dict:
     """Replace each split chapter by its parts, then plan the next round (parts still over the code-block cap)."""
-    data = runtime.context.scratch[STEP]
+    data = runtime.context.scratch[params.STEP]
     round_ = state.get("round") or 1
     sizes = {item["pos"]: item["n_parts"] for item in state.get("plans") or []}
     outcomes = [o for o in state.get("outcomes") or [] if o["round"] == round_]
@@ -201,10 +200,10 @@ def apply(state: graphs.pipeline.planner.chapter_select.state.SelectState, runti
     return {"plans": plans, "round": round_ + 1}
 
 
-async def finalize(state: graphs.pipeline.planner.chapter_select.state.SelectState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.planner.chapter_select.states.SelectState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     slug = data["slug"]
     manifest = state["manifest_hash"]
     proposals = data["proposals"]
@@ -288,7 +287,7 @@ async def finalize(state: graphs.pipeline.planner.chapter_select.state.SelectSta
         blobs, keys.chapter_plan_versioned_key(slug, manifest), plan_lkey, plan_payload,
     )
 
-    wall_ms = shared.service.elapsed_ms(state.get("started") or time.monotonic())
+    wall_ms = graphs.service.elapsed_ms(state.get("started") or time.monotonic())
     stats = {
         "n_proposals_in":     len(proposals),
         "n_chapters_out":     len(out_chapters),
@@ -305,8 +304,8 @@ async def finalize(state: graphs.pipeline.planner.chapter_select.state.SelectSta
     }
     if orphan_protected:
         logger.info(f"[chapter_select] {slug}: orphan-protected {len(orphan_protected)} small chapter(s) whose members had no alternative above-threshold chapter: {orphan_protected}")
-    shared.service.emit(
-        STEP, "done",
+    graphs.service.emit(
+        params.STEP, "done",
         n_chapters = len(out_chapters), n_pruned = len(pruned), n_orphan_protected = len(orphan_protected),
         coverage = coverage, wall_ms = wall_ms, titles = stats["chapter_titles"],
     )

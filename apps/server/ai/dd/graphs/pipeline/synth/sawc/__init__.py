@@ -1,6 +1,6 @@
 """sawc subgraph."""
 from __future__ import annotations
 
-from . import graph, state
+from . import entities, graphs, states
 
-__all__ = ["graph", "state"]
+__all__ = ["entities", "graphs", "states"]

@@ -168,7 +168,7 @@ def flatten_prerequisites(outline: schemas.ChapterOutline, dag: schemas.OutlineD
             lifted = list(dict.fromkeys(lift(p) for p in sec.prerequisites if p in by_id))
             sec = sec.model_copy(update={"prerequisites": lifted})
         sections.append(sec)
-    return outline.model_copy(update={"sections": sections})
+    return outline.model_copy(update = {"sections": sections})
 
 
 def validate_outline_structure(
@@ -597,18 +597,18 @@ def heuristic_fallback_outline(
 
     sections = [
         schemas.OutlineSection(
-            section_id=f"s{i + 1}",
-            heading=h,
-            description=(
+            section_id = f"s{i + 1}",
+            heading = h,
+            description = (
                 f"Auto-derived section from source heading {h!r}; "
                 f"{params.FALLBACK_DESCRIPTION_TAG}."
             ),
-            prerequisites=[],
-            needs_code=True,
+            prerequisites = [],
+            needs_code = True,
         )
         for i, h in enumerate(headings)
     ]
-    return schemas.ChapterOutline(sections=sections)
+    return schemas.ChapterOutline(sections = sections)
 
 
 def is_heuristic_fallback_outline(outline_dict: dict) -> bool:

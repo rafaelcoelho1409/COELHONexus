@@ -14,10 +14,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 import domains
 import ai
-from ai.dd.agents import entities
 from ai.dd.agents.pipeline.planner import schemas
-from ai.dd.graphs.pipeline.planner import context as planner_context
-from ai.dd.graphs.pipeline.planner.graph import NODE_ORDER, NODE_TO_FIELD, build_planner_graph
+from ai.dd.graphs.pipeline.planner import entities as planner_entities
+from ai.dd.graphs.pipeline.planner.graphs import planner_graph
+from ai.dd.graphs.pipeline.planner.keys import NODE_TO_FIELD
+from ai.dd.graphs.pipeline.planner.params import NODE_ORDER
 
 keys = domains.dd.pipeline.storage.keys
 SLUG = "fw"
@@ -97,10 +98,6 @@ class Fake:
         return {"structured_response": self.answer(payload)}
 
 
-def role(fake: Fake) -> entities.Role:
-    return entities.Role(agent = fake, files = {})
-
-
 def topic_of(text: str) -> str:
     return next((t for t in TOPICS if t in text.lower()), "alpha")
 
@@ -163,10 +160,10 @@ class Run:
         self.saver = InMemorySaver()
 
     async def go(self, thread_id: str = "docs-distiller/fw/t1", resume: bool = False) -> dict:
-        graph = build_planner_graph(self.saver)
-        context = planner_context.PlannerContext(
+        graph = planner_graph(self.saver)
+        context = planner_entities.PlannerContext(
             blobs = self.blobs,
-            agents = planner_context.PlannerAgents(**{name: role(fake) for name, fake in self.fakes.items()}),
+            agents = planner_entities.PlannerAgents(**self.fakes),
         )
         config = {"configurable": {"thread_id": thread_id}}
         initial = None if resume else {"framework_slug": SLUG, "thread_id": thread_id, "planner_mode": "llm", "status": "running"}
@@ -248,7 +245,7 @@ async def main() -> None:
     flaky = Run(flaky_blobs, page_distiller = Fake(flaky_distiller))
     await flaky.go(thread_id = "docs-distiller/fw/t3")
     # A page the model cannot distill keeps a deterministic distillate (it is kept, not dropped); the run completes and counts it.
-    final = dict((await build_planner_graph(flaky.saver).aget_state({"configurable": {"thread_id": "docs-distiller/fw/t3"}})).values)
+    final = dict((await planner_graph(flaky.saver).aget_state({"configurable": {"thread_id": "docs-distiller/fw/t3"}})).values)
     check("a page whose distill fails keeps a fallback distillate", final["doc_distill_stats"]["n_fallback"], 1)
     check("... and the run still produced a plan", bool(final.get("plan_path")), True)
 

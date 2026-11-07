@@ -4,6 +4,10 @@ from __future__ import annotations
 import os
 
 
+# The name this stage reports its progress events, cached items and scratch data under.
+STEP = "sawc_derive"
+
+
 # Concurrency for derive runs across sections in a chapter: bounded fan-out so we don't burst the Rotator's free-tier pool.
 CONCURRENCY = 4
 

@@ -15,7 +15,7 @@ STRUCTURE_ISSUES = (
 )
 
 
-def plan_repairs(state: graphs.ingestion.state.IngestionRunState) -> dict:
+def plan_repairs(state: graphs.ingestion.states.IngestionRunState) -> dict:
     """Create page-local assignments; metadata is handled by its dedicated stage."""
     assessments = state.get("page_audits")
     if not isinstance(assessments, list) or len(assessments) != state.get("expected_page_count"):

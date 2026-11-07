@@ -4,6 +4,10 @@ Question: which third Nexus feature maximizes the chance of a Senior AI Engineer
 
 Status: decision + design only. Nothing built. The COELHO Search MCP failed to connect (timeout) during this research, so the web-researcher wiring is untested.
 
+**Architecture expansion 2026-11-06:** the current book-distillation, learning-report, visual-artifact, sandbox, evaluation, and later RAG plan is in [BD-BOOK-DISTILLATION-AND-REPORT-ARCHITECTURE-2026-11-06.md](BD-BOOK-DISTILLATION-AND-REPORT-ARCHITECTURE-2026-11-06.md). Use it as the detailed follow-up to this product decision.
+
+**Feature naming update 2026-11-07:** the BD feature is named **Distill**. **Book Distiller** remains the product and bounded context; **Learning Guide** remains the reader-facing report.
+
 **Update 2026-11-02: named Book Distiller, and it is the third feature again.** The feature (book distillation + deep research over the distilled book and the live web) is called **Book Distiller**, the sibling of Docs Distiller; the name was chosen after a collision check (Knowledge Distiller reads as the ML model-compression technique; Scriptorium, Marginalia and Tome are taken in the AI space). Domain code `bd`: `domains/bd/`, `/api/v1/bd`, Celery queue `bd`. The user builds it by hand, to learn Deep Agents, LangChain, LangGraph and FastMCP. Tagline: "Distill any book, then research across it and the live web, with citations." The file name keeps "BOOK-RESEARCH" because it is dated and linked from elsewhere; read "Book Research" below as Book Distiller.
 
 ---

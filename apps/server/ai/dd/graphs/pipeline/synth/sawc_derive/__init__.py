@@ -1,6 +1,6 @@
 """sawc_derive subgraph."""
 from __future__ import annotations
 
-from . import graph, state
+from . import graphs, states
 
-__all__ = ["graph", "state"]
+__all__ = ["graphs", "states"]

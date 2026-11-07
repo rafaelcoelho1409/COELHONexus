@@ -975,51 +975,6 @@ def compute_sawc_stats(
     )
 
 
-def format_contributions_block(contributions: list[dict]) -> str:
-    """Pretty-format the digest's per_section[section_id] contributions for
-    the writer prompt."""
-    if not contributions:
-        return "(no contributions assigned to this section — write a thin "\
-               "orientation paragraph only; checklist_eval will flag this)"
-    lines: list[str] = []
-    for i, c in enumerate(contributions):
-        src = c.get("source_key") or "?"
-        # Source key can be long — show last component
-        src_short = src.rsplit("/", 1)[-1]
-        relevance = c.get("relevance", "?")
-        summary = c.get("summary", "")
-        facts = c.get("key_facts") or []
-        refs = c.get("code_refs") or []
-        lines.append(
-            f"  [{i + 1}] {src_short} ({relevance}) — {summary}\n"
-            f"      key_facts:"
-        )
-        for f in facts[:5]:
-            lines.append(f"        • {f}")
-        if refs:
-            lines.append(f"      code_refs: {', '.join(refs)}")
-    return "\n".join(lines)
-
-
-def format_memory_block(memory: list[dict]) -> str:
-    """Pretty-format the memory ledger for the writer prompt; accepts dicts (model_dump() or raw) to avoid callers coercing to MemoryEntry."""
-    if not memory:
-        return "  (this is the first stage — no prior sections yet)"
-    lines: list[str] = []
-    for e in memory:
-        sid = e.get("section_id", "?")
-        head = e.get("heading", "?")
-        summ = e.get("summary", "")
-        terms = e.get("key_terminology") or []
-        lines.append(f"  [{sid}] {head}")
-        lines.append(f"      summary:     {summ}")
-        if terms:
-            lines.append(
-                f"      terminology: {', '.join(terms)}"
-            )
-    return "\n".join(lines)
-
-
 def is_context_overflow_error(e: Exception) -> bool:
     """Heuristic substring match — same idiom as outline_sdp/digest_construct's
     classifiers. The Rotator is a universal gateway with no context-length
@@ -1353,20 +1308,20 @@ def placeholder_section(
         # already does, instead of a total failure being undiagnosable.
         issues.extend(f"draft_fail:{tag}" for tag in error_tags)
     return schemas.Section(
-        section_id=section_id,
-        heading=heading,
-        intro=(
+        section_id = section_id,
+        heading = heading,
+        intro = (
             f"This section ({heading}) is awaiting content. The synth "
             f"writer was unable to produce a valid draft on its initial "
             f"pass; mgsr_replan should retarget this section or merge "
             f"it into an adjacent section in the next iteration."
         ),
-        subtopics=[],
-        citations=[],
-        n_drafts_tried=1,
-        n_repairs=n_repairs,
-        deployment_writer=deployment_writer,
-        issues=issues,
+        subtopics = [],
+        citations = [],
+        n_drafts_tried = 1,
+        n_repairs = n_repairs,
+        deployment_writer = deployment_writer,
+        issues = issues,
     )
 
 

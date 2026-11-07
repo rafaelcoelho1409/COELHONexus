@@ -5,14 +5,13 @@ from __future__ import annotations
 import os
 
 
+# The name this stage reports its progress events, cached items and scratch data under.
+STEP = "render_audit_write"
+
+
 # Same algorithm as `synth/vault.py:_hash_block` — 16-hex SHA-256 prefix.
 VAULT_HASH_LEN = 16
 
-# Dedup only bodies with real heft — tiny one-liners (e.g.
-# `claude --version`) recur legitimately and must NOT be cross-referenced
-# away.
-DEDUP_MIN_LINES = 3
-DEDUP_MIN_CHARS = 80
 # Mismatch needs enough identifiers to judge + a clean zero overlap.
 MISMATCH_MIN_CODE_IDENTS = 4
 

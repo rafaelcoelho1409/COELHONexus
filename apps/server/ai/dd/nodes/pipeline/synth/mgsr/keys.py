@@ -1,7 +1,5 @@
 """mgsr — MinIO key builders."""
 from __future__ import annotations
-from . import params
-
 
 
 def versioned_blob_key(slug: str, chapter_id: str, manifest_hash: str) -> str:

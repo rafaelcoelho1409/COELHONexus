@@ -1,30 +1,33 @@
 """LangGraph node adapter for concurrent ingestion page normalization."""
 from __future__ import annotations
-
 from . import service
 from .... import graphs
 
 from typing import Any
 
+from langgraph.runtime import Runtime
+
 
 async def normalize_pages(
-    state: graphs.ingestion.state.IngestionState,
-    read_page: service.PageReader,
-    artifact_exists: service.ArtifactExists,
-    read_artifact: service.ArtifactReader,
-    write_artifact: service.ArtifactWriter,
-    repairer: service.Repairer,
-    progress: service.CancellationCheck | None,
-    page_done: service.PageProgress,
+    state: graphs.ingestion.states.IngestionState,
+    runtime: Runtime[graphs.ingestion.entities.IngestionDependencies],
 ) -> dict[str, Any]:
-    """Run the normalization service as the ingestion graph's repair node."""
-    return await service.normalize_pages(
-        state,
-        read_page,
-        artifact_exists,
-        read_artifact,
-        write_artifact,
-        repairer,
-        progress,
-        page_done,
+    """Run the normalization service as the ingestion graph's repair node, under progress reporting."""
+    total = len(state.get("pages", []))
+    return await graphs.service.run_node(
+        runtime.context.progress,
+        "normalize_pages",
+        lambda: service.normalize_pages(
+            state,
+            runtime.context.read_page,
+            runtime.context.artifact_exists,
+            runtime.context.read_artifact,
+            runtime.context.write_artifact,
+            runtime.context.repairer,
+            runtime.context.progress,
+            lambda: graphs.ingestion.service.page_done(
+                runtime.context, 
+                "normalize_pages", 
+                total),
+        ),
     )

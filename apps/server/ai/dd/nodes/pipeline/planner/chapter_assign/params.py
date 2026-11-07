@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 
+# The name this stage reports its progress events, cached items and scratch data under.
+STEP = "chapter_assign"
+
 # SOTA Sept 2026: 24×138 burst → 103 lexical fallback (75%) on free-tier 402/timeout;
 # 24→12 cuts burst 50% and pooled 200/100 still saturates, 600tok needs 45s not 30s.
 # 2026-09-08: cut further 12 -> 8, paired with SETTLE_DELAY_S below. Raising
@@ -25,9 +28,8 @@ CONCURRENCY = 12
 # triggered. Skipped entirely on a cache hit.
 SETTLE_DELAY_S = 130.0
 
-# A completion cut at MAX_TOKENS is retried once with LENGTH_RETRY_FACTOR x the budget (cap below).
+# A completion cut at MAX_TOKENS is retried once with LENGTH_RETRY_FACTOR x the budget.
 LENGTH_RETRY_FACTOR = 2.0
-MAX_TOKENS_RETRY_CAP = 4000
 MAX_TOKENS = 1200   # was 600 — scores needs one entry per chapter proposal,
 # and PROPOSALS_MAX=30 alone eats ~450-600 tokens of pure JSON in the worst
 # case, leaving zero headroom for a reasoning model's <think> preamble (same
@@ -51,7 +53,6 @@ TEMPERATURE = 0.0
 # evidence-justified number for this node specifically, not a borrowed
 # default.
 TIMEOUT_S = 120.0
-MAX_REPAIR_ATTEMPTS = 1
 # A vector missing at most this many chapters whose best score is >= SKIP_REASK_MIN_BEST is accepted as is.
 SKIP_REASK_MAX_MISSING = 1
 SKIP_REASK_MIN_BEST = 0.7
@@ -69,11 +70,15 @@ URL_PATH_MAX_CHARS = 160
 # misplaces its doc (asyncio `timeout_at` → Event Loop), a retry costs one more call.
 TRANSIENT_RETRIES = 1
 TRANSIENT_RETRY_PAUSE_S = 4.0
-# A page whose whole vector came back below RESCUE_FLOOR is asked again up to this many times (see prompts.CLOSEST_CHAPTER).
+# A page whose whole vector came back below RESCUE_FLOOR is asked again up to this many times (see CLOSEST_CHAPTER).
 # 2 -> 4 (fastmcp run 18: after 2 re-asks 17 of 344 pages were still all-zero; asked 4 more times each, 10 of the 17 flipped. Every
 # one of the 51 ising-calibration answers was zero but 10 of the 11 answers from other arms were not, and each re-ask lands on
 # ising ~60% of the time: 4 asks leave ~13% of an ising-only zero page, 2 asks left ~36%).
 ZERO_REASKS = 4
+# The note a re-ask carries.
+CLOSEST_CHAPTER = (
+    "Every page was written for some topic: unless NO chapter shares its topic at all, give the closest chapter at least 0.5."
+)
 # Quality reported to the Rotator's feedback endpoint: an all-below-RESCUE_FLOOR vector, and a re-ask that found a chapter.
 # The Rotator keeps one bandit cell per (arm, task): scoring calls get their own, so the feedback below only demotes an arm here.
 ROTATOR_TASK = "dd.assign"

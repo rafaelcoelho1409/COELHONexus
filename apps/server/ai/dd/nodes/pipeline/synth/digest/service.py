@@ -7,7 +7,6 @@ the unrouted, fold overlapping sections, drop empty ones, index per section, cov
 from __future__ import annotations
 import domains
 from . import domain, keys, params, schemas, versions
-from .. import shared
 from ..... import agents, graphs, tools
 
 import asyncio
@@ -22,29 +21,28 @@ from langgraph.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
-Context = graphs.pipeline.synth.context.SynthContext
-STEP = "digest_construct"
+Context = graphs.pipeline.synth.entities.SynthContext
 
 
 def chunk_id(key: str, chunk: int) -> str:
     return f"{key}#{chunk}"
 
 
-async def prepare(state: graphs.pipeline.synth.digest.state.DigestState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.synth.digest.states.DigestState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
     chapter_id = state.get("chapter_id")
     started = time.monotonic()
     if not slug or not chapter_id:
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "digest_path", "digest_stats", "no_slug_or_chapter_id", "framework_slug or chapter_id missing from SynthState", started,
         )}
 
     outline_key = keys.outline_latest_key(slug, chapter_id)
-    outline_payload = await shared.service.load_json(blobs, outline_key)
+    outline_payload = await domains.dd.pipeline.storage.service.load_json(blobs, outline_key)
     if outline_payload is None:
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "digest_path", "digest_stats", "outline_not_found", f"outline {outline_key!r} not in MinIO (or unreadable); run outline_sdp first", started,
             outline_key = outline_key,
         )}
@@ -53,13 +51,13 @@ async def prepare(state: graphs.pipeline.synth.digest.state.DigestState, runtime
     chapter_title = outline_payload.get("chapter_title") or chapter_id
     outline_manifest_hash = outline_payload.get("manifest_hash") or ""
     if not outline_sections or not source_keys:
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "digest_path", "digest_stats", "empty_outline_or_sources",
             f"outline has {len(outline_sections)} sections and {len(source_keys)} sources — both must be >0", started,
             n_sections = len(outline_sections), n_sources = len(source_keys),
         )}
 
-    shared.service.emit(STEP, "start", chapter_id = chapter_id, chapter_title = chapter_title, n_sections = len(outline_sections), n_sources = len(source_keys))
+    graphs.service.emit(params.STEP, "start", chapter_id = chapter_id, chapter_title = chapter_title, n_sections = len(outline_sections), n_sources = len(source_keys))
 
     # Sources without pre-built vaults have no sentinels; the router would route zero code refs. Sentinelize them here, in memory.
     vault = domains.dd.ingestion.vault
@@ -77,7 +75,7 @@ async def prepare(state: graphs.pipeline.synth.digest.state.DigestState, runtime
                 logger.warning(f"[digest_construct] runtime-sentinelize failed for {key!r}: {type(error).__name__}: {error}; using the raw body")
         pairs.append((key, text))
     if not pairs:
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "digest_path", "digest_stats", "all_sources_empty", "every source body returned empty from MinIO", started,
         )}
 
@@ -85,8 +83,8 @@ async def prepare(state: graphs.pipeline.synth.digest.state.DigestState, runtime
     all_hashes: set[str] = set()
     for _, body in pairs:
         all_hashes.update(domain.extract_vault_hashes(body))
-    shared.service.emit(
-        STEP, "outline_loaded",
+    graphs.service.emit(
+        params.STEP, "outline_loaded",
         n_sections = len(outline_sections), n_sources = len(pairs), n_total_vault_hashes = len(all_hashes), total_bytes = total_bytes,
     )
 
@@ -100,7 +98,7 @@ async def prepare(state: graphs.pipeline.synth.digest.state.DigestState, runtime
         try:
             cached = json.loads(await blobs.read_text(versioned_key))
             cov = (cached or {}).get("coverage_stats") or {}
-            elapsed = shared.service.elapsed_ms(started)
+            elapsed = graphs.service.elapsed_ms(started)
             stats = {
                 "n_sources": len(cached.get("per_source") or []),
                 "n_sections": cov.get("n_sections", 0),
@@ -118,8 +116,8 @@ async def prepare(state: graphs.pipeline.synth.digest.state.DigestState, runtime
                 "cache_hit": True,
                 "prompt_version": cached.get("prompt_version"),
             }
-            shared.service.emit(
-                STEP, "done",
+            graphs.service.emit(
+                params.STEP, "done",
                 n_sources = stats["n_sources"], n_sections = stats["n_sections"], n_sections_covered = stats["n_sections_covered"],
                 n_empty_sections = stats["n_empty_sections"], n_orphan_code_refs = stats["n_orphan_code_refs"], wall_ms = elapsed, cache_hit = True,
             )
@@ -137,14 +135,14 @@ async def prepare(state: graphs.pipeline.synth.digest.state.DigestState, runtime
             chunks[identity] = part
             items.append({
                 "id": identity, "key": key, "chunk": index, "n_chunks": len(parts),
-                "digest": shared.service.digest(versions.DIGEST_PROMPT_VERSION, outline_manifest_hash, key, str(index), hashlib.sha256(part.encode()).hexdigest()),
+                "digest": domains.dd.pipeline.storage.domain.digest(versions.DIGEST_PROMPT_VERSION, outline_manifest_hash, key, str(index), hashlib.sha256(part.encode()).hexdigest()),
             })
     stored = await domains.dd.pipeline.storage.service.read_chapter_items(
-        blobs, slug, chapter_id, STEP, versions.DIGEST_PROMPT_VERSION, [item["digest"] for item in items],
+        blobs, slug, chapter_id, params.STEP, versions.DIGEST_PROMPT_VERSION, [item["digest"] for item in items],
     )
     cached_items = {item["id"]: stored[item["digest"]] for item in items if item["digest"] in stored}
     todo = [item for item in items if item["id"] not in cached_items]
-    context.scratch[STEP] = {
+    context.scratch[params.STEP] = {
         "pairs": dict(pairs),
         "chunks": chunks,
         "cached": cached_items,
@@ -153,7 +151,7 @@ async def prepare(state: graphs.pipeline.synth.digest.state.DigestState, runtime
         "n_sources": len(pairs),
         "frame": {"framework_slug": slug, "chapter_id": chapter_id, "chapter_title": chapter_title},
     }
-    context.counters[STEP] = {"routed": 0}
+    context.counters[params.STEP] = {"routed": 0}
     logger.info(f"[digest_construct] {slug}/{chapter_id}: {len(items)} chunks of {len(pairs)} sources ({len(cached_items)} routed by an earlier run, {len(todo)} to route)")
     return {
         "finished": False,
@@ -188,7 +186,7 @@ async def route_source(state: dict, runtime: Runtime[Context]) -> dict:
     """Route one chunk. Returns its digest (the router's, normalized), or why it has none."""
     context = runtime.context
     item = state["item"]
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     text = data["chunks"][item["id"]]
     outline_sections = data["outline_sections"]
     valid_sections = {s["section_id"] for s in outline_sections}
@@ -207,7 +205,7 @@ async def route_source(state: dict, runtime: Runtime[Context]) -> dict:
     payload = None
     cap = params.MAX_SOURCE_CHARS
     for attempt in range(2):
-        role = context.agents.source_router(tools = [tools.pipeline.synth.check.service.check_digest_tool(check)])
+        role = context.agents.source_router(tools = [tools.pipeline.synth.check.tool.check_digest_tool(check)])
         try:
             answer = await agents.service.ask(
                 role,
@@ -230,12 +228,12 @@ async def route_source(state: dict, runtime: Runtime[Context]) -> dict:
         last_error = f"pydantic_fail: {parse_error}"
         break
 
-    counts = context.counters.setdefault(STEP, {"routed": 0})
+    counts = context.counters.setdefault(params.STEP, {"routed": 0})
     counts["routed"] += 1
-    wall_ms = shared.service.elapsed_ms(started)
+    wall_ms = graphs.service.elapsed_ms(started)
     if payload is None:
         logger.warning(f"[digest_construct] {item['id']}: routing failed ({last_error})")
-        shared.service.emit(STEP, "source_done", source_key = item["key"], chunk = item["chunk"], ok = False, error = (last_error or "")[:120], wall_ms = wall_ms)
+        graphs.service.emit(params.STEP, "source_done", source_key = item["key"], chunk = item["chunk"], ok = False, error = (last_error or "")[:120], wall_ms = wall_ms)
         return {"results": [{"id": item["id"], "key": item["key"], "chunk": item["chunk"], "digest": None, "error": last_error or "unknown"}]}
 
     remaining = domain.validate_source_digest(payload, valid_section_ids = valid_sections, valid_vault_hashes = valid_hashes)
@@ -257,32 +255,32 @@ async def route_source(state: dict, runtime: Runtime[Context]) -> dict:
     ).model_dump()
     try:
         await domains.dd.pipeline.storage.service.write_chapter_item(
-            context.blobs, frame["framework_slug"], frame["chapter_id"], STEP, versions.DIGEST_PROMPT_VERSION, item["digest"], digest,
+            context.blobs, frame["framework_slug"], frame["chapter_id"], params.STEP, versions.DIGEST_PROMPT_VERSION, item["digest"], digest,
         )
     except Exception as error:
         logger.warning(f"[digest_construct] routed chunk not stored ({type(error).__name__}: {error})")
-    shared.service.emit(
-        STEP, "source_done",
+    graphs.service.emit(
+        params.STEP, "source_done",
         source_key = item["key"], chunk = item["chunk"], ok = True, n_contributions = len(payload.contributes_to), n_unassigned = len(payload.unassigned_code_refs), wall_ms = wall_ms,
     )
     return {"results": [{"id": item["id"], "key": item["key"], "chunk": item["chunk"], "digest": digest}]}
 
 
-async def collect(state: graphs.pipeline.synth.digest.state.DigestState, runtime: Runtime[Context]) -> dict:
+async def collect(state: graphs.pipeline.synth.digest.states.DigestState, runtime: Runtime[Context]) -> dict:
     """After a wave: the items that failed go back once, after a pause (the arms that just stalled are ejected for tens of seconds)."""
     done = {r["id"] for r in state.get("results") or [] if r.get("digest") is not None}
     failed = [item for item in state.get("todo") or [] if item["id"] not in done]
     if failed and state.get("wave", 0) == 0:
         logger.info(f"[digest_construct] {state['framework_slug']}/{state['chapter_id']}: retrying {len(failed)}/{len(state['todo'])} failed chunk(s) as a second wave")
-        shared.service.emit(STEP, "second_wave", n_failed = len(failed))
-        await asyncio.sleep(shared.params.WAVE_PAUSE_S)
+        graphs.service.emit(params.STEP, "second_wave", n_failed = len(failed))
+        await asyncio.sleep(params.WAVE_PAUSE_S)
         return {"todo": failed, "wave": 1}
     return {"todo": []}
 
 
-async def finalize(state: graphs.pipeline.synth.digest.state.DigestState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.synth.digest.states.DigestState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     blobs = context.blobs
     slug = state["framework_slug"]
     chapter_id = state["chapter_id"]
@@ -320,7 +318,7 @@ async def finalize(state: graphs.pipeline.synth.digest.state.DigestState, runtim
     for reason in failure_reasons:
         kind = (reason or "unknown").split(":", 1)[0].strip() or "unknown"
         error_breakdown[kind] = error_breakdown.get(kind, 0) + 1
-    shared.service.emit(STEP, "digests_aggregated", n_digests_ok = len(per_source), n_pydantic_fail = n_pydantic_fail, n_total = len(pairs))
+    graphs.service.emit(params.STEP, "digests_aggregated", n_digests_ok = len(per_source), n_pydantic_fail = n_pydantic_fail, n_total = len(pairs))
     if n_stubs:
         logger.info(f"[digest_construct] {slug}/{chapter_id}: {n_stubs} source(s) the router could not digest kept as heuristic stubs (page opening + every code block)")
 
@@ -362,7 +360,7 @@ async def finalize(state: graphs.pipeline.synth.digest.state.DigestState, runtim
     await blobs.write(state["versioned_key"], body, content_type = "application/json")
     await blobs.write(state["latest_key"], body, content_type = "application/json")
 
-    elapsed = shared.service.elapsed_ms(state["started"])
+    elapsed = graphs.service.elapsed_ms(state["started"])
     stats = {
         "n_sources": len(per_source),
         "n_sections": coverage.n_sections,
@@ -386,8 +384,8 @@ async def finalize(state: graphs.pipeline.synth.digest.state.DigestState, runtim
         "cache_hit": False,
         "prompt_version": versions.DIGEST_PROMPT_VERSION,
     }
-    shared.service.emit(
-        STEP, "done",
+    graphs.service.emit(
+        params.STEP, "done",
         n_sources = stats["n_sources"], n_sections = stats["n_sections"], n_sections_covered = stats["n_sections_covered"], n_empty_sections = stats["n_empty_sections"],
         n_merged_sections = stats["n_merged_sections"], n_orphan_code_refs = stats["n_orphan_code_refs"], n_pydantic_fail = n_pydantic_fail, wall_ms = elapsed,
     )

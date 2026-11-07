@@ -101,7 +101,7 @@ def _clip_summary(summary: str) -> str:
 
 def normalize_distillate(
     summary: str, key_terms: list[str], source_key: str, body: str,
-    role: str = schemas.DEFAULT_ROLE,
+    role: str = agents.pipeline.planner.params.DEFAULT_ROLE,
 ) -> schemas.DocDistillate:
     """Normalize-then-validate for the LLM's distillate: clip an over-long
     summary, top up a too-short one and a key-term shortfall from the doc itself

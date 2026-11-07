@@ -6,6 +6,7 @@ import domains.bd.ingestion.ai.task
 from . import params, schemas
 
 import asyncio
+import hashlib
 import json
 import logging
 from typing import Literal
@@ -228,6 +229,36 @@ async def get_agentic_run(book_id: str, agentic_run_id: str) -> dict:
     if manifest is None:
         raise HTTPException(status_code = 404, detail = "Agentic ingestion run not found")
     return _agentic_status(manifest)
+
+
+@router.get(
+    "/{book_id}/agentic/runs/{agentic_run_id}/pages/{page_no}",
+    response_model = schemas.PageBody,
+)
+async def get_agentic_run_page(book_id: str, agentic_run_id: str, page_no: int) -> dict:
+    """Read the normalized page from one exact immutable ingestion QA run."""
+    try:
+        manifest = await domains.bd.ingestion.ai.service.read_ingestion_ai_run(book_id, agentic_run_id)
+    except ValueError as error:
+        raise HTTPException(status_code = 404, detail = str(error)) from error
+    if manifest is None:
+        raise HTTPException(status_code = 404, detail = "Agentic ingestion run not found")
+    page = next((item for item in manifest["pages"] if item["page_number"] == page_no), None)
+    if page is None or page["status"] not in {"done", "review_required"}:
+        raise HTTPException(status_code = 404, detail = f"no normalized page {page_no} exists in this ingestion run")
+    storage = infra.minio.service.get_storage()
+    try:
+        markdown = await storage.read_text(page["normalized_key"])
+    except FileNotFoundError as error:
+        raise HTTPException(status_code = 404, detail = f"page {page_no} artifact is missing") from error
+    if hashlib.sha256(markdown.encode("utf-8")).hexdigest() != page["normalized_sha256"]:
+        raise HTTPException(status_code = 409, detail = f"page {page_no} failed its integrity check")
+    return {
+        "book_id": book_id,
+        "page": page_no,
+        "markdown": markdown,
+        "content_source": "agentic",
+    }
 
 
 @router.get("/{book_id}/agentic/runs/{agentic_run_id}/events")

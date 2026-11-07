@@ -2,8 +2,8 @@
 from __future__ import annotations
 import domains
 from . import domain, params, versions
-from .. import chapter_select, shared
-from ..... import agents, graphs
+from .. import chapter_select
+from ..... import agents, graphs, skills
 
 import json
 import logging
@@ -15,14 +15,14 @@ from langgraph.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
-Context = graphs.pipeline.planner.context.PlannerContext
+Context = graphs.pipeline.planner.entities.PlannerContext
 
 
 def _blob(slug: str, mh: str) -> str:
     return domains.dd.pipeline.storage.keys.order_key(slug, mh)
 
 
-async def prepare(state: graphs.pipeline.planner.order_chapters.state.OrderState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.planner.order_chapters.states.OrderState, runtime: Runtime[Context]) -> dict:
     """Answer from the cache or by rule when possible; otherwise load what the samples need (chapters, composition, source order)."""
     blobs = runtime.context.blobs
     slug = state.get("framework_slug") or ""
@@ -45,7 +45,7 @@ async def prepare(state: graphs.pipeline.planner.order_chapters.state.OrderState
     if await blobs.exists(cache_key):
         try:
             cached = json.loads(await blobs.read_text(cache_key))
-            elapsed = shared.service.elapsed_ms(started)
+            elapsed = graphs.service.elapsed_ms(started)
             stats = {
                 "n_chapters": cached.get("n_chapters", 0),
                 "n_samples": len(cached.get("samples") or []),
@@ -56,13 +56,13 @@ async def prepare(state: graphs.pipeline.planner.order_chapters.state.OrderState
                 "cache_hit": True,
                 "prompt_version": cached.get("prompt_version"),
             }
-            shared.service.emit("order_chapters", "done", n_chapters = stats["n_chapters"], wall_ms = elapsed, cache_hit = True)
+            graphs.service.emit("order_chapters", "done", n_chapters = stats["n_chapters"], wall_ms = elapsed, cache_hit = True)
             logger.info(f"[order_chapters] {slug}: CACHE HIT — order={stats['order']}, foundational={stats['foundational']}, {elapsed} ms")
             return {"finished": True, "chapter_order_ref": cache_key, "order_chapters_stats": stats}
         except Exception as error:
             logger.warning(f"[order_chapters] {slug}: cached blob {cache_key!r} unreadable ({type(error).__name__}: {error}); recomputing")
 
-    shared.service.emit("order_chapters", "start")
+    graphs.service.emit("order_chapters", "start")
     try:
         outline = domain.load_outline(content or await blobs.read_text(reduce_ref))
     except Exception as error:
@@ -73,7 +73,7 @@ async def prepare(state: graphs.pipeline.planner.order_chapters.state.OrderState
             "order_chapters_stats": {
                 "skipped": "outline_unreadable",
                 "error": f"{type(error).__name__}: {str(error)[:120]}",
-                "wall_ms": shared.service.elapsed_ms(started),
+                "wall_ms": graphs.service.elapsed_ms(started),
             },
         }
     chapters = (outline or {}).get("chapters") or []
@@ -81,7 +81,7 @@ async def prepare(state: graphs.pipeline.planner.order_chapters.state.OrderState
 
     if n_chapters <= 1:
         # 0 or 1 chapter: no meaningful ordering. Persist a trivial blob so plan_write sees the file and skips its own reorder.
-        elapsed = shared.service.elapsed_ms(started)
+        elapsed = graphs.service.elapsed_ms(started)
         identity = list(range(n_chapters))
         await blobs.write(
             cache_key,
@@ -91,7 +91,7 @@ async def prepare(state: graphs.pipeline.planner.order_chapters.state.OrderState
             }),
             content_type = "application/json",
         )
-        shared.service.emit("order_chapters", "done", n_chapters = n_chapters, wall_ms = elapsed, skipped = "trivial_n_chapters")
+        graphs.service.emit("order_chapters", "done", n_chapters = n_chapters, wall_ms = elapsed, skipped = "trivial_n_chapters")
         return {
             "finished": True,
             "chapter_order_ref": cache_key,
@@ -118,7 +118,7 @@ async def prepare(state: graphs.pipeline.planner.order_chapters.state.OrderState
         logger.info(f"[order_chapters] {slug}: source order unavailable ({type(error).__name__})")
 
     # Only reached past the cache and trivial checks, so a fully cached re-plan never pays the wait.
-    await shared.service.settle("order_chapters", params.SETTLE_DELAY_S)
+    await graphs.service.settle("order_chapters", params.SETTLE_DELAY_S)
 
     composition = None
     try:
@@ -140,7 +140,7 @@ async def prepare(state: graphs.pipeline.planner.order_chapters.state.OrderState
     }
 
 
-async def sample_order(state: graphs.pipeline.planner.order_chapters.state.SampleInput, runtime: Runtime[Context]) -> dict:
+async def sample_order(state: graphs.pipeline.planner.order_chapters.entities.SampleInput, runtime: Runtime[Context]) -> dict:
     """One sequencer sample: the model's chapter titles in reading order, mapped back to chapter indexes."""
     chapters = state["chapters"]
     labels = domain.chapter_labels(chapters)
@@ -153,6 +153,7 @@ async def sample_order(state: graphs.pipeline.planner.order_chapters.state.Sampl
             payload,
             attempts = params.SAMPLE_ATTEMPTS,
             wait_base_s = params.SAMPLE_RETRY_WAIT_S,
+            files = skills.service.files_for("chapter_sequencer"),
             check = lambda value: domain.titles_to_order(value.order, labels) is not None,
         )
     except Exception as error:
@@ -163,11 +164,11 @@ async def sample_order(state: graphs.pipeline.planner.order_chapters.state.Sampl
     return {"samples": [{"sample": index, "order": order}]}
 
 
-def collect(state: graphs.pipeline.planner.order_chapters.state.OrderState) -> dict:
+def collect(state: graphs.pipeline.planner.order_chapters.states.OrderState) -> dict:
     """After a round of samples: with fewer valid orderings than MIN_VALID_SAMPLES, ask once more for the missing ones."""
     samples = state.get("samples") or []
     valid = [s for s in samples if s["order"] is not None]
-    shared.service.emit(
+    graphs.service.emit(
         "order_chapters", "samples_done",
         n_samples = len(samples), n_valid = len(valid), n_failed = len(samples) - len(valid),
     )
@@ -184,7 +185,7 @@ def collect(state: graphs.pipeline.planner.order_chapters.state.OrderState) -> d
     return {"retry_samples": [params.N_SAMPLES + i for i in range(missing)], "retry_done": True}
 
 
-async def finalize(state: graphs.pipeline.planner.order_chapters.state.OrderState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.planner.order_chapters.states.OrderState, runtime: Runtime[Context]) -> dict:
     """Aggregate the valid orderings (and the docs' own order) by Borda, apply the pins, persist the blob and the stats."""
     blobs = runtime.context.blobs
     slug = state["framework_slug"]
@@ -194,7 +195,7 @@ async def finalize(state: graphs.pipeline.planner.order_chapters.state.OrderStat
     samples = state.get("samples") or []
     valid_orderings = [s["order"] for s in samples if s["order"] is not None]
     source_ranking = state.get("source_ranking")
-    elapsed = shared.service.elapsed_ms(state.get("started") or time.monotonic())
+    elapsed = graphs.service.elapsed_ms(state.get("started") or time.monotonic())
 
     if not valid_orderings:
         # Even the retry failed: the identity order (the docs' own when known), pinned. Better than refusing to ship; each
@@ -214,7 +215,7 @@ async def finalize(state: graphs.pipeline.planner.order_chapters.state.OrderStat
             content_type = "application/json",
         )
         logger.warning(f"[order_chapters] {slug}: all {len(samples)} samples failed even after retry ({sample_errors}); identity ordering applied")
-        shared.service.emit(
+        graphs.service.emit(
             "order_chapters", "done", n_chapters = n_chapters, wall_ms = elapsed,
             error = "all_samples_failed_after_retry", sample_errors = sample_errors,
         )
@@ -270,7 +271,7 @@ async def finalize(state: graphs.pipeline.planner.order_chapters.state.OrderStat
         "prompt_version": versions.PROMPT_VERSION,
         "deployment_usage": [],
     }
-    shared.service.emit(
+    graphs.service.emit(
         "order_chapters", "done",
         n_chapters = n_chapters, n_samples = len(valid_orderings), n_foundational = len(foundational_idx), wall_ms = elapsed,
     )

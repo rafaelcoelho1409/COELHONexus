@@ -1,0 +1,6 @@
+from __future__ import annotations
+
+MANIFEST_SCHEMA_VERSION = "1.0"
+REPORT_SCHEMA_VERSION = "1.0"
+WORKFLOW_VERSION = "1.0"
+PROMPT_VERSION = "1.0"

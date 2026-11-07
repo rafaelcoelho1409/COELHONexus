@@ -193,9 +193,9 @@ check(
     sorted(script.seen_tools - {"PatchDraftBatch"}),
     sorted({
         "read_file",
-        tools.patch.service.check_patch.name,
-        tools.book.service.book_term_frequency.name,
-        tools.book.service.adjacent_page_edges.name,
+        tools.patch.tool.check_patch.name,
+        tools.book.tool.book_term_frequency.name,
+        tools.book.tool.adjacent_page_edges.name,
     }),
 )
 
@@ -210,8 +210,8 @@ check(
     sorted(structure_script.seen_tools - {"PatchDraftBatch"}),
     sorted({
         "read_file",
-        tools.patch.service.check_patch.name,
-        tools.book.service.adjacent_page_edges.name,
+        tools.patch.tool.check_patch.name,
+        tools.book.tool.adjacent_page_edges.name,
     }),
 )
 

@@ -8,12 +8,6 @@ import re
 from hashlib import sha256
 
 
-
-CLOSEST_CHAPTER = (
-    "Every page was written for some topic: unless NO chapter shares its topic at all, give the closest chapter at least 0.5."
-)
-
-
 def score_payload(
     *, framework: str, source_key: str, doc_path: str, summary: str, terms: list[str], body: str, note: str = "",
 ) -> str:

@@ -4,6 +4,8 @@
 **Last researched:** 2026-11-03.
 **Scope:** Improve Docling-extracted PDF/EPUB content before downstream Book Distiller processes. The current focus is text, metadata, and structure quality; VLM-based image understanding is explicitly out of scope.
 
+**Downstream plan:** the separate **Distill** graph, evidence-backed learning report, generated visuals, renderer/sandbox boundary, evaluation plan, and later Agentic RAG are documented in [BD-BOOK-DISTILLATION-AND-REPORT-ARCHITECTURE-2026-11-06.md](BD-BOOK-DISTILLATION-AND-REPORT-ARCHITECTURE-2026-11-06.md).
+
 ## Decision
 
 Build a **DeepAgents specialist ecosystem orchestrated by an outer LangGraph workflow**. LangGraph owns the workflow sequence and, once production wiring is added, checkpointed resumption and review interrupts. The current graph runs a fixed sequence with bounded async page processing and deterministic routing. DeepAgents supplies role-specific agents for judgment-heavy work. Ordinary application code remains responsible for MinIO I/O, patch validation/application, and publication invariants.

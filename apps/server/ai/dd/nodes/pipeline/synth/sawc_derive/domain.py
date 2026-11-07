@@ -133,20 +133,3 @@ def rank_mpsc_samples(
         return None, scores
     chosen = max(in_band, key = lambda i: scores[i])
     return chosen, scores
-
-
-def body_passes_derive_gate(body: str) -> bool:
-    """Deterministic 'good enough' gate for Optimal-Stopping on MPSC.
-    Used by sawc_derive's service layer to short-circuit the remaining
-    MPSC samples when sample 0 is already shippable."""
-    if not body:
-        return False
-    if not python_ast_valid(body):
-        return False
-    n_chars = len(body)
-    if not (params.DERIVED_MIN_CHARS <= n_chars <= params.DERIVED_MAX_CHARS):
-        return False
-    n_lines = sum(1 for ln in body.splitlines() if ln.strip())
-    if not (params.DERIVED_MIN_LINES <= n_lines <= params.DERIVED_MAX_LINES):
-        return False
-    return True

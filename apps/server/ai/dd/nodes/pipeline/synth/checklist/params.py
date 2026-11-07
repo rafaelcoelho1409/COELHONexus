@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 
+# The name this stage reports its progress events, cached items and scratch data under.
+STEP = "checklist_eval"
+
+
 PASS_THRESHOLD = 0.80
 
-# v1 schema (paragraph-mode) — kept for backwards-compat with any legacy
-# blobs still emitting avg_chars_per_paragraph in coverage_stats.
-DENSITY_MIN_CHARS_PER_PARA = 150
-DENSITY_MAX_CHARS_PER_PARA = 1200
 # v2 cookbook schema : density is measured in
 # explanation-words-per-subtopic, NOT chars-per-paragraph.
 DENSITY_MIN_AVG_EXPLANATION_WORDS = 12.0

@@ -148,11 +148,6 @@ def _code_inner(code_block: str) -> str:
     return body.strip("\n")
 
 
-def _norm_body(inner: str) -> str:
-    """Whitespace-collapsed body for duplicate detection."""
-    return re.sub(r"\s+", " ", inner).strip()
-
-
 def _idents(text: str) -> set[str]:
     return {w.lower() for w in patterns.IDENT_RE.findall(text or "")} - params.NOISE_IDENTS
 
@@ -161,7 +156,7 @@ def _fix_stray_slash_command_space(inner: str) -> str:
     if not inner:
         return inner
     lines = inner.split("\n")
-    lines[0] = patterns.STRAY_SLASH_SPACE_RE.sub(r"\1\2", lines[0], count=1)
+    lines[0] = patterns.STRAY_SLASH_SPACE_RE.sub(r"\1\2", lines[0], count = 1)
     return "\n".join(lines)
 
 

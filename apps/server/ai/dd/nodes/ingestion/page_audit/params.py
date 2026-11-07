@@ -15,7 +15,7 @@ DUPLICATE_CATEGORIES = frozenset({
     "duplicate_boilerplate",
     "duplicate_section",
 })
-# Leads from the page scans (`detectors.py`): the shortest block that counts as a repeat, how many leads go to the auditor, and how much
+# Leads from the page scans (`domain.candidates`): the shortest block that counts as a repeat, how many leads go to the auditor, and how much
 # text a lead about damaged characters quotes.
 MIN_REPEAT_CHARS = 40
 MAX_CANDIDATES = 12

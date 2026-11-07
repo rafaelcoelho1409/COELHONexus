@@ -8,7 +8,7 @@ stored per page, so a run that stops resumes with the pages it has not scored.""
 from __future__ import annotations
 import domains
 from . import domain, params, versions
-from .. import chapter_propose, shared
+from .. import chapter_propose
 from ..... import agents, graphs
 
 import asyncio
@@ -22,8 +22,7 @@ from langgraph.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
-Context = graphs.pipeline.planner.context.PlannerContext
-STEP = "chapter_assign"
+Context = graphs.pipeline.planner.entities.PlannerContext
 
 
 def _valid_scores(assignment: Any, n: int) -> list[dict]:
@@ -38,7 +37,7 @@ def _best(scores: list[dict]) -> float:
     return max((s["confidence"] for s in scores), default = 0.0)
 
 
-async def prepare(state: graphs.pipeline.planner.chapter_assign.state.AssignState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.planner.chapter_assign.states.AssignState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
@@ -60,7 +59,7 @@ async def prepare(state: graphs.pipeline.planner.chapter_assign.state.AssignStat
     if await blobs.exists(vkey) and await blobs.exists(lkey):
         try:
             cached = json.loads(await blobs.read_text(vkey))
-            wall_ms = shared.service.elapsed_ms(started)
+            wall_ms = graphs.service.elapsed_ms(started)
             stats = {
                 "n_docs": len(cached.get("assignments") or {}),
                 "n_proposals": len(proposals),
@@ -68,12 +67,12 @@ async def prepare(state: graphs.pipeline.planner.chapter_assign.state.AssignStat
                 "wall_ms": wall_ms,
                 "manifest_hash": manifest,
             }
-            shared.service.emit(STEP, "done", cache_hit = True, n_docs = stats["n_docs"], wall_ms = wall_ms)
+            graphs.service.emit(params.STEP, "done", cache_hit = True, n_docs = stats["n_docs"], wall_ms = wall_ms)
             return {"finished": True, "chapter_doc_assignments_ref": lkey, "assign_stats": stats}
         except Exception:
             pass
 
-    shared.service.emit(STEP, "start", n_docs = len(relevant_files), n_proposals = len(proposals))
+    graphs.service.emit(params.STEP, "start", n_docs = len(relevant_files), n_proposals = len(proposals))
 
     paths: dict[str, str] = {}
     if params.URL_PATH_IN_PROMPT:
@@ -84,27 +83,27 @@ async def prepare(state: graphs.pipeline.planner.chapter_assign.state.AssignStat
             logger.info(f"[chapter_assign] {slug}: manifest unavailable, no URL paths for the scorer ({type(error).__name__})")
 
     digests = {
-        key: shared.service.digest(
+        key: domains.dd.pipeline.storage.domain.digest(
             versions.PROMPT_VERSION, proposals_fp, key, json.dumps(distillates.get(key) or {}, sort_keys = True), paths.get(key, ""),
         )
         for key in relevant_files
     }
-    items = await domains.dd.pipeline.storage.service.read_items(blobs, slug, STEP, versions.PROMPT_VERSION, list(digests.values()))
+    items = await domains.dd.pipeline.storage.service.read_items(blobs, slug, params.STEP, versions.PROMPT_VERSION, list(digests.values()))
     cached_items = {key: items[digest]["scores"] for key, digest in digests.items() if digest in items}
     todo = [key for key in relevant_files if key not in cached_items]
     if todo:
-        await shared.service.settle(STEP, params.SETTLE_DELAY_S)
+        await graphs.service.settle(params.STEP, params.SETTLE_DELAY_S)
 
     # The scorer carries this run's chapters in its system prompt, so it is built once, here, for all the page branches.
     fixed_keys = params.FIXED_KEY_OUTPUT and len(proposals) >= params.FIXED_KEY_MIN_CHAPTERS
     context.agents.page_scorer(proposals, fixed_keys = fixed_keys)
-    context.scratch[STEP] = {
+    context.scratch[params.STEP] = {
         "proposals": proposals,
         "distillates": distillates,
         "fixed_keys": fixed_keys,
         "sweep_slots": asyncio.Semaphore(params.SWEEP_CONCURRENCY),
     }
-    context.counters[STEP] = {"scored": 0}
+    context.counters[params.STEP] = {"scored": 0}
     logger.info(
         f"[chapter_assign] {slug}: {len(relevant_files)} pages × {len(proposals)} chapters "
         f"({len(cached_items)} scored by an earlier run, {len(todo)} to score; fixed keys: {fixed_keys})"
@@ -198,7 +197,7 @@ async def _ladder(context: Any, data: dict, request: dict) -> tuple[list[dict] |
         again_meta: dict = {}
         try:
             again = _valid_scores(
-                await _ask(context, data, domain.score_payload(**request, note = domain.CLOSEST_CHAPTER), again_meta), n,
+                await _ask(context, data, domain.score_payload(**request, note = params.CLOSEST_CHAPTER), again_meta), n,
             )
         except Exception as error:
             logger.info(f"[chapter_assign] {request['source_key']}: all-zero reask failed ({type(error).__name__})")
@@ -216,9 +215,9 @@ async def _ladder(context: Any, data: dict, request: dict) -> tuple[list[dict] |
     return scores, False
 
 
-async def score_page(state: graphs.pipeline.planner.chapter_assign.state.ScoreInput, runtime: Runtime[Context]) -> dict:
+async def score_page(state: graphs.pipeline.planner.chapter_assign.entities.ScoreInput, runtime: Runtime[Context]) -> dict:
     context = runtime.context
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     key = state["key"]
     distillate = data["distillates"].get(key) or {}
     summary = (distillate.get("summary") or "").strip()
@@ -244,21 +243,21 @@ async def score_page(state: graphs.pipeline.planner.chapter_assign.state.ScoreIn
         if scores is not None and not used_fallback:
             try:
                 await domains.dd.pipeline.storage.service.write_item(
-                    context.blobs, state["framework_slug"], STEP, versions.PROMPT_VERSION, state["digest"], {"scores": scores},
+                    context.blobs, state["framework_slug"], params.STEP, versions.PROMPT_VERSION, state["digest"], {"scores": scores},
                 )
             except Exception as error:
                 logger.warning(f"[chapter_assign] scores not stored ({type(error).__name__}: {error})")
 
     if state["round"] == 1:
-        counts = context.counters.setdefault(STEP, {"scored": 0})
+        counts = context.counters.setdefault(params.STEP, {"scored": 0})
         counts["scored"] += 1
         every = max(1, state["total"] // params.PROGRESS_EVENTS)
         if counts["scored"] % every == 0 or counts["scored"] == state["total"]:
-            shared.service.emit(STEP, "llm_progress", scored = counts["scored"], total = state["total"])
+            graphs.service.emit(params.STEP, "llm_progress", scored = counts["scored"], total = state["total"])
     return {"results": [{"key": key, "scores": scores, "fallback": used_fallback, "round": state["round"]}]}
 
 
-def tally(state: graphs.pipeline.planner.chapter_assign.state.AssignState, runtime: Runtime[Context]) -> dict:
+def tally(state: graphs.pipeline.planner.chapter_assign.states.AssignState, runtime: Runtime[Context]) -> dict:
     """After the main pass: the pages that ended on the lexical fallback get one more pass, unless too many failed (the Rotator is
     down and a sweep would only burn the time)."""
     if state.get("swept") or not params.SWEEP_ENABLED:
@@ -270,7 +269,7 @@ def tally(state: graphs.pipeline.planner.chapter_assign.state.AssignState, runti
     return {"sweep": failed, "swept": True}
 
 
-async def finalize(state: graphs.pipeline.planner.chapter_assign.state.AssignState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.planner.chapter_assign.states.AssignState, runtime: Runtime[Context]) -> dict:
     blobs = runtime.context.blobs
     slug = state["framework_slug"]
     relevant_files = state.get("relevant_files") or state.get("raw_files") or []
@@ -339,7 +338,7 @@ async def finalize(state: graphs.pipeline.planner.chapter_assign.state.AssignSta
             "rescue_floor":      params.RESCUE_FLOOR,
         },
     )
-    wall_ms = shared.service.elapsed_ms(state.get("started") or time.monotonic())
+    wall_ms = graphs.service.elapsed_ms(state.get("started") or time.monotonic())
     stats = {
         "n_docs": len(relevant_files),
         "n_assigned": len(assignments),
@@ -355,8 +354,8 @@ async def finalize(state: graphs.pipeline.planner.chapter_assign.state.AssignSta
         "manifest_hash": manifest,
         "n_cached": len(state.get("cached") or {}),
     }
-    shared.service.emit(
-        STEP, "done",
+    graphs.service.emit(
+        params.STEP, "done",
         cache_hit = False, n_assigned = len(assignments), n_failed = n_failed, n_fallback = len(fallbacks),
         n_rescued = len(rescued), wall_ms = wall_ms,
     )

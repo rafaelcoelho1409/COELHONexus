@@ -4,6 +4,17 @@ from __future__ import annotations
 import os
 
 
+# Canonical order of the nodes. corpus_normalize and the code vaults are ingestion-time work; the per-stage MinIO caches are inside each node.
+NODE_ORDER = (
+    "outline_sdp",
+    "digest_construct",
+    "sawc_write",
+    "sawc_derive",
+    "checklist_eval",
+    "mgsr_replan",
+    "render_audit_write",
+)
+
 CHECKLIST_THRESHOLD = 0.80
 MAX_REFINE_ITER = 5
 PLATEAU_DELTA = 0.03

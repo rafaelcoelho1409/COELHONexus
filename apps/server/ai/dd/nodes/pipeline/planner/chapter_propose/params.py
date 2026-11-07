@@ -5,6 +5,10 @@ from ..... import agents
 import os
 
 
+# The name this stage reports its progress events and scratch data under.
+STEP = "chapter_propose"
+
+
 # Chapter-count bounds are part of the agents' contract (`agents.pipeline.planner.params`); the node reads the same numbers.
 PROPOSALS_MIN = agents.pipeline.planner.params.PROPOSALS_MIN
 PROPOSALS_MAX = agents.pipeline.planner.params.PROPOSALS_MAX

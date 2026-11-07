@@ -2,7 +2,7 @@
 from __future__ import annotations
 import domains
 from . import domain, params
-from ..page_audit import params as audit_params
+from .. import page_audit
 from .... import agents, tools
 
 import json
@@ -27,9 +27,9 @@ async def repair_page(
     *,
     config: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    if len(markdown) > audit_params.MAX_PAGE_MARKDOWN_CHARS:
+    if len(markdown) > page_audit.params.MAX_PAGE_MARKDOWN_CHARS:
         raise ValueError(
-            f"page {page['idx']} exceeds the {audit_params.MAX_PAGE_MARKDOWN_CHARS}-character repair limit; "
+            f"page {page['idx']} exceeds the {page_audit.params.MAX_PAGE_MARKDOWN_CHARS}-character repair limit; "
             "split or escalate it instead of truncating"
         )
 
@@ -53,7 +53,7 @@ async def repair_page(
     result = await domains.settings.chat.service.resilient_ainvoke(
         lambda: repairer.ainvoke(request, config = config),
         attempts = params.MAX_ATTEMPTS,
-        wait_base_s = audit_params.RETRY_WAIT_BASE_S,
+        wait_base_s = page_audit.params.RETRY_WAIT_BASE_S,
         accept = lambda value: agents.domain.structured_or_recovered(value, agents.schemas.PagePatchBatch) is not None,
     )
     batch = agents.domain.structured_or_recovered(result, agents.schemas.PagePatchBatch)

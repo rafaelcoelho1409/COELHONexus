@@ -2,8 +2,8 @@
 chapter/digest rendering for the judge, the judge's request, LLM verdict
 coercion and manifest hashing."""
 from __future__ import annotations
+import ai
 from . import params, schemas, versions
-from .. import sawc as sawc_stage
 
 import ast
 import re
@@ -405,11 +405,16 @@ def check_code_coverage(sawc: dict) -> schemas.CriterionResult:
         covered = routed & used
         bodies = sawc.get("_vault_bodies") or {}
         if bodies:
-            covered |= sawc_stage.domain.near_duplicate_hashes(sorted(routed - used), sorted(used), bodies)
+            covered |= ai.dd.nodes.pipeline.synth.sawc.domain.near_duplicate_hashes(
+                sorted(routed - used), sorted(used), bodies,
+            )
         n_used = len(covered)
         need = params.COVERAGE_MIN_CODE * len(routed)
         if sections:
-            need = min(need, params.COVERAGE_CAPACITY_SHARE * len(sections) * sawc_stage.params.TOPUP_SECTION_MAX)
+            need = min(
+                need,
+                params.COVERAGE_CAPACITY_SHARE * len(sections) * ai.dd.nodes.pipeline.synth.sawc.params.TOPUP_SECTION_MAX,
+            )
         if n_used < need:
             problems.append(f"only {n_used} of {len(routed)} routed code blocks are printed (or repeated by a printed near-copy)")
     if len(sources) >= params.COVERAGE_MIN_SOURCE_COUNT:
@@ -430,7 +435,7 @@ def check_code_prose_alignment(sawc: dict) -> schemas.CriterionResult:
     bodies = sawc.get("_vault_bodies") or {}
     if not bodies:
         return schemas.CriterionResult(name = "code_prose_alignment", passed = True, kind = "deterministic", feedback = "")
-    match = sawc_stage.domain.prose_matches_code
+    match = ai.dd.nodes.pipeline.synth.sawc.domain.prose_matches_code
     bad: list[str] = []
     for s in sawc.get("sections") or []:
         for st in (s.get("subtopics") or []):
@@ -706,10 +711,10 @@ def fallback_llm_verdicts(reason: str) -> list[schemas.CriterionResult]:
     out: list[schemas.CriterionResult] = []
     for name in params.LLM_CRITERIA:
         out.append(schemas.CriterionResult(
-            name=name,
-            passed=False,
-            kind="llm_judge",
-            feedback=(
+            name = name,
+            passed = False,
+            kind = "llm_judge",
+            feedback = (
                 f"judge_unavailable: {reason}. Conservatively marked "
                 f"FAIL so mgsr_replan re-evaluates next iteration."
             ),

@@ -6,7 +6,7 @@ hashing the ref alone made every re-plan of a slug hit this cache and return the
 from __future__ import annotations
 import domains
 from . import domain, versions
-from .. import order_chapters, shared
+from .. import order_chapters
 from ..... import graphs
 
 import asyncio
@@ -32,7 +32,7 @@ async def persist_plan(blobs: Any, *, versioned_key: str, latest_key: str, plan:
     )
 
 
-async def plan_write_run(state: graphs.pipeline.planner.state.PlannerState, blobs: Any) -> dict:
+async def plan_write_run(state: graphs.pipeline.planner.states.PlannerState, blobs: Any) -> dict:
     """Final-plan persist: load outline → pedagogical reorder → sanitize → versioned + latest."""
     slug = state.get("framework_slug")
     chapter_plan_ref = state.get("chapter_plan_ref") or ""
@@ -54,7 +54,7 @@ async def plan_write_run(state: graphs.pipeline.planner.state.PlannerState, blob
     latest_key = domains.dd.pipeline.storage.keys.plan_latest_key(slug)
 
     # Unconditional `start` so the UI shows running even on a cache hit.
-    shared.service.emit("plan_write", "start", manifest_hash = manifest_hash)
+    graphs.service.emit("plan_write", "start", manifest_hash = manifest_hash)
 
     exists_v, exists_l = await asyncio.gather(blobs.exists(versioned_key), blobs.exists(latest_key))
     if exists_v and exists_l:
@@ -64,7 +64,7 @@ async def plan_write_run(state: graphs.pipeline.planner.state.PlannerState, blob
                 chapters = latest.get("chapters") or []
                 latest_stats = latest.get("stats") or {}
                 n_sources = sum(len(c.get("sources") or []) for c in chapters)
-                elapsed = shared.service.elapsed_ms(t0)
+                elapsed = graphs.service.elapsed_ms(t0)
                 stats = {
                     "n_chapters":     len(chapters),
                     "n_sources":      n_sources,
@@ -77,7 +77,7 @@ async def plan_write_run(state: graphs.pipeline.planner.state.PlannerState, blob
                     "cache_hit":      True,
                     "plan":           latest,
                 }
-                shared.service.emit(
+                graphs.service.emit(
                     "plan_write", "done",
                     n_chapters = len(chapters), n_sources = n_sources,
                     n_unassigned = stats["n_unassigned"], n_dropped = stats["n_dropped"],
@@ -102,7 +102,7 @@ async def plan_write_run(state: graphs.pipeline.planner.state.PlannerState, blob
             refined_assignments_list.append(synth_cid)
     refined_assignments = np.array(refined_assignments_list, dtype = np.int64)
 
-    shared.service.emit(
+    graphs.service.emit(
         "plan_write", "loaded",
         n_chapters_in = len((outline or {}).get("chapters") or []),
         n_clusters = len({int(c) for c in refined_assignments if int(c) >= 0}),
@@ -122,7 +122,7 @@ async def plan_write_run(state: graphs.pipeline.planner.state.PlannerState, blob
                         ch["order"] = new_pos + 1
                 raw_chapters = reordered
                 reorder_applied = True
-                shared.service.emit("plan_write", "reordered", order = order)
+                graphs.service.emit("plan_write", "reordered", order = order)
                 logger.info(f"[plan_write] {slug}: applied pedagogical order from {order_ref!r}: {order}")
             else:
                 logger.warning(
@@ -139,7 +139,7 @@ async def plan_write_run(state: graphs.pipeline.planner.state.PlannerState, blob
     chapters, n_dropped = domain.sanitize_chapters(raw_chapters, cluster_to_keys)
     n_sources_total = sum(len(c["sources"]) for c in chapters)
     unassigned_keys = sorted(set(cluster_keys) - {k for c in chapters for k in c["sources"]})
-    shared.service.emit(
+    graphs.service.emit(
         "plan_write", "sanitized",
         n_chapters = len(chapters), n_dropped = n_dropped,
         n_sources = n_sources_total, n_unassigned = len(unassigned_keys),
@@ -168,7 +168,7 @@ async def plan_write_run(state: graphs.pipeline.planner.state.PlannerState, blob
     }
     await persist_plan(blobs, versioned_key = versioned_key, latest_key = latest_key, plan = plan)
 
-    elapsed = shared.service.elapsed_ms(t0)
+    elapsed = graphs.service.elapsed_ms(t0)
     stats = {
         "n_chapters":      len(chapters),
         "n_sources":       n_sources_total,
@@ -182,7 +182,7 @@ async def plan_write_run(state: graphs.pipeline.planner.state.PlannerState, blob
         "reorder_applied": reorder_applied,
         "plan":            plan,
     }
-    shared.service.emit(
+    graphs.service.emit(
         "plan_write", "done",
         n_chapters = len(chapters), n_sources = n_sources_total,
         n_unassigned = len(unassigned_keys), n_dropped = n_dropped, wall_ms = elapsed,

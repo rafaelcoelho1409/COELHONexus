@@ -7,8 +7,7 @@ and the heuristic fallback outline are unchanged."""
 from __future__ import annotations
 import domains
 from . import domain, keys, params, schemas, versions
-from .. import shared
-from ..... import agents, backends, graphs, tools
+from ..... import agents, backends, graphs, skills, tools
 
 import json
 import logging
@@ -20,8 +19,7 @@ from langgraph.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
-Context = graphs.pipeline.synth.context.SynthContext
-STEP = "outline_sdp"
+Context = graphs.pipeline.synth.entities.SynthContext
 
 
 async def semantic_h2_duplicates(outline: schemas.ChapterOutline) -> list[str]:
@@ -72,27 +70,27 @@ async def outline_issues(
     return dag, issues + await semantic_h2_duplicates(outline)
 
 
-async def prepare(state: graphs.pipeline.synth.outline.state.OutlineState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.synth.outline.states.OutlineState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
     chapter_id = state.get("chapter_id")
     started = time.monotonic()
     if not slug or not chapter_id:
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "outline_path", "outline_stats", "no_slug_or_chapter_id", "framework_slug or chapter_id missing from SynthState", started,
         )}
 
     plan_key = domains.dd.pipeline.storage.keys.plan_latest_key(slug)
-    plan = await shared.service.load_json(blobs, plan_key)
+    plan = await domains.dd.pipeline.storage.service.load_json(blobs, plan_key)
     if plan is None:
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "outline_path", "outline_stats", "plan_not_found", f"planner plan {plan_key!r} not in MinIO (or unreadable); run planner first", started,
             plan_key = plan_key,
         )}
     chapter = domain.find_chapter(plan, chapter_id)
     if chapter is None:
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "outline_path", "outline_stats", "chapter_not_in_plan", f"chapter {chapter_id!r} not in plan-latest.json", started,
             known_ids = [c.get("id") for c in (plan.get("chapters") or [])],
         )}
@@ -100,24 +98,24 @@ async def prepare(state: graphs.pipeline.synth.outline.state.OutlineState, runti
     chapter_description = chapter.get("description") or ""
     sources = sorted(chapter.get("sources") or [])
     if not sources:
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "outline_path", "outline_stats", "no_sources", f"chapter {chapter_id!r} has zero sources in plan", started,
         )}
 
-    shared.service.emit(STEP, "start", chapter_id = chapter_id, chapter_title = chapter_title, n_sources = len(sources))
+    graphs.service.emit(params.STEP, "start", chapter_id = chapter_id, chapter_title = chapter_title, n_sources = len(sources))
 
     # Each source is already corpus_normalized and vault-built by ingestion: just read them.
     bodies = list(await blobs.read_many(sources))
     pairs = [(key, body) for key, body in zip(sources, bodies) if body]
     if not pairs:
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "outline_path", "outline_stats", "source_bodies_empty", "all source bodies came back empty", started,
         )}
     texts = [body for _, body in pairs]
     sources_concat_md, truncated = domain.concat_sources(texts)
     n_vault_hashes = domain.count_code_blocks(texts)
-    shared.service.emit(
-        STEP, "sources_loaded",
+    graphs.service.emit(
+        params.STEP, "sources_loaded",
         n_sources = len(sources), n_bodies = len(pairs), bytes = len(sources_concat_md), truncated = truncated, n_vault_hashes = n_vault_hashes,
     )
 
@@ -136,7 +134,7 @@ async def prepare(state: graphs.pipeline.synth.outline.state.OutlineState, runti
                 # A prior run's drafts all failed and shipped the heuristic fallback; serving it from cache would turn a transient outage into a permanent bad outline.
                 logger.info(f"[outline_sdp] {slug}/{chapter_id}: cached outline is a heuristic fallback — ignoring cache, drafting again")
             else:
-                elapsed = shared.service.elapsed_ms(started)
+                elapsed = graphs.service.elapsed_ms(started)
                 stats = {
                     "n_sections": len(outline_dict.get("sections") or []),
                     "max_stage": int(dag_dict.get("max_stage", 0)),
@@ -149,13 +147,13 @@ async def prepare(state: graphs.pipeline.synth.outline.state.OutlineState, runti
                     "cache_hit": True,
                     "prompt_version": cached.get("prompt_version"),
                 }
-                shared.service.emit(STEP, "done", n_sections = stats["n_sections"], max_stage = stats["max_stage"], wall_ms = elapsed, cache_hit = True)
+                graphs.service.emit(params.STEP, "done", n_sections = stats["n_sections"], max_stage = stats["max_stage"], wall_ms = elapsed, cache_hit = True)
                 logger.info(f"[outline_sdp] {slug}/{chapter_id}: CACHE HIT — {stats['n_sections']} sections, max_stage = {stats['max_stage']}, {elapsed} ms")
                 return {"finished": True, "outline_path": latest_key, "outline_stats": stats}
         except Exception as error:
             logger.warning(f"[outline_sdp] {slug}/{chapter_id}: cached blob {versioned_key!r} unreadable ({type(error).__name__}: {error}); recomputing")
 
-    context.scratch[STEP] = {"pairs": pairs, "texts": texts, "concat": sources_concat_md}
+    context.scratch[params.STEP] = {"pairs": pairs, "texts": texts, "concat": sources_concat_md}
     # Adaptive cap (not fixed 8): a fixed cap pushed the model to over-section small chapters; the right count up front rarely needs trimming.
     return {
         "finished": False,
@@ -183,10 +181,10 @@ def source_files(pairs: list[tuple[str, str]]) -> dict[str, str]:
     return {domain.source_path(n, key): body for n, (key, body) in enumerate(pairs, start = 1)}
 
 
-async def draft(state: graphs.pipeline.synth.outline.state.OutlineState, runtime: Runtime[Context]) -> dict:
+async def draft(state: graphs.pipeline.synth.outline.states.OutlineState, runtime: Runtime[Context]) -> dict:
     """One outliner run. Returns the new best outline (by `accept_repair`) and what is still wrong with it."""
     context = runtime.context
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     attempt = state.get("attempt", 0) + 1
     half = state.get("half", False)
     n_sources = len(state["sources"])
@@ -213,7 +211,7 @@ async def draft(state: graphs.pipeline.synth.outline.state.OutlineState, runtime
             entry["headings"] = entry["headings"][:params.INDEX_HEADINGS // 2]
     role = context.agents.chapter_outliner(
         backend = backends.files.service.mounted(files, route),
-        tools = [tools.pipeline.synth.check.service.validate_outline_tool(check)],
+        tools = [tools.pipeline.synth.check.tool.validate_outline_tool(check)],
     )
     best = state.get("best")
     request = {
@@ -236,11 +234,12 @@ async def draft(state: graphs.pipeline.synth.outline.state.OutlineState, runtime
             json.dumps(request, ensure_ascii = False),
             attempts = params.ASK_ATTEMPTS,
             wait_base_s = params.RETRY_WAIT_S,
+            files = skills.service.files_for("chapter_outliner"),
             check = lambda a: bool(a.sections),
         )
     except Exception as error:
         logger.warning(f"[outline_sdp] {state['framework_slug']}/{state['chapter_id']}: outliner run {attempt} failed: {type(error).__name__}: {str(error)[:200]}")
-        shared.service.emit(STEP, "draft_done", attempt = attempt, ok = False, error = f"{type(error).__name__}: {str(error)[:120]}")
+        graphs.service.emit(params.STEP, "draft_done", attempt = attempt, ok = False, error = f"{type(error).__name__}: {str(error)[:120]}")
         return {
             "attempt": attempt,
             "half": half or domain.is_context_overflow_error(error),
@@ -251,7 +250,7 @@ async def draft(state: graphs.pipeline.synth.outline.state.OutlineState, runtime
     outline, error = domain.try_parse_outline(answer.model_dump())
     if outline is None:
         logger.info(f"[outline_sdp] {state['framework_slug']}/{state['chapter_id']}: outliner run {attempt} answered an invalid outline — {error}")
-        shared.service.emit(STEP, "draft_done", attempt = attempt, ok = False, error = "invalid_outline")
+        graphs.service.emit(params.STEP, "draft_done", attempt = attempt, ok = False, error = "invalid_outline")
         return {
             "attempt": attempt,
             "feedback": [f"Your previous answer was rejected: {error}"],
@@ -262,8 +261,8 @@ async def draft(state: graphs.pipeline.synth.outline.state.OutlineState, runtime
     _, issues = await outline_issues(outline, n_sources = n_sources, n_blocks = n_blocks, bodies = texts)
     candidate = {"outline": outline.model_dump(), "issues": issues}
     accepted = best is None or domain.accept_repair(best["issues"], issues, params.REPAIR_FLOOR_SLACK)
-    shared.service.emit(
-        STEP, "draft_done",
+    graphs.service.emit(
+        params.STEP, "draft_done",
         attempt = attempt, ok = True, n_sections = len(outline.sections), n_violations = len(issues), accepted = accepted,
     )
     logger.info(
@@ -309,10 +308,10 @@ def hard_trim(outline: schemas.ChapterOutline, dag: schemas.OutlineDAG, cap: int
     return outline.model_copy(update = {"sections": kept})
 
 
-async def finalize(state: graphs.pipeline.synth.outline.state.OutlineState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.synth.outline.states.OutlineState, runtime: Runtime[Context]) -> dict:
     """The best outline (else the heuristic fallback), flattened and trimmed, written under its content hash and as the latest pointer."""
     context = runtime.context
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     slug = state["framework_slug"]
     chapter_id = state["chapter_id"]
     sources = state["sources"]
@@ -346,7 +345,7 @@ async def finalize(state: graphs.pipeline.synth.outline.state.OutlineState, runt
         domains.dd.pipeline.observability.service.record_bucket_split_overflow(framework = slug, sections_dropped = max(n_before - len(outline.sections), 0))
         # Re-validate after the trim so downstream sees the violations that remain, not the pre-trim ones.
         dag, issues = await outline_issues(outline, n_sources = len(sources), n_blocks = n_blocks, bodies = texts)
-        shared.service.emit(STEP, "hard_trimmed", n_before = n_before, n_after = len(outline.sections), adaptive_cap = cap, n_sources = len(sources))
+        graphs.service.emit(params.STEP, "hard_trimmed", n_before = n_before, n_after = len(outline.sections), adaptive_cap = cap, n_sources = len(sources))
 
     payload = domain.serialize_outline_with_dag(outline, dag)
     payload.update({
@@ -364,7 +363,7 @@ async def finalize(state: graphs.pipeline.synth.outline.state.OutlineState, runt
     await context.blobs.write(state["versioned_key"], body, content_type = "application/json")
     await context.blobs.write(state["latest_key"], body, content_type = "application/json")
 
-    elapsed = shared.service.elapsed_ms(state["started"])
+    elapsed = graphs.service.elapsed_ms(state["started"])
     stats = {
         "n_sections": len(outline.sections),
         "max_stage": dag.max_stage,
@@ -383,8 +382,8 @@ async def finalize(state: graphs.pipeline.synth.outline.state.OutlineState, runt
         "cache_hit": False,
         "prompt_version": versions.OUTLINE_PROMPT_VERSION,
     }
-    shared.service.emit(
-        STEP, "done",
+    graphs.service.emit(
+        params.STEP, "done",
         n_sections = stats["n_sections"], max_stage = stats["max_stage"], n_repairs = stats["n_repairs"], n_violations = stats["n_violations"], wall_ms = elapsed,
     )
     logger.info(

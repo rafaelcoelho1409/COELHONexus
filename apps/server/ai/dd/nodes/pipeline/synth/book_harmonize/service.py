@@ -9,7 +9,7 @@ from __future__ import annotations
 import domains
 from . import domain, params
 from .. import render
-from ..... import agents, backends, graphs
+from ..... import agents, backends, graphs, skills
 
 import json
 import logging
@@ -21,8 +21,7 @@ from langgraph.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
-Context = graphs.pipeline.synth.context.SynthContext
-STEP = "book_harmonize"
+Context = graphs.pipeline.synth.entities.SynthContext
 
 
 def summary(started: float, n_chapters: int, skipped: str | None, **extra) -> dict:
@@ -32,12 +31,12 @@ def summary(started: float, n_chapters: int, skipped: str | None, **extra) -> di
     }
 
 
-async def prepare(state: graphs.pipeline.synth.book_harmonize.state.HarmonizeState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.synth.book_harmonize.states.HarmonizeState, runtime: Runtime[Context]) -> dict:
     started = time.monotonic()
-    chapters = runtime.context.scratch[STEP]["chapters"]
+    chapters = runtime.context.scratch[params.STEP]["chapters"]
     if len(chapters) < params.MIN_CHAPTERS:
         return {"finished": True, "started": started, "result": summary(started, len(chapters), "less_than_2_chapters")}
-    runtime.context.scratch[STEP]["claims"] = {}
+    runtime.context.scratch[params.STEP]["claims"] = {}
     return {"finished": False, "started": started, "chapter_ids": list(chapters)}
 
 
@@ -45,7 +44,7 @@ async def extract(state: dict, runtime: Runtime[Context]) -> dict:
     """The atomic claims and key terms of one chapter. A chapter whose extraction fails contributes none (it keeps its prose)."""
     context = runtime.context
     chapter_id = state["chapter_id"]
-    prose = context.scratch[STEP]["chapters"][chapter_id]["prose"]
+    prose = context.scratch[params.STEP]["chapters"][chapter_id]["prose"]
     try:
         answer = await agents.service.ask(
             context.agents.claim_extractor(), agents.pipeline.synth.schemas.ClaimsAnswer,
@@ -62,9 +61,9 @@ async def extract(state: dict, runtime: Runtime[Context]) -> dict:
     }]}
 
 
-async def canonicalize(state: graphs.pipeline.synth.book_harmonize.state.HarmonizeState, runtime: Runtime[Context]) -> dict:
+async def canonicalize(state: graphs.pipeline.synth.book_harmonize.states.HarmonizeState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     claims_by_id = {e["chapter_id"]: e["claims"] for e in state.get("extracted") or []}
     terms_by_id = {e["chapter_id"]: e["terms"] for e in state.get("extracted") or []}
     data["claims"] = claims_by_id
@@ -99,7 +98,7 @@ async def canonicalize(state: graphs.pipeline.synth.book_harmonize.state.Harmoni
 async def detect(state: dict, runtime: Runtime[Context]) -> dict:
     """Cross-chapter problems of one chapter, as the drift_detector reported them (validated later). A failure assumes none."""
     context = runtime.context
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     chapter_id = state["chapter_id"]
     files = {f"/{cid}.md": chapter["prose"] for cid, chapter in data["chapters"].items()}
     role = context.agents.drift_detector(backend = backends.files.service.mounted(files, agents.pipeline.synth.params.CHAPTERS_ROUTE))
@@ -114,6 +113,7 @@ async def detect(state: dict, runtime: Runtime[Context]) -> dict:
         answer = await agents.service.ask(
             role, agents.pipeline.synth.schemas.ViolationsAnswer, json.dumps(request, ensure_ascii = False),
             attempts = params.ASK_ATTEMPTS, wait_base_s = params.RETRY_WAIT_S,
+            files = skills.service.files_for("drift_detector"),
         )
     except Exception as error:
         logger.warning(f"[book_harmonize] detect failed for {chapter_id}: {type(error).__name__}: {error}")
@@ -121,9 +121,9 @@ async def detect(state: dict, runtime: Runtime[Context]) -> dict:
     return {"detections": [{"chapter_id": chapter_id, "violations": [v.model_dump() for v in answer.violations], "summary": answer.summary}]}
 
 
-async def plan_patches(state: graphs.pipeline.synth.book_harmonize.state.HarmonizeState, runtime: Runtime[Context]) -> dict:
+async def plan_patches(state: graphs.pipeline.synth.book_harmonize.states.HarmonizeState, runtime: Runtime[Context]) -> dict:
     """Keep the grounded violations; group them by the paragraph that holds their quote: one edit per paragraph."""
-    data = runtime.context.scratch[STEP]
+    data = runtime.context.scratch[params.STEP]
     canonical = state.get("canonical_terms") or []
     data["canonical_terms"] = canonical
     detections = {d["chapter_id"]: d for d in state.get("detections") or []}
@@ -158,7 +158,7 @@ async def plan_patches(state: graphs.pipeline.synth.book_harmonize.state.Harmoni
 async def patch(state: dict, runtime: Runtime[Context]) -> dict:
     """One paragraph, minimally edited; accepted only when its length stays close and it carries no fence."""
     context = runtime.context
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     task = state["task"]
     chapter_id, index = task["chapter_id"], task["paragraph"]
     paragraph = data["plans"][chapter_id]["paragraphs"][index]
@@ -184,8 +184,8 @@ async def patch(state: dict, runtime: Runtime[Context]) -> dict:
     return {"edits": [{"chapter_id": chapter_id, "paragraph": index, "text": edited if domain.paragraph_patch_ok(paragraph, edited) else None}]}
 
 
-async def finalize(state: graphs.pipeline.synth.book_harmonize.state.HarmonizeState, runtime: Runtime[Context]) -> dict:
-    data = runtime.context.scratch[STEP]
+async def finalize(state: graphs.pipeline.synth.book_harmonize.states.HarmonizeState, runtime: Runtime[Context]) -> dict:
+    data = runtime.context.scratch[params.STEP]
     slug = state["framework_slug"]
     edits_by_chapter: dict[str, dict[int, str]] = {}
     for edit in state.get("edits") or []:
@@ -303,3 +303,81 @@ async def store_result(blobs, slug: str, manifest_hash: str, payload: dict) -> N
         await blobs.write(storage_keys.book_harmonize_latest_key(slug), body, content_type = "application/json")
     except Exception as error:
         logger.warning(f"[book_harmonize] {slug}: cache write failed ({type(error).__name__}: {error})")
+
+
+async def harmonize_book(context: Context, *, framework_slug: str, framework_name: str, chapters: list[dict]) -> dict:
+    """Run the harmonize subgraph over `chapters` (`{chapter_id, title, prose}` each) and return its result: counts and, per chapter, whether and how it was patched."""
+    context.scratch[params.STEP] = {
+        "chapters": {chapter["chapter_id"]: chapter for chapter in chapters},
+        "framework_name": framework_name,
+    }
+    result = await graphs.pipeline.synth.book_harmonize.graphs.book_harmonize_graph().ainvoke(
+        {"framework_slug": framework_slug, "framework_name": framework_name},
+        {"max_concurrency": params.PER_CHAPTER_CONCURRENCY},
+        context = context,
+    )
+    return result.get("result") or {}
+
+
+async def run_pass(context: Context, *, slug: str, study_thread_id: str, chapter_ids: list[str]) -> dict:
+    """The study's pass over its chapters: loads each README, runs the harmonize subgraph, overwrites the validated patches. A content-addressed cache skips the
+    work on identical inputs. Returns the telemetry dict (counts, or `skipped` and why)."""
+    with domains.dd.pipeline.observability.service.workflow_span(
+        "dd.synth.node.book_harmonize",
+        workflow = "dd_synth", kind = "workflow_node", node = params.STEP, stage = "synth",
+        attributes = {
+            "synth.node": params.STEP,
+            "synth.framework_slug": slug,
+            "synth.thread_id": study_thread_id,
+            "synth.chapter_count": len(chapter_ids),
+        },
+    ):
+        with domains.settings.llm_counter.service.llm_context(ns = "dd", run_id = study_thread_id, node_id = params.STEP, stage = "synth"):
+            return await _run_pass(context, slug = slug, study_thread_id = study_thread_id, chapter_ids = chapter_ids)
+
+
+async def _run_pass(context: Context, *, slug: str, study_thread_id: str, chapter_ids: list[str]) -> dict:
+    blobs = context.blobs
+    entry = domains.dd.catalog.service.index_by_slug().get(slug, {})
+    framework_name = entry.get("name") or entry.get("slug") or slug
+
+    chapters, missing, audit_failed = await load_chapters(blobs, slug, chapter_ids)
+    if len(chapters) < params.MIN_CHAPTERS:
+        await domains.dd.pipeline.runtime.progress.service.emit_progress(
+            study_thread_id, "study", "book_harmonize_skipped", reason = "fewer_than_2_rendered_chapters", n_rendered = len(chapters),
+        )
+        return {
+            "skipped": "fewer_than_2_rendered_chapters",
+            "n_rendered_chapters": len(chapters),
+            "missing_chapters": missing,
+            "audit_failed_chapters": audit_failed,
+        }
+
+    manifest_hash = domain.compute_harmonize_manifest_hash(chapters)
+    cached = await read_cached(blobs, slug, manifest_hash)
+    if cached is not None:
+        await _announce_done(study_thread_id, cached, n_overwritten = cached.get("n_chapters_overwritten", 0), cache_hit = True)
+        logger.info(f"[book_harmonize] {slug}: CACHE HIT — manifest_hash = {manifest_hash}")
+        return cached
+
+    await domains.dd.pipeline.runtime.progress.service.emit_progress(study_thread_id, "study", "book_harmonize_start", n_chapters = len(chapters))
+    try:
+        result = await harmonize_book(context, framework_slug = slug, framework_name = framework_name, chapters = chapters)
+    except Exception as error:
+        logger.warning(f"[book_harmonize] {slug}: harmonize_book crashed ({type(error).__name__}: {error})")
+        return {"skipped": f"crash: {type(error).__name__}", "error": str(error)[:240]}
+
+    n_overwritten = await overwrite_chapters(blobs, slug, result)
+    payload = {**result, "manifest_hash": manifest_hash, "n_chapters_overwritten": n_overwritten, "cache_hit": False}
+    await store_result(blobs, slug, manifest_hash, payload)
+    await _announce_done(study_thread_id, payload, n_overwritten = n_overwritten, cache_hit = False)
+    return payload
+
+
+async def _announce_done(study_thread_id: str, payload: dict, *, n_overwritten: int, cache_hit: bool) -> None:
+    await domains.dd.pipeline.runtime.progress.service.emit_progress(
+        study_thread_id, "study", "book_harmonize_done",
+        n_chapters = payload.get("n_chapters", 0), n_atomic_claims = payload.get("n_atomic_claims", 0), n_canonical_terms = payload.get("n_canonical_terms", 0),
+        n_chapters_with_issues = payload.get("n_chapters_with_issues", 0), n_chapters_patched = payload.get("n_chapters_patched", 0),
+        n_chapters_overwritten = n_overwritten, elapsed_ms = payload.get("elapsed_ms", 0), cache_hit = cache_hit,
+    )

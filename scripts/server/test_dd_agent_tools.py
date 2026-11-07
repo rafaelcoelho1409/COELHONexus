@@ -11,12 +11,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
+from deepagents import FilesystemPermission, GeneralPurposeSubagentProfile, HarnessProfile, create_deep_agent, register_harness_profile
+from deepagents.backends import StateBackend
+from deepagents.profiles.harness import harness_profiles
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_openai import ChatOpenAI
 
-from ai.dd import agents, nodes, tools
+from ai.dd import agents, middlewares, nodes, tools
 
 
 def check(label: str, got, want) -> None:
@@ -59,10 +62,30 @@ model_config = agents.entities.ModelConfig(max_output_tokens = 512, timeout_s = 
 
 
 def role(name: str, allowed: frozenset[str], scripted: ScriptedModel):
-    return agents.service.build(
-        name, system_prompt = "x", config = model_config, rotator_task = "t", allowed_tools = allowed,
-        read_paths = ["/corpus/**"], model = scripted,
-        subagents = [agents.service.subagent("critic", description = "Reviews.", system_prompt = "x")] if "task" in allowed else (),
+    key = f"openai:{scripted.model_name}"
+    harness_profiles._HARNESS_PROFILES.pop(key, None)
+    register_harness_profile(
+        key,
+        HarnessProfile(
+            base_system_prompt = "",
+            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
+        ),
+    )
+    return create_deep_agent(
+        model = scripted,
+        system_prompt = "x",
+        subagents = [{"name": "critic", "description": "Reviews.", "system_prompt": "x"}] if "task" in allowed else None,
+        middleware = [
+            *agents.service.resilience(model_calls = 8, with_tools = True),
+            middlewares.middleware.ToolAllowlistMiddleware(allowed),
+        ],
+        permissions = [
+            FilesystemPermission(operations = ["read"], paths = ["/corpus/**"], mode = "allow"),
+            FilesystemPermission(operations = ["read"], paths = ["/**"], mode = "deny"),
+            FilesystemPermission(operations = ["write"], paths = ["/**"], mode = "deny"),
+        ],
+        backend = StateBackend(),
+        name = name,
     )
 
 
@@ -72,22 +95,20 @@ wide_model = model()
 wide = role("wide", frozenset({"read_file", "grep", "glob", "ls", "task"}), wide_model)
 for scripted, built in ((strict_model, strict), (wide_model, wide)):
     try:
-        asyncio.run(ask(built.agent, scripted))
+        asyncio.run(ask(built, scripted))
     except Exception:
         pass
 check("a strict role is shown only its own stack tools", strict_model.seen[0], ["read_file"])
 check("a wide role built after it still gets its tools", wide_model.seen[0], ["glob", "grep", "ls", "read_file", "task"])
 
-from deepagents.profiles.harness import harness_profiles
 check("the shared model profile excludes no tool", sorted(harness_profiles._get_harness_profile("openai:fgts-va").excluded_tools), [])
 
 # --- another piece of code registered an exclusion under the same key: building a role clears it
-from deepagents import HarnessProfile, register_harness_profile
 register_harness_profile("openai:fgts-va", HarnessProfile(excluded_tools = frozenset({"grep", "task"})))
 late_model = model()
 late = role("late", frozenset({"read_file", "grep"}), late_model)
 try:
-    asyncio.run(ask(late.agent, late_model))
+    asyncio.run(ask(late, late_model))
 except Exception:
     pass
 check("an exclusion registered elsewhere does not reach a role", late_model.seen[0], ["grep", "read_file"])

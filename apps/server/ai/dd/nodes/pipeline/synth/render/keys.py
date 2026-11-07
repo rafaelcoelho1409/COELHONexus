@@ -1,7 +1,7 @@
 """render — MinIO key builders."""
 from __future__ import annotations
 import domains
-from . import params, versions
+from . import versions
 
 
 

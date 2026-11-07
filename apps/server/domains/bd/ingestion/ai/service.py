@@ -1029,7 +1029,7 @@ async def run_ingestion_ai(
             for key in ("filename", "title", "subtitle", "authors", "source_format")
             if key in source_manifest
         }
-        graph_state: ai.bd.graphs.ingestion.state.IngestionRunState = {
+        graph_state: ai.bd.graphs.ingestion.states.IngestionRunState = {
             "book_id": book_id,
             "extraction_run_id": extraction_id,
             "agentic_run_id": agentic_run_id,
@@ -1046,13 +1046,13 @@ async def run_ingestion_ai(
             "source_metadata": source_metadata,
             "status": "running",
         }
-        graph = ai.bd.graphs.ingestion.graph.ingestion_graph(
-            storage.read_text,
-            write_artifact,
-            auditor,
-            {"text_repair": text_repair, "structure": structure_repair},
-            metadata_normalizer,
-            checkpointer = checkpointer,
+        graph = ai.bd.graphs.ingestion.graphs.ingestion_graph(checkpointer = checkpointer)
+        dependencies = ai.bd.graphs.ingestion.entities.IngestionDependencies(
+            read_page = storage.read_text,
+            write_artifact = write_artifact,
+            auditor = auditor,
+            specialists = {"text_repair": text_repair, "structure": structure_repair},
+            metadata_normalizer = metadata_normalizer,
             progress_callback = report_progress,
             finding_verifier = finding_verifier,
         )
@@ -1060,11 +1060,11 @@ async def run_ingestion_ai(
             "thread_id": f"bd-ingestion-agentic:{book_id}:{extraction_id}:{agentic_run_id}",
         }}
         if checkpointer is None:
-            result = await graph.ainvoke(graph_state)
+            result = await graph.ainvoke(graph_state, context = dependencies)
         else:
             snapshot = await graph.aget_state(config)
             graph_input = None if snapshot.next else graph_state
-            result = await graph.ainvoke(graph_input, config = config)
+            result = await graph.ainvoke(graph_input, config = config, context = dependencies)
         final_manifest = json.loads(await storage.read_text(output_manifest_key))
         final_manifest["progress"] = domains.bd.ingestion.ai.schemas.AgenticRunProgress.model_validate(
             progress_state,

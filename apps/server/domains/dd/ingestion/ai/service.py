@@ -83,15 +83,15 @@ async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> d
             content_type,
         )
 
-    graph = ai.dd.graphs.ingestion.graph.build_ingestion_graph(
-        read_page=read_page,
-        artifact_exists=minio.exists,
-        read_artifact=minio.read_text,
-        write_artifact=write_artifact,
-        auditor=auditor,
-        repairer=repairer,
-        progress=progress,
-        checkpointer=checkpointer,
+    graph = ai.dd.graphs.ingestion.graphs.ingestion_graph(checkpointer = checkpointer)
+    dependencies = ai.dd.graphs.ingestion.entities.IngestionDependencies(
+        read_page = read_page,
+        artifact_exists = minio.exists,
+        read_artifact = minio.read_text,
+        write_artifact = write_artifact,
+        auditor = auditor,
+        repairer = repairer,
+        progress = progress,
     )
     graph_config = {
         "configurable": {
@@ -109,7 +109,7 @@ async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> d
         snapshot = await graph.aget_state(graph_config)
         if snapshot.next:
             graph_input = None
-    result = await graph.ainvoke(graph_input, config=graph_config)
+    result = await graph.ainvoke(graph_input, config = graph_config, context = dependencies)
 
     outputs = result.get("output_pages", [])
     by_idx = {page["idx"]: page for page in outputs}

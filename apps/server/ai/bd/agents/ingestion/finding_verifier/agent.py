@@ -2,11 +2,18 @@
 from __future__ import annotations
 import domains
 from . import config, params
-from ... import schemas, service
-from .... import middleware, prompts
+from ... import schemas
+from .... import middlewares, prompts
 
-from deepagents import FilesystemPermission, create_deep_agent
+from deepagents import (
+    FilesystemPermission,
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    create_deep_agent,
+    register_harness_profile,
+)
 from deepagents.backends import StateBackend
+from deepagents.profiles.harness import harness_profiles
 from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain_openai import ChatOpenAI
 
@@ -26,12 +33,22 @@ def finding_verifier(model = None):
     if not isinstance(model, ChatOpenAI):
         raise TypeError("the finding verifier must use the COELHO Rotator ChatOpenAI model")
 
-    service.isolate_harness_profile(model_name)
+    # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
+    # before (by another role or other code in the process) hides tools from this agent.
+    key = f"openai:{model_name}"
+    harness_profiles._HARNESS_PROFILES.pop(key, None)
+    register_harness_profile(
+        key,
+        HarnessProfile(
+            base_system_prompt = "",
+            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
+        ),
+    )
     agent = create_deep_agent(
         model = model,
         tools = [],
         system_prompt = prompts.ingestion.finding_verifier.prompts.SYSTEM_PROMPT,
-        middleware = [middleware.service.ToolAllowlistMiddleware(frozenset()), ModelCallLimitMiddleware(
+        middleware = [middlewares.middleware.ToolAllowlistMiddleware(frozenset()), ModelCallLimitMiddleware(
             run_limit = domains.bd.ingestion.ai.params.AGENT_MODEL_CALL_LIMIT,
             exit_behavior = "end",
         )],

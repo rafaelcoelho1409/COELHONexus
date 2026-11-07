@@ -5,6 +5,10 @@ from __future__ import annotations
 import math
 
 
+# The name this stage reports its progress events, cached items and scratch data under.
+STEP = "outline_sdp"
+
+
 # see versions.py rationale.
 SECTIONS_MIN = 2
 SECTIONS_MAX = 40
@@ -39,10 +43,6 @@ BANNED_HEADINGS_LC: frozenset[str] = frozenset({
     "background", "related work", "future work",
 })
 
-
-BANNED_LIST_HUMAN = ", ".join(
-    f"'{h.title()}'" for h in sorted(BANNED_HEADINGS_LC)
-)
 
 
 # A chapter whose code the sections could not print: each section prints at most TOPUP_SECTION_MAX (16) blocks and the coverage gate asks for

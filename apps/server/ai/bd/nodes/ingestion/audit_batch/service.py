@@ -170,7 +170,7 @@ async def audit_page(
 
 
 async def audit_pages(
-    state: graphs.ingestion.state.IngestionRunState,
+    state: graphs.ingestion.states.IngestionRunState,
     read_page: PageReader,
     auditor: Auditor,
     progress_callback = None,

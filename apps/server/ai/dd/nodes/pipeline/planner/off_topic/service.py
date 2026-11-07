@@ -11,7 +11,6 @@ A KEEP/DROP judge per page, LLM-only (no embeddings):
 from __future__ import annotations
 import domains
 from . import domain, params, versions
-from .. import shared
 from ..... import agents, graphs
 
 import logging
@@ -22,11 +21,10 @@ from langgraph.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
-Context = graphs.pipeline.planner.context.PlannerContext
-STEP = "off_topic"
+Context = graphs.pipeline.planner.entities.PlannerContext
 
 
-async def prepare(state: graphs.pipeline.planner.off_topic.state.OffTopicState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.planner.off_topic.states.OffTopicState, runtime: Runtime[Context]) -> dict:
     blobs = runtime.context.blobs
     slug = state.get("framework_slug")
     raw_files = state.get("raw_files") or []
@@ -44,8 +42,8 @@ async def prepare(state: graphs.pipeline.planner.off_topic.state.OffTopicState, 
     index_summary = (state.get("corpus_stats") or {}).get("index_summary") or ""
 
     started = time.monotonic()
-    shared.service.emit(STEP, "start", files = len(raw_files))
-    bodies = await shared.service.read_all(blobs, raw_files)
+    graphs.service.emit(params.STEP, "start", files = len(raw_files))
+    bodies = await domains.dd.pipeline.storage.service.read_all(blobs, raw_files)
 
     # Best-effort: without the manifest every page is judged.
     auto_keep: set[int] = set()
@@ -63,14 +61,14 @@ async def prepare(state: graphs.pipeline.planner.off_topic.state.OffTopicState, 
         if i in auto_keep:
             continue
         judged = domain.head_tail_truncate(body or "")
-        digest = shared.service.digest(versions.PROMPT_VERSION, framework_name, category, index_summary, judged)
+        digest = domains.dd.pipeline.storage.domain.digest(versions.PROMPT_VERSION, framework_name, category, index_summary, judged)
         groups.setdefault(digest, []).append(i)
         reps.setdefault(digest, raw_files[i])
         lengths[digest] = len(judged)
 
-    cached = await domains.dd.pipeline.storage.service.read_items(blobs, slug, STEP, versions.PROMPT_VERSION, list(groups))
+    cached = await domains.dd.pipeline.storage.service.read_items(blobs, slug, params.STEP, versions.PROMPT_VERSION, list(groups))
     todo = [digest for digest in groups if digest not in cached]
-    runtime.context.counters[STEP] = {"judged": 0, "keep": 0, "drop": 0, "err": 0}
+    runtime.context.counters[params.STEP] = {"judged": 0, "keep": 0, "drop": 0, "err": 0}
     logger.info(f"[off_topic] {slug}: {len(raw_files)} pages → {len(groups)} distinct texts ({len(cached)} judged by an earlier run, {len(todo)} to judge)")
     return {
         "finished": False,
@@ -89,7 +87,7 @@ async def prepare(state: graphs.pipeline.planner.off_topic.state.OffTopicState, 
     }
 
 
-async def judge_page(state: graphs.pipeline.planner.off_topic.state.JudgeInput, runtime: Runtime[Context]) -> dict:
+async def judge_page(state: graphs.pipeline.planner.off_topic.entities.JudgeInput, runtime: Runtime[Context]) -> dict:
     """One judge call for one distinct page text. A call that cannot be answered counts as KEEP (quality over speed)."""
     context = runtime.context
     try:
@@ -114,17 +112,17 @@ async def judge_page(state: graphs.pipeline.planner.off_topic.state.JudgeInput, 
         if error is None:
             try:
                 await domains.dd.pipeline.storage.service.write_item(
-                    context.blobs, state["framework_slug"], STEP, versions.PROMPT_VERSION, state["digest"], {"keep": keep, "final": False},
+                    context.blobs, state["framework_slug"], params.STEP, versions.PROMPT_VERSION, state["digest"], {"keep": keep, "final": False},
                 )
             except Exception as exc:
                 logger.warning(f"[off_topic] verdict not stored ({type(exc).__name__}: {exc}); the page is judged again on a resume")
-        counts = context.counters.setdefault(STEP, {"judged": 0, "keep": 0, "drop": 0, "err": 0})
+        counts = context.counters.setdefault(params.STEP, {"judged": 0, "keep": 0, "drop": 0, "err": 0})
         counts["judged"] += 1
         counts["err" if error else ("keep" if keep else "drop")] += 1
         every = max(1, state["total"] // params.PROGRESS_EVENTS)
         if counts["judged"] % every == 0 or counts["judged"] == state["total"]:
-            shared.service.emit(
-                STEP, "llm_progress",
+            graphs.service.emit(
+                params.STEP, "llm_progress",
                 judged = counts["judged"], total = state["total"], deduped = state["deduped"],
                 llm_keep = counts["keep"], llm_drop = counts["drop"], llm_err = counts["err"],
             )
@@ -134,7 +132,7 @@ async def judge_page(state: graphs.pipeline.planner.off_topic.state.JudgeInput, 
     return {"verdicts": [verdict]}
 
 
-def tally(state: graphs.pipeline.planner.off_topic.state.OffTopicState, runtime: Runtime[Context]) -> dict:
+def tally(state: graphs.pipeline.planner.off_topic.states.OffTopicState, runtime: Runtime[Context]) -> dict:
     """After round 1: the confident DROPs of substantial pages that a second call must confirm."""
     if state.get("rechecked"):
         return {"recheck": []}
@@ -152,7 +150,7 @@ def tally(state: graphs.pipeline.planner.off_topic.state.OffTopicState, runtime:
     return {"recheck": recheck, "rechecked": True}
 
 
-async def finalize(state: graphs.pipeline.planner.off_topic.state.OffTopicState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.planner.off_topic.states.OffTopicState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     slug = state["framework_slug"]
     raw_files = state["raw_files"]
@@ -179,7 +177,7 @@ async def finalize(state: graphs.pipeline.planner.off_topic.state.OffTopicState,
         if second is not None:
             try:
                 await domains.dd.pipeline.storage.service.write_item(
-                    context.blobs, slug, STEP, versions.PROMPT_VERSION, digest, {"keep": keep, "final": True},
+                    context.blobs, slug, params.STEP, versions.PROMPT_VERSION, digest, {"keep": keep, "final": True},
                 )
             except Exception as exc:
                 logger.warning(f"[off_topic] final verdict not stored ({type(exc).__name__}: {exc})")
@@ -198,7 +196,7 @@ async def finalize(state: graphs.pipeline.planner.off_topic.state.OffTopicState,
     n_judged = len(groups)
     n_deduped = (n - len(auto_keep)) - n_judged
     llm_kept = agg["llm_kept"] - len(auto_keep)   # auto-kept pages carry a KEEP verdict but never reached the judge
-    elapsed = shared.service.elapsed_ms(state.get("started") or time.monotonic())
+    elapsed = graphs.service.elapsed_ms(state.get("started") or time.monotonic())
     entry = domains.dd.catalog.service.index_by_slug().get(slug, {})
     summary = state.get("index_summary") or ""
 
@@ -226,7 +224,7 @@ async def finalize(state: graphs.pipeline.planner.off_topic.state.OffTopicState,
         "judge_concurrency":   params.JUDGE_CONCURRENCY,
         "judge_router":        "deep-agent",
     }
-    domains.dd.pipeline.observability.service.span_attrs(STEP, {
+    domains.dd.pipeline.observability.service.span_attrs(params.STEP, {
         "kept": stats["kept"], "dropped": stats["dropped"], "llm_judged": n_judged, "llm_deduped": n_deduped,
         "llm_errors": stats["llm_errors"], "domain_coherence": 0.0, "elapsed_ms": elapsed,
     })
@@ -236,8 +234,8 @@ async def finalize(state: graphs.pipeline.planner.off_topic.state.OffTopicState,
         f"second look at {len(rounds[2])} drops of >={params.RECHECK_MIN_CHARS} chars: {rescued} kept; "
         f"keep={llm_kept} drop={agg['llm_dropped']}, errors={stats['llm_errors']} = {dict(sorted(agg['error_breakdown'].items()))}; {elapsed}ms"
     )
-    shared.service.emit(
-        STEP, "done",
+    graphs.service.emit(
+        params.STEP, "done",
         kept = len(relevant), dropped = n - len(relevant), total = n,
         llm_judged = n_judged, llm_deduped = n_deduped, llm_keep = llm_kept,
         llm_drop = agg["llm_dropped"], llm_err = stats["llm_errors"],

@@ -7,7 +7,6 @@ every later chapter. A block it cannot repair ships as it came, and still passes
 from __future__ import annotations
 import domains
 from . import domain, keys, params, schemas, versions
-from .. import shared
 from ..... import agents, graphs, tools
 
 import json
@@ -19,8 +18,7 @@ from langgraph.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
-Context = graphs.pipeline.synth.context.SynthContext
-STEP = "render_audit_write"
+Context = graphs.pipeline.synth.entities.SynthContext
 
 
 async def load_per_source_vaults(blobs, slug: str, source_keys: list[str]) -> tuple[dict[str, str], int, int]:
@@ -71,14 +69,14 @@ def normalizable(fence_text: str) -> tuple | None:
     return open_marker, info_string, body, close_marker, lang
 
 
-async def prepare(state: graphs.pipeline.synth.render.state.RenderState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.synth.render.states.RenderState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
     chapter_id = state.get("chapter_id")
     started = time.monotonic()
     if not slug or not chapter_id:
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "chapter_path", "chapter_stats", "no_slug_or_chapter_id", "framework_slug or chapter_id missing from SynthState", started,
         )}
 
@@ -87,25 +85,25 @@ async def prepare(state: graphs.pipeline.synth.render.state.RenderState, runtime
     sawc_key = best_seen_path or keys.sawc_latest_key(slug, chapter_id)
     mgsr_key = keys.mgsr_latest_key(slug, chapter_id)
     if not await blobs.exists(sawc_key):
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "chapter_path", "chapter_stats", "sawc_not_found", f"sawc {sawc_key!r} not in MinIO — run sawc_write first", started, sawc_key = sawc_key,
         )}
     if not await blobs.exists(mgsr_key):
-        return {"finished": True, **shared.service.failure(
+        return {"finished": True, **graphs.pipeline.synth.service.failure(
             "chapter_path", "chapter_stats", "mgsr_not_found", f"mgsr {mgsr_key!r} not in MinIO — run mgsr_replan first", started, mgsr_key = mgsr_key,
         )}
-    sawc = await shared.service.load_json(blobs, sawc_key)
-    mgsr = await shared.service.load_json(blobs, mgsr_key)
+    sawc = await domains.dd.pipeline.storage.service.load_json(blobs, sawc_key)
+    mgsr = await domains.dd.pipeline.storage.service.load_json(blobs, mgsr_key)
     if sawc is None or mgsr is None:
-        return {"finished": True, **shared.service.failure("chapter_path", "chapter_stats", "inputs_unreadable", "sawc/mgsr unreadable", started)}
+        return {"finished": True, **graphs.pipeline.synth.service.failure("chapter_path", "chapter_stats", "inputs_unreadable", "sawc/mgsr unreadable", started)}
 
     chapter_title = sawc.get("chapter_title") or chapter_id
     sections = sawc.get("sections") or []
     sawc_manifest_hash = sawc.get("sawc_manifest_hash") or ""
     mgsr_manifest_hash = mgsr.get("mgsr_manifest_hash") or ""
     decision = mgsr.get("decision") or {}
-    shared.service.emit(
-        STEP, "start",
+    graphs.service.emit(
+        params.STEP, "start",
         chapter_id = chapter_id, chapter_title = chapter_title, n_sections = len(sections), mgsr_halt = decision.get("halt", True), mgsr_halt_reason = decision.get("halt_reason", "?"),
     )
     manifest_hash = domain.compute_manifest_hash(sawc_manifest_hash = sawc_manifest_hash, mgsr_manifest_hash = mgsr_manifest_hash)
@@ -119,7 +117,7 @@ async def prepare(state: graphs.pipeline.synth.render.state.RenderState, runtime
             # A cache hit is valid only when its content artifacts also exist: defense against a partial-write crash state.
             if all([art.get("minio_key") and await blobs.exists(art["minio_key"]) for art in arts]):
                 audit = cached.get("audit") or {}
-                elapsed = shared.service.elapsed_ms(started)
+                elapsed = graphs.service.elapsed_ms(started)
                 readme_key = keys.artifact_key(slug, chapter_id, "README.md")
                 stats = {
                     "audit_passed": audit.get("audit_passed", False),
@@ -138,8 +136,8 @@ async def prepare(state: graphs.pipeline.synth.render.state.RenderState, runtime
                     "cache_hit": True,
                     "template_version": cached.get("template_version"),
                 }
-                shared.service.emit(
-                    STEP, "done",
+                graphs.service.emit(
+                    params.STEP, "done",
                     audit_passed = stats["audit_passed"], n_artifacts = stats["n_artifacts"], n_code_refs = stats["n_code_refs"], n_resolved = stats["n_resolved"],
                     n_missing = stats["n_missing"], n_byte_drift = stats["n_byte_drift"], sentinels_in_output = stats["sentinels_in_output"],
                     rendered_chars = stats["rendered_chars"], wall_ms = elapsed, cache_hit = True,
@@ -150,7 +148,7 @@ async def prepare(state: graphs.pipeline.synth.render.state.RenderState, runtime
         except Exception as error:
             logger.warning(f"[render_audit_write] {slug}/{chapter_id}: cached blob {versioned_key!r} unreadable ({type(error).__name__}: {error}); recomputing")
 
-    plan = await shared.service.load_json(blobs, keys.planner_latest_key(slug))
+    plan = await domains.dd.pipeline.storage.service.load_json(blobs, keys.planner_latest_key(slug))
     source_keys: list[str] = []
     for chapter in (plan or {}).get("chapters") or []:
         if (chapter or {}).get("id") == chapter_id:
@@ -186,7 +184,7 @@ async def prepare(state: graphs.pipeline.synth.render.state.RenderState, runtime
         else:
             todo.append(h)
 
-    context.scratch[STEP] = {
+    context.scratch[params.STEP] = {
         "slug": slug, "chapter_id": chapter_id, "sections": sections, "source_keys": source_keys, "vault": vault, "normalized_hashes": normalized_hashes,
         "counts": {"normalized": n_norm, "unchanged": n_skip_norm, "loaded": n_loaded, "skipped": n_skipped}, "best_seen_path": best_seen_path,
         "mgsr": mgsr,
@@ -208,7 +206,7 @@ async def prepare(state: graphs.pipeline.synth.render.state.RenderState, runtime
 async def normalize_block(state: dict, runtime: Runtime[Context]) -> dict:
     """Repair one distinct code block. The repaired fence is cached by content hash; a block the agent cannot repair, or answers badly, ships as it came (still byte-exact for the audit)."""
     context = runtime.context
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     h = state["hash"]
     fence_text = data["vault"][h] if isinstance(data["vault"][h], str) else str(data["vault"][h] or "")
     parts = normalizable(fence_text)
@@ -223,7 +221,7 @@ async def normalize_block(state: dict, runtime: Runtime[Context]) -> dict:
         ok, error = domain.python_ast_valid(domain.strip_code_fences(candidate.get("code") or ""))
         return [] if ok else [f"The code does not parse as Python: {error}"]
 
-    role = context.agents.code_normalizer(tools = [tools.pipeline.synth.check.service.check_code_tool(check)])
+    role = context.agents.code_normalizer(tools = [tools.pipeline.synth.check.tool.check_code_tool(check)])
     try:
         answer = await agents.service.ask(
             role, agents.pipeline.synth.schemas.NormalizedCodeAnswer, json.dumps({"lang": lang or "code", "code": body}, ensure_ascii = False),
@@ -271,10 +269,10 @@ async def publish_best_checklist(blobs, slug: str, chapter_id: str) -> bool:
         return False
 
 
-async def finalize(state: graphs.pipeline.synth.render.state.RenderState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.synth.render.states.RenderState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     slug, chapter_id = data["slug"], data["chapter_id"]
     sections = data["sections"]
     vault = data["vault"]
@@ -283,8 +281,8 @@ async def finalize(state: graphs.pipeline.synth.render.state.RenderState, runtim
     counts = data["counts"]
     n_norm = counts["normalized"] + sum(1 for r in state.get("normalized") or [] if r["changed"])
     n_skip_norm = counts["unchanged"] + sum(1 for r in state.get("normalized") or [] if not r["changed"])
-    shared.service.emit(
-        STEP, "inputs_loaded",
+    graphs.service.emit(
+        params.STEP, "inputs_loaded",
         n_sources = len(data["source_keys"]), n_vault_files_loaded = counts["loaded"], n_vault_files_skipped = counts["skipped"], n_vault_entries = len(vault),
         n_codes_normalized = n_norm, n_codes_unchanged = n_skip_norm,
     )
@@ -315,8 +313,8 @@ async def finalize(state: graphs.pipeline.synth.render.state.RenderState, runtim
     if n_placeholder_sections:
         audit = audit.model_copy(update = {"audit_passed": False})
         logger.warning(f"[render_audit_write] {slug}/{chapter_id}: {n_placeholder_sections}/{len(sections_ctx)} section(s) are EMPTY placeholders (the writer produced 0 subtopics) — failing the audit")
-    shared.service.emit(
-        STEP, "rendered",
+    graphs.service.emit(
+        params.STEP, "rendered",
         chapter_chars = len(chapter_md), n_sections_rendered = len(sections_ctx), n_placeholder_sections = n_placeholder_sections, n_code_refs_resolved = audit.n_resolved,
         n_code_refs_missing = len(audit.n_missing), n_code_refs_drift = len(audit.n_byte_drift), sentinels_in_output = audit.sentinels_in_output, audit_passed = audit.audit_passed,
         n_code_deduped = dedup_stats["n_dedup"], n_code_mismatch_omitted = dedup_stats["n_mismatch"],
@@ -327,18 +325,18 @@ async def finalize(state: graphs.pipeline.synth.render.state.RenderState, runtim
     artifacts = [schemas.RenderedArtifact(
         name = "README.md", minio_key = readme_key, size_bytes = len(chapter_md.encode("utf-8")), sha256 = domain.sha256_bytes(chapter_md),
     )]
-    shared.service.emit(
-        STEP, "artifacts_written",
+    graphs.service.emit(
+        params.STEP, "artifacts_written",
         n_artifacts = len(artifacts), total_bytes = sum(a.size_bytes for a in artifacts), artifact_names = [a.name for a in artifacts],
     )
 
     # Fingerprint of the plan chapter this render was built from (fail-soft: a missing plan just leaves it empty, i.e. "valid").
     plan_hash = ""
-    plan = await shared.service.load_json(blobs, keys.planner_latest_key(slug))
+    plan = await domains.dd.pipeline.storage.service.load_json(blobs, keys.planner_latest_key(slug))
     if plan is not None:
         plan_hash = domain.plan_sources_hash(next((c for c in plan.get("chapters") or [] if isinstance(c, dict) and c.get("id") == chapter_id), None))
 
-    elapsed = shared.service.elapsed_ms(state["started"])
+    elapsed = graphs.service.elapsed_ms(state["started"])
     result = schemas.RenderResult(
         chapter_id = chapter_id,
         chapter_title = chapter_title,
@@ -388,8 +386,8 @@ async def finalize(state: graphs.pipeline.synth.render.state.RenderState, runtim
         "cache_hit": False,
         "template_version": versions.RENDER_TEMPLATE_VERSION,
     }
-    shared.service.emit(
-        STEP, "done",
+    graphs.service.emit(
+        params.STEP, "done",
         audit_passed = audit.audit_passed, n_artifacts = len(artifacts), n_code_refs = audit.n_code_refs_referenced, n_resolved = audit.n_resolved, n_missing = len(audit.n_missing),
         n_byte_drift = len(audit.n_byte_drift), sentinels_in_output = audit.sentinels_in_output, rendered_chars = len(chapter_md), wall_ms = elapsed,
     )

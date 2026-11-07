@@ -1,4 +1,4 @@
-"""Offline checks of the planner's DeepAgents: each role builds on the shared factory (harness profile, permissions, middleware, the
+"""Offline checks of the planner's DeepAgents: each role is built by its own factory (harness profile, permissions, middleware, the
 unreviewed-tool guard), reads its skill and the corpus through its backend, calls its tools, and answers with its schema.
 
     cd apps/server && .venv/bin/python ../../scripts/server/test_dd_planner_agents.py
@@ -102,8 +102,9 @@ async def main() -> None:
         call("SectionProposals", {"proposals": [{"title": "Auth Flows", "description": "How readers sign in to the service safely.", "key_concepts": ["login", "token"]}]}, "r3"),
     )
     analyst = section_analyst.agent.section_analyst(analyst_model)
-    truthy("section_analyst: its skill files travel with the role", skill_path in analyst.files)
-    proposals_out = await service.ask(analyst, schemas.SectionProposals, "{}", attempts = 1, wait_base_s = 0)
+    analyst_files = ai.dd.skills.service.files_for("section_analyst")
+    truthy("section_analyst: its skill files are found for the call", skill_path in analyst_files)
+    proposals_out = await service.ask(analyst, schemas.SectionProposals, "{}", attempts = 1, wait_base_s = 0, files = analyst_files)
     check("section_analyst answers with its schema", proposals_out.proposals[0].title, "Auth Flows")
     truthy("section_analyst: it read its SKILL.md", any("Analyze a documentation section" in s for s in [str(m.content) for m in analyst_model.seen[1] if getattr(m, "type", "") == "tool"]))
     truthy("section_analyst: a path outside its skills is refused", any("permission" in s.lower() for s in [str(m.content) for m in analyst_model.seen[2] if getattr(m, "type", "") == "tool"]))
@@ -128,7 +129,7 @@ async def main() -> None:
         scored_with.append(chapters)
         return {"n": len(chapters), "unmatched_pct": 25.0, "largest_share_pct": 50.0, "score": 0.5, "unmatched": [3], "chapter_sizes": [3] * len(chapters)}
 
-    score_tool = outline.service.score_outline_tool(score, labels, target = 4)
+    score_tool = outline.tool.score_outline_tool(score, labels, target = 4)
     architect_model = model(
         call("write_todos", {"todos": [{"content": "merge sketches", "status": "in_progress"}]}, "a1"),
         call("grep", {"pattern": "bravo"}, "a2"),
@@ -141,7 +142,12 @@ async def main() -> None:
         ]}, "a6"),
     )
     architect = chapter_architect.agent.chapter_architect(backend = backend, tools = [score_tool], model = architect_model)
-    files = {"/work/structure.md": service.file("structure"), "/work/sketches.json": service.file("[]")}
+    files = {
+        **ai.dd.skills.service.files_for("chapter_architect"),
+        **ai.dd.skills.service.files_for("plan_critic"),
+        "/work/structure.md": service.file("structure"),
+        "/work/sketches.json": service.file("[]"),
+    }
     outline_out = await service.ask(architect, schemas.ChapterProposalList, "{}", attempts = 1, wait_base_s = 0, files = files)
     check("chapter_architect answers with its schema", len(outline_out.proposals), 4)
     check("chapter_architect: the score tool ran on its outline", len(scored_with), 1)
@@ -150,20 +156,22 @@ async def main() -> None:
     truthy("chapter_architect: grep found the page by its summary", any("/corpus/docs/1-0001-bravo.md" in r for r in results))
     truthy("chapter_architect: read_file opened a corpus page", any("body of dd/fw/ingestion/pages/0001-bravo.md" in r for r in results))
     truthy("chapter_architect: the score report names the unmatched page", any("pages matching no chapter" in r and "0003-delta" in r for r in results))
-    truthy("chapter_architect: it can reach the critic", "plan_critic" in str(architect.agent.nodes.keys()) or True)
-    truthy("chapter_architect: the critic's skill travels with the role", any("review-chapter-outline" in path for path in architect.files))
+    truthy("chapter_architect: it can reach the critic", "plan_critic" in str(architect.nodes.keys()) or True)
+    truthy("chapter_architect: the critic's skill files are found for the call", any("review-chapter-outline" in path for path in files))
 
     # --- the curator's tools
     units = [{"id": i, "keys": [f"k{i}"], "label": f"Unit {i}", "summary": "s", "role": None} for i in range(4)]
-    cluster_tool = split.service.cluster_units_tool(lambda n: [[0, 1], [2, 3]] if n == 2 else None, lambda ids: ", ".join(map(str, ids)))
-    validate_tool = split.service.validate_split_tool(lambda groups: (len(groups) == 2, "need two groups"))
+    cluster_tool = split.tool.cluster_units_tool(lambda n: [[0, 1], [2, 3]] if n == 2 else None, lambda ids: ", ".join(map(str, ids)))
+    validate_tool = split.tool.validate_split_tool(lambda groups: (len(groups) == 2, "need two groups"))
     curator_model = model(
         call("cluster_units", {"n_parts": 2}, "u1"),
         call("validate_split", {"groups": [{"title": "Streams", "description": "d", "unit_ids": [0, 1]}, {"title": "Queues", "description": "d", "unit_ids": [2, 3]}]}, "u2"),
         call("SplitPlan", {"groups": [{"title": "Streams", "description": "Reading and writing streams.", "unit_ids": [0, 1]}, {"title": "Queues", "description": "Queues and priority.", "unit_ids": [2, 3]}]}, "u3"),
     )
     curator = chapter_curator.agent.chapter_curator(tools = [cluster_tool, validate_tool], model = curator_model)
-    plan = await service.ask(curator, schemas.SplitPlan, "{}", attempts = 1, wait_base_s = 0)
+    plan = await service.ask(
+        curator, schemas.SplitPlan, "{}", attempts = 1, wait_base_s = 0, files = ai.dd.skills.service.files_for("chapter_curator"),
+    )
     check("chapter_curator answers with its schema", [g.title for g in plan.groups], ["Streams", "Queues"])
     results = tool_results(curator_model)
     truthy("chapter_curator: cluster_units grouped the units", any("group 0 (2 units)" in r for r in results))
@@ -171,7 +179,10 @@ async def main() -> None:
 
     # --- the sequencer
     sequencer_model = model(call("ChapterTitleOrder", {"rationale": "Orientation first, then the core.", "order": ["A", "B"]}))
-    order = await service.ask(chapter_sequencer.agent.chapter_sequencer(sequencer_model), schemas.ChapterTitleOrder, "{}", attempts = 1, wait_base_s = 0)
+    order = await service.ask(
+        chapter_sequencer.agent.chapter_sequencer(sequencer_model), schemas.ChapterTitleOrder, "{}", attempts = 1, wait_base_s = 0,
+        files = ai.dd.skills.service.files_for("chapter_sequencer"),
+    )
     check("chapter_sequencer answers with its schema", order.order, ["A", "B"])
 
     # --- the corpus backend is read-only and bounded

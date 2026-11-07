@@ -6,7 +6,6 @@ so a run that stops resumes with the pages it has not distilled and a re-plan re
 from __future__ import annotations
 import domains
 from . import domain, params, versions
-from .. import shared
 from ..... import agents, graphs
 
 import json
@@ -19,8 +18,7 @@ from langgraph.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
-Context = graphs.pipeline.planner.context.PlannerContext
-STEP = "doc_distill"
+Context = graphs.pipeline.planner.entities.PlannerContext
 
 
 def _request(framework: str, source_key: str, body: str, max_chars: int) -> str:
@@ -31,7 +29,7 @@ def _request(framework: str, source_key: str, body: str, max_chars: int) -> str:
     )
 
 
-async def prepare(state: graphs.pipeline.planner.doc_distill.state.DistillState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.planner.doc_distill.states.DistillState, runtime: Runtime[Context]) -> dict:
     blobs = runtime.context.blobs
     slug = state.get("framework_slug")
     relevant_files = state.get("relevant_files") or state.get("raw_files") or []
@@ -40,7 +38,7 @@ async def prepare(state: graphs.pipeline.planner.doc_distill.state.DistillState,
 
     n = len(relevant_files)
     started = time.monotonic()
-    shared.service.emit(STEP, "start", n_files = n)
+    graphs.service.emit(params.STEP, "start", n_files = n)
 
     entries: list[dict] = []
     try:
@@ -58,7 +56,7 @@ async def prepare(state: graphs.pipeline.planner.doc_distill.state.DistillState,
     if await blobs.exists(vkey) and await blobs.exists(lkey):
         try:
             cached = json.loads(await blobs.read_text(vkey))
-            wall_ms = shared.service.elapsed_ms(started)
+            wall_ms = graphs.service.elapsed_ms(started)
             stats = {
                 "n_files": n,
                 "n_distilled": len((cached or {}).get("distillates") or {}),
@@ -66,20 +64,20 @@ async def prepare(state: graphs.pipeline.planner.doc_distill.state.DistillState,
                 "cache_hit": True,
                 "wall_ms": wall_ms,
             }
-            shared.service.emit(STEP, "done", cache_hit = True, n_distilled = stats["n_distilled"], wall_ms = wall_ms)
+            graphs.service.emit(params.STEP, "done", cache_hit = True, n_distilled = stats["n_distilled"], wall_ms = wall_ms)
             return {"finished": True, "doc_distill_ref": lkey, "doc_distill_stats": stats}
         except Exception:
             pass
 
     digests = {
-        key: shared.service.digest(versions.PROMPT_VERSION, key, str(sizes.get(key))) for key in relevant_files
+        key: domains.dd.pipeline.storage.domain.digest(versions.PROMPT_VERSION, key, str(sizes.get(key))) for key in relevant_files
     }
-    items = await domains.dd.pipeline.storage.service.read_items(blobs, slug, STEP, versions.PROMPT_VERSION, list(digests.values()))
+    items = await domains.dd.pipeline.storage.service.read_items(blobs, slug, params.STEP, versions.PROMPT_VERSION, list(digests.values()))
     cached_items = {key: items[digest] for key, digest in digests.items() if digest in items}
     todo = [key for key in relevant_files if key not in cached_items]
     if todo:
-        await shared.service.settle(STEP, params.SETTLE_DELAY_S)
-    runtime.context.counters[STEP] = {"distilled": 0}
+        await graphs.service.settle(params.STEP, params.SETTLE_DELAY_S)
+    runtime.context.counters[params.STEP] = {"distilled": 0}
     logger.info(f"[doc_distill] {slug}: {n} pages ({len(cached_items)} distilled by an earlier run, {len(todo)} to distill)")
     return {
         "finished": False,
@@ -91,7 +89,7 @@ async def prepare(state: graphs.pipeline.planner.doc_distill.state.DistillState,
     }
 
 
-async def distill_page(state: graphs.pipeline.planner.doc_distill.state.DistillInput, runtime: Runtime[Context]) -> dict:
+async def distill_page(state: graphs.pipeline.planner.doc_distill.entities.DistillInput, runtime: Runtime[Context]) -> dict:
     """Distill one page. Returns its distillate (the model's, normalized), or a deterministic fallback with the reason the model gave none."""
     context = runtime.context
     key = state["key"]
@@ -129,7 +127,7 @@ async def distill_page(state: graphs.pipeline.planner.doc_distill.state.DistillI
             result = {"key": key, "distillate": distillate.model_dump(), "fallback": False}
             try:
                 await domains.dd.pipeline.storage.service.write_item(
-                    context.blobs, state["framework_slug"], STEP, versions.PROMPT_VERSION, state["digest"], result["distillate"],
+                    context.blobs, state["framework_slug"], params.STEP, versions.PROMPT_VERSION, state["digest"], result["distillate"],
                 )
             except Exception as exc:
                 logger.warning(f"[doc_distill] distillate not stored ({type(exc).__name__}: {exc})")
@@ -142,15 +140,15 @@ async def distill_page(state: graphs.pipeline.planner.doc_distill.state.DistillI
                 "reason": reason or "unknown",
             }
 
-    counts = context.counters.setdefault(STEP, {"distilled": 0})
+    counts = context.counters.setdefault(params.STEP, {"distilled": 0})
     counts["distilled"] += 1
     every = max(1, state["total"] // params.PROGRESS_EVENTS)
     if counts["distilled"] % every == 0 or counts["distilled"] == state["total"]:
-        shared.service.emit(STEP, "llm_progress", distilled = counts["distilled"], total = state["total"])
+        graphs.service.emit(params.STEP, "llm_progress", distilled = counts["distilled"], total = state["total"])
     return {"results": [result]}
 
 
-async def finalize(state: graphs.pipeline.planner.doc_distill.state.DistillState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.planner.doc_distill.states.DistillState, runtime: Runtime[Context]) -> dict:
     """Assemble the node's blob (every page's distillate) and its stats; write the versioned blob and the latest pointer."""
     blobs = runtime.context.blobs
     slug = state["framework_slug"]
@@ -197,7 +195,7 @@ async def finalize(state: graphs.pipeline.planner.doc_distill.state.DistillState
             "failure_reasons": failure_reasons,
         },
     )
-    wall_ms = shared.service.elapsed_ms(state.get("started") or time.monotonic())
+    wall_ms = graphs.service.elapsed_ms(state.get("started") or time.monotonic())
     stats = {
         "n_files": n,
         "n_distilled": len(ordered),
@@ -210,8 +208,8 @@ async def finalize(state: graphs.pipeline.planner.doc_distill.state.DistillState
         "read_ms": 0,
         "n_cached": len(state.get("cached") or {}),
     }
-    shared.service.emit(
-        STEP, "done",
+    graphs.service.emit(
+        params.STEP, "done",
         cache_hit = False, n_distilled = len(ordered), n_failed = len(failures), n_fallback = len(fallbacks),
         failure_reasons = failure_reasons, wall_ms = wall_ms,
     )

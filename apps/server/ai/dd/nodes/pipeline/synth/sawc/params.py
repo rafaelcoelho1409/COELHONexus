@@ -4,6 +4,10 @@ from __future__ import annotations
 import builtins
 
 
+# The name this stage reports its progress events, cached items and scratch data under.
+STEP = "sawc_write"
+
+
 # Identifiers that carry no signal in a code block or its prose.
 IDENT_STOPWORDS = frozenset({
     "self", "cls", "str", "int", "bool", "list", "dict", "set", "tuple",
@@ -67,20 +71,12 @@ INTRO_CHARS_MIN = 20
 INTRO_CHARS_MAX = 400
 
 
-# Legacy paragraph-mode bounds (kept for backwards-compat).
-PARAGRAPHS_MIN = 2
-PARAGRAPHS_MAX = 12
-PARAGRAPH_CHARS_MIN = 80
-PARAGRAPH_CHARS_MAX = 1800
 HEADING_MIN_WORDS = 1    # matches outline_sdp — single-word module/API names are valid H2s
 HEADING_MAX_WORDS = 8
-CODE_REFS_MAX = 30
 CITATIONS_MIN = 0
 CITATIONS_MAX = 12
 CITATION_CLAIM_CHARS_MIN = 6
 CITATION_CLAIM_CHARS_MAX = 400
-PLACEMENT_HINT_CHARS_MIN = 4
-PLACEMENT_HINT_CHARS_MAX = 200
 MEMORY_TERMS_MIN = 0
 MEMORY_TERMS_MAX = 12
 MEMORY_TERM_CHARS_MIN = 2
@@ -120,8 +116,6 @@ TOPUP_ENABLED = True
 TOPUP_MIN_UNUSED = 2          # fewer unused routed blocks than this: not worth a call
 TOPUP_MAX_NEW = 8             # subtopics added per section per call (6 -> 8: a section routed 24 blocks, asyncio ch-05)
 TOPUP_CONCURRENCY = 3
-TOPUP_MAX_TOKENS = 4000
-TOPUP_TIMEOUT_S = 150.0
 TOPUP_MAX_BLOCK_CHARS = 1500  # of each block shown to the model
 TOPUP_MAX_FACTS = 14
 # A top-up call that fails or whose answer holds nothing valid is asked again (asyncio ch-04: a 147 s Rotator 504 on the source top-up, and an answer

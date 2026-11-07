@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from . import params
-from ..page_audit import params as audit_params
+from .. import page_audit
 from .... import agents
 
 import re
@@ -64,7 +64,7 @@ def patch_rejection(
         return "target does not occur exactly once", 0, 0
     if category in params.WORD_PRESERVING_CATEGORIES and dropped_words(patch.target_text, patch.replacement):
         return "formatting patch removes words from the page", 0, 0
-    if category in audit_params.DUPLICATE_CATEGORIES and not duplicate_survives(
+    if category in page_audit.params.DUPLICATE_CATEGORIES and not duplicate_survives(
         markdown, patch.evidence, patch.target_text, patch.replacement
     ):
         return "removing it would leave no copy of the text", 0, 0

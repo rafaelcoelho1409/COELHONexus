@@ -1,0 +1,249 @@
+"""Persist bounded source chunks and extract cited learning units from them."""
+from __future__ import annotations
+
+import hashlib
+import json
+from typing import Any
+
+import domains
+
+from .... import graphs, prompts
+
+
+def _canonical_sha256(value: dict) -> str:
+    body = json.dumps(value, ensure_ascii = False, separators = (",", ":"), sort_keys = True)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def _json_body(value: Any) -> str:
+    return json.dumps(value, ensure_ascii = False, separators = (",", ":"), sort_keys = True)
+
+
+async def prepare_units(
+    dependencies: graphs.distill.entities.DistillDependencies,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    storage = dependencies.storage
+    source_manifest = await domains.bd.ingestion.storage.service.read_manifest(storage, state["book_id"])
+    if source_manifest is None or source_manifest.get("status") != domains.bd.ingestion.storage.params.STATUS_DONE:
+        raise ValueError("Distill requires a completed extraction")
+    if source_manifest.get("extraction_id") != state["extraction_run_id"]:
+        raise ValueError("the book's current extraction no longer matches this Distill run")
+    source_manifest_sha256 = _canonical_sha256(source_manifest)
+    if source_manifest_sha256 != state["source_manifest_sha256"]:
+        raise ValueError("the source manifest changed after this Distill run was queued")
+
+    qa_key = state["ingestion_ai_manifest_key"]
+    qa_content = await storage.read_text(qa_key)
+    if hashlib.sha256(qa_content.encode("utf-8")).hexdigest() != state["ingestion_ai_manifest_sha256"]:
+        raise ValueError("the ingestion QA manifest changed after this Distill run was queued")
+    qa_manifest = domains.bd.ingestion.ai.schemas.IngestionAIRunManifest.model_validate_json(qa_content)
+    if qa_manifest.status != domains.bd.ingestion.ai.schemas.AgenticRunStatus.DONE:
+        raise ValueError("Distill requires a completed ingestion QA run")
+    if qa_manifest.quality_status not in {"complete", "complete_with_review"}:
+        raise ValueError("the selected ingestion QA run has no publishable quality result")
+    if qa_manifest.extraction_run_id != state["extraction_run_id"]:
+        raise ValueError("the ingestion QA run is pinned to a different extraction")
+    if qa_manifest.expected_page_count != state["expected_page_count"]:
+        raise ValueError("the ingestion QA page count does not match the Distill run")
+
+    page_by_number = {
+        page.get("page"): page
+        for page in source_manifest.get("pages", [])
+        if isinstance(page, dict) and type(page.get("page")) is int
+    }
+    source_pages = []
+    unit_refs = []
+    for qa_page in qa_manifest.pages:
+        raw_page = page_by_number.get(qa_page.page_number)
+        if raw_page is None:
+            raise ValueError(f"source manifest has no page {qa_page.page_number}")
+        section_path = raw_page.get("section_path")
+        if not isinstance(section_path, list) or not all(isinstance(item, str) for item in section_path):
+            section_path = []
+        source_page = {
+            "page_number": qa_page.page_number,
+            "source_key": qa_page.normalized_key,
+            "source_sha256": qa_page.normalized_sha256,
+            "section_path": section_path,
+            "disposition": qa_page.delivery_disposition,
+            "review_required": qa_page.status == domains.bd.ingestion.ai.schemas.AgenticPageStatus.REVIEW_REQUIRED,
+        }
+        source_pages.append(source_page)
+        if qa_page.delivery_disposition == "discarded_blank":
+            continue
+        page_text = await storage.read_text(qa_page.normalized_key)
+        if hashlib.sha256(page_text.encode("utf-8")).hexdigest() != qa_page.normalized_sha256:
+            raise ValueError(f"normalized source page {qa_page.page_number} failed its integrity check")
+        chunks = domains.bd.distill.domain.split_source_page(
+            page_text,
+            page_number = qa_page.page_number,
+            source_key = qa_page.normalized_key,
+            source_sha256 = qa_page.normalized_sha256,
+            section_path = section_path,
+        )
+        for ref, chunk in chunks:
+            input_key = domains.bd.distill.keys.input_unit_key(state["book_id"], state["run_id"], ref["unit_id"])
+            ref["input_key"] = input_key
+            input_record = {
+                "unit_id": ref["unit_id"],
+                "page_number": ref["page_number"],
+                "section_path": section_path,
+                "source_key": qa_page.normalized_key,
+                "source_sha256": qa_page.normalized_sha256,
+                "text_sha256": ref["text_sha256"],
+                "char_start": ref["char_start"],
+                "char_end": ref["char_end"],
+                "text": chunk,
+            }
+            if await storage.exists(input_key):
+                existing = json.loads(await storage.read_text(input_key))
+                if existing.get("text_sha256") != ref["text_sha256"]:
+                    raise ValueError("an immutable Distill source-unit key has conflicting content")
+            else:
+                await storage.write(input_key, _json_body(input_record), content_type = domains.bd.distill.params.JSON_TYPE)
+            unit_refs.append(ref)
+
+    await graphs.service.report(
+        dependencies.progress_callback,
+        kind = "unit_plan",
+        total_units = len(unit_refs),
+    )
+    return {
+        "source_pages": source_pages,
+        "unit_refs": unit_refs,
+        "title": str(source_manifest.get("title") or source_manifest.get("filename") or "Learning Guide"),
+    }
+
+
+async def extract_unit(
+    dependencies: graphs.distill.entities.DistillDependencies,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    ref = state["unit_ref"]
+    storage = dependencies.storage
+    input_record = json.loads(await storage.read_text(ref["input_key"]))
+    source_text = input_record.get("text")
+    if not isinstance(source_text, str) or domains.bd.distill.domain.sha256_text(source_text) != ref["text_sha256"]:
+        raise ValueError(f"Distill input {ref['unit_id']} failed its integrity check")
+    output_key = domains.bd.distill.keys.learning_unit_key(state["book_id"], state["run_id"], ref["unit_id"])
+    if await storage.exists(output_key):
+        artifact = json.loads(await storage.read_text(output_key))
+        if artifact.get("text_sha256") != ref["text_sha256"]:
+            raise ValueError("an immutable learning-unit artifact has conflicting source content")
+        ref["learning_unit_ids"] = [item["learning_unit_id"] for item in artifact.get("lessons", [])]
+        ref["existing_artifact"] = True
+        await graphs.service.report(
+            dependencies.progress_callback,
+            kind = "unit",
+            status = "done",
+            unit_id = ref["unit_id"],
+            lesson_count = len(ref["learning_unit_ids"]),
+        )
+        return {"completed_units": [ref]}
+
+    prompt_payload = {
+        "task": "Extract the important learning units from this source chunk.",
+        "physical_page": ref["page_number"],
+        "section_path": ref["section_path"],
+        "source_chunk_id": ref["unit_id"],
+        "markdown": source_text,
+    }
+    with domains.settings.llm_counter.service.llm_context(
+        ns = "bd", run_id = state["run_id"], node_id = "learning_extractor", stage = "distill",
+    ):
+        result = await dependencies.extractor.ainvoke({"messages": [{
+            "role": "user",
+            "content": json.dumps(prompt_payload, ensure_ascii = False),
+        }]}, config = {
+            "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
+        })
+    structured = result.get("structured_response") if isinstance(result, dict) else None
+    extraction = domains.bd.distill.schemas.LearningExtraction.model_validate(structured)
+
+    candidates: list[dict[str, Any]] = []
+    review_flags: list[str] = []
+    for lesson in extraction.lessons:
+        evidence = [
+            quote.model_dump(mode = "json")
+            for quote in lesson.evidence
+            if quote.page_number == ref["page_number"] and domains.bd.distill.domain.quote_is_supported(
+                quote.quote, source_text,
+            )
+        ]
+        if not evidence:
+            review_flags.append("A proposed lesson had no exact quotation in its source chunk and was excluded.")
+            continue
+        candidates.append({
+            "kind": lesson.kind,
+            "title": lesson.title,
+            "claim": lesson.claim,
+            "explanation": lesson.explanation,
+            "attribution": lesson.attribution,
+            "evidence": evidence,
+            "confidence": lesson.confidence,
+        })
+
+    if candidates:
+        review_prompt = (
+            prompts.distill.evidence_verifier.prompts.SYSTEM_PROMPT
+            + "\n\nReview these proposed lessons against their quoted source passages. Return one verdict for each zero-based lesson_index.\n"
+            + json.dumps({"page_number": ref["page_number"], "lessons": candidates}, ensure_ascii = False)
+        )
+        try:
+            with domains.settings.llm_counter.service.llm_context(
+                ns = "bd", run_id = state["run_id"], node_id = "evidence_verifier", stage = "distill",
+            ):
+                review, _ = await domains.settings.chat.service.chat_structured_async(
+                    review_prompt,
+                    domains.bd.distill.schemas.EvidenceReview,
+                    max_tokens = 2500,
+                    temperature = 0.0,
+                    strict = False,
+                    rotator_task = "bd_distill_evidence_verifier",
+                )
+            verdicts = {item.lesson_index: item for item in review.verdicts}
+        except Exception as error:  # noqa: BLE001 — unavailable semantic review must retain a review-marked citation.
+            verdicts = {}
+            review_flags.append(f"Evidence review was unavailable ({type(error).__name__}); supported quotes require human review.")
+    else:
+        verdicts = {}
+
+    persisted_lessons = []
+    for index, candidate in enumerate(candidates):
+        verdict = verdicts.get(index)
+        if verdict is not None and not verdict.supported:
+            review_flags.append("An evidence reviewer rejected a proposed lesson as unsupported; it was excluded.")
+            continue
+        lesson_id = domains.bd.distill.domain.stable_id(ref["unit_id"], str(index), candidate["claim"])
+        persisted_lessons.append({
+            "learning_unit_id": lesson_id,
+            **candidate,
+            "verification_status": "verified" if verdict is not None else "unverified",
+            "verification_note": verdict.reason if verdict is not None else None,
+        })
+        if verdict is None:
+            review_flags.append("A lesson has a source quote but no independent semantic evidence verdict.")
+
+    artifact = {
+        "unit_id": ref["unit_id"],
+        "page_number": ref["page_number"],
+        "source_key": input_record["source_key"],
+        "section_path": ref["section_path"],
+        "source_sha256": ref["source_sha256"],
+        "text_sha256": ref["text_sha256"],
+        "source_char_range": [ref["char_start"], ref["char_end"]],
+        "lessons": persisted_lessons,
+        "omitted_material": extraction.omitted_material,
+        "review_flags": sorted(set(review_flags)),
+    }
+    await storage.write(output_key, _json_body(artifact), content_type = domains.bd.distill.params.JSON_TYPE)
+    ref["learning_unit_ids"] = [item["learning_unit_id"] for item in persisted_lessons]
+    await graphs.service.report(
+        dependencies.progress_callback,
+        kind = "unit",
+        status = "done",
+        unit_id = ref["unit_id"],
+        lesson_count = len(persisted_lessons),
+    )
+    return {"completed_units": [ref]}

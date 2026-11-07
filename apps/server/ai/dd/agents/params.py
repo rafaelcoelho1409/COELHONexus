@@ -12,10 +12,13 @@ STACK_TOOLS = frozenset({
     "execute",
     "task",
 })
-READ_TOOLS = frozenset({"ls", "read_file", "glob", "grep"})
+READ_TOOLS = frozenset({
+    "ls", 
+    "read_file", 
+    "glob", 
+    "grep"
+})
 
-# Model calls one agent run may make before it ends without an answer (a loop that never finishes costs the run its deadline).
-MODEL_CALL_LIMIT = 8
 # Transient provider failures (timeout, dropped connection, 429, 5xx) are retried by the agent itself.
 MODEL_RETRIES = 2
 MODEL_RETRY_DELAY_S = 4.0

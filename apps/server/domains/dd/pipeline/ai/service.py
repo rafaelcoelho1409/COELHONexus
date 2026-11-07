@@ -1,5 +1,5 @@
 """The pipeline's composition root, planner side: binds the planner graph, object storage and run context to COELHO Cloud (the shared checkpointer, MinIO, the
-Settings chat endpoint) and runs the graph in the worker. What a run does lives in `ai.dd.graphs.pipeline.planner.service`; `ai/` never imports `infra`, so
+Settings chat endpoint) and runs the graph in the worker. What a run does lives in `domains.dd.pipeline.runtime.planner.service`; `ai/` never imports `infra`, so
 everything it needs from COELHO Cloud is handed to it here."""
 from __future__ import annotations
 import ai, domains, infra
@@ -13,18 +13,18 @@ logger = logging.getLogger(__name__)
 
 def planner_graph():
     """The planner graph over the shared checkpointer. Reading a thread's state needs nothing else: the run's dependencies are the `context` of a run."""
-    return ai.dd.graphs.pipeline.planner.graph.build_planner_graph(checkpointer = infra.postgres.service.get_checkpointer())
+    return ai.dd.graphs.pipeline.planner.graphs.planner_graph(checkpointer = infra.postgres.service.get_checkpointer())
 
 
 def node_order() -> tuple[str, ...]:
     """The planner's stages in the order they run (what `/info` reports and the web's stage board is checked against)."""
-    return ai.dd.graphs.pipeline.planner.graph.NODE_ORDER
+    return ai.dd.graphs.pipeline.planner.params.NODE_ORDER
 
 
 def build_context() -> Any:
     """A run's context: object storage and its agents (built on first use, from the endpoint the Settings page currently holds)."""
     domains.settings.chat.service.refresh_endpoint(force = True)
-    return ai.dd.graphs.pipeline.planner.context.PlannerContext(blobs = infra.minio.service.get_storage())
+    return ai.dd.graphs.pipeline.planner.entities.PlannerContext(blobs = infra.minio.service.get_storage())
 
 
 def run_config(thread_id: str) -> dict:
@@ -33,7 +33,7 @@ def run_config(thread_id: str) -> dict:
 
 def binding() -> Any:
     """What the planner run is handed: its graph, object storage, a context per run and the thread's config."""
-    return ai.dd.graphs.pipeline.runner.entities.Binding(
+    return domains.dd.pipeline.runtime.runner.entities.Binding(
         graph = planner_graph(), blobs = infra.minio.service.get_storage(), context = build_context, config = run_config,
     )
 
@@ -60,9 +60,9 @@ def release_planner_lock(slug: str, thread_id: str) -> None:
 
 async def run_planner_async(thread_id: str, slug: str, mode: str = "llm") -> dict:
     """Fresh planner kickoff in the worker."""
-    return await ai.dd.graphs.pipeline.planner.service.run(binding(), thread_id, slug, mode)
+    return await domains.dd.pipeline.runtime.planner.service.run(binding(), thread_id, slug, mode)
 
 
 async def resume_planner_async(thread_id: str) -> dict:
     """Resume the planner from its last checkpoint."""
-    return await ai.dd.graphs.pipeline.planner.service.resume(binding(), thread_id)
+    return await domains.dd.pipeline.runtime.planner.service.resume(binding(), thread_id)

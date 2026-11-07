@@ -70,7 +70,7 @@ class IngestionPageResult(TypedDict, total = False):
 
 @dataclass(frozen = True, slots = True)
 class IngestionDependencies:
-    """What the nodes of one run need: where pages and artifacts live, the agents, and where progress goes."""
+    """What the nodes of one run need, handed to them as the graph's `context`: where pages and artifacts live, the agents, and where progress goes."""
 
     read_page: PageReader
     write_artifact: ArtifactWriter

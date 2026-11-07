@@ -7,6 +7,8 @@ KEY_TERMS_MIN = 3
 KEY_TERMS_MAX = 8
 KEY_TERM_CHARS_MIN = 2
 KEY_TERM_CHARS_MAX = 80
+# The role a page gets when the distiller's answer names none (a page of API or option listings is the commonest kind).
+DEFAULT_ROLE = "reference"
 
 # Chapter proposals (chapter_architect, section_analyst).
 PROPOSALS_MIN = 4
@@ -15,9 +17,26 @@ SECTION_PROPOSALS_MAX = 12
 TITLE_MIN_WORDS = 1
 TITLE_MAX_WORDS = 8
 GENERIC_TITLES = frozenset({
-    "introduction", "intro", "overview", "conclusion", "background", "about", "summary",
-    "references", "reference", "foundations", "foundation", "miscellaneous", "misc",
-    "other", "others", "general", "appendix", "index", "preface", "epilogue",
+    "introduction", 
+    "intro", 
+    "overview", 
+    "conclusion", 
+    "background", 
+    "about", 
+    "summary",
+    "references", 
+    "reference", 
+    "foundations", 
+    "foundation", 
+    "miscellaneous", 
+    "misc",
+    "other", 
+    "others", 
+    "general", 
+    "appendix", 
+    "index", 
+    "preface", 
+    "epilogue",
 })
 DESCRIPTION_CHARS_MIN = 20
 DESCRIPTION_CHARS_MAX = 400
@@ -26,6 +45,3 @@ CONCEPTS_MIN_ACCEPT = 2
 CONCEPTS_MAX = 15
 CONCEPT_CHARS_MIN = 2
 CONCEPT_CHARS_MAX = 80
-
-# Where the agents' skills live, relative to `ai/dd/skills/`.
-SKILL_STAGE = "pipeline/planner"

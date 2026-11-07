@@ -12,8 +12,7 @@ The documentation's chapters are proposed by a small team of deep agents:
 from __future__ import annotations
 import domains
 from . import domain, errors, params, versions
-from .. import shared
-from ..... import agents, backends, graphs, tools
+from ..... import agents, backends, graphs, skills, tools
 
 import json
 import logging
@@ -25,8 +24,7 @@ from langgraph.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
-Context = graphs.pipeline.planner.context.PlannerContext
-STEP = "chapter_propose"
+Context = graphs.pipeline.planner.entities.PlannerContext
 
 
 def section_target(n_pages: int) -> int:
@@ -34,7 +32,7 @@ def section_target(n_pages: int) -> int:
     return max(1, min(agents.pipeline.planner.params.SECTION_PROPOSALS_MAX, round(n_pages / params.PROPOSALS_DIVISOR)))
 
 
-async def prepare(state: graphs.pipeline.planner.chapter_propose.state.ProposeState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.planner.chapter_propose.states.ProposeState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
@@ -55,7 +53,7 @@ async def prepare(state: graphs.pipeline.planner.chapter_propose.state.ProposeSt
     if await blobs.exists(vkey) and await blobs.exists(lkey):
         try:
             cached = json.loads(await blobs.read_text(vkey))
-            wall_ms = shared.service.elapsed_ms(started)
+            wall_ms = graphs.service.elapsed_ms(started)
             stats = {
                 "n_files": n,
                 "n_proposals": len(cached.get("proposals") or []),
@@ -64,16 +62,16 @@ async def prepare(state: graphs.pipeline.planner.chapter_propose.state.ProposeSt
                 "manifest_hash": manifest,
                 "titles": [p.get("title") for p in cached.get("proposals") or []],
             }
-            shared.service.emit(STEP, "done", cache_hit = True, n_proposals = stats["n_proposals"], wall_ms = wall_ms)
+            graphs.service.emit(params.STEP, "done", cache_hit = True, n_proposals = stats["n_proposals"], wall_ms = wall_ms)
             return {"finished": True, "chapter_proposals_ref": lkey, "propose_stats": stats}
         except Exception:
             pass
 
-    shared.service.emit(STEP, "start", n_files = n, distill_available = bool(distill_ref))
+    graphs.service.emit(params.STEP, "start", n_files = n, distill_available = bool(distill_ref))
     # Only reached past the cache check, so a fully cached re-plan never pays the wait.
-    await shared.service.settle(STEP, params.SETTLE_DELAY_S)
+    await graphs.service.settle(params.STEP, params.SETTLE_DELAY_S)
 
-    bodies_all = await shared.service.read_all(blobs, relevant_files)
+    bodies_all = await domains.dd.pipeline.storage.service.read_all(blobs, relevant_files)
     bodies = {k: (b or "")[:params.BODY_CHARS_PER_DOC * 2] for k, b in zip(relevant_files, bodies_all)}
     seeds = domain.extract_structural_seeds(source_keys = relevant_files, bodies_by_key = bodies)
 
@@ -90,7 +88,7 @@ async def prepare(state: graphs.pipeline.planner.chapter_propose.state.ProposeSt
     target = domain.target_chapters_for_n_docs(n)
     shards = domain.shard_sections(entries, relevant_files)
     titles = {e["key"]: e.get("title") or "" for e in entries if e.get("key")}
-    context.scratch[STEP] = {
+    context.scratch[params.STEP] = {
         "slug": slug,
         "distillates": distillates,
         "bodies": bodies,
@@ -99,8 +97,8 @@ async def prepare(state: graphs.pipeline.planner.chapter_propose.state.ProposeSt
         "titles": titles,
         "doc_texts": [domain.doc_match_text(k, distillates.get(k), bodies.get(k, "")) for k in relevant_files],
     }
-    shared.service.emit(
-        STEP, "sampling",
+    graphs.service.emit(
+        params.STEP, "sampling",
         n_samples = max(1, len(shards)), n_sections = len(shards), target_chapters = target, n_docs = n,
         n_heading_seeds = len(seeds.get("headings") or []), n_namespace_seeds = len(seeds.get("namespaces") or []),
     )
@@ -116,10 +114,10 @@ async def prepare(state: graphs.pipeline.planner.chapter_propose.state.ProposeSt
     }
 
 
-async def analyze_section(state: graphs.pipeline.planner.chapter_propose.state.SectionInput, runtime: Runtime[Context]) -> dict:
+async def analyze_section(state: graphs.pipeline.planner.chapter_propose.entities.SectionInput, runtime: Runtime[Context]) -> dict:
     """One section analyst: the chapters its section supports, from the page summaries. A failed analyst costs its section's sketch only."""
     context = runtime.context
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     keys = state["keys"]
     pages = []
     for key in keys:
@@ -144,6 +142,7 @@ async def analyze_section(state: graphs.pipeline.planner.chapter_propose.state.S
             request,
             attempts = params.ANALYST_ATTEMPTS,
             wait_base_s = params.ANALYST_RETRY_WAIT_S,
+            files = skills.service.files_for("section_analyst"),
         )
     except Exception as error:
         logger.warning(f"[chapter_propose] section {state['section']!r}: analyst failed ({type(error).__name__}: {str(error)[:160]})")
@@ -166,11 +165,11 @@ def _feedback(outline: dict, labels: list[str], target: int) -> str:
     return " ".join(lines)
 
 
-async def architect(state: graphs.pipeline.planner.chapter_propose.state.ProposeState, runtime: Runtime[Context]) -> dict:
+async def architect(state: graphs.pipeline.planner.chapter_propose.states.ProposeState, runtime: Runtime[Context]) -> dict:
     """One architect attempt: the corpus as read-only files, the sketches as a working file, the score tool bound to this run's pages."""
     context = runtime.context
     blobs = context.blobs
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     slug = data["slug"]
     relevant_files = state.get("relevant_files") or state.get("raw_files") or []
     target = state["target"]
@@ -197,7 +196,7 @@ async def architect(state: graphs.pipeline.planner.chapter_propose.state.Propose
     score = lambda outline: domain.score_outline(outline, data["doc_texts"], target)
     role = context.agents.chapter_architect(
         backend = backend,
-        tools = [tools.pipeline.planner.outline.service.score_outline_tool(score, labels, target)],
+        tools = [tools.pipeline.planner.outline.tool.score_outline_tool(score, labels, target)],
     )
 
     seeds = data["seeds"]
@@ -233,7 +232,7 @@ async def architect(state: graphs.pipeline.planner.chapter_propose.state.Propose
             request,
             attempts = params.ARCHITECT_ATTEMPTS,
             wait_base_s = params.ARCHITECT_RETRY_WAIT_S,
-            files = files,
+            files = {**skills.service.files_for("chapter_architect"), **skills.service.files_for("plan_critic"), **files},
         )
     except Exception as error:
         message = f"attempt {attempt}: {type(error).__name__}: {str(error)[:160]}"
@@ -248,10 +247,10 @@ async def architect(state: graphs.pipeline.planner.chapter_propose.state.Propose
     return {"attempt": attempt, "outlines": [{"attempt": attempt, "proposals": proposals, "scored": scored}]}
 
 
-async def finalize(state: graphs.pipeline.planner.chapter_propose.state.ProposeState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.planner.chapter_propose.states.ProposeState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
-    data = context.scratch[STEP]
+    data = context.scratch[params.STEP]
     slug = data["slug"]
     relevant_files = state.get("relevant_files") or state.get("raw_files") or []
     n = len(relevant_files)
@@ -293,7 +292,7 @@ async def finalize(state: graphs.pipeline.planner.chapter_propose.state.ProposeS
             "proposals":        proposals,
         },
     )
-    wall_ms = shared.service.elapsed_ms(state.get("started") or time.monotonic())
+    wall_ms = graphs.service.elapsed_ms(state.get("started") or time.monotonic())
     titles = [p["title"] for p in proposals]
     stats = {
         "n_files": n,
@@ -316,7 +315,7 @@ async def finalize(state: graphs.pipeline.planner.chapter_propose.state.ProposeS
         "titles": titles,
         "fallback_used": fallback_used,
     }
-    shared.service.emit(STEP, "done", cache_hit = False, n_proposals = len(proposals), wall_ms = wall_ms, titles = titles)
+    graphs.service.emit(params.STEP, "done", cache_hit = False, n_proposals = len(proposals), wall_ms = wall_ms, titles = titles)
 
     # DD_PLANNER_ABORT_ON_DEGRADE: a fallback on a large corpus is a near-certain predictor of a throwaway plan (generic titles, a
     # lopsided catch-all bucket). The artifact is persisted above, so /resume still works once the pool recovers.

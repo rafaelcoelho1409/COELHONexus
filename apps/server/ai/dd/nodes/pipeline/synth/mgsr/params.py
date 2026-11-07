@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 
+# The name this stage reports its progress events, cached items and scratch data under.
+STEP = "mgsr_replan"
+
+
 # A chapter at or above this pass rate is not reviewed (matches the checklist's own pass threshold).
 PASS_RATE_TRIVIAL = 0.80
 # The reviewer's `halt` ("no rewrite would help") is honored only at or above this confidence; below it the chapter is rewritten whole.

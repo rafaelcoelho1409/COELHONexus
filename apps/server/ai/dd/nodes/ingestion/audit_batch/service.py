@@ -36,7 +36,7 @@ class CancellationCheck(Protocol):
 
 
 async def audit_pages(
-    state: graphs.ingestion.state.IngestionState,
+    state: graphs.ingestion.states.IngestionState,
     read_page: PageReader,
     artifact_exists: ArtifactExists,
     read_artifact: ArtifactReader,
@@ -52,7 +52,7 @@ async def audit_pages(
         raise ValueError("the ingestion graph state has no framework or run identity")
     semaphore = asyncio.Semaphore(params.PAGE_CONCURRENCY)
 
-    async def audit_page(page: graphs.ingestion.state.PageReference) -> dict[str, Any]:
+    async def audit_page(page: graphs.ingestion.entities.PageReference) -> dict[str, Any]:
         if progress is not None:
             await progress.raise_if_cancelled()
         markdown = await read_page(page["source_key"])
@@ -130,7 +130,7 @@ async def audit_pages(
         await page_done()
         return record
 
-    async def audit_one(page: graphs.ingestion.state.PageReference) -> dict[str, Any]:
+    async def audit_one(page: graphs.ingestion.entities.PageReference) -> dict[str, Any]:
         async with semaphore:
             return await audit_page(page)
 

@@ -15,7 +15,7 @@ async def prune_old_threads(
     """Delete checkpoint history for threads with no work left to resume.
 
     LangGraph's own checkpoints/checkpoint_writes/checkpoint_blobs tables
-    (shared by planner + synth, see synth/graph.py) grow one row per node
+    (shared by planner + synth, see synth/graphs.py) grow one row per node
     per run forever — nothing before this pruned them (confirmed
     2026-09-26: zero DELETE/adelete_thread call sites against these
     tables outside `wipe_planner`'s manual per-slug endpoint, which also

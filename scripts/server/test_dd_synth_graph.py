@@ -12,9 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
 import domains
 import ai
-from ai.dd.agents import entities
 from ai.dd.agents.pipeline.synth import schemas as answers
-from ai.dd.graphs.pipeline.synth import context as synth_context
+from ai.dd.graphs.pipeline.synth import entities as synth_entities
 
 keys = domains.dd.pipeline.storage.keys
 SLUG = "fw"
@@ -91,12 +90,8 @@ class Fake:
         return {"structured_response": value}
 
 
-def role(fake: Fake) -> entities.Role:
-    return entities.Role(agent = fake, files = {})
-
-
-def context(blobs: FakeBlobs, **fakes: Fake) -> synth_context.SynthContext:
-    return synth_context.SynthContext(blobs = blobs, agents = synth_context.SynthAgents(**{name: role(fake) for name, fake in fakes.items()}))
+def context(blobs: FakeBlobs, **fakes: Fake) -> synth_entities.SynthContext:
+    return synth_entities.SynthContext(blobs = blobs, agents = synth_entities.SynthAgents(**fakes))
 
 
 # ---- a small chapter: three sources, two with code ---------------------------------------------------------------------------------------
@@ -157,14 +152,14 @@ def outliner(payload):
 
 
 async def test_outline() -> None:
-    from ai.dd.graphs.pipeline.synth.outline import graph as outline_graph
+    from ai.dd.graphs.pipeline.synth.outline.graphs import outline_graph
 
     blobs = FakeBlobs()
     seed(blobs)
     fake = Fake(outliner)
     ctx = context(blobs, chapter_outliner = fake)
     start = {"framework_slug": SLUG, "chapter_id": CHAPTER, "thread_id": "t"}
-    result = await outline_graph.build().ainvoke(start, context = ctx)
+    result = await outline_graph().ainvoke(start, context = ctx)
     stats = result["outline_stats"]
     check("outline: one outliner run for a clean outline", fake.calls, 1)
     check("outline: sections", stats["n_sections"], 2)
@@ -175,7 +170,7 @@ async def test_outline() -> None:
     check("outline: the request carries the source index", len(payload["sources"]), 3)
     truthy("outline: the index names the pages in /sources/", payload["sources"][0]["path"].startswith("/sources/1-"))
 
-    again = await outline_graph.build().ainvoke(start, context = context(blobs, chapter_outliner = Fake(outliner)))
+    again = await outline_graph().ainvoke(start, context = context(blobs, chapter_outliner = Fake(outliner)))
     check("outline: a second run is a cache hit", again["outline_stats"]["cache_hit"], True)
 
     # an outline with a defect (a banned content-type heading) → one more run with the defect as its brief
@@ -190,7 +185,7 @@ async def test_outline() -> None:
         return outliner(payload)
 
     fake2 = Fake(flawed_then_fixed)
-    result2 = await outline_graph.build().ainvoke(start, context = context(blobs2, chapter_outliner = fake2))
+    result2 = await outline_graph().ainvoke(start, context = context(blobs2, chapter_outliner = fake2))
     check("outline: a flawed outline is asked again with its issues", fake2.calls, 2)
     check("outline: the second run is given the first outline", "previous_outline" in fake2.payloads[1], True)
     check("outline: the fixed outline ships clean", result2["outline_stats"]["n_violations"], 0)
@@ -199,20 +194,20 @@ async def test_outline() -> None:
     blobs3 = FakeBlobs()
     seed(blobs3)
     dead = Fake(lambda payload: RuntimeError("no arm available"))
-    result3 = await outline_graph.build().ainvoke(start, context = context(blobs3, chapter_outliner = dead))
+    result3 = await outline_graph().ainvoke(start, context = context(blobs3, chapter_outliner = dead))
     truthy("outline: a dead outliner falls back to a heuristic outline", result3["outline_stats"]["n_sections"] >= 2)
     check("outline: the fallback is flagged", "heuristic_fallback" in result3["outline_stats"]["violations"], True)
     check("outline: the outliner was tried twice", dead.calls, 2)
 
     # missing plan
-    missing = await outline_graph.build().ainvoke(start, context = context(FakeBlobs(), chapter_outliner = Fake(outliner)))
+    missing = await outline_graph().ainvoke(start, context = context(FakeBlobs(), chapter_outliner = Fake(outliner)))
     check("outline: no plan fails the run", missing.get("status"), "failed")
 
 
 async def run_outline(blobs: FakeBlobs) -> None:
-    from ai.dd.graphs.pipeline.synth.outline import graph as outline_graph
+    from ai.dd.graphs.pipeline.synth.outline.graphs import outline_graph
 
-    await outline_graph.build().ainvoke(
+    await outline_graph().ainvoke(
         {"framework_slug": SLUG, "chapter_id": CHAPTER, "thread_id": "t"}, context = context(blobs, chapter_outliner = Fake(outliner)),
     )
 
@@ -233,16 +228,16 @@ def router(payload):
 
 
 async def test_digest() -> None:
-    from ai.dd.graphs.pipeline.synth.digest import graph as digest_graph
-    from ai.dd.nodes.pipeline.synth import shared
+    from ai.dd.graphs.pipeline.synth.digest.graphs import digest_graph
+    from ai.dd.nodes.pipeline.synth.digest import params as digest_params
 
-    shared.params.WAVE_PAUSE_S = 0.0
+    digest_params.WAVE_PAUSE_S = 0.0
     start = {"framework_slug": SLUG, "chapter_id": CHAPTER, "thread_id": "t"}
     blobs = FakeBlobs()
     seed(blobs)
     await run_outline(blobs)
     fake = Fake(router)
-    result = await digest_graph.build().ainvoke(start, context = context(blobs, source_router = fake), config = {"max_concurrency": 4})
+    result = await digest_graph().ainvoke(start, context = context(blobs, source_router = fake), config = {"max_concurrency": 4})
     stats = result["digest_stats"]
     check("digest: one router run per source", fake.calls, 3)
     check("digest: every source is in the digest", stats["n_sources"], 3)
@@ -253,7 +248,7 @@ async def test_digest() -> None:
     check("digest: the chapter digest is indexed per section", sorted(saved["per_section"]), ["s1", "s2"])
     truthy("digest: contributions carry their source key", all(c["source_key"] for cs in saved["per_section"].values() for c in cs))
 
-    cached = await digest_graph.build().ainvoke(start, context = context(blobs, source_router = Fake(router)))
+    cached = await digest_graph().ainvoke(start, context = context(blobs, source_router = Fake(router)))
     check("digest: a second run is a cache hit", cached["digest_stats"]["cache_hit"], True)
 
     # a run that stopped after some chunks is resumed from the stored per-chunk results
@@ -262,7 +257,7 @@ async def test_digest() -> None:
     for k in [k for k in blobs.objects if k.endswith("digest-latest.json")]:
         del blobs.objects[k]
     resumed = Fake(router)
-    await digest_graph.build().ainvoke(start, context = context(blobs, source_router = resumed))
+    await digest_graph().ainvoke(start, context = context(blobs, source_router = resumed))
     check("digest: a resumed chapter routes nothing again", resumed.calls, 0)
 
     # one source fails the first wave and succeeds on the second
@@ -279,7 +274,7 @@ async def test_digest() -> None:
         return router(payload)
 
     flaky_fake = Fake(flaky)
-    result2 = await digest_graph.build().ainvoke(start, context = context(blobs2, source_router = flaky_fake))
+    result2 = await digest_graph().ainvoke(start, context = context(blobs2, source_router = flaky_fake))
     check("digest: a failed source gets a second wave", flaky_fake.calls, 4 + 0)
     check("digest: the second wave recovers it", result2["digest_stats"]["n_pydantic_fail"], 0)
 
@@ -288,12 +283,12 @@ async def test_digest() -> None:
     seed(blobs3)
     await run_outline(blobs3)
     dead = Fake(lambda payload: RuntimeError("no arm") if "concepts" in payload["source_key"] else router(payload))
-    result3 = await digest_graph.build().ainvoke(start, context = context(blobs3, source_router = dead))
+    result3 = await digest_graph().ainvoke(start, context = context(blobs3, source_router = dead))
     check("digest: a source that never routes is kept as a stub", result3["digest_stats"]["n_sources"], 3)
     check("digest: the failure is counted", result3["digest_stats"]["n_pydantic_fail"], 1)
 
     # no outline → the stage fails with a reason
-    missing = await digest_graph.build().ainvoke(start, context = context(FakeBlobs(), source_router = Fake(router)))
+    missing = await digest_graph().ainvoke(start, context = context(FakeBlobs(), source_router = Fake(router)))
     check("digest: no outline fails the run", missing.get("status"), "failed")
 
 
@@ -393,9 +388,9 @@ async def run_chapter(blobs: FakeBlobs, fakes: dict[str, Fake], thread: str = "t
 
     from langgraph.checkpoint.memory import InMemorySaver
 
-    from ai.dd.graphs.pipeline.synth.graph import build_synth_graph
+    from ai.dd.graphs.pipeline.synth.graphs import synth_graph
 
-    graph = build_synth_graph(InMemorySaver())
+    graph = synth_graph(InMemorySaver())
     config = {"configurable": {"thread_id": thread}, "recursion_limit": 100}
     events: list[dict] = []
     async for _ns, mode, chunk in graph.astream(
@@ -407,7 +402,8 @@ async def run_chapter(blobs: FakeBlobs, fakes: dict[str, Fake], thread: str = "t
 
 
 async def test_chapter() -> None:
-    from ai.dd.graphs.pipeline.synth.graph import NODE_ORDER, NODE_TO_FIELD
+    from ai.dd.graphs.pipeline.synth.keys import NODE_TO_FIELD
+    from ai.dd.graphs.pipeline.synth.params import NODE_ORDER
 
     blobs = FakeBlobs()
     seed(blobs)
@@ -736,7 +732,7 @@ async def test_resume_and_chunks() -> None:
 
 
 async def test_harmonize() -> None:
-    from ai.dd.nodes.pipeline.synth.book_harmonize import node as harmonize
+    from ai.dd.nodes.pipeline.synth.book_harmonize import service as harmonize
     from ai.dd.nodes.pipeline.synth.book_harmonize import params as harmonize_params
 
     prose_a = "# Alpha A\n\nThe client sets the timeout to thirty seconds by default for every request it sends.\n\nSecond paragraph about retries.\n\n```python\nclient = AlphaClient()\n```\n"

@@ -2,6 +2,12 @@
 from __future__ import annotations
 
 
+# The name this stage reports its progress events, cached items and scratch data under.
+STEP = "digest_construct"
+# Pause between a failed first wave of calls and its retry: the arms that just stalled are ejected for tens of seconds to minutes.
+WAVE_PAUSE_S = 45.0
+
+
 MAX_KEY_FACTS_PER_CONTRIB = 5
 MIN_KEY_FACTS_PER_CONTRIB = 1
 MAX_CONTRIBS_PER_SOURCE = 20

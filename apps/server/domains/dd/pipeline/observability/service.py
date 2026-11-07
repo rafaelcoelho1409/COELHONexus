@@ -3,6 +3,10 @@ from __future__ import annotations
 import domains, infra
 
 import contextlib
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 @contextlib.contextmanager
@@ -107,6 +111,39 @@ def record_planner_run(
         pass
 
 
+async def record_planner_terminal(graph, config: dict, *, fallback_slug: str, fallback_mode: str, status: str, duration_s: float | None) -> None:
+    """Record how a planner run ended, from the thread's final state (best-effort: logged, never raised)."""
+    try:
+        values = dict((await graph.aget_state(config)).values or {})
+        plan_write_stats = values.get("plan_write_stats") or {}
+        select_stats = values.get("select_stats") or {}
+        chapter_count = plan_write_stats.get("n_chapters") or select_stats.get("n_chapters_out")
+        record_planner_run(
+            framework = str(values.get("framework_slug") or fallback_slug or "unknown"),
+            mode = str(values.get("planner_mode") or fallback_mode or "unknown"),
+            outcome = status,
+            duration_s = duration_s,
+            chapter_count = int(chapter_count) if chapter_count is not None else None,
+        )
+    except Exception as error:
+        logger.warning(f"[planner] terminal metric emit failed: {type(error).__name__}: {error}")
+
+
+async def planner_langfuse_output(graph, config: dict, *, fallback_slug: str, fallback_mode: str, status: str, error: str | None) -> dict:
+    """The summary a planner run hands to its Langfuse trace: derived from the thread's final state, or the bare outcome when it cannot be read."""
+    output = {"status": status, "framework_slug": fallback_slug or "unknown", "mode": fallback_mode or "unknown"}
+    if error:
+        output["error"] = error
+    try:
+        values = dict((await graph.aget_state(config)).values or {})
+        output = domains.dd.pipeline.runtime.dispatch.domain.derive_langfuse_output(
+            values, fallback_slug = fallback_slug, fallback_mode = fallback_mode, status = status, error = error,
+        )
+    except Exception as exc:
+        logger.warning(f"[planner] langfuse output summary failed: {type(exc).__name__}: {exc}")
+    return output
+
+
 # ---- synth ---------------------------------------------------------------------------------------------------------------------------------
 
 def _synth_llm_context(state: dict, node_name: str):
@@ -152,6 +189,36 @@ def record_chapter_outcome(
             inst.record(iterations, attributes = attrs)
     except Exception:
         pass
+
+
+async def record_chapter_terminal(graph, config: dict, status: str) -> None:
+    """Chapter outcome and audit metrics of a finished chapter (best-effort: logged, never raised)."""
+    if status != "done":
+        return
+    try:
+        state = dict((await graph.aget_state(config)).values or {})
+        slug = str(state.get("framework_slug") or "")
+        chapter_id = str(state.get("chapter_id") or "")
+        chapter_num = domains.dd.pipeline.runtime.dispatch.domain.chapter_number_from_id(chapter_id)
+        chapter_stats = state.get("chapter_stats") or {}
+        if not slug or not chapter_id or chapter_num <= 0 or not chapter_stats:
+            return
+        wall_ms = int(chapter_stats.get("wall_ms", 0) or 0)
+        refine_iter = int(state.get("refine_iter", 0) or 0)
+        halt_reason = str((state.get("mgsr_stats") or {}).get("halt_reason") or "")
+        audit_passed = bool(chapter_stats.get("audit_passed", False))
+        record_chapter_outcome(
+            outcome = "accept" if halt_reason == "chapter_passed" else "debt_below",
+            framework = slug, chapter_number = chapter_num, duration_s = max(wall_ms / 1000.0, 0.0), iterations = max(refine_iter, 0),
+        )
+        n_code_refs = int(chapter_stats.get("n_code_refs", 0) or 0)
+        n_missing = int(chapter_stats.get("n_missing", 0) or 0)
+        missing_ratio = float(n_missing) / float(n_code_refs) if n_code_refs > 0 else (1.0 if not audit_passed else 0.0)
+        record_audit_missing(
+            framework = slug, chapter_number = chapter_num, iteration = max(refine_iter, 0), missing_ratio = max(0.0, min(missing_ratio, 1.0)),
+        )
+    except Exception as error:
+        logger.warning(f"[synth] terminal metric emit failed: {type(error).__name__}: {error}")
 
 
 def record_bucket_split_overflow(*, framework: str, sections_dropped: int) -> None:

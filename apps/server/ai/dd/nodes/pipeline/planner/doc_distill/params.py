@@ -3,6 +3,10 @@ from __future__ import annotations
 from ..... import agents
 
 
+# The name this stage reports its progress events, cached items and scratch data under.
+STEP = "doc_distill"
+
+
 # The summary and term limits are part of the distiller's contract (`agents.pipeline.planner.params`); the node reads the same numbers.
 SUMMARY_WORDS_MIN = agents.pipeline.planner.params.SUMMARY_WORDS_MIN
 SUMMARY_WORDS_MAX = agents.pipeline.planner.params.SUMMARY_WORDS_MAX

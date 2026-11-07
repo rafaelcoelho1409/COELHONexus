@@ -1,6 +1,6 @@
 """Split tools for the chapter curator."""
 from __future__ import annotations
 
-from . import service
+from . import schemas, tool
 
-__all__ = ["service"]
+__all__ = ["schemas", "tool"]

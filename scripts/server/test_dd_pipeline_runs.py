@@ -25,10 +25,10 @@ import domains
 os.environ.setdefault("DD_STUDY_SEM", "1")
 
 keys = domains.dd.pipeline.storage.keys
-runner = ai.dd.graphs.pipeline.runner
-planner_run = ai.dd.graphs.pipeline.planner.service
-synth_run = ai.dd.graphs.pipeline.synth.service
-study = ai.dd.graphs.pipeline.synth.study
+runner = domains.dd.pipeline.runtime.runner
+planner_run = domains.dd.pipeline.runtime.planner.service
+synth_run = domains.dd.pipeline.runtime.synth.service
+study = domains.dd.pipeline.runtime.study.service
 harmonize = ai.dd.nodes.pipeline.synth.book_harmonize
 SLUG = "fw"
 
@@ -326,8 +326,8 @@ async def test_study() -> None:
         seen_harmonize.append({"slug": slug, "thread": study_thread_id, "chapter_ids": chapter_ids, "blobs": context.blobs})
         return {"elapsed_ms": 4000, "n_chapters": 2}
 
-    original_pass = harmonize.node.run_pass
-    harmonize.node.run_pass = fake_pass
+    original_pass = harmonize.service.run_pass
+    harmonize.service.run_pass = fake_pass
     try:
         # one chapter already rendered, one that fails its audit, one that renders
         clear()
@@ -389,7 +389,7 @@ async def test_study() -> None:
         async def crashing_pass(context, **_):
             raise RuntimeError("harmonize down")
 
-        harmonize.node.run_pass = crashing_pass
+        harmonize.service.run_pass = crashing_pass
         clear()
         behaviour.clear()
         behaviour["default"] = "ok"
@@ -398,7 +398,7 @@ async def test_study() -> None:
         result5 = await study.run(binding(blobs5), STUDY, SLUG, CHAPTERS, "quality")
         check("study: a harmonize crash leaves the study done", (result5["final_status"], result5["book_harmonize"]), ("done", {"skipped": "crash: RuntimeError"}))
     finally:
-        harmonize.node.run_pass = original_pass
+        harmonize.service.run_pass = original_pass
         behaviour.clear()
         behaviour["default"] = "ok"
 
@@ -412,7 +412,7 @@ def seed_readmes(blobs: FakeBlobs, chapter_ids: list[str], audit_failed: tuple[s
 
 
 async def test_harmonize_pass() -> None:
-    ctx_for = lambda blobs: ai.dd.graphs.pipeline.synth.context.SynthContext(blobs = blobs)  # noqa: E731
+    ctx_for = lambda blobs: ai.dd.graphs.pipeline.synth.entities.SynthContext(blobs = blobs)  # noqa: E731
     ran: list[list[str]] = []
 
     async def fake_harmonize(context, *, framework_slug, framework_name, chapters):
@@ -425,14 +425,14 @@ async def test_harmonize_pass() -> None:
             ],
         }
 
-    original = harmonize.node.harmonize_book
-    harmonize.node.harmonize_book = fake_harmonize
+    original = harmonize.service.harmonize_book
+    harmonize.service.harmonize_book = fake_harmonize
     try:
         # fewer than two rendered chapters
         clear()
         blobs = FakeBlobs()
         seed_readmes(blobs, ["ch-01-a", "ch-02-b"], audit_failed = ("ch-02-b",))
-        out = await harmonize.node.run_pass(ctx_for(blobs), slug = SLUG, study_thread_id = STUDY, chapter_ids = ["ch-01-a", "ch-02-b", "ch-03-c"])
+        out = await harmonize.service.run_pass(ctx_for(blobs), slug = SLUG, study_thread_id = STUDY, chapter_ids = ["ch-01-a", "ch-02-b", "ch-03-c"])
         check("pass: fewer than two usable chapters skips it", (out["skipped"], out["audit_failed_chapters"], out["missing_chapters"]), ("fewer_than_2_rendered_chapters", ["ch-02-b"], ["ch-03-c"]))
         check("pass: and says so on the study's channel", kinds(STUDY, "study"), ["book_harmonize_skipped"])
 
@@ -440,7 +440,7 @@ async def test_harmonize_pass() -> None:
         clear()
         blobs2 = FakeBlobs()
         seed_readmes(blobs2, ["ch-01-a", "ch-02-b"])
-        out2 = await harmonize.node.run_pass(ctx_for(blobs2), slug = SLUG, study_thread_id = STUDY, chapter_ids = ["ch-01-a", "ch-02-b"])
+        out2 = await harmonize.service.run_pass(ctx_for(blobs2), slug = SLUG, study_thread_id = STUDY, chapter_ids = ["ch-01-a", "ch-02-b"])
         check("pass: it runs once over both chapters", ran[-1], ["ch-01-a", "ch-02-b"])
         check("pass: the patched README is overwritten, fences unwrapped", blobs2.objects[keys.chapter_readme_key(SLUG, "ch-02-b")], "# ch-02-b\n\nThe timeout is thirty seconds.\n")
         check("pass: the unpatched README is left alone", blobs2.objects[keys.chapter_readme_key(SLUG, "ch-01-a")], "# ch-01-a\n\nThe timeout is ten seconds.\n")
@@ -454,7 +454,7 @@ async def test_harmonize_pass() -> None:
         before = len(ran)
         # the first pass changed ch-02-b, so its hash is new: seed the original text back to hit the first run's cache entry
         blobs2.objects[keys.chapter_readme_key(SLUG, "ch-02-b")] = "# ch-02-b\n\nThe timeout is ten seconds.\n"
-        out3 = await harmonize.node.run_pass(ctx_for(blobs2), slug = SLUG, study_thread_id = STUDY, chapter_ids = ["ch-01-a", "ch-02-b"])
+        out3 = await harmonize.service.run_pass(ctx_for(blobs2), slug = SLUG, study_thread_id = STUDY, chapter_ids = ["ch-01-a", "ch-02-b"])
         check("pass: identical inputs are a cache hit, nothing runs", (out3["cache_hit"], len(ran) - before), (True, 0))
         check("pass: the hit is announced as done", (kinds(STUDY, "study"), fields_of(STUDY, "book_harmonize_done")["cache_hit"]), (["book_harmonize_done"], True))
 
@@ -462,13 +462,13 @@ async def test_harmonize_pass() -> None:
         async def crash(context, **_):
             raise RuntimeError("agent down")
 
-        harmonize.node.harmonize_book = crash
+        harmonize.service.harmonize_book = crash
         blobs4 = FakeBlobs()
         seed_readmes(blobs4, ["ch-01-a", "ch-02-b"])
-        out4 = await harmonize.node.run_pass(ctx_for(blobs4), slug = SLUG, study_thread_id = STUDY, chapter_ids = ["ch-01-a", "ch-02-b"])
+        out4 = await harmonize.service.run_pass(ctx_for(blobs4), slug = SLUG, study_thread_id = STUDY, chapter_ids = ["ch-01-a", "ch-02-b"])
         check("pass: a crash is reported with its cause", (out4["skipped"], out4["error"]), ("crash: RuntimeError", "agent down"))
     finally:
-        harmonize.node.harmonize_book = original
+        harmonize.service.harmonize_book = original
 
 
 async def main() -> None:

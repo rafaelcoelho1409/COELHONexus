@@ -1,7 +1,5 @@
 """sawc_derive — MinIO key builders."""
 from __future__ import annotations
-from . import params
-
 
 
 def sawc_latest_key(slug: str, chapter_id: str) -> str:

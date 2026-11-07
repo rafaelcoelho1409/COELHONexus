@@ -1,7 +1,7 @@
 """Read-only LangGraph node for one evidence-grounded page audit."""
 from __future__ import annotations
 import domains
-from . import detectors, domain, params
+from . import domain, params
 from .... import agents
 
 from typing import Any, Protocol
@@ -38,7 +38,7 @@ async def audit_page(
                 page["url"],
                 page["title"],
                 markdown,
-                detectors.candidates(markdown),
+                domain.candidates(markdown),
             ),
         }],
     }

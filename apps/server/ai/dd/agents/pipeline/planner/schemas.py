@@ -30,7 +30,6 @@ class PageRelevance(BaseModel):
 # TOC pages that mostly point at other pages) and `cross_cutting` (platform support, debugging, performance, threading or
 # compatibility notes that apply across the whole framework, not to one topic).
 DocRole = Literal["overview", "cross_cutting", "tutorial", "how_to", "reference", "explanation"]
-DEFAULT_ROLE = "reference"
 
 
 class DocDistillate(BaseModel):
@@ -40,7 +39,7 @@ class DocDistillate(BaseModel):
 
     summary: str
     key_terms: list[str]
-    role: DocRole = DEFAULT_ROLE
+    role: DocRole = params.DEFAULT_ROLE
 
     @field_validator("summary")
     @classmethod

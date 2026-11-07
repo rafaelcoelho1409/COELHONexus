@@ -1,3 +1,11 @@
+STACK_TOOLS = frozenset({
+    "write_todos", 
+    "ls", 
+    "read_file", 
+    "glob", 
+    "grep", 
+    "task"
+})
 ROTATOR_TASK = "dd_planner_chapter_architect"
 # Model calls one architect run may make: the plan, the reads and searches, up to 3 score checks, the critic round and the answer.
 MODEL_CALLS = 30

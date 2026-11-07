@@ -2,11 +2,18 @@
 from __future__ import annotations
 import domains
 from . import config, params
-from ... import schemas, service
-from .... import middleware, prompts, skills, tools
+from ... import schemas
+from .... import middlewares, prompts, skills, tools
 
-from deepagents import FilesystemPermission, create_deep_agent
+from deepagents import (
+    FilesystemPermission,
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    create_deep_agent,
+    register_harness_profile,
+)
 from deepagents.backends import StateBackend
+from deepagents.profiles.harness import harness_profiles
 from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain_openai import ChatOpenAI
 
@@ -26,18 +33,28 @@ def text_repair(model = None):
     if not isinstance(model, ChatOpenAI):
         raise TypeError("the text-repair specialist must use the COELHO Rotator ChatOpenAI model")
 
-    service.isolate_harness_profile(model_name)
+    # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
+    # before (by another role or other code in the process) hides tools from this agent.
+    key = f"openai:{model_name}"
+    harness_profiles._HARNESS_PROFILES.pop(key, None)
+    register_harness_profile(
+        key,
+        HarnessProfile(
+            base_system_prompt = "",
+            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
+        ),
+    )
     repair_tools = [
-        tools.patch.service.check_patch,
-        tools.book.service.book_term_frequency,
-        tools.book.service.adjacent_page_edges,
+        tools.patch.tool.check_patch,
+        tools.book.tool.book_term_frequency,
+        tools.book.tool.adjacent_page_edges,
     ]
     agent = create_deep_agent(
         model = model,
         tools = repair_tools,
         system_prompt = prompts.ingestion.text_repair.prompts.SYSTEM_PROMPT,
         context_schema = domains.bd.ingestion.ai.entities.SpecialistContext,
-        middleware = [middleware.service.ToolAllowlistMiddleware(
+        middleware = [middlewares.middleware.ToolAllowlistMiddleware(
             frozenset({"read_file", *(tool.name for tool in repair_tools)}),
         ), ModelCallLimitMiddleware(
             run_limit = domains.bd.ingestion.ai.params.SPECIALIST_MODEL_CALL_LIMIT,

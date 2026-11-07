@@ -36,7 +36,7 @@ class CancellationCheck(Protocol):
 
 
 async def normalize_pages(
-    state: graphs.ingestion.state.IngestionState,
+    state: graphs.ingestion.states.IngestionState,
     read_page: PageReader,
     artifact_exists: ArtifactExists,
     read_artifact: ArtifactReader,
@@ -56,7 +56,7 @@ async def normalize_pages(
     }
     semaphore = asyncio.Semaphore(params.PAGE_CONCURRENCY)
 
-    async def normalize_page(page: graphs.ingestion.state.PageReference) -> dict[str, Any]:
+    async def normalize_page(page: graphs.ingestion.entities.PageReference) -> dict[str, Any]:
         if progress is not None:
             await progress.raise_if_cancelled()
         markdown = await read_page(page["source_key"])
@@ -203,7 +203,7 @@ async def normalize_pages(
             "repair_status": repair["status"],
         }
 
-    async def normalize_one(page: graphs.ingestion.state.PageReference) -> dict[str, Any]:
+    async def normalize_one(page: graphs.ingestion.entities.PageReference) -> dict[str, Any]:
         async with semaphore:
             return await normalize_page(page)
 

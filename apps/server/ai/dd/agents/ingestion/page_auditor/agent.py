@@ -2,11 +2,18 @@
 from __future__ import annotations
 import domains
 from . import config, domain, params
-from ... import schemas, service
-from .... import middleware
+from ... import schemas
+from .... import middlewares
 
-from deepagents import FilesystemPermission, create_deep_agent
+from deepagents import (
+    FilesystemPermission,
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    create_deep_agent,
+    register_harness_profile,
+)
 from deepagents.backends import StateBackend
+from deepagents.profiles.harness import harness_profiles
 from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain_openai import ChatOpenAI
 
@@ -27,20 +34,38 @@ def page_auditor(model = None):
     if not isinstance(model, ChatOpenAI):
         raise TypeError("the page auditor must use the COELHO Rotator ChatOpenAI model")
 
-    service.isolate_harness_profile(model_name)
+    # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
+    # before (by another role or other code in the process) hides tools from this agent.
+    key = f"openai:{model_name}"
+    harness_profiles._HARNESS_PROFILES.pop(key, None)
+    register_harness_profile(
+        key,
+        HarnessProfile(
+            base_system_prompt = "",
+            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
+        ),
+    )
     agent = create_deep_agent(
         model = model,
         tools = [],
         system_prompt = domain.system_prompt(),
         response_format = schemas.PageAssessment,
         permissions = [
-            FilesystemPermission(operations = ["read"], paths = ["/**"], mode = "deny"),
-            FilesystemPermission(operations = ["write"], paths = ["/**"], mode = "deny"),
+            FilesystemPermission(
+                operations = ["read"], 
+                paths = ["/**"], 
+                mode = "deny"),
+            FilesystemPermission(
+                operations = ["write"], 
+                paths = ["/**"], 
+                mode = "deny"),
         ],
         backend = StateBackend(),
         middleware = [
-            ModelCallLimitMiddleware(run_limit = params.MODEL_CALLS, exit_behavior = "end"),
-            middleware.service.ToolAllowlistMiddleware(frozenset()),
+            ModelCallLimitMiddleware(
+                run_limit = params.MODEL_CALLS, 
+                exit_behavior = "end"),
+            middlewares.middleware.ToolAllowlistMiddleware(frozenset()),
         ],
         name = "dd_page_auditor",
     )
