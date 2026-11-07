@@ -590,9 +590,36 @@ check("every lead quotes the page exactly", all(lead["evidence"] in FENCED and (
 check("leads are numbered in reading order", [lead["candidate_id"] for lead in leads], ["c1", "c2", "c3", "c4"])
 check("a clean page has no leads", page_audit.domain.candidates("# Title\n\nA clean page with one paragraph of text in it.\n"), [])
 
-check("every export convention example matches the pattern the audit drops",
+check("every export convention example is one the audit drops",
       [example for _, examples in auditor_patterns.EXPORT_CONVENTIONS for example in examples
-       if not auditor_patterns.EXPORT_CONVENTION_RE.match(example)], [])
+       if not auditor_patterns.is_export_convention(example)], [])
+
+# the Mintlify exports that auditors took for defects on the DeepAgents run: block-quote tabs, cards and callouts, and sound tables
+check("a block-quote tab, card, step or callout is an export convention",
+      [auditor_patterns.is_export_convention(text) for text in (
+          "> [tab] StateBackend\n>\n> A thread-scoped filesystem backend.", "> [card] [View example trace](https://x.dev)", "> [step] Install",
+          "> > [!WARNING]\n> >\n> > This backend grants access.", "> [!note]\n> Text")],
+      [True] * 5)
+check("an ordinary block quote is not",
+      [auditor_patterns.is_export_convention(text) for text in ("> A quoted sentence.", "> [link text](https://x.dev) is quoted", "> ## A heading in a quote")],
+      [False] * 3)
+check("a table head with an alignment row or plain dashes is sound",
+      [auditor_patterns.is_sound_table_head(text) for text in (
+          "| Integration | Downloads |\n| :- | :- |", "| a | b | c |\n| - | - | - |", "| a | b |\n| :-: | -: |\n| 1 | 2 |", "| :- | :- |")],
+      [True] * 4)
+check("a table with a ragged row, no delimiter row or no pipes is not",
+      [auditor_patterns.is_sound_table_head(text) for text in (
+          "| a | b | c |\n| - | - |", "| a | b |\n| - | - |\n| 1 | 2 | 3 |", "| a | b |\n| 1 | 2 |", "- | -", "just text")],
+      [False] * 5)
+check("an escaped pipe and a pipe in a code span are not cell edges",
+      auditor_patterns.is_sound_table_head("| a | b |\n| - | - |\n| x \\| y | `p|q` |"), True)
+table_page = "| Integration | Downloads |\n| :- | :- |\n| A | 1 |\n"
+table_findings = schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATION, confidence = 0.9, issues = [
+    finding_on("markdown_formatting", "| Integration | Downloads |\n| :- | :- |", "table"),
+    finding_on("markdown_formatting", "| A | 1 |", "row"),
+])
+kept_tables, _ = page_audit.domain.sanitize_assessment(table_findings, markdown = table_page)
+check("a finding that calls a sound table head malformed is dropped; one about a data row is kept", [issue.issue_id for issue in kept_tables.issues], ["row"])
 rendered = auditor_domain.system_prompt()
 check("the auditor prompt carries every example and no placeholder",
       (auditor_params.CONVENTIONS_MARKER in rendered, all(example in rendered for _, examples in auditor_patterns.EXPORT_CONVENTIONS for example in examples)),
@@ -629,3 +656,34 @@ _, gate = page_repair.domain.apply_patches(
 check("the final gate agrees with the check", (len(gate["accepted"]), len(gate["rejected"])), (1, 0))
 check("every refusal the gate can give has a hint for the model",
       sorted(reason for reason in page_repair.params.REJECTION_HINTS if not page_repair.params.REJECTION_HINTS[reason].strip()), [])
+
+# a patch that takes the quote markers off part of a block quote splits a callout or a tab (the DeepAgents run's page 19)
+def cuts(markdown: str, target: str, replacement: str) -> bool:
+    start = markdown.index(target)
+    return page_repair.domain.cuts_block_quote(markdown, start, start + len(target), replacement)
+
+
+check("quote depth counts nested markers", [page_repair.domain.quote_depth(line) for line in ("plain", "> a", ">a", "> > a", "   > a", "    > a")], [0, 1, 1, 2, 1, 0])
+TAB_PAGE = "Intro.\n\n> [tab] StateBackend\n>\n> A thread-scoped backend.\n>\n> ```python\n> code\n> ```\n\nAfter.\n"
+check("unquoting the first lines of a quote that goes on is a cut", cuts(TAB_PAGE, "> [tab] StateBackend\n>\n> A thread-scoped backend.", "[tab] StateBackend\n\nA thread-scoped backend."), True)
+check("…and so is unquoting one line in the middle of it", cuts("> A\n> B\n> C\n", "> B", "B"), True)
+check("a nested callout cut from its inner lines is a cut", cuts("> > [!WARNING]\n> >\n> > Grants access.\n> > Use with care.\n", "> > [!WARNING]\n> >\n> > Grants access.", "[!WARNING]\n\nGrants access."), True)
+check("unquoting a whole quote is not a cut", cuts("Intro.\n\n> A\n> B\n\nAfter.\n", "> A\n> B", "A\nB"), False)
+check("the banner at the top of a page, unquoted whole, is not a cut", cuts("> ## Documentation Index\n> Fetch it.\n\n# Title\n", "> ## Documentation Index\n> Fetch it.", "## Documentation Index\nFetch it."), False)
+check("a change inside a quote that keeps its markers is not a cut", cuts("> A\n> B\n> C\n", "> B", "> B2"), False)
+check("a change outside any quote is not a cut", cuts("One.\n\nTwo.\n", "Two.", "Three."), False)
+quote_page = "# T\n\n> [tab] StateBackend\n>\n> A thread-scoped backend.\n>\n> More.\n"
+quote_assessment = {"issues": [{"issue_id": "q", "category": "markdown_formatting", "severity": "medium", "description": "d",
+                                 "evidence": "> [tab] StateBackend\n>\n> A thread-scoped backend.", "confidence": 0.95}]}
+quote_sha = hashlib.sha256(quote_page.encode("utf-8")).hexdigest()
+quote_fields = {"issue_id": "q", "evidence": "> [tab] StateBackend\n>\n> A thread-scoped backend.", "confidence": 0.95,
+                "target_text": "> [tab] StateBackend\n>\n> A thread-scoped backend.", "replacement": "[tab] StateBackend\n\nA thread-scoped backend.",
+                "context_before": "# T\n\n", "context_after": "\n>\n> More.\n"}
+quote_check = page_repair.domain.check_patch(quote_page, quote_sha, quote_assessment, quote_fields)
+check("the check refuses it, and says what to do", (quote_check.startswith("patch takes the quote markers off part of a block quote"), "Drop the patch" in quote_check), (True, True))
+_, quote_gate = page_repair.domain.apply_patches(
+    quote_page, quote_sha, quote_assessment,
+    schemas.PagePatchBatch(patches = [schemas.PagePatch(source_sha256 = quote_sha, rationale = "r", **quote_fields)]),
+)
+check("the final gate refuses it too", (len(quote_gate["accepted"]), [item["reason"] for item in quote_gate["rejected"]]),
+      (0, ["patch takes the quote markers off part of a block quote"]))

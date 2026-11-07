@@ -158,6 +158,11 @@ frameworks:
   github: https://github.com/langchain-ai/deepagents
   category: AI
   path_filter:
+    # The include list names /releases/ on purpose: without this the default noise filter drops the release notes it asks for.
+    # The changelog stays out, as it does everywhere (a changelog is not studied).
+    disable_defaults: true
+    exclude:
+      - "/oss/python/releases/changelog"
     include:
       - "/oss/python/deepagents/"
       - "/oss/python/concepts/"
@@ -380,6 +385,9 @@ frameworks:
   github: https://github.com/langchain-ai/langchain
   category: AI
   path_filter:
+    disable_defaults: true
+    exclude:
+      - "/oss/python/releases/changelog"
     include:
       - "/oss/python/langchain/"
       - "/oss/python/concepts/"
@@ -407,6 +415,9 @@ frameworks:
   github: https://github.com/langchain-ai/langgraph
   category: AI
   path_filter:
+    disable_defaults: true
+    exclude:
+      - "/oss/python/releases/changelog"
     include:
       - "/oss/python/langgraph/"
       - "/oss/python/concepts/"

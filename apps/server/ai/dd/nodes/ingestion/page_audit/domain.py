@@ -61,10 +61,10 @@ def sanitize_assessment(
                 f"Discarded finding {issue.issue_id}: evidence was not a bounded exact source substring."
             )
             continue
-        if issue.category in params.CONVENTION_CATEGORIES and agents.ingestion.page_auditor.patterns.EXPORT_CONVENTION_RE.match(issue.evidence):
+        if issue.category in params.CONVENTION_CATEGORIES and agents.ingestion.page_auditor.patterns.is_export_convention(issue.evidence):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: its evidence is a documentation-export convention "
-                "(JSX component, HTML media tag or fence attribute), not a page defect."
+                "(JSX component, HTML media tag, fence attribute, block-quote tab or callout, or a sound table head), not a page defect."
             )
             continue
         if issue.category in params.DUPLICATE_CATEGORIES and not is_repeat(markdown, issue.evidence, issue.other_evidence):

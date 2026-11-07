@@ -10,7 +10,7 @@ import { useState } from "react";
 import { ContextBar } from "@/shared/layout/context-bar";
 
 import { useAutoChainPreference } from "../hooks/use-auto-chain-preference";
-import { BOOK_PARAM, type BookViewId, bookHref } from "../params";
+import { BOOK_PARAM, type BookViewId, bookHref, PAGE_PARAM, parsePageParam } from "../params";
 import { BookView } from "./book-view";
 import { BookViewTabs } from "./book-view-tabs";
 import { LibraryPicker } from "./library-list";
@@ -18,14 +18,17 @@ import { UploadDropzone } from "./upload-dropzone";
 
 export function IngestionStage() {
   const router = useRouter();
-  const bookId = useSearchParams().get(BOOK_PARAM);
+  const searchParams = useSearchParams();
+  const bookId = searchParams.get(BOOK_PARAM);
+  const initialPage = parsePageParam(searchParams.get(PAGE_PARAM));
   const [refreshKey, setRefreshKey] = useState(0);
   const [autoChain, setAutoChain] = useAutoChainPreference();
   // The chosen view belongs to one opening of one book: another book, or the same one extracted again, starts on
   // Agents. Deriving that from the key keeps it out of an effect.
-  const openingKey = `${bookId}-${refreshKey}`;
+  const openingKey = `${bookId}-${initialPage ?? ""}-${refreshKey}`;
   const [chosen, setChosen] = useState<{ openingKey: string; view: BookViewId } | null>(null);
-  const view = chosen?.openingKey === openingKey ? chosen.view : "pipeline";
+  const view =
+    chosen?.openingKey === openingKey ? chosen.view : initialPage === null ? "pipeline" : "materials";
   const open = (id: string | null) => router.push(bookHref(id), { scroll: false });
   const refresh = (id: string) => {
     setRefreshKey((key) => key + 1);
@@ -61,6 +64,7 @@ export function IngestionStage() {
           <BookView
             key={openingKey}
             bookId={bookId}
+            initialPage={initialPage}
             autoChain={autoChain}
             activeView={view}
             onViewChange={(next) => setChosen({ openingKey, view: next })}

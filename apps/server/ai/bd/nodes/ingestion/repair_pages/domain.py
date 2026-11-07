@@ -389,7 +389,7 @@ def _apply_mechanical_fixes(markdown: str) -> tuple[str, dict[str, int], list[tu
     control_characters = sum(_is_control_noise(character) for character in markdown)
     soft_hyphens = markdown.count("­")
     cleaned = "".join(
-        character for character in markdown
+        character for character in patterns._SOFT_HYPHEN_BREAK_RE.sub("", markdown)
         if character != "­" and not _is_control_noise(character)
     )
     cleaned, table_count, table_changes = _normalize_markdown_tables(cleaned)
@@ -610,6 +610,8 @@ def _is_spacing_repair(proposal: agents.schemas.PatchProposal, markdown: str, st
         # Markdown renders "\_" as "_", so dropping the backslash (and the stray space beside it) in a reference URL changes
         # nothing a reader sees; inside code the backslash is a real character and stays.
         return not _inside_code(markdown, start)
+    # Words the edit leaves alone (a domain name beside the repaired word, say) are not part of it: judge what changes.
+    target, replacement = _changed_words(target, replacement)
     if not all(patterns._PLAIN_PROSE_RE.fullmatch(text) for text in (target, replacement)):
         return False
     if "­" in target and replacement.count("-") > target.count("-"):
@@ -620,9 +622,27 @@ def _is_spacing_repair(proposal: agents.schemas.PatchProposal, markdown: str, st
     joined_target = patterns._DANGLING_HYPHEN_RE.sub("", target)
     return (
         patterns._INTRA_WORD_HYPHEN_RE.sub("", patterns._SPACE_RE.sub("", joined_target))
-        == patterns._INTRA_WORD_HYPHEN_RE.sub("", squeezed_replacement)
+        == patterns._INTRA_WORD_HYPHEN_RE.sub("", patterns._SPACE_RE.sub("", replacement))
         and replacement.count("-") >= joined_target.count("-")
     )
+
+
+def _changed_words(target: str, replacement: str) -> tuple[str, str]:
+    """Target and replacement cut down to the whitespace-delimited words that differ; the text around them is identical."""
+    limit = min(len(target), len(replacement))
+    head = 0
+    while head < limit and target[head] == replacement[head]:
+        head += 1
+    tail = 0
+    while tail < limit - head and target[-1 - tail] == replacement[-1 - tail]:
+        tail += 1
+    # A space that is added or removed belongs to the words it joins or splits: the window starts at a word start and the
+    # text after it starts at a space, so a repaired word is never cut in two.
+    while head > 0 and not target[head - 1].isspace():
+        head -= 1
+    while tail > 0 and not target[len(target) - tail].isspace():
+        tail -= 1
+    return target[head:len(target) - tail], replacement[head:len(replacement) - tail]
 
 
 def _inserts_space(target: str, replacement: str) -> bool:

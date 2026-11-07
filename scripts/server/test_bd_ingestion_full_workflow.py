@@ -476,6 +476,27 @@ _, _, resolved_ids = apply_mechanical_fixes_for_issues("cyberattacks", [soft_hyp
 assert resolved_ids == ["soft-1"]
 print("ok  a soft-hyphen finding is resolved when a space-only repair already swallowed the soft hyphen")
 
+# Workflow 1.13: the gate judges the words an edit changes, not the unchanged words around them (page 221, run 511c2e4a).
+assert applies(
+    "Before.\n\ncommandand-control domain software-update.org\n\nAfter.",
+    spacing_proposal("commandand-control domain software-update.org", "command-and-control domain software-update.org"),
+)
+for label, page, proposal in (
+    ("the edited word holds digits", "see CVE2010-0249 now", spacing_proposal("CVE2010-0249", "CVE-2010-0249")),
+    ("a hyphen is added inside a URL", "see https://x.com/abcd now", spacing_proposal(
+        "see https://x.com/abcd now", "see https://x.com/ab-cd now",
+    )),
+    ("a letter changes beside an unchanged domain", "C C&C domain a.org", spacing_proposal(
+        "C C&C domain a.org", "C&C domain a.org",
+    )),
+):
+    assert not applies(page, proposal), label
+print("ok  a wide target does not hide a plain-prose hyphen repair, and does not let a changed URL, number or letter through")
+
+cleaned_text, cleaned_counts = apply_mechanical_fixes("the cyber­ attacks grew; trade­ Craft; a soft­hyphen")
+assert cleaned_text == "the cyberattacks grew; trade Craft; a softhyphen" and cleaned_counts == {"soft_hyphen": 3}, cleaned_text
+print("ok  a soft hyphen before a space and a lowercase word is a line break and joins the word; elsewhere it is only removed")
+
 audit_markdown = (
     "Body text.\n\n<!-- image -->\n\nFigure 1: A caption.\n\n17\n\nC&amp;C server.\n\n| a | b |\n\n"
     "Syria, Egypt and . . ., and also Iran.\n\n| Intro . . . . . . 7 |\n"

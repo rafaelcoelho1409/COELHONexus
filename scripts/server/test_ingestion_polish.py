@@ -187,6 +187,7 @@ class FakeStore:
 
     def __init__(self, bundle: str, nav_index: list[tuple[str, str]]):
         self.framework_slug = "s"
+        self.run_id = "run"
         self.minio = FakeMinio()
         self.nav_index = nav_index
         self._body = bundle
@@ -240,10 +241,15 @@ async def main() -> None:
 
         async def write(self, key, text, content_type=""): self.objects[key] = text
 
+        async def exists(self, key): return key in self.objects
+
+        async def read_bytes(self, key): return self.objects[key].encode("utf-8") if isinstance(self.objects[key], str) else self.objects[key]
+
     class TierStore:
         def __init__(self):
             self.nav_index: list[tuple[str, str]] = []
             self.pages: list[dict] = []
+            self.run_id = "run"
             self.minio = CaptureMinio()
 
         async def add_page(self, **kwargs):
@@ -318,7 +324,7 @@ def normalized(text: str) -> str:
     return normalize.domain.normalize_doc(text).body
 
 
-check("the normalizer is at v11", normalize.versions.NORMALIZER_VERSION, 11)
+check("the normalizer is at v12", normalize.versions.NORMALIZER_VERSION, 12)
 check("a callout's fence loses its Mintlify attributes",
       normalized('> [!NOTE]\n>\n> ```bash theme={"theme":"css-variables"}\n> pip install "x[video]"\n> ```\n'),
       '> [!NOTE]\n>\n> ```bash\n> pip install "x[video]"\n> ```\n')
@@ -422,6 +428,21 @@ check("…without the rule", normalized("Body text.\n\n## Sitemap\n\n[Overview o
 check("a Sitemap section with real content stays", normalized("Body.\n\n## Sitemap\n\nThe docs have a [map](/docs/map).\n"), "Body.\n\n## Sitemap\n\nThe docs have a [map](/docs/map).\n")
 check("a Sitemap heading in the middle of a page stays", normalized("Intro.\n\n## Sitemap\n\n[All](/llms.txt)\n\n## Next\n\nmore\n"), "Intro.\n\n## Sitemap\n\n[All](/llms.txt)\n\n## Next\n\nmore\n")
 check("the footer is counted", normalize.domain.normalize_doc(REACT_FOOT).stats.agent_footer_stripped, 1)
+
+# Mintlify's links under every page
+MINT_FOOT = (
+    "Body.\n\n***\n\n[Connect these docs](https://docs.example.com/use-these-docs.md) to your agent of choice via MCP for real-time answers.\n\n"
+    "[Edit this page on GitHub](https://github.com/o/r/edit/main/a.mdx) or [file an issue](https://github.com/o/r/issues/new/choose).\n"
+)
+check("Mintlify's call-to-action links go, with the `***` rule above them", normalized(MINT_FOOT), "Body.\n")
+check("…the links are counted", normalize.domain.normalize_doc(MINT_FOOT).stats.footer_links_stripped, 2)
+check("…a second pass adds nothing", normalized(normalized(MINT_FOOT)), "Body.\n")
+check("a link line that is not at the end of the page stays", normalized("Intro.\n\n[Edit this page on GitHub](https://x/y)\n\nMore text.\n"),
+      "Intro.\n\n[Edit this page on GitHub](https://x/y)\n\nMore text.\n")
+check("a sentence that merely holds such a link stays", normalized("Body.\n\nYou can [Edit this page on GitHub](https://x/y) too.\n"),
+      "Body.\n\nYou can [Edit this page on GitHub](https://x/y) too.\n")
+check("a trailing `***` or `___` rule goes like a `---` one", (normalized("Body.\n\n***\n"), normalized("Body.\n\n___\n")), ("Body.\n", "Body.\n"))
+check("a `***` rule in the middle of a page stays", normalized("One.\n\n***\n\nTwo.\n"), "One.\n\n***\n\nTwo.\n")
 
 # react.dev's remaining components, and its `<img>`
 def content_lines(text: str) -> list[str]:
@@ -531,7 +552,7 @@ check("…and what the page it came from knew (tier, section, notes, lastmod, an
       [(e.tier, e.section, e.notes, e.lastmod, e.anchors) for e in entries[:2]], [("docs", "Guides", "n", "2026-01-01", ["a"])] * 2)
 check("…a page's source_path is its URL, and each is written as Markdown under a key in document order",
       ([e.source_path for e in entries], [(k, t) for k, _b, t in batch]),
-      (["https://s/big", "https://s/big", "https://s/small"], [(f"ingestion/fw/pages/{i:04d}-{e.slug}.md", "text/markdown") for i, e in enumerate(entries)]))
+      (["https://s/big", "https://s/big", "https://s/small"], [(f"dd/fw/ingestion/pages/{i:04d}-{e.slug}.md", "text/markdown") for i, e in enumerate(entries)]))
 check("…a page no entry of the manifest accounts for takes the first entry's tier",
       post.domain.dedup_manifest("fw", before, [("other", "https://s/other", SMALL, ("gone", "https://s/gone"))])[0][0].tier, "docs")
 
@@ -548,7 +569,7 @@ check("…and each is written as Markdown under a key in order", [(k.rsplit("/",
 sd = ingestion.storage.domain
 made = sd.new_entry("fw", 3, slug = "intro", url = "https://s/intro", tier = "docs", size = 120, anchors = ["a"])
 check("a new entry is titled by its slug when it has no title, and keyed by its number",
-      (made.idx, made.title, made.key, made.bytes, made.anchors, made.section), (3, "intro", "ingestion/fw/pages/0003-intro.md", 120, ["a"], ""))
+      (made.idx, made.title, made.key, made.bytes, made.anchors, made.section), (3, "intro", "dd/fw/ingestion/pages/0003-intro.md", 120, ["a"], ""))
 written = [sd.new_entry("fw", i, slug = s, url = u, tier = "docs", size = 1) for i, (s, u) in enumerate(
     [("b", "https://s/b#x"), ("a", "https://s/a"), ("z", "https://s/z"), ("c", "https://s/b#y")])]
 check("entries follow the discovery order of the URL list (a fragment is ignored, an unlisted page goes last, equal ones keep their write order)",
@@ -561,7 +582,7 @@ check("a stored manifest is read back into entries, ignoring a field this versio
 check("an unreadable stored value is the default",
       (sd.parse_json(None, []), sd.parse_json("{nope", None), sd.parse_json(b'{"a": 1}', None), sd.parse_json("", {})), ([], None, {"a": 1}, {}))
 check("an entry is stored under the key it carries, or the one its number and slug make",
-      (sd.entry_key("fw", {"key": "k"}, 0), sd.entry_key("fw", {"slug": "x"}, 2)), ("k", "ingestion/fw/pages/0002-x.md"))
+      (sd.entry_key("fw", {"key": "k"}, 0), sd.entry_key("fw", {"slug": "x"}, 2)), ("k", "dd/fw/ingestion/pages/0002-x.md"))
 check("a snapshot's id is its time, and its label if it has one; ids list newest first",
       (sd.snapshot_id("20261027T200000Z", None), sd.snapshot_id("20261027T200000Z", "pre"), sd.newest_first(["20260101T000000Z", "20261027T200000Z"])),
       ("20261027T200000Z", "20261027T200000Z-pre", ["20261027T200000Z", "20260101T000000Z"]))

@@ -149,7 +149,8 @@ async def repair_pages(
             request = payload if not last_error else {
                 **payload,
                 "previous_attempt_rejected": last_error,
-                "response_contract": "Return PatchDraftBatch JSON with a `proposals` array; copy target_text verbatim from `markdown`.",
+                "response_contract": "Return PatchDraftBatch JSON with a `proposals` array; copy target_text verbatim from `markdown`."
+                + (" You ran out of turns: call `check_patches` once at most, then answer." if "model-call limit" in last_error else ""),
             }
             try:
                 with domains.settings.llm_counter.service.llm_context(

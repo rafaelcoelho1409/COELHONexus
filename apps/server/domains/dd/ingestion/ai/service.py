@@ -15,6 +15,17 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+async def normalize_source(source: str) -> str:
+    """The page as the audit reads it: what a docs host prints on every page (the agent banner, the footer links, fence attributes, MDX
+    wrappers) is removed by the deterministic normalizer first, so the model's calls go to what the page teaches and no repair can turn the
+    furniture into content. A page the normalizer cannot read is audited as it came."""
+    try:
+        return (await asyncio.to_thread(domains.dd.ingestion.corpus_normalize.domain.normalize_doc, source)).body
+    except Exception as error:
+        logger.warning(f"[dd-agentic] normalize_doc failed: {type(error).__name__}: {error}; the page is audited as it came")
+        return source
+
+
 async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> dict:
     """Freeze assembled page inputs, run the graph, then update the in-memory manifest."""
     # A worker resolves the LLM endpoint once at import, before the Settings store may answer; the agents below are
@@ -28,13 +39,17 @@ async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> d
     # The graph only receives immutable object references and compact metadata.
     for entry in entries:
         source_key = entry.source_key or entry.key
-        source = await minio.read_text(source_key)
         input_key = domains.dd.ingestion.storage.keys.agentic_input_key(
             store.framework_slug,
             store.run_id,
             entry.idx,
             entry.slug,
         )
+        if await minio.exists(input_key):
+            # A failed run already froze this page (already normalized): resume on those exact bytes.
+            source = await minio.read_text(input_key)
+        else:
+            source = await normalize_source(await minio.read_text(source_key))
         await domains.dd.ingestion.storage.service.write_immutable(
             minio,
             input_key,

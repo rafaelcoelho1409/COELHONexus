@@ -21,6 +21,524 @@
         }
       }
     },
+    "/api/v1/bd/distill/{book_id}/runs": {
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Start Run",
+        "operationId": "post_bd_distill_book_id_runs",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/StartRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStart"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "List Runs",
+        "operationId": "get_bd_distill_book_id_runs",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response Get Bd Distill Book Id Runs"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/distill/{book_id}/runs/current": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Current Run",
+        "operationId": "get_bd_distill_book_id_runs_current",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Bd Distill Book Id Runs Current"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/distill/{book_id}/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Run",
+        "operationId": "get_bd_distill_book_id_runs_run_id",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Bd Distill Book Id Runs Run Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/distill/{book_id}/runs/{run_id}/cancel": {
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Cancel Run",
+        "operationId": "post_bd_distill_book_id_runs_run_id_cancel",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/entrypoints__api__v1__bd__distill__schemas__CancelResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/distill/{book_id}/runs/{run_id}/events": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Run Events",
+        "operationId": "get_bd_distill_book_id_runs_run_id_events",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/distill/{book_id}/runs/{run_id}/report": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Report",
+        "operationId": "get_bd_distill_book_id_runs_run_id_report",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyGuideDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/distill/{book_id}/runs/{run_id}/report.html": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Report Html",
+        "operationId": "get_bd_distill_book_id_runs_run_id_report_html",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/distill/{book_id}/runs/{run_id}/report.pdf": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Report Pdf",
+        "operationId": "get_bd_distill_book_id_runs_run_id_report_pdf",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/distill/{book_id}/runs/{run_id}/resume": {
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Resume Run",
+        "operationId": "post_bd_distill_book_id_runs_run_id_resume",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStart"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/bd/ingestion": {
       "get": {
         "tags": [
@@ -490,6 +1008,67 @@
         }
       }
     },
+    "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/pages/{page_no}": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Agentic Run Page",
+        "description": "Read the normalized page from one exact immutable ingestion QA run.",
+        "operationId": "get_bd_ingestion_book_id_agentic_runs_agentic_run_id_pages_page_no",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "agentic_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agentic Run Id"
+            }
+          },
+          {
+            "name": "page_no",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Page No"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/resume": {
       "post": {
         "tags": [
@@ -566,7 +1145,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CancelResponse"
+                  "$ref": "#/components/schemas/entrypoints__api__v1__bd__ingestion__schemas__CancelResponse"
                 }
               }
             }
@@ -6213,24 +6792,6 @@
         ],
         "title": "BulkDeleteRequest"
       },
-      "CancelResponse": {
-        "properties": {
-          "book_id": {
-            "type": "string",
-            "title": "Book Id"
-          },
-          "status": {
-            "type": "string",
-            "title": "Status"
-          }
-        },
-        "type": "object",
-        "required": [
-          "book_id",
-          "status"
-        ],
-        "title": "CancelResponse"
-      },
       "ChannelPipelineRequest": {
         "properties": {
           "channel_id": {
@@ -6333,6 +6894,225 @@
         ],
         "title": "ChapterRange"
       },
+      "ChartSpec": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Title"
+          },
+          "chart_type": {
+            "type": "string",
+            "enum": [
+              "bar",
+              "line",
+              "scatter",
+              "table"
+            ],
+            "title": "Chart Type"
+          },
+          "x_field": {
+            "type": "string",
+            "minLength": 1,
+            "title": "X Field"
+          },
+          "y_fields": {
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 1,
+            "title": "Y Fields"
+          },
+          "caption": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Caption"
+          },
+          "accessible_description": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Accessible Description"
+          },
+          "learning_unit_ids": {
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Learning Unit Ids"
+          },
+          "dataset": {
+            "$ref": "#/components/schemas/Dataset"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title",
+          "chart_type",
+          "x_field",
+          "y_fields",
+          "caption",
+          "accessible_description",
+          "learning_unit_ids",
+          "dataset"
+        ],
+        "title": "ChartSpec"
+      },
+      "DataColumn": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Name"
+          },
+          "value_type": {
+            "type": "string",
+            "enum": [
+              "number",
+              "text"
+            ],
+            "title": "Value Type"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "value_type"
+        ],
+        "title": "DataColumn"
+      },
+      "Dataset": {
+        "properties": {
+          "dataset_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Dataset Id"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Title"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/DataColumn"
+            },
+            "type": "array",
+            "maxItems": 12,
+            "minItems": 2,
+            "title": "Columns"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetRow"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Rows"
+          },
+          "transformations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Transformations"
+          },
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Assumptions"
+          },
+          "learning_unit_ids": {
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Learning Unit Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "dataset_id",
+          "title",
+          "columns",
+          "rows",
+          "learning_unit_ids"
+        ],
+        "title": "Dataset"
+      },
+      "DatasetRow": {
+        "properties": {
+          "values": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Values"
+          },
+          "learning_unit_ids": {
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Learning Unit Ids"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceQuote"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 1,
+            "title": "Evidence"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "values",
+          "learning_unit_ids",
+          "evidence"
+        ],
+        "title": "DatasetRow"
+      },
       "DeleteResponse": {
         "properties": {
           "book_id": {
@@ -6372,6 +7152,160 @@
           "deleted"
         ],
         "title": "DeleteResponse"
+      },
+      "DiagramEdge": {
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Source Id"
+          },
+          "target_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Target Id"
+          },
+          "relation": {
+            "type": "string",
+            "enum": [
+              "supports",
+              "requires",
+              "defines",
+              "contrasts",
+              "sequence",
+              "example_of"
+            ],
+            "title": "Relation"
+          },
+          "attribution": {
+            "type": "string",
+            "enum": [
+              "book",
+              "agent_inference"
+            ],
+            "title": "Attribution",
+            "default": "book"
+          },
+          "learning_unit_ids": {
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Learning Unit Ids"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceQuote"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 1,
+            "title": "Evidence"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_id",
+          "target_id",
+          "relation",
+          "learning_unit_ids",
+          "evidence"
+        ],
+        "title": "DiagramEdge"
+      },
+      "DiagramNode": {
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Node Id"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Label"
+          },
+          "attribution": {
+            "type": "string",
+            "enum": [
+              "book",
+              "agent_inference"
+            ],
+            "title": "Attribution",
+            "default": "book"
+          },
+          "learning_unit_ids": {
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Learning Unit Ids"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceQuote"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 1,
+            "title": "Evidence"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "node_id",
+          "label",
+          "learning_unit_ids",
+          "evidence"
+        ],
+        "title": "DiagramNode"
+      },
+      "DiagramSpec": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Title"
+          },
+          "accessible_description": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Accessible Description"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/DiagramNode"
+            },
+            "type": "array",
+            "maxItems": 24,
+            "minItems": 2,
+            "title": "Nodes"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/DiagramEdge"
+            },
+            "type": "array",
+            "maxItems": 48,
+            "minItems": 1,
+            "title": "Edges"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title",
+          "accessible_description",
+          "nodes",
+          "edges"
+        ],
+        "title": "DiagramSpec"
       },
       "EmbeddingBody": {
         "properties": {
@@ -6517,6 +7451,92 @@
         "title": "EnumerationResponse",
         "description": "Paginated video listing inside ONE channel or playlist. Frontend\nuses this to render a master+row checkbox picker so the user can\nsubmit a subset (or all) of the source's videos to the existing\n`/content/videos/pipeline` chain. yt-dlp pagination via\n`--playlist-items <offset+1>:<offset+limit>` is range-honest (walks\nthe playlist from the start internally; the limit just bounds the\nJSON output). For massive channels (10k+ videos) batches of 100 are\na reasonable trade between latency per page (~3–6s) and number of\npages."
       },
+      "EquationBlock": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Title"
+          },
+          "latex": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Latex"
+          },
+          "explanation": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Explanation"
+          },
+          "attribution": {
+            "type": "string",
+            "enum": [
+              "book",
+              "agent_inference"
+            ],
+            "title": "Attribution",
+            "default": "book"
+          },
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Assumptions"
+          },
+          "learning_unit_ids": {
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Learning Unit Ids"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceQuote"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 1,
+            "title": "Evidence"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title",
+          "latex",
+          "explanation",
+          "learning_unit_ids",
+          "evidence"
+        ],
+        "title": "EquationBlock"
+      },
+      "EvidenceQuote": {
+        "properties": {
+          "page_number": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Page Number"
+          },
+          "quote": {
+            "type": "string",
+            "maxLength": 800,
+            "minLength": 1,
+            "title": "Quote"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "page_number",
+          "quote"
+        ],
+        "title": "EvidenceQuote"
+      },
       "ExtractionWipeResponse": {
         "properties": {
           "book_id": {
@@ -6539,6 +7559,54 @@
           "objects_deleted"
         ],
         "title": "ExtractionWipeResponse"
+      },
+      "GlossaryEntry": {
+        "properties": {
+          "term": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Term"
+          },
+          "definition": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Definition"
+          },
+          "attribution": {
+            "type": "string",
+            "enum": [
+              "book",
+              "agent_inference"
+            ],
+            "title": "Attribution",
+            "default": "book"
+          },
+          "source_refs": {
+            "items": {
+              "$ref": "#/components/schemas/SourceRef"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Source Refs"
+          },
+          "verification_status": {
+            "type": "string",
+            "enum": [
+              "verified",
+              "unverified"
+            ],
+            "title": "Verification Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "term",
+          "definition",
+          "source_refs",
+          "verification_status"
+        ],
+        "title": "GlossaryEntry"
       },
       "GraphIngestRequest": {
         "properties": {
@@ -7543,6 +8611,170 @@
         "title": "RawQueryResponse",
         "description": "`ok=False` short-circuits the UI to the error band; `notes` is a\nlist of user-visible advisories (e.g. \"default size=20 synthesized\nbecause the request body omitted it\")."
       },
+      "ReportLesson": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Title"
+          },
+          "explanation": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Explanation"
+          },
+          "source_refs": {
+            "items": {
+              "$ref": "#/components/schemas/SourceRef"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Source Refs"
+          },
+          "attribution": {
+            "type": "string",
+            "enum": [
+              "book",
+              "agent_inference"
+            ],
+            "title": "Attribution",
+            "default": "book"
+          },
+          "verification_status": {
+            "type": "string",
+            "enum": [
+              "verified",
+              "unverified"
+            ],
+            "title": "Verification Status",
+            "default": "unverified"
+          },
+          "confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "default": 0.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title",
+          "explanation",
+          "source_refs"
+        ],
+        "title": "ReportLesson"
+      },
+      "ReportSection": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Title"
+          },
+          "overview": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Overview"
+          },
+          "overview_attribution": {
+            "type": "string",
+            "enum": [
+              "book",
+              "agent_inference"
+            ],
+            "title": "Overview Attribution",
+            "default": "book"
+          },
+          "overview_source_refs": {
+            "items": {
+              "$ref": "#/components/schemas/SourceRef"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Overview Source Refs"
+          },
+          "lessons": {
+            "items": {
+              "$ref": "#/components/schemas/ReportLesson"
+            },
+            "type": "array",
+            "title": "Lessons"
+          },
+          "open_questions": {
+            "items": {
+              "$ref": "#/components/schemas/ReportLesson"
+            },
+            "type": "array",
+            "title": "Open Questions"
+          },
+          "diagrams": {
+            "items": {
+              "$ref": "#/components/schemas/DiagramSpec"
+            },
+            "type": "array",
+            "title": "Diagrams"
+          },
+          "equations": {
+            "items": {
+              "$ref": "#/components/schemas/EquationBlock"
+            },
+            "type": "array",
+            "title": "Equations"
+          },
+          "charts": {
+            "items": {
+              "$ref": "#/components/schemas/ChartSpec"
+            },
+            "type": "array",
+            "title": "Charts"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title",
+          "overview",
+          "overview_source_refs",
+          "lessons"
+        ],
+        "title": "ReportSection"
+      },
+      "RunStart": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "queued",
+            "title": "Status"
+          },
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "extraction_run_id": {
+            "type": "string",
+            "title": "Extraction Run Id"
+          },
+          "ingestion_ai_run_id": {
+            "type": "string",
+            "title": "Ingestion Ai Run Id"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "book_id",
+          "extraction_run_id",
+          "ingestion_ai_run_id",
+          "run_id"
+        ],
+        "title": "RunStart"
+      },
       "SearchRequest": {
         "properties": {
           "query": {
@@ -7859,6 +9091,98 @@
         ],
         "title": "Snapshot"
       },
+      "SourceRef": {
+        "properties": {
+          "source_type": {
+            "type": "string",
+            "enum": [
+              "book",
+              "agent_inference"
+            ],
+            "title": "Source Type"
+          },
+          "book_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Book Id"
+          },
+          "extraction_run_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Extraction Run Id"
+          },
+          "ingestion_ai_run_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Ingestion Ai Run Id"
+          },
+          "chunk_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Chunk Id"
+          },
+          "source_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Source Key"
+          },
+          "page_number": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Page Number"
+          },
+          "section_path": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Section Path"
+          },
+          "source_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Sha256"
+          },
+          "quote": {
+            "type": "string",
+            "maxLength": 800,
+            "minLength": 1,
+            "title": "Quote"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_type",
+          "book_id",
+          "extraction_run_id",
+          "ingestion_ai_run_id",
+          "chunk_id",
+          "source_key",
+          "page_number",
+          "section_path",
+          "source_sha256",
+          "quote"
+        ],
+        "title": "SourceRef"
+      },
+      "StartRequest": {
+        "properties": {
+          "ingestion_ai_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ingestion Ai Run Id"
+          }
+        },
+        "type": "object",
+        "title": "StartRequest"
+      },
       "StartResponse": {
         "properties": {
           "status": {
@@ -7916,6 +9240,174 @@
           "slug"
         ],
         "title": "StartRunBody"
+      },
+      "StudyGuideDocument": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Title"
+          },
+          "book_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Book Id"
+          },
+          "extraction_run_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Extraction Run Id"
+          },
+          "ingestion_ai_run_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Ingestion Ai Run Id"
+          },
+          "distill_run_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Distill Run Id"
+          },
+          "generated_at": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Generated At"
+          },
+          "report_scope": {
+            "type": "string",
+            "const": "book_only",
+            "title": "Report Scope",
+            "default": "book_only"
+          },
+          "central_thesis": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Central Thesis"
+          },
+          "central_thesis_attribution": {
+            "type": "string",
+            "enum": [
+              "book",
+              "agent_inference"
+            ],
+            "title": "Central Thesis Attribution",
+            "default": "book"
+          },
+          "central_thesis_source_refs": {
+            "items": {
+              "$ref": "#/components/schemas/SourceRef"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Central Thesis Source Refs"
+          },
+          "key_takeaways": {
+            "items": {
+              "$ref": "#/components/schemas/ReportLesson"
+            },
+            "type": "array",
+            "title": "Key Takeaways"
+          },
+          "cross_chapter_connections": {
+            "items": {
+              "$ref": "#/components/schemas/ReportLesson"
+            },
+            "type": "array",
+            "title": "Cross Chapter Connections"
+          },
+          "chapters": {
+            "items": {
+              "$ref": "#/components/schemas/ReportSection"
+            },
+            "type": "array",
+            "title": "Chapters"
+          },
+          "glossary": {
+            "items": {
+              "$ref": "#/components/schemas/GlossaryEntry"
+            },
+            "type": "array",
+            "title": "Glossary"
+          },
+          "limitation_notes": {
+            "items": {
+              "$ref": "#/components/schemas/ReportLesson"
+            },
+            "type": "array",
+            "title": "Limitation Notes"
+          },
+          "review_notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Review Notes"
+          },
+          "diagrams": {
+            "items": {
+              "$ref": "#/components/schemas/DiagramSpec"
+            },
+            "type": "array",
+            "title": "Diagrams"
+          },
+          "equations": {
+            "items": {
+              "$ref": "#/components/schemas/EquationBlock"
+            },
+            "type": "array",
+            "title": "Equations"
+          },
+          "charts": {
+            "items": {
+              "$ref": "#/components/schemas/ChartSpec"
+            },
+            "type": "array",
+            "title": "Charts"
+          },
+          "covered_pages": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Covered Pages"
+          },
+          "uncovered_pages": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Uncovered Pages"
+          },
+          "review_required": {
+            "type": "boolean",
+            "title": "Review Required"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title",
+          "book_id",
+          "extraction_run_id",
+          "ingestion_ai_run_id",
+          "distill_run_id",
+          "generated_at",
+          "central_thesis",
+          "central_thesis_source_refs",
+          "key_takeaways",
+          "cross_chapter_connections",
+          "chapters",
+          "covered_pages",
+          "uncovered_pages",
+          "review_required"
+        ],
+        "title": "StudyGuideDocument"
       },
       "ValidationError": {
         "properties": {
@@ -8198,6 +9690,47 @@
         ],
         "title": "VideosRequest",
         "description": "Paste video IDs / URLs. `include_transcription` toggles whether the\nCelery task also fetches transcripts via Playwright after the yt-dlp\nmetadata pass (deprecated `tasks/youtube/crawler.py:L57-95`)."
+      },
+      "entrypoints__api__v1__bd__distill__schemas__CancelResponse": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "run_id",
+          "status"
+        ],
+        "title": "CancelResponse"
+      },
+      "entrypoints__api__v1__bd__ingestion__schemas__CancelResponse": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "status"
+        ],
+        "title": "CancelResponse"
       }
     }
   }

@@ -30,6 +30,40 @@ def dropped_words(target: str, replacement: str) -> set[str]:
     return set(re.findall(r"\w+", target.casefold())) - set(re.findall(r"\w+", replacement.casefold()))
 
 
+def quote_depth(line: str) -> int:
+    """How many block-quote markers open `line` (`> > x` is 2)."""
+    depth = 0
+    rest = line
+    marker = re.match(r"[ \t]{0,3}>[ \t]?", rest)
+    while marker:
+        depth += 1
+        rest = rest[marker.end():]
+        marker = re.match(r"[ \t]{0,3}>[ \t]?", rest)
+    return depth
+
+
+def cuts_block_quote(markdown: str, start: int, end: int, replacement: str) -> bool:
+    """Whether a patch takes the quote markers off part of a block quote that goes on around it: the edited lines are less quoted than they
+    were while the line above or below still is, which splits a callout, tab or card in two. A quote taken apart whole (the patch's lines
+    are the quote's first and last) is not cut."""
+    line_start = markdown.rfind("\n", 0, start) + 1
+    line_end = markdown.find("\n", end)
+    line_end = len(markdown) if line_end == -1 else line_end
+    old = markdown[line_start:line_end]
+    new = markdown[line_start:start] + replacement + markdown[end:line_end]
+
+    def shallowest(text: str) -> int:
+        depths = [quote_depth(line) for line in text.split("\n") if line.strip()]
+        return min(depths) if depths else 0
+
+    depth = shallowest(old)
+    if depth == 0 or shallowest(new) >= depth:
+        return False
+    above = markdown[:line_start].rstrip("\n").rsplit("\n", 1)[-1] if line_start else ""
+    below = markdown[line_end + 1:].split("\n", 1)[0] if line_end < len(markdown) else ""
+    return quote_depth(above) >= depth or quote_depth(below) >= depth
+
+
 def duplicate_survives(markdown: str, evidence: str, target: str, replacement: str) -> bool:
     """Whether the text a removal claims is repeated is still on the page once the patch is applied: a duplicate has a
     surviving copy, and an edit that deletes the only one is a deletion, not a deduplication."""
@@ -72,7 +106,9 @@ def patch_rejection(
     end = start + len(patch.target_text)
     if overlaps_fenced_code(markdown, start, end):
         return "patch target overlaps a fenced code block", start, end
-    before = markdown[max(0, start - len(patch.context_before)):start]
+    if cuts_block_quote(markdown, start, end, patch.replacement):
+        return "patch takes the quote markers off part of a block quote", start, end
+    before =markdown[max(0, start - len(patch.context_before)):start]
     after = markdown[end:end + len(patch.context_after)]
     if before != patch.context_before or after != patch.context_after:
         return "surrounding context mismatch", start, end

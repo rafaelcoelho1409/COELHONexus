@@ -31,6 +31,9 @@ def normalize_doc(
     text, n_footer = _agent_footer_pass(text)
     stats.agent_footer_stripped = n_footer
 
+    text, n_links = _footer_links_pass(text)
+    stats.footer_links_stripped = n_links
+
     text, n_rules = _trailing_rule_pass(text)
     stats.trailing_rules_stripped = n_rules
 
@@ -178,6 +181,29 @@ def _agent_footer_pass(text: str) -> tuple[str, int]:
     kept = text[: m.start()].rstrip()
     cut = max(0, len(kept) - params.AGENT_FOOTER_TAIL_CHARS)
     return kept[:cut] + patterns.TRAILING_RULES_RE.sub("", kept[cut:]) + "\n", 1
+
+
+def _footer_links_pass(text: str) -> tuple[str, int]:
+    """Drop the call-to-action links a docs host prints under every page (Mintlify's "Connect these docs … via MCP" and "Edit this page on
+    GitHub or file an issue"; 70 of 70 pages of the LangChain site). Identical on every page and about nothing the page says. Only lines in
+    the last few hundred characters are taken, and only while every line from the end is one of these links; the rule above them goes with
+    the trailing-rule pass."""
+    lines = text.rstrip().split("\n")
+    tail_start = max(0, len(text) - params.AGENT_FOOTER_TAIL_CHARS)
+    cut = len(lines)
+    dropped = 0
+    while cut > 0:
+        line = lines[cut - 1]
+        if not line.strip():
+            cut -= 1
+        elif patterns.FOOTER_LINK_RE.match(line.strip()) and len("\n".join(lines[:cut - 1])) >= tail_start:
+            cut -= 1
+            dropped += 1
+        else:
+            break
+    if not dropped:
+        return text, 0
+    return "\n".join(lines[:cut]).rstrip() + "\n", dropped
 
 
 def _trailing_rule_pass(text: str) -> tuple[str, int]:

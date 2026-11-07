@@ -15,6 +15,8 @@ _INLINE_TOC_ROW_RE = re.compile(
 )
 _TRAILING_LEADERS_RE = re.compile(rf"\s*(?:{_DOT_LEADER})\s*$")
 _SPACE_RE = re.compile(r"[ \t­]+")
+# A soft hyphen the extraction left before a space and a lowercase word is a hyphenated line break: the word continues.
+_SOFT_HYPHEN_BREAK_RE = re.compile(r"(?<=[A-Za-z])­[ \t]+(?=[a-z])")
 _INTRA_WORD_HYPHEN_RE = re.compile(r"(?<=\w)-(?=\w)")
 _DANGLING_HYPHEN_RE = re.compile(r"(?<=\w)-[ \t]+(?=\w)")
 _LINK_DESTINATION_RE = re.compile(r"\]\(([^)]*)\)")

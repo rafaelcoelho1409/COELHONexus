@@ -17,12 +17,14 @@ export function LibraryPicker({
   selected,
   onOpen,
   onRefresh,
-  autoChain,
+  autoChain = false,
+  showActions = true,
 }: {
   selected: string | null;
   onOpen: (bookId: string | null) => void;
-  onRefresh: (bookId: string) => void;
-  autoChain: boolean;
+  onRefresh?: (bookId: string) => void;
+  autoChain?: boolean;
+  showActions?: boolean;
 }) {
   const library = useLibrary();
   const del = useDeleteBook();
@@ -95,6 +97,7 @@ export function LibraryPicker({
   };
 
   const refreshBook = (row: BookRow) => {
+    if (!onRefresh) return;
     runBook.mutate(
       { bookId: row.book_id, refresh: true, autoChain },
       {
@@ -168,7 +171,7 @@ export function LibraryPicker({
                 return (
                   <li
                     key={row.book_id}
-                    className={`group grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-1 rounded-sm px-1 ${current ? "bg-muted" : "hover:bg-muted"}`}
+                    className={`group grid min-w-0 ${showActions && onRefresh ? "grid-cols-[minmax(0,1fr)_auto_auto]" : "grid-cols-1"} items-center gap-1 rounded-sm px-1 ${current ? "bg-muted" : "hover:bg-muted"}`}
                   >
                     <button
                       type="button"
@@ -190,24 +193,28 @@ export function LibraryPicker({
                         </span>
                       </span>
                     </button>
-                    <ActionButton
-                      iconOnly
-                      aria-label={`Refresh ${titleOf(row)}`}
-                      title="Refresh extraction"
-                      disabled={busy || isLive(status)}
-                      onClick={() => refreshBook(row)}
-                    >
-                      <RotateCw aria-hidden="true" />
-                    </ActionButton>
-                    <ActionButton
-                      iconOnly
-                      aria-label={`Delete ${titleOf(row)}`}
-                      title={isLive(status) ? "Cancel the extraction first" : "Delete"}
-                      disabled={busy || isLive(status)}
-                      onClick={() => void remove(row)}
-                    >
-                      <Trash2 aria-hidden="true" />
-                    </ActionButton>
+                    {showActions && onRefresh ? (
+                      <>
+                        <ActionButton
+                          iconOnly
+                          aria-label={`Refresh ${titleOf(row)}`}
+                          title="Refresh extraction"
+                          disabled={busy || isLive(status)}
+                          onClick={() => refreshBook(row)}
+                        >
+                          <RotateCw aria-hidden="true" />
+                        </ActionButton>
+                        <ActionButton
+                          iconOnly
+                          aria-label={`Delete ${titleOf(row)}`}
+                          title={isLive(status) ? "Cancel the extraction first" : "Delete"}
+                          disabled={busy || isLive(status)}
+                          onClick={() => void remove(row)}
+                        >
+                          <Trash2 aria-hidden="true" />
+                        </ActionButton>
+                      </>
+                    ) : null}
                   </li>
                 );
               })}

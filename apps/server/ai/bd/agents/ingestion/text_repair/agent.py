@@ -45,7 +45,7 @@ def text_repair(model = None):
         ),
     )
     repair_tools = [
-        tools.patch.tool.check_patch,
+        tools.patch.tool.check_patches,
         tools.book.tool.book_term_frequency,
         tools.book.tool.adjacent_page_edges,
     ]

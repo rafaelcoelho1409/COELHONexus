@@ -26,4 +26,8 @@ from __future__ import annotations
 # v10 (2026-10-27): the "Bash ![Copy code to clipboard](…) Copy" line Grafana's markdown prints above each code block goes.
 # v11 (2026-10-27): a `[#](#anchor "Link to this heading")` permalink (pydata-sphinx-theme: OpenVINO) goes with its title; Sphinx's
 # `[[source]](…)` viewcode link goes; a table that is only links to places in the page (nginx's table of contents) goes.
-NORMALIZER_VERSION = 11
+# v12 (2026-11-07): the "[Connect these docs](…) … via MCP" and "[Edit this page on GitHub](…) or [file an issue](…)" lines Mintlify prints under
+# every page go (70 of 70 pages of the LangChain site), and a trailing `***` or `___` rule goes like a `---` one. The agentic ingestion
+# runs this normalizer on every page before its audit (it did not between 2026-11-03 and now, so the banner, footer and fence attributes
+# of every Tier 2-4 page stayed).
+NORMALIZER_VERSION = 12

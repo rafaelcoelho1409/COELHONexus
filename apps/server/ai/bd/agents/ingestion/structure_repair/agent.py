@@ -45,7 +45,7 @@ def structure_repair(model = None):
         ),
     )
     repair_tools = [
-        tools.patch.tool.check_patch,
+        tools.patch.tool.check_patches,
         tools.book.tool.adjacent_page_edges,
     ]
     agent = create_deep_agent(

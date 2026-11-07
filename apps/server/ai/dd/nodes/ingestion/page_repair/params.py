@@ -30,5 +30,6 @@ REJECTION_HINTS = {
     "formatting patch removes words from the page": "Keep every word of the target in the replacement, or drop the patch.",
     "removing it would leave no copy of the text": "Drop the patch; this is the only copy on the page.",
     "patch target overlaps a fenced code block": "Drop the patch; code is never edited.",
+    "patch takes the quote markers off part of a block quote": "Drop the patch; a quoted tab, card or callout is how the site exports it, and a quote is changed whole or not at all.",
     "surrounding context mismatch": "Copy context_before and context_after exactly from the page text around target_text.",
 }

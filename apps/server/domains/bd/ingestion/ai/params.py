@@ -11,13 +11,14 @@ MAX_REPAIR_CONTEXT_CHARS = 10000
 AUTO_APPLY_CONFIDENCE = 0.98
 SPACING_REPAIR_CONFIDENCE = 0.8
 METADATA_ACCEPT_CONFIDENCE = 0.85
-# A specialist checks its patches itself (`check_patch`), so a second full attempt only covers a failed or unreadable answer.
+# A specialist checks its patches itself (`check_patches`), so a second full attempt only covers a failed or unreadable answer.
 SPECIALIST_ATTEMPTS = 2
 PAGE_AUDIT_ATTEMPTS = 3
 # LLM counters of a one-page audit run outside a book run (the auditor evaluation) are billed to this id.
 PAGE_AUDIT_EVALUATION_RUN_ID = "page-audit-evaluation"
 AGENT_MODEL_CALL_LIMIT = 4
-# Each tool call costs one model turn: a few checks or lookups, then the structured answer.
+# Each tool call costs one model turn: one batched check (twice, if a patch is fixed), a lookup, then the structured answer.
+# 1.12 checked patches one by one and a page with eight URL repairs ran out of turns (6 pages in its first run).
 SPECIALIST_MODEL_CALL_LIMIT = 8
 MAX_TERM_VARIANTS = 8
 MAX_TERM_CHARS = 80

@@ -20,6 +20,7 @@ class NormalizeStats(BaseModel):
     agent_banner_stripped:      int  = 0
     license_header_stripped:    int  = 0
     agent_footer_stripped:      int  = 0
+    footer_links_stripped:      int  = 0
     heading_anchors_stripped:   int  = 0
     img_tags_rewritten:         int  = 0
     code_annotations_stripped:  int  = 0

@@ -142,9 +142,13 @@ class Script:
         names = [tool["function"]["name"] for tool in kwargs.get("tools", [])]
         self.seen_tools |= set(names)
         if not replies:
+            # Two patches in one call: a page with many repairs must not spend one model turn on each.
             message = AIMessage(content = "", tool_calls = [{
-                "name": "check_patch",
-                "args": {"issue_id": "url", "target_text": self.patch["target_text"], "replacement": self.patch["replacement"]},
+                "name": "check_patches",
+                "args": {"patches": [
+                    {"issue_id": "url", "target_text": self.patch["target_text"], "replacement": self.patch["replacement"]},
+                    {"issue_id": "ack", "target_text": "ACKNOWL EDGMENT S", "replacement": "ACKNOWLEDGEMENTS"},
+                ]},
                 "id": "call-check",
             }])
         elif "PatchDraftBatch" in names:
@@ -173,7 +177,7 @@ def scripted_model(script: Script) -> ChatOpenAI:
 script = Script({"target_text": "https://www .site.com/a", "replacement": "https://www.site.com/a"})
 # Other code in the worker (a Docs Distiller role, say) may have registered an exclusion under the same model name; DeepAgents
 # merges those, so without isolation it would hide read_file from this role too.
-register_harness_profile("openai:scripted-model", HarnessProfile(excluded_tools = frozenset({"read_file", "check_patch"})))
+register_harness_profile("openai:scripted-model", HarnessProfile(excluded_tools = frozenset({"read_file", "check_patches"})))
 agent = text_repair.agent.text_repair(scripted_model(script))
 specialist_context = domains.bd.ingestion.ai.entities.SpecialistContext(
     check_patch = lambda issue_id, target, replacement: preflight(issue_id, target, replacement),
@@ -184,8 +188,10 @@ result = asyncio.run(agent.ainvoke(
     {"messages": [{"role": "user", "content": "repair"}]},
     context = specialist_context,
 ))
-check("the specialist called check_patch and read its answer", len(script.tool_replies), 1)
-contains("the tool result reached the model", script.tool_replies[0], "applies it automatically")
+check("the specialist checked both patches in one call and read one answer", len(script.tool_replies), 1)
+check("that answer takes two turns in all: the check, then the structured answer", script.calls, 2)
+contains("the first patch's verdict reached the model", script.tool_replies[0], "1. url: ok: only spaces")
+contains("the second patch's verdict reached the model", script.tool_replies[0], "2. ack: ok: valid, but it changes letters")
 structured = result.get("structured_response")
 check("the specialist's final answer is the structured batch", getattr(structured, "proposals", [None])[0].target_text, "https://www .site.com/a")
 check(
@@ -193,7 +199,7 @@ check(
     sorted(script.seen_tools - {"PatchDraftBatch"}),
     sorted({
         "read_file",
-        tools.patch.tool.check_patch.name,
+        tools.patch.tool.check_patches.name,
         tools.book.tool.book_term_frequency.name,
         tools.book.tool.adjacent_page_edges.name,
     }),
@@ -210,7 +216,7 @@ check(
     sorted(structure_script.seen_tools - {"PatchDraftBatch"}),
     sorted({
         "read_file",
-        tools.patch.tool.check_patch.name,
+        tools.patch.tool.check_patches.name,
         tools.book.tool.adjacent_page_edges.name,
     }),
 )

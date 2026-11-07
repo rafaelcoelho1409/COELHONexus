@@ -1,8 +1,14 @@
 import type { Section } from "@/shared/layout/section";
 
-/** Book Distiller stages. Only Ingestion exists; Distill and Research join this list when they do (the tab strip
- * and the route table are built from it). */
-const BD_STAGES = [{ key: "ingestion", label: "Ingestion", href: "/bd/ingestion" }] as const;
+/** The address parameter that names the open book. */
+export const BOOK_PARAM = "book";
+export const PAGE_PARAM = "page";
+
+/** Book Distiller stages. */
+const BD_STAGES = [
+  { key: "ingestion", label: "Ingestion", href: "/bd/ingestion", carry: true },
+  { key: "distill", label: "Distill", href: "/bd/distill", carry: true },
+] as const;
 
 /** The title and stage tabs in the second navbar. `/bd` opens the Ingestion stage, so it is the current tab there. */
 export const BD_SECTION: Section = {
@@ -10,7 +16,8 @@ export const BD_SECTION: Section = {
   title: "Book Distiller",
   description: "Upload a book, watch it being read, study what was extracted",
   defaultTab: "ingestion",
-  tabs: BD_STAGES.map((stage) => ({ ...stage, tab: true, carry: false })),
+  carryParam: BOOK_PARAM,
+  tabs: BD_STAGES.map((stage) => ({ ...stage, tab: true })),
 };
 
 /** The server refuses a larger upload (413); the dropzone says so before sending 300 MB for nothing. */
@@ -24,8 +31,6 @@ export const BOOK_VIEWS = [
 ] as const;
 export type BookViewId = (typeof BOOK_VIEWS)[number][0];
 
-/** The address parameter that names the open book. */
-export const BOOK_PARAM = "book";
 export const AUTO_CHAIN_STORAGE_KEY = "bd-ingestion-auto-chain";
 
 /** The reader's layout (which side columns are open, how wide the text runs) and the page each book was left on are
@@ -56,4 +61,15 @@ export const NOTICE_MS = 8_000;
 export function bookHref(bookId?: string | null): string {
   const base = "/bd/ingestion";
   return bookId ? `${base}?${BOOK_PARAM}=${encodeURIComponent(bookId)}` : base;
+}
+
+/** A source citation opens the existing book reader at the cited page. */
+export function ingestionPageHref(bookId: string, page: number): string {
+  return `${bookHref(bookId)}&${PAGE_PARAM}=${page}`;
+}
+
+export function parsePageParam(value: string | null): number | null {
+  if (value === null || !/^\d+$/.test(value)) return null;
+  const page = Number(value);
+  return Number.isSafeInteger(page) && page > 0 ? page : null;
 }

@@ -66,11 +66,13 @@ const STICKY_COLUMN =
 
 export function BookView({
   bookId,
+  initialPage,
   autoChain,
   activeView,
   onViewChange,
 }: {
   bookId: string;
+  initialPage: number | null;
   autoChain: boolean;
   activeView: BookViewId;
   onViewChange: (view: BookViewId) => void;
@@ -98,6 +100,7 @@ export function BookView({
   return (
     <BookDetail
       bookId={bookId}
+      initialPage={initialPage}
       snapshot={snapshot.data}
       autoChain={autoChain}
       activeView={activeView}
@@ -108,12 +111,14 @@ export function BookView({
 
 function BookDetail({
   bookId,
+  initialPage,
   snapshot,
   autoChain,
   activeView,
   onViewChange,
 }: {
   bookId: string;
+  initialPage: number | null;
   snapshot: BookSnapshot;
   autoChain: boolean;
   activeView: BookViewId;
@@ -149,10 +154,13 @@ function BookDetail({
   // Follow the newest page while the run is live when the book is opened; a reader's own choice turns it off.
   const [view, setView] = useState<{ follow: boolean; picked: number | null }>(() => {
     const remembered = live ? null : readRememberedPage(bookId, manifest.n_pages);
+    const cited =
+      initialPage !== null && rows.some((candidate) => candidate.page === initialPage) ? initialPage : null;
     return {
-      follow: live,
+      follow: live && cited === null,
       picked:
-        remembered !== null && rows.some((candidate) => candidate.page === remembered) ? remembered : null,
+        cited ??
+        (remembered !== null && rows.some((candidate) => candidate.page === remembered) ? remembered : null),
     };
   });
   const page = shownPage(view, state.newest, rows);

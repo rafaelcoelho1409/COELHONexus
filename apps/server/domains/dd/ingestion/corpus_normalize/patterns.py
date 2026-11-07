@@ -148,8 +148,12 @@ AGENT_FOOTER_RE = re.compile(
 )
 
 # The horizontal rules react.dev leaves between its last section and the footer: more than one when the last section's own
-# rule is there too.
-TRAILING_RULES_RE = re.compile(r"(?:\s*\n[ \t]*-{3,}[ \t]*)+\Z")
+# rule is there too. Mintlify's markdown prints its rule as `***`.
+TRAILING_RULES_RE = re.compile(r"(?:\s*\n[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*)+\Z")
+
+# One of the call-to-action lines a docs host prints under every page: Mintlify's "[Connect these docs](…) to your agent of choice via
+# MCP for real-time answers." and "[Edit this page on GitHub](…) or [file an issue](…)." (a Docusaurus "[Edit this page](…)" too).
+FOOTER_LINK_RE = re.compile(r"^\[(?:Connect these docs|Edit this page(?: on GitHub)?)\]\([^)\s]*\)[^\n]*$")
 
 # A JSX `<img>` (`<img className="w-full" src="…" alt="…" />`): not Markdown, so a reader that does not render raw HTML
 # shows the tag as text. Rewritten as `![alt](src)`; the `dark-image` half of a light/dark pair is the same picture again.
