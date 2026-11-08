@@ -55,5 +55,5 @@ class SynthState(TypedDict, total = False):
     # content review. Resets to 0 the moment an iteration is NOT infra-degraded. Distinct from refine_iter (total budget spent).
     consecutive_infra_degraded: Optional[int]
 
-    status:         Optional[str]  # "running" | "done" | "failed" | "cancelled" | "audit_failed"
+    status:         Optional[str]  # "running" | "done" | "needs_review" | "failed" | "cancelled" | "audit_failed"
     error:          Optional[str]

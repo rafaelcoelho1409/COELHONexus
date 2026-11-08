@@ -36,5 +36,5 @@ class PlannerState(TypedDict, total = False):
     plan_path: Optional[str]                    # plan_write — MinIO key of latest pointer
     plan_write_stats: Optional[dict]            # plan_write — counts + inline plan for UI
 
-    status: Optional[str]                       # "running" | "done" | "failed" | "cancelled"
+    status: Optional[str]                       # "running" | "done" | "needs_review" | "failed" | "cancelled"
     error: Optional[str]                        # last-node error, if any

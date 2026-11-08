@@ -34,7 +34,7 @@ async def _terms_facet(
         },
     }
     try:
-        with domains.ycs.observability.service.es_search_span(
+        with domains.ycs.ask.observability.service.es_search_span(
             index = infra.elasticsearch.keys.INDEX_METADATA, top_k = 0,
             operation = "terms_facet",
         ):
@@ -95,7 +95,7 @@ async def _compute_video_statuses(
         return {}
     transcript_meta: dict[str, dict[str, Any]] = {}
     try:
-        with domains.ycs.observability.service.es_search_span(
+        with domains.ycs.ask.observability.service.es_search_span(
             index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
             top_k = min(10000, max(200, len(video_ids) * 10)),
             operation = "video_status_lookup",
@@ -143,9 +143,9 @@ async def _compute_video_statuses(
     if neo4j_graph is not None:
         try:
             rows = neo4j_graph.query(
-                f"MATCH (d:Document:{domains.ycs.graph_builder.params.SOURCE_LABEL}) "
+                f"MATCH (d:Document:{domains.ycs.ingestion.graph_builder.params.SOURCE_LABEL}) "
                 "WHERE d.video_id IN $vids OR d.parent_video_id IN $vids "
-                f"OPTIONAL MATCH (d)-[:MENTIONS]-(e:__Entity__:{domains.ycs.graph_builder.params.SOURCE_LABEL}) "
+                f"OPTIONAL MATCH (d)-[:MENTIONS]-(e:__Entity__:{domains.ycs.ingestion.graph_builder.params.SOURCE_LABEL}) "
                 "WITH COALESCE(d.parent_video_id, d.video_id) AS vid, "
                 "     d.part_total AS part_total, "
                 "     count(DISTINCT d) AS n_docs, "

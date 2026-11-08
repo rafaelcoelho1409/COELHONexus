@@ -1,5 +1,5 @@
 """AI workflow integration for Book Distiller ingestion."""
-from . import entities, params, progress, schemas, inventory, selection, service, versions
+from . import domain, entities, inventory, params, progress, schemas, service, versions
 
 
-__all__ = ["entities", "inventory", "params", "progress", "schemas", "selection", "service", "versions"]
+__all__ = ["domain", "entities", "inventory", "params", "progress", "schemas", "service", "versions"]

@@ -25,7 +25,7 @@ async def render_audit_write(
         context = runtime.context,
     )
     patch = {"chapter_path": result.get("chapter_path"), "chapter_stats": result.get("chapter_stats") or {}}
-    if result.get("status") in ("failed", "audit_failed"):
+    if result.get("status") in ("done", "failed", "audit_failed", "needs_review", "cancelled"):
         patch.update({"status": result["status"], "error": result.get("error")})
     return patch
 

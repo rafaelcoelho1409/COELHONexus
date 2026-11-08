@@ -113,7 +113,7 @@ async def lifespan(app: FastAPI):
 
     try:
         app.state.pg_url = infra.postgres.service.url()
-        await domains.ycs.conversation.service.ensure_conversation_table(
+        await domains.ycs.ask.conversation.service.ensure_conversation_table(
             app.state.pg_url)
     except Exception as e:
         logger.warning(
@@ -179,22 +179,22 @@ async def lifespan(app: FastAPI):
     try:
         es = infra.elasticsearch.service.get_es()
         qdrant = infra.qdrant.service.get_qdrant()
-        es_retriever = domains.ycs.retriever.service.ElasticsearchRetriever(es)
-        qdrant_retriever = domains.ycs.retriever.service.QdrantHybridRetriever(
+        es_retriever = domains.ycs.ask.retriever.service.ElasticsearchRetriever(es)
+        qdrant_retriever = domains.ycs.ask.retriever.service.QdrantHybridRetriever(
             qdrant            = qdrant,
-            dense_embeddings  = domains.ycs.embeddings.service.create_dense_embeddings(),
-            sparse_embeddings = domains.ycs.embeddings.service.create_sparse_embeddings(),
+            dense_embeddings  = domains.ycs.ingestion.embeddings.service.create_dense_embeddings(),
+            sparse_embeddings = domains.ycs.ingestion.embeddings.service.create_sparse_embeddings(),
             es_client         = es,
         )
         neo4j_retriever = (
-            domains.ycs.retriever.service.Neo4jRetriever(
+            domains.ycs.ask.retriever.service.Neo4jRetriever(
                 neo4j_graph = app.state.neo4j_graph,
                 llm         = app.state.llm,
             )
             if app.state.neo4j_graph is not None and app.state.llm is not None
             else None
         )
-        app.state.smart_retriever = domains.ycs.retriever.service.SmartRetriever(
+        app.state.smart_retriever = domains.ycs.ask.retriever.service.SmartRetriever(
             es_retriever      = es_retriever,
             qdrant_retriever  = qdrant_retriever,
             neo4j_retriever   = neo4j_retriever,
@@ -208,7 +208,7 @@ async def lifespan(app: FastAPI):
 
     try:
         app.state.grader = (
-            domains.ycs.grader.service.DocumentGrader(app.state.llm)
+            domains.ycs.ask.grader.service.DocumentGrader(app.state.llm)
             if app.state.llm is not None else None
         )
     except Exception as e:

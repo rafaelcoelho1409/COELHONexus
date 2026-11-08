@@ -37,6 +37,8 @@ const LINE_TONE: Record<ActivityLine["tone"], string> = {
 const PENDING_NOTE: Record<StageNodeView["status"], string | null> = {
   done: null,
   failed: "This node failed before producing output. The Activity tab has the event trace.",
+  needs_review:
+    "This run finished with unresolved quality signals. Review the Activity tab before using its output.",
   running: "Running — its results appear here the moment the node commits.",
   pending: "This node has not run yet.",
   future: "The server does not implement this node yet.",

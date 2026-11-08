@@ -95,7 +95,7 @@ describe("chapter cells", () => {
     expect(toChapterStatus("failed")).toBe("failed");
     expect(toChapterStatus("cancelled")).toBe("cancelled");
     expect(toChapterStatus("done")).toBe("done");
-    expect(toChapterStatus("something-new")).toBe("done");
+    expect(toChapterStatus("something-new")).toBe("needs_review");
   });
 
   it("humanises chapter ids", () => {

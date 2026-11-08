@@ -1,6 +1,7 @@
 """Run integration between completed Book Distiller extractions and the AI graph."""
 from __future__ import annotations
 import ai, domains, infra
+from . import domain, schemas, versions
 
 
 import asyncio
@@ -454,6 +455,206 @@ async def read_ingestion_ai_run(
     if manifest.book_id != book_id or manifest.agentic_run_id != agentic_run_id:
         raise ValueError("the stored agentic manifest does not match the requested run")
     return manifest.model_dump(mode = "json")
+
+
+async def read_selection(
+    book_id: str,
+    agentic_run_id: str,
+    *,
+    storage: infra.minio.service.MinIOStorage | None = None,
+) -> tuple[schemas.ContentSelectionManifest, str, str] | None:
+    """Return the current page-selection revision, key, and exact content hash."""
+    if not _safe_segment(book_id) or not _safe_segment(agentic_run_id):
+        raise ValueError("book_id and agentic_run_id must be safe path segments")
+    if storage is None:
+        storage = infra.minio.service.get_storage()
+    pointer_key = domains.bd.ingestion.storage.keys.agentic_current_content_selection_key(
+        book_id, agentic_run_id,
+    )
+    if not await storage.exists(pointer_key):
+        return None
+    pointer = json.loads(await storage.read_text(pointer_key))
+    key = pointer.get("key") if isinstance(pointer, dict) else None
+    digest = pointer.get("sha256") if isinstance(pointer, dict) else None
+    revision = pointer.get("revision") if isinstance(pointer, dict) else None
+    if type(revision) is not int or revision < 1 or not isinstance(key, str) or not isinstance(digest, str):
+        raise ValueError("the current content-selection pointer is malformed")
+    expected_key = domains.bd.ingestion.storage.keys.agentic_content_selection_key(
+        book_id, agentic_run_id, revision,
+    )
+    if key != expected_key:
+        raise ValueError("the current content-selection pointer does not match its revision")
+    content = await storage.read_text(key)
+    actual_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    if actual_digest != digest:
+        raise ValueError("the current content-selection revision failed its integrity check")
+    manifest = schemas.ContentSelectionManifest.model_validate_json(content)
+    if manifest.book_id != book_id or manifest.agentic_run_id != agentic_run_id:
+        raise ValueError("the current content selection belongs to a different run")
+    return manifest, key, actual_digest
+
+
+async def ensure_selection(
+    book_id: str,
+    agentic_run_id: str,
+    *,
+    run_manifest: dict[str, Any] | None = None,
+    storage: infra.minio.service.MinIOStorage | None = None,
+) -> tuple[schemas.ContentSelectionManifest, str, str]:
+    """Return a selection, migrating completed pre-classifier runs with a conservative default.
+
+    Older completed runs have no content-selection artifact. Keep known blank pages excluded and
+    retain every other page as unknown so a compatibility migration can never silently drop book
+    content. The generated artifact is immutable and reviewed edits continue through revisions.
+    """
+    if not _safe_segment(book_id) or not _safe_segment(agentic_run_id):
+        raise ValueError("book_id and agentic_run_id must be safe path segments")
+    if storage is None:
+        storage = infra.minio.service.get_storage()
+
+    async with (
+        infra.redis.service.client() as redis,
+        redis.lock(
+            domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+            timeout = 120,
+            blocking_timeout = 30,
+        ),
+    ):
+        current = await read_selection(book_id, agentic_run_id, storage = storage)
+        if current is not None:
+            return current
+
+        manifest = run_manifest or await read_ingestion_ai_run(book_id, agentic_run_id, storage = storage)
+        if manifest is None:
+            raise FileNotFoundError(f"Agentic ingestion run {agentic_run_id!r} was not found")
+        if manifest.get("book_id") != book_id or manifest.get("agentic_run_id") != agentic_run_id:
+            raise ValueError("the ingestion run does not match the requested content selection")
+        if manifest.get("status") != schemas.AgenticRunStatus.DONE.value:
+            raise ValueError("content selection is available after ingestion completes")
+
+        revision = 1
+        while True:
+            key = domains.bd.ingestion.storage.keys.agentic_content_selection_key(
+                book_id, agentic_run_id, revision,
+            )
+            if not await storage.exists(key):
+                selection = domain.build_legacy_selection(manifest, revision, time.time())
+                content = domain.selection_json(selection)
+                await storage.write(key, content, content_type = "application/json")
+                digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                break
+
+            content = await storage.read_text(key)
+            try:
+                existing = schemas.ContentSelectionManifest.model_validate_json(content)
+            except ValueError:
+                revision += 1
+                continue
+            if (
+                existing.book_id != book_id
+                or existing.agentic_run_id != agentic_run_id
+                or existing.extraction_run_id != manifest.get("extraction_run_id")
+                or existing.revision != revision
+                or existing.expected_page_count != manifest.get("expected_page_count")
+            ):
+                revision += 1
+                continue
+            selection = existing
+            digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            break
+
+        pointer_key = domains.bd.ingestion.storage.keys.agentic_current_content_selection_key(
+            book_id, agentic_run_id,
+        )
+        await storage.write(
+            pointer_key,
+            json.dumps(
+                {"revision": selection.revision, "key": key, "sha256": digest},
+                separators = (",", ":"),
+                sort_keys = True,
+            ),
+            content_type = "application/json",
+        )
+        return selection, key, digest
+
+
+async def apply_overrides(
+    book_id: str,
+    agentic_run_id: str,
+    overrides: list[dict[str, Any]],
+    *,
+    expected_revision: int,
+    storage: infra.minio.service.MinIOStorage | None = None,
+) -> schemas.ContentSelectionManifest:
+    """Append a reviewed selection revision and only then move its current pointer."""
+    if not _safe_segment(book_id) or not _safe_segment(agentic_run_id):
+        raise ValueError("book_id and agentic_run_id must be safe path segments")
+    if storage is None:
+        storage = infra.minio.service.get_storage()
+    async with (
+        infra.redis.service.client() as redis,
+        redis.lock(
+            domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+            timeout = 120,
+            blocking_timeout = 30,
+        ),
+    ):
+        return await _apply_selection_overrides_unlocked(
+            book_id, agentic_run_id, overrides, expected_revision, storage,
+        )
+
+
+async def _apply_selection_overrides_unlocked(
+    book_id: str,
+    agentic_run_id: str,
+    overrides: list[dict[str, Any]],
+    expected_revision: int,
+    storage: infra.minio.service.MinIOStorage,
+) -> schemas.ContentSelectionManifest:
+    current = await read_selection(book_id, agentic_run_id, storage = storage)
+    if current is None:
+        raise FileNotFoundError("the ingestion run has no content selection")
+    manifest, _, _ = current
+    updated = domain.apply_selection_overrides(
+        manifest,
+        overrides,
+        expected_revision = expected_revision,
+        revision = manifest.revision + 1,
+        created_at = time.time(),
+    )
+    if updated is manifest:
+        return manifest
+
+    revision = updated.revision
+    key = domains.bd.ingestion.storage.keys.agentic_content_selection_key(
+        book_id, agentic_run_id, revision,
+    )
+    # A crash after writing the immutable revision but before moving the
+    # current pointer can leave an unreferenced object. Skip it on retry.
+    while await storage.exists(key):
+        revision += 1
+        key = domains.bd.ingestion.storage.keys.agentic_content_selection_key(
+            book_id, agentic_run_id, revision,
+        )
+    if revision != updated.revision:
+        updated = updated.model_copy(update = {"revision": revision})
+
+    content = domain.selection_json(updated)
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    await storage.write(key, content, content_type = "application/json")
+    pointer_key = domains.bd.ingestion.storage.keys.agentic_current_content_selection_key(
+        book_id, agentic_run_id,
+    )
+    await storage.write(
+        pointer_key,
+        json.dumps(
+            {"revision": updated.revision, "key": key, "sha256": digest},
+            separators = (",", ":"),
+            sort_keys = True,
+        ),
+        content_type = "application/json",
+    )
+    return updated
 
 
 async def find_active_ingestion_ai_run(

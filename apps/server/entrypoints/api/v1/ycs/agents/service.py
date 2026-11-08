@@ -28,7 +28,7 @@ async def build_graph_from_request(request: Request):
     BYOK exclusive-override was dropped — routing one user key through a shared
     fallback defeats explicit provider choice; same workload as Planner/Synth so same endpoint path."""
     app = request.app
-    return domains.ycs.rag.adaptive.graph.build_adaptive_rag_graph(
+    return domains.ycs.ask.rag.adaptive.graph.build_adaptive_rag_graph(
         retriever    = app.state.smart_retriever,
         grader       = app.state.grader,
         llm          = app.state.llm,
@@ -64,9 +64,9 @@ async def _raise_if_embedding_migration_needed() -> None:
     this — either can write a video's vectors under a DIFFERENT model
     than everything already in the active collection, exactly the
     silent-corpus-fragmentation failure mode the gate exists to
-    prevent. See `domains.ycs.embedding_migration.check_migration_needed_now`
+    prevent. See `domains.ycs.ingestion.embedding_migration.check_migration_needed_now`
     for the actual check."""
-    mismatch = await domains.ycs.embedding_migration.service.check_migration_needed_now()
+    mismatch = await domains.ycs.ingestion.embedding_migration.service.check_migration_needed_now()
     if mismatch is not None:
         raise HTTPException(
             status_code = 423,

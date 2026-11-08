@@ -28,11 +28,11 @@ TASK_INCLUDE = [
     "domains.dd.ingestion.task",
     "domains.dd.ingestion.ai.task",
     "domains.dd.pipeline.ai.task",
-    "domains.ycs.extract.task",
-    "domains.ycs.qdrant_task.task",
-    "domains.ycs.neo4j_task.task",
-    "domains.ycs.pipeline_task.task",
-    "domains.ycs.embedding_migration.task",
+    "domains.ycs.ingestion.extract.task",
+    "domains.ycs.ingestion.qdrant_task.task",
+    "domains.ycs.ingestion.neo4j_task.task",
+    "domains.ycs.ingestion.pipeline_task.task",
+    "domains.ycs.ingestion.embedding_migration.task",
 ]
 
 

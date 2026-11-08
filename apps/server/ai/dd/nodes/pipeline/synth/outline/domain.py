@@ -643,20 +643,27 @@ def compute_manifest_hash(
     *,
     sources: list[str],
     sources_bytes: int,
+    source_digests: dict[str, str] | None = None,
     chapter_title: str,
     chapter_description: str,
     tutorial: bool = False,
 ) -> str:
-    """`tutorial` marks an outline planned as a tutorial (one step per best code); a v1 outline's hash is unchanged."""
-    payload = (
-        f"sources={','.join(sorted(sources))}|"
-        f"n_sources={len(sources)}|"
-        f"bytes={sources_bytes}|"
-        f"title={chapter_title}|"
-        f"goal={chapter_description}|"
-        f"prompt={versions.prompt_version(tutorial)}|"
-        f"schema={versions.schema_version(tutorial)}"
-    ) + ("|tutorial=1" if tutorial else "")
+    """Content-address an outline against its exact source bodies and full chapter brief."""
+    payload = json.dumps(
+        {
+            "sources": sorted(sources),
+            "source_digests": {key: (source_digests or {}).get(key, "") for key in sorted(sources)},
+            "sources_bytes": sources_bytes,
+            "chapter_title": chapter_title,
+            "chapter_description": chapter_description,
+            "prompt_version": versions.prompt_version(tutorial),
+            "schema_version": versions.schema_version(tutorial),
+            "tutorial": tutorial,
+        },
+        ensure_ascii = False,
+        sort_keys = True,
+        separators = (",", ":"),
+    )
     return sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 

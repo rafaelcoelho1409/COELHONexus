@@ -157,7 +157,7 @@ async def create_distill_run(
         if qa_manifest.get("expected_page_count") != page_count:
             raise ValueError("the selected ingestion QA run does not cover every page")
 
-        selection_result = await domains.bd.ingestion.ai.selection.read_selection(
+        selection_result = await domains.bd.ingestion.ai.service.read_selection(
             book_id, qa_run_id, storage = storage,
         )
         if selection_result is None:

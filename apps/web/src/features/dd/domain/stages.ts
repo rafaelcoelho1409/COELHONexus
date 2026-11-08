@@ -98,7 +98,7 @@ export const STAGE_NODES: Record<RunStage, StageNode[]> = {
 };
 
 /** `stopped`: a node left running by a run that was cancelled (ingestion; the planner and synth graphs never show it). */
-export type NodeStatus = "done" | "running" | "pending" | "future" | "failed" | "stopped";
+export type NodeStatus = "done" | "running" | "pending" | "future" | "needs_review" | "failed" | "stopped";
 
 /** What a graph or a node list needs of a node: its name and its state. Planner, synth and ingestion all draw it. */
 export type NodeView = {
@@ -189,18 +189,21 @@ export function plannerStartLabel(values: Record<string, unknown>): "Start" | "R
 // ============================================================
 
 export type StagePillState = {
-  status: "idle" | "working" | "done" | "failed" | "cancelled";
+  status: "idle" | "working" | "done" | "needs_review" | "failed" | "cancelled";
   label: string | null;
 };
 
 export const IDLE_PILL: StagePillState = { status: "idle", label: null };
 export const WORKING_PILL: StagePillState = { status: "working", label: null };
 
-/** Pill for a terminal run status as the server reports it (`done` | `failed` | `cancelled`). */
+/** Pill for a terminal run status; unknown outcomes stay visible as needs-review. */
 export function terminalPill(status: string): StagePillState {
+  if (status === "needs_review" || status === "audit_failed")
+    return { status: "needs_review", label: "Needs review" };
   if (status === "failed") return { status: "failed", label: "Failed" };
   if (status === "cancelled") return { status: "cancelled", label: "Cancelled" };
-  return { status: "done", label: null };
+  if (status === "done") return { status: "done", label: null };
+  return { status: "needs_review", label: "Needs review" };
 }
 
 /** A planner thread id in the backend's `docs-distiller/{slug}/{uuid}` shape (its "recent runs" query finds

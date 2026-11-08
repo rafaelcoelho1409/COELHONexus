@@ -34,6 +34,8 @@ const EMPTY_FIGURES: readonly string[] = [];
  * shows it bare. */
 export function PageReader({
   bookId,
+  bookTitle,
+  filename,
   page,
   row,
   nPages,
@@ -43,6 +45,8 @@ export function PageReader({
   toolbar,
 }: {
   bookId: string;
+  bookTitle?: string;
+  filename?: string;
   page: number | null;
   row: PageRow | undefined;
   nPages: number;
@@ -110,8 +114,23 @@ export function PageReader({
       className={`min-w-0 ${framed ? "rounded-md border border-border bg-card p-4 sm:p-5" : ""}`}
     >
       <header className="mb-4 border-b border-border pb-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-48 flex-1">
+        {bookTitle ? (
+          <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <h4 className="break-words text-base font-semibold">{bookTitle}</h4>
+              {filename ? (
+                <p className="mt-1 break-all text-xs text-muted-foreground">
+                  <span className="mono-label">Source file</span>: {filename}
+                </p>
+              ) : null}
+            </div>
+            {toolbar}
+          </div>
+        ) : null}
+        <div
+          className={`flex min-w-0 flex-wrap items-start justify-between gap-3 ${bookTitle ? "mt-3" : ""}`}
+        >
+          <div className="min-w-0 flex-1">
             <p className="mono-label">
               {unitName} {page}
               {nPages > 0 ? ` of ${nPages}` : ""}
@@ -125,22 +144,22 @@ export function PageReader({
                     : "AI-processed content"
                 : "Docling extraction"}
             </p>
-            {trail ? <p className="mt-1 text-sm text-muted-foreground">{trail}</p> : null}
-            {chips.length > 0 ? (
-              <ul aria-label={`What the ${units.singular} contains`} className="mt-2 flex flex-wrap gap-2">
-                {chips.map((chip) => (
-                  <li
-                    key={chip}
-                    className="rounded-sm border border-border px-2 py-0.5 text-xs text-muted-foreground"
-                  >
-                    {chip}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
           </div>
-          {toolbar}
+          {bookTitle ? null : toolbar}
         </div>
+        {trail ? <p className="mt-2 w-full break-words text-sm text-muted-foreground">{trail}</p> : null}
+        {chips.length > 0 ? (
+          <ul aria-label={`What the ${units.singular} contains`} className="mt-2 flex flex-wrap gap-2">
+            {chips.map((chip) => (
+              <li
+                key={chip}
+                className="rounded-sm border border-border px-2 py-0.5 text-xs text-muted-foreground"
+              >
+                {chip}
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <PageQualityPanel bookId={bookId} page={page} unit={unitName} enabled={hasAi} defaultOpen={framed} />
       </header>
       <div className="flex flex-wrap items-center justify-between gap-2">

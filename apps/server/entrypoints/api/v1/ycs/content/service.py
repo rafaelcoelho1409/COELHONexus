@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 async def _raise_if_embedding_migration_needed(include_transcription: bool) -> None:
     """2026-09-15: gate for the embedding-migration flow
-    (`domains.ycs.embedding_migration`) — blocks dispatching a NEW
+    (`domains.ycs.ingestion.embedding_migration`) — blocks dispatching a NEW
     ingestion run while the corpus is split across two embedding models
     (a change was detected but not yet migrated, or a migration is
     currently in flight). Without this, new videos would land in the
@@ -26,7 +26,7 @@ async def _raise_if_embedding_migration_needed(include_transcription: bool) -> N
     all until this was found)."""
     if not include_transcription:
         return
-    mismatch = await domains.ycs.embedding_migration.service.check_migration_needed_now()
+    mismatch = await domains.ycs.ingestion.embedding_migration.service.check_migration_needed_now()
     if mismatch is not None:
         raise HTTPException(
             status_code = 423,

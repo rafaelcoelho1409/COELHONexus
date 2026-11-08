@@ -186,11 +186,18 @@ export function useSynthRun(slug: string): SynthRunController {
     const totalMs = data.study_total_wall_ms > 0 ? data.study_total_wall_ms : null;
     // A book with every chapter written is "Done", not "Idle" — the same word the planner shows for its plan.
     const finished = cells.every((cell) => cell.status === "done");
+    const needsReview = cells.some((cell) => cell.status === "needs_review");
     setState((s) => ({
       ...s,
       ...(!s.running ? DETACHED : {}),
       cells,
-      pill: s.running ? s.pill : finished ? terminalPill("done") : IDLE_PILL,
+      pill: s.running
+        ? s.pill
+        : finished
+          ? terminalPill("done")
+          : needsReview
+            ? terminalPill("needs_review")
+            : IDLE_PILL,
       elapsedMs: s.elapsedMs ?? totalMs,
     }));
     return cells;
@@ -263,7 +270,7 @@ export function useSynthRun(slug: string): SynthRunController {
                   : c,
               )
             : s.cells,
-          pill: status === "failed" ? terminalPill("failed") : IDLE_PILL,
+          pill: status === "done" ? IDLE_PILL : terminalPill(status),
         };
       });
       invalidatePipeline();
@@ -344,7 +351,9 @@ export function useSynthRun(slug: string): SynthRunController {
           ),
           ...(s.canvas?.chapterId === chapterId && s.canvas.live ? DETACHED : {}),
         }));
-        if (status === "failed") overlays.toast(`Chapter failed: ${String(event.error || chapterId)}`);
+        if (status === "needs_review")
+          overlays.toast(`Chapter needs review: ${String(event.error || chapterId)}`);
+        else if (status === "failed") overlays.toast(`Chapter failed: ${String(event.error || chapterId)}`);
         return;
       }
       case "chapter_ready":
@@ -391,14 +400,20 @@ export function useSynthRun(slug: string): SynthRunController {
           pill:
             finalStatus === "cancelled"
               ? { status: "cancelled", label: `Cancelled (${completed}/${total})` }
-              : { status: "done", label: `Done (${completed}/${total})` },
+              : finalStatus === "needs_review"
+                ? { status: "needs_review", label: `Needs review (${completed}/${total})` }
+                : finalStatus === "failed"
+                  ? terminalPill("failed")
+                  : { status: "done", label: `Done (${completed}/${total})` },
         }));
         overlays.toast(
           finalStatus === "cancelled"
             ? `Study cancelled: ${completed}/${total} chapters done.`
             : finalStatus === "failed"
               ? `Study finished with failures: ${completed}/${total} chapters done.`
-              : `All ${total} chapters synthesized.`,
+              : finalStatus === "needs_review"
+                ? `Study finished with chapters needing review: ${completed}/${total} chapters done.`
+                : `All ${total} chapters synthesized.`,
         );
         invalidatePipeline();
         void hydratePlan();

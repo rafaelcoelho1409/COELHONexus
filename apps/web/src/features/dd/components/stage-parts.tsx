@@ -28,6 +28,7 @@ const PILL_LABEL: Record<StagePillState["status"], string> = {
   idle: "Idle",
   working: "Working",
   done: "Done",
+  needs_review: "Needs review",
   failed: "Failed",
   cancelled: "Cancelled",
 };
@@ -36,6 +37,7 @@ const PILL_TONE: Record<StagePillState["status"], string> = {
   idle: "text-muted-foreground",
   working: "text-running-text",
   done: "text-success-text",
+  needs_review: "text-warning-text",
   failed: "text-destructive-text",
   cancelled: "text-muted-foreground",
 };
@@ -62,6 +64,8 @@ export function StatusGlyph({ status }: { status: NodeStatus }) {
   if (status === "running") {
     return <CircleDot aria-hidden className={`${GLYPH_CLASS} animate-pulse text-running-text`} />;
   }
+  if (status === "needs_review")
+    return <CircleDot aria-hidden className={`${GLYPH_CLASS} text-warning-text`} />;
   if (status === "future") return <Lock aria-hidden className={`${GLYPH_CLASS} text-muted-foreground`} />;
   if (status === "failed") return <X aria-hidden className={`${GLYPH_CLASS} text-destructive-text`} />;
   if (status === "stopped") return <Ban aria-hidden className={`${GLYPH_CLASS} text-muted-foreground`} />;
@@ -73,6 +77,7 @@ export const NODE_STATUS_LABEL: Record<NodeStatus, string> = {
   running: "running",
   pending: "pending",
   future: "not available yet",
+  needs_review: "needs review",
   failed: "failed",
   stopped: "stopped",
 };
@@ -145,6 +150,7 @@ const CELL_GLYPH: Record<ChapterCell["status"], NodeStatus> = {
   pending: "pending",
   running: "running",
   done: "done",
+  needs_review: "needs_review",
   failed: "failed",
   cancelled: "failed",
 };
@@ -222,8 +228,14 @@ export function ChapterStrip({
                 </button>
               </div>
               <div className="flex items-center justify-between gap-2 pl-6">
-                <span className="font-mono text-xs text-muted-foreground">
-                  {cell.synthEligible === false ? "Excluded from Synth" : fmtMs(cell.wallMs)}
+                <span
+                  className={`font-mono text-xs ${cell.status === "needs_review" ? "text-warning-text" : "text-muted-foreground"}`}
+                >
+                  {cell.synthEligible === false
+                    ? "Excluded from Synth"
+                    : cell.status === "needs_review"
+                      ? "Needs review"
+                      : fmtMs(cell.wallMs)}
                 </span>
                 <span className="relative z-10 flex items-center">
                   <button

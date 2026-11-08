@@ -16,7 +16,7 @@ export function humanizeChapterId(id: string): string {
 export type ChapterCell = {
   id: string;
   title: string;
-  status: "pending" | "running" | "done" | "failed" | "cancelled";
+  status: "pending" | "running" | "done" | "needs_review" | "failed" | "cancelled";
   wallMs: number | null;
   threadId: string | null;
   selected: boolean;
@@ -25,9 +25,11 @@ export type ChapterCell = {
   exclusionReason?: string;
 };
 
-/** Server statuses outside the known set count as done: the chapter finished, just with a status we don't name. */
+/** A chapter is done only on an explicit success; unknown terminal results need review. */
 export function toChapterStatus(status: string): ChapterCell["status"] {
-  return status === "failed" || status === "cancelled" ? status : "done";
+  if (status === "done") return "done";
+  if (status === "failed" || status === "cancelled") return status;
+  return "needs_review";
 }
 
 /** Strings out of an open event payload field; anything else is dropped. */
@@ -50,7 +52,11 @@ export function cellsFromPlan(data: SynthChapters): ChapterCell[] {
     .map((chapter) => ({
       id: chapter.id,
       title: chapter.title || humanizeChapterId(chapter.id),
-      status: chapter.rendered ? ("done" as const) : ("pending" as const),
+      status: chapter.rendered
+        ? ("done" as const)
+        : chapter.needs_review
+          ? ("needs_review" as const)
+          : ("pending" as const),
       wallMs: chapter.rendered ? chapter.wall_ms : null,
       threadId: chapter.thread_id ?? null,
       selected: false,
@@ -107,9 +113,17 @@ export function harmonizeDoneLabel(patched: number, withIssues: number, cached =
 export function chapterCounter(cells: readonly ChapterCell[]): string {
   const eligible = cells.filter((cell) => cell.synthEligible !== false);
   const done = eligible.filter((cell) => cell.status === "done").length;
+  const needsReview = eligible.filter((cell) => cell.status === "needs_review").length;
   const failed = eligible.filter((cell) => cell.status === "failed" || cell.status === "cancelled").length;
+  const details = [
+    done > 0 ? `${done} done` : "",
+    needsReview > 0 ? `${needsReview} needs review` : "",
+    failed > 0 ? `${failed} failed` : "",
+  ].filter(Boolean);
   const progress =
-    failed > 0 ? `${done} done, ${failed} failed / ${eligible.length}` : `${done} / ${eligible.length}`;
+    needsReview > 0 || failed > 0
+      ? `${details.join(", ")} / ${eligible.length}`
+      : `${done} / ${eligible.length}`;
   const excluded = cells.length - eligible.length;
   return excluded > 0 ? `${progress} · ${excluded} excluded from Synth` : progress;
 }

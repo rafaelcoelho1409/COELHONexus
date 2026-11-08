@@ -130,6 +130,10 @@ export function agenticRun(over: Partial<AgenticRunStatus> = {}): AgenticRunStat
     finished_at: 2,
     error: null,
     ...over,
+    selected_page_count: over.selected_page_count ?? 1,
+    excluded_page_count: over.excluded_page_count ?? 0,
+    content_selection_revision:
+      over.content_selection_revision === undefined ? 1 : over.content_selection_revision,
   };
 }
 

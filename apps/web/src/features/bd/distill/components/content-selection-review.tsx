@@ -36,19 +36,11 @@ export function ContentSelectionReview({
   onSave: (expectedRevision: number, overrides: { page_number: number; disposition: Disposition }[]) => void;
 }) {
   return (
-    <section aria-labelledby="content-selection-heading" className="min-w-0 border-t border-border pt-4">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="mono-label">Distill input</p>
-          <h3 id="content-selection-heading" className="mt-1 text-base font-semibold">
-            Page selection
-          </h3>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Confident navigation, legal, blank, and noise pages are left out of the Learning Guide. The original
-            Ingestion pages stay available, and uncertain pages stay included unless you change them here.
-          </p>
-        </div>
-      </header>
+    <section aria-label="Distill page selection" className="min-w-0">
+      <p className="text-sm text-muted-foreground">
+        Confident navigation, legal, blank, and noise pages are left out of the Learning Guide. The original
+        Ingestion pages stay available, and uncertain pages stay included unless you change them here.
+      </p>
 
       {agenticRunId === null ? (
         <p className="mt-3 rounded-sm border border-border px-3 py-2 text-sm text-muted-foreground">

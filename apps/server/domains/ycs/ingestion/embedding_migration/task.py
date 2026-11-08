@@ -1,0 +1,76 @@
+"""ycs/ingestion/embedding_migration — the tiny cutover task.
+
+The actual re-embed work reuses `domains.ycs.ingestion.qdrant_task.task
+.ingest_to_qdrant` unchanged (it already accepts `video_ids=None` for
+"every ES transcript" and now takes an optional `collection_name`
+override) — no need to duplicate chunk/embed/upsert logic. This module
+only adds what that task doesn't do: atomically re-pointing the
+`QDRANT_COLLECTION` alias once the re-embed succeeds.
+
+Wired via `Signature.link()`, not `celery.chain()` — a chain's overall
+`AsyncResult.id` refers to the LAST task, which shows PENDING for the
+entire (long) re-embed phase; `.link()` on the re-embed signature keeps
+that signature's OWN task id as the one callers poll, so live progress
+(`_progress` callback → `self.update_state`) is visible immediately, same
+as every other YCS Celery task. See `service.dispatch_migration` for the
+wiring. If the re-embed task fails, `.link()` never invokes this
+finalize step — migration state stays `status: "running"` (stale but
+SAFE: `check_migration_needed` reads live Qdrant data, not this status
+field, so the dispatch gate stays correctly closed) and the task's own
+FAILURE state is what the poller/UI surfaces."""
+from __future__ import annotations
+import domains
+import infra.celery
+from . import service
+
+import asyncio
+import time
+
+
+logger = infra.celery.service.get_task_logger(__name__)
+
+
+@infra.celery.service.app.task(
+    bind = True,
+    name = "domains.ycs.embedding_migration.task.finalize_embedding_migration",
+)
+def finalize_embedding_migration(self, physical_collection: str) -> dict:
+    """Re-point the `QDRANT_COLLECTION` alias at `physical_collection`
+    and clear migration state. Runs only after the re-embed task
+    (linked via `.link()`) succeeds."""
+    logger.info(f"[finalize_embedding_migration] cutover -> {physical_collection!r}")
+
+    async def _run() -> dict:
+        async with infra.redis.service.client() as redis:
+            qdrant = infra.qdrant.service.new_qdrant()
+            with infra.langfuse.service.session(
+                "ycs-embedding-migration",
+                session_id = self.request.id or "(no-request-id)",
+            ), infra.opentelemetry.service.get_tracer().start_as_current_span(
+                "ycs.embedding_migration.finalize",
+                attributes = {
+                    infra.langfuse.keys.KEEP:          True,
+                    infra.langfuse.keys.KIND:          "workflow_root",
+                    infra.langfuse.keys.TRACE_NAME:           "ycs.embedding_migration.finalize",
+                    "ycs.embedding_migration.target": physical_collection,
+                },
+            ):
+                try:
+                    await service.cutover(redis, qdrant, physical_collection)
+                    return {"status": "done", "collection": physical_collection}
+                finally:
+                    await qdrant.close()
+
+    t0 = time.monotonic()
+    try:
+        result = asyncio.run(_run())
+    except Exception:
+        domains.ycs.ask.observability.service.record_ycs_ingest_run(
+            kind = "embedding_migration", outcome = "error", duration_s = time.monotonic() - t0,
+        )
+        raise
+    domains.ycs.ask.observability.service.record_ycs_ingest_run(
+        kind = "embedding_migration", outcome = "ok", duration_s = time.monotonic() - t0,
+    )
+    logger.info(f"[finalize_embedding_migration] Done: {result}")
+    return result

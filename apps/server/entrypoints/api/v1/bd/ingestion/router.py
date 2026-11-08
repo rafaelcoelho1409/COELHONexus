@@ -241,9 +241,14 @@ async def get_agentic_content_selection(book_id: str, agentic_run_id: str) -> di
         raise HTTPException(status_code = 404, detail = "Agentic ingestion run not found")
     if manifest["status"] != "done":
         raise HTTPException(status_code = 409, detail = "Content selection is available after ingestion completes")
-    selected = await domains.bd.ingestion.ai.selection.read_selection(book_id, agentic_run_id)
-    if selected is None:
-        raise HTTPException(status_code = 404, detail = "Content selection not found")
+    try:
+        selected = await domains.bd.ingestion.ai.service.ensure_selection(
+            book_id, agentic_run_id, run_manifest = manifest,
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code = 404, detail = str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code = 409, detail = str(error)) from error
     selection, _, digest = selected
     return _content_selection_response(selection, digest)
 
@@ -263,13 +268,16 @@ async def update_agentic_content_selection(
     if manifest["status"] != "done":
         raise HTTPException(status_code = 409, detail = "Content selection can be reviewed after ingestion completes")
     try:
-        selection = await domains.bd.ingestion.ai.selection.apply_overrides(
+        await domains.bd.ingestion.ai.service.ensure_selection(
+            book_id, agentic_run_id, run_manifest = manifest,
+        )
+        selection = await domains.bd.ingestion.ai.service.apply_overrides(
             book_id,
             agentic_run_id,
             [row.model_dump() for row in body.overrides],
             expected_revision = body.expected_revision,
         )
-        selected = await domains.bd.ingestion.ai.selection.read_selection(book_id, agentic_run_id)
+        selected = await domains.bd.ingestion.ai.service.read_selection(book_id, agentic_run_id)
         if selected is None:
             raise RuntimeError("content selection disappeared after review")
         _, _, digest = selected
@@ -515,12 +523,16 @@ def _pages_where(manifest: dict, keep) -> list[int]:
 
 async def _agentic_status(manifest: dict) -> dict:
     progress = manifest["progress"]
-    selected_page_count = manifest.get("selected_page_count", 0)
-    excluded_page_count = manifest.get("excluded_page_count", 0)
+    selected_page_count = manifest.get("selected_page_count")
+    if type(selected_page_count) is not int or selected_page_count < 0:
+        selected_page_count = 0
+    excluded_page_count = manifest.get("excluded_page_count")
+    if type(excluded_page_count) is not int or excluded_page_count < 0:
+        excluded_page_count = 0
     selection_revision = manifest.get("content_selection_revision")
     if manifest.get("status") == "done":
         try:
-            current = await domains.bd.ingestion.ai.selection.read_selection(
+            current = await domains.bd.ingestion.ai.service.read_selection(
                 manifest["book_id"], manifest["agentic_run_id"],
             )
             if current is not None:

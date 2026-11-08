@@ -34,7 +34,7 @@ else:
 
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY") or None
 
-# Fallback only — `domains.ycs.embeddings.service.get_embedding_info()`
+# Fallback only — `domains.ycs.ingestion.embeddings.service.get_embedding_info()`
 # probes the real dimension from the configured endpoint. Used at
 # collection-create time when no probe has succeeded yet.
 DEFAULT_DENSE_DIM = 2048

@@ -64,7 +64,7 @@ async def prior_render_verdict(blobs, slug: str, chapter_id: str, plan_chapters:
     except Exception as error:
         logger.warning(f"[study-orchestrator] {slug}/{chapter_id}: prior render blob unreadable for the resume-skip check ({type(error).__name__}: {error}) — rendering anyway")
         return False
-    if not bool((render.get("audit") or {}).get("audit_passed", True)):
+    if (render.get("audit") or {}).get("audit_passed") is not True:
         # A prior run left content whose audit FAILED: resuming must not treat that as "already done" forever.
         logger.info(f"[study-orchestrator] {slug}/{chapter_id}: prior render failed its audit — not skipping, re-running")
         return False
@@ -77,6 +77,7 @@ async def prior_render_verdict(blobs, slug: str, chapter_id: str, plan_chapters:
 
 async def _execute_chapter(
     binding: domains.dd.pipeline.runtime.runner.entities.Binding, study_thread_id: str, slug: str, chapter_id: str, chapter_thread_id: str, mode: str,
+    plan_chapters: dict[str, dict],
 ) -> tuple[str, str | None]:
     """Run one chapter's graph inside the study and report how it ended: (`done` | `needs_review` | `failed` | `cancelled`, error)."""
     graph = binding.graph
@@ -94,12 +95,22 @@ async def _execute_chapter(
         await main_task
         # The graph running to its end is not the chapter being fit to ship: render signals a failed audit through the state's status, not an exception.
         values = dict((await graph.aget_state(config)).values or {})
-        if values.get("status") == "audit_failed":
+        graph_status = values.get("status")
+        if graph_status in {"audit_failed", "needs_review"}:
             chapter_status = "needs_review"
             chapter_error = values.get("error") or "render audit failed — content persisted for review but not marked done"
-        elif values.get("status") == "failed":
+        elif graph_status == "failed":
             chapter_status = "failed"
             chapter_error = values.get("error")
+        elif graph_status == "cancelled":
+            chapter_status = "cancelled"
+        elif graph_status == "done":
+            if not await prior_render_verdict(binding.blobs, slug, chapter_id, plan_chapters):
+                chapter_status = "needs_review"
+                chapter_error = "render is missing, failed audit, or does not match the current plan"
+        else:
+            chapter_status = "failed"
+            chapter_error = f"chapter graph ended without a recognized terminal status (status={graph_status!r})"
     except asyncio.CancelledError:
         chapter_status = "cancelled"
     except Exception as error:
@@ -165,7 +176,9 @@ async def _study(binding: domains.dd.pipeline.runtime.runner.entities.Binding, s
                 study_thread_id, "study", "chapter_running",
                 chapter_id = chapter_id, chapter_thread_id = chapter_thread_id, position = position, n_total = n_total,
             )
-            chapter_status, chapter_error = await _execute_chapter(binding, study_thread_id, slug, chapter_id, chapter_thread_id, mode)
+            chapter_status, chapter_error = await _execute_chapter(
+                binding, study_thread_id, slug, chapter_id, chapter_thread_id, mode, plan_chapters,
+            )
 
             ch_wall_ms = int((time.monotonic() - ch_t0) * 1000)
             if chapter_status == "done":
@@ -201,7 +214,7 @@ async def _study(binding: domains.dd.pipeline.runtime.runner.entities.Binding, s
     n_completed, n_needs_review, n_failed, cancelled = counters["completed"], counters["needs_review"], counters["failed"], counters["cancelled"]
     final_status = (
         "cancelled" if cancelled
-        else "failed" if n_failed and not n_completed
+        else "failed" if n_failed
         # A study isn't cleanly "done" while any chapter shipped with a failed render audit: surface it distinctly rather than reporting blanket success.
         else "needs_review" if n_needs_review
         else "done"
@@ -235,7 +248,10 @@ async def _study(binding: domains.dd.pipeline.runtime.runner.entities.Binding, s
         status = final_status, error = None, n_completed = n_completed, n_needs_review = n_needs_review, n_failed = n_failed, n_total = n_total,
     )
     await domains.dd.pipeline.runtime.dispatch.service.clear_active_study(slug)
-    logger.info(f"[study-orchestrator] {slug}: done — {n_completed}/{n_total} completed, {n_failed} failed, final_status = {final_status}")
+    logger.info(
+        f"[study-orchestrator] {slug}: {n_completed}/{n_total} completed, {n_needs_review} needs review, "
+        f"{n_failed} failed, final_status = {final_status}"
+    )
     try:
         domains.dd.pipeline.observability.service.record_study_completion(
             framework = slug, duration_s = max(total_wall_ms / 1000.0, 0.0), n_accepted = n_completed, n_total = n_total, outcome = final_status,

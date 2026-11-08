@@ -143,7 +143,13 @@ async def prepare(state: graphs.pipeline.synth.render.states.RenderState, runtim
                     rendered_chars = stats["rendered_chars"], wall_ms = elapsed, cache_hit = True,
                 )
                 logger.info(f"[render_audit_write] {slug}/{chapter_id}: CACHE HIT — audit_passed = {stats['audit_passed']}, refs = {stats['n_resolved']}/{stats['n_code_refs']}, {elapsed} ms")
-                return {"finished": True, "chapter_path": readme_key, "chapter_stats": stats}
+                return {
+                    "finished": True,
+                    "chapter_path": readme_key,
+                    "chapter_stats": stats,
+                    "status": "done" if stats["audit_passed"] else "audit_failed",
+                    **({"error": "cached render audit did not pass"} if not stats["audit_passed"] else {}),
+                }
             logger.warning("[render_audit_write] cached render_result exists but artifacts missing — re-rendering")
         except Exception as error:
             logger.warning(f"[render_audit_write] {slug}/{chapter_id}: cached blob {versioned_key!r} unreadable ({type(error).__name__}: {error}); recomputing")
@@ -409,4 +415,6 @@ async def finalize(state: graphs.pipeline.synth.render.states.RenderState, runti
     if not audit.audit_passed:
         patch["status"] = "audit_failed"
         patch["error"] = f"render audit failed: missing = {len(audit.n_missing)} drift = {len(audit.n_byte_drift)} unresolved_sentinels = {audit.sentinels_in_output}"
+    else:
+        patch["status"] = "done"
     return patch

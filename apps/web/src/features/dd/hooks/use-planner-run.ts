@@ -169,7 +169,7 @@ export function usePlannerRun(
       const { values, next } = graphState;
       const status = String(values.status ?? "");
       const pill =
-        status === "failed" || status === "cancelled"
+        status === "failed" || status === "cancelled" || status === "needs_review"
           ? terminalPill(status)
           : stageAllImplementedDone(
                 plannerNodesFor(stageInfo?.implemented),

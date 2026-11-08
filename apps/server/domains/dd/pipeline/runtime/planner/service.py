@@ -57,9 +57,11 @@ async def resume(binding: domains.dd.pipeline.runtime.runner.entities.Binding, t
 
     progress = domains.dd.pipeline.runtime.progress.service
     await domains.dd.pipeline.runtime.cancel.service.reset(thread_id)
-    if dict(snap.values or {}).get("status") == "done":
-        await progress.emit_progress(thread_id, params.STAGE, "terminal", status = "done", error = None)
-        return {"thread_id": thread_id, "status": "done", "error": None}
+    terminal_status = dict(snap.values or {}).get("status")
+    if terminal_status in {"done", "needs_review"}:
+        terminal_error = dict(snap.values or {}).get("error")
+        await progress.emit_progress(thread_id, params.STAGE, "terminal", status = terminal_status, error = terminal_error)
+        return {"thread_id": thread_id, "status": terminal_status, "error": terminal_error}
 
     await progress.emit_progress(thread_id, params.STAGE, "resumed", next_nodes = list(snap.next or []))
     main_task, watcher_task = domains.dd.pipeline.runtime.runner.service.launch(binding, None, config, thread_id)

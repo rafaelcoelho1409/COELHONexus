@@ -5,7 +5,7 @@ import domains
 
 def _absolutize_thumb(url: str | None) -> str:
     """Thin wrapper over content-domain helper so library listing shares Source preview's exact behavior."""
-    return domains.ycs.content.domain._absolutize_thumbnail_url(url or "")
+    return domains.ycs.source.content.domain._absolutize_thumbnail_url(url or "")
 
 
 def _status_for(has_transcript: bool, has_neo4j_doc: bool) -> str:

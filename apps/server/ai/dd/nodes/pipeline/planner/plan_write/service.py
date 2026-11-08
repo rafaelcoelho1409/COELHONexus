@@ -74,7 +74,7 @@ async def plan_write_run(state: graphs.pipeline.planner.states.PlannerState, blo
     is_v2 = planner_version == "v2"
     if is_v2:
         plan_identity += f"|page_cards={state.get('page_cards_ref') or ''}"
-    schema_version = "2.0-planner-v2" if is_v2 else versions.SCHEMA_VERSION
+    schema_version = "2.1-planner-v2-source-fingerprints" if is_v2 else versions.SCHEMA_VERSION
     manifest_hash = domain.compute_manifest_hash(
         f"{plan_identity}|planner=v2" if is_v2 else plan_identity, schema_version,
     )
@@ -105,6 +105,7 @@ async def plan_write_run(state: graphs.pipeline.planner.states.PlannerState, blo
                     "cache_hit":      True,
                     "plan":           latest,
                 }
+                health = latest_stats.get("pipeline_health") or {}
                 graphs.service.emit(
                     "plan_write", "done",
                     n_chapters = len(chapters), n_sources = n_sources,
@@ -112,7 +113,11 @@ async def plan_write_run(state: graphs.pipeline.planner.states.PlannerState, blo
                     wall_ms = elapsed, cache_hit = True,
                 )
                 logger.info(f"[plan_write] {slug}: CACHE HIT — {len(chapters)} chapters, {n_sources} sources, {elapsed} ms")
-                return {"plan_path": latest_key, "plan_write_stats": stats, "status": "done"}
+                return {
+                    "plan_path": latest_key,
+                    "plan_write_stats": stats,
+                    "status": "needs_review" if health.get("degraded") else "done",
+                }
         except Exception as error:
             logger.warning(f"[plan_write] {slug}: cached latest unreadable ({type(error).__name__}: {error}); regenerating")
 
@@ -215,6 +220,25 @@ async def plan_write_run(state: graphs.pipeline.planner.states.PlannerState, blo
             page_card_payload = json.loads(await blobs.read_text(state["page_cards_ref"])) or {}
         except Exception as error:
             logger.warning(f"[plan_write] {slug}: page-card provenance unavailable ({type(error).__name__}: {error})")
+    if is_v2:
+        card_rows = page_card_payload.get("cards") or {}
+        if isinstance(card_rows, dict):
+            for chapter in chapters:
+                chapter["source_content_digests"] = {
+                    source: card_rows[source]["content_digest"]
+                    for source in chapter.get("sources") or []
+                    if isinstance(card_rows.get(source), dict)
+                    and isinstance(card_rows[source].get("content_digest"), str)
+                    and card_rows[source]["content_digest"]
+                }
+    health = domain.pipeline_health(state)
+    if is_v2:
+        missing_digests = sum(
+            len(chapter.get("sources") or []) - len(chapter.get("source_content_digests") or {})
+            for chapter in chapters
+        )
+        health["chapter_source_digests_missing"] = missing_digests
+        health["degraded"] = bool(health.get("degraded") or missing_digests)
     plan = {
         "schema_version": schema_version,
         **({"planner_version": planner_version} if is_v2 else {}),
@@ -240,7 +264,7 @@ async def plan_write_run(state: graphs.pipeline.planner.states.PlannerState, blo
             "n_sources":    n_sources_total,
             "n_unassigned": len(unassigned_keys),
             "n_dropped":    n_dropped,
-            "pipeline_health": domain.pipeline_health(state),
+            "pipeline_health": health,
             **({"reading": reading} if reading else {}),
             **({
                 "page_cards": {
@@ -281,4 +305,8 @@ async def plan_write_run(state: graphs.pipeline.planner.states.PlannerState, blo
         f"{len(unassigned_keys)} unassigned; chapter sizes max={max(sizes) if sizes else 0} min={min(sizes) if sizes else 0}; "
         f"wrote {latest_key} + {versioned_key} in {elapsed} ms"
     )
-    return {"plan_path": latest_key, "plan_write_stats": stats, "status": "done"}
+    return {
+        "plan_path": latest_key,
+        "plan_write_stats": stats,
+        "status": "needs_review" if health.get("degraded") else "done",
+    }

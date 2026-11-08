@@ -307,6 +307,7 @@ export const synthChaptersSchema = z.looseObject({
       title: z.string().nullable().catch(null),
       order: z.number().nullable().catch(null),
       rendered: z.boolean().catch(false),
+      needs_review: z.boolean().optional().catch(false),
       wall_ms: z.number().nullable().catch(null),
       thread_id: z.string().nullable().catch(null),
       // What the finished chapter looks like; absent until it has been rendered.

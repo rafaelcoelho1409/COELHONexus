@@ -30,9 +30,8 @@ import {
 import { DISTILL_RUN_PARAM, distillHref } from "../params";
 import { DistillNodeBoard } from "./distill-node-board";
 import { DistillProgressPanel } from "./distill-progress-panel";
-import { DistillRunPanel } from "./distill-run-panel";
+import { DistillOutputPanel } from "./distill-output-panel";
 import { ReadinessPanel } from "./readiness-panel";
-import { ContentSelectionReview } from "./content-selection-review";
 
 export function DistillPage() {
   return (
@@ -69,7 +68,7 @@ function DistillStage() {
           </>
         }
       />
-      <div className="mx-auto w-full max-w-6xl p-4">
+      <div className="w-full p-4">
         {bookId ? (
           <DistillBookStage
             key={bookId}
@@ -261,157 +260,155 @@ function DistillAgentsView({
   const title = book.manifest.title.trim() || book.manifest.filename;
 
   return (
-    <section aria-labelledby="distill-book-title" className="min-w-0 space-y-4">
+    <section aria-labelledby="distill-book-title" className="min-w-0">
       <header className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-3">
         <div className="min-w-0">
-          <p className="mono-label">Distill · Learning Guide</p>
+          <p className="mono-label">Book Distiller · Distill workspace</p>
           <h2 id="distill-book-title" className="mt-1 break-words text-xl font-semibold tracking-tight">
             {title}
           </h2>
         </div>
       </header>
 
-      <div className="grid grid-cols-1 items-stretch gap-3 lg:grid-cols-2">
-        <section
-          aria-label="Distill source readiness"
-          className="min-w-0 rounded-md border border-border bg-card p-3"
-        >
-          <ReadinessPanel readiness={readiness} />
-        </section>
-        <DistillProgressPanel
-          run={controlRun}
-          status={progressStatus}
-          progress={progress}
-          error={progressError}
-          streamStatus={progressStreamStatus}
-          readiness={readiness}
-          stopping={stopping}
-          capabilitiesPending={capabilities.isPending}
-          capabilitiesError={capabilities.isError ? apiErrorMessage(capabilities.error) : null}
-          canExecute={canExecute}
-          actions={
-            <>
-              <ActionButton
-                onClick={resumable ? resumeRun : startRun}
-                disabled={resumable ? resumeDisabled : startDisabled}
-                aria-busy={actions.start.isPending || actions.resume.isPending}
-                aria-label={resumable ? "Resume Distill" : "Start Distill"}
-                title={
-                  !canExecute
-                    ? "Distill execution is unavailable in this environment."
-                    : !readiness.ready
-                      ? "Complete the source checks before starting Distill."
-                      : activeRun
-                        ? "A Distill run is already active."
-                        : undefined
-                }
-              >
-                {actions.start.isPending || actions.resume.isPending
-                  ? resumable
-                    ? "Resuming…"
-                    : "Starting…"
-                  : resumable
-                    ? "Resume"
-                    : "Start"}
-              </ActionButton>
-              <ActionButton
-                onClick={stopRun}
-                disabled={stopDisabled}
-                aria-busy={actions.cancel.isPending || stopping}
-                aria-label="Stop Distill"
-                title={
-                  stopping
-                    ? "Stop requested; active work is draining."
-                    : activeRun
-                      ? undefined
-                      : "There is no active Distill run to stop."
-                }
-              >
-                {actions.cancel.isPending || stopping ? "Stopping…" : "Stop"}
-              </ActionButton>
-              <ActionButton
-                onClick={() => void wipeRun()}
-                disabled={wipeDisabled}
-                aria-busy={actions.wipe.isPending}
-                aria-label="Wipe Distill"
-                title={
-                  !selected
-                    ? "There are no Distill artifacts to wipe."
-                    : activeRun
-                      ? "Stop the active Distill run before wiping."
-                      : undefined
-                }
-              >
-                {actions.wipe.isPending ? "Wiping…" : "Wipe"}
-              </ActionButton>
-            </>
-          }
-        />
-      </div>
-
-      <ContentSelectionReview
-        bookId={bookId}
-        agenticRunId={agenticRunId}
-        selection={contentSelection.data ?? null}
-        pending={agenticRunId !== null && contentSelection.isPending}
-        error={contentSelection.isError ? contentSelection.error : null}
-        saving={saveSelection.isPending}
-        saveError={saveSelection.isError ? saveSelection.error : null}
-        onRetry={() => void contentSelection.refetch()}
-        onSave={savePageSelection}
-      />
-
-      {runs.isPending ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          Loading Distill runs…
-        </p>
-      ) : runs.isError ? (
-        <section role="alert" className="rounded-md border border-border bg-card p-4 text-sm">
-          <p className="text-destructive-text">
-            Distill runs could not be loaded — {apiErrorMessage(runs.error)}
-          </p>
-          <div className="mt-3">
-            <ActionButton onClick={() => void runs.refetch()}>Try again</ActionButton>
-          </div>
-        </section>
-      ) : (runs.data?.length ?? 0) > 1 && selected ? (
-        <section aria-label="Learning Guide run history" className="border-b border-border pb-3">
-          <label
-            className="flex flex-wrap items-center gap-3 text-xs font-medium text-muted-foreground"
-            htmlFor="distill-run-select"
+      <div className="mt-4 grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(29rem,0.92fr)_minmax(0,1.35fr)]">
+        <div className="min-w-0 space-y-3 xl:sticky xl:top-[calc(var(--chrome-top)+1rem)] xl:max-h-[calc(100dvh-var(--chrome-top)-2rem)] xl:self-start xl:overflow-y-auto">
+          <section
+            aria-label="Distill source readiness"
+            className="min-w-0 rounded-md border border-border bg-card p-3"
           >
-            <span>Run history · {runs.data?.length ?? 0} saved</span>
-            <select
-              id="distill-run-select"
-              value={selected.run_id}
-              onChange={(event) =>
-                router.push(distillHref(bookId, event.currentTarget.value), { scroll: false })
-              }
-              className="min-h-9 min-w-0 flex-1 rounded-sm border border-border bg-background px-2 text-sm font-normal text-foreground sm:max-w-2xl"
-            >
-              {runs.data?.map((run) => (
-                <option key={run.run_id} value={run.run_id}>
-                  {statusLabel(run.status)} · {formatRunDate(run.created_at)} · run {run.run_id.slice(-8)}
-                </option>
-              ))}
-            </select>
-          </label>
-        </section>
-      ) : null}
+            <ReadinessPanel readiness={readiness} />
+          </section>
 
-      {!runs.isPending && !runs.isError ? (
-        <DistillNodeBoard status={selectedState?.status ?? null} progress={selectedState?.progress ?? null} />
-      ) : null}
+          <DistillProgressPanel
+            run={controlRun}
+            status={progressStatus}
+            progress={progress}
+            error={progressError}
+            streamStatus={progressStreamStatus}
+            readiness={readiness}
+            stopping={stopping}
+            capabilitiesPending={capabilities.isPending}
+            capabilitiesError={capabilities.isError ? apiErrorMessage(capabilities.error) : null}
+            canExecute={canExecute}
+            actions={
+              <>
+                <ActionButton
+                  onClick={resumable ? resumeRun : startRun}
+                  disabled={resumable ? resumeDisabled : startDisabled}
+                  aria-busy={actions.start.isPending || actions.resume.isPending}
+                  aria-label={resumable ? "Resume Distill" : "Start Distill"}
+                  title={
+                    !canExecute
+                      ? "Distill execution is unavailable in this environment."
+                      : !readiness.ready
+                        ? "Complete the source checks before starting Distill."
+                        : activeRun
+                          ? "A Distill run is already active."
+                          : undefined
+                  }
+                >
+                  {actions.start.isPending || actions.resume.isPending
+                    ? resumable
+                      ? "Resuming…"
+                      : "Starting…"
+                    : resumable
+                      ? "Resume"
+                      : "Start"}
+                </ActionButton>
+                <ActionButton
+                  onClick={stopRun}
+                  disabled={stopDisabled}
+                  aria-busy={actions.cancel.isPending || stopping}
+                  aria-label="Stop Distill"
+                  title={
+                    stopping
+                      ? "Stop requested; active work is draining."
+                      : activeRun
+                        ? undefined
+                        : "There is no active Distill run to stop."
+                  }
+                >
+                  {actions.cancel.isPending || stopping ? "Stopping…" : "Stop"}
+                </ActionButton>
+                <ActionButton
+                  onClick={() => void wipeRun()}
+                  disabled={wipeDisabled}
+                  aria-busy={actions.wipe.isPending}
+                  aria-label="Wipe Distill"
+                  title={
+                    !selected
+                      ? "There are no Distill artifacts to wipe."
+                      : activeRun
+                        ? "Stop the active Distill run before wiping."
+                        : undefined
+                  }
+                >
+                  {actions.wipe.isPending ? "Wiping…" : "Wipe"}
+                </ActionButton>
+              </>
+            }
+          />
 
-      {selected && selectedState ? (
-        <DistillRunPanel
-          key={selected.run_id}
+          {runs.isPending ? (
+            <p role="status" className="text-sm text-muted-foreground">
+              Loading Distill runs…
+            </p>
+          ) : runs.isError ? (
+            <section role="alert" className="rounded-md border border-border bg-card p-4 text-sm">
+              <p className="text-destructive-text">
+                Distill runs could not be loaded — {apiErrorMessage(runs.error)}
+              </p>
+              <div className="mt-3">
+                <ActionButton onClick={() => void runs.refetch()}>Try again</ActionButton>
+              </div>
+            </section>
+          ) : (runs.data?.length ?? 0) > 1 && selected ? (
+            <section aria-label="Learning Guide run history" className="rounded-md border border-border bg-card p-3">
+              <label
+                className="flex flex-wrap items-center gap-3 text-xs font-medium text-muted-foreground"
+                htmlFor="distill-run-select"
+              >
+                <span>Run history · {runs.data?.length ?? 0} saved</span>
+                <select
+                  id="distill-run-select"
+                  value={selected.run_id}
+                  onChange={(event) =>
+                    router.push(distillHref(bookId, event.currentTarget.value), { scroll: false })
+                  }
+                  className="min-h-9 min-w-0 flex-1 rounded-sm border border-border bg-background px-2 text-sm font-normal text-foreground"
+                >
+                  {runs.data?.map((run) => (
+                    <option key={run.run_id} value={run.run_id}>
+                      {statusLabel(run.status)} · {formatRunDate(run.created_at)} · run {run.run_id.slice(-8)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </section>
+          ) : null}
+
+          {!runs.isPending && !runs.isError ? (
+            <DistillNodeBoard status={selectedState?.status ?? null} progress={selectedState?.progress ?? null} />
+          ) : null}
+        </div>
+
+        <DistillOutputPanel
+          key={`${selected?.run_id ?? "no-run"}:${agenticRunId ?? "no-ingestion-ai"}`}
           bookId={bookId}
+          book={book}
+          agenticRunId={agenticRunId}
+          selection={contentSelection.data ?? null}
+          selectionPending={agenticRunId !== null && contentSelection.isPending}
+          selectionError={contentSelection.isError ? contentSelection.error : null}
+          savingSelection={saveSelection.isPending}
+          saveSelectionError={saveSelection.isError ? saveSelection.error : null}
+          onRetrySelection={() => void contentSelection.refetch()}
+          onSaveSelection={savePageSelection}
           run={selected}
-          state={selectedState}
+          runState={selectedState}
           streamStatus={stream.status}
         />
-      ) : null}
+      </div>
     </section>
   );
 }

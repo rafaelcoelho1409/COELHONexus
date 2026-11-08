@@ -62,7 +62,7 @@ export function DistillNodeBoard({
           </div>
         </header>
 
-        <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-[minmax(0,3fr)_minmax(16rem,1fr)]">
+        <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-[minmax(15rem,1.1fr)_minmax(11rem,0.9fr)]">
           <div className="min-w-0">
             {mode === "graph" ? (
               <AgenticFlow views={views} onOpenNode={setSelectedNodeId} ariaLabel="Distill pipeline graph" />

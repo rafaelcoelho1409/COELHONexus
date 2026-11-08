@@ -88,7 +88,7 @@ async def pipeline_stream_status(
     redis = getattr(request.app.state, "redis_aio", None)
     if redis is None:
         raise HTTPException(status_code = 503, detail = "Redis unavailable")
-    progress = await domains.ycs.pipeline_task.service.get_phase_progress(redis, extract_id, phase)
+    progress = await domains.ycs.ingestion.pipeline_task.service.get_phase_progress(redis, extract_id, phase)
     payload: dict[str, Any] = {"task_id": extract_id, "state": progress["state"]}
     if progress["state"] == "SUCCESS":
         payload["result"] = progress.get("result") or {}
@@ -136,7 +136,7 @@ async def list_videos(
         })
     query: dict[str, Any] = {"bool": {"must": must}} if must else {"match_all": {}}
     try:
-        with domains.ycs.observability.service.es_search_span(
+        with domains.ycs.ask.observability.service.es_search_span(
             index = infra.elasticsearch.keys.INDEX_METADATA,
             top_k = max(1, min(int(limit), 500)),
         ):
@@ -248,7 +248,7 @@ async def videos_facets(request: Request) -> dict:
     }
 
     try:
-        with domains.ycs.observability.service.es_search_span(
+        with domains.ycs.ask.observability.service.es_search_span(
             index = infra.elasticsearch.keys.INDEX_METADATA, top_k = 0,
             operation = "facet_channels",
         ):
@@ -293,7 +293,7 @@ async def videos_facets(request: Request) -> dict:
         pass
 
     try:
-        with domains.ycs.observability.service.es_search_span(
+        with domains.ycs.ask.observability.service.es_search_span(
             index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS, top_k = 0,
             operation = "facet_languages",
         ):
@@ -317,7 +317,7 @@ async def videos_facets(request: Request) -> dict:
         # Bounded like `list_videos`'s own transcript lookup — fine at
         # this scale (10k id cap); a corpus past that needs a real
         # scroll, not a bigger constant.
-        with domains.ycs.observability.service.es_search_span(
+        with domains.ycs.ask.observability.service.es_search_span(
             index = infra.elasticsearch.keys.INDEX_METADATA, top_k = 10000,
             operation = "facet_status_ids",
         ):
@@ -347,7 +347,7 @@ async def delete_video(video_id: str, request: Request) -> dict:
     """Drop ES metadata + transcripts, Qdrant points, and Neo4j nodes for one video."""
     if not video_id:
         raise HTTPException(status_code = 400, detail = "video_id required")
-    summary = await domains.ycs.pipeline_task.service.wipe_videos_data(
+    summary = await domains.ycs.ingestion.pipeline_task.service.wipe_videos_data(
         video_ids   = [video_id],
         neo4j_graph = getattr(request.app.state, "neo4j_graph", None),
     )
@@ -365,7 +365,7 @@ async def bulk_delete_videos(
     """Multi-select wipe. POST (not DELETE) because HTTP DELETE doesn't reliably carry a body."""
     if not payload.video_ids:
         return {"status": "noop", "summary": {"video_ids": []}}
-    summary = await domains.ycs.pipeline_task.service.wipe_videos_data(
+    summary = await domains.ycs.ingestion.pipeline_task.service.wipe_videos_data(
         video_ids   = payload.video_ids,
         neo4j_graph = getattr(request.app.state, "neo4j_graph", None),
     )

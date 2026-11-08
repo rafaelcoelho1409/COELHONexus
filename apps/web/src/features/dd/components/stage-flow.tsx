@@ -61,7 +61,9 @@ function StageNodeCard({ data }: NodeProps<StageFlowNode>) {
             ? "border-running"
             : data.status === "failed"
               ? "border-destructive"
-              : "border-border"
+              : data.status === "needs_review"
+                ? "border-warning"
+                : "border-border"
         } ${data.status === "future" ? "opacity-60" : ""}`}
       >
         <span className="flex items-center gap-1.5">

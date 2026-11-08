@@ -101,7 +101,7 @@ export function MaterialsPageList({
         ref={list}
         // biome-ignore lint/a11y/noNoninteractiveTabindex: a long list scrolls, so keyboard users must be able to focus it to scroll it (WCAG 2.1.1)
         tabIndex={0}
-        className="relative max-h-72 min-h-0 overflow-auto lg:max-h-none lg:flex-1"
+        className="relative max-h-72 min-h-0 overflow-auto"
       >
         {groups.map((group) => (
           <div key={group.prefix}>

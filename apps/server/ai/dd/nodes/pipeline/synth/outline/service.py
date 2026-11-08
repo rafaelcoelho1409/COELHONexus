@@ -12,6 +12,7 @@ from ..... import agents, backends, graphs, skills, tools
 import json
 import logging
 import time
+from hashlib import sha256
 
 import numpy as np
 from langgraph.runtime import Runtime
@@ -95,7 +96,16 @@ async def prepare(state: graphs.pipeline.synth.outline.states.OutlineState, runt
             known_ids = [c.get("id") for c in (plan.get("chapters") or [])],
         )}
     chapter_title = chapter.get("title") or chapter_id
-    chapter_description = chapter.get("description") or ""
+    chapter_brief = [chapter.get("description") or ""]
+    if chapter.get("objective"):
+        chapter_brief.append(f"Learning objective: {chapter['objective']}")
+    if chapter.get("key_concepts"):
+        chapter_brief.append("Core concepts: " + "; ".join(str(value) for value in chapter["key_concepts"] if value))
+    if chapter.get("prerequisite_titles"):
+        chapter_brief.append("Prerequisites: " + "; ".join(str(value) for value in chapter["prerequisite_titles"] if value))
+    elif chapter.get("prerequisites"):
+        chapter_brief.append("Prerequisite chapter ids: " + "; ".join(str(value) for value in chapter["prerequisites"] if value))
+    chapter_description = "\n".join(value for value in chapter_brief if value)
     sources = sorted(chapter.get("sources") or [])
     if not sources:
         return {"finished": True, **graphs.pipeline.synth.service.failure(
@@ -106,12 +116,16 @@ async def prepare(state: graphs.pipeline.synth.outline.states.OutlineState, runt
 
     # Each source is already corpus_normalized and vault-built by ingestion: just read them.
     bodies = list(await blobs.read_many(sources))
-    pairs = [(key, body) for key, body in zip(sources, bodies) if body]
-    if not pairs:
+    pairs = [(key, body) for key, body in zip(sources, bodies) if isinstance(body, str) and body.strip()]
+    if len(pairs) != len(sources):
+        available = {key for key, _ in pairs}
+        missing_sources = [key for key in sources if key not in available]
         return {"finished": True, **graphs.pipeline.synth.service.failure(
-            "outline_path", "outline_stats", "source_bodies_empty", "all source bodies came back empty", started,
+            "outline_path", "outline_stats", "source_bodies_incomplete", "one or more planned source bodies are missing or empty; refusing to synthesize a partial chapter", started,
+            missing_sources = missing_sources,
         )}
     texts = [body for _, body in pairs]
+    source_digests = {key: sha256(body.encode("utf-8")).hexdigest() for key, body in pairs}
     sources_concat_md, truncated = domain.concat_sources(texts)
     n_vault_hashes = domain.count_code_blocks(texts)
     graphs.service.emit(
@@ -121,7 +135,8 @@ async def prepare(state: graphs.pipeline.synth.outline.states.OutlineState, runt
 
     tutorial = graphs.pipeline.synth.params.tutorial_mode()
     manifest_hash = domain.compute_manifest_hash(
-        sources = sources, sources_bytes = len(sources_concat_md), chapter_title = chapter_title, chapter_description = chapter_description, tutorial = tutorial,
+        sources = sources, sources_bytes = len(sources_concat_md), source_digests = source_digests,
+        chapter_title = chapter_title, chapter_description = chapter_description, tutorial = tutorial,
     )
     versioned_key = keys.versioned_blob_key(slug, chapter_id, manifest_hash)
     latest_key = keys.latest_blob_key(slug, chapter_id)

@@ -14,9 +14,9 @@ OUTLINE_SCHEMA_VERSION = "1.0"
 # v11 (2026-10-17): the floor issue and its hint say a section must be backed by the sources (fastmcp ch-01: 12 sections for 18 client pages, 4 invented).
 # v12 (2026-10-20): a repair that clears the section floor is kept even when it overshoots the cap (qdrant ch-10 shipped 5 sections for 160 blocks after four rejected/identical repairs).
 # v13 (2026-11-06): the outline is drafted by a chapter_outliner agent that validates it with a tool and reads the sources on demand (was 3 samples + a vote + repair calls).
-OUTLINE_PROMPT_VERSION = "v13-outliner-agent-2026-11-06"
+OUTLINE_PROMPT_VERSION = "v14-source-digests-learning-contract-2026-11-08"
 OUTLINE_V2_SCHEMA_VERSION = "1.1"
-OUTLINE_V2_PROMPT_VERSION = "v14-code-ledger-steps-2026-11-07"
+OUTLINE_V2_PROMPT_VERSION = "v15-source-digests-learning-contract-2026-11-08"
 
 
 def schema_version(tutorial: bool = False) -> str:

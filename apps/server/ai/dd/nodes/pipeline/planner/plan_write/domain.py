@@ -31,13 +31,17 @@ def pipeline_health(state: dict) -> dict:
     """Roll the per-node fallback/degradation signals into the plan's stats so a
     'done' plan that silently ran on deterministic fallbacks (generic chapter
     titles, lopsided buckets) is distinguishable from a high-quality one without
-    MinIO archaeology. Observability only — no behaviour change."""
+    MinIO archaeology. Quality-affecting fallbacks and unresolved design signals
+    mark the plan for review before Synth can consume it."""
     dd = state.get("doc_distill_stats") or {}
     ot = state.get("off_topic_stats") or {}
     pr = state.get("propose_stats") or {}
     asg = state.get("assign_stats") or {}
     ordc = state.get("order_chapters_stats") or {}
     sel = state.get("select_stats") or {}
+    design = state.get("chapter_design_stats") or {}
+    design_errors = design.get("designer_errors") or []
+    design_review_flags = design.get("designer_review_flags") or []
 
     def _pct(num, den):
         return round(100.0 * num / den, 1) if den else 0.0
@@ -98,6 +102,8 @@ def pipeline_health(state: dict) -> dict:
             "page_card_fallback_pct": fallback_pct,
             "page_card_dropped_pages": cards.get("n_dropped", 0),
             "chapter_design_fallback_used": bool(design.get("fallback_used")),
+            "chapter_design_errors": len(design_errors),
+            "chapter_design_review_flags": len(design_review_flags),
             "chapter_design_ledger_available": design.get("ledger_available"),
             "chapter_design_embedding_model": design.get("embedding_model"),
             "chapter_design_candidate_count": design.get("n_partitions_scored", 0),
@@ -110,6 +116,8 @@ def pipeline_health(state: dict) -> dict:
         health["degraded"] = bool(
             fallback_pct >= 40.0
             or design.get("fallback_used")
+            or bool(design_errors)
+            or bool(design_review_flags)
             or design.get("ledger_available") is False
             or (pages and assigned < pages)
             or ordc.get("n_samples", 0) == 0 and int(sel.get("n_chapters_out", 0)) > 1

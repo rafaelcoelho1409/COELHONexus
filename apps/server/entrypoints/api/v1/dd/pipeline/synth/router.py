@@ -11,6 +11,7 @@ import io
 import json
 import logging
 import zipfile
+from hashlib import sha256
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from starlette.responses import StreamingResponse
@@ -20,6 +21,37 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
+
+
+async def _source_digest_mismatches(minio, chapters: list[dict]) -> list[str]:
+    """Require the current v2 corpus bytes to match the Planner's source snapshot."""
+    expected: dict[str, str] = {}
+    mismatches: set[str] = set()
+    for chapter in chapters:
+        sources = chapter.get("sources") or []
+        if not sources:
+            mismatches.add(str(chapter.get("id") or "chapter without source pages"))
+        digests = chapter.get("source_content_digests") or {}
+        for source in sources:
+            digest = digests.get(source) if isinstance(digests, dict) else None
+            if not isinstance(digest, str) or not digest:
+                mismatches.add(source)
+            elif source in expected and expected[source] != digest:
+                mismatches.add(source)
+            else:
+                expected[source] = digest
+    keys = sorted(expected)
+    try:
+        bodies = await minio.read_many(keys)
+    except Exception as error:
+        logger.warning(f"[synth] failed verifying Planner source fingerprints: {type(error).__name__}: {error}")
+        raise HTTPException(status_code=503, detail="could not verify the current corpus against the Planner snapshot") from error
+    for key, body in zip(keys, bodies):
+        if not body or sha256(body.encode("utf-8")).hexdigest() != expected[key]:
+            mismatches.add(key)
+    if len(bodies) != len(keys):
+        mismatches.update(keys[len(bodies):])
+    return sorted(mismatches)
 
 
 @router.get("/info")
@@ -80,6 +112,7 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
             "synth_exclusion_reason": ch.get("synth_exclusion_reason") or "",
             "rendered":   rendered,
             "audit_passed": False,
+            "needs_review": False,
             "render_path": render_key if rendered else None,
             "wall_ms":    int(per_chapter_ms.get(cid, 0) or 0),
         }
@@ -97,6 +130,10 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
                 entry["audit_passed"] = bool(
                     (rp.get("audit") or {}).get("audit_passed", False)
                 )
+                entry["rendered"] = entry["audit_passed"] is True
+                entry["needs_review"] = not entry["audit_passed"]
+                if not entry["rendered"]:
+                    entry["render_path"] = None
                 for _k in ("n_sources_cited", "n_code_available", "n_code_used"):
                     if _k in rp:
                         entry[_k] = rp[_k]
@@ -105,7 +142,9 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
                 entry["n_code_files"] = len(rp.get("code_files") or [])
                 entry["thread_id"] = rp.get("thread_id") or None
             except Exception:
-                pass
+                entry["rendered"] = False
+                entry["needs_review"] = True
+                entry["render_path"] = None
         out.append(entry)
     return {
         "framework_slug": slug,
@@ -244,6 +283,15 @@ async def start_synth(
         )
 
     plan = await service.load_plan(slug)
+    health = ((plan or {}).get("stats") or {}).get("pipeline_health") or {}
+    if health.get("degraded") is True:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "the latest Planner plan needs review before Synth can run; "
+                "resolve its fallback, design, or source-coverage issues and run Planner again"
+            ),
+        )
     # The planner's chapter array is already in pedagogical order. Sorting ids
     # made the study run a different chapter first (and shuffled the UI list).
     all_plan_chapter_ids: list[str] = [
@@ -262,6 +310,25 @@ async def start_synth(
             status_code=404,
             detail=f"plan for {slug!r} has no chapters",
         )
+
+    selected_chapter_ids = {chapter_id} if chapter_id else set(plan_chapter_ids)
+    chapters_to_run = [
+        chapter
+        for chapter in (plan.get("chapters") or [])
+        if isinstance(chapter, dict)
+        and chapter.get("id") in selected_chapter_ids
+        and chapter.get("synth_eligible", True) is not False
+    ]
+    if plan.get("planner_version") == "v2":
+        mismatches = await _source_digest_mismatches(infra.minio.service.get_storage(), chapters_to_run)
+        if mismatches:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "the current corpus differs from the Planner snapshot; run Planner again before Synth. "
+                    f"Unmatched source pages: {mismatches[:8]}"
+                ),
+            )
 
     if chapter_id is None:
         if not plan_chapter_ids:

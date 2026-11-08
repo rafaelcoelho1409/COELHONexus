@@ -216,8 +216,8 @@ async def run():
     LC.set_node(node="generate")
     ask_msg = AIMessage(content="hi", response_metadata={"model_name": "nvidia/model-b"}, usage_metadata={
         "input_tokens": 7, "output_tokens": 3, "total_tokens": 10, "output_token_details": {"reasoning": 2}})
-    await domains.ycs.rag.service.capture_llm_usage(ask_msg, duration_s=0.2)
-    await domains.ycs.rag.service.capture_llm_usage(AIMessage(content="no usage"))
+    await domains.ycs.ask.rag.service.capture_llm_usage(ask_msg, duration_s=0.2)
+    await domains.ycs.ask.rag.service.capture_llm_usage(AIMessage(content="no usage"))
     a = await LC.read_counters("ycs", "th-ask2")
     ok("ycs ask: bare AIMessage counted once (tokens, reasoning, model); usage-less reply skipped", a == {
         "extract_id": "th-ask2",

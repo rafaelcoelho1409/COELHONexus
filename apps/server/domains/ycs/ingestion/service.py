@@ -51,7 +51,7 @@ async def ensure_collection(
     whole corpus's Qdrant data gone, "a Rerun will rebuild this from
     scratch" was the only recovery path, no consent, no warning). The
     actual consent+re-embed flow now lives in
-    `domains.ycs.embedding_migration` and gates dispatch BEFORE this
+    `domains.ycs.ingestion.embedding_migration` and gates dispatch BEFORE this
     function ever sees a mismatch in normal operation — reaching that
     state here means the gate was bypassed, so this raises instead of
     silently mixing incomparable vectors in one cosine space OR
@@ -112,7 +112,7 @@ async def ensure_collection(
         if not model_match:
             # 2026-09-15: no longer auto-drops (see this function's
             # docstring) — the consent+re-embed gate in
-            # `domains.ycs.embedding_migration` should have caught this
+            # `domains.ycs.ingestion.embedding_migration` should have caught this
             # BEFORE dispatch. Reaching it here means that gate was
             # bypassed; fail loud rather than silently mixing
             # incomparable vectors in one cosine space or deleting data.
@@ -195,7 +195,7 @@ async def _scroll_transcripts(
         {"terms": {"video_id": video_ids}} if video_ids
         else {"match_all": {}}
     )
-    with domains.ycs.observability.service.es_search_span(
+    with domains.ycs.ask.observability.service.es_search_span(
         index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS, top_k = batch_size,
         operation = "scroll_open",
     ):
@@ -249,7 +249,7 @@ async def fetch_metadata_from_es(
     if not video_ids:
         return {}
     lookup_ids = {vid: domain.parent_video_id(vid) for vid in video_ids}
-    with domains.ycs.observability.service.es_search_span(
+    with domains.ycs.ask.observability.service.es_search_span(
         index = infra.elasticsearch.keys.INDEX_METADATA,
         top_k = len(set(lookup_ids.values())),
         operation = "mget_by_ids",
@@ -317,9 +317,9 @@ async def ingest_to_qdrant(
         video).
     `progress_cb` (Wave 5 polish) receives per-transcript dicts so the
     Celery task wrapper can pipe them into `self.update_state(meta=)`."""
-    dense_embeddings = domains.ycs.embeddings.service.create_dense_embeddings()
-    sparse_embeddings = domains.ycs.embeddings.service.create_sparse_embeddings()
-    dimensions, embedding_model = await domains.ycs.embeddings.service.get_embedding_info()
+    dense_embeddings = domains.ycs.ingestion.embeddings.service.create_dense_embeddings()
+    sparse_embeddings = domains.ycs.ingestion.embeddings.service.create_sparse_embeddings()
+    dimensions, embedding_model = await domains.ycs.ingestion.embeddings.service.get_embedding_info()
 
     collection_created = await ensure_collection(
         qdrant, dimensions, embedding_model, collection_name = collection_name,
@@ -382,7 +382,7 @@ async def ingest_to_qdrant(
             "points":  0,
         })
 
-    chunker = domains.ycs.chunker.domain.create_chunker(chunk_size, chunk_overlap)
+    chunker = domains.ycs.ingestion.chunker.domain.create_chunker(chunk_size, chunk_overlap)
     total_transcripts = 0
     total_chunks = 0
     total_upserted = 0
@@ -447,7 +447,7 @@ async def ingest_to_qdrant(
             )
             for i, doc in enumerate(buffer)
         ]
-        with domains.ycs.observability.service.qdrant_upsert_span(
+        with domains.ycs.ask.observability.service.qdrant_upsert_span(
             collection = collection_name, point_count = len(points),
         ):
             await qdrant.upsert(
@@ -474,7 +474,7 @@ async def ingest_to_qdrant(
             continue
         meta = metadata_cache.get(vid, {})
 
-        chunks = domains.ycs.chunker.domain.chunk_transcript(
+        chunks = domains.ycs.ingestion.chunker.domain.chunk_transcript(
             video_id = vid,
             content = transcript.get("content") or "",
             metadata = domain.build_chunk_metadata(
@@ -555,7 +555,7 @@ async def expand_with_partition_ids(
     if not video_ids:
         return []
     try:
-        with domains.ycs.observability.service.es_search_span(
+        with domains.ycs.ask.observability.service.es_search_span(
             index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
             top_k = min(10000, max(200, len(video_ids) * 10)),
             operation = "partition_expand",
@@ -592,7 +592,7 @@ async def _find_all_ycs_collections(qdrant: infra.qdrant.service.AsyncQdrantClie
     the bare `params.QDRANT_COLLECTION` name (if it's still a literal, pre-
     migration collection) plus every versioned physical collection any
     past embedding-migration ever created
-    (`domains.ycs.embedding_migration.domain.physical_collection_name`
+    (`domains.ycs.ingestion.embedding_migration.domain.physical_collection_name`
     → `"{params.QDRANT_COLLECTION}__{model}__{dim}d"`).
 
     2026-09-15: added — `delete_points_for_videos` previously only
@@ -801,9 +801,9 @@ async def _flush_buffer(
         if not docs:
             return 0
         try:
-            dense_embeddings = domains.ycs.embeddings.service.create_dense_embeddings()
-            sparse_embeddings = domains.ycs.embeddings.service.create_sparse_embeddings()
-            dimensions, embedding_model = await domains.ycs.embeddings.service.get_embedding_info()
+            dense_embeddings = domains.ycs.ingestion.embeddings.service.create_dense_embeddings()
+            sparse_embeddings = domains.ycs.ingestion.embeddings.service.create_sparse_embeddings()
+            dimensions, embedding_model = await domains.ycs.ingestion.embeddings.service.get_embedding_info()
             await ensure_collection(qdrant, dimensions, embedding_model)
         except Exception as setup_err:
             # Probe/collection failure happens AFTER the pop — without
@@ -850,7 +850,7 @@ async def _flush_buffer(
             for i, doc in enumerate(docs)
         ]
         try:
-            with domains.ycs.observability.service.qdrant_upsert_span(
+            with domains.ycs.ask.observability.service.qdrant_upsert_span(
                 collection = params.QDRANT_COLLECTION, point_count = len(points),
             ):
                 await qdrant.upsert(collection_name = params.QDRANT_COLLECTION, points = points)
@@ -918,8 +918,8 @@ async def stream_video_to_qdrant(
         logger.info(f"[ycs:ingestion:streaming] {video_id}: unchanged, skipping re-embed")
         return {"video_id": video_id, "chunks": 0, "skipped": True, **part_group}
 
-    chunker = domains.ycs.chunker.domain.create_chunker(chunk_size, chunk_overlap)
-    chunks = domains.ycs.chunker.domain.chunk_transcript(
+    chunker = domains.ycs.ingestion.chunker.domain.create_chunker(chunk_size, chunk_overlap)
+    chunks = domains.ycs.ingestion.chunker.domain.chunk_transcript(
         video_id = video_id,
         content = content,
         metadata = domain.build_chunk_metadata(

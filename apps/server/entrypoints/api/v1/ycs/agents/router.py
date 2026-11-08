@@ -1,9 +1,9 @@
 """ycs/agents — agentic RAG router: ask (sync+stream), ingest, graph stats, pipeline."""
 from __future__ import annotations
 import domains, infra
-import domains.ycs.qdrant_task.task
-import domains.ycs.neo4j_task.task
-import domains.ycs.pipeline_task.task
+import domains.ycs.ingestion.qdrant_task.task
+import domains.ycs.ingestion.neo4j_task.task
+import domains.ycs.ingestion.pipeline_task.task
 from . import domain, params, schemas, service
 
 import asyncio
@@ -71,9 +71,9 @@ async def endpoint_ping(request: Request) -> dict:
 @router.get("/history/{thread_id}")
 async def get_thread_history(thread_id: str, request: Request) -> dict:
     """Return Q+A history for thread_id; empty list for default sentinel or unknown thread."""
-    if not thread_id or thread_id == domains.ycs.conversation.params.DEFAULT_THREAD_ID:
+    if not thread_id or thread_id == domains.ycs.ask.conversation.params.DEFAULT_THREAD_ID:
         return {"thread_id": thread_id, "items": [], "total": 0}
-    items = await domains.ycs.conversation.service.list_thread_messages(
+    items = await domains.ycs.ask.conversation.service.list_thread_messages(
         request.app.state.pg_url, thread_id,
     )
     return {"thread_id": thread_id, "items": items, "total": len(items)}
@@ -82,7 +82,7 @@ async def get_thread_history(thread_id: str, request: Request) -> dict:
 @router.get("/threads")
 async def get_threads(request: Request) -> dict:
     """List existing threads most-recent first; each item has thread_id/turn_count/last_seen/first_question."""
-    items = await domains.ycs.conversation.service.list_threads(request.app.state.pg_url)
+    items = await domains.ycs.ask.conversation.service.list_threads(request.app.state.pg_url)
     return {"items": items, "total": len(items)}
 
 
@@ -92,7 +92,7 @@ async def branch_thread_endpoint(
     request:   Request,
 ) -> dict:
     """Branch a thread at up_to_created_at (copies whole source if absent); returns new_thread_id + copied count."""
-    if not thread_id or thread_id == domains.ycs.conversation.params.DEFAULT_THREAD_ID:
+    if not thread_id or thread_id == domains.ycs.ask.conversation.params.DEFAULT_THREAD_ID:
         raise HTTPException(
             status_code = 400,
             detail      = "cannot branch the default sentinel",
@@ -103,7 +103,7 @@ async def branch_thread_endpoint(
         body = {}
     up_to = (body.get("up_to_created_at") or "").strip() or None
     new_thread_id = (uuid.uuid4().hex)[:12]
-    n = await domains.ycs.conversation.service.branch_thread(
+    n = await domains.ycs.ask.conversation.service.branch_thread(
         request.app.state.pg_url, thread_id, up_to, new_thread_id,
     )
     return {"new_thread_id": new_thread_id, "copied": n}
@@ -115,9 +115,9 @@ async def delete_thread_endpoint(
     request:   Request,
 ) -> dict:
     """Delete thread + all its turns; returns deleted row count (0 if not found); default sentinel is a no-op."""
-    if not thread_id or thread_id == domains.ycs.conversation.params.DEFAULT_THREAD_ID:
+    if not thread_id or thread_id == domains.ycs.ask.conversation.params.DEFAULT_THREAD_ID:
         return {"deleted": 0}
-    n = await domains.ycs.conversation.service.delete_thread(request.app.state.pg_url, thread_id)
+    n = await domains.ycs.ask.conversation.service.delete_thread(request.app.state.pg_url, thread_id)
     return {"deleted": n}
 
 
@@ -129,7 +129,7 @@ async def cancel_turn_endpoint(
     """Mark turn for early SSE exit and delete its PG row; idempotent (second call returns deleted=0)."""
     service.mark_turn_cancelled(turn_id)
     try:
-        n = await domains.ycs.conversation.service.delete_turn(request.app.state.pg_url, turn_id)
+        n = await domains.ycs.ask.conversation.service.delete_turn(request.app.state.pg_url, turn_id)
     except Exception as e:
         logger.warning(
             f"[ycs:cancel] delete_turn({turn_id}) failed: "
@@ -146,7 +146,7 @@ async def rag_search(
 ) -> dict:
     """Agentic RAG: cache check → history load → graph.ainvoke() → save turn → cache response."""
     if not payload.thread_id or payload.thread_id == "default":
-        cached = await domains.ycs.cache.service.get_cached_response(
+        cached = await domains.ycs.ask.cache.service.get_cached_response(
             request.app.state.redis_aio,
             payload.question,
             payload.force_mode,
@@ -154,13 +154,13 @@ async def rag_search(
         if cached:
             cached["_from_cache"] = True
             return cached
-    history = await domains.ycs.conversation.service.get_history(
+    history = await domains.ycs.ask.conversation.service.get_history(
         request.app.state.pg_url, payload.thread_id,
     )
     graph = await service.build_graph_from_request(request)
     initial_state = {
         "question":             payload.question,
-        "thread_id":            payload.thread_id or domains.ycs.conversation.params.DEFAULT_THREAD_ID,
+        "thread_id":            payload.thread_id or domains.ycs.ask.conversation.params.DEFAULT_THREAD_ID,
         "route":                "search",
         "contextualized":       False,
         "mode":                 "",
@@ -223,7 +223,7 @@ async def rag_search(
                     infra.langfuse.keys.OBS_META_WORKFLOW: "ycs_ask",
                 },
             ):
-                infra.langfuse.service.set_current_span_langfuse_io(input_data = domains.ycs.observability.domain.langfuse_ycs_input(
+                infra.langfuse.service.set_current_span_langfuse_io(input_data = domains.ycs.ask.observability.domain.langfuse_ycs_input(
                     question = payload.question,
                     route = "search",
                     force_mode = payload.force_mode or "",
@@ -255,7 +255,7 @@ async def rag_search(
                     except asyncio.TimeoutError:
                         # Global deadline hit — one bounded fallback pass
                         # instead of grinding until the client disconnects.
-                        _fb = await domains.ycs.rag.standard.nodes.fallback_answer.node.fallback_answer(
+                        _fb = await domains.ycs.ask.rag.standard.nodes.fallback_answer.node.fallback_answer(
                             {
                                 "question":             payload.question,
                                 "conversation_history": history,
@@ -275,7 +275,7 @@ async def rag_search(
                             "_deadline_hit":     True,
                         }
                 except Exception as e:
-                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.observability.domain.langfuse_ycs_output(
+                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.ask.observability.domain.langfuse_ycs_output(
                         status = "error",
                         answer = "",
                         mode = payload.force_mode or "unknown",
@@ -284,7 +284,7 @@ async def rag_search(
                         error = str(e),
                     ))
                     raise
-                infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.observability.domain.langfuse_ycs_output(
+                infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.ask.observability.domain.langfuse_ycs_output(
                     status = "done",
                     answer = str(result.get("generation") or ""),
                     mode = str(result.get("mode") or payload.force_mode or "standard"),
@@ -293,7 +293,7 @@ async def rag_search(
                     sub_questions = result.get("sub_questions"),
                     confidence_score = result.get("confidence_score"),
                 ))
-        domains.ycs.observability.service.record_ask_run(
+        domains.ycs.ask.observability.service.record_ask_run(
             route = "search",
             mode = str(result.get("mode") or payload.force_mode or "standard"),
             outcome = "deadline" if result.get("_deadline_hit") else "done",
@@ -302,7 +302,7 @@ async def rag_search(
             citation_count = len(result.get("citations") or []),
         )
     except Exception as e:
-        domains.ycs.observability.service.record_ask_run(
+        domains.ycs.ask.observability.service.record_ask_run(
             route = "search",
             mode = payload.force_mode or "unknown",
             outcome = "error",
@@ -336,7 +336,7 @@ async def rag_search(
     if mode == "deep":
         response["sub_questions"]    = result.get("sub_questions", [])
         response["confidence_score"] = result.get("confidence_score", 0.0)
-    await domains.ycs.conversation.service.save_turn(
+    await domains.ycs.ask.conversation.service.save_turn(
         request.app.state.pg_url,
         payload.thread_id,
         payload.question,
@@ -344,7 +344,7 @@ async def rag_search(
         mode,
     )
     if not payload.thread_id or payload.thread_id == "default":
-        await domains.ycs.cache.service.cache_response(
+        await domains.ycs.ask.cache.service.cache_response(
             request.app.state.redis_aio,
             payload.question,
             response,
@@ -377,11 +377,11 @@ async def rag_search_stream(
     request: Request,
 ) -> StreamingResponse:
     """Streaming agentic RAG via SSE; one event per node completion; saves final answer to Postgres."""
-    history = await domains.ycs.conversation.service.get_history(
+    history = await domains.ycs.ask.conversation.service.get_history(
         request.app.state.pg_url, payload.thread_id,
     )
     # Thread scope is frozen to the first turn's channel_ids; enforce server-side so hand-crafted POSTs can't bypass.
-    locked_scope = await domains.ycs.conversation.service.get_thread_locked_scope(
+    locked_scope = await domains.ycs.ask.conversation.service.get_thread_locked_scope(
         request.app.state.pg_url, payload.thread_id,
     )
     effective_channel_ids = (
@@ -398,7 +398,7 @@ async def rag_search_stream(
     graph = await service.build_graph_from_request(request)
     initial_state = {
         "question":             payload.question,
-        "thread_id":            payload.thread_id or domains.ycs.conversation.params.DEFAULT_THREAD_ID,
+        "thread_id":            payload.thread_id or domains.ycs.ask.conversation.params.DEFAULT_THREAD_ID,
         "route":                "search_stream",
         "contextualized":       False,
         "mode":                 "",
@@ -434,7 +434,7 @@ async def rag_search_stream(
         (not payload.thread_id or payload.thread_id == "default")
         and not (payload.sub_questions or [])
     ):
-        _hit = await domains.ycs.cache.service.get_cached_response(
+        _hit = await domains.ycs.ask.cache.service.get_cached_response(
             request.app.state.redis_aio,
             payload.question,
             payload.force_mode,
@@ -443,7 +443,7 @@ async def rag_search_stream(
             async def _replay_cached():
                 _hit_turn_id: int | None = None
                 try:
-                    _hit_turn_id = await domains.ycs.conversation.service.insert_turn(
+                    _hit_turn_id = await domains.ycs.ask.conversation.service.insert_turn(
                         request.app.state.pg_url,
                         payload.thread_id,
                         payload.question,
@@ -468,7 +468,7 @@ async def rag_search_stream(
                 )
                 if _hit_turn_id is not None:
                     try:
-                        await domains.ycs.conversation.service.update_turn_answer(
+                        await domains.ycs.ask.conversation.service.update_turn_answer(
                             request.app.state.pg_url,
                             _hit_turn_id,
                             _hit.get("answer", ""),
@@ -496,7 +496,7 @@ async def rag_search_stream(
 
     turn_id: int | None = None
     try:
-        turn_id = await domains.ycs.conversation.service.insert_turn(
+        turn_id = await domains.ycs.ask.conversation.service.insert_turn(
             request.app.state.pg_url,
             payload.thread_id,
             payload.question,
@@ -645,7 +645,7 @@ async def rag_search_stream(
             )
 
     async def event_generator():
-        _sess_id = payload.thread_id or domains.ycs.conversation.params.DEFAULT_THREAD_ID
+        _sess_id = payload.thread_id or domains.ycs.ask.conversation.params.DEFAULT_THREAD_ID
         _user_id = (effective_channel_ids or ["default"])[0]
         # 2026-09-15: same thread-tagging as sync `/search` so the
         # conversation-level usage counter captures this stream too.
@@ -680,7 +680,7 @@ async def rag_search_stream(
             },
         )
         _span_cm.__enter__()
-        infra.langfuse.service.set_current_span_langfuse_io(input_data = domains.ycs.observability.domain.langfuse_ycs_input(
+        infra.langfuse.service.set_current_span_langfuse_io(input_data = domains.ycs.ask.observability.domain.langfuse_ycs_input(
             question = payload.question,
             route = "search_stream",
             force_mode = payload.force_mode or "",
@@ -806,7 +806,7 @@ async def rag_search_stream(
                             initial_state,
                             config = config,
                         )
-                    for ev in domains.ycs.rag.domain.result_to_graph_updates(result):
+                    for ev in domains.ycs.ask.rag.domain.result_to_graph_updates(result):
                         await event_queue.put(("event", ev))
                     await event_queue.put(("done", None))
                 except asyncio.CancelledError:
@@ -863,7 +863,7 @@ async def rag_search_stream(
                                 snap = dict(thinking_state)
                                 snap["_seq"] = hb_seq
                                 await asyncio.wait_for(
-                                    domains.ycs.conversation.service.update_turn_answer(
+                                    domains.ycs.ask.conversation.service.update_turn_answer(
                                         request.app.state.pg_url,
                                         turn_id, last_generation, last_mode,
                                         thinking_state = snap,
@@ -962,7 +962,7 @@ async def rag_search_stream(
                         if should_persist:
                             try:
                                 await asyncio.wait_for(
-                                    domains.ycs.conversation.service.update_turn_answer(
+                                    domains.ycs.ask.conversation.service.update_turn_answer(
                                         request.app.state.pg_url,
                                         turn_id, last_generation, last_mode,
                                         thinking_state = thinking_state,
@@ -980,7 +980,7 @@ async def rag_search_stream(
                     logger.info(
                         f"[ycs:stream] cancelled mid-flight turn_id={turn_id}"
                     )
-                    domains.ycs.observability.service.record_ask_run(
+                    domains.ycs.ask.observability.service.record_ask_run(
                         route = "search_stream",
                         mode = last_mode or payload.force_mode or "unknown",
                         outcome = "cancelled",
@@ -988,7 +988,7 @@ async def rag_search_stream(
                         duration_s = max(time.monotonic() - t_run_start, 0.0),
                         citation_count = len(last_citations),
                     )
-                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.observability.domain.langfuse_ycs_output(
+                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.ask.observability.domain.langfuse_ycs_output(
                         status = "cancelled",
                         answer = last_generation,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1013,7 +1013,7 @@ async def rag_search_stream(
                     # text below. Merged into one branch.)
                     if not last_generation:
                         try:
-                            _fb = await domains.ycs.rag.standard.nodes.fallback_answer.node.fallback_answer(
+                            _fb = await domains.ycs.ask.rag.standard.nodes.fallback_answer.node.fallback_answer(
                                 {
                                     "question":             payload.question,
                                     "conversation_history": history,
@@ -1054,7 +1054,7 @@ async def rag_search_stream(
                             )
                             _stamp_citations(thinking_state, last_citations)
                             await asyncio.wait_for(
-                                domains.ycs.conversation.service.update_turn_answer(
+                                domains.ycs.ask.conversation.service.update_turn_answer(
                                     request.app.state.pg_url,
                                     turn_id, last_generation, last_mode,
                                     thinking_state = thinking_state,
@@ -1066,7 +1066,7 @@ async def rag_search_stream(
                                 f"[ycs:stream] deadline finalize failed: "
                                 f"{type(e).__name__}: {e}"
                             )
-                    domains.ycs.observability.service.record_ask_run(
+                    domains.ycs.ask.observability.service.record_ask_run(
                         route = "search_stream",
                         mode = last_mode or payload.force_mode or "unknown",
                         outcome = "deadline",
@@ -1074,7 +1074,7 @@ async def rag_search_stream(
                         duration_s = max(time.monotonic() - t_run_start, 0.0),
                         citation_count = len(last_citations),
                     )
-                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.observability.domain.langfuse_ycs_output(
+                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.ask.observability.domain.langfuse_ycs_output(
                         status = "done",
                         answer = last_generation,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1118,7 +1118,7 @@ async def rag_search_stream(
                             )
                             _stamp_citations(thinking_state, last_citations)
                             await asyncio.wait_for(
-                                domains.ycs.conversation.service.update_turn_answer(
+                                domains.ycs.ask.conversation.service.update_turn_answer(
                                     request.app.state.pg_url,
                                     turn_id, sentinel, last_mode,
                                     thinking_state = thinking_state,
@@ -1130,7 +1130,7 @@ async def rag_search_stream(
                                 f"[ycs:stream] watchdog finalize "
                                 f"failed: {type(e).__name__}: {e}"
                             )
-                    domains.ycs.observability.service.record_ask_run(
+                    domains.ycs.ask.observability.service.record_ask_run(
                         route = "search_stream",
                         mode = last_mode or payload.force_mode or "unknown",
                         outcome = "stalled",
@@ -1138,7 +1138,7 @@ async def rag_search_stream(
                         duration_s = max(time.monotonic() - t_run_start, 0.0),
                         citation_count = len(last_citations),
                     )
-                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.observability.domain.langfuse_ycs_output(
+                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.ask.observability.domain.langfuse_ycs_output(
                         status = "stalled",
                         answer = sentinel,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1165,7 +1165,7 @@ async def rag_search_stream(
                             )
                             _stamp_citations(thinking_state, last_citations)
                             await asyncio.wait_for(
-                                domains.ycs.conversation.service.update_turn_answer(
+                                domains.ycs.ask.conversation.service.update_turn_answer(
                                     request.app.state.pg_url,
                                     turn_id, last_generation, last_mode,
                                     thinking_state = thinking_state,
@@ -1186,7 +1186,7 @@ async def rag_search_stream(
                             )
                             _stamp_citations(thinking_state, last_citations)
                             await asyncio.wait_for(
-                                domains.ycs.conversation.service.update_turn_answer(
+                                domains.ycs.ask.conversation.service.update_turn_answer(
                                     request.app.state.pg_url,
                                     turn_id,
                                     "(no response — see Thinking for pipeline status)",
@@ -1200,7 +1200,7 @@ async def rag_search_stream(
                                 f"[ycs:stream] no-generation finalize "
                                 f"failed: {type(e).__name__}: {e}"
                             )
-                    domains.ycs.observability.service.record_ask_run(
+                    domains.ycs.ask.observability.service.record_ask_run(
                         route = "search_stream",
                         mode = last_mode or payload.force_mode or "unknown",
                         outcome = "done",
@@ -1218,7 +1218,7 @@ async def rag_search_stream(
                         and not (payload.sub_questions or [])
                         and last_generation
                     ):
-                        await domains.ycs.cache.service.cache_response(
+                        await domains.ycs.ask.cache.service.cache_response(
                             request.app.state.redis_aio,
                             payload.question,
                             {
@@ -1235,7 +1235,7 @@ async def rag_search_stream(
                         if last_generation else
                         "(no response — see Thinking for pipeline status)"
                     )
-                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.observability.domain.langfuse_ycs_output(
+                    infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.ask.observability.domain.langfuse_ycs_output(
                         status = "done",
                         answer = final_answer,
                         mode = last_mode or payload.force_mode or "unknown",
@@ -1276,7 +1276,7 @@ async def rag_search_stream(
                 f"[ycs:stream] cancelled (client disconnect) "
                 f"turn_id={turn_id} — scheduling sentinel persist and re-raising"
             )
-            domains.ycs.observability.service.record_ask_run(
+            domains.ycs.ask.observability.service.record_ask_run(
                 route = "search_stream",
                 mode = last_mode or payload.force_mode or "unknown",
                 outcome = "client_disconnect",
@@ -1284,7 +1284,7 @@ async def rag_search_stream(
                 duration_s = max(time.monotonic() - t_run_start, 0.0),
                 citation_count = len(last_citations),
             )
-            infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.observability.domain.langfuse_ycs_output(
+            infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.ask.observability.domain.langfuse_ycs_output(
                 status = "client_disconnect",
                 answer = last_generation,
                 mode = last_mode or payload.force_mode or "unknown",
@@ -1311,7 +1311,7 @@ async def rag_search_stream(
                 ):
                     try:
                         await asyncio.wait_for(
-                            domains.ycs.conversation.service.update_turn_answer(
+                            domains.ycs.ask.conversation.service.update_turn_answer(
                                 pg_url, tid, answer, mode,
                                 thinking_state = state_snapshot,
                             ),
@@ -1340,18 +1340,18 @@ async def rag_search_stream(
                         await _stamp_usage(
                             thinking_state, _sess_id, _usage_before,
                         )
-                        await domains.ycs.conversation.service.update_turn_answer(
+                        await domains.ycs.ask.conversation.service.update_turn_answer(
                             request.app.state.pg_url,
                             turn_id, last_generation, last_mode,
                             thinking_state = thinking_state,
                         )
                     else:
-                        await domains.ycs.conversation.service.delete_turn(
+                        await domains.ycs.ask.conversation.service.delete_turn(
                             request.app.state.pg_url, turn_id,
                         )
                 except Exception:
                     pass
-            domains.ycs.observability.service.record_ask_run(
+            domains.ycs.ask.observability.service.record_ask_run(
                 route = "search_stream",
                 mode = last_mode or payload.force_mode or "unknown",
                 outcome = "error",
@@ -1359,7 +1359,7 @@ async def rag_search_stream(
                 duration_s = max(time.monotonic() - t_run_start, 0.0),
                 citation_count = len(last_citations),
             )
-            infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.observability.domain.langfuse_ycs_output(
+            infra.langfuse.service.set_current_span_langfuse_io(output_data = domains.ycs.ask.observability.domain.langfuse_ycs_output(
                 status = "error",
                 answer = last_generation,
                 mode = last_mode or payload.force_mode or "unknown",
@@ -1402,7 +1402,7 @@ async def rag_search_stream(
 async def ingest_to_qdrant(payload: schemas.IngestRequest) -> dict:
     """Queue ES transcripts → Qdrant ingestion (Celery)."""
     await service._raise_if_embedding_migration_needed()
-    task = domains.ycs.qdrant_task.task.ingest_to_qdrant.delay(
+    task = domains.ycs.ingestion.qdrant_task.task.ingest_to_qdrant.delay(
         payload.video_ids,
         payload.chunk_size,
         payload.chunk_overlap,
@@ -1418,7 +1418,7 @@ async def ingest_to_qdrant(payload: schemas.IngestRequest) -> dict:
 @router.post("/ingest/neo4j")
 async def ingest_to_neo4j(payload: schemas.GraphIngestRequest) -> dict:
     """Queue entity extraction → Neo4j (Celery); 1 LLM call per transcript."""
-    task = domains.ycs.neo4j_task.task.ingest_to_neo4j.delay(payload.video_ids, payload.batch_size)
+    task = domains.ycs.ingestion.neo4j_task.task.ingest_to_neo4j.delay(payload.video_ids, payload.batch_size)
     infra.opentelemetry.service.tag_celery_task(task.id)
     return {
         "task_id":  task.id,
@@ -1431,7 +1431,7 @@ async def ingest_to_neo4j(payload: schemas.GraphIngestRequest) -> dict:
 async def graph_stats(request: Request) -> dict:
     """Get Neo4j node/relationship counts."""
     try:
-        stats = await domains.ycs.graph_builder.service.get_graph_stats(request.app.state.neo4j_graph)
+        stats = await domains.ycs.ingestion.graph_builder.service.get_graph_stats(request.app.state.neo4j_graph)
         return stats
     except Exception as e:
         raise HTTPException(
@@ -1445,7 +1445,7 @@ async def full_pipeline(payload: schemas.PipelineRequest) -> dict:
     """Queue full Celery chain: extract → Qdrant → Neo4j → cache."""
     if payload.include_qdrant:
         await service._raise_if_embedding_migration_needed()
-    task = domains.ycs.pipeline_task.task.full_channel_pipeline.delay(
+    task = domains.ycs.ingestion.pipeline_task.task.full_channel_pipeline.delay(
         payload.channel_id,
         payload.max_results,
         payload.include_transcription,

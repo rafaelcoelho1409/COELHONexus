@@ -5,6 +5,7 @@ from .. import sawc_derive
 
 import ast
 import hashlib
+import json
 import re
 import textwrap
 from typing import Optional
@@ -300,18 +301,32 @@ def _is_fence_line(ln: str) -> bool:
 
 
 def plan_sources_hash(chapter: Optional[dict]) -> str:
-    """16-hex fingerprint of a plan chapter (title + sorted sources); "" when the chapter is unknown. A re-plan that changes either invalidates renders built under the old plan (chapter ids are stable across re-plans, so the id alone can't tell them apart)."""
+    """Fingerprint every plan field that can change what this chapter teaches or which source bytes it uses."""
     if not chapter:
         return ""
-    payload = (chapter.get("title") or "") + "\n" + "\n".join(sorted(chapter.get("sources") or []))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    payload = {
+        "title": chapter.get("title") or "",
+        "description": chapter.get("description") or "",
+        "objective": chapter.get("objective") or "",
+        "key_concepts": list(chapter.get("key_concepts") or []),
+        "prerequisites": list(chapter.get("prerequisites") or []),
+        "kind": chapter.get("kind") or "",
+        "role": chapter.get("role") or "",
+        "synth_eligible": chapter.get("synth_eligible", True),
+        "synth_exclusion_reason": chapter.get("synth_exclusion_reason") or "",
+        "best_code_ids": sorted(chapter.get("best_code_ids") or []),
+        "sources": sorted(chapter.get("sources") or []),
+        "source_content_digests": chapter.get("source_content_digests") or {},
+    }
+    body = json.dumps(payload, ensure_ascii = False, sort_keys = True, separators = (",", ":"))
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
 
 
 def render_is_stale(render_blob: dict, chapter: Optional[dict]) -> bool:
-    """True only when the render carries a plan fingerprint AND the current plan's chapter has a different one. Missing on either side → not stale (renders from before the field existed, or a plan that can't be read, must never be thrown away)."""
+    """A known current chapter is stale if its render has no matching plan fingerprint."""
     stored = (render_blob or {}).get("plan_sources_hash") or ""
     current = plan_sources_hash(chapter)
-    return bool(stored and current and stored != current)
+    return bool(current and (not stored or stored != current))
 
 
 def coverage_metrics(

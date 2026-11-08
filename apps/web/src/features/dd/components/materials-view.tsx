@@ -44,7 +44,7 @@ const COLUMNS = {
 
 /** A column that stays in view while the page scrolls, and scrolls on its own when it is taller than the screen. */
 const STICKY_COLUMN =
-  "lg:sticky lg:top-[calc(var(--chrome-top)+1.5rem)] lg:max-h-[calc(100dvh-var(--chrome-top)-2.5rem)] lg:self-start";
+  "lg:sticky lg:top-[calc(var(--chrome-top)+1.5rem)] lg:max-h-[calc(100dvh-var(--chrome-top)-2.5rem)] lg:self-start lg:overflow-y-auto";
 
 /** Arrow keys step through pages, unless the reader is typing somewhere. */
 function isTyping(target: EventTarget | null): boolean {
@@ -58,11 +58,14 @@ export function MaterialsView({
   slug,
   manifest,
   runId = null,
+  loadError = false,
   active = true,
 }: {
   slug: string;
   manifest: Manifest | null;
   runId?: string | null;
+  /** The saved manifest request failed and no live run manifest is available. */
+  loadError?: boolean;
   /** The Materials tab is the one on show: the shortcuts (Ctrl+K, the arrow keys) belong to it only then. */
   active?: boolean;
 }) {
@@ -203,7 +206,13 @@ export function MaterialsView({
         aria-label="Ingested library"
         className="rounded-md border border-border bg-card p-8 text-center text-sm text-muted-foreground"
       >
-        {manifest ? "This ingestion has no pages." : "No ingested pages yet."}
+        {loadError ? (
+          <p role="alert">Could not load the ingested pages. Refresh the page to try again.</p>
+        ) : manifest ? (
+          "This ingestion has no pages."
+        ) : (
+          "No ingested pages yet."
+        )}
       </section>
     );
   }

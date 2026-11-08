@@ -346,6 +346,7 @@ function IngestionWorkspace({
           manifest={activeManifest}
           runId={explorerRunId}
           active={view === "materials"}
+          loadError={manifestQuery.isError && !manifestQuery.data && !showLiveManifest}
         />
       </section>
     </div>

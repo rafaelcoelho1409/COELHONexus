@@ -43,13 +43,28 @@ async def stop_watcher(watcher_task: asyncio.Task) -> None:
 
 
 async def settle(binding: entities.Binding, config: dict, main_task: asyncio.Task, watcher_task: asyncio.Task, thread_id: str, stage: str) -> dict:
-    """Await the run, stop its watcher and write the terminal status into the thread's checkpoint. Returns the terminal patch: `status` (done, cancelled or
-    failed) and, on a failure, `error`."""
+    """Await the run, stop its watcher and write the graph's terminal status into the checkpoint."""
     patch: dict = {}
     try:
         await main_task
-        patch["status"] = "done"
-        logger.info(f"[{stage}] {thread_id}: done")
+        values = dict((await binding.graph.aget_state(config)).values or {})
+        graph_status = values.get("status")
+        if graph_status == "done":
+            patch["status"] = "done"
+            logger.info(f"[{stage}] {thread_id}: done")
+        elif graph_status == "audit_failed":
+            patch["status"] = "needs_review"
+            patch["error"] = values.get("error") or "the chapter render audit did not pass"
+            logger.warning(f"[{stage}] {thread_id}: needs review — {patch['error']}")
+        elif graph_status in {"needs_review", "failed", "cancelled"}:
+            patch["status"] = graph_status
+            if values.get("error"):
+                patch["error"] = values["error"]
+            logger.info(f"[{stage}] {thread_id}: {graph_status}")
+        else:
+            patch["status"] = "failed"
+            patch["error"] = f"graph ended without a recognized terminal status (status={graph_status!r})"
+            logger.error(f"[{stage}] {thread_id}: {patch['error']}")
     except asyncio.CancelledError:
         patch["status"] = "cancelled"
         logger.info(f"[{stage}] {thread_id}: cancelled by user")

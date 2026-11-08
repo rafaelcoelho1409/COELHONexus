@@ -76,8 +76,8 @@ class RenderResult(BaseModel):
     code_files:            list[str] = Field(default_factory = list)
     # Fingerprint of the plan chapter (title + sources) this render was built
     # from. Resume and the chapter list use it to tell a render from the CURRENT
-    # plan from a leftover of an older one. "" = rendered before this field
-    # existed — treated as valid, so existing studies are untouched.
+    # plan from a leftover of an older one. A missing value is stale when a
+    # current plan chapter is available.
     plan_sources_hash:     str = ""
     # Informational coverage metrics (never scored): how much of the chapter's
     # source material and code the writer actually used. A chapter citing 3 of 16

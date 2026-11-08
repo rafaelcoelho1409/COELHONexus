@@ -49,13 +49,13 @@ export function DistillProgressPanel({
       aria-label="Distill Agentic AI progress"
       className="min-w-0 rounded-md border border-border bg-card p-3"
     >
-      <div className="flex min-h-9 flex-wrap items-center justify-between gap-2">
+      <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <h3 className="text-sm font-medium">Distill Agentic AI</h3>
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <div className="flex min-w-0 flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-end">
           <span aria-live="polite" className="text-xs text-muted-foreground">
             {statusText}
           </span>
-          {actions}
+          <div className="flex flex-wrap items-center gap-2">{actions}</div>
         </div>
       </div>
 
@@ -75,7 +75,7 @@ export function DistillProgressPanel({
         <div className="h-full bg-primary" style={{ width: `${percent ?? 0}%` }} />
       </div>
 
-      <dl className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3 xl:grid-cols-6">
+      <dl className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
         <ProgressMetric
           label="Learning units"
           value={

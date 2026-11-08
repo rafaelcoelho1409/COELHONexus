@@ -1,68 +1,25 @@
-"""YouCanSee (YCS) — bounded context. Wave 1-4 ingestion pipeline
-(extract/chunker/embeddings/es_index/graph_builder/ingestion) +
-Wave 5 Ask (rag/retriever/reranker/grader/query/conversation) +
-their Celery task packages, re-exported here for cross-package
-refs (docs/CODE-CONVENTIONS.md §8 rollout).
+"""YouCanSee (YCS), grouped by product feature.
 
-The 20 subpackages below are re-exported LAZILY (PEP 562 module
-`__getattr__`, 2026-09-24) — see `infra/__init__.py`'s docstring for
-the full rationale/measurements. Same fix, same reason: reaching
-`domains.ycs.embeddings` alone used to import all of them (graph_builder's
-LangChain stack, reranker's cross-encoder, everything) because this
-file had to run to completion first. Each subpackage now only imports
-on first actual access."""
+* ``source`` owns YouTube discovery and source metadata search.
+* ``ingestion`` owns extraction, transcription, indexing, storage, and task coordination.
+* ``ask`` owns RAG, retrieval, grading, reranking, and conversation state.
+  Its observability helpers are shared with ingestion and query.
+* ``query`` owns the direct Elasticsearch, Qdrant, and Neo4j workbench.
+
+Feature packages stay lazily imported so a consumer only loads the
+integrations used by its request path.
+"""
 from __future__ import annotations
+
 from typing import TYPE_CHECKING
 import importlib
 
 
 if TYPE_CHECKING:
-    from . import (
-        cache,
-        chunker,
-        content,
-        conversation,
-        embedding_migration,
-        embeddings,
-        es_index,
-        extract,
-        grader,
-        graph_builder,
-        ingestion,
-        neo4j_task,
-        observability,
-        pipeline_task,
-        qdrant_task,
-        query,
-        rag,
-        reranker,
-        retriever,
-        transcript,
-    )
+    from . import ask, ingestion, query, source
 
 
-__all__ = [
-    "cache",
-    "chunker",
-    "content",
-    "conversation",
-    "embedding_migration",
-    "embeddings",
-    "es_index",
-    "extract",
-    "grader",
-    "graph_builder",
-    "ingestion",
-    "neo4j_task",
-    "observability",
-    "pipeline_task",
-    "qdrant_task",
-    "query",
-    "rag",
-    "reranker",
-    "retriever",
-    "transcript",
-]
+__all__ = ["source", "ingestion", "ask", "query"]
 
 
 def __getattr__(name: str):

@@ -247,7 +247,7 @@ async def load_chapters(blobs, slug: str, chapter_ids: list[str]) -> tuple[list[
                 slug, chapter_id, graphs.pipeline.synth.params.version(),
             )
             render_blob = json.loads(await blobs.read_text(render_key))
-            if not (render_blob.get("audit") or {}).get("audit_passed", True):
+            if (render_blob.get("audit") or {}).get("audit_passed") is not True:
                 audit_failed.append(chapter_id)
                 continue
         except Exception:
