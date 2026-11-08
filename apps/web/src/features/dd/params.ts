@@ -6,6 +6,7 @@ import type { Section } from "@/shared/layout/section";
 export const DD_STAGES = [
   { key: "catalog", label: "Catalog", href: "/dd", tab: true },
   { key: "ingestion", label: "Ingestion", href: "/dd/ingestion", tab: true },
+  { key: "pages", label: "Pages", href: "/dd/pages", tab: true },
   { key: "pipeline", label: "Pipeline", href: "/dd/pipeline", tab: true },
   { key: "planner", label: "Planner", href: "/dd/planner", tab: false },
   { key: "synth", label: "Synth", href: "/dd/synth", tab: false },
@@ -43,6 +44,14 @@ export function ingestionHref(slug: string | null, runId?: string | null): strin
   return qsStr ? `/dd/ingestion?${qsStr}` : "/dd/ingestion";
 }
 
+export function pagesHref(slug: string | null, runId?: string | null): string {
+  const qs = new URLSearchParams();
+  if (slug) qs.set("slug", slug);
+  if (runId) qs.set("run", runId);
+  const qsStr = qs.toString();
+  return qsStr ? `/dd/pages?${qsStr}` : "/dd/pages";
+}
+
 /** The study reader, opened on one chapter. */
 export function chapterStudyHref(slug: string, chapterId: string): string {
   return `/dd/study?slug=${encodeURIComponent(slug)}&chapter=${encodeURIComponent(chapterId)}`;
@@ -57,6 +66,10 @@ export const SYNTH_MODE = "quality";
 
 /** The study reader shows this artifact of a rendered chapter. */
 export const CHAPTER_ARTIFACT = "README.md";
+
+/** Where a tutorial chapter's code folder (each step's examples and the capstone) is downloaded as a zip. */
+export const chapterCodeHref = (slug: string, chapterId: string) =>
+  `/api/v1/dd/pipeline/synth/${encodeURIComponent(slug)}/study/${encodeURIComponent(chapterId)}/code.zip`;
 
 /** An ingestion run's status is re-read this often until it reaches a terminal state. */
 export const RUN_POLL_MS = 1_500;

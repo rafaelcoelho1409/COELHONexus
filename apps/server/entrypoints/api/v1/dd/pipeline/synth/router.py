@@ -7,8 +7,10 @@ import domains.dd.pipeline.ai.task
 from . import params, service
 
 import asyncio
+import io
 import json
 import logging
+import zipfile
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from starlette.responses import StreamingResponse
@@ -25,6 +27,7 @@ async def synth_info() -> dict:
     return {
         "node_order":  list(domains.dd.pipeline.ai.synth.service.node_order()),
         "implemented": list(domains.dd.pipeline.ai.synth.service.node_order()),
+        "synth_version": ai.dd.graphs.pipeline.synth.params.version(),
         "modes": [
             {"key": "quality", "label": "Quality (default)", "enabled": True},
             {"key": "fast",    "label": "Fast (3 iters)",    "enabled": False},
@@ -63,13 +66,18 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
         cid = (ch or {}).get("id")
         if not cid:
             continue
-        render_key = domains.dd.pipeline.storage.keys.chapter_render_latest_key(slug, cid)
+        render_key = domains.dd.pipeline.storage.keys.chapter_render_latest_key(
+            slug, cid, ai.dd.graphs.pipeline.synth.params.version(),
+        )
         rendered = await minio.exists(render_key)
         entry: dict = {
             "id":         cid,
             "title":      ch.get("title") or cid,
             "order":      ch.get("order") or 0,
             "n_sources":  len(ch.get("sources") or []),
+            "source_files": [str(key).rsplit("/", 1)[-1] for key in ch.get("sources") or []],
+            "synth_eligible": ch.get("synth_eligible", True) is not False,
+            "synth_exclusion_reason": ch.get("synth_exclusion_reason") or "",
             "rendered":   rendered,
             "audit_passed": False,
             "render_path": render_key if rendered else None,
@@ -94,6 +102,7 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
                         entry[_k] = rp[_k]
                 entry["rendered_chars"] = rp.get("rendered_chars", 0)
                 entry["n_sections"] = rp.get("n_sections", 0)
+                entry["n_code_files"] = len(rp.get("code_files") or [])
                 entry["thread_id"] = rp.get("thread_id") or None
             except Exception:
                 pass
@@ -158,6 +167,28 @@ async def get_study_artifact(
     )
 
 
+@router.get("/{slug}/study/{chapter_id}/code.zip")
+async def get_study_code(slug: str, chapter_id: str) -> StreamingResponse:
+    """The chapter's `code/` folder (each step's examples, the capstone and its `main.py`) as one zip. Only a tutorial chapter has one."""
+    minio = infra.minio.service.get_storage()
+    root = domains.dd.pipeline.storage.keys.chapter_artifact_key(slug, chapter_id, "")
+    names = sorted(await minio.list(domains.dd.pipeline.storage.keys.chapter_artifact_key(slug, chapter_id, "code/")))
+    if not names:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no code folder for chapter {chapter_id!r} under {root!r}; only a tutorial chapter, once rendered, has one",
+        )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, text in zip(names, await minio.read_many(names)):
+            archive.writestr(name[len(root):], text or "")
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{chapter_id}-code.zip"', "Cache-Control": "no-store"},
+    )
+
+
 @router.get("/recent")
 async def list_recent_synth() -> dict:
     """Most-recent thread per slug for page-refresh recovery."""
@@ -213,17 +244,28 @@ async def start_synth(
         )
 
     plan = await service.load_plan(slug)
-    plan_chapter_ids: list[str] = sorted(
-        c["id"] for c in (plan.get("chapters") or [])
-        if (c or {}).get("id")
-    )
-    if not plan_chapter_ids:
+    # The planner's chapter array is already in pedagogical order. Sorting ids
+    # made the study run a different chapter first (and shuffled the UI list).
+    all_plan_chapter_ids: list[str] = [
+        chapter["id"]
+        for chapter in (plan.get("chapters") or [])
+        if isinstance(chapter, dict) and chapter.get("id")
+    ]
+    eligible_chapter_ids = {
+        chapter["id"]
+        for chapter in (plan.get("chapters") or [])
+        if isinstance(chapter, dict) and chapter.get("id") and chapter.get("synth_eligible", True) is not False
+    }
+    plan_chapter_ids = [chapter_id for chapter_id in all_plan_chapter_ids if chapter_id in eligible_chapter_ids]
+    if not all_plan_chapter_ids:
         raise HTTPException(
             status_code=404,
             detail=f"plan for {slug!r} has no chapters",
         )
 
     if chapter_id is None:
+        if not plan_chapter_ids:
+            raise HTTPException(status_code=409, detail="the plan has no chapters eligible for Synth")
         study_thread_id = thread_id or domains.dd.pipeline.runtime.dispatch.domain.make_study_thread_id(slug)
 
         gate = await domains.dd.pipeline.runtime.dispatch.service.reserve_synth_start(slug, study_thread_id)
@@ -263,13 +305,19 @@ async def start_synth(
             "latency_ms":      0,
         }
 
-    if chapter_id not in set(plan_chapter_ids):
+    if chapter_id not in set(all_plan_chapter_ids):
         raise HTTPException(
             status_code=404,
             detail=(
                 f"chapter {chapter_id!r} not in plan; known ids: "
                 f"{plan_chapter_ids}"
             ),
+        )
+
+    if chapter_id not in eligible_chapter_ids:
+        raise HTTPException(
+            status_code=409,
+            detail="this chapter is marked reference-only and is not eligible for Synth",
         )
 
     if not thread_id:

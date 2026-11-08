@@ -159,22 +159,22 @@ describe("buildSavePayload", () => {
     expect(buildSavePayload({ kind: "llm", url: "http://g", model: "", apiKey: "", clearKey: true })).toEqual(
       {
         url: "http://g",
-        model: "fgts-va",
+        model: "",
         api_key: "",
       },
     );
   });
 
-  it("falls back to the default model when the field is blank", () => {
+  it("leaves a blank model for the server to resolve to its configured default", () => {
     expect(
       buildSavePayload({ kind: "llm", url: "http://g", model: "   ", apiKey: "", clearKey: false }).model,
-    ).toBe("fgts-va");
+    ).toBe("");
   });
 
-  it("keeps the embedding endpoint's independent default model", () => {
+  it("leaves a blank embedding model for the server to resolve", () => {
     expect(
       buildSavePayload({ kind: "embedding", url: "http://g", model: "", apiKey: "", clearKey: false }).model,
-    ).toBe("auto");
+    ).toBe("");
   });
 });
 

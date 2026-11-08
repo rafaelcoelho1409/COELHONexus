@@ -10,6 +10,7 @@ import {
   deleteBdIngestionBookId,
   getBdIngestionActiveQueryKey,
   getBdIngestionBookIdOptions,
+  getBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionOptions,
   getBdIngestionBookIdPagesPageNoOptions,
   getBdIngestionBookIdPagesPageNoQualityOptions,
   getBdIngestionBookIdQueryKey,
@@ -31,6 +32,7 @@ import {
   type AgenticRunCancelResponse,
   type AgenticRunWipeResponse,
   agenticRunStatusSchema,
+  contentSelectionSchema,
   type BookSnapshot,
   type ExtractionWipeResponse,
   pageBodySchema,
@@ -101,6 +103,18 @@ export function usePageQuality(bookId: string, page: number | null, enabled: boo
     enabled: enabled && page !== null,
     retry: false,
     select: (data) => pageQualitySchema.parse(data),
+  });
+}
+
+/** The latest completed Agentic Ingestion page-selection revision, used to explain the Pages stage's Distill view. */
+export function useContentSelection(bookId: string, agenticRunId: string | null) {
+  return useQuery({
+    ...getBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionOptions({
+      path: { book_id: bookId, agentic_run_id: agenticRunId ?? "" },
+    }),
+    enabled: agenticRunId !== null,
+    retry: false,
+    select: (data) => contentSelectionSchema.parse(data),
   });
 }
 

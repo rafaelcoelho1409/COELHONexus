@@ -12,6 +12,7 @@ class OutlineSectionAnswer(BaseModel):
     description: str = Field(description = "20-400 chars, one specific topic; used to route source material to this section.")
     prerequisites: list[str] = Field(default_factory = list, description = "0-3 ids of EARLIER sections this one structurally depends on.")
     needs_code: bool = Field(default = True, description = "False for pure design or conceptual narrative.")
+    code_refs: list[str] = Field(default_factory = list, description = "In tutorial mode, the 16-hex canonical code-ledger hashes this step teaches; use at most one best example per step.")
 
 
 class OutlineAnswer(BaseModel):
@@ -82,6 +83,20 @@ class DerivedCodeAnswer(BaseModel):
 
     code: str = Field(description = "The example's source code only: no fences, no prose.")
     explanation: str = Field(default = "", description = "8-80 words (1-3 sentences) describing this code and naming an identifier in it. No fences.")
+
+
+class CapstonePartAnswer(BaseModel):
+    subheading: str = Field(description = "1-10 words naming what this part of the application builds; no leading '#'.")
+    explanation: str = Field(description = "8-80 words that say what this part does and which step of the chapter it uses, naming an identifier in its code. No fences.")
+    code: str = Field(description = "This part's source code only: no fences, no prose. Python that parses.")
+
+
+class CapstoneAnswer(BaseModel):
+    """The application that ends a chapter: it combines the best code the chapter teaches, in one to four parts that together run."""
+
+    title: str = Field(description = "2-8 words naming the application, without the word 'Capstone'.")
+    intro: str = Field(description = "20-400 chars: what the application does and which steps of the chapter it combines. No fences.")
+    parts: list[CapstonePartAnswer] = Field(description = "1-4 parts in the order a reader builds them; the last says how to run the whole.")
 
 
 class NormalizedCodeAnswer(BaseModel):

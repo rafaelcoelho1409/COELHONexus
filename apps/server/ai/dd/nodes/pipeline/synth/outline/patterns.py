@@ -5,6 +5,7 @@ import re
 
 
 SECTION_ID_RE = re.compile(r"^s\d{1,3}$")   # s1, s2, ..., s999
+CODE_HASH_RE = re.compile(r"^[0-9a-f]{16}$")
 
 # Markdown link inside a heading — `[text](url "title")`; group 1 is the link
 # text (empty for permalink anchors like `[](#id "Link to this heading")`).

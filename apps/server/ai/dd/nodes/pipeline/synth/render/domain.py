@@ -24,6 +24,58 @@ def _slugify(s: str) -> str:
     return re.sub(r"\s+", "-", out)
 
 
+CODE_EXTENSIONS = {
+    "python": "py", "py": "py", "bash": "sh", "sh": "sh", "shell": "sh", "json": "json", "yaml": "yaml", "yml": "yaml", "toml": "toml",
+    "javascript": "js", "js": "js", "typescript": "ts", "ts": "ts", "sql": "sql", "dockerfile": "Dockerfile",
+}
+
+
+def code_files(sections_ctx: list[dict]) -> dict[str, str]:
+    """The chapter's code as a folder to run: each step's examples under `code/steps/NN-<step>/MM-<example>.<ext>`, the capstone's parts under
+    `code/capstone/` with `main.py` holding them joined in order, and `code/INDEX.md` listing them. Only rendered code is written; a step with none has no folder."""
+    files: dict[str, str] = {}
+    capstone_parts: list[str] = []
+    index: list[str] = []
+    step_number = 0
+    for section in sections_ctx:
+        heading = section.get("heading") or ""
+        is_capstone = heading.startswith(sawc_derive.params.CAPSTONE_PREFIX)
+        if not is_capstone:
+            step_number += 1
+        for number, sub in enumerate(section.get("subtopics") or [], start = 1):
+            block = sub.get("code_block") or ""
+            if not block:
+                continue
+            info = block.split("\n", 1)[0].strip().lstrip("`~").strip()
+            lang = info.split()[0].lower() if info else ""
+            body = _fence_inner(block)
+            if not body:
+                continue
+            extension = CODE_EXTENSIONS.get(lang, "txt")
+            name = _slugify(sub.get("subheading") or "") or f"example-{number}"
+            if is_capstone:
+                path = f"code/capstone/{number:02d}-{name}.{extension}"
+                capstone_parts.append(body)
+            else:
+                path = f"code/steps/{step_number:02d}-{_slugify(heading) or 'step'}/{number:02d}-{name}.{extension}"
+            files[path] = body + "\n"
+            index.append(f"- `{path}`: {sub.get('subheading') or name}")
+    if capstone_parts:
+        files["code/capstone/main.py"] = "\n\n".join(capstone_parts) + "\n"
+        index.append("- `code/capstone/main.py`: the capstone, all its parts in order")
+    if files:
+        files["code/INDEX.md"] = "# Code of this chapter\n\nRun a step's file on its own; run `capstone/main.py` for the whole application.\n\n" + "\n".join(index) + "\n"
+    return files
+
+
+def _fence_inner(block: str) -> str:
+    """The code between the fence lines of a rendered block."""
+    lines = block.strip("\n").splitlines()
+    if len(lines) >= 2 and lines[0].lstrip().startswith(("```", "~~~")) and lines[-1].strip().startswith(("```", "~~~")):
+        lines = lines[1:-1]
+    return textwrap.dedent("\n".join(lines)).strip("\n")
+
+
 def build_section_context(
     section: dict,
     *,

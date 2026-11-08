@@ -42,8 +42,8 @@ function StageWithSearchParams({ stage }: { stage: DdStage }) {
   const runId = params.get("run");
   return (
     <>
-      {/* Ingestion draws its own bar: its Agents | Pages views sit on the right of it. */}
-      {stage === "ingestion" ? null : (
+      {/* Ingestion and Pages draw their own stage bar and content controls. */}
+      {stage === "ingestion" || stage === "pages" ? null : (
         <StageBar
           stage={stage}
           slug={slug}
@@ -58,6 +58,9 @@ function StageWithSearchParams({ stage }: { stage: DdStage }) {
 function StageBody({ stage, slug, runId }: { stage: DdStage; slug: string | null; runId: string | null }) {
   if (stage === "ingestion") {
     return <IngestionStage slug={slug} runId={runId} />;
+  }
+  if (stage === "pages") {
+    return <IngestionStage slug={slug} runId={runId} view="materials" />;
   }
   if (stage === "pipeline") {
     return <PipelineView slug={slug} />;

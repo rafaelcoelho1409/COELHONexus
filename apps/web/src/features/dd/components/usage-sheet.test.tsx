@@ -1,4 +1,5 @@
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { delay, HttpResponse, http } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,7 +32,7 @@ afterAll(() => server.close());
 const renderWith = (children: React.ReactNode) => render(<QueryProvider>{children}</QueryProvider>);
 
 describe("PlannerUsageSheet", () => {
-  it("shows calls and tokens, then each busy node, then each model", async () => {
+  it("uses the Ingestion grouping control for nodes, models, or both", async () => {
     server.use(
       http.get(`${API}/pipeline/planner/debug/graph/*/llm-counters`, () =>
         HttpResponse.json({
@@ -48,33 +49,40 @@ describe("PlannerUsageSheet", () => {
 
     const dialog = screen.getByRole("dialog", { name: "Planner LLM usage" });
     expect(await within(dialog).findByText("9,000")).toBeInTheDocument();
-    const table = within(dialog).getByRole("region", { name: "Usage by node" });
+    const combined = await within(dialog).findByRole("region", { name: "Usage by node and model" });
+    expect(within(combined).getByText("Off-topic filter")).toBeInTheDocument();
+    expect(within(combined).getByText("vendor-a")).toBeInTheDocument();
+    expect(within(combined).getByText("model-x")).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "By node" }));
+    const table = await within(dialog).findByRole("region", { name: "Usage by node" });
     expect(
       within(table)
         .getAllByRole("row")
         .map((row) => row.textContent),
     ).toEqual([
-      "NodeCallsInput tokensOutput tokens",
-      "Off-topic filter126,000300",
-      "Chapter propose23,0001,800",
+      "NodeCallsInput tokensOutput tokensReasoning",
+      "Off-topic filter126,0003000",
+      "Chapter propose23,0001,8000",
     ]);
-    const models = within(dialog).getByRole("region", { name: "Usage by model" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "By model" }));
+    const models = await within(dialog).findByRole("region", { name: "Usage by model" });
     expect(
       within(models)
         .getAllByRole("row")
         .map((row) => row.textContent),
-    ).toEqual(["ModelCallsInput tokensOutput tokensReasoning", "vendor-a/model-x126,0003000"]);
+    ).toEqual(["ProviderModelCallsInput tokensOutput tokensReasoning", "vendor-amodel-x126,0003000"]);
   });
 
   it("says so when nothing was recorded", async () => {
     server.use(http.get(`${API}/pipeline/planner/debug/graph/*/llm-counters`, () => HttpResponse.json({})));
     renderWith(<PlannerUsageSheet threadId="planner/alpha/t1" live={false} onClose={vi.fn()} />);
-    expect(await screen.findByText("No LLM usage recorded yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No LLM calls have been recorded for this run.")).toBeInTheDocument();
   });
 });
 
 describe("SynthUsageSheet", () => {
-  const cells = cellsFromIds(["ch-a", "ch-b"]).map((cell, index) => ({
+  const cells = cellsFromIds(["ch-01-a", "ch-02-b"]).map((cell, index) => ({
     ...cell,
     status: "done" as const,
     threadId: `synth/alpha/${index + 1}`,
@@ -86,7 +94,14 @@ describe("SynthUsageSheet", () => {
         const second = decodeURIComponent(request.url).includes("synth/alpha/2");
         return HttpResponse.json({
           total: second ? counts(3, 1000, 500) : counts(5, 4000, 1000, 200),
-          by_node: { sawc_write: second ? counts(3, 1000, 500) : counts(5, 4000, 1000, 200) },
+          by_node: {
+            sawc_write: {
+              ...(second ? counts(3, 1000, 500) : counts(5, 4000, 1000, 200)),
+              by_model: {
+                "vendor-a/model-x": second ? counts(3, 1000, 500) : counts(5, 4000, 1000, 200),
+              },
+            },
+          },
         });
       }),
     );
@@ -97,10 +112,11 @@ describe("SynthUsageSheet", () => {
     renderWith(<SynthUsageSheet cells={cells} live={false} onClose={vi.fn()} />);
 
     const combined = await screen.findByRole("region", { name: "All chapters combined" });
-    // 4,000 + 1,000 input tokens: once in the headline figure, once in the node row
+    // The combined headline and model row each sum every eligible chapter once.
     expect(await within(combined).findAllByText("5,000")).toHaveLength(2);
-    expect(within(combined).getByText("reasoning tokens")).toBeInTheDocument();
-    expect(screen.getAllByRole("group")).toHaveLength(2); // one <details> per chapter
+    expect(within(combined).getByText("Reasoning tokens")).toBeInTheDocument();
+    expect(screen.getByText("A")).toBeInTheDocument();
+    expect(screen.getByText("B")).toBeInTheDocument();
   });
 
   it("holds the combined total back while a chapter is still pending", async () => {
@@ -116,9 +132,64 @@ describe("SynthUsageSheet", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "All chapters combined" })).not.toBeInTheDocument();
   });
+
+  it("does not request or wait for a reference-only chapter", async () => {
+    chapterCounters();
+    const [eligible] = cells;
+    const [reference] = cellsFromIds(["reference"]);
+    if (!eligible || !reference) throw new Error("fixture");
+    const excluded = {
+      ...reference,
+      synthEligible: false,
+      status: "pending" as const,
+      threadId: "synth/alpha/reference",
+    };
+    renderWith(<SynthUsageSheet cells={[eligible, excluded]} live={false} onClose={vi.fn()} />);
+
+    expect(await screen.findByRole("region", { name: "All chapters combined" })).toBeInTheDocument();
+    expect(screen.queryByText("Reference")).not.toBeInTheDocument();
+  });
 });
 
 describe("PlanHealth", () => {
+  it("shows each Planner chapter with the exact Markdown files and Synth eligibility", async () => {
+    server.use(
+      http.get(`${API}/pipeline/planner/alpha/health`, () =>
+        HttpResponse.json({
+          degraded: false,
+          pipeline_health: {},
+          chapters: [
+            {
+              id: "ch-agents",
+              title: "Agent Workflows",
+              order: 1,
+              n_sources: 2,
+              source_files: ["agents.md", "tools.md"],
+              synth_eligible: true,
+            },
+            {
+              id: "ch-reference",
+              title: "API Reference",
+              order: 2,
+              n_sources: 1,
+              source_files: ["api.md"],
+              synth_eligible: false,
+              synth_exclusion_reason: "Lookup-only API detail.",
+            },
+          ],
+        }),
+      ),
+    );
+    renderWith(<PlanHealth slug="alpha" />);
+    await userEvent.click(await screen.findByText("2 Planner chapters and their source files"));
+    await userEvent.click(screen.getByText(/Agent Workflows/));
+    expect(screen.getByText("agents.md")).toBeInTheDocument();
+    expect(screen.getByText("tools.md")).toBeInTheDocument();
+    await userEvent.click(screen.getByText(/API Reference/));
+    expect(screen.getByText("api.md")).toBeInTheDocument();
+    expect(screen.getByText("Lookup-only API detail.")).toBeInTheDocument();
+  });
+
   it("names what degraded the plan", async () => {
     server.use(
       http.get(`${API}/pipeline/planner/alpha/health`, () =>

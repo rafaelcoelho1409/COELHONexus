@@ -132,3 +132,23 @@ def route_after_mgsr(graph_state: graphs.pipeline.synth.states.SynthState) -> st
         f"{where}: RETHINK (iter={refine_iter}, score={score:.2f}, threshold={graphs.pipeline.synth.params.CHECKLIST_THRESHOLD}) → loop back to sawc_write"
     )
     return "sawc_write"
+
+
+def route_after_mgsr_v2(graph_state: graphs.pipeline.synth.states.SynthState) -> str:
+    """Allow one targeted rewrite only when the reviewer names sections and the first checklist did not pass."""
+    stats = graph_state.get("checklist_stats") or {}
+    review = graph_state.get("mgsr_stats") or {}
+    refine_iter = int(graph_state.get("refine_iter", 0) or 0)
+    should_revise = (
+        refine_iter < graphs.pipeline.synth.params.MAX_V2_REFINE_ITER
+        and not bool(stats.get("chapter_passed"))
+        and not bool(review.get("halt", True))
+        and int(review.get("n_revisions", 0) or 0) > 0
+    )
+    if should_revise:
+        logger.info(
+            f"[synth-v2-graph] {graph_state.get('framework_slug')}/{graph_state.get('chapter_id')}: one targeted revision "
+            f"({review.get('n_revisions')} section(s))"
+        )
+        return "sawc_write"
+    return "render_audit_write"

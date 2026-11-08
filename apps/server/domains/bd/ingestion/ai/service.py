@@ -36,6 +36,17 @@ async def _load_run_source(
         book_id, source_manifest, expected_extraction_id,
     )
     source_page_refs = request.page_references()
+    manifest_pages = {
+        page.get("page"): page for page in source_manifest.get("pages", [])
+        if isinstance(page, dict) and type(page.get("page")) is int
+    }
+    for page_ref in source_page_refs:
+        manifest_page = manifest_pages.get(page_ref["page"], {})
+        section_path = manifest_page.get("section_path", [])
+        page_ref["section_path"] = (
+            [item for item in section_path if isinstance(item, str)]
+            if isinstance(section_path, list) else []
+        )
     source_manifest_key = domains.bd.ingestion.storage.keys.manifest_key(book_id)
     source_manifest_json = json.dumps(
         source_manifest, ensure_ascii = False, separators = (",", ":"), sort_keys = True,
@@ -112,6 +123,8 @@ def _initial_progress() -> dict[str, Any]:
         "processed_pages": [],
         "active_audit_pages": [],
         "active_repair_pages": [],
+        "classified_pages": [],
+        "active_classification_pages": [],
     }
 
 
@@ -782,6 +795,7 @@ async def run_page_audit(
     storage: infra.minio.service.MinIOStorage | None = None,
     auditor: Any | None = None,
     finding_verifier: Any | None = None,
+    content_classifier: Any | None = None,
 ) -> dict[str, Any]:
     """Audit one page of the current completed extraction the way the full run does, and write nothing.
 
@@ -934,7 +948,7 @@ async def run_ingestion_ai(
         nonlocal progress_state, cancellation_observed
         kind = event.get("kind")
         if cancel_check is not None and event.get("status") == "running":
-            if kind == "node" or kind in {"page_audit", "page_repair"}:
+            if kind == "node" or kind in {"page_audit", "page_repair", "content_classification"}:
                 if await cancel_check():
                     cancellation_observed = True
                     raise asyncio.CancelledError
@@ -953,12 +967,20 @@ async def run_ingestion_ai(
                         None if progress_state.get("current_node") == node else progress_state.get("current_node")
                     )
                     should_persist = not (node == "publish" and status == "done")
-            elif kind in {"page_audit", "page_repair"}:
+            elif kind in {"page_audit", "page_repair", "content_classification"}:
                 page = event.get("page")
                 status = event.get("status")
                 if type(page) is int and status in {"running", "done"}:
-                    active_key = "active_audit_pages" if kind == "page_audit" else "active_repair_pages"
-                    completed_key = "audited_pages" if kind == "page_audit" else "processed_pages"
+                    active_key = {
+                        "page_audit": "active_audit_pages",
+                        "page_repair": "active_repair_pages",
+                        "content_classification": "active_classification_pages",
+                    }[kind]
+                    completed_key = {
+                        "page_audit": "audited_pages",
+                        "page_repair": "processed_pages",
+                        "content_classification": "classified_pages",
+                    }[kind]
                     active_pages = set(progress_state[active_key])
                     if status == "running":
                         active_pages.add(page)
@@ -1012,6 +1034,8 @@ async def run_ingestion_ai(
             structure_repair = ai.bd.agents.ingestion.structure_repair.agent.structure_repair()
         if metadata_normalizer is None:
             metadata_normalizer = ai.bd.agents.ingestion.metadata_normalizer.agent.metadata_normalizer()
+        if content_classifier is None:
+            content_classifier = ai.bd.agents.ingestion.content_classifier.agent.content_classifier()
 
         async def write_artifact(key: str, content: str, content_type: str) -> None:
             if key == output_manifest_key:
@@ -1050,9 +1074,11 @@ async def run_ingestion_ai(
         dependencies = ai.bd.graphs.ingestion.entities.IngestionDependencies(
             read_page = storage.read_text,
             write_artifact = write_artifact,
+            artifact_exists = storage.exists,
             auditor = auditor,
             specialists = {"text_repair": text_repair, "structure": structure_repair},
             metadata_normalizer = metadata_normalizer,
+            content_classifier = content_classifier,
             progress_callback = report_progress,
             finding_verifier = finding_verifier,
         )
@@ -1093,6 +1119,7 @@ async def run_ingestion_ai(
             progress_closed = True
             progress_state["active_audit_pages"] = []
             progress_state["active_repair_pages"] = []
+            progress_state["active_classification_pages"] = []
             progress_state["current_node"] = None
             progress_state["node_status"] = {
                 node: (

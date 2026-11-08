@@ -73,6 +73,11 @@ async def publish(
         raise ValueError("cannot publish a page with a failed or pending status")
     if not state.get("book_metadata_sha256"):
         raise ValueError("book metadata must be persisted before run publication")
+    selection = state.get("content_selection")
+    if not isinstance(selection, list) or len(selection) != expected_page_count:
+        raise ValueError("a complete content selection must be persisted before run publication")
+    if not state.get("content_selection_key") or not state.get("content_selection_sha256"):
+        raise ValueError("content selection must be persisted before run publication")
 
     verification = await verify_pages(state, read_page) if read_page is not None else None
     if verification is not None and verification["integrity_failure_pages"]:
@@ -102,6 +107,10 @@ async def publish(
         if page.get("structured_output_fallback") is True
     ]
     audit_warning_count = sum(len(page.get("warnings", [])) for page in state["page_audits"])
+    content_selection_review_pages = [
+        page["page_number"] for page in selection
+        if page.get("decision_source") == "conservative_fallback"
+    ]
     repair_context_chars = sum(page.get("repair_context_chars", 0) for page in page_results)
     markdown_chars_by_page = {
         page["page"]: page["markdown_chars"] for page in state["page_audits"]
@@ -119,6 +128,7 @@ async def publish(
             or unverified_pages
             or state["book_metadata"].get("review_required")
             or (verification is not None and verification["text_loss_pages"])
+            or content_selection_review_pages
         )
         else "complete"
     )
@@ -132,6 +142,8 @@ async def publish(
             review_reasons["unresolved_issues"] += 1
         if page.get("error"):
             review_reasons["repair_errors"] += 1
+    if content_selection_review_pages:
+        review_reasons["content_selection_fallback"] += len(content_selection_review_pages)
     quality_report = {
         "book_id": state["book_id"],
         "extraction_run_id": state["extraction_run_id"],
@@ -141,6 +153,12 @@ async def publish(
         "pages_completed": len(page_results),
         "delivered_page_numbers": delivered_page_numbers,
         "delivered_page_count": len(delivered_page_numbers),
+        "distill_selected_page_count": state.get("selected_page_count", 0),
+        "distill_excluded_page_count": state.get("excluded_page_count", 0),
+        "distill_excluded_pages": [
+            page["page_number"] for page in selection if page.get("disposition") == "exclude"
+        ],
+        "content_selection_review_pages": content_selection_review_pages,
         "discarded_blank_pages": discarded_blank_pages,
         "discarded_blank_page_count": len(discarded_blank_pages),
         "pages_requiring_review": review_pages,
@@ -218,6 +236,11 @@ async def publish(
         quality_report_key = report_key,
         quality_report_sha256 = report_sha256,
         quality_status = quality_status,
+        content_selection_key = state["content_selection_key"],
+        content_selection_sha256 = state["content_selection_sha256"],
+        content_selection_revision = state["content_selection_revision"],
+        selected_page_count = state["selected_page_count"],
+        excluded_page_count = state["excluded_page_count"],
         delivered_page_count = len(delivered_page_numbers),
         discarded_blank_page_count = len(discarded_blank_pages),
         review_page_count = len(review_pages),

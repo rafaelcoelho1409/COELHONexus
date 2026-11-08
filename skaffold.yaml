@@ -95,6 +95,7 @@ portForward:
 
 # Needs docker-buildx (useBuildkit). Dev ports: 23030-23039.
 # skaffold dev --cache-artifacts=false --no-prune=false --auto-sync=false
+# skaffold run --port-forward=user 
 
 profiles:
   - name: ci

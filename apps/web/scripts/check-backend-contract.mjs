@@ -29,9 +29,9 @@ function typedDictKeys(source, className) {
 }
 
 /** The strings of `NODE_ORDER = ( … )` in a graph module, in order. */
-function nodeOrder(source) {
-  const match = source.match(/^NODE_ORDER = \(([\s\S]*?)\n\)/m);
-  if (!match) throw new Error("NODE_ORDER not found");
+function nodeOrder(source, constant = "NODE_ORDER") {
+  const match = source.match(new RegExp(`^${constant} = \\(([\\s\\S]*?)\\n\\)`, "m"));
+  if (!match) throw new Error(`${constant} not found`);
   return [...match[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
 }
 
@@ -50,25 +50,43 @@ function webNodes(source, table) {
 
 const stages = read(join(web, "src/features/dd/domain/stages.ts"));
 
-for (const [name, table, stateClass, statePath, graphPath] of [
+for (const [name, table, stateClass, statePath, graphPath, orderConstant] of [
   [
     "planner",
     "PLANNER_NODES",
     "PlannerState",
-    "ai/dd/graphs/pipeline/planner/state.py",
-    "ai/dd/graphs/pipeline/planner/graph.py",
+    "ai/dd/graphs/pipeline/planner/states.py",
+    "ai/dd/graphs/pipeline/planner/params.py",
+    "NODE_ORDER_V1",
+  ],
+  [
+    "planner v2",
+    "PLANNER_V2_NODES",
+    "PlannerState",
+    "ai/dd/graphs/pipeline/planner/states.py",
+    "ai/dd/graphs/pipeline/planner/params.py",
+    "NODE_ORDER_V2",
   ],
   [
     "synth",
     "SYNTH_NODES",
     "SynthState",
-    "ai/dd/graphs/pipeline/synth/state.py",
-    "ai/dd/graphs/pipeline/synth/graph.py",
+    "ai/dd/graphs/pipeline/synth/states.py",
+    "ai/dd/graphs/pipeline/synth/params.py",
+    "NODE_ORDER",
+  ],
+  [
+    "synth v2",
+    "SYNTH_V2_NODES",
+    "SynthState",
+    "ai/dd/graphs/pipeline/synth/states.py",
+    "ai/dd/graphs/pipeline/synth/params.py",
+    "V2_NODE_ORDER",
   ],
 ]) {
   const keys = typedDictKeys(read(join(server, statePath)), stateClass);
   const nodes = webNodes(stages, table);
-  const order = nodeOrder(read(join(server, graphPath)));
+  const order = nodeOrder(read(join(server, graphPath)), orderConstant);
 
   if (nodes.length === 0) problems.push(`${name}: found no nodes in ${table}`);
   if (nodes.map((n) => n.id).join() !== order.join()) {
@@ -95,4 +113,4 @@ if (problems.length > 0) {
   console.error(`backend contract drift:\n  - ${problems.join("\n  - ")}`);
   process.exit(1);
 }
-console.log("ok   planner and synth node tables and the thread-id prefix match the backend");
+console.log("ok   planner and synth v1/v2 node tables and the thread-id prefix match the backend");

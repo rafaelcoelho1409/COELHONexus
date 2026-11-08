@@ -213,6 +213,28 @@ describe("Study reader", () => {
     expect(nav.push).toHaveBeenCalledWith("/dd/study?slug=alpha&chapter=ch-2#judges");
   });
 
+  it("offers the code folder of a tutorial chapter, and nothing for a chapter without one", async () => {
+    server.use(
+      http.get(`${API}/pipeline/synth/alpha/study/chapters`, () =>
+        HttpResponse.json({
+          ...CHAPTERS,
+          chapters: CHAPTERS.chapters.map((chapter) =>
+            chapter.id === "ch-1" ? { ...chapter, n_code_files: 7 } : chapter,
+          ),
+        }),
+      ),
+    );
+    const first = renderStudy();
+    const link = await screen.findByRole("link", { name: /download the code folder \(7 files\)/ });
+    expect(link).toHaveAttribute("href", "/api/v1/dd/pipeline/synth/alpha/study/ch-1/code.zip");
+    first.unmount();
+
+    nav.params = new URLSearchParams("slug=alpha&chapter=ch-2");
+    renderStudy();
+    expect(await screen.findByTestId("study-title")).toHaveTextContent("Evaluation");
+    expect(screen.queryByRole("link", { name: /download the code folder/ })).not.toBeInTheDocument();
+  });
+
   it("tells the reader a pending chapter has nothing to read yet", async () => {
     nav.params = new URLSearchParams("slug=alpha&chapter=ch-3");
     renderStudy();

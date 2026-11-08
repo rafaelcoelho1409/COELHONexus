@@ -67,6 +67,37 @@ export type PageVersion = "processed" | "original";
 /** GET /api/v1/dd/ingestion/{slug}/pages/{idx} — page body. */
 export const pageBodySchema = z.looseObject({ body: z.string() });
 
+/** GET /api/v1/dd/ingestion/{slug}/pages/{idx}/quality. */
+const pageQualityProposalSchema = z.looseObject({
+  target_text: z.string().catch(""),
+  replacement: z.string().catch(""),
+  rationale: z.string().catch(""),
+  confidence: z.number().catch(0),
+  risk: z.string().catch(""),
+});
+const pageQualityIssueSchema = z.looseObject({
+  issue_id: z.string(),
+  code: z.string(),
+  severity: z.string().catch(""),
+  description: z.string().catch(""),
+  evidence: z.array(z.string()).catch([]),
+  resolution: z.enum(["auto_applied", "review", "none"]).catch("none"),
+  proposal: pageQualityProposalSchema.nullable().catch(null),
+});
+export const pageQualitySchema = z.looseObject({
+  framework_slug: z.string(),
+  agentic_run_id: z.string(),
+  page: z.number(),
+  page_kind: z.string().catch("other"),
+  status: z.enum(["done", "review_required"]).catch("review_required"),
+  delivery_disposition: z.enum(["include", "discarded_blank", "image_only"]).catch("include"),
+  issues: z.array(pageQualityIssueSchema).catch([]),
+  mechanical_fixes: z.record(z.string(), z.number()).catch({}),
+  audit_warnings: z.array(z.string()).catch([]),
+  errors: z.array(z.string()).catch([]),
+});
+export type PageQuality = z.infer<typeof pageQualitySchema>;
+
 /** GET /api/v1/dd/ingestion/runs/{run_id} — live progress + manifest snapshot.
  * `post` is record_post's summary (split/dedup result); either field may
  * be absent on early/tier-only payloads. */
@@ -203,6 +234,8 @@ export type PipelineActive = z.infer<typeof pipelineActiveSchema>;
 /** GET /api/v1/dd/{stage}/info — which graph nodes the server implements. */
 export const stageInfoSchema = z.looseObject({
   implemented: z.array(z.string()),
+  planner_version: z.enum(["v1", "v2"]).optional(),
+  synth_version: z.enum(["v1", "v2"]).optional(),
 });
 export type StageInfo = z.infer<typeof stageInfoSchema>;
 
@@ -280,7 +313,12 @@ export const synthChaptersSchema = z.looseObject({
       audit_passed: z.boolean().nullish().catch(null),
       n_sections: z.number().nullish().catch(null),
       n_sources: z.number().nullish().catch(null),
+      source_files: z.array(z.string()).optional().catch([]),
+      synth_eligible: z.boolean().optional().catch(true),
+      synth_exclusion_reason: z.string().optional().catch(""),
       rendered_chars: z.number().nullish().catch(null),
+      // Files of the chapter's code/ folder (a tutorial chapter ships one); 0 or absent for a chapter without.
+      n_code_files: z.number().nullish().catch(null),
     }),
   ),
   study_total_wall_ms: z.number().catch(0),
@@ -341,6 +379,19 @@ export type UsagePayload = z.infer<typeof usagePayloadSchema>;
 export const plannerHealthSchema = z.looseObject({
   degraded: z.boolean().nullable().catch(null),
   pipeline_health: z.record(z.string(), z.unknown()).catch({}),
+  chapters: z
+    .array(
+      z.looseObject({
+        id: z.string().nullable().catch(null),
+        title: z.string().nullable().catch(null),
+        order: z.number().nullable().catch(null),
+        n_sources: z.number().catch(0),
+        source_files: z.array(z.string()).catch([]),
+        synth_eligible: z.boolean().catch(true),
+        synth_exclusion_reason: z.string().catch(""),
+      }),
+    )
+    .catch([]),
 });
 export type PlannerHealth = z.infer<typeof plannerHealthSchema>;
 

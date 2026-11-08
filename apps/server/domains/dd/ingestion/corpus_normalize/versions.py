@@ -30,4 +30,5 @@ from __future__ import annotations
 # every page go (70 of 70 pages of the LangChain site), and a trailing `***` or `___` rule goes like a `---` one. The agentic ingestion
 # runs this normalizer on every page before its audit (it did not between 2026-11-03 and now, so the banner, footer and fence attributes
 # of every Tier 2-4 page stayed).
-NORMALIZER_VERSION = 12
+# v13 (2026-11-08): strip non-whitespace Unicode control characters (`Cc`) before page audit and record the count for the page quality report.
+NORMALIZER_VERSION = 13

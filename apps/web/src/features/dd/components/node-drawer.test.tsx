@@ -88,14 +88,14 @@ describe("NodeDrawer", () => {
       ),
     );
     const { dialog } = drawerFor("off_topic", "done", PLANNER_FINISHED_VALUES, EVENTS, "planner/alpha/old");
-    // the headline figure, then the usage table's node and whole-run cells, then the model's own row
-    expect(await within(dialog).findAllByText("6,000")).toHaveLength(4);
-    expect(within(dialog).getByText("input tokens")).toBeInTheDocument();
-    expect(within(dialog).getByText("top model")).toBeInTheDocument();
+    expect(await within(dialog).findAllByText("6,000")).toHaveLength(2);
+    expect(within(dialog).getAllByText("Input tokens")).toHaveLength(2);
+    expect(within(dialog).getByRole("tab", { name: "Usage" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("explains a finished node and shows what it produced", () => {
     const { dialog } = drawerFor("off_topic", "done", PLANNER_FINISHED_VALUES);
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Overview" }));
     expect(within(dialog).getByRole("heading", { name: "Off-topic filter" })).toBeInTheDocument();
     expect(within(dialog).getByText("LLM judge")).toBeInTheDocument();
     expect(within(dialog).getByText(/keeps only the pages relevant/)).toBeInTheDocument();
@@ -108,6 +108,7 @@ describe("NodeDrawer", () => {
 
   it("tells the reader a node that has not run has nothing yet", () => {
     const { dialog } = drawerFor("plan_write", "pending", {});
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Overview" }));
     expect(within(dialog).getByText("This node has not run yet.")).toBeInTheDocument();
     expect(within(dialog).queryByRole("region")).not.toBeInTheDocument();
   });
@@ -139,54 +140,22 @@ describe("NodeDrawer", () => {
     expect(within(dialog).getByText(/"off_topic_stats"/)).toBeInTheDocument();
   });
 
-  it("tabulates the node's LLM calls and tokens against the whole run", async () => {
+  it("opens on node usage and lets the reader regroup calls by node, model, or both", async () => {
     server.use(
       http.get("*/api/v1/dd/pipeline/planner/debug/graph/*/llm-counters", () => HttpResponse.json(COUNTERS)),
     );
     const { dialog } = drawerFor("off_topic", "done", PLANNER_FINISHED_VALUES, EVENTS, "planner/alpha/old");
 
-    const table = await within(dialog).findByRole("region", { name: "LLM calls and tokens" });
-    expect(within(table).getByRole("columnheader", { name: "This node" })).toBeInTheDocument();
-    expect(within(table).getByRole("columnheader", { name: "Whole run" })).toBeInTheDocument();
-    const failed = within(table).getByRole("row", { name: /Failed calls/ });
-    expect(
-      within(failed)
-        .getAllByRole("cell")
-        .map((cell) => cell.textContent),
-    ).toEqual(["2", "3", "67%"]);
-    expect(within(table).getByRole("row", { name: /Input per call/ })).toHaveTextContent("500");
-    // the headline grid shows the exact usage once, not the node's own "LLM calls" beside it
-    expect(within(dialog).getAllByText("LLM calls")).toHaveLength(1);
-  });
-
-  it("names each model that answered, with its calls and input, output and reasoning tokens, busiest first", async () => {
-    server.use(
-      http.get("*/api/v1/dd/pipeline/planner/debug/graph/*/llm-counters", () => HttpResponse.json(COUNTERS)),
-    );
-    const { dialog } = drawerFor("off_topic", "done", PLANNER_FINISHED_VALUES, EVENTS, "planner/alpha/old");
-
-    const table = await within(dialog).findByRole("region", { name: "Usage by model" });
-    expect(
-      within(table)
-        .getAllByRole("row")
-        .map((row) => row.textContent),
-    ).toEqual([
-      "ModelCallsInput tokensOutput tokensReasoning",
-      "vendor-a/model-small94,5002000",
-      "vendor-b/model-large31,5001000",
-    ]);
-    expect(within(dialog).getByText("vendor-a/model-small", { selector: "dd" })).toBeInTheDocument(); // top model
-    expect(within(dialog).getByText("9 calls")).toBeInTheDocument();
-  });
-
-  it("puts the by-model table above the calls-and-tokens table", async () => {
-    server.use(
-      http.get("*/api/v1/dd/pipeline/planner/debug/graph/*/llm-counters", () => HttpResponse.json(COUNTERS)),
-    );
-    const { dialog } = drawerFor("off_topic", "done", PLANNER_FINISHED_VALUES, EVENTS, "planner/alpha/old");
+    const byNodeModel = await within(dialog).findByRole("region", { name: "Usage by node and model" });
+    expect(within(byNodeModel).getAllByText("Off-topic filter")).toHaveLength(2);
+    expect(within(byNodeModel).getByText("vendor-a")).toBeInTheDocument();
+    expect(within(byNodeModel).getByText("model-small")).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "By node" }));
+    expect(await within(dialog).findByRole("region", { name: "Usage by node" })).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "By model" }));
     const byModel = await within(dialog).findByRole("region", { name: "Usage by model" });
-    const callsAndTokens = within(dialog).getByRole("region", { name: "LLM calls and tokens" });
-    expect(byModel.compareDocumentPosition(callsAndTokens) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(byModel).getByText("vendor-a")).toBeInTheDocument();
+    expect(within(byModel).getByText("model-small")).toBeInTheDocument();
   });
 
   it("has no by-model table for a node that made no call", async () => {
@@ -195,7 +164,10 @@ describe("NodeDrawer", () => {
     );
     const { dialog } = drawerFor("corpus_load", "done", PLANNER_FINISHED_VALUES, EVENTS, "planner/alpha/old");
     expect(await within(dialog).findByRole("heading", { name: "Corpus load" })).toBeInTheDocument();
-    expect(within(dialog).queryByRole("region", { name: "Usage by model" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("region", { name: "Usage by node and model" })).not.toBeInTheDocument();
+    expect(
+      await within(dialog).findByText(/No LLM calls have been recorded for this node/),
+    ).toBeInTheDocument();
   });
 
   it("has no calls-and-tokens table before the counters load or for a node that made no call", async () => {
@@ -204,7 +176,7 @@ describe("NodeDrawer", () => {
     );
     const { dialog } = drawerFor("corpus_load", "done", PLANNER_FINISHED_VALUES, EVENTS, "planner/alpha/old");
     expect(await within(dialog).findByRole("heading", { name: "Corpus load" })).toBeInTheDocument();
-    expect(within(dialog).queryByRole("region", { name: "LLM calls and tokens" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("region", { name: "Usage by node and model" })).not.toBeInTheDocument();
   });
 
   it("names the stage and node in the header, with the node's headline number once it is done", () => {
@@ -219,7 +191,7 @@ describe("NodeDrawer", () => {
     expect(within(dialog).queryByTestId("node-kpi")).not.toBeInTheDocument();
   });
 
-  it("opens the tabs from the keys 1, 2 and 3, except while typing or with a modifier held", async () => {
+  it("opens the tabs from the keys 1 to 4, except while typing or with a modifier held", async () => {
     const { dialog } = drawerFor("off_topic", "done", PLANNER_FINISHED_VALUES);
     const tab = (name: string) => within(dialog).getByRole("tab", { name: new RegExp(name) });
 
@@ -227,7 +199,11 @@ describe("NodeDrawer", () => {
     expect(tab("Activity")).toHaveAttribute("aria-selected", "true");
     await userEvent.keyboard("3");
     expect(tab("Raw")).toHaveAttribute("aria-selected", "true");
+    await userEvent.keyboard("4");
+    expect(tab("Usage")).toHaveAttribute("aria-selected", "true");
     await userEvent.keyboard("{Control>}1{/Control}");
+    expect(tab("Usage")).toHaveAttribute("aria-selected", "true");
+    await userEvent.keyboard("3");
     expect(tab("Raw")).toHaveAttribute("aria-selected", "true");
     await userEvent.keyboard("1");
     expect(tab("Overview")).toHaveAttribute("aria-selected", "true");

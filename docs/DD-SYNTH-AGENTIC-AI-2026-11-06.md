@@ -1,7 +1,6 @@
 # DD Synth as an agentic graph (`ai/dd/…/pipeline/synth`), 2026-11-06
 
-Status: built and offline-tested; **not run live** (needs a redeploy of the API, the planner worker, the synth worker and the web together: the
-Celery task names and queues changed, and a run in flight dies). Nothing is committed. The old `domains/dd/pipeline/synth/` package is deleted
+Status: built and run live in dev on 2026-11-08. The first study exposed chapter-order, v2 render-pointer and UI title-retention defects; the local fixes and run evidence are in [the live assessment](DD-DEEPAGENTS-PIPELINE-LIVE-ASSESSMENT-2026-11-08.md). Those fixes are not yet deployed. Plan chapter 01 has not been synthesized after the fixes, and v2 has not been compared against v1. The v1 graph remains reachable with `DD_SYNTH_VERSION=v1` for rollback. Nothing is committed. The old `domains/dd/pipeline/synth/` package is deleted
 (it is in git history). Built by Claude at the user's explicit request, a one-time exception to "the user writes `ai/dd/` by hand".
 
 ## What changed
@@ -94,10 +93,10 @@ config) built in `domains/dd/pipeline/ai`. What `ai/` needs from Redis, Langfuse
 - Unchanged and green: `test_dd_routers.py` (golden), `test_api_layout.py`, `test_infra_boundary.py` (`ai-no-infra`), `export_openapi --check`,
   `apps/web` typecheck / vitest (259) / contract:check / api:check / knip.
 
-## Not verified, to watch on the first live run
+## Remaining live validation
 
 - Tool-calling reliability of the free pool for the outliner, router, writer and reviewer (bounded by `ModelCallLimit`/`ToolCallLimit`, with
-  deterministic fallbacks, but only a live run shows it).
+  deterministic fallbacks). The first study produced one audited chapter, but ran plan order 21 due to an ID sort; the order, v2 pointer and UI title fixes still need deployment.
 - The cost of a skill read on the outliner and reviewer (one extra turn per call); the writer's `/vault/` reads per section.
-- Whether the reviewer's targeted rewrites converge faster than the old whole-chapter loop (watch `n_revisions` and `halt_reason`).
+- Whether the reviewer's targeted rewrites converge faster than the old whole-chapter loop (watch `n_revisions` and `halt_reason`) on plan chapter 01.
 - `apps/web` Playwright (e2e) was not run for this change; `copy:check` fails on `src/features/settings/params.ts:19` (`fgts-va`), which predates it.

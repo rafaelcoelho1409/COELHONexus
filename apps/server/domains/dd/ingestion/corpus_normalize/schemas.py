@@ -34,6 +34,7 @@ class NormalizeStats(BaseModel):
     blank_lines_collapsed:      int  = 0
     trailing_ws_lines:          int  = 0
     zero_width_chars_stripped:  int  = 0
+    non_whitespace_control_chars_stripped: int = 0
     input_bytes:                int  = 0
     output_bytes:                int = 0
 

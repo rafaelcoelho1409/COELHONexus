@@ -21,6 +21,27 @@
         }
       }
     },
+    "/api/v1/bd/distill/capabilities": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Capabilities",
+        "operationId": "get_bd_distill_capabilities",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capabilities"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/bd/distill/{book_id}/runs": {
       "post": {
         "tags": [
@@ -225,6 +246,58 @@
             }
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Wipe Run",
+        "description": "Delete one terminal Distill run and its artifacts while preserving the book and ingestion results.",
+        "operationId": "delete_bd_distill_book_id_runs_run_id",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WipeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/bd/distill/{book_id}/runs/{run_id}/cancel": {
@@ -315,6 +388,110 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/distill/{book_id}/runs/{run_id}/rag-index": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Rag Index Status",
+        "operationId": "get_bd_distill_book_id_runs_run_id_rag_index",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RagIndexStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Retry Rag Index",
+        "operationId": "post_bd_distill_book_id_runs_run_id_rag_index",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RagIndexStatus"
+                }
               }
             }
           },
@@ -905,6 +1082,116 @@
         }
       }
     },
+    "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/content-selection": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Agentic Content Selection",
+        "operationId": "get_bd_ingestion_book_id_agentic_runs_agentic_run_id_content_selection",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "agentic_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agentic Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentSelectionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Update Agentic Content Selection",
+        "operationId": "put_bd_ingestion_book_id_agentic_runs_agentic_run_id_content_selection",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "agentic_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agentic Run Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContentSelectionUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentSelectionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/events": {
       "get": {
         "tags": [
@@ -1402,7 +1689,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PageQuality"
+                  "$ref": "#/components/schemas/entrypoints__api__v1__bd__ingestion__schemas__PageQuality"
                 }
               }
             }
@@ -2668,6 +2955,58 @@
         }
       }
     },
+    "/api/v1/dd/ingestion/{slug}/pages/{idx}/quality": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Page Quality",
+        "description": "The current Agentic AI assessment and repair outcome for one finalized page.",
+        "operationId": "get_dd_ingestion_slug_pages_idx_quality",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Idx"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/entrypoints__api__v1__dd__ingestion__schemas__PageQuality"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dd/pipeline/active": {
       "get": {
         "tags": [
@@ -3720,6 +4059,56 @@
         }
       }
     },
+    "/api/v1/dd/pipeline/synth/{slug}/study/{chapter_id}/code.zip": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Study Code",
+        "description": "The chapter's `code/` folder (each step's examples, the capstone and its `main.py`) as one zip. Only a tutorial chapter has one.",
+        "operationId": "get_dd_pipeline_synth_slug_study_chapter_id_code_zip",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "chapter_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Chapter Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dd/pipeline/synth/{slug}/wipe": {
       "delete": {
         "tags": [
@@ -4102,6 +4491,174 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/search": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Get Search Settings",
+        "operationId": "get_settings_search",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchSettingsView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/search/default": {
+      "put": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Put Search Default",
+        "operationId": "put_settings_search_default",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchDefaultBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchSettingsView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/search/{provider_id}": {
+      "put": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Put Search Provider",
+        "operationId": "put_settings_search_provider_id",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "coelho_search",
+                "tavily",
+                "exa",
+                "jina"
+              ],
+              "type": "string",
+              "title": "Provider Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchProviderBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchSettingsView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/search/{provider_id}/test": {
+      "post": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Test Search Provider",
+        "operationId": "post_settings_search_provider_id_test",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "coelho_search",
+                "tavily",
+                "exa",
+                "jina"
+              ],
+              "type": "string",
+              "title": "Provider Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchTestResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
               }
             }
           }
@@ -6429,6 +6986,20 @@
             },
             "type": "array",
             "title": "Active Repair Pages"
+          },
+          "classified_pages": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Classified Pages"
+          },
+          "active_classification_pages": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Active Classification Pages"
           }
         },
         "type": "object",
@@ -6551,6 +7122,27 @@
             "type": "integer",
             "title": "Discarded Blank Page Count",
             "default": 0
+          },
+          "selected_page_count": {
+            "type": "integer",
+            "title": "Selected Page Count",
+            "default": 0
+          },
+          "excluded_page_count": {
+            "type": "integer",
+            "title": "Excluded Page Count",
+            "default": 0
+          },
+          "content_selection_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Selection Revision"
           },
           "review_page_count": {
             "type": "integer",
@@ -6792,6 +7384,19 @@
         ],
         "title": "BulkDeleteRequest"
       },
+      "Capabilities": {
+        "properties": {
+          "execution_enabled": {
+            "type": "boolean",
+            "title": "Execution Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "execution_enabled"
+        ],
+        "title": "Capabilities"
+      },
       "ChannelPipelineRequest": {
         "properties": {
           "channel_id": {
@@ -6962,6 +7567,153 @@
           "dataset"
         ],
         "title": "ChartSpec"
+      },
+      "ContentSelectionOverride": {
+        "properties": {
+          "page_number": {
+            "type": "integer",
+            "title": "Page Number"
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "include",
+              "exclude"
+            ],
+            "title": "Disposition"
+          }
+        },
+        "type": "object",
+        "required": [
+          "page_number",
+          "disposition"
+        ],
+        "title": "ContentSelectionOverride"
+      },
+      "ContentSelectionPage": {
+        "properties": {
+          "page_number": {
+            "type": "integer",
+            "title": "Page Number"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          },
+          "rationale": {
+            "type": "string",
+            "title": "Rationale"
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "include",
+              "exclude"
+            ],
+            "title": "Disposition"
+          },
+          "decision_source": {
+            "type": "string",
+            "title": "Decision Source"
+          }
+        },
+        "type": "object",
+        "required": [
+          "page_number",
+          "role",
+          "confidence",
+          "rationale",
+          "disposition",
+          "decision_source"
+        ],
+        "title": "ContentSelectionPage"
+      },
+      "ContentSelectionResponse": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "extraction_run_id": {
+            "type": "string",
+            "title": "Extraction Run Id"
+          },
+          "agentic_run_id": {
+            "type": "string",
+            "title": "Agentic Run Id"
+          },
+          "classifier_version": {
+            "type": "string",
+            "title": "Classifier Version"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "expected_page_count": {
+            "type": "integer",
+            "title": "Expected Page Count"
+          },
+          "included_page_count": {
+            "type": "integer",
+            "title": "Included Page Count"
+          },
+          "excluded_page_count": {
+            "type": "integer",
+            "title": "Excluded Page Count"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/ContentSelectionPage"
+            },
+            "type": "array",
+            "title": "Pages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "extraction_run_id",
+          "agentic_run_id",
+          "classifier_version",
+          "revision",
+          "expected_page_count",
+          "included_page_count",
+          "excluded_page_count",
+          "sha256",
+          "pages"
+        ],
+        "title": "ContentSelectionResponse"
+      },
+      "ContentSelectionUpdate": {
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Expected Revision"
+          },
+          "overrides": {
+            "items": {
+              "$ref": "#/components/schemas/ContentSelectionOverride"
+            },
+            "type": "array",
+            "title": "Overrides"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expected_revision",
+          "overrides"
+        ],
+        "title": "ContentSelectionUpdate"
       },
       "DataColumn": {
         "properties": {
@@ -7988,85 +8740,94 @@
         ],
         "title": "PageIssueView"
       },
-      "PageQuality": {
+      "PageQualityIssue": {
         "properties": {
-          "book_id": {
+          "issue_id": {
             "type": "string",
-            "title": "Book Id"
+            "title": "Issue Id"
           },
-          "agentic_run_id": {
+          "code": {
             "type": "string",
-            "title": "Agentic Run Id"
+            "title": "Code"
           },
-          "page": {
-            "type": "integer",
-            "title": "Page"
-          },
-          "page_kind": {
+          "severity": {
             "type": "string",
-            "title": "Page Kind"
+            "title": "Severity"
           },
-          "status": {
+          "description": {
             "type": "string",
-            "enum": [
-              "done",
-              "review_required"
-            ],
-            "title": "Status"
+            "title": "Description"
           },
-          "delivery_disposition": {
-            "type": "string",
-            "enum": [
-              "include",
-              "discarded_blank",
-              "image_only"
-            ],
-            "title": "Delivery Disposition"
-          },
-          "issues": {
-            "items": {
-              "$ref": "#/components/schemas/PageIssueView"
-            },
-            "type": "array",
-            "title": "Issues"
-          },
-          "mechanical_fixes": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "type": "object",
-            "title": "Mechanical Fixes"
-          },
-          "audit_warnings": {
+          "evidence": {
             "items": {
               "type": "string"
             },
             "type": "array",
-            "title": "Audit Warnings"
+            "title": "Evidence"
           },
-          "errors": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Errors"
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "auto_applied",
+              "review",
+              "none"
+            ],
+            "title": "Resolution"
+          },
+          "proposal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PageQualityProposal"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
         "required": [
-          "book_id",
-          "agentic_run_id",
-          "page",
-          "page_kind",
-          "status",
-          "delivery_disposition",
-          "issues",
-          "mechanical_fixes",
-          "audit_warnings",
-          "errors"
+          "issue_id",
+          "code",
+          "severity",
+          "description",
+          "evidence",
+          "resolution"
         ],
-        "title": "PageQuality",
-        "description": "What the current Agentic AI run found on one page and what it did about it."
+        "title": "PageQualityIssue"
+      },
+      "PageQualityProposal": {
+        "properties": {
+          "target_text": {
+            "type": "string",
+            "title": "Target Text"
+          },
+          "replacement": {
+            "type": "string",
+            "title": "Replacement"
+          },
+          "rationale": {
+            "type": "string",
+            "title": "Rationale"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          },
+          "risk": {
+            "type": "string",
+            "title": "Risk"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target_text",
+          "replacement",
+          "rationale",
+          "confidence",
+          "risk"
+        ],
+        "title": "PageQualityProposal"
       },
       "PatchSuggestion": {
         "properties": {
@@ -8498,6 +9259,143 @@
         "title": "RAGSearchRequest",
         "description": "Adaptive RAG question. `force_mode` overrides auto-classification (fast/standard/deep)."
       },
+      "RagIndexStatus": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "distill_run_id": {
+            "type": "string",
+            "title": "Distill Run Id"
+          },
+          "extraction_run_id": {
+            "type": "string",
+            "title": "Extraction Run Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_started",
+              "queued",
+              "running",
+              "done",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "attempt": {
+            "type": "integer",
+            "title": "Attempt",
+            "default": 0
+          },
+          "collection_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection Name"
+          },
+          "embedding_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Model"
+          },
+          "embedding_dimensions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Dimensions"
+          },
+          "source_page_count": {
+            "type": "integer",
+            "title": "Source Page Count",
+            "default": 0
+          },
+          "learning_unit_count": {
+            "type": "integer",
+            "title": "Learning Unit Count",
+            "default": 0
+          },
+          "guide_record_count": {
+            "type": "integer",
+            "title": "Guide Record Count",
+            "default": 0
+          },
+          "point_count": {
+            "type": "integer",
+            "title": "Point Count",
+            "default": 0
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "distill_run_id",
+          "extraction_run_id",
+          "status"
+        ],
+        "title": "RagIndexStatus"
+      },
       "RawQueryHit": {
         "properties": {
           "summary": {
@@ -8774,6 +9672,158 @@
           "run_id"
         ],
         "title": "RunStart"
+      },
+      "SearchDefaultBody": {
+        "properties": {
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "coelho_search",
+                  "tavily",
+                  "exa",
+                  "jina"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
+          }
+        },
+        "type": "object",
+        "title": "SearchDefaultBody"
+      },
+      "SearchProviderBody": {
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          }
+        },
+        "type": "object",
+        "title": "SearchProviderBody"
+      },
+      "SearchProviderView": {
+        "properties": {
+          "provider_id": {
+            "type": "string",
+            "enum": [
+              "coelho_search",
+              "tavily",
+              "exa",
+              "jina"
+            ],
+            "title": "Provider Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint"
+          },
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "has_key": {
+            "type": "boolean",
+            "title": "Has Key"
+          },
+          "key_source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "env"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key Source"
+          },
+          "key_last4": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key Last4"
+          },
+          "connected": {
+            "type": "boolean",
+            "title": "Connected"
+          },
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tools"
+          },
+          "last_test_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Test Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider_id",
+          "name",
+          "endpoint",
+          "available",
+          "has_key",
+          "key_source",
+          "key_last4",
+          "connected",
+          "last_checked_at",
+          "tools",
+          "last_test_error"
+        ],
+        "title": "SearchProviderView"
       },
       "SearchRequest": {
         "properties": {
@@ -9058,6 +10108,90 @@
         "title": "SearchResponse",
         "description": "Envelope for /content/search."
       },
+      "SearchSettingsView": {
+        "properties": {
+          "default_provider": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "coelho_search",
+                  "tavily",
+                  "exa",
+                  "jina"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Provider"
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/SearchProviderView"
+            },
+            "type": "array",
+            "title": "Providers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "default_provider",
+          "providers"
+        ],
+        "title": "SearchSettingsView"
+      },
+      "SearchTestResult": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "provider_id": {
+            "type": "string",
+            "enum": [
+              "coelho_search",
+              "tavily",
+              "exa",
+              "jina"
+            ],
+            "title": "Provider Id"
+          },
+          "latency_ms": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Latency Ms"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tools"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "provider_id",
+          "latency_ms",
+          "tools",
+          "error"
+        ],
+        "title": "SearchTestResult"
+      },
       "Snapshot": {
         "properties": {
           "manifest": {
@@ -9245,9 +10379,12 @@
         "properties": {
           "schema_version": {
             "type": "string",
-            "const": "1.0",
+            "enum": [
+              "1.0",
+              "1.1"
+            ],
             "title": "Schema Version",
-            "default": "1.0"
+            "default": "1.1"
           },
           "title": {
             "type": "string",
@@ -9273,6 +10410,30 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]+$",
             "title": "Distill Run Id"
+          },
+          "source_page_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Source Page Count",
+            "default": 0
+          },
+          "selected_page_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Selected Page Count",
+            "default": 0
+          },
+          "excluded_page_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Excluded Page Count",
+            "default": 0
+          },
+          "content_selection_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Content Selection Revision",
+            "default": 1
           },
           "generated_at": {
             "type": "number",
@@ -9691,6 +10852,34 @@
         "title": "VideosRequest",
         "description": "Paste video IDs / URLs. `include_transcription` toggles whether the\nCelery task also fetches transcripts via Playwright after the yt-dlp\nmetadata pass (deprecated `tasks/youtube/crawler.py:L57-95`)."
       },
+      "WipeResponse": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "wiped": {
+            "type": "boolean",
+            "title": "Wiped"
+          },
+          "objects_deleted": {
+            "type": "integer",
+            "title": "Objects Deleted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "run_id",
+          "wiped",
+          "objects_deleted"
+        ],
+        "title": "WipeResponse"
+      },
       "entrypoints__api__v1__bd__distill__schemas__CancelResponse": {
         "properties": {
           "book_id": {
@@ -9731,6 +10920,159 @@
           "status"
         ],
         "title": "CancelResponse"
+      },
+      "entrypoints__api__v1__bd__ingestion__schemas__PageQuality": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "agentic_run_id": {
+            "type": "string",
+            "title": "Agentic Run Id"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_kind": {
+            "type": "string",
+            "title": "Page Kind"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "done",
+              "review_required"
+            ],
+            "title": "Status"
+          },
+          "delivery_disposition": {
+            "type": "string",
+            "enum": [
+              "include",
+              "discarded_blank",
+              "image_only"
+            ],
+            "title": "Delivery Disposition"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/PageIssueView"
+            },
+            "type": "array",
+            "title": "Issues"
+          },
+          "mechanical_fixes": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Mechanical Fixes"
+          },
+          "audit_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Audit Warnings"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "agentic_run_id",
+          "page",
+          "page_kind",
+          "status",
+          "delivery_disposition",
+          "issues",
+          "mechanical_fixes",
+          "audit_warnings",
+          "errors"
+        ],
+        "title": "PageQuality",
+        "description": "What the current Agentic AI run found on one page and what it did about it."
+      },
+      "entrypoints__api__v1__dd__ingestion__schemas__PageQuality": {
+        "properties": {
+          "framework_slug": {
+            "type": "string",
+            "title": "Framework Slug"
+          },
+          "agentic_run_id": {
+            "type": "string",
+            "title": "Agentic Run Id"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_kind": {
+            "type": "string",
+            "title": "Page Kind"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "done",
+              "review_required"
+            ],
+            "title": "Status"
+          },
+          "delivery_disposition": {
+            "type": "string",
+            "const": "include",
+            "title": "Delivery Disposition",
+            "default": "include"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/PageQualityIssue"
+            },
+            "type": "array",
+            "title": "Issues"
+          },
+          "mechanical_fixes": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Mechanical Fixes"
+          },
+          "audit_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Audit Warnings"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "framework_slug",
+          "agentic_run_id",
+          "page",
+          "page_kind",
+          "status",
+          "issues"
+        ],
+        "title": "PageQuality",
+        "description": "What Agentic AI found on a documentation page and how it was handled."
       }
     }
   }

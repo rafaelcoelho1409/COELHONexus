@@ -52,6 +52,48 @@ const PLANNER_DETAILS: Record<string, NodeDetails> = {
       ];
     },
   },
+  page_cards: {
+    title: "Page cards",
+    subtitle: "Reviews every distinct source page and records what it teaches.",
+    kind: "LLM map with deterministic fallback",
+    actions: [
+      "Creates a compact topic, summary, teaching role, code role and prerequisite card for each distinct page.",
+      "Keeps exact duplicate and rejected-page reasons in the card artifact.",
+      "Uses deterministic cards when a model call fails so a page is not silently lost.",
+    ],
+    inputs: ["raw_files"],
+    outputs: ["relevant_files", "page_cards_ref", "page_cards_stats"],
+    llm: "One structured page-card call per distinct non-empty page; content-addressed cards are reused.",
+    metrics: (values) => {
+      const s = statsOf(values, "page_cards_stats");
+      return [
+        metric("kept", num(s, "n_kept"), "of " + num(s, "n_pages") + " pages"),
+        metric("fallback cards", num(s, "n_fallback_cards")),
+        metric("cache", flag(s, "cache_hit") ? "hit" : "cold"),
+      ];
+    },
+  },
+  chapter_design: {
+    title: "Chapter design",
+    subtitle: "Scores candidate groupings, then designs chapters with a tutorial architect.",
+    kind: "embeddings + LLM architect",
+    actions: [
+      "Builds semantic and documentation-navigation candidate partitions.",
+      "Counts unique tutorial time and preserves the best code examples for the capstone ability check.",
+      "Repairs missing group assignments and prerequisite cycles before writing the proposals.",
+    ],
+    inputs: ["page_cards_ref", "relevant_files"],
+    outputs: ["chapter_proposals_ref", "chapter_doc_assignments_ref", "chapter_design_stats"],
+    llm: "The configured embedding model scores page similarity; one architect call chooses and refines the partition.",
+    metrics: (values) => {
+      const s = statsOf(values, "chapter_design_stats");
+      return [
+        metric("chapters", num(s, "n_chapters")),
+        metric("pages assigned", num(s, "n_pages_assigned") + "/" + num(s, "n_pages_in")),
+        metric("best code examples", num(s, "n_best_code")),
+      ];
+    },
+  },
   off_topic: {
     title: "Off-topic filter",
     subtitle: "An LLM judge keeps only the pages relevant to the framework.",
@@ -157,16 +199,16 @@ const PLANNER_DETAILS: Record<string, NodeDetails> = {
   },
   chapter_select: {
     title: "Chapter select",
-    subtitle: "Chooses the final chapter set with deterministic coverage logic.",
+    subtitle: "Checks page coverage and curates chapters that exceed size limits.",
     kind: "algorithm",
     actions: [
-      "Picks a minimum useful chapter set from the proposal/assignment matrix.",
-      "Targets broad document coverage while pruning tiny unpinned chapters.",
+      "Keeps the chapter architect's designed groups and repairs any uncovered page placement.",
+      "Uses a curator to split chapters that exceed the page or code-example limits.",
       "Produces the chapter plan the ordering and plan-writing nodes consume.",
     ],
     inputs: ["chapter_doc_assignments_ref"],
     outputs: ["chapter_plan_ref", "select_stats"],
-    llm: "No LLM call. Selection is greedy coverage and pruning.",
+    llm: "No LLM call for v2 selection; an optional curator agent checks oversized chapter splits.",
     metrics: (values) => {
       const s = statsOf(values, "select_stats");
       const coverage = maybeNum(s, "coverage_fraction");
@@ -265,6 +307,28 @@ const SYNTH_DETAILS: Record<string, NodeDetails> = {
       ];
     },
   },
+  ledger_prepare: {
+    title: "Code ledger",
+    subtitle:
+      "Assigns each canonical source example to a tutorial step without a separate model call for every source page.",
+    kind: "deterministic evidence builder",
+    actions: [
+      "Builds the canonical examples and their variants from the chapter's source pages.",
+      "Assigns each best example to one outline step and writes source keys, evidence facts and code references for the writer.",
+      "Reports any canonical examples that could not be assigned.",
+    ],
+    inputs: ["outline_path"],
+    outputs: ["ledger_path", "ledger_stats"],
+    llm: "No LLM call. Assignments come from the chapter outline and the canonical code ledger.",
+    metrics: (values) => {
+      const s = statsOf(values, "ledger_stats");
+      return [
+        metric("best examples", num(s, "n_best_code")),
+        metric("assigned", `${num(s, "n_assigned")}/${num(s, "n_best_code")}`),
+        metric("unassigned", num(s, "n_orphan_code_refs")),
+      ];
+    },
+  },
   sawc_write: {
     title: "SAWC write (section-aware writer-critic)",
     subtitle: "Writes chapter sections stage by stage, then tops up coverage and repairs.",
@@ -287,13 +351,13 @@ const SYNTH_DETAILS: Record<string, NodeDetails> = {
     },
   },
   sawc_derive: {
-    title: "SAWC derive",
-    subtitle: "Optionally derives a fuller code example for blocks that are only a signature.",
-    kind: "optional LLM expansion",
+    title: "SAWC derive and capstone",
+    subtitle: "Expands thin examples when needed and builds the chapter's closing application.",
+    kind: "optional LLM code generation",
     actions: [
       "A deriver agent expands each thin block into a short runnable example.",
       "Code rejects candidates that fail the syntax or length gates.",
-      "Promotes accepted examples into the chapter.",
+      "A capstone designer combines the taught steps into a final application and checks its code before keeping it.",
     ],
     inputs: ["sawc_path"],
     outputs: ["derive_stats"],
@@ -311,6 +375,27 @@ const SYNTH_DETAILS: Record<string, NodeDetails> = {
         metric("promoted", num(s, "n_promoted")),
         metric("LLM fail", num(s, "n_rotator_fail")),
         metric("attempts", Array.isArray(s.attempts) ? s.attempts.length : "not reported"),
+      ];
+    },
+  },
+  verify: {
+    title: "Code verification",
+    subtitle: "Checks canonical examples and generated code, and records what the environment could verify.",
+    kind: "static checks with optional code execution",
+    actions: [
+      "Checks Python syntax, resolvable imports and supported configuration formats.",
+      "Runs code only when execution is enabled; unsupported or environment-dependent checks stay unverified.",
+      "Persists individual results so failed code cannot be hidden by the chapter score.",
+    ],
+    inputs: ["ledger_path", "sawc_path"],
+    outputs: ["verify_path", "verify_stats"],
+    llm: "No LLM call. Code execution is optional and disabled by default.",
+    metrics: (values) => {
+      const s = statsOf(values, "verify_stats");
+      return [
+        metric("status", String(s.status ?? "pending")),
+        metric("verified", num(s, "verified")),
+        metric("unverified / failed", `${num(s, "unverified")} / ${num(s, "failed")}`),
       ];
     },
   },

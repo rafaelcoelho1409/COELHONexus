@@ -47,6 +47,13 @@ async def finalize(
     return await service.finalize(state, runtime)
 
 
+async def capstone(
+    state: graphs.pipeline.synth.sawc_derive.states.DeriveState,
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+) -> dict:
+    return await service.capstone(state, runtime)
+
+
 def after_prepare(graph_state: graphs.pipeline.synth.sawc_derive.states.DeriveState):
     if graph_state.get("finished"):
         return END

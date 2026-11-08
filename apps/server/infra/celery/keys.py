@@ -24,6 +24,7 @@ TASK_INCLUDE = [
     "domains.bd.ingestion.task",
     "domains.bd.ingestion.ai.task",
     "domains.bd.distill.task",
+    "domains.bd.distill.rag.task",
     "domains.dd.ingestion.task",
     "domains.dd.ingestion.ai.task",
     "domains.dd.pipeline.ai.task",
@@ -40,6 +41,7 @@ TASK_ROUTES = {
     "domains.bd.ingestion.task.*": {"queue": Q_BD},
     "domains.bd.ingestion.ai.task.*": {"queue": Q_BD},
     "domains.bd.distill.task.*": {"queue": Q_BD},
+    "domains.bd.distill.rag.task.*": {"queue": Q_BD},
     "domains.dd.ingestion.task.*": {"queue": Q_CRAWLER},
     "domains.dd.ingestion.ai.task.*": {"queue": Q_CRAWLER},
     # One task module serves both stages: the synth's three tasks are named first (the first matching route wins), the rest of the module is the planner's.

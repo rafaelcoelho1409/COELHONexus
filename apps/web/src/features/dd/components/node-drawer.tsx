@@ -11,22 +11,21 @@ import { type ActivityLine, activityLines } from "../domain/activity";
 import { nodeDetails, nodeKpi, nodeMetrics, nodeRawIO } from "../domain/node-details";
 import { buildOverview } from "../domain/overview";
 import type { StageNodeView } from "../domain/stages";
-import { mergeMetrics, nodeModelRows, nodeUsageMetrics, nodeUsageTable } from "../domain/usage";
+import { mergeMetrics, nodeUsageMetrics } from "../domain/usage";
 import type { StageEvent } from "../entities";
-import { useRunUsage } from "../hooks/use-usage";
+import { useRunUsageState } from "../hooks/use-usage";
 import type { RunStage } from "../params";
-import { ModelUsageTableView } from "./model-usage-table";
 import { NodeOverviewView } from "./node-overview";
-import { NodeUsageTableView } from "./node-usage-table";
 import { SideSheet } from "./side-sheet";
 import { NodeStatusBadge } from "./stage-parts";
+import { UsageBreakdown } from "./usage-breakdown";
 
-type TabId = "overview" | "activity" | "raw";
+type TabId = "overview" | "activity" | "raw" | "usage";
 
-const TAB_IDS: readonly TabId[] = ["overview", "activity", "raw"];
+const TAB_IDS: readonly TabId[] = ["overview", "activity", "raw", "usage"];
 const isTabId = (value: unknown): value is TabId => TAB_IDS.some((id) => id === value);
 
-/** The tab a number key opens (1 = Overview, 2 = Activity, 3 = Raw I/O), as in the original drawer. */
+/** The tab a number key opens (1 = Overview, 2 = Activity, 3 = Raw I/O, 4 = Usage). */
 const tabForKey = (key: string): TabId | undefined => TAB_IDS[Number(key) - 1];
 
 const LINE_TONE: Record<ActivityLine["tone"], string> = {
@@ -141,9 +140,11 @@ export function NodeDrawer({
   since?: number;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<TabId>("overview");
+  // Opening a graph node follows the Ingestion interaction: show its usage first,
+  // with the node description and trace one tab away.
+  const [tab, setTab] = useState<TabId>("usage");
   const [seen, setSeen] = useState(0);
-  const usage = useRunUsage(stage, threadId, { live });
+  const usage = useRunUsageState(stage, threadId, { live });
 
   const { node } = view;
   const details = nodeDetails(stage, node.id);
@@ -151,9 +152,8 @@ export function NodeDrawer({
   const unseen = tab === "activity" ? 0 : Math.max(0, nodeEvents.length - seen);
   const reported = view.status === "done" || view.status === "running";
   const metrics = reported
-    ? mergeMetrics(nodeUsageMetrics(usage, node.id), nodeMetrics(stage, node.id, values))
+    ? mergeMetrics(nodeUsageMetrics(usage.usage, node.id), nodeMetrics(stage, node.id, values))
     : [];
-  const usageTable = reported ? nodeUsageTable(stage, usage, node.id) : null;
   const kpi = view.status === "done" ? nodeKpi(stage, node.id, values) : null;
   const raw = nodeRawIO(stage, node.id, values);
   const pendingNote = PENDING_NOTE[view.status];
@@ -164,7 +164,7 @@ export function NodeDrawer({
     setTab(next);
   };
 
-  // 1, 2 and 3 jump to a tab, unless the reader is typing or holding a modifier (which belongs to the browser).
+  // 1–4 jump to a tab, unless the reader is typing or holding a modifier (which belongs to the browser).
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -219,6 +219,9 @@ export function NodeDrawer({
           <TabsTrigger value="raw" aria-keyshortcuts="3">
             Raw I/O
           </TabsTrigger>
+          <TabsTrigger value="usage" aria-keyshortcuts="4">
+            Usage
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="flex flex-col gap-5">
@@ -251,8 +254,6 @@ export function NodeDrawer({
               ))}
             </dl>
           ) : null}
-          {reported ? <ModelUsageTableView rows={nodeModelRows(usage, node.id)} /> : null}
-          {usageTable ? <NodeUsageTableView table={usageTable} /> : null}
           {pendingNote && view.status !== "running" ? (
             <p className="text-sm text-muted-foreground">{pendingNote}</p>
           ) : (
@@ -272,6 +273,17 @@ export function NodeDrawer({
           ) : null}
           {raw.inputs !== null ? <RawBlock title="Inputs (upstream state, raw)" json={raw.inputs} /> : null}
           {raw.outputs !== null ? <RawBlock title="Outputs (this node, raw)" json={raw.outputs} /> : null}
+        </TabsContent>
+
+        <TabsContent value="usage">
+          <UsageBreakdown
+            stage={stage}
+            usage={usage.usage}
+            nodeId={node.id}
+            hasRun={threadId !== null}
+            loading={usage.loading}
+            failed={usage.failed}
+          />
         </TabsContent>
       </Tabs>
     </SideSheet>

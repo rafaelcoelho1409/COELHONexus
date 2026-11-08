@@ -32,6 +32,16 @@ Only structural dependencies ("s3 uses the lifecycle defined in s1"), never mere
 
 Call `validate_outline` with every section. It reports structural defects and pairs of sections whose scope overlaps (same APIs, same examples under different wording). Merge an overlapping pair under one heading, or re-scope one of them to a capability the other does not have. Fix every issue and call the tool again; answer when it says the outline is valid.
 
+## 6. Tutorial chapters
+
+When the request has `tutorial`, the outline is the plan of a complete tutorial: the reader learns every best code example and ends with an application that combines them.
+
+- Start from `tutorial.best_code`, not from the page list. Group the examples into steps by what they build on: an example that defines something another example uses comes first.
+- Every example belongs to one step. Put the description's APIs and defined names in `description`, so the router sends each example to its step.
+- Order: setup and the smallest working example first, then one capability per step, each using only what earlier steps taught. Prerequisites follow that order.
+- Use `list_variants` when a family has several variants and you need to know what the others add; `compare_variants` shows the difference. The canonical variant is the one to teach.
+- A page that adds no example the others lack does not need a step of its own.
+
 ## Boundary examples
 
 - "Session Management" and "Remote Control" that both cover persist, resume and in-memory stores are ONE section.

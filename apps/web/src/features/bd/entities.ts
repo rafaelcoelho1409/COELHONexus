@@ -22,6 +22,29 @@ export const pageBodySchema = z.object({
   content_source: z.enum(["docling", "agentic"]).catch("docling"),
 });
 
+export const contentSelectionPageSchema = z.looseObject({
+  page_number: z.number().int().positive(),
+  role: z.enum(["core", "preface", "reference", "navigation", "legal", "noise", "unknown"]),
+  confidence: z.number().min(0).max(1),
+  rationale: z.string(),
+  disposition: z.enum(["include", "exclude"]),
+  decision_source: z.enum(["classifier", "content_policy", "conservative_fallback", "user"]),
+});
+export const contentSelectionSchema = z.looseObject({
+  book_id: z.string(),
+  extraction_run_id: z.string(),
+  agentic_run_id: z.string(),
+  classifier_version: z.string(),
+  revision: z.number().int().positive(),
+  expected_page_count: z.number().int().positive(),
+  included_page_count: z.number().int().nonnegative(),
+  excluded_page_count: z.number().int().nonnegative(),
+  sha256: z.string(),
+  pages: z.array(contentSelectionPageSchema),
+});
+export type ContentSelection = z.infer<typeof contentSelectionSchema>;
+export type ContentSelectionPage = z.infer<typeof contentSelectionPageSchema>;
+
 /** What the stored reader layout holds. Every field falls back on its own, so a value from an older version or a
  * hand-edited one still gives a usable layout. */
 export const readerLayoutSchema = z.object({
@@ -76,6 +99,8 @@ const agenticProgressSchema = z.looseObject({
   processed_pages: z.array(z.number()).catch([]),
   active_audit_pages: z.array(z.number()).catch([]),
   active_repair_pages: z.array(z.number()).catch([]),
+  classified_pages: z.array(z.number()).catch([]).optional(),
+  active_classification_pages: z.array(z.number()).catch([]).optional(),
 });
 
 export const agenticRunStatusSchema = z.looseObject({
@@ -88,6 +113,9 @@ export const agenticRunStatusSchema = z.looseObject({
   quality_status: z.enum(["complete", "complete_with_review"]).nullable().catch(null),
   delivered_page_count: z.number().catch(0),
   discarded_blank_page_count: z.number().catch(0),
+  selected_page_count: z.number().catch(0),
+  excluded_page_count: z.number().catch(0),
+  content_selection_revision: z.number().nullable().catch(null),
   review_page_count: z.number().catch(0),
   review_pages: z.array(z.number()).catch([]),
   unverified_page_count: z.number().catch(0),
@@ -141,6 +169,7 @@ export const agenticEventSchema = z.looseObject({
     "node",
     "page_audit",
     "page_repair",
+    "content_classification",
     "run_done",
     "run_failed",
     "run_cancelled",

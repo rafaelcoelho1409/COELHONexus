@@ -30,13 +30,14 @@ import { MaterialsArticle, type PreviewMode } from "./materials-article";
 import { MaterialsPageList } from "./materials-page-list";
 import { MaterialsReadingMode } from "./materials-reading-mode";
 import { MaterialsSearch } from "./materials-search";
+import { PageQualityPanel } from "./page-quality";
 import { ReadingProgress } from "./reading-progress";
 import { StudyOutline } from "./study-outline";
 
 /** The page's grid from 1024px up for each way of folding the two side columns (whole class names, so Tailwind sees them). */
 const COLUMNS = {
-  both: "lg:grid-cols-[18rem_minmax(0,1fr)_14rem]",
-  pagesOnly: "lg:grid-cols-[18rem_minmax(0,1fr)]",
+  both: "lg:grid-cols-[16rem_minmax(0,1fr)_14rem]",
+  pagesOnly: "lg:grid-cols-[16rem_minmax(0,1fr)]",
   outlineOnly: "lg:grid-cols-[minmax(0,1fr)_14rem]",
   neither: "lg:grid-cols-[minmax(0,1fr)]",
 } as const;
@@ -112,6 +113,18 @@ export function MaterialsView({
   const runPage = useRunPageBody(runId, selected, selectedEntry?.key ?? null, selectedVersion);
   const page = runId ? runPage : canonicalPage;
   const text = page.data ?? "";
+  const qualityPanel = (defaultOpen: boolean) =>
+    selectedEntry && manifest?.agentic_run_id && !runId ? (
+      <PageQualityPanel
+        slug={slug}
+        page={selectedEntry.idx}
+        agenticRunId={manifest.agentic_run_id}
+        enabled
+        defaultOpen={defaultOpen}
+      />
+    ) : null;
+  const quality = reading ? null : qualityPanel(true);
+  const readingQuality = reading ? qualityPanel(false) : null;
 
   // Outline and scroll-spy. The text is drawn in one place at a time (the page, or the reading window), so the spy
   // watches the headings afresh whenever it moves.
@@ -260,11 +273,6 @@ export function MaterialsView({
     >
       <ReadingProgress />
       <div className="mb-4 flex flex-wrap items-center justify-end gap-2">
-        <ActionButton onClick={() => setSearchOpen(true)} aria-haspopup="dialog">
-          <Search aria-hidden />
-          Search pages
-          <kbd className="ml-1 font-mono text-xs text-muted-foreground">Ctrl K</kbd>
-        </ActionButton>
         <ActionButton
           iconOnly
           aria-expanded={layout.chapters}
@@ -298,7 +306,21 @@ export function MaterialsView({
       </div>
 
       <div className={`flex flex-col gap-4 lg:grid ${columns}`}>
-        {layout.chapters ? <aside className={`flex flex-col ${STICKY_COLUMN}`}>{pageList}</aside> : null}
+        {layout.chapters ? (
+          <aside className={`flex min-w-0 flex-col gap-3 ${STICKY_COLUMN}`}>
+            <ActionButton
+              className="w-full justify-start"
+              onClick={() => setSearchOpen(true)}
+              aria-haspopup="dialog"
+              disabled={entries.length === 0}
+            >
+              <Search aria-hidden />
+              Search pages
+              <kbd className="ml-auto font-mono text-xs text-muted-foreground">Ctrl K</kbd>
+            </ActionButton>
+            <div className="rounded-md border border-border bg-card p-3">{pageList}</div>
+          </aside>
+        ) : null}
 
         {/* In the reading window the text is drawn there, not here: one copy at a time, so a heading's id is never twice on the page. */}
         <MaterialsArticle
@@ -313,6 +335,7 @@ export function MaterialsView({
           hasVersions={hasVersions}
           onPrevious={goPrevious}
           onNext={goNext}
+          quality={quality}
         >
           {reading ? null : body}
         </MaterialsArticle>
@@ -350,6 +373,7 @@ export function MaterialsView({
             hasVersions={hasVersions}
             onPrevious={goPrevious}
             onNext={goNext}
+            quality={readingQuality}
           >
             {body}
           </MaterialsArticle>

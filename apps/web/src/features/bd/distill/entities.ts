@@ -52,6 +52,7 @@ const diagramSchema = z.looseObject({
   nodes: z.array(diagramNodeSchema),
   edges: z.array(diagramEdgeSchema),
 });
+export type ReportDiagram = z.infer<typeof diagramSchema>;
 
 const equationSchema = z.looseObject({
   title: z.string(),
@@ -95,6 +96,7 @@ const chartSchema = z.looseObject({
   learning_unit_ids: z.array(z.string()).catch([]),
   dataset: datasetSchema,
 });
+export type ReportChart = z.infer<typeof chartSchema>;
 
 const reportSectionSchema = z.looseObject({
   title: z.string(),
@@ -111,6 +113,8 @@ export type ReportSection = z.infer<typeof reportSectionSchema>;
 
 const structuralQualitySchema = z.looseObject({
   expected_page_count: z.number().int().nonnegative().catch(0),
+  selected_page_count: z.number().int().nonnegative().catch(0),
+  excluded_page_count: z.number().int().nonnegative().catch(0),
   substantive_page_count: z.number().int().nonnegative().catch(0),
   covered_substantive_pages: z.number().int().nonnegative().catch(0),
   page_coverage_rate: z.number().min(0).max(1).catch(0),
@@ -144,6 +148,8 @@ export const distillRunSchema = z.looseObject({
   extraction_run_id: z.string().min(1),
   ingestion_ai_run_id: z.string().min(1),
   expected_page_count: z.number().int().positive().catch(0),
+  selected_page_count: z.number().int().nonnegative().optional(),
+  content_selection_revision: z.number().int().positive().optional(),
   status: z.enum(["queued", "running", "done", "failed", "cancelled"]),
   progress: progressSchema,
   structural_quality: structuralQualitySchema.nullable().catch(null),
@@ -174,6 +180,17 @@ export const distillCancelSchema = z.looseObject({
   status: z.enum(["queued", "running", "done", "failed", "cancelled"]),
 });
 
+export const distillCapabilitiesSchema = z.object({
+  execution_enabled: z.boolean(),
+});
+
+export const distillWipeSchema = z.object({
+  book_id: z.string(),
+  run_id: z.string(),
+  wiped: z.boolean(),
+  objects_deleted: z.number().int().nonnegative(),
+});
+
 export const distillEventSchema = z.looseObject({
   kind: z.string(),
   status: z.string().optional(),
@@ -190,6 +207,10 @@ export const learningGuideSchema = z.looseObject({
   extraction_run_id: z.string().min(1),
   ingestion_ai_run_id: z.string().min(1),
   distill_run_id: z.string().min(1),
+  source_page_count: z.number().int().nonnegative().catch(0),
+  selected_page_count: z.number().int().nonnegative().catch(0),
+  excluded_page_count: z.number().int().nonnegative().catch(0),
+  content_selection_revision: z.number().int().positive().catch(1),
   generated_at: z.number().positive(),
   report_scope: z.literal("book_only").catch("book_only"),
   central_thesis: z.string(),
@@ -219,3 +240,47 @@ export const learningGuideSchema = z.looseObject({
   review_required: z.boolean(),
 });
 export type LearningGuide = z.infer<typeof learningGuideSchema>;
+
+export const contentSelectionPageSchema = z.object({
+  page_number: z.number().int().positive(),
+  role: z.enum(["core", "preface", "reference", "navigation", "legal", "noise", "unknown"]),
+  confidence: z.number().min(0).max(1),
+  rationale: z.string(),
+  disposition: z.enum(["include", "exclude"]),
+  decision_source: z.enum(["classifier", "content_policy", "conservative_fallback", "user"]),
+});
+export type ContentSelectionPage = z.infer<typeof contentSelectionPageSchema>;
+
+export const contentSelectionSchema = z.object({
+  book_id: z.string().min(1),
+  extraction_run_id: z.string().min(1),
+  agentic_run_id: z.string().min(1),
+  classifier_version: z.string().min(1),
+  revision: z.number().int().positive(),
+  expected_page_count: z.number().int().positive(),
+  included_page_count: z.number().int().nonnegative(),
+  excluded_page_count: z.number().int().nonnegative(),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  pages: z.array(contentSelectionPageSchema),
+});
+export type ContentSelection = z.infer<typeof contentSelectionSchema>;
+
+export const ragIndexStatusSchema = z.object({
+  book_id: z.string(),
+  distill_run_id: z.string(),
+  extraction_run_id: z.string(),
+  status: z.enum(["not_started", "queued", "running", "done", "failed"]),
+  attempt: z.number().int().nonnegative().catch(0),
+  collection_name: z.string().nullable().catch(null),
+  embedding_model: z.string().nullable().catch(null),
+  embedding_dimensions: z.number().int().positive().nullable().catch(null),
+  source_page_count: z.number().int().nonnegative().catch(0),
+  learning_unit_count: z.number().int().nonnegative().catch(0),
+  guide_record_count: z.number().int().nonnegative().catch(0),
+  point_count: z.number().int().nonnegative().catch(0),
+  created_at: z.number().nullable().catch(null),
+  updated_at: z.number().nullable().catch(null),
+  finished_at: z.number().nullable().catch(null),
+  error: z.string().nullable().catch(null),
+});
+export type RagIndexStatus = z.infer<typeof ragIndexStatusSchema>;

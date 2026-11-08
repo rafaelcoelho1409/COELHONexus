@@ -26,6 +26,18 @@ class PageKind(StrEnum):
     UNKNOWN = "unknown"
 
 
+class ContentPageRole(StrEnum):
+    """A page's role in the book, separate from extraction-quality findings."""
+
+    CORE = "core"
+    PREFACE = "preface"
+    REFERENCE = "reference"
+    NAVIGATION = "navigation"
+    LEGAL = "legal"
+    NOISE = "noise"
+    UNKNOWN = "unknown"
+
+
 class IssueCode(StrEnum):
     CONTROL_CHARACTERS = "control_characters"
     NEAR_EMPTY = "near_empty"
@@ -143,6 +155,16 @@ class PageAssessment(BaseModel):
         if len(issue_ids) != len(set(issue_ids)):
             raise ValueError("issue_ids must be unique within a page assessment")
         return self
+
+
+class ContentPageAssessment(BaseModel):
+    """Content-role classification for one normalized physical page."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    role: ContentPageRole
+    confidence: Confidence
+    rationale: Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1, max_length = 600)]
 
 
 class PageAuditFinding(BaseModel):
@@ -311,6 +333,8 @@ __all__ = [
     "EvidenceRef",
     "EvidenceSource",
     "BookMetadataProposal",
+    "ContentPageAssessment",
+    "ContentPageRole",
     "FindingCheck",
     "FindingCheckBatch",
     "FindingVerdict",

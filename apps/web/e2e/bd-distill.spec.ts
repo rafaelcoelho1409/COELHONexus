@@ -101,11 +101,11 @@ const REPORT = {
   charts: [
     {
       title: "Observed latency",
-      chart_type: "table",
+      chart_type: "bar",
       x_field: "Percentile",
       y_fields: ["Latency"],
       caption: "Latency by percentile.",
-      accessible_description: "A table compares latency for two percentiles.",
+      accessible_description: "A bar chart compares latency for two percentiles.",
       learning_unit_ids: ["unit-1"],
       dataset: {
         dataset_id: "latency-1",
@@ -282,6 +282,9 @@ async function mockBd(page: Page, selectedRun: "done" | "running" | "failed" | "
   await page.route("**/api/v1/bd/distill/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
+    if (path === "/api/v1/bd/distill/capabilities") {
+      return route.fulfill({ json: { execution_enabled: false } });
+    }
     if (path === `/api/v1/bd/distill/${BOOK}/runs` && request.method() === "GET") {
       return route.fulfill({
         json: selectedRun === "none" ? [] : [run(selectedRun)],
@@ -307,17 +310,34 @@ test.describe("Book Distiller · Distill", () => {
     await page.goto(`/bd/distill?book=${BOOK}`);
 
     await expect(page.getByRole("heading", { level: 2, name: TITLE })).toBeVisible();
+    await expect(page.getByRole("figure", { name: "Distill pipeline graph" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Publish the guide.*done/ })).toBeVisible();
     await expect(
       page.getByRole("heading", { name: "Learning Guide: Designing Reliable Systems" }),
     ).toBeVisible();
     await expect(page.getByText("Page coverage")).toBeVisible();
+    await expect(page.getByText("6 of 6 stages complete")).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Learning Guide contents" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Failure recovery" })).toBeVisible();
-    await expect(page.getByText("A table compares latency for two percentiles.")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Create another guide" })).toBeDisabled();
+    await expect(page.getByText("A bar chart compares latency for two percentiles.")).toBeVisible();
+    await expect(
+      page.getByRole("img", { name: "Observed latency. A bar chart compares latency for two percentiles." }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Start Distill" })).toBeDisabled();
     expect(state.starts()).toBe(0);
 
+    await page.getByRole("button", { name: "List" }).click();
+    const nodeList = page.getByRole("list", { name: "Distill pipeline nodes" });
+    await expect(nodeList.getByRole("listitem")).toHaveCount(6);
+    await nodeList.getByRole("button", { name: /Connect the book/ }).click();
+    const nodeDetails = page.getByRole("dialog", { name: "Connect the book" });
+    await expect(nodeDetails).toContainText("Central thesis");
+    await expect(nodeDetails).toContainText("Cross-chapter connections");
+    await page.getByRole("button", { name: "Close node details" }).click();
+    await page.getByRole("button", { name: "Graph" }).click();
+
     await page.getByRole("link", { name: "Page 1" }).first().click();
-    await expect(page).toHaveURL(new RegExp(`/bd/ingestion\\?book=${BOOK}.*page=1`));
+    await expect(page).toHaveURL(new RegExp(`/bd/distill\\?book=${BOOK}.*run=distill-1.*page=1`));
     await expect(page.getByRole("article", { name: "Page 1" })).toContainText(
       "Reliable systems keep working",
     );
@@ -327,9 +347,14 @@ test.describe("Book Distiller · Distill", () => {
     await api("healthy");
     await mockBd(page, "none");
     await page.goto(`/bd/distill?book=${BOOK}`);
-    await expect(page.getByText("No Learning Guide yet")).toBeVisible();
+    await expect(page.getByText("Ready to start")).toBeVisible();
+    await expect(page.getByRole("figure", { name: "Distill pipeline graph" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Prepare the book.*pending/ })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Source readiness" })).toBeVisible();
     await expect(
-      page.getByText("Run controls are disabled while Distill is being structured."),
+      page.getByText(
+        "Distill runs are unavailable in this environment. Existing runs can still be stopped or wiped.",
+      ),
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "Start Distill" })).toBeDisabled();
   });

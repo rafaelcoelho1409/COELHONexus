@@ -8,11 +8,16 @@ class PlannerState(TypedDict, total = False):
     framework_slug: str
     thread_id: str               # also LangFuse session_id
     planner_mode: str            # future modes ("llm-fast"/"llm-thorough"); default "llm"
+    planner_version: str         # "v1" or "v2"; recorded in the output plan
 
     raw_files: Optional[list[str]]              # corpus_load — MinIO keys only
     corpus_stats: Optional[dict]                # corpus_load — count/bytes/perc dist
     relevant_files: Optional[list[str]]         # off_topic — LLM-only filter
     off_topic_stats: Optional[dict]             # off_topic observability dict
+
+    page_cards_ref: Optional[str]               # page_cards — content-addressed semantic cards
+    page_cards_stats: Optional[dict]             # page_cards — keep/drop/cache/embed counts
+    chapter_design_stats: Optional[dict]         # chapter_design — grouping and coverage diagnostics
 
     doc_distill_ref: Optional[str]              # doc_distill — MinIO key of {key→DocDistillate} JSON
     doc_distill_stats: Optional[dict]           # doc_distill — counts + skip-pass flag

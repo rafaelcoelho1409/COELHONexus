@@ -1,3 +1,3 @@
-from . import finding_verifier, metadata_normalizer, page_auditor, structure_repair, text_repair
+from . import content_classifier, finding_verifier, metadata_normalizer, page_auditor, structure_repair, text_repair
 
-__all__ = ["finding_verifier", "metadata_normalizer", "page_auditor", "structure_repair", "text_repair"]
+__all__ = ["content_classifier", "finding_verifier", "metadata_normalizer", "page_auditor", "structure_repair", "text_repair"]

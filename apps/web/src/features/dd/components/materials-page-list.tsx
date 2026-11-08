@@ -101,7 +101,7 @@ export function MaterialsPageList({
         ref={list}
         // biome-ignore lint/a11y/noNoninteractiveTabindex: a long list scrolls, so keyboard users must be able to focus it to scroll it (WCAG 2.1.1)
         tabIndex={0}
-        className="relative max-h-72 min-h-0 overflow-auto rounded-md border border-border bg-card lg:max-h-none lg:flex-1"
+        className="relative max-h-72 min-h-0 overflow-auto lg:max-h-none lg:flex-1"
       >
         {groups.map((group) => (
           <div key={group.prefix}>
@@ -117,16 +117,18 @@ export function MaterialsPageList({
                     type="button"
                     onClick={() => onPick(entry.idx)}
                     aria-current={selected === entry.idx ? "page" : undefined}
-                    className={`flex min-h-9 w-full items-baseline gap-2 border-l-2 px-2 py-1 text-left text-xs hover:bg-muted ${
+                    className={`flex min-h-12 w-full items-baseline gap-2 border-l-2 px-2 py-1 text-left text-sm hover:bg-muted ${
                       selected === entry.idx ? "border-primary bg-muted" : "border-transparent"
                     }`}
                   >
                     <span
-                      className={`truncate ${selected === entry.idx ? "font-medium text-foreground" : "text-foreground"}`}
+                      className={`min-w-0 flex-1 truncate ${
+                        selected === entry.idx ? "font-medium text-foreground" : "text-foreground"
+                      }`}
                     >
                       {entry.title || entry.slug}
                     </span>
-                    <span aria-hidden className="ml-auto shrink-0 text-muted-foreground">
+                    <span aria-hidden className="ml-auto shrink-0 text-right text-xs text-muted-foreground">
                       {[entry.tier, fmtBytes(entry.bytes ?? 0)].filter(Boolean).join(" · ")}
                     </span>
                   </button>

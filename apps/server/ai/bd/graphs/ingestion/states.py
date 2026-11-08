@@ -26,4 +26,10 @@ class IngestionRunState(TypedDict, total = False):
     book_metadata_sha256: str
     quality_report: dict[str, object]
     quality_status: str
+    content_selection: list[dict[str, object]]
+    content_selection_key: str
+    content_selection_sha256: str
+    content_selection_revision: int
+    selected_page_count: int
+    excluded_page_count: int
     status: str

@@ -18,13 +18,17 @@ def planner_graph():
 
 def node_order() -> tuple[str, ...]:
     """The planner's stages in the order they run (what `/info` reports and the web's stage board is checked against)."""
-    return ai.dd.graphs.pipeline.planner.params.NODE_ORDER
+    planner_params = ai.dd.graphs.pipeline.planner.params
+    return planner_params.NODE_ORDER_V2 if planner_params.PLANNER_V2 else planner_params.NODE_ORDER_V1
 
 
 def build_context() -> Any:
     """A run's context: object storage and its agents (built on first use, from the endpoint the Settings page currently holds)."""
     domains.settings.chat.service.refresh_endpoint(force = True)
-    return ai.dd.graphs.pipeline.planner.entities.PlannerContext(blobs = infra.minio.service.get_storage())
+    return ai.dd.graphs.pipeline.planner.entities.PlannerContext(
+        blobs = infra.minio.service.get_storage(),
+        embed_texts = domains.settings.embeddings.service.embed_texts_async,
+    )
 
 
 def run_config(thread_id: str) -> dict:

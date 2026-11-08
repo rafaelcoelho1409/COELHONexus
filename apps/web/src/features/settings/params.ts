@@ -4,21 +4,18 @@ import type { Section } from "@/shared/layout/section";
 export const SETTINGS_SECTION: Section = {
   href: "/settings",
   title: "Settings",
-  description: "The LLM and embedding connections the tools call",
+  description: "Connections used by your tools",
   tabs: [],
 };
 
 /** The two saved connections: the chat endpoint and the embedding endpoint. */
 export type ConnectionKind = "llm" | "embedding";
 
+export const SEARCH_PROVIDER_IDS = ["coelho_search", "tavily", "exa", "jina"] as const;
+export type SearchProviderId = (typeof SEARCH_PROVIDER_IDS)[number];
+
 /** PUT body. `api_key`: omit = keep the stored key, `""` = delete it, otherwise replace it. */
 export type SaveBody = { url: string; model: string; api_key?: string };
-
-/** Fallback model selectors for chat and embedding endpoints. */
-export const DEFAULT_MODELS: Record<ConnectionKind, string> = {
-  llm: "fgts-va",
-  embedding: "auto",
-};
 
 /** The migration task poll re-reads the worker's task status this often. */
 export const MIGRATION_POLL_MS = 3_000;

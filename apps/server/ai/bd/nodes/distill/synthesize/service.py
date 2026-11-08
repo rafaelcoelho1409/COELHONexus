@@ -116,7 +116,11 @@ async def _read_learning_units(storage, book_id: str, run_id: str, unit_ids: lis
         lesson = next((item for item in record.get("lessons", []) if item.get("learning_unit_id") == unit_id), None)
         if lesson is None:
             raise ValueError("a chapter references a learning unit that was not persisted")
-        records.append(lesson)
+        records.append({
+            **lesson,
+            "source_page_number": record.get("page_number"),
+            "section_path": record.get("section_path", []),
+        })
     return records
 
 
@@ -132,23 +136,85 @@ async def prepare_chapters(
         unit_ids = [item["learning_unit_id"] for item in artifact.get("lessons", [])]
         if unit_ids:
             refs.append({**ref, "learning_unit_ids": unit_ids})
-    groups = domains.bd.distill.domain.group_by_section(refs)
+    refs.sort(key = lambda ref: (ref["page_number"], ref["char_start"], ref["unit_id"]))
+    source_chapters = state.get("source_chapters", [])
+    groups: list[dict[str, Any]] = []
+    assigned_unit_ids: set[str] = set()
+    if isinstance(source_chapters, list):
+        for chapter in sorted(
+            (item for item in source_chapters if isinstance(item, dict)),
+            key = lambda item: item.get("first_page", 0),
+        ):
+            title = chapter.get("title")
+            first_page = chapter.get("first_page")
+            last_page = chapter.get("last_page")
+            if (
+                not isinstance(title, str)
+                or type(first_page) is not int
+                or type(last_page) is not int
+                or first_page < 1
+                or last_page < first_page
+            ):
+                continue
+            selected_refs = [
+                ref for ref in refs
+                if first_page <= ref["page_number"] <= last_page and ref["unit_id"] not in assigned_unit_ids
+            ]
+            if not selected_refs:
+                continue
+            groups.append({
+                "title": title,
+                "first_page": first_page,
+                "last_page": last_page,
+                "section_path": [title],
+                "refs": selected_refs,
+            })
+            assigned_unit_ids.update(ref["unit_id"] for ref in selected_refs)
+
+    unassigned_by_root: dict[str, list[dict[str, Any]]] = {}
+    for ref in refs:
+        if ref["unit_id"] in assigned_unit_ids:
+            continue
+        path = [item.strip() for item in ref.get("section_path", []) if item.strip()]
+        title = path[0] if path else "Unassigned material"
+        unassigned_by_root.setdefault(title, []).append(ref)
+    for title, section_refs in sorted(
+        unassigned_by_root.items(), key = lambda item: min(ref["page_number"] for ref in item[1]),
+    ):
+        groups.append({
+            "title": title,
+            "first_page": min(ref["page_number"] for ref in section_refs),
+            "last_page": max(ref["page_number"] for ref in section_refs),
+            "section_path": [title],
+            "refs": section_refs,
+        })
+
     chapter_refs = []
-    for section_path, section_refs in groups:
+    for group in sorted(groups, key = lambda item: (item["first_page"], item["last_page"])):
+        title = group["title"]
+        section_path = tuple(group["section_path"])
+        section_refs = group["refs"]
         selected: list[str] = []
+        selected_refs_by_unit: dict[str, dict[str, Any]] = {}
         batch_index = 0
         for ref in section_refs:
             for unit_id in ref.get("learning_unit_ids", []):
                 selected.append(unit_id)
+                selected_refs_by_unit[unit_id] = ref
                 if len(selected) == _CHAPTER_BATCH_SIZE:
+                    subsection_paths = _subsection_paths(selected, selected_refs_by_unit)
                     chapter_refs.append(await _write_chapter_input(
-                        storage, state["book_id"], state["run_id"], section_path, batch_index, selected,
+                        storage, state["book_id"], state["run_id"], title, section_path,
+                        group["first_page"], group["last_page"], subsection_paths, batch_index, selected,
                     ))
                     selected = []
+                    selected_refs_by_unit = {}
                     batch_index += 1
         if selected:
+            subsection_paths = _subsection_paths(selected, selected_refs_by_unit)
             chapter_refs.append(await _write_chapter_input(
-                storage, state["book_id"], state["run_id"], section_path, batch_index, selected,
+                storage, state["book_id"], state["run_id"], title, section_path,
+                group["first_page"], group["last_page"], subsection_paths, batch_index, selected,
             ))
     if not chapter_refs:
         raise ValueError("no source-grounded learning units were extracted from the completed book")
@@ -160,17 +226,42 @@ async def prepare_chapters(
     return {"chapter_refs": chapter_refs}
 
 
-async def _write_chapter_input(storage, book_id: str, run_id: str, section_path: tuple[str, ...], batch: int,
-                               unit_ids: list[str]) -> dict[str, Any]:
-    chapter_id = domains.bd.distill.domain.stable_id(*section_path, str(batch), *unit_ids)
+def _subsection_paths(unit_ids: list[str], refs_by_unit: dict[str, dict[str, Any]]) -> list[list[str]]:
+    paths = {
+        tuple(path)
+        for unit_id in unit_ids
+        for path in [refs_by_unit[unit_id].get("section_path", [])]
+        if isinstance(path, list) and all(isinstance(item, str) for item in path)
+    }
+    return [list(path) for path in sorted(paths)]
+
+
+async def _write_chapter_input(
+    storage,
+    book_id: str,
+    run_id: str,
+    title: str,
+    section_path: tuple[str, ...],
+    first_page: int,
+    last_page: int,
+    subsection_paths: list[list[str]],
+    batch: int,
+    unit_ids: list[str],
+) -> dict[str, Any]:
+    structure_id = domains.bd.distill.domain.stable_id(
+        title, str(first_page), str(last_page),
+    )
+    chapter_id = domains.bd.distill.domain.stable_id(structure_id, str(batch), *unit_ids)
     input_key = domains.bd.distill.keys.chapter_input_key(book_id, run_id, chapter_id)
     record = {
         "chapter_id": chapter_id,
+        "structure_id": structure_id,
         "section_path": list(section_path),
+        "first_page": first_page,
+        "last_page": last_page,
+        "subsection_paths": subsection_paths,
         "part_index": batch,
-        "title": (
-            section_path[-1] if batch == 0 else f"{section_path[-1]} (continued {batch + 1})"
-        ) if section_path else "Unassigned material",
+        "title": title if batch == 0 else f"{title} — Part {batch + 1}",
         "unit_ids": list(unit_ids),
     }
     if await storage.exists(input_key):
@@ -184,6 +275,8 @@ async def _write_chapter_input(storage, book_id: str, run_id: str, section_path:
         "artifact_key": domains.bd.distill.keys.chapter_key(book_id, run_id, chapter_id),
         "section_path": list(section_path),
         "part_index": batch,
+        "first_page": first_page,
+        "last_page": last_page,
         "unit_ids": list(unit_ids),
         "input_key": input_key,
     }
@@ -255,7 +348,7 @@ async def synthesize_book(
     chapter_summaries = []
     ordered_refs = sorted(
         state.get("completed_chapters", []),
-        key = lambda ref: (tuple(ref["section_path"]), ref["part_index"]),
+        key = lambda ref: (ref.get("first_page", 0), ref["part_index"]),
     )
     for ref in ordered_refs:
         artifact = json.loads(await storage.read_text(ref["artifact_key"]))
@@ -264,6 +357,8 @@ async def synthesize_book(
             "chapter_id": ref["chapter_id"],
             "title": artifact["title"],
             "section_path": artifact["section_path"],
+            "first_page": artifact.get("first_page", 0),
+            "last_page": artifact.get("last_page", 0),
             "unit_ids": artifact["unit_ids"],
             "summary": {
                 "overview": chapter.overview[:1600],

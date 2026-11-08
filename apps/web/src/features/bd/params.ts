@@ -7,6 +7,7 @@ export const PAGE_PARAM = "page";
 /** Book Distiller stages. */
 const BD_STAGES = [
   { key: "ingestion", label: "Ingestion", href: "/bd/ingestion", carry: true },
+  { key: "pages", label: "Pages", href: "/bd/pages", carry: true },
   { key: "distill", label: "Distill", href: "/bd/distill", carry: true },
 ] as const;
 
@@ -24,12 +25,8 @@ export const BD_SECTION: Section = {
 export const MAX_UPLOAD_BYTES = 300 * 1024 * 1024;
 export const MAX_UPLOAD_LABEL = "300 MB";
 
-/** The two views of an open book, drawn as links in the page's third navbar. */
-export const BOOK_VIEWS = [
-  ["pipeline", "Agents"],
-  ["materials", "Pages"],
-] as const;
-export type BookViewId = (typeof BOOK_VIEWS)[number][0];
+/** Which workspace the book page displays. Agents and Pages have their own section tabs. */
+export type BookViewId = "pipeline" | "materials";
 
 export const AUTO_CHAIN_STORAGE_KEY = "bd-ingestion-auto-chain";
 
@@ -63,9 +60,18 @@ export function bookHref(bookId?: string | null): string {
   return bookId ? `${base}?${BOOK_PARAM}=${encodeURIComponent(bookId)}` : base;
 }
 
+/** The source reader, opened on a book and optionally a cited page. */
+export function bookPagesHref(bookId?: string | null, page?: number | null): string {
+  const params = new URLSearchParams();
+  if (bookId) params.set(BOOK_PARAM, bookId);
+  if (page !== undefined && page !== null) params.set(PAGE_PARAM, String(page));
+  const query = params.toString();
+  return query ? `/bd/pages?${query}` : "/bd/pages";
+}
+
 /** A source citation opens the existing book reader at the cited page. */
 export function ingestionPageHref(bookId: string, page: number): string {
-  return `${bookHref(bookId)}&${PAGE_PARAM}=${page}`;
+  return bookPagesHref(bookId, page);
 }
 
 export function parsePageParam(value: string | null): number | null {

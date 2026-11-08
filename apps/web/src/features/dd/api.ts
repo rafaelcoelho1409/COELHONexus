@@ -152,16 +152,14 @@ export function fetchPlannerTotalMs(slug: string): Promise<number> {
   }, 0);
 }
 
-/** LLM calls and tokens of one run thread; null when the counters cannot be read. */
-export function fetchUsage(stage: RunStage, threadId: string): Promise<UsagePayload | null> {
-  return orFallback(async () => {
-    const path = { thread_id: threadId };
-    const result =
-      stage === "planner"
-        ? await getDdPipelinePlannerDebugGraphThreadIdLlmCounters({ path, throwOnError: true })
-        : await getDdPipelineSynthDebugGraphThreadIdLlmCounters({ path, throwOnError: true });
-    return usagePayloadSchema.parse(result.data);
-  }, null);
+/** Usage read for views that show a distinct loading/error state; React Query owns failures here. */
+export async function fetchUsageForQuery(stage: RunStage, threadId: string): Promise<UsagePayload> {
+  const path = { thread_id: threadId };
+  const result =
+    stage === "planner"
+      ? await getDdPipelinePlannerDebugGraphThreadIdLlmCounters({ path, throwOnError: true })
+      : await getDdPipelineSynthDebugGraphThreadIdLlmCounters({ path, throwOnError: true });
+  return usagePayloadSchema.parse(result.data);
 }
 
 /** How the latest plan of a framework was produced; null when unknown. */

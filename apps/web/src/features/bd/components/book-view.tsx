@@ -28,6 +28,7 @@ import { useAgenticRun } from "../hooks/use-agentic-run";
 import {
   useCancelAgenticRun,
   useCancelBook,
+  useContentSelection,
   useResumeAgenticRun,
   useRunBook,
   useSnapshot,
@@ -69,13 +70,11 @@ export function BookView({
   initialPage,
   autoChain,
   activeView,
-  onViewChange,
 }: {
   bookId: string;
   initialPage: number | null;
   autoChain: boolean;
   activeView: BookViewId;
-  onViewChange: (view: BookViewId) => void;
 }) {
   const snapshot = useSnapshot(bookId);
   if (snapshot.isPending) {
@@ -104,7 +103,6 @@ export function BookView({
       snapshot={snapshot.data}
       autoChain={autoChain}
       activeView={activeView}
-      onViewChange={onViewChange}
     />
   );
 }
@@ -115,17 +113,19 @@ function BookDetail({
   snapshot,
   autoChain,
   activeView,
-  onViewChange,
 }: {
   bookId: string;
   initialPage: number | null;
   snapshot: BookSnapshot;
   autoChain: boolean;
   activeView: BookViewId;
-  onViewChange: (view: BookViewId) => void;
 }) {
   const run = useBookRun(bookId, snapshot);
   const agentic = useAgenticRun(bookId, snapshot);
+  const contentSelection = useContentSelection(
+    bookId,
+    agentic.status === "done" ? agentic.run?.agentic_run_id ?? null : null,
+  );
   const runBook = useRunBook();
   const cancelBook = useCancelBook();
   const cancelAgentic = useCancelAgenticRun();
@@ -217,7 +217,6 @@ function BookDetail({
       { bookId, autoChain },
       {
         onSuccess: (result) => {
-          onViewChange("pipeline");
           run.restart();
           setView({ follow: true, picked: null });
           if (result.status === "locked")
@@ -242,7 +241,6 @@ function BookDetail({
   const startAgenticProcessing = () =>
     startAgentic.mutate(bookId, {
       onSuccess: () => {
-        onViewChange("pipeline");
         notice("Agentic ingestion queued.");
       },
       onError: (error) => notice(apiErrorMessage(error), "error"),
@@ -253,7 +251,6 @@ function BookDetail({
       { bookId, agenticRunId: agentic.run.agentic_run_id },
       {
         onSuccess: () => {
-          onViewChange("pipeline");
           agentic.restart();
           notice("Agentic ingestion retry queued.");
         },
@@ -307,7 +304,6 @@ function BookDetail({
       onSuccess: () => {
         run.clear();
         setView({ follow: false, picked: null });
-        onViewChange("materials");
         notice("Extracted materials wiped. The uploaded book is preserved.");
       },
       onError: (error) => notice(apiErrorMessage(error), "error"),
@@ -347,6 +343,9 @@ function BookDetail({
           following={view.follow}
           live={live}
           flags={flags}
+          selection={contentSelection.data ?? null}
+          selectionPending={agentic.status === "done" && contentSelection.isPending}
+          selectionError={agentic.status === "done" && contentSelection.isError}
           onFollow={(follow) => setView({ follow, picked: null })}
           onPick={choosePage}
         />
@@ -492,10 +491,8 @@ function BookDetail({
         live={agentic.streaming}
         onClose={() => setUsageOpen(false)}
       />
-      <div
-        role="tabpanel"
-        id="bd-pipeline-panel"
-        aria-labelledby="bd-pipeline-tab"
+      <section
+        aria-label="Agents"
         hidden={activeView !== "pipeline"}
         className="mt-4"
       >
@@ -626,11 +623,9 @@ function BookDetail({
           chapters={state.chapters.length > 0 ? state.chapters : manifest.chapters}
           onOpenUsage={() => setUsageOpen(true)}
         />
-      </div>
-      <div
-        role="tabpanel"
-        id="bd-materials-panel"
-        aria-labelledby="bd-materials-tab"
+      </section>
+      <section
+        aria-label="Pages"
         hidden={activeView !== "materials"}
         className="mt-4"
       >
@@ -711,7 +706,7 @@ function BookDetail({
             onClose={() => setSearchOpen(false)}
           />
         ) : null}
-      </div>
+      </section>
     </section>
   );
 }

@@ -645,16 +645,18 @@ def compute_manifest_hash(
     sources_bytes: int,
     chapter_title: str,
     chapter_description: str,
+    tutorial: bool = False,
 ) -> str:
+    """`tutorial` marks an outline planned as a tutorial (one step per best code); a v1 outline's hash is unchanged."""
     payload = (
         f"sources={','.join(sorted(sources))}|"
         f"n_sources={len(sources)}|"
         f"bytes={sources_bytes}|"
         f"title={chapter_title}|"
         f"goal={chapter_description}|"
-        f"prompt={versions.OUTLINE_PROMPT_VERSION}|"
-        f"schema={versions.OUTLINE_SCHEMA_VERSION}"
-    )
+        f"prompt={versions.prompt_version(tutorial)}|"
+        f"schema={versions.schema_version(tutorial)}"
+    ) + ("|tutorial=1" if tutorial else "")
     return sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 

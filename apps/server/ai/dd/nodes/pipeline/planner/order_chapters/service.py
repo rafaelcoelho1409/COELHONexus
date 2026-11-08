@@ -51,6 +51,7 @@ async def prepare(state: graphs.pipeline.planner.order_chapters.states.OrderStat
                 "n_samples": len(cached.get("samples") or []),
                 "foundational": cached.get("foundational_idx") or [],
                 "order": cached.get("order") or [],
+                **(cached.get("prerequisites") or {}),
                 "wall_ms": elapsed,
                 "store_path": cache_key,
                 "cache_hit": True,
@@ -204,6 +205,7 @@ async def finalize(state: graphs.pipeline.planner.order_chapters.states.OrderSta
         identity, _ = domain.pin_foundations_first(identity, chapters)
         identity, _ = domain.pin_trailing_last(identity, chapters)
         identity, _ = domain.pin_appendix_last(identity, chapters)
+        identity, prerequisite_stats = domain.respect_prerequisites(identity, chapters)
         sample_errors = [s.get("error", "unknown") for s in samples]
         await blobs.write(
             cache_key,
@@ -211,6 +213,7 @@ async def finalize(state: graphs.pipeline.planner.order_chapters.states.OrderSta
                 "order": identity, "samples": [], "foundational_idx": [], "n_chapters": n_chapters,
                 "prompt_version": versions.PROMPT_VERSION, "deployment_usage": [],
                 "error": "all_samples_failed_after_retry", "sample_errors": sample_errors,
+                "prerequisites": prerequisite_stats,
             }),
             content_type = "application/json",
         )
@@ -224,6 +227,7 @@ async def finalize(state: graphs.pipeline.planner.order_chapters.states.OrderSta
             "order_chapters_stats": {
                 "n_chapters": n_chapters, "wall_ms": elapsed, "store_path": cache_key, "cache_hit": False,
                 "order": identity, "foundational": [], "error": "all_samples_failed_after_retry", "sample_errors": sample_errors,
+                **prerequisite_stats,
             },
         }
 
@@ -245,6 +249,7 @@ async def finalize(state: graphs.pipeline.planner.order_chapters.states.OrderSta
     final_order, foundations_idx = domain.pin_foundations_first(final_order, chapters)
     final_order, trailing_idx = domain.pin_trailing_last(final_order, chapters)
     final_order, _appendix_idx = domain.pin_appendix_last(final_order, chapters)
+    final_order, prerequisite_stats = domain.respect_prerequisites(final_order, chapters)
 
     await blobs.write(
         cache_key,
@@ -254,6 +259,7 @@ async def finalize(state: graphs.pipeline.planner.order_chapters.states.OrderSta
             "source_order": source_ranking, "composition": state.get("composition"), "n_chapters": n_chapters,
             "prompt_version": versions.PROMPT_VERSION, "deployment_usage": [],
             "chapter_titles": [ch.get("title", "?") for ch in chapters],
+            "prerequisites": prerequisite_stats,
         }, indent = 2),
         content_type = "application/json",
     )
@@ -261,6 +267,7 @@ async def finalize(state: graphs.pipeline.planner.order_chapters.states.OrderSta
         "n_chapters": n_chapters,
         "n_samples": len(valid_orderings),
         "foundational": foundational_idx,
+        **prerequisite_stats,
         "order": final_order,
         "aggregated": aggregated,
         "source_order": source_ranking,

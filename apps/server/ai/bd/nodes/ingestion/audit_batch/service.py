@@ -190,7 +190,14 @@ async def audit_pages(
         expected_page_count = expected_page_count,
         page_refs = page_refs,
     )
-    validated_refs = request.page_references()
+    section_paths = {
+        page_ref["page"]: page_ref.get("section_path", [])
+        for page_ref in page_refs
+    }
+    validated_refs = [
+        {**page_ref, "section_path": section_paths.get(page_ref["page"], [])}
+        for page_ref in request.page_references()
+    ]
     semaphore = asyncio.Semaphore(domains.bd.ingestion.ai.params.PAGE_AUDIT_CONCURRENCY)
 
     async def audit_one(page_ref: graphs.ingestion.entities.PageReference) -> tuple[dict, dict]:

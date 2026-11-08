@@ -56,6 +56,49 @@ def borda_aggregate(
     )
 
 
+def respect_prerequisites(order: list[int], chapters: list[dict]) -> tuple[list[int], dict]:
+    """Stable topological sort: keep the sequencer's order whenever dependencies allow."""
+    n = len(chapters)
+    rank = {index: position for position, index in enumerate(order) if 0 <= index < n}
+    title_index: dict[str, int] = {}
+    for index, chapter in enumerate(chapters):
+        title_index.setdefault(" ".join(str(chapter.get("title") or "").casefold().split()), index)
+    outgoing: dict[int, set[int]] = {index: set() for index in range(n)}
+    indegree = [0] * n
+    unresolved = []
+    for index, chapter in enumerate(chapters):
+        for raw in chapter.get("prerequisites") or []:
+            dependency = title_index.get(" ".join(str(raw).casefold().split()))
+            if dependency is None or dependency == index:
+                unresolved.append({"chapter": chapter.get("title"), "prerequisite": raw})
+                continue
+            if index not in outgoing[dependency]:
+                outgoing[dependency].add(index)
+                indegree[index] += 1
+
+    ready = sorted((index for index in range(n) if indegree[index] == 0), key = lambda index: (rank.get(index, n + index), index))
+    sorted_indices = []
+    while ready:
+        index = ready.pop(0)
+        sorted_indices.append(index)
+        for child in sorted(outgoing[index], key = lambda item: (rank.get(item, n + item), item)):
+            indegree[child] -= 1
+            if indegree[child] == 0:
+                ready.append(child)
+                ready.sort(key = lambda item: (rank.get(item, n + item), item))
+
+    cycle_indices = [index for index in range(n) if index not in set(sorted_indices)]
+    if cycle_indices:
+        # Reconciliation already removes cycles; this is a final guard for edited or stale outlines.
+        sorted_indices.extend(sorted(cycle_indices, key = lambda index: (rank.get(index, n + index), index)))
+    return sorted_indices, {
+        "n_prerequisite_edges": sum(len(children) for children in outgoing.values()),
+        "n_unresolved_prerequisites": len(unresolved),
+        "unresolved_prerequisites": unresolved,
+        "n_cycle_guarded_chapters": len(cycle_indices),
+    }
+
+
 def source_order_ranking(chapters: list[dict], key_idx: dict[str, int]) -> list[int] | None:
     """Chapter indices ordered by where their pages sit in the source docs (mean
     manifest `idx` of the members). Chapters with no known page go last, in

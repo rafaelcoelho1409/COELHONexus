@@ -1,6 +1,8 @@
 """settings router — Pydantic request/response models (HTTP contract)."""
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -20,3 +22,41 @@ class EmbeddingBody(BaseModel):
     url: str = Field(min_length=1)
     model: str = "auto"
     api_key: str | None = None
+
+
+SearchProviderId = Literal["coelho_search", "tavily", "exa", "jina"]
+
+
+class SearchProviderBody(BaseModel):
+    api_key: str | None = Field(default = None, max_length = 4096)
+
+
+class SearchDefaultBody(BaseModel):
+    provider_id: SearchProviderId | None = None
+
+
+class SearchProviderView(BaseModel):
+    provider_id: SearchProviderId
+    name: str
+    endpoint: str | None
+    available: bool
+    has_key: bool
+    key_source: Literal["user", "env"] | None
+    key_last4: str | None
+    connected: bool
+    last_checked_at: float | None
+    tools: list[str]
+    last_test_error: str | None
+
+
+class SearchSettingsView(BaseModel):
+    default_provider: SearchProviderId | None
+    providers: list[SearchProviderView]
+
+
+class SearchTestResult(BaseModel):
+    ok: bool
+    provider_id: SearchProviderId
+    latency_ms: int = Field(ge = 0)
+    tools: list[str]
+    error: str | None

@@ -17,8 +17,24 @@ describe("chapter cells", () => {
   const plan = {
     study_total_wall_ms: 0,
     chapters: [
-      { id: "02_eval", title: null, order: 2, rendered: false, wall_ms: null, thread_id: null },
-      { id: "01_hall", title: "Hallucinations", order: 1, rendered: true, wall_ms: 2000, thread_id: "t1" },
+      {
+        id: "02_eval",
+        title: null,
+        order: 2,
+        rendered: false,
+        wall_ms: null,
+        thread_id: null,
+        source_files: ["guide.md"],
+      },
+      {
+        id: "01_hall",
+        title: "Hallucinations",
+        order: 1,
+        rendered: true,
+        wall_ms: 2000,
+        thread_id: "t1",
+        source_files: ["hallucinations.md"],
+      },
     ],
   };
 
@@ -29,6 +45,7 @@ describe("chapter cells", () => {
       ["02_eval", "pending", null, null],
     ]);
     expect(cells[1]?.title).toBe("02 eval"); // no title yet: humanised from the id
+    expect(cells[0]?.sourceFiles).toEqual(["hallucinations.md"]);
   });
 
   it("builds placeholder cells from bare ids", () => {
@@ -58,6 +75,20 @@ describe("chapter cells", () => {
         { ...b, status: "done" },
       ]),
     ).toBe("Start");
+  });
+
+  it("keeps reference-only chapters visible without counting or starting them in Synth", () => {
+    const [tutorial, reference] = cellsFromIds(["tutorial", "api-reference"]);
+    if (!tutorial || !reference) throw new Error("fixture");
+    const excluded = { ...reference, synthEligible: false, exclusionReason: "Lookup-only API detail." };
+    expect(chapterCounter([tutorial, excluded])).toBe("0 / 1 · 1 excluded from Synth");
+    expect(synthStartLabel([{ ...tutorial, status: "done" }, excluded])).toBe("Start");
+    expect(
+      cellsFromIds([tutorial.id], [tutorial, excluded]).map((cell) => [cell.id, cell.synthEligible]),
+    ).toEqual([
+      [tutorial.id, true],
+      [excluded.id, false],
+    ]);
   });
 
   it("maps server statuses onto cell statuses", () => {

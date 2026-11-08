@@ -215,6 +215,45 @@ async def main() -> None:
     check("off_topic: the web's events", [k for k in run.kinds("off_topic") if k in {"start", "done"}], ["start", "done"])
     truthy("per-page results are stored", any(k.startswith(keys.item_prefix(SLUG, "off_topic")) for k in blobs.objects))
 
+    check("plan_write: v1 plans carry no reading time", any("reading_minutes" in c or "n_best_code" in c for c in plan["chapters"]), False)
+
+    # --- tutorial mode: each chapter records its reading time and the best code it must teach; the chapter block cap is lower
+    from ai.dd.graphs.pipeline import params as pipeline_params
+
+    tutorial_blobs = FakeBlobs()
+    tutorial_pages = corpus(tutorial_blobs)
+    for n, page_key in enumerate(tutorial_pages):
+        if "CODE OF CONDUCT" not in tutorial_blobs.objects[page_key]:
+            tutorial_blobs.objects[page_key] += (
+                f"\n```python\nfrom {topic_of(page_key)} import Client\n\nclient = Client(name='page{n}')\nresult = client.run('task{n}')\nprint(result)\n```\n"
+            )
+    pipeline_params.TUTORIAL_MODE = True
+    try:
+        await Run(tutorial_blobs).go(thread_id = "docs-distiller/fw/tut")
+    finally:
+        pipeline_params.TUTORIAL_MODE = False
+    tutorial_plan = json.loads(tutorial_blobs.objects[keys.plan_latest_key(SLUG)])
+    truthy("tutorial: every chapter has a reading time", all(c["reading_minutes"] > 0 for c in tutorial_plan["chapters"]))
+    truthy("tutorial: every chapter counts the best code it must teach", all(c["n_best_code"] >= 1 for c in tutorial_plan["chapters"]))
+    truthy("tutorial: …and an estimated tutorial time", all(c["tutorial_minutes"] > 0 for c in tutorial_plan["chapters"]))
+    select_domain = ai.dd.nodes.pipeline.planner.chapter_select.domain
+    reading = tutorial_plan["stats"]["reading"]
+    check("tutorial: the plan says how its count compares with its reading time", (reading["n_chapters"], reading["suggested_chapters"] >= 1, reading["over_budget"]), (len(tutorial_plan["chapters"]), True, []))
+    ledger_domain = domains.dd.pipeline.ledger.domain
+    sample = [{"id": "a", "tutorial_minutes": 60.0}, {"id": "b", "tutorial_minutes": 20.0}, {"id": "c", "tutorial_minutes": 5.0}, {"id": "d"}]
+    check("tutorial: reading plan: total, suggested count, chapters over budget and short ones",
+          ledger_domain.reading_plan(sample), {"tutorial_minutes": 85.0, "suggested_chapters": 3, "n_chapters": 4, "over_budget": ["a"], "short": ["c"]})
+    check("tutorial: …and nothing to say when no chapter has a figure", ledger_domain.reading_plan([{"id": "x"}])["suggested_chapters"], 0)
+    check("plan_write: v1 plans carry no reading section", "reading" in plan["stats"], False)
+    check("tutorial: the block cap is lower than v1's", (select_domain.block_limits(False), select_domain.block_limits(True)), ((200, 140), (90, 60)))
+    chapter = lambda n: {"member_doc_keys": [f"p{i}" for i in range(n)], "origin": "proposal"}
+    wide = [chapter(10)] + [chapter(10) for _ in range(3)]
+    many_blocks = {k: 10 for c in wide for k in c["member_doc_keys"]}
+    check("tutorial: 100 blocks is one chapter in v1 and is split in tutorial mode",
+          (select_domain.plan_splits(wide, doc_blocks = many_blocks), len(select_domain.plan_splits(wide, doc_blocks = many_blocks, max_blocks = 90, blocks_per_part = 60)) > 0),
+          ([], True))
+    check("tutorial: a v1 selection's cache key does not change", select_domain.manifest_hash(slug = "s", proposals_ref = "p", assignments_ref = "a") != select_domain.manifest_hash(slug = "s", proposals_ref = "p", assignments_ref = "a", tutorial = True), True)
+
     # --- the same corpus again: every node answers from its blob or its stored per-page results, no model call
     before = {n: f.calls for n, f in run.fakes.items()}
     again = Run(blobs)

@@ -22,9 +22,11 @@ router = APIRouter()
 
 @router.get("/info")
 async def planner_info() -> dict:
+    node_order = list(domains.dd.pipeline.ai.service.node_order())
     return {
-        "node_order": list(domains.dd.pipeline.ai.service.node_order()),
-        "implemented": list(domains.dd.pipeline.ai.service.node_order()),
+        "planner_version": "v2" if "page_cards" in node_order else "v1",
+        "node_order": node_order,
+        "implemented": node_order,
         "modes": [
             {"key": "llm",       "label": "LLM-only",        "enabled": True},
             {"key": "classical", "label": "Classical + LLM", "enabled": False},
@@ -43,6 +45,19 @@ async def planner_health(slug: str, response: Response) -> dict:
         plan = json.loads(raw)
         stats = plan.get("stats") or {}
         ph = stats.get("pipeline_health") or {}
+        chapters = [
+            {
+                "id": chapter.get("id"),
+                "title": chapter.get("title"),
+                "order": chapter.get("order"),
+                "n_sources": len(chapter.get("sources") or []),
+                "source_files": [str(key).rsplit("/", 1)[-1] for key in chapter.get("sources") or []],
+                "synth_eligible": chapter.get("synth_eligible", True) is not False,
+                "synth_exclusion_reason": chapter.get("synth_exclusion_reason") or "",
+            }
+            for chapter in plan.get("chapters") or []
+            if isinstance(chapter, dict)
+        ]
         return {
             "slug": slug,
             "generated_at": plan.get("generated_at"),
@@ -50,6 +65,7 @@ async def planner_health(slug: str, response: Response) -> dict:
             "n_sources": stats.get("n_sources"),
             "degraded": ph.get("degraded"),
             "pipeline_health": ph,
+            "chapters": chapters,
         }
     except Exception as e:
         return {"slug": slug, "degraded": None, "error": f"{type(e).__name__}: {e}"}

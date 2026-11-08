@@ -82,6 +82,14 @@ export type AgenticProgress = {
      * Active Repair Pages
      */
     active_repair_pages: Array<number>;
+    /**
+     * Classified Pages
+     */
+    classified_pages?: Array<number>;
+    /**
+     * Active Classification Pages
+     */
+    active_classification_pages?: Array<number>;
 };
 
 /**
@@ -164,6 +172,18 @@ export type AgenticRunStatus = {
      * Discarded Blank Page Count
      */
     discarded_blank_page_count?: number;
+    /**
+     * Selected Page Count
+     */
+    selected_page_count?: number;
+    /**
+     * Excluded Page Count
+     */
+    excluded_page_count?: number;
+    /**
+     * Content Selection Revision
+     */
+    content_selection_revision?: number | null;
     /**
      * Review Page Count
      */
@@ -322,6 +342,16 @@ export type BulkDeleteRequest = {
 };
 
 /**
+ * Capabilities
+ */
+export type Capabilities = {
+    /**
+     * Execution Enabled
+     */
+    execution_enabled: boolean;
+};
+
+/**
  * ChannelPipelineRequest
  *
  * `POST /content/channel/pipeline` — enumerate ALL videos in the
@@ -420,6 +450,110 @@ export type ChartSpec = {
      */
     learning_unit_ids: Array<string>;
     dataset: Dataset;
+};
+
+/**
+ * ContentSelectionOverride
+ */
+export type ContentSelectionOverride = {
+    /**
+     * Page Number
+     */
+    page_number: number;
+    /**
+     * Disposition
+     */
+    disposition: 'include' | 'exclude';
+};
+
+/**
+ * ContentSelectionPage
+ */
+export type ContentSelectionPage = {
+    /**
+     * Page Number
+     */
+    page_number: number;
+    /**
+     * Role
+     */
+    role: string;
+    /**
+     * Confidence
+     */
+    confidence: number;
+    /**
+     * Rationale
+     */
+    rationale: string;
+    /**
+     * Disposition
+     */
+    disposition: 'include' | 'exclude';
+    /**
+     * Decision Source
+     */
+    decision_source: string;
+};
+
+/**
+ * ContentSelectionResponse
+ */
+export type ContentSelectionResponse = {
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Extraction Run Id
+     */
+    extraction_run_id: string;
+    /**
+     * Agentic Run Id
+     */
+    agentic_run_id: string;
+    /**
+     * Classifier Version
+     */
+    classifier_version: string;
+    /**
+     * Revision
+     */
+    revision: number;
+    /**
+     * Expected Page Count
+     */
+    expected_page_count: number;
+    /**
+     * Included Page Count
+     */
+    included_page_count: number;
+    /**
+     * Excluded Page Count
+     */
+    excluded_page_count: number;
+    /**
+     * Sha256
+     */
+    sha256: string;
+    /**
+     * Pages
+     */
+    pages: Array<ContentSelectionPage>;
+};
+
+/**
+ * ContentSelectionUpdate
+ */
+export type ContentSelectionUpdate = {
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    /**
+     * Overrides
+     */
+    overrides: Array<ContentSelectionOverride>;
 };
 
 /**
@@ -1042,53 +1176,60 @@ export type PageIssueView = {
 };
 
 /**
- * PageQuality
- *
- * What the current Agentic AI run found on one page and what it did about it.
+ * PageQualityIssue
  */
-export type PageQuality = {
+export type PageQualityIssue = {
     /**
-     * Book Id
+     * Issue Id
      */
-    book_id: string;
+    issue_id: string;
     /**
-     * Agentic Run Id
+     * Code
      */
-    agentic_run_id: string;
+    code: string;
     /**
-     * Page
+     * Severity
      */
-    page: number;
+    severity: string;
     /**
-     * Page Kind
+     * Description
      */
-    page_kind: string;
+    description: string;
     /**
-     * Status
+     * Evidence
      */
-    status: 'done' | 'review_required';
+    evidence: Array<string>;
     /**
-     * Delivery Disposition
+     * Resolution
      */
-    delivery_disposition: 'include' | 'discarded_blank' | 'image_only';
+    resolution: 'auto_applied' | 'review' | 'none';
+    proposal?: PageQualityProposal | null;
+};
+
+/**
+ * PageQualityProposal
+ */
+export type PageQualityProposal = {
     /**
-     * Issues
+     * Target Text
      */
-    issues: Array<PageIssueView>;
+    target_text: string;
     /**
-     * Mechanical Fixes
+     * Replacement
      */
-    mechanical_fixes: {
-        [key: string]: number;
-    };
+    replacement: string;
     /**
-     * Audit Warnings
+     * Rationale
      */
-    audit_warnings: Array<string>;
+    rationale: string;
     /**
-     * Errors
+     * Confidence
      */
-    errors: Array<string>;
+    confidence: number;
+    /**
+     * Risk
+     */
+    risk: string;
 };
 
 /**
@@ -1388,6 +1529,76 @@ export type RagSearchRequest = {
 };
 
 /**
+ * RagIndexStatus
+ */
+export type RagIndexStatus = {
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Distill Run Id
+     */
+    distill_run_id: string;
+    /**
+     * Extraction Run Id
+     */
+    extraction_run_id: string;
+    /**
+     * Status
+     */
+    status: 'not_started' | 'queued' | 'running' | 'done' | 'failed';
+    /**
+     * Attempt
+     */
+    attempt?: number;
+    /**
+     * Collection Name
+     */
+    collection_name?: string | null;
+    /**
+     * Embedding Model
+     */
+    embedding_model?: string | null;
+    /**
+     * Embedding Dimensions
+     */
+    embedding_dimensions?: number | null;
+    /**
+     * Source Page Count
+     */
+    source_page_count?: number;
+    /**
+     * Learning Unit Count
+     */
+    learning_unit_count?: number;
+    /**
+     * Guide Record Count
+     */
+    guide_record_count?: number;
+    /**
+     * Point Count
+     */
+    point_count?: number;
+    /**
+     * Created At
+     */
+    created_at?: number | null;
+    /**
+     * Updated At
+     */
+    updated_at?: number | null;
+    /**
+     * Finished At
+     */
+    finished_at?: number | null;
+    /**
+     * Error
+     */
+    error?: string | null;
+};
+
+/**
  * RawQueryHit
  *
  * Renderer-friendly projection of one row, generic across backends.
@@ -1578,6 +1789,76 @@ export type RunStart = {
 };
 
 /**
+ * SearchDefaultBody
+ */
+export type SearchDefaultBody = {
+    /**
+     * Provider Id
+     */
+    provider_id?: 'coelho_search' | 'tavily' | 'exa' | 'jina' | null;
+};
+
+/**
+ * SearchProviderBody
+ */
+export type SearchProviderBody = {
+    /**
+     * Api Key
+     */
+    api_key?: string | null;
+};
+
+/**
+ * SearchProviderView
+ */
+export type SearchProviderView = {
+    /**
+     * Provider Id
+     */
+    provider_id: 'coelho_search' | 'tavily' | 'exa' | 'jina';
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Endpoint
+     */
+    endpoint: string | null;
+    /**
+     * Available
+     */
+    available: boolean;
+    /**
+     * Has Key
+     */
+    has_key: boolean;
+    /**
+     * Key Source
+     */
+    key_source: 'user' | 'env' | null;
+    /**
+     * Key Last4
+     */
+    key_last4: string | null;
+    /**
+     * Connected
+     */
+    connected: boolean;
+    /**
+     * Last Checked At
+     */
+    last_checked_at: number | null;
+    /**
+     * Tools
+     */
+    tools: Array<string>;
+    /**
+     * Last Test Error
+     */
+    last_test_error: string | null;
+};
+
+/**
  * SearchRequest
  *
  * Search YouTube and return ranked snippets.
@@ -1699,6 +1980,46 @@ export type SearchResponse = {
 };
 
 /**
+ * SearchSettingsView
+ */
+export type SearchSettingsView = {
+    /**
+     * Default Provider
+     */
+    default_provider: 'coelho_search' | 'tavily' | 'exa' | 'jina' | null;
+    /**
+     * Providers
+     */
+    providers: Array<SearchProviderView>;
+};
+
+/**
+ * SearchTestResult
+ */
+export type SearchTestResult = {
+    /**
+     * Ok
+     */
+    ok: boolean;
+    /**
+     * Provider Id
+     */
+    provider_id: 'coelho_search' | 'tavily' | 'exa' | 'jina';
+    /**
+     * Latency Ms
+     */
+    latency_ms: number;
+    /**
+     * Tools
+     */
+    tools: Array<string>;
+    /**
+     * Error
+     */
+    error: string | null;
+};
+
+/**
  * Snapshot
  */
 export type Snapshot = {
@@ -1806,7 +2127,7 @@ export type StudyGuideDocument = {
     /**
      * Schema Version
      */
-    schema_version?: '1.0';
+    schema_version?: '1.0' | '1.1';
     /**
      * Title
      */
@@ -1827,6 +2148,22 @@ export type StudyGuideDocument = {
      * Distill Run Id
      */
     distill_run_id: string;
+    /**
+     * Source Page Count
+     */
+    source_page_count?: number;
+    /**
+     * Selected Page Count
+     */
+    selected_page_count?: number;
+    /**
+     * Excluded Page Count
+     */
+    excluded_page_count?: number;
+    /**
+     * Content Selection Revision
+     */
+    content_selection_revision?: number;
     /**
      * Generated At
      */
@@ -2039,6 +2376,28 @@ export type VideosRequest = {
 };
 
 /**
+ * WipeResponse
+ */
+export type WipeResponse = {
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Run Id
+     */
+    run_id: string;
+    /**
+     * Wiped
+     */
+    wiped: boolean;
+    /**
+     * Objects Deleted
+     */
+    objects_deleted: number;
+};
+
+/**
  * CancelResponse
  */
 export type EntrypointsApiV1BdDistillSchemasCancelResponse = {
@@ -2070,6 +2429,106 @@ export type EntrypointsApiV1BdIngestionSchemasCancelResponse = {
     status: string;
 };
 
+/**
+ * PageQuality
+ *
+ * What the current Agentic AI run found on one page and what it did about it.
+ */
+export type EntrypointsApiV1BdIngestionSchemasPageQuality = {
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Agentic Run Id
+     */
+    agentic_run_id: string;
+    /**
+     * Page
+     */
+    page: number;
+    /**
+     * Page Kind
+     */
+    page_kind: string;
+    /**
+     * Status
+     */
+    status: 'done' | 'review_required';
+    /**
+     * Delivery Disposition
+     */
+    delivery_disposition: 'include' | 'discarded_blank' | 'image_only';
+    /**
+     * Issues
+     */
+    issues: Array<PageIssueView>;
+    /**
+     * Mechanical Fixes
+     */
+    mechanical_fixes: {
+        [key: string]: number;
+    };
+    /**
+     * Audit Warnings
+     */
+    audit_warnings: Array<string>;
+    /**
+     * Errors
+     */
+    errors: Array<string>;
+};
+
+/**
+ * PageQuality
+ *
+ * What Agentic AI found on a documentation page and how it was handled.
+ */
+export type EntrypointsApiV1DdIngestionSchemasPageQuality = {
+    /**
+     * Framework Slug
+     */
+    framework_slug: string;
+    /**
+     * Agentic Run Id
+     */
+    agentic_run_id: string;
+    /**
+     * Page
+     */
+    page: number;
+    /**
+     * Page Kind
+     */
+    page_kind: string;
+    /**
+     * Status
+     */
+    status: 'done' | 'review_required';
+    /**
+     * Delivery Disposition
+     */
+    delivery_disposition?: 'include';
+    /**
+     * Issues
+     */
+    issues: Array<PageQualityIssue>;
+    /**
+     * Mechanical Fixes
+     */
+    mechanical_fixes?: {
+        [key: string]: number;
+    };
+    /**
+     * Audit Warnings
+     */
+    audit_warnings?: Array<string>;
+    /**
+     * Errors
+     */
+    errors?: Array<string>;
+};
+
 export type GetHealthData = {
     body?: never;
     path?: never;
@@ -2083,6 +2542,22 @@ export type GetHealthResponses = {
      */
     200: unknown;
 };
+
+export type GetBdDistillCapabilitiesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/bd/distill/capabilities';
+};
+
+export type GetBdDistillCapabilitiesResponses = {
+    /**
+     * Successful Response
+     */
+    200: Capabilities;
+};
+
+export type GetBdDistillCapabilitiesResponse = GetBdDistillCapabilitiesResponses[keyof GetBdDistillCapabilitiesResponses];
 
 export type GetBdDistillBookIdRunsData = {
     body?: never;
@@ -2184,6 +2659,40 @@ export type GetBdDistillBookIdRunsCurrentResponses = {
 };
 
 export type GetBdDistillBookIdRunsCurrentResponse = GetBdDistillBookIdRunsCurrentResponses[keyof GetBdDistillBookIdRunsCurrentResponses];
+
+export type DeleteBdDistillBookIdRunsRunIdData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/distill/{book_id}/runs/{run_id}';
+};
+
+export type DeleteBdDistillBookIdRunsRunIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteBdDistillBookIdRunsRunIdError = DeleteBdDistillBookIdRunsRunIdErrors[keyof DeleteBdDistillBookIdRunsRunIdErrors];
+
+export type DeleteBdDistillBookIdRunsRunIdResponses = {
+    /**
+     * Successful Response
+     */
+    200: WipeResponse;
+};
+
+export type DeleteBdDistillBookIdRunsRunIdResponse = DeleteBdDistillBookIdRunsRunIdResponses[keyof DeleteBdDistillBookIdRunsRunIdResponses];
 
 export type GetBdDistillBookIdRunsRunIdData = {
     body?: never;
@@ -2288,6 +2797,74 @@ export type GetBdDistillBookIdRunsRunIdEventsResponses = {
      */
     200: unknown;
 };
+
+export type GetBdDistillBookIdRunsRunIdRagIndexData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/distill/{book_id}/runs/{run_id}/rag-index';
+};
+
+export type GetBdDistillBookIdRunsRunIdRagIndexErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetBdDistillBookIdRunsRunIdRagIndexError = GetBdDistillBookIdRunsRunIdRagIndexErrors[keyof GetBdDistillBookIdRunsRunIdRagIndexErrors];
+
+export type GetBdDistillBookIdRunsRunIdRagIndexResponses = {
+    /**
+     * Successful Response
+     */
+    200: RagIndexStatus;
+};
+
+export type GetBdDistillBookIdRunsRunIdRagIndexResponse = GetBdDistillBookIdRunsRunIdRagIndexResponses[keyof GetBdDistillBookIdRunsRunIdRagIndexResponses];
+
+export type PostBdDistillBookIdRunsRunIdRagIndexData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/distill/{book_id}/runs/{run_id}/rag-index';
+};
+
+export type PostBdDistillBookIdRunsRunIdRagIndexErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBdDistillBookIdRunsRunIdRagIndexError = PostBdDistillBookIdRunsRunIdRagIndexErrors[keyof PostBdDistillBookIdRunsRunIdRagIndexErrors];
+
+export type PostBdDistillBookIdRunsRunIdRagIndexResponses = {
+    /**
+     * Successful Response
+     */
+    202: RagIndexStatus;
+};
+
+export type PostBdDistillBookIdRunsRunIdRagIndexResponse = PostBdDistillBookIdRunsRunIdRagIndexResponses[keyof PostBdDistillBookIdRunsRunIdRagIndexResponses];
 
 export type GetBdDistillBookIdRunsRunIdReportData = {
     body?: never;
@@ -2672,6 +3249,74 @@ export type PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelResponses = {
 
 export type PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelResponse = PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelResponses[keyof PostBdIngestionBookIdAgenticRunsAgenticRunIdCancelResponses];
 
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Agentic Run Id
+         */
+        agentic_run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/content-selection';
+};
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionError = GetBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionErrors[keyof GetBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionErrors];
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionResponses = {
+    /**
+     * Successful Response
+     */
+    200: ContentSelectionResponse;
+};
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionResponse = GetBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionResponses[keyof GetBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionResponses];
+
+export type PutBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionData = {
+    body: ContentSelectionUpdate;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Agentic Run Id
+         */
+        agentic_run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/content-selection';
+};
+
+export type PutBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PutBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionError = PutBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionErrors[keyof PutBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionErrors];
+
+export type PutBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionResponses = {
+    /**
+     * Successful Response
+     */
+    200: ContentSelectionResponse;
+};
+
+export type PutBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionResponse = PutBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionResponses[keyof PutBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionResponses];
+
 export type GetBdIngestionBookIdAgenticRunsAgenticRunIdEventsData = {
     body?: never;
     path: {
@@ -3002,7 +3647,7 @@ export type GetBdIngestionBookIdPagesPageNoQualityResponses = {
     /**
      * Successful Response
      */
-    200: PageQuality;
+    200: EntrypointsApiV1BdIngestionSchemasPageQuality;
 };
 
 export type GetBdIngestionBookIdPagesPageNoQualityResponse = GetBdIngestionBookIdPagesPageNoQualityResponses[keyof GetBdIngestionBookIdPagesPageNoQualityResponses];
@@ -3897,6 +4542,40 @@ export type GetDdIngestionSlugPagesIdxResponses = {
 
 export type GetDdIngestionSlugPagesIdxResponse = GetDdIngestionSlugPagesIdxResponses[keyof GetDdIngestionSlugPagesIdxResponses];
 
+export type GetDdIngestionSlugPagesIdxQualityData = {
+    body?: never;
+    path: {
+        /**
+         * Slug
+         */
+        slug: string;
+        /**
+         * Idx
+         */
+        idx: number;
+    };
+    query?: never;
+    url: '/api/v1/dd/ingestion/{slug}/pages/{idx}/quality';
+};
+
+export type GetDdIngestionSlugPagesIdxQualityErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetDdIngestionSlugPagesIdxQualityError = GetDdIngestionSlugPagesIdxQualityErrors[keyof GetDdIngestionSlugPagesIdxQualityErrors];
+
+export type GetDdIngestionSlugPagesIdxQualityResponses = {
+    /**
+     * Successful Response
+     */
+    200: EntrypointsApiV1DdIngestionSchemasPageQuality;
+};
+
+export type GetDdIngestionSlugPagesIdxQualityResponse = GetDdIngestionSlugPagesIdxQualityResponses[keyof GetDdIngestionSlugPagesIdxQualityResponses];
+
 export type GetDdPipelineActiveData = {
     body?: never;
     path?: never;
@@ -4665,6 +5344,38 @@ export type GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameResponses = 
     200: unknown;
 };
 
+export type GetDdPipelineSynthSlugStudyChapterIdCodeZipData = {
+    body?: never;
+    path: {
+        /**
+         * Slug
+         */
+        slug: string;
+        /**
+         * Chapter Id
+         */
+        chapter_id: string;
+    };
+    query?: never;
+    url: '/api/v1/dd/pipeline/synth/{slug}/study/{chapter_id}/code.zip';
+};
+
+export type GetDdPipelineSynthSlugStudyChapterIdCodeZipErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetDdPipelineSynthSlugStudyChapterIdCodeZipError = GetDdPipelineSynthSlugStudyChapterIdCodeZipErrors[keyof GetDdPipelineSynthSlugStudyChapterIdCodeZipErrors];
+
+export type GetDdPipelineSynthSlugStudyChapterIdCodeZipResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
 export type DeleteDdPipelineSynthSlugWipeData = {
     body?: never;
     path: {
@@ -4935,6 +5646,107 @@ export type PostSettingsEndpointTestResponses = {
      */
     200: unknown;
 };
+
+export type GetSettingsSearchData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/settings/search';
+};
+
+export type GetSettingsSearchResponses = {
+    /**
+     * Successful Response
+     */
+    200: SearchSettingsView;
+};
+
+export type GetSettingsSearchResponse = GetSettingsSearchResponses[keyof GetSettingsSearchResponses];
+
+export type PutSettingsSearchDefaultData = {
+    body: SearchDefaultBody;
+    path?: never;
+    query?: never;
+    url: '/api/v1/settings/search/default';
+};
+
+export type PutSettingsSearchDefaultErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PutSettingsSearchDefaultError = PutSettingsSearchDefaultErrors[keyof PutSettingsSearchDefaultErrors];
+
+export type PutSettingsSearchDefaultResponses = {
+    /**
+     * Successful Response
+     */
+    200: SearchSettingsView;
+};
+
+export type PutSettingsSearchDefaultResponse = PutSettingsSearchDefaultResponses[keyof PutSettingsSearchDefaultResponses];
+
+export type PutSettingsSearchProviderIdData = {
+    body: SearchProviderBody;
+    path: {
+        /**
+         * Provider Id
+         */
+        provider_id: 'coelho_search' | 'tavily' | 'exa' | 'jina';
+    };
+    query?: never;
+    url: '/api/v1/settings/search/{provider_id}';
+};
+
+export type PutSettingsSearchProviderIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PutSettingsSearchProviderIdError = PutSettingsSearchProviderIdErrors[keyof PutSettingsSearchProviderIdErrors];
+
+export type PutSettingsSearchProviderIdResponses = {
+    /**
+     * Successful Response
+     */
+    200: SearchSettingsView;
+};
+
+export type PutSettingsSearchProviderIdResponse = PutSettingsSearchProviderIdResponses[keyof PutSettingsSearchProviderIdResponses];
+
+export type PostSettingsSearchProviderIdTestData = {
+    body?: never;
+    path: {
+        /**
+         * Provider Id
+         */
+        provider_id: 'coelho_search' | 'tavily' | 'exa' | 'jina';
+    };
+    query?: never;
+    url: '/api/v1/settings/search/{provider_id}/test';
+};
+
+export type PostSettingsSearchProviderIdTestErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostSettingsSearchProviderIdTestError = PostSettingsSearchProviderIdTestErrors[keyof PostSettingsSearchProviderIdTestErrors];
+
+export type PostSettingsSearchProviderIdTestResponses = {
+    /**
+     * Successful Response
+     */
+    200: SearchTestResult;
+};
+
+export type PostSettingsSearchProviderIdTestResponse = PostSettingsSearchProviderIdTestResponses[keyof PostSettingsSearchProviderIdTestResponses];
 
 export type GetYcsAdminIngestedChannelsData = {
     body?: never;

@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+import os
+
+DISTILL_EXECUTION_ENABLED = os.environ.get("BD_DISTILL_EXECUTION_ENABLED", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
 JSON_TYPE = "application/json"
 HTML_TYPE = "text/html; charset=utf-8"
 PDF_TYPE = "application/pdf"

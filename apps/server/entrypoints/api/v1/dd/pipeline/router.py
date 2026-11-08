@@ -56,7 +56,7 @@ async def pipeline_state(slug: str) -> dict:
     if synth:
         try:
             keys = await minio.list(synth_prefix)
-            study = any(k.endswith("/render-latest.json") for k in keys)
+            study = any(k.endswith(("/render-latest.json", "/render-v2-latest.json")) for k in keys)
         except Exception as e:
             logger.info(f"[pipeline-state] study probe failed: {e}")
             study = False

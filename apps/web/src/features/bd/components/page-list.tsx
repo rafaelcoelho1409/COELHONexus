@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { BookUnits } from "../domain/books";
+import type { ContentSelection } from "../entities";
 import {
   breadcrumb,
   filterPageRows,
@@ -29,6 +30,9 @@ export function PageList({
   following,
   live,
   flags,
+  selection,
+  selectionPending,
+  selectionError,
   onFollow,
   onPick,
 }: {
@@ -41,15 +45,26 @@ export function PageList({
   live: boolean;
   /** Whether the page needs review, has an unverified audit, is blank, or contains only an image. */
   flags: ReadonlyMap<number, PageFlag>;
+  /** Current reviewed Distill input selection. The source archive remains complete. */
+  selection: ContentSelection | null;
+  selectionPending: boolean;
+  selectionError: boolean;
   onFollow: (follow: boolean) => void;
   onPick: (page: number) => void;
 }) {
   const list = useRef<HTMLOListElement | null>(null);
   const [query, setQuery] = useState("");
   const [onlyReview, setOnlyReview] = useState(false);
+  const [showExcluded, setShowExcluded] = useState(false);
+  const includedPages = new Set(
+    selection?.pages.filter((item) => item.disposition === "include").map((item) => item.page_number) ?? [],
+  );
+  const selectionByPage = new Map(selection?.pages.map((item) => [item.page_number, item]) ?? []);
+  const includedRows = selection ? rows.filter((row) => includedPages.has(row.page)) : rows;
+  const eligibleRows = selection && !showExcluded ? includedRows : rows;
   const count = rows.length;
-  const reviewCount = rows.filter((row) => flags.get(row.page) === "review").length;
-  const searched = filterPageRows(rows, query);
+  const reviewCount = eligibleRows.filter((row) => flags.get(row.page) === "review").length;
+  const searched = filterPageRows(eligibleRows, query);
   const visibleRows =
     onlyReview && reviewCount > 0 ? searched.filter((row) => flags.get(row.page) === "review") : searched;
 
@@ -62,9 +77,9 @@ export function PageList({
     <section aria-labelledby="units-title">
       <div className="flex items-center justify-between gap-3">
         <h3 id="units-title" className="mono-label">
-          {units.plural[0]?.toUpperCase()}
-          {units.plural.slice(1)} · {count}
-          {total > 0 ? ` of ${total}` : ""}
+          {selection
+            ? `Pages for Distill · ${includedRows.length} of ${selection.included_page_count}`
+            : `${units.plural[0]?.toUpperCase()}${units.plural.slice(1)} · ${count}${total > 0 ? ` of ${total}` : ""}`}
         </h3>
         {live ? (
           <label className="flex min-h-9 items-center gap-2 text-xs text-muted-foreground">
@@ -81,6 +96,31 @@ export function PageList({
         onChange={(event) => setQuery(event.target.value)}
         className="mt-2 h-9 w-full min-w-0 rounded-sm border border-border bg-background px-2 text-sm"
       />
+      {selection ? (
+        <>
+          <p className="mt-2 text-xs text-muted-foreground">
+            The list starts with pages selected for Distill. Original pages are retained in the book archive.
+          </p>
+          {selection.excluded_page_count > 0 ? (
+            <label className="mt-2 flex min-h-9 items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={showExcluded}
+                onChange={(event) => setShowExcluded(event.target.checked)}
+              />
+              Show all source pages, including {selection.excluded_page_count} excluded from Distill
+            </label>
+          ) : null}
+        </>
+      ) : selectionPending ? (
+        <p role="status" className="mt-2 text-xs text-muted-foreground">
+          Loading Distill page selection. All source pages remain available.
+        </p>
+      ) : selectionError ? (
+        <p role="status" className="mt-2 text-xs text-muted-foreground">
+          Distill page selection is unavailable. Showing all source pages.
+        </p>
+      ) : null}
       {reviewCount > 0 ? (
         <label className="mt-2 flex min-h-9 items-center gap-2 text-xs text-muted-foreground">
           <input
@@ -91,9 +131,9 @@ export function PageList({
           Only {units.plural} that need review · {reviewCount}
         </label>
       ) : null}
-      {query.trim() || (onlyReview && reviewCount > 0) ? (
+      {query.trim() || (onlyReview && reviewCount > 0) || showExcluded ? (
         <p role="status" className="mt-1 text-xs text-muted-foreground">
-          Showing {visibleRows.length} of {count} {units.plural}
+          Showing {visibleRows.length} of {eligibleRows.length} source pages
         </p>
       ) : null}
       {count === 0 ? (
@@ -108,6 +148,7 @@ export function PageList({
             const chips = pageChips(row);
             const where = row.sectionPath.at(-1);
             const flag = flags.get(row.page);
+            const contentPage = selectionByPage.get(row.page);
             return (
               <li key={row.page}>
                 <button
@@ -134,6 +175,9 @@ export function PageList({
                     <span className={`text-xs font-medium ${FLAG_STYLE[flag]}`}>
                       {PAGE_FLAG_LABELS[flag]}
                     </span>
+                  ) : null}
+                  {contentPage?.disposition === "exclude" ? (
+                    <span className="text-xs font-medium text-warning-text">Excluded from Distill</span>
                   ) : null}
                 </button>
               </li>

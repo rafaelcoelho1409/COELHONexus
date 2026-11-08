@@ -243,7 +243,10 @@ async def load_chapters(blobs, slug: str, chapter_ids: list[str]) -> tuple[list[
     audit_failed: list[str] = []
     for chapter_id in chapter_ids:
         try:
-            render_blob = json.loads(await blobs.read_text(storage_keys.chapter_render_latest_key(slug, chapter_id)))
+            render_key = storage_keys.chapter_render_latest_key(
+                slug, chapter_id, graphs.pipeline.synth.params.version(),
+            )
+            render_blob = json.loads(await blobs.read_text(render_key))
             if not (render_blob.get("audit") or {}).get("audit_passed", True):
                 audit_failed.append(chapter_id)
                 continue

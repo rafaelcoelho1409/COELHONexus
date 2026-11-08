@@ -1,4 +1,5 @@
 from . import (
+    content_classifier,
     finding_verifier, 
     metadata_normalizer, 
     page_auditor, 
@@ -7,6 +8,7 @@ from . import (
 )
 
 __all__ = [
+    "content_classifier",
     "finding_verifier", 
     "metadata_normalizer", 
     "page_auditor", 

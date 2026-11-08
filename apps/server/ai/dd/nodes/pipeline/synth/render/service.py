@@ -329,6 +329,12 @@ async def finalize(state: graphs.pipeline.synth.render.states.RenderState, runti
         params.STEP, "artifacts_written",
         n_artifacts = len(artifacts), total_bytes = sum(a.size_bytes for a in artifacts), artifact_names = [a.name for a in artifacts],
     )
+    # Tutorial chapters also ship the code as a folder to run (each step's examples, the capstone and `main.py`).
+    code_files = domain.code_files(sections_ctx) if graphs.pipeline.synth.params.tutorial_mode() else {}
+    for relative, content in code_files.items():
+        await blobs.write(keys.artifact_key(slug, chapter_id, relative), content, content_type = "text/plain; charset=utf-8")
+    if code_files:
+        graphs.service.emit(params.STEP, "code_exported", n_files = len(code_files))
 
     # Fingerprint of the plan chapter this render was built from (fail-soft: a missing plan just leaves it empty, i.e. "valid").
     plan_hash = ""
@@ -353,6 +359,7 @@ async def finalize(state: graphs.pipeline.synth.render.states.RenderState, runti
         wall_ms = elapsed,
         # Passed explicitly: the schema's default "" makes the chapters API return None, which breaks the web's canvas repaint after a refresh.
         thread_id = thread_id,
+        code_files = sorted(code_files),
         plan_sources_hash = plan_hash,
         **coverage,
     )

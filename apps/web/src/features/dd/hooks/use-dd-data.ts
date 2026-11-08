@@ -19,6 +19,8 @@ import {
   getDdIngestionSlugManifestOptions,
   getDdIngestionSlugManifestQueryKey,
   getDdIngestionSlugPagesIdxOptions,
+  getDdIngestionSlugPagesIdxQuality,
+  getDdIngestionSlugPagesIdxQualityQueryKey,
   getDdIngestionSlugPagesIdxQueryKey,
   postDdIngestionRuns,
   postDdIngestionRunsRunIdCancel,
@@ -39,6 +41,7 @@ import {
   manifestSchema,
   type PageVersion,
   pageBodySchema,
+  pageQualitySchema,
   resolverCatalogSchema,
   runStatusSchema,
   startRunResponseSchema,
@@ -228,6 +231,22 @@ export function usePageBody(slug: string | null, idx: number | null, version: Pa
     select: parsePageBody,
   });
   return { data: query.data ?? null, isPending: query.isPending, isError: query.isError };
+}
+
+/** GET /dd/ingestion/{slug}/pages/{idx}/quality — the finalized page's audit and repair report. */
+export function usePageQuality(slug: string, idx: number, agenticRunId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: [...getDdIngestionSlugPagesIdxQualityQueryKey({ path: { slug, idx } }), agenticRunId],
+    queryFn: async () => {
+      const result = await getDdIngestionSlugPagesIdxQuality({
+        path: { slug, idx },
+        throwOnError: true,
+      });
+      return pageQualitySchema.parse(result.data);
+    },
+    retry: false,
+    enabled,
+  });
 }
 
 /** GET /dd/ingestion/runs/{run_id}/pages/{idx} — page bodies from the in-flight raw-to-agentic manifest. */

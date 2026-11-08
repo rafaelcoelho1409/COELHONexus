@@ -14,6 +14,8 @@ Credentials are loaded from secret via secretRef
 */}}
 {{- define "coelhonexus.commonEnvVars" -}}
 ENVIRONMENT: "{{ .Values.environment }}"
+DD_PLANNER_VERSION: "{{ .Values.planner.version | default "v2" }}"
+DD_SYNTH_VERSION: "{{ .Values.synth.version | default "v2" }}"
 SERVER_HOST: "coelhonexus-server"
 LLM_ENDPOINT_URL: "{{ .Values.llm.endpoint.url }}"
 LLM_API_KEY: "{{ .Values.llm.endpoint.apiKey }}"

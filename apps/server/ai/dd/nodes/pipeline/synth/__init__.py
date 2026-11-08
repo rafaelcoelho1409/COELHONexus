@@ -4,6 +4,6 @@ Import order matters: a node's `domain` reads the packages it builds on at modul
 packages load from the bottom up."""
 from __future__ import annotations
 
-from . import sawc_derive, render, outline, digest, sawc, checklist, mgsr, book_harmonize
+from . import sawc_derive, render, outline, digest, sawc, checklist, mgsr, book_harmonize, ledger_prepare, verify
 
-__all__ = ["book_harmonize", "checklist", "digest", "mgsr", "outline", "render", "sawc", "sawc_derive"]
+__all__ = ["book_harmonize", "checklist", "digest", "ledger_prepare", "mgsr", "outline", "render", "sawc", "sawc_derive", "verify"]

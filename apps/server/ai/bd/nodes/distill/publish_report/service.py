@@ -160,6 +160,10 @@ async def publish_report(
     review_notes = [
         "This is an automated draft. No representative human-reviewed evaluation set has been run for this book."
     ]
+    review_notes.append(
+        f"Distill processed {state['selected_page_count']} of {state['expected_page_count']} physical pages "
+        f"using content-selection revision {state['content_selection_revision']}. Excluded pages remain available in Ingestion."
+    )
     for page in source_pages:
         if page.get("review_required"):
             review_notes.append(f"Page {page['page_number']} was marked for review during ingestion quality assurance.")
@@ -198,6 +202,10 @@ async def publish_report(
         extraction_run_id = state["extraction_run_id"],
         ingestion_ai_run_id = ingestion_ai_run_id,
         distill_run_id = run_id,
+        source_page_count = state["expected_page_count"],
+        selected_page_count = state["selected_page_count"],
+        excluded_page_count = state["expected_page_count"] - state["selected_page_count"],
+        content_selection_revision = state["content_selection_revision"],
         generated_at = state["run_created_at"],
         central_thesis = book_synthesis.central_thesis,
         central_thesis_attribution = attribution_for(
@@ -231,6 +239,7 @@ async def publish_report(
     structural_quality = domains.bd.distill.evaluation.assess_report_structure(
         report,
         expected_page_count = state["expected_page_count"],
+        expected_page_numbers = [page["page_number"] for page in source_pages],
         source_pages = source_pages,
         source_text_by_page = source_text_by_page,
     )

@@ -48,6 +48,7 @@ def assess_report_structure(
     report: domains.bd.distill.schemas.StudyGuideDocument,
     *,
     expected_page_count: int,
+    expected_page_numbers: list[int] | None = None,
     source_pages: list[dict],
     source_text_by_page: dict[int, str],
 ) -> domains.bd.distill.schemas.StructuralQuality:
@@ -55,6 +56,9 @@ def assess_report_structure(
     if expected_page_count < 1:
         raise ValueError("expected_page_count must be positive")
     errors: list[str] = []
+    expected_pages = set(expected_page_numbers or range(1, expected_page_count + 1))
+    if not expected_pages or any(type(number) is not int or number < 1 or number > expected_page_count for number in expected_pages):
+        raise ValueError("expected_page_numbers must be non-empty physical page numbers in range")
     pages = {
         page["page_number"]: page
         for page in source_pages
@@ -62,7 +66,7 @@ def assess_report_structure(
     }
     if len(pages) != len(source_pages):
         errors.append("source_page_manifest_has_invalid_or_duplicate_page_numbers")
-    if set(pages) != set(range(1, expected_page_count + 1)):
+    if set(pages) != expected_pages:
         errors.append("source_page_manifest_does_not_cover_expected_page_range")
 
     substantive_pages = {
@@ -76,9 +80,9 @@ def assess_report_structure(
     accounted_pages = covered_pages | set(report.uncovered_pages)
     if covered_pages & set(report.uncovered_pages):
         errors.append("report_page_coverage_sets_overlap")
-    if accounted_pages != set(range(1, expected_page_count + 1)):
+    if accounted_pages != expected_pages:
         errors.append("report_page_coverage_does_not_account_for_every_page")
-    if report.covered_pages and (min(report.covered_pages) < 1 or max(report.covered_pages) > expected_page_count):
+    if set(report.covered_pages) - expected_pages:
         errors.append("report_contains_out_of_range_covered_pages")
 
     references = list(_all_source_refs(report))
@@ -117,6 +121,8 @@ def assess_report_structure(
     ) + sum(glossary.verification_status != "verified" for glossary in report.glossary)
     return domains.bd.distill.schemas.StructuralQuality(
         expected_page_count = expected_page_count,
+        selected_page_count = len(expected_pages),
+        excluded_page_count = expected_page_count - len(expected_pages),
         substantive_page_count = len(substantive_pages),
         covered_substantive_pages = len(covered_substantive),
         page_coverage_rate = coverage_rate,
@@ -126,7 +132,7 @@ def assess_report_structure(
         supported_evidence_quote_count = supported_quotes,
         unverified_lesson_count = unverified_count,
         uncovered_substantive_pages = uncovered,
-        citation_integrity_passed = not citation_errors and set(pages) == set(range(1, expected_page_count + 1)),
+        citation_integrity_passed = not citation_errors and set(pages) == expected_pages,
         quote_support_passed = supported_quotes == len(quotes),
         errors = sorted(set(errors)),
     )

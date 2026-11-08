@@ -72,6 +72,8 @@ class RenderResult(BaseModel):
     wall_ms:               int
     # Persisted so the Study chapter strip can re-open the LangGraph canvas after a page refresh.
     thread_id:             str = ""
+    # Tutorial chapters: the files of the chapter's `code/` folder (keys relative to the chapter's folder). Empty for a v1 chapter.
+    code_files:            list[str] = Field(default_factory = list)
     # Fingerprint of the plan chapter (title + sources) this render was built
     # from. Resume and the chapter list use it to tell a render from the CURRENT
     # plan from a leftover of an older one. "" = rendered before this field

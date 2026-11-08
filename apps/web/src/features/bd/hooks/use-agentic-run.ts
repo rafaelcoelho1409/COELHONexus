@@ -98,6 +98,8 @@ export function useAgenticRun(bookId: string, snapshot: BookSnapshot): AgenticRu
                 processed_pages: [],
                 active_audit_pages: [],
                 active_repair_pages: [],
+                classified_pages: [],
+                active_classification_pages: [],
               },
               error: null,
               cancelRequested: false,

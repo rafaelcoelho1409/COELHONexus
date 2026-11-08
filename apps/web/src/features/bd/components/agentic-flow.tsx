@@ -76,9 +76,11 @@ const ARROW = { type: MarkerType.ArrowClosed, width: 14, height: 14 } as const;
 export function AgenticFlow({
   views,
   onOpenNode,
+  ariaLabel = "Book Distiller agentic ingestion graph",
 }: {
   views: readonly AgenticNodeView[];
   onOpenNode: (nodeId: string) => void;
+  ariaLabel?: string;
 }) {
   const nodes: AgenticFlowNode[] = views.map((view, index) => ({
     id: view.id,
@@ -118,7 +120,7 @@ export function AgenticFlow({
         height:
           PADDING * 2 + views.length * NODE_HEIGHT + Math.max(0, views.length - 1) * NODE_GAP + CREDIT_ROOM,
       }}
-      aria-label="Book Distiller agentic ingestion graph"
+      aria-label={ariaLabel}
     >
       <ReactFlow
         nodes={nodes}

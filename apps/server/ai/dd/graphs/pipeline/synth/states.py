@@ -20,6 +20,10 @@ class SynthState(TypedDict, total = False):
     digest_path:    Optional[str]
     digest_stats:   Optional[dict]
 
+    # Synth v2's deterministic ledger stage writes the digest-compatible artifact consumed by the existing section writer.
+    ledger_path:    Optional[str]
+    ledger_stats:   Optional[dict]
+
     sawc_path:      Optional[str]
     sawc_stats:     Optional[dict]
 
@@ -34,6 +38,9 @@ class SynthState(TypedDict, total = False):
 
     chapter_path:   Optional[str]
     chapter_stats:  Optional[dict]
+
+    verify_path:    Optional[str]
+    verify_stats:   Optional[dict]
 
     refine_iter:           Optional[int]
     # Plateau detection: halt when |this_score - prev_score| < PLATEAU_DELTA AND iter >= 2.

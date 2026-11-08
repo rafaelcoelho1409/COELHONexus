@@ -75,7 +75,7 @@ async def get_book(book_id: str) -> dict:
     if snapshot is None:
         raise HTTPException(status_code = 404, detail = f"book {book_id!r} not found")
     agentic_run = await domains.bd.ingestion.ai.service.read_current_ingestion_ai_run(book_id)
-    snapshot["agentic"] = _agentic_status(agentic_run) if agentic_run is not None else None
+    snapshot["agentic"] = await _agentic_status(agentic_run) if agentic_run is not None else None
     metadata = await domains.bd.ingestion.ai.service.read_current_ingestion_ai_metadata(book_id)
     if metadata is not None:
         snapshot["manifest"]["title"] = metadata["title"]
@@ -228,7 +228,71 @@ async def get_agentic_run(book_id: str, agentic_run_id: str) -> dict:
         raise HTTPException(status_code = 404, detail = str(error)) from error
     if manifest is None:
         raise HTTPException(status_code = 404, detail = "Agentic ingestion run not found")
-    return _agentic_status(manifest)
+    return await _agentic_status(manifest)
+
+
+@router.get(
+    "/{book_id}/agentic/runs/{agentic_run_id}/content-selection",
+    response_model = schemas.ContentSelectionResponse,
+)
+async def get_agentic_content_selection(book_id: str, agentic_run_id: str) -> dict:
+    manifest = await domains.bd.ingestion.ai.service.read_ingestion_ai_run(book_id, agentic_run_id)
+    if manifest is None:
+        raise HTTPException(status_code = 404, detail = "Agentic ingestion run not found")
+    if manifest["status"] != "done":
+        raise HTTPException(status_code = 409, detail = "Content selection is available after ingestion completes")
+    selected = await domains.bd.ingestion.ai.selection.read_selection(book_id, agentic_run_id)
+    if selected is None:
+        raise HTTPException(status_code = 404, detail = "Content selection not found")
+    selection, _, digest = selected
+    return _content_selection_response(selection, digest)
+
+
+@router.put(
+    "/{book_id}/agentic/runs/{agentic_run_id}/content-selection",
+    response_model = schemas.ContentSelectionResponse,
+)
+async def update_agentic_content_selection(
+    book_id: str,
+    agentic_run_id: str,
+    body: schemas.ContentSelectionUpdate,
+) -> dict:
+    manifest = await domains.bd.ingestion.ai.service.read_ingestion_ai_run(book_id, agentic_run_id)
+    if manifest is None:
+        raise HTTPException(status_code = 404, detail = "Agentic ingestion run not found")
+    if manifest["status"] != "done":
+        raise HTTPException(status_code = 409, detail = "Content selection can be reviewed after ingestion completes")
+    try:
+        selection = await domains.bd.ingestion.ai.selection.apply_overrides(
+            book_id,
+            agentic_run_id,
+            [row.model_dump() for row in body.overrides],
+            expected_revision = body.expected_revision,
+        )
+        selected = await domains.bd.ingestion.ai.selection.read_selection(book_id, agentic_run_id)
+        if selected is None:
+            raise RuntimeError("content selection disappeared after review")
+        _, _, digest = selected
+        return _content_selection_response(selection, digest)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code = 404, detail = str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code = 409, detail = str(error)) from error
+
+
+def _content_selection_response(selection, digest: str) -> dict:
+    return {
+        "book_id": selection.book_id,
+        "extraction_run_id": selection.extraction_run_id,
+        "agentic_run_id": selection.agentic_run_id,
+        "classifier_version": selection.classifier_version,
+        "revision": selection.revision,
+        "expected_page_count": selection.expected_page_count,
+        "included_page_count": sum(page.disposition == "include" for page in selection.pages),
+        "excluded_page_count": sum(page.disposition == "exclude" for page in selection.pages),
+        "sha256": digest,
+        "pages": [page.model_dump(mode = "json") for page in selection.pages],
+    }
 
 
 @router.get(
@@ -449,8 +513,27 @@ def _pages_where(manifest: dict, keep) -> list[int]:
     return sorted(page["page_number"] for page in manifest.get("pages", []) if keep(page))
 
 
-def _agentic_status(manifest: dict) -> dict:
+async def _agentic_status(manifest: dict) -> dict:
     progress = manifest["progress"]
+    selected_page_count = manifest.get("selected_page_count", 0)
+    excluded_page_count = manifest.get("excluded_page_count", 0)
+    selection_revision = manifest.get("content_selection_revision")
+    if manifest.get("status") == "done":
+        try:
+            current = await domains.bd.ingestion.ai.selection.read_selection(
+                manifest["book_id"], manifest["agentic_run_id"],
+            )
+            if current is not None:
+                selection, _, _ = current
+                selected_page_count = sum(page.disposition == "include" for page in selection.pages)
+                excluded_page_count = sum(page.disposition == "exclude" for page in selection.pages)
+                selection_revision = selection.revision
+        except Exception as error:  # noqa: BLE001 — keep the run-status response available during storage outages.
+            logger.warning(
+                "[bd-ingestion] couldn't load reviewed selection for run %s (%s)",
+                manifest.get("agentic_run_id"),
+                type(error).__name__,
+            )
     return {
         "book_id": manifest["book_id"],
         "extraction_run_id": manifest["extraction_run_id"],
@@ -461,6 +544,9 @@ def _agentic_status(manifest: dict) -> dict:
         "quality_status": manifest.get("quality_status"),
         "delivered_page_count": manifest.get("delivered_page_count", 0),
         "discarded_blank_page_count": manifest.get("discarded_blank_page_count", 0),
+        "selected_page_count": selected_page_count,
+        "excluded_page_count": excluded_page_count,
+        "content_selection_revision": selection_revision,
         "review_page_count": manifest.get("review_page_count", 0),
         "review_pages": _pages_where(manifest, lambda page: page["status"] == "review_required"),
         "unverified_page_count": manifest.get("unverified_page_count", 0),

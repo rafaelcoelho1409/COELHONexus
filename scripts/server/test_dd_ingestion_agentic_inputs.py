@@ -95,8 +95,12 @@ async def run(store: FakeStore) -> FakeGraph:
 
 
 async def test_normalize_source() -> None:
-    check("the banner, the footer links, the rule above them and the fence attribute go", await service.normalize_source(RAW), CLEAN)
-    check("a normalized page is unchanged by a second pass", await service.normalize_source(CLEAN), CLEAN)
+    normalized, mechanical_fixes = await service.normalize_source(RAW)
+    check("the banner, the footer links, the rule above them and the fence attribute go", normalized, CLEAN)
+    check("normalization reports the automatic cleanup", bool(mechanical_fixes), True)
+    normalized_again, fixes_again = await service.normalize_source(CLEAN)
+    check("a normalized page is unchanged by a second pass", normalized_again, CLEAN)
+    check("a second pass reports no automatic cleanup", fixes_again, {})
 
 
 async def test_fresh_run() -> None:
@@ -131,7 +135,9 @@ async def test_unreadable_page_is_audited_as_it_came() -> None:
     real = domains.dd.ingestion.corpus_normalize.domain.normalize_doc
     domains.dd.ingestion.corpus_normalize.domain.normalize_doc = broken
     try:
-        check("a page the normalizer cannot read is kept as it came", await service.normalize_source(RAW), RAW)
+        normalized, mechanical_fixes = await service.normalize_source(RAW)
+        check("a page the normalizer cannot read is kept as it came", normalized, RAW)
+        check("a failed normalizer reports no automatic cleanup", mechanical_fixes, {})
     finally:
         domains.dd.ingestion.corpus_normalize.domain.normalize_doc = real
 

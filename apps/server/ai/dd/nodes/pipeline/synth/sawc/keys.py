@@ -7,16 +7,26 @@ def versioned_blob_key(slug: str, chapter_id: str, manifest_hash: str) -> str:
 
 
 def latest_blob_key(slug: str, chapter_id: str) -> str:
-    return f"dd/{slug}/synth/{chapter_id}/sawc-latest.json"
+    from ai.dd.graphs.pipeline.synth import keys
+
+    return keys.latest_key(slug, chapter_id, "sawc")
 
 
 def outline_latest_key(slug: str, chapter_id: str) -> str:
-    return f"dd/{slug}/synth/{chapter_id}/outline-latest.json"
+    from ai.dd.graphs.pipeline.synth import keys
+
+    return keys.latest_key(slug, chapter_id, "outline")
 
 
 def digest_latest_key(slug: str, chapter_id: str) -> str:
-    return f"dd/{slug}/synth/{chapter_id}/digest-latest.json"
+    from ai.dd.graphs.pipeline.synth import keys
+    from ai.dd.graphs.pipeline.synth import params
+
+    artifact = "ledger" if params.is_v2() else "digest"
+    return keys.latest_key(slug, chapter_id, artifact)
 
 
 def mgsr_latest_key(slug: str, chapter_id: str) -> str:
-    return f"dd/{slug}/synth/{chapter_id}/mgsr-latest.json"
+    from ai.dd.graphs.pipeline.synth import keys
+
+    return keys.latest_key(slug, chapter_id, "mgsr")

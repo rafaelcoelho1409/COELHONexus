@@ -16,9 +16,14 @@ class DistillRunState(TypedDict, total = False):
     source_manifest_sha256: str
     ingestion_ai_manifest_key: str
     ingestion_ai_manifest_sha256: str
+    content_selection_key: str
+    content_selection_sha256: str
+    content_selection_revision: int
     expected_page_count: int
+    selected_page_count: int
     run_created_at: float
     title: str
+    source_chapters: list[dict[str, Any]]
     source_pages: list[domains.bd.distill.entities.SourcePage]
     unit_refs: list[domains.bd.distill.entities.UnitRef]
     completed_units: Annotated[list[domains.bd.distill.entities.UnitRef], operator.add]

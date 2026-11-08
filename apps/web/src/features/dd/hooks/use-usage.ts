@@ -8,7 +8,7 @@ import {
   getDdPipelineSynthDebugGraphThreadIdLlmCountersQueryKey,
 } from "@/shared/api";
 
-import { fetchPlannerHealth, fetchUsage } from "../api";
+import { fetchPlannerHealth, fetchUsageForQuery } from "../api";
 import type { ChapterCell } from "../domain/chapters";
 import type { UsagePayload } from "../entities";
 import { type RunStage, USAGE_REFRESH_MS } from "../params";
@@ -20,7 +20,7 @@ function usageQuery(stage: RunStage, threadId: string, live: boolean) {
       stage === "planner"
         ? getDdPipelinePlannerDebugGraphThreadIdLlmCountersQueryKey({ path })
         : getDdPipelineSynthDebugGraphThreadIdLlmCountersQueryKey({ path }),
-    queryFn: () => fetchUsage(stage, threadId),
+    queryFn: () => fetchUsageForQuery(stage, threadId),
     // While a run is live the counters move; afterwards they are final.
     refetchInterval: live ? USAGE_REFRESH_MS : (false as const),
     retry: false,
@@ -40,21 +40,48 @@ export function useRunUsage(
   return query.data ?? null;
 }
 
-export type ChapterUsage = { cell: ChapterCell; usage: UsagePayload | null };
+/** Usage plus request state for a sheet or graph-node drawer. */
+export function useRunUsageState(
+  stage: RunStage,
+  threadId: string | null,
+  { live, enabled = true }: { live: boolean; enabled?: boolean },
+) {
+  const query = useQuery({
+    ...usageQuery(stage, threadId ?? "", live),
+    enabled: enabled && threadId !== null,
+  });
+  return {
+    usage: query.data ?? null,
+    loading: query.isLoading,
+    failed: query.isError,
+  };
+}
+
+export type ChapterUsage = {
+  cell: ChapterCell;
+  usage: UsagePayload | null;
+  loading: boolean;
+  failed: boolean;
+};
 
 /** LLM usage of every chapter that has a thread — rendered ones and the one running now. */
 export function useChapterUsage(
   cells: readonly ChapterCell[],
   { live, enabled = true }: { live: boolean; enabled?: boolean },
 ): ChapterUsage[] {
-  const withThread = cells.filter((cell) => cell.threadId !== null);
+  const withThread = cells.filter((cell) => cell.threadId !== null && cell.synthEligible !== false);
   const results = useQueries({
     queries: withThread.map((cell) => ({
       ...usageQuery("synth", cell.threadId ?? "", live && cell.status === "running"),
       enabled,
     })),
   });
-  return withThread.map((cell, index) => ({ cell, usage: results[index]?.data ?? null }));
+  return withThread.map((cell, index) => ({
+    cell,
+    usage: results[index]?.data ?? null,
+    loading: results[index]?.isLoading ?? false,
+    failed: results[index]?.isError ?? false,
+  }));
 }
 
 /** How the latest plan of this framework was produced. */

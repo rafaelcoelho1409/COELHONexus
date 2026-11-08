@@ -12,6 +12,7 @@ import {
   pipelineFigures,
   planHealthView,
   usageFigures,
+  usageGroupingRows,
   usageRows,
 } from "./usage";
 
@@ -73,6 +74,22 @@ describe("usage payloads", () => {
       usageRows("synth", mergeUsage([usagePayloadSchema.parse({ by_node: { mystery: { calls: 1 } } })]))[0]
         ?.label,
     ).toBe("mystery");
+  });
+
+  it("regroups the same calls by node, model, or node and model, with an optional node filter", () => {
+    expect(usageGroupingRows("planner", planner, "node").map((row) => row.node)).toEqual([
+      "Off-topic filter",
+      "Chapter propose",
+    ]);
+    expect(usageGroupingRows("planner", planner, "model").map((row) => row.model)).toEqual([
+      "vendor-a/model-small",
+      "vendor-b/model-large",
+    ]);
+    expect(usageGroupingRows("planner", planner, "node_model").map((row) => [row.node, row.model])).toEqual([
+      ["Off-topic filter", "vendor-a/model-small"],
+      ["Off-topic filter", "vendor-b/model-large"],
+    ]);
+    expect(usageGroupingRows("planner", planner, "model", "chapter_propose")).toEqual([]);
   });
 
   it("words the figures, and shows reasoning tokens only when there were some", () => {

@@ -111,6 +111,15 @@ def agentic_quality_report_key(book_id: str, agentic_run_id: str) -> str:
     return f"{agentic_prefix(book_id, agentic_run_id)}quality-report.json"
 
 
+def agentic_content_selection_key(book_id: str, agentic_run_id: str, revision: int) -> str:
+    _positive_page(revision)
+    return f"{agentic_prefix(book_id, agentic_run_id)}content-selection/revisions/{revision:05d}.json"
+
+
+def agentic_current_content_selection_key(book_id: str, agentic_run_id: str) -> str:
+    return f"{agentic_prefix(book_id, agentic_run_id)}content-selection/current.json"
+
+
 def previous_raw_prefix(book_id: str, extraction_id: str) -> str:
     return f"{previous_extraction_prefix(book_id, extraction_id)}raw/"
 

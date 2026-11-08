@@ -222,15 +222,21 @@ export function ChapterStrip({
                 </button>
               </div>
               <div className="flex items-center justify-between gap-2 pl-6">
-                <span className="font-mono text-xs text-muted-foreground">{fmtMs(cell.wallMs)}</span>
+                <span className="font-mono text-xs text-muted-foreground">
+                  {cell.synthEligible === false ? "Excluded from Synth" : fmtMs(cell.wallMs)}
+                </span>
                 <span className="relative z-10 flex items-center">
                   <button
                     type="button"
                     aria-label={`Run only ${cell.title}`}
                     data-testid={`chapter-run-${cell.id}`}
                     onClick={() => onRun(cell.id)}
-                    disabled={!runEnabled}
-                    title={runTitle || "Run only this chapter"}
+                    disabled={!runEnabled || cell.synthEligible === false}
+                    title={
+                      cell.synthEligible === false
+                        ? cell.exclusionReason || "Reference-only chapter"
+                        : runTitle || "Run only this chapter"
+                    }
                     className={ICON_BUTTON}
                   >
                     <Play className="size-4" aria-hidden />
@@ -264,6 +270,21 @@ export function ChapterStrip({
                   )}
                 </span>
               </div>
+              {cell.synthEligible === false && cell.exclusionReason ? (
+                <p className="ml-6 pb-2 text-xs text-muted-foreground">{cell.exclusionReason}</p>
+              ) : null}
+              {(cell.sourceFiles?.length ?? 0) > 0 ? (
+                <details className="relative z-10 ml-6 pb-2">
+                  <summary className="min-h-9 cursor-pointer py-2 text-xs text-muted-foreground">
+                    {cell.sourceFiles?.length} source {cell.sourceFiles?.length === 1 ? "file" : "files"}
+                  </summary>
+                  <ul className="list-disc space-y-1 break-all pl-5 font-mono text-xs text-muted-foreground">
+                    {cell.sourceFiles?.map((file) => (
+                      <li key={file}>{file}</li>
+                    ))}
+                  </ul>
+                </details>
+              ) : null}
             </div>
           </li>
         ))}
@@ -363,7 +384,7 @@ export function RunBar({
             className="px-2"
             data-testid={`${testId}-wipe`}
             onClick={() => void controls.wipe()}
-            disabled={busy}
+            disabled={busy || blockedMessage !== null}
           >
             Wipe
           </ActionButton>

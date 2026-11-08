@@ -26,6 +26,31 @@ export function plannerLiveText(ev: StageEvent): string {
       if (kind === "done")
         return `✓ ${fmtInt(num(ev, "files"))} files, ${Math.trunc(num(ev, "total_bytes") / 1024)} KB`;
       return "";
+    case "page_cards":
+      if (kind === "start") return "· creating cards for " + fmtInt(num(ev, "n_pages")) + " pages…";
+      if (kind === "done")
+        return (
+          "✓ kept " +
+          fmtInt(num(ev, "n_kept")) +
+          "/" +
+          fmtInt(num(ev, "n_pages")) +
+          " pages · " +
+          fmtInt(num(ev, "n_fallback_cards")) +
+          " fallback"
+        );
+      return "";
+    case "chapter_design":
+      if (kind === "start")
+        return "· scoring chapter partitions for " + fmtInt(num(ev, "n_pages")) + " pages…";
+      if (kind === "done")
+        return (
+          "✓ " +
+          fmtInt(num(ev, "n_chapters")) +
+          " chapters · " +
+          fmtInt(num(ev, "n_pages")) +
+          " pages assigned"
+        );
+      return "";
     case "off_topic":
       if (kind === "start") return `· filtering ${fmtInt(num(ev, "files"))} files…`;
       if (kind === "anchors_embedded") return "· anchors embedded (pos + neg)";
@@ -62,7 +87,7 @@ export function plannerLiveText(ev: StageEvent): string {
         return `✓ ${fmtInt(num(ev, "n_assigned"))} assigned${failedSuffix(num(ev, "n_failed"))}`;
       return "";
     case "chapter_select":
-      if (kind === "start") return `· greedy coverage over ${fmtInt(num(ev, "n_proposals"))} proposals…`;
+      if (kind === "start") return "· checking " + fmtInt(num(ev, "n_proposals")) + " designed chapters…";
       if (kind === "done") {
         return `✓ ${fmtInt(num(ev, "n_chapters"))} chapters selected · ${Math.round(num(ev, "coverage") * 100)}% coverage`;
       }
@@ -93,6 +118,10 @@ export function synthLiveText(ev: StageEvent): string {
   const kind = ev.kind || "";
   const chapter = str(ev, "chapter_title") || str(ev, "chapter_id") || "chapter";
   if (kind === "start") return `· starting ${ev.step === "synth" ? "" : `${ev.step} for `}${chapter}…`;
+  if (ev.step === "ledger_prepare" && kind === "done")
+    return `✓ assigned ${fmtInt(num(ev, "n_assigned"))}/${fmtInt(num(ev, "n_best_code"))} canonical examples`;
+  if (ev.step === "verify" && kind === "done")
+    return `✓ ${str(ev, "status")}: ${fmtInt(num(ev, "verified"))} verified · ${fmtInt(num(ev, "unverified"))} unverified · ${fmtInt(num(ev, "failed"))} failed`;
   if (kind === "done") return `✓ done (${num(ev, "wall_ms")} ms)`;
   if (ev.step === "digest_construct" && kind === "sources_loaded")
     return `· sources loaded (${num(ev, "n_sources")} files)`;

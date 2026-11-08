@@ -34,6 +34,34 @@ export const PLANNER_NODES: StageNode[] = [
   { id: "plan_write", label: "Plan write", field: "plan_path", stats: "plan_write_stats" },
 ];
 
+export const PLANNER_V2_NODES: StageNode[] = [
+  { id: "corpus_load", label: "Corpus load", field: "raw_files", stats: "corpus_stats" },
+  { id: "page_cards", label: "Page cards", field: "page_cards_ref", stats: "page_cards_stats" },
+  {
+    id: "chapter_design",
+    label: "Chapter design",
+    field: "chapter_proposals_ref",
+    stats: "chapter_design_stats",
+  },
+  { id: "chapter_select", label: "Chapter select", field: "chapter_plan_ref", stats: "select_stats" },
+  {
+    id: "order_chapters",
+    label: "Order chapters",
+    field: "chapter_order_ref",
+    stats: "order_chapters_stats",
+  },
+  { id: "plan_write", label: "Plan write", field: "plan_path", stats: "plan_write_stats" },
+];
+
+export const ALL_PLANNER_NODES: StageNode[] = [
+  ...PLANNER_NODES,
+  ...PLANNER_V2_NODES.filter((node) => !PLANNER_NODES.some((legacy) => legacy.id === node.id)),
+];
+
+export function plannerNodesFor(implemented?: readonly string[]): StageNode[] {
+  return implemented?.includes("page_cards") ? PLANNER_V2_NODES : PLANNER_NODES;
+}
+
 export const SYNTH_NODES: StageNode[] = [
   { id: "outline_sdp", label: "Outline (SDP)", field: "outline_path", stats: "outline_stats" },
   { id: "digest_construct", label: "Digest", field: "digest_path", stats: "digest_stats" },
@@ -44,7 +72,30 @@ export const SYNTH_NODES: StageNode[] = [
   { id: "render_audit_write", label: "Render + audit", field: "chapter_path", stats: "chapter_stats" },
 ];
 
-export const STAGE_NODES: Record<RunStage, StageNode[]> = { planner: PLANNER_NODES, synth: SYNTH_NODES };
+export const SYNTH_V2_NODES: StageNode[] = [
+  { id: "outline_sdp", label: "Outline (SDP)", field: "outline_path", stats: "outline_stats" },
+  { id: "ledger_prepare", label: "Code ledger", field: "ledger_path", stats: "ledger_stats" },
+  { id: "sawc_write", label: "SAWC write", field: "sawc_path", stats: "sawc_stats" },
+  { id: "sawc_derive", label: "SAWC derive + capstone", field: "derive_stats", stats: "derive_stats" },
+  { id: "verify", label: "Code verification", field: "verify_path", stats: "verify_stats" },
+  { id: "checklist_eval", label: "Checklist eval", field: "checklist_path", stats: "checklist_stats" },
+  { id: "mgsr_replan", label: "MGSR replan", field: "mgsr_path", stats: "mgsr_stats" },
+  { id: "render_audit_write", label: "Render + audit", field: "chapter_path", stats: "chapter_stats" },
+];
+
+export const ALL_SYNTH_NODES: StageNode[] = [
+  ...SYNTH_NODES,
+  ...SYNTH_V2_NODES.filter((node) => !SYNTH_NODES.some((legacy) => legacy.id === node.id)),
+];
+
+export function synthNodesFor(implemented?: readonly string[]): StageNode[] {
+  return implemented?.includes("ledger_prepare") ? SYNTH_V2_NODES : SYNTH_NODES;
+}
+
+export const STAGE_NODES: Record<RunStage, StageNode[]> = {
+  planner: ALL_PLANNER_NODES,
+  synth: ALL_SYNTH_NODES,
+};
 
 /** `stopped`: a node left running by a run that was cancelled (ingestion; the planner and synth graphs never show it). */
 export type NodeStatus = "done" | "running" | "pending" | "future" | "failed" | "stopped";

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class StartResponse(BaseModel):
@@ -91,6 +91,9 @@ class AgenticRunStatus(BaseModel):
     quality_status: Literal["complete", "complete_with_review"] | None = None
     delivered_page_count: int = 0
     discarded_blank_page_count: int = 0
+    selected_page_count: int = 0
+    excluded_page_count: int = 0
+    content_selection_revision: int | None = None
     review_page_count: int = 0
     review_pages: list[int] = []
     unverified_page_count: int = 0
@@ -111,6 +114,40 @@ class AgenticProgress(BaseModel):
     processed_pages: list[int]
     active_audit_pages: list[int]
     active_repair_pages: list[int]
+    classified_pages: list[int] = Field(default_factory = list)
+    active_classification_pages: list[int] = Field(default_factory = list)
+
+
+class ContentSelectionPage(BaseModel):
+    page_number: int
+    role: str
+    confidence: float
+    rationale: str
+    disposition: Literal["include", "exclude"]
+    decision_source: str
+
+
+class ContentSelectionResponse(BaseModel):
+    book_id: str
+    extraction_run_id: str
+    agentic_run_id: str
+    classifier_version: str
+    revision: int
+    expected_page_count: int
+    included_page_count: int
+    excluded_page_count: int
+    sha256: str
+    pages: list[ContentSelectionPage]
+
+
+class ContentSelectionOverride(BaseModel):
+    page_number: int
+    disposition: Literal["include", "exclude"]
+
+
+class ContentSelectionUpdate(BaseModel):
+    expected_revision: int = Field(gt = 0, strict = True)
+    overrides: list[ContentSelectionOverride]
 
 
 class Snapshot(BaseModel):

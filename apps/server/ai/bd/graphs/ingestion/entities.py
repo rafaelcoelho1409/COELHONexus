@@ -9,6 +9,7 @@ from typing import Any, NotRequired, TypedDict
 
 PageReader = Callable[[str], str | None | Awaitable[str | None]]
 ArtifactWriter = Callable[[str, str, str], Any]
+ArtifactExists = Callable[[str], Awaitable[bool]]
 
 
 class PageReference(TypedDict):
@@ -17,6 +18,7 @@ class PageReference(TypedDict):
     page: int
     key: str
     pictures: NotRequired[int]
+    section_path: NotRequired[list[str]]
 
 
 class IngestionPageReference(TypedDict):
@@ -29,6 +31,7 @@ class IngestionPageReference(TypedDict):
     assessment_key: str
     patch_proposals_key: str
     pictures: NotRequired[int]
+    section_path: NotRequired[list[str]]
 
 
 class IngestionPageAuditResult(TypedDict):
@@ -66,6 +69,11 @@ class IngestionPageResult(TypedDict, total = False):
     audit_warnings: list[str]
     status: str
     error: str
+    content_role: str
+    content_confidence: float
+    content_rationale: str
+    content_disposition: str
+    content_decision_source: str
 
 
 @dataclass(frozen = True, slots = True)
@@ -74,8 +82,10 @@ class IngestionDependencies:
 
     read_page: PageReader
     write_artifact: ArtifactWriter
+    artifact_exists: ArtifactExists
     auditor: nodes.ingestion.audit_batch.service.Auditor
     specialists: dict[str, nodes.ingestion.repair_pages.service.Specialist]
     metadata_normalizer: nodes.ingestion.metadata_normalization.service.Normalizer
+    content_classifier: nodes.ingestion.content_classification.service.ContentClassifier
     progress_callback: graphs.service.ProgressReporter | None = None
     finding_verifier: Any | None = None

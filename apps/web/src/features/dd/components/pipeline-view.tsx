@@ -24,7 +24,14 @@ function PipelineWorkbench({ slug }: { slug: string }) {
   const synthBlocker = useCrossStageBlocker("synth");
   const synth = useSynthRun(slug);
   const chain = useAutoChain(synth.start, (message) => overlays.notice(message, "error"));
-  const planner = usePlannerRun(slug, { onTerminal: (status) => void chain.onPlannerFinished(status) });
+  const planner = usePlannerRun(slug, {
+    onTerminal: (status) => {
+      const continueChain = () => chain.onPlannerFinished(status);
+      if (status === "done") void synth.refreshPlan().then(continueChain, continueChain);
+      else void continueChain();
+    },
+    onWipe: synth.clearPlan,
+  });
 
   return (
     <div className="flex flex-col gap-6" data-testid="pipeline-workbench">

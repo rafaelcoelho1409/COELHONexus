@@ -1,7 +1,7 @@
 "use client";
 
 import { X } from "lucide-react";
-import { type ReactNode, useId, useState } from "react";
+import { type ReactNode, useId } from "react";
 
 import { fmtInt } from "../domain/format";
 import {
@@ -10,21 +10,11 @@ import {
   type IngestionNodeStatus,
   ingestionNodeText,
 } from "../domain/ingestion-progress";
-import {
-  type IngestionUsageMode,
-  ingestionUsageRows,
-  nodeUsageForIngestionStep,
-} from "../domain/ingestion-usage";
+import { ingestionUsageRows, nodeUsageForIngestionStep } from "../domain/ingestion-usage";
 import type { UsagePayload } from "../entities";
 import { useModalDialog } from "../hooks/use-modal-dialog";
 import { ActionButton } from "./action-button";
-import { ToggleGroup } from "./toggle-group";
-
-const USAGE_MODES: readonly { id: IngestionUsageMode; label: string }[] = [
-  { id: "agent", label: "By agent" },
-  { id: "model", label: "By model" },
-  { id: "agent_model", label: "By agent + model" },
-];
+import { type UsageBreakdownModeOption, UsageBreakdownView } from "./usage-breakdown";
 
 export function PipelineUsageTotal({
   usage,
@@ -190,133 +180,67 @@ function UsageBreakdown({
   failed: boolean;
   hasRun: boolean;
 }) {
-  const [mode, setMode] = useState<IngestionUsageMode>("agent_model");
   const counts = nodeId ? nodeUsageForIngestionStep(usage, nodeId) : usage?.total;
-  const rows = ingestionUsageRows(usage, mode, nodeId);
-  const caption =
-    mode === "agent" ? "Usage by agent" : mode === "model" ? "Usage by model" : "Usage by agent and model";
-  const metrics = [
-    ["LLM calls", counts?.calls ?? 0],
-    ["Input tokens", counts?.tokens_in ?? 0],
-    ["Output tokens", counts?.tokens_out ?? 0],
-    ["Reasoning tokens", counts?.reasoning_tokens ?? 0],
-    ["Errors", counts?.errors ?? 0],
-  ] as const;
+  const modes: UsageBreakdownModeOption[] = [
+    {
+      id: "agent",
+      label: "By agent",
+      caption: "Usage by agent",
+      columns: ["Agent"],
+      rows: ingestionUsageRows(usage, "agent", nodeId).map((row) => ({
+        key: row.key,
+        dimensions: [row.agent ?? ""],
+        calls: row.calls,
+        tokens_in: row.tokens_in,
+        tokens_out: row.tokens_out,
+        reasoning_tokens: row.reasoning_tokens,
+      })),
+    },
+    {
+      id: "model",
+      label: "By model",
+      caption: "Usage by model",
+      columns: ["Provider", "Model"],
+      rows: ingestionUsageRows(usage, "model", nodeId).map((row) => ({
+        key: row.key,
+        dimensions: [row.provider ?? "—", row.model ?? ""],
+        calls: row.calls,
+        tokens_in: row.tokens_in,
+        tokens_out: row.tokens_out,
+        reasoning_tokens: row.reasoning_tokens,
+      })),
+    },
+    {
+      id: "agent_model",
+      label: "By agent + model",
+      caption: "Usage by agent and model",
+      columns: ["Agent", "Provider", "Model"],
+      rows: ingestionUsageRows(usage, "agent_model", nodeId).map((row) => ({
+        key: row.key,
+        dimensions: [row.agent ?? "", row.provider ?? "—", row.model ?? ""],
+        calls: row.calls,
+        tokens_in: row.tokens_in,
+        tokens_out: row.tokens_out,
+        reasoning_tokens: row.reasoning_tokens,
+      })),
+    },
+  ];
 
   return (
-    <>
-      {usage ? (
-        <dl className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-          {metrics.map(([label, value]) => (
-            <div key={label} className="rounded-sm border border-border px-3 py-2">
-              <dt className="text-xs text-muted-foreground">{label}</dt>
-              <dd className="text-lg font-semibold tabular-nums">{fmtInt(value)}</dd>
-            </div>
-          ))}
-        </dl>
-      ) : null}
-      {hasRun ? (
-        <ToggleGroup legend="Group usage by" options={USAGE_MODES} value={mode} onChange={setMode} />
-      ) : null}
-      {failed ? (
-        <p role="alert" className="text-sm text-destructive-text">
-          LLM usage could not be loaded.
-        </p>
-      ) : loading && !usage ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          Loading LLM usage…
-        </p>
-      ) : !hasRun ? (
-        <p className="text-sm text-muted-foreground">Usage will appear after this node runs.</p>
-      ) : rows.length > 0 ? (
-        <IngestionUsageTable rows={rows} mode={mode} caption={caption} />
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          {nodeId
-            ? "No LLM calls have been recorded for this node. This may be expected for deterministic stages."
-            : "No LLM calls have been recorded for this run."}
-        </p>
-      )}
-    </>
-  );
-}
-
-function IngestionUsageTable({
-  rows,
-  mode,
-  caption,
-}: {
-  rows: ReturnType<typeof ingestionUsageRows>;
-  mode: IngestionUsageMode;
-  caption: string;
-}) {
-  const showAgent = mode !== "model";
-  const showModel = mode !== "agent";
-
-  return (
-    <section
-      aria-label={caption}
-      // biome-ignore lint/a11y/noNoninteractiveTabindex: a wide table scrolls, so keyboard users must be able to focus it to scroll it (WCAG 2.1.1)
-      tabIndex={0}
-      className="overflow-x-auto rounded-sm border border-border"
-    >
-      <table className="w-full min-w-[42rem] border-collapse text-sm">
-        <caption className="border-b border-border px-3 py-2 text-left text-xs font-medium text-muted-foreground">
-          {caption}
-        </caption>
-        <thead>
-          <tr className="border-b border-border text-left text-xs text-muted-foreground">
-            {showAgent ? (
-              <th scope="col" className="px-3 py-2 font-medium">
-                Agent
-              </th>
-            ) : null}
-            {showModel ? (
-              <>
-                <th scope="col" className="px-3 py-2 font-medium">
-                  Provider
-                </th>
-                <th scope="col" className="px-3 py-2 font-medium">
-                  Model
-                </th>
-              </>
-            ) : null}
-            <th scope="col" className="px-3 py-2 text-right font-medium">
-              Calls
-            </th>
-            <th scope="col" className="px-3 py-2 text-right font-medium">
-              Input tokens
-            </th>
-            <th scope="col" className="px-3 py-2 text-right font-medium">
-              Output tokens
-            </th>
-            <th scope="col" className="px-3 py-2 text-right font-medium">
-              Reasoning
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.key} className="border-b border-border last:border-b-0">
-              {showAgent ? (
-                <th scope="row" className="px-3 py-1.5 text-left font-normal">
-                  {row.agent}
-                </th>
-              ) : null}
-              {showModel ? (
-                <>
-                  <td className="break-all px-3 py-1.5 font-mono text-xs">{row.provider}</td>
-                  <td className="break-all px-3 py-1.5 font-mono text-xs">{row.model}</td>
-                </>
-              ) : null}
-              <td className="px-3 py-1.5 text-right tabular-nums">{fmtInt(row.calls)}</td>
-              <td className="px-3 py-1.5 text-right tabular-nums">{fmtInt(row.tokens_in)}</td>
-              <td className="px-3 py-1.5 text-right tabular-nums">{fmtInt(row.tokens_out)}</td>
-              <td className="px-3 py-1.5 text-right tabular-nums">{fmtInt(row.reasoning_tokens)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
+    <UsageBreakdownView
+      counts={usage ? (counts ?? undefined) : undefined}
+      modes={modes}
+      defaultMode="agent_model"
+      hasData={usage !== undefined}
+      hasRun={hasRun}
+      loading={loading}
+      failed={failed}
+      noRunMessage="Usage will appear after this node runs."
+      emptyMessage={
+        nodeId
+          ? "No LLM calls have been recorded for this node. This may be expected for deterministic stages."
+          : "No LLM calls have been recorded for this run."
+      }
+    />
   );
 }

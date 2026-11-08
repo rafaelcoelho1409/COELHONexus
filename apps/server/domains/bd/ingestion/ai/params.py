@@ -32,6 +32,9 @@ MAX_VERIFIER_CONTEXT_CHARS = 3000
 VERIFY_LOSS_MIN_CHARS = 12
 VERIFY_LOSS_RATIO = 0.01
 VERIFY_CONCURRENCY = 16
+CONTENT_CLASSIFICATION_CONCURRENCY = 8
+CONTENT_CLASSIFICATION_EXCERPT_CHARS = 8000
+CONTENT_EXCLUSION_CONFIDENCE = 0.94
 TASK_NAME = "domains.bd.ingestion.ai.task.run_ingestion_ai"
 AUTO_RUN_ID_PREFIX = "auto-"
 GRAPH_NODES = (
@@ -39,5 +42,6 @@ GRAPH_NODES = (
     "plan_repairs",
     "repair_pages",
     "normalize_metadata",
+    "classify_content",
     "publish",
 )

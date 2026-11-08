@@ -1,4 +1,5 @@
 import { ConnectionCard } from "./connection-card";
+import { SearchConnections } from "./search-connections";
 
 /** The saved connections, one per tool. Server component; the cards hydrate their own forms. The page title sits in
  * the app's second navbar. */
@@ -15,6 +16,7 @@ export function SettingsPage() {
         title="Embedding"
         intro="Give the transcript search its own OpenAI-compatible embedding endpoint, separate from the LLM endpoint — its URL, key and model can differ."
       />
+      <SearchConnections />
     </div>
   );
 }

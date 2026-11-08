@@ -31,10 +31,11 @@ import {
 import { deleteCascadeText } from "../domain/library";
 import { plannerLiveText } from "../domain/live-text";
 import {
+  ALL_PLANNER_NODES,
   appendStageEvent,
   generateThreadId,
   IDLE_PILL,
-  PLANNER_NODES,
+  plannerNodesFor,
   plannerStartLabel,
   type StageNodeView,
   type StagePillState,
@@ -111,7 +112,7 @@ const isPlannerTerminal = (event: StageEvent) => event.step === "planner" && eve
 
 export function usePlannerRun(
   slug: string,
-  { onTerminal }: { onTerminal?: (status: string) => void } = {},
+  { onTerminal, onWipe }: { onTerminal?: (status: string) => void; onWipe?: () => void } = {},
 ): PlannerRunController {
   const overlays = useDdOverlays();
   const queryClient = useQueryClient();
@@ -121,6 +122,7 @@ export function usePlannerRun(
 
   const info = useStageInfo("planner");
   const implemented = useMemo(() => new Set(info?.implemented ?? []), [info]);
+  const nodes = useMemo(() => plannerNodesFor(info?.implemented), [info]);
 
   useEffect(() => {
     activeThread.current = state.threadId;
@@ -169,7 +171,11 @@ export function usePlannerRun(
       const pill =
         status === "failed" || status === "cancelled"
           ? terminalPill(status)
-          : stageAllImplementedDone(PLANNER_NODES, values, new Set(stageInfo?.implemented ?? []))
+          : stageAllImplementedDone(
+                plannerNodesFor(stageInfo?.implemented),
+                values,
+                new Set(stageInfo?.implemented ?? []),
+              )
             ? terminalPill("done")
             : IDLE_PILL;
       settle({ ...idle, values, next, pill });
@@ -237,7 +243,7 @@ export function usePlannerRun(
       pill: WORKING_PILL,
     }));
     if (event.kind === "done" || event.kind === "sanitized" || event.kind === "llm_progress") {
-      const field = PLANNER_NODES.find((node) => node.id === step)?.field ?? null;
+      const field = ALL_PLANNER_NODES.find((node) => node.id === step)?.field ?? null;
       void fetchGraphStateRetried("planner", threadId, field, () => activeThread.current === threadId).then(
         (graphState) => {
           if (graphState) setState((s) => ({ ...s, values: graphState.values, next: graphState.next }));
@@ -247,8 +253,8 @@ export function usePlannerRun(
   });
 
   const views = useMemo(
-    () => stageNodeViews(PLANNER_NODES, state.values, state.next, state.running, implemented),
-    [state.values, state.next, state.running, implemented],
+    () => stageNodeViews(nodes, state.values, state.next, state.running, implemented),
+    [nodes, state.values, state.next, state.running, implemented],
   );
 
   const start = useCallback(async () => {
@@ -317,8 +323,9 @@ export function usePlannerRun(
       return;
     }
     setState(PLANNER_EMPTY);
+    onWipe?.();
     invalidatePipeline();
-  }, [slug, overlays, invalidatePipeline]);
+  }, [slug, overlays, invalidatePipeline, onWipe]);
 
   const elapsed = useElapsed(state.running, state.startedMs);
 
@@ -336,7 +343,7 @@ export function usePlannerRun(
     values: state.values,
     next: state.next,
     startLabel: plannerStartLabel(state.values),
-    progress: stageProgressLabel(PLANNER_NODES, views, implemented),
+    progress: stageProgressLabel(nodes, views, implemented),
     start,
     cancel,
     wipe,

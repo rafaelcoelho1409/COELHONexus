@@ -47,6 +47,24 @@ async def prepare_units(
     if qa_manifest.expected_page_count != state["expected_page_count"]:
         raise ValueError("the ingestion QA page count does not match the Distill run")
 
+    selection_by_page = None
+    if state.get("content_selection_key"):
+        selection_content = await storage.read_text(state["content_selection_key"])
+        if hashlib.sha256(selection_content.encode("utf-8")).hexdigest() != state["content_selection_sha256"]:
+            raise ValueError("the pinned content-selection revision failed its integrity check")
+        selection = domains.bd.ingestion.ai.schemas.ContentSelectionManifest.model_validate_json(selection_content)
+        if (
+            selection.book_id != state["book_id"]
+            or selection.extraction_run_id != state["extraction_run_id"]
+            or selection.agentic_run_id != state["ingestion_ai_run_id"]
+            or selection.revision != state["content_selection_revision"]
+            or selection.expected_page_count != state["expected_page_count"]
+        ):
+            raise ValueError("the pinned content-selection revision does not match this Distill run")
+        selection_by_page = {page.page_number: page for page in selection.pages}
+        if sum(page.disposition == "include" for page in selection.pages) != state["selected_page_count"]:
+            raise ValueError("the pinned content-selection count does not match this Distill run")
+
     page_by_number = {
         page.get("page"): page
         for page in source_manifest.get("pages", [])
@@ -55,6 +73,11 @@ async def prepare_units(
     source_pages = []
     unit_refs = []
     for qa_page in qa_manifest.pages:
+        content_page = selection_by_page.get(qa_page.page_number) if selection_by_page is not None else None
+        if selection_by_page is not None and content_page is None:
+            raise ValueError(f"content selection has no page {qa_page.page_number}")
+        if content_page is not None and content_page.disposition == "exclude":
+            continue
         raw_page = page_by_number.get(qa_page.page_number)
         if raw_page is None:
             raise ValueError(f"source manifest has no page {qa_page.page_number}")
@@ -68,6 +91,7 @@ async def prepare_units(
             "section_path": section_path,
             "disposition": qa_page.delivery_disposition,
             "review_required": qa_page.status == domains.bd.ingestion.ai.schemas.AgenticPageStatus.REVIEW_REQUIRED,
+            "content_role": content_page.role if content_page is not None else "unknown",
         }
         source_pages.append(source_page)
         if qa_page.delivery_disposition == "discarded_blank":
@@ -112,6 +136,20 @@ async def prepare_units(
     return {
         "source_pages": source_pages,
         "unit_refs": unit_refs,
+        "source_chapters": [
+            {
+                "title": chapter["title"],
+                "first_page": chapter["first_page"],
+                "last_page": chapter["last_page"],
+            }
+            for chapter in source_manifest.get("chapters", [])
+            if isinstance(chapter, dict)
+            and isinstance(chapter.get("title"), str)
+            and type(chapter.get("first_page")) is int
+            and type(chapter.get("last_page")) is int
+            and chapter["first_page"] > 0
+            and chapter["last_page"] >= chapter["first_page"]
+        ],
         "title": str(source_manifest.get("title") or source_manifest.get("filename") or "Learning Guide"),
     }
 

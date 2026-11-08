@@ -72,6 +72,10 @@ STOP_TOKENS = frozenset({
 SPLIT_MAX_BLOCKS     = 200
 SPLIT_BLOCKS_PER_PART = 140
 SPLIT_BLOCKS_MIN_DOCS = 6
+# In tutorial mode a chapter teaches every best code it holds and ends in one application, so it must fit a reading session: the cap is lower (about a third
+# of the v1 cap, each part about as many blocks as a step-by-step tutorial can carry).
+TUTORIAL_SPLIT_MAX_BLOCKS = 90
+TUTORIAL_SPLIT_BLOCKS_PER_PART = 60
 SPLIT_MAX_ROUNDS     = 3       # a part of a split can itself be over the block cap (langfuse: one of 7 parts held 35 pages and 376 blocks): parts are re-checked
 # Curators (deep agents) splitting chapters at once, and the asks per curator run (a transient failure or an unusable answer is asked again).
 CURATOR_CONCURRENCY = 4

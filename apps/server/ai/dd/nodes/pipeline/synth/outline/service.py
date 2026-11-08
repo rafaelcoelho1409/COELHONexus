@@ -119,8 +119,9 @@ async def prepare(state: graphs.pipeline.synth.outline.states.OutlineState, runt
         n_sources = len(sources), n_bodies = len(pairs), bytes = len(sources_concat_md), truncated = truncated, n_vault_hashes = n_vault_hashes,
     )
 
+    tutorial = graphs.pipeline.synth.params.tutorial_mode()
     manifest_hash = domain.compute_manifest_hash(
-        sources = sources, sources_bytes = len(sources_concat_md), chapter_title = chapter_title, chapter_description = chapter_description,
+        sources = sources, sources_bytes = len(sources_concat_md), chapter_title = chapter_title, chapter_description = chapter_description, tutorial = tutorial,
     )
     versioned_key = keys.versioned_blob_key(slug, chapter_id, manifest_hash)
     latest_key = keys.latest_blob_key(slug, chapter_id)
@@ -154,6 +155,9 @@ async def prepare(state: graphs.pipeline.synth.outline.states.OutlineState, runt
             logger.warning(f"[outline_sdp] {slug}/{chapter_id}: cached blob {versioned_key!r} unreadable ({type(error).__name__}: {error}); recomputing")
 
     context.scratch[params.STEP] = {"pairs": pairs, "texts": texts, "concat": sources_concat_md}
+    if tutorial:
+        # What the chapter has to teach: the best code of its pages, each example once, in the order the pages introduce them.
+        context.scratch[params.STEP]["ledger"] = await domains.dd.pipeline.ledger.service.build(blobs, slug, [key for key, _ in pairs])
     # Adaptive cap (not fixed 8): a fixed cap pushed the model to over-section small chapters; the right count up front rarely needs trimming.
     return {
         "finished": False,
@@ -209,9 +213,10 @@ async def draft(state: graphs.pipeline.synth.outline.states.OutlineState, runtim
         if half:
             entry["excerpt"] = ""
             entry["headings"] = entry["headings"][:params.INDEX_HEADINGS // 2]
+    ledger = data.get("ledger")
     role = context.agents.chapter_outliner(
         backend = backends.files.service.mounted(files, route),
-        tools = [tools.pipeline.synth.check.tool.validate_outline_tool(check)],
+        tools = [tools.pipeline.synth.check.tool.validate_outline_tool(check), *(tools.pipeline.synth.ledger.tool.ledger_tools(ledger) if ledger else [])],
     )
     best = state.get("best")
     request = {
@@ -224,6 +229,12 @@ async def draft(state: graphs.pipeline.synth.outline.states.OutlineState, runtim
         "feedback": state.get("feedback") or [],
         "sources": index,
     }
+    if ledger:
+        request["tutorial"] = {
+            "goal": "a complete tutorial: one step per best code example, in the order a reader needs them, ending in an application that combines them (added later; do not plan it)",
+            "best_code": domains.dd.pipeline.ledger.domain.summary(ledger),
+            "n_best_code": len(ledger.must_teach),
+        }
     if best is not None:
         request["previous_outline"] = best["outline"]
     n_checks = state.get("n_checks", 0)
@@ -318,6 +329,7 @@ async def finalize(state: graphs.pipeline.synth.outline.states.OutlineState, run
     n_blocks = state["n_vault_hashes"]
     texts = data["texts"]
     target = state["adaptive_target"]
+    tutorial = graphs.pipeline.synth.params.tutorial_mode()
 
     best = state.get("best")
     if best is not None:
@@ -333,10 +345,17 @@ async def finalize(state: graphs.pipeline.synth.outline.states.OutlineState, run
         dag = domain.derive_dag(outline.sections)
         issues = ["heuristic_fallback"]
 
+    if tutorial and data.get("ledger") is not None:
+        outline = assign_tutorial_steps(outline, data["ledger"])
+        dag = domain.derive_dag(outline.sections)
+        logger.info(f"[outline_sdp] {slug}/{chapter_id}: assigned {sum(len(section.code_refs) for section in outline.sections)} canonical code example(s) to tutorial steps")
+
     outline, dag, issues = await flatten_if_deep(outline, dag, issues, n_sources = len(sources), n_blocks = n_blocks, bodies = texts)
 
     # HARD-TRIM: the model ignores the soft cap signal (a chapter shipped 30 H2 at cap 12; another 20 at cap 14): trim to the adaptive cap directly.
     cap = params.max_h2_for_n_sources(len(sources), n_blocks)
+    if tutorial and data.get("ledger") is not None:
+        cap = min(params.SECTIONS_MAX, max(cap, len(outline.sections)))
     if len(outline.sections) > cap:
         n_before = len(outline.sections)
         outline = hard_trim(outline, dag, cap)
@@ -348,6 +367,8 @@ async def finalize(state: graphs.pipeline.synth.outline.states.OutlineState, run
         graphs.service.emit(params.STEP, "hard_trimmed", n_before = n_before, n_after = len(outline.sections), adaptive_cap = cap, n_sources = len(sources))
 
     payload = domain.serialize_outline_with_dag(outline, dag)
+    payload["prompt_version"] = versions.prompt_version(tutorial)
+    payload["schema_version"] = versions.schema_version(tutorial)
     payload.update({
         "framework_slug": slug,
         "chapter_id": chapter_id,
@@ -380,7 +401,7 @@ async def finalize(state: graphs.pipeline.synth.outline.states.OutlineState, run
         "versioned_path": state["versioned_key"],
         "manifest_hash": state["manifest_hash"],
         "cache_hit": False,
-        "prompt_version": versions.OUTLINE_PROMPT_VERSION,
+        "prompt_version": versions.prompt_version(tutorial),
     }
     graphs.service.emit(
         params.STEP, "done",
@@ -391,3 +412,62 @@ async def finalize(state: graphs.pipeline.synth.outline.states.OutlineState, run
         f"n_repairs = {stats['n_repairs']}, violations = {len(issues)}, {elapsed} ms"
     )
     return {"outline_path": state["latest_key"], "outline_stats": stats}
+
+
+def _step_heading(block, index: int) -> str:
+    """A readable fallback heading when the outliner did not create enough code steps."""
+    name = next(iter(block.defines), "")
+    words = [word for word in name.replace("_", " ").replace("-", " ").split() if word]
+    if not words:
+        words = [block.lang.title() if block.lang else "Code", "Example"]
+    if len(words) == 1:
+        words.append("Example")
+    return " ".join(words[:8]) or f"Code Example {index}"
+
+
+def assign_tutorial_steps(outline: schemas.ChapterOutline, ledger) -> schemas.ChapterOutline:
+    """Put every canonical code example in a distinct outline step, appending source-derived steps when the outline is too short."""
+    hashes = list(ledger.must_teach)
+    if not hashes:
+        return outline
+
+    sections = [section.model_copy(deep = True) for section in outline.sections]
+    capacity = params.SECTIONS_MAX
+    needed = min(len(hashes), capacity)
+    if needed >= 2 and len(sections) > needed:
+        sections = sections[:needed]
+        kept_ids = {section.section_id for section in sections}
+        for section in sections:
+            section.prerequisites = [prerequisite for prerequisite in section.prerequisites if prerequisite in kept_ids]
+    used_ids = {section.section_id for section in sections}
+    while len(sections) < needed:
+        index = len(sections) + 1
+        digest = hashes[index - 1]
+        block = ledger.blocks[digest]
+        heading = _step_heading(block, index)
+        if any(section.heading.casefold() == heading.casefold() for section in sections):
+            heading_words = heading.split()[:6]
+            heading = " ".join([*heading_words, f"Step{index}"])
+        prior = sections[-1].section_id if sections else ""
+        section_number = 1
+        while f"s{section_number}" in used_ids:
+            section_number += 1
+        section_id = f"s{section_number}"
+        used_ids.add(section_id)
+        sections.append(schemas.OutlineSection(
+            section_id = section_id,
+            heading = heading,
+            description = f"Teach the canonical {block.lang or 'code'} example for {heading}, using its source explanation and exact code reference.",
+            prerequisites = [prior] if prior else [],
+            needs_code = True,
+            code_refs = [],
+        ))
+
+    for index, section in enumerate(sections):
+        section.code_refs = [hashes[index]] if index < needed else []
+        if index < needed:
+            section.needs_code = True
+
+    if len(hashes) > capacity:
+        sections[-1].code_refs.extend(hashes[capacity:])
+    return outline.model_copy(update = {"sections": sections})

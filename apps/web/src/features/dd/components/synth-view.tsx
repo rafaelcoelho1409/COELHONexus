@@ -35,6 +35,8 @@ export function SynthRunPanel({
 }) {
   const { harmonize } = synth;
   const [usageOpen, setUsageOpen] = useState(false);
+  const noEligibleChapters =
+    synth.cells.length > 0 && synth.cells.every((cell) => cell.synthEligible === false);
 
   return (
     <div className={`flex min-w-0 flex-col gap-4 ${className}`}>
@@ -42,7 +44,9 @@ export function SynthRunPanel({
         title="Synth"
         testId="synth"
         controls={synth}
-        blockedMessage={blocker.message}
+        blockedMessage={
+          blocker.message ?? (noEligibleChapters ? "This plan has no chapters eligible for Synth." : null)
+        }
         onOpenUsage={() => setUsageOpen(true)}
       >
         {harmonize.status !== "idle" ? (
@@ -88,13 +92,21 @@ export function SynthChapters({
   blocker: CrossStageBlocker;
 }) {
   const studyHref = (chapterId: string) => chapterStudyHref(slug, chapterId);
+  const noEligibleChapters =
+    synth.cells.length > 0 && synth.cells.every((cell) => cell.synthEligible === false);
   return (
     <div className="flex min-h-0 flex-col gap-2">
       <ChapterStrip
         cells={synth.cells}
         counter={synth.counter}
-        runEnabled={!(synth.running || synth.starting || blocker.blocked)}
-        runTitle={synth.running ? "A synthesis run is active — stop it first." : (blocker.message ?? "")}
+        runEnabled={!(synth.running || synth.starting || blocker.blocked || noEligibleChapters)}
+        runTitle={
+          noEligibleChapters
+            ? "This plan has no chapters eligible for Synth."
+            : synth.running
+              ? "A synthesis run is active — stop it first."
+              : (blocker.message ?? "")
+        }
         studyHref={studyHref}
         onRun={(id) => void synth.runChapter(id)}
         onWipe={(id) => void synth.wipeChapter(id)}

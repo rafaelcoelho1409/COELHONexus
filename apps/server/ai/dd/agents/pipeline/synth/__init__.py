@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from . import params, schemas
 from . import (
-    chapter_judge, 
+    capstone_designer,
+    chapter_judge,
     chapter_outliner, 
     chapter_reviewer, 
     claim_extractor, 
@@ -19,6 +20,7 @@ from . import (
 )
 
 __all__ = [
+    "capstone_designer",
     "chapter_judge",
     "chapter_outliner",
     "chapter_reviewer",

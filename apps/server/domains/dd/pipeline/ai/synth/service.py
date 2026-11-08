@@ -14,13 +14,13 @@ def synth_graph():
 
 def node_order() -> tuple[str, ...]:
     """The chapter graph's nodes in the order they run (what `/info` reports and the web's stage board is checked against)."""
-    return ai.dd.graphs.pipeline.synth.params.NODE_ORDER
+    return ai.dd.graphs.pipeline.synth.params.node_order()
 
 
 def build_context() -> Any:
     """A run's context: object storage and its agents (built when a node asks, from the endpoint the Settings page currently holds)."""
     domains.settings.chat.service.refresh_endpoint(force = True)
-    return ai.dd.graphs.pipeline.synth.entities.SynthContext(blobs = infra.minio.service.get_storage())
+    return ai.dd.graphs.pipeline.synth.entities.SynthContext(blobs = infra.minio.service.get_storage(), executor = domains.dd.pipeline.verify.service.executor())
 
 
 def binding() -> Any:

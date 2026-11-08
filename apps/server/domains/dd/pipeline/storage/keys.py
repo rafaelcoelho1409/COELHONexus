@@ -29,6 +29,14 @@ def distill_latest_key(slug: str) -> str:
     return f"dd/{slug}/planner/doc_distill-latest.json"
 
 
+def page_cards_versioned_key(slug: str, manifest: str) -> str:
+    return f"dd/{slug}/planner/page_cards/{manifest}.json"
+
+
+def page_cards_latest_key(slug: str) -> str:
+    return f"dd/{slug}/planner/page_cards-latest.json"
+
+
 def proposals_versioned_key(slug: str, manifest: str) -> str:
     return f"dd/{slug}/planner/chapter_propose/{manifest}.json"
 
@@ -105,8 +113,10 @@ def chapter_readme_key(slug: str, chapter_id: str) -> str:
     return f"{synth_chapter_prefix(slug, chapter_id)}README.md"
 
 
-def chapter_render_latest_key(slug: str, chapter_id: str) -> str:
-    return f"{synth_chapter_prefix(slug, chapter_id)}render-latest.json"
+def chapter_render_latest_key(slug: str, chapter_id: str, version: str = "v1") -> str:
+    """Pointer to the active graph's render result; the no-version default preserves v1 callers."""
+    suffix = "-v2" if version == "v2" else ""
+    return f"{synth_chapter_prefix(slug, chapter_id)}render{suffix}-latest.json"
 
 
 def chapter_artifact_key(slug: str, chapter_id: str, artifact_name: str) -> str:

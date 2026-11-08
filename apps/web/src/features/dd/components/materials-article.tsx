@@ -34,6 +34,7 @@ export function MaterialsArticle({
   hasVersions,
   onPrevious,
   onNext,
+  quality,
   children,
 }: {
   ref?: Ref<HTMLElement>;
@@ -49,6 +50,8 @@ export function MaterialsArticle({
   hasVersions: boolean;
   onPrevious: (() => void) | null;
   onNext: (() => void) | null;
+  /** Quality report for finalized Agentic AI pages. */
+  quality?: ReactNode;
   /** The page's text, or the loading and error lines. */
   children: ReactNode;
 }) {
@@ -124,6 +127,7 @@ export function MaterialsArticle({
                 ) : null}
               </div>
             </div>
+            {quality}
           </header>
           {children}
         </>

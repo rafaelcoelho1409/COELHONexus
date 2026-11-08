@@ -20,6 +20,8 @@ async def chapter_select(
             "thread_id": state.get("thread_id") or "",
             "chapter_proposals_ref": state.get("chapter_proposals_ref"),
             "chapter_doc_assignments_ref": state.get("chapter_doc_assignments_ref"),
+            "planner_version": state.get("planner_version") or "v1",
+            "page_cards_ref": state.get("page_cards_ref"),
         },
         {"max_concurrency": params.CURATOR_CONCURRENCY},
         context = runtime.context,

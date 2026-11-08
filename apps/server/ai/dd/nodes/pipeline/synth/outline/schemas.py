@@ -39,6 +39,10 @@ class OutlineSection(BaseModel):
             "configs."
         ),
     )
+    code_refs: list[str] = Field(
+        default_factory = list,
+        description = "Canonical code-ledger hashes assigned to this tutorial step; v2 aims for one best example per step.",
+    )
 
     @field_validator("section_id")
     @classmethod
@@ -89,6 +93,16 @@ class OutlineSection(BaseModel):
                 )
         if len(set(v)) != len(v):
             raise ValueError(f"duplicate prerequisites: {v}")
+        return v
+
+    @field_validator("code_refs")
+    @classmethod
+    def _validate_code_refs(cls, v: list[str]) -> list[str]:
+        for digest in v:
+            if not patterns.CODE_HASH_RE.match(digest):
+                raise ValueError(f"code_ref {digest!r} must be a 16-character lowercase hash")
+        if len(set(v)) != len(v):
+            raise ValueError(f"duplicate code_refs: {v}")
         return v
 
 

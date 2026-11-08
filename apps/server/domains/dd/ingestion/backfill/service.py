@@ -13,6 +13,11 @@ from typing import Awaitable, Callable, Optional
 logger = logging.getLogger(__name__)
 
 
+def _is_agentic_normalizer(version: object) -> bool:
+    """Any Agentic AI generation owns its immutable page output; backfill must not rewrite it."""
+    return isinstance(version, str) and version.startswith("dd-ingestion-agentic-")
+
+
 async def _list_framework_slugs() -> list[str]:
     """Walk MinIO `ingestion/` and return every framework slug with ≥1 page."""
     s = infra.minio.service.get_storage()
@@ -195,7 +200,7 @@ async def backfill_normalize_for_framework(slug: str) -> dict:
     manifest = await domains.dd.ingestion.storage.service.read_framework_manifest(
         infra.minio.service.get_storage(), slug,
     )
-    if manifest and manifest.get("normalizer") == domains.dd.ingestion.ai.params.NORMALIZER_VERSION:
+    if manifest and _is_agentic_normalizer(manifest.get("normalizer")):
         return {"slug": slug, "pages": manifest.get("page_count", 0), "skipped": "agentic_ingestion_is_authoritative"}
     page_keys = await _list_page_keys(slug)
     if not page_keys:
@@ -222,7 +227,7 @@ async def ensure_framework_normalized(slug: str) -> dict:
     manifest = await domains.dd.ingestion.storage.service.read_framework_manifest(s, slug)
     if not manifest:
         return {"slug": slug, "skipped": "no_manifest"}
-    if manifest.get("normalizer") == domains.dd.ingestion.ai.params.NORMALIZER_VERSION:
+    if _is_agentic_normalizer(manifest.get("normalizer")):
         return {"slug": slug, "skipped": "agentic_ingestion_is_authoritative",
                 "normalizer_version": domains.dd.ingestion.ai.params.NORMALIZER_VERSION}
     stored = int(manifest.get("normalizer_version") or 0)

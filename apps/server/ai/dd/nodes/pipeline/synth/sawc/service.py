@@ -253,8 +253,11 @@ def section_inputs(sid: str, data: dict) -> dict:
     # Gate prose_mode on the pre-pad count: padding would pull stray hashes into a section that has no code of its own.
     n_routed = len(allowed)
     claimed_elsewhere = domain.hashes_claimed_elsewhere(per_section_index, sid)
+    # Synth v2 treats each section as one code step: its canonical assignment is the whole bank, with no chapter-wide padding.
+    # V1 keeps relevance-ranked padding so thinly routed sections retain their established behavior.
+    synth_v2 = graphs.pipeline.synth.params.is_v2()
     # Chapter-wide blocks the digest never routed here but whose vocabulary this section's own text covers keep a section of a multi-topic code page out of prose mode.
-    if vault_rich and n_routed < params.BANK_MIN_SIZE:
+    if not synth_v2 and vault_rich and n_routed < params.BANK_MIN_SIZE:
         scored = vault.domain.rank_hashes_by_relevance(
             [h for h in vault_rich if h not in allowed and h not in claimed_elsewhere], vault_rich, domain.section_relevance_query(outline_sec, contributions),
         )
@@ -265,7 +268,7 @@ def section_inputs(sid: str, data: dict) -> dict:
             n_routed += len(relevant)
             if relevant:
                 logger.info(f"[sawc_write] {sid}: digest routed few/no code blocks; {len(relevant)} chapter-wide block(s) matched this section by relevance → bank {len(allowed)}")
-    if vault_rich and len(allowed) < params.BANK_MIN_SIZE:
+    if not synth_v2 and vault_rich and len(allowed) < params.BANK_MIN_SIZE:
         ranked = vault.domain.rank_hashes_by_pedagogy(list(vault_rich.keys()), vault_rich)
         needed = params.BANK_PAD_TO - len(allowed)
         pads = [h for h in ranked if h not in allowed and h not in claimed_elsewhere][:needed]

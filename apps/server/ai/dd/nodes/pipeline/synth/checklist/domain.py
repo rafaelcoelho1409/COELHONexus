@@ -2,10 +2,11 @@
 chapter/digest rendering for the judge, the judge's request, LLM verdict
 coercion and manifest hashing."""
 from __future__ import annotations
-import ai
+import ai, domains
 from . import params, schemas, versions
 
 import ast
+import json
 import re
 import random
 from collections import Counter
@@ -451,6 +452,137 @@ def check_code_prose_alignment(sawc: dict) -> schemas.CriterionResult:
     )
 
 
+# ---------------------------------------------------------------------------
+# Tutorial gates: a chapter is a complete tutorial that ends in a working application. Run only in tutorial mode.
+# Inputs injected by the service (not persisted): `_must_teach`, `_variant_of`, `_labels` (the code ledger), `_capstone_prefix`.
+# ---------------------------------------------------------------------------
+
+def tutorial_sections(sawc: dict) -> list[dict]:
+    """The chapter's steps: every section but the capstone."""
+    prefix = sawc.get("_capstone_prefix") or "Capstone"
+    return [s for s in sawc.get("sections") or [] if not str(s.get("heading") or "").startswith(prefix)]
+
+
+def check_best_code_taught(sawc: dict) -> schemas.CriterionResult:
+    """Every best code of the chapter's pages is taught by a step: the canonical block of each family of examples (a printed variant counts for its
+    family). Never more than the steps can print at all, as for `code_coverage`."""
+    must = list(sawc.get("_must_teach") or [])
+    variant_of = sawc.get("_variant_of") or {}
+    steps = tutorial_sections(sawc)
+    used = {st.get("code_ref_hash") for s in steps for st in (s.get("subtopics") or []) if (st or {}).get("code_ref_hash")}
+    taught = {variant_of.get(h, h) for h in used}
+    missing = [h for h in must if h not in taught]
+    allowed = (1.0 - params.TUTORIAL_MIN_COVERAGE) * len(must)
+    if steps:
+        allowed = max(allowed, len(must) - params.COVERAGE_CAPACITY_SHARE * len(steps) * ai.dd.nodes.pipeline.synth.sawc.params.TOPUP_SECTION_MAX)
+    passed = len(missing) <= allowed
+    labels = sawc.get("_labels") or {}
+    named = ", ".join(f"{labels.get(h, h[:8])}" for h in missing[:6])
+    return schemas.CriterionResult(
+        name = "best_code_taught", passed = passed, kind = "deterministic",
+        feedback = "" if passed else (
+            f"{len(missing)} of the {len(must)} best code examples of the sources are not taught (for example: {named}). "
+            "Give each a step with its code, or fold it into the step it extends."
+        ),
+    )
+
+
+def check_all_best_code_taught(sawc: dict) -> schemas.CriterionResult:
+    """Synth v2 requires every canonical ledger example to appear in a tutorial step."""
+    must = list(sawc.get("_must_teach") or [])
+    variant_of = sawc.get("_variant_of") or {}
+    steps = tutorial_sections(sawc)
+    used = {st.get("code_ref_hash") for section in steps for st in (section.get("subtopics") or []) if (st or {}).get("code_ref_hash")}
+    taught = {variant_of.get(digest, digest) for digest in used}
+    missing = [digest for digest in must if digest not in taught]
+    labels = sawc.get("_labels") or {}
+    named = ", ".join(str(labels.get(digest, digest[:8])) for digest in missing[:6])
+    passed = not missing
+    return schemas.CriterionResult(
+        name = "best_code_taught",
+        passed = passed,
+        kind = "deterministic",
+        feedback = "" if passed else (
+            f"{len(missing)} canonical best code example(s) are missing from the tutorial steps (for example: {named}). "
+            "Give each example its own step or include its exact code reference in the step that teaches it."
+        ),
+    )
+
+
+def check_capstone(sawc: dict) -> schemas.CriterionResult:
+    """The chapter ends with a capstone: one application that parses, is the right size and uses the key API of most steps. The capstone step records how
+    it ended in the draft; a chapter without one says why. A reference chapter, with too few examples to combine, needs none."""
+    record = sawc.get("capstone") or {}
+    sections = sawc.get("sections") or []
+    prefix = sawc.get("_capstone_prefix") or "Capstone"
+    ends = bool(sections) and str(sections[-1].get("heading") or "").startswith(prefix)
+    if record.get("status") == "not_needed" or (record.get("status") == "added" and ends):
+        return schemas.CriterionResult(name = "capstone", passed = True, kind = "deterministic")
+    status = record.get("status") or "missing"
+    detail = "; ".join(record.get("issues") or []) or record.get("error") or ""
+    return schemas.CriterionResult(
+        name = "capstone", passed = False, kind = "deterministic",
+        feedback = f"The chapter does not end with a working capstone application ({status}{': ' + detail if detail else ''}). Make each step's code easy to combine.",
+    )
+
+
+def check_reading_budget(sawc: dict) -> schemas.CriterionResult:
+    """The chapter reads in the time budget: prose at the reading speed, code at the following speed. A chapter over it repeats itself or teaches what
+    its application does not need."""
+    words = 0
+    code_lines = 0
+    bodies = sawc.get("_vault_bodies") or {}
+    for section in sawc.get("sections") or []:
+        words += len(str(section.get("intro") or "").split())
+        for st in section.get("subtopics") or []:
+            words += len(str((st or {}).get("explanation") or "").split())
+            body = (st or {}).get("derived_code") or bodies.get((st or {}).get("code_ref_hash") or "") or ""
+            code_lines += len([line for line in str(body).splitlines() if line.strip() and not line.strip().startswith(("```", "~~~"))])
+    minutes = domains.dd.pipeline.ledger.domain.reading_minutes(words, code_lines)
+    passed = minutes <= params.TUTORIAL_MAX_MINUTES
+    return schemas.CriterionResult(
+        name = "reading_budget", passed = passed, kind = "deterministic",
+        feedback = "" if passed else (
+            f"The chapter takes about {minutes:.0f} minutes to read (budget {params.TUTORIAL_MAX_MINUTES:.0f}). "
+            "Cut explanation that repeats what the code shows and steps the capstone does not use."
+        ),
+    )
+
+
+def check_code_verification(sawc: dict) -> schemas.CriterionResult:
+    """Every canonical example is accounted for and no code block has a failed applicable check; unverified is an honest outcome."""
+    report = sawc.get("_verification_report") or {}
+    results = report.get("results") or []
+    by_hash = {result.get("hash"): result for result in results if result.get("hash")}
+    required = list(report.get("required_hashes") or [])
+    missing = [digest for digest in required if digest not in by_hash]
+    failed = [result.get("hash") for result in results if result.get("status") == "failed"]
+    passed = not missing and not failed and not report.get("missing")
+    details = []
+    if report.get("missing"):
+        details.append("verification report is missing")
+    if missing:
+        details.append(f"{len(missing)} canonical example(s) have no verification result")
+    if failed:
+        details.append(f"{len(failed)} code block(s) failed applicable checks")
+    return schemas.CriterionResult(
+        name = "code_verification",
+        passed = passed,
+        kind = "deterministic",
+        feedback = "" if passed else "; ".join(details) + ". Fix the failing code or record a supported unverified status.",
+    )
+
+
+TUTORIAL_CHECKS = (
+    check_best_code_taught,
+    check_capstone,
+    check_reading_budget,
+)
+
+V2_VERIFICATION_CHECKS = (check_code_verification,)
+V2_TUTORIAL_CHECKS = (check_all_best_code_taught, check_capstone, check_reading_budget, check_code_verification)
+
+
 # Ordered list — stable iteration = stable pass-rate denominators.
 DETERMINISTIC_CHECKS = (
     check_all_sections_present,
@@ -467,11 +599,27 @@ DETERMINISTIC_CHECKS = (
 )
 
 
-def best_seen_key(pass_rate: float, n_pre_passed: int) -> tuple:
+def tutorial_token(sawc: dict) -> str:
+    """What the tutorial gates read that the draft's own hash does not name: how the capstone step ended and the capstone's code."""
+    prefix = sawc.get("_capstone_prefix") or "Capstone"
+    last = (sawc.get("sections") or [{}])[-1]
+    code = [st.get("derived_code") or "" for st in last.get("subtopics") or []] if str(last.get("heading") or "").startswith(prefix) else []
+    return sha256(json.dumps([sawc.get("capstone"), code], sort_keys = True, ensure_ascii = False).encode("utf-8")).hexdigest()[:12]
+
+
+def active_checks(tutorial: bool, verification_required: bool = False) -> tuple:
+    """The deterministic gates of a run: tutorial checks and, in Synth v2, an explicit code-verification gate."""
+    if tutorial and verification_required:
+        return DETERMINISTIC_CHECKS + V2_TUTORIAL_CHECKS
+    checks = DETERMINISTIC_CHECKS + TUTORIAL_CHECKS if tutorial else DETERMINISTIC_CHECKS
+    return checks + V2_VERIFICATION_CHECKS if verification_required else checks
+
+
+def best_seen_key(pass_rate: float, n_pre_passed: int, n_checks: int = len(DETERMINISTIC_CHECKS)) -> tuple:
     """Ordering of iterations for best-seen: every deterministic gate passing first (a RETHINK iteration with a higher judge score
     but a failed gate — asyncio ch-03: five unparseable derived blocks — must not displace a clean one), then the score, then the
-    gate count."""
-    return (n_pre_passed >= len(DETERMINISTIC_CHECKS), pass_rate, n_pre_passed)
+    gate count. `n_checks` is how many gates the run has (more in tutorial mode)."""
+    return (n_pre_passed >= n_checks, pass_rate, n_pre_passed)
 
 
 def aggregate_pass_rate(
@@ -681,13 +829,15 @@ def compute_manifest_hash(
     *,
     sawc_manifest_hash: str,
     digest_manifest_hash: str,
+    tutorial: str = "",
 ) -> str:
+    """`tutorial` is empty for a v1 chapter (its hash is unchanged) and, in tutorial mode, names the capstone and the gates' inputs, which the draft's own hash does not."""
     payload = (
         f"sawc={sawc_manifest_hash}|"
         f"digest={digest_manifest_hash}|"
         f"prompt={versions.CHECKLIST_PROMPT_VERSION}|"
         f"schema={versions.CHECKLIST_SCHEMA_VERSION}"
-    )
+    ) + (f"|tutorial={tutorial}" if tutorial else "")
     return sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 

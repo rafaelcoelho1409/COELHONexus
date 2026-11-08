@@ -90,8 +90,8 @@ class Fake:
         return {"structured_response": value}
 
 
-def context(blobs: FakeBlobs, **fakes: Fake) -> synth_entities.SynthContext:
-    return synth_entities.SynthContext(blobs = blobs, agents = synth_entities.SynthAgents(**fakes))
+def context(blobs: FakeBlobs, executor = None, **fakes: Fake) -> synth_entities.SynthContext:
+    return synth_entities.SynthContext(blobs = blobs, agents = synth_entities.SynthAgents(**fakes), executor = executor)
 
 
 # ---- a small chapter: three sources, two with code ---------------------------------------------------------------------------------------
@@ -383,7 +383,7 @@ def chapter_fakes(judge_answer = judge_passes, reviewer = reviewer_names_s1) -> 
     }
 
 
-async def run_chapter(blobs: FakeBlobs, fakes: dict[str, Fake], thread: str = "t1"):
+async def run_chapter(blobs: FakeBlobs, fakes: dict[str, Fake], thread: str = "t1", executor = None):
     import time
 
     from langgraph.checkpoint.memory import InMemorySaver
@@ -395,7 +395,7 @@ async def run_chapter(blobs: FakeBlobs, fakes: dict[str, Fake], thread: str = "t
     events: list[dict] = []
     async for _ns, mode, chunk in graph.astream(
         {"framework_slug": SLUG, "chapter_id": CHAPTER, "thread_id": thread, "status": "running", "run_started_at": time.time()},
-        config, context = context(blobs, **fakes), stream_mode = ["custom"], subgraphs = True, durability = "sync",
+        config, context = context(blobs, executor = executor, **fakes), stream_mode = ["custom"], subgraphs = True, durability = "sync",
     ):
         events.append(chunk)
     return graph, config, events
@@ -695,6 +695,189 @@ async def test_derive_and_render() -> None:
     truthy("render: the first chapter did ask", first_calls >= 1)
 
 
+CAPSTONE_CODE = (
+    "from alpha import AlphaClient, AlphaServer, logging_middleware, retry_policy\n\npolicy = retry_policy(max_attempts=3)\nclient = AlphaClient(url='http://alpha', policy=policy)\n"
+    "server = AlphaServer(port=8080)\nserver.use(logging_middleware)\n\n\n"
+    "def load_items(collection: str) -> list:\n    result = client.fetch(collection)\n    return list(result.items)\n\n\n"
+    "def handler(request) -> str:\n    items = load_items('items')\n    return \", \".join(str(item) for item in items)\n\n\n"
+    "server.route('/items', handler)\n\nif __name__ == \"__main__\":\n    server.run()\n"
+)
+
+
+def capstone_answer(code: str = CAPSTONE_CODE, parts: int = 1) -> answers.CapstoneAnswer:
+    return answers.CapstoneAnswer(
+        title = "Retrying item loader",
+        intro = "A small program that loads items from the alpha service with retries and prints a summary of what it got back.",
+        parts = [
+            answers.CapstonePartAnswer(
+                subheading = f"Build the loader part {n}",
+                explanation = "This part creates an AlphaClient with a retry_policy, loads the items of a collection and prints them as one summary line.",
+                code = code,
+            )
+            for n in range(1, parts + 1)
+        ],
+    )
+
+
+def test_tutorial_gates() -> None:
+    gates = ai.dd.nodes.pipeline.synth.checklist.domain
+    step = lambda hashes, heading = "Using alpha": {"heading": heading, "intro": "x" * 30, "citations": [], "subtopics": [
+        {"code_ref_hash": h, "explanation": "This shows how the call is used with its arguments today.", "subheading": f"Case {h}"} for h in hashes]}
+    base = {"_must_teach": ["a" * 16, "b" * 16, "c" * 16], "_variant_of": {"d" * 16: "c" * 16}, "_labels": {"a" * 16: "make_client"}, "_capstone_prefix": "Capstone"}
+    full = gates.check_best_code_taught({**base, "sections": [step(["a" * 16, "b" * 16, "d" * 16])]})
+    check("tutorial: all best code taught (a variant counts for its family)", full.passed, True)
+    lacking = gates.check_best_code_taught({**base, "_must_teach": [f"{n:016x}" for n in range(1, 9)], "sections": [step([f"{n:016x}" for n in range(1, 5)])]})
+    check("tutorial: half of the best code missing fails, and says how many", (lacking.passed, "4 of the 8" in lacking.feedback), (False, True))
+    named = gates.check_best_code_taught({**base, "sections": [step(["b" * 16, "c" * 16])], "_must_teach": ["a" * 16, "b" * 16, "c" * 16, "e" * 16, "f" * 16, "9" * 16, "8" * 16, "7" * 16, "6" * 16, "5" * 16]})
+    truthy("tutorial: the feedback names what is missing", "make_client" in named.feedback)
+    check("tutorial: a chapter with no code owes none", gates.check_best_code_taught({"sections": [step([])]}).passed, True)
+    check("tutorial: the capstone section is not a step", [s["heading"] for s in gates.tutorial_sections({"sections": [step([]), step([], "Capstone: Loader")]})], ["Using alpha"])
+    ended = {"sections": [step([]), step([], "Capstone: Loader")], "capstone": {"status": "added"}}
+    check("tutorial: a chapter that ends with an added capstone passes", gates.check_capstone(ended).passed, True)
+    check("tutorial: a reference chapter, with too few examples to combine, needs no capstone", gates.check_capstone({"sections": [step([])], "capstone": {"status": "not_needed"}}).passed, True)
+    check("tutorial: one whose capstone was rejected fails", gates.check_capstone({"sections": [step([])], "capstone": {"status": "rejected", "issues": ["too short"]}}).passed, False)
+    check("tutorial: one with no record fails as missing", "missing" in gates.check_capstone({"sections": [step([])]}).feedback, True)
+    long_text = " ".join(["word"] * 12_000)
+    check("tutorial: a chapter over the reading budget fails", gates.check_reading_budget({"sections": [{"intro": long_text, "subtopics": []}]}).passed, False)
+    check("tutorial: a short chapter is inside it", gates.check_reading_budget({"sections": [step(["a" * 16])], "_vault_bodies": {"a" * 16: "```python\nx = 1\n```"}}).passed, True)
+    check("tutorial: the gates add to the v1 ones only in tutorial mode",
+          (len(gates.active_checks(False)), len(gates.active_checks(True))), (len(gates.DETERMINISTIC_CHECKS), len(gates.DETERMINISTIC_CHECKS) + 3))
+    check("tutorial: a v1 manifest hash does not change", gates.compute_manifest_hash(sawc_manifest_hash = "s", digest_manifest_hash = "d") != gates.compute_manifest_hash(sawc_manifest_hash = "s", digest_manifest_hash = "d", tutorial = "t"), True)
+    check("tutorial: best-seen counts the gates of the run", (gates.best_seen_key(0.9, 11)[0], gates.best_seen_key(0.9, 11, 14)[0]), (True, False))
+
+
+async def test_capstone() -> None:
+    from ai.dd.graphs.pipeline import params as pipeline_params
+
+    test_tutorial_gates()
+
+    # off: the designer is never asked and the chapter is the v1 chapter
+    blobs0 = FakeBlobs()
+    seed(blobs0)
+    fakes0 = chapter_fakes()
+    fakes0["capstone_designer"] = Fake(lambda p: capstone_answer())
+    await run_chapter(blobs0, fakes0, "c0")
+    check("capstone: off, the designer is not asked", fakes0["capstone_designer"].calls, 0)
+    check("capstone: off, no section is added", any(s["heading"].startswith("Capstone") for s in sawc_blob(blobs0)["sections"]), False)
+    check("capstone: off, the outliner is not given the ledger", "tutorial" in fakes0["chapter_outliner"].payloads[0], False)
+
+    pipeline_params.TUTORIAL_MODE = True
+    try:
+        blobs = FakeBlobs()
+        seed(blobs)
+        fakes = chapter_fakes()
+        fakes["capstone_designer"] = Fake(lambda p: capstone_answer())
+        graph, config, _ = await run_chapter(blobs, fakes, "c1")
+        values = (await graph.aget_state(config)).values
+        record = values["derive_stats"]["capstone"]
+        check("capstone: added", record["status"], "added")
+        truthy("capstone: it uses the key API of most steps", record["use_share"] >= 0.6)
+        check("capstone: its code passed the static checks", record["verify"]["failed"], 0)
+        blob = sawc_blob(blobs)
+        last = blob["sections"][-1]
+        truthy("capstone: the chapter ends with the capstone section", last["heading"].startswith("Capstone: Retrying item loader"))
+        check("capstone: its code is derived, with no vault hash", {(st["code_source"], st["code_ref_hash"]) for st in last["subtopics"]}, {("derived", "")})
+        truthy("capstone: it cites sources of the chapter", len(last["citations"]) >= 1)
+        check("capstone: the draft records how the step ended", blob["capstone"]["status"], "added")
+        tutorial = fakes["chapter_outliner"].payloads[0]["tutorial"]
+        truthy("capstone: the outliner is given the best code of the sources, in order", tutorial["n_best_code"] >= 3 and len(tutorial["best_code"]) >= 3)
+        truthy("capstone: …each with its hash and a preview", all(row["hash"] and row["preview"] for row in tutorial["best_code"]))
+        request = fakes["capstone_designer"].payloads[0]
+        truthy("capstone: the designer was shown the steps with their code", any(ex["code"] for step in request["steps"] for ex in step["examples"]))
+        truthy("capstone: the README prints the application", "def load_items(collection: str) -> list:" in blobs.objects[keys.chapter_readme_key(SLUG, CHAPTER)])
+
+        # the chapter ships its code as a folder to run
+        folder = f"dd/{SLUG}/synth/{CHAPTER}/code/"
+        shipped = sorted(k[len(f"dd/{SLUG}/synth/{CHAPTER}/"):] for k in blobs.objects if k.startswith(folder))
+        truthy("capstone: the code folder has the capstone's main.py and an index", "code/capstone/main.py" in shipped and "code/INDEX.md" in shipped)
+        truthy("capstone: …and the steps' examples", any(name.startswith("code/steps/01-") and name.endswith(".py") for name in shipped))
+        main_py = blobs.objects[folder + "capstone/main.py"]
+        truthy("capstone: main.py is the application, and it parses", "def load_items(collection: str) -> list:" in main_py and ai.dd.nodes.pipeline.synth.sawc_derive.domain.python_ast_valid(main_py))
+        render_record = json.loads(blobs.objects[keys.chapter_render_latest_key(SLUG, CHAPTER)])
+        check("capstone: the render result lists the files", render_record["code_files"], shipped)
+        check("capstone: a v1 chapter ships no code folder", any(k.startswith(f"dd/{SLUG}/synth/{CHAPTER}/code/") for k in blobs0.objects), False)
+        check("capstone: …and records none", json.loads(blobs0.objects[keys.chapter_render_latest_key(SLUG, CHAPTER)])["code_files"], [])
+
+        # the judge reads the tutorial gates too
+        evaluation = json.loads(blobs.objects[f"dd/{SLUG}/synth/{CHAPTER}/checklist-latest.json"])
+        verdicts = {c["name"]: c["passed"] for c in evaluation["criteria"]}
+        truthy("capstone: the tutorial gates are part of the checklist", {"best_code_taught", "capstone", "reading_budget"} <= set(verdicts))
+        check("capstone: the capstone gate passes", verdicts["capstone"], True)
+        check("capstone: so does the reading budget", verdicts["reading_budget"], True)
+        check("capstone: the checklist counts the v1 gates and the tutorial ones", evaluation["n_total"], len(ai.dd.nodes.pipeline.synth.checklist.domain.DETERMINISTIC_CHECKS) + 3 + 5)
+
+        # a designer that fails: the chapter keeps its steps, and the draft says why there is no capstone
+        blobs2 = FakeBlobs()
+        seed(blobs2)
+        fakes2 = chapter_fakes()
+        fakes2["capstone_designer"] = Fake(lambda p: RuntimeError("provider down"))
+        await run_chapter(blobs2, fakes2, "c2")
+        check("capstone: a failed designer is recorded", sawc_blob(blobs2)["capstone"]["status"], "designer_failed")
+        failed_run = json.loads(blobs2.objects[f"dd/{SLUG}/synth/{CHAPTER}/checklist-latest.json"])
+        capstone_gate = next(c for c in failed_run["criteria"] if c["name"] == "capstone")
+        check("capstone: …and the capstone gate fails with the reason", (capstone_gate["passed"], "designer_failed" in capstone_gate["feedback"]), (False, True))
+        check("capstone: …and the chapter has no capstone section", any(s["heading"].startswith("Capstone") for s in sawc_blob(blobs2)["sections"]), False)
+
+        # with an executor the capstone is run: a clean run is kept, a failing one rejects it
+        class Runner:
+            def __init__(self, ok: bool) -> None:
+                self.ok = ok
+                self.ran: list[str] = []
+
+            async def run(self, code, *, lang, timeout_s):
+                self.ran.append(code)
+                return domains.dd.pipeline.verify.entities.RunResult(ok = self.ok, stderr = "" if self.ok else "NameError: name 'handler' is not defined")
+
+        for ok, thread in ((True, "e1"), (False, "e2")):
+            blobs_e = FakeBlobs()
+            seed(blobs_e)
+            fakes_e = chapter_fakes()
+            fakes_e["capstone_designer"] = Fake(lambda p: capstone_answer())
+            runner = Runner(ok)
+            await run_chapter(blobs_e, fakes_e, thread, executor = runner)
+            record_e = sawc_blob(blobs_e)["capstone"]
+            truthy(f"capstone: with an executor the application is run ({'clean' if ok else 'failing'})", any("def load_items" in code for code in runner.ran))
+            if ok:
+                check("capstone: a clean run keeps it", record_e["status"], "added")
+            else:
+                check("capstone: a failing run rejects it, with the error", (record_e["status"], any("NameError" in issue for issue in record_e["issues"])), ("rejected", True))
+
+        # a chapter with too few examples to combine is a reference chapter: no capstone is designed or asked for
+        derive_params = ai.dd.nodes.pipeline.synth.sawc_derive.params
+        derive_params.CAPSTONE_MIN_EXAMPLES = 99
+        try:
+            blobs5 = FakeBlobs()
+            seed(blobs5)
+            fakes5 = chapter_fakes()
+            fakes5["capstone_designer"] = Fake(lambda p: capstone_answer())
+            await run_chapter(blobs5, fakes5, "c5")
+        finally:
+            derive_params.CAPSTONE_MIN_EXAMPLES = 3
+        check("capstone: a reference chapter is recorded as needing none", sawc_blob(blobs5)["capstone"]["status"], "not_needed")
+        check("capstone: …and the designer is not asked", fakes5["capstone_designer"].calls, 0)
+
+        # an application that does not parse is rejected, not shipped
+        blobs3 = FakeBlobs()
+        seed(blobs3)
+        fakes3 = chapter_fakes()
+        fakes3["capstone_designer"] = Fake(lambda p: capstone_answer("def broken(:\n    pass\n"))
+        await run_chapter(blobs3, fakes3, "c3")
+        check("capstone: an application that does not parse is rejected", sawc_blob(blobs3)["capstone"]["status"], "rejected")
+
+        # an application that ignores the steps is rejected
+        blobs4 = FakeBlobs()
+        seed(blobs4)
+        fakes4 = chapter_fakes()
+        unrelated = "import json\n\n\ndef dump(data):\n    return json.dumps(data)\n\n\ndef load(text):\n    return json.loads(text)\n\n\nvalues = [1, 2, 3]\ntext = dump(values)\nprint(load(text))\nprint(len(text))\n"
+        fakes4["capstone_designer"] = Fake(lambda p: capstone_answer(unrelated))
+        await run_chapter(blobs4, fakes4, "c4")
+        record4 = sawc_blob(blobs4)["capstone"]
+        check("capstone: an application that uses none of the steps is rejected", record4["status"], "rejected")
+        truthy("capstone: …and says which steps it left out", any("leaves out" in issue for issue in record4["issues"]))
+    finally:
+        pipeline_params.TUTORIAL_MODE = False
+
+
 async def test_resume_and_chunks() -> None:
     # a chapter that stopped after the sections were written resumes from the stored sections
     blobs = FakeBlobs()
@@ -796,6 +979,7 @@ async def main() -> None:
     await test_writer_retries()
     await test_judge_outage_and_reviewer()
     await test_derive_and_render()
+    await test_capstone()
     await test_resume_and_chunks()
     await test_harmonize()
     print("\nall synth graph checks passed")

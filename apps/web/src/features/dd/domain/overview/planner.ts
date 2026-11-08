@@ -67,6 +67,51 @@ function corpusLoad(values: Record<string, unknown>): NodeOverview {
   };
 }
 
+function pageCards(values: Record<string, unknown>): NodeOverview {
+  const s = statsOf(values, "page_cards_stats");
+  if (maybeNum(s, "n_pages") === undefined) return emptyOverview("No page-card stats reported yet.");
+  const dropped = statsOf(s, "dropped_pages");
+  return {
+    cards: [
+      card("Kept", int(num(s, "n_kept")) + "/" + int(num(s, "n_pages")), "distinct source pages"),
+      card("Dropped", int(num(s, "n_dropped")), "reasons are stored with the page cards"),
+      card("Fallback cards", int(num(s, "n_fallback_cards")), "semantic card call failed"),
+      card("Cache", cacheLabel(s, "cold"), wall(s)),
+    ],
+    sections: Object.keys(dropped).length
+      ? [
+          {
+            kind: "note",
+            title: "Dropped pages",
+            text:
+              Object.keys(dropped).length + " page entries have a recorded reason in the page-card artifact.",
+          },
+        ]
+      : [],
+    footer: compact([hashNote(s), int(num(s, "n_exact_duplicates")) + " exact duplicates"]),
+  };
+}
+
+function chapterDesign(values: Record<string, unknown>): NodeOverview {
+  const s = statsOf(values, "chapter_design_stats");
+  const titles = texts(s, "chapter_titles");
+  if (!num(s, "n_chapters") && !titles.length) return emptyOverview("No chapter-design stats reported yet.");
+  return {
+    cards: [
+      card("Chapters", int(num(s, "n_chapters")), "suggested " + num(s, "suggested_chapters")),
+      card("Pages assigned", int(num(s, "n_pages_assigned")) + "/" + int(num(s, "n_pages_in"))),
+      card("Best code", int(num(s, "n_best_code")), "must-teach examples"),
+      card("Tutorial time", num(s, "unique_tutorial_minutes") + " min", text(s, "embedding_model", "—")),
+    ],
+    sections: titles.length ? [{ kind: "list", title: "Designed chapters", items: titles }] : [],
+    footer: compact([
+      hashNote(s),
+      flag(s, "fallback_used") ? "deterministic grouping fallback used" : null,
+      int(num(s, "n_missing_groups_repaired")) + " groups repaired",
+    ]),
+  };
+}
+
 function offTopic(values: Record<string, unknown>): NodeOverview {
   const s = statsOf(values, "off_topic_stats");
   if (maybeNum(s, "kept") === undefined && maybeNum(s, "dropped") === undefined) {
@@ -374,6 +419,8 @@ function planWrite(values: Record<string, unknown>): NodeOverview {
 
 export const PLANNER_OVERVIEWS: Record<string, (values: Record<string, unknown>) => NodeOverview> = {
   corpus_load: corpusLoad,
+  page_cards: pageCards,
+  chapter_design: chapterDesign,
   off_topic: offTopic,
   doc_distill: docDistill,
   chapter_propose: chapterPropose,

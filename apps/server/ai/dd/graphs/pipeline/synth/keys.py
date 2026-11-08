@@ -8,3 +8,11 @@ NODE_TO_FIELD = {
     "mgsr_replan":        "mgsr_path",
     "render_audit_write": "chapter_path",
 }
+
+
+def latest_key(slug: str, chapter_id: str, artifact: str) -> str:
+    """Version-isolated pointer keys; v1 keeps every established object key byte-for-byte."""
+    from . import params
+
+    suffix = "-v2" if params.is_v2() else ""
+    return f"dd/{slug}/synth/{chapter_id}/{artifact}{suffix}-latest.json"

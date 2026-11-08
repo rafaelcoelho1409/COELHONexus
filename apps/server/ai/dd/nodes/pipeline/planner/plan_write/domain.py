@@ -80,6 +80,41 @@ def pipeline_health(state: dict) -> dict:
     health["chapter_select_family_rehomed"] = (
         cons.get("n_family_consolidated", 0) + cons.get("n_rehomed_to_family", 0)
     )
+    if state.get("planner_version") == "v2":
+        cards = state.get("page_cards_stats") or {}
+        design = state.get("chapter_design_stats") or {}
+        # The v2 selector assigns only kept canonical pages. Raw pages include
+        # off-topic rejects and exact duplicate aliases, so use the kept count
+        # when reporting chapter coverage and degradation.
+        pages = int(cards.get("n_kept") or design.get("n_pages_in") or 0)
+        assigned = int(
+            sel.get("n_assigned_docs")
+            if "n_assigned_docs" in sel
+            else design.get("n_pages_assigned") or 0
+        )
+        fallback_pct = _pct(cards.get("n_fallback_cards", 0), cards.get("n_kept", 0))
+        health.update({
+            "planner_version": "v2",
+            "page_card_fallback_pct": fallback_pct,
+            "page_card_dropped_pages": cards.get("n_dropped", 0),
+            "chapter_design_fallback_used": bool(design.get("fallback_used")),
+            "chapter_design_ledger_available": design.get("ledger_available"),
+            "chapter_design_embedding_model": design.get("embedding_model"),
+            "chapter_design_candidate_count": design.get("n_partitions_scored", 0),
+            "chapter_design_best_code": design.get("n_best_code", 0),
+            "chapter_select_page_coverage_pct": _pct(assigned, pages),
+            "chapter_select_unplaced_pages": max(pages - assigned, 0),
+            "prerequisite_cycles_guarded": ordc.get("n_cycle_guarded_chapters", 0),
+            "prerequisites_unresolved": ordc.get("n_unresolved_prerequisites", 0),
+        })
+        health["degraded"] = bool(
+            fallback_pct >= 40.0
+            or design.get("fallback_used")
+            or design.get("ledger_available") is False
+            or (pages and assigned < pages)
+            or ordc.get("n_samples", 0) == 0 and int(sel.get("n_chapters_out", 0)) > 1
+            or (pages > 15 and int(sel.get("n_chapters_out", 0)) < 3)
+        )
     return health
 
 
@@ -159,6 +194,9 @@ def build_cluster_to_keys(
 def sanitize_chapters(
     outline_chapters: list[dict],
     cluster_to_keys: dict[int, list[str]],
+    *,
+    preserve_metadata: bool = False,
+    stable_identity: bool = False,
 ) -> tuple[list[dict], int]:
     """Hydrate sources + title/description cleanup + drop empty +
     re-number. Returns (chapters, n_dropped)."""
@@ -199,7 +237,7 @@ def sanitize_chapters(
         if len(words) > params.TITLE_MAX_WORDS:
             title = " ".join(words[:params.TITLE_MAX_WORDS])
 
-        sanitized.append({
+        row = {
             "title":              title,
             "description":        trim_description(
                 ch.get("description") or "",
@@ -207,12 +245,26 @@ def sanitize_chapters(
             "member_cluster_ids": member_ids,
             "sources":            sorted(sources),
             "n_sources":          len(sources),
-        })
+        }
+        if preserve_metadata:
+            for name in (
+                "objective", "key_concepts", "prerequisites", "kind", "role",
+                "capstone_ability", "capstone_reason", "n_best_code", "best_code_ids", "reading_minutes", "tutorial_minutes",
+                "synth_eligible", "synth_exclusion_reason",
+            ):
+                if name in ch:
+                    value = ch[name]
+                    row[name] = list(value) if name in ("key_concepts", "prerequisites") and isinstance(value, list) else value
+        sanitized.append(row)
 
     # Re-number `order` to 1..N contiguous + assign stable slug ids.
     for i, ch in enumerate(sanitized, start = 1):
         ch["order"] = i
-        ch["id"] = f"ch-{i:02d}-{slugify(ch['title'])}"
+        if stable_identity:
+            identity = sha256("\n".join(ch["sources"]).encode("utf-8")).hexdigest()[:12]
+            ch["id"] = f"ch-{identity}"
+        else:
+            ch["id"] = f"ch-{i:02d}-{slugify(ch['title'])}"
 
     return sanitized, dropped
 

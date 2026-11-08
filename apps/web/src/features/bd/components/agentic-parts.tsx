@@ -40,12 +40,14 @@ export function AgenticStatusBadge({ status }: { status: AgenticNodeStatus }) {
 export function AgenticNodeList({
   rows,
   onOpen,
+  label = "Agentic pipeline nodes",
 }: {
   rows: readonly AgenticNodeView[];
   onOpen: (nodeId: string) => void;
+  label?: string;
 }) {
   return (
-    <ol aria-label="Agentic pipeline nodes" className="flex flex-col gap-1.5">
+    <ol aria-label={label} className="flex flex-col gap-1.5">
       {rows.map((row) => (
         <li key={row.id} data-status={row.status} data-node={row.id}>
           <button

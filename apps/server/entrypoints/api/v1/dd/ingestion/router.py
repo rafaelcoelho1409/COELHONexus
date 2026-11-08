@@ -3,7 +3,7 @@ finalize corpus). Anything here survives Redis TTL."""
 
 import domains, infra
 import domains.dd.ingestion.ai.task
-from . import runs
+from . import runs, schemas
 
 import logging
 from typing import Literal
@@ -118,6 +118,21 @@ async def get_page(
             detail=f"page idx={idx} {version} version is unavailable for {slug!r}",
         ) from error
     return {"slug": slug, "idx": idx, "version": version, "body": body}
+
+
+@router.get("/{slug}/pages/{idx}/quality", response_model=schemas.PageQuality)
+async def get_page_quality(slug: str, idx: int, response: Response) -> dict:
+    """The current Agentic AI assessment and repair outcome for one finalized page."""
+    response.headers["Cache-Control"] = "no-store"
+    quality = await domains.dd.ingestion.ai.service.read_page_quality(
+        slug, idx, storage=infra.minio.service.get_storage(),
+    )
+    if quality is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no Agentic AI quality report for page {idx} of {slug!r}",
+        )
+    return quality
 
 
 @router.post("/{slug}/agentic/runs", status_code=202)

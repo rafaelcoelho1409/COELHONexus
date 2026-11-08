@@ -102,6 +102,10 @@ COVERAGE_CAPACITY_SHARE = 0.5     # 0.75 -> 0.5: langchain ch-04 routed 234 bloc
 COVERAGE_MIN_SOURCE_COUNT = 6
 COVERAGE_MIN_SOURCES = 0.70
 
+# Tutorial gates: the share of a chapter's best code examples its steps must teach, and the reading time a chapter may take (minutes).
+TUTORIAL_MIN_COVERAGE = 0.90
+TUTORIAL_MAX_MINUTES = 45.0
+
 # Quality reported to the Rotator for a judge that passed every LLM criterion while one of these deterministic gates failed.
 JUDGE_CONTRADICTED_BY = ("code_prose_alignment", "code_coverage", "code_uniqueness_ratio", "code_snippet_sanity")
 FEEDBACK_LENIENT_JUDGE_QUALITY = 0.2

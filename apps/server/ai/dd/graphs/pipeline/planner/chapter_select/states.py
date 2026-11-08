@@ -11,6 +11,9 @@ class SelectState(TypedDict, total = False):
     thread_id: str
     chapter_proposals_ref: str | None
     chapter_doc_assignments_ref: str | None
+    planner_version: str
+    page_cards_ref: str | None
+    relevant_files: list[str]
     chapter_plan_ref: str | None
     select_stats: dict
 

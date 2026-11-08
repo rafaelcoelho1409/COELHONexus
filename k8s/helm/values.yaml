@@ -3,6 +3,14 @@
 # 'production' = ArgoCD with GitLab Container Registry
 environment: production
 
+# Planner graph version. Set to v1 to roll back while retaining both implementations.
+planner:
+  version: "v2"
+
+# Synth graph version. Set to v1 to roll back while retaining both implementations.
+synth:
+  version: "v2"
+
 # LLM endpoint the Docs Distiller / YCS apps call (OpenAI-compatible HTTP).
 # No default endpoint is baked into the chart — set url/apiKey/model here, or
 # configure it at runtime from the Settings page (BYOK, takes precedence over

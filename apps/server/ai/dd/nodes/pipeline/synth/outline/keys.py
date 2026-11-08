@@ -7,4 +7,6 @@ def versioned_blob_key(slug: str, chapter_id: str, manifest_hash: str) -> str:
 
 
 def latest_blob_key(slug: str, chapter_id: str) -> str:
-    return f"dd/{slug}/synth/{chapter_id}/outline-latest.json"
+    from ai.dd.graphs.pipeline.synth import keys
+
+    return keys.latest_key(slug, chapter_id, "outline")

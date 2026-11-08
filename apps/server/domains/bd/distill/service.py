@@ -157,6 +157,21 @@ async def create_distill_run(
         if qa_manifest.get("expected_page_count") != page_count:
             raise ValueError("the selected ingestion QA run does not cover every page")
 
+        selection_result = await domains.bd.ingestion.ai.selection.read_selection(
+            book_id, qa_run_id, storage = storage,
+        )
+        if selection_result is None:
+            raise ValueError("a completed content-selection pass is required before Distill can start")
+        selection, selection_key, selection_sha256 = selection_result
+        if (
+            selection.extraction_run_id != extraction_run_id
+            or selection.expected_page_count != page_count
+        ):
+            raise ValueError("the content selection is pinned to a different extraction or page count")
+        selected_page_count = sum(page.disposition == "include" for page in selection.pages)
+        if selected_page_count < 1:
+            raise ValueError("at least one page must be included in the Distill selection")
+
         active = [
             run for run in await list_runs(book_id, storage = storage)
             if run["status"] in {"queued", "running"}
@@ -180,6 +195,10 @@ async def create_distill_run(
             ingestion_ai_manifest_key = qa_manifest_key,
             ingestion_ai_manifest_sha256 = qa_manifest_sha256,
             expected_page_count = page_count,
+            selected_page_count = selected_page_count,
+            content_selection_key = selection_key,
+            content_selection_sha256 = selection_sha256,
+            content_selection_revision = selection.revision,
             prompt_version = versions.PROMPT_VERSION,
             model_name = domains.settings.chat.service.ENDPOINT.model,
             created_at = now,
@@ -229,13 +248,97 @@ async def queue_resume(book_id: str, run_id: str) -> dict[str, Any]:
 
 
 async def request_cancel(book_id: str, run_id: str) -> dict[str, Any]:
-    manifest = await read_run(book_id, run_id)
-    if manifest is None:
-        raise FileNotFoundError(f"Distill run {run_id} was not found")
-    if manifest["status"] in {"queued", "running"}:
-        await progress.request_cancel(book_id, run_id)
-        await progress.emit(book_id, run_id, "run_cancel_requested", status = manifest["status"])
-    return {"book_id": book_id, "run_id": run_id, "status": manifest["status"]}
+    if not _safe_segment(book_id) or not _safe_segment(run_id):
+        raise ValueError("book_id and run_id must be safe path segments")
+    async with (
+        infra.redis.service.client() as redis,
+        redis.lock(
+            domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+            timeout = 120,
+            blocking_timeout = 30,
+        ),
+    ):
+        manifest = await read_run(book_id, run_id)
+        if manifest is None:
+            raise FileNotFoundError(f"Distill run {run_id} was not found")
+        if manifest["status"] in {"queued", "running"}:
+            await progress.request_cancel(book_id, run_id)
+            await progress.emit(book_id, run_id, "run_cancel_requested", status = manifest["status"])
+        return {"book_id": book_id, "run_id": run_id, "status": manifest["status"]}
+
+
+async def wipe_run(book_id: str, run_id: str) -> dict[str, Any]:
+    """Delete a terminal candidate, its checkpoints, usage, and progress without touching source pages."""
+    if not _safe_segment(book_id) or not _safe_segment(run_id):
+        raise ValueError("book_id and run_id must be safe path segments")
+    storage = infra.minio.service.get_storage()
+    try:
+        async with infra.redis.service.client() as redis:
+            async with (
+                redis.lock(
+                    domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+                    timeout = 3600,
+                    blocking_timeout = 30,
+                ),
+                redis.lock(
+                    f"coelhonexus:bd:distill:pdf:{book_id}:{run_id}",
+                    timeout = 3600,
+                    blocking_timeout = 30,
+                ),
+                redis.lock(
+                    domains.bd.distill.rag.keys.enqueue_lock_key(book_id, run_id),
+                    timeout = 120,
+                    blocking_timeout = 30,
+                ),
+                redis.lock(
+                    domains.bd.distill.rag.keys.index_lock_key(book_id, run_id),
+                    timeout = domains.bd.distill.rag.params.INDEX_LOCK_TIMEOUT_S,
+                    blocking_timeout = 1,
+                ),
+            ):
+                manifest = await read_run(book_id, run_id, storage = storage)
+                if manifest is None:
+                    raise FileNotFoundError(f"Distill run {run_id} was not found")
+                if manifest["status"] in {"queued", "running"}:
+                    raise ValueError("stop the Distill run and wait for it to finish before wiping it")
+                runs = await list_runs(book_id, storage = storage)
+                if any(run["status"] in {"queued", "running"} for run in runs):
+                    raise ValueError("stop the active Distill run before wiping another run")
+                index_manifest = await domains.bd.distill.rag.service.read_index(book_id, run_id, storage = storage)
+                if index_manifest is not None:
+                    await domains.bd.distill.rag.service.delete_run_points(book_id, run_id)
+                replacement = next(
+                    (run for run in runs
+                     if run["run_id"] != run_id and run["extraction_run_id"] == manifest["extraction_run_id"]),
+                    None,
+                )
+                thread_id = f"bd-distill:{book_id}:{manifest['extraction_run_id']}:{run_id}"
+                checkpointer = await infra.postgres.service.init_checkpointer()
+                await checkpointer.adelete_thread(thread_id)
+                removed = await storage.delete_prefix(keys.run_prefix(book_id, run_id))
+                await domains.settings.llm_counter.service.delete_run("bd", run_id)
+                await progress.clear(book_id, run_id)
+                pointer_key = keys.current_run_key(book_id)
+                if await storage.exists(pointer_key):
+                    try:
+                        pointer = json.loads(await storage.read_text(pointer_key))
+                    except json.JSONDecodeError:
+                        pointer = None
+                    if isinstance(pointer, dict) and pointer.get("run_id") == run_id:
+                        await storage.write(
+                            pointer_key,
+                            json.dumps(
+                                {
+                                    "run_id": replacement["run_id"] if replacement else None,
+                                    "extraction_run_id": manifest["extraction_run_id"],
+                                },
+                                separators = (",", ":"),
+                            ),
+                            content_type = params.JSON_TYPE,
+                        )
+                return {"book_id": book_id, "run_id": run_id, "wiped": True, "objects_deleted": removed}
+    except infra.redis.service.LockError as error:
+        raise ValueError("a Distill retrieval index is still processing; wait for it before wiping this run") from error
 
 
 async def mark_failed(book_id: str, run_id: str, error: Exception) -> dict[str, Any] | None:
@@ -327,6 +430,9 @@ async def run_distill(
     checkpointer: Any | None,
 ) -> dict[str, Any]:
     """Run or resume the pinned graph; all substantive intermediate artifacts remain outside graph state."""
+    if not params.DISTILL_EXECUTION_ENABLED:
+        raise RuntimeError("Distill execution is disabled")
+
     from langgraph.errors import NodeCancelledError
 
     import ai
@@ -348,6 +454,19 @@ async def run_distill(
     qa_content = await storage.read_text(manifest["ingestion_ai_manifest_key"])
     if hashlib.sha256(qa_content.encode("utf-8")).hexdigest() != manifest["ingestion_ai_manifest_sha256"]:
         raise ValueError("the ingestion QA manifest changed after this Distill run was created")
+    if manifest.get("schema_version") == "1.1":
+        selection_content = await storage.read_text(manifest["content_selection_key"])
+        if hashlib.sha256(selection_content.encode("utf-8")).hexdigest() != manifest["content_selection_sha256"]:
+            raise ValueError("the content-selection revision changed after this Distill run was created")
+        selection = domains.bd.ingestion.ai.schemas.ContentSelectionManifest.model_validate_json(selection_content)
+        if (
+            selection.book_id != book_id
+            or selection.extraction_run_id != manifest["extraction_run_id"]
+            or selection.agentic_run_id != manifest["ingestion_ai_run_id"]
+            or selection.revision != manifest["content_selection_revision"]
+            or sum(page.disposition == "include" for page in selection.pages) != manifest["selected_page_count"]
+        ):
+            raise ValueError("the pinned content-selection revision does not match this Distill run")
 
     manifest["status"] = "running"
     manifest["error"] = None
@@ -417,7 +536,11 @@ async def run_distill(
             "source_manifest_sha256": manifest["source_manifest_sha256"],
             "ingestion_ai_manifest_key": manifest["ingestion_ai_manifest_key"],
             "ingestion_ai_manifest_sha256": manifest["ingestion_ai_manifest_sha256"],
+            "content_selection_key": manifest.get("content_selection_key"),
+            "content_selection_sha256": manifest.get("content_selection_sha256"),
+            "content_selection_revision": manifest.get("content_selection_revision", 1),
             "expected_page_count": manifest["expected_page_count"],
+            "selected_page_count": manifest.get("selected_page_count", manifest["expected_page_count"]),
             "run_created_at": manifest["created_at"],
             "completed_units": [],
             "completed_chapters": [],

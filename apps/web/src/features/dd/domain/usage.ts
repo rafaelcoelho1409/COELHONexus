@@ -86,6 +86,65 @@ export function payloadModelRows(payload: UsagePayload | null | undefined): Mode
 
 export type UsageNodeRow = UsageCounts & { nodeId: string; label: string };
 
+export type UsageGroupingMode = "node" | "model" | "node_model";
+export type UsageGroupingRow = UsageCounts & {
+  key: string;
+  node: string | null;
+  model: string | null;
+};
+
+/** The shared usage-sheet breakdown: by graph node, by reported model, or by node and model together. */
+export function usageGroupingRows(
+  stage: RunStage,
+  payload: UsagePayload | null | undefined,
+  mode: UsageGroupingMode,
+  nodeId?: string,
+): UsageGroupingRow[] {
+  const labels = new Map(STAGE_NODES[stage].map((node) => [node.id, node.label]));
+  const entries = Object.entries(payload?.by_node ?? {}).filter(
+    ([id]) => nodeId === undefined || id === nodeId,
+  );
+  if (mode === "node") {
+    return entries
+      .filter(([, counts]) => counts.calls > 0)
+      .map(([id, counts]) => ({ key: `node:${id}`, node: labels.get(id) ?? id, model: null, ...counts }))
+      .sort((a, b) => b.calls - a.calls || (a.node ?? "").localeCompare(b.node ?? ""));
+  }
+
+  if (mode === "node_model") {
+    return entries
+      .flatMap(([id, counts]) =>
+        Object.entries(counts.by_model)
+          .filter(([, modelCounts]) => modelCounts.calls > 0)
+          .map(([model, modelCounts]) => ({
+            key: `node-model:${id}:${model}`,
+            node: labels.get(id) ?? id,
+            model,
+            errors: 0,
+            ...modelCounts,
+          })),
+      )
+      .sort(
+        (a, b) =>
+          b.calls - a.calls ||
+          (a.node ?? "").localeCompare(b.node ?? "") ||
+          (a.model ?? "").localeCompare(b.model ?? ""),
+      );
+  }
+
+  const byModel = new Map<string, ModelCounts>();
+  for (const [, counts] of entries) {
+    for (const [model, modelCounts] of Object.entries(counts.by_model)) {
+      const previous = byModel.get(model);
+      byModel.set(model, previous ? addModel(previous, modelCounts) : modelCounts);
+    }
+  }
+  return [...byModel.entries()]
+    .filter(([, counts]) => counts.calls > 0)
+    .map(([model, counts]) => ({ key: `model:${model}`, node: null, model, errors: 0, ...counts }))
+    .sort((a, b) => b.calls - a.calls || (a.model ?? "").localeCompare(b.model ?? ""));
+}
+
 /** Nodes that made at least one call, busiest first, named as the node board names them. */
 export function usageRows(stage: RunStage, payload: UsagePayload): UsageNodeRow[] {
   const labels = new Map(STAGE_NODES[stage].map((node) => [node.id, node.label]));

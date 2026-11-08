@@ -86,4 +86,22 @@ describe("book readiness", () => {
       distillReadiness(snapshot({ status: "done" }, null, agenticRun({ quality_status: null }))).ready,
     ).toBe(false);
   });
+
+  it("shows remaining quality review pages even when ingestion can feed Distill", () => {
+    const readiness = distillReadiness(
+      snapshot(
+        { status: "done" },
+        null,
+        agenticRun({
+          expected_page_count: 9,
+          quality_status: "complete_with_review",
+          delivered_page_count: 8,
+          review_page_count: 1,
+        }),
+      ),
+    );
+
+    expect(readiness.ready).toBe(true);
+    expect(readiness.steps[1]?.detail).toContain("1 page is flagged for review");
+  });
 });

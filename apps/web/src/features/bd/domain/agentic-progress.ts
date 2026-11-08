@@ -5,6 +5,7 @@ export const AGENTIC_NODES = [
   { id: "plan_repairs", label: "Plan repairs" },
   { id: "repair_pages", label: "Repair pages" },
   { id: "normalize_metadata", label: "Normalize metadata" },
+  { id: "classify_content", label: "Select Distill pages" },
   { id: "publish", label: "Publish results" },
 ] as const;
 
@@ -75,6 +76,19 @@ export const AGENTIC_NODE_DETAILS: Record<AgenticNodeId, AgenticNodeDetails> = {
     writes: ["book metadata"],
     llm: "Metadata normalizer agent, one call.",
   },
+  classify_content: {
+    title: "Select Distill pages",
+    subtitle: "Classifies each normalized page's role in the book and keeps uncertain pages in the working set.",
+    kind: "LLM classification + conservative policy",
+    actions: [
+      "Reads each repaired page with its book title and section path.",
+      "Excludes only high-confidence navigation, legal and noise pages; blank pages stay excluded and image-only pages stay included for review.",
+      "Writes a versioned selection that Distill pins before creating learning units.",
+    ],
+    reads: ["AI-processed pages", "book metadata", "book outline"],
+    writes: ["versioned Distill page selection"],
+    llm: "Content classifier agent, one bounded page at a time; uncertain or failed classifications are kept.",
+  },
   publish: {
     title: "Publish results",
     subtitle: "Writes the quality report and, last of all, the run manifest.",
@@ -105,6 +119,8 @@ export const EMPTY_AGENTIC_PROGRESS: AgenticProgress = {
   processed_pages: [],
   active_audit_pages: [],
   active_repair_pages: [],
+  classified_pages: [],
+  active_classification_pages: [],
 };
 
 export type ChapterProgress = ChapterRange & { processed: number; total: number };
@@ -174,6 +190,13 @@ export function agenticNodeCaption(
       ? `${done} ${unitPlural} repaired · ${active} active · ${total} total`
       : `${done} of ${total} ${unitPlural} repaired`;
   }
+  if (nodeId === "classify_content") {
+    const done = progress.classified_pages?.length ?? 0;
+    const active = progress.active_classification_pages?.length ?? 0;
+    return active > 0
+      ? `${done} ${unitPlural} classified · ${active} active · ${total} total`
+      : `${done} of ${total} ${unitPlural} classified`;
+  }
   return null;
 }
 
@@ -188,6 +211,7 @@ export function agenticNodeKpi(
   if (status !== "done") return null;
   if (nodeId === "audit_batch") return `${progress.audited_pages.length} ${unitPlural} audited`;
   if (nodeId === "repair_pages") return `${progress.processed_pages.length} ${unitPlural} repaired`;
+  if (nodeId === "classify_content") return `${progress.classified_pages?.length ?? 0} ${unitPlural} classified`;
   if (nodeId === "publish" && summary) {
     return `${summary.deliveredPages} delivered · ${summary.reviewPages} need review`;
   }
@@ -207,7 +231,9 @@ export function agenticNodeLiveLine(
       ? [progress.audited_pages.length, progress.active_audit_pages.length]
       : nodeId === "repair_pages"
         ? [progress.processed_pages.length, progress.active_repair_pages.length]
-        : [null, 0];
+        : nodeId === "classify_content"
+          ? [progress.classified_pages?.length ?? 0, progress.active_classification_pages?.length ?? 0]
+          : [null, 0];
   if (done === null) return null;
   return active > 0 ? `${done}/${total} · ${active} in flight` : `${done}/${total}`;
 }

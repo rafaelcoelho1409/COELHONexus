@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 
 import {
@@ -33,7 +33,7 @@ import { humanizeChapterId } from "../domain/chapters";
 import type { SearchHit } from "../domain/study-search";
 import { useSourceSheet } from "../hooks/use-source-sheet";
 import { useStudyLayout } from "../hooks/use-study-layout";
-import { CHAPTER_ARTIFACT, chapterStudyHref, stageHref } from "../params";
+import { CHAPTER_ARTIFACT, chapterCodeHref, chapterStudyHref, stageHref } from "../params";
 import { FileDrawer } from "./file-drawer";
 import { ReadingProgress } from "./reading-progress";
 import { NoFrameworkCard } from "./stage-parts";
@@ -149,13 +149,10 @@ function StudyReader({ slug }: { slug: string }) {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
-  const choose = useCallback(
-    (hit: SearchHit) => {
-      setSearchOpen(false);
-      router.push(`${chapterStudyHref(slug, hit.chapterId)}${hit.headingId ? `#${hit.headingId}` : ""}`);
-    },
-    [router, slug],
-  );
+  const choose = (hit: SearchHit) => {
+    setSearchOpen(false);
+    router.push(`${chapterStudyHref(slug, hit.chapterId)}${hit.headingId ? `#${hit.headingId}` : ""}`);
+  };
 
   // Sources: the page a citation names opens in a side sheet that steps through the whole manifest.
   const sources = useSourceSheet(slug);
@@ -187,6 +184,19 @@ function StudyReader({ slug }: { slug: string }) {
       {sources.notInLibrary ? (
         <p role="status" className="mb-3 text-sm text-warning-text">
           That source page is not in the ingested library any more.
+        </p>
+      ) : null}
+      {current.n_code_files ? (
+        <p className="mb-4 text-sm text-muted-foreground">
+          This chapter ships its code to run:{" "}
+          <a
+            className="font-medium text-foreground underline underline-offset-4"
+            href={chapterCodeHref(slug, current.id)}
+            download
+          >
+            download the code folder ({current.n_code_files} files)
+          </a>
+          .
         </p>
       ) : null}
       <Markdown text={text} remarkPlugins={CHAPTER_PLUGINS} components={components} />

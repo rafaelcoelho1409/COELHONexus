@@ -3,7 +3,7 @@ from __future__ import annotations
 from .... import agents
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 
 class PlannerAgents:
@@ -30,6 +30,12 @@ class PlannerAgents:
 
     def page_distiller(self):
         return self._once("page_distiller", lambda: agents.pipeline.planner.page_distiller.agent.page_distiller())
+
+    def page_card(self):
+        return self._once("page_card", lambda: agents.pipeline.planner.page_card.agent.page_card())
+
+    def chapter_designer(self):
+        return self._once("chapter_designer", lambda: agents.pipeline.planner.chapter_designer.agent.chapter_designer())
 
     def section_analyst(self):
         return self._once("section_analyst", lambda: agents.pipeline.planner.section_analyst.agent.section_analyst())
@@ -60,6 +66,8 @@ class PlannerContext:
 
     blobs: Any
     agents: PlannerAgents = field(default_factory = PlannerAgents)
+    # Optional configured embedding endpoint, supplied by the composition root. Planner v2 falls back to local TF-IDF features if unavailable.
+    embed_texts: Callable | None = None
     # Running totals the parallel branches of a fan-out node add to, per node, for its progress events (a branch cannot see its siblings).
     counters: dict[str, dict[str, int]] = field(default_factory = dict)
     # Data a node's `prepare` loads once for its parallel branches (a branch is sent only a key, not 700 copies of the run's chapters).

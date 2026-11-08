@@ -138,11 +138,20 @@ async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, 
     chapter_title = sawc.get("chapter_title") or chapter_id
     sawc_manifest_hash = sawc.get("sawc_manifest_hash") or ""
     digest_manifest_hash = digest.get("digest_manifest_hash") or ""
+    tutorial = graphs.pipeline.synth.params.tutorial_mode()
+    verification_required = graphs.pipeline.synth.params.is_v2()
+    checks = domain.active_checks(tutorial, verification_required)
+    verification_key = ai.dd.graphs.pipeline.synth.keys.latest_key(slug, chapter_id, "verification")
+    verification_report = await domains.dd.pipeline.storage.service.load_json(blobs, verification_key) if verification_required else {}
     graphs.service.emit(
         params.STEP, "start",
-        chapter_id = chapter_id, chapter_title = chapter_title, n_total_criteria = len(domain.DETERMINISTIC_CHECKS) + len(params.LLM_CRITERIA), pass_threshold = params.PASS_THRESHOLD,
+        chapter_id = chapter_id, chapter_title = chapter_title, n_total_criteria = len(checks) + len(params.LLM_CRITERIA), pass_threshold = params.PASS_THRESHOLD,
     )
-    manifest_hash = domain.compute_manifest_hash(sawc_manifest_hash = sawc_manifest_hash, digest_manifest_hash = digest_manifest_hash)
+    manifest_hash = domain.compute_manifest_hash(
+        sawc_manifest_hash = sawc_manifest_hash,
+        digest_manifest_hash = digest_manifest_hash,
+        tutorial = (domain.tutorial_token(sawc) + ":" + str((verification_report or {}).get("manifest_hash", "missing"))) if verification_required else domain.tutorial_token(sawc) if tutorial else "",
+    )
     versioned_key = keys.versioned_blob_key(slug, chapter_id, manifest_hash)
     latest_key = keys.latest_blob_key(slug, chapter_id)
 
@@ -183,6 +192,7 @@ async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, 
             emit_criterion_scores(slug, cached.get("criteria") or [])
             # The same immediate best-seen promotion as a fresh evaluation: a cache hit is still this iteration's real score.
             n_pregate_passed = sum(1 for c in (cached.get("criteria") or []) if c.get("kind") == "deterministic" and c.get("passed"))
+            n_gates = sum(1 for c in (cached.get("criteria") or []) if c.get("kind") == "deterministic")
             incoming_score, incoming_pregate = state.get("best_seen_score"), state.get("best_seen_pregate")
             patch = {
                 "finished": True, "checklist_path": latest_key, "checklist_stats": stats,
@@ -190,7 +200,7 @@ async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, 
                 "consecutive_infra_degraded": 0,
                 "best_seen_score": incoming_score, "best_seen_pregate": incoming_pregate, "best_seen_sawc_path": state.get("best_seen_sawc_path"),
             }
-            if incoming_score is None or domain.best_seen_key(stats["pass_rate"], n_pregate_passed) > domain.best_seen_key(incoming_score, incoming_pregate or 0):
+            if incoming_score is None or domain.best_seen_key(stats["pass_rate"], n_pregate_passed, n_gates) > domain.best_seen_key(incoming_score, incoming_pregate or 0, n_gates):
                 patch.update({
                     "best_seen_score": stats["pass_rate"], "best_seen_pregate": n_pregate_passed,
                     "best_seen_sawc_path": ai.dd.nodes.pipeline.synth.sawc.keys.versioned_blob_key(
@@ -219,8 +229,19 @@ async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, 
         "_digest_sources": list(digest.get("source_keys") or []),
         "_vault_bodies": vault_bodies,
     }
+    if tutorial:
+        # The code ledger of the chapter's sources: what a complete tutorial teaches, and the variants of each example that count for it.
+        ledger = await domains.dd.pipeline.ledger.service.build(blobs, slug, sorted(digest.get("source_keys") or []))
+        for_checks.update({
+            "_must_teach": list(ledger.must_teach),
+            "_variant_of": {digest_: family.canonical for family in ledger.families for digest_ in family.hashes},
+            "_labels": {h: (ledger.blocks[h].defines[0] if ledger.blocks[h].defines else ledger.blocks[h].body.strip().splitlines()[0][:40]) for h in ledger.must_teach if ledger.blocks[h].body.strip()},
+            "_capstone_prefix": ai.dd.nodes.pipeline.synth.sawc_derive.params.CAPSTONE_PREFIX,
+        })
+    if verification_required:
+        for_checks["_verification_report"] = verification_report or {"missing": True}
     pre: list[schemas.CriterionResult] = []
-    for check in domain.DETERMINISTIC_CHECKS:
+    for check in checks:
         try:
             pre.append(check(for_checks))
         except Exception as error:
@@ -313,7 +334,7 @@ async def finalize(state: graphs.pipeline.synth.checklist.states.ChecklistState,
     sawc_manifest_hash = state["sawc_manifest_hash"]
     incoming_score, incoming_pregate = state.get("best_seen_score"), state.get("best_seen_pregate")
     best_score, best_pregate, best_path = incoming_score, incoming_pregate, state.get("best_seen_sawc_path")
-    is_better = incoming_score is None or domain.best_seen_key(pass_rate, n_pre_passed) > domain.best_seen_key(incoming_score, incoming_pregate or 0)
+    is_better = incoming_score is None or domain.best_seen_key(pass_rate, n_pre_passed, len(pre)) > domain.best_seen_key(incoming_score, incoming_pregate or 0, len(pre))
     if is_better:
         best_score, best_pregate = pass_rate, n_pre_passed
         best_path = ai.dd.nodes.pipeline.synth.sawc.keys.versioned_blob_key(slug, chapter_id, sawc_manifest_hash)

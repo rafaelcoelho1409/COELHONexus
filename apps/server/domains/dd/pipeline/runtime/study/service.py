@@ -54,7 +54,9 @@ async def run(binding: domains.dd.pipeline.runtime.runner.entities.Binding, stud
 
 async def prior_render_verdict(blobs, slug: str, chapter_id: str, plan_chapters: dict[str, dict]) -> bool:
     """Whether a chapter already holds a render that a resumed study must not redo: it exists, its audit passed and it was built under the current plan."""
-    render_key = domains.dd.pipeline.storage.keys.chapter_render_latest_key(slug, chapter_id)
+    render_key = domains.dd.pipeline.storage.keys.chapter_render_latest_key(
+        slug, chapter_id, ai.dd.graphs.pipeline.synth.params.version(),
+    )
     if not await blobs.exists(render_key):
         return False
     try:

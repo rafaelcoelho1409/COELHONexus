@@ -24,6 +24,7 @@ from typing import Any
 import redis as redis_sync
 from redis.asyncio import Redis, from_url as _async_from_url
 from redis.asyncio.lock import Lock
+from redis.exceptions import LockError
 
 
 logger = logging.getLogger(__name__)
@@ -297,7 +298,7 @@ async def watch_flag(
 
 # Public surface for the rest of the code (the re-exports are intentional).
 __all__ = [
-    "Lock", "Redis", "clear_flag", "client", "client_sync", "delete_matching", "emit_event", "extend_if_owner", "first_held",
+    "Lock", "LockError", "Redis", "clear_flag", "client", "client_sync", "delete_matching", "emit_event", "extend_if_owner", "first_held",
     "flag_is_set", "is_configured", "iter_held", "new_redis", "new_redis_sync", "release_if_owner",
     "release_if_owner_sync", "replay_snapshot", "set_flag", "subscribe_events", "try_lock", "url", "watch_flag",
 ]

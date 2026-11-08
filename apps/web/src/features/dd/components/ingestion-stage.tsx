@@ -2,7 +2,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import {
   getDdIngestionQueryKey,
@@ -30,56 +30,12 @@ import {
   useWipeAgenticRun,
 } from "../hooks/use-dd-data";
 import { useDdOverlays } from "../hooks/use-overlays";
-import { ingestionHref } from "../params";
+import { ingestionHref, pagesHref } from "../params";
 import { IngestionPipeline } from "./ingestion-pipeline";
 import { MaterialsView } from "./materials-view";
 import { StageBar } from "./stage-bar";
 
 type IngestionView = "pipeline" | "materials";
-
-const INGESTION_VIEWS = [
-  ["pipeline", "Agents"],
-  ["materials", "Pages"],
-] as const;
-
-/** The Agents | Pages choice, drawn like the app's other navbar links. */
-function IngestionViewTabs({
-  view,
-  onChange,
-}: {
-  view: IngestionView;
-  onChange: (view: IngestionView) => void;
-}) {
-  return (
-    <div role="tablist" aria-label="Ingestion views" className="flex items-center">
-      {INGESTION_VIEWS.map(([viewId, label]) => (
-        <button
-          key={viewId}
-          id={`dd-ingestion-${viewId}-tab`}
-          type="button"
-          role="tab"
-          aria-selected={view === viewId}
-          aria-controls={`dd-ingestion-${viewId}-panel`}
-          tabIndex={view === viewId ? 0 : -1}
-          onClick={() => onChange(viewId)}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-              event.preventDefault();
-              const nextView = viewId === "pipeline" ? "materials" : "pipeline";
-              onChange(nextView);
-              document.getElementById(`dd-ingestion-${nextView}-tab`)?.focus();
-            }
-          }}
-          className={`inline-flex h-9 items-center px-2 text-sm transition-colors sm:px-3 ${
-            view === viewId ? "text-foreground" : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 function completedProgress(pageCount: number): NonNullable<RunStatus["progress"]> {
   return {
@@ -119,7 +75,15 @@ function completedProgress(pageCount: number): NonNullable<RunStatus["progress"]
   };
 }
 
-export function IngestionStage({ slug, runId }: { slug: string | null; runId: string | null }) {
+export function IngestionStage({
+  slug,
+  runId,
+  view = "pipeline",
+}: {
+  slug: string | null;
+  runId: string | null;
+  view?: IngestionView;
+}) {
   const { runs } = useActiveRun(true);
   const router = useRouter();
   const finished = useRef<Set<string>>(new Set());
@@ -134,13 +98,17 @@ export function IngestionStage({ slug, runId }: { slug: string | null; runId: st
       active: runs.find((candidate) => candidate.slug === slug),
       finished: finished.current,
     });
-    if (adopt && slug) router.replace(ingestionHref(slug, adopt), { scroll: false });
-  }, [runId, slug, runs, router]);
+    if (adopt && slug) {
+      router.replace(view === "materials" ? pagesHref(slug, adopt) : ingestionHref(slug, adopt), {
+        scroll: false,
+      });
+    }
+  }, [runId, slug, runs, router, view]);
 
   if (!slug) {
     return (
       <>
-        <StageBar stage="ingestion" slug={null} />
+        <StageBar stage={view === "pipeline" ? "ingestion" : "pages"} slug={null} />
         <div className="rounded-md border border-border bg-card p-8 text-center">
           <h2 className="text-base font-medium">Ingest something first</h2>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -150,19 +118,28 @@ export function IngestionStage({ slug, runId }: { slug: string | null; runId: st
       </>
     );
   }
-  return <IngestionWorkspace key={slug} slug={slug} runId={runId} onRunFinished={rememberFinished} />;
+  return (
+    <IngestionWorkspace
+      key={slug}
+      slug={slug}
+      runId={runId}
+      view={view}
+      onRunFinished={rememberFinished}
+    />
+  );
 }
 
 function IngestionWorkspace({
   slug,
   runId,
+  view,
   onRunFinished,
 }: {
   slug: string;
   runId: string | null;
+  view: IngestionView;
   onRunFinished: (runId: string) => void;
 }) {
-  const [activeView, setActiveView] = useState<IngestionView>("pipeline");
   const manifestQuery = useManifest(slug);
   const effectiveRunId = runId ?? manifestQuery.data?.agentic_run_id ?? null;
   // A run named in the address is in flight (or just ended); the run saved with the library is finished, and its status is read once.
@@ -240,7 +217,6 @@ function IngestionWorkspace({
       {
         onSuccess: (outcome) => {
           if (outcome.kind === "queued") {
-            setActiveView("pipeline");
             notice(`Ingesting ${framework.name}…`);
             router.replace(ingestionHref(slug, outcome.runId ?? null), { scroll: false });
           } else if (outcome.kind === "locked") {
@@ -259,7 +235,6 @@ function IngestionWorkspace({
     message?: string;
   }) => {
     if (outcome.kind === "queued") {
-      setActiveView("pipeline");
       notice(`Running Agentic AI for ${framework.name}…`);
       router.replace(ingestionHref(slug, outcome.runId ?? null), { scroll: false });
     } else {
@@ -329,16 +304,13 @@ function IngestionWorkspace({
   return (
     <div>
       <StageBar
-        stage="ingestion"
+        stage={view === "pipeline" ? "ingestion" : "pages"}
         slug={slug}
         info={frameworkInfo(activeManifest)}
-        end={<IngestionViewTabs view={activeView} onChange={setActiveView} />}
       />
-      <div
-        role="tabpanel"
-        id="dd-ingestion-pipeline-panel"
-        aria-labelledby="dd-ingestion-pipeline-tab"
-        hidden={activeView !== "pipeline"}
+      <section
+        aria-label="Agents"
+        hidden={view !== "pipeline"}
       >
         <IngestionPipeline
           runId={effectiveRunId}
@@ -363,21 +335,19 @@ function IngestionWorkspace({
           onWipeAgentic={() => void wipeAgenticAI()}
           onWipe={() => void wipeIngestion()}
         />
-      </div>
+      </section>
 
-      <div
-        role="tabpanel"
-        id="dd-ingestion-materials-panel"
-        aria-labelledby="dd-ingestion-materials-tab"
-        hidden={activeView !== "materials"}
+      <section
+        aria-label="Pages"
+        hidden={view !== "materials"}
       >
         <MaterialsView
           slug={slug}
           manifest={activeManifest}
           runId={explorerRunId}
-          active={activeView === "materials"}
+          active={view === "materials"}
         />
-      </div>
+      </section>
     </div>
   );
 }

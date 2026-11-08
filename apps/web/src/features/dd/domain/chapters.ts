@@ -20,6 +20,9 @@ export type ChapterCell = {
   wallMs: number | null;
   threadId: string | null;
   selected: boolean;
+  sourceFiles?: string[];
+  synthEligible?: boolean;
+  exclusionReason?: string;
 };
 
 /** Server statuses outside the known set count as done: the chapter finished, just with a status we don't name. */
@@ -51,6 +54,9 @@ export function cellsFromPlan(data: SynthChapters): ChapterCell[] {
       wallMs: chapter.rendered ? chapter.wall_ms : null,
       threadId: chapter.thread_id ?? null,
       selected: false,
+      sourceFiles: chapter.source_files ?? [],
+      synthEligible: chapter.synth_eligible ?? true,
+      exclusionReason: chapter.synth_exclusion_reason ?? "",
     }));
 }
 
@@ -71,16 +77,24 @@ export function chapterFacts(chapter: SynthChapters["chapters"][number]): string
   return facts;
 }
 
-/** Placeholder cells from bare ids (the study run announces ids before titles are known). */
-export function cellsFromIds(ids: readonly string[]): ChapterCell[] {
-  return ids.map((id) => ({
-    id,
-    title: humanizeChapterId(id),
-    status: "pending" as const,
-    wallMs: null,
-    threadId: null,
-    selected: false,
-  }));
+/** Reset run state from bare ids while retaining titles already hydrated from the plan. */
+export function cellsFromIds(ids: readonly string[], existing: readonly ChapterCell[] = []): ChapterCell[] {
+  const byId = new Map(existing.map((cell) => [cell.id, cell]));
+  const mapped: ChapterCell[] = ids.map((id) => {
+    const prior = byId.get(id);
+    return {
+      id,
+      title: prior?.title || humanizeChapterId(id),
+      status: prior?.status === "done" ? ("done" as const) : ("pending" as const),
+      wallMs: prior?.wallMs ?? null,
+      threadId: prior?.threadId ?? null,
+      selected: prior?.selected ?? false,
+      sourceFiles: prior?.sourceFiles ?? [],
+      synthEligible: prior?.synthEligible ?? true,
+      exclusionReason: prior?.exclusionReason ?? "",
+    };
+  });
+  return [...mapped, ...existing.filter((cell) => cell.synthEligible === false && !ids.includes(cell.id))];
 }
 
 /** Outcome of the whole-book coherence pass: chapters patched out of those with issues, and whether it came from cache. */
@@ -91,13 +105,18 @@ export function harmonizeDoneLabel(patched: number, withIssues: number, cached =
 }
 
 export function chapterCounter(cells: readonly ChapterCell[]): string {
-  const done = cells.filter((cell) => cell.status === "done").length;
-  const failed = cells.filter((cell) => cell.status === "failed" || cell.status === "cancelled").length;
-  return failed > 0 ? `${done} done, ${failed} failed / ${cells.length}` : `${done} / ${cells.length}`;
+  const eligible = cells.filter((cell) => cell.synthEligible !== false);
+  const done = eligible.filter((cell) => cell.status === "done").length;
+  const failed = eligible.filter((cell) => cell.status === "failed" || cell.status === "cancelled").length;
+  const progress =
+    failed > 0 ? `${done} done, ${failed} failed / ${eligible.length}` : `${done} / ${eligible.length}`;
+  const excluded = cells.length - eligible.length;
+  return excluded > 0 ? `${progress} · ${excluded} excluded from Synth` : progress;
 }
 
 /** Partly rendered book → "Resume" (the backend skips rendered chapters), else "Start". */
 export function synthStartLabel(cells: readonly ChapterCell[]): "Start" | "Resume" {
-  const done = cells.filter((cell) => cell.status === "done").length;
-  return done > 0 && done < cells.length ? "Resume" : "Start";
+  const eligible = cells.filter((cell) => cell.synthEligible !== false);
+  const done = eligible.filter((cell) => cell.status === "done").length;
+  return done > 0 && done < eligible.length ? "Resume" : "Start";
 }

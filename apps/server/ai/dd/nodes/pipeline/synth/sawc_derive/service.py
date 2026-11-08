@@ -4,9 +4,9 @@ A code block that is only a bare signature teaches nothing, so a code_deriver ag
 that goes with it. The agent checks its code with `check_code` (it parses; its body is inside the length band) before answering, so a bad example is
 repaired inside the run, not discarded after N samples. The chapter draft is updated in place with the derived code."""
 from __future__ import annotations
-import domains
+import ai, domains
 from . import domain, keys, params, schemas
-from ..... import agents, graphs, tools
+from ..... import agents, graphs, skills, tools
 
 import json
 import logging
@@ -179,6 +179,18 @@ async def derive_subtopic(state: dict, runtime: Runtime[Context]) -> dict:
     ).model_dump()]}
 
 
+async def persist_payload(context: Context, data: dict, slug: str, chapter_id: str) -> None:
+    """Write the mutated draft where it is read from: the latest pointer AND the iteration's versioned blob, because render ships the best-seen iteration by its versioned key."""
+    body = json.dumps(data["payload"], indent = 2, ensure_ascii = False)
+    manifest = data["payload"].get("sawc_manifest_hash") or ""
+    targets = [data["sawc_key"]] + ([keys.sawc_versioned_key(slug, chapter_id, manifest)] if manifest else [])
+    for key in targets:
+        try:
+            await context.blobs.write(key, body, content_type = "application/json")
+        except Exception as error:
+            logger.error(f"[sawc_derive] failed to persist the mutated draft at {key!r}: {type(error).__name__}: {error}")
+
+
 async def finalize(state: graphs.pipeline.synth.sawc_derive.states.DeriveState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     data = context.scratch[params.STEP]
@@ -196,16 +208,8 @@ async def finalize(state: graphs.pipeline.synth.sawc_derive.states.DeriveState, 
             original_chars = len(body), original_lines = (body.count("\n") + 1) if body else 0, decision = "skipped_thin",
         ))
     n_promoted = sum(1 for a in results if a.decision == "promoted")
-    # Mutate the draft in place if any derive promoted: the latest pointer AND the iteration's versioned blob, because render ships the best-seen iteration by its versioned key.
     if n_promoted:
-        body = json.dumps(data["payload"], indent = 2, ensure_ascii = False)
-        manifest = data["payload"].get("sawc_manifest_hash") or ""
-        targets = [data["sawc_key"]] + ([keys.sawc_versioned_key(slug, chapter_id, manifest)] if manifest else [])
-        for key in targets:
-            try:
-                await context.blobs.write(key, body, content_type = "application/json")
-            except Exception as error:
-                logger.error(f"[sawc_derive] failed to persist the mutated draft at {key!r}: {type(error).__name__}: {error}")
+        await persist_payload(context, data, slug, chapter_id)
     started = state.get("started") or time.monotonic()
     stats = schemas.DeriveStats(
         chapter_id = chapter_id,
@@ -234,3 +238,80 @@ async def finalize(state: graphs.pipeline.synth.sawc_derive.states.DeriveState, 
         f"(ast_fail={stats.n_rejected_ast}, len_fail={stats.n_rejected_len}, rotator_fail={stats.n_rotator_fail}); {stats.wall_ms} ms"
     )
     return {"derive_stats": stats.model_dump()}
+
+
+async def capstone(state: graphs.pipeline.synth.sawc_derive.states.DeriveState, runtime: Runtime[Context]) -> dict:
+    """The last section of a tutorial chapter: one application that combines the code the steps taught, designed by the capstone designer and checked
+    before it is kept (it parses, its size is in the band, it uses the key API of most steps, its code passes the static checks). A chapter whose designer
+    fails keeps its steps and has no capstone; the judge says so. Off unless `TUTORIAL_MODE`."""
+    if not graphs.pipeline.synth.params.tutorial_mode():
+        return {}
+    context = runtime.context
+    data = context.scratch[params.STEP]
+    slug, chapter_id = state["framework_slug"], state["chapter_id"]
+    started = time.monotonic()
+    sections: list[dict] = data["payload"].setdefault("sections", [])
+    # A draft that already has a capstone (a run resumed after this step) is designed again from its steps.
+    sections[:] = [section for section in sections if not str(section.get("heading") or "").startswith(params.CAPSTONE_PREFIX)]
+
+    async def outcome(status: str, **extra) -> dict:
+        """Record how the step ended in the draft (the judge reads it), and keep the draft."""
+        record = {"status": status, "wall_ms": graphs.service.elapsed_ms(started), **extra}
+        data["payload"]["capstone"] = record
+        graphs.service.emit(params.STEP, "capstone", chapter_id = chapter_id, **record)
+        await persist_payload(context, data, slug, chapter_id)
+        return {"derive_stats": {**(state.get("derive_stats") or {}), "capstone": record}}
+
+    steps, names = domain.collect_steps(sections, data["vault"])
+    n_examples = sum(1 for step in steps for example in step["examples"] if example["code"])
+    if not n_examples:
+        return await outcome("no_code")
+    if n_examples < params.CAPSTONE_MIN_EXAMPLES:
+        return await outcome("not_needed", n_examples = n_examples)
+
+    async def check(candidate: dict) -> list[str]:
+        return domain.capstone_issues(candidate.get("code") or "", names)
+
+    role = context.agents.capstone_designer(tools = [tools.pipeline.synth.check.tool.check_code_tool(check)])
+    request = {
+        "framework": data["framework"],
+        "chapter": data["chapter_title"],
+        "steps": steps,
+        "limits": {
+            "lines": [params.CAPSTONE_MIN_LINES, params.CAPSTONE_MAX_LINES],
+            "parts": params.CAPSTONE_MAX_PARTS,
+            "share_of_steps_used": params.CAPSTONE_MIN_USE_SHARE,
+        },
+    }
+    try:
+        answer = await agents.service.ask(
+            role, agents.pipeline.synth.schemas.CapstoneAnswer, json.dumps(request, ensure_ascii = False),
+            attempts = params.ASK_ATTEMPTS, wait_base_s = params.RETRY_WAIT_S,
+            files = skills.service.files_for("capstone_designer"), check = lambda a: bool(a.parts),
+        )
+    except Exception as error:
+        logger.warning(f"[sawc_derive] {slug}/{chapter_id}: capstone designer failed: {type(error).__name__}: {str(error)[:200]}")
+        return await outcome("designer_failed", error = f"{type(error).__name__}: {str(error)[:120]}")
+
+    built = domain.build_section(answer.model_dump(), sections)
+    if built is None:
+        return await outcome("no_code_in_answer")
+    try:
+        section = ai.dd.nodes.pipeline.synth.sawc.schemas.Section.model_validate(built).model_dump(mode = "json")
+    except Exception as error:
+        return await outcome("invalid_section", error = str(error)[:200])
+    code = "\n\n".join(subtopic["derived_code"] for subtopic in section["subtopics"])
+    issues = domain.capstone_issues(code, names)
+    imported = frozenset(name for step in steps for example in step["examples"] for name in domains.dd.pipeline.ledger.domain.python_facts(example["code"])[1])
+    report = await domains.dd.pipeline.verify.service.verify_blocks(
+        [(f"capstone{index}", "python", subtopic["derived_code"]) for index, subtopic in enumerate(section["subtopics"], start = 1)],
+        domains.dd.pipeline.verify.entities.Environment(known = imported),
+        context.executor,
+    )
+    if issues or report.failed:
+        return await outcome("rejected", issues = issues[:3] + [issue for result in report.failed for issue in result.issues][:3], verify = report.summary())
+    sections.append(section)
+    share, _ = domain.use_share(names, code)
+    return await outcome(
+        "added", n_parts = len(section["subtopics"]), lines = sum(1 for line in code.splitlines() if line.strip()), use_share = round(share, 2), verify = report.summary(),
+    )

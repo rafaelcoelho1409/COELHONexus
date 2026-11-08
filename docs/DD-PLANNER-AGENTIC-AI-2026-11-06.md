@@ -1,7 +1,6 @@
 # DD Planner as an agentic graph (`ai/dd/…/pipeline/planner`), 2026-11-06
 
-Status: built and offline-tested; **not run live** (needs a redeploy of the API, the planner worker and the web together: the Celery task
-names changed). Nothing is committed. The old `domains/dd/pipeline/planner/` package is deleted (it is in git history).
+Status: built and run live in dev on 2026-11-08. The first live plan exposed a chapter-design fallback defect; the source fixes and evidence are in [the live assessment](DD-DEEPAGENTS-PIPELINE-LIVE-ASSESSMENT-2026-11-08.md). Those fixes are not yet deployed, so v2 has not passed its corrected live run or a v1 comparison. The v1 graph remains reachable with `DD_PLANNER_VERSION=v1` for rollback. Nothing is committed. The old `domains/dd/pipeline/planner/` package is deleted (it is in git history); that package deletion did not remove the selectable v1 graph under `ai/dd/`.
 
 ## What changed
 
@@ -81,10 +80,10 @@ domains/dd/pipeline/{ai,runtime,storage,observability}/      the binding (graph 
   (full run, re-plan, resume of a failed page, large corpus, assign ladder + sweep, score gate, curator split, order top-up, dead-architect
   fallback) and `test_dd_planner_agents.py` (each real agent with a scripted model, skills, permissions, backend, tools).
 
-## Not verified, to watch on the first live run
+## Remaining live validation
 
 - Tool-calling reliability of the free pool for the architect, the critic and the curator (bounded by `ModelCallLimit` and
-  `ToolCallLimit`, with deterministic fallbacks, but only a live run shows it). `structured_or_recovered` covers models that answer with fenced JSON.
+  `ToolCallLimit`, with deterministic fallbacks). The first run had one invalid architect answer; the local two-attempt/content-kind fixes still need a deployed rerun. `structured_or_recovered` covers models that answer with fenced JSON.
 - The cost of a skill read on `section_analyst` and `chapter_sequencer` (one extra turn per call).
 - `PlanHealth` and the Langfuse trace of a 300+ page framework: section count, architect rounds, score.
 - `RubricMiddleware` (beta) is deliberately not used: the score gate is deterministic and cheaper.

@@ -117,6 +117,7 @@ async def audit_pages(
                 "idx": page["idx"],
                 "source_sha256": source_sha256,
                 "assessment": assessment.model_dump(mode = "json"),
+                "mechanical_fixes": page.get("mechanical_fixes", {}),
                 "warnings": warnings,
                 "audit_status": "unavailable" if audit_error else "completed",
                 **({"audit_error": audit_error} if audit_error else {}),
@@ -126,6 +127,9 @@ async def audit_pages(
                 json.dumps(record, ensure_ascii = False),
                 domains.dd.ingestion.ai.params.JSON_TYPE,
             )
+        elif page.get("mechanical_fixes"):
+            # A retry may reuse an audit artifact written before normalization counters were attached.
+            record = {**record, "mechanical_fixes": page["mechanical_fixes"]}
 
         await page_done()
         return record

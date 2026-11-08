@@ -11,6 +11,7 @@ class SourcePage(TypedDict):
     section_path: list[str]
     disposition: str
     review_required: bool
+    content_role: NotRequired[str]
 
 
 class UnitRef(TypedDict):
@@ -32,5 +33,7 @@ class ChapterRef(TypedDict):
     input_key: str
     section_path: list[str]
     part_index: int
+    first_page: int
+    last_page: int
     unit_ids: list[str]
     existing_artifact: NotRequired[bool]

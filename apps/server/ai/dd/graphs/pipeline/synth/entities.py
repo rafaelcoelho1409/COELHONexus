@@ -65,6 +65,9 @@ class SynthAgents:
     def code_normalizer(self, *, tools: list[Any]):
         return self._per_call("code_normalizer", lambda: self.roles.code_normalizer.agent.code_normalizer(tools = tools))
 
+    def capstone_designer(self, *, tools: list[Any]):
+        return self._per_call("capstone_designer", lambda: self.roles.capstone_designer.agent.capstone_designer(tools = tools))
+
     def chapter_reviewer(self, *, tools: list[Any]):
         return self._per_call("chapter_reviewer", lambda: self.roles.chapter_reviewer.agent.chapter_reviewer(tools = tools))
 
@@ -78,6 +81,8 @@ class SynthContext:
 
     blobs: Any
     agents: SynthAgents = field(default_factory = SynthAgents)
+    # Runs a chapter's code in isolation (`domains.dd.pipeline.verify.entities.Executor`), or None: the code is then only checked, not run.
+    executor: Any = None
     # Running totals the parallel branches of a fan-out node add to, per node, for its progress events (a branch cannot see its siblings).
     counters: dict[str, dict[str, int]] = field(default_factory = dict)
     # Data a node's `prepare` loads once for its parallel branches (a branch is sent only a key, not the chapter's sources). Not

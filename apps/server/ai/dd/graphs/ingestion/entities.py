@@ -25,6 +25,7 @@ class PageReference(TypedDict):
     source_sha256: str
     source_key: str
     raw_key: str
+    mechanical_fixes: NotRequired[dict[str, int]]
 
 
 class PageAssessmentResult(TypedDict):
@@ -33,6 +34,7 @@ class PageAssessmentResult(TypedDict):
     idx: int
     source_sha256: str
     assessment: dict[str, Any]
+    mechanical_fixes: NotRequired[dict[str, int]]
     warnings: NotRequired[list[str]]
     audit_status: NotRequired[str]
     audit_error: NotRequired[str]

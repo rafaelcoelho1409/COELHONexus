@@ -272,6 +272,14 @@ def prune_and_finalize_selection(
             "title":              p.get("title"),
             "description":        p.get("description"),
             "key_concepts":       p.get("key_concepts") or [],
+            **{
+                name: p[name]
+                for name in (
+                    "objective", "prerequisites", "kind", "role", "capstone_ability",
+                    "capstone_reason", "n_best_code", "best_code_ids", "reading_minutes", "tutorial_minutes",
+                )
+                if name in p
+            },
             "member_doc_keys":    sorted(docs_per_chapter.get(ci, [])),
             "n_member_docs":      len(docs_per_chapter.get(ci, [])),
             "order":              order_idx,
@@ -392,6 +400,14 @@ def consolidate_placements(
             "key_concepts": p.get("key_concepts") or [],
             "origin":      origin,
             "proposal_idx": slot if slot >= 0 else None,
+            **{
+                name: p[name]
+                for name in (
+                    "objective", "prerequisites", "kind", "role", "capstone_ability",
+                    "capstone_reason", "n_best_code", "best_code_ids", "reading_minutes", "tutorial_minutes",
+                )
+                if name in p
+            },
         }
 
     for ci in kept:
@@ -650,6 +666,14 @@ def consolidate_placements(
             "order":               i,
             "source_proposal_idx": sl["proposal_idx"],
             "origin":              sl["origin"],
+            **{
+                name: sl[name]
+                for name in (
+                    "objective", "prerequisites", "kind", "capstone_ability",
+                    "capstone_reason", "n_best_code", "best_code_ids", "reading_minutes", "tutorial_minutes",
+                )
+                if name in sl
+            },
             **({"role": sl["role"]} if sl.get("role") else {}),
             "pinned":              False,
         })
@@ -999,9 +1023,23 @@ def code_block_count(text: str) -> int:
     return len(patterns.FENCE_LINE_RE.findall(text or "")) // 2
 
 
-def plan_splits(out_chapters: list[dict], max_chapters: int = 30, doc_blocks: dict[str, int] | None = None, blocks_only: bool = False) -> list[tuple[int, int]]:
+def block_limits(tutorial: bool) -> tuple[int, int]:
+    """`(blocks above which a chapter is split, blocks per part)`: lower in tutorial mode, where a chapter is read in one session."""
+    if tutorial:
+        return params.TUTORIAL_SPLIT_MAX_BLOCKS, params.TUTORIAL_SPLIT_BLOCKS_PER_PART
+    return params.SPLIT_MAX_BLOCKS, params.SPLIT_BLOCKS_PER_PART
+
+
+def plan_splits(
+    out_chapters: list[dict],
+    max_chapters: int = 30,
+    doc_blocks: dict[str, int] | None = None,
+    blocks_only: bool = False,
+    max_blocks: int = params.SPLIT_MAX_BLOCKS,
+    blocks_per_part: int = params.SPLIT_BLOCKS_PER_PART,
+) -> list[tuple[int, int]]:
     """[(chapter position, n_parts)] for chapters over SPLIT_MAX_SHARE of the corpus, and for
-    a catch-all appendix over GAP_SPLIT_MIN_SHARE (its parts become ordinary chapters)."""
+    a catch-all appendix over GAP_SPLIT_MIN_SHARE (its parts become ordinary chapters). A chapter over `max_blocks` code blocks is split into parts of about `blocks_per_part`."""
     total = sum(len(c["member_doc_keys"]) for c in out_chapters)
     if total < params.SPLIT_MIN_TOTAL_DOCS:
         return []
@@ -1013,9 +1051,9 @@ def plan_splits(out_chapters: list[dict], max_chapters: int = 30, doc_blocks: di
         n = len(c["member_doc_keys"])
         if doc_blocks and c.get("origin") != "foundations" and c.get("role") != "appendix" and n >= params.SPLIT_BLOCKS_MIN_DOCS:
             blocks = sum(doc_blocks.get(k, 0) for k in c["member_doc_keys"])
-            if blocks > params.SPLIT_MAX_BLOCKS:
+            if blocks > max_blocks:
                 k = min(
-                    params.SPLIT_MAX_PARTS, math.ceil(blocks / params.SPLIT_BLOCKS_PER_PART),
+                    params.SPLIT_MAX_PARTS, math.ceil(blocks / blocks_per_part),
                     n // params.MIN_DOCS_PER_CHAPTER, max_chapters - n_chapters + 1,
                 )
                 if k >= 2:
@@ -1332,21 +1370,30 @@ def fallback_group_titles(
     return out
 
 
-def apply_split(chapter: dict, parts: list[dict], units: list[dict]) -> list[dict]:
+def apply_split(
+    chapter: dict, parts: list[dict], units: list[dict],
+    best_code_by_page: dict[str, list[str]] | None = None,
+) -> list[dict]:
     """Replace one chapter by its validated parts (order within the chapter by source position)."""
     out = []
     for j, p in enumerate(parts):
         keys = sorted(k for u in p["unit_ids"] for k in units[u]["keys"])
-        out.append({
+        row = {
             **{k: v for k, v in chapter.items() if k != "role"},   # a split-off part is no appendix
             "title":               " ".join(p["title"].split()),
             "description":         (p.get("description") or chapter.get("description") or "").strip(),
+            "objective":           (p.get("description") or chapter.get("objective") or chapter.get("description") or "").strip(),
             "key_concepts":        [],
             "member_doc_keys":     keys,
             "n_member_docs":       len(keys),
             "source_proposal_idx": chapter.get("source_proposal_idx") if j == 0 else None,
             "origin":              "split",
-        })
+        }
+        if best_code_by_page is not None:
+            code_ids = sorted({digest for key in keys for digest in best_code_by_page.get(key, [])})
+            row["best_code_ids"] = code_ids
+            row["n_best_code"] = len(code_ids)
+        out.append(row)
     return out
 
 
@@ -1432,8 +1479,9 @@ def describe_units(units: list[dict], ids: list[int]) -> str:
 
 
 def manifest_hash(
-    *, slug: str, proposals_ref: str, assignments_ref: str,
+    *, slug: str, proposals_ref: str, assignments_ref: str, tutorial: bool = False, planner_version: str = "v1",
 ) -> str:
+    """`tutorial` (the lower block cap) is part of the hash only when on, so a v1 plan's hash is unchanged."""
     h = sha256()
     h.update(versions.PROMPT_VERSION.encode())
     h.update(slug.encode())
@@ -1441,4 +1489,8 @@ def manifest_hash(
     h.update(proposals_ref.encode())
     h.update(b"|")
     h.update(assignments_ref.encode())
+    if tutorial:
+        h.update(b"|tutorial")
+    if planner_version == "v2":
+        h.update(b"|planner-v2")
     return h.hexdigest()[:16]

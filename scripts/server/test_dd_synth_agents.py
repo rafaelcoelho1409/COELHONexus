@@ -213,6 +213,27 @@ async def main() -> None:
     truthy("code_deriver: the parser tool rejected broken code", any("does not parse" in t for t in tool_texts(deriver_model, 1)))
     check("code_deriver: the derive gate is the same function the node uses", sawc_derive.domain.python_ast_valid("import alpha\nprint(alpha)\n"), True)
 
+    # --- the capstone designer reads its skill, checks the whole application with the code tool and answers with its schema
+    from ai.dd.agents.pipeline.synth import capstone_designer
+
+    async def check_capstone(candidate: dict) -> list[str]:
+        return [] if "client.fetch" in candidate["code"] else ["The application uses the code of only 0% of the chapter's steps."]
+
+    application = "from alpha import AlphaClient\n\nclient = AlphaClient(url='http://alpha')\nresult = client.fetch('items')\nprint(result)\n"
+    part = {"subheading": "Build the loader", "explanation": "This part creates an AlphaClient and fetches the items of the collection to print them.", "code": application}
+    designer_model = model(
+        call("read_file", {"file_path": "/skills/pipeline/synth/capstone-designer/design-capstone/SKILL.md"}, "c0"),
+        call("check_code", {"code": "x = 1"}, "c1"),
+        call("check_code", {"code": application}, "c2"),
+        call("CapstoneAnswer", {"title": "Item loader", "intro": "A small program that loads items from the alpha service and prints them.", "parts": [part]}, "c3"),
+    )
+    designer = capstone_designer.agent.capstone_designer(tools = [check_tools.tool.check_code_tool(check_capstone)], model = designer_model)
+    capstone = await ask(designer, schemas.CapstoneAnswer, designer_model, files = ai.dd.skills.service.files_for("capstone_designer"))
+    check("capstone_designer: answers with its schema", (capstone.title, len(capstone.parts)), ("Item loader", 1))
+    truthy("capstone_designer: it read its skill first", any("Design the capstone" in t for t in tool_texts(designer_model, 1)))
+    truthy("capstone_designer: the check tool rejected an application that ignores the steps", any("1 issue(s) to fix" in t and "steps" in t for t in tool_texts(designer_model, 2)))
+    truthy("capstone_designer: …and then said it was valid", any(t.startswith("OK") for t in tool_texts(designer_model, 3)))
+
     normalizer_model = model(call("NormalizedCodeAnswer", {"code": "x = 1\n"}))
     normalizer = code_normalizer.agent.code_normalizer(tools = [check_tools.tool.check_code_tool(check_code)], model = normalizer_model)
     check("code_normalizer answers with its schema", (await ask(normalizer, schemas.NormalizedCodeAnswer, normalizer_model)).code, "x = 1\n")

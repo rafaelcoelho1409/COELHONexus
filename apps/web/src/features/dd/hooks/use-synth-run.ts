@@ -43,9 +43,9 @@ import {
   IDLE_PILL,
   type StageNodeView,
   type StagePillState,
-  SYNTH_NODES,
   stageNodeViews,
   stageProgressLabel,
+  synthNodesFor,
   terminalPill,
   WORKING_PILL,
 } from "../domain/stages";
@@ -83,6 +83,10 @@ export type SynthRunController = {
   start: () => Promise<void>;
   cancel: () => Promise<void>;
   wipe: () => Promise<void>;
+  /** Reload the chapter plan after Planner writes a new outline. */
+  refreshPlan: () => Promise<ChapterCell[]>;
+  /** Clear plan-backed chapter state after the Planner cache is wiped. */
+  clearPlan: () => void;
   runChapter: (chapterId: string) => Promise<void>;
   wipeChapter: (chapterId: string) => Promise<void>;
   selectChapter: (chapterId: string) => Promise<void>;
@@ -160,6 +164,7 @@ export function useSynthRun(slug: string): SynthRunController {
 
   const info = useStageInfo("synth");
   const implemented = useMemo(() => new Set(info?.implemented ?? []), [info]);
+  const synthNodes = useMemo(() => synthNodesFor(info?.implemented), [info]);
 
   const setCells = useCallback((update: (cells: ChapterCell[]) => ChapterCell[]) => {
     setState((s) => ({ ...s, cells: update(s.cells) }));
@@ -168,19 +173,32 @@ export function useSynthRun(slug: string): SynthRunController {
   /** Chapter list with durable render status; returns the cells so recovery can match a thread to one. */
   const hydratePlan = useCallback(async (): Promise<ChapterCell[]> => {
     const data = await fetchSynthChapters(slug);
-    if (!data || data.chapters.length === 0) return [];
+    if (!data) return [];
+    if (data.chapters.length === 0) {
+      setState((s) =>
+        s.running
+          ? s
+          : { ...s, ...DETACHED, cells: [], pill: IDLE_PILL, elapsedMs: null, harmonize: IDLE_HARMONIZE },
+      );
+      return [];
+    }
     const cells = cellsFromPlan(data);
     const totalMs = data.study_total_wall_ms > 0 ? data.study_total_wall_ms : null;
     // A book with every chapter written is "Done", not "Idle" — the same word the planner shows for its plan.
     const finished = cells.every((cell) => cell.status === "done");
     setState((s) => ({
       ...s,
+      ...(!s.running ? DETACHED : {}),
       cells,
       pill: s.running ? s.pill : finished ? terminalPill("done") : IDLE_PILL,
       elapsedMs: s.elapsedMs ?? totalMs,
     }));
     return cells;
   }, [slug]);
+
+  const clearPlan = useCallback(() => {
+    setState((s) => (s.running ? s : { ...SYNTH_EMPTY }));
+  }, []);
 
   const paintCanvas = useCallback(async (threadId: string) => {
     const graphState = await fetchGraphState("synth", threadId);
@@ -258,7 +276,7 @@ export function useSynthRun(slug: string): SynthRunController {
       // A node's checkpoint commits a tick after its `done`: re-read the state so its stats reach the drawer.
       const threadId = liveChapterThread;
       if (event.kind === "done" && threadId) {
-        const field = SYNTH_NODES.find((node) => node.id === step)?.field ?? null;
+        const field = synthNodes.find((node) => node.id === step)?.field ?? null;
         void fetchGraphStateRetried("synth", threadId, field, () => attachedThread.current === threadId).then(
           (graphState) => {
             if (!graphState) return;
@@ -296,7 +314,7 @@ export function useSynthRun(slug: string): SynthRunController {
         const ids = stringList(event.chapter_ids);
         setState((s) => ({
           ...s,
-          cells: cellsFromIds(ids),
+          cells: cellsFromIds(ids, s.cells),
           pill: { status: "working", label: `Working · 0/${ids.length}` },
           harmonize: IDLE_HARMONIZE,
         }));
@@ -449,7 +467,7 @@ export function useSynthRun(slug: string): SynthRunController {
       }
       const startedMs = Date.now();
       setState((s) => {
-        const cells = outcome.chapterIds.length > 0 ? cellsFromIds(outcome.chapterIds) : s.cells;
+        const cells = outcome.chapterIds.length > 0 ? cellsFromIds(outcome.chapterIds, s.cells) : s.cells;
         return {
           ...s,
           running: true,
@@ -600,8 +618,8 @@ export function useSynthRun(slug: string): SynthRunController {
   const canvasElapsed = useElapsed(canvasRunning, state.canvasStartedMs);
 
   const views = useMemo(
-    () => stageNodeViews(SYNTH_NODES, state.values, state.next, Boolean(state.canvas?.live), implemented),
-    [state.values, state.next, state.canvas?.live, implemented],
+    () => stageNodeViews(synthNodes, state.values, state.next, Boolean(state.canvas?.live), implemented),
+    [synthNodes, state.values, state.next, state.canvas?.live, implemented],
   );
 
   return {
@@ -622,10 +640,12 @@ export function useSynthRun(slug: string): SynthRunController {
     canvasThreadId: state.canvas?.threadId ?? null,
     views,
     next: state.next,
-    progress: stageProgressLabel(SYNTH_NODES, views, implemented),
+    progress: stageProgressLabel(synthNodes, views, implemented),
     start,
     cancel,
     wipe,
+    refreshPlan: hydratePlan,
+    clearPlan,
     runChapter,
     wipeChapter,
     selectChapter,

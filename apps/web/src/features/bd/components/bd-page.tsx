@@ -9,11 +9,19 @@ import { IngestionStage } from "./ingestion-stage";
 import { BdOverlaysProvider } from "./overlays";
 
 export function BookDistillerPage() {
+  return <BookDistillerWorkspace view="pipeline" />;
+}
+
+export function BookPagesPage() {
+  return <BookDistillerWorkspace view="materials" />;
+}
+
+function BookDistillerWorkspace({ view }: { view: "pipeline" | "materials" }) {
   return (
     <BdOverlaysProvider>
       <div className="mx-auto w-full max-w-6xl p-4">
         <Suspense fallback={<p className="text-sm text-muted-foreground">Loading…</p>}>
-          <IngestionStage />
+          <IngestionStage view={view} />
         </Suspense>
       </div>
     </BdOverlaysProvider>

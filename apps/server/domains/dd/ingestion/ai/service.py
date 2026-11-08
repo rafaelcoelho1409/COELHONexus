@@ -11,19 +11,186 @@ import time
 import uuid
 from typing import Any
 
+from pydantic import ValidationError
+
 
 logger = logging.getLogger(__name__)
 
 
-async def normalize_source(source: str) -> str:
+async def normalize_source(source: str) -> tuple[str, dict[str, int]]:
     """The page as the audit reads it: what a docs host prints on every page (the agent banner, the footer links, fence attributes, MDX
     wrappers) is removed by the deterministic normalizer first, so the model's calls go to what the page teaches and no repair can turn the
     furniture into content. A page the normalizer cannot read is audited as it came."""
     try:
-        return (await asyncio.to_thread(domains.dd.ingestion.corpus_normalize.domain.normalize_doc, source)).body
+        normalized = await asyncio.to_thread(
+            domains.dd.ingestion.corpus_normalize.domain.normalize_doc, source,
+        )
+        counted = {
+            name: value
+            for name, value in normalized.stats.model_dump().items()
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0
+        }
+        mechanical_fixes = {
+            name: count
+            for name, count in counted.items()
+            if name in {
+                "zero_width_chars_stripped", "non_whitespace_control_chars_stripped",
+                "fence_meta_stripped", "boundary_markers_stripped",
+                "orphan_tags_stripped", "permalink_debris_stripped", "empty_media_stripped",
+                "agent_banner_stripped", "license_header_stripped", "agent_footer_stripped",
+                "footer_links_stripped", "heading_anchors_stripped", "code_annotations_stripped",
+                "code_copy_lines_stripped", "toc_tables_stripped", "viewcode_links_stripped",
+                "trailing_rules_stripped", "blank_lines_collapsed", "trailing_ws_lines",
+            }
+        }
+        return normalized.body, mechanical_fixes
     except Exception as error:
         logger.warning(f"[dd-agentic] normalize_doc failed: {type(error).__name__}: {error}; the page is audited as it came")
-        return source
+        return source, {}
+
+
+async def read_page_quality(
+    framework_slug: str,
+    page_idx: int,
+    *,
+    storage: infra.minio.service.MinIOStorage | None = None,
+) -> dict[str, Any] | None:
+    """Read the immutable audit/repair record for a page in the current finalized corpus."""
+    if storage is None:
+        storage = infra.minio.service.get_storage()
+    manifest = await domains.dd.ingestion.storage.service.read_framework_manifest(
+        storage, framework_slug,
+    )
+    run_id = (manifest or {}).get("agentic_run_id")
+    if not isinstance(run_id, str) or not run_id:
+        return None
+    if domains.dd.ingestion.storage.domain.entry_with_idx(
+        (manifest or {}).get("entries", []), page_idx,
+    ) is None:
+        return None
+
+    key = domains.dd.ingestion.storage.keys.agentic_assessment_key(
+        framework_slug, run_id, page_idx,
+    )
+    try:
+        artifact = json.loads(await storage.read_text(key))
+    except (FileNotFoundError, ValueError):
+        return None
+    if not isinstance(artifact, dict) or not isinstance(artifact.get("assessment"), dict):
+        return None
+
+    try:
+        assessment = ai.dd.agents.schemas.PageAssessment.model_validate(artifact["assessment"])
+    except ValidationError as error:
+        logger.warning(
+            f"[dd-quality] {framework_slug}: page {page_idx} has an invalid assessment artifact: "
+            f"{error.__class__.__name__}"
+        )
+        return None
+    patches = artifact.get("patches") or {}
+    if not isinstance(patches, dict):
+        patches = {}
+
+    def patches_by_issue(name: str) -> dict[str, dict]:
+        rows = patches.get(name)
+        if not isinstance(rows, list):
+            return {}
+        return {
+            patch["issue_id"]: patch
+            for patch in rows
+            if isinstance(patch, dict) and isinstance(patch.get("issue_id"), str)
+        }
+
+    accepted = patches_by_issue("accepted")
+    rejected = patches_by_issue("rejected")
+    repair = artifact.get("repair") or {}
+    if not isinstance(repair, dict):
+        repair = {}
+    audit_unavailable = artifact.get("audit_status") == "unavailable"
+    try:
+        eligible_issues = int(repair.get("eligible_issues") or 0)
+    except (TypeError, ValueError):
+        eligible_issues = 0
+    repair_unavailable = repair.get("status") == "unavailable" and eligible_issues > 0
+    review_ids = set(rejected)
+    if repair_unavailable or audit_unavailable:
+        review_ids.update(issue.issue_id for issue in assessment.issues if issue.issue_id not in accepted)
+
+    issues = []
+    for issue in assessment.issues:
+        accepted_patch = accepted.get(issue.issue_id)
+        rejected_patch = rejected.get(issue.issue_id)
+        rejected_proposal = (rejected_patch or {}).get("proposal")
+        if not isinstance(rejected_proposal, dict):
+            rejected_proposal = {}
+        issues.append({
+            "issue_id": issue.issue_id,
+            "code": issue.category.value,
+            "severity": issue.severity.value,
+            "description": issue.description,
+            "evidence": [text for text in (issue.evidence, issue.other_evidence) if text],
+            "resolution": (
+                "auto_applied" if accepted_patch is not None
+                else "review" if issue.issue_id in review_ids
+                else "none"
+            ),
+            "proposal": (
+                {
+                    "target_text": rejected_proposal.get("target_text", ""),
+                    "replacement": rejected_proposal.get("replacement", ""),
+                    "rationale": rejected_proposal.get("rationale", ""),
+                    "confidence": rejected_proposal.get("confidence", 0.0),
+                    "risk": rejected_patch.get("reason", "") if isinstance(rejected_patch.get("reason", ""), str) else "",
+                }
+                if rejected_patch is not None
+                else None
+            ),
+        })
+
+    mechanical_fixes = artifact.get("mechanical_fixes")
+    if isinstance(mechanical_fixes, dict):
+        try:
+            control_chars_removed = int(mechanical_fixes.get("non_whitespace_control_chars_stripped") or 0)
+        except (TypeError, ValueError):
+            control_chars_removed = 0
+        if control_chars_removed > 0 and not any(issue["code"] == "control_characters" for issue in issues):
+            issues.append({
+                "issue_id": "normalizer-control-characters",
+                "code": "control_characters",
+                "severity": "medium",
+                "description": (
+                    f"Found {control_chars_removed} non-whitespace control character"
+                    f"{'s' if control_chars_removed != 1 else ''}."
+                ),
+                "evidence": [],
+                "resolution": "auto_applied",
+                "proposal": None,
+            })
+
+    warnings = artifact.get("warnings")
+    if not isinstance(warnings, list):
+        warnings = []
+    errors = [
+        message
+        for message in (artifact.get("audit_error"), repair.get("error"))
+        if isinstance(message, str) and message
+    ]
+    return {
+        "framework_slug": framework_slug,
+        "agentic_run_id": run_id,
+        "page": page_idx,
+        "page_kind": assessment.page_kind.value,
+        "status": "review_required" if review_ids or audit_unavailable else "done",
+        "delivery_disposition": "include",
+        "issues": issues,
+        "mechanical_fixes": {
+            name: value
+            for name, value in (artifact.get("mechanical_fixes") or {}).items()
+            if isinstance(name, str) and isinstance(value, int) and not isinstance(value, bool) and value > 0
+        } if isinstance(artifact.get("mechanical_fixes"), dict) else {},
+        "audit_warnings": [warning for warning in warnings if isinstance(warning, str)],
+        "errors": errors,
+    }
 
 
 async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> dict:
@@ -48,8 +215,16 @@ async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> d
         if await minio.exists(input_key):
             # A failed run already froze this page (already normalized): resume on those exact bytes.
             source = await minio.read_text(input_key)
+            raw_source = await minio.read_text(source_key)
+            recalculated, mechanical_fixes = await normalize_source(raw_source)
+            if recalculated != source:
+                logger.warning(
+                    f"[dd-agentic] {store.framework_slug}: page {entry.idx} normalization differs from frozen input; "
+                    "preserving the frozen input and omitting normalization counters"
+                )
+                mechanical_fixes = {}
         else:
-            source = await normalize_source(await minio.read_text(source_key))
+            source, mechanical_fixes = await normalize_source(await minio.read_text(source_key))
         await domains.dd.ingestion.storage.service.write_immutable(
             minio,
             input_key,
@@ -73,6 +248,7 @@ async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> d
                 "source_key": input_key,
                 "raw_key": entry.raw_key,
                 "source_sha256": source_sha256,
+                "mechanical_fixes": mechanical_fixes,
             }
         )
 

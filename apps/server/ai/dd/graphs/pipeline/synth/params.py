@@ -15,8 +15,43 @@ NODE_ORDER = (
     "render_audit_write",
 )
 
+# Synth v2 replaces the per-source LLM digest with a code-ledger preparation stage and
+# reports code verification as its own checkpointed stage. Keep this tuple literal:
+# the web contract checker compares it with SYNTH_V2_NODES.
+V2_NODE_ORDER = (
+    "outline_sdp",
+    "ledger_prepare",
+    "sawc_write",
+    "sawc_derive",
+    "verify",
+    "checklist_eval",
+    "mgsr_replan",
+    "render_audit_write",
+)
+
+
+def version() -> str:
+    """The active graph version. Unknown values fall back to the established v1 graph."""
+    return "v2" if os.getenv("DD_SYNTH_VERSION", "v2").strip().lower() == "v2" else "v1"
+
+
+def is_v2() -> bool:
+    return version() == "v2"
+
+
+def tutorial_mode() -> bool:
+    """Enable tutorial behavior for Synth v2 without changing Planner's version selection."""
+    from .. import params as pipeline_params
+
+    return is_v2() or pipeline_params.TUTORIAL_MODE
+
+
+def node_order() -> tuple[str, ...]:
+    return V2_NODE_ORDER if is_v2() else NODE_ORDER
+
 CHECKLIST_THRESHOLD = 0.80
 MAX_REFINE_ITER = 5
+MAX_V2_REFINE_ITER = 2  # initial write plus one targeted revision
 PLATEAU_DELTA = 0.03
 
 # chapters below 0.5 at iter-1 rarely recover above 0.80; best-seen rescue at iter-1 ≈ iter-2

@@ -46,6 +46,44 @@ class AgenticRunProgress(BaseModel):
     processed_pages: list[int] = Field(default_factory = list)
     active_audit_pages: list[int] = Field(default_factory = list)
     active_repair_pages: list[int] = Field(default_factory = list)
+    classified_pages: list[int] = Field(default_factory = list)
+    active_classification_pages: list[int] = Field(default_factory = list)
+
+
+class ContentSelectionPage(BaseModel):
+    """Classifier result and effective inclusion policy for one original physical page."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    page_number: int = Field(gt = 0, strict = True)
+    role: Literal["core", "preface", "reference", "navigation", "legal", "noise", "unknown"]
+    confidence: float = Field(ge = 0, le = 1, allow_inf_nan = False)
+    rationale: Annotated[str, StringConstraints(strip_whitespace = True, max_length = 600)]
+    disposition: Literal["include", "exclude"]
+    decision_source: Literal["classifier", "content_policy", "conservative_fallback", "user"]
+
+
+class ContentSelectionManifest(BaseModel):
+    """Append-only page-selection revision, independent from canonical source and QA artifacts."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    schema_version: Literal["1.0"] = "1.0"
+    classifier_version: NonEmptyText
+    book_id: SafeSegment
+    extraction_run_id: SafeSegment
+    agentic_run_id: SafeSegment
+    revision: int = Field(gt = 0, strict = True)
+    expected_page_count: int = Field(gt = 0, strict = True)
+    pages: list[ContentSelectionPage]
+    created_at: float = Field(gt = 0, allow_inf_nan = False)
+
+    @model_validator(mode = "after")
+    def _validate_selection(self) -> ContentSelectionManifest:
+        numbers = [page.page_number for page in self.pages]
+        if numbers != list(range(1, self.expected_page_count + 1)):
+            raise ValueError("content selection must include every physical page in order")
+        return self
 
 
 class IngestionPageArtifact(BaseModel):
@@ -82,7 +120,7 @@ class IngestionAIRunManifest(BaseModel):
 
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2"] = versions.MANIFEST_SCHEMA_VERSION
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = versions.MANIFEST_SCHEMA_VERSION
     workflow_version: NonEmptyText = versions.WORKFLOW_VERSION
     agentic_run_id: SafeSegment
     book_id: SafeSegment
@@ -103,6 +141,11 @@ class IngestionAIRunManifest(BaseModel):
     review_page_count: int = Field(default = 0, ge = 0, strict = True)
     unverified_page_count: int = Field(default = 0, ge = 0, strict = True)
     unverified_pages: list[int] = Field(default_factory = list)
+    content_selection_key: ObjectKey | None = None
+    content_selection_sha256: Sha256Hex | None = None
+    content_selection_revision: int | None = Field(default = None, ge = 1, strict = True)
+    selected_page_count: int | None = Field(default = None, ge = 0, strict = True)
+    excluded_page_count: int | None = Field(default = None, ge = 0, strict = True)
     created_at: float = Field(gt = 0, allow_inf_nan = False)
     updated_at: float = Field(gt = 0, allow_inf_nan = False)
     finished_at: float | None = Field(default = None, gt = 0, allow_inf_nan = False)
@@ -147,7 +190,7 @@ class IngestionAIRunManifest(BaseModel):
                 raise ValueError("completed runs may contain only completed or review-required pages")
             if self.book_metadata_sha256 is None or self.quality_report_sha256 is None:
                 raise ValueError("completed runs must include hashes for book metadata and quality report")
-            if self.schema_version in {"1.1", "1.2"}:
+            if self.schema_version in {"1.1", "1.2", "1.3"}:
                 if self.quality_status is None:
                     raise ValueError("completed 1.1 runs must include a quality status")
                 if self.delivered_page_count != sum(
@@ -162,13 +205,24 @@ class IngestionAIRunManifest(BaseModel):
                     page.status == AgenticPageStatus.REVIEW_REQUIRED for page in self.pages
                 ):
                     raise ValueError("review_page_count must match page review statuses")
-            if self.schema_version == "1.2":
+            if self.schema_version in {"1.2", "1.3"}:
                 if len(self.unverified_pages) != self.unverified_page_count:
                     raise ValueError("unverified_page_count must match unverified_pages")
                 if len(self.unverified_pages) != len(set(self.unverified_pages)):
                     raise ValueError("unverified_pages must contain unique page numbers")
                 if any(page_number < 1 or page_number > self.expected_page_count for page_number in self.unverified_pages):
                     raise ValueError("unverified_pages must be within the expected page range")
+            if self.schema_version == "1.3":
+                if any(value is None for value in (
+                    self.content_selection_key,
+                    self.content_selection_sha256,
+                    self.content_selection_revision,
+                    self.selected_page_count,
+                    self.excluded_page_count,
+                )):
+                    raise ValueError("completed 1.3 runs must pin a complete content-selection revision")
+                if self.selected_page_count + self.excluded_page_count != self.expected_page_count:
+                    raise ValueError("content-selection counts must cover every physical page")
 
         return self
 
@@ -223,4 +277,6 @@ __all__ = [
     "ExtractionRequest",
     "IngestionAIRunManifest",
     "IngestionPageArtifact",
+    "ContentSelectionManifest",
+    "ContentSelectionPage",
 ]

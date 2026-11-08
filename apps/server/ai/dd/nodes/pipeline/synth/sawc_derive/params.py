@@ -34,6 +34,21 @@ MAX_DERIVES_PER_CHAPTER = 30
 EXPLANATION_MIN_WORDS = 6
 EXPLANATION_MAX_WORDS = 100
 
+# The capstone that ends a tutorial chapter: its heading, its size in non-blank lines, the share of the chapter's steps whose key API it must use, and how
+# much of the chapter's code the designer is shown (per example, then in all).
+CAPSTONE_PREFIX = "Capstone"
+CAPSTONE_MIN_LINES = 12
+CAPSTONE_MAX_LINES = 120
+CAPSTONE_MIN_USE_SHARE = 0.6
+# A chapter that teaches fewer examples than this (a reference chapter) has nothing to combine: it gets no capstone, and its judge does not ask for one.
+CAPSTONE_MIN_EXAMPLES = 3
+CAPSTONE_BLOCK_CHARS = 1_500
+CAPSTONE_CODE_CHARS = 14_000
+CAPSTONE_MAX_PARTS = 4
+CAPSTONE_CITATIONS = 3
+INTRO_MIN_CHARS = 20
+INTRO_MAX_CHARS = 400
+
 # Env flag — default ON. Set KD_ENABLE_SAWC_DERIVE=false to disable.
 ENV_ENABLED = "KD_ENABLE_SAWC_DERIVE"
 

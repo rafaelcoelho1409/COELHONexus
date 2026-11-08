@@ -19,6 +19,9 @@ def normalize_doc(
     stats = schemas.NormalizeStats(input_bytes = len(md_text.encode("utf-8")))
     text = md_text
 
+    text, n_controls = _control_character_pass(text)
+    stats.non_whitespace_control_chars_stripped = n_controls
+
     text, n_zw = _unicode_pass(text)
     stats.zero_width_chars_stripped = n_zw
 
@@ -79,6 +82,16 @@ def normalize_doc(
         body = text, frontmatter = frontmatter,
         stats = stats, version = versions.NORMALIZER_VERSION,
     )
+
+
+def _control_character_pass(text: str) -> tuple[str, int]:
+    """Drop non-whitespace Unicode control characters while preserving Markdown whitespace."""
+    cleaned = "".join(
+        character
+        for character in text
+        if unicodedata.category(character) != "Cc" or character.isspace()
+    )
+    return cleaned, len(text) - len(cleaned)
 
 
 def _unicode_pass(text: str) -> tuple[str, int]:

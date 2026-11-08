@@ -12,6 +12,31 @@ export const keyStatusSchema = z.object({
 });
 export const connectionViewSchema = keyStatusSchema.extend({ url: z.string(), model: z.string() });
 
+export const searchProviderSchema = z.looseObject({
+  provider_id: z.enum(["coelho_search", "tavily", "exa", "jina"]),
+  name: z.string(),
+  endpoint: z.string().nullable(),
+  available: z.boolean(),
+  has_key: z.boolean(),
+  key_source: z.enum(["user", "env"]).nullable(),
+  key_last4: z.string().nullable(),
+  connected: z.boolean(),
+  last_checked_at: z.number().nullable(),
+  tools: z.array(z.string()),
+  last_test_error: z.string().nullable(),
+});
+export const searchSettingsSchema = z.looseObject({
+  default_provider: z.enum(["coelho_search", "tavily", "exa", "jina"]).nullable(),
+  providers: z.array(searchProviderSchema),
+});
+export const searchTestSchema = z.looseObject({
+  ok: z.boolean(),
+  provider_id: z.enum(["coelho_search", "tavily", "exa", "jina"]),
+  latency_ms: z.number().int().nonnegative(),
+  tools: z.array(z.string()),
+  error: z.string().nullable(),
+});
+
 export const llmTestSchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), reply: z.string(), latency_ms: z.number(), model: z.string().nullish() }),
   z.object({ ok: z.literal(false), error: z.string(), latency_ms: z.number() }),
@@ -50,6 +75,9 @@ export const taskStatusSchema = z.looseObject({
 
 export type KeyStatus = z.infer<typeof keyStatusSchema>;
 export type ConnectionView = z.infer<typeof connectionViewSchema>;
+export type SearchProvider = z.infer<typeof searchProviderSchema>;
+export type SearchSettings = z.infer<typeof searchSettingsSchema>;
+export type SearchTestResult = z.infer<typeof searchTestSchema>;
 export type LlmTestResult = z.infer<typeof llmTestSchema>;
 export type EmbeddingTestResult = z.infer<typeof embeddingTestSchema>;
 export type MigrationStatus = z.infer<typeof migrationStatusSchema>;

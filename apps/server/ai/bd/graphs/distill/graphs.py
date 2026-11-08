@@ -19,7 +19,8 @@ def _identity(state: states.DistillRunState) -> dict[str, Any]:
         for key in (
             "book_id", "run_id", "extraction_run_id", "ingestion_ai_run_id", "source_manifest_key",
             "source_manifest_sha256", "ingestion_ai_manifest_key", "ingestion_ai_manifest_sha256",
-            "expected_page_count", "run_created_at",
+            "content_selection_key", "content_selection_sha256", "content_selection_revision",
+            "expected_page_count", "selected_page_count", "run_created_at",
         )
         if key in state
     }
