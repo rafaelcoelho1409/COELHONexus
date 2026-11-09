@@ -77,10 +77,10 @@ describe("run helpers", () => {
     expect(terminalPill("cancelled")).toEqual({ status: "cancelled", label: "Cancelled" });
   });
 
-  it("starts as Resume once the plan's path is in the checkpoint", () => {
+  it("offers a fresh run for a terminal plan", () => {
     expect(plannerStartLabel({})).toBe("Start");
     expect(plannerStartLabel({ raw_files: ["a"] })).toBe("Start");
-    expect(plannerStartLabel({ plan_path: "planner/alpha/plan-latest.json" })).toBe("Resume");
+    expect(plannerStartLabel({ plan_path: "planner/alpha/plan-latest.json" }, [])).toBe("Run again");
   });
 
   it("keeps a bounded tail of events, oldest first", () => {

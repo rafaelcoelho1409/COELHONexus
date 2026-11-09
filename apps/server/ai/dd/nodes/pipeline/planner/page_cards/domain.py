@@ -40,6 +40,36 @@ def fallback_card(*, key: str, title: str, body: str, url: str = "") -> dict:
     }
 
 
+def normalize_reference_kind(card: dict, *, key: str, title: str, url: str) -> dict:
+    """Keep ambiguous feature and configuration docs in the learning path; exclude only clear lookup pages."""
+    if card.get("kind") != "reference":
+        return card
+    locator = " ".join((key or "", title or "", url or "")).casefold()
+    teaches = card.get("teaches") or []
+    teaches_text = teaches if isinstance(teaches, str) else " ".join(str(value) for value in teaches)
+    learning_text = " ".join([
+        locator,
+        str(card.get("summary") or ""),
+        teaches_text,
+    ])
+    strong_learning_signal = (
+        patterns.LEARNING_FILE_RE.search(locator)
+        or card.get("code_role") == "runnable_example"
+    )
+    if strong_learning_signal:
+        return {**card, "kind": "how_to"}
+    if patterns.REFERENCE_DOC_PATH_RE.search(url or ""):
+        return card
+    if patterns.API_PATH_RE.search(url or ""):
+        return card
+    if patterns.TEACHING_LANGUAGE_RE.search(learning_text):
+        return {**card, "kind": "how_to"}
+    if patterns.LOOKUP_FILE_RE.search(locator):
+        return card
+    # A short card summary is not enough evidence to remove an ambiguous page from the tutorial.
+    return {**card, "kind": "concept"}
+
+
 def to_distillate(card: dict) -> dict:
     """Compatibility shape for the existing selector's page-family rules."""
     role_by_kind = {

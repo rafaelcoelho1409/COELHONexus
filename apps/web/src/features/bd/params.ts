@@ -9,6 +9,7 @@ const BD_STAGES = [
   { key: "ingestion", label: "Ingestion", href: "/bd/ingestion", carry: true },
   { key: "pages", label: "Pages", href: "/bd/pages", carry: true },
   { key: "distill", label: "Distill", href: "/bd/distill", carry: true },
+  { key: "study", label: "Study", href: "/bd/study", carry: true },
 ] as const;
 
 /** The title and stage tabs in the second navbar. `/bd` opens the Ingestion stage, so it is the current tab there. */

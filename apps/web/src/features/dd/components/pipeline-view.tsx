@@ -27,8 +27,9 @@ function PipelineWorkbench({ slug }: { slug: string }) {
   const planner = usePlannerRun(slug, {
     onTerminal: (status) => {
       const continueChain = () => chain.onPlannerFinished(status);
-      if (status === "done") void synth.refreshPlan().then(continueChain, continueChain);
-      else void continueChain();
+      // A durable plan may exist for any terminal status. Refresh every time so Chapters gets final titles/actions
+      // without requiring a page reload; auto-chain still only proceeds on "done".
+      void synth.refreshPlan().then(continueChain, continueChain);
     },
     onWipe: synth.clearPlan,
   });

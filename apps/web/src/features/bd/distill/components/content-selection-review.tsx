@@ -8,7 +8,7 @@ import { apiErrorMessage } from "@/shared/lib/api-error";
 
 import { ActionButton } from "../../components/action-button";
 import type { ContentSelection, ContentSelectionPage } from "../entities";
-import { distillHref } from "../params";
+import { distillStudyHref } from "../params";
 
 const PAGE_SIZE = 20;
 type SelectionFilter = "all" | "include" | "exclude";
@@ -52,7 +52,9 @@ export function ContentSelectionReview({
         </p>
       ) : error ? (
         <div role="alert" className="mt-3 rounded-sm border border-border p-3 text-sm">
-          <p className="text-destructive-text">Page selection could not be loaded — {apiErrorMessage(error)}</p>
+          <p className="text-destructive-text">
+            Page selection could not be loaded — {apiErrorMessage(error)}
+          </p>
           <div className="mt-2">
             <ActionButton onClick={onRetry}>Try again</ActionButton>
           </div>
@@ -146,7 +148,11 @@ function SelectionEditor({
         </p>
       ) : null}
       <p className="sr-only" role="status" aria-live="polite">
-        {saving ? "Saving page selection." : changes.length > 0 ? `${changes.length} unsaved page changes.` : "Page selection saved."}
+        {saving
+          ? "Saving page selection."
+          : changes.length > 0
+            ? `${changes.length} unsaved page changes.`
+            : "Page selection saved."}
       </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="Filter selected pages">
@@ -166,16 +172,22 @@ function SelectionEditor({
           There are no pages in this selection.
         </p>
       ) : (
-        <ol aria-label="Book page inclusion decisions" className="mt-3 divide-y divide-border border-y border-border">
+        <ol
+          aria-label="Book page inclusion decisions"
+          className="mt-3 divide-y divide-border border-y border-border"
+        >
           {visiblePages.map((page) => {
             const disposition = drafts[page.page_number] ?? page.disposition;
             const included = disposition === "include";
             return (
-              <li key={page.page_number} className="flex min-w-0 flex-wrap items-start justify-between gap-3 py-3">
+              <li
+                key={page.page_number}
+                className="flex min-w-0 flex-wrap items-start justify-between gap-3 py-3"
+              >
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <Link
-                      href={distillHref(bookId, null, page.page_number)}
+                      href={distillStudyHref(bookId, null, page.page_number)}
                       className="font-mono text-sm font-medium underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                     >
                       Page {page.page_number}
@@ -210,10 +222,14 @@ function SelectionEditor({
       {filtered.length > PAGE_SIZE ? (
         <nav aria-label="Page selection pages" className="mt-3 flex items-center justify-between gap-3">
           <p className="text-xs text-muted-foreground">
-            {currentIndex * PAGE_SIZE + 1}–{Math.min((currentIndex + 1) * PAGE_SIZE, filtered.length)} of {filtered.length}
+            {currentIndex * PAGE_SIZE + 1}–{Math.min((currentIndex + 1) * PAGE_SIZE, filtered.length)} of{" "}
+            {filtered.length}
           </p>
           <div className="flex gap-2">
-            <ActionButton onClick={() => setPageIndex((index) => Math.max(0, index - 1))} disabled={currentIndex === 0}>
+            <ActionButton
+              onClick={() => setPageIndex((index) => Math.max(0, index - 1))}
+              disabled={currentIndex === 0}
+            >
               Previous
             </ActionButton>
             <ActionButton
@@ -253,7 +269,9 @@ function FilterButton({
       onClick={onClick}
       aria-pressed={active}
       className={`min-h-9 rounded-sm border px-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
-        active ? "border-border bg-muted text-foreground" : "border-border text-muted-foreground hover:bg-muted"
+        active
+          ? "border-border bg-muted text-foreground"
+          : "border-border text-muted-foreground hover:bg-muted"
       }`}
     >
       {children}

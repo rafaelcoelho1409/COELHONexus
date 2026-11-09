@@ -20,6 +20,78 @@ from starlette.responses import StreamingResponse
 logger = logging.getLogger(__name__)
 
 
+def _planner_review_reasons(health: dict, stats: dict, chapters: list[dict]) -> list[str]:
+    reasons = []
+    design = stats.get("chapter_design") or {}
+    doc_fallback_pct = float(health.get("doc_distill_fallback_pct") or 0.0)
+    if doc_fallback_pct >= 40.0:
+        reasons.append(f"{doc_fallback_pct:.1f}% of source distillation used fallback extraction")
+    proposal_fallback = bool(health.get("chapter_propose_fallback_used"))
+    design_fallback = bool(
+        health.get("chapter_design_fallback_used") or design.get("fallback_used")
+    )
+    if health.get("planner_version") == "v2" and proposal_fallback and design_fallback:
+        # v2 creates the proposal artifact from chapter design, so these flags
+        # describe one fallback event rather than two independent stages.
+        reasons.append("chapter design used its deterministic fallback to create the chapter proposals")
+    elif proposal_fallback:
+        reasons.append("chapter proposal used its deterministic fallback")
+    assignment_fallback_pct = float(health.get("chapter_assign_fallback_pct") or 0.0)
+    if assignment_fallback_pct >= 50.0:
+        reasons.append(f"{assignment_fallback_pct:.1f}% of chapter assignments used fallback logic")
+    tutorial_count = sum(
+        1 for chapter in chapters
+        if isinstance(chapter, dict)
+        and chapter.get("kind") != "appendix"
+        and chapter.get("role") != "appendix"
+    )
+    chapter_count = tutorial_count or health.get("chapter_select_n_chapters") or stats.get("n_chapters")
+    if health.get("order_chapters_valid_samples") == 0 and chapter_count and chapter_count > 1:
+        reasons.append("chapter ordering had no valid model samples")
+    if design_fallback and not (
+        health.get("planner_version") == "v2" and proposal_fallback
+    ):
+        reasons.append(
+            "chapter design used its deterministic fallback"
+            if health.get("planner_version") != "v2"
+            else "chapter design used deterministic recovery"
+        )
+    design_errors = max(
+        int(health.get("chapter_design_errors") or 0),
+        len(design.get("designer_errors") or []),
+    )
+    if design_errors:
+        reasons.append(f"chapter design recorded {design_errors} structured-output failure(s)")
+    review_flags = max(
+        int(health.get("chapter_design_review_flags") or 0),
+        len(design.get("designer_review_flags") or []),
+    )
+    review_flag_details = design.get("designer_review_flags") or health.get("chapter_design_review_reasons") or []
+    if review_flags:
+        detail = next((str(flag).strip() for flag in review_flag_details if str(flag).strip()), "")
+        suffix = f": {detail[:220]}" if detail else ""
+        reasons.append(f"chapter design has {review_flags} unresolved review flag(s){suffix}")
+    if health.get("chapter_design_ledger_available") is False:
+        reasons.append("the best-code ledger was unavailable")
+    unplaced = int(health.get("chapter_select_unplaced_pages") or 0)
+    if unplaced:
+        reasons.append(f"{unplaced} source page(s) are unplaced")
+    coverage = health.get("chapter_select_page_coverage_pct")
+    if coverage is not None and float(coverage) < 100.0 and not unplaced:
+        reasons.append(f"source coverage is {float(coverage):.1f}%")
+    fallback_pct = float(health.get("page_card_fallback_pct") or 0.0)
+    if fallback_pct >= 40.0:
+        reasons.append(f"{fallback_pct:.1f}% of page cards used fallback extraction")
+
+    missing_digests = int(health.get("chapter_source_digests_missing") or 0)
+    if missing_digests:
+        reasons.append(f"{missing_digests} source content fingerprint(s) are missing")
+    suggested = health.get("chapter_design_suggested_chapters") or design.get("suggested_chapters")
+    if chapter_count and suggested and chapter_count > 2 * suggested:
+        reasons.append(f"the plan has {chapter_count} tutorial chapters against a {suggested}-chapter estimate")
+    return reasons
+
+
 router = APIRouter()
 
 
@@ -283,13 +355,16 @@ async def start_synth(
         )
 
     plan = await service.load_plan(slug)
-    health = ((plan or {}).get("stats") or {}).get("pipeline_health") or {}
+    stats = (plan or {}).get("stats") or {}
+    health = stats.get("pipeline_health") or {}
     if health.get("degraded") is True:
+        reasons = _planner_review_reasons(health, stats, (plan or {}).get("chapters") or [])
+        review_detail = "; ".join(reasons) if reasons else "the plan has an unresolved Planner quality issue"
         raise HTTPException(
             status_code=409,
             detail=(
-                "the latest Planner plan needs review before Synth can run; "
-                "resolve its fallback, design, or source-coverage issues and run Planner again"
+                f"the latest Planner plan needs review before Synth can run: {review_detail}. "
+                "Fix the Planner issues and run Planner again"
             ),
         )
     # The planner's chapter array is already in pedagogical order. Sorting ids

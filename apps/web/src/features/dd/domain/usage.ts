@@ -292,7 +292,33 @@ export function planHealthView(degraded: boolean | null, health: Record<string, 
     return typeof value === "number" && Number.isFinite(value) ? value : 0;
   };
   const reasons: string[] = [];
-  if (health.chapter_propose_fallback_used === true) {
+  if (health.planner_version === "v2") {
+    if (health.chapter_design_fallback_used === true) {
+      reasons.push("Chapter design required deterministic recovery.");
+    }
+    const reviewCount = read("chapter_design_review_flags");
+    if (reviewCount > 0) {
+      const details = Array.isArray(health.chapter_design_review_reasons)
+        ? health.chapter_design_review_reasons.filter((item): item is string => typeof item === "string")
+        : [];
+      reasons.push(
+        details[0]
+          ? `Chapter design needs review: ${details[0]}`
+          : `Chapter design has ${reviewCount} unresolved review flag${reviewCount === 1 ? "" : "s"}.`,
+      );
+    }
+    const errorCount = read("chapter_design_errors");
+    if (errorCount > 0) {
+      const details = Array.isArray(health.chapter_design_error_details)
+        ? health.chapter_design_error_details.filter((item): item is string => typeof item === "string")
+        : [];
+      reasons.push(
+        details[0]
+          ? `Chapter design had a structured-output failure: ${details[0]}`
+          : `Chapter design recorded ${errorCount} structured-output failure${errorCount === 1 ? "" : "s"}.`,
+      );
+    }
+  } else if (health.chapter_propose_fallback_used === true) {
     reasons.push("Chapter proposals fell back to deterministic titles.");
   }
   if (read("doc_distill_fallback_pct") >= FALLBACK_DISTILL_PCT) {

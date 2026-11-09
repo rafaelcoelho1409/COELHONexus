@@ -8,7 +8,6 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { ContextBar } from "@/shared/layout/context-bar";
 import { apiErrorMessage } from "@/shared/lib/api-error";
-import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 
 import {
@@ -27,6 +26,7 @@ import {
 import { useActiveRun, useCatalog, useLibrary, useStartRun } from "../hooks/use-dd-data";
 import { useDdOverlays } from "../hooks/use-overlays";
 import { ingestionHref, stageHref } from "../params";
+import { ActionButton } from "./action-button";
 import { CatalogTile } from "./catalog-tile";
 import { FilterDropdown } from "./filter-dropdown";
 
@@ -114,7 +114,7 @@ export function CatalogStage() {
 
   return (
     <div className="pb-28">
-      {/* The third navbar: search, how many match, then the three filters. */}
+      {/* The third navbar: search and filters; the match count sits beside Status. */}
       <ContextBar
         start={
           <>
@@ -125,9 +125,6 @@ export function CatalogStage() {
               aria-label="Search the catalog"
               className="h-9 w-full sm:w-64"
             />
-            <p aria-live="polite" className="order-last text-xs text-muted-foreground sm:order-none">
-              {visible.length} of {entries.length} frameworks shown
-            </p>
             <FilterDropdown
               label="Category"
               ariaLabel="Filter by category"
@@ -162,28 +159,34 @@ export function CatalogStage() {
               }
               onReset={() => setFilters((f) => ({ ...f, tiers: new Set() }))}
             />
-            <FilterDropdown
-              label="Status"
-              ariaLabel="Filter by status"
-              summary={facetSummary(filters.statuses)}
-              multiple
-              options={STATUSES.map((status) => ({
-                value: status,
-                label: status,
-                count: counts.status[status] ?? 0,
-                active: filters.statuses.has(status),
-              }))}
-              onToggle={(value) => {
-                const status = STATUSES.find((candidate) => candidate === value);
-                if (!status) return;
-                setFilters((f) => {
-                  const statuses = new Set(f.statuses);
-                  if (!statuses.delete(status)) statuses.add(status);
-                  return { ...f, statuses };
-                });
-              }}
-              onReset={() => setFilters((f) => ({ ...f, statuses: new Set() }))}
-            />
+            <div className="flex items-center gap-2">
+              <FilterDropdown
+                label="Status"
+                ariaLabel="Filter by status"
+                summary={facetSummary(filters.statuses)}
+                multiple
+                options={STATUSES.map((status) => ({
+                  value: status,
+                  label: status,
+                  count: counts.status[status] ?? 0,
+                  active: filters.statuses.has(status),
+                }))}
+                onToggle={(value) => {
+                  const status = STATUSES.find((candidate) => candidate === value);
+                  if (!status) return;
+                  setFilters((f) => {
+                    const statuses = new Set(f.statuses);
+                    if (!statuses.delete(status)) statuses.add(status);
+                    return { ...f, statuses };
+                  });
+                }}
+                onReset={() => setFilters((f) => ({ ...f, statuses: new Set() }))}
+              />
+              <span aria-live="polite" className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                <span aria-hidden="true">{visible.length}/{entries.length}</span>
+                <span className="sr-only">{visible.length} of {entries.length} frameworks shown</span>
+              </span>
+            </div>
           </>
         }
       />
@@ -213,17 +216,16 @@ export function CatalogStage() {
               {activeFramework ? ` A run is active (${activeFramework}).` : ""}
             </span>
             <div className="ml-auto flex gap-2">
-              <Button size="lg" variant="outline" onClick={() => setSelected(null)}>
+              <ActionButton onClick={() => setSelected(null)}>
                 Cancel
-              </Button>
-              <Button
-                size="lg"
+              </ActionButton>
+              <ActionButton
                 onClick={startIngestion}
                 disabled={start.isPending || activeRun != null}
                 aria-busy={start.isPending}
               >
                 {selectedIngested ? "Reingest" : start.isPending ? "Starting…" : "Start Ingestion"}
-              </Button>
+              </ActionButton>
             </div>
           </div>
         </div>

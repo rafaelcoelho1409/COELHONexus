@@ -1,6 +1,7 @@
 "use client";
 
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { Literata } from "next/font/google";
 import Image from "next/image";
 import { Children, isValidElement, type ReactNode, useId, useMemo, useState } from "react";
 import type { Components } from "react-markdown";
@@ -8,13 +9,14 @@ import type { Components } from "react-markdown";
 import { Markdown } from "@/shared/markdown";
 
 import { figureUrl } from "../api";
-import type { BookUnits } from "../domain/books";
+import { type BookStatus, type BookUnits, fmtBytes } from "../domain/books";
 import { breadcrumb, type PageRow, pageChips, readableMarkdown } from "../domain/pages";
 import { useModalDialog } from "../hooks/use-modal-dialog";
 import type { PageContent, PageVersion } from "../hooks/use-page-content";
 import { ActionButton } from "./action-button";
 import { PageChanges } from "./page-changes";
 import { PageQualityPanel } from "./page-quality";
+import { StatusChip } from "./status-chip";
 import { ToggleGroup } from "./toggle-group";
 
 const PREVIEW_MODES = [
@@ -27,6 +29,12 @@ const VERSIONS: readonly { id: PageVersion; label: string }[] = [
   { id: "changes", label: "Changes" },
 ];
 const EMPTY_FIGURES: readonly string[] = [];
+const bookPageFont = Literata({
+  axes: ["opsz"],
+  display: "swap",
+  fallback: ["Georgia", "serif"],
+  subsets: ["latin"],
+});
 
 /** One extracted content unit: its section path, what it contains, what the Agentic AI step did to it, its text and its
  * figures. The text itself (and the outline drawn beside it) comes from `usePageContent`, one level up, so the page, the
@@ -34,8 +42,7 @@ const EMPTY_FIGURES: readonly string[] = [];
  * shows it bare. */
 export function PageReader({
   bookId,
-  bookTitle,
-  filename,
+  bookMetadata,
   page,
   row,
   nPages,
@@ -45,8 +52,13 @@ export function PageReader({
   toolbar,
 }: {
   bookId: string;
-  bookTitle?: string;
-  filename?: string;
+  bookMetadata?: {
+    title: string;
+    filename: string;
+    status: BookStatus;
+    sizeBytes: number;
+    pageCount: number;
+  };
   page: number | null;
   row: PageRow | undefined;
   nPages: number;
@@ -114,21 +126,21 @@ export function PageReader({
       className={`min-w-0 ${framed ? "rounded-md border border-border bg-card p-4 sm:p-5" : ""}`}
     >
       <header className="mb-4 border-b border-border pb-4">
-        {bookTitle ? (
-          <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <h4 className="break-words text-base font-semibold">{bookTitle}</h4>
-              {filename ? (
-                <p className="mt-1 break-all text-xs text-muted-foreground">
-                  <span className="mono-label">Source file</span>: {filename}
-                </p>
-              ) : null}
-            </div>
-            {toolbar}
+        {bookMetadata ? (
+          <div className="min-w-0">
+            <h4 className="break-words text-xl font-semibold">{bookMetadata.title}</h4>
+            <p className="mt-1 break-all text-sm text-muted-foreground">{bookMetadata.filename}</p>
+            <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              <StatusChip status={bookMetadata.status} />
+              <span>{fmtBytes(bookMetadata.sizeBytes)}</span>
+              <span className="tabular">
+                {bookMetadata.pageCount} {units.plural}
+              </span>
+            </p>
           </div>
         ) : null}
         <div
-          className={`flex min-w-0 flex-wrap items-start justify-between gap-3 ${bookTitle ? "mt-3" : ""}`}
+          className={`flex min-w-0 flex-wrap items-start justify-between gap-3 ${bookMetadata ? "mt-3" : ""}`}
         >
           <div className="min-w-0 flex-1">
             <p className="mono-label">
@@ -145,7 +157,7 @@ export function PageReader({
                 : "Docling extraction"}
             </p>
           </div>
-          {bookTitle ? null : toolbar}
+          {toolbar}
         </div>
         {trail ? <p className="mt-2 w-full break-words text-sm text-muted-foreground">{trail}</p> : null}
         {chips.length > 0 ? (
@@ -197,7 +209,9 @@ export function PageReader({
             <PageChanges diff={content.diff} loading={loadingVersion} failed={raw.isError} />
           ) : display ? (
             previewMode === "rendered" ? (
-              <Markdown text={renderedText} components={markdownComponents} />
+              <div className={`${bookPageFont.className} bd-book-page-reader`}>
+                <Markdown text={renderedText} components={markdownComponents} />
+              </div>
             ) : (
               <pre className="break-words whitespace-pre-wrap font-mono text-xs text-foreground">
                 {source}

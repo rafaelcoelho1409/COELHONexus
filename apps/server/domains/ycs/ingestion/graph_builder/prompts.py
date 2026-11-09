@@ -5,13 +5,11 @@ from __future__ import annotations
 from langchain_core.prompts import ChatPromptTemplate
 
 
-GRAPH_PROMPT_VERSION = "deprecated-1:1-2026-06-06"
+GRAPH_PROMPT_VERSION = "ycs-deepagent-2:1-2026-11-09"
 
 
-# Sent to `LLMGraphTransformer` as `additional_instructions`. Enforces
-# FORMATTING (TitleCase nodes, UPPER_SNAKE_CASE relationships,
-# normalized names) — NOT a content constraint. Works for any YouTube
-# topic.
+# Retained for callers of the legacy `create_graph_transformer` helper.
+# The active DeepAgent instructions live in `ai/ycs/prompts/ingestion/graph_extractor/SYSTEM.md`.
 EXTRACTION_INSTRUCTIONS = """
 Extract ALL entities and relationships from the text. Do not limit yourself
 to predefined types — capture everything meaningful.

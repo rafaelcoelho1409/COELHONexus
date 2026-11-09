@@ -26,7 +26,6 @@ def _model_partitions(candidates: dict) -> list[dict]:
     """Do not repeat full page cards or code facts in every candidate partition sent to the model."""
     return [
         {
-            "id": partition["id"],
             "method": partition["method"],
             "metrics": partition["metrics"],
             "groups": [
@@ -50,7 +49,11 @@ def _answer_issues(answer: dict | None, candidates: dict, cards: list[dict]) -> 
     partitions = {item["id"]: item for item in candidates.get("partitions") or []}
     selected = partitions.get((answer or {}).get("candidate_partition_id"))
     if not selected:
-        return ["Choose one of the supplied candidate partition ids."]
+        valid_ids = sorted(partitions)
+        return [
+            "Copy candidate_partition_id exactly from these valid ids: "
+            f"{valid_ids}. Assign groups only from that same partition."
+        ]
     groups = {group["group_id"]: group for group in selected["groups"]}
     counts: dict[str, int] = defaultdict(int)
     issues = []
@@ -122,8 +125,8 @@ def _answer_issues(answer: dict | None, candidates: dict, cards: list[dict]) -> 
         issues.append("Remove prerequisite cycles; keep only real dependencies and use exact chapter titles.")
     if stats.get("n_synth_concept_exclusion_overrides"):
         issues.append(
-            "Do not exclude a chapter with a source-card teaching point that is not taught by another eligible chapter; "
-            "keep it eligible unless the learning content is genuinely redundant."
+            "Do not exclude a tutorial chapter with a source-card teaching point that is not taught elsewhere; "
+            "reference-only groups may remain lookup-only and excluded from Synth."
         )
     return issues
 
@@ -169,14 +172,132 @@ async def _embed(context: Context, cards: list[dict]) -> tuple[list, str]:
 
 
 async def _ask_designer(context: Context, payload: str, *, attempts: int = params.ATTEMPTS):
+    skill_files = skills.service.files_for("chapter_designer")
+    skill = next(
+        (file_data.get("content", "") for path, file_data in skill_files.items() if path.endswith("/SKILL.md")),
+        "",
+    )
+    if not skill:
+        raise RuntimeError("the chapter-designer skill is missing or empty")
+    request = f"{payload}\n\nApply these chapter-design skill instructions:\n\n{skill}"
     return await agents.service.ask(
         context.agents.chapter_designer(),
         agents.pipeline.planner.chapter_designer.schemas.ChapterDesignAnswer,
-        payload,
+        request,
         attempts = attempts,
         wait_base_s = params.RETRY_WAIT_S,
-        files = skills.service.files_for("chapter_designer"),
     )
+
+
+def _bind_partition_index(
+    answer,
+    candidates: dict,
+    *,
+    index_map: list[int] | None = None,
+) -> tuple[dict, str | None, str | None]:
+    """Resolve the model's numeric choice to a server-owned partition id."""
+    data = answer.model_dump() if hasattr(answer, "model_dump") else dict(answer or {})
+    partitions = candidates.get("partitions") or []
+    if not partitions:
+        return data, None, "no candidate partitions were offered"
+    answer_index = data.get("candidate_partition_index")
+    index_count = len(index_map) if index_map is not None else len(partitions)
+    valid_index = (
+        isinstance(answer_index, int)
+        and not isinstance(answer_index, bool)
+        and 0 <= answer_index < index_count
+    )
+    if index_map is not None:
+        local_index = answer_index if valid_index else 0
+        index = index_map[local_index] if index_map else None
+    else:
+        index = answer_index
+    valid_partition_index = (
+        isinstance(index, int)
+        and not isinstance(index, bool)
+        and 0 <= index < len(partitions)
+    )
+
+    assigned = [
+        group_id
+        for chapter in data.get("chapters") or []
+        if isinstance(chapter, dict)
+        for group_id in chapter.get("group_ids") or []
+        if isinstance(group_id, str)
+    ]
+    exact = []
+    if assigned and len(assigned) == len(set(assigned)):
+        assigned_set = set(assigned)
+        for partition in partitions:
+            expected = {
+                group.get("group_id")
+                for group in partition.get("groups") or []
+                if isinstance(group, dict) and isinstance(group.get("group_id"), str)
+            }
+            if expected and expected == assigned_set and len(expected) == len(assigned):
+                exact.append(partition)
+
+    recovered_id = None
+    if len(exact) == 1:
+        selected = exact[0]
+        requested = partitions[index].get("id") if valid_partition_index else None
+        if selected.get("id") != requested:
+            recovered_id = selected.get("id")
+    elif valid_partition_index:
+        selected = partitions[index]
+    else:
+        selected = partitions[0]
+
+    data["candidate_partition_id"] = selected["id"]
+    data["candidate_partition_index"] = next(
+        (position for position, partition in enumerate(partitions) if partition.get("id") == selected.get("id")),
+        index,
+    )
+    selection_issue = None if valid_index or recovered_id else (
+        f"Choose candidate_partition_index from 0 to {index_count - 1}."
+    )
+    return data, recovered_id, selection_issue
+
+
+def _repair_request(candidates: dict, answer: dict, findings: list[str]) -> tuple[str, list[int]]:
+    """Retry against one server-selected partition so group IDs cannot drift between alternatives."""
+    all_partitions = candidates.get("partitions") or []
+    requested_index = answer.get("candidate_partition_index") if isinstance(answer, dict) else None
+    if not isinstance(requested_index, int) or isinstance(requested_index, bool) or not 0 <= requested_index < len(all_partitions):
+        requested_index = 0
+    partition = all_partitions[requested_index]
+    repair_partition = {
+        "index": 0,
+        "score": (partition.get("metrics") or {}).get("score"),
+        "tutorial_chapters": (partition.get("metrics") or {}).get("n_tutorial_chapters"),
+        "groups": [
+            {
+                "group_id": group.get("group_id"),
+                "kind": group.get("kind"),
+                "n_pages": group.get("n_pages"),
+                "n_best_code": group.get("n_best_code"),
+                "topics": group.get("topics") or [],
+                "page_keys": [page.get("key") for page in group.get("pages") or []],
+            }
+            for group in partition.get("groups") or []
+        ],
+    }
+    previous_answer = dict(answer) if isinstance(answer, dict) else {}
+    previous_answer.pop("candidate_partition_id", None)
+    previous_answer["candidate_partition_index"] = 0
+    request = json.dumps({
+        "task": "Repair the previous chapter design as a complete structured answer.",
+        "candidate_partitions": [repair_partition],
+        "previous_answer": previous_answer,
+        "validation_findings": findings,
+        "requirements": [
+            "The repair has one server-selected candidate partition; set candidate_partition_index to 0.",
+            "Use only group ids from that partition and assign every group exactly once.",
+            "Every chapter must own at least one group.",
+            "Return the full corrected answer, preserving useful titles and objectives where they still fit.",
+        ],
+    }, ensure_ascii = False)
+    return request, [requested_index]
 
 
 async def chapter_design_run(state: graphs.pipeline.planner.states.PlannerState, runtime: Runtime[Context]) -> dict:
@@ -271,26 +392,53 @@ async def chapter_design_run(state: graphs.pipeline.planner.states.PlannerState,
             for page_facts in best_code_by_page.values()
             for fact in page_facts
         }.values()),
-        "candidate_partitions": _model_partitions(candidates),
+        "candidate_partitions": [
+            {"index": index, **partition}
+            for index, partition in enumerate(_model_partitions(candidates))
+        ],
     }
     request = json.dumps(request_data, ensure_ascii = False)
     design_answer = None
     designer_errors = []
     designer_review_flags = []
+    designer_recoveries = []
     if not (state.get("page_cards_stats") or {}).get("n_fallback_cards", 0):
         await graphs.service.settle(params.STEP, params.SETTLE_DELAY_S)
     try:
         answer = await _ask_designer(context, request)
-        design_answer = answer.model_dump()
-        designer_review_flags = _answer_issues(design_answer, candidates, cards)
-        if designer_review_flags:
-            repair_request = request + "\n\nYour previous design needs these repairs:\n- " + "\n- ".join(designer_review_flags)
+        design_answer, recovered_id, selection_issue = _bind_partition_index(answer, candidates)
+        if recovered_id:
+            designer_recoveries.append(f"matched {recovered_id} from its complete, unique group assignment")
+        for repair_round in range(params.DESIGN_REPAIR_ROUNDS + 1):
+            design_answer, recovered_id, exact_match = domain.recover_partition_choice(design_answer, candidates)
+            if recovered_id:
+                detail = (
+                    "from its complete, unique group assignment"
+                    if exact_match
+                    else "from the strongest unique group-id match for validation"
+                )
+                recovery = f"inferred {recovered_id} {detail}"
+                if recovery not in designer_recoveries:
+                    designer_recoveries.append(recovery)
+            designer_review_flags = _answer_issues(design_answer, candidates, cards)
+            if selection_issue:
+                designer_review_flags.insert(0, selection_issue)
+            if not designer_review_flags or repair_round == params.DESIGN_REPAIR_ROUNDS:
+                break
+
+            repair_request, repair_index_map = _repair_request(candidates, design_answer, designer_review_flags)
             try:
                 answer = await _ask_designer(context, repair_request)
-                design_answer = answer.model_dump()
-                designer_review_flags = _answer_issues(design_answer, candidates, cards)
+                design_answer, recovered_id, selection_issue = _bind_partition_index(
+                    answer, candidates, index_map = repair_index_map,
+                )
+                if recovered_id:
+                    recovery = f"matched {recovered_id} from its complete, unique group assignment"
+                    if recovery not in designer_recoveries:
+                        designer_recoveries.append(recovery)
             except Exception as error:
-                designer_errors.append(f"repair: {type(error).__name__}: {str(error)[:160]}")
+                designer_errors.append(f"repair {repair_round + 1}: {type(error).__name__}: {str(error)[:160]}")
+                break
     except Exception as error:
         designer_errors.append(f"design: {type(error).__name__}: {str(error)[:160]}")
         logger.warning(f"[chapter_design] {slug}: architect fallback ({type(error).__name__}: {str(error)[:180]})")
@@ -373,6 +521,7 @@ async def chapter_design_run(state: graphs.pipeline.planner.states.PlannerState,
         "candidate_metrics": candidates,
         "designer_errors": designer_errors,
         "designer_review_flags": designer_review_flags,
+        "designer_recoveries": designer_recoveries,
     }
     assignment_payload = {
         "prompt_version": versions.PROMPT_VERSION,
@@ -409,11 +558,14 @@ async def chapter_design_run(state: graphs.pipeline.planner.states.PlannerState,
         "chapter_count_basis": candidates["target_basis"],
         "embedding_model": embedding_model,
         "n_partitions_scored": len(candidates["partitions"]),
+        "n_partitions_total_scored": candidates.get("n_partitions_total_scored", len(candidates["partitions"])),
+        "n_partitions_rejected_extreme": candidates.get("n_partitions_rejected_extreme", 0),
         "candidate_scores": [
             {"id": item["id"], **item["metrics"]} for item in candidates["partitions"]
         ],
         "designer_errors": designer_errors,
         "designer_review_flags": designer_review_flags,
+        "designer_recoveries": designer_recoveries,
         "wall_ms": graphs.service.elapsed_ms(started),
         "chapter_titles": [chapter["title"] for chapter in chapters],
     }

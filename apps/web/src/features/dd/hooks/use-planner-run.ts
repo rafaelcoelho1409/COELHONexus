@@ -66,7 +66,7 @@ export type PlannerRunController = {
   error: string | null;
   values: Record<string, unknown>;
   next: string[];
-  startLabel: "Start" | "Resume";
+  startLabel: "Start" | "Resume" | "Run again";
   progress: string | null;
   start: () => Promise<void>;
   cancel: () => Promise<void>;
@@ -261,10 +261,15 @@ export function usePlannerRun(
     if (state.running || state.starting) return;
     setState((s) => ({ ...s, starting: true, error: null }));
     try {
-      // Smart resume: an existing thread resumes only its uncached nodes; a fresh slug is a full run.
+      // Resume only a checkpoint that still has pending graph work. A terminal needs-review/done
+      // thread cannot make progress; use a new thread so a corrected Planner can run from the start.
       const recent = await fetchStageRecent("planner");
       const existing = recent.find((item) => item.slug === slug);
-      const threadId = existing?.thread_id ?? generateThreadId(slug);
+      const checkpoint = existing ? await fetchGraphState("planner", existing.thread_id) : null;
+      const terminalStatus = checkpoint?.values.status;
+      const isTerminal = terminalStatus === "done" || terminalStatus === "needs_review";
+      const resume = Boolean(existing && checkpoint && checkpoint.next.length > 0 && !isTerminal);
+      const threadId = resume && existing ? existing.thread_id : generateThreadId(slug);
       setState((s) => ({
         ...s,
         running: true,
@@ -272,11 +277,13 @@ export function usePlannerRun(
         lastThreadId: threadId,
         startedMs: Date.now(),
         pill: WORKING_PILL,
+        values: resume ? s.values : {},
+        next: resume ? s.next : [],
         liveLines: {},
         events: [],
       }));
       invalidatePipeline();
-      const outcome = await startPlanner(slug, threadId, existing !== undefined);
+      const outcome = await startPlanner(slug, threadId, resume);
       if (outcome.kind === "locked") {
         setState((s) => ({ ...s, running: false, threadId: null, pill: IDLE_PILL }));
         overlays.notice(
@@ -342,7 +349,7 @@ export function usePlannerRun(
     error: state.error,
     values: state.values,
     next: state.next,
-    startLabel: plannerStartLabel(state.values),
+    startLabel: plannerStartLabel(state.values, state.next),
     progress: stageProgressLabel(nodes, views, implemented),
     start,
     cancel,

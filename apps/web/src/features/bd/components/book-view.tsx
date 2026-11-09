@@ -124,7 +124,7 @@ function BookDetail({
   const agentic = useAgenticRun(bookId, snapshot);
   const contentSelection = useContentSelection(
     bookId,
-    agentic.status === "done" ? agentic.run?.agentic_run_id ?? null : null,
+    agentic.status === "done" ? (agentic.run?.agentic_run_id ?? null) : null,
   );
   const runBook = useRunBook();
   const cancelBook = useCancelBook();
@@ -367,6 +367,11 @@ function BookDetail({
   // On the right of the page's header: step through the book, fold either side column, or read on the whole screen.
   const toolbar = (
     <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+      {status === "cancelled" || status === "failed" ? (
+        <ActionButton onClick={start} disabled={runBook.isPending}>
+          {runBook.isPending ? "Starting…" : "Resume"}
+        </ActionButton>
+      ) : null}
       <ActionButton
         iconOnly
         aria-label={`Previous ${units.singular}`}
@@ -442,26 +447,28 @@ function BookDetail({
   return (
     <section aria-label={title} className="min-w-0">
       <BookReadingProgress />
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="break-words text-xl font-semibold tracking-tight">{title}</h2>
-          <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-            <StatusChip status={status} />
-            <span className="break-all">{manifest.filename}</span>
-            <span>{fmtBytes(manifest.size_bytes)}</span>
-            <span className="tabular">
-              {nPages > 0 ? `${nPages} ${units.plural}` : `${units.plural} not counted yet`}
-            </span>
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {status === "cancelled" || status === "failed" ? (
-            <ActionButton onClick={start} disabled={runBook.isPending}>
-              {runBook.isPending ? "Starting…" : "Resume"}
-            </ActionButton>
-          ) : null}
-        </div>
-      </header>
+      {activeView !== "materials" ? (
+        <header className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="break-words text-xl font-semibold tracking-tight">{title}</h2>
+            <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+              <StatusChip status={status} />
+              <span className="break-all">{manifest.filename}</span>
+              <span>{fmtBytes(manifest.size_bytes)}</span>
+              <span className="tabular">
+                {nPages > 0 ? `${nPages} ${units.plural}` : `${units.plural} not counted yet`}
+              </span>
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {status === "cancelled" || status === "failed" ? (
+              <ActionButton onClick={start} disabled={runBook.isPending}>
+                {runBook.isPending ? "Starting…" : "Resume"}
+              </ActionButton>
+            ) : null}
+          </div>
+        </header>
+      ) : null}
 
       <div aria-live="polite" className="mt-3 text-sm">
         {cancelling && live ? (
@@ -491,11 +498,7 @@ function BookDetail({
         live={agentic.streaming}
         onClose={() => setUsageOpen(false)}
       />
-      <section
-        aria-label="Agents"
-        hidden={activeView !== "pipeline"}
-        className="mt-4"
-      >
+      <section aria-label="Agents" hidden={activeView !== "pipeline"} className="mt-4">
         <div className="mb-4 grid grid-cols-1 items-stretch gap-3 lg:grid-cols-2">
           <section
             aria-label="Docling extraction progress"
@@ -624,11 +627,7 @@ function BookDetail({
           onOpenUsage={() => setUsageOpen(true)}
         />
       </section>
-      <section
-        aria-label="Pages"
-        hidden={activeView !== "materials"}
-        className="mt-4"
-      >
+      <section aria-label="Pages" hidden={activeView !== "materials"} className="mt-4">
         {!reading ? (
           <div className={`flex flex-col gap-4 lg:grid ${columns}`}>
             {layout.contents ? (
@@ -650,6 +649,13 @@ function BookDetail({
             {/* In the reading window the text is drawn there, not here: one copy at a time, so a heading's id is never twice on the page. */}
             <PageReader
               bookId={bookId}
+              bookMetadata={{
+                title,
+                filename: manifest.filename,
+                status,
+                sizeBytes: manifest.size_bytes,
+                pageCount: nPages,
+              }}
               page={page}
               row={row}
               nPages={nPages}

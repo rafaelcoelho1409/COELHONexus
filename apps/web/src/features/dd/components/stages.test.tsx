@@ -71,7 +71,7 @@ function sse(events: unknown[]): HttpResponse<string> {
 }
 
 describe("Planner stage", () => {
-  it("recovers the last committed plan and offers Resume", async () => {
+  it("recovers the last committed plan and offers a fresh run", async () => {
     server.use(
       http.get(`${API}/v1/dd/pipeline/planner/info`, () => HttpResponse.json(PLANNER_IMPLEMENTED)),
       http.get(`${API}/v1/dd/pipeline/planner/alpha/active`, () => HttpResponse.json({ active: false })),
@@ -87,7 +87,7 @@ describe("Planner stage", () => {
       ),
     );
     renderWith(<PlannerView slug="alpha" />);
-    expect(await screen.findByRole("button", { name: "Resume" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Run again" })).toBeInTheDocument();
     // every node reads as done and carries its headline number
     await waitFor(() => expect(screen.getByText("12 files")).toBeInTheDocument());
     expect(screen.getByText("10 docs scored")).toBeInTheDocument();

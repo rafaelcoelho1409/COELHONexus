@@ -2,14 +2,14 @@ import Link from "next/link";
 
 import { Markdown } from "@/shared/markdown";
 import type { DistillRun, LearningGuide, ReportLesson, ReportSection, SourceRef } from "../entities";
-import { distillHref } from "../params";
+import { distillStudyHref } from "../params";
 import { ReportChart } from "./report-chart";
 import { ReportDiagram } from "./report-diagram";
 
 type GuideQuality = DistillRun["structural_quality"];
 
 export function LearningGuideView({ report, quality }: { report: LearningGuide; quality: GuideQuality }) {
-  const pageHref = (page: number) => distillHref(report.book_id, report.distill_run_id, page);
+  const pageHref = (page: number) => distillStudyHref(report.book_id, report.distill_run_id, page);
   const reviewRequired = report.review_required || report.uncovered_pages.length > 0;
   const visualsCount =
     report.diagrams.length +
@@ -74,7 +74,11 @@ export function LearningGuideView({ report, quality }: { report: LearningGuide; 
           <GuideFact
             label="Pages used"
             value={selectedPages.toLocaleString()}
-            detail={hasSelectionCounts ? `${report.excluded_page_count} of ${report.source_page_count} left out` : undefined}
+            detail={
+              hasSelectionCounts
+                ? `${report.excluded_page_count} of ${report.source_page_count} left out`
+                : undefined
+            }
           />
           <GuideFact label="Key takeaways" value={report.key_takeaways.length.toLocaleString()} />
           <GuideFact label="Chapters" value={report.chapters.length.toLocaleString()} />
@@ -104,7 +108,8 @@ export function LearningGuideView({ report, quality }: { report: LearningGuide; 
         <aside aria-label="Guide review status" className="mt-4 border-l-2 border-border pl-3">
           <h3 className="text-sm font-semibold text-warning-text">Review needed</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            {report.covered_pages.length} included pages covered · {report.uncovered_pages.length} not covered.
+            {report.covered_pages.length} included pages covered · {report.uncovered_pages.length} not
+            covered.
           </p>
           {report.uncovered_pages.length > 0 ? (
             <p className="mt-1 text-xs text-muted-foreground">

@@ -9,6 +9,7 @@ from . import domain, keys, params, service
 
 if TYPE_CHECKING:
     from . import (
+        ai,
         chunker,
         embedding_migration,
         embeddings,
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
 
 
 _LAZY_SUBDOMAINS = (
+    "ai",
     "chunker",
     "embedding_migration",
     "embeddings",

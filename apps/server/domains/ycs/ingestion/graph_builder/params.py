@@ -96,8 +96,8 @@ FUZZ_MERGE_CUTOFF = 75
 # stale — the skip-on-video_id check then re-extracts instead of
 # trusting outdated entities (DD's manifest_hash pattern, adapted:
 # DD versions prompt+inputs per node; here one version covers the
-# single LLMGraphTransformer call shape).
-EXTRACT_PROMPT_VERSION = 1
+# single DeepAgent extraction contract).
+EXTRACT_PROMPT_VERSION = 2
 
 # Inter-retry-pass backoff (jittered): immediate retries hammer an
 # already-exhausted free-tier pool (DD: 2-5s+jitter per item; scaled up

@@ -56,6 +56,7 @@ async def page_cards_run(state: graphs.pipeline.planner.states.PlannerState, run
     failed_digests: set[str] = set()
     fallback_digests: set[str] = set()
     llm_digests: set[str] = set()
+    reference_kind_reclassified_digests: set[str] = set()
     role = context.agents.page_card() if any(body_by_key[unique[digest][0]].strip() for digest in todo) else None
 
     async def card_one(digest: str) -> None:
@@ -87,7 +88,12 @@ async def page_cards_run(state: graphs.pipeline.planner.states.PlannerState, run
                     wait_base_s = params.RETRY_WAIT_S,
                     meta = meta,
                 )
-            cards_by_digest[digest] = answer.model_dump()
+            raw_card = answer.model_dump()
+            cards_by_digest[digest] = domain.normalize_reference_kind(
+                raw_card, key = key, title = title, url = url,
+            )
+            if raw_card.get("kind") == "reference" and cards_by_digest[digest].get("kind") != "reference":
+                reference_kind_reclassified_digests.add(digest)
             await domains.dd.pipeline.storage.service.write_item(
                 blobs, slug, params.STEP, versions.PROMPT_VERSION, digest,
                 {"card": cards_by_digest[digest], "deployment": meta},
@@ -113,6 +119,15 @@ async def page_cards_run(state: graphs.pipeline.planner.states.PlannerState, run
             url = (entries.get(canonical) or {}).get("url") or "",
         )
         entry = entries.get(canonical) or {}
+        original_kind = card.get("kind")
+        card = domain.normalize_reference_kind(
+            card,
+            key = canonical,
+            title = entry.get("title") or canonical.rsplit("/", 1)[-1],
+            url = entry.get("url") or entry.get("source_path") or "",
+        )
+        if original_kind == "reference" and card.get("kind") != "reference":
+            reference_kind_reclassified_digests.add(digest)
         body = body_by_key[canonical]
         cards[canonical] = {
             **card,
@@ -162,6 +177,7 @@ async def page_cards_run(state: graphs.pipeline.planner.states.PlannerState, run
         "n_llm_cards": len(llm_digests - failed_digests),
         "n_llm_calls": len(llm_digests),
         "n_fallback_cards": len(fallback_digests), "n_cached_cards": len(cached),
+        "n_reference_kind_reclassified": len(reference_kind_reclassified_digests),
         "cache_hit": not todo, "manifest_hash": manifest_hash,
         "wall_ms": graphs.service.elapsed_ms(started), "dropped_pages": dropped,
     }

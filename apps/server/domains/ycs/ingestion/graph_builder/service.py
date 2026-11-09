@@ -3,8 +3,9 @@
 Imperative Shell (`docs/CODE-CONVENTIONS.md` §4): I/O + Cypher writes +
 LLM dispatch. Pure decisions delegated to `domain.py`.
 Public API:
-  create_graph_transformer(llm) → LLMGraphTransformer
+  create_graph_transformer(llm) → legacy LLMGraphTransformer helper
   extract_and_store_graph(transcripts, metadata_map, llm, neo4j_graph, batch_size)
+    → DeepAgent + LangGraph evidence-checked extraction, then Neo4j writes
   resolve_entities(neo4j_graph) → int (merged count)
   discover_schema(sample_transcripts, llm) → dict
   get_graph_stats(neo4j_graph) → dict
@@ -212,17 +213,12 @@ async def extract_and_store_graph(
     that come back in `failed_video_ids`, not the whole batch.
 
     Returns counters dict suitable for the API response envelope."""
-    # LLM-usage drawer (mirrors DD Planner/Synth's) — attached here,
-    # not inside create_graph_transformer, so that utility stays a
-    # plain "given an llm, build a transformer" function. Only fires
-    # when `extract_id` is supplied (the agents-endpoint direct callers
-    # that predate this feature pass none, and stay silently unmetered
-    # rather than erroring).
-    if extract_id:
-        llm = llm.with_config(
-            callbacks=[domains.settings.llm_counter.service.LLMCounterCallback()],
-        )
-    transformer = create_graph_transformer(llm)
+    # One DeepAgent + LangGraph graph per Celery task. Their state is
+    # transient and per-transcript; the surrounding streaming pool,
+    # retry loop, and Neo4j writes remain the existing run shell.
+    graph_extractor = domains.ycs.ingestion.ai.service.build_graph_extractor(
+        llm, run_id = extract_id,
+    )
     concurrency = (
         batch_size if batch_size and batch_size > 1 else params.EXTRACT_CONCURRENCY
     )
@@ -407,10 +403,13 @@ async def extract_and_store_graph(
                 redis_client, params.NEO4J_EXTRACT_SEM_KEY, params.EXTRACT_CONCURRENCY,
                 params.NEO4J_EXTRACT_SEM_LEASE_S,
             ):
-                return await asyncio.wait_for(
-                    transformer.aconvert_to_graph_documents([doc]),
+                graph_document = await asyncio.wait_for(
+                    domains.ycs.ingestion.ai.service.extract_graph_document(
+                        graph_extractor, doc,
+                    ),
                     timeout = params.GRAPH_BATCH_TIMEOUT_S,
                 )
+                return [graph_document]
 
     async def _extract_one(doc: Document) -> tuple[str, Any, str | None]:
         """One transcript → (video_id, GraphDocument|None, error|None).
@@ -483,7 +482,7 @@ async def extract_and_store_graph(
             # timeout/connection/rate-limit/5xx from the provider) are
             # almost certainly code bugs (e.g. the observed
             # `AttributeError: 'list' object has no attribute 'get'`
-            # from inside the transformer) — log the full traceback
+            # from inside the agent/graph call) — log the full traceback
             # once here so the next occurrence is diagnosable instead
             # of just a one-line `failed:` warning downstream.
             if not _is_infra_error(err):
@@ -520,7 +519,7 @@ async def extract_and_store_graph(
                 if vid and vid not in failed_ids:
                     failed_ids.append(vid)
             else:
-                # LLMGraphTransformer occasionally emits id as a StringArray; coerce before writing to Neo4j.
+                # Keep defensive coercion for model and legacy transformer output before writing to Neo4j.
                 # `type` is sanitized too (see sanitize_neo4j_label's
                 # docstring) — it's written verbatim as a Neo4j label/
                 # relationship-type token by langchain-neo4j's own
@@ -750,7 +749,7 @@ async def resolve_entities(neo4j_graph: infra.neo4j.service.Neo4jGraph) -> int:
     installed."""
     merged_count = 0
 
-    # Heal historical list-typed ids (LLMGraphTransformer used to emit them as lists).
+    # Heal historical list-typed ids emitted by older transformer versions.
     # `apoc.refactor.mergeNodes(... properties: 'combine')` USED to
     # concatenate conflicting property values into lists, corrupting
     # `e.id` into `['brasil', 'brazil']` shapes that broke every
@@ -845,7 +844,7 @@ async def resolve_entities(neo4j_graph: infra.neo4j.service.Neo4jGraph) -> int:
             f"[ycs:graph:resolve] list-typed id heal failed: {e}"
         )
 
-    # Python-side normalize (vs Cypher trim()) — trim() blows up on StringArray ids from LLMGraphTransformer.
+    # Python-side normalize (vs Cypher trim()) — trim() blows up on historical StringArray ids.
     try:
         rows = neo4j_graph.query(
             f"MATCH (n:__Entity__:{params.SOURCE_LABEL}) WHERE n.id IS NOT NULL "

@@ -99,15 +99,25 @@ def pipeline_health(state: dict) -> dict:
         fallback_pct = _pct(cards.get("n_fallback_cards", 0), cards.get("n_kept", 0))
         health.update({
             "planner_version": "v2",
+            # v2 has no separate chapter_propose node; its proposal artifact is
+            # produced by chapter_design, so don't report the aliased stats as
+            # a second, independent proposal fallback.
+            "chapter_propose_fallback_used": False,
             "page_card_fallback_pct": fallback_pct,
             "page_card_dropped_pages": cards.get("n_dropped", 0),
             "chapter_design_fallback_used": bool(design.get("fallback_used")),
             "chapter_design_errors": len(design_errors),
             "chapter_design_review_flags": len(design_review_flags),
+            "chapter_design_review_reasons": [str(flag)[:280] for flag in design_review_flags if str(flag).strip()][:8],
+            "chapter_design_error_details": [str(error)[:280] for error in design_errors if str(error).strip()][:8],
+            "chapter_design_recoveries": [str(item)[:200] for item in (design.get("designer_recoveries") or []) if str(item).strip()][:8],
             "chapter_design_ledger_available": design.get("ledger_available"),
             "chapter_design_embedding_model": design.get("embedding_model"),
             "chapter_design_candidate_count": design.get("n_partitions_scored", 0),
+            "chapter_design_total_candidate_count": design.get("n_partitions_total_scored", design.get("n_partitions_scored", 0)),
+            "chapter_design_extreme_candidates_removed": design.get("n_partitions_rejected_extreme", 0),
             "chapter_design_best_code": design.get("n_best_code", 0),
+            "chapter_design_suggested_chapters": design.get("suggested_chapters"),
             "chapter_select_page_coverage_pct": _pct(assigned, pages),
             "chapter_select_unplaced_pages": max(pages - assigned, 0),
             "prerequisite_cycles_guarded": ordc.get("n_cycle_guarded_chapters", 0),

@@ -312,7 +312,7 @@ export type RunControls = {
   canceling: boolean;
   pill: StagePillState;
   elapsedMs: number | null;
-  startLabel: "Start" | "Resume";
+  startLabel: "Start" | "Resume" | "Run again";
   start: () => Promise<void>;
   cancel: () => Promise<void>;
   wipe: () => Promise<void>;

@@ -270,6 +270,51 @@ export function MaterialsView({
       ? COLUMNS.outlineOnly
       : COLUMNS.neither;
 
+  const pageToolbar = (
+    <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+      {layout.chapters ? null : (
+        <ActionButton
+          iconOnly
+          aria-label="Search pages"
+          title="Search pages"
+          onClick={() => setSearchOpen(true)}
+        >
+          <Search aria-hidden />
+        </ActionButton>
+      )}
+      <ActionButton
+        iconOnly
+        aria-expanded={layout.chapters}
+        aria-label={layout.chapters ? "Hide pages" : "Show pages"}
+        title={layout.chapters ? "Hide pages" : "Show pages"}
+        onClick={() => update({ chapters: !layout.chapters })}
+      >
+        {layout.chapters ? <PanelLeftClose aria-hidden /> : <PanelLeftOpen aria-hidden />}
+      </ActionButton>
+      {hasOutline ? (
+        <ActionButton
+          iconOnly
+          className="hidden lg:inline-flex"
+          aria-expanded={layout.outline}
+          aria-label={layout.outline ? "Hide outline" : "Show outline"}
+          title={layout.outline ? "Hide outline" : "Show outline"}
+          onClick={() => update({ outline: !layout.outline })}
+        >
+          {layout.outline ? <PanelRightClose aria-hidden /> : <PanelRightOpen aria-hidden />}
+        </ActionButton>
+      ) : null}
+      <ActionButton
+        aria-haspopup="dialog"
+        title="Read this page on the whole screen"
+        disabled={selectedEntry === null}
+        onClick={() => setReading({ startId: activeId })}
+      >
+        <Maximize2 aria-hidden />
+        Reading mode
+      </ActionButton>
+    </div>
+  );
+
   return (
     <section
       aria-label="Ingested library"
@@ -281,39 +326,6 @@ export function MaterialsView({
       }}
     >
       <ReadingProgress />
-      <div className="mb-4 flex flex-wrap items-center justify-end gap-2">
-        <ActionButton
-          iconOnly
-          aria-expanded={layout.chapters}
-          aria-label={layout.chapters ? "Hide pages" : "Show pages"}
-          title={layout.chapters ? "Hide pages" : "Show pages"}
-          onClick={() => update({ chapters: !layout.chapters })}
-        >
-          {layout.chapters ? <PanelLeftClose aria-hidden /> : <PanelLeftOpen aria-hidden />}
-        </ActionButton>
-        {hasOutline ? (
-          <ActionButton
-            iconOnly
-            className="hidden lg:inline-flex"
-            aria-expanded={layout.outline}
-            aria-label={layout.outline ? "Hide outline" : "Show outline"}
-            title={layout.outline ? "Hide outline" : "Show outline"}
-            onClick={() => update({ outline: !layout.outline })}
-          >
-            {layout.outline ? <PanelRightClose aria-hidden /> : <PanelRightOpen aria-hidden />}
-          </ActionButton>
-        ) : null}
-        <ActionButton
-          aria-haspopup="dialog"
-          title="Read this page on the whole screen"
-          disabled={selectedEntry === null}
-          onClick={() => setReading({ startId: activeId })}
-        >
-          <Maximize2 aria-hidden />
-          Reading mode
-        </ActionButton>
-      </div>
-
       <div className={`flex flex-col gap-4 lg:grid ${columns}`}>
         {layout.chapters ? (
           <aside className={`flex min-w-0 flex-col gap-3 ${STICKY_COLUMN}`}>
@@ -344,6 +356,7 @@ export function MaterialsView({
           hasVersions={hasVersions}
           onPrevious={goPrevious}
           onNext={goNext}
+          toolbar={pageToolbar}
           quality={quality}
         >
           {reading ? null : body}

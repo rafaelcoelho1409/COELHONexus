@@ -178,9 +178,14 @@ export function stageAllImplementedDone(
   return nodes.every((node) => !implemented.has(node.id) || node.field in values);
 }
 
-/** Planner start semantics: a completed plan on the server turns Start into Resume (the checkpoint
- * carries the values back into the graph). */
-export function plannerStartLabel(values: Record<string, unknown>): "Start" | "Resume" {
+/** Resume only when the checkpoint still has work; a terminal plan starts a fresh Planner run. */
+export function plannerStartLabel(
+  values: Record<string, unknown>,
+  next?: readonly string[],
+): "Start" | "Resume" | "Run again" {
+  if (values.status === "done" || values.status === "needs_review") return "Run again";
+  if (next && next.length > 0) return "Resume";
+  if (next && next.length === 0 && "plan_path" in values) return "Run again";
   return "plan_path" in values ? "Resume" : "Start";
 }
 

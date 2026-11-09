@@ -3,18 +3,15 @@ from __future__ import annotations
 import ai, domains
 from . import config, params, schemas
 from .... import service
-from ..... import middlewares, prompts, skills
+from ..... import middlewares, prompts
 
 from deepagents import (
-    FilesystemPermission,
     GeneralPurposeSubagentProfile,
     HarnessProfile,
     create_deep_agent,
     register_harness_profile,
 )
-from deepagents.backends import StateBackend
 from deepagents.profiles.harness import harness_profiles
-from langchain.agents.middleware import ToolCallLimitMiddleware
 
 
 def chapter_designer(model = None):
@@ -40,26 +37,9 @@ def chapter_designer(model = None):
         system_prompt = prompts.pipeline.planner.chapter_designer.prompts.SYSTEM_PROMPT,
         response_format = schemas.ChapterDesignAnswer,
         middleware = [
-            *service.resilience(model_calls = params.MODEL_CALLS, with_tools = True),
-            middlewares.middleware.ToolAllowlistMiddleware(frozenset({"read_file"})),
-            ToolCallLimitMiddleware(tool_name = "read_file", run_limit = 1, exit_behavior = "continue"),
+            *service.resilience(model_calls = params.MODEL_CALLS, with_tools = False),
+            middlewares.middleware.ToolAllowlistMiddleware(frozenset()),
         ],
-        permissions = [
-            FilesystemPermission(
-                operations = ["read"],
-                paths = [f"{skills.domain.source_for('chapter_designer')}**"],
-                mode = "allow"),
-            FilesystemPermission(
-                operations = ["read"], 
-                paths = ["/**"], 
-                mode = "deny"),
-            FilesystemPermission(
-                operations = ["write"], 
-                paths = ["/**"], 
-                mode = "deny"),
-        ],
-        backend = StateBackend(),
-        skills = [skills.domain.source_for("chapter_designer")],
         name = "dd_chapter_designer_v2",
     )
     tool_node = agent.nodes.get("tools")

@@ -280,21 +280,30 @@ def build_candidate_partitions(
             "metrics": metrics,
         })
 
-    # Keep the design prompt compact while exposing both concise and broad
-    # chapter-count choices, plus the strongest measured partitions. The target
-    # is one anchor among several, never a hard cap or the sole optimization.
     ranked.sort(key = lambda item: (-item["metrics"]["score"], item["metrics"]["n_tutorial_chapters"], item["id"]))
-    available_counts = sorted({item["metrics"]["n_tutorial_chapters"] for item in ranked})
+    # A candidate whose largest tutorial group is many times the soft chapter
+    # budget cannot be a usable study plan; it only pushes the real design into
+    # downstream emergency splitting. Keep all other counts eligible, so this
+    # does not impose a maximum chapter count.
+    max_candidate_minutes = params.MAX_MINUTES * params.MAX_CANDIDATE_CHAPTER_OVER_BUDGET_FACTOR
+    viable = [
+        item for item in ranked
+        if max(item["metrics"].get("chapter_tutorial_minutes") or [0.0]) <= max_candidate_minutes
+    ]
+    if not viable:
+        viable = ranked
+    n_rejected_extreme = len(ranked) - len(viable)
+
+    # Keep the design prompt compact while exposing viable concise and broad
+    # chapter-count choices, plus the strongest measured partitions.
+    available_counts = sorted({item["metrics"]["n_tutorial_chapters"] for item in viable})
     n_teaching = len(teaching)
-    # Include useful compact and broad alternatives without putting the
-    # one-page-per-chapter extreme into every prompt by default. The full
-    # hierarchy is still scored, so an unusually high count remains available
-    # when it genuinely fits the corpus and ranks well.
-    anchor_counts = {1, target}
+    # Offer the smallest viable partition and the time-based estimate; chapter
+    # count remains a soft anchor and there is no maximum.
+    anchor_counts = {target}
+    if available_counts:
+        anchor_counts.add(available_counts[0])
     anchor_counts.update(round(target * factor) for factor in (0.5, 1.5, 2.0))
-    # Keep a small number of corpus-wide checkpoints so the architect can
-    # still challenge a poor time estimate, without making one-page-per-chapter
-    # the default broad alternative for every corpus.
     anchor_counts.update(round(n_teaching * fraction) for fraction in (0.25, 0.5))
     selected = []
     selected_counts = set()
@@ -304,10 +313,10 @@ def build_candidate_partitions(
         count = min(available_counts, key = lambda value: (abs(value - wanted_count), value))
         if count in selected_counts:
             continue
-        option = next(item for item in ranked if item["metrics"]["n_tutorial_chapters"] == count)
+        option = next(item for item in viable if item["metrics"]["n_tutorial_chapters"] == count)
         selected.append(option)
         selected_counts.add(count)
-    for option in ranked:
+    for option in viable:
         if len(selected) >= params.MAX_PARTITION_OPTIONS:
             break
         if option["id"] not in {item["id"] for item in selected}:
@@ -356,6 +365,8 @@ def build_candidate_partitions(
     return {
         "target_chapters": target,
         "target_basis": target_basis,
+        "n_partitions_total_scored": len(ranked),
+        "n_partitions_rejected_extreme": n_rejected_extreme,
         "target_minutes": params.TARGET_MINUTES,
         "max_minutes_soft": params.MAX_MINUTES,
         "chapter_overhead_minutes": chapter_overhead_minutes,
@@ -383,11 +394,25 @@ def _concept_key(value) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).strip()
 
 
+def _reference_title(value: str) -> str:
+    """Append one consistent reference suffix, even when source topics already include it."""
+    title = " ".join(str(value or "").split())
+    title = re.sub(r"(?:\s+(?:api\s+)?reference)+$", "", title, flags = re.IGNORECASE).strip()
+    return f"{title or 'API'} Reference"
+
+
 def _chapter_teaching_concepts(chapter: dict, cards_by_key: dict[str, dict]) -> set[str]:
-    """Conservative source-grounded signals for learning content beyond code examples."""
+    """Source-grounded tutorial concepts; lookup-only reference pages don't create required lessons."""
+    member_cards = [
+        cards_by_key.get(page_key) or {}
+        for page_key in chapter.get("member_doc_keys") or []
+    ]
+    if member_cards and all(card.get("kind") == "reference" for card in member_cards):
+        return set()
     values = list(chapter.get("key_concepts") or [])
-    for page_key in chapter.get("member_doc_keys") or []:
-        card = cards_by_key.get(page_key) or {}
+    for card in member_cards:
+        if card.get("kind") == "reference":
+            continue
         topic = card.get("topic")
         if topic:
             values.append(topic)
@@ -399,8 +424,66 @@ def _chapter_teaching_concepts(chapter: dict, cards_by_key: dict[str, dict]) -> 
     return {normalized for value in values if (normalized := _concept_key(value))}
 
 
+def recover_partition_choice(answer: dict | None, candidates: dict) -> tuple[dict | None, str | None, bool]:
+    """Normalize a bad partition label from group ids; mark exact, complete matches as safe recovery."""
+    if not isinstance(answer, dict):
+        return answer, None, False
+    partitions = candidates.get("partitions") or []
+    by_id = {
+        item.get("id"): item
+        for item in partitions
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    requested = answer.get("candidate_partition_id")
+    if isinstance(requested, str) and requested in by_id:
+        return answer, None, False
+
+    assigned: list[str] = []
+    for chapter in answer.get("chapters") or []:
+        if not isinstance(chapter, dict):
+            return answer, None, False
+        group_ids = chapter.get("group_ids") or []
+        if not isinstance(group_ids, list) or any(not isinstance(group_id, str) or not group_id for group_id in group_ids):
+            return answer, None, False
+        assigned.extend(group_ids)
+    if not assigned:
+        return answer, None, False
+
+    exact_matches = []
+    ranked_matches = []
+    assigned_set = set(assigned)
+    for partition in by_id.values():
+        expected = {
+            group.get("group_id")
+            for group in partition.get("groups") or []
+            if isinstance(group, dict) and isinstance(group.get("group_id"), str)
+        }
+        if not expected:
+            continue
+        overlap = len(assigned_set & expected)
+        if overlap:
+            ranked_matches.append((overlap, partition))
+        if len(assigned) == len(assigned_set) and len(expected) == len(assigned) and expected == assigned_set:
+            exact_matches.append(partition)
+    if len(exact_matches) == 1:
+        selected = exact_matches[0]
+        exact = True
+    else:
+        ranked_matches.sort(key = lambda item: item[0], reverse = True)
+        if not ranked_matches or len(ranked_matches) > 1 and ranked_matches[0][0] == ranked_matches[1][0]:
+            return answer, None, False
+        selected = ranked_matches[0][1]
+        exact = False
+
+    recovered = dict(answer)
+    recovered_id = selected["id"]
+    recovered["candidate_partition_id"] = recovered_id
+    return recovered, recovered_id, exact
+
+
 def reconcile_design(answer: dict | None, candidates: dict, cards: list[dict]) -> tuple[list[dict], dict]:
     """Map group ids to pages and repair omissions, duplicates, unknown ids, and prerequisite cycles."""
+    answer, _, _ = recover_partition_choice(answer, candidates)
     partitions = candidates.get("partitions") or []
     by_partition = {item["id"]: item for item in partitions}
     selected = by_partition.get((answer or {}).get("candidate_partition_id")) or (partitions[0] if partitions else None)
@@ -430,8 +513,8 @@ def reconcile_design(answer: dict | None, candidates: dict, cards: list[dict]) -
         page_keys = list(dict.fromkeys(page_keys))
         if not page_keys:
             continue
-        is_reference = all(card_map[key].get("kind") == "reference" for key in page_keys)
-        kind = "appendix" if raw.get("kind") == "appendix" or is_reference else "tutorial"
+        reference_only = all(card_map[key].get("kind") == "reference" for key in page_keys)
+        kind = "appendix" if raw.get("kind") == "appendix" or reference_only else "tutorial"
         if kind == "tutorial":
             # A reference group cannot be hidden inside a tutorial, even if the model tried to merge it.
             reference_keys = [key for key in page_keys if card_map[key].get("kind") == "reference"]
@@ -452,12 +535,24 @@ def reconcile_design(answer: dict | None, candidates: dict, cards: list[dict]) -
                 })
             if not page_keys:
                 continue
-        synth_eligible = bool(raw.get("synth_eligible", True))
         synth_exclusion_reason = " ".join(str(raw.get("synth_exclusion_reason") or "").split())[:300]
-        if not synth_exclusion_reason:
+        if reference_only:
+            synth_eligible = False
+            synth_exclusion_reason = synth_exclusion_reason or (
+                "Reference-only pages remain available for lookup and do not add a tutorial learning objective."
+            )
+        else:
+            synth_eligible = bool(raw.get("synth_eligible", True))
+        if synth_eligible:
+            synth_exclusion_reason = ""
+        elif not synth_exclusion_reason:
             synth_eligible = True
         out.append({
-            "title": " ".join(str(raw.get("title") or "Related Topics").split())[:120],
+            "title": (
+                _reference_title(raw.get("title") or "Related Topics")[:120]
+                if kind == "appendix"
+                else " ".join(str(raw.get("title") or "Related Topics").split())[:120]
+            ),
             "description": " ".join(str(raw.get("description") or "").split())[:400],
             "objective": " ".join(str(raw.get("objective") or "").split())[:300],
             "group_ids": group_ids,
@@ -487,9 +582,9 @@ def reconcile_design(answer: dict | None, candidates: dict, cards: list[dict]) -
             continue
         first = card_map[page_keys[0]]
         is_reference = group.get("kind") == "reference"
-        title = (first.get("topic") or first.get("title") or "Related Topics").strip()
+        title = " ".join(str(first.get("topic") or first.get("title") or "Related Topics").split())
         out.append({
-            "title": f"{title[:90]} Reference" if is_reference else title[:100],
+            "title": _reference_title(title)[:120] if is_reference else title[:100],
             "description": "Reference pages grouped by their source documentation section." if is_reference else "Related source pages retained after an incomplete chapter assignment.",
             "objective": "Find detailed API behavior when needed." if is_reference else f"Understand {title}.",
             "group_ids": [group_id],

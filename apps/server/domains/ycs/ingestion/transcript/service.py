@@ -1637,7 +1637,20 @@ async def fetch_transcriptions_batch(
         nonlocal total_success, total_index_write_failed
         if es_client:
             try:
-                await domains.ycs.ingestion.es_index.service.index_transcriptions_to_elasticsearch(es_client, [doc])
+                index_result = await domains.ycs.ingestion.es_index.service.index_transcriptions_to_elasticsearch(
+                    es_client, [doc],
+                )
+                if (
+                    index_result.get("indexed") != 1
+                    or index_result.get("failed", 0) != 0
+                    or index_result.get("errors", False)
+                    or index_result.get("error")
+                ):
+                    raise RuntimeError(
+                        "Elasticsearch did not confirm the transcript write "
+                        f"(indexed={index_result.get('indexed')}, "
+                        f"failed={index_result.get('failed')})"
+                    )
             except Exception as e:
                 total_index_write_failed += 1
                 log.error(

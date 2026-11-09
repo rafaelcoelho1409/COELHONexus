@@ -53,7 +53,8 @@ import {
   PIPELINE_POLL_BACKOFF_MS,
   PIPELINE_POLL_MS,
 } from "../params";
-import { PipelineSteps, type Step, type StepView } from "./pipeline-steps";
+import { IngestionAgenticStructure } from "./ingestion-agentic-structure";
+import type { Step, StepView } from "./pipeline-steps";
 import { PipelineUsageSheet } from "./pipeline-usage-sheet";
 import { PipelineVideosSheet } from "./pipeline-videos-sheet";
 import { StatusBadge } from "./status-badge";
@@ -71,7 +72,7 @@ const BAR_HINTS: Record<PipelinePrefix, string> = {
   playwright: "yt-dlp metadata + Playwright transcript scrape.",
   elasticsearch: "Bulk-index fetched transcripts (chunk-grained).",
   qdrant: "Hybrid dense + BM25 upsert.",
-  neo4j: "Full-transcript LLM entity extraction.",
+  neo4j: "DeepAgent entity extraction, transcript-evidence validation, and Neo4j graph writes.",
 };
 
 type AllItem = { id: string; title?: string | null; channel?: string | null };
@@ -308,14 +309,14 @@ export function PipelinePanel({
   const retryIsPrimary = !running && overall !== "done";
 
   return (
-    <section aria-label="Pipeline progress" className="mb-6 flex flex-col gap-3">
+    <section aria-label="Agentic AI ingestion progress" className="flex min-w-0 flex-col gap-3">
       {/* The one place a screen reader hears the run: it changes when a phase changes state, not at every poll. */}
       <p role="status" className="sr-only">
         {announcement}
       </p>
 
       <header className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <h2 className="text-base font-medium">Pipeline</h2>
+        <h2 className="min-w-0 text-base font-medium">Agentic AI</h2>
         <span className="font-mono text-xs text-muted-foreground">
           {videoCount ? `· ${videoCount} video${videoCount === 1 ? "" : "s"}` : ""}
         </span>
@@ -347,7 +348,7 @@ export function PipelinePanel({
 
       {wipeLine ? <p className="text-xs text-muted-foreground">{wipeLine}</p> : null}
 
-      <PipelineSteps steps={steps} />
+      <IngestionAgenticStructure steps={steps} />
 
       <footer className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
         <Button
