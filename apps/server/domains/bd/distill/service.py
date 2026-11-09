@@ -286,13 +286,13 @@ async def wipe_run(book_id: str, run_id: str) -> dict[str, Any]:
                     blocking_timeout = 30,
                 ),
                 redis.lock(
-                    domains.bd.distill.rag.keys.enqueue_lock_key(book_id, run_id),
+                    domains.bd.rag.keys.enqueue_lock_key(book_id, run_id),
                     timeout = 120,
                     blocking_timeout = 30,
                 ),
                 redis.lock(
-                    domains.bd.distill.rag.keys.index_lock_key(book_id, run_id),
-                    timeout = domains.bd.distill.rag.params.INDEX_LOCK_TIMEOUT_S,
+                    domains.bd.rag.keys.index_lock_key(book_id, run_id),
+                    timeout = domains.bd.rag.params.INDEX_LOCK_TIMEOUT_S,
                     blocking_timeout = 1,
                 ),
             ):
@@ -304,9 +304,10 @@ async def wipe_run(book_id: str, run_id: str) -> dict[str, Any]:
                 runs = await list_runs(book_id, storage = storage)
                 if any(run["status"] in {"queued", "running"} for run in runs):
                     raise ValueError("stop the active Distill run before wiping another run")
-                index_manifest = await domains.bd.distill.rag.service.read_index(book_id, run_id, storage = storage)
+                index_manifest = await domains.bd.rag.service.read_index(book_id, run_id, storage = storage)
                 if index_manifest is not None:
-                    await domains.bd.distill.rag.service.delete_run_points(book_id, run_id)
+                    await domains.bd.rag.service.delete_run_points(book_id, run_id)
+                    await domains.bd.rag.service.delete_graph_run(book_id, run_id)
                 replacement = next(
                     (run for run in runs
                      if run["run_id"] != run_id and run["extraction_run_id"] == manifest["extraction_run_id"]),

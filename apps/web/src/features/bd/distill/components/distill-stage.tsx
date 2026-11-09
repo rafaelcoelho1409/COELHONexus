@@ -12,6 +12,8 @@ import { bookUnits } from "../../domain/books";
 import type { BookSnapshot } from "../../entities";
 import { useLibrary, useSnapshot } from "../../hooks/use-bd-data";
 import { useBdOverlays } from "../../hooks/use-overlays";
+import { RagIndexBoard } from "../../rag/components/rag-index-board";
+import { useRagCapabilities, useRagIndex, useRagIndexActions } from "../../rag/hooks/use-index-data";
 import { BOOK_PARAM, PAGE_PARAM, bookHref, parsePageParam } from "../../params";
 import {
   distillReadiness,
@@ -191,6 +193,7 @@ function DistillWorkspaceView({
   const router = useRouter();
   const { confirm, notice } = useBdOverlays();
   const capabilities = useDistillCapabilities();
+  const ragCapabilities = useRagCapabilities();
   const runs = useDistillRuns(bookId);
   const actions = useDistillActions(bookId);
   const agenticRunId = book.agentic?.status === "done" ? book.agentic.agentic_run_id : null;
@@ -199,6 +202,8 @@ function DistillWorkspaceView({
   const [stoppingRunId, setStoppingRunId] = useState<string | null>(null);
   const readiness = distillReadiness(book, contentSelection.data ?? null, contentSelection.isError);
   const selected = selectDistillRun(runs.data ?? [], requestedRunId);
+  const ragIndex = useRagIndex(bookId, selected?.run_id ?? "", selected?.status === "done");
+  const ragActions = useRagIndexActions(bookId, selected?.run_id ?? "");
   const activeRun = (runs.data ?? []).find((run) => isDistillLive(run.status)) ?? null;
   const controlRun = activeRun ?? selected;
   const stream = useDistillRunStream(bookId, selected);
@@ -298,6 +303,33 @@ function DistillWorkspaceView({
         router.replace(distillHref(bookId));
         notice("Distill run wiped. The book and Ingestion results are unchanged.");
       },
+      onError: (error) => notice(apiErrorMessage(error), "error"),
+    });
+  };
+  const startRag = () => {
+    ragActions.start.mutate(undefined, {
+      onSuccess: () => notice("Agentic RAG queued."),
+      onError: (error) => notice(apiErrorMessage(error), "error"),
+    });
+  };
+  const stopRag = () => {
+    ragActions.cancel.mutate(undefined, {
+      onSuccess: (result) => {
+        notice(result.status === "cancelled" ? "Agentic RAG stopped." : "Agentic RAG stop requested.");
+      },
+      onError: (error) => notice(apiErrorMessage(error), "error"),
+    });
+  };
+  const wipeRag = async () => {
+    const confirmed = await confirm({
+      title: "Wipe Agentic RAG index?",
+      message:
+        "Deletes this run’s retrieval vectors, book graph, and index manifest. Distill results and the uploaded book are preserved.",
+      confirmLabel: "Wipe",
+    });
+    if (!confirmed) return;
+    ragActions.wipe.mutate(undefined, {
+      onSuccess: () => notice("Agentic RAG index wiped."),
       onError: (error) => notice(apiErrorMessage(error), "error"),
     });
   };
@@ -478,10 +510,22 @@ function DistillWorkspaceView({
             </div>
           </div>
           {!runs.isPending && !runs.isError ? (
-            <div className="mt-4">
+            <div className="mt-4 grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-2">
               <DistillNodeBoard
                 status={selectedState?.status ?? null}
                 progress={selectedState?.progress ?? null}
+              />
+              <RagIndexBoard
+                index={ragIndex.data ?? null}
+                distillComplete={selected?.status === "done"}
+                executionEnabled={ragCapabilities.data?.execution_enabled === true}
+                capabilityError={ragCapabilities.isError ? apiErrorMessage(ragCapabilities.error) : null}
+                startPending={ragActions.start.isPending}
+                cancelPending={ragActions.cancel.isPending}
+                wipePending={ragActions.wipe.isPending}
+                onStart={startRag}
+                onCancel={stopRag}
+                onWipe={() => void wipeRag()}
               />
             </div>
           ) : null}

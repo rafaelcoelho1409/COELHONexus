@@ -10,13 +10,15 @@ const BD_STAGES = [
   { key: "pages", label: "Pages", href: "/bd/pages", carry: true },
   { key: "distill", label: "Distill", href: "/bd/distill", carry: true },
   { key: "study", label: "Study", href: "/bd/study", carry: true },
+  { key: "ask", label: "Ask", href: "/bd/ask", carry: true },
+  { key: "query", label: "Query", href: "/bd/query", carry: true },
 ] as const;
 
 /** The title and stage tabs in the second navbar. `/bd` opens the Ingestion stage, so it is the current tab there. */
 export const BD_SECTION: Section = {
   href: "/bd",
   title: "Book Distiller",
-  description: "Upload a book, watch it being read, study what was extracted",
+  description: "Upload, distill, study, ask, and inspect book knowledge",
   defaultTab: "ingestion",
   carryParam: BOOK_PARAM,
   tabs: BD_STAGES.map((stage) => ({ ...stage, tab: true })),

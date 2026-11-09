@@ -681,7 +681,7 @@ class PlaywrightTranscriptService:
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self._playwright = None
         self._browser = None
-        self._context_pool: asyncio.Queue = None
+        self._context_pool: asyncio.Queue | None = None
         self._initialized = False
         self._cdp_url: str | None = None
         # Browser refresh tracking — checked proactively in
@@ -699,31 +699,25 @@ class PlaywrightTranscriptService:
         """Initialize browser and context pool. Call once at startup."""
         if self._initialized:
             return
-        # YouTube blocks headless for captions extraction → always HEADED
-        cdp_endpoint = self._cdp_endpoint or infra.playwright.params.CDP_HEADED
-        # Sweep stale service-worker / dedicated-worker targets left
-        # over from a previous run BEFORE attaching — otherwise the
-        # Playwright driver crashes in `_onAttachedToTarget`. See
-        # `infra.playwright.service.close_stale_targets` for the full story.
-        await asyncio.to_thread(infra.playwright.service.close_stale_targets, cdp_endpoint)
-        self._cdp_url = await asyncio.to_thread(
-            infra.playwright.service.resolve_ws_url, cdp_endpoint,
-        ) or cdp_endpoint
-        log.info(
-            f"[transcript-service] Initializing with CDP: {self._cdp_url[:60]}...",
-        )
-        self._playwright = await infra.playwright.service.start_playwright()
-        self._browser = await self._playwright.chromium.connect_over_cdp(
-            self._cdp_url,
-        )
         self._context_pool = asyncio.Queue(maxsize = self.context_pool_size)
-        for i in range(self.context_pool_size):
-            ctx = await self._create_context()
-            await self._context_pool.put(ctx)
-            log.info(
-                f"[transcript-service] Warmed context "
-                f"{i + 1}/{self.context_pool_size}",
+        log.info(
+            "[transcript-service] Initializing browser connection",
+        )
+        try:
+            await self._connect_browser_with_retry(
+                max_retries = params.INITIAL_CONNECT_RETRIES,
+                initial_wait = params.INITIAL_RETRY_WAIT_S,
             )
+            for i in range(self.context_pool_size):
+                ctx = await self._create_context()
+                await self._context_pool.put(ctx)
+                log.info(
+                    f"[transcript-service] Warmed context "
+                    f"{i + 1}/{self.context_pool_size}",
+                )
+        except BaseException:
+            await self.close()
+            raise
         self._initialized = True
         log.info(
             f"[transcript-service] Ready "
@@ -733,11 +727,16 @@ class PlaywrightTranscriptService:
 
     async def close(self) -> None:
         """Cleanup all resources. Call at shutdown."""
-        if not self._initialized:
+        if (
+            not self._initialized
+            and self._playwright is None
+            and self._browser is None
+            and self._context_pool is None
+        ):
             return
         log.info("[transcript-service] Shutting down...")
         closed = 0
-        while not self._context_pool.empty():
+        while self._context_pool is not None and not self._context_pool.empty():
             try:
                 ctx = self._context_pool.get_nowait()
                 await ctx.close()
@@ -750,13 +749,107 @@ class PlaywrightTranscriptService:
                 await self._browser.close()
             except Exception:
                 pass
+            self._browser = None
         if self._playwright:
             try:
                 await self._playwright.stop()
             except Exception:
                 pass
+            self._playwright = None
+        self._context_pool = None
         self._initialized = False
         log.info("[transcript-service] Shutdown complete")
+
+    async def _connect_browser_with_retry(
+        self,
+        *,
+        max_retries: int,
+        initial_wait: float,
+    ) -> None:
+        """Attach to the headed browser with bounded CDP retries.
+
+        Chromium can accept the WebSocket while its CDP handshake is stalled,
+        so the Playwright API timeout is paired with an outer asyncio timeout.
+        A failed attempt also stops its local driver before the next one; this
+        prevents a timed-out protocol command from poisoning later attempts.
+        """
+        cdp_endpoint = self._cdp_endpoint or infra.playwright.params.CDP_HEADED
+        connect_timeout = params.CONNECT_TIMEOUT_S
+        last_error: Exception | None = None
+
+        for attempt in range(max_retries):
+            try:
+                log.info(
+                    f"[transcript-service] CDP connect attempt "
+                    f"{attempt + 1}/{max_retries}...",
+                )
+                # Sweep stale workers each time: they may have accumulated
+                # while Chromium was recovering from the previous attempt.
+                await asyncio.to_thread(
+                    infra.playwright.service.close_stale_targets,
+                    cdp_endpoint,
+                )
+                self._cdp_url = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        infra.playwright.service.resolve_ws_url,
+                        cdp_endpoint,
+                    ),
+                    timeout = connect_timeout,
+                ) or cdp_endpoint
+                log.info(
+                    f"[transcript-service] Connecting to CDP: "
+                    f"{self._cdp_url[:60]}...",
+                )
+                if self._playwright is None:
+                    self._playwright = await infra.playwright.service.start_playwright()
+                self._browser = await asyncio.wait_for(
+                    self._playwright.chromium.connect_over_cdp(
+                        self._cdp_url,
+                        timeout = int(connect_timeout * 1000),
+                    ),
+                    timeout = connect_timeout + 1,
+                )
+                log.info(
+                    f"[transcript-service] CDP connected "
+                    f"(attempt {attempt + 1})",
+                )
+                return
+            except asyncio.CancelledError:
+                await self._stop_playwright_driver()
+                raise
+            except Exception as error:
+                last_error = error
+                await self._stop_playwright_driver()
+                if attempt < max_retries - 1:
+                    wait_time = initial_wait * (2 ** attempt)
+                    log.warning(
+                        f"[transcript-service] CDP connect failed "
+                        f"(attempt {attempt + 1}/{max_retries}), "
+                        f"retrying in {wait_time}s: {error}",
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    log.error(
+                        f"[transcript-service] CDP connect failed after "
+                        f"{max_retries} attempts: {error}",
+                    )
+
+        raise RuntimeError(
+            f"Failed to connect to Playwright CDP after {max_retries} attempts",
+        ) from last_error
+
+    async def _stop_playwright_driver(self) -> None:
+        """Discard a possibly wedged local driver after a failed CDP attach."""
+        playwright = self._playwright
+        self._playwright = None
+        self._browser = None
+        if playwright is not None:
+            try:
+                await playwright.stop()
+            except Exception as error:
+                log.warning(
+                    f"[transcript-service] Failed to stop Playwright driver: {error}",
+                )
 
     async def _refresh_browser(
         self,
@@ -766,8 +859,8 @@ class PlaywrightTranscriptService:
         """Refresh browser connection to prevent stale CDP connections.
 
         Caller must hold `_refresh_lock` (asyncio locks are not reentrant).
-        Connect_over_cdp can hang indefinitely (known Playwright bug) so
-        each attempt is wrapped in `asyncio.wait_for(timeout=params.CONNECT_TIMEOUT_S)`."""
+        Connect_over_cdp can hang indefinitely (known Playwright bug), so
+        each attempt uses both Playwright's timeout and an asyncio timeout."""
         log.info(
             f"[transcript-service] Refreshing browser "
             f"(after {self._videos_since_refresh} videos)...",
@@ -789,76 +882,13 @@ class PlaywrightTranscriptService:
                 log.warning(
                     f"[transcript-service] Error closing old browser: {e}",
                 )
-        # 3. Re-resolve CDP URL and connect with retry
-        cdp_endpoint = self._cdp_endpoint or infra.playwright.params.CDP_HEADED
-        connect_timeout = params.CONNECT_TIMEOUT_S
-        last_error: Exception | None = None
-        for attempt in range(max_retries):
-            try:
-                log.info(
-                    f"[transcript-service] CDP reconnect attempt "
-                    f"{attempt + 1}/{max_retries}...",
-                )
-                # Sweep stale workers between every reconnect attempt
-                # — `refresh_interval=10` means this fires roughly every
-                # 10 videos and is exactly where the assertion crash
-                # would otherwise resurface.
-                await asyncio.to_thread(
-                    infra.playwright.service.close_stale_targets, cdp_endpoint,
-                )
-                self._cdp_url = await asyncio.wait_for(
-                    asyncio.to_thread(infra.playwright.service.resolve_ws_url, cdp_endpoint),
-                    timeout = connect_timeout,
-                ) or cdp_endpoint
-                self._browser = await asyncio.wait_for(
-                    self._playwright.chromium.connect_over_cdp(self._cdp_url),
-                    timeout = connect_timeout,
-                )
-                log.info(
-                    f"[transcript-service] CDP connected "
-                    f"(attempt {attempt + 1})",
-                )
-                break
-            except asyncio.TimeoutError:
-                last_error = TimeoutError(
-                    f"CDP connect timed out after {connect_timeout}s",
-                )
-                if attempt < max_retries - 1:
-                    wait_time = initial_wait * (2 ** attempt)
-                    log.warning(
-                        f"[transcript-service] CDP connect TIMEOUT "
-                        f"(attempt {attempt + 1}/{max_retries}), "
-                        f"retrying in {wait_time}s",
-                    )
-                    await asyncio.sleep(wait_time)
-                else:
-                    log.error(
-                        f"[transcript-service] CDP connect timed out "
-                        f"after {max_retries} attempts",
-                    )
-                    raise RuntimeError(
-                        f"Failed to connect to Playwright CDP after "
-                        f"{max_retries} attempts (timeout)",
-                    ) from last_error
-            except Exception as e:
-                last_error = e
-                if attempt < max_retries - 1:
-                    wait_time = initial_wait * (2 ** attempt)
-                    log.warning(
-                        f"[transcript-service] CDP connect failed "
-                        f"(attempt {attempt + 1}/{max_retries}), "
-                        f"retrying in {wait_time}s: {e}",
-                    )
-                    await asyncio.sleep(wait_time)
-                else:
-                    log.error(
-                        f"[transcript-service] CDP connect failed after "
-                        f"{max_retries} attempts: {e}",
-                    )
-                    raise RuntimeError(
-                        f"Failed to connect to Playwright CDP after "
-                        f"{max_retries} attempts",
-                    ) from last_error
+        # 3. Re-resolve CDP URL and connect with the same bounded path used
+        # during startup.
+        self._browser = None
+        await self._connect_browser_with_retry(
+            max_retries = max_retries,
+            initial_wait = initial_wait,
+        )
         # 4. Re-warm context pool
         self._context_pool = asyncio.Queue(maxsize = self.context_pool_size)
         for i in range(self.context_pool_size):

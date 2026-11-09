@@ -9,8 +9,6 @@ import {
   getBdDistillBookIdRunsRunIdQueryKey,
   getBdDistillBookIdRunsRunIdReportOptions,
   getBdDistillBookIdRunsRunIdReportQueryKey,
-  getBdDistillBookIdRunsRunIdRagIndexOptions,
-  getBdDistillBookIdRunsRunIdRagIndexQueryKey,
   getBdDistillCapabilitiesOptions,
   getBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionOptions,
   getBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionQueryKey,
@@ -20,11 +18,9 @@ import { useEventStream } from "@/shared/sse";
 import {
   cancelDistillRun,
   distillEventsUrl,
-  getDistillRagIndex,
   resumeDistillRun,
   startDistillRun,
   wipeDistillRun,
-  retryDistillRagIndex,
   saveContentSelection,
 } from "../api";
 import {
@@ -40,7 +36,6 @@ import {
   distillEventSchema,
   distillRunListSchema,
   learningGuideSchema,
-  ragIndexStatusSchema,
 } from "../entities";
 import { DISTILL_REFRESH_MS } from "../params";
 
@@ -72,35 +67,6 @@ export function useLearningGuide(bookId: string, runId: string, enabled: boolean
     enabled,
     retry: false,
     select: (data) => learningGuideSchema.parse(data),
-  });
-}
-
-export function useRagIndex(bookId: string, runId: string, enabled: boolean) {
-  return useQuery({
-    ...getBdDistillBookIdRunsRunIdRagIndexOptions({ path: { book_id: bookId, run_id: runId } }),
-    queryFn: () => getDistillRagIndex(bookId, runId),
-    enabled,
-    retry: false,
-    select: (data) => ragIndexStatusSchema.parse(data),
-    refetchInterval: (query) => {
-      const parsed = ragIndexStatusSchema.safeParse(query.state.data);
-      return !parsed.success || ["not_started", "queued", "running"].includes(parsed.data.status)
-        ? DISTILL_REFRESH_MS
-        : false;
-    },
-  });
-}
-
-export function useRetryRagIndex(bookId: string, runId: string) {
-  const queryClient = useQueryClient();
-  const queryKey = getBdDistillBookIdRunsRunIdRagIndexQueryKey({ path: { book_id: bookId, run_id: runId } });
-  return useMutation({
-    mutationFn: () => retryDistillRagIndex(bookId, runId),
-    onSuccess: (status) => {
-      queryClient.setQueryData(queryKey, status);
-      void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
-    },
-    onError: () => void queryClient.invalidateQueries({ queryKey }),
   });
 }
 

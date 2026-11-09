@@ -35,6 +35,7 @@ import {
 import type {
   AgenticWipeResponse,
   GraphState,
+  GraphTopology,
   PipelineActive,
   PipelineState,
   PlannerHealth,
@@ -48,6 +49,7 @@ import type {
 import {
   agenticWipeResponseSchema,
   graphStateSchema,
+  graphTopologySchema,
   pageBodySchema,
   pipelineActiveSchema,
   pipelineStateSchema,
@@ -90,6 +92,16 @@ export async function fetchStageInfo(stage: RunStage): Promise<StageInfo> {
       ? await getDdPipelinePlannerInfo({ throwOnError: true })
       : await getDdPipelineSynthInfo({ throwOnError: true });
   return stageInfoSchema.parse(result.data);
+}
+
+/** The compiled Ingestion LangGraph topology (read-only; this does not run the graph). */
+export async function fetchIngestionGraph(): Promise<GraphTopology> {
+  const result = await client.request({
+    method: "GET",
+    url: "/api/v1/dd/ingestion/agentic-graph",
+    throwOnError: true,
+  });
+  return graphTopologySchema.parse(result.data);
 }
 
 /** Latest checkpoint thread per slug. */

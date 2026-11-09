@@ -7,6 +7,8 @@ export type ConfirmOptions = { title: string; message: string; confirmLabel: str
 export type OverlaysValue = {
   /** In-page message that hides itself. */
   notice: (message: string, tone?: "info" | "error") => void;
+  /** Short success/info message; an alias kept for data-workbench actions. */
+  toast: (message: string) => void;
   /** Resolves true when the user confirms, false on cancel or Escape. */
   confirm: (options: ConfirmOptions) => Promise<boolean>;
 };

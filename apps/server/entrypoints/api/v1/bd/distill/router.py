@@ -15,6 +15,7 @@ import domains.bd.distill.task
 import infra
 
 from . import schemas
+from ..rag import schemas as rag_schemas
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -132,12 +133,12 @@ async def get_report(book_id: SafePathSegment, run_id: SafePathSegment) -> dict:
         raise HTTPException(status_code = 409, detail = str(error)) from error
 
 
-@router.get("/{book_id}/runs/{run_id}/rag-index", response_model = schemas.RagIndexStatus)
+@router.get("/{book_id}/runs/{run_id}/rag-index", response_model = rag_schemas.RagIndexStatus)
 async def get_rag_index_status(book_id: SafePathSegment, run_id: SafePathSegment) -> dict:
     run = await domains.bd.distill.service.read_run(book_id, run_id)
     if run is None:
         raise HTTPException(status_code = 404, detail = "Distill run not found")
-    index = await domains.bd.distill.rag.service.read_index(book_id, run_id)
+    index = await domains.bd.rag.service.read_index(book_id, run_id)
     if index is not None:
         return index
     return {
@@ -150,12 +151,12 @@ async def get_rag_index_status(book_id: SafePathSegment, run_id: SafePathSegment
 
 @router.post(
     "/{book_id}/runs/{run_id}/rag-index",
-    response_model = schemas.RagIndexStatus,
+    response_model = rag_schemas.RagIndexStatus,
     status_code = 202,
 )
 async def retry_rag_index(book_id: SafePathSegment, run_id: SafePathSegment) -> dict:
     try:
-        return await domains.bd.distill.rag.service.queue_index(book_id, run_id)
+        return await domains.bd.rag.service.queue_index(book_id, run_id)
     except FileNotFoundError as error:
         raise HTTPException(status_code = 404, detail = str(error)) from error
     except ValueError as error:

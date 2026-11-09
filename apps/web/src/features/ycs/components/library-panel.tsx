@@ -242,14 +242,17 @@ export function LibraryPanel({ refreshTick }: { refreshTick: number }): JSX.Elem
         : `${rangeStart}–${rangeEnd} of ${fmtInt(total)}`;
 
   return (
-    <section aria-label="Library" className="flex flex-col gap-4">
+    <section
+      aria-label="Library"
+      className="flex min-h-0 min-w-0 flex-col gap-3 xl:sticky xl:top-[calc(var(--chrome-top)+1rem)] xl:h-[calc(100dvh-var(--chrome-top)-2.5rem)]"
+    >
       <h2 className="text-base font-medium">
         Library{" "}
         <span className="font-mono text-xs font-normal text-muted-foreground">· {fmtInt(total)} videos</span>
       </h2>
 
-      <div className="flex flex-wrap items-end gap-x-3 gap-y-3">
-        <div className="min-w-0 flex-[1_1_14rem]">
+      <div className="grid shrink-0 gap-3">
+        <div className="min-w-0">
           <Label htmlFor="ycs-lib-search" className="mb-1.5 block text-xs font-medium text-muted-foreground">
             Search
           </Label>
@@ -263,37 +266,41 @@ export function LibraryPanel({ refreshTick }: { refreshTick: number }): JSX.Elem
             className="h-9 text-sm"
           />
         </div>
-        {FACET_GROUPS.map((group) => (
-          <div key={group.key} className="min-w-0 flex-[1_1_10rem]">
-            <Label
-              htmlFor={`ycs-lib-facet-${group.key}`}
-              className="mb-1.5 block text-xs font-medium text-muted-foreground"
-            >
-              {group.label}
-            </Label>
-            <select
-              id={`ycs-lib-facet-${group.key}`}
-              value={filters[group.key]}
-              onChange={(event) => setFilter(group.key, event.target.value)}
-              className={`${SELECT_CLASS} w-full`}
-            >
-              <option value="">All</option>
-              {libraryGroupOf(facetsQuery.data ?? EMPTY_FACETS, group.key).map((entry) => {
-                const value = facetValue(entry);
-                if (!value) return null;
-                return (
-                  <option key={value} value={value}>
-                    {facetLabel(entry)} ({facetCount(entry)})
-                  </option>
-                );
-              })}
-            </select>
-          </div>
-        ))}
+        <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-3">
+          {FACET_GROUPS.map((group) => (
+            <div key={group.key} className="min-w-0">
+              <Label
+                htmlFor={`ycs-lib-facet-${group.key}`}
+                className="mb-1.5 block text-xs font-medium text-muted-foreground"
+              >
+                {group.label}
+              </Label>
+              <select
+                id={`ycs-lib-facet-${group.key}`}
+                value={filters[group.key]}
+                onChange={(event) => setFilter(group.key, event.target.value)}
+                className={`${SELECT_CLASS} w-full`}
+              >
+                <option value="">All</option>
+                {libraryGroupOf(facetsQuery.data ?? EMPTY_FACETS, group.key).map((entry) => {
+                  const value = facetValue(entry);
+                  if (!value) return null;
+                  return (
+                    <option key={value} value={value}>
+                      {facetLabel(entry)} ({facetCount(entry)})
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+          ))}
+        </div>
         {filtering ? (
-          <Button type="button" variant="ghost" size="lg" onClick={clearFilters}>
-            Clear filters
-          </Button>
+          <div className="flex justify-end">
+            <Button type="button" variant="ghost" size="lg" onClick={clearFilters}>
+              Clear filters
+            </Button>
+          </div>
         ) : null}
       </div>
 
@@ -313,8 +320,8 @@ export function LibraryPanel({ refreshTick }: { refreshTick: number }): JSX.Elem
         </p>
       ) : null}
 
-      <div className="rounded-md border border-border bg-card">
-        <div className="z-10 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-t-md border-b border-border bg-card px-3 py-1 sm:sticky sm:top-(--chrome-top)">
+      <div className="min-h-0 rounded-md border border-border bg-card xl:flex-1 xl:overflow-y-auto xl:overscroll-contain">
+        <div className="z-10 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-t-md border-b border-border bg-card px-3 py-1 sm:sticky sm:top-(--chrome-top) xl:top-0">
           <label className="flex min-h-9 cursor-pointer items-center gap-3 text-sm">
             <span className="flex size-9 items-center justify-center">
               <input
@@ -382,7 +389,7 @@ export function LibraryPanel({ refreshTick }: { refreshTick: number }): JSX.Elem
         )}
 
         {total > LIBRARY_PAGE_SIZE ? (
-          <div className="flex items-center justify-between gap-3 rounded-b-md border-t border-border px-3 py-2">
+          <div className="flex items-center justify-between gap-3 rounded-b-md border-t border-border bg-card px-3 py-2 xl:sticky xl:bottom-0">
             <Button
               type="button"
               variant="outline"

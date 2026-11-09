@@ -24,11 +24,19 @@ PageProgress = Callable[[], Awaitable[None]]
 
 
 class Auditor(Protocol):
+    def with_structured_output(
+        self,
+        schema: type[agents.schemas.PageAssessment],
+        *,
+        method: str,
+        include_raw: bool,
+    ) -> Any: ...
+
     async def ainvoke(
         self,
-        input: dict[str, Any],
+        input: Any,
         config: dict[str, Any] | None = None,
-    ) -> dict[str, Any]: ...
+    ) -> Any: ...
 
 
 class CancellationCheck(Protocol):

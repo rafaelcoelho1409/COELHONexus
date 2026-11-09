@@ -8,6 +8,7 @@
 import type { JSX } from "react";
 
 import { STATUS_WORD_LABEL, statusWord } from "../domain";
+import { IngestionStatusGlyph } from "./ingestion-status-glyph";
 import { StatusBadge } from "./status-badge";
 
 export type StepView = {
@@ -33,40 +34,72 @@ const FILL: Record<string, string> = {
 /** Work that has begun but has no count to measure it by shows as a pulsing stub, not as a number it cannot back up. */
 const INDETERMINATE_BELOW = 9;
 
-export function PipelineSteps({ steps }: { steps: ReadonlyArray<Step> }): JSX.Element {
+export function StepProgress({ step }: { step: Step }): JSX.Element {
+  const word = statusWord(step.view.state);
+  const indeterminate = word === "running" && step.view.pct < INDETERMINATE_BELOW;
+  const pct = Math.max(0, Math.min(100, step.view.pct));
   return (
-    <ol aria-label="Pipeline phases" className="grid grid-cols-1 gap-2 md:grid-cols-4">
+    <span
+      role="progressbar"
+      aria-label={step.title}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={indeterminate ? undefined : Math.round(pct)}
+      className="mt-2 block h-1.5 w-full overflow-hidden rounded-sm bg-muted"
+    >
+      <span
+        className={`block h-full ${FILL[step.view.state] ?? "bg-primary"} ${indeterminate ? "animate-status" : ""}`}
+        style={{ width: `${indeterminate ? 30 : pct}%` }}
+      />
+    </span>
+  );
+}
+
+export function PipelineSteps({
+  steps,
+  onOpen,
+}: {
+  steps: ReadonlyArray<Step>;
+  onOpen: (step: Step) => void;
+}): JSX.Element {
+  return (
+    <ol aria-label="Pipeline phases" className="flex flex-col gap-1.5">
       {steps.map((step) => {
         const word = statusWord(step.view.state);
         const wordLabel = STATUS_WORD_LABEL[word];
-        const indeterminate = word === "running" && step.view.pct < INDETERMINATE_BELOW;
-        const pct = Math.max(0, Math.min(100, step.view.pct));
-        const showLabel = step.view.label.toLowerCase() !== wordLabel.toLowerCase();
         return (
-          <li
-            key={step.key}
-            data-state={word}
-            className="flex min-w-0 flex-col gap-2 rounded-md border border-border bg-card p-3"
-          >
-            <div className="flex items-start justify-between gap-2">
-              <h3 className="min-w-0 text-sm font-medium">{step.title}</h3>
-              <StatusBadge tone={word} label={wordLabel} />
-            </div>
-            <div
-              role="progressbar"
-              aria-label={step.title}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={indeterminate ? undefined : Math.round(pct)}
-              className="h-1.5 w-full overflow-hidden rounded-sm bg-muted"
+          <li key={step.key} data-node={step.key} data-status={word}>
+            <button
+              type="button"
+              onClick={() => onOpen(step)}
+              aria-haspopup="dialog"
+              className={`block min-h-9 w-full rounded-sm border bg-background px-3 py-2 text-left hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ${
+                word === "running"
+                  ? "border-running"
+                  : word === "failed"
+                    ? "border-destructive"
+                    : word === "partial"
+                      ? "border-warning"
+                      : "border-border"
+              }`}
             >
-              <div
-                className={`h-full ${FILL[step.view.state] ?? "bg-primary"} ${indeterminate ? "animate-status" : ""}`}
-                style={{ width: `${indeterminate ? 30 : pct}%` }}
-              />
-            </div>
-            {showLabel ? <p className="tabular font-mono text-xs break-words">{step.view.label}</p> : null}
-            <p className="text-xs break-words text-muted-foreground">{step.view.hint ?? step.defaultHint}</p>
+              <span className="flex items-center justify-between gap-3">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <IngestionStatusGlyph status={word} />
+                  <span className="min-w-0 text-sm">{step.title}</span>
+                </span>
+                <StatusBadge tone={word} label={wordLabel} className="shrink-0" />
+              </span>
+              <StepProgress step={step} />
+              {step.view.label !== wordLabel ? (
+                <span className="mt-1 block font-mono text-xs break-words text-muted-foreground">
+                  {step.view.label}
+                </span>
+              ) : null}
+              <span className="mt-1 block text-xs break-words text-muted-foreground">
+                {step.view.hint ?? step.defaultHint}
+              </span>
+            </button>
           </li>
         );
       })}

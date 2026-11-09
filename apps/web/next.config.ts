@@ -6,6 +6,7 @@ import { buildRewrites } from "./src/shared/config/rewrites";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  allowedDevOrigins: ["192.168.1.7"],
   // Server-sent events pass through the rewrite proxy. With compression on, Next gzips a
   // `text/event-stream` that lacks `Cache-Control: no-transform` and delivers it in one lump when
   // the stream ends (measured: events arrived together after 6 s). Let the ingress compress.

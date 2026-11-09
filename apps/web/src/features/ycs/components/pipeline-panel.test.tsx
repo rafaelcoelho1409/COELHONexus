@@ -132,6 +132,7 @@ describe("PipelinePanel", () => {
     renderWith(
       <PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} onDismiss={vi.fn()} />,
     );
+    await userEvent.click(screen.getByRole("button", { name: "List" }));
 
     expect(await screen.findByText("Phase 1 · Playwright")).toBeInTheDocument();
     expect(screen.getByText("Phase 2 · ElasticSearch")).toBeInTheDocument();
@@ -251,6 +252,7 @@ describe("PipelinePanel", () => {
         onDismiss={vi.fn()}
       />,
     );
+    await userEvent.click(screen.getByRole("button", { name: "List" }));
 
     expect(await screen.findByText("2 metadata · 2 transcripts fetched")).toBeInTheDocument();
     expect(screen.getByText("2 transcripts in ES (2 new · 0 cached)")).toBeInTheDocument();
@@ -275,6 +277,7 @@ describe("PipelinePanel", () => {
     await user.click(within(dialog).getByRole("button", { name: "Stop" }));
 
     await waitFor(() => expect(screen.getAllByText("Cancelled").length).toBeGreaterThanOrEqual(2));
+    await user.click(screen.getByRole("button", { name: "List" }));
     expect(screen.getAllByText("Stopped by user — partial writes preserved.").length).toBeGreaterThanOrEqual(
       2,
     );

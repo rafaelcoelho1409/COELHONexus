@@ -348,7 +348,11 @@ export function PipelinePanel({
 
       {wipeLine ? <p className="text-xs text-muted-foreground">{wipeLine}</p> : null}
 
-      <IngestionAgenticStructure steps={steps} />
+      <IngestionAgenticStructure
+        steps={steps}
+        ariaLabel="Pipeline progress"
+        caption="Target flow: Playwright transcripts → Elasticsearch → Qdrant and Neo4j."
+      />
 
       <footer className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
         <Button

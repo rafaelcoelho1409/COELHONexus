@@ -6,6 +6,8 @@
 
 import { useQuery } from "@tanstack/react-query";
 import {
+  ChevronLeft,
+  ChevronRight,
   Maximize2,
   PanelLeftClose,
   PanelLeftOpen,
@@ -24,8 +26,6 @@ import {
 } from "@/shared/api";
 import { useScrollSpy } from "@/shared/lib/use-scroll-spy";
 import { Markdown, markdownToc } from "@/shared/markdown";
-import { Button } from "@/shared/ui/button";
-import { buttonVariants } from "@/shared/ui/button-variants";
 
 import { fetchChapterMarkdown, fetchSynthChapters } from "../api";
 import { CHAPTER_PLUGINS, unwrapChapterFence } from "../domain/chapter-markdown";
@@ -37,7 +37,8 @@ import { CHAPTER_ARTIFACT, chapterCodeHref, chapterStudyHref, stageHref } from "
 import { FileDrawer } from "./file-drawer";
 import { ReadingProgress } from "./reading-progress";
 import { NoFrameworkCard } from "./stage-parts";
-import { StudyArticle } from "./study-article";
+import { StudyActionButton, studyActionLinkClassName } from "./study-action-button";
+import { StudyArticle, type StudyContentView, StudyRenderedChapter } from "./study-article";
 import { StudyChapterList } from "./study-chapter-list";
 import { StudyOutline } from "./study-outline";
 import { StudyReadingMode } from "./study-reading-mode";
@@ -93,6 +94,7 @@ function StudyReader({ slug }: { slug: string }) {
   const { layout, update } = useStudyLayout();
   // The reading window: null while closed, else the heading the reader was at on the page.
   const [reading, setReading] = useState<{ startId: string | null } | null>(null);
+  const [contentView, setContentView] = useState<StudyContentView>("rendered");
 
   const chapters = useQuery({
     queryKey: getDdPipelineSynthSlugStudyChaptersQueryKey({ path: { slug } }),
@@ -151,6 +153,7 @@ function StudyReader({ slug }: { slug: string }) {
   }, []);
   const choose = (hit: SearchHit) => {
     setSearchOpen(false);
+    setContentView("rendered");
     router.push(`${chapterStudyHref(slug, hit.chapterId)}${hit.headingId ? `#${hit.headingId}` : ""}`);
   };
 
@@ -166,7 +169,9 @@ function StudyReader({ slug }: { slug: string }) {
       totalWallMs={chapters.data?.study_total_wall_ms ?? 0}
     />
   );
-  const outlineView = hasOutline ? <StudyOutline entries={outline} activeId={activeId} /> : null;
+  const showOutline = hasOutline && contentView === "rendered";
+  const outlineView = showOutline ? <StudyOutline entries={outline} activeId={activeId} /> : null;
+  const canChooseContentView = Boolean(current?.rendered && artifact.isSuccess);
 
   // The chapter's text, or what stands in for it.
   const body = !current ? null : !current.rendered ? (
@@ -199,11 +204,21 @@ function StudyReader({ slug }: { slug: string }) {
           .
         </p>
       ) : null}
-      <Markdown text={text} remarkPlugins={CHAPTER_PLUGINS} components={components} />
+      {contentView === "source" ? (
+        <section aria-label="Markdown source" className="min-w-0">
+          <pre className="break-words whitespace-pre-wrap rounded-sm border border-border bg-background p-4 font-mono text-xs text-foreground">
+            {text}
+          </pre>
+        </section>
+      ) : (
+        <StudyRenderedChapter>
+          <Markdown text={text} remarkPlugins={CHAPTER_PLUGINS} components={components} />
+        </StudyRenderedChapter>
+      )}
     </>
   );
 
-  const showOutlineColumn = layout.outline && hasOutline;
+  const showOutlineColumn = layout.outline && showOutline;
   const columns = layout.chapters
     ? showOutlineColumn
       ? COLUMNS.both
@@ -214,21 +229,53 @@ function StudyReader({ slug }: { slug: string }) {
 
   // On the right of the chapter's title: fold either side column, or read the chapter on the whole screen.
   const toolbar = (
-    <div className="flex shrink-0 items-center gap-1">
-      <Button
-        variant="ghost"
-        size="icon-lg"
+    <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+      <StudyActionButton
+        iconOnly
+        aria-label="Previous chapter"
+        title="Previous chapter"
+        disabled={currentIndex <= 0}
+        onClick={() =>
+          currentIndex > 0 && router.push(chapterStudyHref(slug, cells[currentIndex - 1]?.id ?? ""))
+        }
+      >
+        <ChevronLeft aria-hidden />
+      </StudyActionButton>
+      <StudyActionButton
+        iconOnly
+        aria-label="Next chapter"
+        title="Next chapter"
+        disabled={currentIndex < 0 || currentIndex >= cells.length - 1}
+        onClick={() =>
+          currentIndex >= 0 &&
+          currentIndex < cells.length - 1 &&
+          router.push(chapterStudyHref(slug, cells[currentIndex + 1]?.id ?? ""))
+        }
+      >
+        <ChevronRight aria-hidden />
+      </StudyActionButton>
+      {!layout.chapters ? (
+        <StudyActionButton
+          iconOnly
+          aria-label="Search chapters"
+          title="Search chapters"
+          onClick={() => setSearchOpen(true)}
+        >
+          <Search aria-hidden />
+        </StudyActionButton>
+      ) : null}
+      <StudyActionButton
+        iconOnly
         aria-expanded={layout.chapters}
         aria-label={layout.chapters ? "Hide chapters" : "Show chapters"}
         title={layout.chapters ? "Hide chapters" : "Show chapters"}
         onClick={() => update({ chapters: !layout.chapters })}
       >
         {layout.chapters ? <PanelLeftClose aria-hidden /> : <PanelLeftOpen aria-hidden />}
-      </Button>
-      {hasOutline ? (
-        <Button
-          variant="ghost"
-          size="icon-lg"
+      </StudyActionButton>
+      {showOutline ? (
+        <StudyActionButton
+          iconOnly
           className="hidden lg:inline-flex"
           aria-expanded={layout.outline}
           aria-label={layout.outline ? "Hide outline" : "Show outline"}
@@ -236,19 +283,17 @@ function StudyReader({ slug }: { slug: string }) {
           onClick={() => update({ outline: !layout.outline })}
         >
           {layout.outline ? <PanelRightClose aria-hidden /> : <PanelRightOpen aria-hidden />}
-        </Button>
+        </StudyActionButton>
       ) : null}
       {current?.rendered ? (
-        <Button
-          variant="outline"
-          size="lg"
+        <StudyActionButton
           aria-haspopup="dialog"
           title="Read this chapter on the whole screen"
           onClick={() => setReading({ startId: activeId })}
         >
           <Maximize2 aria-hidden />
           Reading mode
-        </Button>
+        </StudyActionButton>
       ) : null}
     </div>
   );
@@ -259,23 +304,31 @@ function StudyReader({ slug }: { slug: string }) {
       <div className={`flex flex-col gap-4 lg:grid ${columns}`}>
         {layout.chapters ? (
           <aside className={`flex flex-col gap-3 ${STICKY_COLUMN}`}>
-            <Button variant="outline" size="lg" onClick={() => setSearchOpen(true)} aria-haspopup="dialog">
+            <StudyActionButton onClick={() => setSearchOpen(true)} aria-haspopup="dialog">
               <Search aria-hidden />
               Search chapters
               <kbd className="ml-auto font-mono text-xs text-muted-foreground">Ctrl K</kbd>
-            </Button>
+            </StudyActionButton>
             {chapterList}
-            <Link
-              href={stageHref("pipeline", slug)}
-              className={buttonVariants({ variant: "outline", size: "lg" })}
-            >
+            <Link href={stageHref("pipeline", slug)} className={studyActionLinkClassName()}>
               Pipeline
             </Link>
           </aside>
         ) : null}
 
         {/* In the reading window the text is drawn there, not here: one copy at a time, so a heading's id is never twice on the page. */}
-        <StudyArticle chapter={current} hasChapters={cells.length > 0} framed toolbar={toolbar}>
+        <StudyArticle
+          chapter={current}
+          hasChapters={cells.length > 0}
+          framed
+          position={`${currentIndex + 1} of ${cells.length}`}
+          contentView={contentView}
+          onContentView={setContentView}
+          canChooseContentView={canChooseContentView}
+          sourceFiles={current?.source_files ?? []}
+          onOpenSource={sources.open}
+          toolbar={toolbar}
+        >
           {reading ? null : body}
         </StudyArticle>
 
@@ -305,7 +358,17 @@ function StudyReader({ slug }: { slug: string }) {
           chapters={chapterList}
           outline={outlineView}
         >
-          <StudyArticle chapter={current} hasChapters framed={false}>
+          <StudyArticle
+            chapter={current}
+            hasChapters
+            framed={false}
+            position={`${currentIndex + 1} of ${cells.length}`}
+            contentView={contentView}
+            onContentView={setContentView}
+            canChooseContentView={canChooseContentView}
+            sourceFiles={current.source_files ?? []}
+            onOpenSource={sources.open}
+          >
             {body}
           </StudyArticle>
         </StudyReadingMode>

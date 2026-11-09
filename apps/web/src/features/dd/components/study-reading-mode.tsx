@@ -19,12 +19,10 @@ import {
 import Link from "next/link";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 
-import { Button } from "@/shared/ui/button";
-import { buttonVariants } from "@/shared/ui/button-variants";
-
 import type { StudyLayout } from "../entities";
 import { useModalDialog } from "../hooks/use-modal-dialog";
 import { ReadingProgress } from "./reading-progress";
+import { StudyActionButton, studyActionLinkClassName } from "./study-action-button";
 
 /** How far the text runs: a comfortable line for prose, or most of a wide screen for tables and code. */
 const TEXT_WIDTH: Record<StudyLayout["width"], string> = {
@@ -102,9 +100,8 @@ export function StudyReadingMode({
       <div className="flex h-full flex-col">
         <header className="relative flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5 sm:gap-2 sm:px-3">
           <ReadingProgress scroller={scroller} className="absolute inset-x-0 -bottom-px z-10 h-0.5" />
-          <Button
-            variant="ghost"
-            size="icon-lg"
+          <StudyActionButton
+            iconOnly
             className="hidden md:inline-flex"
             aria-expanded={layout.readingChapters}
             aria-label={layout.readingChapters ? "Hide chapters" : "Show chapters"}
@@ -112,7 +109,7 @@ export function StudyReadingMode({
             onClick={() => onLayout({ readingChapters: !layout.readingChapters })}
           >
             {layout.readingChapters ? <PanelLeftClose aria-hidden /> : <PanelLeftOpen aria-hidden />}
-          </Button>
+          </StudyActionButton>
           <div className="min-w-0 flex-1 px-1">
             <h2 id={titleId} className="truncate text-sm font-medium">
               {title}
@@ -124,41 +121,33 @@ export function StudyReadingMode({
               href={previousHref}
               aria-label="Previous chapter"
               title="Previous chapter"
-              className={buttonVariants({ variant: "ghost", size: "icon-lg" })}
+              className={studyActionLinkClassName(true)}
             >
               <ChevronLeft aria-hidden />
             </Link>
           ) : (
-            <Button variant="ghost" size="icon-lg" disabled aria-label="Previous chapter">
+            <StudyActionButton iconOnly disabled aria-label="Previous chapter">
               <ChevronLeft aria-hidden />
-            </Button>
+            </StudyActionButton>
           )}
           {nextHref ? (
             <Link
               href={nextHref}
               aria-label="Next chapter"
               title="Next chapter"
-              className={buttonVariants({ variant: "ghost", size: "icon-lg" })}
+              className={studyActionLinkClassName(true)}
             >
               <ChevronRight aria-hidden />
             </Link>
           ) : (
-            <Button variant="ghost" size="icon-lg" disabled aria-label="Next chapter">
+            <StudyActionButton iconOnly disabled aria-label="Next chapter">
               <ChevronRight aria-hidden />
-            </Button>
+            </StudyActionButton>
           )}
-          <Button
-            variant="ghost"
-            size="icon-lg"
-            aria-label="Search chapters"
-            title="Search chapters"
-            onClick={onSearch}
-          >
+          <StudyActionButton iconOnly aria-label="Search chapters" title="Search chapters" onClick={onSearch}>
             <Search aria-hidden />
-          </Button>
-          <Button
-            variant={wide ? "secondary" : "ghost"}
-            size="lg"
+          </StudyActionButton>
+          <StudyActionButton
             className="hidden sm:inline-flex"
             aria-pressed={wide}
             title="Let the text run across most of the screen"
@@ -166,11 +155,10 @@ export function StudyReadingMode({
           >
             <MoveHorizontal aria-hidden />
             Wide
-          </Button>
+          </StudyActionButton>
           {hasOutline ? (
-            <Button
-              variant="ghost"
-              size="icon-lg"
+            <StudyActionButton
+              iconOnly
               className="hidden lg:inline-flex"
               aria-expanded={layout.readingOutline}
               aria-label={layout.readingOutline ? "Hide outline" : "Show outline"}
@@ -178,12 +166,12 @@ export function StudyReadingMode({
               onClick={() => onLayout({ readingOutline: !layout.readingOutline })}
             >
               {layout.readingOutline ? <PanelRightClose aria-hidden /> : <PanelRightOpen aria-hidden />}
-            </Button>
+            </StudyActionButton>
           ) : null}
-          <Button variant="outline" size="lg" aria-label="Exit reading mode" onClick={onExit}>
+          <StudyActionButton aria-label="Exit reading mode" onClick={onExit}>
             <Minimize2 aria-hidden />
             <span className="hidden sm:inline">Exit</span>
-          </Button>
+          </StudyActionButton>
         </header>
 
         <div className="flex min-h-0 flex-1">

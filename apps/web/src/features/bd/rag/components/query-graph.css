@@ -1,0 +1,77 @@
+/* The Neo4j result graph. React Flow's own stylesheet is loaded first; these rules recolour it with the app's tokens
+   and switch off everything a read-only graph does not need. */
+
+.query-graph .react-flow {
+  --xy-background-color: transparent;
+  --xy-node-background-color: transparent;
+  --xy-node-border: none;
+  background: transparent;
+}
+
+.query-graph .react-flow__node {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+.query-graph .react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.query-graph .react-flow__edge-path {
+  stroke: var(--neutral-8);
+  stroke-width: 1.5;
+}
+
+.query-graph .react-flow__arrowhead polyline {
+  stroke: var(--neutral-8);
+  fill: var(--neutral-8);
+}
+
+.query-graph .react-flow__edge.query-edge-faded {
+  opacity: 0.2;
+}
+
+.query-graph .react-flow__edge-text {
+  font-size: 12px;
+  fill: var(--muted-foreground);
+}
+
+.query-graph .react-flow__edge-textbg {
+  fill: var(--background);
+}
+
+/* Zoom buttons meet the 36px target the rest of the app uses. */
+.query-graph .react-flow__controls {
+  box-shadow: none;
+}
+
+.query-graph .react-flow__controls-button {
+  width: 36px;
+  height: 36px;
+  border-color: var(--border);
+  background: var(--card);
+  fill: var(--foreground);
+  color: var(--foreground);
+}
+
+.query-graph .react-flow__controls-button:hover {
+  background: var(--muted);
+}
+
+.query-graph .react-flow__attribution {
+  font-size: 12px;
+  background: transparent;
+}
+
+.query-graph .react-flow__attribution a {
+  display: inline-flex;
+  align-items: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0 4px;
+  color: var(--muted-foreground);
+}

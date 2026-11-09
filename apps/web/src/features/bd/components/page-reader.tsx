@@ -1,12 +1,12 @@
 "use client";
 
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
-import { Literata } from "next/font/google";
 import Image from "next/image";
 import { Children, isValidElement, type ReactNode, useId, useMemo, useState } from "react";
 import type { Components } from "react-markdown";
 
 import { Markdown } from "@/shared/markdown";
+import { readerFont } from "@/shared/markdown/reader-font";
 
 import { figureUrl } from "../api";
 import { type BookStatus, type BookUnits, fmtBytes } from "../domain/books";
@@ -29,13 +29,6 @@ const VERSIONS: readonly { id: PageVersion; label: string }[] = [
   { id: "changes", label: "Changes" },
 ];
 const EMPTY_FIGURES: readonly string[] = [];
-const bookPageFont = Literata({
-  axes: ["opsz"],
-  display: "swap",
-  fallback: ["Georgia", "serif"],
-  subsets: ["latin"],
-});
-
 /** One extracted content unit: its section path, what it contains, what the Agentic AI step did to it, its text and its
  * figures. The text itself (and the outline drawn beside it) comes from `usePageContent`, one level up, so the page, the
  * outline column and the reading window all show the same thing. The page frames it as a card; the reading window
@@ -209,7 +202,7 @@ export function PageReader({
             <PageChanges diff={content.diff} loading={loadingVersion} failed={raw.isError} />
           ) : display ? (
             previewMode === "rendered" ? (
-              <div className={`${bookPageFont.className} bd-book-page-reader`}>
+              <div className={`${readerFont.className} reader-prose`}>
                 <Markdown text={renderedText} components={markdownComponents} />
               </div>
             ) : (

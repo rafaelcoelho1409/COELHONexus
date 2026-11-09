@@ -1529,6 +1529,16 @@ export type RagSearchRequest = {
 };
 
 /**
+ * RagCapabilities
+ */
+export type RagCapabilities = {
+    /**
+     * Execution Enabled
+     */
+    execution_enabled: boolean;
+};
+
+/**
  * RagIndexStatus
  */
 export type RagIndexStatus = {
@@ -1547,7 +1557,31 @@ export type RagIndexStatus = {
     /**
      * Status
      */
-    status: 'not_started' | 'queued' | 'running' | 'done' | 'failed';
+    status: 'not_started' | 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+    /**
+     * Workflow Version
+     */
+    workflow_version?: string;
+    /**
+     * Graph Extraction Prompt Version
+     */
+    graph_extraction_prompt_version?: string;
+    /**
+     * Vector Status
+     */
+    vector_status?: 'pending' | 'running' | 'done' | 'failed' | 'cancelled';
+    /**
+     * Graph Status
+     */
+    graph_status?: 'pending' | 'running' | 'done' | 'failed' | 'cancelled';
+    /**
+     * Current Stage
+     */
+    current_stage?: 'preparing' | 'vector_index' | 'graph_materialization' | 'complete' | null;
+    /**
+     * Cancel Requested
+     */
+    cancel_requested?: boolean;
     /**
      * Attempt
      */
@@ -1581,6 +1615,14 @@ export type RagIndexStatus = {
      */
     point_count?: number;
     /**
+     * Graph Node Count
+     */
+    graph_node_count?: number;
+    /**
+     * Graph Relationship Count
+     */
+    graph_relationship_count?: number;
+    /**
      * Created At
      */
     created_at?: number | null;
@@ -1596,6 +1638,28 @@ export type RagIndexStatus = {
      * Error
      */
     error?: string | null;
+};
+
+/**
+ * RagWipeResponse
+ */
+export type RagWipeResponse = {
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Distill Run Id
+     */
+    distill_run_id: string;
+    /**
+     * Wiped
+     */
+    wiped: boolean;
+    /**
+     * Objects Deleted
+     */
+    objects_deleted: number;
 };
 
 /**
@@ -3691,6 +3755,158 @@ export type PostBdIngestionBookIdRunResponses = {
 
 export type PostBdIngestionBookIdRunResponse = PostBdIngestionBookIdRunResponses[keyof PostBdIngestionBookIdRunResponses];
 
+export type GetBdRagCapabilitiesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/bd/rag/capabilities';
+};
+
+export type GetBdRagCapabilitiesResponses = {
+    /**
+     * Successful Response
+     */
+    200: RagCapabilities;
+};
+
+export type GetBdRagCapabilitiesResponse = GetBdRagCapabilitiesResponses[keyof GetBdRagCapabilitiesResponses];
+
+export type DeleteBdRagBookIdRunsRunIdIndexData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/rag/{book_id}/runs/{run_id}/index';
+};
+
+export type DeleteBdRagBookIdRunsRunIdIndexErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteBdRagBookIdRunsRunIdIndexError = DeleteBdRagBookIdRunsRunIdIndexErrors[keyof DeleteBdRagBookIdRunsRunIdIndexErrors];
+
+export type DeleteBdRagBookIdRunsRunIdIndexResponses = {
+    /**
+     * Successful Response
+     */
+    200: RagWipeResponse;
+};
+
+export type DeleteBdRagBookIdRunsRunIdIndexResponse = DeleteBdRagBookIdRunsRunIdIndexResponses[keyof DeleteBdRagBookIdRunsRunIdIndexResponses];
+
+export type GetBdRagBookIdRunsRunIdIndexData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/rag/{book_id}/runs/{run_id}/index';
+};
+
+export type GetBdRagBookIdRunsRunIdIndexErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetBdRagBookIdRunsRunIdIndexError = GetBdRagBookIdRunsRunIdIndexErrors[keyof GetBdRagBookIdRunsRunIdIndexErrors];
+
+export type GetBdRagBookIdRunsRunIdIndexResponses = {
+    /**
+     * Successful Response
+     */
+    200: RagIndexStatus;
+};
+
+export type GetBdRagBookIdRunsRunIdIndexResponse = GetBdRagBookIdRunsRunIdIndexResponses[keyof GetBdRagBookIdRunsRunIdIndexResponses];
+
+export type PostBdRagBookIdRunsRunIdIndexData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/rag/{book_id}/runs/{run_id}/index';
+};
+
+export type PostBdRagBookIdRunsRunIdIndexErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBdRagBookIdRunsRunIdIndexError = PostBdRagBookIdRunsRunIdIndexErrors[keyof PostBdRagBookIdRunsRunIdIndexErrors];
+
+export type PostBdRagBookIdRunsRunIdIndexResponses = {
+    /**
+     * Successful Response
+     */
+    202: RagIndexStatus;
+};
+
+export type PostBdRagBookIdRunsRunIdIndexResponse = PostBdRagBookIdRunsRunIdIndexResponses[keyof PostBdRagBookIdRunsRunIdIndexResponses];
+
+export type PostBdRagBookIdRunsRunIdIndexCancelData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/rag/{book_id}/runs/{run_id}/index/cancel';
+};
+
+export type PostBdRagBookIdRunsRunIdIndexCancelErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBdRagBookIdRunsRunIdIndexCancelError = PostBdRagBookIdRunsRunIdIndexCancelErrors[keyof PostBdRagBookIdRunsRunIdIndexCancelErrors];
+
+export type PostBdRagBookIdRunsRunIdIndexCancelResponses = {
+    /**
+     * Successful Response
+     */
+    202: RagIndexStatus;
+};
+
+export type PostBdRagBookIdRunsRunIdIndexCancelResponse = PostBdRagBookIdRunsRunIdIndexCancelResponses[keyof PostBdRagBookIdRunsRunIdIndexCancelResponses];
+
 export type GetDdCatalogData = {
     body?: never;
     path?: never;
@@ -4060,6 +4276,26 @@ export type GetDdIngestionResponses = {
 };
 
 export type GetDdIngestionResponse = GetDdIngestionResponses[keyof GetDdIngestionResponses];
+
+export type GetDdIngestionAgenticGraphData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/dd/ingestion/agentic-graph';
+};
+
+export type GetDdIngestionAgenticGraphResponses = {
+    /**
+     * Response Get Dd Ingestion Agentic Graph
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetDdIngestionAgenticGraphResponse = GetDdIngestionAgenticGraphResponses[keyof GetDdIngestionAgenticGraphResponses];
 
 export type PostDdIngestionRunsData = {
     body: StartRunBody;

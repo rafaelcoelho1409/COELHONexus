@@ -127,11 +127,14 @@ async def _source_digest_mismatches(minio, chapters: list[dict]) -> list[str]:
 
 
 @router.get("/info")
-async def synth_info() -> dict:
+async def synth_info(response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    graph = ai.dd.graphs.pipeline.synth.graphs.synth_graph(checkpointer = None)
     return {
         "node_order":  list(domains.dd.pipeline.ai.synth.service.node_order()),
         "implemented": list(domains.dd.pipeline.ai.synth.service.node_order()),
         "synth_version": ai.dd.graphs.pipeline.synth.params.version(),
+        "graph_mermaid": ai.dd.graphs.topology.mermaid_source(graph),
         "modes": [
             {"key": "quality", "label": "Quality (default)", "enabled": True},
             {"key": "fast",    "label": "Fast (3 iters)",    "enabled": False},

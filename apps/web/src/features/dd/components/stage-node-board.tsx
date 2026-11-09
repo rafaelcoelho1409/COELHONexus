@@ -1,7 +1,6 @@
 "use client";
 
-/** One stage's nodes as a graph (default) or as a plain list, with the drawer of whichever node the reader
- * opened. The list is the text equivalent of the graph: the same buttons in order, nothing to pan or zoom. */
+/** One stage's live nodes as a graph or list, or the compiled LangGraph topology, with the drawer of whichever node the reader opened. */
 
 import dynamic from "next/dynamic";
 import { useState } from "react";
@@ -9,7 +8,9 @@ import { useState } from "react";
 import { nodeKpi } from "../domain/node-details";
 import type { StageNodeView } from "../domain/stages";
 import type { StageEvent } from "../entities";
+import { useStageInfo } from "../hooks/use-stage-queries";
 import type { RunStage } from "../params";
+import { LangGraphTopology } from "./langgraph-topology";
 import { NodeDrawer } from "./node-drawer";
 import { StageNodes } from "./stage-parts";
 import { ToggleGroup } from "./toggle-group";
@@ -23,7 +24,10 @@ const StageFlow = dynamic(() => import("./stage-flow").then((module) => module.S
 const VIEWS = [
   { id: "graph", label: "Graph" },
   { id: "list", label: "List" },
+  { id: "langgraph", label: "LangGraph" },
 ] as const;
+
+type ViewMode = (typeof VIEWS)[number]["id"];
 
 const STAGE_TITLE: Record<RunStage, string> = { planner: "Planner", synth: "Synth" };
 
@@ -57,7 +61,9 @@ export function StageNodeBoard({
     setOpenedAt({ ...openedAt, [nodeId]: Date.now() });
     setOpenId(nodeId);
   };
-  const [mode, setMode] = useState<(typeof VIEWS)[number]["id"]>("graph");
+  const [mode, setMode] = useState<ViewMode | null>(null);
+  const activeMode: ViewMode = mode ?? (views.length > 0 ? "graph" : "langgraph");
+  const stageInfo = useStageInfo(stage);
   const open = views.find((view) => view.node.id === openId);
 
   const kpis: Record<string, string> = {};
@@ -68,7 +74,7 @@ export function StageNodeBoard({
 
   return (
     <>
-      {/* The graph sits in a box like Ingestion's "Agentic pipeline", with the same Graph | List switch. */}
+      {/* The graph sits in a box like Ingestion's "Agentic pipeline", with the same run views and topology source. */}
       <section
         aria-label={`${STAGE_TITLE[stage]} pipeline`}
         className="flex min-w-0 flex-1 flex-col gap-3 rounded-md border border-border bg-card p-3"
@@ -87,12 +93,18 @@ export function StageNodeBoard({
             <ToggleGroup
               legend={`${STAGE_TITLE[stage]} nodes shown as`}
               options={VIEWS}
-              value={mode}
+              value={activeMode}
               onChange={setMode}
             />
           </div>
         </div>
-        {mode === "graph" ? (
+        {activeMode === "langgraph" ? (
+          <LangGraphTopology title={STAGE_TITLE[stage]} source={stageInfo?.graph_mermaid ?? null} />
+        ) : views.length === 0 ? (
+          <p className="flex min-h-36 items-center justify-center rounded-sm border border-border bg-background p-3 text-center text-xs text-muted-foreground">
+            Run {STAGE_TITLE[stage]} to see execution status for its nodes.
+          </p>
+        ) : activeMode === "graph" ? (
           <StageFlow
             stage={stage}
             title={STAGE_TITLE[stage]}

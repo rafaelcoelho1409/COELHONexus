@@ -1,7 +1,8 @@
-from . import distill, ingestion, schemas
+from . import distill, ingestion, rag, schemas
 
 __all__ = [
     "distill",
     "ingestion",
+    "rag",
     "schemas",
 ]

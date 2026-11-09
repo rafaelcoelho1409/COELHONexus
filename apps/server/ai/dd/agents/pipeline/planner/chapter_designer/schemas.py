@@ -57,7 +57,6 @@ class ChapterDesignAnswer(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
     candidate_partition_index: int = Field(
-        default = -1,
         description = "Zero-based index of the selected candidate partition in the supplied candidate_partitions list; required for a valid design.",
     )
     chapters: list[DesignedChapter] = Field(description = "The complete chapter plan. Every candidate group appears once.")

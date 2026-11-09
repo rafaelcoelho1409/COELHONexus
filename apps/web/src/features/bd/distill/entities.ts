@@ -264,23 +264,3 @@ export const contentSelectionSchema = z.object({
   pages: z.array(contentSelectionPageSchema),
 });
 export type ContentSelection = z.infer<typeof contentSelectionSchema>;
-
-export const ragIndexStatusSchema = z.object({
-  book_id: z.string(),
-  distill_run_id: z.string(),
-  extraction_run_id: z.string(),
-  status: z.enum(["not_started", "queued", "running", "done", "failed"]),
-  attempt: z.number().int().nonnegative().catch(0),
-  collection_name: z.string().nullable().catch(null),
-  embedding_model: z.string().nullable().catch(null),
-  embedding_dimensions: z.number().int().positive().nullable().catch(null),
-  source_page_count: z.number().int().nonnegative().catch(0),
-  learning_unit_count: z.number().int().nonnegative().catch(0),
-  guide_record_count: z.number().int().nonnegative().catch(0),
-  point_count: z.number().int().nonnegative().catch(0),
-  created_at: z.number().nullable().catch(null),
-  updated_at: z.number().nullable().catch(null),
-  finished_at: z.number().nullable().catch(null),
-  error: z.string().nullable().catch(null),
-});
-export type RagIndexStatus = z.infer<typeof ragIndexStatusSchema>;

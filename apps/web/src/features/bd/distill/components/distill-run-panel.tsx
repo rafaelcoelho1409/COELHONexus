@@ -3,11 +3,11 @@
 import { ArrowDownToLine } from "lucide-react";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 import type { StreamStatus } from "@/shared/sse";
-import { ActionButton } from "../../components/action-button";
+import { useRagIndex } from "../../rag/hooks/use-index-data";
 import { learningGuideHtmlUrl, learningGuidePdfUrl } from "../api";
 import type { DistillRunViewState } from "../domain/run-state";
 import type { DistillRun } from "../entities";
-import { useLearningGuide, useRagIndex, useRetryRagIndex } from "../hooks/use-distill-data";
+import { useLearningGuide } from "../hooks/use-distill-data";
 import { LearningGuideView } from "./learning-guide";
 
 export function DistillRunPanel({
@@ -23,7 +23,6 @@ export function DistillRunPanel({
 }) {
   const report = useLearningGuide(bookId, run.run_id, state.status === "done");
   const ragIndex = useRagIndex(bookId, run.run_id, state.status === "done");
-  const retryIndex = useRetryRagIndex(bookId, run.run_id);
 
   if (state.status !== "done") return null;
 
@@ -64,52 +63,45 @@ export function DistillRunPanel({
         <p className="mono-label">Post-publication process</p>
         <h4 className="mt-1 text-sm font-semibold">Book retrieval index</h4>
         {ragIndex.isError ? (
-          <div role="alert" className="mt-2 flex flex-wrap items-center gap-3 text-sm">
-            <p className="text-warning-text">Index status could not be loaded — {apiErrorMessage(ragIndex.error)}</p>
-            <ActionButton onClick={() => void ragIndex.refetch()}>Retry status</ActionButton>
+          <div role="alert" className="mt-2 text-sm">
+            <p className="text-warning-text">
+              Index status could not be loaded — {apiErrorMessage(ragIndex.error)}
+            </p>
           </div>
         ) : ragIndex.isPending ? (
           <p role="status" className="mt-2 text-sm text-muted-foreground">
-            Waiting for the separate index job. It includes every Ingestion page, selected or excluded, plus the
-            Learning Guide records.
+            Waiting for the separate index job. It includes every Ingestion page, selected or excluded, plus
+            the Learning Guide records.
           </p>
         ) : ragIndex.data?.status === "not_started" ? (
-          <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
+          <div className="mt-2 text-sm">
             <p className="text-muted-foreground">
-              The report is published; source-page indexing has not started yet.
+              The report is published; indexing has not started. Manage this process in the Agents tab.
             </p>
-            <ActionButton onClick={() => retryIndex.mutate()} disabled={retryIndex.isPending} aria-busy={retryIndex.isPending}>
-              {retryIndex.isPending ? "Starting…" : "Start retrieval indexing"}
-            </ActionButton>
-            {retryIndex.isError ? <span className="text-destructive-text">{apiErrorMessage(retryIndex.error)}</span> : null}
           </div>
         ) : ragIndex.data?.status === "queued" || ragIndex.data?.status === "running" ? (
           <p role="status" className="mt-2 text-sm text-muted-foreground">
-            {ragIndex.data.status === "queued" ? "Queued" : "Indexing"} · {ragIndex.data.point_count.toLocaleString()} chunks stored so far
+            {ragIndex.data.status === "queued" ? "Queued" : "Indexing"} ·{" "}
+            {ragIndex.data.point_count.toLocaleString()} passages indexed so far
           </p>
         ) : ragIndex.data?.status === "done" ? (
           <p role="status" className="mt-2 text-sm text-success-text">
-            Ready for later retrieval · {ragIndex.data.source_page_count.toLocaleString()} pages ·{" "}
-            {ragIndex.data.point_count.toLocaleString()} hybrid search chunks
+            Ready for later retrieval · {ragIndex.data.source_page_count.toLocaleString()} source pages ·{" "}
+            {ragIndex.data.point_count.toLocaleString()} passages ·{" "}
+            {ragIndex.data.graph_node_count.toLocaleString()} knowledge nodes
           </p>
         ) : (
-          <div role="alert" className="mt-2 flex flex-wrap items-center gap-3 text-sm">
+          <div role={ragIndex.data?.status === "failed" ? "alert" : "status"} className="mt-2 text-sm">
             <p className="text-warning-text">
-              Indexing failed{ragIndex.data?.error ? ` — ${ragIndex.data.error}` : "."}
+              {ragIndex.data?.status === "cancelled" ? "Indexing stopped" : "Indexing failed"}
+              {ragIndex.data?.error ? ` — ${ragIndex.data.error}` : "."} Manage or resume this process in the
+              Agents tab.
             </p>
-            <ActionButton
-              onClick={() => retryIndex.mutate()}
-              disabled={retryIndex.isPending}
-              aria-busy={retryIndex.isPending}
-            >
-              {retryIndex.isPending ? "Retrying…" : "Retry indexing"}
-            </ActionButton>
-            {retryIndex.isError ? (
-              <span className="text-destructive-text">{apiErrorMessage(retryIndex.error)}</span>
-            ) : null}
           </div>
         )}
-        <p className="mt-1 text-xs text-muted-foreground">Cross-book chat will be added in a later feature step.</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Distill-linked chat and cross-book retrieval are future capabilities.
+        </p>
       </section>
 
       {report.isPending ? (

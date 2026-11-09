@@ -18,7 +18,8 @@ MAX_RETRIES = 2
 
 CONNECT_TIMEOUT_S = 30.0
 INITIAL_RETRY_WAIT_S = 5.0
-RETRY_LIMIT = 6               # exponential 5s → ~60s total
+INITIAL_CONNECT_RETRIES = 3
+RETRY_LIMIT = 6               # reconnect attempts; exponential waits total 155s
 
 DEFAULT_CHUNK_SIZE = 10       # ES checkpoint frequency
 

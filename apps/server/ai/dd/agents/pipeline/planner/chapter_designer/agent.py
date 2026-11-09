@@ -1,20 +1,12 @@
-"""DeepAgent for Planner v2's grouped chapter design."""
+"""The tool-free chat model used to choose and refine Planner v2 chapter groups."""
 from __future__ import annotations
-import ai, domains
-from . import config, params, schemas
-from .... import service
-from ..... import middlewares, prompts
 
-from deepagents import (
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
-from deepagents.profiles.harness import harness_profiles
+import domains
+from . import config, params
 
 
 def chapter_designer(model = None):
+    """Build the direct Rotator chat model; chapter design has no tools to execute or files to browse."""
     if model is None:
         model = domains.settings.chat.service.build_chat_model(
             timeout_s = config.MODEL.timeout_s,
@@ -26,24 +18,6 @@ def chapter_designer(model = None):
     model_name = getattr(model, "model_name", None)
     if not isinstance(model_name, str) or not model_name or ":" in model_name:
         raise ValueError("the chapter designer requires a named OpenAI-compatible Rotator model")
-    key = f"openai:{model_name}"
-    harness_profiles._HARNESS_PROFILES.pop(key, None)
-    register_harness_profile(key, HarnessProfile(
-        base_system_prompt = "",
-        general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
-    ))
-    agent = create_deep_agent(
-        model = model,
-        system_prompt = prompts.pipeline.planner.chapter_designer.prompts.SYSTEM_PROMPT,
-        response_format = schemas.ChapterDesignAnswer,
-        middleware = [
-            *service.resilience(model_calls = params.MODEL_CALLS, with_tools = False),
-            middlewares.middleware.ToolAllowlistMiddleware(frozenset()),
-        ],
-        name = "dd_chapter_designer_v2",
-    )
-    tool_node = agent.nodes.get("tools")
-    available = getattr(getattr(tool_node, "bound", None), "_tools_by_name", None)
-    if not isinstance(available, dict) or set(available) - ai.dd.agents.params.STACK_TOOLS:
-        raise RuntimeError("DeepAgents exposed an unreviewed tool to the v2 chapter designer")
-    return agent
+    if not callable(getattr(model, "with_structured_output", None)):
+        raise TypeError("the chapter designer requires a chat model with structured-output support")
+    return model

@@ -5,10 +5,12 @@ from . import domain, params
 from .. import middlewares
 
 from collections.abc import Callable
+import json
 from typing import Any, TypeVar
 
 from deepagents.backends.utils import create_file_data
 from langchain.agents.middleware import ModelCallLimitMiddleware, ModelRetryMiddleware, ToolCallLimitMiddleware, ToolErrorMiddleware
+from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 
@@ -48,9 +50,12 @@ def file(content: str) -> dict[str, Any]:
 
 def request_config(extra: dict[str, Any] | None = None) -> dict[str, Any]:
     """The invoke config every agent call carries: usage is counted on the current (run, node) attribution."""
-    callbacks = [domains.settings.llm_counter.service.LLMCounterCallback()]
     merged = dict(extra or {})
-    merged["callbacks"] = [*(merged.get("callbacks") or []), *callbacks]
+    callbacks = list(merged.get("callbacks") or [])
+    callback_type = domains.settings.llm_counter.service.LLMCounterCallback
+    if not any(isinstance(callback, callback_type) for callback in callbacks):
+        callbacks.append(callback_type())
+    merged["callbacks"] = callbacks
     return merged
 
 
@@ -77,9 +82,12 @@ async def ask(
         "messages": [{"role": "user", "content": payload}],
         "files": files or {},
     }
+    failures: list[str] = []
 
     def usable(value: Any) -> bool:
         parsed = domain.structured_or_recovered(value, schema)
+        if parsed is None:
+            failures.append(domain.structured_failure_reason(value, schema))
         return parsed is not None and (check is None or check(parsed))
 
     result = await domains.settings.chat.service.resilient_ainvoke(
@@ -92,5 +100,74 @@ async def ask(
         meta.update(domain.rotator_meta(result))
     answer = domain.structured_or_recovered(result, schema)
     if answer is None:
-        raise ValueError(f"the {schema.__name__} agent ended {attempts} times without a valid {schema.__name__}")
+        detail = failures[-1] if failures else "no parse diagnostic was available"
+        raise ValueError(
+            f"the {schema.__name__} agent ended {attempts} times without a valid {schema.__name__}; {detail}"
+        )
     return answer
+
+
+async def ask_chat_model(
+    model: Any,
+    schema: type[Schema],
+    system_prompt: str,
+    payload: str,
+    *,
+    attempts: int,
+    wait_base_s: float,
+    config: dict[str, Any] | None = None,
+) -> Schema:
+    """Ask a tool-free model role for a schema, then make one bounded JSON-text recovery call.
+
+    This path is for tasks that do not need an agent loop or executable tools. It keeps the structured call's raw
+    message so function-call arguments and provider finish metadata remain inspectable when parsing fails.
+    """
+    messages = [SystemMessage(content = system_prompt), HumanMessage(content = payload)]
+    failures: list[str] = []
+
+    def usable(result: Any) -> bool:
+        parsed = domain.structured_or_recovered(result, schema)
+        if parsed is None:
+            failures.append(domain.structured_failure_reason(result, schema))
+        return parsed is not None
+
+    structured_result: Any = None
+    try:
+        structured = model.with_structured_output(schema, method = "function_calling", include_raw = True)
+        structured_result = await domains.settings.chat.service.resilient_ainvoke(
+            lambda: structured.ainvoke(messages, config = request_config(config)),
+            attempts = attempts,
+            wait_base_s = wait_base_s,
+            accept = usable,
+        )
+        answer = domain.structured_or_recovered(structured_result, schema)
+        if answer is not None:
+            return answer
+        failures.append(domain.structured_failure_reason(structured_result, schema))
+    except Exception as error:
+        # Keep provider response bodies and source text out of planner health metadata.
+        failures.append(f"function-call request failed ({type(error).__name__})")
+
+    fallback_instruction = (
+        "Return one JSON object only, with no Markdown fence or commentary. It must match this JSON Schema exactly:\n"
+        + json.dumps(schema.model_json_schema(), ensure_ascii = False)
+    )
+    try:
+        raw = await model.ainvoke(
+            [*messages, HumanMessage(content = fallback_instruction)],
+            config = request_config(config),
+        )
+        fallback_result = {"raw": raw}
+        answer = domain.structured_or_recovered(fallback_result, schema)
+        if answer is not None:
+            return answer
+        failures.append("JSON-text recovery: " + domain.structured_failure_reason(fallback_result, schema))
+    except Exception as error:
+        failures.append(f"JSON-text recovery failed ({type(error).__name__})")
+
+    detail = failures[-1] if failures else "no parse diagnostic was available"
+    first = failures[0] if len(failures) > 1 else "structured response was unusable"
+    raise ValueError(
+        f"the {schema.__name__} model produced no valid answer after {attempts} structured attempt(s) and one JSON-text recovery; "
+        f"{first}; {detail}"
+    )

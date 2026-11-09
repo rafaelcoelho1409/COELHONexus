@@ -18,9 +18,11 @@ import {
 } from "../domain/ingestion-progress";
 import type { RunStatus } from "../entities";
 import { useIngestionUsage } from "../hooks/use-dd-data";
+import { useIngestionGraph } from "../hooks/use-stage-queries";
 import { ActionButton } from "./action-button";
 import { AgenticProgress, ExtractionProgress } from "./ingestion-progress";
 import { IngestionNodeSheet, IngestionUsageSheet, PipelineUsageTotal } from "./ingestion-usage";
+import { LangGraphTopology } from "./langgraph-topology";
 import { StageNodes } from "./stage-parts";
 import { ToggleGroup } from "./toggle-group";
 
@@ -37,6 +39,7 @@ const NO_VALUES: Record<string, unknown> = {};
 const MODES = [
   { id: "graph", label: "Graph" },
   { id: "list", label: "List" },
+  { id: "langgraph", label: "LangGraph" },
 ] as const;
 
 type Progress = NonNullable<RunStatus["progress"]>;
@@ -86,6 +89,7 @@ export function IngestionPipeline({
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
+  const graphTopology = useIngestionGraph();
   const runStatus = progress?.status ?? null;
   const hasRun = runId !== null;
   const terminal = isRunTerminal(runStatus);
@@ -197,7 +201,7 @@ export function IngestionPipeline({
           </header>
           <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-[minmax(0,3fr)_minmax(16rem,1fr)]">
             <div className="min-w-0">
-              {/* The same graph and list as the planner and synth stages, fed the three ingestion nodes. */}
+              {/* The same run views as Planner and Synth, fed Ingestion's three nodes and compiled graph. */}
               {mode === "graph" ? (
                 <StageFlow
                   stage="ingestion"
@@ -209,7 +213,7 @@ export function IngestionPipeline({
                   live={live}
                   onOpen={setSelectedNodeId}
                 />
-              ) : (
+              ) : mode === "list" ? (
                 <StageNodes
                   label="Agentic pipeline nodes"
                   views={nodeViews}
@@ -217,6 +221,8 @@ export function IngestionPipeline({
                   liveLines={NO_LIVE_LINES}
                   onOpen={setSelectedNodeId}
                 />
+              ) : (
+                <LangGraphTopology title="Ingestion Agentic AI" source={graphTopology} />
               )}
             </div>
             <div className="flex min-w-0 flex-col">

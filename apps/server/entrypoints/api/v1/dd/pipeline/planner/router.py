@@ -2,7 +2,7 @@
 is the HTTP/SSE layer. SSE via Redis pub/sub, cancel via Redis flag,
 checkpoints in Postgres."""
 from __future__ import annotations
-import domains, infra
+import ai, domains, infra
 import domains.dd.pipeline.ai.task
 from . import params
 
@@ -21,12 +21,15 @@ router = APIRouter()
 
 
 @router.get("/info")
-async def planner_info() -> dict:
+async def planner_info(response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
     node_order = list(domains.dd.pipeline.ai.service.node_order())
+    graph = ai.dd.graphs.pipeline.planner.graphs.planner_graph(checkpointer = None)
     return {
         "planner_version": "v2" if "page_cards" in node_order else "v1",
         "node_order": node_order,
         "implemented": node_order,
+        "graph_mermaid": ai.dd.graphs.topology.mermaid_source(graph),
         "modes": [
             {"key": "llm",       "label": "LLM-only",        "enabled": True},
             {"key": "classical", "label": "Classical + LLM", "enabled": False},

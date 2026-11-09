@@ -77,7 +77,10 @@ export function BdOverlaysProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  const value = useMemo<OverlaysValue>(() => ({ notice: showNotice, confirm }), [showNotice, confirm]);
+  const value = useMemo<OverlaysValue>(
+    () => ({ notice: showNotice, toast: showNotice, confirm }),
+    [showNotice, confirm],
+  );
 
   return (
     <OverlaysContext.Provider value={value}>

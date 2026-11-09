@@ -1,25 +1,16 @@
 """Read-only LangGraph node for one evidence-grounded page audit."""
 from __future__ import annotations
-import domains
 from . import domain, params
 from .... import agents
 
-from typing import Any, Protocol
-
-
-class PageAuditor(Protocol):
-    async def ainvoke(
-        self,
-        input: dict[str, Any],
-        config: dict[str, Any] | None = None,
-    ) -> dict[str, Any]: ...
+from typing import Any
 
 
 async def audit_page(
     framework_slug: str,
     page: dict[str, Any],
     markdown: str,
-    auditor: PageAuditor,
+    auditor: Any,
     *,
     config: dict[str, Any] | None = None,
 ) -> tuple[agents.schemas.PageAssessment, list[str]]:
@@ -29,29 +20,21 @@ async def audit_page(
             "split or escalate it instead of truncating"
         )
 
-    request = {
-        "messages": [{
-            "role": "user",
-            "content": domain.user_payload(
-                framework_slug,
-                page["idx"],
-                page["url"],
-                page["title"],
-                markdown,
-                domain.candidates(markdown),
-            ),
-        }],
-    }
-    # Retry transient provider failures and occasional non-structured answers in one bounded loop.
-    result = await domains.settings.chat.service.resilient_ainvoke(
-        lambda: auditor.ainvoke(request, config = config),
+    request = domain.user_payload(
+        framework_slug,
+        page["idx"],
+        page["url"],
+        page["title"],
+        markdown,
+        domain.candidates(markdown),
+    )
+    assessment = await agents.service.ask_chat_model(
+        auditor,
+        agents.schemas.PageAssessment,
+        agents.ingestion.page_auditor.domain.system_prompt(),
+        request,
         attempts = params.MAX_ATTEMPTS,
         wait_base_s = params.RETRY_WAIT_BASE_S,
-        accept = lambda value: agents.domain.structured_or_recovered(value, agents.schemas.PageAssessment) is not None,
+        config = config,
     )
-    assessment = agents.domain.structured_or_recovered(result, agents.schemas.PageAssessment)
-    if assessment is not None:
-        return domain.sanitize_assessment(assessment, markdown = markdown)
-    raise ValueError(
-        f"page auditor ended {params.MAX_ATTEMPTS} times without a structured PageAssessment for page {page['idx']}"
-    )
+    return domain.sanitize_assessment(assessment, markdown = markdown)

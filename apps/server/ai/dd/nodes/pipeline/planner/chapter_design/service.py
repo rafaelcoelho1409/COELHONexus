@@ -2,7 +2,7 @@
 from __future__ import annotations
 import domains
 from . import domain, params, versions
-from ..... import agents, graphs, skills
+from ..... import agents, graphs, prompts, skills
 
 import asyncio
 import json
@@ -179,11 +179,16 @@ async def _ask_designer(context: Context, payload: str, *, attempts: int = param
     )
     if not skill:
         raise RuntimeError("the chapter-designer skill is missing or empty")
-    request = f"{payload}\n\nApply these chapter-design skill instructions:\n\n{skill}"
-    return await agents.service.ask(
+    system_prompt = (
+        prompts.pipeline.planner.chapter_designer.prompts.SYSTEM_PROMPT
+        + "\n\nChapter-design skill:\n\n"
+        + skill
+    )
+    return await agents.service.ask_chat_model(
         context.agents.chapter_designer(),
         agents.pipeline.planner.chapter_designer.schemas.ChapterDesignAnswer,
-        request,
+        system_prompt,
+        payload,
         attempts = attempts,
         wait_base_s = params.RETRY_WAIT_S,
     )
@@ -544,6 +549,7 @@ async def chapter_design_run(state: graphs.pipeline.planner.states.PlannerState,
     stats = {
         **reconciliation,
         "planner_version": "v2",
+        "structured_output_strategy": "tool_call",
         "manifest_hash": manifest,
         "n_pages_in": len(relevant_files),
         "n_pages_assigned": n_assigned,

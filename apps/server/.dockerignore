@@ -51,8 +51,11 @@
 **/*.md
 !ai/bd/prompts/ingestion/**/SYSTEM.md
 !ai/bd/prompts/distill/**/SYSTEM.md
+!ai/bd/prompts/rag/**/SYSTEM.md
 !ai/bd/skills/ingestion/**/*.md
 !ai/dd/prompts/ingestion/**/SYSTEM.md
 !ai/dd/skills/ingestion/**/*.md
 !ai/dd/prompts/pipeline/**/SYSTEM.md
 !ai/dd/skills/pipeline/**/*.md
+# YCS graph extraction loads its system prompt from disk at import time.
+!ai/ycs/prompts/**/SYSTEM.md

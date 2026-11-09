@@ -16,6 +16,7 @@ import { SynthUsageSheet } from "./usage-sheet";
 /** Says whose nodes the board shows: the nodes belong to one chapter's run, and with none picked every node
  * would read "pending" — which looks like nothing was written when the whole book is. */
 function nodeBoardCaption(synth: SynthRunController): string {
+  if (synth.views.length === 0) return "Compiled Synth topology · run one chapter to see execution status.";
   const picked = synth.cells.find((cell) => cell.selected);
   if (picked) return `How each node ran for “${picked.title}”`;
   if (synth.running) return "Nodes of the chapter being written";
@@ -56,18 +57,16 @@ export function SynthRunPanel({
         ) : null}
       </RunBar>
       <div className="flex min-w-0 flex-col gap-4">
-        {synth.views.length > 0 ? (
-          <StageNodeBoard
-            stage="synth"
-            views={synth.views}
-            values={synth.values}
-            liveLines={synth.liveLines}
-            events={synth.events}
-            threadId={synth.canvasThreadId}
-            live={synth.running}
-            caption={nodeBoardCaption(synth)}
-          />
-        ) : null}
+        <StageNodeBoard
+          stage="synth"
+          views={synth.views}
+          values={synth.values}
+          liveLines={synth.liveLines}
+          events={synth.events}
+          threadId={synth.canvasThreadId}
+          live={synth.running}
+          caption={nodeBoardCaption(synth)}
+        />
         {synth.error ? (
           <p role="alert" className="text-xs text-destructive-text">
             {synth.error}

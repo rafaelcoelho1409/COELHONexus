@@ -8,9 +8,8 @@
   overflow-wrap: anywhere;
 }
 
-/* Book prose gets a dedicated reading measure and a slightly larger type size. The font class is placed only on
-   rendered BD book content, leaving Markdown in other features and the surrounding reader controls unchanged. */
-.bd-book-page-reader .markdown {
+/* Long-form book and study prose share a dedicated reading measure and slightly larger type size. */
+.reader-prose .markdown {
   max-width: 68ch;
   margin-inline: auto;
   font-size: 1.0625rem;
@@ -19,7 +18,7 @@
 }
 
 @media (min-width: 40rem) {
-  .bd-book-page-reader .markdown {
+  .reader-prose .markdown {
     font-size: 1.125rem;
   }
 }

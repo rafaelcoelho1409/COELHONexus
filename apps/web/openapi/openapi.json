@@ -1770,6 +1770,235 @@
         }
       }
     },
+    "/api/v1/bd/rag/capabilities": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Capabilities",
+        "operationId": "get_bd_rag_capabilities",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RagCapabilities"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/rag/{book_id}/runs/{run_id}/index": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Index",
+        "operationId": "get_bd_rag_book_id_runs_run_id_index",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RagIndexStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Start Index",
+        "operationId": "post_bd_rag_book_id_runs_run_id_index",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RagIndexStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Wipe Index",
+        "operationId": "delete_bd_rag_book_id_runs_run_id_index",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RagWipeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/rag/{book_id}/runs/{run_id}/index/cancel": {
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Cancel Index",
+        "operationId": "post_bd_rag_book_id_runs_run_id_index_cancel",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RagIndexStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dd/catalog": {
       "get": {
         "tags": [
@@ -2273,6 +2502,30 @@
                   },
                   "type": "array",
                   "title": "Response Get Dd Ingestion"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/ingestion/agentic-graph": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Agentic Graph",
+        "description": "The compiled Ingestion Agentic AI topology, with no page processing or model calls.",
+        "operationId": "get_dd_ingestion_agentic_graph",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Dd Ingestion Agentic Graph"
                 }
               }
             }
@@ -6223,7 +6476,7 @@
           "YouTube Content Search"
         ],
         "summary": "Stop Videos Pipeline",
-        "description": "Cooperatively cancel `extract_id`: sets a Redis flag `domains.ycs.extract.task.extract_videos`'\nPlaywright chunk loop and `ingest_to_neo4j`'s retry-pass loop poll at safe\ncheckpoints, then revokes (non-terminating) any phase/per-video task still\nqueued but not yet started. Preserves SUCCESS-state phases; idempotent\nQdrant upserts and Neo4j skip-on-video_id let a rerun pick up cleanly.\n\n2026-09-14: no longer sends SIGTERM to already-running tasks — that\nwas observed live to wedge Celery's prefork pool (see\n`pipeline_task.service.revoke_pipeline_phases` docstring for the\nfull incident). A task already past its last checkpoint when Stop\nis clicked finishes that unit of work (one Playwright chunk of up\nto 10 videos, or one Neo4j retry pass) before noticing the flag —\nbounded, not indefinite.",
+        "description": "Cooperatively cancel `extract_id`: sets a Redis flag `domains.ycs.ingestion.extract.task.extract_videos`'\nPlaywright chunk loop and `ingest_to_neo4j`'s retry-pass loop poll at safe\ncheckpoints, then revokes (non-terminating) any phase/per-video task still\nqueued but not yet started. Preserves SUCCESS-state phases; idempotent\nQdrant upserts and Neo4j skip-on-video_id let a rerun pick up cleanly.\n\n2026-09-14: no longer sends SIGTERM to already-running tasks — that\nwas observed live to wedge Celery's prefork pool (see\n`pipeline_task.service.revoke_pipeline_phases` docstring for the\nfull incident). A task already past its last checkpoint when Stop\nis clicked finishes that unit of work (one Playwright chunk of up\nto 10 videos, or one Neo4j retry pass) before noticing the flag —\nbounded, not indefinite.",
         "operationId": "post_ycs_content_videos_pipeline_extract_id_stop",
         "parameters": [
           {
@@ -6313,7 +6566,7 @@
           "YouTube Content Search"
         ],
         "summary": "Preview Videos",
-        "description": "yt-dlp metadata fetch for a comma-separated `ids=` list. Same `domains.ycs.content.schemas.EnumerationResponse` shape\nas channel/playlist so picker.js renders all three tabs with one shared module.",
+        "description": "yt-dlp metadata fetch for a comma-separated `ids=` list. Same `domains.ycs.source.content.schemas.EnumerationResponse` shape\nas channel/playlist so picker.js renders all three tabs with one shared module.",
         "operationId": "get_ycs_content_videos_preview",
         "parameters": [
           {
@@ -9259,6 +9512,19 @@
         "title": "RAGSearchRequest",
         "description": "Adaptive RAG question. `force_mode` overrides auto-classification (fast/standard/deep)."
       },
+      "RagCapabilities": {
+        "properties": {
+          "execution_enabled": {
+            "type": "boolean",
+            "title": "Execution Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "execution_enabled"
+        ],
+        "title": "RagCapabilities"
+      },
       "RagIndexStatus": {
         "properties": {
           "book_id": {
@@ -9280,9 +9546,66 @@
               "queued",
               "running",
               "done",
-              "failed"
+              "failed",
+              "cancelled"
             ],
             "title": "Status"
+          },
+          "workflow_version": {
+            "type": "string",
+            "title": "Workflow Version",
+            "default": "1.0"
+          },
+          "graph_extraction_prompt_version": {
+            "type": "string",
+            "title": "Graph Extraction Prompt Version",
+            "default": "2"
+          },
+          "vector_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "done",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Vector Status",
+            "default": "pending"
+          },
+          "graph_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "done",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Graph Status",
+            "default": "pending"
+          },
+          "current_stage": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "preparing",
+                  "vector_index",
+                  "graph_materialization",
+                  "complete"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Stage"
+          },
+          "cancel_requested": {
+            "type": "boolean",
+            "title": "Cancel Requested",
+            "default": false
           },
           "attempt": {
             "type": "integer",
@@ -9342,6 +9665,16 @@
             "title": "Point Count",
             "default": 0
           },
+          "graph_node_count": {
+            "type": "integer",
+            "title": "Graph Node Count",
+            "default": 0
+          },
+          "graph_relationship_count": {
+            "type": "integer",
+            "title": "Graph Relationship Count",
+            "default": 0
+          },
           "created_at": {
             "anyOf": [
               {
@@ -9395,6 +9728,34 @@
           "status"
         ],
         "title": "RagIndexStatus"
+      },
+      "RagWipeResponse": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "distill_run_id": {
+            "type": "string",
+            "title": "Distill Run Id"
+          },
+          "wiped": {
+            "type": "boolean",
+            "title": "Wiped"
+          },
+          "objects_deleted": {
+            "type": "integer",
+            "title": "Objects Deleted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "distill_run_id",
+          "wiped",
+          "objects_deleted"
+        ],
+        "title": "RagWipeResponse"
       },
       "RawQueryHit": {
         "properties": {

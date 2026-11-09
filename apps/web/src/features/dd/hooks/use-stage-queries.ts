@@ -9,7 +9,7 @@ import {
   getDdPipelineSynthInfoQueryKey,
 } from "@/shared/api";
 
-import { fetchStageInfo } from "../api";
+import { fetchIngestionGraph, fetchStageInfo } from "../api";
 import { type RunStage, STAGE_INFO_STALE_MS } from "../params";
 
 /** One definition for `useStageInfo` and for the recovery code that reads the cache imperatively. */
@@ -25,6 +25,18 @@ export function stageInfoQuery(stage: RunStage) {
 /** Which graph nodes the server implements (null until known or when the call fails). */
 export function useStageInfo(stage: RunStage) {
   return useQuery(stageInfoQuery(stage)).data ?? null;
+}
+
+/** Source for the compiled Ingestion graph, separate from the live run-status graph. */
+export function useIngestionGraph() {
+  return (
+    useQuery({
+      queryKey: ["dd", "ingestion", "agentic-graph"],
+      queryFn: fetchIngestionGraph,
+      staleTime: STAGE_INFO_STALE_MS,
+      retry: false,
+    }).data?.graph_mermaid ?? null
+  );
 }
 
 /** Tells every stage view to re-read the cross-stage run registry. */

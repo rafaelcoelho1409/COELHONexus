@@ -236,8 +236,13 @@ export const stageInfoSchema = z.looseObject({
   implemented: z.array(z.string()),
   planner_version: z.enum(["v1", "v2"]).optional(),
   synth_version: z.enum(["v1", "v2"]).optional(),
+  graph_mermaid: z.string().optional(),
 });
 export type StageInfo = z.infer<typeof stageInfoSchema>;
+
+/** GET /api/v1/dd/ingestion/agentic-graph — source from the compiled Ingestion graph. */
+export const graphTopologySchema = z.looseObject({ graph_mermaid: z.string() });
+export type GraphTopology = z.infer<typeof graphTopologySchema>;
 
 /** GET /api/v1/dd/{stage}/recent — latest checkpoint thread per slug. */
 export const stageRecentSchema = z.looseObject({

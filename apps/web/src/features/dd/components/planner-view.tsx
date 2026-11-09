@@ -38,18 +38,20 @@ export function PlannerBoard({
         {"plan_path" in planner.values && !planner.running ? <PlanHealth slug={slug} /> : null}
       </RunBar>
       <div className="flex min-w-0 flex-col gap-4">
-        {planner.views.length > 0 ? (
-          <StageNodeBoard
-            stage="planner"
-            views={planner.views}
-            values={planner.values}
-            liveLines={planner.liveLines}
-            events={planner.events}
-            threadId={planner.threadId}
-            live={planner.running}
-            caption={stageCaption(planner.views, planner.progress, planner.next)}
-          />
-        ) : null}
+        <StageNodeBoard
+          stage="planner"
+          views={planner.views}
+          values={planner.values}
+          liveLines={planner.liveLines}
+          events={planner.events}
+          threadId={planner.threadId}
+          live={planner.running}
+          caption={
+            planner.views.length > 0
+              ? stageCaption(planner.views, planner.progress, planner.next)
+              : "Compiled Planner topology · run Planner to see execution status."
+          }
+        />
         {planner.error ? (
           <p role="alert" className="text-xs text-destructive-text">
             {planner.error}

@@ -1,7 +1,7 @@
 """Read-only view of the per-framework MinIO content (canonical post-
 finalize corpus). Anything here survives Redis TTL."""
 
-import domains, infra
+import ai, domains, infra
 import domains.dd.ingestion.ai.task
 from . import runs, schemas
 
@@ -43,6 +43,14 @@ async def list_library() -> list[dict]:
             )
         )
     return domains.dd.ingestion.storage.domain.newest_ingested_first(out)
+
+
+@router.get("/agentic-graph")
+async def agentic_graph(response: Response) -> dict:
+    """The compiled Ingestion Agentic AI topology, with no page processing or model calls."""
+    response.headers["Cache-Control"] = "no-store"
+    graph = ai.dd.graphs.ingestion.graphs.ingestion_graph(checkpointer = None)
+    return {"graph_mermaid": ai.dd.graphs.topology.mermaid_source(graph)}
 
 
 @router.get("/{slug}/manifest")

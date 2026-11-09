@@ -10,11 +10,11 @@ import { useState } from "react";
 
 import { usePipelineTracking } from "../hooks/use-pipeline-tracking";
 import { stageHref } from "../params";
-import type { Step } from "./pipeline-steps";
-import { StatusBadge } from "./status-badge";
 import { IngestionAgenticStructure } from "./ingestion-agentic-structure";
 import { LibraryPanel } from "./library-panel";
 import { PipelinePanel } from "./pipeline-panel";
+import type { Step } from "./pipeline-steps";
+import { StatusBadge } from "./status-badge";
 
 const IDLE_STEPS: ReadonlyArray<Step> = [
   {
@@ -50,7 +50,7 @@ export function IngestionStage(): JSX.Element {
   const bump = () => setRefreshTick((tick) => tick + 1);
 
   return (
-    <div className="grid min-w-0 grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,35fr)_minmax(0,65fr)]">
+    <div className="grid min-w-0 grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,35fr)_minmax(0,65fr)]">
       <div className="min-w-0">
         {tracking ? (
           // A new dispatch or retry starts with fresh panel controls and node selection.
@@ -74,7 +74,10 @@ export function IngestionStage(): JSX.Element {
               </Link>
               ; its progress will show here.
             </p>
-            <IngestionAgenticStructure steps={IDLE_STEPS} />
+            <IngestionAgenticStructure
+              steps={IDLE_STEPS}
+              caption="Target flow: Playwright transcript retrieval → Elasticsearch → Qdrant and Neo4j."
+            />
           </section>
         )}
       </div>

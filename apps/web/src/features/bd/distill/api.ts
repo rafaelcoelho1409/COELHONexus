@@ -1,12 +1,10 @@
 import {
   client,
   getBdIngestionBookIdAgenticRunsAgenticRunIdContentSelection,
-  getBdDistillBookIdRunsRunIdRagIndex,
   deleteBdDistillBookIdRunsRunId,
   postBdDistillBookIdRuns,
   postBdDistillBookIdRunsRunIdCancel,
   postBdDistillBookIdRunsRunIdResume,
-  postBdDistillBookIdRunsRunIdRagIndex,
   putBdIngestionBookIdAgenticRunsAgenticRunIdContentSelection,
 } from "@/shared/api";
 import {
@@ -14,7 +12,6 @@ import {
   distillCancelSchema,
   distillRunStartSchema,
   distillWipeSchema,
-  ragIndexStatusSchema,
 } from "./entities";
 
 export function distillEventsUrl(bookId: string, runId: string): string {
@@ -69,22 +66,6 @@ export async function wipeDistillRun(bookId: string, runId: string) {
     throwOnError: true,
   });
   return distillWipeSchema.parse(result.data);
-}
-
-export async function getDistillRagIndex(bookId: string, runId: string) {
-  const result = await getBdDistillBookIdRunsRunIdRagIndex({
-    path: { book_id: bookId, run_id: runId },
-    throwOnError: true,
-  });
-  return ragIndexStatusSchema.parse(result.data);
-}
-
-export async function retryDistillRagIndex(bookId: string, runId: string) {
-  const result = await postBdDistillBookIdRunsRunIdRagIndex({
-    path: { book_id: bookId, run_id: runId },
-    throwOnError: true,
-  });
-  return ragIndexStatusSchema.parse(result.data);
 }
 
 export async function getContentSelection(bookId: string, agenticRunId: string) {
