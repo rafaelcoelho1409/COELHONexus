@@ -4827,9 +4827,17 @@
             "schema": {
               "enum": [
                 "coelho_search",
-                "tavily",
+                "linkup",
+                "you",
+                "parallel",
                 "exa",
-                "jina"
+                "geekflare",
+                "tavily",
+                "tinyfish",
+                "firecrawl",
+                "serper",
+                "jina",
+                "serpapi"
               ],
               "type": "string",
               "title": "Provider Id"
@@ -4885,9 +4893,17 @@
             "schema": {
               "enum": [
                 "coelho_search",
-                "tavily",
+                "linkup",
+                "you",
+                "parallel",
                 "exa",
-                "jina"
+                "geekflare",
+                "tavily",
+                "tinyfish",
+                "firecrawl",
+                "serper",
+                "jina",
+                "serpapi"
               ],
               "type": "string",
               "title": "Provider Id"
@@ -10042,9 +10058,17 @@
                 "type": "string",
                 "enum": [
                   "coelho_search",
-                  "tavily",
+                  "linkup",
+                  "you",
+                  "parallel",
                   "exa",
-                  "jina"
+                  "geekflare",
+                  "tavily",
+                  "tinyfish",
+                  "firecrawl",
+                  "serper",
+                  "jina",
+                  "serpapi"
                 ]
               },
               {
@@ -10081,9 +10105,17 @@
             "type": "string",
             "enum": [
               "coelho_search",
-              "tavily",
+              "linkup",
+              "you",
+              "parallel",
               "exa",
-              "jina"
+              "geekflare",
+              "tavily",
+              "tinyfish",
+              "firecrawl",
+              "serper",
+              "jina",
+              "serpapi"
             ],
             "title": "Provider Id"
           },
@@ -10102,9 +10134,24 @@
             ],
             "title": "Endpoint"
           },
+          "account_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Url"
+          },
           "available": {
             "type": "boolean",
             "title": "Available"
+          },
+          "key_required": {
+            "type": "boolean",
+            "title": "Key Required"
           },
           "has_key": {
             "type": "boolean",
@@ -10175,7 +10222,9 @@
           "provider_id",
           "name",
           "endpoint",
+          "account_url",
           "available",
+          "key_required",
           "has_key",
           "key_source",
           "key_last4",
@@ -10477,9 +10526,17 @@
                 "type": "string",
                 "enum": [
                   "coelho_search",
-                  "tavily",
+                  "linkup",
+                  "you",
+                  "parallel",
                   "exa",
-                  "jina"
+                  "geekflare",
+                  "tavily",
+                  "tinyfish",
+                  "firecrawl",
+                  "serper",
+                  "jina",
+                  "serpapi"
                 ]
               },
               {
@@ -10513,9 +10570,17 @@
             "type": "string",
             "enum": [
               "coelho_search",
-              "tavily",
+              "linkup",
+              "you",
+              "parallel",
               "exa",
-              "jina"
+              "geekflare",
+              "tavily",
+              "tinyfish",
+              "firecrawl",
+              "serper",
+              "jina",
+              "serpapi"
             ],
             "title": "Provider Id"
           },

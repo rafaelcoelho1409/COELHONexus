@@ -624,13 +624,16 @@ def best_seen_key(pass_rate: float, n_pre_passed: int, n_checks: int = len(DETER
 
 def aggregate_pass_rate(
     results: list[schemas.CriterionResult],
+    *,
+    required_criteria: tuple[str, ...] = (),
 ) -> tuple[int, int, float, bool]:
-    """Compute (n_passed, n_total, pass_rate, chapter_passed) from
-    the full criterion list."""
+    """Compute the score and pass decision; named learning-critical gates must pass even when the overall score clears threshold."""
     n_total = len(results)
     n_passed = sum(1 for r in results if r.passed)
     pass_rate = (n_passed / n_total) if n_total else 0.0
-    chapter_passed = pass_rate >= params.PASS_THRESHOLD
+    by_name = {result.name: result for result in results}
+    required_passed = all(by_name.get(name) is not None and by_name[name].passed for name in required_criteria)
+    chapter_passed = pass_rate >= params.PASS_THRESHOLD and required_passed
     return n_passed, n_total, pass_rate, chapter_passed
 
 

@@ -250,6 +250,7 @@ async def queue_resume(book_id: str, run_id: str) -> dict[str, Any]:
 async def request_cancel(book_id: str, run_id: str) -> dict[str, Any]:
     if not _safe_segment(book_id) or not _safe_segment(run_id):
         raise ValueError("book_id and run_id must be safe path segments")
+    storage = infra.minio.service.get_storage()
     async with (
         infra.redis.service.client() as redis,
         redis.lock(
@@ -258,10 +259,23 @@ async def request_cancel(book_id: str, run_id: str) -> dict[str, Any]:
             blocking_timeout = 30,
         ),
     ):
-        manifest = await read_run(book_id, run_id)
+        manifest = await read_run(book_id, run_id, storage = storage)
         if manifest is None:
             raise FileNotFoundError(f"Distill run {run_id} was not found")
-        if manifest["status"] in {"queued", "running"}:
+        if manifest["status"] == "queued":
+            manifest["status"] = "cancelled"
+            manifest["finished_at"] = max(time.time(), manifest["created_at"])
+            manifest["error"] = None
+            manifest["progress"]["current_node"] = None
+            manifest = await _write_manifest(storage, manifest)
+            await progress.emit(
+                book_id,
+                run_id,
+                "run_cancelled",
+                status = "cancelled",
+                progress = manifest["progress"],
+            )
+        elif manifest["status"] == "running":
             await progress.request_cancel(book_id, run_id)
             await progress.emit(book_id, run_id, "run_cancel_requested", status = manifest["status"])
         return {"book_id": book_id, "run_id": run_id, "status": manifest["status"]}
@@ -273,71 +287,71 @@ async def wipe_run(book_id: str, run_id: str) -> dict[str, Any]:
         raise ValueError("book_id and run_id must be safe path segments")
     storage = infra.minio.service.get_storage()
     try:
-        async with infra.redis.service.client() as redis:
-            async with (
-                redis.lock(
-                    domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
-                    timeout = 3600,
-                    blocking_timeout = 30,
-                ),
-                redis.lock(
-                    f"coelhonexus:bd:distill:pdf:{book_id}:{run_id}",
-                    timeout = 3600,
-                    blocking_timeout = 30,
-                ),
-                redis.lock(
-                    domains.bd.rag.keys.enqueue_lock_key(book_id, run_id),
-                    timeout = 120,
-                    blocking_timeout = 30,
-                ),
-                redis.lock(
-                    domains.bd.rag.keys.index_lock_key(book_id, run_id),
-                    timeout = domains.bd.rag.params.INDEX_LOCK_TIMEOUT_S,
-                    blocking_timeout = 1,
-                ),
-            ):
-                manifest = await read_run(book_id, run_id, storage = storage)
-                if manifest is None:
-                    raise FileNotFoundError(f"Distill run {run_id} was not found")
-                if manifest["status"] in {"queued", "running"}:
-                    raise ValueError("stop the Distill run and wait for it to finish before wiping it")
-                runs = await list_runs(book_id, storage = storage)
-                if any(run["status"] in {"queued", "running"} for run in runs):
-                    raise ValueError("stop the active Distill run before wiping another run")
-                index_manifest = await domains.bd.rag.service.read_index(book_id, run_id, storage = storage)
-                if index_manifest is not None:
-                    await domains.bd.rag.service.delete_run_points(book_id, run_id)
-                    await domains.bd.rag.service.delete_graph_run(book_id, run_id)
-                replacement = next(
-                    (run for run in runs
-                     if run["run_id"] != run_id and run["extraction_run_id"] == manifest["extraction_run_id"]),
-                    None,
-                )
-                thread_id = f"bd-distill:{book_id}:{manifest['extraction_run_id']}:{run_id}"
-                checkpointer = await infra.postgres.service.init_checkpointer()
-                await checkpointer.adelete_thread(thread_id)
-                removed = await storage.delete_prefix(keys.run_prefix(book_id, run_id))
-                await domains.settings.llm_counter.service.delete_run("bd", run_id)
-                await progress.clear(book_id, run_id)
-                pointer_key = keys.current_run_key(book_id)
-                if await storage.exists(pointer_key):
-                    try:
-                        pointer = json.loads(await storage.read_text(pointer_key))
-                    except json.JSONDecodeError:
-                        pointer = None
-                    if isinstance(pointer, dict) and pointer.get("run_id") == run_id:
-                        await storage.write(
-                            pointer_key,
-                            json.dumps(
-                                {
-                                    "run_id": replacement["run_id"] if replacement else None,
-                                    "extraction_run_id": manifest["extraction_run_id"],
-                                },
-                                separators = (",", ":"),
-                            ),
-                            content_type = params.JSON_TYPE,
-                        )
-                return {"book_id": book_id, "run_id": run_id, "wiped": True, "objects_deleted": removed}
+        async with (
+            infra.redis.service.client() as redis,
+            redis.lock(
+                domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+                timeout = 3600,
+                blocking_timeout = 30,
+            ),
+            redis.lock(
+                f"coelhonexus:bd:distill:pdf:{book_id}:{run_id}",
+                timeout = 3600,
+                blocking_timeout = 30,
+            ),
+            redis.lock(
+                domains.bd.rag.keys.enqueue_lock_key(book_id, run_id),
+                timeout = 120,
+                blocking_timeout = 30,
+            ),
+            redis.lock(
+                domains.bd.rag.keys.index_lock_key(book_id, run_id),
+                timeout = domains.bd.rag.params.INDEX_LOCK_TIMEOUT_S,
+                blocking_timeout = 1,
+            ),
+        ):
+            manifest = await read_run(book_id, run_id, storage = storage)
+            if manifest is None:
+                raise FileNotFoundError(f"Distill run {run_id} was not found")
+            if manifest["status"] in {"queued", "running"}:
+                raise ValueError("stop the Distill run and wait for it to finish before wiping it")
+            runs = await list_runs(book_id, storage = storage)
+            if any(run["status"] in {"queued", "running"} for run in runs):
+                raise ValueError("stop the active Distill run before wiping another run")
+            index_manifest = await domains.bd.rag.service.read_index(book_id, run_id, storage = storage)
+            if index_manifest is not None:
+                await domains.bd.rag.service.delete_run_points(book_id, run_id)
+                await domains.bd.rag.service.delete_graph_run(book_id, run_id)
+            replacement = next(
+                (run for run in runs
+                 if run["run_id"] != run_id and run["extraction_run_id"] == manifest["extraction_run_id"]),
+                None,
+            )
+            thread_id = f"bd-distill:{book_id}:{manifest['extraction_run_id']}:{run_id}"
+            checkpointer = await infra.postgres.service.init_checkpointer()
+            await checkpointer.adelete_thread(thread_id)
+            removed = await storage.delete_prefix(keys.run_prefix(book_id, run_id))
+            await domains.settings.llm_counter.service.delete_run("bd", run_id)
+            await progress.clear(book_id, run_id)
+            pointer_key = keys.current_run_key(book_id)
+            if await storage.exists(pointer_key):
+                try:
+                    pointer = json.loads(await storage.read_text(pointer_key))
+                except json.JSONDecodeError:
+                    pointer = None
+                if isinstance(pointer, dict) and pointer.get("run_id") == run_id:
+                    await storage.write(
+                        pointer_key,
+                        json.dumps(
+                            {
+                                "run_id": replacement["run_id"] if replacement else None,
+                                "extraction_run_id": manifest["extraction_run_id"],
+                            },
+                            separators = (",", ":"),
+                        ),
+                        content_type = params.JSON_TYPE,
+                    )
+            return {"book_id": book_id, "run_id": run_id, "wiped": True, "objects_deleted": removed}
     except infra.redis.service.LockError as error:
         raise ValueError("a Distill retrieval index is still processing; wait for it before wiping this run") from error
 
@@ -378,6 +392,33 @@ async def read_html(book_id: str, run_id: str) -> str:
     if hashlib.sha256(content.encode("utf-8")).hexdigest() != manifest.get("html_sha256"):
         raise ValueError("the stored Learning Guide HTML failed its integrity check")
     return content
+
+
+async def mark_run_started(book_id: str, run_id: str) -> dict[str, Any]:
+    """Promote a queued run as soon as a worker accepts it, before checkpointer setup."""
+    storage = infra.minio.service.get_storage()
+    async with (
+        infra.redis.service.client() as redis,
+        redis.lock(
+            domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+            timeout = 120,
+            blocking_timeout = 30,
+        ),
+    ):
+        manifest = await read_run(book_id, run_id, storage = storage)
+        if manifest is None:
+            raise FileNotFoundError(f"Distill run {run_id} was not found")
+        if manifest["status"] in {"done", "cancelled"}:
+            return manifest
+        if manifest["status"] not in {"queued", "running"}:
+            raise ValueError("only queued or running Distill runs can start")
+        if manifest["status"] == "queued":
+            manifest["status"] = "running"
+            manifest["error"] = None
+            manifest["finished_at"] = None
+            manifest = await _write_manifest(storage, manifest)
+            await progress.emit(book_id, run_id, "run_started", status = "running", progress = manifest["progress"])
+        return manifest
 
 
 async def read_pdf(book_id: str, run_id: str) -> bytes:
@@ -439,7 +480,7 @@ async def run_distill(
     manifest = await read_run(book_id, run_id, storage = storage)
     if manifest is None:
         raise FileNotFoundError(f"Distill run {run_id} was not found")
-    if manifest["status"] == "done":
+    if manifest["status"] in {"done", "cancelled"}:
         return manifest
     if manifest["status"] not in {"queued", "running"}:
         raise ValueError("only queued or running Distill runs can execute")
@@ -466,11 +507,28 @@ async def run_distill(
         ):
             raise ValueError("the pinned content-selection revision does not match this Distill run")
 
-    manifest["status"] = "running"
-    manifest["error"] = None
-    manifest["finished_at"] = None
-    await _write_manifest(storage, manifest)
-    await progress.emit(book_id, run_id, "run_started", status = "running", progress = manifest["progress"])
+    async with (
+        infra.redis.service.client() as redis,
+        redis.lock(
+            domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+            timeout = 120,
+            blocking_timeout = 30,
+        ),
+    ):
+        current = await read_run(book_id, run_id, storage = storage)
+        if current is None:
+            raise FileNotFoundError(f"Distill run {run_id} was not found")
+        if current["status"] in {"done", "cancelled"}:
+            return current
+        if current["status"] not in {"queued", "running"}:
+            raise ValueError("only queued or running Distill runs can execute")
+        manifest = current
+        if manifest["status"] == "queued":
+            manifest["status"] = "running"
+            manifest["error"] = None
+            manifest["finished_at"] = None
+            manifest = await _write_manifest(storage, manifest)
+            await progress.emit(book_id, run_id, "run_started", status = "running", progress = manifest["progress"])
     domains.settings.chat.service.refresh_endpoint(force = True)
 
     existing_units = await storage.list(f"{keys.run_prefix(book_id, run_id)}learning-units/")

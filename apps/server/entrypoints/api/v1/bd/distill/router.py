@@ -14,8 +14,8 @@ import domains.bd.distill.params
 import domains.bd.distill.task
 import infra
 
-from . import schemas
 from ..rag import schemas as rag_schemas
+from . import schemas
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -73,6 +73,14 @@ async def get_run(book_id: SafePathSegment, run_id: SafePathSegment) -> dict:
     if manifest is None:
         raise HTTPException(status_code = 404, detail = "Distill run not found")
     return manifest
+
+
+@router.get("/{book_id}/runs/{run_id}/llm-counters")
+async def get_run_llm_counters(book_id: SafePathSegment, run_id: SafePathSegment) -> dict:
+    manifest = await domains.bd.distill.service.read_run(book_id, run_id)
+    if manifest is None:
+        raise HTTPException(status_code = 404, detail = "Distill run not found")
+    return await domains.settings.llm_counter.service.read_counters("bd", run_id)
 
 
 @router.delete("/{book_id}/runs/{run_id}", response_model = schemas.WipeResponse)

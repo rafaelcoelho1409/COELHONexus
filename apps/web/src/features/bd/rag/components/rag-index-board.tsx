@@ -74,6 +74,7 @@ const NODES = [
 type NodeId = (typeof NODES)[number]["id"];
 
 export function RagIndexBoard({
+  bookId,
   index,
   distillComplete,
   executionEnabled,
@@ -85,6 +86,7 @@ export function RagIndexBoard({
   onCancel,
   onWipe,
 }: {
+  bookId: string;
   index: RagIndexStatus | null;
   distillComplete: boolean;
   executionEnabled: boolean;
@@ -112,56 +114,10 @@ export function RagIndexBoard({
     >
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="mono-label">Book Distiller · Retrieval</p>
-          <h3 className="mt-1 text-sm font-medium">Agentic RAG</h3>
+          <h3 className="text-sm font-medium">Agentic RAG</h3>
           <p aria-live="polite" className="mt-1 text-xs text-muted-foreground">
             {caption(index, executionEnabled)}
           </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <ActionButton
-            onClick={onStart}
-            disabled={
-              !executionEnabled ||
-              !distillComplete ||
-              index?.status === "done" ||
-              active ||
-              startPending ||
-              cancelPending
-            }
-            aria-busy={startPending}
-            aria-label={resumable ? "Resume Agentic RAG" : "Start Agentic RAG"}
-            title={
-              capabilityError ??
-              (!executionEnabled
-                ? "Agentic RAG execution is disabled in this environment."
-                : index?.status === "done"
-                  ? "This retrieval index is complete."
-                  : !distillComplete
-                    ? "Complete Distill before starting retrieval indexing."
-                    : undefined)
-            }
-          >
-            {startPending ? (resumable ? "Resuming…" : "Starting…") : resumable ? "Resume" : "Start"}
-          </ActionButton>
-          <ActionButton
-            onClick={onCancel}
-            disabled={!active || index?.cancel_requested === true || cancelPending}
-            aria-busy={cancelPending || index?.cancel_requested === true}
-            aria-label="Stop Agentic RAG"
-            title={active ? undefined : "There is no active retrieval run to stop."}
-          >
-            {cancelPending || index?.cancel_requested === true ? "Stopping…" : "Stop"}
-          </ActionButton>
-          <ActionButton
-            onClick={onWipe}
-            disabled={!hasRun || active || wipePending || startPending || cancelPending}
-            aria-busy={wipePending}
-            aria-label="Wipe Agentic RAG index"
-            title={active ? "Stop the active retrieval run before wiping its index." : undefined}
-          >
-            {wipePending ? "Wiping…" : "Wipe"}
-          </ActionButton>
         </div>
       </header>
 
@@ -198,6 +154,55 @@ export function RagIndexBoard({
         </div>
         <div className="flex min-w-0 flex-col">
           <div className="mb-3 flex min-w-0 flex-col items-stretch gap-2">
+            <fieldset className="m-0 grid w-full min-w-0 grid-cols-3 gap-2 border-0 p-0">
+              <legend className="sr-only">Agentic RAG run controls</legend>
+              <ActionButton
+                className="w-full min-w-0 justify-center px-1"
+                onClick={onStart}
+                disabled={
+                  !executionEnabled ||
+                  !distillComplete ||
+                  index?.status === "done" ||
+                  active ||
+                  startPending ||
+                  cancelPending
+                }
+                aria-busy={startPending}
+                aria-label={resumable ? "Resume Agentic RAG" : "Start Agentic RAG"}
+                title={
+                  capabilityError ??
+                  (!executionEnabled
+                    ? "Agentic RAG execution is disabled in this environment."
+                    : index?.status === "done"
+                      ? "This retrieval index is complete."
+                      : !distillComplete
+                        ? "Complete Distill before starting retrieval indexing."
+                        : undefined)
+                }
+              >
+                {startPending ? (resumable ? "Resuming…" : "Starting…") : resumable ? "Resume" : "Start"}
+              </ActionButton>
+              <ActionButton
+                className="w-full min-w-0 justify-center px-1"
+                onClick={onCancel}
+                disabled={!active || index?.cancel_requested === true || cancelPending}
+                aria-busy={cancelPending || index?.cancel_requested === true}
+                aria-label="Stop Agentic RAG"
+                title={active ? undefined : "There is no active retrieval run to stop."}
+              >
+                {cancelPending || index?.cancel_requested === true ? "Stopping…" : "Stop"}
+              </ActionButton>
+              <ActionButton
+                className="w-full min-w-0 justify-center px-1"
+                onClick={onWipe}
+                disabled={!hasRun || active || wipePending || startPending || cancelPending}
+                aria-busy={wipePending}
+                aria-label="Wipe Agentic RAG index"
+                title={active ? "Stop the active retrieval run before wiping its index." : undefined}
+              >
+                {wipePending ? "Wiping…" : "Wipe"}
+              </ActionButton>
+            </fieldset>
             <ActionButton
               className="w-full justify-center whitespace-nowrap px-2"
               onClick={() => setUsageOpen(true)}
@@ -206,12 +211,13 @@ export function RagIndexBoard({
               <ChartNoAxesColumn aria-hidden />
               LLM usage
             </ActionButton>
-            <div className="flex justify-end">
+            <div className="w-full">
               <ToggleGroup
                 legend="Agentic RAG pipeline shown as"
                 options={MODES}
                 value={mode}
                 onChange={setMode}
+                fullWidth
               />
             </div>
           </div>
@@ -247,10 +253,11 @@ export function RagIndexBoard({
       </div>
       {usageOpen ? (
         <PipelineUsageSheet
-          threadId={index && index.status !== "not_started" ? index.distill_run_id : null}
+          bookId={bookId}
+          runId={index && index.status !== "not_started" ? index.distill_run_id : null}
           live={active}
           title="Agentic RAG LLM usage"
-          subtitle="Calls and token counts for this retrieval run."
+          subtitle="Calls and token counts recorded for this book run."
           emptyMessage="No retrieval run yet. Usage appears here after indexing starts."
           onClose={() => setUsageOpen(false)}
         />

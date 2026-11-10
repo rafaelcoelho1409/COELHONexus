@@ -38,7 +38,7 @@ class ChecklistEvaluation(BaseModel):
     n_passed:       int
     n_total:        int
     pass_rate:      float
-    chapter_passed: bool                    # pass_rate >= PASS_THRESHOLD
+    chapter_passed: bool                    # score threshold plus every required hard gate
     failed_feedback: list[str]              # extracted for mgsr_replan
     n_llm_judge_repairs: int = 0
     judge_unavailable:   bool = False        # the judge never answered; criteria are the deterministic gates only

@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 
 HaltReason = Literal[
-    "chapter_passed",          # pass_rate ≥ the threshold: nothing to review
+    "chapter_passed",          # score threshold and all required gates pass: nothing to review
     "reviewer_halt",           # the reviewer found no rewrite that would help: ship the best draft so far
     "targeted_revision",       # the reviewer named the sections to write again
     "full_rewrite",            # the reviewer named none: the whole chapter is written again

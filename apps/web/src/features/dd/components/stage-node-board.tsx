@@ -40,6 +40,7 @@ export function StageNodeBoard({
   threadId,
   live,
   caption,
+  embedded = false,
 }: {
   stage: RunStage;
   views: StageNodeView[];
@@ -51,6 +52,8 @@ export function StageNodeBoard({
   live: boolean;
   /** One line of context for the graph (whose nodes these are, how far the run is), on the left of the view switch. */
   caption: string;
+  /** Draw the graph inside its stage's shared card with the run controls above. */
+  embedded?: boolean;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   // When each node was last opened, so its Activity tab can mark what arrived since (this page visit only).
@@ -74,10 +77,12 @@ export function StageNodeBoard({
 
   return (
     <>
-      {/* The graph sits in a box like Ingestion's "Agentic pipeline", with the same run views and topology source. */}
+      {/* The graph uses Ingestion's run views and topology source inside the enclosing stage card. */}
       <section
         aria-label={`${STAGE_TITLE[stage]} pipeline`}
-        className="flex min-w-0 flex-1 flex-col gap-3 rounded-md border border-border bg-card p-3"
+        className={`flex min-w-0 flex-1 flex-col gap-3 ${
+          embedded ? "" : "rounded-md border border-border bg-card p-3"
+        }`}
       >
         {/* One row, the same height in both stages (the switch is 36px; the caption takes two lines of 16px at most), so
             the planner's graph and the synth graph start at the same height. */}

@@ -102,7 +102,8 @@ COVERAGE_CAPACITY_SHARE = 0.5     # 0.75 -> 0.5: langchain ch-04 routed 234 bloc
 COVERAGE_MIN_SOURCE_COUNT = 6
 COVERAGE_MIN_SOURCES = 0.70
 
-# Tutorial gates: the share of a chapter's best code examples its steps must teach, and the reading time a chapter may take (minutes).
+# Synth v1 tutorial gates: the share of a chapter's best code examples its steps must teach, and the reading time a chapter may take (minutes).
+# Synth v2 requires every canonical example through check_all_best_code_taught.
 TUTORIAL_MIN_COVERAGE = 0.90
 TUTORIAL_MAX_MINUTES = 45.0
 

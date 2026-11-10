@@ -326,7 +326,15 @@ async def finalize(state: graphs.pipeline.synth.checklist.states.ChecklistState,
             f"[checklist_eval] {slug}/{chapter_id}: judge unavailable after retries; the chapter is scored on its {len(pre)} deterministic gates and is not sent back to the writer for the outage"
         )
     all_results = list(pre) + ([] if judge_unavailable else list(llm))
-    n_passed, n_total, pass_rate, chapter_passed = domain.aggregate_pass_rate(all_results)
+    required_criteria = (
+        ("best_code_taught",)
+        if graphs.pipeline.synth.params.is_v2() and graphs.pipeline.synth.params.tutorial_mode()
+        else ()
+    )
+    n_passed, n_total, pass_rate, chapter_passed = domain.aggregate_pass_rate(
+        all_results,
+        required_criteria = required_criteria,
+    )
     failed_feedback = domain.collect_failed_feedback(all_results)
 
     # Best-seen promotion happens HERE, immediately: the current iteration's own fresh score must be in state before the router decides to loop. Ordering: every

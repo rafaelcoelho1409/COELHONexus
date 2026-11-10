@@ -1859,7 +1859,7 @@ export type SearchDefaultBody = {
     /**
      * Provider Id
      */
-    provider_id?: 'coelho_search' | 'tavily' | 'exa' | 'jina' | null;
+    provider_id?: 'coelho_search' | 'linkup' | 'you' | 'parallel' | 'exa' | 'geekflare' | 'tavily' | 'tinyfish' | 'firecrawl' | 'serper' | 'jina' | 'serpapi' | null;
 };
 
 /**
@@ -1879,7 +1879,7 @@ export type SearchProviderView = {
     /**
      * Provider Id
      */
-    provider_id: 'coelho_search' | 'tavily' | 'exa' | 'jina';
+    provider_id: 'coelho_search' | 'linkup' | 'you' | 'parallel' | 'exa' | 'geekflare' | 'tavily' | 'tinyfish' | 'firecrawl' | 'serper' | 'jina' | 'serpapi';
     /**
      * Name
      */
@@ -1889,9 +1889,17 @@ export type SearchProviderView = {
      */
     endpoint: string | null;
     /**
+     * Account Url
+     */
+    account_url: string | null;
+    /**
      * Available
      */
     available: boolean;
+    /**
+     * Key Required
+     */
+    key_required: boolean;
     /**
      * Has Key
      */
@@ -2050,7 +2058,7 @@ export type SearchSettingsView = {
     /**
      * Default Provider
      */
-    default_provider: 'coelho_search' | 'tavily' | 'exa' | 'jina' | null;
+    default_provider: 'coelho_search' | 'linkup' | 'you' | 'parallel' | 'exa' | 'geekflare' | 'tavily' | 'tinyfish' | 'firecrawl' | 'serper' | 'jina' | 'serpapi' | null;
     /**
      * Providers
      */
@@ -2068,7 +2076,7 @@ export type SearchTestResult = {
     /**
      * Provider Id
      */
-    provider_id: 'coelho_search' | 'tavily' | 'exa' | 'jina';
+    provider_id: 'coelho_search' | 'linkup' | 'you' | 'parallel' | 'exa' | 'geekflare' | 'tavily' | 'tinyfish' | 'firecrawl' | 'serper' | 'jina' | 'serpapi';
     /**
      * Latency Ms
      */
@@ -5930,7 +5938,7 @@ export type PutSettingsSearchProviderIdData = {
         /**
          * Provider Id
          */
-        provider_id: 'coelho_search' | 'tavily' | 'exa' | 'jina';
+        provider_id: 'coelho_search' | 'linkup' | 'you' | 'parallel' | 'exa' | 'geekflare' | 'tavily' | 'tinyfish' | 'firecrawl' | 'serper' | 'jina' | 'serpapi';
     };
     query?: never;
     url: '/api/v1/settings/search/{provider_id}';
@@ -5960,7 +5968,7 @@ export type PostSettingsSearchProviderIdTestData = {
         /**
          * Provider Id
          */
-        provider_id: 'coelho_search' | 'tavily' | 'exa' | 'jina';
+        provider_id: 'coelho_search' | 'linkup' | 'you' | 'parallel' | 'exa' | 'geekflare' | 'tavily' | 'tinyfish' | 'firecrawl' | 'serper' | 'jina' | 'serpapi';
     };
     query?: never;
     url: '/api/v1/settings/search/{provider_id}/test';

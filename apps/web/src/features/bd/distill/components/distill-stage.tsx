@@ -210,6 +210,7 @@ function DistillWorkspaceView({
   const contentSelection = useContentSelection(bookId, agenticRunId);
   const saveSelection = useSaveContentSelection(bookId);
   const [stoppingRunId, setStoppingRunId] = useState<string | null>(null);
+  const [restartingQueuedRun, setRestartingQueuedRun] = useState(false);
   const readiness = distillReadiness(book, contentSelection.data ?? null, contentSelection.isError);
   const selected = selectDistillRun(runs.data ?? [], requestedRunId);
   const ragIndex = useRagIndex(bookId, selected?.run_id ?? "", selected?.status === "done");
@@ -237,8 +238,14 @@ function DistillWorkspaceView({
   const actionPending =
     actions.start.isPending || actions.resume.isPending || actions.cancel.isPending || actions.wipe.isPending;
   const canExecute = capabilities.data?.execution_enabled === true;
+  const canReplaceQueuedRun = activeRun?.status === "queued";
   const startDisabled =
-    !canExecute || !readiness.ready || activeRun !== null || actionPending || runs.isPending || runs.isError;
+    !canExecute ||
+    !readiness.ready ||
+    (activeRun !== null && !canReplaceQueuedRun) ||
+    actionPending ||
+    runs.isPending ||
+    runs.isError;
   const resumeDisabled =
     !canExecute ||
     !resumable ||
@@ -250,16 +257,42 @@ function DistillWorkspaceView({
   const stopDisabled = activeRun === null || stopping || actionPending;
   const wipeDisabled =
     selected === null || isDistillLive(selected.status) || activeRun !== null || actionPending;
-  const startRun = () => {
-    if (startDisabled || !book.agentic || !contentSelection.data) return;
+  const queueFreshRun = () => {
+    if (!book.agentic || !contentSelection.data) return;
     actions.start.mutate(book.agentic.agentic_run_id, {
       onSuccess: (result) => {
+        setRestartingQueuedRun(false);
         setStoppingRunId(null);
         router.push(distillHref(bookId, result.run_id));
         notice("Distill run queued.");
       },
-      onError: (error) => notice(apiErrorMessage(error), "error"),
+      onError: (error) => {
+        setRestartingQueuedRun(false);
+        notice(apiErrorMessage(error), "error");
+      },
     });
+  };
+  const startRun = () => {
+    if (startDisabled || !book.agentic || !contentSelection.data) return;
+    if (canReplaceQueuedRun && activeRun) {
+      setRestartingQueuedRun(true);
+      actions.cancel.mutate(activeRun.run_id, {
+        onSuccess: (result) => {
+          if (result.status !== "cancelled") {
+            setRestartingQueuedRun(false);
+            notice("The queued Distill run became active. Stop it before starting a fresh run.", "info");
+            return;
+          }
+          queueFreshRun();
+        },
+        onError: (error) => {
+          setRestartingQueuedRun(false);
+          notice(apiErrorMessage(error), "error");
+        },
+      });
+      return;
+    }
+    queueFreshRun();
   };
   const resumeRun = () => {
     if (resumeDisabled || !controlRun) return;
@@ -292,6 +325,9 @@ function DistillWorkspaceView({
         if (isDistillLive(result.status)) {
           setStoppingRunId(activeRun.run_id);
           notice("Distill stop requested; active work is draining.");
+        } else if (result.status === "cancelled") {
+          setStoppingRunId(null);
+          notice("Distill run cancelled.");
         } else {
           notice(`Distill run is already ${statusLabel(result.status).toLowerCase()}.`);
         }
@@ -346,10 +382,19 @@ function DistillWorkspaceView({
   const progressActions = (
     <>
       <ActionButton
+        className="w-full min-w-0 justify-center px-1"
         onClick={resumable ? resumeRun : startRun}
         disabled={resumable ? resumeDisabled : startDisabled}
-        aria-busy={actions.start.isPending || actions.resume.isPending}
-        aria-label={resumable ? "Resume Distill" : "Start Distill"}
+        aria-busy={restartingQueuedRun || actions.start.isPending || actions.resume.isPending}
+        aria-label={
+          restartingQueuedRun
+            ? "Restarting Distill"
+            : resumable
+              ? "Resume Distill"
+              : canReplaceQueuedRun
+                ? "Start a fresh Distill run"
+                : "Start Distill"
+        }
         title={
           !canExecute
             ? "Distill execution is unavailable in this environment."
@@ -359,20 +404,27 @@ function DistillWorkspaceView({
                 ? "Load Distill runs before starting."
                 : !readiness.ready
                   ? "Complete the source checks before starting Distill."
-                  : activeRun
-                    ? "A Distill run is already active."
-                    : undefined
+                  : canReplaceQueuedRun
+                    ? "Cancel the queued run and start a fresh Distill run."
+                    : activeRun
+                      ? "A Distill run is already active."
+                      : undefined
         }
       >
-        {actions.start.isPending || actions.resume.isPending
-          ? resumable
-            ? "Resuming…"
-            : "Starting…"
-          : resumable
-            ? "Resume"
-            : "Start"}
+        {restartingQueuedRun
+          ? "Restarting…"
+          : actions.start.isPending || actions.resume.isPending
+            ? resumable
+              ? "Resuming…"
+              : "Starting…"
+            : resumable
+              ? "Resume"
+              : canReplaceQueuedRun
+                ? "Start fresh"
+                : "Start"}
       </ActionButton>
       <ActionButton
+        className="w-full min-w-0 justify-center px-1"
         onClick={stopRun}
         disabled={stopDisabled}
         aria-busy={actions.cancel.isPending || stopping}
@@ -388,6 +440,7 @@ function DistillWorkspaceView({
         {actions.cancel.isPending || stopping ? "Stopping…" : "Stop"}
       </ActionButton>
       <ActionButton
+        className="w-full min-w-0 justify-center px-1"
         onClick={() => void wipeRun()}
         disabled={wipeDisabled}
         aria-busy={actions.wipe.isPending}
@@ -501,6 +554,7 @@ function DistillWorkspaceView({
           <div className="mt-4 grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-2">
             <div className={!runs.isPending && !runs.isError ? "min-w-0" : "min-w-0 xl:col-span-2"}>
               <DistillNodeBoard
+                bookId={bookId}
                 status={progressStatus}
                 progress={progress}
                 statusText={progressStatusText}
@@ -510,6 +564,7 @@ function DistillWorkspaceView({
             </div>
             {!runs.isPending && !runs.isError ? (
               <RagIndexBoard
+                bookId={bookId}
                 index={ragIndex.data ?? null}
                 distillComplete={selected?.status === "done"}
                 executionEnabled={ragCapabilities.data?.execution_enabled === true}

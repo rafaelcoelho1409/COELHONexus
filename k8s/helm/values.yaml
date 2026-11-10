@@ -160,6 +160,7 @@ celery:
   replicas: 1
   # 2 workers: peak COW RSS (5 × 2GB + parent) OOMKilled at concurrency=5; 2 × 8 LLM calls already hits DD_LLM_GLOBAL_CONCURRENCY.
   concurrency: 2
+  # Keep aligned with infra/celery/keys.py; deployment.yaml applies the environment suffix.
   queues: "crawler,embedding,llm,planner,synth,default,ycs,bd"
   threads: "1"
   resources:

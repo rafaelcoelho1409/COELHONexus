@@ -23,8 +23,8 @@ function nodeBoardCaption(synth: SynthRunController): string {
   return "Pick a finished chapter in the list to see how each of its nodes ran.";
 }
 
-/** Run bar, volume-audit line and the node graph: two rows — the run bar, then everything under it — so the pipeline
- * page can lay it on shared grid rows (`className`). */
+/** Run bar, volume-audit line and the node graph share one card. The pipeline page lays their two rows on shared grid
+ * tracks (`className`). */
 export function SynthRunPanel({
   synth,
   blocker,
@@ -40,43 +40,50 @@ export function SynthRunPanel({
     synth.cells.length > 0 && synth.cells.every((cell) => cell.synthEligible === false);
 
   return (
-    <div className={`flex min-w-0 flex-col gap-4 ${className}`}>
-      <RunBar
-        title="Synth"
-        testId="synth"
-        controls={synth}
-        blockedMessage={
-          blocker.message ?? (noEligibleChapters ? "This plan has no chapters eligible for Synth." : null)
-        }
-        onOpenUsage={() => setUsageOpen(true)}
+    <>
+      <section
+        aria-label="Synth Agentic AI"
+        className={`flex min-w-0 flex-col gap-4 rounded-md border border-border bg-card p-3 ${className}`}
       >
-        {harmonize.status !== "idle" ? (
-          <span data-testid="synth-harmonize" className="text-xs text-muted-foreground">
-            Volume audit — {harmonize.label}
-          </span>
-        ) : null}
-      </RunBar>
-      <div className="flex min-w-0 flex-col gap-4">
-        <StageNodeBoard
-          stage="synth"
-          views={synth.views}
-          values={synth.values}
-          liveLines={synth.liveLines}
-          events={synth.events}
-          threadId={synth.canvasThreadId}
-          live={synth.running}
-          caption={nodeBoardCaption(synth)}
-        />
-        {synth.error ? (
-          <p role="alert" className="text-xs text-destructive-text">
-            {synth.error}
-          </p>
-        ) : null}
-      </div>
+        <RunBar
+          title="Synth"
+          testId="synth"
+          controls={synth}
+          blockedMessage={
+            blocker.message ?? (noEligibleChapters ? "This plan has no chapters eligible for Synth." : null)
+          }
+          onOpenUsage={() => setUsageOpen(true)}
+          embedded
+        >
+          {harmonize.status !== "idle" ? (
+            <span data-testid="synth-harmonize" className="text-xs text-muted-foreground">
+              Volume audit — {harmonize.label}
+            </span>
+          ) : null}
+        </RunBar>
+        <div className="flex min-w-0 flex-col gap-4">
+          <StageNodeBoard
+            stage="synth"
+            views={synth.views}
+            values={synth.values}
+            liveLines={synth.liveLines}
+            events={synth.events}
+            threadId={synth.canvasThreadId}
+            live={synth.running}
+            embedded
+            caption={nodeBoardCaption(synth)}
+          />
+          {synth.error ? (
+            <p role="alert" className="text-xs text-destructive-text">
+              {synth.error}
+            </p>
+          ) : null}
+        </div>
+      </section>
       {usageOpen ? (
         <SynthUsageSheet cells={synth.cells} live={synth.running} onClose={() => setUsageOpen(false)} />
       ) : null}
-    </div>
+    </>
   );
 }
 

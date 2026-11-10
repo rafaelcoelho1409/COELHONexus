@@ -24,8 +24,18 @@ def run_distill(self, book_id: str, run_id: str) -> dict:
     logger.info("[bd-distill-task] book_id=%s run_id=%s", book_id, run_id)
 
     async def execute() -> dict:
+        checkpointer_initialized = False
         try:
+            manifest = await service.mark_run_started(book_id, run_id)
+            if manifest["status"] in {"done", "cancelled"}:
+                return {
+                    "book_id": book_id,
+                    "run_id": run_id,
+                    "status": manifest["status"],
+                    "report_key": manifest.get("report_key"),
+                }
             await infra.postgres.service.init_checkpointer()
+            checkpointer_initialized = True
             result = await service.run_distill(
                 book_id,
                 run_id,
@@ -34,7 +44,7 @@ def run_distill(self, book_id: str, run_id: str) -> dict:
             if result.get("status") == "done" and domains.bd.rag.params.RAG_EXECUTION_ENABLED:
                 try:
                     await domains.bd.rag.service.queue_index(book_id, run_id)
-                except Exception as error:  # noqa: BLE001 — report publication must survive an indexing queue failure.
+                except Exception as error:
                     logger.exception("[bd-distill-task] unable to queue Agentic RAG for %s (%s)", run_id, type(error).__name__)
             return {
                 "book_id": book_id,
@@ -50,6 +60,7 @@ def run_distill(self, book_id: str, run_id: str) -> dict:
                 logger.exception("[bd-distill-task] unable to persist failure for %s", run_id)
             raise
         finally:
-            await infra.postgres.service.close_checkpointer()
+            if checkpointer_initialized:
+                await infra.postgres.service.close_checkpointer()
 
     return asyncio.run(execute())

@@ -5,7 +5,7 @@
 
 import type { ReactNode } from "react";
 
-import { readerFont } from "@/shared/markdown/reader-font";
+import { ddStudyFont } from "@/shared/markdown/dd-study-font";
 import { Badge } from "@/shared/ui/badge";
 
 import { chapterFacts, humanizeChapterId } from "../domain/chapters";
@@ -123,7 +123,7 @@ export function StudyArticle({
   );
 }
 
-/** The BD Pages reading measure and Literata prose treatment, reused for synthesized DD chapters. */
+/** DD uses a technical reading face while keeping BD's Literata treatment separate. */
 export function StudyRenderedChapter({ children }: { children: ReactNode }) {
-  return <div className={`${readerFont.className} reader-prose`}>{children}</div>;
+  return <div className={`${ddStudyFont.className} reader-prose`}>{children}</div>;
 }

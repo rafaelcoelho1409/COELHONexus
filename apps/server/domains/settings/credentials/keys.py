@@ -18,10 +18,18 @@ MANAGED_KEY_ENVS: tuple[str, ...] = (
     # Same idea, independent endpoint — embeddings (YCS) can point at
     # a different provider than chat. See domains/settings/embeddings/service.py.
     "COELHO_EMBEDDING_API_KEY",
-    # Search MCP connections used by BD Distill. These credentials are
-    # write-only in Settings and are sent in Authorization headers.
+    # Saved search service credentials. These are write-only in Settings and
+    # are sent only to the selected service during a connection check.
     "COELHO_SEARCH_API_KEY",
+    "LINKUP_API_KEY",
+    "YOUCOM_API_KEY",
+    "PARALLEL_SEARCH_MCP_API_KEY",
     "TAVILY_API_KEY",
     "EXA_API_KEY",
+    "GEEKTFLARE_API_KEY",
+    "TINYFISH_API_KEY",
+    "FIRECRAWL_API_KEY",
+    "SERPER_API_KEY",
     "JINA_API_KEY",
+    "SERPAPI_API_KEY",
 )

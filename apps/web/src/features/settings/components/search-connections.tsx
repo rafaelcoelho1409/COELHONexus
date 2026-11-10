@@ -10,7 +10,7 @@ import { Label } from "@/shared/ui/label";
 
 import type { SearchProvider, SearchTestResult } from "../entities";
 import { useSearchConnections } from "../hooks/use-search-connections";
-import { CUSTOM_SEARCH_PROVIDER_ID, SEARCH_PROVIDER_ACCOUNT_URLS, type SearchProviderId } from "../params";
+import { CUSTOM_SEARCH_PROVIDER_ID, type SearchProviderId } from "../params";
 
 export function SearchConnections() {
   const { query, save, setDefault, test } = useSearchConnections();
@@ -34,8 +34,9 @@ export function SearchConnections() {
           Search
         </h2>
         <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-          Manage saved search connections for research features across COELHO Nexus. Any tool that integrates
-          search can use them; the settings aren&apos;t limited to book distillation.
+          Manage saved search connections for COELHO Nexus integrations. These settings are shared across
+          future research features; Distill runs do not call search yet. Some connection checks send a
+          lightweight request that may count toward the service&apos;s usage.
         </p>
       </header>
 
@@ -176,7 +177,7 @@ function SearchProviderCard({
   const canRemoveKey = provider.has_key && provider.key_source === "user";
   const hasUnsavedKey = apiKey.trim().length > 0;
   const prefix = `search-${provider.provider_id}`;
-  const accountUrl = SEARCH_PROVIDER_ACCOUNT_URLS[provider.provider_id];
+  const accountUrl = provider.account_url;
   const displayName = provider.provider_id === CUSTOM_SEARCH_PROVIDER_ID ? "Custom" : provider.name;
   const statusText = !provider.available
     ? "Endpoint not configured"
@@ -265,7 +266,12 @@ function SearchProviderCard({
               type="button"
               variant="outline"
               size="sm"
-              disabled={!provider.available || testing || hasUnsavedKey}
+              disabled={
+                !provider.available ||
+                testing ||
+                hasUnsavedKey ||
+                (provider.key_required && !provider.has_key)
+              }
               aria-busy={testing}
               onClick={onTest}
             >
@@ -289,7 +295,9 @@ function SearchProviderCard({
         <div role={testResult.ok ? "status" : "alert"} className="mt-3 border-t border-border pt-3">
           <p className={testResult.ok ? "text-sm text-success-text" : "text-sm text-warning-text"}>
             {testResult.ok
-              ? `Connection ready · ${testResult.latency_ms} ms · ${testResult.tools.length} tools found`
+              ? testResult.tools.length > 0
+                ? `MCP connection ready · ${testResult.latency_ms} ms · ${testResult.tools.length} tools found`
+                : `Search connection ready · ${testResult.latency_ms} ms`
               : (testResult.error ?? "The connection check did not succeed.")}
           </p>
           {testResult.tools.length > 0 ? (
@@ -308,7 +316,11 @@ function SearchProviderCard({
 function KeySummary({ provider }: { provider: SearchProvider }) {
   if (!provider.has_key) {
     return (
-      <span className="text-xs text-muted-foreground">No saved key. Some services allow keyless search.</span>
+      <span className="text-xs text-muted-foreground">
+        {provider.key_required
+          ? "No saved key. Save a key before testing."
+          : "No saved key. This service supports keyless access."}
+      </span>
     );
   }
   const source = provider.key_source === "env" ? "Server key" : "Saved key";

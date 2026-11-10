@@ -97,7 +97,7 @@ export const STAGE_NODES: Record<RunStage, StageNode[]> = {
   synth: ALL_SYNTH_NODES,
 };
 
-/** `stopped`: a node left running by a run that was cancelled (ingestion; the planner and synth graphs never show it). */
+/** `stopped`: work ended by cancellation, distinct from a node that failed. */
 export type NodeStatus = "done" | "running" | "pending" | "future" | "needs_review" | "failed" | "stopped";
 
 /** What a graph or a node list needs of a node: its name and its state. Planner, synth and ingestion all draw it. */

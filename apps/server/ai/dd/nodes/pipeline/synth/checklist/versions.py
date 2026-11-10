@@ -44,4 +44,6 @@ CHECKLIST_SCHEMA_VERSION = "1.0"
 # about two arm attempts when NIM arms stall at 36 s (the two biggest chapters lost the judge three times in a row).
 # v18 (2026-10-18): a cached verdict scored without the LLM judge (judge unavailable) is not reused: the chapter is judged again.
 # v19 (2026-11-06): the judge is a chapter_judge agent; the picker gate is gone (no picker) and the dormant CoCoA + atomic-claim checks are removed; the second-opinion runs are graph branches.
-CHECKLIST_PROMPT_VERSION = "v19-judge-agent-2026-11-06"
+# v20 (2026-11-10): in Synth v2 tutorial mode, `best_code_taught` is a hard pass gate.
+# A high aggregate score cannot accept a tutorial that omits canonical learning examples.
+CHECKLIST_PROMPT_VERSION = "v20-v2-code-coverage-gate-2026-11-10"

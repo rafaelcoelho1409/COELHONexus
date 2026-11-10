@@ -1,4 +1,4 @@
-"""Safe persistence and bounded MCP discovery for supported Search connections."""
+"""Safe persistence and bounded connection checks for configured Search services."""
 from __future__ import annotations
 
 import asyncio
@@ -9,6 +9,7 @@ import time
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+import httpx
 import domains
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
@@ -105,7 +106,9 @@ def read_settings_view() -> dict[str, Any]:
             "provider_id": definition.provider_id,
             "name": definition.name,
             "endpoint": _safe_endpoint(endpoint),
+            "account_url": definition.account_url,
             "available": endpoint is not None,
+            "key_required": definition.key_required,
             "has_key": status.has_key,
             "key_source": status.source,
             "key_last4": status.last4,
@@ -114,7 +117,7 @@ def read_settings_view() -> dict[str, Any]:
                 and endpoint is not None
                 and record.get("endpoint_fingerprint") == expected_fingerprint
                 and record.get("credential_fingerprint") == expected_credential_fingerprint
-                and (not definition.requires_search_key or status.has_key)
+                and (not definition.key_required or status.has_key)
             ),
             "last_checked_at": checked_at,
             "tools": [tool for tool in tools if isinstance(tool, str)][:params.MAX_DISCOVERED_TOOLS],
@@ -217,14 +220,51 @@ async def test_provider(provider_id: str) -> dict[str, Any]:
         }
 
     api_key = domains.settings.credentials.service.resolve_key(definition.key_env)
-    if definition.requires_search_key and not api_key:
+    if definition.key_required and not api_key:
         return {
             "ok": False,
             "provider_id": provider_id,
             "latency_ms": 0,
             "tools": [],
-            "error": "Save a Jina API key to enable web search.",
+            "error": "Save an API key before testing this service.",
         }
+
+    if provider_id == "coelho_search" or provider_id == "parallel":
+        return await _test_mcp_provider(
+            provider_id,
+            endpoint,
+            api_key,
+            started_at,
+        )
+
+    try:
+        request = _provider_probe(provider_id, endpoint, api_key)
+        async with httpx.AsyncClient(timeout = params.SEARCH_REQUEST_TIMEOUT_S) as client:
+            response = await client.request(**request)
+        ok, error = _provider_probe_result(provider_id, response)
+        return {
+            "ok": ok,
+            "provider_id": provider_id,
+            "latency_ms": int((time.monotonic() - started_at) * 1000),
+            "tools": [],
+            "error": error,
+        }
+    except Exception as error:  # noqa: BLE001 — report only the failure class; never expose request headers.
+        return {
+            "ok": False,
+            "provider_id": provider_id,
+            "latency_ms": int((time.monotonic() - started_at) * 1000),
+            "tools": [],
+            "error": f"Connection failed ({type(error).__name__}).",
+        }
+
+
+async def _test_mcp_provider(
+    provider_id: str,
+    endpoint: str,
+    api_key: str,
+    started_at: float,
+) -> dict[str, Any]:
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
         client = MultiServerMCPClient({
@@ -236,6 +276,7 @@ async def test_provider(provider_id: str) -> dict[str, Any]:
         })
         discovered = await asyncio.wait_for(client.get_tools(), timeout = params.MCP_CONNECT_TIMEOUT_S)
         tool_names = sorted({tool.name for tool in discovered if isinstance(tool.name, str)})
+        definition = _provider(provider_id)
         if provider_id == "coelho_search":
             has_search = any("search" in name.casefold() for name in tool_names)
         else:
@@ -263,3 +304,100 @@ async def test_provider(provider_id: str) -> dict[str, Any]:
             "tools": [],
             "error": f"Connection failed ({type(error).__name__}).",
         }
+
+
+def _provider_probe(provider_id: str, endpoint: str, api_key: str) -> dict[str, Any]:
+    headers: dict[str, str] = {"Accept": "application/json"}
+    request: dict[str, Any] = {"method": "GET", "url": endpoint, "headers": headers}
+
+    if provider_id == "linkup":
+        request["url"] = "https://api.linkup.so/v1/credits/balance"
+        headers["Authorization"] = f"Bearer {api_key}"
+    elif provider_id == "you":
+        if api_key:
+            request["url"] = "https://api.you.com/v1/billing/account_balance"
+            headers["X-API-Key"] = api_key
+        else:
+            request.update({
+                "method": "POST",
+                "json": {"query": "COELHO Nexus connection check", "count": 1},
+            })
+            headers["Content-Type"] = "application/json"
+    elif provider_id == "exa":
+        request.update({
+            "method": "POST",
+            "json": {
+                "query": "COELHO Nexus connection check",
+                "type": "auto",
+                "numResults": 1,
+            },
+        })
+        headers["Authorization"] = f"Bearer {api_key}"
+        headers["Content-Type"] = "application/json"
+    elif provider_id == "geekflare":
+        request.update({
+            "method": "POST",
+            "json": {
+                "query": "COELHO Nexus connection check",
+                "limit": 1,
+                "source": "web",
+                "format": "json",
+            },
+        })
+        headers["x-api-key"] = api_key
+        headers["Content-Type"] = "application/json"
+    elif provider_id == "tavily":
+        if api_key:
+            request["url"] = "https://api.tavily.com/usage"
+            headers["Authorization"] = f"Bearer {api_key}"
+        else:
+            request.update({
+                "method": "POST",
+                "json": {
+                    "query": "COELHO Nexus connection check",
+                    "search_depth": "basic",
+                    "max_results": 1,
+                    "include_answer": False,
+                },
+            })
+            headers["X-Tavily-Access-Mode"] = "keyless"
+            headers["Content-Type"] = "application/json"
+    elif provider_id == "tinyfish":
+        request.update({
+            "params": {"query": "COELHO Nexus connection check", "results": 1},
+        })
+        headers["X-API-Key"] = api_key
+    elif provider_id == "firecrawl":
+        request["url"] = "https://api.firecrawl.dev/v1/team/credit-usage"
+        headers["Authorization"] = f"Bearer {api_key}"
+    elif provider_id == "serper":
+        request["url"] = "https://google.serper.dev/account"
+        headers["X-API-KEY"] = api_key
+    elif provider_id == "jina":
+        request["url"] = "https://embeddings-dashboard-api.jina.ai/api/v1/api_key/user"
+        request["params"] = {"api_key": api_key}
+    elif provider_id == "serpapi":
+        request["url"] = "https://serpapi.com/account.json"
+        request["params"] = {"api_key": api_key}
+    else:
+        raise ValueError("unsupported search connection")
+
+    return request
+
+
+def _provider_probe_result(provider_id: str, response: httpx.Response) -> tuple[bool, str | None]:
+    if not response.is_success:
+        return False, f"Connection failed (HTTP {response.status_code})."
+    try:
+        payload = response.json()
+    except ValueError:
+        return False, "The service returned an unreadable response."
+    if not isinstance(payload, dict):
+        return False, "The service returned an unreadable response."
+    if payload.get("error"):
+        return False, "The service rejected the connection check."
+    if provider_id == "geekflare" and str(payload.get("apiStatus", "")).casefold() != "success":
+        return False, "The service rejected the connection check."
+    if provider_id == "firecrawl" and payload.get("success") is False:
+        return False, "The service rejected the connection check."
+    return True, None

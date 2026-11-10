@@ -415,6 +415,9 @@ async def finalize(state: graphs.pipeline.synth.render.states.RenderState, runti
     if not audit.audit_passed:
         patch["status"] = "audit_failed"
         patch["error"] = f"render audit failed: missing = {len(audit.n_missing)} drift = {len(audit.n_byte_drift)} unresolved_sentinels = {audit.sentinels_in_output}"
+    elif not bool(mgsr.get("checklist_chapter_passed", False)):
+        patch["status"] = "needs_review"
+        patch["error"] = "The chapter rendered, but one or more required Synth quality checks remain unresolved. See checklist feedback."
     else:
         patch["status"] = "done"
     return patch

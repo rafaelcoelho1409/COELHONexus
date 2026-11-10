@@ -12,8 +12,8 @@ import { StageNodeBoard } from "./stage-node-board";
 import { NoFrameworkCard, RunBar } from "./stage-parts";
 import { PlannerUsageSheet } from "./usage-sheet";
 
-/** The planner screen without its data source, so the pipeline page can drive it from its own controller. Two rows —
- * the run bar, then everything under it — so the pipeline page can lay it on shared grid rows (`className`). */
+/** The planner screen without its data source, so the pipeline page can drive it from its own controller. The run bar
+ * and graph share one card; the pipeline page lays those two rows on shared grid tracks (`className`). */
 export function PlannerBoard({
   slug,
   planner,
@@ -27,37 +27,44 @@ export function PlannerBoard({
 }) {
   const [usageOpen, setUsageOpen] = useState(false);
   return (
-    <div className={`flex min-w-0 flex-col gap-4 ${className}`}>
-      <RunBar
-        title="Planner"
-        testId="planner"
-        controls={planner}
-        blockedMessage={blocker.message}
-        onOpenUsage={() => setUsageOpen(true)}
+    <>
+      <section
+        aria-label="Planner Agentic AI"
+        className={`flex min-w-0 flex-col gap-4 rounded-md border border-border bg-card p-3 ${className}`}
       >
-        {"plan_path" in planner.values && !planner.running ? <PlanHealth slug={slug} /> : null}
-      </RunBar>
-      <div className="flex min-w-0 flex-col gap-4">
-        <StageNodeBoard
-          stage="planner"
-          views={planner.views}
-          values={planner.values}
-          liveLines={planner.liveLines}
-          events={planner.events}
-          threadId={planner.threadId}
-          live={planner.running}
-          caption={
-            planner.views.length > 0
-              ? stageCaption(planner.views, planner.progress, planner.next)
-              : "Compiled Planner topology · run Planner to see execution status."
-          }
-        />
-        {planner.error ? (
-          <p role="alert" className="text-xs text-destructive-text">
-            {planner.error}
-          </p>
-        ) : null}
-      </div>
+        <RunBar
+          title="Planner"
+          testId="planner"
+          controls={planner}
+          blockedMessage={blocker.message}
+          onOpenUsage={() => setUsageOpen(true)}
+          embedded
+        >
+          {"plan_path" in planner.values && !planner.running ? <PlanHealth slug={slug} /> : null}
+        </RunBar>
+        <div className="flex min-w-0 flex-col gap-4">
+          <StageNodeBoard
+            stage="planner"
+            views={planner.views}
+            values={planner.values}
+            liveLines={planner.liveLines}
+            events={planner.events}
+            threadId={planner.threadId}
+            live={planner.running}
+            embedded
+            caption={
+              planner.views.length > 0
+                ? stageCaption(planner.views, planner.progress, planner.next)
+                : "Compiled Planner topology · run Planner to see execution status."
+            }
+          />
+          {planner.error ? (
+            <p role="alert" className="text-xs text-destructive-text">
+              {planner.error}
+            </p>
+          ) : null}
+        </div>
+      </section>
       {usageOpen ? (
         <PlannerUsageSheet
           threadId={planner.threadId}
@@ -65,7 +72,7 @@ export function PlannerBoard({
           onClose={() => setUsageOpen(false)}
         />
       ) : null}
-    </div>
+    </>
   );
 }
 

@@ -40,12 +40,14 @@ const MODES = [
 
 /** Distill's Agents view uses the same graph/list and node-detail pattern as BD's other agent pipelines. */
 export function DistillNodeBoard({
+  bookId,
   status,
   progress,
   statusText,
   actions,
   runId,
 }: {
+  bookId: string;
   status: DistillRun["status"] | null;
   progress: DistillRun["progress"] | null;
   statusText: string;
@@ -72,14 +74,10 @@ export function DistillNodeBoard({
               {caption}
             </p>
           </div>
-          <div className="flex min-w-0 flex-wrap items-center justify-start gap-2 sm:justify-end">
+          <div className="flex min-w-0 flex-col items-start gap-1 sm:items-end">
             <span aria-live="polite" className="text-xs text-muted-foreground">
               {statusText}
             </span>
-            <fieldset className="m-0 flex min-w-0 flex-wrap items-center gap-2 border-0 p-0">
-              <legend className="sr-only">Distill run controls</legend>
-              {actions}
-            </fieldset>
           </div>
         </header>
 
@@ -99,6 +97,10 @@ export function DistillNodeBoard({
           </div>
           <div className="flex min-w-0 flex-col">
             <div className="mb-3 flex min-w-0 flex-col items-stretch gap-2">
+              <fieldset className="m-0 grid w-full min-w-0 grid-cols-3 gap-2 border-0 p-0">
+                <legend className="sr-only">Distill run controls</legend>
+                {actions}
+              </fieldset>
               <ActionButton
                 className="w-full justify-center whitespace-nowrap px-2"
                 onClick={() => setUsageOpen(true)}
@@ -107,12 +109,13 @@ export function DistillNodeBoard({
                 <ChartNoAxesColumn aria-hidden />
                 LLM usage
               </ActionButton>
-              <div className="flex justify-end">
+              <div className="w-full">
                 <ToggleGroup
                   legend="Distill pipeline shown as"
                   options={MODES}
                   value={mode}
                   onChange={setMode}
+                  fullWidth
                 />
               </div>
             </div>
@@ -167,10 +170,11 @@ export function DistillNodeBoard({
       ) : null}
       {usageOpen ? (
         <PipelineUsageSheet
-          threadId={runId}
+          bookId={bookId}
+          runId={runId}
           live={status === "queued" || status === "running"}
           title="Distill LLM usage"
-          subtitle="Calls and token counts for this Distill run."
+          subtitle="Calls and token counts recorded for this book run."
           onClose={() => setUsageOpen(false)}
         />
       ) : null}

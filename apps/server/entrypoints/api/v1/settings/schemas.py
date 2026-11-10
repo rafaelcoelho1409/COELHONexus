@@ -24,7 +24,20 @@ class EmbeddingBody(BaseModel):
     api_key: str | None = None
 
 
-SearchProviderId = Literal["coelho_search", "tavily", "exa", "jina"]
+SearchProviderId = Literal[
+    "coelho_search",
+    "linkup",
+    "you",
+    "parallel",
+    "exa",
+    "geekflare",
+    "tavily",
+    "tinyfish",
+    "firecrawl",
+    "serper",
+    "jina",
+    "serpapi",
+]
 
 
 class SearchProviderBody(BaseModel):
@@ -39,7 +52,9 @@ class SearchProviderView(BaseModel):
     provider_id: SearchProviderId
     name: str
     endpoint: str | None
+    account_url: str | None
     available: bool
+    key_required: bool
     has_key: bool
     key_source: Literal["user", "env"] | None
     key_last4: str | None

@@ -152,7 +152,7 @@ const CELL_GLYPH: Record<ChapterCell["status"], NodeStatus> = {
   done: "done",
   needs_review: "needs_review",
   failed: "failed",
-  cancelled: "failed",
+  cancelled: "stopped",
 };
 
 const ICON_BUTTON =
@@ -229,13 +229,23 @@ export function ChapterStrip({
               </div>
               <div className="flex items-center justify-between gap-2 pl-6">
                 <span
-                  className={`font-mono text-xs ${cell.status === "needs_review" ? "text-warning-text" : "text-muted-foreground"}`}
+                  className={`font-mono text-xs ${
+                    cell.status === "needs_review"
+                      ? "text-warning-text"
+                      : cell.status === "failed"
+                        ? "text-destructive-text"
+                        : "text-muted-foreground"
+                  }`}
                 >
                   {cell.synthEligible === false
                     ? "Excluded from Synth"
                     : cell.status === "needs_review"
                       ? "Needs review"
-                      : fmtMs(cell.wallMs)}
+                      : cell.status === "failed"
+                        ? "Failed"
+                        : cell.status === "cancelled"
+                          ? "Cancelled"
+                          : fmtMs(cell.wallMs)}
                 </span>
                 <span className="relative z-10 flex items-center">
                   <button
@@ -318,10 +328,9 @@ export type RunControls = {
   wipe: () => Promise<void>;
 };
 
-/** A stage's box, drawn as Ingestion draws its two: title (with a check once it finished cleanly) and status on top; below,
- * the LLM usage button on the left and Start / Stop / Wipe on the right, all in the Ingestion button look. Both boxes of
- * the pipeline page are this one shape, so their graphs start at the same height. `testId` prefixes the button test ids.
- * `children` sit under the title row (a health or audit line). */
+/** A stage's run controls, drawn in Ingestion's button style: title and status on top; below, LLM usage on the left and
+ * Start / Stop / Wipe on the right. In Planner and Synth this sits inside the same outer card as the graph. `testId`
+ * prefixes the button test ids. `children` sit under the title row (a health or audit line). */
 export function RunBar({
   title,
   testId,
@@ -329,6 +338,7 @@ export function RunBar({
   blockedMessage,
   onOpenUsage,
   children,
+  embedded = false,
 }: {
   title: string;
   testId: string;
@@ -338,13 +348,17 @@ export function RunBar({
   /** Opens the LLM usage sheet of this stage. */
   onOpenUsage: () => void;
   children?: ReactNode;
+  /** Draw the controls inside their stage's shared card with the graph below. */
+  embedded?: boolean;
 }) {
   const busy = controls.running || controls.starting;
   return (
     // `justify-between`: when a neighbouring box is taller (the pipeline page gives both one height), the buttons stay at the bottom edge.
     <section
       aria-label={`${title} run`}
-      className="flex min-w-0 flex-col justify-between gap-2 rounded-md border border-border bg-card p-3"
+      className={`flex min-w-0 flex-col justify-between gap-2 ${
+        embedded ? "" : "rounded-md border border-border bg-card p-3"
+      }`}
     >
       <div>
         <div className="flex min-h-9 flex-wrap items-center justify-between gap-2">
