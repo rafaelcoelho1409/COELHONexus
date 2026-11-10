@@ -546,39 +546,37 @@ function DistillWorkspaceView({
       {view === "study" ? (
         <div className="min-w-0">{outputPanel}</div>
       ) : (
-        <>
-          <div className="mt-4 min-w-0 space-y-3">
+        <div className="mt-4 grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,4fr)_minmax(0,4fr)_minmax(0,2fr)]">
+          <div className="min-w-0">
+            <DistillNodeBoard
+              bookId={bookId}
+              status={progressStatus}
+              progress={progress}
+              statusText={progressStatusText}
+              actions={progressActions}
+              runId={controlRun?.run_id ?? null}
+            />
+          </div>
+          <div className="min-w-0">
+            <RagIndexBoard
+              bookId={bookId}
+              index={ragIndex.data ?? null}
+              distillComplete={selected?.status === "done"}
+              executionEnabled={ragCapabilities.data?.execution_enabled === true}
+              capabilityError={ragCapabilities.isError ? apiErrorMessage(ragCapabilities.error) : null}
+              startPending={ragActions.start.isPending}
+              cancelPending={ragActions.cancel.isPending}
+              wipePending={ragActions.wipe.isPending}
+              onStart={startRag}
+              onCancel={stopRag}
+              onWipe={() => void wipeRag()}
+            />
+          </div>
+          <div className="min-w-0 space-y-3">
             {progressPanel}
             {runHistory}
           </div>
-          <div className="mt-4 grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-2">
-            <div className={!runs.isPending && !runs.isError ? "min-w-0" : "min-w-0 xl:col-span-2"}>
-              <DistillNodeBoard
-                bookId={bookId}
-                status={progressStatus}
-                progress={progress}
-                statusText={progressStatusText}
-                actions={progressActions}
-                runId={controlRun?.run_id ?? null}
-              />
-            </div>
-            {!runs.isPending && !runs.isError ? (
-              <RagIndexBoard
-                bookId={bookId}
-                index={ragIndex.data ?? null}
-                distillComplete={selected?.status === "done"}
-                executionEnabled={ragCapabilities.data?.execution_enabled === true}
-                capabilityError={ragCapabilities.isError ? apiErrorMessage(ragCapabilities.error) : null}
-                startPending={ragActions.start.isPending}
-                cancelPending={ragActions.cancel.isPending}
-                wipePending={ragActions.wipe.isPending}
-                onStart={startRag}
-                onCancel={stopRag}
-                onWipe={() => void wipeRag()}
-              />
-            ) : null}
-          </div>
-        </>
+        </div>
       )}
     </section>
   );

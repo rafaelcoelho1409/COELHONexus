@@ -5,7 +5,10 @@
  *
  * Request paths are same-origin (`/api/...`); `next.config.ts` proxies them to the server.
  */
-export * from "./generated";
+// Re-export the generated source modules directly so Next can resolve the SDK's named exports.
+
 export * from "./generated/@tanstack/react-query.gen";
 /** The shared fetch client — tests and server-side callers point it at an absolute `baseUrl`. */
 export { client } from "./generated/client.gen";
+export * from "./generated/sdk.gen";
+export * from "./generated/types.gen";

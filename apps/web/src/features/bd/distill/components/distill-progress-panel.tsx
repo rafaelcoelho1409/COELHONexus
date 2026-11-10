@@ -54,7 +54,7 @@ export function DistillProgressPanel({
         <div className="h-full bg-primary" style={{ width: `${percent ?? 0}%` }} />
       </div>
 
-      <dl className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
+      <dl className="mt-2 grid grid-cols-1 gap-2 text-xs">
         <ProgressMetric
           label="Learning units"
           value={

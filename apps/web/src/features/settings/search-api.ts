@@ -16,10 +16,10 @@ export async function readSearchSettings(signal: AbortSignal) {
   return searchSettingsSchema.parse(data);
 }
 
-export async function saveSearchProvider(providerId: SearchProviderId, apiKey: string) {
+export async function saveSearchProvider(providerId: SearchProviderId, apiKey?: string, endpoint?: string) {
   const { data } = await putSettingsSearchProviderId({
     path: { provider_id: providerId },
-    body: { api_key: apiKey },
+    body: { api_key: apiKey, endpoint },
     throwOnError: true,
   });
   return searchSettingsSchema.parse(data);

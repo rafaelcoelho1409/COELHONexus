@@ -118,9 +118,10 @@ async def put_search_provider(
 ) -> JSONResponse:
     try:
         result = await run_in_threadpool(
-            domains.settings.search.service.save_provider_key,
+            domains.settings.search.service.save_provider_connection,
             provider_id,
             body.api_key,
+            body.endpoint,
         )
     except domains.settings.credentials.errors.UnmanagedKeyEnv as error:
         raise HTTPException(status_code = 400, detail = str(error)) from error

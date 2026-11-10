@@ -1,4 +1,4 @@
-"""Fixed-endpoint Search MCP connections available to BD Distill."""
+"""Saved Search connections available to product integrations."""
 from . import params, service
 
 

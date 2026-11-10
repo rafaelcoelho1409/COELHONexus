@@ -42,6 +42,9 @@ SearchProviderId = Literal[
 
 class SearchProviderBody(BaseModel):
     api_key: str | None = Field(default = None, max_length = 4096)
+    # Used by Custom; omitted or null leaves the saved endpoint unchanged, and
+    # an empty string clears the override and falls back to deployment config.
+    endpoint: str | None = Field(default = None, max_length = 2048)
 
 
 class SearchDefaultBody(BaseModel):

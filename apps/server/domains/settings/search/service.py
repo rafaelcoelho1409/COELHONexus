@@ -23,27 +23,49 @@ def _provider(provider_id: str) -> params.SearchProvider:
     raise ValueError("unsupported search connection")
 
 
-def _endpoint(provider: params.SearchProvider) -> str | None:
+def _validate_endpoint(value: str | None) -> str | None:
+    if not value:
+        return None
+    value = value.strip()
+    if not value or any(character.isspace() for character in value):
+        return None
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname or ""
+        trusted_internal_http = host.casefold() == "localhost"
+        if host:
+            try:
+                trusted_internal_http = trusted_internal_http or ipaddress.ip_address(host).is_loopback
+            except ValueError:
+                trusted_internal_http = trusted_internal_http or host.casefold().endswith(
+                    (".svc", ".svc.cluster.local")
+                )
+        secure = parsed.scheme == "https" or (parsed.scheme == "http" and trusted_internal_http)
+        if (
+            not secure
+            or not parsed.netloc
+            or not host
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            return None
+        parsed.port  # Validate malformed ports before returning the URL.
+    except ValueError:
+        return None
+    return value.rstrip("/")
+
+
+def _endpoint(provider: params.SearchProvider, settings: dict[str, Any] | None = None) -> str | None:
     if provider.provider_id == "coelho_search":
-        value = os.environ.get("COELHO_SEARCH_MCP_URL", "").strip()
-        if not value:
-            return None
-        try:
-            parsed = urlsplit(value)
-            host = parsed.hostname or ""
-            trusted_internal_http = host.casefold() == "localhost"
-            if host:
-                try:
-                    trusted_internal_http = trusted_internal_http or ipaddress.ip_address(host).is_loopback
-                except ValueError:
-                    trusted_internal_http = trusted_internal_http or host.casefold().endswith((".svc", ".svc.cluster.local"))
-            secure = parsed.scheme == "https" or (parsed.scheme == "http" and trusted_internal_http)
-            if not secure or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
-                return None
-            parsed.port  # Validate malformed ports before returning the URL.
-        except ValueError:
-            return None
-        return value.rstrip("/")
+        if settings is None:
+            settings = domains.settings.credentials.service.get_store().read_settings() or {}
+        record = _provider_records(settings).get(provider.provider_id)
+        saved_endpoint = record.get("endpoint") if isinstance(record, dict) else None
+        if isinstance(saved_endpoint, str) and saved_endpoint.strip():
+            return _validate_endpoint(saved_endpoint)
+        return _validate_endpoint(os.environ.get("COELHO_SEARCH_MCP_URL"))
     return provider.endpoint
 
 
@@ -62,8 +84,8 @@ def _safe_endpoint(value: str | None) -> str | None:
     return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
 
 
-def endpoint_fingerprint(provider_id: str) -> str | None:
-    endpoint = _endpoint(_provider(provider_id))
+def endpoint_fingerprint(provider_id: str, settings: dict[str, Any] | None = None) -> str | None:
+    endpoint = _endpoint(_provider(provider_id), settings)
     return hashlib.sha256(endpoint.encode("utf-8")).hexdigest() if endpoint else None
 
 
@@ -94,9 +116,9 @@ def read_settings_view() -> dict[str, Any]:
         record = records.get(definition.provider_id)
         record = record if isinstance(record, dict) else {}
         status = store.key_status(definition.key_env)
-        endpoint = _endpoint(definition)
+        endpoint = _endpoint(definition, settings)
         tools = record.get("tools") if isinstance(record.get("tools"), list) else []
-        expected_fingerprint = endpoint_fingerprint(definition.provider_id)
+        expected_fingerprint = endpoint_fingerprint(definition.provider_id, settings)
         expected_credential_fingerprint = credential_fingerprint(definition.provider_id)
         checked_at = record.get("last_checked_at")
         if type(checked_at) not in {int, float}:
@@ -130,22 +152,42 @@ def read_settings_view() -> dict[str, Any]:
     return {"default_provider": default_provider, "providers": providers}
 
 
-def save_provider_key(provider_id: str, api_key: str | None) -> dict[str, Any]:
+def save_provider_connection(
+    provider_id: str,
+    api_key: str | None,
+    endpoint: str | None = None,
+) -> dict[str, Any]:
     definition = _provider(provider_id)
-    if _endpoint(definition) is None:
-        raise ValueError("the COELHO Search MCP endpoint is not configured on this deployment")
+    if provider_id != "coelho_search" and endpoint is not None:
+        raise ValueError("only the Custom connection accepts an endpoint")
+
     store = domains.settings.credentials.service.get_store()
+    settings = store.read_settings() or {}
+    search_settings = _records(settings)
+    provider_records = _provider_records(settings)
+    prior = provider_records.get(provider_id)
+    provider_record = dict(prior) if isinstance(prior, dict) else {}
+
+    if provider_id == "coelho_search" and endpoint is not None:
+        cleaned_endpoint = endpoint.strip()
+        if cleaned_endpoint:
+            validated_endpoint = _validate_endpoint(cleaned_endpoint)
+            if validated_endpoint is None:
+                raise ValueError(
+                    "Use an HTTPS endpoint, or HTTP on localhost or a trusted internal service, without "
+                    "credentials, query parameters, or fragments."
+                )
+            provider_record["endpoint"] = validated_endpoint
+        else:
+            provider_record.pop("endpoint", None)
+
     if api_key is not None:
         if api_key.strip():
             store.set_key(definition.key_env, api_key.strip())
         else:
             store.delete_key(definition.key_env)
-    settings = store.read_settings() or {}
-    search_settings = _records(settings)
-    provider_records = _provider_records(settings)
-    prior = provider_records.get(provider_id)
     provider_records[provider_id] = {
-        **(prior if isinstance(prior, dict) else {}),
+        **provider_record,
         "last_test_ok": False,
         "last_checked_at": None,
         "tools": [],
@@ -169,8 +211,8 @@ def set_default_provider(provider_id: str | None) -> dict[str, Any]:
         if (
             not isinstance(record, dict)
             or not record.get("last_test_ok")
-            or _endpoint(_provider(provider_id)) is None
-            or record.get("endpoint_fingerprint") != endpoint_fingerprint(provider_id)
+            or _endpoint(_provider(provider_id), settings) is None
+            or record.get("endpoint_fingerprint") != endpoint_fingerprint(provider_id, settings)
             or record.get("credential_fingerprint") != credential_fingerprint(provider_id)
         ):
             raise ValueError("test this available search connection successfully before selecting it")
@@ -216,7 +258,7 @@ async def test_provider(provider_id: str) -> dict[str, Any]:
             "provider_id": provider_id,
             "latency_ms": 0,
             "tools": [],
-            "error": "The COELHO Search MCP endpoint is not configured on this deployment.",
+            "error": "Set an endpoint before testing this connection.",
         }
 
     api_key = domains.settings.credentials.service.resolve_key(definition.key_env)

@@ -1,6 +1,6 @@
 "use client";
 
-import { ChartNoAxesColumn, X } from "lucide-react";
+import { ChartNoAxesColumn, Info, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import type { ReactNode } from "react";
 import { useState } from "react";
@@ -57,6 +57,7 @@ export function DistillNodeBoard({
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
+  const [progressOpen, setProgressOpen] = useState(false);
   const views = distillNodeViews(status, progress);
   const selectedNode = DISTILL_NODES.find((node) => node.id === selectedNodeId);
   const caption = distillBoardCaption(status, progress);
@@ -81,12 +82,47 @@ export function DistillNodeBoard({
           </div>
         </header>
 
-        <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-[minmax(15rem,1.1fr)_minmax(11rem,0.9fr)]">
-          <div className="min-w-0">
+        <div className="mt-3 flex min-w-0 flex-col gap-3">
+          <div className="flex min-w-0 flex-col gap-2">
+            <fieldset className="m-0 grid w-full min-w-0 grid-cols-3 gap-2 border-0 p-0">
+              <legend className="sr-only">Distill run controls</legend>
+              {actions}
+            </fieldset>
+            <ActionButton
+              className="w-full justify-center whitespace-nowrap px-2"
+              onClick={() => setUsageOpen(true)}
+              aria-haspopup="dialog"
+            >
+              <ChartNoAxesColumn aria-hidden />
+              LLM usage
+            </ActionButton>
+            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+              <ToggleGroup
+                legend="Distill pipeline shown as"
+                options={MODES}
+                value={mode}
+                onChange={setMode}
+                fullWidth
+              />
+              <ActionButton
+                iconOnly
+                onClick={() => setProgressOpen(true)}
+                aria-haspopup="dialog"
+                aria-label="Open learning progress"
+                title="Learning progress"
+              >
+                <Info aria-hidden />
+              </ActionButton>
+            </div>
+          </div>
+
+          <div className="min-w-0 overflow-hidden rounded-sm border border-border bg-background">
             {mode === "graph" ? (
               <AgenticFlow views={views} onOpenNode={setSelectedNodeId} ariaLabel="Distill pipeline graph" />
             ) : mode === "list" ? (
-              <AgenticNodeList rows={views} onOpen={setSelectedNodeId} label="Distill pipeline nodes" />
+              <div className="p-3">
+                <AgenticNodeList rows={views} onOpen={setSelectedNodeId} label="Distill pipeline nodes" />
+              </div>
             ) : (
               <MermaidTopology
                 title="Distill pipeline"
@@ -94,68 +130,6 @@ export function DistillNodeBoard({
                 note="Configured node flow, in execution order."
               />
             )}
-          </div>
-          <div className="flex min-w-0 flex-col">
-            <div className="mb-3 flex min-w-0 flex-col items-stretch gap-2">
-              <fieldset className="m-0 grid w-full min-w-0 grid-cols-3 gap-2 border-0 p-0">
-                <legend className="sr-only">Distill run controls</legend>
-                {actions}
-              </fieldset>
-              <ActionButton
-                className="w-full justify-center whitespace-nowrap px-2"
-                onClick={() => setUsageOpen(true)}
-                aria-haspopup="dialog"
-              >
-                <ChartNoAxesColumn aria-hidden />
-                LLM usage
-              </ActionButton>
-              <div className="w-full">
-                <ToggleGroup
-                  legend="Distill pipeline shown as"
-                  options={MODES}
-                  value={mode}
-                  onChange={setMode}
-                  fullWidth
-                />
-              </div>
-            </div>
-            <section
-              aria-label="Learning progress"
-              className="relative min-w-0 rounded-sm border border-border bg-background xl:min-h-72 xl:flex-1"
-            >
-              <div className="flex min-h-0 flex-col p-3 xl:absolute xl:inset-0">
-                <header className="flex flex-wrap items-baseline justify-between gap-2">
-                  <h4 className="text-sm font-medium">Learning progress</h4>
-                  {progress && progress.total_units > 0 ? (
-                    <span className="text-xs tabular-nums text-muted-foreground">
-                      {progress.completed_units} of {progress.total_units} units
-                    </span>
-                  ) : null}
-                </header>
-                {status === null ? (
-                  <p className="mt-3 text-xs text-muted-foreground">
-                    Unit and chapter progress appears here when a run starts.
-                  </p>
-                ) : progress ? (
-                  <div className="mt-3 flex min-h-0 flex-col gap-4 xl:flex-1">
-                    <ProgressMetric
-                      label="Learning units"
-                      current={progress.completed_units}
-                      total={progress.total_units}
-                    />
-                    <ProgressMetric
-                      label="Chapters"
-                      current={progress.completed_chapters}
-                      total={progress.total_chapters}
-                    />
-                  </div>
-                ) : (
-                  <p className="mt-3 text-xs text-muted-foreground">
-                    This run has not reported progress totals yet.
-                  </p>
-                )}
-              </div>
-            </section>
           </div>
         </div>
       </section>
@@ -166,6 +140,14 @@ export function DistillNodeBoard({
           status={distillNodeStatus(selectedNode.id, status, progress)}
           runStatus={status}
           onClose={() => setSelectedNodeId(null)}
+        />
+      ) : null}
+      {progressOpen ? (
+        <LearningProgressSheet
+          status={status}
+          statusText={statusText}
+          progress={progress}
+          onClose={() => setProgressOpen(false)}
         />
       ) : null}
       {usageOpen ? (
@@ -179,6 +161,89 @@ export function DistillNodeBoard({
         />
       ) : null}
     </>
+  );
+}
+
+function LearningProgressSheet({
+  status,
+  statusText,
+  progress,
+  onClose,
+}: {
+  status: DistillRun["status"] | null;
+  statusText: string;
+  progress: DistillRun["progress"] | null;
+  onClose: () => void;
+}) {
+  const dialog = useModalDialog();
+  const totalUnits = progress?.total_units ?? 0;
+  const completedUnits = progress ? Math.max(0, Math.min(progress.completed_units, totalUnits)) : 0;
+  const completedPercent = totalUnits > 0 ? Math.round((completedUnits / totalUnits) * 100) : 0;
+
+  return (
+    <dialog
+      ref={dialog}
+      aria-labelledby="distill-progress-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      className="m-0 ml-auto h-dvh max-h-none w-full max-w-2xl overflow-y-auto border-l border-border bg-background p-0 text-foreground backdrop:bg-background/80"
+    >
+      <header className="sticky top-0 z-10 flex items-start gap-3 border-b border-border bg-background px-5 py-4">
+        <div className="min-w-0 flex-1">
+          <h2 id="distill-progress-title" className="text-lg font-semibold tracking-tight">
+            Learning progress
+          </h2>
+          <p className="mt-1 text-xs text-muted-foreground">{statusText}</p>
+        </div>
+        <ActionButton iconOnly onClick={onClose} aria-label="Close learning progress">
+          <X aria-hidden />
+        </ActionButton>
+      </header>
+      <div className="flex flex-col gap-4 px-5 py-4">
+        {status === null ? (
+          <p className="text-sm text-muted-foreground">
+            Unit and chapter progress appears here when a run starts.
+          </p>
+        ) : progress ? (
+          <>
+            <section className="rounded-sm border border-border bg-card p-4">
+              <header className="flex flex-wrap items-baseline justify-between gap-2">
+                <h3 className="text-sm font-medium">Learning units</h3>
+                <span className="text-sm font-semibold tabular-nums">
+                  {totalUnits > 0
+                    ? `${completedUnits.toLocaleString()} / ${totalUnits.toLocaleString()}`
+                    : "Not reported"}
+                </span>
+              </header>
+              {totalUnits > 0 ? (
+                <div
+                  role="progressbar"
+                  aria-label="Learning units completed"
+                  aria-valuemin={0}
+                  aria-valuemax={totalUnits}
+                  aria-valuenow={completedUnits}
+                  aria-valuetext={`${completedUnits} of ${totalUnits} learning units · ${completedPercent}%`}
+                  className="mt-3 h-2 overflow-hidden rounded-sm bg-muted"
+                >
+                  <div className="h-full bg-primary" style={{ width: `${completedPercent}%` }} />
+                </div>
+              ) : null}
+            </section>
+            <section aria-label="Chapter progress" className="rounded-sm border border-border bg-card p-4">
+              <ProgressMetric
+                label="Chapters"
+                current={progress.completed_chapters}
+                total={progress.total_chapters}
+              />
+            </section>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">This run has not reported progress totals yet.</p>
+        )}
+      </div>
+    </dialog>
   );
 }
 

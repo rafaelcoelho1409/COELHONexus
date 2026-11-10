@@ -404,6 +404,61 @@
         }
       }
     },
+    "/api/v1/bd/distill/{book_id}/runs/{run_id}/llm-counters": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Run Llm Counters",
+        "operationId": "get_bd_distill_book_id_runs_run_id_llm_counters",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Bd Distill Book Id Runs Run Id Llm Counters"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/bd/distill/{book_id}/runs/{run_id}/rag-index": {
       "get": {
         "tags": [
@@ -10094,6 +10149,18 @@
               }
             ],
             "title": "Api Key"
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint"
           }
         },
         "type": "object",

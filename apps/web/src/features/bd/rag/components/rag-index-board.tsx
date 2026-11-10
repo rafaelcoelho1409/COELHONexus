@@ -1,6 +1,6 @@
 "use client";
 
-import { ChartNoAxesColumn } from "lucide-react";
+import { ChartNoAxesColumn, Info } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useState } from "react";
 import { MermaidTopology } from "@/shared/markdown/mermaid-topology";
@@ -11,6 +11,7 @@ import { ToggleGroup } from "../../components/toggle-group";
 import type { AgenticNodeStatus, AgenticNodeView } from "../../domain/agentic-progress";
 import type { RagIndexStatus } from "../index-entities";
 import { PipelineUsageSheet } from "./pipeline-usage-sheet";
+import { SideSheet } from "./side-sheet";
 
 const AgenticFlow = dynamic(
   () => import("../../components/agentic-flow").then((module) => module.AgenticFlow),
@@ -101,6 +102,7 @@ export function RagIndexBoard({
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<NodeId>("pin_sources");
   const [usageOpen, setUsageOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
   const views = nodeViews(index);
   const selectedNode = NODES.find((node) => node.id === selectedNodeId);
   const active = index?.status === "queued" || index?.status === "running";
@@ -138,12 +140,92 @@ export function RagIndexBoard({
         </p>
       ) : null}
 
-      <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-[minmax(13rem,1.1fr)_minmax(10rem,0.9fr)]">
-        <div className="min-w-0">
+      <div className="mt-3 flex min-w-0 flex-col gap-3">
+        <div className="flex min-w-0 flex-col gap-2">
+          <fieldset className="m-0 grid w-full min-w-0 grid-cols-3 gap-2 border-0 p-0">
+            <legend className="sr-only">Agentic RAG run controls</legend>
+            <ActionButton
+              className="w-full min-w-0 justify-center px-1"
+              onClick={onStart}
+              disabled={
+                !executionEnabled ||
+                !distillComplete ||
+                index?.status === "done" ||
+                active ||
+                startPending ||
+                cancelPending
+              }
+              aria-busy={startPending}
+              aria-label={resumable ? "Resume Agentic RAG" : "Start Agentic RAG"}
+              title={
+                capabilityError ??
+                (!executionEnabled
+                  ? "Agentic RAG execution is disabled in this environment."
+                  : index?.status === "done"
+                    ? "This retrieval index is complete."
+                    : !distillComplete
+                      ? "Complete Distill before starting retrieval indexing."
+                      : undefined)
+              }
+            >
+              {startPending ? (resumable ? "Resuming…" : "Starting…") : resumable ? "Resume" : "Start"}
+            </ActionButton>
+            <ActionButton
+              className="w-full min-w-0 justify-center px-1"
+              onClick={onCancel}
+              disabled={!active || index?.cancel_requested === true || cancelPending}
+              aria-busy={cancelPending || index?.cancel_requested === true}
+              aria-label="Stop Agentic RAG"
+              title={active ? undefined : "There is no active retrieval run to stop."}
+            >
+              {cancelPending || index?.cancel_requested === true ? "Stopping…" : "Stop"}
+            </ActionButton>
+            <ActionButton
+              className="w-full min-w-0 justify-center px-1"
+              onClick={onWipe}
+              disabled={!hasRun || active || wipePending || startPending || cancelPending}
+              aria-busy={wipePending}
+              aria-label="Wipe Agentic RAG index"
+              title={active ? "Stop the active retrieval run before wiping its index." : undefined}
+            >
+              {wipePending ? "Wiping…" : "Wipe"}
+            </ActionButton>
+          </fieldset>
+          <ActionButton
+            className="w-full justify-center whitespace-nowrap px-2"
+            onClick={() => setUsageOpen(true)}
+            aria-haspopup="dialog"
+          >
+            <ChartNoAxesColumn aria-hidden />
+            LLM usage
+          </ActionButton>
+          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+            <ToggleGroup
+              legend="Agentic RAG pipeline shown as"
+              options={MODES}
+              value={mode}
+              onChange={setMode}
+              fullWidth
+            />
+            <ActionButton
+              iconOnly
+              onClick={() => setInfoOpen(true)}
+              aria-haspopup="dialog"
+              aria-label={`Open ${selectedNode?.label ?? "Agentic RAG"} details`}
+              title={`${selectedNode?.label ?? "Agentic RAG"} details`}
+            >
+              <Info aria-hidden />
+            </ActionButton>
+          </div>
+        </div>
+
+        <div className="min-w-0 overflow-hidden rounded-sm border border-border bg-background">
           {mode === "graph" ? (
             <AgenticFlow views={views} onOpenNode={selectNode} ariaLabel="Agentic RAG pipeline graph" />
           ) : mode === "list" ? (
-            <AgenticNodeList rows={views} onOpen={selectNode} label="Agentic RAG pipeline nodes" />
+            <div className="p-3">
+              <AgenticNodeList rows={views} onOpen={selectNode} label="Agentic RAG pipeline nodes" />
+            </div>
           ) : (
             <MermaidTopology
               title="Agentic RAG"
@@ -152,105 +234,40 @@ export function RagIndexBoard({
             />
           )}
         </div>
-        <div className="flex min-w-0 flex-col">
-          <div className="mb-3 flex min-w-0 flex-col items-stretch gap-2">
-            <fieldset className="m-0 grid w-full min-w-0 grid-cols-3 gap-2 border-0 p-0">
-              <legend className="sr-only">Agentic RAG run controls</legend>
-              <ActionButton
-                className="w-full min-w-0 justify-center px-1"
-                onClick={onStart}
-                disabled={
-                  !executionEnabled ||
-                  !distillComplete ||
-                  index?.status === "done" ||
-                  active ||
-                  startPending ||
-                  cancelPending
-                }
-                aria-busy={startPending}
-                aria-label={resumable ? "Resume Agentic RAG" : "Start Agentic RAG"}
-                title={
-                  capabilityError ??
-                  (!executionEnabled
-                    ? "Agentic RAG execution is disabled in this environment."
-                    : index?.status === "done"
-                      ? "This retrieval index is complete."
-                      : !distillComplete
-                        ? "Complete Distill before starting retrieval indexing."
-                        : undefined)
-                }
-              >
-                {startPending ? (resumable ? "Resuming…" : "Starting…") : resumable ? "Resume" : "Start"}
-              </ActionButton>
-              <ActionButton
-                className="w-full min-w-0 justify-center px-1"
-                onClick={onCancel}
-                disabled={!active || index?.cancel_requested === true || cancelPending}
-                aria-busy={cancelPending || index?.cancel_requested === true}
-                aria-label="Stop Agentic RAG"
-                title={active ? undefined : "There is no active retrieval run to stop."}
-              >
-                {cancelPending || index?.cancel_requested === true ? "Stopping…" : "Stop"}
-              </ActionButton>
-              <ActionButton
-                className="w-full min-w-0 justify-center px-1"
-                onClick={onWipe}
-                disabled={!hasRun || active || wipePending || startPending || cancelPending}
-                aria-busy={wipePending}
-                aria-label="Wipe Agentic RAG index"
-                title={active ? "Stop the active retrieval run before wiping its index." : undefined}
-              >
-                {wipePending ? "Wiping…" : "Wipe"}
-              </ActionButton>
-            </fieldset>
-            <ActionButton
-              className="w-full justify-center whitespace-nowrap px-2"
-              onClick={() => setUsageOpen(true)}
-              aria-haspopup="dialog"
+      </div>
+      {infoOpen && selectedNode ? (
+        <SideSheet
+          title={selectedNode.label}
+          subtitle={
+            <AgenticStatusBadge
+              status={views.find((view) => view.id === selectedNodeId)?.status ?? "pending"}
+            />
+          }
+          closeLabel="Close Agentic RAG details"
+          onClose={() => setInfoOpen(false)}
+        >
+          <div className="flex flex-col gap-5">
+            <section aria-label="Selected retrieval stage" className="flex flex-col gap-3">
+              <p className="text-sm">{selectedNode.detail}</p>
+              <div className="grid grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-2 text-xs text-muted-foreground">
+                <span>Reads</span>
+                <AgenticPills items={selectedNode.reads} />
+                <span>Writes</span>
+                <AgenticPills items={selectedNode.writes} />
+              </div>
+            </section>
+            <section
+              aria-label="Retrieval index counts"
+              className="flex flex-col gap-2 border-t border-border pt-4"
             >
-              <ChartNoAxesColumn aria-hidden />
-              LLM usage
-            </ActionButton>
-            <div className="w-full">
-              <ToggleGroup
-                legend="Agentic RAG pipeline shown as"
-                options={MODES}
-                value={mode}
-                onChange={setMode}
-                fullWidth
-              />
-            </div>
-          </div>
-          <section
-            aria-label="Retrieval progress"
-            className="min-w-0 rounded-sm border border-border bg-background p-3 xl:min-h-72 xl:flex-1"
-          >
-            {selectedNode ? (
-              <>
-                <header className="flex flex-wrap items-center justify-between gap-2">
-                  <h4 className="text-sm font-medium">{selectedNode.label}</h4>
-                  <AgenticStatusBadge
-                    status={views.find((view) => view.id === selectedNodeId)?.status ?? "pending"}
-                  />
-                </header>
-                <p className="mt-2 text-xs text-muted-foreground">{selectedNode.detail}</p>
-                <div className="mt-3 grid grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-2 text-xs text-muted-foreground">
-                  <span>Reads</span>
-                  <AgenticPills items={selectedNode.reads} />
-                  <span>Writes</span>
-                  <AgenticPills items={selectedNode.writes} />
-                </div>
-              </>
-            ) : null}
-            <div className="mt-4 flex flex-col gap-2 border-t border-border pt-3">
               <Metric label="Source pages" value={index?.source_page_count ?? 0} />
               <Metric label="Indexed passages" value={index?.point_count ?? 0} />
               <Metric label="Knowledge nodes" value={index?.graph_node_count ?? 0} />
               <Metric label="Evidence links" value={index?.graph_relationship_count ?? 0} />
-            </div>
-          </section>
-        </div>
-      </div>
+            </section>
+          </div>
+        </SideSheet>
+      ) : null}
       {usageOpen ? (
         <PipelineUsageSheet
           bookId={bookId}

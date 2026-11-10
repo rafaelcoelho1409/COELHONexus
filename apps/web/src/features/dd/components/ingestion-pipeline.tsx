@@ -226,10 +226,10 @@ export function IngestionPipeline({
               )}
             </div>
             <div className="flex min-w-0 flex-col">
-              <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
+              <div className="mb-3 flex min-w-0 flex-col gap-2">
                 {hasRun ? (
                   <ActionButton
-                    className="min-w-0 flex-1 justify-center whitespace-nowrap px-2"
+                    className="w-full justify-center whitespace-nowrap px-2"
                     onClick={() => setUsageOpen(true)}
                     aria-haspopup="dialog"
                   >
@@ -237,7 +237,13 @@ export function IngestionPipeline({
                     LLM usage
                   </ActionButton>
                 ) : null}
-                <ToggleGroup legend="Pipeline shown as" options={MODES} value={mode} onChange={setMode} />
+                <ToggleGroup
+                  legend="Pipeline shown as"
+                  options={MODES}
+                  value={mode}
+                  onChange={setMode}
+                  fullWidth
+                />
               </div>
               {/* From xl the box is as tall as the graph beside it and nothing more: its content is taken out of flow
                * (`absolute inset-0`), so a long list scrolls inside it instead of stretching the row. */}

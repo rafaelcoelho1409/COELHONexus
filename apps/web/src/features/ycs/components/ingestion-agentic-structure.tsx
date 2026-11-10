@@ -54,38 +54,38 @@ export function IngestionAgenticStructure({
 
   return (
     <>
+      <div className="flex justify-end">
+        <ActionButton type="button" aria-haspopup="dialog" onClick={onOpenUsage}>
+          <ChartNoAxesColumn aria-hidden />
+          LLM usage
+        </ActionButton>
+      </div>
       <section
         aria-label={ariaLabel}
         className="flex min-w-0 flex-col gap-3 rounded-md border border-border bg-card p-3"
       >
-        <header className="flex min-w-0 items-start justify-between gap-3">
+        <header className="flex min-h-9 min-w-0 flex-wrap items-center justify-between gap-3">
           <p
             aria-live="polite"
             title={caption}
-            className="line-clamp-2 min-w-0 flex-1 text-xs leading-4 text-muted-foreground"
+            className="line-clamp-2 min-w-0 text-xs leading-4 text-muted-foreground"
           >
             {caption}
           </p>
-          <div className="flex shrink-0 flex-col items-end gap-2">
-            <ActionButton type="button" aria-haspopup="dialog" onClick={onOpenUsage}>
-              <ChartNoAxesColumn aria-hidden />
-              LLM usage
-            </ActionButton>
-            <fieldset className="m-0 inline-flex overflow-hidden rounded-sm border border-border bg-background p-0">
-              <legend className="sr-only">Ingestion workflow shown as</legend>
-              {MODES.map((entry) => (
-                <ActionButton
-                  key={entry.id}
-                  type="button"
-                  aria-pressed={mode === entry.id}
-                  onClick={() => setMode(entry.id)}
-                  className="min-h-9 min-w-16 rounded-none border-0 border-r border-r-border px-2.5 text-xs last:border-r-0"
-                >
-                  {entry.label}
-                </ActionButton>
-              ))}
-            </fieldset>
-          </div>
+          <fieldset className="m-0 inline-flex shrink-0 overflow-hidden rounded-sm border border-border bg-background p-0">
+            <legend className="sr-only">Ingestion workflow shown as</legend>
+            {MODES.map((entry) => (
+              <ActionButton
+                key={entry.id}
+                type="button"
+                aria-pressed={mode === entry.id}
+                onClick={() => setMode(entry.id)}
+                className="min-h-9 rounded-none border-0 border-r border-r-border px-2.5 last:border-r-0"
+              >
+                {entry.label}
+              </ActionButton>
+            ))}
+          </fieldset>
         </header>
 
         {mode === "graph" ? (

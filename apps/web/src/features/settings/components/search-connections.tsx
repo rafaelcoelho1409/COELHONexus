@@ -8,29 +8,23 @@ import { buttonVariants } from "@/shared/ui/button-variants";
 import { Input } from "@/shared/ui/input";
 import { Label } from "@/shared/ui/label";
 
-import type { SearchProvider, SearchTestResult } from "../entities";
+import type { SearchProvider, SearchSettings, SearchTestResult } from "../entities";
 import { useSearchConnections } from "../hooks/use-search-connections";
 import { CUSTOM_SEARCH_PROVIDER_ID, type SearchProviderId } from "../params";
 
 export function SearchConnections() {
   const { query, save, setDefault, test } = useSearchConnections();
-  const [selectedProviderId, setSelectedProviderId] = useState<SearchProviderId>(CUSTOM_SEARCH_PROVIDER_ID);
+  const [selectedProviderId, setSelectedProviderId] = useState<SearchProviderId | null>(null);
   const settings = query.data;
-  const connectedProviders = settings?.providers.filter((provider) => provider.connected) ?? [];
-  const selectedProvider = settings?.providers.find(
-    (provider) => provider.provider_id === selectedProviderId,
-  );
-  const customProvider = settings?.providers.find(
-    (provider) => provider.provider_id === CUSTOM_SEARCH_PROVIDER_ID,
-  );
+  const activeProviderId = selectedProviderId ?? settings?.default_provider ?? CUSTOM_SEARCH_PROVIDER_ID;
+  const selectedProvider = settings?.providers.find((provider) => provider.provider_id === activeProviderId);
   const saveErrorProvider = save.variables?.providerId;
   const testErrorProvider = test.variables;
 
   return (
     <section aria-labelledby="search-connections-heading" className="border border-border bg-card">
       <header className="border-b border-border px-5 py-4 sm:px-6">
-        <p className="mono-label">Search services</p>
-        <h2 id="search-connections-heading" className="mt-1 text-xl font-semibold tracking-tight">
+        <h2 id="search-connections-heading" className="text-xl font-semibold tracking-tight">
           Search
         </h2>
         <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
@@ -65,61 +59,47 @@ export function SearchConnections() {
 
         {settings ? (
           <>
-            <div className="grid grid-cols-1 gap-2 border-b border-border pb-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:items-center">
-              <Label htmlFor="search-provider-select">Service to configure</Label>
-              <select
-                id="search-provider-select"
-                value={selectedProviderId}
-                onChange={(event) => setSelectedProviderId(event.currentTarget.value as SearchProviderId)}
-                className="h-9 min-w-0 rounded-sm border border-border bg-background px-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                aria-describedby="search-provider-help"
-              >
-                <option value={CUSTOM_SEARCH_PROVIDER_ID}>Custom</option>
-                {settings.providers
-                  .filter((provider) => provider.provider_id !== CUSTOM_SEARCH_PROVIDER_ID)
-                  .map((provider) => (
-                    <option key={provider.provider_id} value={provider.provider_id}>
-                      {provider.name}
-                    </option>
-                  ))}
-              </select>
-              <p id="search-provider-help" className="text-xs text-muted-foreground sm:col-start-2">
-                Choose a service to manage its saved key and connection check.
-                {customProvider ? ` Custom uses ${customProvider.name}.` : ""}
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 gap-2 border-b border-border py-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:items-center">
-              <Label htmlFor="search-default-provider">Default service</Label>
-              <select
-                id="search-default-provider"
-                value={settings.default_provider ?? ""}
-                onChange={(event) => {
-                  const providerId = event.currentTarget.value || null;
-                  setDefault.mutate(providerId as SearchProviderId | null);
-                }}
-                disabled={setDefault.isPending}
-                className="h-9 min-w-0 rounded-sm border border-border bg-background px-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-60"
-                aria-describedby="search-default-help"
-              >
-                <option value="">No preferred service</option>
-                {connectedProviders.map((provider) => (
-                  <option key={provider.provider_id} value={provider.provider_id}>
-                    {provider.provider_id === CUSTOM_SEARCH_PROVIDER_ID ? "Custom" : provider.name}
-                  </option>
-                ))}
-              </select>
-              <p id="search-default-help" className="text-xs text-muted-foreground sm:col-start-2">
-                Only successfully tested connections can be selected.
-              </p>
+            <div className="grid grid-cols-1 gap-x-4 gap-y-4 border-b border-border pb-4 sm:grid-cols-[6rem_minmax(0,1fr)] sm:items-start">
+              <Label htmlFor="search-provider-select" className="sm:h-9">
+                Service
+              </Label>
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <select
+                  id="search-provider-select"
+                  value={activeProviderId}
+                  onChange={(event) => {
+                    const providerId = event.currentTarget.value as SearchProviderId;
+                    setSelectedProviderId(providerId);
+                    setDefault.reset();
+                    const provider = settings.providers.find((item) => item.provider_id === providerId);
+                    if (provider?.connected && providerId !== settings.default_provider) {
+                      setDefault.mutate(providerId);
+                    }
+                  }}
+                  className="h-9 min-w-0 rounded-sm border border-border bg-background px-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-60"
+                  aria-describedby="search-provider-help"
+                >
+                  <option value={CUSTOM_SEARCH_PROVIDER_ID}>Custom</option>
+                  {settings.providers
+                    .filter((provider) => provider.provider_id !== CUSTOM_SEARCH_PROVIDER_ID)
+                    .map((provider) => (
+                      <option key={provider.provider_id} value={provider.provider_id}>
+                        {provider.name}
+                      </option>
+                    ))}
+                </select>
+                <p id="search-provider-help" className="text-xs text-muted-foreground">
+                  Choose a service to manage its connection. A successful check sets it as the default.
+                </p>
+              </div>
               {setDefault.isError ? (
                 <p role="alert" className="text-sm text-destructive-text sm:col-start-2">
-                  The default service could not be saved — {apiErrorMessage(setDefault.error)}
+                  The selected service could not be saved — {apiErrorMessage(setDefault.error)}
                 </p>
               ) : null}
-              {setDefault.isSuccess ? (
+              {setDefault.isSuccess && setDefault.variables === activeProviderId ? (
                 <p role="status" className="text-sm text-success-text sm:col-start-2">
-                  Default service saved.
+                  This is now the default search service.
                 </p>
               ) : null}
             </div>
@@ -137,10 +117,20 @@ export function SearchConnections() {
                   test.isError && testErrorProvider === selectedProvider.provider_id ? test.error : null
                 }
                 testResult={test.data?.provider_id === selectedProvider.provider_id ? test.data : null}
-                onSave={(apiKey, onSaved) =>
-                  save.mutate({ providerId: selectedProvider.provider_id, apiKey }, { onSuccess: onSaved })
+                onSave={(connection, onSaved) =>
+                  save.mutate(
+                    { providerId: selectedProvider.provider_id, ...connection },
+                    { onSuccess: onSaved },
+                  )
                 }
-                onTest={() => test.mutate(selectedProvider.provider_id)}
+                onTest={() => {
+                  setDefault.reset();
+                  test.mutate(selectedProvider.provider_id, {
+                    onSuccess: (result) => {
+                      if (result.ok) setDefault.mutate(selectedProvider.provider_id);
+                    },
+                  });
+                }}
               />
             ) : (
               <p role="status" className="pt-4 text-sm text-muted-foreground">
@@ -170,20 +160,31 @@ function SearchProviderCard({
   testing: boolean;
   testError: unknown;
   testResult: SearchTestResult | null;
-  onSave: (apiKey: string, onSaved: () => void) => void;
+  onSave: (
+    connection: { apiKey?: string; endpoint?: string },
+    onSaved: (settings: SearchSettings) => void,
+  ) => void;
   onTest: () => void;
 }) {
   const [apiKey, setApiKey] = useState("");
+  const [endpointDraft, setEndpointDraft] = useState(provider.endpoint ?? "");
+  const isCustom = provider.provider_id === CUSTOM_SEARCH_PROVIDER_ID;
   const canRemoveKey = provider.has_key && provider.key_source === "user";
   const hasUnsavedKey = apiKey.trim().length > 0;
+  const hasUnsavedEndpoint = isCustom && endpointDraft.trim() !== (provider.endpoint ?? "");
+  const hasUnsavedConnection = hasUnsavedKey || hasUnsavedEndpoint;
   const prefix = `search-${provider.provider_id}`;
   const accountUrl = provider.account_url;
-  const displayName = provider.provider_id === CUSTOM_SEARCH_PROVIDER_ID ? "Custom" : provider.name;
-  const statusText = !provider.available
-    ? "Endpoint not configured"
+  const displayName = isCustom ? "Custom" : provider.name;
+  const statusText = hasUnsavedConnection
+    ? "Unsaved changes"
     : provider.connected
       ? "Connected"
-      : "Not tested";
+      : provider.available
+        ? "Not tested"
+        : isCustom
+          ? "Setup required"
+          : "Endpoint unavailable";
 
   return (
     <article aria-labelledby={`${prefix}-heading`} className="py-5 first:pt-5 last:pb-0">
@@ -194,14 +195,19 @@ function SearchProviderCard({
               {displayName}
             </h3>
             <span
-              className={provider.connected ? "text-xs text-success-text" : "text-xs text-muted-foreground"}
+              aria-live="polite"
+              className={
+                provider.connected && !hasUnsavedConnection
+                  ? "text-xs text-success-text"
+                  : "text-xs text-muted-foreground"
+              }
             >
               {statusText}
             </span>
           </div>
-          <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
-            {provider.endpoint ?? "The endpoint is configured by the deployment."}
-          </p>
+          {!isCustom ? (
+            <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{provider.endpoint}</p>
+          ) : null}
         </div>
         {accountUrl ? (
           <a
@@ -223,41 +229,105 @@ function SearchProviderCard({
         ) : null}
       </div>
 
-      {provider.available ? (
+      {provider.available || isCustom ? (
         <>
-          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[8rem_minmax(0,1fr)] sm:items-center">
-            <Label htmlFor={`${prefix}-key`}>API key</Label>
-            <Input
-              id={`${prefix}-key`}
-              name={`${prefix}-key`}
-              type="password"
-              autoComplete="new-password"
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              aria-describedby={`${prefix}-key-help`}
-              className="h-9"
-            />
-            <span className="sm:col-start-2" id={`${prefix}-key-help`}>
-              <KeySummary provider={provider} />
-            </span>
+          <div className="mt-4 grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-[6rem_minmax(0,1fr)] sm:items-start">
+            {isCustom ? (
+              <>
+                <Label htmlFor={`${prefix}-endpoint`} className="sm:h-9">
+                  MCP endpoint
+                </Label>
+                <div className="flex min-w-0 flex-col gap-1.5">
+                  <Input
+                    id={`${prefix}-endpoint`}
+                    name={`${prefix}-endpoint`}
+                    type="url"
+                    autoComplete="url"
+                    value={endpointDraft}
+                    onChange={(event) => setEndpointDraft(event.target.value)}
+                    placeholder="https://search.example.com/mcp"
+                    aria-describedby={`${prefix}-endpoint-help`}
+                    className="h-9"
+                  />
+                  <span className="text-xs text-muted-foreground" id={`${prefix}-endpoint-help`}>
+                    Enter the full MCP endpoint URL. HTTPS is required except for localhost and trusted
+                    internal services.
+                  </span>
+                </div>
+              </>
+            ) : null}
+            <Label htmlFor={`${prefix}-key`} className="sm:h-9">
+              API key
+            </Label>
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <Input
+                id={`${prefix}-key`}
+                name={`${prefix}-key`}
+                type="password"
+                autoComplete="new-password"
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+                aria-describedby={`${prefix}-key-help`}
+                className="h-9"
+              />
+              <span id={`${prefix}-key-help`}>
+                <KeySummary provider={provider} />
+              </span>
+            </div>
+            {hasUnsavedKey || hasUnsavedEndpoint ? (
+              <p className="text-xs text-muted-foreground sm:col-start-2">
+                Save the connection details before testing.
+              </p>
+            ) : null}
           </div>
-          {hasUnsavedKey ? (
-            <p className="mt-1 text-xs text-muted-foreground sm:ml-[8rem]">
-              Save this key before testing the connection.
-            </p>
-          ) : null}
 
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            {hasUnsavedKey || canRemoveKey ? (
+          <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 sm:pl-[7rem]">
+            {isCustom ? (
+              <>
+                {hasUnsavedKey || hasUnsavedEndpoint ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="lg"
+                    disabled={saving}
+                    aria-busy={saving}
+                    onClick={() => {
+                      const connection: { apiKey?: string; endpoint?: string } = {};
+                      if (hasUnsavedKey) connection.apiKey = apiKey;
+                      if (hasUnsavedEndpoint) connection.endpoint = endpointDraft.trim();
+                      onSave(connection, (settings) => {
+                        const savedProvider = settings.providers.find(
+                          (item) => item.provider_id === provider.provider_id,
+                        );
+                        setEndpointDraft(savedProvider?.endpoint ?? "");
+                        setApiKey("");
+                      });
+                    }}
+                  >
+                    {saving ? "Saving…" : "Save connection"}
+                  </Button>
+                ) : null}
+                {canRemoveKey ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="lg"
+                    disabled={saving}
+                    aria-busy={saving}
+                    onClick={() => onSave({ apiKey: "" }, () => setApiKey(""))}
+                  >
+                    {saving ? "Saving…" : "Remove key"}
+                  </Button>
+                ) : null}
+              </>
+            ) : hasUnsavedKey || canRemoveKey ? (
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
+                size="lg"
                 disabled={saving}
                 aria-busy={saving}
-                onClick={() => {
-                  onSave(apiKey, () => setApiKey(""));
-                }}
+                onClick={() => onSave({ apiKey }, () => setApiKey(""))}
               >
                 {saving ? "Saving…" : hasUnsavedKey ? "Save key" : "Remove key"}
               </Button>
@@ -265,11 +335,12 @@ function SearchProviderCard({
             <Button
               type="button"
               variant="outline"
-              size="sm"
+              size="lg"
               disabled={
                 !provider.available ||
                 testing ||
                 hasUnsavedKey ||
+                hasUnsavedEndpoint ||
                 (provider.key_required && !provider.has_key)
               }
               aria-busy={testing}
@@ -283,7 +354,7 @@ function SearchProviderCard({
 
       {saveError ? (
         <p role="alert" className="mt-2 text-sm text-destructive-text">
-          Key could not be saved — {apiErrorMessage(saveError)}
+          Connection details could not be saved — {apiErrorMessage(saveError)}
         </p>
       ) : null}
       {testError ? (

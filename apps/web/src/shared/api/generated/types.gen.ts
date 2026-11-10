@@ -1870,6 +1870,10 @@ export type SearchProviderBody = {
      * Api Key
      */
     api_key?: string | null;
+    /**
+     * Endpoint
+     */
+    endpoint?: string | null;
 };
 
 /**
@@ -2869,6 +2873,44 @@ export type GetBdDistillBookIdRunsRunIdEventsResponses = {
      */
     200: unknown;
 };
+
+export type GetBdDistillBookIdRunsRunIdLlmCountersData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/distill/{book_id}/runs/{run_id}/llm-counters';
+};
+
+export type GetBdDistillBookIdRunsRunIdLlmCountersErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetBdDistillBookIdRunsRunIdLlmCountersError = GetBdDistillBookIdRunsRunIdLlmCountersErrors[keyof GetBdDistillBookIdRunsRunIdLlmCountersErrors];
+
+export type GetBdDistillBookIdRunsRunIdLlmCountersResponses = {
+    /**
+     * Response Get Bd Distill Book Id Runs Run Id Llm Counters
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetBdDistillBookIdRunsRunIdLlmCountersResponse = GetBdDistillBookIdRunsRunIdLlmCountersResponses[keyof GetBdDistillBookIdRunsRunIdLlmCountersResponses];
 
 export type GetBdDistillBookIdRunsRunIdRagIndexData = {
     body?: never;
