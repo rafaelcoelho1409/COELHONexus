@@ -19,9 +19,9 @@ import {
   cancelDistillRun,
   distillEventsUrl,
   resumeDistillRun,
+  saveContentSelection,
   startDistillRun,
   wipeDistillRun,
-  saveContentSelection,
 } from "../api";
 import {
   initialDistillRunState,
@@ -30,8 +30,8 @@ import {
   reduceDistillRunState,
 } from "../domain/run-state";
 import {
-  type DistillRun,
   contentSelectionSchema,
+  type DistillRun,
   distillCapabilitiesSchema,
   distillEventSchema,
   distillRunListSchema,
@@ -113,7 +113,11 @@ export function useSaveContentSelection(bookId: string) {
 export function useDistillRunStream(bookId: string, run: DistillRun | null) {
   const queryClient = useQueryClient();
   const [eventState, setEventState] = useState<ReturnType<typeof initialDistillRunState> | null>(null);
-  const current = run ? (eventState?.runId === run.run_id ? eventState : initialDistillRunState(run)) : null;
+  const current = run
+    ? eventState?.runId === run.run_id
+      ? reconcileRunState(run, eventState)
+      : initialDistillRunState(run)
+    : null;
   const runId = run?.run_id ?? null;
   const runStatus = current?.status ?? null;
   const options = useMemo(
@@ -131,7 +135,10 @@ export function useDistillRunStream(bookId: string, run: DistillRun | null) {
     if (!run) return;
     setEventState((previous) => {
       const state = previous?.runId === run.run_id ? previous : initialDistillRunState(run);
-      return reduceDistillRunState(state, event);
+      const next = reduceDistillRunState(state, event);
+      const observedWork =
+        event.kind !== "run_queued" && (event.node !== undefined || event.progress !== undefined);
+      return next.status === "queued" && observedWork ? { ...next, status: "running" } : next;
     });
     if (isDistillTerminalEvent(event)) {
       void queryClient.invalidateQueries({
@@ -148,6 +155,22 @@ export function useDistillRunStream(bookId: string, run: DistillRun | null) {
     }
   });
   return { ...stream, state: current };
+}
+
+function reconcileRunState(
+  snapshot: DistillRun,
+  streamed: ReturnType<typeof initialDistillRunState>,
+): ReturnType<typeof initialDistillRunState> {
+  const snapshotAdvancesRun =
+    (streamed.status === "queued" && snapshot.status === "running") ||
+    (isDistillLive(streamed.status) && !isDistillLive(snapshot.status));
+  if (!snapshotAdvancesRun) return streamed;
+  return {
+    ...streamed,
+    status: snapshot.status,
+    progress: snapshot.progress,
+    error: snapshot.error ?? streamed.error,
+  };
 }
 
 export function useDistillActions(bookId: string) {

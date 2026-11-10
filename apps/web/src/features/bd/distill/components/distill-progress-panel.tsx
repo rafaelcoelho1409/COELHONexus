@@ -1,9 +1,7 @@
 "use client";
 
-import type { ReactNode } from "react";
 import type { StreamStatus } from "@/shared/sse";
 import { DISTILL_NODES } from "../domain/distill-progress";
-import type { DistillReadiness } from "../domain/run-state";
 import type { DistillRun } from "../entities";
 
 export function DistillProgressPanel({
@@ -12,9 +10,7 @@ export function DistillProgressPanel({
   progress,
   error,
   streamStatus,
-  readiness,
   stopping,
-  actions,
   capabilitiesPending,
   capabilitiesError,
   canExecute,
@@ -24,9 +20,7 @@ export function DistillProgressPanel({
   progress: DistillRun["progress"] | null;
   error: string | null;
   streamStatus: StreamStatus;
-  readiness: DistillReadiness;
   stopping: boolean;
-  actions: ReactNode;
   capabilitiesPending: boolean;
   capabilitiesError: string | null;
   canExecute: boolean;
@@ -35,13 +29,6 @@ export function DistillProgressPanel({
   const total = progress?.total_units ?? 0;
   const percent = total > 0 ? Math.round((Math.min(completed, total) / total) * 100) : null;
   const currentNode = DISTILL_NODES.find((node) => node.id === progress?.current_node);
-  const statusText = stopping
-    ? "Stopping"
-    : status
-      ? runStatusLabel(status)
-      : readiness.ready
-        ? "Ready to run"
-        : "Waiting for source checks";
   const quality = run?.structural_quality;
 
   return (
@@ -49,15 +36,7 @@ export function DistillProgressPanel({
       aria-label="Distill Agentic AI progress"
       className="min-w-0 rounded-md border border-border bg-card p-3"
     >
-      <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <h3 className="text-sm font-medium">Distill Agentic AI</h3>
-        <div className="flex min-w-0 flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-end">
-          <span aria-live="polite" className="text-xs text-muted-foreground">
-            {statusText}
-          </span>
-          <div className="flex flex-wrap items-center gap-2">{actions}</div>
-        </div>
-      </div>
+      <h3 className="text-sm font-medium">Distill run details</h3>
 
       <div
         role="progressbar"

@@ -13,7 +13,7 @@ class DesignedChapter(BaseModel):
     description: str = Field(description = "One sentence describing what readers learn.")
     objective: str = Field(description = "A measurable ability the reader has after this chapter.")
     group_ids: list[str] = Field(
-        description = "Assigned candidate group ids; every group appears exactly once across all chapters.",
+        description = "Globally unique short group_id aliases copied exactly from the selected partition; every alias appears once across all chapters.",
     )
     key_concepts: list[str] = Field(default_factory = list)
     prerequisites: list[str] = Field(default_factory = list, description = "Titles of chapters that should come first.")

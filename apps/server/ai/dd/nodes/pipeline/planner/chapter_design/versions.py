@@ -2,4 +2,4 @@
 from __future__ import annotations
 
 
-PROMPT_VERSION = "v2-concise-objective-index-repair-reference-safe-2026-11-09-r12-direct-schema-json-recovery"
+PROMPT_VERSION = "v2-concise-objective-index-repair-reference-safe-2026-11-10-r13-compact-page-group-aliases"

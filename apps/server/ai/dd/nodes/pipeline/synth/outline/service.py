@@ -246,7 +246,7 @@ async def draft(state: graphs.pipeline.synth.outline.states.OutlineState, runtim
     }
     if ledger:
         request["tutorial"] = {
-            "goal": "a complete tutorial: one step per best code example, in the order a reader needs them, ending in an application that combines them (added later; do not plan it)",
+            "goal": "a concise complete tutorial: group related best code examples into focused steps, preserve their learning order, and end in an application that combines them (added later; do not plan it)",
             "best_code": domains.dd.pipeline.ledger.domain.summary(ledger),
             "n_best_code": len(ledger.must_teach),
         }
@@ -308,13 +308,16 @@ async def draft(state: graphs.pipeline.synth.outline.states.OutlineState, runtim
 async def flatten_if_deep(
     outline: schemas.ChapterOutline, dag: schemas.OutlineDAG, issues: list[str], *, n_sources: int, n_blocks: int, bodies: list[str],
 ) -> tuple[schemas.ChapterOutline, schemas.OutlineDAG, list[str]]:
-    """An over-deep prerequisite chain is flattened deterministically (a model rarely does it); the flat outline is kept when it leaves no more issues."""
+    """Flatten an over-deep prerequisite chain and keep the refreshed validation result."""
     if dag.max_stage <= params.MAX_STAGE_DEPTH:
         return outline, dag, issues
+    fallback_issue = "heuristic_fallback" in issues
     flat = domain.flatten_prerequisites(outline, dag, params.MAX_STAGE_DEPTH)
     flat_dag, flat_issues = await outline_issues(flat, n_sources = n_sources, n_blocks = n_blocks, bodies = bodies)
-    if len(flat_issues) > len(issues):
+    if flat_dag.max_stage >= dag.max_stage:
         return outline, dag, issues
+    if fallback_issue:
+        flat_issues.insert(0, "heuristic_fallback")
     logger.info(f"[outline_sdp] flattened the prerequisite chain (depth {dag.max_stage} → {flat_dag.max_stage}, {len(issues)} → {len(flat_issues)} issue(s))")
     return flat, flat_dag, flat_issues
 
@@ -360,25 +363,38 @@ async def finalize(state: graphs.pipeline.synth.outline.states.OutlineState, run
         dag = domain.derive_dag(outline.sections)
         issues = ["heuristic_fallback"]
 
+    cap = params.max_h2_for_n_sources(len(sources), n_blocks)
     if tutorial and data.get("ledger") is not None:
-        outline = assign_tutorial_steps(outline, data["ledger"])
+        previous_section_count = len(outline.sections)
+        fallback_issue = "heuristic_fallback" in issues
+        outline = assign_tutorial_steps(outline, data["ledger"], max_sections = cap)
         dag = domain.derive_dag(outline.sections)
+        if len(outline.sections) != previous_section_count:
+            dag, issues = await outline_issues(
+                outline, n_sources = len(sources), n_blocks = n_blocks, bodies = texts,
+            )
+            if fallback_issue:
+                issues.insert(0, "heuristic_fallback")
         logger.info(f"[outline_sdp] {slug}/{chapter_id}: assigned {sum(len(section.code_refs) for section in outline.sections)} canonical code example(s) to tutorial steps")
 
     outline, dag, issues = await flatten_if_deep(outline, dag, issues, n_sources = len(sources), n_blocks = n_blocks, bodies = texts)
 
     # HARD-TRIM: the model ignores the soft cap signal (a chapter shipped 30 H2 at cap 12; another 20 at cap 14): trim to the adaptive cap directly.
-    cap = params.max_h2_for_n_sources(len(sources), n_blocks)
-    if tutorial and data.get("ledger") is not None:
-        cap = min(params.SECTIONS_MAX, max(cap, len(outline.sections)))
     if len(outline.sections) > cap:
         n_before = len(outline.sections)
+        fallback_issue = "heuristic_fallback" in issues
         outline = hard_trim(outline, dag, cap)
+        if tutorial and data.get("ledger") is not None:
+            # The cap can remove model-proposed sections; reassign every canonical
+            # code family to the retained sections before validating/persisting.
+            outline = assign_tutorial_steps(outline, data["ledger"], max_sections = cap)
         dag = domain.derive_dag(outline.sections)
         logger.warning(f"[outline_sdp] {slug}/{chapter_id}: HARD-TRIM outline {n_before} → {len(outline.sections)} sections (adaptive_cap = {cap}, n_sources = {len(sources)})")
         domains.dd.pipeline.observability.service.record_bucket_split_overflow(framework = slug, sections_dropped = max(n_before - len(outline.sections), 0))
         # Re-validate after the trim so downstream sees the violations that remain, not the pre-trim ones.
         dag, issues = await outline_issues(outline, n_sources = len(sources), n_blocks = n_blocks, bodies = texts)
+        if fallback_issue:
+            issues.insert(0, "heuristic_fallback")
         graphs.service.emit(params.STEP, "hard_trimmed", n_before = n_before, n_after = len(outline.sections), adaptive_cap = cap, n_sources = len(sources))
 
     payload = domain.serialize_outline_with_dag(outline, dag)
@@ -440,30 +456,37 @@ def _step_heading(block, index: int) -> str:
     return " ".join(words[:8]) or f"Code Example {index}"
 
 
-def assign_tutorial_steps(outline: schemas.ChapterOutline, ledger) -> schemas.ChapterOutline:
-    """Put every canonical code example in a distinct outline step, appending source-derived steps when the outline is too short."""
-    hashes = list(ledger.must_teach)
+def assign_tutorial_steps(
+    outline: schemas.ChapterOutline,
+    ledger,
+    *,
+    max_sections: int | None = None,
+) -> schemas.ChapterOutline:
+    """Group every canonical code example into a focused section, exactly once."""
+    hashes = [digest for digest in ledger.must_teach if digest in ledger.blocks]
     if not hashes:
         return outline
 
     sections = [section.model_copy(deep = True) for section in outline.sections]
-    capacity = params.SECTIONS_MAX
-    needed = min(len(hashes), capacity)
-    if needed >= 2 and len(sections) > needed:
-        sections = sections[:needed]
-        kept_ids = {section.section_id for section in sections}
-        for section in sections:
-            section.prerequisites = [prerequisite for prerequisite in section.prerequisites if prerequisite in kept_ids]
+    cap = min(params.SECTIONS_MAX, max(params.SECTIONS_MIN, max_sections or len(sections) or params.SECTIONS_MIN))
+    required = (len(hashes) + params.TUTORIAL_CODE_EXAMPLES_PER_SECTION - 1) // params.TUTORIAL_CODE_EXAMPLES_PER_SECTION
+    desired = min(cap, max(min(len(sections), cap), required, params.SECTIONS_MIN))
+    if len(sections) > cap:
+        sections = hard_trim(outline.model_copy(update = {"sections": sections}), domain.derive_dag(sections), cap).sections
+
     used_ids = {section.section_id for section in sections}
-    while len(sections) < needed:
+    while len(sections) < desired:
         index = len(sections) + 1
-        digest = hashes[index - 1]
+        digest = hashes[min(index - 1, len(hashes) - 1)]
         block = ledger.blocks[digest]
         heading = _step_heading(block, index)
         if any(section.heading.casefold() == heading.casefold() for section in sections):
             heading_words = heading.split()[:6]
-            heading = " ".join([*heading_words, f"Step{index}"])
-        prior = sections[-1].section_id if sections else ""
+            heading = " ".join([*heading_words, "Patterns"])
+        suffix = 2
+        while any(section.heading.casefold() == heading.casefold() for section in sections):
+            heading = f"Code Pattern {index} {suffix}"
+            suffix += 1
         section_number = 1
         while f"s{section_number}" in used_ids:
             section_number += 1
@@ -472,17 +495,66 @@ def assign_tutorial_steps(outline: schemas.ChapterOutline, ledger) -> schemas.Ch
         sections.append(schemas.OutlineSection(
             section_id = section_id,
             heading = heading,
-            description = f"Teach the canonical {block.lang or 'code'} example for {heading}, using its source explanation and exact code reference.",
-            prerequisites = [prior] if prior else [],
+            description = f"Teach the related {block.lang or 'code'} examples for {heading}, using their source explanations and exact code references.",
+            prerequisites = [],
             needs_code = True,
             code_refs = [],
         ))
 
+    # Keep any useful model assignments as semantic anchors. Assign every
+    # remaining example to the section with the closest page/topic evidence,
+    # with a balancing term so one broad page cannot create a huge code bank.
+    hash_order = {digest: index for index, digest in enumerate(hashes)}
+    assignments: list[list[str]] = [[] for _ in sections]
+    claimed: set[str] = set()
+    seed_pages: list[set[str]] = [set() for _ in sections]
+    section_terms = [
+        domain.scope_words(f"{section.heading} {section.description}")
+        for section in sections
+    ]
     for index, section in enumerate(sections):
-        section.code_refs = [hashes[index]] if index < needed else []
-        if index < needed:
-            section.needs_code = True
+        for digest in section.code_refs:
+            if (
+                digest in hash_order
+                and digest not in claimed
+                and len(assignments[index]) < params.TUTORIAL_CODE_EXAMPLES_PER_SECTION
+            ):
+                assignments[index].append(digest)
+                claimed.add(digest)
+                seed_pages[index].update(ledger.blocks[digest].pages)
 
-    if len(hashes) > capacity:
-        sections[-1].code_refs.extend(hashes[capacity:])
+    def block_terms(digest: str) -> set[str]:
+        block = ledger.blocks[digest]
+        page_names = " ".join(page.rsplit("/", 1)[-1].replace("-", " ").replace("_", " ") for page in block.pages)
+        names = " ".join([*block.defines, *block.imports, page_names]).replace("_", " ").replace(".", " ")
+        return domain.scope_words(names)
+
+    for digest in hashes:
+        if digest in claimed:
+            continue
+        block = ledger.blocks[digest]
+        pages = set(block.pages)
+        terms = block_terms(digest)
+        scores: dict[int, tuple[float, int, int]] = {}
+        for index, assigned in enumerate(assignments):
+            if len(assigned) >= params.TUTORIAL_CODE_EXAMPLES_PER_SECTION:
+                continue
+            shared_pages = len(pages & seed_pages[index]) / max(len(pages), 1)
+            overlap = len(terms & section_terms[index]) / max(len(terms | section_terms[index]), 1)
+            balance_cost = len(assigned) / max(1, (len(hashes) / len(sections)))
+            scores[index] = (4.0 * shared_pages + overlap - 0.25 * balance_cost, -len(assigned), -index)
+        eligible = list(scores)
+        if not eligible:
+            # The section-count floor normally guarantees room; keep a safe
+            # fallback if a caller supplies a lower cap than the code bank needs.
+            chosen = min(range(len(sections)), key = lambda index: (len(assignments[index]), index))
+        else:
+            chosen = max(eligible, key = lambda index: scores[index])
+        assignments[chosen].append(digest)
+        seed_pages[chosen].update(pages)
+        claimed.add(digest)
+
+    for index, section in enumerate(sections):
+        section.code_refs = sorted(assignments[index], key = hash_order.__getitem__)
+        section.needs_code = bool(section.code_refs)
     return outline.model_copy(update = {"sections": sections})

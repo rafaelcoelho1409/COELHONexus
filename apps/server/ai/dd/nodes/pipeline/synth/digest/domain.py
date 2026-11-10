@@ -384,6 +384,7 @@ def validate_source_digest(
     *,
     valid_section_ids: set[str],
     valid_vault_hashes: set[str],
+    expected_code_sections: dict[str, str] | None = None,
 ) -> list[str]:
     """Cross-source/outline invariant validator; returns repair instructions for the LLM."""
     issues: list[str] = []
@@ -440,6 +441,19 @@ def validate_source_digest(
             f"If you routed it, drop from unassigned. If unsure, drop "
             f"from contribution."
         )
+
+    for digest, expected_section in (expected_code_sections or {}).items():
+        if digest in payload.unassigned_code_refs:
+            issues.append(
+                f"canonical code hash {digest!r} is preassigned to section {expected_section!r}; "
+                "route it there instead of listing it as unassigned."
+            )
+        elif contrib_hash_to_section.get(digest) != expected_section:
+            actual = contrib_hash_to_section.get(digest)
+            issues.append(
+                f"canonical code hash {digest!r} is preassigned to section {expected_section!r}, "
+                f"but was routed to {actual!r}; move it to the preassigned section."
+            )
 
     return issues
 

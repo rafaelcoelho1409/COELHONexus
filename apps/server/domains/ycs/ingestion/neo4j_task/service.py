@@ -495,6 +495,7 @@ async def ingest_pipeline(
                             {
                                 "nodes_created":         agg_nodes,
                                 "relationships_created": agg_rels,
+                                "error_breakdown":       agg_error_breakdown,
                             } if i == 0 else {}
                         )
                         parent_vid = domains.ycs.ingestion.domain.parent_video_id(vid)

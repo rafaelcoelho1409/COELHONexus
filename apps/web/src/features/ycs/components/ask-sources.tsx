@@ -78,7 +78,7 @@ function SourceCard({
               type="button"
               aria-expanded={open}
               onClick={() => setOpen((on) => !on)}
-              className="mt-0.5 min-h-6 text-xs text-primary-text underline underline-offset-2"
+              className="mt-0.5 min-h-6 text-xs text-foreground underline underline-offset-2 hover:text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring"
             >
               {open ? "Less" : "More"}
             </button>

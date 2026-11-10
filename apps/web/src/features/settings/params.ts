@@ -8,11 +8,24 @@ export const SETTINGS_SECTION: Section = {
   tabs: [],
 };
 
+export const SETTINGS_TABS = [
+  { key: "llm", label: "LLM" },
+  { key: "embedding", label: "Embedding" },
+  { key: "search", label: "Search" },
+] as const;
+export type SettingsTabKey = (typeof SETTINGS_TABS)[number]["key"];
+
 /** The two saved connections: the chat endpoint and the embedding endpoint. */
 export type ConnectionKind = "llm" | "embedding";
 
 export const SEARCH_PROVIDER_IDS = ["coelho_search", "tavily", "exa", "jina"] as const;
 export type SearchProviderId = (typeof SEARCH_PROVIDER_IDS)[number];
+export const CUSTOM_SEARCH_PROVIDER_ID: SearchProviderId = "coelho_search";
+export const SEARCH_PROVIDER_ACCOUNT_URLS: Partial<Record<SearchProviderId, string>> = {
+  tavily: "https://app.tavily.com/home",
+  exa: "https://dashboard.exa.ai/api-keys",
+  jina: "https://jina.ai/api-dashboard/key-manager/",
+};
 
 /** PUT body. `api_key`: omit = keep the stored key, `""` = delete it, otherwise replace it. */
 export type SaveBody = { url: string; model: string; api_key?: string };

@@ -24,12 +24,11 @@ SafePathSegment = Annotated[str, Path(pattern = r"^[A-Za-z0-9_-]+$")]
 
 @router.get("/capabilities", response_model = schemas.Capabilities)
 async def get_capabilities() -> dict[str, bool]:
-    return {"execution_enabled": domains.bd.distill.params.DISTILL_EXECUTION_ENABLED}
+    return {"execution_enabled": True}
 
 
 @router.post("/{book_id}/runs", response_model = schemas.RunStart, status_code = 202)
 async def start_run(book_id: SafePathSegment, body: schemas.StartRequest | None = None) -> dict:
-    _require_execution_enabled()
     try:
         manifest = await domains.bd.distill.service.create_distill_run(
             book_id,
@@ -89,7 +88,6 @@ async def wipe_run(book_id: SafePathSegment, run_id: SafePathSegment) -> dict:
 
 @router.post("/{book_id}/runs/{run_id}/resume", response_model = schemas.RunStart, status_code = 202)
 async def resume_run(book_id: SafePathSegment, run_id: SafePathSegment) -> dict:
-    _require_execution_enabled()
     try:
         manifest = await domains.bd.distill.service.queue_resume(book_id, run_id)
     except FileNotFoundError as error:
@@ -252,8 +250,3 @@ async def run_events(book_id: SafePathSegment, run_id: SafePathSegment) -> Strea
         media_type = "text/event-stream",
         headers = {"Cache-Control": "no-cache, no-transform", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
-
-
-def _require_execution_enabled() -> None:
-    if not domains.bd.distill.params.DISTILL_EXECUTION_ENABLED:
-        raise HTTPException(status_code = 503, detail = "Distill execution is disabled")

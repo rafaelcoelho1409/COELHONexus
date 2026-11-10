@@ -26,7 +26,7 @@ afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
 
 describe("SettingsPage", () => {
-  it("gives each card its own intro and landmark; the page title is the app's second navbar", () => {
+  it("shows the active connection view and its view selector; the page title is the app's second navbar", () => {
     render(
       <QueryProvider>
         <SettingsPage />
@@ -34,9 +34,10 @@ describe("SettingsPage", () => {
     );
 
     expect(screen.queryByRole("heading", { level: 1 })).not.toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "LLM Endpoint" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Embedding" })).toBeInTheDocument();
-    expect(screen.getByText(/this configuration wins over the deployment default/)).toBeInTheDocument();
-    expect(screen.getByText(/separate from the LLM endpoint/)).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Settings views" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "LLM" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("region", { name: "LLM" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Embedding" })).not.toBeInTheDocument();
+    expect(screen.getByText(/takes precedence over the deployment default/)).toBeInTheDocument();
   });
 });

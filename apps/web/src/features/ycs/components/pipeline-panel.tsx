@@ -10,7 +10,7 @@
  * reused as a lookup key, not task ids). */
 
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ChartColumn, ListChecks } from "lucide-react";
+import { ListChecks } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { JSX } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -21,8 +21,6 @@ import {
   getYcsAdminTaskTaskIdOptions,
 } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
-import { Button } from "@/shared/ui/button";
-
 import { rerunPipeline, stopPipeline, wipePipeline } from "../api";
 import {
   extractBarState,
@@ -53,6 +51,7 @@ import {
   PIPELINE_POLL_BACKOFF_MS,
   PIPELINE_POLL_MS,
 } from "../params";
+import { ActionButton } from "./action-button";
 import { IngestionAgenticStructure } from "./ingestion-agentic-structure";
 import type { Step, StepView } from "./pipeline-steps";
 import { PipelineUsageSheet } from "./pipeline-usage-sheet";
@@ -306,8 +305,6 @@ export function PipelinePanel({
   }
 
   const videoCount = tracking.videoIds.length || allItems.length;
-  const retryIsPrimary = !running && overall !== "done";
-
   return (
     <section aria-label="Agentic AI ingestion progress" className="flex min-w-0 flex-col gap-3">
       {/* The one place a screen reader hears the run: it changes when a phase changes state, not at every poll. */}
@@ -324,25 +321,13 @@ export function PipelinePanel({
         <span className="tabular font-mono text-xs text-muted-foreground">{elapsed}</span>
         <div className="ml-auto flex items-center gap-2">
           {running ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="lg"
-              onClick={() => void handleStop()}
-              disabled={stop.isPending}
-            >
+            <ActionButton type="button" onClick={() => void handleStop()} disabled={stop.isPending}>
               {stop.isPending ? "Stopping…" : "Stop"}
-            </Button>
+            </ActionButton>
           ) : null}
-          <Button
-            type="button"
-            variant={retryIsPrimary ? "default" : "outline"}
-            size="lg"
-            onClick={() => rerun.mutate()}
-            disabled={running || rerun.isPending}
-          >
+          <ActionButton type="button" onClick={() => rerun.mutate()} disabled={running || rerun.isPending}>
             {rerun.isPending ? "Queuing retry…" : "Retry"}
-          </Button>
+          </ActionButton>
         </div>
       </header>
 
@@ -350,45 +335,24 @@ export function PipelinePanel({
 
       <IngestionAgenticStructure
         steps={steps}
+        onOpenUsage={() => setSheet("usage")}
         ariaLabel="Pipeline progress"
         caption="Target flow: Playwright transcripts → Elasticsearch → Qdrant and Neo4j."
       />
 
       <footer className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
-        <Button
-          type="button"
-          variant="outline"
-          size="lg"
-          aria-haspopup="dialog"
-          onClick={() => setSheet("videos")}
-        >
+        <ActionButton type="button" aria-haspopup="dialog" onClick={() => setSheet("videos")}>
           <ListChecks aria-hidden />
           {`Videos (${videoCount})`}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="lg"
-          aria-haspopup="dialog"
-          onClick={() => setSheet("usage")}
-        >
-          <ChartColumn aria-hidden />
-          LLM usage
-        </Button>
+        </ActionButton>
         {/* Apart from the routine actions: what ends a run's data or its panel for good. */}
         <div className="ml-auto flex items-center gap-2">
-          <Button type="button" variant="ghost" size="lg" onClick={() => void handleDismiss()}>
+          <ActionButton type="button" onClick={() => void handleDismiss()}>
             Dismiss
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            size="lg"
-            onClick={() => void handleWipe()}
-            disabled={wipe.isPending}
-          >
+          </ActionButton>
+          <ActionButton type="button" onClick={() => void handleWipe()} disabled={wipe.isPending}>
             {wipe.isPending ? "Wiping…" : "Wipe cache"}
-          </Button>
+          </ActionButton>
         </div>
       </footer>
 

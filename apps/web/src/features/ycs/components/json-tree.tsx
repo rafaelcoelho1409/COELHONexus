@@ -59,7 +59,7 @@ function Entry({
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((was) => !was)}
-        className="flex min-h-9 w-full items-center gap-1 rounded-sm text-left hover:bg-muted"
+        className="flex min-h-9 w-full items-center gap-1 rounded-sm border border-transparent text-left hover:border-neutral-8 hover:bg-background aria-expanded:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
       >
         <ChevronRight aria-hidden className={`size-4 shrink-0 ${open ? "rotate-90" : ""}`} />
         <span className="break-all">{name}</span>
@@ -75,7 +75,7 @@ function Entry({
               <button
                 type="button"
                 onClick={() => setShown((count) => count + CHILD_STEP)}
-                className="min-h-9 rounded-sm px-2 text-xs text-primary-text hover:bg-muted"
+                className="min-h-9 rounded-sm border border-transparent px-2 text-xs text-foreground hover:border-neutral-8 hover:bg-background focus-visible:outline-2 focus-visible:outline-ring"
               >
                 Show {Math.min(CHILD_STEP, entries.length - shown)} more of {entries.length - shown}
               </button>

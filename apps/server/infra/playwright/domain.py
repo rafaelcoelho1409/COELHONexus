@@ -21,3 +21,16 @@ def stale_targets(targets: list[dict]) -> list[dict]:
         t for t in targets
         if t.get("type", "") in params.STALE_TARGET_TYPES and t.get("id", "")
     ]
+
+
+def top_level_blank_page_targets(targets: list[dict]) -> list[dict]:
+    """Potential orphaned top-level blank pages that can stall Playwright's attach."""
+    return [
+        target for target in targets
+        if (
+            target.get("type") == "page"
+            and target.get("url") == "about:blank"
+            and not target.get("openerId")
+            and target.get("id")
+        )
+    ]

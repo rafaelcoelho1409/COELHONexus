@@ -1,14 +1,18 @@
 "use client";
 
-import { X } from "lucide-react";
+import { ChartNoAxesColumn, X } from "lucide-react";
 import dynamic from "next/dynamic";
+import type { ReactNode } from "react";
 import { useState } from "react";
+import { MermaidTopology } from "@/shared/markdown/mermaid-topology";
 import { ActionButton } from "../../components/action-button";
 import { AgenticNodeList, AgenticPills, AgenticStatusBadge } from "../../components/agentic-parts";
 import { ToggleGroup } from "../../components/toggle-group";
 import type { AgenticNodeStatus } from "../../domain/agentic-progress";
 import { useModalDialog } from "../../hooks/use-modal-dialog";
+import { PipelineUsageSheet } from "../../rag/components/pipeline-usage-sheet";
 import {
+  DISTILL_LANGGRAPH_TOPOLOGY,
   DISTILL_NODES,
   distillBoardCaption,
   distillNodeStatus,
@@ -31,18 +35,26 @@ const AgenticFlow = dynamic(
 const MODES = [
   { id: "graph", label: "Graph" },
   { id: "list", label: "List" },
+  { id: "langgraph", label: "LangGraph" },
 ] as const;
 
 /** Distill's Agents view uses the same graph/list and node-detail pattern as BD's other agent pipelines. */
 export function DistillNodeBoard({
   status,
   progress,
+  statusText,
+  actions,
+  runId,
 }: {
   status: DistillRun["status"] | null;
   progress: DistillRun["progress"] | null;
+  statusText: string;
+  actions: ReactNode;
+  runId: string | null;
 }) {
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [usageOpen, setUsageOpen] = useState(false);
   const views = distillNodeViews(status, progress);
   const selectedNode = DISTILL_NODES.find((node) => node.id === selectedNodeId);
   const caption = distillBoardCaption(status, progress);
@@ -53,12 +65,21 @@ export function DistillNodeBoard({
         aria-label="Distill agent pipeline"
         className="min-w-0 rounded-md border border-border bg-card p-3"
       >
-        <header className="flex flex-wrap items-start justify-between gap-3">
-          <div>
+        <header className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
             <h3 className="text-sm font-medium">Distill pipeline</h3>
             <p aria-live="polite" className="mt-1 text-xs text-muted-foreground">
               {caption}
             </p>
+          </div>
+          <div className="flex min-w-0 flex-wrap items-center justify-start gap-2 sm:justify-end">
+            <span aria-live="polite" className="text-xs text-muted-foreground">
+              {statusText}
+            </span>
+            <fieldset className="m-0 flex min-w-0 flex-wrap items-center gap-2 border-0 p-0">
+              <legend className="sr-only">Distill run controls</legend>
+              {actions}
+            </fieldset>
           </div>
         </header>
 
@@ -66,18 +87,34 @@ export function DistillNodeBoard({
           <div className="min-w-0">
             {mode === "graph" ? (
               <AgenticFlow views={views} onOpenNode={setSelectedNodeId} ariaLabel="Distill pipeline graph" />
-            ) : (
+            ) : mode === "list" ? (
               <AgenticNodeList rows={views} onOpen={setSelectedNodeId} label="Distill pipeline nodes" />
+            ) : (
+              <MermaidTopology
+                title="Distill pipeline"
+                source={DISTILL_LANGGRAPH_TOPOLOGY}
+                note="Configured node flow, in execution order."
+              />
             )}
           </div>
           <div className="flex min-w-0 flex-col">
-            <div className="mb-3 flex min-w-0 flex-wrap items-center justify-end gap-2">
-              <ToggleGroup
-                legend="Distill pipeline shown as"
-                options={MODES}
-                value={mode}
-                onChange={setMode}
-              />
+            <div className="mb-3 flex min-w-0 flex-col items-stretch gap-2">
+              <ActionButton
+                className="w-full justify-center whitespace-nowrap px-2"
+                onClick={() => setUsageOpen(true)}
+                aria-haspopup="dialog"
+              >
+                <ChartNoAxesColumn aria-hidden />
+                LLM usage
+              </ActionButton>
+              <div className="flex justify-end">
+                <ToggleGroup
+                  legend="Distill pipeline shown as"
+                  options={MODES}
+                  value={mode}
+                  onChange={setMode}
+                />
+              </div>
             </div>
             <section
               aria-label="Learning progress"
@@ -126,6 +163,15 @@ export function DistillNodeBoard({
           status={distillNodeStatus(selectedNode.id, status, progress)}
           runStatus={status}
           onClose={() => setSelectedNodeId(null)}
+        />
+      ) : null}
+      {usageOpen ? (
+        <PipelineUsageSheet
+          threadId={runId}
+          live={status === "queued" || status === "running"}
+          title="Distill LLM usage"
+          subtitle="Calls and token counts for this Distill run."
+          onClose={() => setUsageOpen(false)}
         />
       ) : null}
     </>

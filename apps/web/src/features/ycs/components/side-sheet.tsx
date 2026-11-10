@@ -6,9 +6,8 @@
 import { X } from "lucide-react";
 import { type ReactNode, useId } from "react";
 
-import { Button } from "@/shared/ui/button";
-
 import { useModalDialog } from "../hooks/use-modal-dialog";
+import { ActionButton } from "./action-button";
 
 export function SideSheet({
   title,
@@ -42,9 +41,9 @@ export function SideSheet({
           </h2>
           {subtitle ? <div className="mt-1 text-xs text-muted-foreground">{subtitle}</div> : null}
         </div>
-        <Button variant="ghost" size="icon-lg" onClick={onClose} aria-label={closeLabel}>
+        <ActionButton iconOnly onClick={onClose} aria-label={closeLabel}>
           <X aria-hidden />
-        </Button>
+        </ActionButton>
       </header>
       <div className="px-5 py-4">{children}</div>
     </dialog>

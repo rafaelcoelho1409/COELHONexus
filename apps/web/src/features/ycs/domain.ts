@@ -678,7 +678,17 @@ export function successHint(snapshot: PhaseSnapshot, prefix: PipelinePrefix): st
   }
   const base = `${result.nodes_created} nodes · ${result.relationships_created} rels · ${result.entities_merged} merged`;
   const failed = result.failed_ids.length;
-  if (failed) return `${result.completed_ids.length} videos ok · ${failed} failed · ${base}`;
+  if (failed) {
+    const errorSummary = Object.entries(result.error_breakdown)
+      .filter(([, count]) => count > 0)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, count]) => `${name} ×${count}`);
+    return [
+      `${result.completed_ids.length} videos ok · ${failed} failed`,
+      base,
+      ...(errorSummary.length ? [`LLM errors: ${errorSummary.join(", ")}`] : []),
+    ].join(" · ");
+  }
   return base;
 }
 

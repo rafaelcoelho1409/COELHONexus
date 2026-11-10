@@ -650,8 +650,6 @@ function BookDetail({
             <PageReader
               bookId={bookId}
               bookMetadata={{
-                title,
-                filename: manifest.filename,
                 status,
                 sizeBytes: manifest.size_bytes,
                 pageCount: nPages,

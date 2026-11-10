@@ -8,8 +8,6 @@ import type { ComponentProps, JSX } from "react";
 import { createContext, memo, useContext } from "react";
 
 import { Markdown } from "@/shared/markdown";
-import { Button } from "@/shared/ui/button";
-
 import {
   type AskTurn,
   citeMarkdown,
@@ -22,6 +20,7 @@ import {
 } from "../ask";
 import type { AskCitation } from "../entities";
 import { AskThinking } from "./ask-thinking";
+import { RagActionButton as Button } from "./rag-action-button";
 import { StatusBadge } from "./status-badge";
 
 type CiteContextValue = { citations: readonly AskCitation[]; onCite: (n: number) => void };
@@ -170,13 +169,13 @@ function AskTurnViewBase({
           <ul aria-label="Suggested follow-ups" className="m-0 flex list-none flex-wrap gap-2 p-0">
             {turn.followups.map((question) => (
               <li key={question} className="max-w-full">
-                <button
+                <Button
                   type="button"
                   onClick={() => actions.onFollowup(question)}
-                  className="min-h-9 max-w-full cursor-pointer rounded-sm border border-border px-3 py-1.5 text-left text-sm break-words hover:border-primary hover:text-primary-text"
+                  className="h-auto min-h-10 max-w-full whitespace-normal text-left break-words"
                 >
                   {question}
-                </button>
+                </Button>
               </li>
             ))}
           </ul>

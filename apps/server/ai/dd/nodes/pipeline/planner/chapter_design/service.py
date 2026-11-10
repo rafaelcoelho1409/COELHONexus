@@ -22,27 +22,123 @@ def _page_order(cards: list[dict]) -> dict[str, int]:
     return {card["key"]: i for i, card in enumerate(cards)}
 
 
-def _model_partitions(candidates: dict) -> list[dict]:
-    """Do not repeat full page cards or code facts in every candidate partition sent to the model."""
-    return [
-        {
-            "method": partition["method"],
-            "metrics": partition["metrics"],
+def _clip(value, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def _short_list(value, *, limit: int, item_chars: int) -> list[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [_clip(item, item_chars) for item in value[:limit] if str(item or "").strip()]
+
+
+def _page_aliases(cards: list[dict]) -> dict[str, int]:
+    return {str(card["key"]): index for index, card in enumerate(cards, start = 1)}
+
+
+def _model_partitions(candidates: dict, page_aliases: dict[str, int]) -> tuple[list[dict], dict[int, dict[str, str]]]:
+    """Compact alternatives; page ids refer to the one shared evidence table."""
+    metric_keys = (
+        "n_tutorial_chapters", "tutorial_minutes", "cohesion", "separation",
+        "balance", "over_budget", "over_budget_excess", "count_penalty", "score",
+    )
+    out = []
+    group_aliases: dict[int, dict[str, str]] = {}
+    for index, partition in enumerate(candidates.get("partitions") or []):
+        metrics = partition.get("metrics") or {}
+        lesson_minutes = metrics.get("chapter_tutorial_minutes") or []
+        summary = {key: metrics[key] for key in metric_keys if key in metrics}
+        if lesson_minutes:
+            summary["largest_chapter_minutes"] = round(max(lesson_minutes), 1)
+            summary["smallest_chapter_minutes"] = round(min(lesson_minutes), 1)
+            summary["n_very_short_chapters"] = sum(
+                1 for minutes in lesson_minutes if minutes < params.TARGET_MINUTES / 3
+            )
+        aliases = {
+            f"g{index + 1}_{group_index}": group["group_id"]
+            for group_index, group in enumerate(partition.get("groups") or [], start = 1)
+            if isinstance(group.get("group_id"), str)
+        }
+        group_aliases[index] = aliases
+        out.append({
+            "index": index,
+            "method": partition.get("method"),
+            "metrics": summary,
             "groups": [
                 {
-                    "group_id": group["group_id"],
-                    "kind": group["kind"],
-                    "n_pages": group["n_pages"],
-                    "reading_minutes": group["reading_minutes"],
-                    "n_best_code": group["n_best_code"],
-                    "topics": group["topics"],
-                    "page_keys": [page["key"] for page in group["pages"]],
+                    "group_id": f"g{index + 1}_{group_index}",
+                    "kind": group.get("kind"),
+                    "reading_minutes": group.get("reading_minutes"),
+                    "n_best_code": group.get("n_best_code"),
+                    "topics": _short_list(group.get("topics"), limit = 2, item_chars = 40),
+                    "page_ids": [
+                        page_aliases[page["key"]]
+                        for page in group.get("pages") or []
+                        if page.get("key") in page_aliases
+                    ],
                 }
-                for group in partition["groups"]
+                for group_index, group in enumerate(partition.get("groups") or [], start = 1)
             ],
+        })
+    return out, group_aliases
+
+
+def _restore_group_ids(answer, group_aliases: dict[int, dict[str, str]], *, index_map: list[int] | None = None) -> dict:
+    """Map compact model-facing group ids back to server ids before validation."""
+    data = answer.model_dump() if hasattr(answer, "model_dump") else dict(answer or {})
+    index = data.get("candidate_partition_index")
+    local_count = len(index_map) if index_map is not None else len(group_aliases)
+    if index_map is not None and index_map:
+        local_index = index if isinstance(index, int) and not isinstance(index, bool) and 0 <= index < local_count else 0
+        partition_index = index_map[local_index]
+    else:
+        returned_ids = [
+            group_id
+            for chapter in data.get("chapters") or []
+            if isinstance(chapter, dict)
+            for group_id in chapter.get("group_ids") or []
+            if isinstance(group_id, str)
+        ]
+        alias_indexes = {
+            int(group_id[1:].split("_", 1)[0]) - 1
+            for group_id in returned_ids
+            if group_id.startswith("g")
+            and "_" in group_id
+            and group_id[1:].split("_", 1)[0].isdigit()
         }
-        for partition in candidates.get("partitions") or []
-    ]
+        if len(alias_indexes) == 1 and 0 <= next(iter(alias_indexes)) < local_count:
+            partition_index = next(iter(alias_indexes))
+        elif isinstance(index, int) and not isinstance(index, bool) and 0 <= index < local_count:
+            partition_index = index
+        else:
+            partition_index = 0
+    reverse = group_aliases.get(partition_index, {})
+    for chapter in data.get("chapters") or []:
+        if not isinstance(chapter, dict):
+            continue
+        chapter["group_ids"] = [reverse.get(group_id, group_id) for group_id in chapter.get("group_ids") or []]
+    return data
+
+
+def _model_cards(cards: list[dict], code_by_page: dict[str, list[dict]], aliases: dict[str, int]) -> list[dict]:
+    """Bound persisted page-card text before it reaches a multi-provider LLM cascade."""
+    out = []
+    for card in cards:
+        key = card["key"]
+        out.append({
+            "id": aliases[key],
+            "title": _clip(card.get("title"), 90),
+            "kind": card.get("kind"),
+            "topic": _clip(card.get("topic"), 48),
+            "summary": _clip(card.get("summary"), 110),
+            "prerequisites": _short_list(card.get("prerequisites"), limit = 1, item_chars = 48),
+            "n_best_code": int(card.get("n_best_code") or 0),
+            "code_signals": _page_code_signals(code_by_page.get(key, [])),
+        })
+    return out
 
 
 def _answer_issues(answer: dict | None, candidates: dict, cards: list[dict]) -> list[str]:
@@ -153,6 +249,28 @@ def _code_ledger_facts(ledger, page_order: dict[str, int], tutorial_keys: set[st
     return dict(count_by_page), dict(facts_by_page)
 
 
+def _page_code_signals(facts: list[dict]) -> dict:
+    """Give the designer a compact view of code relationships without sending every ledger record."""
+    languages = sorted({str(fact.get("language") or "") for fact in facts if fact.get("language")})[:1]
+    defines = list(dict.fromkeys(
+        str(name).strip()
+        for fact in facts
+        for name in fact.get("defines") or []
+        if str(name).strip()
+    ))[:2]
+    imports = list(dict.fromkeys(
+        str(name).strip()
+        for fact in facts
+        for name in fact.get("imports") or []
+        if str(name).strip()
+    ))[:2]
+    return {
+        "languages": [_clip(value, 24) for value in languages],
+        "defines": [_clip(value, 36) for value in defines],
+        "imports": [_clip(value, 36) for value in imports],
+    }
+
+
 async def _embed(context: Context, cards: list[dict]) -> tuple[list, str]:
     texts = [domain.card_text(card) for card in cards]
     if context.embed_texts and texts:
@@ -191,6 +309,7 @@ async def _ask_designer(context: Context, payload: str, *, attempts: int = param
         payload,
         attempts = attempts,
         wait_base_s = params.RETRY_WAIT_S,
+        recover_json_after_transient_error = False,
     )
 
 
@@ -264,30 +383,50 @@ def _bind_partition_index(
     return data, recovered_id, selection_issue
 
 
-def _repair_request(candidates: dict, answer: dict, findings: list[str]) -> tuple[str, list[int]]:
+def _repair_request(
+    candidates: dict,
+    answer: dict,
+    findings: list[str],
+    page_aliases: dict[str, int],
+) -> tuple[str, list[int]]:
     """Retry against one server-selected partition so group IDs cannot drift between alternatives."""
     all_partitions = candidates.get("partitions") or []
     requested_index = answer.get("candidate_partition_index") if isinstance(answer, dict) else None
     if not isinstance(requested_index, int) or isinstance(requested_index, bool) or not 0 <= requested_index < len(all_partitions):
         requested_index = 0
     partition = all_partitions[requested_index]
+    group_aliases = {
+        group["group_id"]: f"g{requested_index + 1}_{group_index}"
+        for group_index, group in enumerate(partition.get("groups") or [], start = 1)
+    }
     repair_partition = {
         "index": 0,
         "score": (partition.get("metrics") or {}).get("score"),
         "tutorial_chapters": (partition.get("metrics") or {}).get("n_tutorial_chapters"),
         "groups": [
             {
-                "group_id": group.get("group_id"),
+                "group_id": group_aliases[group["group_id"]],
                 "kind": group.get("kind"),
-                "n_pages": group.get("n_pages"),
                 "n_best_code": group.get("n_best_code"),
-                "topics": group.get("topics") or [],
-                "page_keys": [page.get("key") for page in group.get("pages") or []],
+                "topics": _short_list(group.get("topics"), limit = 2, item_chars = 40),
+                "page_ids": [
+                    page_aliases[page["key"]]
+                    for page in group.get("pages") or []
+                    if page.get("key") in page_aliases
+                ],
             }
             for group in partition.get("groups") or []
         ],
     }
     previous_answer = dict(answer) if isinstance(answer, dict) else {}
+    previous_answer["chapters"] = [
+        {
+            **chapter,
+            "group_ids": [group_aliases.get(group_id, group_id) for group_id in chapter.get("group_ids") or []],
+        }
+        for chapter in previous_answer.get("chapters") or []
+        if isinstance(chapter, dict)
+    ]
     previous_answer.pop("candidate_partition_id", None)
     previous_answer["candidate_partition_index"] = 0
     request = json.dumps({
@@ -362,8 +501,11 @@ async def chapter_design_run(state: graphs.pipeline.planner.states.PlannerState,
     if not candidates.get("partitions"):
         raise RuntimeError(f"Planner v2 produced no candidate partition for {slug!r}")
 
+    aliases = _page_aliases(cards)
+    model_partitions, group_aliases = _model_partitions(candidates, aliases)
     request_data = {
         "task": "Choose and refine the chapter grouping for this documentation corpus.",
+        "identifier_guide": "page_evidence.id and group.page_ids are compact numeric page references. group_ids in your answer must echo the globally unique short aliases exactly.",
         "framework": slug,
         "count_policy": {
             "unique_tutorial_minutes": candidates["unique_tutorial_minutes"],
@@ -376,33 +518,16 @@ async def chapter_design_run(state: graphs.pipeline.planner.states.PlannerState,
             "chapter_setup_and_navigation_overhead_matters": True,
             "no_fixed_chapter_count_maximum": True,
         },
-        "cards": [
-            {
-                "key": card["key"],
-                "title": card.get("title") or "",
-                "kind": card.get("kind"),
-                "topic": card.get("topic"),
-                "summary": card.get("summary"),
-                "teaches": card.get("teaches") or [],
-                "prerequisites": card.get("prerequisites") or [],
-                "n_best_code": int(card.get("n_best_code") or 0),
-            }
-            for card in cards
-        ],
-        "best_code_inventory": list({
-            fact["hash"]: {
-                key: fact[key] for key in ("hash", "page_key", "language", "lines", "defines", "imports", "pages")
-                if key in fact
-            }
-            for page_facts in best_code_by_page.values()
-            for fact in page_facts
-        }.values()),
-        "candidate_partitions": [
-            {"index": index, **partition}
-            for index, partition in enumerate(_model_partitions(candidates))
-        ],
+        "page_evidence": _model_cards(cards, best_code_by_page, aliases),
+        "candidate_partitions": model_partitions,
     }
     request = json.dumps(request_data, ensure_ascii = False)
+    designer_input_chars = len(request)
+    logger.info(
+        f"[chapter_design] {slug}: compact designer request prepared, {designer_input_chars} chars, "
+        f"{len(cards)} pages, {sum(len(partition.get('groups') or []) for partition in candidates.get('partitions') or [])} groups, "
+        f"{len(candidates.get('partitions') or [])} partition options, output cap 8000 tokens"
+    )
     design_answer = None
     designer_errors = []
     designer_review_flags = []
@@ -410,7 +535,7 @@ async def chapter_design_run(state: graphs.pipeline.planner.states.PlannerState,
     if not (state.get("page_cards_stats") or {}).get("n_fallback_cards", 0):
         await graphs.service.settle(params.STEP, params.SETTLE_DELAY_S)
     try:
-        answer = await _ask_designer(context, request)
+        answer = _restore_group_ids(await _ask_designer(context, request), group_aliases)
         design_answer, recovered_id, selection_issue = _bind_partition_index(answer, candidates)
         if recovered_id:
             designer_recoveries.append(f"matched {recovered_id} from its complete, unique group assignment")
@@ -431,9 +556,13 @@ async def chapter_design_run(state: graphs.pipeline.planner.states.PlannerState,
             if not designer_review_flags or repair_round == params.DESIGN_REPAIR_ROUNDS:
                 break
 
-            repair_request, repair_index_map = _repair_request(candidates, design_answer, designer_review_flags)
+            repair_request, repair_index_map = _repair_request(candidates, design_answer, designer_review_flags, aliases)
             try:
-                answer = await _ask_designer(context, repair_request)
+                answer = _restore_group_ids(
+                    await _ask_designer(context, repair_request),
+                    group_aliases,
+                    index_map = repair_index_map,
+                )
                 design_answer, recovered_id, selection_issue = _bind_partition_index(
                     answer, candidates, index_map = repair_index_map,
                 )
@@ -442,11 +571,11 @@ async def chapter_design_run(state: graphs.pipeline.planner.states.PlannerState,
                     if recovery not in designer_recoveries:
                         designer_recoveries.append(recovery)
             except Exception as error:
-                designer_errors.append(f"repair {repair_round + 1}: {type(error).__name__}: {str(error)[:160]}")
+                designer_errors.append(f"repair {repair_round + 1}: {type(error).__name__}: {str(error)[:260]}")
                 break
     except Exception as error:
-        designer_errors.append(f"design: {type(error).__name__}: {str(error)[:160]}")
-        logger.warning(f"[chapter_design] {slug}: architect fallback ({type(error).__name__}: {str(error)[:180]})")
+        designer_errors.append(f"design: {type(error).__name__}: {str(error)[:260]}")
+        logger.warning(f"[chapter_design] {slug}: architect fallback ({type(error).__name__}: {str(error)[:360]})")
 
     chapters, reconciliation = domain.reconcile_design(design_answer, candidates, cards)
     if not chapters:
@@ -549,7 +678,7 @@ async def chapter_design_run(state: graphs.pipeline.planner.states.PlannerState,
     stats = {
         **reconciliation,
         "planner_version": "v2",
-        "structured_output_strategy": "tool_call",
+        "structured_output_strategy": "function_call_with_json_recovery",
         "manifest_hash": manifest,
         "n_pages_in": len(relevant_files),
         "n_pages_assigned": n_assigned,
@@ -566,6 +695,11 @@ async def chapter_design_run(state: graphs.pipeline.planner.states.PlannerState,
         "n_partitions_scored": len(candidates["partitions"]),
         "n_partitions_total_scored": candidates.get("n_partitions_total_scored", len(candidates["partitions"])),
         "n_partitions_rejected_extreme": candidates.get("n_partitions_rejected_extreme", 0),
+        "designer_input_chars": designer_input_chars,
+        "designer_card_count": len(cards),
+        "designer_group_count": sum(
+            len(partition.get("groups") or []) for partition in candidates.get("partitions") or []
+        ),
         "candidate_scores": [
             {"id": item["id"], **item["metrics"]} for item in candidates["partitions"]
         ],

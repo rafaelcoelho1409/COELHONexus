@@ -9,6 +9,15 @@ export const AGENTIC_NODES = [
   { id: "publish", label: "Publish results" },
 ] as const;
 
+export const AGENTIC_LANGGRAPH_TOPOLOGY = `flowchart TD
+  start([Start]) --> audit_batch["Audit pages"]
+  audit_batch --> plan_repairs["Plan repairs"]
+  plan_repairs --> repair_pages["Repair pages"]
+  repair_pages --> normalize_metadata["Normalize metadata"]
+  normalize_metadata --> classify_content["Select Distill pages"]
+  classify_content --> publish["Publish results"]
+  publish --> finish([End])`;
+
 export type AgenticNodeId = (typeof AGENTIC_NODES)[number]["id"];
 export type AgenticNodeStatus = "pending" | "running" | "done" | "failed";
 
@@ -78,7 +87,8 @@ export const AGENTIC_NODE_DETAILS: Record<AgenticNodeId, AgenticNodeDetails> = {
   },
   classify_content: {
     title: "Select Distill pages",
-    subtitle: "Classifies each normalized page's role in the book and keeps uncertain pages in the working set.",
+    subtitle:
+      "Classifies each normalized page's role in the book and keeps uncertain pages in the working set.",
     kind: "LLM classification + conservative policy",
     actions: [
       "Reads each repaired page with its book title and section path.",
@@ -211,7 +221,8 @@ export function agenticNodeKpi(
   if (status !== "done") return null;
   if (nodeId === "audit_batch") return `${progress.audited_pages.length} ${unitPlural} audited`;
   if (nodeId === "repair_pages") return `${progress.processed_pages.length} ${unitPlural} repaired`;
-  if (nodeId === "classify_content") return `${progress.classified_pages?.length ?? 0} ${unitPlural} classified`;
+  if (nodeId === "classify_content")
+    return `${progress.classified_pages?.length ?? 0} ${unitPlural} classified`;
   if (nodeId === "publish" && summary) {
     return `${summary.deliveredPages} delivered · ${summary.reviewPages} need review`;
   }

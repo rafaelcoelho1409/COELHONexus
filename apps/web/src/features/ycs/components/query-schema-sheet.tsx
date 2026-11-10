@@ -9,11 +9,10 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
 import { type JSX, useId, useState } from "react";
 
-import { Button } from "@/shared/ui/button";
-
 import { fetchQuerySchema } from "../api";
 import { QUERY_BACKENDS, QUERY_SCHEMA_OPEN_UNDER, type QueryBackend } from "../params";
 import { filterSchema, type SchemaGroup, schemaOutline } from "../query";
+import { ActionButton } from "./action-button";
 import { SideSheet } from "./side-sheet";
 
 /** The server caches a schema for five minutes, so asking again sooner returns the same thing. */
@@ -37,21 +36,19 @@ function Group({
           type="button"
           aria-expanded={open}
           onClick={onToggle}
-          className="flex min-h-9 min-w-0 flex-1 items-center gap-1 rounded-sm px-2 text-left hover:bg-muted"
+          className="flex min-h-10 min-w-0 flex-1 items-center gap-1 rounded-sm bg-background px-2 text-left hover:bg-muted aria-expanded:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
         >
           <ChevronRight aria-hidden className={`size-4 shrink-0 ${open ? "rotate-90" : ""}`} />
           <span className="min-w-0 font-mono text-sm font-semibold break-all">{group.title}</span>
           {group.note ? <span className="shrink-0 text-xs text-muted-foreground">{group.note}</span> : null}
         </button>
         {group.query ? (
-          <Button
-            variant="ghost"
-            size="lg"
+          <ActionButton
             onClick={() => onInsert(group.query ?? "")}
             aria-label={`Insert query for ${group.title}`}
           >
             Insert query
-          </Button>
+          </ActionButton>
         ) : null}
       </div>
       {open ? (
@@ -66,14 +63,12 @@ function Group({
                 <span className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">{item.detail}</span>
                   {item.query ? (
-                    <Button
-                      variant="ghost"
-                      size="lg"
+                    <ActionButton
                       onClick={() => onInsert(item.query ?? "")}
                       aria-label={`Insert query for ${item.name}`}
                     >
                       Insert
-                    </Button>
+                    </ActionButton>
                   ) : null}
                 </span>
               </li>
@@ -129,9 +124,9 @@ export function QuerySchemaSheet({
       ) : schema.isError ? (
         <div role="alert" className="flex flex-col items-start gap-2">
           <p className="text-sm text-destructive-text">The schema could not be loaded.</p>
-          <Button variant="outline" size="lg" onClick={() => void schema.refetch()}>
+          <ActionButton onClick={() => void schema.refetch()}>
             Retry
-          </Button>
+          </ActionButton>
         </div>
       ) : all.length === 0 ? (
         <p className="text-sm text-muted-foreground">The server returned no schema for this store.</p>

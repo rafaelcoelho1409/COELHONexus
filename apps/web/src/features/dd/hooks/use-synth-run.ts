@@ -10,6 +10,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useQueryClient } from "@tanstack/react-query";
+import { getDdPipelineSynthDebugGraphThreadIdLlmCountersQueryKey } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 import { useEventStream } from "@/shared/sse";
 
@@ -18,6 +20,7 @@ import {
   fetchGraphState,
   fetchGraphStateRetried,
   fetchPipelineState,
+  fetchStageRecent,
   fetchSynthActive,
   fetchSynthChapters,
   stageEventsUrl,
@@ -154,6 +157,7 @@ const BLOCKED = "another pipeline run is in flight.";
 
 export function useSynthRun(slug: string): SynthRunController {
   const overlays = useDdOverlays();
+  const queryClient = useQueryClient();
   const invalidatePipeline = useInvalidatePipeline();
   const [state, setState] = useState<SynthState>(SYNTH_LOADING);
   const attachedThread = useRef<string | null>(null); // lets a late state refresh notice the chapter ended
@@ -256,6 +260,7 @@ export function useSynthRun(slug: string): SynthRunController {
     if (isSynthTerminal(event)) {
       const status = String(event.status ?? "done");
       const wallMs = numberOr(event.wall_ms, 0) > 0 ? numberOr(event.wall_ms, 0) : null;
+      const threadId = liveChapterThread;
       setState((s) => {
         const chapterId = s.canvas?.chapterId ?? null;
         return {
@@ -273,6 +278,13 @@ export function useSynthRun(slug: string): SynthRunController {
           pill: status === "done" ? IDLE_PILL : terminalPill(status),
         };
       });
+      if (threadId) {
+        void queryClient.invalidateQueries({
+          queryKey: getDdPipelineSynthDebugGraphThreadIdLlmCountersQueryKey({
+            path: { thread_id: threadId },
+          }),
+        });
+      }
       invalidatePipeline();
       return;
     }
@@ -344,13 +356,28 @@ export function useSynthRun(slug: string): SynthRunController {
       case "chapter_done": {
         const status = String(event.status ?? "done");
         const wallMs = typeof event.wall_ms === "number" ? event.wall_ms : null;
+        const chapterThreadId = String(event.chapter_thread_id ?? "");
         setState((s) => ({
           ...s,
           cells: s.cells.map((c) =>
-            c.id === chapterId ? { ...c, status: toChapterStatus(status), wallMs: wallMs ?? c.wallMs } : c,
+            c.id === chapterId
+              ? {
+                  ...c,
+                  status: toChapterStatus(status),
+                  wallMs: wallMs ?? c.wallMs,
+                  threadId: chapterThreadId || c.threadId,
+                }
+              : c,
           ),
           ...(s.canvas?.chapterId === chapterId && s.canvas.live ? DETACHED : {}),
         }));
+        if (chapterThreadId) {
+          void queryClient.invalidateQueries({
+            queryKey: getDdPipelineSynthDebugGraphThreadIdLlmCountersQueryKey({
+              path: { thread_id: chapterThreadId },
+            }),
+          });
+        }
         if (status === "needs_review")
           overlays.toast(`Chapter needs review: ${String(event.error || chapterId)}`);
         else if (status === "failed") overlays.toast(`Chapter failed: ${String(event.error || chapterId)}`);
@@ -447,13 +474,52 @@ export function useSynthRun(slug: string): SynthRunController {
       if (active?.active && active.chapter_thread_id) {
         const cells = await hydratePlan();
         if (!alive) return;
-        const chapterId = cells.find((c) => c.threadId === active.chapter_thread_id)?.id ?? null;
+        const graphState = await fetchGraphState("synth", active.chapter_thread_id);
+        if (!alive) return;
+        const stateChapterId = String(graphState?.values.chapter_id ?? "");
+        const chapterId = cells.find((c) => c.id === stateChapterId)?.id
+          ?? cells.find((c) => c.threadId === active.chapter_thread_id)?.id
+          ?? null;
+        if (chapterId) {
+          setCells((current) => current.map((cell) =>
+            cell.id === chapterId
+              ? { ...cell, status: "running", threadId: active.chapter_thread_id!, selected: true }
+              : { ...cell, selected: false },
+          ));
+        }
         attachCanvas(active.chapter_thread_id, chapterId, true);
         invalidatePipeline();
         return;
       }
       const cells = await hydratePlan();
       if (!alive) return;
+      const recent = await fetchStageRecent("synth");
+      if (!alive) return;
+      const latest = recent.find((item) => item.slug === slug);
+      if (latest) {
+        const graphState = await fetchGraphState("synth", latest.thread_id);
+        if (!alive) return;
+        const chapterId = String(graphState?.values.chapter_id ?? "");
+        const cell = cells.find((candidate) => candidate.id === chapterId);
+        if (cell) {
+          const status = String(graphState?.values.status ?? "cancelled");
+          setCells((current) => current.map((candidate) =>
+            candidate.id === chapterId
+              ? {
+                  ...candidate,
+                  status: toChapterStatus(status),
+                  threadId: latest.thread_id,
+                  selected: true,
+                }
+              : { ...candidate, selected: false },
+          ));
+          attachCanvas(latest.thread_id, chapterId, false);
+          if (status === "cancelled" || status === "failed" || status === "needs_review") {
+            setState((s) => ({ ...s, pill: terminalPill(status) }));
+          }
+          return;
+        }
+      }
       // With a plan, `hydratePlan` already set the pill (Done once every chapter is written, else Idle); with
       // none there is nothing to say, so drop the "Loading…" it started with.
       if (cells.length === 0) setState((s) => (s.running || s.starting ? s : { ...s, pill: IDLE_PILL }));
@@ -461,7 +527,7 @@ export function useSynthRun(slug: string): SynthRunController {
     return () => {
       alive = false;
     };
-  }, [slug, hydratePlan, invalidatePipeline, attachCanvas]);
+  }, [slug, hydratePlan, invalidatePipeline, attachCanvas, setCells]);
 
   // ------------------------------------------------------------
   // Actions

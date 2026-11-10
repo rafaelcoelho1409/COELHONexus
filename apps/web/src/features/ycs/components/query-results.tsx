@@ -5,10 +5,9 @@
 
 import { type JSX, useMemo, useState } from "react";
 
-import { Button } from "@/shared/ui/button";
-
 import { QUERY_TREE_OPEN_DEPTH, type QueryBackend } from "../params";
 import { collectGraph, flattenRows, type RunState } from "../query";
+import { ActionButton } from "./action-button";
 import { JsonTree } from "./json-tree";
 import { QueryGraphView } from "./query-graph-view";
 import { QueryTable } from "./query-table";
@@ -87,18 +86,16 @@ export function QueryResults({ backend, state }: { backend: QueryBackend; state:
           {result.hits.length.toLocaleString("en-US")} of {total.toLocaleString("en-US")} rows ·{" "}
           {result.took_ms} ms
         </p>
-        <fieldset className="m-0 ml-auto flex min-w-0 gap-1 border-0 p-0">
+        <fieldset className="m-0 ml-auto inline-flex min-w-0 gap-1 border-0 p-0">
           <legend className="sr-only">Result view</legend>
           {views.map((id) => (
-            <Button
+            <ActionButton
               key={id}
-              variant={current === id ? "secondary" : "outline"}
-              size="lg"
               aria-pressed={current === id}
               onClick={() => setPicked(id)}
             >
               {VIEW_LABEL[id]}
-            </Button>
+            </ActionButton>
           ))}
         </fieldset>
       </div>
@@ -112,12 +109,12 @@ export function QueryResults({ backend, state }: { backend: QueryBackend; state:
       ) : current === "json" ? (
         <div className="flex flex-col gap-2">
           <div className="flex gap-1">
-            <Button variant="outline" size="lg" onClick={() => setOpenDepth(Number.POSITIVE_INFINITY)}>
+            <ActionButton onClick={() => setOpenDepth(Number.POSITIVE_INFINITY)}>
               Expand all
-            </Button>
-            <Button variant="outline" size="lg" onClick={() => setOpenDepth(0)}>
+            </ActionButton>
+            <ActionButton onClick={() => setOpenDepth(0)}>
               Collapse all
-            </Button>
+            </ActionButton>
           </div>
           <section
             // biome-ignore lint/a11y/noNoninteractiveTabindex: a long tree scrolls, so keyboard users must be able to focus it to scroll it (WCAG 2.1.1)

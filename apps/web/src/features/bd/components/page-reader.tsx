@@ -46,8 +46,6 @@ export function PageReader({
 }: {
   bookId: string;
   bookMetadata?: {
-    title: string;
-    filename: string;
     status: BookStatus;
     sizeBytes: number;
     pageCount: number;
@@ -121,9 +119,7 @@ export function PageReader({
       <header className="mb-4 border-b border-border pb-4">
         {bookMetadata ? (
           <div className="min-w-0">
-            <h4 className="break-words text-xl font-semibold">{bookMetadata.title}</h4>
-            <p className="mt-1 break-all text-sm text-muted-foreground">{bookMetadata.filename}</p>
-            <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               <StatusChip status={bookMetadata.status} />
               <span>{fmtBytes(bookMetadata.sizeBytes)}</span>
               <span className="tabular">

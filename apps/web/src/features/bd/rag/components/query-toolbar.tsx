@@ -5,10 +5,8 @@
 
 import { BookOpen, History, Play, RotateCcw } from "lucide-react";
 import type { JSX } from "react";
-
-import { Button } from "@/shared/ui/button";
-
 import { QUERY_BACKENDS, type QueryBackend } from "../params";
+import { RagActionButton as Button } from "./rag-action-button";
 
 export function BackendTabs({
   backend,
@@ -18,21 +16,17 @@ export function BackendTabs({
   onChange: (backend: QueryBackend) => void;
 }): JSX.Element {
   return (
-    <nav aria-label="Query backend" className="flex flex-wrap gap-x-1">
+    <nav aria-label="Query backend" className="flex flex-wrap gap-1">
       {QUERY_BACKENDS.map((entry) => (
-        <button
+        <Button
           key={entry.id}
           type="button"
           aria-pressed={entry.id === backend}
           onClick={() => onChange(entry.id)}
-          className={
-            entry.id === backend
-              ? "-mb-px min-h-9 border-b-2 border-primary px-3 py-2 text-sm font-medium text-primary-text"
-              : "-mb-px min-h-9 border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground hover:text-foreground"
-          }
+          className="px-3"
         >
           {entry.label}
-        </button>
+        </Button>
       ))}
     </nav>
   );

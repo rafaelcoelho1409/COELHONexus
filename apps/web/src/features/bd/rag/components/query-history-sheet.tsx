@@ -5,13 +5,11 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { JSX } from "react";
-
-import { Button } from "@/shared/ui/button";
-
 import { useBdOverlays } from "../../hooks/use-overlays";
 import { deleteQueryHistory, fetchQueryHistory } from "../api";
 import { QUERY_BACKENDS, type QueryBackend } from "../params";
 import { groupHistory, whenLabel } from "../query";
+import { RagActionButton as Button } from "./rag-action-button";
 import { SideSheet } from "./side-sheet";
 
 /** The cache key — a successful Run invalidates it so the sheet is current the next time it opens. */

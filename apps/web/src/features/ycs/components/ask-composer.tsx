@@ -7,9 +7,8 @@ import { ArrowUp, Square } from "lucide-react";
 import type { JSX, RefObject } from "react";
 import { useLayoutEffect } from "react";
 
-import { Button } from "@/shared/ui/button";
-
 import type { AskStatus } from "../ask";
+import { ActionButton } from "./action-button";
 
 const MAX_HEIGHT_PX = 200;
 
@@ -71,15 +70,15 @@ export function AskComposer({
           className="min-h-10 flex-1 resize-none rounded-sm border border-input bg-background px-3 py-2 text-sm leading-relaxed outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
         />
         {running ? (
-          <Button type="button" variant="outline" size="lg" onClick={onStop} className="h-10">
+          <ActionButton type="button" onClick={onStop}>
             <Square aria-hidden data-icon="inline-start" />
             Stop
-          </Button>
+          </ActionButton>
         ) : (
-          <Button type="submit" size="lg" disabled={!value.trim()} className="h-10">
+          <ActionButton type="submit" disabled={!value.trim()}>
             <ArrowUp aria-hidden data-icon="inline-start" />
             Send
-          </Button>
+          </ActionButton>
         )}
       </div>
       <div className="mt-1.5 flex min-h-5 flex-wrap items-baseline justify-between gap-x-4 text-xs text-muted-foreground">

@@ -14,6 +14,7 @@ import { IngestionAgenticStructure } from "./ingestion-agentic-structure";
 import { LibraryPanel } from "./library-panel";
 import { PipelinePanel } from "./pipeline-panel";
 import type { Step } from "./pipeline-steps";
+import { PipelineUsageSheet } from "./pipeline-usage-sheet";
 import { StatusBadge } from "./status-badge";
 
 const IDLE_STEPS: ReadonlyArray<Step> = [
@@ -47,6 +48,7 @@ export function IngestionStage(): JSX.Element {
   const { tracking, dismiss } = usePipelineTracking();
   // Library refresh ticks: one per phase reaching SUCCESS, then a final sweep when the chain ends.
   const [refreshTick, setRefreshTick] = useState(0);
+  const [usageOpen, setUsageOpen] = useState(false);
   const bump = () => setRefreshTick((tick) => tick + 1);
 
   return (
@@ -76,8 +78,18 @@ export function IngestionStage(): JSX.Element {
             </p>
             <IngestionAgenticStructure
               steps={IDLE_STEPS}
+              onOpenUsage={() => setUsageOpen(true)}
               caption="Target flow: Playwright transcript retrieval → Elasticsearch → Qdrant and Neo4j."
             />
+            {usageOpen ? (
+              <PipelineUsageSheet
+                usage={null}
+                title="Ingestion LLM usage"
+                subtitle="Calls and token counts for YCS ingestion."
+                emptyMessage="No ingestion run yet. Usage appears here after a run starts."
+                onClose={() => setUsageOpen(false)}
+              />
+            ) : null}
           </section>
         )}
       </div>

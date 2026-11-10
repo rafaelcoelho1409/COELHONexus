@@ -14,7 +14,7 @@ OVER_BUDGET_WEIGHT = 0.20
 CHAPTER_COUNT_REVIEW_RATIO = 2.0
 # The designer can see a broad range of chapter counts. This limits alternatives
 # in its prompt, not the number of chapters it may return.
-MAX_PARTITION_OPTIONS = 8
+MAX_PARTITION_OPTIONS = 4
 # Don't ask the architect to choose a partition whose average lesson size is
 # not the problem: extremely oversized candidates cannot represent a study plan.
 # This is a filter on candidate quality, not a chapter-count ceiling.
@@ -24,6 +24,6 @@ DESIGN_REPAIR_ROUNDS = 2
 EMBED_BATCH = 64
 URL_SIMILARITY_BONUS = 0.12
 REFERENCE_GROUP_PAGES = 18
-ATTEMPTS = 2
+ATTEMPTS = 1
 RETRY_WAIT_S = 20.0
 SETTLE_DELAY_S = 100.0

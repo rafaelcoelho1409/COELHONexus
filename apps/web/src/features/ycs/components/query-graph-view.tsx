@@ -8,11 +8,10 @@
 import dynamic from "next/dynamic";
 import { type JSX, useMemo, useState } from "react";
 
-import { Button } from "@/shared/ui/button";
-
 import type { RawHit } from "../entities";
 import { QUERY_GRAPH_MAX_NODES } from "../params";
 import { cellText, collectGraph, labelColors, layoutGraph } from "../query";
+import { ActionButton } from "./action-button";
 
 // The graph library is only needed once a graph is on screen.
 const Canvas = dynamic(() => import("./query-graph").then((module) => module.QueryGraphCanvas), {
@@ -76,9 +75,9 @@ export function QueryGraphView({ hits }: { hits: ReadonlyArray<RawHit> }): JSX.E
                   <p className="text-xs text-muted-foreground">{node.label}</p>
                   <h3 className="text-base font-semibold break-words">{node.display}</h3>
                 </div>
-                <Button variant="outline" size="lg" onClick={() => setSelected(null)}>
+                <ActionButton onClick={() => setSelected(null)}>
                   Clear
-                </Button>
+                </ActionButton>
               </div>
               {Object.keys(node.properties).length > 0 ? (
                 <dl className="flex flex-col gap-1.5 text-sm">

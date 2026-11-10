@@ -3,23 +3,36 @@
 /** The run's LLM usage: calls and tokens in all, then by model. Model names are the server's, verbatim — runtime data shown
  * because the owner asked for it on usage screens (see AGENTS.md); never written into source, copy or fixtures. */
 
+import { useQuery } from "@tanstack/react-query";
 import type { JSX } from "react";
 
+import { fetchAskUsage } from "../api";
 import { fmtInt, usageModelRows } from "../ask";
-import type { AskUsage } from "../entities";
 import { SideSheet } from "./side-sheet";
 
 export function PipelineUsageSheet({
-  usage,
+  threadId,
+  live = false,
   onClose,
   title = "Pipeline LLM usage",
-  subtitle = "Phase 4, the entity extraction.",
+  subtitle = "Calls and token counts for this run.",
+  emptyMessage = "No run yet. Usage appears here once a run has started.",
 }: {
-  usage: AskUsage | null;
+  threadId: string | null;
+  live?: boolean;
   onClose: () => void;
   title?: string;
   subtitle?: string;
+  emptyMessage?: string;
 }): JSX.Element {
+  const query = useQuery({
+    queryKey: ["bd", "ask", "usage", threadId],
+    queryFn: () => fetchAskUsage(threadId ?? ""),
+    enabled: threadId !== null,
+    refetchInterval: live ? 3_000 : false,
+    retry: false,
+  });
+  const usage = query.data ?? null;
   const total = usage?.total ?? null;
   const rows = usageModelRows(usage);
   const figures = total
@@ -35,7 +48,17 @@ export function PipelineUsageSheet({
 
   return (
     <SideSheet title={title} closeLabel="Close usage" onClose={onClose} subtitle={subtitle}>
-      {total && total.calls > 0 ? (
+      {query.isError ? (
+        <p role="alert" className="text-sm text-destructive-text">
+          LLM usage could not be loaded.
+        </p>
+      ) : query.isPending && threadId !== null ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading LLM usage…
+        </p>
+      ) : threadId === null ? (
+        <p className="text-sm text-muted-foreground">{emptyMessage}</p>
+      ) : total && total.calls > 0 ? (
         <div className="flex flex-col gap-4">
           <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {figures.map((figure) => (
@@ -95,7 +118,7 @@ export function PipelineUsageSheet({
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">
-          {usage ? "No LLM usage recorded yet." : "Usage is loading or unavailable."}
+          {usage ? "No LLM usage recorded yet." : "Usage is unavailable for this run."}
         </p>
       )}
     </SideSheet>

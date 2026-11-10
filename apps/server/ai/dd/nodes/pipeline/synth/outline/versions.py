@@ -15,8 +15,8 @@ OUTLINE_SCHEMA_VERSION = "1.0"
 # v12 (2026-10-20): a repair that clears the section floor is kept even when it overshoots the cap (qdrant ch-10 shipped 5 sections for 160 blocks after four rejected/identical repairs).
 # v13 (2026-11-06): the outline is drafted by a chapter_outliner agent that validates it with a tool and reads the sources on demand (was 3 samples + a vote + repair calls).
 OUTLINE_PROMPT_VERSION = "v14-source-digests-learning-contract-2026-11-08"
-OUTLINE_V2_SCHEMA_VERSION = "1.1"
-OUTLINE_V2_PROMPT_VERSION = "v15-source-digests-learning-contract-2026-11-08"
+OUTLINE_V2_SCHEMA_VERSION = "1.2"
+OUTLINE_V2_PROMPT_VERSION = "v16-grouped-code-learning-contract-2026-11-10"
 
 
 def schema_version(tutorial: bool = False) -> str:

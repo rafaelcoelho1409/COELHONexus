@@ -1,6 +1,6 @@
 # BD Distill Agentic AI flowchart
 
-Solid paths show implemented structure. Dashed paths show later work that is not wired into Distill yet. Distill execution remains disabled by default.
+Solid paths show implemented structure. Dashed paths show later work that is not wired into Distill yet. Distill execution is available by default.
 
 ```mermaid
 flowchart TB

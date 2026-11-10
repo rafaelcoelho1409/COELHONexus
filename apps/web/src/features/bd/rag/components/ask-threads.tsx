@@ -5,11 +5,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { MessagesSquare, Trash2 } from "lucide-react";
 import type { JSX } from "react";
-
-import { Button } from "@/shared/ui/button";
-
 import { fetchThreadList } from "../api";
 import { threadLabel, threadPreview, threadRowMeta } from "../ask";
+import { RagActionButton as Button } from "./rag-action-button";
 import { ToolbarPanel } from "./toolbar-panel";
 
 export const THREADS_QUERY_KEY = ["bd", "ask", "threads"] as const;

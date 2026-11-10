@@ -6,11 +6,9 @@
 
 import { Sparkles, Square } from "lucide-react";
 import { type JSX, type KeyboardEvent, useId } from "react";
-
-import { Button } from "@/shared/ui/button";
-
 import { QUERY_AI_PLACEHOLDER } from "../params";
 import type { AiState } from "../query";
+import { RagActionButton as Button } from "./rag-action-button";
 
 export function QueryAiBar({
   prompt,

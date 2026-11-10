@@ -7,11 +7,10 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { type JSX, useState } from "react";
 
-import { Button } from "@/shared/ui/button";
-
 import { useYcsOverlays } from "../hooks/use-overlays";
 import { QUERY_TREE_OPEN_DEPTH } from "../params";
 import { cellKind, cellText, type Row, toJsonText } from "../query";
+import { ActionButton } from "./action-button";
 import { JsonTree } from "./json-tree";
 import { SideSheet } from "./side-sheet";
 
@@ -57,32 +56,28 @@ export function QueryRecordSheet({
     <SideSheet title="Row" closeLabel="Close row" onClose={onClose}>
       <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="lg" disabled={index === 0} onClick={() => onIndex(index - 1)}>
+          <ActionButton disabled={index === 0} onClick={() => onIndex(index - 1)}>
             <ChevronLeft aria-hidden /> Previous
-          </Button>
-          <Button
-            variant="outline"
-            size="lg"
+          </ActionButton>
+          <ActionButton
             disabled={index >= rows.length - 1}
             onClick={() => onIndex(index + 1)}
           >
             Next <ChevronRight aria-hidden />
-          </Button>
+          </ActionButton>
           <p role="status" className="tabular text-sm text-muted-foreground">
             Row {index + 1} of {rows.length.toLocaleString("en-US")}
           </p>
           <fieldset className="m-0 ml-auto flex min-w-0 gap-1 border-0 p-0">
             <legend className="sr-only">Row view</legend>
             {(["fields", "json"] as const).map((id) => (
-              <Button
+              <ActionButton
                 key={id}
-                variant={view === id ? "secondary" : "outline"}
-                size="lg"
                 aria-pressed={view === id}
                 onClick={() => setView(id)}
               >
                 {id === "fields" ? "Fields" : "JSON"}
-              </Button>
+              </ActionButton>
             ))}
           </fieldset>
         </div>
@@ -100,9 +95,9 @@ export function QueryRecordSheet({
           </dl>
         ) : (
           <div className="flex flex-col items-start gap-2">
-            <Button variant="outline" size="lg" onClick={copyJson}>
+            <ActionButton onClick={copyJson}>
               Copy JSON
-            </Button>
+            </ActionButton>
             <div className="w-full min-w-0 rounded-sm border border-border p-2">
               <JsonTree value={row} label="Row JSON" openDepth={QUERY_TREE_OPEN_DEPTH} />
             </div>

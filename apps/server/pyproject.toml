@@ -29,6 +29,7 @@ dependencies = [
     "bgutil-ytdlp-pot-provider>=1.3.0,<2.0",
     "curl_cffi>=0.15,<0.17",           # Browser impersonation for yt-dlp (yt-dlp >=2026.10 supports <0.17; 0.15 fixes the advisories)
     "playwright>=1.40,<2.0",           # client only — connects to in-cluster CDP sidecar
+    "websockets>=15,<16",               # read-only health probe for stale CDP page targets
     "qdrant-client>=1.10,<2.0",        # Qdrant vector DB client (services/youtube/store.py)
     "langchain-text-splitters>=1.1,<2.0",   # 1.x needed for langchain-core 1.x compat
     # YCS persistence: Elasticsearch (video metadata/transcripts), Neo4j (entity graph).

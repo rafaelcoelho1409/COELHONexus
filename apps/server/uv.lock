@@ -878,6 +878,7 @@ dependencies = [
     { name = "torchvision", version = "0.29.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
     { name = "torchvision", version = "0.29.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'linux'" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
     { name = "yt-dlp" },
 ]
 
@@ -950,6 +951,7 @@ requires-dist = [
     { name = "torchvision", marker = "sys_platform != 'linux'", specifier = ">=0.24,<1.0" },
     { name = "torchvision", marker = "sys_platform == 'linux'", specifier = ">=0.24,<1.0", index = "https://download.pytorch.org/whl/cpu" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32,<1.0" },
+    { name = "websockets", specifier = ">=15,<16" },
     { name = "yt-dlp", specifier = ">=2026.7.4" },
 ]
 

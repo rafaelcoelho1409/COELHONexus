@@ -7,7 +7,7 @@ import { ChevronDown } from "lucide-react";
 import type { JSX, ReactNode } from "react";
 import { useEffect, useId, useRef, useState } from "react";
 
-import { Button } from "@/shared/ui/button";
+import { RagActionButton as Button } from "./rag-action-button";
 
 export function ToolbarPanel({
   icon,

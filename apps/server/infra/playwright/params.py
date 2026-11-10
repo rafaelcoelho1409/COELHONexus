@@ -16,6 +16,7 @@ CDP_HEADED = os.environ.get(
 
 CDP_PROBE_TIMEOUT_S = 10   # /json/version, /json/list
 CDP_CLOSE_TIMEOUT_S = 5    # /json/close/<id>
+CDP_BLANK_PAGE_PROBE_TIMEOUT_S = 5
 
 # Non-page targets that pile up on the long-lived sidecar and crash `connect_over_cdp`.
 STALE_TARGET_TYPES = (

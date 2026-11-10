@@ -7,10 +7,9 @@
 import { Sparkles, Square } from "lucide-react";
 import { type JSX, type KeyboardEvent, useId } from "react";
 
-import { Button } from "@/shared/ui/button";
-
 import { QUERY_AI_PLACEHOLDER } from "../params";
 import type { AiState } from "../query";
+import { ActionButton } from "./action-button";
 
 export function QueryAiBar({
   prompt,
@@ -72,13 +71,13 @@ export function QueryAiBar({
           className="field-sizing-content max-h-40 min-h-9 w-full resize-none rounded-sm border border-input bg-background px-3 py-2 text-sm"
         />
         {running ? (
-          <Button variant="outline" size="lg" onClick={onStop}>
+          <ActionButton onClick={onStop}>
             <Square aria-hidden /> Stop
-          </Button>
+          </ActionButton>
         ) : (
-          <Button size="lg" onClick={onGenerate} disabled={!prompt.trim()}>
+          <ActionButton onClick={onGenerate} disabled={!prompt.trim()}>
             <Sparkles aria-hidden /> Generate
-          </Button>
+          </ActionButton>
         )}
       </div>
     </div>

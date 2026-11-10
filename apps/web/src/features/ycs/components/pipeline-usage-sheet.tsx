@@ -14,11 +14,13 @@ export function PipelineUsageSheet({
   onClose,
   title = "Pipeline LLM usage",
   subtitle = "Phase 4, the entity extraction.",
+  emptyMessage = "Usage is loading or unavailable.",
 }: {
   usage: AskUsage | null;
   onClose: () => void;
   title?: string;
   subtitle?: string;
+  emptyMessage?: string;
 }): JSX.Element {
   const total = usage?.total ?? null;
   const rows = usageModelRows(usage);
@@ -94,9 +96,7 @@ export function PipelineUsageSheet({
           ) : null}
         </div>
       ) : (
-        <p className="text-sm text-muted-foreground">
-          {usage ? "No LLM usage recorded yet." : "Usage is loading or unavailable."}
-        </p>
+        <p className="text-sm text-muted-foreground">{usage ? "No LLM usage recorded yet." : emptyMessage}</p>
       )}
     </SideSheet>
   );

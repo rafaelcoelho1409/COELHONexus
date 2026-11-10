@@ -168,12 +168,21 @@ async def prepare(state: graphs.pipeline.synth.digest.states.DigestState, runtim
 
 
 def request_text(state: dict, item: dict, outline_sections: list[dict], text: str, hashes: list[str]) -> str:
+    present_hashes = set(hashes)
     return json.dumps(
         {
             "framework": state["framework_slug"],
             "chapter_id": state["chapter_id"],
             "chapter_title": state["chapter_title"],
-            "outline": [{"section_id": s["section_id"], "heading": s.get("heading"), "description": s.get("description")} for s in outline_sections],
+            "outline": [
+                {
+                    "section_id": section["section_id"],
+                    "heading": section.get("heading"),
+                    "description": section.get("description"),
+                    "code_refs": [digest for digest in section.get("code_refs") or [] if digest in present_hashes],
+                }
+                for section in outline_sections
+            ],
             "source_key": item["key"],
             "vault_hashes": hashes,
             "source_md": text,
@@ -192,12 +201,23 @@ async def route_source(state: dict, runtime: Runtime[Context]) -> dict:
     valid_sections = {s["section_id"] for s in outline_sections}
     hashes = domain.extract_vault_hashes(text)
     valid_hashes = set(hashes)
+    expected_code_sections = {
+        digest: section["section_id"]
+        for section in outline_sections
+        for digest in section.get("code_refs") or []
+        if digest in valid_hashes
+    }
 
     async def check(candidate: dict) -> list[str]:
         payload, error = domain.try_parse_payload(candidate)
         if payload is None:
             return [f"The digest does not parse: {error}"]
-        return domain.validate_source_digest(payload, valid_section_ids = valid_sections, valid_vault_hashes = valid_hashes)
+        return domain.validate_source_digest(
+            payload,
+            valid_section_ids = valid_sections,
+            valid_vault_hashes = valid_hashes,
+            expected_code_sections = expected_code_sections,
+        )
 
     frame = data["frame"]
     started = time.monotonic()
@@ -236,7 +256,12 @@ async def route_source(state: dict, runtime: Runtime[Context]) -> dict:
         graphs.service.emit(params.STEP, "source_done", source_key = item["key"], chunk = item["chunk"], ok = False, error = (last_error or "")[:120], wall_ms = wall_ms)
         return {"results": [{"id": item["id"], "key": item["key"], "chunk": item["chunk"], "digest": None, "error": last_error or "unknown"}]}
 
-    remaining = domain.validate_source_digest(payload, valid_section_ids = valid_sections, valid_vault_hashes = valid_hashes)
+    remaining = domain.validate_source_digest(
+        payload,
+        valid_section_ids = valid_sections,
+        valid_vault_hashes = valid_hashes,
+        expected_code_sections = expected_code_sections,
+    )
     if remaining:
         # Kept: build_per_section_index drops unknown ids safely.
         logger.info(f"[digest_construct] {item['id']}: kept with {len(remaining)} unresolved issue(s): {remaining[0][:80]}")

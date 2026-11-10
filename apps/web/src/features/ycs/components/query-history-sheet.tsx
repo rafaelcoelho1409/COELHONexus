@@ -6,12 +6,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { JSX } from "react";
 
-import { Button } from "@/shared/ui/button";
-
 import { deleteQueryHistory, fetchQueryHistory } from "../api";
 import { useYcsOverlays } from "../hooks/use-overlays";
 import { QUERY_BACKENDS, type QueryBackend } from "../params";
 import { groupHistory, whenLabel } from "../query";
+import { ActionButton } from "./action-button";
 import { SideSheet } from "./side-sheet";
 
 /** The cache key — a successful Run invalidates it so the sheet is current the next time it opens. */
@@ -58,9 +57,9 @@ export function QueryHistorySheet({
       ) : history.isError ? (
         <div role="alert" className="flex flex-col items-start gap-2">
           <p className="text-sm text-destructive-text">History could not be loaded.</p>
-          <Button variant="outline" size="lg" onClick={() => void history.refetch()}>
+          <ActionButton onClick={() => void history.refetch()}>
             Retry
-          </Button>
+          </ActionButton>
         </div>
       ) : entries.length === 0 ? (
         <p className="text-sm text-muted-foreground">Nothing saved yet — run a query and it shows up here.</p>
@@ -77,19 +76,17 @@ export function QueryHistorySheet({
                 {entry.body}
               </pre>
               <div className="mt-2 flex gap-2">
-                <Button
-                  variant="outline"
-                  size="lg"
+                <ActionButton
                   onClick={() => {
                     onRestore(entry.body);
                     onClose();
                   }}
                 >
                   Restore
-                </Button>
-                <Button variant="ghost" size="lg" onClick={() => void remove(entry.ids)}>
+                </ActionButton>
+                <ActionButton onClick={() => void remove(entry.ids)}>
                   Delete
-                </Button>
+                </ActionButton>
               </div>
             </li>
           ))}

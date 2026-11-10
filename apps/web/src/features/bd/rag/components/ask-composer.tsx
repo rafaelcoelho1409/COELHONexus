@@ -6,10 +6,8 @@
 import { ArrowUp, Square } from "lucide-react";
 import type { JSX, RefObject } from "react";
 import { useLayoutEffect } from "react";
-
-import { Button } from "@/shared/ui/button";
-
 import type { AskStatus } from "../ask";
+import { RagActionButton as Button } from "./rag-action-button";
 
 const MAX_HEIGHT_PX = 200;
 

@@ -10,8 +10,6 @@
 import { ArrowDown, ArrowUp, ArrowUpDown, Columns3, Filter } from "lucide-react";
 import { type JSX, useMemo, useState } from "react";
 
-import { Button } from "@/shared/ui/button";
-
 import { useYcsOverlays } from "../hooks/use-overlays";
 import { QUERY_ID_CLIP, QUERY_ROWS_STEP } from "../params";
 import {
@@ -31,6 +29,7 @@ import {
   toCsv,
   toJsonText,
 } from "../query";
+import { ActionButton } from "./action-button";
 import { QueryRecordSheet } from "./query-record-sheet";
 
 function download(name: string, text: string, type: string): void {
@@ -76,7 +75,7 @@ function Cell({
         type="button"
         onClick={onOpen}
         aria-label={`Open ${column}, ${nestedLabel(value)}`}
-        className="min-h-9 rounded-sm border border-border px-2 font-mono text-xs hover:bg-muted"
+        className="min-h-9 rounded-sm border border-border px-2 font-mono text-xs hover:border-neutral-8 hover:bg-background focus-visible:outline-2 focus-visible:outline-ring"
       >
         {nestedLabel(value)}
       </button>
@@ -136,34 +135,28 @@ export function QueryTable({ rows }: { rows: ReadonlyArray<Row> }): JSX.Element 
             ? `${rows.length.toLocaleString("en-US")} rows`
             : `${visible.length.toLocaleString("en-US")} of ${rows.length.toLocaleString("en-US")} rows match`}
         </p>
-        <Button variant="outline" size="lg" aria-pressed={picking} onClick={() => setPicking((was) => !was)}>
+        <ActionButton aria-pressed={picking} onClick={() => setPicking((was) => !was)}>
           <Columns3 aria-hidden /> Columns
-        </Button>
-        <Button
-          variant="outline"
-          size="lg"
+        </ActionButton>
+        <ActionButton
           aria-pressed={filtering}
           onClick={() => setFiltering((was) => !was)}
         >
           <Filter aria-hidden /> Filter columns
-        </Button>
-        <Button
-          variant="outline"
-          size="lg"
+        </ActionButton>
+        <ActionButton
           onClick={() => download("results.csv", toCsv(exportColumns, visible), "text/csv")}
         >
           Export CSV
-        </Button>
-        <Button
-          variant="outline"
-          size="lg"
+        </ActionButton>
+        <ActionButton
           onClick={() => download("results.json", toJsonText(visible), "application/json")}
         >
           Export JSON
-        </Button>
-        <Button variant="outline" size="lg" onClick={copyAll}>
+        </ActionButton>
+        <ActionButton onClick={copyAll}>
           Copy CSV
-        </Button>
+        </ActionButton>
       </div>
 
       {picking ? (
@@ -213,7 +206,7 @@ export function QueryTable({ rows }: { rows: ReadonlyArray<Row> }): JSX.Element 
                         setSort((current) => nextSort(current, column));
                         setShown(QUERY_ROWS_STEP);
                       }}
-                      className="flex min-h-9 w-full items-center gap-1 px-3 text-left whitespace-nowrap hover:text-foreground"
+                      className="flex min-h-9 w-full items-center gap-1 px-3 text-left whitespace-nowrap hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
                     >
                       <span>{column}</span>
                       <SortIcon dir={dir} />
@@ -251,7 +244,7 @@ export function QueryTable({ rows }: { rows: ReadonlyArray<Row> }): JSX.Element 
                     type="button"
                     onClick={() => setOpenRow(position)}
                     aria-label={`Open row ${position + 1}`}
-                    className="tabular inline-flex min-h-9 min-w-9 items-center justify-center rounded-sm px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                    className="tabular inline-flex min-h-9 min-w-9 items-center justify-center rounded-sm px-2 text-xs text-muted-foreground hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
                   >
                     {position + 1}
                   </button>
@@ -284,9 +277,9 @@ export function QueryTable({ rows }: { rows: ReadonlyArray<Row> }): JSX.Element 
 
       {visible.length > shown ? (
         <div className="flex justify-center">
-          <Button variant="outline" onClick={() => setShown((count) => count + QUERY_ROWS_STEP)}>
+          <ActionButton onClick={() => setShown((count) => count + QUERY_ROWS_STEP)}>
             Show {Math.min(QUERY_ROWS_STEP, visible.length - shown)} more ({visible.length - shown} left)
-          </Button>
+          </ActionButton>
         </div>
       ) : null}
 

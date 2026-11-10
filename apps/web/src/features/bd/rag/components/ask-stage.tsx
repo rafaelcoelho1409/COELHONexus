@@ -3,17 +3,14 @@
 /** The Ask stage: a book-scoped conversation over the Agentic RAG index. The book and thread live in the URL, so a refresh or
  * shared link restores the same context. Reads search params, so it sits inside a Suspense boundary. */
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { ArrowDown } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { JSX } from "react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-
-import { Button } from "@/shared/ui/button";
-
 import { LibraryPicker } from "../../components/library-list";
 import { useBdOverlays } from "../../hooks/use-overlays";
-import { branchThread, deleteThread, fetchAskUsage } from "../api";
+import { branchThread, deleteThread } from "../api";
 import { lastSourcedTurn, shortId } from "../ask";
 import { type AskSendOptions, useAskConversation } from "../hooks/use-ask-conversation";
 import { useMediaQuery } from "../hooks/use-media-query";
@@ -25,6 +22,7 @@ import { THREADS_QUERY_KEY } from "./ask-threads";
 import { AskToolbar } from "./ask-toolbar";
 import { AskTurnView } from "./ask-turn";
 import { PipelineUsageSheet } from "./pipeline-usage-sheet";
+import { RagActionButton as Button } from "./rag-action-button";
 import { SideSheet } from "./side-sheet";
 
 export function AskStage(): JSX.Element {
@@ -127,12 +125,6 @@ function AskConversation({
     if (highlight === null) return;
     document.getElementById(`ask-source-${highlight}`)?.scrollIntoView({ block: "nearest" });
   }, [highlight]);
-
-  const usage = useQuery({
-    queryKey: ["bd", "ask", "usage", threadId],
-    queryFn: () => fetchAskUsage(threadId),
-    enabled: sheet === "usage",
-  });
 
   const busyNotice = (what: string) =>
     notice(`Wait for the answer to finish, or press Stop, before you ${what}.`, "info");
@@ -283,13 +275,13 @@ function AskConversation({
               >
                 {ASK_EXAMPLES.map((example) => (
                   <li key={example} className="max-w-full">
-                    <button
+                    <Button
                       type="button"
                       onClick={() => fill(example)}
-                      className="min-h-9 max-w-full cursor-pointer rounded-sm border border-border px-3 py-1.5 text-left text-sm break-words hover:border-primary hover:text-primary-text"
+                      className="h-auto min-h-10 max-w-full whitespace-normal text-left break-words"
                     >
                       {example}
-                    </button>
+                    </Button>
                   </li>
                 ))}
               </ul>
@@ -366,9 +358,10 @@ function AskConversation({
       ) : null}
       {sheet === "usage" ? (
         <PipelineUsageSheet
-          usage={usage.data ?? null}
+          threadId={turns.length > 0 ? threadId : null}
           title="Conversation LLM usage"
           subtitle="Every answer in this thread."
+          emptyMessage="No conversation yet. Usage appears here after the first answer."
           onClose={() => setSheet(null)}
         />
       ) : null}

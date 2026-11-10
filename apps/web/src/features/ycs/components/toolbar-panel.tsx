@@ -7,7 +7,7 @@ import { ChevronDown } from "lucide-react";
 import type { JSX, ReactNode } from "react";
 import { useEffect, useId, useRef, useState } from "react";
 
-import { Button } from "@/shared/ui/button";
+import { ActionButton } from "./action-button";
 
 export function ToolbarPanel({
   icon,
@@ -50,11 +50,9 @@ export function ToolbarPanel({
 
   return (
     <div ref={rootRef} className="relative">
-      <Button
+      <ActionButton
         ref={buttonRef}
         type="button"
-        variant="outline"
-        size="lg"
         aria-expanded={open}
         aria-controls={panelId}
         onClick={() => setOpen((on) => !on)}
@@ -63,7 +61,7 @@ export function ToolbarPanel({
         {icon}
         <span className="min-w-0 truncate">{label}</span>
         <ChevronDown aria-hidden className="size-3.5 opacity-60" />
-      </Button>
+      </ActionButton>
       {open ? (
         <div
           id={panelId}

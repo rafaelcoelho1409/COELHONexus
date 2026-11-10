@@ -7,12 +7,10 @@
 
 import dynamic from "next/dynamic";
 import { type JSX, useMemo, useState } from "react";
-
-import { Button } from "@/shared/ui/button";
-
 import type { RawHit } from "../entities";
 import { QUERY_GRAPH_MAX_NODES } from "../params";
 import { cellText, collectGraph, labelColors, layoutGraph } from "../query";
+import { RagActionButton as Button } from "./rag-action-button";
 
 // The graph library is only needed once a graph is on screen.
 const Canvas = dynamic(() => import("./query-graph").then((module) => module.QueryGraphCanvas), {

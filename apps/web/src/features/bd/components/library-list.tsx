@@ -19,12 +19,14 @@ export function LibraryPicker({
   onRefresh,
   autoChain = false,
   showActions = true,
+  showSelectedTitle = true,
 }: {
   selected: string | null;
   onOpen: (bookId: string | null) => void;
   onRefresh?: (bookId: string) => void;
   autoChain?: boolean;
   showActions?: boolean;
+  showSelectedTitle?: boolean;
 }) {
   const library = useLibrary();
   const del = useDeleteBook();
@@ -130,7 +132,9 @@ export function LibraryPicker({
         onClick={() => setOpen((value) => !value)}
       >
         <span className="inline-flex max-w-72 items-center gap-2 truncate">
-          {currentBook ? titleOf(currentBook) : `Library${library.data ? ` · ${rows.length}` : ""}`}
+          {currentBook && showSelectedTitle
+            ? titleOf(currentBook)
+            : `Library${library.data ? ` · ${rows.length}` : ""}`}
           <ChevronDown
             className={`size-4 shrink-0 text-muted-foreground ${open ? "rotate-180" : ""}`}
             aria-hidden="true"

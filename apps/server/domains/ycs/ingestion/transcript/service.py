@@ -835,7 +835,8 @@ class PlaywrightTranscriptService:
                     )
 
         raise RuntimeError(
-            f"Failed to connect to Playwright CDP after {max_retries} attempts",
+            f"Failed to connect to Playwright CDP at {cdp_endpoint} "
+            f"after {max_retries} attempts: {last_error}",
         ) from last_error
 
     async def _stop_playwright_driver(self) -> None:

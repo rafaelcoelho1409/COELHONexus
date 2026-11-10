@@ -90,10 +90,9 @@ async def pipeline_stream_status(
         raise HTTPException(status_code = 503, detail = "Redis unavailable")
     progress = await domains.ycs.ingestion.pipeline_task.service.get_phase_progress(redis, extract_id, phase)
     payload: dict[str, Any] = {"task_id": extract_id, "state": progress["state"]}
+    payload["meta"] = progress.get("meta") or {}
     if progress["state"] == "SUCCESS":
         payload["result"] = progress.get("result") or {}
-    else:
-        payload["meta"] = progress.get("meta") or {}
     return payload
 
 

@@ -139,12 +139,6 @@ export function DistillOutputPanel({
         : selectionNeedsAttention
           ? "selection"
           : "pages");
-  const description =
-    visibleMode === "selection"
-      ? "Choose which classified pages Distill will use. Excluded pages stay in the original book."
-      : visibleMode === "guide"
-        ? "Review the condensed lessons and evidence citations from this run."
-        : "Read Ingestion-processed pages, review Distill inputs, or open the finished Learning Guide.";
   const currentIndex = rows.findIndex((candidate) => candidate.page === page);
   const previousPage = currentIndex > 0 ? (rows[currentIndex - 1]?.page ?? null) : null;
   const nextPage = currentIndex >= 0 ? (rows[currentIndex + 1]?.page ?? null) : null;
@@ -301,18 +295,7 @@ export function DistillOutputPanel({
     <>
       <BookReadingProgress />
       <section aria-label="Distill book content" className="min-w-0">
-        <header className="flex min-w-0 flex-wrap items-start justify-between gap-3 border-b border-border pb-3">
-          <div className="min-w-0">
-            <p className="mono-label">Distill · Book content</p>
-            <h3 className="mt-1 text-base font-semibold">
-              {visibleMode === "guide"
-                ? "Learning Guide"
-                : visibleMode === "selection"
-                  ? "Page selection"
-                  : "Processed pages"}
-            </h3>
-            <p className="mt-1 text-xs text-muted-foreground">{description}</p>
-          </div>
+        <header className="flex min-w-0 justify-end border-b border-border pb-3">
           <ToggleGroup
             legend="Distill content view"
             options={availableModes}
@@ -343,8 +326,6 @@ export function DistillOutputPanel({
               <PageReader
                 bookId={bookId}
                 bookMetadata={{
-                  title,
-                  filename: book.manifest.filename,
                   status: effectiveStatus(book.manifest.status, book.progress?.status, null),
                   sizeBytes: book.manifest.size_bytes,
                   pageCount: book.manifest.n_pages,

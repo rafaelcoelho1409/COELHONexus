@@ -6,9 +6,8 @@
 import { BookOpen, History, Play, RotateCcw } from "lucide-react";
 import type { JSX } from "react";
 
-import { Button } from "@/shared/ui/button";
-
 import { QUERY_BACKENDS, type QueryBackend } from "../params";
+import { ActionButton } from "./action-button";
 
 export function BackendTabs({
   backend,
@@ -18,21 +17,20 @@ export function BackendTabs({
   onChange: (backend: QueryBackend) => void;
 }): JSX.Element {
   return (
-    <nav aria-label="Query backend" className="flex flex-wrap gap-x-1">
+    <nav
+      aria-label="Query backend"
+      className="inline-flex max-w-full flex-nowrap overflow-x-auto rounded-sm border border-border bg-background"
+    >
       {QUERY_BACKENDS.map((entry) => (
-        <button
+        <ActionButton
           key={entry.id}
           type="button"
           aria-pressed={entry.id === backend}
           onClick={() => onChange(entry.id)}
-          className={
-            entry.id === backend
-              ? "-mb-px min-h-9 border-b-2 border-primary px-3 py-2 text-sm font-medium text-primary-text"
-              : "-mb-px min-h-9 border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground hover:text-foreground"
-          }
+          className="min-h-9 shrink-0 rounded-none border-0 border-r border-r-border px-3 py-2 text-sm last:border-r-0"
         >
           {entry.label}
-        </button>
+        </ActionButton>
       ))}
     </nav>
   );
@@ -77,25 +75,24 @@ export function EditorHeader({
           </span>
         </p>
       </div>
-      <Button
-        size="lg"
+      <ActionButton
         onClick={onRun}
         disabled={running}
         title="Run the query (Ctrl/Cmd+Enter)"
         className="order-2 sm:order-3"
       >
         <Play aria-hidden /> {running ? "Running…" : "Run"}
-      </Button>
+      </ActionButton>
       <div className="order-3 flex w-full flex-wrap gap-2 sm:order-2 sm:w-auto">
-        <Button variant="outline" size="lg" onClick={onReset} title="Put the starting query back">
+        <ActionButton onClick={onReset} title="Put the starting query back">
           <RotateCcw aria-hidden /> Reset
-        </Button>
-        <Button variant="outline" size="lg" onClick={onSchema}>
+        </ActionButton>
+        <ActionButton onClick={onSchema}>
           <BookOpen aria-hidden /> Schema
-        </Button>
-        <Button variant="outline" size="lg" onClick={onHistory}>
+        </ActionButton>
+        <ActionButton onClick={onHistory}>
           <History aria-hidden /> History
-        </Button>
+        </ActionButton>
       </div>
     </div>
   );

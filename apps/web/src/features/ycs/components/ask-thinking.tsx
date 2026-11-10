@@ -85,7 +85,7 @@ export function AskThinking({ turn }: { turn: AskTurn }): JSX.Element {
         aria-expanded={open}
         aria-controls={panelId}
         onClick={() => setChosen(!open)}
-        className="flex min-h-9 w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-muted-foreground hover:text-foreground"
+        className="flex min-h-10 w-full cursor-pointer items-center gap-2 bg-background px-3 py-1.5 text-left text-sm text-muted-foreground hover:bg-background hover:text-foreground aria-expanded:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
       >
         <ChevronDown
           aria-hidden

@@ -4,12 +4,10 @@
 
 import { Gauge, Plus } from "lucide-react";
 import type { JSX } from "react";
-
-import { Button } from "@/shared/ui/button";
-
 import { LibraryPicker } from "../../components/library-list";
 import { ASK_MODES } from "../params";
 import { AskThreads } from "./ask-threads";
+import { RagActionButton as Button } from "./rag-action-button";
 
 const MODE_HINT: Record<string, string> = {
   "": "Picks Fast, Standard or Deep for each question.",
@@ -61,7 +59,7 @@ export function AskToolbar({
                   onChange={() => onMode(option.id)}
                   className="peer sr-only"
                 />
-                <span className="flex min-h-9 cursor-pointer items-center justify-center border border-border px-2 text-sm text-muted-foreground hover:text-foreground peer-checked:border-primary peer-checked:bg-primary/10 peer-checked:text-primary-text peer-focus-visible:ring-2 peer-focus-visible:ring-ring sm:px-3">
+                <span className="flex min-h-10 cursor-pointer items-center justify-center rounded-none border border-border bg-background px-2 text-sm font-medium text-foreground hover:border-neutral-8 peer-checked:border-primary peer-checked:bg-muted peer-focus-visible:ring-3 peer-focus-visible:ring-ring/50 sm:px-3">
                   {option.label}
                 </span>
               </label>

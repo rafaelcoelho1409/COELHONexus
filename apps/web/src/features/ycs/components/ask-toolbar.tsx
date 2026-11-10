@@ -7,9 +7,8 @@
 import { Gauge, Plus } from "lucide-react";
 import type { JSX } from "react";
 
-import { Button } from "@/shared/ui/button";
-
 import { ASK_MODES } from "../params";
+import { ActionButton } from "./action-button";
 import { AskScope } from "./ask-scope";
 import { AskThreads } from "./ask-threads";
 
@@ -51,37 +50,30 @@ export function AskToolbar({
       <div className="flex items-end gap-2 sm:contents">
         <fieldset className="m-0 min-w-0 flex-1 border-0 p-0 sm:flex-none">
           <legend className="mb-1 text-xs font-medium text-muted-foreground">Mode</legend>
-          <div className="flex">
+          <div className="inline-flex max-w-full overflow-hidden rounded-sm border border-border bg-background">
             {ASK_MODES.map((option) => (
-              <label
+              <ActionButton
                 key={option.id || "auto"}
                 title={MODE_HINT[option.id]}
-                className="relative -ml-px flex-1 first:ml-0 first:[&>span]:rounded-l-sm last:[&>span]:rounded-r-sm sm:flex-none"
+                type="button"
+                aria-pressed={mode === option.id}
+                onClick={() => onMode(option.id)}
+                className="min-h-9 min-w-0 flex-1 rounded-none border-0 border-r border-r-border px-2 text-xs last:border-r-0 sm:flex-none sm:px-2.5"
               >
-                <input
-                  type="radio"
-                  name="ask-mode"
-                  value={option.id}
-                  checked={mode === option.id}
-                  onChange={() => onMode(option.id)}
-                  className="peer sr-only"
-                />
-                <span className="flex min-h-9 cursor-pointer items-center justify-center border border-border px-2 text-sm text-muted-foreground hover:text-foreground peer-checked:border-primary peer-checked:bg-primary/10 peer-checked:text-primary-text peer-focus-visible:ring-2 peer-focus-visible:ring-ring sm:px-3">
-                  {option.label}
-                </span>
-              </label>
+                {option.label}
+              </ActionButton>
             ))}
           </div>
         </fieldset>
         <div className="flex gap-2 sm:order-last sm:ml-auto">
-          <Button type="button" variant="outline" size="lg" onClick={onUsage}>
+          <ActionButton type="button" onClick={onUsage}>
             <Gauge aria-hidden data-icon="inline-start" />
             <span className="sr-only sm:not-sr-only">LLM usage</span>
-          </Button>
-          <Button type="button" variant="outline" size="lg" onClick={onNewThread}>
+          </ActionButton>
+          <ActionButton type="button" onClick={onNewThread}>
             <Plus aria-hidden data-icon="inline-start" />
             <span className="sr-only sm:not-sr-only">New thread</span>
-          </Button>
+          </ActionButton>
         </div>
       </div>
       <div className="flex items-center gap-2 sm:contents">

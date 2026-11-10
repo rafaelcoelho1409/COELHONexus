@@ -6,10 +6,9 @@ import { useQuery } from "@tanstack/react-query";
 import { MessagesSquare, Trash2 } from "lucide-react";
 import type { JSX } from "react";
 
-import { Button } from "@/shared/ui/button";
-
 import { fetchThreadList } from "../api";
 import { threadLabel, threadPreview, threadRowMeta } from "../ask";
+import { ActionButton } from "./action-button";
 import { ToolbarPanel } from "./toolbar-panel";
 
 export const THREADS_QUERY_KEY = ["ycs", "ask", "threads"] as const;
@@ -39,28 +38,27 @@ function ThreadList({
       {threads.data.map((thread) => (
         <li
           key={thread.thread_id}
-          className={`flex items-stretch rounded-sm ${thread.thread_id === currentId ? "bg-muted" : "hover:bg-muted/50"}`}
+          className="flex items-stretch rounded-sm"
         >
           <button
             type="button"
             onClick={() => onSwitch(thread.thread_id)}
             aria-current={thread.thread_id === currentId ? "true" : undefined}
-            className="min-h-9 min-w-0 flex-1 cursor-pointer rounded-sm px-2 py-1.5 text-left"
+            className="min-h-10 min-w-0 flex-1 cursor-pointer rounded-sm border border-transparent bg-background px-2 py-1.5 text-left hover:border-neutral-8 hover:bg-background aria-current:border-primary aria-current:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
           >
             <span className="block text-sm leading-snug break-words">
               {threadPreview(thread.first_question)}
             </span>
             <span className="block text-xs text-muted-foreground">{threadRowMeta(thread)}</span>
           </button>
-          <Button
-            variant="ghost"
-            size="icon-lg"
+          <ActionButton
+            iconOnly
             onClick={() => onDelete(thread.thread_id)}
             aria-label={`Delete thread: ${threadPreview(thread.first_question)}`}
             className="self-center"
           >
             <Trash2 aria-hidden />
-          </Button>
+          </ActionButton>
         </li>
       ))}
     </ul>

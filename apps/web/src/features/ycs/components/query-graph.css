@@ -53,13 +53,14 @@
   width: 36px;
   height: 36px;
   border-color: var(--border);
-  background: var(--card);
+  background: var(--background);
   fill: var(--foreground);
   color: var(--foreground);
 }
 
 .query-graph .react-flow__controls-button:hover {
-  background: var(--muted);
+  border-color: var(--neutral-8);
+  background: var(--background);
 }
 
 .query-graph .react-flow__attribution {

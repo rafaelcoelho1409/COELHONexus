@@ -24,7 +24,7 @@ export function AppShell({
           <Link href="/" className="flex items-center gap-2.5 text-foreground">
             <BrandMark className="size-5 text-primary-text" />
             {/* The wordmark gives way to the nav on a phone; it stays the link's accessible name. */}
-            <span className="sr-only font-semibold tracking-tight sm:not-sr-only">COELHO Nexus</span>
+            <span className="sr-only text-lg font-semibold tracking-tight sm:not-sr-only">COELHO Nexus</span>
           </Link>
           <div className="flex items-center gap-1 sm:gap-2">
             <nav aria-label="Primary" className="flex items-center">

@@ -17,6 +17,17 @@ from pydantic import BaseModel
 Schema = TypeVar("Schema", bound = BaseModel)
 
 
+def _safe_error_summary(error: Exception) -> str:
+    """Expose provider status codes in diagnostics without persisting response bodies or user content."""
+    status = getattr(error, "status_code", None)
+    if not isinstance(status, int):
+        status = getattr(getattr(error, "response", None), "status_code", None)
+    detail = type(error).__name__
+    if isinstance(status, int):
+        detail += f", status={status}"
+    return detail
+
+
 def resilience(*, model_calls: int, with_tools: bool) -> list[Any]:
     """The middleware every agent carries, in order (the first is the outermost): transient provider failures are retried, a
     Rotator capacity wait is waited out, a run that never reaches an answer stops after `model_calls` calls, and a tool failure
@@ -116,8 +127,9 @@ async def ask_chat_model(
     attempts: int,
     wait_base_s: float,
     config: dict[str, Any] | None = None,
+    recover_json_after_transient_error: bool = True,
 ) -> Schema:
-    """Ask a tool-free model role for a schema, then make one bounded JSON-text recovery call.
+    """Ask a tool-free model role for a schema, then make bounded JSON-text recovery attempts.
 
     This path is for tasks that do not need an agent loop or executable tools. It keeps the structured call's raw
     message so function-call arguments and provider finish metadata remain inspectable when parsing fails.
@@ -132,6 +144,7 @@ async def ask_chat_model(
         return parsed is not None
 
     structured_result: Any = None
+    structured_error: Exception | None = None
     try:
         structured = model.with_structured_output(schema, method = "function_calling", include_raw = True)
         structured_result = await domains.settings.chat.service.resilient_ainvoke(
@@ -146,16 +159,30 @@ async def ask_chat_model(
         failures.append(domain.structured_failure_reason(structured_result, schema))
     except Exception as error:
         # Keep provider response bodies and source text out of planner health metadata.
-        failures.append(f"function-call request failed ({type(error).__name__})")
+        structured_error = error
+        failures.append(f"function-call request failed ({_safe_error_summary(error)})")
+
+    # A second prompt with a different response format cannot repair a timeout,
+    # rate limit or provider outage. Expensive callers can fail fast here while
+    # retaining JSON-text recovery for a successful but malformed response.
+    if (
+        structured_error is not None
+        and not recover_json_after_transient_error
+        and domain.is_transient(structured_error)
+    ):
+        raise structured_error
 
     fallback_instruction = (
         "Return one JSON object only, with no Markdown fence or commentary. It must match this JSON Schema exactly:\n"
         + json.dumps(schema.model_json_schema(), ensure_ascii = False)
     )
     try:
-        raw = await model.ainvoke(
-            [*messages, HumanMessage(content = fallback_instruction)],
-            config = request_config(config),
+        recovery_messages = [*messages, HumanMessage(content = fallback_instruction)]
+        raw = await domains.settings.chat.service.resilient_ainvoke(
+            lambda: model.ainvoke(recovery_messages, config = request_config(config)),
+            attempts = attempts,
+            wait_base_s = wait_base_s,
+            accept = lambda value: usable({"raw": value}),
         )
         fallback_result = {"raw": raw}
         answer = domain.structured_or_recovered(fallback_result, schema)
@@ -163,11 +190,12 @@ async def ask_chat_model(
             return answer
         failures.append("JSON-text recovery: " + domain.structured_failure_reason(fallback_result, schema))
     except Exception as error:
-        failures.append(f"JSON-text recovery failed ({type(error).__name__})")
+        failures.append(f"JSON-text recovery failed ({_safe_error_summary(error)})")
 
     detail = failures[-1] if failures else "no parse diagnostic was available"
     first = failures[0] if len(failures) > 1 else "structured response was unusable"
     raise ValueError(
-        f"the {schema.__name__} model produced no valid answer after {attempts} structured attempt(s) and one JSON-text recovery; "
+        f"the {schema.__name__} model produced no valid answer after up to {attempts} structured and "
+        f"{attempts} JSON-text recovery attempt(s); "
         f"{first}; {detail}"
     )

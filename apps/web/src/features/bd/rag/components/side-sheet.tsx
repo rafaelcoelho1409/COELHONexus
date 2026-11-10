@@ -5,10 +5,8 @@
 
 import { X } from "lucide-react";
 import { type ReactNode, useId } from "react";
-
-import { Button } from "@/shared/ui/button";
-
 import { useModalDialog } from "../hooks/use-modal-dialog";
+import { RagActionButton as Button } from "./rag-action-button";
 
 export function SideSheet({
   title,

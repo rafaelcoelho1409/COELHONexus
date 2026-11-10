@@ -9,9 +9,6 @@
 
 import { ArrowDown, ArrowUp, ArrowUpDown, Columns3, Filter } from "lucide-react";
 import { type JSX, useMemo, useState } from "react";
-
-import { Button } from "@/shared/ui/button";
-
 import { useBdOverlays } from "../../hooks/use-overlays";
 import { QUERY_ID_CLIP, QUERY_ROWS_STEP } from "../params";
 import {
@@ -32,6 +29,7 @@ import {
   toJsonText,
 } from "../query";
 import { QueryRecordSheet } from "./query-record-sheet";
+import { RagActionButton as Button } from "./rag-action-button";
 
 function download(name: string, text: string, type: string): void {
   const url = URL.createObjectURL(new Blob([text], { type }));
@@ -72,14 +70,14 @@ function Cell({
   if (shape === "empty") return <span className="text-muted-foreground">&quot;&quot;</span>;
   if (shape === "array" || shape === "object") {
     return (
-      <button
+      <Button
         type="button"
         onClick={onOpen}
         aria-label={`Open ${column}, ${nestedLabel(value)}`}
-        className="min-h-9 rounded-sm border border-border px-2 font-mono text-xs hover:bg-muted"
+        className="h-auto min-h-9 font-mono text-xs"
       >
         {nestedLabel(value)}
-      </button>
+      </Button>
     );
   }
   const text = cellText(value);

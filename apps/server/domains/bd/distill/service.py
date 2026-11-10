@@ -431,9 +431,6 @@ async def run_distill(
     checkpointer: Any | None,
 ) -> dict[str, Any]:
     """Run or resume the pinned graph; all substantive intermediate artifacts remain outside graph state."""
-    if not params.DISTILL_EXECUTION_ENABLED:
-        raise RuntimeError("Distill execution is disabled")
-
     from langgraph.errors import NodeCancelledError
 
     import ai

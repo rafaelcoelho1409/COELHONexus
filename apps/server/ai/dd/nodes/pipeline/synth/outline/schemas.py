@@ -41,7 +41,7 @@ class OutlineSection(BaseModel):
     )
     code_refs: list[str] = Field(
         default_factory = list,
-        description = "Canonical code-ledger hashes assigned to this tutorial step; v2 aims for one best example per step.",
+        description = "Canonical code-ledger hashes assigned to this focused tutorial section; related examples may share one section.",
     )
 
     @field_validator("section_id")

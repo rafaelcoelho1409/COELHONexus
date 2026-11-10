@@ -1,12 +1,12 @@
 "use client";
 
-/** The bar that appears while Library rows are selected: how many, Re-ingest (starts work again), and Delete — set apart in
- * danger styling, since it cannot be undone — and Clear. It sticks to the bottom of the screen. */
+/** The bar that appears while Library rows are selected: how many, Re-ingest, Delete (confirmation-protected), and Clear.
+ * It sticks to the bottom of the screen. */
 
 import { RefreshCw, Trash2, X } from "lucide-react";
 import type { JSX } from "react";
 
-import { Button } from "@/shared/ui/button";
+import { ActionButton } from "./action-button";
 
 export function LibraryBar({
   count,
@@ -31,17 +31,17 @@ export function LibraryBar({
       <p role="status" className="tabular text-sm">
         {count} selected
       </p>
-      <Button type="button" variant="outline" size="lg" onClick={onReingest} disabled={reingesting}>
+      <ActionButton type="button" onClick={onReingest} disabled={reingesting}>
         <RefreshCw aria-hidden />
         {reingesting ? "Queuing…" : "Re-ingest"}
-      </Button>
-      <Button type="button" variant="destructive" size="lg" onClick={onDelete} disabled={deleting}>
+      </ActionButton>
+      <ActionButton type="button" onClick={onDelete} disabled={deleting}>
         <Trash2 aria-hidden />
         {deleting ? "Deleting…" : "Delete"}
-      </Button>
-      <Button type="button" variant="ghost" size="icon-lg" aria-label="Clear selection" onClick={onClear}>
+      </ActionButton>
+      <ActionButton iconOnly type="button" aria-label="Clear selection" onClick={onClear}>
         <X aria-hidden />
-      </Button>
+      </ActionButton>
     </section>
   );
 }

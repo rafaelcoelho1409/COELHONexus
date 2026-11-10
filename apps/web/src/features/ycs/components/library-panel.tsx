@@ -12,7 +12,6 @@ import { useEffect, useState } from "react";
 
 import { getYcsAdminVideosFacetsOptions, getYcsAdminVideosOptions } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
-import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Label } from "@/shared/ui/label";
 
@@ -27,6 +26,7 @@ import {
 } from "../entities";
 import { useYcsOverlays } from "../hooks/use-overlays";
 import { ingestionHref, LIBRARY_PAGE_SIZE, LIBRARY_SEARCH_DEBOUNCE_MS } from "../params";
+import { ActionButton } from "./action-button";
 import { LibraryBar } from "./library-bar";
 import { LibraryRow } from "./library-row";
 import { SELECT_CLASS } from "./search-filters";
@@ -297,9 +297,9 @@ export function LibraryPanel({ refreshTick }: { refreshTick: number }): JSX.Elem
         </div>
         {filtering ? (
           <div className="flex justify-end">
-            <Button type="button" variant="ghost" size="lg" onClick={clearFilters}>
+            <ActionButton type="button" onClick={clearFilters}>
               Clear filters
-            </Button>
+            </ActionButton>
           </div>
         ) : null}
       </div>
@@ -390,27 +390,23 @@ export function LibraryPanel({ refreshTick }: { refreshTick: number }): JSX.Elem
 
         {total > LIBRARY_PAGE_SIZE ? (
           <div className="flex items-center justify-between gap-3 rounded-b-md border-t border-border bg-card px-3 py-2 xl:sticky xl:bottom-0">
-            <Button
+            <ActionButton
               type="button"
-              variant="outline"
-              size="lg"
               onClick={() => setOffset(Math.max(0, offset - LIBRARY_PAGE_SIZE))}
               disabled={offset === 0}
             >
               Previous
-            </Button>
+            </ActionButton>
             <span className="tabular font-mono text-xs text-muted-foreground">
               {rangeStart}–{rangeEnd} of {fmtInt(total)}
             </span>
-            <Button
+            <ActionButton
               type="button"
-              variant="outline"
-              size="lg"
               onClick={() => setOffset(offset + LIBRARY_PAGE_SIZE)}
               disabled={rangeEnd >= total}
             >
               Next
-            </Button>
+            </ActionButton>
           </div>
         ) : null}
       </div>

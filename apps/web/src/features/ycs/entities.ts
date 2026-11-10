@@ -124,6 +124,7 @@ const taskResultSchema = z.looseObject({
   nodes_created: z.number().catch(0),
   relationships_created: z.number().catch(0),
   entities_merged: z.number().catch(0),
+  error_breakdown: z.record(z.string(), z.number()).catch({}),
 });
 export type TaskResult = z.infer<typeof taskResultSchema>;
 

@@ -439,7 +439,8 @@ async def mark_video_or_partition_done(
     has reported does this fire exactly ONE `mark_video_done` call for
     `parent_video_id`, with the aggregated success (AND of all parts)
     and summed numeric `extra` fields (nodes_created, points_upserted,
-    etc. — same shape a single video's own `extra` would carry).
+    etc.) plus merged error-breakdown maps — same shape a single
+    video's own `extra` would carry.
 
     Callers with `parent_video_id=None` (every non-split video — the
     overwhelming majority) get the EXACT same direct `mark_video_done`
@@ -492,6 +493,7 @@ async def mark_video_or_partition_done(
 
     all_success = True
     agg_extra: dict[str, Any] = {}
+    agg_error_breakdown: dict[str, int] = {}
     for raw in reported.values():
         try:
             entry = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
@@ -500,9 +502,18 @@ async def mark_video_or_partition_done(
         if not entry.get("success"):
             all_success = False
         for k, v in entry.items():
+            if k == "error_breakdown" and isinstance(v, dict):
+                for error_name, count in v.items():
+                    if isinstance(count, (int, float)) and not isinstance(count, bool):
+                        agg_error_breakdown[error_name] = (
+                            agg_error_breakdown.get(error_name, 0) + int(count)
+                        )
+                continue
             if k == "success" or not isinstance(v, (int, float)):
                 continue
             agg_extra[k] = agg_extra.get(k, 0) + v
+    if agg_error_breakdown:
+        agg_extra["error_breakdown"] = agg_error_breakdown
     logger.info(
         f"[ycs:pipeline:streaming] {extract_id}: all {len(reported)} "
         f"partition(s) of {parent_video_id} reported for {phase} — "
@@ -651,12 +662,14 @@ async def get_phase_progress(
         raw_status = {}
     completed_ids: list[str] = []
     failed_ids: list[str] = []
-    # Summed across every video's `extra` payload (set by
-    # `neo4j_task.task`/`qdrant_task.task` on success) so the FastHTML
-    # success hint (`_successHint` in `pipeline_panel.js`) has real
-    # numbers instead of `undefined` — those functions expect the same
-    # aggregate shape the old single-task result dicts carried.
+    # Summed across every video's `extra` payload (set by the streaming
+    # store tasks). Counts are aggregated even when the row carrying
+    # chunk-level totals is itself failed: a chunk can have successful
+    # writes and exhausted video retries at the same time. The per-video
+    # success flag only classifies IDs; it does not invalidate store
+    # totals already written by that chunk.
     numeric_totals: dict[str, int] = {}
+    error_breakdown: dict[str, int] = {}
     for k, v in (raw_status or {}).items():
         vid = k.decode() if isinstance(k, (bytes, bytearray)) else k
         raw = v.decode() if isinstance(v, (bytes, bytearray)) else v
@@ -666,12 +679,23 @@ async def get_phase_progress(
             entry = {}
         if entry.get("success"):
             completed_ids.append(vid)
-            for key, val in entry.items():
-                if key in ("success", "error") or not isinstance(val, (int, float)):
-                    continue
-                numeric_totals[key] = numeric_totals.get(key, 0) + val
         else:
             failed_ids.append(vid)
+        for key, val in entry.items():
+            if key == "error_breakdown" and isinstance(val, dict):
+                for error_name, count in val.items():
+                    if isinstance(count, (int, float)) and not isinstance(count, bool):
+                        error_breakdown[error_name] = (
+                            error_breakdown.get(error_name, 0) + int(count)
+                        )
+                continue
+            if (
+                key in ("success", "error")
+                or not isinstance(val, (int, float))
+                or isinstance(val, bool)
+            ):
+                continue
+            numeric_totals[key] = numeric_totals.get(key, 0) + int(val)
     if total is None:
         # extract_videos hasn't finished dispatching — this phase hasn't
         # even started from the poller's point of view.
@@ -794,6 +818,7 @@ async def get_phase_progress(
             "failed_ids":      failed_ids,
             "total_transcripts": len(completed_ids),
             **numeric_totals,
+            **({"error_breakdown": error_breakdown} if error_breakdown else {}),
             **({
                 "piece_current": min(piece_finished, piece_total),
                 "piece_total":   piece_total,

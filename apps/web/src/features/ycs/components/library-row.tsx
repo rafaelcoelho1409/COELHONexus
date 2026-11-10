@@ -6,10 +6,9 @@
 import { Trash2 } from "lucide-react";
 import type { JSX } from "react";
 
-import { Button } from "@/shared/ui/button";
-
 import { libraryMetaLine, libraryStatsLine, libraryUrl } from "../domain";
 import type { LibraryItem } from "../entities";
+import { ActionButton } from "./action-button";
 import { type BadgeTone, StatusBadge } from "./status-badge";
 
 /** A library row's `status` as a badge tone: the three the backend reports, and anything else as waiting. */
@@ -76,16 +75,15 @@ export function LibraryRow({
         <p className="mt-0.5 text-xs break-words text-muted-foreground">{libraryMetaLine(row)}</p>
         {stats ? <p className="font-mono text-xs break-words text-muted-foreground">{stats}</p> : null}
       </div>
-      <Button
+      <ActionButton
+        iconOnly
         type="button"
-        variant="ghost"
-        size="icon-lg"
         onClick={onDelete}
         disabled={deleting}
         aria-label={`Delete ${title}`}
       >
         <Trash2 aria-hidden />
-      </Button>
+      </ActionButton>
     </li>
   );
 }

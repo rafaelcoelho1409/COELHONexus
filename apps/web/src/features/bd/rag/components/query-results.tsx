@@ -4,14 +4,12 @@
  * query), then the stats, the server's notes and a Table | JSON (| Graph, for Neo4j) switch over one result. */
 
 import { type JSX, useMemo, useState } from "react";
-
-import { Button } from "@/shared/ui/button";
-
 import { QUERY_TREE_OPEN_DEPTH, type QueryBackend } from "../params";
 import { collectGraph, flattenRows, type RunState } from "../query";
 import { JsonTree } from "./json-tree";
 import { QueryGraphView } from "./query-graph-view";
 import { QueryTable } from "./query-table";
+import { RagActionButton as Button } from "./rag-action-button";
 
 type View = "table" | "json" | "graph";
 

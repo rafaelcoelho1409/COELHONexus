@@ -12,9 +12,9 @@ import { bookUnits } from "../../domain/books";
 import type { BookSnapshot } from "../../entities";
 import { useLibrary, useSnapshot } from "../../hooks/use-bd-data";
 import { useBdOverlays } from "../../hooks/use-overlays";
+import { BOOK_PARAM, bookHref, PAGE_PARAM, parsePageParam } from "../../params";
 import { RagIndexBoard } from "../../rag/components/rag-index-board";
 import { useRagCapabilities, useRagIndex, useRagIndexActions } from "../../rag/hooks/use-index-data";
-import { BOOK_PARAM, PAGE_PARAM, bookHref, parsePageParam } from "../../params";
 import {
   distillReadiness,
   initialDistillRunState,
@@ -33,7 +33,6 @@ import { DISTILL_RUN_PARAM, distillHref, distillStudyHref } from "../params";
 import { DistillNodeBoard } from "./distill-node-board";
 import { DistillOutputPanel } from "./distill-output-panel";
 import { DistillProgressPanel } from "./distill-progress-panel";
-import { ReadinessPanel } from "./readiness-panel";
 
 export function DistillPage() {
   return <DistillWorkspacePage view="agents" />;
@@ -76,6 +75,7 @@ function DistillStage({ view }: { view: "agents" | "study" }) {
               selected={bookId}
               onOpen={(id) => router.push(view === "study" ? distillStudyHref(id) : distillHref(id))}
               showActions={false}
+              showSelectedTitle={false}
             />
             {selectedBook ? (
               <p className="text-xs text-muted-foreground">
@@ -83,6 +83,16 @@ function DistillStage({ view }: { view: "agents" | "study" }) {
               </p>
             ) : null}
           </>
+        }
+        end={
+          selectedBook ? (
+            <p
+              className="ml-auto min-w-0 max-w-[min(48vw,40rem)] break-words text-right text-base font-semibold text-foreground max-sm:w-full max-sm:max-w-full"
+              title={selectedBook.title.trim() || selectedBook.filename}
+            >
+              {selectedBook.title.trim() || selectedBook.filename}
+            </p>
+          ) : undefined
         }
       />
       <div className="mx-auto w-full max-w-6xl p-4">
@@ -333,7 +343,6 @@ function DistillWorkspaceView({
       onError: (error) => notice(apiErrorMessage(error), "error"),
     });
   };
-  const title = book.manifest.title.trim() || book.manifest.filename;
   const progressActions = (
     <>
       <ActionButton
@@ -344,11 +353,15 @@ function DistillWorkspaceView({
         title={
           !canExecute
             ? "Distill execution is unavailable in this environment."
-            : !readiness.ready
-              ? "Complete the source checks before starting Distill."
-              : activeRun
-                ? "A Distill run is already active."
-                : undefined
+            : runs.isPending
+              ? "Loading Distill runs."
+              : runs.isError
+                ? "Load Distill runs before starting."
+                : !readiness.ready
+                  ? "Complete the source checks before starting Distill."
+                  : activeRun
+                    ? "A Distill run is already active."
+                    : undefined
         }
       >
         {actions.start.isPending || actions.resume.isPending
@@ -391,6 +404,19 @@ function DistillWorkspaceView({
       </ActionButton>
     </>
   );
+  const progressStatusText = stopping
+    ? "Stopping"
+    : runs.isPending
+      ? "Loading run history"
+      : runs.isError
+        ? "Run history unavailable"
+        : progressStatus === "running"
+          ? "Processing"
+          : progressStatus
+            ? statusLabel(progressStatus)
+            : readiness.ready
+              ? "Ready to run"
+              : "Waiting for source checks";
   const progressPanel = (
     <DistillProgressPanel
       run={controlRun}
@@ -398,12 +424,10 @@ function DistillWorkspaceView({
       progress={progress}
       error={progressError}
       streamStatus={progressStreamStatus}
-      readiness={readiness}
       stopping={stopping}
       capabilitiesPending={capabilities.isPending}
       capabilitiesError={capabilities.isError ? apiErrorMessage(capabilities.error) : null}
       canExecute={canExecute}
-      actions={progressActions}
     />
   );
   const runHistory = runs.isPending ? (
@@ -462,59 +486,29 @@ function DistillWorkspaceView({
   );
 
   return (
-    <section aria-labelledby="distill-workspace-title" className="min-w-0">
-      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-3">
-        <div className="min-w-0">
-          {view === "study" ? (
-            <h2 id="distill-workspace-title" className="text-xl font-semibold tracking-tight">
-              Study
-            </h2>
-          ) : (
-            <>
-              <p className="mono-label">Book Distiller · Distill Agents</p>
-              <h2
-                id="distill-workspace-title"
-                className="mt-1 break-words text-xl font-semibold tracking-tight"
-              >
-                {title}
-              </h2>
-            </>
-          )}
-        </div>
-        <Link
-          href={
-            view === "study"
-              ? distillHref(bookId, selected?.run_id)
-              : distillStudyHref(bookId, selected?.run_id)
-          }
-          className="inline-flex min-h-10 items-center rounded-sm border border-border bg-background px-3 text-sm font-medium text-foreground hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-        >
-          {view === "study" ? "Distill Agents" : "Open Study"}
-        </Link>
-      </header>
-
+    <section
+      aria-label={view === "study" ? "Study workspace" : "Distill Agents workspace"}
+      className="min-w-0"
+    >
       {view === "study" ? (
-        <div className="mt-4 min-w-0">{outputPanel}</div>
+        <div className="min-w-0">{outputPanel}</div>
       ) : (
         <>
-          <div className="mt-4 grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
-            <section
-              aria-label="Distill source readiness"
-              className="min-w-0 rounded-md border border-border bg-card p-3"
-            >
-              <ReadinessPanel readiness={readiness} />
-            </section>
-            <div className="min-w-0 space-y-3">
-              {progressPanel}
-              {runHistory}
-            </div>
+          <div className="mt-4 min-w-0 space-y-3">
+            {progressPanel}
+            {runHistory}
           </div>
-          {!runs.isPending && !runs.isError ? (
-            <div className="mt-4 grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-2">
+          <div className="mt-4 grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-2">
+            <div className={!runs.isPending && !runs.isError ? "min-w-0" : "min-w-0 xl:col-span-2"}>
               <DistillNodeBoard
-                status={selectedState?.status ?? null}
-                progress={selectedState?.progress ?? null}
+                status={progressStatus}
+                progress={progress}
+                statusText={progressStatusText}
+                actions={progressActions}
+                runId={controlRun?.run_id ?? null}
               />
+            </div>
+            {!runs.isPending && !runs.isError ? (
               <RagIndexBoard
                 index={ragIndex.data ?? null}
                 distillComplete={selected?.status === "done"}
@@ -527,8 +521,8 @@ function DistillWorkspaceView({
                 onCancel={stopRag}
                 onWipe={() => void wipeRag()}
               />
-            </div>
-          ) : null}
+            ) : null}
+          </div>
         </>
       )}
     </section>

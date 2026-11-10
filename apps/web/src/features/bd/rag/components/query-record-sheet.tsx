@@ -6,13 +6,11 @@
 
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { type JSX, useState } from "react";
-
-import { Button } from "@/shared/ui/button";
-
 import { useBdOverlays } from "../../hooks/use-overlays";
 import { QUERY_TREE_OPEN_DEPTH } from "../params";
 import { cellKind, cellText, type Row, toJsonText } from "../query";
 import { JsonTree } from "./json-tree";
+import { RagActionButton as Button } from "./rag-action-button";
 import { SideSheet } from "./side-sheet";
 
 type View = "fields" | "json";

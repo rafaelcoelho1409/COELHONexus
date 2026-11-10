@@ -49,6 +49,9 @@ BANNED_HEADINGS_LC: frozenset[str] = frozenset({
 # 75% of that, so the ceiling follows the block count too (fastmcp ch-01: 135 blocks and 18 sources -> 4 sections, 29 blocks printed).
 OUTLINE_BLOCKS_PER_SECTION = 12
 OUTLINE_BLOCK_CEILING      = 12
+# Tutorial sections group related canonical examples. Keep each code bank small
+# enough for one writer pass while avoiding one section per code family.
+TUTORIAL_CODE_EXAMPLES_PER_SECTION = 12
 # …and a FLOOR: the model ignores the target (fastmcp ch-01: 4 sections for 135 blocks in 3 runs), so an outline with fewer sections than
 # ceil(blocks / OUTLINE_BLOCKS_PER_SECTION_FLOOR) (at most the cap) is a validation issue the repair loop sends back.
 OUTLINE_BLOCKS_PER_SECTION_FLOOR = 20

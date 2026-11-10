@@ -8,12 +8,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
 import { type JSX, useId, useState } from "react";
-
-import { Button } from "@/shared/ui/button";
-
 import { fetchQuerySchema } from "../api";
 import { QUERY_BACKENDS, QUERY_SCHEMA_OPEN_UNDER, type QueryBackend } from "../params";
 import { filterSchema, type SchemaGroup, schemaOutline } from "../query";
+import { RagActionButton as Button } from "./rag-action-button";
 import { SideSheet } from "./side-sheet";
 
 /** The server caches a schema for five minutes, so asking again sooner returns the same thing. */

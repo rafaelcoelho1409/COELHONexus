@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-DIGEST_SCHEMA_VERSION = "1.1"
+DIGEST_SCHEMA_VERSION = "1.2"
 # v7 (2026-10-15): the prompt says never to return an empty contributes_to, and a source still routed to no section is placed by
 # title/summary overlap with all of its code blocks (asyncio ch-05: 3 sources and 22 code blocks lost to a weak digest model).
 # v8 (2026-10-15): sections are not merged when the result would hold more than MERGE_MAX_BLOCKS routed code blocks.
@@ -12,4 +12,4 @@ DIGEST_SCHEMA_VERSION = "1.1"
 # v11 (2026-10-17): an outline section no source was routed to is folded away (the writer skips it) instead of being written from the whole chapter.
 # v13 (2026-10-19): chunks of a dense page that fail are retried once. v12: a source with more than CHUNK_MAX_BLOCKS (30) code blocks is digested in chunks of whole blocks and merged (langgraph ch-05: 28 of 149 blocks printed).
 # v14 (2026-11-06): each source (or chunk of a dense source) is routed by a source_router agent that checks its digest with a tool; every routed chunk is stored on its own, so a resumed chapter reuses them.
-DIGEST_PROMPT_VERSION = "v14-router-agent-2026-11-06"
+DIGEST_PROMPT_VERSION = "v15-honor-outline-code-groups-2026-11-10"

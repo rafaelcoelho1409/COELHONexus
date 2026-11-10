@@ -3,8 +3,10 @@
 import { ChartNoAxesColumn, Check, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useState } from "react";
+import { MermaidTopology } from "@/shared/markdown/mermaid-topology";
 import type { StreamStatus } from "@/shared/sse";
 import {
+  AGENTIC_LANGGRAPH_TOPOLOGY,
   AGENTIC_NODE_DETAILS,
   AGENTIC_NODES,
   type AgenticNodeStatus,
@@ -36,6 +38,7 @@ const AgenticFlow = dynamic(() => import("./agentic-flow").then((module) => modu
 const MODES = [
   { id: "graph", label: "Graph" },
   { id: "list", label: "List" },
+  { id: "langgraph", label: "LangGraph" },
 ] as const;
 
 const USAGE_MODES: readonly { id: AgenticUsageMode; label: string }[] = [
@@ -337,22 +340,30 @@ export function AgenticPipelineOverview({
           <div className="min-w-0">
             {mode === "graph" ? (
               <AgenticFlow views={views} onOpenNode={setSelectedNodeId} />
-            ) : (
+            ) : mode === "list" ? (
               <AgenticNodeList rows={views} onOpen={setSelectedNodeId} />
+            ) : (
+              <MermaidTopology
+                title="Ingestion Agentic AI"
+                source={AGENTIC_LANGGRAPH_TOPOLOGY}
+                note="Configured node flow, in execution order."
+              />
             )}
           </div>
           <div className="flex min-w-0 flex-col">
-            {/* Always there: with no run, or after its data was wiped, the sheet says so instead of the button vanishing. */}
-            <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
+            {/* Always available: with no run, or after its data was wiped, the sheet explains that there are no counters. */}
+            <div className="mb-3 flex min-w-0 flex-col items-stretch gap-2">
               <ActionButton
-                className="min-w-0 flex-1 justify-center whitespace-nowrap px-2"
+                className="w-full justify-center whitespace-nowrap px-2"
                 onClick={onOpenUsage}
                 aria-haspopup="dialog"
               >
                 <ChartNoAxesColumn aria-hidden />
                 LLM usage
               </ActionButton>
-              <ToggleGroup legend="Pipeline shown as" options={MODES} value={mode} onChange={setMode} />
+              <div className="flex justify-end">
+                <ToggleGroup legend="Pipeline shown as" options={MODES} value={mode} onChange={setMode} />
+              </div>
             </div>
             {/* From xl the box is as tall as the graph beside it and nothing more: its content is taken out of flow
              * (`absolute inset-0`), so a long list scrolls inside it instead of stretching the row. */}

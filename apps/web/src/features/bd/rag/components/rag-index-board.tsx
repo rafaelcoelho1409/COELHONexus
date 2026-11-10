@@ -1,13 +1,16 @@
 "use client";
 
+import { ChartNoAxesColumn } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useState } from "react";
+import { MermaidTopology } from "@/shared/markdown/mermaid-topology";
 
 import { ActionButton } from "../../components/action-button";
 import { AgenticNodeList, AgenticPills, AgenticStatusBadge } from "../../components/agentic-parts";
 import { ToggleGroup } from "../../components/toggle-group";
 import type { AgenticNodeStatus, AgenticNodeView } from "../../domain/agentic-progress";
 import type { RagIndexStatus } from "../index-entities";
+import { PipelineUsageSheet } from "./pipeline-usage-sheet";
 
 const AgenticFlow = dynamic(
   () => import("../../components/agentic-flow").then((module) => module.AgenticFlow),
@@ -24,7 +27,15 @@ const AgenticFlow = dynamic(
 const MODES = [
   { id: "graph", label: "Graph" },
   { id: "list", label: "List" },
+  { id: "langgraph", label: "LangGraph" },
 ] as const;
+
+const RAG_LANGGRAPH_TOPOLOGY = `flowchart TD
+  start([Start]) --> pin_sources["Pin book sources"]
+  pin_sources --> build_vector_index["Build hybrid index"]
+  build_vector_index --> materialize_knowledge_graph["Link book knowledge"]
+  materialize_knowledge_graph --> publish_retrieval_index["Publish retrieval index"]
+  publish_retrieval_index --> finish([End])`;
 
 const NODES = [
   {
@@ -87,6 +98,7 @@ export function RagIndexBoard({
 }) {
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<NodeId>("pin_sources");
+  const [usageOpen, setUsageOpen] = useState(false);
   const views = nodeViews(index);
   const selectedNode = NODES.find((node) => node.id === selectedNodeId);
   const active = index?.status === "queued" || index?.status === "running";
@@ -174,18 +186,34 @@ export function RagIndexBoard({
         <div className="min-w-0">
           {mode === "graph" ? (
             <AgenticFlow views={views} onOpenNode={selectNode} ariaLabel="Agentic RAG pipeline graph" />
-          ) : (
+          ) : mode === "list" ? (
             <AgenticNodeList rows={views} onOpen={selectNode} label="Agentic RAG pipeline nodes" />
+          ) : (
+            <MermaidTopology
+              title="Agentic RAG"
+              source={RAG_LANGGRAPH_TOPOLOGY}
+              note="Configured node flow, in execution order."
+            />
           )}
         </div>
         <div className="flex min-w-0 flex-col">
-          <div className="mb-3 flex min-w-0 flex-wrap items-center justify-end gap-2">
-            <ToggleGroup
-              legend="Agentic RAG pipeline shown as"
-              options={MODES}
-              value={mode}
-              onChange={setMode}
-            />
+          <div className="mb-3 flex min-w-0 flex-col items-stretch gap-2">
+            <ActionButton
+              className="w-full justify-center whitespace-nowrap px-2"
+              onClick={() => setUsageOpen(true)}
+              aria-haspopup="dialog"
+            >
+              <ChartNoAxesColumn aria-hidden />
+              LLM usage
+            </ActionButton>
+            <div className="flex justify-end">
+              <ToggleGroup
+                legend="Agentic RAG pipeline shown as"
+                options={MODES}
+                value={mode}
+                onChange={setMode}
+              />
+            </div>
           </div>
           <section
             aria-label="Retrieval progress"
@@ -217,6 +245,16 @@ export function RagIndexBoard({
           </section>
         </div>
       </div>
+      {usageOpen ? (
+        <PipelineUsageSheet
+          threadId={index && index.status !== "not_started" ? index.distill_run_id : null}
+          live={active}
+          title="Agentic RAG LLM usage"
+          subtitle="Calls and token counts for this retrieval run."
+          emptyMessage="No retrieval run yet. Usage appears here after indexing starts."
+          onClose={() => setUsageOpen(false)}
+        />
+      ) : null}
     </section>
   );
 
@@ -244,18 +282,15 @@ function nodeViews(index: RagIndexStatus | null): AgenticNodeView[] {
     let kpi: string | null = null;
     let liveLine: string | null = null;
     if (status === "done" && node.id === "build_vector_index" && index) {
-      kpi = index.point_count.toLocaleString() + " passages";
+      kpi = `${index.point_count.toLocaleString()} passages`;
     } else if (status === "done" && node.id === "materialize_knowledge_graph" && index) {
-      kpi = index.graph_node_count.toLocaleString() + " nodes";
+      kpi = `${index.graph_node_count.toLocaleString()} nodes`;
     }
     if (index?.status === "running" && status === "running") {
       liveLine =
         index.current_stage === "vector_index"
-          ? index.point_count.toLocaleString() + " passages"
-          : index.graph_node_count.toLocaleString() +
-            " nodes · " +
-            index.graph_relationship_count.toLocaleString() +
-            " links";
+          ? `${index.point_count.toLocaleString()} passages`
+          : `${index.graph_node_count.toLocaleString()} nodes · ${index.graph_relationship_count.toLocaleString()} links`;
     }
     return { id: node.id, label: node.label, status, kpi, liveLine };
   });

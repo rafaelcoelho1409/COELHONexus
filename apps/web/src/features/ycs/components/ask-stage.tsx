@@ -10,8 +10,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import type { JSX } from "react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { Button } from "@/shared/ui/button";
-
 import { branchThread, deleteThread, fetchAskUsage } from "../api";
 import { lastSourcedTurn, shortId } from "../ask";
 import { type AskSendOptions, useAskConversation } from "../hooks/use-ask-conversation";
@@ -19,6 +17,7 @@ import { useMediaQuery } from "../hooks/use-media-query";
 import { useYcsOverlays } from "../hooks/use-overlays";
 import { useStickToBottom } from "../hooks/use-stick-to-bottom";
 import { ASK_EXAMPLES, ASK_THREAD_PARAM, askHref } from "../params";
+import { ActionButton } from "./action-button";
 import { AskComposer } from "./ask-composer";
 import { AskSources } from "./ask-sources";
 import { THREADS_QUERY_KEY } from "./ask-threads";
@@ -273,13 +272,13 @@ function AskConversation({
               >
                 {ASK_EXAMPLES.map((example) => (
                   <li key={example} className="max-w-full">
-                    <button
+                    <ActionButton
                       type="button"
                       onClick={() => fill(example)}
-                      className="min-h-9 max-w-full cursor-pointer rounded-sm border border-border px-3 py-1.5 text-left text-sm break-words hover:border-primary hover:text-primary-text"
+                      className="h-auto max-w-full justify-start text-left whitespace-normal"
                     >
                       {example}
-                    </button>
+                    </ActionButton>
                   </li>
                 ))}
               </ul>
@@ -309,10 +308,10 @@ function AskConversation({
 
           {!following && turns.length > 0 ? (
             <div className="sticky bottom-28 z-10 flex justify-center">
-              <Button type="button" variant="outline" size="lg" onClick={jump} className="bg-background">
+              <ActionButton type="button" onClick={jump}>
                 <ArrowDown aria-hidden data-icon="inline-start" />
                 Jump to latest
-              </Button>
+              </ActionButton>
             </div>
           ) : null}
 

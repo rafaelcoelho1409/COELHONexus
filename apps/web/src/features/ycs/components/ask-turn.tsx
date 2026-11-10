@@ -8,7 +8,6 @@ import type { ComponentProps, JSX } from "react";
 import { createContext, memo, useContext } from "react";
 
 import { Markdown } from "@/shared/markdown";
-import { Button } from "@/shared/ui/button";
 
 import {
   type AskTurn,
@@ -21,6 +20,7 @@ import {
   usageLabel,
 } from "../ask";
 import type { AskCitation } from "../entities";
+import { ActionButton } from "./action-button";
 import { AskThinking } from "./ask-thinking";
 import { StatusBadge } from "./status-badge";
 
@@ -44,7 +44,7 @@ function AnswerLink({
         type="button"
         onClick={() => onCite(n)}
         aria-label={title ? `Source ${n}: ${title}` : `Source ${n}`}
-        className="tabular mx-0.5 inline-flex min-h-6 min-w-6 cursor-pointer items-center justify-center rounded-sm border border-border bg-muted px-1 align-baseline text-xs font-medium text-foreground no-underline hover:border-primary hover:text-primary-text"
+        className="tabular mx-0.5 inline-flex min-h-6 min-w-6 cursor-pointer items-center justify-center rounded-sm border border-border bg-muted px-1 align-baseline text-xs font-medium text-foreground no-underline hover:border-neutral-8 hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
       >
         {n}
       </button>
@@ -159,10 +159,10 @@ function AskTurnViewBase({
               <span className="font-medium">The answer could not be generated.</span>
             </p>
             <p className="m-0 min-w-0 text-sm break-words text-muted-foreground">{failure}</p>
-            <Button variant="outline" size="lg" onClick={() => actions.onRetry(index)} disabled={busy}>
+            <ActionButton onClick={() => actions.onRetry(index)} disabled={busy}>
               <RefreshCw aria-hidden data-icon="inline-start" />
               Retry
-            </Button>
+            </ActionButton>
           </div>
         ) : null}
 
@@ -170,13 +170,13 @@ function AskTurnViewBase({
           <ul aria-label="Suggested follow-ups" className="m-0 flex list-none flex-wrap gap-2 p-0">
             {turn.followups.map((question) => (
               <li key={question} className="max-w-full">
-                <button
+                <ActionButton
                   type="button"
                   onClick={() => actions.onFollowup(question)}
-                  className="min-h-9 max-w-full cursor-pointer rounded-sm border border-border px-3 py-1.5 text-left text-sm break-words hover:border-primary hover:text-primary-text"
+                  className="h-auto max-w-full justify-start text-left whitespace-normal break-words"
                 >
                   {question}
-                </button>
+                </ActionButton>
               </li>
             ))}
           </ul>
@@ -184,33 +184,29 @@ function AskTurnViewBase({
 
         {!live && !failure ? (
           <div className="-ml-2 flex flex-wrap items-center gap-1">
-            <Button
-              variant="ghost"
-              size="lg"
+            <ActionButton
               onClick={() => actions.onSources(index)}
               disabled={!turn.citations.length}
               aria-pressed={sourcesShown}
             >
               <BookOpen aria-hidden data-icon="inline-start" />
               Sources ({turn.citations.length})
-            </Button>
-            <Button variant="ghost" size="lg" onClick={() => actions.onCopy(index)} disabled={!turn.answer}>
+            </ActionButton>
+            <ActionButton onClick={() => actions.onCopy(index)} disabled={!turn.answer}>
               <Copy aria-hidden data-icon="inline-start" />
               Copy
-            </Button>
-            <Button variant="ghost" size="lg" onClick={() => actions.onRegenerate(index)} disabled={busy}>
+            </ActionButton>
+            <ActionButton onClick={() => actions.onRegenerate(index)} disabled={busy}>
               <RefreshCw aria-hidden data-icon="inline-start" />
               Regenerate
-            </Button>
-            <Button
-              variant="ghost"
-              size="lg"
+            </ActionButton>
+            <ActionButton
               onClick={() => actions.onBranch(index)}
               disabled={busy || !canBranch}
             >
               <GitBranch aria-hidden data-icon="inline-start" />
               Branch
-            </Button>
+            </ActionButton>
           </div>
         ) : null}
       </div>
