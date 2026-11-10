@@ -3,14 +3,13 @@
 import { useState } from "react";
 
 import { apiErrorMessage } from "@/shared/lib/api-error";
-import { Button } from "@/shared/ui/button";
-import { buttonVariants } from "@/shared/ui/button-variants";
 import { Input } from "@/shared/ui/input";
 import { Label } from "@/shared/ui/label";
 
 import type { SearchProvider, SearchSettings, SearchTestResult } from "../entities";
 import { useSearchConnections } from "../hooks/use-search-connections";
 import { CUSTOM_SEARCH_PROVIDER_ID, type SearchProviderId } from "../params";
+import { SettingsActionButton, settingsActionButtonClassName } from "./settings-action-button";
 
 export function SearchConnections() {
   const { query, save, setDefault, test } = useSearchConnections();
@@ -45,15 +44,13 @@ export function SearchConnections() {
             <p className="text-destructive-text">
               Couldn&apos;t load search settings — {apiErrorMessage(query.error)}
             </p>
-            <Button
+            <SettingsActionButton
               type="button"
-              variant="outline"
-              size="sm"
               onClick={() => void query.refetch()}
               disabled={query.isRefetching}
             >
               {query.isRefetching ? "Loading…" : "Retry"}
-            </Button>
+            </SettingsActionButton>
           </div>
         ) : null}
 
@@ -210,12 +207,7 @@ function SearchProviderCard({
           ) : null}
         </div>
         {accountUrl ? (
-          <a
-            href={accountUrl}
-            target="_blank"
-            rel="noreferrer"
-            className={buttonVariants({ variant: "outline", size: "lg" })}
-          >
+          <a href={accountUrl} target="_blank" rel="noreferrer" className={settingsActionButtonClassName}>
             Get API key
           </a>
         ) : null}
@@ -285,10 +277,8 @@ function SearchProviderCard({
             {isCustom ? (
               <>
                 {hasUnsavedKey || hasUnsavedEndpoint ? (
-                  <Button
+                  <SettingsActionButton
                     type="button"
-                    variant="outline"
-                    size="lg"
                     disabled={saving}
                     aria-busy={saving}
                     onClick={() => {
@@ -305,37 +295,31 @@ function SearchProviderCard({
                     }}
                   >
                     {saving ? "Saving…" : "Save connection"}
-                  </Button>
+                  </SettingsActionButton>
                 ) : null}
                 {canRemoveKey ? (
-                  <Button
+                  <SettingsActionButton
                     type="button"
-                    variant="outline"
-                    size="lg"
                     disabled={saving}
                     aria-busy={saving}
                     onClick={() => onSave({ apiKey: "" }, () => setApiKey(""))}
                   >
                     {saving ? "Saving…" : "Remove key"}
-                  </Button>
+                  </SettingsActionButton>
                 ) : null}
               </>
             ) : hasUnsavedKey || canRemoveKey ? (
-              <Button
+              <SettingsActionButton
                 type="button"
-                variant="outline"
-                size="lg"
                 disabled={saving}
                 aria-busy={saving}
                 onClick={() => onSave({ apiKey }, () => setApiKey(""))}
               >
                 {saving ? "Saving…" : hasUnsavedKey ? "Save key" : "Remove key"}
-              </Button>
+              </SettingsActionButton>
             ) : null}
-            <Button
+            <SettingsActionButton
               type="button"
-              variant="outline"
-              size="lg"
               disabled={
                 !provider.available ||
                 testing ||
@@ -347,7 +331,7 @@ function SearchProviderCard({
               onClick={onTest}
             >
               {testing ? "Testing…" : "Test connection"}
-            </Button>
+            </SettingsActionButton>
           </div>
         </>
       ) : null}

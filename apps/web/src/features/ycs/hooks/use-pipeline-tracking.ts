@@ -6,8 +6,8 @@
  * here, not by the Source dispatcher, so the hand-off is one-way: only the stage that owns the panel
  * persists it. */
 
-import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 
 import { pipelineVideoIds } from "../api";
 import { PIPELINE_ACTIVE_STORAGE_KEY, PIPELINE_STORAGE_TTL_MS } from "../params";
@@ -70,9 +70,8 @@ function writeStored(tracking: PipelineTracking): void {
   }
 }
 
-export function usePipelineTracking(): { tracking: PipelineTracking | null; dismiss: () => void } {
+export function usePipelineTracking(): { tracking: PipelineTracking | null } {
   const params = useSearchParams();
-  const router = useRouter();
   const [tracking, setTracking] = useState<PipelineTracking | null>(null);
 
   const extract = params.get("extract");
@@ -126,16 +125,5 @@ export function usePipelineTracking(): { tracking: PipelineTracking | null; dism
     };
   }, [extract, qdrant, neo4j]);
 
-  const dismiss = useCallback(() => {
-    try {
-      localStorage.removeItem(PIPELINE_ACTIVE_STORAGE_KEY);
-    } catch {
-      // Nothing to clean up.
-    }
-    setTracking(null);
-    // Drop the URL ids too, or this effect would re-adopt them on the next render.
-    router.replace("/ycs/ingestion", { scroll: false });
-  }, [router]);
-
-  return { tracking, dismiss };
+  return { tracking };
 }

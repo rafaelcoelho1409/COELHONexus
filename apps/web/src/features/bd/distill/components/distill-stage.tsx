@@ -12,7 +12,7 @@ import { bookUnits } from "../../domain/books";
 import type { BookSnapshot } from "../../entities";
 import { useLibrary, useSnapshot } from "../../hooks/use-bd-data";
 import { useBdOverlays } from "../../hooks/use-overlays";
-import { BOOK_PARAM, bookHref, PAGE_PARAM, parsePageParam } from "../../params";
+import { BOOK_PARAM, bookHref } from "../../params";
 import { RagIndexBoard } from "../../rag/components/rag-index-board";
 import { useRagCapabilities, useRagIndex, useRagIndexActions } from "../../rag/hooks/use-index-data";
 import {
@@ -32,6 +32,7 @@ import {
 import { DISTILL_RUN_PARAM, distillHref, distillStudyHref } from "../params";
 import { DistillNodeBoard } from "./distill-node-board";
 import { DistillOutputPanel } from "./distill-output-panel";
+import { DistillProcessProgress, RagProcessProgress } from "./distill-process-progress";
 import { DistillProgressPanel } from "./distill-progress-panel";
 
 export function DistillPage() {
@@ -63,7 +64,6 @@ function DistillStage({ view }: { view: "agents" | "study" }) {
   const params = useSearchParams();
   const bookId = params.get(BOOK_PARAM);
   const requestedRunId = params.get(DISTILL_RUN_PARAM);
-  const initialPage = parsePageParam(params.get(PAGE_PARAM));
   const library = useLibrary();
   const selectedBook = library.data?.find((book) => book.book_id === bookId);
   return (
@@ -101,7 +101,6 @@ function DistillStage({ view }: { view: "agents" | "study" }) {
             key={`${bookId}:${view}`}
             bookId={bookId}
             requestedRunId={requestedRunId}
-            initialPage={initialPage}
             view={view}
           />
         ) : (
@@ -119,7 +118,7 @@ function DistillStage({ view }: { view: "agents" | "study" }) {
             </h2>
             <p className="mt-2 max-w-prose text-sm text-muted-foreground">
               {view === "study"
-                ? "Read the processed pages, review the selected source pages, and open the Learning Guide."
+                ? "Read the Learning Guide generated from the book's selected source content."
                 : "Review source readiness, follow Distill runs, and open the completed results in Study."}
             </p>
             <div className="mt-5 flex flex-wrap gap-2">
@@ -145,12 +144,10 @@ function DistillStage({ view }: { view: "agents" | "study" }) {
 function DistillBookStage({
   bookId,
   requestedRunId,
-  initialPage,
   view,
 }: {
   bookId: string;
   requestedRunId: string | null;
-  initialPage: number | null;
   view: "agents" | "study";
 }) {
   const snapshot = useSnapshot(bookId);
@@ -176,27 +173,17 @@ function DistillBookStage({
   }
 
   const book = snapshot.data;
-  return (
-    <DistillWorkspaceView
-      bookId={bookId}
-      requestedRunId={requestedRunId}
-      initialPage={initialPage}
-      view={view}
-      book={book}
-    />
-  );
+  return <DistillWorkspaceView bookId={bookId} requestedRunId={requestedRunId} view={view} book={book} />;
 }
 
 function DistillWorkspaceView({
   bookId,
   requestedRunId,
-  initialPage,
   view,
   book,
 }: {
   bookId: string;
   requestedRunId: string | null;
-  initialPage: number | null;
   view: "agents" | "study";
   book: BookSnapshot;
 }) {
@@ -211,6 +198,8 @@ function DistillWorkspaceView({
   const saveSelection = useSaveContentSelection(bookId);
   const [stoppingRunId, setStoppingRunId] = useState<string | null>(null);
   const [restartingQueuedRun, setRestartingQueuedRun] = useState(false);
+  const [distillProgressOpen, setDistillProgressOpen] = useState(false);
+  const [ragInfoOpen, setRagInfoOpen] = useState(false);
   const readiness = distillReadiness(book, contentSelection.data ?? null, contentSelection.isError);
   const selected = selectDistillRun(runs.data ?? [], requestedRunId);
   const ragIndex = useRagIndex(bookId, selected?.run_id ?? "", selected?.status === "done");
@@ -520,10 +509,8 @@ function DistillWorkspaceView({
   ) : null;
   const outputPanel = (
     <DistillOutputPanel
-      key={`${selected?.run_id ?? "no-run"}:${agenticRunId ?? "no-ingestion-ai"}:${initialPage ?? "remembered"}`}
+      key={selected?.run_id ?? "no-run"}
       bookId={bookId}
-      book={book}
-      initialPage={initialPage}
       agenticRunId={agenticRunId}
       selection={contentSelection.data ?? null}
       selectionPending={agenticRunId !== null && contentSelection.isPending}
@@ -535,6 +522,9 @@ function DistillWorkspaceView({
       run={selected}
       runState={selectedState}
       streamStatus={stream.status}
+      runsPending={runs.isPending}
+      runsError={runs.isError ? runs.error : null}
+      onRetryRuns={() => void runs.refetch()}
     />
   );
 
@@ -546,23 +536,23 @@ function DistillWorkspaceView({
       {view === "study" ? (
         <div className="min-w-0">{outputPanel}</div>
       ) : (
-        <div className="mt-4 grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,4fr)_minmax(0,4fr)_minmax(0,2fr)]">
-          <div className="min-w-0">
-            <DistillNodeBoard
-              bookId={bookId}
+        <div className="mt-4 min-w-0 space-y-4">
+          <div className="grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-2">
+            <DistillProcessProgress
               status={progressStatus}
               progress={progress}
               statusText={progressStatusText}
-              actions={progressActions}
-              runId={controlRun?.run_id ?? null}
+              error={progressError}
+              controls={progressActions}
+              onOpenInfo={() => setDistillProgressOpen(true)}
             />
-          </div>
-          <div className="min-w-0">
-            <RagIndexBoard
-              bookId={bookId}
+            <RagProcessProgress
               index={ragIndex.data ?? null}
               distillComplete={selected?.status === "done"}
+              isPending={ragIndex.isPending}
+              queryError={ragIndex.isError ? apiErrorMessage(ragIndex.error) : null}
               executionEnabled={ragCapabilities.data?.execution_enabled === true}
+              capabilitiesPending={ragCapabilities.isPending}
               capabilityError={ragCapabilities.isError ? apiErrorMessage(ragCapabilities.error) : null}
               startPending={ragActions.start.isPending}
               cancelPending={ragActions.cancel.isPending}
@@ -570,11 +560,35 @@ function DistillWorkspaceView({
               onStart={startRag}
               onCancel={stopRag}
               onWipe={() => void wipeRag()}
+              onRetry={() => void ragIndex.refetch()}
+              onOpenInfo={() => setRagInfoOpen(true)}
             />
           </div>
-          <div className="min-w-0 space-y-3">
-            {progressPanel}
-            {runHistory}
+          <div className="grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,4fr)_minmax(0,4fr)_minmax(0,2fr)]">
+            <div className="min-w-0">
+              <DistillNodeBoard
+                bookId={bookId}
+                status={progressStatus}
+                progress={progress}
+                statusText={progressStatusText}
+                runId={controlRun?.run_id ?? null}
+                progressOpen={distillProgressOpen}
+                onProgressOpenChange={setDistillProgressOpen}
+              />
+            </div>
+            <div className="min-w-0">
+              <RagIndexBoard
+                bookId={bookId}
+                index={ragIndex.data ?? null}
+                executionEnabled={ragCapabilities.data?.execution_enabled === true}
+                infoOpen={ragInfoOpen}
+                onInfoOpenChange={setRagInfoOpen}
+              />
+            </div>
+            <div className="min-w-0 space-y-3">
+              {progressPanel}
+              {runHistory}
+            </div>
           </div>
         </div>
       )}

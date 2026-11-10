@@ -1,6 +1,7 @@
 /** Book Distiller Agentic RAG — thin, parsed adapters for the BD Ask and Query contracts. */
 
 import { client } from "@/shared/api";
+import { agenticUsageSchema, type AgenticUsage } from "../entities";
 
 import {
   type AskUsage,
@@ -55,14 +56,14 @@ export async function fetchAskUsage(threadId: string): Promise<AskUsage | null> 
   return llmCountersSchema.parse(result.data);
 }
 
-export async function fetchPipelineUsage(bookId: string, runId: string): Promise<AskUsage | null> {
+export async function fetchPipelineUsage(bookId: string, runId: string): Promise<AgenticUsage> {
   const result = await client.request({
     method: "GET",
     url: "/api/v1/bd/distill/{book_id}/runs/{run_id}/llm-counters",
     path: { book_id: bookId, run_id: runId },
     throwOnError: true,
   });
-  return llmCountersSchema.parse(result.data);
+  return agenticUsageSchema.parse(result.data);
 }
 
 export async function cancelAskTurn(turnId: number): Promise<boolean> {

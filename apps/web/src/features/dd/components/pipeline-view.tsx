@@ -11,12 +11,9 @@ import { usePlannerRun } from "../hooks/use-planner-run";
 import { useSynthRun } from "../hooks/use-synth-run";
 import { ChaptersColumn } from "./chapters-column";
 import { PipelineTotal } from "./pipeline-total";
-import { PlannerBoard } from "./planner-view";
+import { PlannerGraphPanel, PlannerProgressPanel } from "./planner-view";
 import { NoFrameworkCard } from "./stage-parts";
-import { SynthRunPanel } from "./synth-view";
-
-/** A stage panel on the pipeline grid: two rows (its bar, then the rest) shared with the other stage's panel. */
-const STAGE_PANEL = "md:row-span-2 md:grid md:grid-rows-subgrid md:self-stretch";
+import { SynthGraphPanel, SynthProgressPanel } from "./synth-view";
 
 function PipelineWorkbench({ slug }: { slug: string }) {
   const overlays = useDdOverlays();
@@ -37,21 +34,22 @@ function PipelineWorkbench({ slug }: { slug: string }) {
   return (
     <div className="flex flex-col gap-6" data-testid="pipeline-workbench">
       <PipelineTotal planner={planner} synth={synth} />
-      {/* Three columns, left to right as the work flows: the planner's graph, the synth graph of one chapter, and the chapters
-          the planner proposes (the original's chapter strip). From 768px the planner and synth each take two grid rows — their
-          run bar, then the rest — on rows they share (a subgrid), so the two bars are one height whatever each holds and the
-          graphs start level. The chapters stay a column from 1024px up (a narrower strip below 1280px) as tall as the graphs
-          beside it, their list scrolling inside; between 768 and 1023px they take a row under the two graphs, and on a phone
-          everything stacks. */}
+      {/* Each process gets an Ingestion-style progress card above the three-column workbench. */}
+      <div
+        data-testid="pipeline-progress-row"
+        className="grid grid-cols-1 items-stretch gap-3 md:grid-cols-2"
+      >
+        <PlannerProgressPanel slug={slug} planner={planner} blocker={plannerBlocker} />
+        <SynthProgressPanel synth={synth} blocker={synthBlocker} />
+      </div>
+      {/* The lower row keeps the Planner graph, Synth graph, and chapters column in workflow order. */}
       <div
         data-testid="pipeline-columns"
-        className="grid grid-cols-1 items-start gap-x-6 gap-y-4 md:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,16rem)] lg:grid-rows-[auto_1fr] xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,20rem)]"
+        className="grid grid-cols-1 items-stretch gap-x-6 gap-y-4 md:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,16rem)] xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,20rem)]"
       >
-        <PlannerBoard slug={slug} planner={planner} blocker={plannerBlocker} className={STAGE_PANEL} />
-        <SynthRunPanel synth={synth} blocker={synthBlocker} className={STAGE_PANEL} />
-        {/* The chapters' minimum height lets the second row (the flexible one) grow, never the bars' row, when the
-            graphs are short — a node list is shorter than a graph. */}
-        <div className="md:col-span-2 lg:relative lg:col-span-1 lg:col-start-3 lg:row-span-2 lg:row-start-1 lg:min-h-160 lg:self-stretch">
+        <PlannerGraphPanel planner={planner} />
+        <SynthGraphPanel synth={synth} />
+        <div className="md:col-span-2 lg:relative lg:col-span-1 lg:col-start-3 lg:min-h-160 lg:self-stretch">
           <ChaptersColumn
             slug={slug}
             synth={synth}

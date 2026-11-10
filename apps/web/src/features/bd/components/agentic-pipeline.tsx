@@ -361,9 +361,13 @@ export function AgenticPipelineOverview({
                 <ChartNoAxesColumn aria-hidden />
                 LLM usage
               </ActionButton>
-              <div className="flex justify-end">
-                <ToggleGroup legend="Pipeline shown as" options={MODES} value={mode} onChange={setMode} />
-              </div>
+              <ToggleGroup
+                legend="Pipeline shown as"
+                options={MODES}
+                value={mode}
+                onChange={setMode}
+                fullWidth
+              />
             </div>
             {/* From xl the box is as tall as the graph beside it and nothing more: its content is taken out of flow
              * (`absolute inset-0`), so a long list scrolls inside it instead of stretching the row. */}

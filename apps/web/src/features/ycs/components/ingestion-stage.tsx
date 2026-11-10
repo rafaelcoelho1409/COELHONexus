@@ -5,6 +5,7 @@
  * Search params come in as props — Next only gives them to a component inside a Suspense boundary. */
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { JSX } from "react";
 import { useState } from "react";
 
@@ -45,7 +46,8 @@ const IDLE_STEPS: ReadonlyArray<Step> = [
 ];
 
 export function IngestionStage(): JSX.Element {
-  const { tracking, dismiss } = usePipelineTracking();
+  const router = useRouter();
+  const { tracking } = usePipelineTracking();
   // Library refresh ticks: one per phase reaching SUCCESS, then a final sweep when the chain ends.
   const [refreshTick, setRefreshTick] = useState(0);
   const [usageOpen, setUsageOpen] = useState(false);
@@ -56,13 +58,7 @@ export function IngestionStage(): JSX.Element {
       <div className="min-w-0">
         {tracking ? (
           // A new dispatch or retry starts with fresh panel controls and node selection.
-          <PipelinePanel
-            key={tracking.extract}
-            tracking={tracking}
-            onPhaseDone={bump}
-            onAllDone={bump}
-            onDismiss={dismiss}
-          />
+          <PipelinePanel key={tracking.extract} tracking={tracking} onPhaseDone={bump} onAllDone={bump} />
         ) : (
           <section aria-label="Agentic AI ingestion structure" className="flex min-w-0 flex-col gap-3">
             <header className="flex flex-wrap items-center justify-between gap-2">
@@ -78,6 +74,28 @@ export function IngestionStage(): JSX.Element {
             </p>
             <IngestionAgenticStructure
               steps={IDLE_STEPS}
+              actions={{
+                start: {
+                  label: "Start",
+                  pendingLabel: "Starting…",
+                  title: "Choose videos on the Source tab to start ingestion.",
+                  onClick: () => router.push(stageHref("source")),
+                },
+                stop: {
+                  label: "Stop",
+                  pendingLabel: "Stopping…",
+                  disabled: true,
+                  title: "There is no active ingestion run to stop.",
+                  onClick: () => {},
+                },
+                wipe: {
+                  label: "Wipe",
+                  pendingLabel: "Wiping…",
+                  disabled: true,
+                  title: "There is no ingestion cache to wipe until a run starts.",
+                  onClick: () => {},
+                },
+              }}
               onOpenUsage={() => setUsageOpen(true)}
               caption="Target flow: Playwright transcript retrieval → Elasticsearch → Qdrant and Neo4j."
             />

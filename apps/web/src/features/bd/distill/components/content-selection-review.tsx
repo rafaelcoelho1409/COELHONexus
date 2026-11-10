@@ -7,8 +7,8 @@ import type { ReactNode } from "react";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 
 import { ActionButton } from "../../components/action-button";
+import { bookPagesHref } from "../../params";
 import type { ContentSelection, ContentSelectionPage } from "../entities";
-import { distillStudyHref } from "../params";
 
 const PAGE_SIZE = 20;
 type SelectionFilter = "all" | "include" | "exclude";
@@ -187,7 +187,7 @@ function SelectionEditor({
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <Link
-                      href={distillStudyHref(bookId, null, page.page_number)}
+                      href={bookPagesHref(bookId, page.page_number)}
                       className="font-mono text-sm font-medium underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                     >
                       Page {page.page_number}

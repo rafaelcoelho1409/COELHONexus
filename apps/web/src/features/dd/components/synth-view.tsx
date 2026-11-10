@@ -1,7 +1,7 @@
 "use client";
 
-/** Synth stage: run bar, the agent graph of one chapter, harmonize indicator, and the chapter list. The pipeline
- * page places the graph panel beside the planner's and the chapter list under both. */
+/** Synth stage: run bar, the agent graph of one chapter, harmonize indicator, and the chapter list. The Pipeline tab
+ * uses separate progress and graph panels above its chapter column. */
 
 import Link from "next/link";
 import { useState } from "react";
@@ -10,7 +10,7 @@ import { type CrossStageBlocker, useCrossStageBlocker } from "../hooks/use-cross
 import { type SynthRunController, useSynthRun } from "../hooks/use-synth-run";
 import { chapterStudyHref } from "../params";
 import { StageNodeBoard } from "./stage-node-board";
-import { ChapterStrip, NoFrameworkCard, RunBar } from "./stage-parts";
+import { ChapterStrip, NoFrameworkCard, PipelineStageProgress, RunBar } from "./stage-parts";
 import { SynthUsageSheet } from "./usage-sheet";
 
 /** Says whose nodes the board shows: the nodes belong to one chapter's run, and with none picked every node
@@ -23,8 +23,7 @@ function nodeBoardCaption(synth: SynthRunController): string {
   return "Pick a finished chapter in the list to see how each of its nodes ran.";
 }
 
-/** Run bar, volume-audit line and the node graph share one card. The pipeline page lays their two rows on shared grid
- * tracks (`className`). */
+/** The standalone Synth view keeps the run bar and node graph in one card; the Pipeline tab uses separate panels. */
 export function SynthRunPanel({
   synth,
   blocker,
@@ -84,6 +83,87 @@ export function SynthRunPanel({
         <SynthUsageSheet cells={synth.cells} live={synth.running} onClose={() => setUsageOpen(false)} />
       ) : null}
     </>
+  );
+}
+
+/** Pipeline's first-row progress card, measured in eligible chapter outputs. */
+export function SynthProgressPanel({
+  synth,
+  blocker,
+}: {
+  synth: SynthRunController;
+  blocker: CrossStageBlocker;
+}) {
+  const { harmonize } = synth;
+  const [usageOpen, setUsageOpen] = useState(false);
+  const eligible = synth.cells.filter((cell) => cell.synthEligible !== false);
+  const processed = eligible.filter((cell) =>
+    ["done", "needs_review", "failed", "cancelled"].includes(cell.status),
+  ).length;
+  const running = eligible.filter((cell) => cell.status === "running").length;
+  const excluded = synth.cells.length - eligible.length;
+  const total = eligible.length;
+  const current = Math.min(total, processed + running);
+  const summary = total
+    ? `${synth.counter}${running ? ` · ${running} running` : ""}`
+    : excluded
+      ? `No eligible chapters · ${excluded} excluded from Synth`
+      : "No planned chapters yet.";
+  const valueText = total
+    ? `${current} of ${total} Synth chapters processed${running ? `, ${running} running` : ""}`
+    : "No eligible Synth chapters";
+  const noEligibleChapters = synth.cells.length > 0 && eligible.length === 0;
+
+  return (
+    <>
+      <PipelineStageProgress
+        title="Synth"
+        testId="synth"
+        controls={synth}
+        blockedMessage={
+          blocker.message ?? (noEligibleChapters ? "This plan has no chapters eligible for Synth." : null)
+        }
+        error={synth.error}
+        onOpenUsage={() => setUsageOpen(true)}
+        current={current}
+        total={total}
+        valueText={valueText}
+        summary={summary}
+        indeterminate={synth.running}
+      >
+        {harmonize.status !== "idle" ? (
+          <span data-testid="synth-harmonize" className="text-xs text-muted-foreground">
+            Volume audit — {harmonize.label}
+          </span>
+        ) : null}
+      </PipelineStageProgress>
+      {usageOpen ? (
+        <SynthUsageSheet cells={synth.cells} live={synth.running} onClose={() => setUsageOpen(false)} />
+      ) : null}
+    </>
+  );
+}
+
+/** Synth's lower-row node graph box for the shared Pipeline layout. */
+export function SynthGraphPanel({ synth }: { synth: SynthRunController }) {
+  return (
+    <section
+      aria-label="Synth Agentic AI graph"
+      className="flex min-w-0 flex-col gap-3 rounded-md border border-border bg-card p-3"
+    >
+      <h3 className="text-sm font-medium">Synth graph</h3>
+      <StageNodeBoard
+        stage="synth"
+        views={synth.views}
+        values={synth.values}
+        liveLines={synth.liveLines}
+        events={synth.events}
+        threadId={synth.canvasThreadId}
+        live={synth.running}
+        embedded
+        caption={nodeBoardCaption(synth)}
+      />
+    </section>
   );
 }
 

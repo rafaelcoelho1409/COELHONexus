@@ -129,9 +129,7 @@ describe("PipelinePanel", () => {
     streamState.qdrant = { state: "PROGRESS", meta: { completed_ids: ["vid1aaaaaaa"] }, result: null };
     streamState.neo4j = { state: "PENDING", meta: {}, result: null };
 
-    renderWith(
-      <PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} onDismiss={vi.fn()} />,
-    );
+    renderWith(<PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: "List" }));
 
     expect(await screen.findByText("Phase 1 · Playwright")).toBeInTheDocument();
@@ -160,9 +158,7 @@ describe("PipelinePanel", () => {
   it("announces the run once, by words, and keeps the phases themselves out of any live region", async () => {
     taskState.state = "RUNNING";
     taskState.meta = { phase: "transcription", current: 3, total: 10 };
-    renderWith(
-      <PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} onDismiss={vi.fn()} />,
-    );
+    renderWith(<PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} />);
     await screen.findByText("3/10");
     const live = screen.getAllByRole("status").find((element) => element.className.includes("sr-only"));
     expect(live).toHaveTextContent("Pipeline running.");
@@ -191,9 +187,7 @@ describe("PipelinePanel", () => {
         }),
       ),
     );
-    renderWith(
-      <PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} onDismiss={vi.fn()} />,
-    );
+    renderWith(<PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} />);
     await userEvent.click(await screen.findByRole("button", { name: "LLM usage" }));
     const sheet = await screen.findByRole("dialog", { name: "Pipeline LLM usage" });
     expect(await within(sheet).findByText("1,200")).toBeInTheDocument();
@@ -244,14 +238,7 @@ describe("PipelinePanel", () => {
     const onPhaseDone = vi.fn();
     const onAllDone = vi.fn();
 
-    renderWith(
-      <PipelinePanel
-        tracking={TRACKING}
-        onPhaseDone={onPhaseDone}
-        onAllDone={onAllDone}
-        onDismiss={vi.fn()}
-      />,
-    );
+    renderWith(<PipelinePanel tracking={TRACKING} onPhaseDone={onPhaseDone} onAllDone={onAllDone} />);
     await userEvent.click(screen.getByRole("button", { name: "List" }));
 
     expect(await screen.findByText("2 metadata · 2 transcripts fetched")).toBeInTheDocument();
@@ -267,9 +254,7 @@ describe("PipelinePanel", () => {
     const user = userEvent.setup();
     taskState.state = "RUNNING";
     taskState.meta = { phase: "transcription", current: 3, total: 10 };
-    renderWith(
-      <PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} onDismiss={vi.fn()} />,
-    );
+    renderWith(<PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} />);
 
     await user.click(await screen.findByRole("button", { name: "Stop" }));
     const dialog = screen.getByRole("dialog");
@@ -285,9 +270,7 @@ describe("PipelinePanel", () => {
 
   it("wipes through the confirm dialog and prints the summary", async () => {
     const user = userEvent.setup();
-    renderWith(
-      <PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} onDismiss={vi.fn()} />,
-    );
+    renderWith(<PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} />);
 
     await user.click(await screen.findByRole("button", { name: "Wipe cache" }));
     const dialog = screen.getByRole("dialog");
@@ -299,18 +282,14 @@ describe("PipelinePanel", () => {
     ).toBeInTheDocument();
   });
 
-  it("dismiss goes through the confirm dialog and calls onDismiss", async () => {
-    const user = userEvent.setup();
-    const onDismiss = vi.fn();
-    renderWith(
-      <PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} onDismiss={onDismiss} />,
-    );
+  it("shows the video action in the run header without a dismiss action", async () => {
+    taskState.state = "RUNNING";
+    taskState.meta = { phase: "transcription", current: 3, total: 10 };
+    renderWith(<PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} />);
 
-    await user.click(await screen.findByRole("button", { name: "Dismiss" }));
-    const dialog = screen.getByRole("dialog");
-    expect(await within(dialog).findByText("Dismiss this pipeline panel?")).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Dismiss" }));
-    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+    const header = screen.getByRole("heading", { name: "Agentic AI" }).parentElement?.parentElement;
+    expect(header).toContainElement(await screen.findByRole("button", { name: "Videos (2)" }));
+    expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
   });
 
   it("retry queues a rerun and pushes the fresh phase ids", async () => {
@@ -324,9 +303,7 @@ describe("PipelinePanel", () => {
     };
     streamState.qdrant = { state: "SUCCESS", meta: { completed_ids: TRACKING.videoIds }, result: null };
     streamState.neo4j = { state: "SUCCESS", meta: { completed_ids: TRACKING.videoIds }, result: null };
-    renderWith(
-      <PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} onDismiss={vi.fn()} />,
-    );
+    renderWith(<PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} />);
 
     const retry = await screen.findByRole("button", { name: "Retry" });
     await waitFor(() => expect(retry).toBeEnabled());

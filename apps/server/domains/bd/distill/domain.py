@@ -4,11 +4,112 @@ from __future__ import annotations
 import hashlib
 import html
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from json import JSONDecodeError, JSONDecoder, loads
+from typing import Any
+
+from json_repair import loads as json_repair_loads
+from pydantic import ValidationError
 
 from . import entities, params, schemas
 
 _WHITESPACE_RE = re.compile(r"\s+")
+
+
+def learning_extraction_from_agent_result(result: Any) -> schemas.LearningExtraction | None:
+    """Read a typed extraction, recovering valid JSON when the agent omitted its structured field."""
+    if not isinstance(result, dict):
+        return None
+
+    for candidate in (result.get("structured_response"), result.get("parsed")):
+        extraction = _validate_learning_extraction(candidate)
+        if extraction is not None:
+            return extraction
+
+    raw = result.get("raw")
+    for message in [*(result.get("messages") or []), *([raw] if raw is not None else [])]:
+        for candidate in _tool_call_arguments(message):
+            extraction = _validate_learning_extraction(candidate)
+            if extraction is not None:
+                return extraction
+        content = _assistant_content(message)
+        for candidate in _json_objects(content):
+            extraction = _validate_learning_extraction(candidate)
+            if extraction is not None:
+                return extraction
+    return None
+
+
+def _validate_learning_extraction(value: Any) -> schemas.LearningExtraction | None:
+    if value is None:
+        return None
+    try:
+        return schemas.LearningExtraction.model_validate(value)
+    except ValidationError:
+        return None
+
+
+def _assistant_content(message: Any) -> str | None:
+    if isinstance(message, dict):
+        role = message.get("role") or message.get("type")
+        content = message.get("content")
+    else:
+        role = getattr(message, "type", None)
+        content = getattr(message, "content", None)
+    if role not in {"assistant", "ai", "AIMessage"}:
+        return None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [
+            item["text"]
+            for item in content
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+        ]
+        return "\n".join(parts) if parts else None
+    return None
+
+
+def _tool_call_arguments(message: Any) -> Iterator[dict[str, Any]]:
+    for call in getattr(message, "tool_calls", None) or []:
+        if isinstance(call, dict) and isinstance(call.get("args"), dict):
+            yield call["args"]
+
+    additional = getattr(message, "additional_kwargs", None) or {}
+    calls = additional.get("tool_calls") if isinstance(additional, dict) else None
+    for call in calls or []:
+        function = call.get("function") if isinstance(call, dict) else None
+        arguments = function.get("arguments") if isinstance(function, dict) else None
+        if isinstance(arguments, dict):
+            yield arguments
+        elif isinstance(arguments, str):
+            try:
+                value = loads(arguments)
+            except JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                yield value
+
+
+def _json_objects(content: str | None) -> Iterator[dict[str, Any]]:
+    if not content:
+        return
+    try:
+        repaired = json_repair_loads(content)
+    except Exception:  # noqa: BLE001 — strict parsing below can still recover a later JSON object.
+        repaired = None
+    if isinstance(repaired, dict):
+        yield repaired
+    decoder = JSONDecoder()
+    for start, character in enumerate(content):
+        if character != "{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(content[start:])
+        except JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            yield value
 
 
 def sha256_text(value: str) -> str:

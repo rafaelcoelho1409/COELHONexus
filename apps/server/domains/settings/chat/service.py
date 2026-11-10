@@ -37,7 +37,6 @@ from typing import TypeVar
 import httpx
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
-from openai import APIConnectionError
 from pydantic import BaseModel, ValidationError
 
 
@@ -281,10 +280,7 @@ def build_chat_model(
 
 def _is_transient_provider_error(error: Exception) -> bool:
     """Return whether a provider connection, timeout, rate limit, or server error can be retried."""
-    if isinstance(error, (TimeoutError, APIConnectionError, httpx.TransportError)):
-        return True
-    status_code = getattr(error, "status_code", None)
-    return status_code in (408, 429) or (isinstance(status_code, int) and 500 <= status_code <= 599)
+    return domain.is_transient_provider_error(error)
 
 
 async def resilient_ainvoke(

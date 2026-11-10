@@ -1,15 +1,15 @@
 import Link from "next/link";
 
 import { Markdown } from "@/shared/markdown";
+import { bookPagesHref } from "../../params";
 import type { DistillRun, LearningGuide, ReportLesson, ReportSection, SourceRef } from "../entities";
-import { distillStudyHref } from "../params";
 import { ReportChart } from "./report-chart";
 import { ReportDiagram } from "./report-diagram";
 
 type GuideQuality = DistillRun["structural_quality"];
 
 export function LearningGuideView({ report, quality }: { report: LearningGuide; quality: GuideQuality }) {
-  const pageHref = (page: number) => distillStudyHref(report.book_id, report.distill_run_id, page);
+  const pageHref = (page: number) => bookPagesHref(report.book_id, page);
   const reviewRequired = report.review_required || report.uncovered_pages.length > 0;
   const visualsCount =
     report.diagrams.length +

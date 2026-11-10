@@ -1,8 +1,7 @@
 "use client";
 
-import { ChartNoAxesColumn, Info, X } from "lucide-react";
+import { ChartNoAxesColumn, X } from "lucide-react";
 import dynamic from "next/dynamic";
-import type { ReactNode } from "react";
 import { useState } from "react";
 import { MermaidTopology } from "@/shared/markdown/mermaid-topology";
 import { ActionButton } from "../../components/action-button";
@@ -11,6 +10,7 @@ import { ToggleGroup } from "../../components/toggle-group";
 import type { AgenticNodeStatus } from "../../domain/agentic-progress";
 import { useModalDialog } from "../../hooks/use-modal-dialog";
 import { PipelineUsageSheet } from "../../rag/components/pipeline-usage-sheet";
+import { SideSheet } from "../../rag/components/side-sheet";
 import {
   DISTILL_LANGGRAPH_TOPOLOGY,
   DISTILL_NODES,
@@ -44,20 +44,21 @@ export function DistillNodeBoard({
   status,
   progress,
   statusText,
-  actions,
   runId,
+  progressOpen,
+  onProgressOpenChange,
 }: {
   bookId: string;
   status: DistillRun["status"] | null;
   progress: DistillRun["progress"] | null;
   statusText: string;
-  actions: ReactNode;
   runId: string | null;
+  progressOpen: boolean;
+  onProgressOpenChange: (open: boolean) => void;
 }) {
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
-  const [progressOpen, setProgressOpen] = useState(false);
   const views = distillNodeViews(status, progress);
   const selectedNode = DISTILL_NODES.find((node) => node.id === selectedNodeId);
   const caption = distillBoardCaption(status, progress);
@@ -84,10 +85,6 @@ export function DistillNodeBoard({
 
         <div className="mt-3 flex min-w-0 flex-col gap-3">
           <div className="flex min-w-0 flex-col gap-2">
-            <fieldset className="m-0 grid w-full min-w-0 grid-cols-3 gap-2 border-0 p-0">
-              <legend className="sr-only">Distill run controls</legend>
-              {actions}
-            </fieldset>
             <ActionButton
               className="w-full justify-center whitespace-nowrap px-2"
               onClick={() => setUsageOpen(true)}
@@ -96,24 +93,13 @@ export function DistillNodeBoard({
               <ChartNoAxesColumn aria-hidden />
               LLM usage
             </ActionButton>
-            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
-              <ToggleGroup
-                legend="Distill pipeline shown as"
-                options={MODES}
-                value={mode}
-                onChange={setMode}
-                fullWidth
-              />
-              <ActionButton
-                iconOnly
-                onClick={() => setProgressOpen(true)}
-                aria-haspopup="dialog"
-                aria-label="Open learning progress"
-                title="Learning progress"
-              >
-                <Info aria-hidden />
-              </ActionButton>
-            </div>
+            <ToggleGroup
+              legend="Distill pipeline shown as"
+              options={MODES}
+              value={mode}
+              onChange={setMode}
+              fullWidth
+            />
           </div>
 
           <div className="min-w-0 overflow-hidden rounded-sm border border-border bg-background">
@@ -147,13 +133,14 @@ export function DistillNodeBoard({
           status={status}
           statusText={statusText}
           progress={progress}
-          onClose={() => setProgressOpen(false)}
+          onClose={() => onProgressOpenChange(false)}
         />
       ) : null}
       {usageOpen ? (
         <PipelineUsageSheet
           bookId={bookId}
           runId={runId}
+          nodeIds={["learning_extractor", "evidence_verifier", "chapter_synthesizer", "book_synthesizer"]}
           live={status === "queued" || status === "running"}
           title="Distill LLM usage"
           subtitle="Calls and token counts recorded for this book run."
@@ -286,7 +273,6 @@ function DistillNodeSheet({
   runStatus: DistillRun["status"] | null;
   onClose: () => void;
 }) {
-  const dialog = useModalDialog();
   const detail =
     runStatus === null
       ? "This stage runs when you start Distill."
@@ -303,30 +289,18 @@ function DistillNodeSheet({
                 : "This stage has not run yet.";
 
   return (
-    <dialog
-      ref={dialog}
-      aria-labelledby="distill-node-title"
-      onCancel={(event) => {
-        event.preventDefault();
-        onClose();
-      }}
-      className="m-0 ml-auto h-dvh max-h-none w-full max-w-2xl overflow-y-auto border-l border-border bg-background p-0 text-foreground backdrop:bg-background/80"
+    <SideSheet
+      title={node.label}
+      subtitle={
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <AgenticStatusBadge status={status} />
+          <span className="font-mono">distill · {node.id}</span>
+        </span>
+      }
+      closeLabel="Close node details"
+      onClose={onClose}
     >
-      <header className="sticky top-0 z-10 flex items-start gap-3 border-b border-border bg-background px-5 py-4">
-        <div className="min-w-0 flex-1">
-          <h2 id="distill-node-title" className="text-lg font-semibold tracking-tight">
-            {node.label}
-          </h2>
-          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-            <AgenticStatusBadge status={status} />
-            <span className="font-mono text-xs text-muted-foreground">distill · {node.id}</span>
-          </div>
-        </div>
-        <ActionButton iconOnly onClick={onClose} aria-label="Close node details">
-          <X aria-hidden />
-        </ActionButton>
-      </header>
-      <div className="flex flex-col gap-5 px-5 py-4">
+      <div className="flex flex-col gap-5">
         <section aria-label="What this stage does" className="flex flex-col gap-3">
           <p className="text-sm">{node.detail}</p>
           <p className="text-sm text-muted-foreground">{detail}</p>
@@ -338,6 +312,6 @@ function DistillNodeSheet({
           </div>
         </section>
       </div>
-    </dialog>
+    </SideSheet>
   );
 }

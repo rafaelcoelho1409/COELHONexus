@@ -328,6 +328,134 @@ export type RunControls = {
   wipe: () => Promise<void>;
 };
 
+/** Pipeline's standalone stage-progress card: the same hierarchy as Ingestion progress, with chapter/node units. */
+export function PipelineStageProgress({
+  title,
+  testId,
+  controls,
+  blockedMessage,
+  error,
+  onOpenUsage,
+  current,
+  total,
+  valueText,
+  summary,
+  indeterminate = false,
+  children,
+}: {
+  title: string;
+  testId: string;
+  controls: RunControls;
+  blockedMessage: string | null;
+  error: string | null;
+  onOpenUsage: () => void;
+  current: number;
+  total: number;
+  valueText: string;
+  summary: string;
+  indeterminate?: boolean;
+  children?: ReactNode;
+}) {
+  const hasTotal = total > 0;
+  const boundedCurrent = hasTotal ? Math.max(0, Math.min(current, total)) : 0;
+  const percent = hasTotal ? Math.round((boundedCurrent / total) * 100) : null;
+  const busy = controls.running || controls.starting;
+
+  return (
+    <section
+      aria-label={`${title} progress`}
+      className="min-w-0 rounded-md border border-border bg-card p-3"
+    >
+      <div className="flex min-h-9 flex-wrap items-center justify-between gap-2">
+        <h3 className="flex items-center gap-1.5 text-sm font-medium">
+          {title}
+          {controls.pill.status === "done" ? <SuccessMark /> : null}
+        </h3>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <StagePill pill={controls.pill} elapsedMs={controls.elapsedMs} />
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
+            <ActionButton
+              onClick={onOpenUsage}
+              data-testid={`${testId}-usage`}
+              aria-haspopup="dialog"
+              className="px-2"
+            >
+              <ChartNoAxesColumn aria-hidden />
+              LLM usage
+            </ActionButton>
+            <ActionButton
+              onClick={() => void controls.start()}
+              disabled={busy || blockedMessage !== null}
+              aria-busy={controls.starting}
+              data-testid={`${testId}-start`}
+              className="px-2"
+            >
+              {controls.starting ? "Starting…" : controls.startLabel}
+            </ActionButton>
+            <ActionButton
+              onClick={() => void controls.cancel()}
+              disabled={!controls.running || controls.canceling}
+              aria-busy={controls.canceling}
+              data-testid={`${testId}-stop`}
+              className="px-2"
+            >
+              {controls.canceling ? "Stopping…" : "Stop"}
+            </ActionButton>
+            <ActionButton
+              onClick={() => void controls.wipe()}
+              disabled={busy || blockedMessage !== null}
+              data-testid={`${testId}-wipe`}
+              className="px-2"
+            >
+              Wipe
+            </ActionButton>
+          </div>
+        </div>
+      </div>
+      <div
+        role="progressbar"
+        aria-label={`${title} progress`}
+        aria-valuemin={0}
+        aria-valuemax={hasTotal ? total : 100}
+        aria-valuenow={boundedCurrent}
+        aria-valuetext={valueText}
+        className="mt-2 h-1.5 w-full overflow-hidden rounded-sm bg-muted"
+      >
+        <div
+          className={`h-full bg-primary ${indeterminate && !hasTotal ? "w-1/3 animate-pulse" : ""}`}
+          style={
+            percent === null
+              ? indeterminate
+                ? undefined
+                : { width: 0 }
+              : { width: `${percent}%` }
+          }
+        />
+      </div>
+      <p className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <span className="tabular-nums">
+          {summary}
+          {percent !== null ? ` · ${percent}%` : ""}
+        </span>
+      </p>
+      {children ? (
+        <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 empty:hidden">{children}</div>
+      ) : null}
+      {blockedMessage ? (
+        <p role="status" className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Clock3 className="size-4 shrink-0" aria-hidden />
+          {blockedMessage}
+        </p>
+      ) : null}
+      {error ? (
+        <p role="alert" className="mt-1 break-words text-xs text-destructive-text">
+          {error}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 /** A stage's run controls, drawn in Ingestion's button style: title and status on top; below, LLM usage on the left and
  * Start / Stop / Wipe on the right. In Planner and Synth this sits inside the same outer card as the graph. `testId`
  * prefixes the button test ids. `children` sit under the title row (a health or audit line). */

@@ -1,12 +1,11 @@
 "use client";
 
 import { apiErrorMessage } from "@/shared/lib/api-error";
-import { buttonVariants } from "@/shared/ui/button-variants";
-
 import { useConnection } from "../hooks/use-connection";
 import type { ConnectionKind } from "../params";
 import { ConnectionForm } from "./connection-form";
 import { MigrationBanner } from "./migration-banner";
+import { SettingsActionButton } from "./settings-action-button";
 
 /** The saved connection loads here; the form remounts whenever the saved view changes. */
 export function ConnectionCard({
@@ -37,14 +36,13 @@ export function ConnectionCard({
             <p className="text-destructive-text">
               Couldn&apos;t load the saved settings — {apiErrorMessage(query.error)}
             </p>
-            <button
+            <SettingsActionButton
               type="button"
               onClick={() => void query.refetch()}
               disabled={query.isRefetching}
-              className={buttonVariants({ variant: "link", size: "sm" })}
             >
-              Retry
-            </button>
+              {query.isRefetching ? "Loading…" : "Retry"}
+            </SettingsActionButton>
           </div>
         )}
         {view && (

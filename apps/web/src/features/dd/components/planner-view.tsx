@@ -9,11 +9,10 @@ import { type CrossStageBlocker, useCrossStageBlocker } from "../hooks/use-cross
 import { type PlannerRunController, usePlannerRun } from "../hooks/use-planner-run";
 import { PlanHealth } from "./plan-health";
 import { StageNodeBoard } from "./stage-node-board";
-import { NoFrameworkCard, RunBar } from "./stage-parts";
+import { NoFrameworkCard, PipelineStageProgress, RunBar } from "./stage-parts";
 import { PlannerUsageSheet } from "./usage-sheet";
 
-/** The planner screen without its data source, so the pipeline page can drive it from its own controller. The run bar
- * and graph share one card; the pipeline page lays those two rows on shared grid tracks (`className`). */
+/** Planner's standalone tab: its run bar and graph share one card. The Pipeline tab splits those into progress and graph panels. */
 export function PlannerBoard({
   slug,
   planner,
@@ -73,6 +72,84 @@ export function PlannerBoard({
         />
       ) : null}
     </>
+  );
+}
+
+/** Pipeline's first-row progress card, separated from the graph column below it. */
+export function PlannerProgressPanel({
+  slug,
+  planner,
+  blocker,
+}: {
+  slug: string;
+  planner: PlannerRunController;
+  blocker: CrossStageBlocker;
+}) {
+  const [usageOpen, setUsageOpen] = useState(false);
+  const activeViews = planner.views.filter((view) => view.status !== "future");
+  const completed = activeViews.filter((view) => view.status === "done").length;
+  const running = activeViews.filter((view) => view.status === "running").length;
+  const total = activeViews.length;
+  const current = Math.min(total, completed + running);
+  const summary = total
+    ? `${completed} of ${total} nodes complete${running ? ` · ${running} in progress` : ""}`
+    : "Planner node progress is unavailable.";
+  const valueText = total
+    ? `${current} of ${total} Planner nodes reached`
+    : "Planner node progress is unavailable";
+
+  return (
+    <>
+      <PipelineStageProgress
+        title="Planner"
+        testId="planner"
+        controls={planner}
+        blockedMessage={blocker.message}
+        error={planner.error}
+        onOpenUsage={() => setUsageOpen(true)}
+        current={current}
+        total={total}
+        valueText={valueText}
+        summary={summary}
+        indeterminate={planner.running}
+      >
+        {"plan_path" in planner.values && !planner.running ? <PlanHealth slug={slug} /> : null}
+      </PipelineStageProgress>
+      {usageOpen ? (
+        <PlannerUsageSheet
+          threadId={planner.threadId}
+          live={planner.running}
+          onClose={() => setUsageOpen(false)}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/** Planner's lower-row graph box for the shared Pipeline layout. */
+export function PlannerGraphPanel({ planner }: { planner: PlannerRunController }) {
+  return (
+    <section
+      aria-label="Planner Agentic AI graph"
+      className="flex min-w-0 flex-col gap-3 rounded-md border border-border bg-card p-3"
+    >
+      <h3 className="text-sm font-medium">Planner graph</h3>
+      <StageNodeBoard
+        stage="planner"
+        views={planner.views}
+        values={planner.values}
+        liveLines={planner.liveLines}
+        events={planner.events}
+        threadId={planner.threadId}
+        live={planner.running}
+        embedded
+        caption={
+          planner.views.length > 0
+            ? stageCaption(planner.views, planner.progress, planner.next)
+            : "Compiled Planner topology · run Planner to see execution status."
+        }
+      />
+    </section>
   );
 }
 

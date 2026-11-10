@@ -3,11 +3,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from typing import Any
 
 import domains
 
 from .... import graphs, prompts
+from ....agents.distill.learning_extractor import config as extractor_config, params as extractor_params
+
+logger = logging.getLogger(__name__)
 
 
 def _canonical_sha256(value: dict) -> str:
@@ -17,6 +21,10 @@ def _canonical_sha256(value: dict) -> str:
 
 def _json_body(value: Any) -> str:
     return json.dumps(value, ensure_ascii = False, separators = (",", ":"), sort_keys = True)
+
+
+def _is_transient_provider_error(error: Exception) -> bool:
+    return domains.settings.chat.domain.is_transient_provider_error(error)
 
 
 async def prepare_units(
@@ -187,17 +195,152 @@ async def extract_unit(
         "source_chunk_id": ref["unit_id"],
         "markdown": source_text,
     }
-    with domains.settings.llm_counter.service.llm_context(
-        ns = "bd", run_id = state["run_id"], node_id = "learning_extractor", stage = "distill",
-    ):
-        result = await dependencies.extractor.ainvoke({"messages": [{
-            "role": "user",
-            "content": json.dumps(prompt_payload, ensure_ascii = False),
-        }]}, config = {
-            "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
-        })
-    structured = result.get("structured_response") if isinstance(result, dict) else None
-    extraction = domains.bd.distill.schemas.LearningExtraction.model_validate(structured)
+    extraction = None
+    response_attempts = extractor_params.MAX_STRUCTURED_RESPONSE_ATTEMPTS
+    for attempt in range(response_attempts):
+        result = None
+        try:
+            with domains.settings.llm_counter.service.llm_context(
+                ns = "bd", run_id = state["run_id"], node_id = "learning_extractor", stage = "distill",
+            ):
+                result = await domains.settings.chat.service.resilient_ainvoke(
+                    lambda: dependencies.extractor.ainvoke({"messages": [{
+                        "role": "user",
+                        "content": json.dumps(prompt_payload, ensure_ascii = False),
+                    }]}, config = {
+                        "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
+                    }),
+                    attempts = extractor_params.MAX_PROVIDER_ATTEMPTS,
+                    wait_base_s = extractor_params.PROVIDER_RETRY_WAIT_BASE_S,
+                )
+            extraction = domains.bd.distill.domain.learning_extraction_from_agent_result(result)
+        except Exception as error:  # noqa: BLE001 — invalid agent output should fall back to native structured output.
+            if _is_transient_provider_error(error):
+                raise
+            extraction = None
+            logger.warning(
+                "[bd-distill] extractor agent failed for unit=%s attempt=%s/%s error=%s",
+                ref["unit_id"],
+                attempt + 1,
+                response_attempts,
+                type(error).__name__,
+            )
+        if extraction is not None:
+            break
+
+        if result is not None:
+            logger.warning(
+                "[bd-distill] extractor returned no valid structured response for unit=%s attempt=%s/%s",
+                ref["unit_id"],
+                attempt + 1,
+                response_attempts,
+            )
+        if attempt + 1 < response_attempts:
+            prompt_payload["response_retry"] = (
+                "The previous response did not contain a valid LearningExtraction. Return the requested "
+                "structured response now, with lessons and omitted_material fields. If the source has no "
+                "useful learning material, return empty lists."
+            )
+
+    if extraction is None:
+        logger.warning(
+            "[bd-distill] using direct structured-output fallback for unit=%s after %s invalid agent response(s)",
+            ref["unit_id"],
+            response_attempts,
+        )
+        fallback_error: Exception | None = None
+        for attempt in range(extractor_params.MAX_DIRECT_STRUCTURED_ATTEMPTS):
+            if attempt > 0:
+                prompt_payload["response_retry"] = (
+                    "The previous structured response was invalid. Return valid LearningExtraction JSON now. "
+                    "Limit the result to four concise, high-value lessons; every lesson must retain an exact quote "
+                    "from this page. If no useful lesson is supported, return empty lessons and explain omissions."
+                )
+            fallback_prompt = (
+                prompts.distill.learning_extractor.prompts.SYSTEM_PROMPT
+                + "\n\n"
+                + json.dumps(prompt_payload, ensure_ascii = False)
+            )
+            try:
+                with domains.settings.llm_counter.service.llm_context(
+                    ns = "bd", run_id = state["run_id"], node_id = "learning_extractor", stage = "distill",
+                ):
+                    extraction, _ = await domains.settings.chat.service.resilient_ainvoke(
+                        lambda: domains.settings.chat.service.chat_structured_async(
+                            fallback_prompt,
+                            domains.bd.distill.schemas.LearningExtraction,
+                            max_tokens = extractor_config.MODEL.max_output_tokens,
+                            temperature = extractor_config.MODEL.temperature,
+                            strict = False,
+                            rotator_task = extractor_params.ROTATOR_TASK,
+                        ),
+                        attempts = extractor_params.MAX_PROVIDER_ATTEMPTS,
+                        wait_base_s = extractor_params.PROVIDER_RETRY_WAIT_BASE_S,
+                    )
+                break
+            except Exception as error:  # noqa: BLE001 — retry malformed output and transient provider failures.
+                if _is_transient_provider_error(error):
+                    raise
+                fallback_error = error
+                logger.warning(
+                    "[bd-distill] structured fallback failed for unit=%s attempt=%s/%s error=%s",
+                    ref["unit_id"],
+                    attempt + 1,
+                    extractor_params.MAX_DIRECT_STRUCTURED_ATTEMPTS,
+                    type(error).__name__,
+                )
+
+        if extraction is None:
+            logger.warning(
+                "[bd-distill] using JSON-text fallback for unit=%s after structured-output retries",
+                ref["unit_id"],
+            )
+            for attempt in range(extractor_params.MAX_TEXT_FALLBACK_ATTEMPTS):
+                prompt_payload["response_retry"] = (
+                    "Return only a JSON object with exactly these keys: lessons and omitted_material. "
+                    "Do not use markdown fences or add prose. Every lesson must cite an exact quote from this page."
+                )
+                text_prompt = (
+                    prompts.distill.learning_extractor.prompts.SYSTEM_PROMPT
+                    + "\n\n"
+                    + json.dumps(prompt_payload, ensure_ascii = False)
+                )
+                try:
+                    with domains.settings.llm_counter.service.llm_context(
+                        ns = "bd", run_id = state["run_id"], node_id = "learning_extractor", stage = "distill",
+                    ):
+                        response, _ = await domains.settings.chat.service.resilient_ainvoke(
+                            lambda: domains.settings.chat.service.chat_text_async(
+                                text_prompt,
+                                max_tokens = extractor_config.MODEL.max_output_tokens,
+                                temperature = extractor_config.MODEL.temperature,
+                                rotator_task = extractor_params.ROTATOR_TASK,
+                            ),
+                            attempts = extractor_params.MAX_PROVIDER_ATTEMPTS,
+                            wait_base_s = extractor_params.PROVIDER_RETRY_WAIT_BASE_S,
+                        )
+                    extraction = domains.bd.distill.domain.learning_extraction_from_agent_result({
+                        "messages": [{"role": "assistant", "content": response}],
+                    })
+                    if extraction is None:
+                        raise ValueError("the text fallback did not contain a valid LearningExtraction")
+                    break
+                except Exception as error:  # noqa: BLE001 — preserve the source chunk rather than silently skipping it.
+                    if _is_transient_provider_error(error):
+                        raise
+                    fallback_error = error
+                    logger.warning(
+                        "[bd-distill] JSON-text fallback failed for unit=%s attempt=%s/%s error=%s",
+                        ref["unit_id"],
+                        attempt + 1,
+                        extractor_params.MAX_TEXT_FALLBACK_ATTEMPTS,
+                        type(error).__name__,
+                    )
+
+        if extraction is None:
+            raise ValueError(
+                "the learning extractor returned no valid response after agent, structured-output, and JSON-text retries"
+            ) from fallback_error
 
     candidates: list[dict[str, Any]] = []
     review_flags: list[str] = []

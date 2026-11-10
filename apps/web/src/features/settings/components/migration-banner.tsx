@@ -1,10 +1,9 @@
 "use client";
 
 import { apiErrorMessage } from "@/shared/lib/api-error";
-import { Button } from "@/shared/ui/button";
-
 import { isTerminalTaskState, progressText } from "../domain";
 import { useEmbeddingMigration } from "../hooks/use-embedding-migration";
+import { SettingsActionButton } from "./settings-action-button";
 
 const STATUS_TONE = {
   complete: "text-success-text",
@@ -41,15 +40,14 @@ export function MigrationBanner() {
             searchable until they are re-embedded.
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-3">
-            <Button
+            <SettingsActionButton
               type="button"
-              size="lg"
               onClick={() => start.mutate()}
               disabled={start.isPending}
               aria-busy={start.isPending}
             >
               {start.isPending ? "Starting…" : "Migrate now"}
-            </Button>
+            </SettingsActionButton>
           </div>
           {start.isError && (
             <p role="alert" className="mt-2 text-sm text-destructive-text">

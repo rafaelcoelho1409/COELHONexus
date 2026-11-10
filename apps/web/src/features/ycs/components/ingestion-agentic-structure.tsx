@@ -30,6 +30,21 @@ const MODES = [
   { id: "langgraph", label: "LangGraph" },
 ] as const;
 
+export type IngestionWorkflowAction = {
+  label: string;
+  pendingLabel: string;
+  pending?: boolean;
+  disabled?: boolean;
+  title?: string;
+  onClick: () => void;
+};
+
+export type IngestionWorkflowActions = {
+  start: IngestionWorkflowAction;
+  stop: IngestionWorkflowAction;
+  wipe: IngestionWorkflowAction;
+};
+
 const INGESTION_TOPOLOGY = `flowchart TD
   start([Start]) --> playwright["Playwright transcripts"]
   playwright --> elasticsearch["Elasticsearch indexing"]
@@ -39,11 +54,13 @@ const INGESTION_TOPOLOGY = `flowchart TD
 
 export function IngestionAgenticStructure({
   steps,
+  actions,
   onOpenUsage,
   ariaLabel = "Agentic ingestion workflow",
   caption = "Target flow: Playwright transcript retrieval → Elasticsearch → Qdrant and Neo4j.",
 }: {
   steps: ReadonlyArray<Step>;
+  actions: IngestionWorkflowActions;
   onOpenUsage: () => void;
   ariaLabel?: string;
   caption?: string;
@@ -54,39 +71,62 @@ export function IngestionAgenticStructure({
 
   return (
     <>
-      <div className="flex justify-end">
-        <ActionButton type="button" aria-haspopup="dialog" onClick={onOpenUsage}>
-          <ChartNoAxesColumn aria-hidden />
-          LLM usage
-        </ActionButton>
-      </div>
       <section
         aria-label={ariaLabel}
         className="flex min-w-0 flex-col gap-3 rounded-md border border-border bg-card p-3"
       >
-        <header className="flex min-h-9 min-w-0 flex-wrap items-center justify-between gap-3">
-          <p
-            aria-live="polite"
-            title={caption}
-            className="line-clamp-2 min-w-0 text-xs leading-4 text-muted-foreground"
-          >
-            {caption}
-          </p>
-          <fieldset className="m-0 inline-flex shrink-0 overflow-hidden rounded-sm border border-border bg-background p-0">
-            <legend className="sr-only">Ingestion workflow shown as</legend>
-            {MODES.map((entry) => (
+        <fieldset className="m-0 grid min-w-0 grid-cols-3 gap-2 border-0 p-0">
+          <legend className="sr-only">Ingestion run controls</legend>
+          {(["start", "stop", "wipe"] as const).map((key) => {
+            const action = actions[key];
+            return (
               <ActionButton
-                key={entry.id}
+                key={key}
                 type="button"
-                aria-pressed={mode === entry.id}
-                onClick={() => setMode(entry.id)}
-                className="min-h-9 rounded-none border-0 border-r border-r-border px-2.5 last:border-r-0"
+                onClick={action.onClick}
+                disabled={action.disabled}
+                aria-busy={action.pending}
+                title={action.title}
+                className="min-w-0 justify-center whitespace-nowrap px-2"
               >
-                {entry.label}
+                {action.pending ? action.pendingLabel : action.label}
               </ActionButton>
-            ))}
-          </fieldset>
-        </header>
+            );
+          })}
+        </fieldset>
+
+        <ActionButton
+          type="button"
+          aria-haspopup="dialog"
+          onClick={onOpenUsage}
+          className="w-full justify-center whitespace-nowrap px-2"
+        >
+          <ChartNoAxesColumn aria-hidden />
+          LLM usage
+        </ActionButton>
+
+        <fieldset className="m-0 flex w-full overflow-hidden rounded-sm border border-border bg-background p-0">
+          <legend className="sr-only">Ingestion workflow shown as</legend>
+          {MODES.map((entry) => (
+            <ActionButton
+              key={entry.id}
+              type="button"
+              aria-pressed={mode === entry.id}
+              onClick={() => setMode(entry.id)}
+              className="min-w-0 flex-1 justify-center whitespace-nowrap rounded-none border-0 border-r border-r-border px-1.5 last:border-r-0"
+            >
+              {entry.label}
+            </ActionButton>
+          ))}
+        </fieldset>
+
+        <p
+          aria-live="polite"
+          title={caption}
+          className="line-clamp-2 text-xs leading-4 text-muted-foreground"
+        >
+          {caption}
+        </p>
 
         {mode === "graph" ? (
           <IngestionAgenticFlow steps={steps} onOpen={setSelectedKey} />

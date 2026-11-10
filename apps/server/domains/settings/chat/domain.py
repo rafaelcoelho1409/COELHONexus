@@ -5,6 +5,7 @@ import re
 from urllib.parse import urlsplit
 
 import httpx
+from openai import APIConnectionError
 
 
 def normalize_base_url(url: str) -> str:
@@ -75,6 +76,16 @@ def classify_error(exc: Exception) -> str:
     if "5" in msg and ("server" in msg or "internal" in msg or "bad gateway" in msg):
         return "server_error"
     return "unknown"
+
+
+def is_transient_provider_error(exc: Exception) -> bool:
+    """Whether another request can recover from a provider or transport failure."""
+    if isinstance(exc, (TimeoutError, APIConnectionError, httpx.TransportError)):
+        return True
+    status_code = getattr(exc, "status_code", None)
+    if status_code in (408, 429) or (isinstance(status_code, int) and 500 <= status_code <= 599):
+        return True
+    return classify_error(exc) in {"timeout", "rate_limit", "server_error"}
 
 
 _CAPACITY_MARKERS = ("pool exhausted", "pool_exhausted", "no deployments available", "no healthy deployments")

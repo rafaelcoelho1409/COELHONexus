@@ -1,6 +1,6 @@
 "use client";
 
-import { ChartNoAxesColumn, Info } from "lucide-react";
+import { ChartNoAxesColumn } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useState } from "react";
 import { MermaidTopology } from "@/shared/markdown/mermaid-topology";
@@ -77,37 +77,22 @@ type NodeId = (typeof NODES)[number]["id"];
 export function RagIndexBoard({
   bookId,
   index,
-  distillComplete,
   executionEnabled,
-  capabilityError,
-  startPending,
-  cancelPending,
-  wipePending,
-  onStart,
-  onCancel,
-  onWipe,
+  infoOpen,
+  onInfoOpenChange,
 }: {
   bookId: string;
   index: RagIndexStatus | null;
-  distillComplete: boolean;
   executionEnabled: boolean;
-  capabilityError: string | null;
-  startPending: boolean;
-  cancelPending: boolean;
-  wipePending: boolean;
-  onStart: () => void;
-  onCancel: () => void;
-  onWipe: () => void;
+  infoOpen: boolean;
+  onInfoOpenChange: (open: boolean) => void;
 }) {
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<NodeId>("pin_sources");
   const [usageOpen, setUsageOpen] = useState(false);
-  const [infoOpen, setInfoOpen] = useState(false);
   const views = nodeViews(index);
   const selectedNode = NODES.find((node) => node.id === selectedNodeId);
   const active = index?.status === "queued" || index?.status === "running";
-  const resumable = index?.status === "failed" || index?.status === "cancelled";
-  const hasRun = index !== null && index.status !== "not_started";
 
   return (
     <section
@@ -123,74 +108,8 @@ export function RagIndexBoard({
         </div>
       </header>
 
-      {capabilityError ? (
-        <p
-          role="status"
-          className="mt-3 rounded-sm border border-border bg-background p-2 text-xs text-muted-foreground"
-        >
-          Execution availability could not be loaded. {capabilityError}
-        </p>
-      ) : null}
-      {index?.error ? (
-        <p
-          role="alert"
-          className="mt-3 rounded-sm border border-destructive bg-background p-2 text-xs text-destructive-text"
-        >
-          {index.error}
-        </p>
-      ) : null}
-
       <div className="mt-3 flex min-w-0 flex-col gap-3">
         <div className="flex min-w-0 flex-col gap-2">
-          <fieldset className="m-0 grid w-full min-w-0 grid-cols-3 gap-2 border-0 p-0">
-            <legend className="sr-only">Agentic RAG run controls</legend>
-            <ActionButton
-              className="w-full min-w-0 justify-center px-1"
-              onClick={onStart}
-              disabled={
-                !executionEnabled ||
-                !distillComplete ||
-                index?.status === "done" ||
-                active ||
-                startPending ||
-                cancelPending
-              }
-              aria-busy={startPending}
-              aria-label={resumable ? "Resume Agentic RAG" : "Start Agentic RAG"}
-              title={
-                capabilityError ??
-                (!executionEnabled
-                  ? "Agentic RAG execution is disabled in this environment."
-                  : index?.status === "done"
-                    ? "This retrieval index is complete."
-                    : !distillComplete
-                      ? "Complete Distill before starting retrieval indexing."
-                      : undefined)
-              }
-            >
-              {startPending ? (resumable ? "Resuming…" : "Starting…") : resumable ? "Resume" : "Start"}
-            </ActionButton>
-            <ActionButton
-              className="w-full min-w-0 justify-center px-1"
-              onClick={onCancel}
-              disabled={!active || index?.cancel_requested === true || cancelPending}
-              aria-busy={cancelPending || index?.cancel_requested === true}
-              aria-label="Stop Agentic RAG"
-              title={active ? undefined : "There is no active retrieval run to stop."}
-            >
-              {cancelPending || index?.cancel_requested === true ? "Stopping…" : "Stop"}
-            </ActionButton>
-            <ActionButton
-              className="w-full min-w-0 justify-center px-1"
-              onClick={onWipe}
-              disabled={!hasRun || active || wipePending || startPending || cancelPending}
-              aria-busy={wipePending}
-              aria-label="Wipe Agentic RAG index"
-              title={active ? "Stop the active retrieval run before wiping its index." : undefined}
-            >
-              {wipePending ? "Wiping…" : "Wipe"}
-            </ActionButton>
-          </fieldset>
           <ActionButton
             className="w-full justify-center whitespace-nowrap px-2"
             onClick={() => setUsageOpen(true)}
@@ -199,24 +118,13 @@ export function RagIndexBoard({
             <ChartNoAxesColumn aria-hidden />
             LLM usage
           </ActionButton>
-          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
-            <ToggleGroup
-              legend="Agentic RAG pipeline shown as"
-              options={MODES}
-              value={mode}
-              onChange={setMode}
-              fullWidth
-            />
-            <ActionButton
-              iconOnly
-              onClick={() => setInfoOpen(true)}
-              aria-haspopup="dialog"
-              aria-label={`Open ${selectedNode?.label ?? "Agentic RAG"} details`}
-              title={`${selectedNode?.label ?? "Agentic RAG"} details`}
-            >
-              <Info aria-hidden />
-            </ActionButton>
-          </div>
+          <ToggleGroup
+            legend="Agentic RAG pipeline shown as"
+            options={MODES}
+            value={mode}
+            onChange={setMode}
+            fullWidth
+          />
         </div>
 
         <div className="min-w-0 overflow-hidden rounded-sm border border-border bg-background">
@@ -244,7 +152,7 @@ export function RagIndexBoard({
             />
           }
           closeLabel="Close Agentic RAG details"
-          onClose={() => setInfoOpen(false)}
+          onClose={() => onInfoOpenChange(false)}
         >
           <div className="flex flex-col gap-5">
             <section aria-label="Selected retrieval stage" className="flex flex-col gap-3">
@@ -272,6 +180,7 @@ export function RagIndexBoard({
         <PipelineUsageSheet
           bookId={bookId}
           runId={index && index.status !== "not_started" ? index.distill_run_id : null}
+          nodeIds={["rag_graph_extractor"]}
           live={active}
           title="Agentic RAG LLM usage"
           subtitle="Calls and token counts recorded for this book run."
@@ -283,7 +192,9 @@ export function RagIndexBoard({
   );
 
   function selectNode(nodeId: string) {
-    if (isNodeId(nodeId)) setSelectedNodeId(nodeId);
+    if (!isNodeId(nodeId)) return;
+    setSelectedNodeId(nodeId);
+    onInfoOpenChange(true);
   }
 }
 

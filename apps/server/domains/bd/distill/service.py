@@ -18,6 +18,19 @@ from . import keys, params, progress, schemas, versions
 logger = logging.getLogger(__name__)
 
 
+def _failure_message(error: Exception) -> str:
+    provider_kind = domains.settings.chat.domain.classify_error(error)
+    provider_reasons = {
+        "timeout": "repeated LLM provider timeouts",
+        "rate_limit": "LLM provider rate limits",
+        "server_error": "repeated LLM provider server errors",
+    }
+    reason = provider_reasons.get(provider_kind)
+    if reason:
+        return f"Distill failed after {reason}. Completed work is saved; resume this run to continue."
+    return f"Distill failed ({type(error).__name__}). Check worker logs for details."
+
+
 def _safe_segment(value: object) -> bool:
     return isinstance(value, str) and bool(value) and all(
         character.isascii() and (character.isalnum() or character in "-_") for character in value
@@ -208,13 +221,13 @@ async def create_distill_run(
             ),
         ).model_dump(mode = "json")
         manifest = await _write_manifest(storage, manifest)
-        await progress.clear(book_id, run_id)
+        await progress.service.clear(book_id, run_id)
         await storage.write(
             keys.current_run_key(book_id),
             json.dumps({"run_id": run_id, "extraction_run_id": extraction_run_id}, separators = (",", ":")),
             content_type = params.JSON_TYPE,
         )
-        await progress.emit(book_id, run_id, "run_queued", status = manifest["status"], progress = manifest["progress"])
+        await progress.service.emit(book_id, run_id, "run_queued", status = manifest["status"], progress = manifest["progress"])
         return manifest
 
 
@@ -235,7 +248,7 @@ async def queue_resume(book_id: str, run_id: str) -> dict[str, Any]:
         active = [run for run in await list_runs(book_id) if run["status"] in {"queued", "running"}]
         if any(run["run_id"] != run_id for run in active):
             raise ValueError("another Distill run is already active for this book")
-        await progress.clear_cancel(book_id, run_id)
+        await progress.service.clear_cancel(book_id, run_id)
         manifest["status"] = "queued"
         manifest["finished_at"] = None
         manifest["error"] = None
@@ -268,7 +281,7 @@ async def request_cancel(book_id: str, run_id: str) -> dict[str, Any]:
             manifest["error"] = None
             manifest["progress"]["current_node"] = None
             manifest = await _write_manifest(storage, manifest)
-            await progress.emit(
+            await progress.service.emit(
                 book_id,
                 run_id,
                 "run_cancelled",
@@ -276,8 +289,8 @@ async def request_cancel(book_id: str, run_id: str) -> dict[str, Any]:
                 progress = manifest["progress"],
             )
         elif manifest["status"] == "running":
-            await progress.request_cancel(book_id, run_id)
-            await progress.emit(book_id, run_id, "run_cancel_requested", status = manifest["status"])
+            await progress.service.request_cancel(book_id, run_id)
+            await progress.service.emit(book_id, run_id, "run_cancel_requested", status = manifest["status"])
         return {"book_id": book_id, "run_id": run_id, "status": manifest["status"]}
 
 
@@ -332,7 +345,7 @@ async def wipe_run(book_id: str, run_id: str) -> dict[str, Any]:
             await checkpointer.adelete_thread(thread_id)
             removed = await storage.delete_prefix(keys.run_prefix(book_id, run_id))
             await domains.settings.llm_counter.service.delete_run("bd", run_id)
-            await progress.clear(book_id, run_id)
+            await progress.service.clear(book_id, run_id)
             pointer_key = keys.current_run_key(book_id)
             if await storage.exists(pointer_key):
                 try:
@@ -362,10 +375,10 @@ async def mark_failed(book_id: str, run_id: str, error: Exception) -> dict[str, 
         return manifest
     manifest["status"] = "failed"
     manifest["finished_at"] = max(time.time(), manifest["created_at"])
-    manifest["error"] = f"Distill failed ({type(error).__name__}). Check worker logs for details."
+    manifest["error"] = _failure_message(error)
     manifest["progress"]["current_node"] = None
     await _write_manifest(infra.minio.service.get_storage(), manifest)
-    await progress.emit(book_id, run_id, "run_failed", status = manifest["status"], error = manifest["error"])
+    await progress.service.emit(book_id, run_id, "run_failed", status = manifest["status"], error = manifest["error"])
     return manifest
 
 
@@ -417,7 +430,7 @@ async def mark_run_started(book_id: str, run_id: str) -> dict[str, Any]:
             manifest["error"] = None
             manifest["finished_at"] = None
             manifest = await _write_manifest(storage, manifest)
-            await progress.emit(book_id, run_id, "run_started", status = "running", progress = manifest["progress"])
+            await progress.service.emit(book_id, run_id, "run_started", status = "running", progress = manifest["progress"])
         return manifest
 
 
@@ -528,7 +541,7 @@ async def run_distill(
             manifest["error"] = None
             manifest["finished_at"] = None
             manifest = await _write_manifest(storage, manifest)
-            await progress.emit(book_id, run_id, "run_started", status = "running", progress = manifest["progress"])
+            await progress.service.emit(book_id, run_id, "run_started", status = "running", progress = manifest["progress"])
     domains.settings.chat.service.refresh_endpoint(force = True)
 
     existing_units = await storage.list(f"{keys.run_prefix(book_id, run_id)}learning-units/")
@@ -544,7 +557,7 @@ async def run_distill(
         kind = event.get("kind")
         status = event.get("status")
         should_check_cancel = (kind == "node" and status == "running") or kind in {"unit", "chapter"}
-        if should_check_cancel and await progress.cancel_requested(cancel_redis, book_id, run_id):
+        if should_check_cancel and await progress.service.cancel_requested(cancel_redis, book_id, run_id):
             cancellation_observed = True
             raise asyncio.CancelledError
         async with progress_lock:
@@ -571,7 +584,7 @@ async def run_distill(
                     completed_chapter_ids.add(chapter_id)
                 current["completed_chapters"] = len(completed_chapter_ids)
             manifest = await _write_manifest(storage, manifest)
-            await progress.emit(book_id, run_id, kind if isinstance(kind, str) else "progress", **{
+            await progress.service.emit(book_id, run_id, kind if isinstance(kind, str) else "progress", **{
                 key: value for key, value in event.items() if key != "kind"
             }, progress = manifest["progress"])
 
@@ -633,7 +646,7 @@ async def run_distill(
         )
         manifest = await _write_manifest(storage, manifest)
         await domains.settings.llm_counter.service.snapshot("bd", run_id)
-        await progress.emit(book_id, run_id, "run_done", status = "done", progress = manifest["progress"])
+        await progress.service.emit(book_id, run_id, "run_done", status = "done", progress = manifest["progress"])
         return manifest
     except (asyncio.CancelledError, NodeCancelledError):
         if not cancellation_observed:
@@ -643,17 +656,17 @@ async def run_distill(
         manifest["error"] = None
         manifest["progress"]["current_node"] = None
         manifest = await _write_manifest(storage, manifest)
-        await progress.emit(book_id, run_id, "run_cancelled", status = "cancelled", progress = manifest["progress"])
+        await progress.service.emit(book_id, run_id, "run_cancelled", status = "cancelled", progress = manifest["progress"])
         return manifest
     except Exception as error:
         manifest["status"] = "failed"
         manifest["finished_at"] = max(time.time(), manifest["created_at"])
-        manifest["error"] = f"Distill failed ({type(error).__name__}). Check worker logs for details."
+        manifest["error"] = _failure_message(error)
         manifest["progress"]["current_node"] = None
         manifest = await _write_manifest(storage, manifest)
         logger.exception("[bd-distill] run failed book=%s run=%s", book_id, run_id)
         await domains.settings.llm_counter.service.snapshot("bd", run_id)
-        await progress.emit(book_id, run_id, "run_failed", status = "failed", error = manifest["error"])
+        await progress.service.emit(book_id, run_id, "run_failed", status = "failed", error = manifest["error"])
         raise
     finally:
         with contextlib.suppress(Exception):

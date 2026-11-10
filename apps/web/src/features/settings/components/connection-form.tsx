@@ -3,7 +3,6 @@
 import { type FormEvent, useState } from "react";
 
 import { apiErrorMessage } from "@/shared/lib/api-error";
-import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Label } from "@/shared/ui/label";
 
@@ -12,6 +11,7 @@ import type { ConnectionView } from "../entities";
 import type { SaveMutation, TestMutation } from "../hooks/use-connection";
 import type { ConnectionKind } from "../params";
 import { KeyStatusPill } from "./key-status-pill";
+import { SettingsActionButton } from "./settings-action-button";
 
 /** The form itself: state starts from `initial`; the card remounts it after each save, which clears the key field. */
 export function ConnectionForm({
@@ -123,30 +123,22 @@ export function ConnectionForm({
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 sm:pl-[7rem]">
-        <Button type="submit" size="lg" disabled={save.isPending} aria-busy={save.isPending}>
+        <SettingsActionButton type="submit" disabled={save.isPending} aria-busy={save.isPending}>
           {save.isPending ? "Saving…" : "Save"}
-        </Button>
+        </SettingsActionButton>
         {canRemoveKey && (
-          <Button
-            type="button"
-            size="lg"
-            variant="outline"
-            onClick={() => submit(true)}
-            disabled={save.isPending}
-          >
+          <SettingsActionButton type="button" onClick={() => submit(true)} disabled={save.isPending}>
             Remove key
-          </Button>
+          </SettingsActionButton>
         )}
-        <Button
+        <SettingsActionButton
           type="button"
-          size="lg"
-          variant="outline"
           onClick={() => test.mutate()}
           disabled={test.isPending}
           aria-busy={test.isPending}
         >
           {test.isPending ? "Testing…" : "Test"}
-        </Button>
+        </SettingsActionButton>
         {unsaved && (
           <p id={`${prefix}-unsaved`} className="text-xs text-warning-text">
             Unsaved changes — Test uses the saved settings.
