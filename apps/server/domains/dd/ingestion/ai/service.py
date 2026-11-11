@@ -327,6 +327,7 @@ async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> d
         **result.get("summary", {}),
         "pages": len(outputs),
         "normalizer": params.NORMALIZER_VERSION,
+        "quality": result.get("quality_summary") or {},
     }
 
 

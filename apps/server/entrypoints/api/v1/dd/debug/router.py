@@ -1,16 +1,191 @@
-"""Dev-time stage isolation. Synchronous (no Celery, no lock, no
-progress writes) so exceptions surface with full stack traces.
-Not gated — single-user dev cluster only."""
+"""DD development routes: direct stage-isolation helpers and queued tier benchmarks.
+
+The benchmark endpoints use the regular Celery, lock and progress lifecycle,
+but isolate their MinIO output. Other debug routes retain their direct dev
+behavior. This router is not gated and is intended for the single-user dev cluster.
+"""
 import domains, infra
-from . import params
+import domains.dd.ingestion.task
+from . import params, schemas
 from .. import catalog
 
+import json
+import logging
+import re
 import time
 
 from fastapi import APIRouter, HTTPException
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+def _valid_benchmark_round(round_id: str) -> bool:
+    return re.fullmatch(
+        domains.dd.ingestion.runtime.dispatch.params.BENCHMARK_ROUND_ID_PATTERN,
+        round_id,
+    ) is not None
+
+
+@router.post("/benchmarks/{slug}")
+async def start_tier_benchmark(
+    slug: str,
+    body: schemas.TierBenchmarkBody,
+    entry: catalog.schemas.CatalogEntry,
+) -> dict:
+    """Queue an isolated, forced-tier run through extraction, normalization and publish."""
+    dispatch = domains.dd.ingestion.runtime.dispatch
+    dispatch_params = dispatch.params
+    kind = dispatch_params.BENCHMARK_SOURCE_KINDS[body.tier - 1]
+    source_url = entry.get(kind)
+    if not isinstance(source_url, str) or not source_url:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{slug!r} has no {kind!r} URL in the catalog",
+        )
+
+    gate = await dispatch.service.reserve_run(slug, refresh=True)
+    if gate["status"] != "reserved":
+        return gate
+
+    run_id = gate["run_id"]
+    storage_slug = dispatch.domain.benchmark_storage_slug(slug, kind, run_id)
+    report = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "round_id": body.round_id,
+        "framework_slug": slug,
+        "framework_name": entry["name"],
+        "requested_tier": kind,
+        "source_url": source_url,
+        "storage_slug": storage_slug,
+        "status": "queued",
+        "queued_at": time.time(),
+        "source_attempts": [],
+        "timings_ms": {},
+        "build": {
+            "service_version": infra.opentelemetry.params.SERVICE_VERSION,
+            "git_sha": infra.opentelemetry.params.GIT_SHA,
+            "normalizer_version": domains.dd.ingestion.corpus_normalize.versions.NORMALIZER_VERSION,
+        },
+    }
+    minio = infra.minio.service.get_storage()
+    progress = domains.dd.ingestion.runtime.progress.service.Progress(run_id)
+    try:
+        await minio.write(
+            domains.dd.ingestion.storage.keys.benchmark_report_key(body.round_id, run_id),
+            json.dumps(report, ensure_ascii=False, separators=(",", ":")),
+            content_type=domains.dd.ingestion.storage.params.JSON_TYPE,
+        )
+        await progress.record_benchmark(report)
+    except Exception as error:
+        await dispatch.service.release_run(slug, run_id)
+        raise HTTPException(
+            status_code=503,
+            detail=f"could not persist benchmark report before queueing: {type(error).__name__}",
+        ) from error
+    finally:
+        await progress.close()
+
+    try:
+        task = domains.dd.ingestion.task.run_ingestion.delay(
+            run_id,
+            slug,
+            source_kind=kind,
+            benchmark_slug=storage_slug,
+            round_id=body.round_id,
+        )
+    except Exception as error:
+        report.update(
+            status="failed",
+            error=f"enqueue failed: {type(error).__name__}: {error}"[:500],
+            finished_at=time.time(),
+        )
+        try:
+            await minio.write(
+                domains.dd.ingestion.storage.keys.benchmark_report_key(body.round_id, run_id),
+                json.dumps(report, ensure_ascii=False, separators=(",", ":")),
+                content_type=domains.dd.ingestion.storage.params.JSON_TYPE,
+            )
+        except Exception:
+            logger.exception("failed to persist benchmark enqueue failure")
+        failed_progress = domains.dd.ingestion.runtime.progress.service.Progress(run_id)
+        try:
+            await failed_progress.record_benchmark(report)
+        finally:
+            await failed_progress.close()
+        await dispatch.service.release_run(slug, run_id)
+        raise
+
+    try:
+        infra.opentelemetry.service.tag_celery_task(task.id)
+    except Exception:
+        logger.warning("could not attach the benchmark Celery task trace tag", exc_info=True)
+
+    return {
+        "status": "queued",
+        "slug": slug,
+        "run_id": run_id,
+        "benchmark": {
+            "round_id": body.round_id,
+            "tier": body.tier,
+            "source_kind": kind,
+            "storage_slug": storage_slug,
+        },
+    }
+
+
+@router.get("/benchmarks/{round_id}")
+async def list_tier_benchmarks(round_id: str) -> dict:
+    """Read the durable comparison reports for one benchmark round."""
+    if not _valid_benchmark_round(round_id):
+        raise HTTPException(status_code=400, detail="invalid benchmark round id")
+    minio = infra.minio.service.get_storage()
+    prefix = domains.dd.ingestion.storage.keys.benchmark_report_prefix(round_id)
+    try:
+        object_keys = await minio.list(prefix)
+        reports = []
+        for key in object_keys:
+            if not key.endswith(".json"):
+                continue
+            try:
+                report = json.loads(await minio.read_text(key))
+            except (ValueError, UnicodeDecodeError):
+                logger.warning("skipping malformed benchmark report %s", key)
+                continue
+            if isinstance(report, dict):
+                reports.append(report)
+    except Exception as error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"could not read benchmark reports: {type(error).__name__}",
+        ) from error
+    reports.sort(key=lambda item: item.get("started_at") or item.get("queued_at") or 0)
+    return {"round_id": round_id, "runs": reports}
+
+
+@router.get("/benchmarks/{round_id}/{run_id}")
+async def get_tier_benchmark(round_id: str, run_id: str) -> dict:
+    """Read one benchmark report by round and ingestion run id."""
+    if not _valid_benchmark_round(round_id) or re.fullmatch(r"[a-f0-9]{32}", run_id) is None:
+        raise HTTPException(status_code=400, detail="invalid benchmark round or run id")
+    minio = infra.minio.service.get_storage()
+    key = domains.dd.ingestion.storage.keys.benchmark_report_key(round_id, run_id)
+    try:
+        if not await minio.exists(key):
+            raise HTTPException(status_code=404, detail="benchmark report not found")
+        report = json.loads(await minio.read_text(key))
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"could not read benchmark report: {type(error).__name__}",
+        ) from error
+    if not isinstance(report, dict):
+        raise HTTPException(status_code=500, detail="benchmark report is malformed")
+    return report
 
 
 

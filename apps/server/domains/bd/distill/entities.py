@@ -37,3 +37,4 @@ class ChapterRef(TypedDict):
     last_page: int
     unit_ids: list[str]
     existing_artifact: NotRequired[bool]
+    unit_sources: NotRequired[list[dict[str, str]]]

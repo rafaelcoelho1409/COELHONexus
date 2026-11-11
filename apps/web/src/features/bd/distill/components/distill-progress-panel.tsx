@@ -138,10 +138,6 @@ export function DistillProgressPanel({
         <p role="status" className="mt-2 text-xs text-muted-foreground">
           Stop requested; active work is draining before the run ends.
         </p>
-      ) : status === "queued" || status === "running" ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          Stop takes effect at a safe graph-stage boundary. Wipe becomes available after the run stops.
-        </p>
       ) : null}
     </section>
   );

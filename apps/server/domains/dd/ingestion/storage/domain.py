@@ -129,12 +129,12 @@ def entry_key(framework_slug: str, entry: dict, idx: int) -> str:
 
 
 def framework_slugs(folders: list[str]) -> list[str]:
-    """Framework slugs among the immediate children of the `dd/` library prefix."""
+    """Visible framework slugs among the immediate children of the `dd/` library prefix."""
     reserved = {"synth-cache"}
     return [
         slug
         for slug in (f.rstrip("/").rsplit("/", 1)[-1] for f in folders if f.strip("/"))
-        if slug not in reserved
+        if slug not in reserved and not slug.startswith("__dd_benchmark__-")
     ]
 
 

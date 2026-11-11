@@ -20,6 +20,13 @@ def source_chain(entry: dict) -> list[dict]:
     return [{"kind": kind, "url": entry[kind]} for kind in params.KIND_PRIORITY if entry.get(kind)]
 
 
+def benchmark_storage_slug(slug: str, kind: str, run_id: str) -> str:
+    """Private MinIO namespace for a forced-tier benchmark; never a catalog slug."""
+    safe_slug = (slug or "framework").strip().strip("/")[:80]
+    safe_run_id = (run_id or "").strip().strip("/")
+    return f"{params.BENCHMARK_STORAGE_PREFIX}{safe_slug}-{kind}-{safe_run_id}"
+
+
 def tier_arguments(kind: str, entry: dict) -> dict:
     """What the tier of source `kind` is handed from the catalog `entry`, besides its URL, the slug, the progress and the store
     (`params.TIER_ARGUMENTS`): a field the entry lacks is `None`."""
@@ -106,9 +113,12 @@ def cancel_requested(run_id: str) -> dict:
     return {"run_id": run_id, "status": "cancel_requested"}
 
 
-def run_snapshot(run_id: str, progress, manifest, post) -> dict:
+def run_snapshot(run_id: str, progress, manifest, post, benchmark: dict | None = None) -> dict:
     """What GET /ingestion/runs/{id} answers for a run in flight: its progress, the manifest so far and the post-processing summary."""
-    return {"run_id": run_id, "progress": progress, "manifest": manifest, "post": post}
+    snapshot = {"run_id": run_id, "progress": progress, "manifest": manifest, "post": post}
+    if benchmark is not None:
+        snapshot["benchmark"] = benchmark
+    return snapshot
 
 
 # ---- the run's answers (what the dispatcher returns, and the Celery task result carries) --------------------------------------

@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 import domains
+from pydantic import ValidationError
 
 from .... import graphs, prompts
 from ....agents.distill.learning_extractor import config as extractor_config, params as extractor_params
@@ -196,6 +197,7 @@ async def extract_unit(
         "markdown": source_text,
     }
     extraction = None
+    extraction_needs_review = False
     response_attempts = extractor_params.MAX_STRUCTURED_RESPONSE_ATTEMPTS
     for attempt in range(response_attempts):
         result = None
@@ -297,7 +299,13 @@ async def extract_unit(
             )
             for attempt in range(extractor_params.MAX_TEXT_FALLBACK_ATTEMPTS):
                 prompt_payload["response_retry"] = (
-                    "Return only a JSON object with exactly these keys: lessons and omitted_material. "
+                    "The previous JSON-only response did not validate. Return one native JSON object with exactly "
+                    "the lessons and omitted_material arrays. Every lesson must include kind, title, claim, explanation, "
+                    "attribution, evidence, and confidence; each evidence item must include page_number and an exact "
+                    "quote copied from this page. Use empty arrays if no supported lesson can be extracted. Do not "
+                    "use markdown fences, JSON strings for arrays, or surrounding prose."
+                    if attempt > 0
+                    else "Return only a JSON object with exactly these keys: lessons and omitted_material. "
                     "Do not use markdown fences or add prose. Every lesson must cite an exact quote from this page."
                 )
                 text_prompt = (
@@ -338,12 +346,30 @@ async def extract_unit(
                     )
 
         if extraction is None:
-            raise ValueError(
-                "the learning extractor returned no valid response after agent, structured-output, and JSON-text retries"
-            ) from fallback_error
+            if not isinstance(fallback_error, (ValueError, ValidationError)):
+                raise ValueError(
+                    "the learning extractor failed after agent, structured-output, and JSON-text retries"
+                ) from fallback_error
+            logger.warning(
+                "[bd-distill] preserving source chunk for review after invalid extraction output "
+                "unit=%s page=%s error=%s",
+                ref["unit_id"],
+                ref["page_number"],
+                type(fallback_error).__name__,
+            )
+            extraction = domains.bd.distill.schemas.LearningExtraction(
+                lessons = [],
+                omitted_material = [],
+            )
+            extraction_needs_review = True
 
     candidates: list[dict[str, Any]] = []
     review_flags: list[str] = []
+    if extraction_needs_review:
+        review_flags.append(
+            f"Learning extraction could not validate a model response for source chunk {ref['unit_id']} "
+            f"on page {ref['page_number']}; review the original page before relying on this section."
+        )
     for lesson in extraction.lessons:
         evidence = [
             quote.model_dump(mode = "json")
@@ -414,6 +440,7 @@ async def extract_unit(
         "source_sha256": ref["source_sha256"],
         "text_sha256": ref["text_sha256"],
         "source_char_range": [ref["char_start"], ref["char_end"]],
+        "extraction_status": "needs_review" if extraction_needs_review else "complete",
         "lessons": persisted_lessons,
         "omitted_material": extraction.omitted_material,
         "review_flags": sorted(set(review_flags)),

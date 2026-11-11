@@ -15,15 +15,18 @@ shrinking the plan trades modest coverage for ~40% faster wall-
 time."""
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
 class QueryClassification(BaseModel):
     """Output of the query classifier."""
+    intent: Literal["corpus", "conversation"] = "corpus"
     mode: str = Field(
         description = (
-            "Query mode: 'fast' for simple factual, 'standard' for "
-            "evidence-based, 'deep' for analytical"
+            "Retrieval effort: 'fast' for a simple corpus lookup, "
+            "'standard' for ordinary evidence QA, 'deep' for analytical QA"
         ),
     )
     reasoning: str = Field(

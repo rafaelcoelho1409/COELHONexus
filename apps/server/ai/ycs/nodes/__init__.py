@@ -1,4 +1,4 @@
 """LangGraph nodes for YCS."""
-from . import ingestion
+from . import ask, ingestion
 
-__all__ = ["ingestion"]
+__all__ = ["ask", "ingestion"]

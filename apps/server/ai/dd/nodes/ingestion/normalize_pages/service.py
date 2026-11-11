@@ -23,6 +23,73 @@ ArtifactWriter = Callable[[str, str, str], Awaitable[None]]
 PageProgress = Callable[[], Awaitable[None]]
 
 
+def _quality_row(audit: dict[str, Any], patches: dict[str, Any], repair: dict[str, Any]) -> dict[str, Any]:
+    assessment = audit.get("assessment") or {}
+    issues = assessment.get("issues") if isinstance(assessment, dict) else []
+    issues = issues if isinstance(issues, list) else []
+    accepted = patches.get("accepted") if isinstance(patches, dict) else []
+    rejected = patches.get("rejected") if isinstance(patches, dict) else []
+    mechanical_fixes = audit.get("mechanical_fixes") or {}
+    return {
+        "audit_status": audit.get("audit_status", "completed"),
+        "repair_status": repair.get("status", "not_needed"),
+        "issue_categories": [
+            str(issue.get("category", "unknown"))
+            for issue in issues
+            if isinstance(issue, dict)
+        ],
+        "issue_severities": [
+            str(issue.get("severity", "unknown"))
+            for issue in issues
+            if isinstance(issue, dict)
+        ],
+        "accepted_patches": len(accepted) if isinstance(accepted, list) else 0,
+        "rejected_patches": len(rejected) if isinstance(rejected, list) else 0,
+        "mechanical_fixes": {
+            name: value
+            for name, value in mechanical_fixes.items()
+            if isinstance(name, str) and isinstance(value, int) and not isinstance(value, bool) and value > 0
+        } if isinstance(mechanical_fixes, dict) else {},
+    }
+
+
+def _quality_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    categories: dict[str, int] = {}
+    severities: dict[str, int] = {}
+    mechanical_fixes: dict[str, int] = {}
+    accepted_patches = rejected_patches = 0
+    for row in rows:
+        for category in row["issue_categories"]:
+            categories[category] = categories.get(category, 0) + 1
+        for severity in row["issue_severities"]:
+            severities[severity] = severities.get(severity, 0) + 1
+        for name, count in row["mechanical_fixes"].items():
+            mechanical_fixes[name] = mechanical_fixes.get(name, 0) + count
+        accepted_patches += row["accepted_patches"]
+        rejected_patches += row["rejected_patches"]
+    audit_unavailable = sum(row["audit_status"] == "unavailable" for row in rows)
+    repair_unavailable = sum(row["repair_status"] == "unavailable" for row in rows)
+    review_required = sum(
+        row["audit_status"] == "unavailable"
+        or row["repair_status"] == "unavailable"
+        or row["rejected_patches"] > 0
+        for row in rows
+    )
+    return {
+        "pages": len(rows),
+        "pages_with_issues": sum(bool(row["issue_categories"]) for row in rows),
+        "issues": sum(len(row["issue_categories"]) for row in rows),
+        "issues_by_category": dict(sorted(categories.items())),
+        "issues_by_severity": dict(sorted(severities.items())),
+        "accepted_patches": accepted_patches,
+        "rejected_patches": rejected_patches,
+        "audit_unavailable_pages": audit_unavailable,
+        "repair_unavailable_pages": repair_unavailable,
+        "review_required_pages": review_required,
+        "mechanical_fixes": dict(sorted(mechanical_fixes.items())),
+    }
+
+
 class Repairer(Protocol):
     async def ainvoke(
         self,
@@ -55,6 +122,7 @@ async def normalize_pages(
         for item in state.get("assessments", [])
     }
     semaphore = asyncio.Semaphore(params.PAGE_CONCURRENCY)
+    quality_rows: list[dict[str, Any]] = []
 
     async def normalize_page(page: graphs.ingestion.entities.PageReference) -> dict[str, Any]:
         if progress is not None:
@@ -119,6 +187,9 @@ async def normalize_pages(
                     existing_body,
                     domains.dd.ingestion.ai.params.MARKDOWN_TYPE,
                 )
+            saved_patches = saved_normalization.get("patches") or {}
+            saved_repair = saved_normalization.get("repair") or {}
+            quality_rows.append(_quality_row(audit, saved_patches, saved_repair))
             await page_done()
             return {
                 **page,
@@ -192,6 +263,7 @@ async def normalize_pages(
             normalized,
             domains.dd.ingestion.ai.params.MARKDOWN_TYPE,
         )
+        quality_rows.append(_quality_row(audit, patch_report, repair))
         await page_done()
         return {
             **page,
@@ -221,7 +293,7 @@ async def normalize_pages(
     )
     for page, title in zip(outputs, unique_titles):
         page["title"] = title
-    return {"output_pages": outputs}
+    return {"output_pages": outputs, "quality_summary": _quality_summary(quality_rows)}
 
 
 async def _gather_cancel_on_failure(

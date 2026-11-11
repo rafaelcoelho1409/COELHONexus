@@ -1,19 +1,23 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import { ChartNoAxesColumn, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useState } from "react";
 import { MermaidTopology } from "@/shared/markdown/mermaid-topology";
+import { apiErrorMessage } from "@/shared/lib/api-error";
 import { ActionButton } from "../../components/action-button";
 import { AgenticNodeList, AgenticPills, AgenticStatusBadge } from "../../components/agentic-parts";
 import { ToggleGroup } from "../../components/toggle-group";
 import type { AgenticNodeStatus } from "../../domain/agentic-progress";
 import { useModalDialog } from "../../hooks/use-modal-dialog";
-import { PipelineUsageSheet } from "../../rag/components/pipeline-usage-sheet";
+import { fetchPipelineUsage } from "../../rag/api";
+import { PipelineUsageBreakdown, PipelineUsageSheet } from "../../rag/components/pipeline-usage-sheet";
 import { SideSheet } from "../../rag/components/side-sheet";
 import {
   DISTILL_LANGGRAPH_TOPOLOGY,
   DISTILL_NODES,
+  DISTILL_USAGE_COUNTERS,
   distillBoardCaption,
   distillNodeStatus,
   distillNodeViews,
@@ -122,7 +126,9 @@ export function DistillNodeBoard({
 
       {selectedNode ? (
         <DistillNodeSheet
+          bookId={bookId}
           node={selectedNode}
+          runId={runId}
           status={distillNodeStatus(selectedNode.id, status, progress)}
           runStatus={status}
           onClose={() => setSelectedNodeId(null)}
@@ -263,16 +269,28 @@ function ProgressMetric({ label, current, total }: { label: string; current: num
 }
 
 function DistillNodeSheet({
+  bookId,
   node,
+  runId,
   status,
   runStatus,
   onClose,
 }: {
+  bookId: string;
   node: (typeof DISTILL_NODES)[number];
+  runId: string | null;
   status: AgenticNodeStatus;
   runStatus: DistillRun["status"] | null;
   onClose: () => void;
 }) {
+  const usageCounterIds = DISTILL_USAGE_COUNTERS[node.id] ?? [];
+  const usageQuery = useQuery({
+    queryKey: ["bd", "pipeline", "usage", bookId, runId] as const,
+    queryFn: () => fetchPipelineUsage(bookId, runId ?? ""),
+    enabled: runId !== null,
+    refetchInterval: runStatus === "queued" || runStatus === "running" ? 3_000 : false,
+    retry: false,
+  });
   const detail =
     runStatus === null
       ? "This stage runs when you start Distill."
@@ -310,6 +328,29 @@ function DistillNodeSheet({
             <span>Writes</span>
             <AgenticPills items={node.writes} />
           </div>
+        </section>
+        <section aria-label="Node LLM usage" className="flex flex-col gap-3">
+          <div>
+            <h3 className="text-sm font-medium">LLM usage</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Calls and token counts recorded for this graph stage.
+            </p>
+          </div>
+          <PipelineUsageBreakdown
+            usage={usageQuery.data}
+            nodeIds={usageCounterIds}
+            hasRun={runId !== null}
+            loading={usageQuery.isPending}
+            failed={usageQuery.isError}
+            errorMessage={usageQuery.isError ? apiErrorMessage(usageQuery.error) : null}
+            onRetry={() => void usageQuery.refetch()}
+            emptyMessage="Usage appears here when Distill has a run."
+            noCallsMessage={
+              usageCounterIds.length === 0
+                ? "This stage does not make LLM calls."
+                : "No LLM calls have been recorded for this stage yet."
+            }
+          />
         </section>
       </div>
     </SideSheet>

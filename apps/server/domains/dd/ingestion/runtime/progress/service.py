@@ -373,6 +373,20 @@ class Progress:
         except Exception as e:
             logger.info(f"[progress] record_post skipped: {e}")
 
+    async def record_benchmark(self, report: dict) -> None:
+        """Persist benchmark metadata beside progress without rewriting the live progress snapshot."""
+        r = await self._client()
+        if r is None:
+            return
+        try:
+            await r.set(
+                keys.benchmark_key(self.run_id),
+                json.dumps(report),
+                ex=params.TTL_S,
+            )
+        except Exception as e:
+            logger.info(f"[progress] benchmark report skipped: {e}")
+
     async def finish(self, status: str = "done", error: str | None = None) -> None:
         """status ∈ {done, failed, aborted, downgrade, cancelled}.
 
@@ -433,3 +447,7 @@ async def read_url_records(r: infra.redis.service.Redis, run_id: str) -> list[di
 
 async def read_post(r: infra.redis.service.Redis, run_id: str) -> dict | None:
     return await _read_json(r, keys.post_key(run_id))
+
+
+async def read_benchmark(r: infra.redis.service.Redis, run_id: str) -> dict | None:
+    return await _read_json(r, keys.benchmark_key(run_id))

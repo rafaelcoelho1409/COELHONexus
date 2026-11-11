@@ -2,9 +2,8 @@
 
 LLM-as-judge for factual grounding. Two booleans per
 `HallucinationCheck` — both must be true to consider the answer
-acceptable. On structured-output error we DEFAULT to grounded=True
-(deprecated rationale: assume grounded to avoid blocking the user
-on a transient LLM hiccup; the graph still bails after MAX_RETRIES).
+acceptable. A verifier error is unknown and therefore fails closed;
+the graph's bounded retry/corroboration path handles the degradation.
 """
 from __future__ import annotations
 from domains.ycs.ask.observability.service import traced
@@ -48,6 +47,4 @@ async def check_hallucination(state: state.YouTubeRAGState, llm) -> dict:
         # AND the two booleans — both must hold for "good enough".
         return {"grounded": result.grounded and result.addresses_question}
     except (asyncio.TimeoutError, Exception):
-        # Don't block on a transient judge failure or hang. The
-        # MAX_RETRIES ceiling stops infinite loops elsewhere.
-        return {"grounded": True}
+        return {"grounded": False}

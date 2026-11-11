@@ -17,9 +17,39 @@ async def prepare_chapters(dependencies: graphs.distill.entities.DistillDependen
 
 async def synthesize_chapter(dependencies: graphs.distill.entities.DistillDependencies, state: dict[str, Any]) -> dict:
     async def _synthesize_batch() -> dict:
+        chapter_batch = state.get("chapter_batch", [])
+        pending_refs = []
+        for ref in chapter_batch:
+            if not await dependencies.storage.exists(ref["artifact_key"]):
+                pending_refs.append(ref)
+        learning_units_by_id = None
+        if pending_refs:
+            unit_ids = list(dict.fromkeys(
+                unit_id
+                for ref in pending_refs
+                for unit_id in ref["unit_ids"]
+            ))
+            unit_sources = [
+                source
+                for ref in pending_refs
+                for source in ref.get("unit_sources", [])
+            ]
+            units = await service.read_learning_units(
+                dependencies.storage,
+                state["book_id"],
+                state["run_id"],
+                unit_ids,
+                unit_sources,
+            )
+            learning_units_by_id = dict(zip(unit_ids, units, strict = True))
+
         completed = []
-        for ref in state.get("chapter_batch", []):
-            output = await service.synthesize_chapter(dependencies, {**state, "chapter_ref": ref})
+        for ref in chapter_batch:
+            output = await service.synthesize_chapter(
+                dependencies,
+                {**state, "chapter_ref": ref},
+                learning_units_by_id = learning_units_by_id,
+            )
             completed.extend(output.get("completed_chapters", []))
         return {"completed_chapters": completed}
 

@@ -1,8 +1,9 @@
 """Validated agent, manifest, source, and Learning Guide contracts."""
 from __future__ import annotations
 
+import json
 import math
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
@@ -11,6 +12,70 @@ from . import versions
 SafeSegment = Annotated[str, StringConstraints(pattern = r"^[A-Za-z0-9_-]+$")]
 Sha256Hex = Annotated[str, StringConstraints(pattern = r"^[0-9a-f]{64}$")]
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1)]
+
+_JSON_ARRAY_FIELDS = frozenset({
+    "assumptions",
+    "charts",
+    "columns",
+    "diagrams",
+    "edges",
+    "equations",
+    "evidence",
+    "lessons",
+    "learning_unit_ids",
+    "nodes",
+    "omitted_material",
+    "open_questions",
+    "overview_learning_unit_ids",
+    "rows",
+    "transformations",
+    "y_fields",
+})
+_JSON_OBJECT_ARRAY_FIELDS = frozenset({
+    "charts",
+    "columns",
+    "diagrams",
+    "edges",
+    "equations",
+    "evidence",
+    "lessons",
+    "nodes",
+    "open_questions",
+    "rows",
+})
+_JSON_OBJECT_FIELDS = frozenset({"dataset", "values"})
+_JSON_COLLECTION_FIELDS = _JSON_ARRAY_FIELDS | _JSON_OBJECT_FIELDS
+
+
+def _normalize_stringified_collections(value: Any, field_name: str | None = None) -> Any:
+    """Unwrap JSON-encoded collection fields some structured-output providers double encode."""
+    if isinstance(value, list):
+        items = []
+        for item in value:
+            if field_name in _JSON_OBJECT_ARRAY_FIELDS and isinstance(item, str):
+                try:
+                    decoded = json.loads(item)
+                except ValueError:
+                    decoded = item
+                if isinstance(decoded, dict):
+                    item = decoded
+            items.append(_normalize_stringified_collections(item))
+        return items
+    if not isinstance(value, dict):
+        return value
+
+    normalized = {}
+    for key, item in value.items():
+        if isinstance(item, str) and key in _JSON_COLLECTION_FIELDS:
+            try:
+                decoded = json.loads(item)
+            except ValueError:
+                decoded = item
+            expected_type = list if key in _JSON_ARRAY_FIELDS else dict
+            if isinstance(decoded, expected_type):
+                item = decoded
+        normalized[key] = _normalize_stringified_collections(item, key)
+    return normalized
 
 
 class EvidenceQuote(BaseModel):
@@ -43,6 +108,12 @@ class LearningExtraction(BaseModel):
 
     lessons: list[ExtractedLesson] = Field(max_length = 8)
     omitted_material: list[NonEmptyText] = Field(max_length = 8)
+
+    @model_validator(mode = "before")
+    @classmethod
+    def _unwrap_stringified_collections(cls, data):
+        """Normalize JSON-stringified lessons/evidence while retaining strict field validation."""
+        return _normalize_stringified_collections(data)
 
 
 class EvidenceVerdict(BaseModel):
@@ -79,6 +150,12 @@ class ChapterSynthesis(BaseModel):
     diagrams: list[DiagramSpec] = Field(default_factory = list, max_length = 8)
     equations: list[EquationBlock] = Field(default_factory = list, max_length = 8)
     charts: list[ChartSpec] = Field(default_factory = list, max_length = 8)
+
+    @model_validator(mode = "before")
+    @classmethod
+    def _unwrap_stringified_collections(cls, data):
+        """Normalize JSON-stringified nested collections before validating every field."""
+        return _normalize_stringified_collections(data)
 
 
 class BookSynthesis(BaseModel):

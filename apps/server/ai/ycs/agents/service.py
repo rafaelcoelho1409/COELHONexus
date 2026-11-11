@@ -153,6 +153,11 @@ async def ask(
         wait_base_s = wait_base_s,
         accept = usable,
     )
+    messages = result.get("messages") if isinstance(result, dict) else None
+    if isinstance(messages, list):
+        for message in messages:
+            if getattr(message, "usage_metadata", None):
+                await domains.ycs.ask.rag.service.capture_llm_usage(message)
     answer = structured_or_recovered(result, schema)
     if answer is None or (check is not None and not check(answer)):
         raise ValueError(f"the YCS agent ended without a valid {schema.__name__}")

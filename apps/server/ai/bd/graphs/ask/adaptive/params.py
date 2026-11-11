@@ -1,0 +1,6 @@
+"""Bounded control-flow limits for BD Adaptive Ask."""
+
+MAX_RETRIEVAL_RETRIES = 1
+MAX_RESEARCH_QUESTIONS = 4
+RECURSION_LIMIT = 30
+HEARTBEAT_INTERVAL_S = 5.0

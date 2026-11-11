@@ -1,8 +1,8 @@
-"""ycs/ask/rag/adaptive/nodes/direct_answer — FAST node.
+"""ycs/ask/rag/adaptive/nodes/direct_answer — corpus-free conversation node.
 
-Single LLM call, no retrieval. Returns a synthetic `grounded=True`
-+ empty citations so the response envelope shape stays consistent
-with STANDARD / DEEP.
+Single LLM call, no retrieval. The classifier may route greetings and
+app-meta questions here; factual video questions always go through a
+retrieval path, even when their effort mode is FAST.
 """
 from __future__ import annotations
 import domains
@@ -16,7 +16,7 @@ import asyncio
 
 @traced("rag.direct_answer")
 async def direct_answer(state: state.AdaptiveRAGState, llm) -> dict:
-    """FAST path: direct LLM answer without retrieval."""
+    """Answer a conversational turn without making corpus claims."""
     chain = service.resolve_prompt(prompts.DIRECT_ANSWER_PROMPT, "ycs.rag.direct_answer") | llm
     try:
         domains.settings.llm_counter.service.set_node(node = "direct_answer")
@@ -36,7 +36,7 @@ async def direct_answer(state: state.AdaptiveRAGState, llm) -> dict:
         )
         return {
             "generation":        domain.strip_think_tags(response.content),
-            "grounded":          True,
+            "grounded":          False,
             "citations":         [],
             "retrieval_sources": [],
         }

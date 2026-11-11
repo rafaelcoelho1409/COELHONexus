@@ -107,8 +107,8 @@ const USAGE_MODES: readonly { id: UsageMode; label: string }[] = [
 const NODE_LABELS: Readonly<Record<string, string>> = {
   learning_extractor: "Extract lessons",
   evidence_verifier: "Verify evidence",
-  chapter_synthesizer: "Synthesize chapters",
-  book_synthesizer: "Synthesize book",
+  chapter_synthesizer: "Explain chapters",
+  book_synthesizer: "Connect the book",
   rag_graph_extractor: "Extract knowledge graph",
 };
 
@@ -129,8 +129,46 @@ function RunUsageSheet({
     refetchInterval: live ? 3_000 : false,
     retry: false,
   });
+
+  return (
+    <SideSheet title={title} closeLabel="Close usage" onClose={onClose} subtitle={subtitle}>
+      <PipelineUsageBreakdown
+        usage={query.data}
+        nodeIds={nodeIds}
+        hasRun={runId !== null}
+        loading={query.isPending}
+        failed={query.isError}
+        errorMessage={query.isError ? apiErrorMessage(query.error) : null}
+        onRetry={() => void query.refetch()}
+        emptyMessage={emptyMessage}
+      />
+    </SideSheet>
+  );
+}
+
+/** Reusable node-scoped usage display for graph node detail sheets. */
+export function PipelineUsageBreakdown({
+  usage,
+  nodeIds,
+  hasRun,
+  loading,
+  failed,
+  errorMessage,
+  onRetry,
+  emptyMessage,
+  noCallsMessage,
+}: {
+  usage: AgenticUsage | undefined;
+  nodeIds?: readonly string[];
+  hasRun: boolean;
+  loading: boolean;
+  failed: boolean;
+  errorMessage: string | null;
+  onRetry: () => void;
+  emptyMessage: string;
+  noCallsMessage?: string;
+}) {
   const [mode, setMode] = useState<UsageMode>("node_model");
-  const usage = query.data;
   const nodes = Object.entries(usage?.by_node ?? {}).filter(
     ([nodeId]) => nodeIds === undefined || nodeIds.includes(nodeId),
   );
@@ -146,30 +184,32 @@ function RunUsageSheet({
   );
   const rows = runUsageRows(nodes, mode);
 
+  if (failed) {
+    return <UsageError message={errorMessage ?? "The usage request failed."} onRetry={onRetry} />;
+  }
+  if (loading && hasRun && usage === undefined) {
+    return (
+      <p role="status" className="text-sm text-muted-foreground">
+        Loading LLM usage…
+      </p>
+    );
+  }
+  if (!hasRun) {
+    return <p className="text-sm text-muted-foreground">{emptyMessage}</p>;
+  }
+
   return (
-    <SideSheet title={title} closeLabel="Close usage" onClose={onClose} subtitle={subtitle}>
-      {query.isError ? (
-        <UsageError message={apiErrorMessage(query.error)} onRetry={() => void query.refetch()} />
-      ) : query.isPending && runId !== null ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          Loading LLM usage…
-        </p>
-      ) : runId === null ? (
-        <p className="text-sm text-muted-foreground">{emptyMessage}</p>
+    <div className="flex flex-col gap-4">
+      <UsageTotals total={total} />
+      <ToggleGroup legend="Group usage by" options={USAGE_MODES} value={mode} onChange={setMode} />
+      {rows.length > 0 ? (
+        <RunUsageTable rows={rows} mode={mode} />
       ) : (
-        <div className="flex flex-col gap-4">
-          <UsageTotals total={total} />
-          <ToggleGroup legend="Group usage by" options={USAGE_MODES} value={mode} onChange={setMode} />
-          {rows.length > 0 ? (
-            <RunUsageTable rows={rows} mode={mode} />
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              No LLM calls have been recorded for this process yet.
-            </p>
-          )}
-        </div>
+        <p className="text-sm text-muted-foreground">
+          {noCallsMessage ?? "No LLM calls have been recorded for this process yet."}
+        </p>
       )}
-    </SideSheet>
+    </div>
   );
 }
 

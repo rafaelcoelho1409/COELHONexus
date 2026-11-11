@@ -75,12 +75,15 @@ async def get_run(run_id: str) -> dict:
             r, run_id
         )
         post = await domains.dd.ingestion.runtime.progress.service.read_post(r, run_id)
+        benchmark = await domains.dd.ingestion.runtime.progress.service.read_benchmark(
+            r, run_id
+        )
 
-    if progress is None and not manifest:
+    if progress is None and not manifest and benchmark is None:
         raise HTTPException(status_code=404, detail=f"run {run_id!r} not found")
 
     return domains.dd.ingestion.runtime.dispatch.domain.run_snapshot(
-        run_id, progress, manifest, post
+        run_id, progress, manifest, post, benchmark
     )
 
 

@@ -13,4 +13,5 @@ class IngestionState(TypedDict, total = False):
     pages: list[entities.PageReference]
     assessments: list[entities.PageAssessmentResult]
     output_pages: list[entities.PageOutputReference]
+    quality_summary: dict[str, Any]
     summary: dict[str, Any]

@@ -108,20 +108,62 @@ def _validate_visual_evidence(
                     raise ValueError("chart text values must appear in their cited source evidence")
 
 
-async def _read_learning_units(storage, book_id: str, run_id: str, unit_ids: list[str]) -> list[dict[str, Any]]:
-    records = []
-    for unit_id in unit_ids:
-        key = domains.bd.distill.keys.learning_unit_key(book_id, run_id, unit_id)
-        record = json.loads(await storage.read_text(key))
-        lesson = next((item for item in record.get("lessons", []) if item.get("learning_unit_id") == unit_id), None)
-        if lesson is None:
-            raise ValueError("a chapter references a learning unit that was not persisted")
-        records.append({
-            **lesson,
-            "source_page_number": record.get("page_number"),
-            "section_path": record.get("section_path", []),
-        })
-    return records
+async def read_learning_units(
+    storage,
+    book_id: str,
+    run_id: str,
+    unit_ids: list[str],
+    unit_sources: list[dict[str, str]] | None = None,
+) -> list[dict[str, Any]]:
+    """Resolve lesson IDs through their persisted source-chunk artifacts.
+
+    Older chapter checkpoints only carry lesson IDs, so unresolved IDs are
+    recovered by scanning the run's immutable source-chunk artifacts once.
+    """
+    requested_ids = list(dict.fromkeys(unit_ids))
+    wanted = set(requested_ids)
+    records_by_id: dict[str, dict[str, Any]] = {}
+    source_by_lesson = {
+        item["learning_unit_id"]: item["source_unit_id"]
+        for item in unit_sources or []
+        if isinstance(item, dict)
+        and isinstance(item.get("learning_unit_id"), str)
+        and isinstance(item.get("source_unit_id"), str)
+        and item["learning_unit_id"] in wanted
+    }
+    loaded_source_keys: set[str] = set()
+
+    async def load_source_artifact(key: str) -> None:
+        artifact = json.loads(await storage.read_text(key))
+        for lesson in artifact.get("lessons", []):
+            lesson_id = lesson.get("learning_unit_id") if isinstance(lesson, dict) else None
+            if lesson_id in wanted:
+                records_by_id[lesson_id] = {
+                    **lesson,
+                    "source_page_number": artifact.get("page_number"),
+                    "section_path": artifact.get("section_path", []),
+                }
+
+    for source_unit_id in dict.fromkeys(source_by_lesson.values()):
+        source_key = domains.bd.distill.keys.learning_unit_key(book_id, run_id, source_unit_id)
+        loaded_source_keys.add(source_key)
+        await load_source_artifact(source_key)
+
+    missing_ids = wanted - records_by_id.keys()
+    if missing_ids:
+        prefix = f"{domains.bd.distill.keys.run_prefix(book_id, run_id)}learning-units/"
+        for key in await storage.list(prefix):
+            if key in loaded_source_keys:
+                continue
+            await load_source_artifact(key)
+            missing_ids = wanted - records_by_id.keys()
+            if not missing_ids:
+                break
+
+    if missing_ids:
+        missing = ", ".join(sorted(missing_ids)[:5])
+        raise ValueError(f"chapter learning units have no persisted source artifact: {missing}")
+    return [records_by_id[unit_id] for unit_id in requested_ids]
 
 
 async def prepare_chapters(
@@ -206,6 +248,13 @@ async def prepare_chapters(
                     chapter_refs.append(await _write_chapter_input(
                         storage, state["book_id"], state["run_id"], title, section_path,
                         group["first_page"], group["last_page"], subsection_paths, batch_index, selected,
+                        [
+                            {
+                                "learning_unit_id": unit_id,
+                                "source_unit_id": selected_refs_by_unit[unit_id]["unit_id"],
+                            }
+                            for unit_id in selected
+                        ],
                     ))
                     selected = []
                     selected_refs_by_unit = {}
@@ -215,6 +264,13 @@ async def prepare_chapters(
             chapter_refs.append(await _write_chapter_input(
                 storage, state["book_id"], state["run_id"], title, section_path,
                 group["first_page"], group["last_page"], subsection_paths, batch_index, selected,
+                [
+                    {
+                        "learning_unit_id": unit_id,
+                        "source_unit_id": selected_refs_by_unit[unit_id]["unit_id"],
+                    }
+                    for unit_id in selected
+                ],
             ))
     if not chapter_refs:
         raise ValueError("no source-grounded learning units were extracted from the completed book")
@@ -247,6 +303,7 @@ async def _write_chapter_input(
     subsection_paths: list[list[str]],
     batch: int,
     unit_ids: list[str],
+    unit_sources: list[dict[str, str]],
 ) -> dict[str, Any]:
     structure_id = domains.bd.distill.domain.stable_id(
         title, str(first_page), str(last_page),
@@ -263,10 +320,12 @@ async def _write_chapter_input(
         "part_index": batch,
         "title": title if batch == 0 else f"{title} — Part {batch + 1}",
         "unit_ids": list(unit_ids),
+        "unit_sources": unit_sources,
     }
     if await storage.exists(input_key):
         existing = json.loads(await storage.read_text(input_key))
-        if existing != record:
+        legacy_record = {key: value for key, value in record.items() if key != "unit_sources"}
+        if existing != record and existing != legacy_record:
             raise ValueError("an immutable chapter-input key has conflicting learning units")
     else:
         await storage.write(input_key, _json_body(record), content_type = domains.bd.distill.params.JSON_TYPE)
@@ -278,6 +337,7 @@ async def _write_chapter_input(
         "first_page": first_page,
         "last_page": last_page,
         "unit_ids": list(unit_ids),
+        "unit_sources": unit_sources,
         "input_key": input_key,
     }
 
@@ -285,6 +345,7 @@ async def _write_chapter_input(
 async def synthesize_chapter(
     dependencies: graphs.distill.entities.DistillDependencies,
     state: dict[str, Any],
+    learning_units_by_id: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     storage = dependencies.storage
     ref = state["chapter_ref"]
@@ -301,7 +362,19 @@ async def synthesize_chapter(
         return {"completed_chapters": [ref]}
 
     chapter_input = json.loads(await storage.read_text(ref["input_key"]))
-    units = await _read_learning_units(storage, state["book_id"], state["run_id"], ref["unit_ids"])
+    if learning_units_by_id is None:
+        units = await read_learning_units(
+            storage,
+            state["book_id"],
+            state["run_id"],
+            ref["unit_ids"],
+            ref.get("unit_sources") or chapter_input.get("unit_sources"),
+        )
+    else:
+        missing_ids = set(ref["unit_ids"]) - learning_units_by_id.keys()
+        if missing_ids:
+            raise ValueError("chapter synthesis did not receive all of its persisted learning units")
+        units = [learning_units_by_id[unit_id] for unit_id in ref["unit_ids"]]
     prompt = (
         prompts.distill.chapter_synthesizer.prompts.SYSTEM_PROMPT
         + "\n\nWrite this section's learning guide. Every generated lesson, overview, question, diagram node/edge, and equation must use only the available learning_unit_ids.\n"

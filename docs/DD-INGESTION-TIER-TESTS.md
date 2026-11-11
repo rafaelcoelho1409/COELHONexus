@@ -1,108 +1,93 @@
-# DD Ingestion — per-tier smoke test picks
+# DD ingestion refinement loop — Tiers 1–4
 
-Quick reference for validating the ingestion download pipeline end-to-end after any change to `apps/server/domains/dd/ingestion/tiers/*`. Run in order; fail-fast on the cheapest first.
+This guide defines the repeatable refinement loop for Docs Distiller ingestion. Tier 5 (GitHub) is explicitly out of scope.
 
----
+## What a benchmark run does
 
-## The picks
+The benchmark endpoint forces one catalog source tier and runs the same full path as normal ingestion:
 
-| Tier | Source pattern | **Best test pick** | Why this one | Approx. corpus |
-|---|---|---|---|---|
-| **1** | `llms-full.txt` (single bundle) | **Pydantic** | Stable, recognizable content, ~50-100 KB single file, fast to verify | ~20-40 split pages |
-| **2** | `llms.txt` (link index) | **FastHTML** | Only 2 candidates in this tier; FastHTML is the framework the UI itself runs on — easy to spot bad output | ~10-20 pages |
-| **3** | `sitemap.xml` | **FastAPI** | Popular, reliable sitemap structure, well-known content, large enough to exercise concurrency | ~80-150 pages |
-| **4** | Sphinx + `objects.inv` (autodoc-heavy) | **NumPy** | Directly stresses Tier 4's BFS + autodoc filter path; objects.inv proven to resolve (2735 doc pages, 7183 entities) | ~2700 pages |
-| **5** | GitHub-only crawler | *(none)* | **Zero catalog entries currently route here** — the dispatch path exists but no framework declares GitHub-only as its source |
+1. extract from the requested source;
+2. prepare and split pages;
+3. run Agentic AI audit, repair and normalization;
+4. build vaults and publish a manifest.
 
----
+The forced tier has no fallback. If that source is unavailable or unusable, the benchmark fails and records why. Normal catalog ingestion keeps its existing priority and fallback behavior.
 
-## Run order — fast → slow
+Benchmark pages and manifests are written beneath a unique hidden storage slug, so a benchmark cannot replace the framework's normal catalog corpus. The real framework slug is still used for the single-flight lock; run benchmarks sequentially. Hidden benchmark artifacts remain available for inspection and are excluded from the visible DD library.
 
-1. **Pydantic** (Tier 1) — ~10 s
-2. **FastHTML** (Tier 2) — ~20 s
-3. **FastAPI** (Tier 3) — ~1-2 min
-4. **NumPy** (Tier 4) — ~5-10 min
+Each report records the framework, requested tier, source attempts, build metadata (including Git SHA when configured), normalizer version, extraction and post-processing sizes, Agentic AI quality summary, phase timings, vault status, publish count and terminal outcome. Reports are durable in MinIO under `dd-benchmarks/{round_id}/{run_id}.json`; the round ID groups runs made against one code revision or experiment.
 
-If Pydantic + FastHTML + FastAPI succeed but NumPy fails, the regression is isolated to Tier 4 download logic. If all 4 succeed, the entire ingestion download pipeline is healthy.
+## Run the loop
 
----
+1. Choose one representative source for each tier and note the current code revision.
+2. Start one benchmark at a time. Keep using the same `round_id` for runs against the same code revision; use a new round after code changes and redeployment.
+3. Follow the run through the regular ingestion progress route. Its response includes a `benchmark` object for benchmark runs.
+4. Read the round report after each run. Review failures, source attempts, page counts, timing, quality metrics and stored pages.
+5. Assess a small sample of extracted and normalized pages for content fidelity, links, code examples, navigation order and missing sections. Quality counters alone do not establish correctness.
+6. Fix issues, record the change, and wait for the user to redeploy Skaffold. Repeat with a new round ID, then rerun previously passing representatives as regression checks.
+7. Consider a tier ready when its representative run completes without extraction or publish errors, expected content is present, Agentic AI completes without unavailable pages, vault backfill succeeds, and sampled output preserves the source's teaching content. Record any accepted review items and known source-specific limitations.
 
-## What these tests do and do NOT cover
+Do not start the next benchmark until the current run is terminal. Ingestion uses a shared LLM pool and a global one-at-a-time lock; parallel full-pipeline runs make results less comparable and can exhaust provider capacity.
 
-**Cover** (the download pipeline — what regressions on `tiers/*` actually break):
+## API
 
-- Source resolution (which tier picks each framework)
-- Per-tier fetch logic (httpx GET, objects.inv parse, sitemap parse, Sphinx toctree, Playwright fallback)
-- Page splitting + sentinelization
-- MinIO write of `ingestion/<slug>/pages/*.md` + `ingestion/<slug>/artifacts/*`
+Start a full-pipeline benchmark:
 
-**Do NOT cover**:
+```http
+POST /api/v1/dd/debug/benchmarks/{slug}
+Content-Type: application/json
 
-- The `doc_distill` LLM stage of the **Planner** — that needs a working LLM provider (NVIDIA NIM canonical, free; configure via `/settings` BYOK UI or `NVIDIA_API_KEY` in `.env`). With empty keys, every distill returns `parse_fail` and falls back to the deterministic placeholder distillate. Pages still land in MinIO, but the planner's chapter outline will be built on placeholders.
-- The Synth pipeline downstream (its own CoRefine loop, separate concern).
-
-So: **these tests verify the download phases**, not the LLM phases. If you see all 4 ingest successfully into MinIO but the planner produces meaningless chapter titles, the issue is the BYOK key drought, not the ingestion code.
-
----
-
-## Verifying success without using the UI
-
-After kicking off an ingestion from the Catalog tab, you can confirm pages landed in MinIO directly:
-
-```bash
-export KUBECONFIG=$HOME/Workbench/COELHONexus/infrastructure/live/coelhonexus/00-bootstrap/k3d/kubeconfig
-kubectl -n minio exec -i deploy/minio -- mc alias set local http://localhost:9000 minioadmin minioadmin 2>/dev/null
-kubectl -n minio exec -i deploy/minio -- mc ls --recursive local/coelhonexus 2>/dev/null \
-  | grep -E "ingestion/(pydantic|fasthtml|fastapi|numpy)/" | head -20
+{"tier": 3, "round_id": "ingestion-r1"}
 ```
 
-Empty output for a given slug = the download phase failed for that tier. Compare against the Celery log's `[task] run_ingestion ... status=` line.
+`tier` must be `1`, `2`, `3` or `4`. The `round_id` must start with a letter or digit and contain at most 48 letters, digits, dots, underscores or hyphens.
 
----
+Read live progress and benchmark metadata:
 
-## Catalog index of all tiers (for reference)
-
-At time of writing the catalog has:
-
-- **Tier 1** (llms_full): 14 entries — Browser Use, Claude Code, Dask, dbt, Evidently, FastMCP, Inference (Roboflow), Locust, **Pydantic**, Qdrant, …
-- **Tier 2** (llms_txt only): 2 entries — **FastHTML**, Optimum
-- **Tier 3** (sitemap only): 48 entries — Alibi Explain, Argo CD, CatBoost, Crawl4AI, Dagster, Docker, DuckDB (Python), Elasticsearch (Python), **FastAPI**, FastEmbed, …
-- **Tier 4** (Sphinx-only): 43 entries — ADTK, Ansible, Apache Airflow, Asyncio, Bash, Celery (Python), Delta Lake (Python), Go, Kafka (Python), Kubeflow, **NumPy**, Pandas, Scikit-Learn, PyTorch Lightning, …
-- **Tier 5** (github only): 0 entries
-
-The full catalog lives at `apps/server/domains/dd/catalog/sources.yaml`. Run this Python one-liner to recompute the tier distribution after catalog edits:
-
-```bash
-python3 -c "
-import yaml
-data = yaml.safe_load(open('apps/server/domains/dd/catalog/sources.yaml'))['frameworks']
-tiers = {1:[], 2:[], 3:[], 4:[], 5:[]}
-for e in data:
-    if   e.get('llms_full'): tiers[1].append(e['name'])
-    elif e.get('llms_txt'):  tiers[2].append(e['name'])
-    elif e.get('sitemap'):   tiers[3].append(e['name'])
-    elif e.get('docs'):      tiers[4].append(e['name'])
-    elif e.get('github'):    tiers[5].append(e['name'])
-for t,n in tiers.items(): print(f'Tier {t}: {len(n)} entries')
-"
+```http
+GET /api/v1/dd/ingestion/runs/{run_id}
 ```
 
----
+List reports in a round, or read one report:
 
-## Planner + Synth validation picks (2026-09-29)
+```http
+GET /api/v1/dd/debug/benchmarks/{round_id}
+GET /api/v1/dd/debug/benchmarks/{round_id}/{run_id}
+```
 
-The table above proves the *download* pipeline. These picks prove the *downstream*
-pipelines consume each tier's corpus shape correctly. One pick per tier, each
-proving something different. **Sequential only, after any running Synth finishes**
-— concurrent full-pipeline runs sharing the Rotator pool reproduce the 2026-09-29
-pool-exhaustion incident (all 19 arms benched, 6 FastMCP chapters lost to
-`sawc` ChatErrors, Rotator OOMKill).
+The start response and report include `storage_slug`. Use it to inspect the isolated corpus and page-level quality records:
 
-| Tier | Pick (pages) | Proves | Scale follow-up (only if clean) |
+```http
+GET /api/v1/dd/ingestion/{storage_slug}/manifest
+GET /api/v1/dd/ingestion/{storage_slug}/pages/{idx}?version=processed
+GET /api/v1/dd/ingestion/{storage_slug}/pages/{idx}?version=original
+GET /api/v1/dd/ingestion/{storage_slug}/pages/{idx}/quality
+```
+
+If the framework is already ingesting, the start endpoint returns the existing `locked` response. A tier URL absent from that framework's catalog entry returns `400`; choose a framework that declares the requested source.
+
+## First-pass representatives
+
+Use the smallest useful representative first, then run the larger regression pick after that tier's issues are fixed. Page counts below come from the DD ingestion assessment dated 2026-11-07; re-check the current catalog and source before starting because upstream docs change.
+
+| Tier | First pass | Follow-up | Coverage focus |
 |---|---|---|---|
-| 1 | **FastMCP** (467) | Reference baseline (already validated) | dbt (1025), Claude Code (~322 eff.) |
-| 2 | **FastHTML** (20) | Summary anchor, `section` grouping, cross-host pages — cheapest complete proof | Qdrant (~382 eff. post-quarantine) |
-| 3 | **FastAPI** (169) | Pre-split giants, disambiguated slugs, debris-stripped bodies, tutorial/reference pairs | LangChain triad (189) |
-| 4 | **Asyncio** (73 slices) | Fragment-collapse: 8 base pages re-derived as anchor sections flow through judge → distill → propose | Pandas (186, known-good regression baseline) |
+| 1 — `llms_full` | Unsloth (~202 pages) | Pydantic (~328 pages) | Multi-part bundle handling, banner removal, monolith splitting and navigation |
+| 2 — `llms_txt` | Optimum (~16 pages) | React (~180 pages) | Index parsing, page ordering, section metadata and JSX residue |
+| 3 — `sitemap` | DeepAgents (~73 pages) | FastAPI (~153 pages) | Sitemap filtering, URL extraction and a second documentation-site generator |
+| 4 — `docs` | Asyncio (~73 slices) | Celery for Python (~234 pages) | Sphinx inventory/toctree traversal, fragment handling and autodoc-heavy pages |
 
-Order: FastHTML → FastAPI → Asyncio, then Qdrant/Pandas only if those three are clean.
+These are candidate sources, not a claim that they are the only or always-best corpus. Confirm that the selected catalog entry has the requested tier URL before each run. Tier 1's banner issue and Tier 4's Sphinx edge cases are included intentionally so the refinement loop exercises known risk areas.
+
+## Benchmark acceptance record
+
+For every run, record:
+
+- code SHA, round ID, framework, requested tier and source URL;
+- source attempt outcome and extraction page/byte counts;
+- post-processing input/output counts and drops;
+- Agentic AI pages, audit/repair availability, issue categories, accepted/rejected patches, review-required pages and deterministic fixes;
+- phase timings and vault/publish outcome;
+- sampled content checks and any regression found.
+
+Compare runs within a round before attributing changes to code. Compare different rounds only when the source and meaningful upstream content are unchanged; otherwise treat the upstream change as a confounder.

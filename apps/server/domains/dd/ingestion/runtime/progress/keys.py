@@ -13,6 +13,10 @@ def post_key(run_id: str) -> str:
     return f"coelhonexus:dd:runs:{run_id}:post"
 
 
+def benchmark_key(run_id: str) -> str:
+    return f"coelhonexus:dd:runs:{run_id}:benchmark"
+
+
 def cancel_key(run_id: str) -> str:
     return f"coelhonexus:dd:runs:{run_id}:cancel"
 

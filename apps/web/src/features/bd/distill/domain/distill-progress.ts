@@ -58,6 +58,12 @@ export const DISTILL_LANGGRAPH_TOPOLOGY = `flowchart TD
 
 export type DistillNode = (typeof DISTILL_NODES)[number];
 
+export const DISTILL_USAGE_COUNTERS: Partial<Record<DistillNode["id"], readonly string[]>> = {
+  extract_unit: ["learning_extractor", "evidence_verifier"],
+  synthesize_chapter: ["chapter_synthesizer"],
+  synthesize_book: ["book_synthesizer"],
+};
+
 export function distillNodeViews(
   status: DistillRun["status"] | null,
   progress: DistillRun["progress"] | null,

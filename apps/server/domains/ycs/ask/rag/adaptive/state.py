@@ -1,8 +1,7 @@
-"""ycs/ask/rag/adaptive — LangGraph state for the FAST/STANDARD/DEEP parent.
+"""Compatibility state for the YCS adaptive graph's legacy callers.
 
-Wraps `YouTubeRAGState` fields + DEEP-mode accumulators. `sub_results`
-uses `operator.add` so parallel sub-agents (via LangGraph `Send()`)
-accumulate without overwriting.
+The application-owned LangGraph state is defined in ``ai.ycs``; this
+shape remains for existing domain nodes and compatibility imports.
 """
 from __future__ import annotations
 
@@ -15,6 +14,7 @@ class AdaptiveRAGState(TypedDict):
     # Shared fields
     question:           str
     contextualized:     bool
+    intent:             str               # "corpus" or corpus-free "conversation"
     mode:               str               # "fast" | "standard" | "deep"
     force_mode:         str               # Optional override from the API
     generation:         str               # Final answer

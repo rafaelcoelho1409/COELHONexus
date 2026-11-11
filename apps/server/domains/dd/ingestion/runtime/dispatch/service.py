@@ -7,9 +7,12 @@ from . import domain, params
 from ... import tiers
 
 import asyncio
+import json
 import logging
+import re
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 
 
 logger = logging.getLogger(__name__)
@@ -40,22 +43,59 @@ async def run_tier(
 
 
 async def run_source_chain(
-    chain, progress, *, new_progress, run_tier, base_result: dict, slug: str
+    chain,
+    progress,
+    *,
+    new_progress,
+    run_tier,
+    base_result: dict,
+    slug: str,
+    source_attempts: list[dict] | None = None,
+    on_attempts: Callable[[list[dict]], Awaitable[None]] | None = None,
 ):
     """Run the first source in `chain` (`[{kind, url}]`, best first) that works, and return the `Progress` the winning
     tier used. A tier that says its source is unusable — a link index instead of content, a page of links with none to
     follow, a 404 or an HTML page — hands over to the next declared source with a fresh `Progress`; any other error
     ends the run as before. When nothing is left the run fails, naming every reason."""
     reasons: list[str] = []
+    attempts = source_attempts if source_attempts is not None else []
+
+    async def publish_attempts() -> None:
+        base_result["source_attempts"] = attempts
+        if on_attempts is not None:
+            await on_attempts(attempts)
+
     for position, source in enumerate(chain):
         kind, url = source["kind"], source["url"]
         base_result["tier_kind"] = kind
         base_result["tier_url"] = url
+        started = time.monotonic()
+        attempt = {
+            "tier_kind": kind,
+            "url": url,
+            "status": "running",
+            "started_at": time.time(),
+        }
+        attempts.append(attempt)
+        await publish_attempts()
         try:
             await run_tier(kind, url, progress)
+            attempt.update(
+                status="selected",
+                finished_at=time.time(),
+                duration_ms=max(0, int((time.monotonic() - started) * 1000)),
+            )
+            await publish_attempts()
             return progress
         except tiers.errors.FALL_THROUGH as unusable:
             reasons.append(f"{kind} ({url}): {unusable}")
+            attempt.update(
+                status="unusable",
+                error=str(unusable)[:500],
+                finished_at=time.time(),
+                duration_ms=max(0, int((time.monotonic() - started) * 1000)),
+            )
+            await publish_attempts()
             if isinstance(unusable, tiers.errors.EmptyLinksDetected):
                 # Tier 2 does not log its own downgrade (tier 1 does): without this marker the progress row would sit
                 # at "running" and the UI trail would lose the fact that a fallback happened at all.
@@ -75,6 +115,15 @@ async def run_source_chain(
             )
             await progress.close()
             progress = new_progress()
+        except BaseException as error:
+            attempt.update(
+                status="cancelled" if isinstance(error, asyncio.CancelledError) else "failed",
+                error=f"{type(error).__name__}: {error}"[:500],
+                finished_at=time.time(),
+                duration_ms=max(0, int((time.monotonic() - started) * 1000)),
+            )
+            await publish_attempts()
+            raise
     raise RuntimeError(f"no declared source for {slug!r} worked: " + "; ".join(reasons))
 
 
@@ -135,6 +184,68 @@ async def _cleanup_run_staging(minio, framework_slug: str, run_id: str) -> int:
         return 0
 
 
+async def _persist_benchmark_report(progress, minio, report: dict) -> None:
+    """Keep benchmark status available during a run and durable after Redis progress expires."""
+    await progress.record_benchmark(report)
+    try:
+        key = domains.dd.ingestion.storage.keys.benchmark_report_key(
+            report["round_id"], report["run_id"],
+        )
+        await minio.write(
+            key,
+            json.dumps(report, ensure_ascii=False, separators=(",", ":")),
+            content_type=domains.dd.ingestion.storage.params.JSON_TYPE,
+        )
+    except Exception as error:
+        logger.warning(
+            f"[dispatch] benchmark report write failed for {report.get('run_id')}: "
+            f"{type(error).__name__}: {error}"
+        )
+
+
+async def mark_benchmark_task_failed(
+    run_id: str,
+    slug: str,
+    source_kind: str,
+    benchmark_slug: str,
+    round_id: str,
+    error: BaseException,
+) -> None:
+    """Record worker setup failures that happen before the dispatcher starts."""
+    if (
+        source_kind not in params.BENCHMARK_SOURCE_KINDS
+        or re.fullmatch(params.BENCHMARK_ROUND_ID_PATTERN, round_id) is None
+        or benchmark_slug != domain.benchmark_storage_slug(slug, source_kind, run_id)
+    ):
+        return
+    minio = infra.minio.service.get_storage()
+    key = domains.dd.ingestion.storage.keys.benchmark_report_key(round_id, run_id)
+    try:
+        report = json.loads(await minio.read_text(key))
+        if not isinstance(report, dict):
+            report = {}
+    except Exception:
+        report = {}
+    if report.get("status") in {"done", "failed", "cancelled"}:
+        return
+    report.update(
+        schema_version=1,
+        run_id=run_id,
+        round_id=round_id,
+        framework_slug=slug,
+        requested_tier=source_kind,
+        storage_slug=benchmark_slug,
+        status="failed",
+        error=domain.error_text(error),
+        finished_at=time.time(),
+    )
+    progress = domains.dd.ingestion.runtime.progress.service.Progress(run_id)
+    try:
+        await _persist_benchmark_report(progress, minio, report)
+    finally:
+        await progress.close()
+
+
 async def reserve_run(slug: str, refresh: bool) -> dict:
     """Single-flight gate for starting an ingestion of `slug`. Returns a terminal response — `locked` (another
     ingestion is running, this slug's lock is held, or a concurrent start won the lock) or `cached` (a manifest
@@ -191,7 +302,14 @@ async def release_run(slug: str, run_id: str) -> None:
         pass
 
 
-async def run(run_id: str, slug: str) -> dict:
+async def run(
+    run_id: str,
+    slug: str,
+    *,
+    source_kind: str | None = None,
+    benchmark_slug: str | None = None,
+    round_id: str | None = None,
+) -> dict:
     """Session + span + metrics wrapper around the ingestion dispatcher.
     The session wrapper was missing until now — every other DD/YCS
     pipeline groups its spans into one LangFuse trace via `session(...)`;
@@ -208,6 +326,15 @@ async def run(run_id: str, slug: str) -> dict:
     REST routes all still use the plain uuid4 hex) — this only changes
     the cosmetic label LangFuse groups spans under."""
     t0 = asyncio.get_running_loop().time()
+    attributes = domain.run_attributes(run_id, slug)
+    if source_kind is not None:
+        attributes.update(
+            {
+                "ingestion.benchmark": True,
+                "ingestion.benchmark.tier": source_kind,
+                "ingestion.benchmark.round_id": round_id or "",
+            }
+        )
     with (
         infra.langfuse.service.session(
             params.LANGFUSE_SESSION_NAME,
@@ -218,12 +345,18 @@ async def run(run_id: str, slug: str) -> dict:
         infra.opentelemetry.service.get_tracer().start_as_current_span(
             params.SPAN_NAME,
             attributes={
-                **domain.run_attributes(run_id, slug),
+                **attributes,
                 infra.langfuse.keys.KEEP: True,
             },
         ),
     ):
-        result = await _run_inner(run_id, slug)
+        result = await _run_inner(
+            run_id,
+            slug,
+            source_kind=source_kind,
+            benchmark_slug=benchmark_slug,
+            round_id=round_id,
+        )
         await domains.settings.llm_counter.service.snapshot("dd", run_id)
     domains.dd.ingestion.observability.service.record_ingestion_run(
         framework=slug,
@@ -233,14 +366,67 @@ async def run(run_id: str, slug: str) -> dict:
     return result
 
 
-async def _run_inner(run_id: str, slug: str) -> dict:
+async def _run_inner(
+    run_id: str,
+    slug: str,
+    *,
+    source_kind: str | None = None,
+    benchmark_slug: str | None = None,
+    round_id: str | None = None,
+) -> dict:
     """Framework lock held by run_id on entry (acquired in POST /ingestion/runs); released in finally."""
+    benchmark = source_kind is not None or benchmark_slug is not None or round_id is not None
+
+    async def record_benchmark_rejection(message: str) -> None:
+        if (
+            benchmark
+            and isinstance(source_kind, str)
+            and isinstance(benchmark_slug, str)
+            and isinstance(round_id, str)
+        ):
+            await mark_benchmark_task_failed(
+                run_id,
+                slug,
+                source_kind,
+                benchmark_slug,
+                round_id,
+                RuntimeError(message),
+            )
+
     catalog = domains.dd.catalog.service.index_by_slug()
     entry = catalog.get(slug)
     if entry is None:
-        return domain.rejected_result(run_id, slug, f"unknown framework slug: {slug!r}")
+        error = f"unknown framework slug: {slug!r}"
+        await record_benchmark_rejection(error)
+        return domain.rejected_result(run_id, slug, error)
 
-    best = domain.pick_best(entry)
+    if benchmark:
+        if (
+            source_kind not in params.BENCHMARK_SOURCE_KINDS
+            or re.fullmatch(r"[a-f0-9]{32}", run_id) is None
+            or not isinstance(benchmark_slug, str)
+            or benchmark_slug != domain.benchmark_storage_slug(slug, source_kind, run_id)
+            or not isinstance(round_id, str)
+            or re.fullmatch(params.BENCHMARK_ROUND_ID_PATTERN, round_id) is None
+        ):
+            await record_benchmark_rejection("invalid tier benchmark configuration")
+            return domain.rejected_result(
+                run_id,
+                slug,
+                "invalid tier benchmark configuration",
+            )
+        source_url = entry.get(source_kind)
+        if not isinstance(source_url, str) or not source_url:
+            error = f"catalog entry has no source URL for forced tier {source_kind!r}"
+            await record_benchmark_rejection(error)
+            return domain.rejected_result(
+                run_id,
+                slug,
+                error,
+            )
+        best = {"kind": source_kind, "url": source_url}
+    else:
+        best = domain.pick_best(entry)
     if best is None:
         return domain.rejected_result(
             run_id,
@@ -252,9 +438,50 @@ async def _run_inner(run_id: str, slug: str) -> dict:
     progress = domains.dd.ingestion.runtime.progress.service.Progress(run_id)
     r = infra.redis.service.new_redis(op_timeout_s=params.REDIS_OP_TIMEOUT_S)
     minio = infra.minio.service.get_storage()
-    store = domains.dd.ingestion.storage.service.Store(run_id, slug, r, minio)
+    storage_slug = benchmark_slug or slug
+    store = domains.dd.ingestion.storage.service.Store(run_id, storage_slug, r, minio)
 
     base_result = domain.base_result(run_id, slug, entry, best)
+    source_attempts: list[dict] = []
+    benchmark_report = None
+    started_at = time.time()
+    if benchmark:
+        queued_at = None
+        build_info = {}
+        try:
+            queued_report = json.loads(
+                await minio.read_text(
+                    domains.dd.ingestion.storage.keys.benchmark_report_key(
+                        round_id, run_id,
+                    )
+                )
+            )
+            if isinstance(queued_report, dict):
+                queued_at = queued_report.get("queued_at")
+                build_info = queued_report.get("build") or {}
+        except Exception:
+            pass
+        benchmark_report = {
+            "schema_version": 1,
+            "run_id": run_id,
+            "round_id": round_id,
+            "framework_slug": slug,
+            "framework_name": entry["name"],
+            "requested_tier": source_kind,
+            "source_url": best["url"],
+            "storage_slug": storage_slug,
+            "status": "running",
+            "started_at": started_at,
+            "queued_at": queued_at,
+            "build": build_info if isinstance(build_info, dict) else {},
+            "source_attempts": source_attempts,
+        }
+        base_result["tier_benchmark"] = {
+            "round_id": round_id,
+            "requested_tier": source_kind,
+            "storage_slug": storage_slug,
+        }
+        await _persist_benchmark_report(progress, minio, benchmark_report)
 
     # Spawn watcher BEFORE the main try so it's active from the first await.
     watcher_task = asyncio.create_task(
@@ -268,23 +495,45 @@ async def _run_inner(run_id: str, slug: str) -> dict:
         if not await domains.dd.ingestion.runtime.progress.service.renew_lock(
             r, slug, run_id
         ):
-            return domain.rejected_result(
+            result = domain.rejected_result(
                 run_id,
                 slug,
                 "the framework's lock was taken by another run while this one waited to start",
                 framework_name=entry["name"],
             )
+            if benchmark_report is not None:
+                benchmark_report.update(
+                    status="failed",
+                    error=result["error"],
+                    finished_at=time.time(),
+                    duration_s=max(0.0, time.time() - started_at),
+                )
+                await _persist_benchmark_report(progress, minio, benchmark_report)
+            return result
 
         await progress.raise_if_cancelled()
 
         async def _chain_tier(kind: str, url: str, tier_progress) -> None:
             await run_tier(
-                kind, url, entry=entry, slug=slug, progress=tier_progress, store=store
+                kind, url, entry=entry, slug=storage_slug, progress=tier_progress, store=store
             )
 
-        # The best declared source first; each lower one only if the one before turns out unusable today.
+        chain = (
+            [best]
+            if benchmark
+            else domain.source_chain(entry)
+        )
+        extraction_started = time.monotonic()
+
+        async def _record_attempts(attempts: list[dict]) -> None:
+            if benchmark_report is None:
+                return
+            benchmark_report["source_attempts"] = [dict(row) for row in attempts]
+            await _persist_benchmark_report(progress, minio, benchmark_report)
+
+        # Benchmarks force exactly one source kind; regular runs retain catalog priority and fallback behavior.
         progress = await run_source_chain(
-            domain.source_chain(entry),
+            chain,
             progress,
             new_progress=lambda: domains.dd.ingestion.runtime.progress.service.Progress(
                 run_id
@@ -292,6 +541,8 @@ async def _run_inner(run_id: str, slug: str) -> dict:
             run_tier=_chain_tier,
             base_result=base_result,
             slug=slug,
+            source_attempts=source_attempts,
+            on_attempts=_record_attempts if benchmark else None,
         )
 
         await progress.raise_if_cancelled()
@@ -301,22 +552,47 @@ async def _run_inner(run_id: str, slug: str) -> dict:
             current=len(store.manifest),
             total=len(store.manifest),
         )
+        if benchmark_report is not None:
+            benchmark_report["extraction"] = {
+                "pages": len(store.manifest),
+                "bytes": sum(entry.bytes for entry in store.manifest),
+                "source_attempts": [dict(row) for row in source_attempts],
+            }
+            benchmark_report.setdefault("timings_ms", {})["extraction"] = max(
+                0, int((time.monotonic() - extraction_started) * 1000)
+            )
+            await _persist_benchmark_report(progress, minio, benchmark_report)
         await progress.start(tier="post", total=0)
 
+        phase_started = time.monotonic()
         post_summary = await domains.dd.ingestion.post.service.prepare_for_agentic(
             store
         )
+        if benchmark_report is not None:
+            benchmark_report.setdefault("timings_ms", {})["post"] = max(
+                0, int((time.monotonic() - phase_started) * 1000)
+            )
         await progress.record_post(
             **domain.post_record(base_result["tier_kind"], post_summary)
         )
+        if benchmark_report is not None:
+            benchmark_report["post"] = post_summary
+            await _persist_benchmark_report(progress, minio, benchmark_report)
 
         await progress.raise_if_cancelled()
 
+        phase_started = time.monotonic()
         ai_result = await domains.dd.ingestion.ai.service.run_ingestion_agentic(
             store,
             progress=progress,
             checkpointer=infra.postgres.service.get_checkpointer(),
         )
+        if benchmark_report is not None:
+            benchmark_report["agentic"] = ai_result
+            benchmark_report.setdefault("timings_ms", {})["agentic"] = max(
+                0, int((time.monotonic() - phase_started) * 1000)
+            )
+            await _persist_benchmark_report(progress, minio, benchmark_report)
 
         # Vaults are derived from the final agentic page version and live beneath that agentic run.
         # Own tier + real total/current — on a large framework (400+ pages)
@@ -327,27 +603,59 @@ async def _run_inner(run_id: str, slug: str) -> dict:
         async def _on_backfill_progress(done: int, total: int) -> None:
             await progress.update(current=done)
 
+        phase_started = time.monotonic()
+        vault_backfill_status = "done"
         try:
             await domains.dd.ingestion.backfill.service.backfill_vaults_for_framework(
-                slug,
+                storage_slug,
                 on_progress=_on_backfill_progress,
                 page_keys=[entry.key for entry in store.manifest],
             )
         except Exception as e:
+            vault_backfill_status = "failed"
             logger.warning(
                 f"[dispatch] {slug}: post-ingest vault backfill failed: "
                 f"{type(e).__name__}: {e}"
             )
+            if benchmark_report is not None:
+                benchmark_report["vault_backfill_error"] = f"{type(e).__name__}: {e}"
+
+        if benchmark_report is not None:
+            benchmark_report["vault_backfill"] = vault_backfill_status
+            benchmark_report.setdefault("timings_ms", {})["vault_backfill"] = max(
+                0, int((time.monotonic() - phase_started) * 1000)
+            )
+            await _persist_benchmark_report(progress, minio, benchmark_report)
 
         await progress.start(tier="finalize", total=0)
 
-        await store.finalize(
-            extra=domain.finalize_extra(
-                entry, base_result, run_id, getattr(store, "index_summary", "")
-            )
+        manifest_extra = domain.finalize_extra(
+            entry, base_result, run_id, getattr(store, "index_summary", "")
         )
+        if benchmark_report is not None:
+            manifest_extra["tier_benchmark"] = {
+                "round_id": round_id,
+                "run_id": run_id,
+                "requested_tier": source_kind,
+                "report_key": domains.dd.ingestion.storage.keys.benchmark_report_key(
+                    round_id, run_id,
+                ),
+            }
+        phase_started = time.monotonic()
+        await store.finalize(extra=manifest_extra)
+        if benchmark_report is not None:
+            benchmark_report.setdefault("timings_ms", {})["finalize"] = max(
+                0, int((time.monotonic() - phase_started) * 1000)
+            )
+            benchmark_report.update(
+                status="done",
+                published_pages=len(store.manifest),
+                finished_at=time.time(),
+                duration_s=max(0.0, time.time() - started_at),
+            )
+            await _persist_benchmark_report(progress, minio, benchmark_report)
 
-        await _cleanup_run_staging(minio, slug, run_id)
+        await _cleanup_run_staging(minio, storage_slug, run_id)
 
         await progress.finish(status="done")
 
@@ -365,15 +673,30 @@ async def _run_inner(run_id: str, slug: str) -> dict:
             await watcher_task
         except (asyncio.CancelledError, Exception):
             pass
-        await _cleanup_run_staging(minio, slug, run_id)
+        await _cleanup_run_staging(minio, storage_slug, run_id)
         await progress.finish(status="cancelled")
+        if benchmark_report is not None:
+            benchmark_report.update(
+                status="cancelled",
+                finished_at=time.time(),
+                duration_s=max(0.0, time.time() - started_at),
+            )
+            await _persist_benchmark_report(progress, minio, benchmark_report)
         return domain.cancelled_result(base_result)
 
     except Exception as e:
         logger.exception(f"[dispatch] {slug}: failed")
         # The previous canonical manifest remains active. Raw and partial agentic artifacts stay versioned for diagnosis/retry.
-        await _cleanup_run_staging(minio, slug, run_id)
+        await _cleanup_run_staging(minio, storage_slug, run_id)
         await progress.finish(status="failed", error=domain.error_text(e))
+        if benchmark_report is not None:
+            benchmark_report.update(
+                status="failed",
+                error=domain.error_text(e),
+                finished_at=time.time(),
+                duration_s=max(0.0, time.time() - started_at),
+            )
+            await _persist_benchmark_report(progress, minio, benchmark_report)
         return domain.failed_result(base_result, e)
 
     finally:

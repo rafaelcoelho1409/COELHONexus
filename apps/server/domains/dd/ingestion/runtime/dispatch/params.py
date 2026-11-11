@@ -11,6 +11,10 @@ KIND_PRIORITY: tuple[str, ...] = (
     "github",
 )
 
+BENCHMARK_SOURCE_KINDS: tuple[str, ...] = KIND_PRIORITY[:4]
+BENCHMARK_STORAGE_PREFIX = "__dd_benchmark__-"
+BENCHMARK_ROUND_ID_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,47}$"
+
 # What each tier is handed from the catalog entry besides its URL, the slug, the progress and the store:
 # (argument, catalog field, the source kinds that take it).
 TIER_ARGUMENTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
