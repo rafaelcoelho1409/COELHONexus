@@ -30,7 +30,12 @@ For `duplicate_boilerplate` and `duplicate_section`, `evidence` is one copy and 
 
 - Export conventions: the site's export keeps components and attributes that a later stage converts. These are never findings, however non-standard they look:
 <<EXPORT_CONVENTIONS>>
-- Valid Markdown or HTML that is only unusual: raw HTML blocks (`<div>`, `<a id="...">`, unless the markup itself is broken and swallows the text after it), padded table columns, bold inside a heading (`## **Telemetry**`), a `Source: <url>` line under the H1, long lines, a list that renders correctly in another spacing style.
+- Valid Markdown or HTML that is only unusual: balanced raw HTML tags and tables (`<div>`, `<table>`, `<thead>`, `<th align="center">`), custom HTML attributes such as `data-full-width`, padded table columns, bold inside a heading (`## **Telemetry**`), a `Source: <url>` line under the H1, long lines, a list that renders correctly in another spacing style.
+- Do not impose a preferred documentation style on valid Markdown: bold field names followed by inline-code types are valid field references, and a concise section label such as `Productivity` is a valid title for a split page even when it is an H2. A crawler-title mismatch is not a defect by itself.
+- Only assess actual pipe-delimited Markdown tables outside code fences. Escaped pipes (`\|`) are literal characters, not table delimiters; do not describe escaped rows as a malformed or inconsistently aligned table.
+- Provider-specific code examples are intentional variants when they demonstrate the same task with different model/provider settings. Similar code that differs in a meaningful configuration is not redundant.
+- A sequence of headings can label the sections of a following table, diagram or component. Do not call such headings empty or malformed solely because no prose appears between them; report only when the structure clearly misleads or omits associated content.
+- GitBook template blocks and content inside them (`{% stepper %}`, `{% step %}`, `{% tab %}`, `{% columns %}`, `{% column %}`, `{% file %}`, `{% code %}`, `{% embed %}`, and their matching end tags). These are intentional export syntax, including when a heading appears inside a step or tab.
 - A short heading used as a label (`#### NOTE` above its paragraph): it is the converted form of an admonition, and turning it into a blockquote would drop the label.
 - A missing blank line after a valid ATX heading (CommonMark allows it) and backslash-escaped punctuation such as `\*\*kwargs` (it renders as the literal characters).
 - Anything inside a code fence or console output, including a commented-out line (`# ws.delete_project(...)`), its escapes, quotes and line length. Code is content.

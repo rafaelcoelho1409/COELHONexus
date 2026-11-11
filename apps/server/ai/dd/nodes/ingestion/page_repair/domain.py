@@ -20,7 +20,7 @@ def repairable_assessment(assessment: dict[str, Any]) -> dict[str, Any]:
             issue
             for issue in assessment["issues"]
             if issue["category"] in params.PATCHABLE_CATEGORIES
-            and issue["confidence"] >= params.MIN_PATCH_CONFIDENCE
+            and issue["confidence"] >= params.MIN_AUDIT_CONFIDENCE
         ],
     }
 

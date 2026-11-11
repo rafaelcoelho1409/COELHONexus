@@ -210,6 +210,7 @@ async def normalize_pages(
             "status": "not_needed",
             "total_issues": len(audit["assessment"]["issues"]),
             "eligible_issues": len(repair_input["issues"]),
+            "eligible_issue_ids": [issue["issue_id"] for issue in repair_input["issues"]],
         }
         if repair_input["issues"]:
             with domains.settings.llm_counter.service.llm_context(

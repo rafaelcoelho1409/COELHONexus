@@ -12,6 +12,31 @@ from typing import Any
 ArtifactWriter = Callable[[str, str, str], Awaitable[None]]
 
 
+def _order_by_source_pages(
+    items: list[dict[str, Any]],
+    expected_indices: list[int],
+    label: str,
+) -> list[dict[str, Any]]:
+    """Require exact one-to-one page coverage, then restore source manifest order."""
+    if len(set(expected_indices)) != len(expected_indices):
+        raise ValueError("source pages contain duplicate page indices")
+
+    by_idx: dict[int, dict[str, Any]] = {}
+    for item in items:
+        idx = item.get("idx")
+        if idx in by_idx:
+            raise ValueError(f"{label} contain duplicate page index {idx}")
+        by_idx[idx] = item
+
+    expected = set(expected_indices)
+    actual = set(by_idx)
+    missing = [idx for idx in expected_indices if idx not in actual]
+    extra = sorted(actual - expected, key=str)
+    if missing or extra:
+        raise ValueError(f"{label} do not cover source pages; missing={missing}, extra={extra}")
+    return [by_idx[idx] for idx in expected_indices]
+
+
 async def publish(
     state: graphs.ingestion.states.IngestionState,
     write_artifact: ArtifactWriter,
@@ -21,16 +46,8 @@ async def publish(
     assessments = state.get("assessments", [])
     outputs = state.get("output_pages", [])
     expected_indices = [page["idx"] for page in pages]
-    if len(assessments) != len(pages):
-        raise ValueError(
-            "cannot publish an ingestion graph with incomplete page audits"
-        )
-    if [item["idx"] for item in assessments] != expected_indices:
-        raise ValueError("page assessments must cover every source page in order")
-    if len(outputs) != len(pages):
-        raise ValueError("cannot publish an incomplete normalized page set")
-    if [page["idx"] for page in outputs] != expected_indices:
-        raise ValueError("normalized pages must cover every source page in order")
+    assessments = _order_by_source_pages(assessments, expected_indices, "page assessments")
+    outputs = _order_by_source_pages(outputs, expected_indices, "normalized pages")
     if any(
         not page.get("key") or not page.get("source_key") or not page.get("raw_key")
         for page in outputs

@@ -11,6 +11,21 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+async def _drop_pages_empty_after_normalization(pages, *, body_index: int):
+    """Drop only pages whose deterministic corpus cleanup leaves no readable content."""
+    if not pages:
+        return pages, 0
+    normalized = await asyncio.gather(*(
+        asyncio.to_thread(
+            domains.dd.ingestion.corpus_normalize.domain.normalize_doc,
+            page[body_index],
+        )
+        for page in pages
+    ))
+    kept = [page for page, result in zip(pages, normalized) if result.body.strip()]
+    return kept, len(pages) - len(kept)
+
+
 async def prepare_for_agentic(store: domains.dd.ingestion.storage.service.Store) -> dict:
     """Create page-sized AI inputs while keeping every extracted page for Agentic AI to assess and normalize.
 
@@ -35,8 +50,30 @@ async def prepare_for_agentic(store: domains.dd.ingestion.storage.service.Store)
             only.slug,
             cleanup = False,
         )
+        writes, empty_pages_dropped = await _drop_pages_empty_after_normalization(
+            writes,
+            body_index=1,
+        )
+        if not writes:
+            await store.delete_body_by_key(only.key)
+            await store.delete_vault(only.idx, only.slug)
+            await store.replace_manifest([])
+            return domain.make_summary(
+                params.SUMMARY_KIND_PREPARE,
+                input_files,
+                input_bytes,
+                [],
+                was_split=True,
+                empty_pages_dropped=empty_pages_dropped,
+            )
         if len(writes) == 1 and writes[0][1] == body:
-            return domain.make_summary(params.SUMMARY_KIND_PREPARE, input_files, input_bytes, current)
+            return domain.make_summary(
+                params.SUMMARY_KIND_PREPARE,
+                input_files,
+                input_bytes,
+                current,
+                empty_pages_dropped=empty_pages_dropped,
+            )
 
         nav_index = getattr(store, "nav_index", None) or []
         ordered = domain.order_by_nav(writes, [url for url, _section in nav_index])
@@ -64,6 +101,7 @@ async def prepare_for_agentic(store: domains.dd.ingestion.storage.service.Store)
             input_bytes,
             new_entries,
             was_split = True,
+            empty_pages_dropped=empty_pages_dropped,
         )
 
     if not current:
@@ -77,12 +115,16 @@ async def prepare_for_agentic(store: domains.dd.ingestion.storage.service.Store)
         return (entry.slug, entry.url, body)
 
     pages = list(await asyncio.gather(*(read_one(entry) for entry in current)))
+    pages, empty_pages_dropped = await _drop_pages_empty_after_normalization(
+        pages,
+        body_index=2,
+    )
     expanded, oversized = domain.presplit_oversized(
         pages,
         params.OVERSIZED_SPLIT_BYTES,
         deduplicate = False,
     )
-    if not oversized:
+    if not oversized and not empty_pages_dropped:
         return domain.make_summary(params.SUMMARY_KIND_PREPARE, input_files, input_bytes, current)
 
     for slug, size_kb, children in oversized:
@@ -116,6 +158,7 @@ async def prepare_for_agentic(store: domains.dd.ingestion.storage.service.Store)
         input_bytes,
         new_entries,
         was_split = True,
+        empty_pages_dropped=empty_pages_dropped,
     )
 
 

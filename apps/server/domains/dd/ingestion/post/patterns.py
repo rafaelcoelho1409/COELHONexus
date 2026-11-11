@@ -33,6 +33,10 @@ MD_LINK_TEXT_RE = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
 # A fence line, once indentation and blockquote markers are off: group 1 is the run of backticks/tildes, group 2 what follows.
 FENCE_LINE_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 
+# An ATX heading as a page's own title. Used when an oversized page section starts
+# with H2/H3 rather than carrying an H1 of its parent page.
+ATX_HEADING_RE = re.compile(r"^[ \t]{0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
+
 # An inline markdown link or image target: group 1 is `](`, group 2 the destination, group 3 an optional title and `)`.
 MD_LINK_TARGET_RE = re.compile(r'(\]\()([^)\s]+)((?:\s+"[^"]*")?\))')
 

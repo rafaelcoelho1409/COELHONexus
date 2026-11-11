@@ -5,7 +5,7 @@ from functools import partial
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Send
+from langgraph.types import RetryPolicy, Send
 
 import domains
 
@@ -52,12 +52,32 @@ def distill_graph(
     dependencies: entities.DistillDependencies,
     checkpointer: Any | None = None,
 ):
+    provider_retry_policy = RetryPolicy(
+        max_attempts = domains.bd.distill.params.TRANSIENT_NODE_RETRY_ATTEMPTS,
+        initial_interval = domains.bd.distill.params.TRANSIENT_NODE_RETRY_INITIAL_INTERVAL_S,
+        backoff_factor = 2.0,
+        max_interval = domains.bd.distill.params.TRANSIENT_NODE_RETRY_MAX_INTERVAL_S,
+        jitter = True,
+        retry_on = domains.settings.chat.domain.is_transient_provider_error,
+    )
     workflow = StateGraph(states.DistillRunState)
     workflow.add_node("prepare_units", partial(nodes.distill.extract_learning_units.node.prepare_units, dependencies))
-    workflow.add_node("extract_unit", partial(nodes.distill.extract_learning_units.node.extract_unit, dependencies))
+    workflow.add_node(
+        "extract_unit",
+        partial(nodes.distill.extract_learning_units.node.extract_unit, dependencies),
+        retry_policy = provider_retry_policy,
+    )
     workflow.add_node("prepare_chapters", partial(nodes.distill.synthesize.node.prepare_chapters, dependencies))
-    workflow.add_node("synthesize_chapter", partial(nodes.distill.synthesize.node.synthesize_chapter, dependencies))
-    workflow.add_node("synthesize_book", partial(nodes.distill.synthesize.node.synthesize_book, dependencies))
+    workflow.add_node(
+        "synthesize_chapter",
+        partial(nodes.distill.synthesize.node.synthesize_chapter, dependencies),
+        retry_policy = provider_retry_policy,
+    )
+    workflow.add_node(
+        "synthesize_book",
+        partial(nodes.distill.synthesize.node.synthesize_book, dependencies),
+        retry_policy = provider_retry_policy,
+    )
     workflow.add_node("publish_report", partial(nodes.distill.publish_report.node.publish_report, dependencies))
     workflow.add_edge(START, "prepare_units")
     workflow.add_conditional_edges("prepare_units", _dispatch_units, ["extract_unit", "prepare_chapters"])

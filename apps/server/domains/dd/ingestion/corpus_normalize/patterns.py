@@ -46,6 +46,15 @@ TOML_FRONTMATTER_RE = re.compile(
 # A heading at the top level of a page: `# Title`.
 H1_LINE_RE = re.compile(r"^#[ \t]+\S")
 
+# A GitBook emoji shortcode at the beginning of a heading needs separation
+# from the heading text: `## :sparkles:How` otherwise keeps the text inside
+# the shortcode-looking token in several Markdown renderers.
+EMOJI_SHORTCODE_HEADING_RE = re.compile(
+    r"^(?P<prefix>[ \t]{0,3}(?:>[ \t]?)*#{1,6}[ \t]+)"
+    r"(?P<shortcode>:[A-Za-z][A-Za-z0-9_\\+-]*:)"
+    r"(?P<text>\S.*)$"
+)
+
 # Container admonitions (Docusaurus / VitePress / MkDocs Material subset).
 ADMON_OPEN_RE = re.compile(
     rf"^\s*:::\s*(?:{'|'.join(params.ADMON_KINDS)})(?:\s+.*)?\s*$",

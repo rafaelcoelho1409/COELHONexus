@@ -2,7 +2,7 @@
 
 /** Controls above the book conversation: book, reasoning mode, thread, usage, and a fresh start. */
 
-import { Gauge, Plus } from "lucide-react";
+import { BookOpen, Gauge, Plus } from "lucide-react";
 import type { JSX } from "react";
 import { LibraryPicker } from "../../components/library-list";
 import { ASK_MODES } from "../params";
@@ -27,6 +27,7 @@ export function AskToolbar({
   onDeleteThread,
   onNewThread,
   onUsage,
+  onSources,
 }: {
   mode: string;
   onMode: (mode: string) => void;
@@ -38,6 +39,7 @@ export function AskToolbar({
   onDeleteThread: (id: string) => void;
   onNewThread: () => void;
   onUsage: () => void;
+  onSources: () => void;
 }): JSX.Element {
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end sm:gap-x-4">
@@ -67,6 +69,10 @@ export function AskToolbar({
           </div>
         </fieldset>
         <div className="flex gap-2 sm:order-last sm:ml-auto">
+          <Button type="button" variant="outline" size="lg" onClick={onSources}>
+            <BookOpen aria-hidden data-icon="inline-start" />
+            <span className="sr-only sm:not-sr-only">Sources</span>
+          </Button>
           <Button type="button" variant="outline" size="lg" onClick={onUsage}>
             <Gauge aria-hidden data-icon="inline-start" />
             <span className="sr-only sm:not-sr-only">LLM usage</span>

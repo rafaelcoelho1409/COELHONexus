@@ -1,5 +1,7 @@
-MAX_ATTEMPTS = 3
-RETRY_WAIT_BASE_S = 20.0
+# Provider outages should not make a single source page hold the entire ingestion for minutes.
+# The audit can fail open (the source page is retained), while two short attempts still cover transient blips.
+MAX_ATTEMPTS = 2
+RETRY_WAIT_BASE_S = 3.0
 MAX_PAGE_MARKDOWN_CHARS = 180_000
 MAX_ISSUES_PER_PAGE = 24
 MAX_EVIDENCE_CHARS = 2_000

@@ -35,6 +35,7 @@ async def normalize_source(source: str) -> tuple[str, dict[str, int]]:
             for name, count in counted.items()
             if name in {
                 "zero_width_chars_stripped", "non_whitespace_control_chars_stripped",
+                "emoji_shortcode_heading_spaces_inserted",
                 "fence_meta_stripped", "boundary_markers_stripped",
                 "orphan_tags_stripped", "permalink_debris_stripped", "empty_media_stripped",
                 "agent_banner_stripped", "license_header_stripped", "agent_footer_stripped",
@@ -114,7 +115,15 @@ async def read_page_quality(
     repair_unavailable = repair.get("status") == "unavailable" and eligible_issues > 0
     review_ids = set(rejected)
     if repair_unavailable or audit_unavailable:
-        review_ids.update(issue.issue_id for issue in assessment.issues if issue.issue_id not in accepted)
+        eligible_ids = repair.get("eligible_issue_ids")
+        if repair_unavailable and isinstance(eligible_ids, list):
+            review_ids.update(
+                issue_id
+                for issue_id in eligible_ids
+                if isinstance(issue_id, str) and issue_id not in accepted
+            )
+        else:
+            review_ids.update(issue.issue_id for issue in assessment.issues if issue.issue_id not in accepted)
 
     issues = []
     for issue in assessment.issues:
@@ -202,6 +211,8 @@ async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> d
     entries = store.manifest
     minio = store.minio
     page_refs: list[dict[str, Any]] = []
+    retained_entries = []
+    empty_pages_dropped = 0
 
     # The graph only receives immutable object references and compact metadata.
     for entry in entries:
@@ -225,6 +236,23 @@ async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> d
                 mechanical_fixes = {}
         else:
             source, mechanical_fixes = await normalize_source(await minio.read_text(source_key))
+        if not source.strip():
+            empty_pages_dropped += 1
+            logger.info(
+                f"[dd-agentic] {store.framework_slug}: dropping page {entry.idx} "
+                "because normalization left no readable content"
+            )
+            stage_key = domains.dd.ingestion.storage.keys.stage_page_key(
+                store.framework_slug,
+                store.run_id,
+                entry.idx,
+                entry.slug,
+            )
+            if entry.key == stage_key:
+                await store.delete_body_by_key(entry.key)
+            continue
+
+        retained_entries.append(entry)
         await domains.dd.ingestion.storage.service.write_immutable(
             minio,
             input_key,
@@ -251,6 +279,10 @@ async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> d
                 "mechanical_fixes": mechanical_fixes,
             }
         )
+
+    entries = retained_entries
+    if not page_refs:
+        raise ValueError("Agentic normalization found no readable content pages after cleanup")
 
     candidate_digest = domain.candidate_digest(
         [(page["idx"], page["source_sha256"]) for page in page_refs]
@@ -326,6 +358,7 @@ async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> d
     return {
         **result.get("summary", {}),
         "pages": len(outputs),
+        "empty_pages_dropped": empty_pages_dropped,
         "normalizer": params.NORMALIZER_VERSION,
         "quality": result.get("quality_summary") or {},
     }

@@ -528,6 +528,23 @@ async def rag_search_stream(
     }
 
     def _thinking_apply(state: dict, node_name: str, update: dict) -> dict:
+        graph = state.setdefault("graph", {
+            "route": "",
+            "active_node": None,
+            "visited_nodes": [],
+            "retrieval_sources": [],
+            "status": "running",
+        })
+        graph["active_node"] = node_name
+        graph["status"] = "running"
+        if node_name not in graph["visited_nodes"]:
+            graph["visited_nodes"].append(node_name)
+        if update.get("intent") == "conversation":
+            graph["route"] = "conversation"
+        elif update.get("intent") == "corpus":
+            graph["route"] = "deep" if update.get("mode") == "deep" else "standard"
+        elif update.get("mode"):
+            graph["route"] = "deep" if update["mode"] == "deep" else "standard"
         sa = _NODE_STAGE_ACTION.get(node_name)
         if sa:
             stage, action = sa
@@ -543,6 +560,8 @@ async def rag_search_stream(
                     cur["action"] = action
         if update.get("mode"):
             state["mode"] = update["mode"]
+        if update.get("retrieval_sources") is not None:
+            graph["retrieval_sources"] = list(update.get("retrieval_sources") or [])
         if update.get("sub_questions"):
             deep = state.get("deep")
             if not isinstance(deep, dict):
@@ -606,13 +625,15 @@ async def rag_search_stream(
                 deep["confidence_score"] = update["confidence_score"]
         return state
 
-    def _thinking_finalize(state: dict) -> dict:
+    def _thinking_finalize(state: dict, graph_status: str = "done") -> dict:
         """End-of-stream: all four stages → done, no active stage."""
         stages = state.setdefault("stages", {})
         for s in _STAGE_ORDER:
             cur = stages.setdefault(s, {"status": "done", "action": ""})
             cur["status"] = "done"
             cur["action"] = ""
+        graph = state.setdefault("graph", {})
+        graph.update(active_node = None, status = graph_status)
         return state
 
     def _stamp_duration(state: dict, t_start: float) -> int:
@@ -723,6 +744,13 @@ async def rag_search_stream(
             },
             "mode":        "",
             "channel_ids": list(effective_channel_ids),
+            "graph":       {
+                "route": "",
+                "active_node": "prepare",
+                "visited_nodes": [],
+                "retrieval_sources": [],
+                "status": "running",
+            },
         }
         cancelled = False
         stalled   = False
@@ -953,6 +981,7 @@ async def rag_search_stream(
                         serializable_update = domain.serialize_update(
                             node_name, update,
                         )
+                        serializable_update["graph"] = thinking_state.get("graph")
                         yield (
                             f"data: {json.dumps(serializable_update)}\n\n"
                         )
@@ -1049,7 +1078,7 @@ async def rag_search_stream(
                             )
                     if turn_id is not None:
                         try:
-                            thinking_state = _thinking_finalize(thinking_state)
+                            thinking_state = _thinking_finalize(thinking_state, "failed")
                             _stamp_duration(thinking_state, t_run_start)
                             await _stamp_usage(
                                 thinking_state, _sess_id, _usage_before,
@@ -1097,7 +1126,8 @@ async def rag_search_stream(
                         "data: "
                         + json.dumps({
                             "node":        "end",
-                            "status":      "complete",
+                            "status":      "deadline",
+                            "graph":       thinking_state.get("graph"),
                             "duration_ms": thinking_state.get("duration_ms"),
                             "usage":       thinking_state.get("usage"),
                         })
@@ -1113,7 +1143,7 @@ async def rag_search_stream(
                     )
                     if turn_id is not None:
                         try:
-                            thinking_state = _thinking_finalize(thinking_state)
+                            thinking_state = _thinking_finalize(thinking_state, "failed")
                             _stamp_duration(thinking_state, t_run_start)
                             await _stamp_usage(
                                 thinking_state, _sess_id, _usage_before,
@@ -1152,6 +1182,7 @@ async def rag_search_stream(
                         + json.dumps({
                             "node":        "end",
                             "status":      "stalled",
+                            "graph":       thinking_state.get("graph"),
                             "duration_ms": thinking_state.get("duration_ms"),
                             "usage":       thinking_state.get("usage"),
                         })
@@ -1160,7 +1191,7 @@ async def rag_search_stream(
                 else:
                     if turn_id is not None and last_generation:
                         try:
-                            thinking_state = _thinking_finalize(thinking_state)
+                            thinking_state = _thinking_finalize(thinking_state, "done")
                             _stamp_duration(thinking_state, t_run_start)
                             await _stamp_usage(
                                 thinking_state, _sess_id, _usage_before,
@@ -1181,7 +1212,7 @@ async def rag_search_stream(
                             )
                     elif turn_id is not None and not last_generation:
                         try:
-                            thinking_state = _thinking_finalize(thinking_state)
+                            thinking_state = _thinking_finalize(thinking_state, "failed")
                             _stamp_duration(thinking_state, t_run_start)
                             await _stamp_usage(
                                 thinking_state, _sess_id, _usage_before,
@@ -1259,6 +1290,7 @@ async def rag_search_stream(
                         + json.dumps({
                             "node":        "end",
                             "status":      "complete",
+                            "graph":       thinking_state.get("graph"),
                             "duration_ms": thinking_state.get("duration_ms"),
                             "usage":       thinking_state.get("usage"),
                         })
@@ -1294,7 +1326,7 @@ async def rag_search_stream(
                 citations = last_citations,
             ))
             if turn_id is not None:
-                thinking_state_snapshot = _thinking_finalize(thinking_state)
+                thinking_state_snapshot = _thinking_finalize(thinking_state, "failed")
                 _stamp_duration(thinking_state_snapshot, t_run_start)
                 _stamp_citations(thinking_state_snapshot, last_citations)
                 answer_text = (
@@ -1334,6 +1366,7 @@ async def rag_search_stream(
                 )
             raise
         except Exception as e:
+            thinking_state.setdefault("graph", {}).update(active_node = None, status = "failed")
             if turn_id is not None:
                 try:
                     if last_generation:

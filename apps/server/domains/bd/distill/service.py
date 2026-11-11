@@ -250,6 +250,7 @@ async def queue_resume(book_id: str, run_id: str) -> dict[str, Any]:
             raise ValueError("another Distill run is already active for this book")
         await progress.service.clear_cancel(book_id, run_id)
         manifest["status"] = "queued"
+        manifest["workflow_version"] = versions.WORKFLOW_VERSION
         manifest["finished_at"] = None
         manifest["error"] = None
         manifest["updated_at"] = time.time()
@@ -593,6 +594,11 @@ async def run_distill(
         dependencies = ai.bd.graphs.distill.entities.DistillDependencies(
             storage = storage,
             extractor = extractor,
+            controls = ai.bd.graphs.distill.entities.DistillRunControls(
+                chapter_synthesis_semaphore = asyncio.Semaphore(
+                    params.CHAPTER_SYNTHESIS_CONCURRENCY,
+                ),
+            ),
             progress_callback = report_progress,
         )
         graph = ai.bd.graphs.distill.graphs.distill_graph(dependencies, checkpointer = checkpointer)

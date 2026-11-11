@@ -13,12 +13,14 @@ export function SideSheet({
   subtitle,
   closeLabel,
   onClose,
+  side = "right",
   children,
 }: {
   title: string;
   subtitle?: ReactNode;
   closeLabel: string;
   onClose: () => void;
+  side?: "left" | "right";
   children: ReactNode;
 }) {
   const ref = useModalDialog();
@@ -31,7 +33,9 @@ export function SideSheet({
         event.preventDefault(); // Escape: close through our state so the parent stays the one source of truth
         onClose();
       }}
-      className="m-0 ml-auto h-dvh max-h-none w-full max-w-2xl overflow-y-auto border-l border-border bg-background p-0 text-foreground backdrop:bg-background/80"
+      className={`m-0 h-dvh max-h-none w-full max-w-2xl overflow-y-auto border-border bg-background p-0 text-foreground backdrop:bg-background/80 ${
+        side === "left" ? "mr-auto border-r" : "ml-auto border-l"
+      }`}
     >
       <header className="sticky top-0 z-10 flex items-start gap-3 border-b border-border bg-background px-5 py-4">
         <div className="min-w-0 flex-1">

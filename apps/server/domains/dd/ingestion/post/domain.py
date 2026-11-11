@@ -216,15 +216,16 @@ def display_title(body: str, fallback: str) -> str:
     The page's first H1 (past a throwaway filename-derived one — `_resolve_display_heading`). A page split out of
     a bigger one starts `# Parent` and then, with nothing but blank lines between, its own heading — `### FileChanged`
     or a changelog `<Update label="v3.2.3">` — so those read "Parent › Child" and stay distinguishable from their
-    siblings. A page whose H1 is followed by a `Source:` line is a whole page, never a child. With no H1 at all, the
-    first sentence of prose, then `fallback`."""
+    siblings. A page whose H1 is followed by a `Source:` line is a whole page, never a child. A split section without
+    an H1 uses its first real ATX heading (often H2/H3), then the first sentence of prose, then `fallback`."""
     lines = (body or "").splitlines()
     h1_idx = next(
         (i for i, ln in enumerate(lines[: params.TITLE_SCAN_LINES]) if ln.startswith("# ") and not ln.startswith("## ")),
         None,
     )
     if h1_idx is None:
-        return _plain_heading(_fallback_heading(body)) or fallback
+        heading = _first_markdown_heading(lines[: params.TITLE_SCAN_LINES])
+        return _plain_heading(heading or _fallback_heading(body)) or fallback
     title = _plain_heading(_resolve_display_heading(lines, h1_idx, lines[h1_idx][2:].strip())) or fallback
     after = [ln.strip() for ln in lines[h1_idx + 1 : h1_idx + 1 + params.TITLE_CHILD_LOOKAHEAD_LINES] if ln.strip()]
     first = after[0] if after else ""
@@ -238,6 +239,28 @@ def display_title(body: str, fallback: str) -> str:
             # `# C` over "Cache Components"), not a parent worth naming.
             return sub if len(title) <= 2 else f"{title} › {sub}"[: params.TITLE_MAX_CHARS]
     return title
+
+
+def _first_markdown_heading(lines: list[str]) -> str:
+    """Return the first ATX heading outside a fenced code block."""
+    opening: tuple[str, int] | None = None
+    for line in lines:
+        stripped = line.lstrip(" \t")
+        fence = patterns.FENCE_LINE_RE.match(stripped)
+        if opening is not None:
+            if fence is not None:
+                marker, rest = fence.groups()
+                if marker[0] == opening[0] and len(marker) >= opening[1] and not rest.strip():
+                    opening = None
+            continue
+        if fence is not None:
+            marker, _rest = fence.groups()
+            opening = (marker[0], len(marker))
+            continue
+        heading = patterns.ATX_HEADING_RE.match(line)
+        if heading is not None:
+            return heading.group(2).strip()
+    return ""
 
 
 def _section_label(segment: str) -> str:
@@ -890,6 +913,7 @@ def make_summary(
     was_split: bool = False,
     stubs: int = 0,
     dupes: int = 0,
+    empty_pages_dropped: int = 0,
 ) -> dict:
     return {
         "kind":               kind,
@@ -900,4 +924,5 @@ def make_summary(
         "was_split":          was_split,
         "stubs_dropped":      stubs,
         "duplicates_dropped": dupes,
+        "empty_pages_dropped": empty_pages_dropped,
     }

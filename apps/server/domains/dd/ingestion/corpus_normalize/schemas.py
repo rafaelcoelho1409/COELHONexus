@@ -29,6 +29,7 @@ class NormalizeStats(BaseModel):
     viewcode_links_stripped:    int  = 0
     trailing_rules_stripped:    int  = 0
     title_promoted:             bool = False
+    emoji_shortcode_heading_spaces_inserted: int = 0
     frontmatter_extracted:      bool = False
     html_entities_decoded:      int  = 0
     blank_lines_collapsed:      int  = 0

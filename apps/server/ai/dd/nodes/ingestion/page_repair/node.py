@@ -53,7 +53,7 @@ async def repair_page(
     result = await domains.settings.chat.service.resilient_ainvoke(
         lambda: repairer.ainvoke(request, config = config),
         attempts = params.MAX_ATTEMPTS,
-        wait_base_s = page_audit.params.RETRY_WAIT_BASE_S,
+        wait_base_s = params.RETRY_WAIT_BASE_S,
         accept = lambda value: agents.domain.structured_or_recovered(value, agents.schemas.PagePatchBatch) is not None,
     )
     batch = agents.domain.structured_or_recovered(result, agents.schemas.PagePatchBatch)

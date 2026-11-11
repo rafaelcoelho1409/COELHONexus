@@ -78,6 +78,21 @@ def _citation_event(state: dict) -> list[dict]:
 
 
 def _thinking_update(thinking: dict, node: str, update: dict) -> None:
+    graph = thinking.setdefault("graph", {
+        "route": "",
+        "active_node": None,
+        "visited_nodes": [],
+        "retrieval_sources": [],
+        "status": "running",
+    })
+    graph["active_node"] = node
+    graph["status"] = "running"
+    if node not in graph["visited_nodes"]:
+        graph["visited_nodes"].append(node)
+    if update.get("mode"):
+        graph["route"] = "deep" if update["mode"] == "deep" else "standard"
+    if update.get("retrieval_sources") is not None:
+        graph["retrieval_sources"] = list(update.get("retrieval_sources") or [])
     node_stage = {
         "plan_research": ("retrieve", "Planning book research"),
         "run_subagent": ("retrieve", "Searching book passages and evidence graph"),
@@ -123,8 +138,16 @@ def _thinking_update(thinking: dict, node: str, update: dict) -> None:
     thinking["_seq"] = int(thinking.get("_seq", 0)) + 1
 
 
-def _event(node: str, update: dict, turn_id: int, elapsed_ms: int | None = None) -> dict:
+def _event(
+    node: str,
+    update: dict,
+    turn_id: int,
+    elapsed_ms: int | None = None,
+    graph: dict | None = None,
+) -> dict:
     event = {"node": node, "turn_id": turn_id}
+    if graph is not None:
+        event["graph"] = graph
     for key in (
         "mode", "generation", "confidence_score", "citations", "sub_questions",
         "research_plan", "sub_results", "latest_sub_question", "latest_sub_answer",
@@ -209,6 +232,13 @@ async def ask_stream(payload: schemas.AskRequest, request: Request) -> Streaming
         "book_id": payload.book_id,
         "citations": [],
         "deep": None,
+        "graph": {
+            "route": "",
+            "active_node": "plan_research",
+            "visited_nodes": [],
+            "retrieval_sources": [],
+            "status": "running",
+        },
         "_seq": 0,
     }
     queue: asyncio.Queue = asyncio.Queue()
@@ -249,7 +279,7 @@ async def ask_stream(payload: schemas.AskRequest, request: Request) -> Streaming
                                 await domains.bd.ask.conversation.service.update_snapshot(
                                     turn_id, thinking.get("mode", ""), thinking,
                                 )
-                            await queue.put(("event", {**values, "turn_id": turn_id}))
+                            await queue.put(("event", {**values, "turn_id": turn_id, "graph": thinking.get("graph")}))
                         continue
                 else:
                     values = streamed
@@ -265,9 +295,10 @@ async def ask_stream(payload: schemas.AskRequest, request: Request) -> Streaming
                         await domains.bd.ask.conversation.service.update_snapshot(
                             turn_id, final_state.get("mode", ""), thinking,
                         )
-                    await queue.put(("event", _event(node, update, turn_id)))
+                    await queue.put(("event", _event(node, update, turn_id, graph=thinking.get("graph"))))
             for stage in thinking["stages"].values():
                 stage.update(status = "done", action = "")
+            thinking["graph"].update(active_node = None, status = "done")
             duration_ms = int((time.monotonic() - started) * 1000)
             thinking["duration_ms"] = duration_ms
             try:
@@ -279,7 +310,8 @@ async def ask_stream(payload: schemas.AskRequest, request: Request) -> Streaming
                 turn_id, answer, final_state.get("mode", "standard"), thinking,
             )
             await queue.put(("event", {"node": "end", "turn_id": turn_id, "duration_ms": duration_ms,
-                                        "usage": thinking.get("usage"), "citations": _citation_event(final_state)}))
+                                        "usage": thinking.get("usage"), "citations": _citation_event(final_state),
+                                        "graph": thinking.get("graph")}))
         except asyncio.CancelledError:
             raise
         except Exception as error:  # noqa: BLE001 — report an actionable stream error and finish the persisted snapshot.
@@ -287,6 +319,7 @@ async def ask_stream(payload: schemas.AskRequest, request: Request) -> Streaming
             failure = f"Error generating answer: {type(error).__name__}: {str(error)[:240]}"
             for stage in thinking["stages"].values():
                 stage.update(status = "done", action = "")
+            thinking["graph"].update(active_node = None, status = "failed")
             thinking["duration_ms"] = int((time.monotonic() - started) * 1000)
             try:
                 await domains.bd.ask.conversation.service.update_turn(
@@ -294,8 +327,8 @@ async def ask_stream(payload: schemas.AskRequest, request: Request) -> Streaming
                 )
             except Exception:
                 logger.exception("[bd:ask] failed to persist graph error")
-            await queue.put(("event", {"node": "error", "turn_id": turn_id, "error": failure}))
-            await queue.put(("event", {"node": "end", "turn_id": turn_id, "duration_ms": thinking["duration_ms"]}))
+            await queue.put(("event", {"node": "error", "turn_id": turn_id, "error": failure, "graph": thinking.get("graph")}))
+            await queue.put(("event", {"node": "end", "turn_id": turn_id, "duration_ms": thinking["duration_ms"], "graph": thinking.get("graph")}))
         finally:
             heartbeat_task.cancel()
             await asyncio.gather(heartbeat_task, return_exceptions = True)

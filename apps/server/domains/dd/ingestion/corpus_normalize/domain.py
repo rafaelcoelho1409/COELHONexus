@@ -52,6 +52,9 @@ def normalize_doc(
     text, n_hoisted = _hoist_nested_fences_pass(text)
     stats.nested_fences_hoisted = n_hoisted
 
+    text, n_emoji_heading_spaces = _emoji_shortcode_heading_spacing_pass(text)
+    stats.emoji_shortcode_heading_spaces_inserted = n_emoji_heading_spaces
+
     text, n_meta, n_admon, n_orphan, n_img, n_annot, n_copy = _token_aware_passes(text)
     stats.fence_meta_stripped       = n_meta
     stats.container_admonitions     = n_admon
@@ -82,6 +85,25 @@ def normalize_doc(
         body = text, frontmatter = frontmatter,
         stats = stats, version = versions.NORMALIZER_VERSION,
     )
+
+
+def _emoji_shortcode_heading_spacing_pass(text: str) -> tuple[str, int]:
+    """Separate a leading GitBook emoji shortcode from heading text, outside code fences."""
+    lines = text.split("\n")
+    fenced_lines: set[int] = set()
+    for start, end, _kind in _identify_fence_ranges(text):
+        fenced_lines.update(range(start, end))
+
+    changed = 0
+    for idx, line in enumerate(lines):
+        if idx in fenced_lines:
+            continue
+        match = patterns.EMOJI_SHORTCODE_HEADING_RE.match(line)
+        if match is None:
+            continue
+        lines[idx] = f"{match.group('prefix')}{match.group('shortcode')} {match.group('text')}"
+        changed += 1
+    return "\n".join(lines), changed
 
 
 def _control_character_pass(text: str) -> tuple[str, int]:

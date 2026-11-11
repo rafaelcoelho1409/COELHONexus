@@ -62,6 +62,14 @@ const subResultSchema = z.looseObject({
   answer: z.string().catch(""),
 });
 
+const askGraphStateSchema = z.looseObject({
+  route: z.string().catch(""),
+  active_node: z.string().nullish().catch(null),
+  visited_nodes: z.array(z.string()).catch([]),
+  retrieval_sources: z.array(z.string()).catch([]),
+  status: z.enum(["idle", "running", "done", "failed"]).catch("idle"),
+});
+
 const thinkingStateSchema = z.looseObject({
   stages: z
     .record(z.string(), z.looseObject({ status: z.string().catch(""), action: z.string().catch("") }))
@@ -75,6 +83,7 @@ const thinkingStateSchema = z.looseObject({
     })
     .nullish()
     .catch(null),
+  graph: askGraphStateSchema.nullish().catch(null),
   book_id: z.string().nullish().catch(null),
   citations: z.array(citationSchema).nullish().catch(null),
   duration_ms: z.number().nullish().catch(null),
@@ -101,6 +110,8 @@ export const askEventSchema = z.looseObject({
   node: z.string().catch("unknown"),
   turn_id: z.number().nullish().catch(null),
   mode: z.string().nullish().catch(null),
+  graph: askGraphStateSchema.nullish().catch(null),
+  retrieval_sources: z.array(z.string()).nullish().catch(null),
   documents: z.unknown().nullish().catch(null),
   document_count: z.number().nullish().catch(null),
   generation: z.string().nullish().catch(null),

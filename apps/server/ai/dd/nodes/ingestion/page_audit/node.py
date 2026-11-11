@@ -35,6 +35,7 @@ async def audit_page(
         request,
         attempts = params.MAX_ATTEMPTS,
         wait_base_s = params.RETRY_WAIT_BASE_S,
+        recover_json_after_transient_error = False,
         config = config,
     )
     return domain.sanitize_assessment(assessment, markdown = markdown)

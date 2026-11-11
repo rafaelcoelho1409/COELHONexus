@@ -4,7 +4,7 @@
  * the thread has cost, and a fresh start. Mode and scope apply to the next question. On a phone it is two rows — the mode
  * with the two actions as icons, then channels and thread side by side — so the conversation starts high on the screen. */
 
-import { Gauge, Plus } from "lucide-react";
+import { BookOpen, Gauge, Plus } from "lucide-react";
 import type { JSX } from "react";
 
 import { ASK_MODES } from "../params";
@@ -31,6 +31,7 @@ export function AskToolbar({
   onDeleteThread,
   onNewThread,
   onUsage,
+  onSources,
 }: {
   mode: string;
   onMode: (mode: string) => void;
@@ -44,6 +45,7 @@ export function AskToolbar({
   onDeleteThread: (id: string) => void;
   onNewThread: () => void;
   onUsage: () => void;
+  onSources: () => void;
 }): JSX.Element {
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end sm:gap-x-4">
@@ -66,6 +68,10 @@ export function AskToolbar({
           </div>
         </fieldset>
         <div className="flex gap-2 sm:order-last sm:ml-auto">
+          <ActionButton type="button" onClick={onSources}>
+            <BookOpen aria-hidden data-icon="inline-start" />
+            <span className="sr-only sm:not-sr-only">Sources</span>
+          </ActionButton>
           <ActionButton type="button" onClick={onUsage}>
             <Gauge aria-hidden data-icon="inline-start" />
             <span className="sr-only sm:not-sr-only">LLM usage</span>

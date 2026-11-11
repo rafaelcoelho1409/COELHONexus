@@ -5,7 +5,7 @@
  * Suspense boundary. */
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown } from "lucide-react";
+import { ArrowDown, MessageSquare, Workflow } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { JSX } from "react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -13,11 +13,11 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { branchThread, deleteThread, fetchAskUsage } from "../api";
 import { lastSourcedTurn, shortId } from "../ask";
 import { type AskSendOptions, useAskConversation } from "../hooks/use-ask-conversation";
-import { useMediaQuery } from "../hooks/use-media-query";
 import { useYcsOverlays } from "../hooks/use-overlays";
 import { useStickToBottom } from "../hooks/use-stick-to-bottom";
 import { ASK_EXAMPLES, ASK_THREAD_PARAM, askHref } from "../params";
 import { ActionButton } from "./action-button";
+import { YcsAskAgenticGraph } from "./ask-agentic-graph";
 import { AskComposer } from "./ask-composer";
 import { AskSources } from "./ask-sources";
 import { THREADS_QUERY_KEY } from "./ask-threads";
@@ -73,8 +73,8 @@ function AskConversation({
   const [sourcesTurn, setSourcesTurn] = useState<number | null>(null);
   const [highlight, setHighlight] = useState<number | null>(null);
   const [sheet, setSheet] = useState<"sources" | "usage" | null>(null);
+  const [mobilePane, setMobilePane] = useState<"conversation" | "graph">("conversation");
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const wide = useMediaQuery("(min-width: 1024px)");
   const { following, jump } = useStickToBottom(turns);
 
   // The first message fixes the thread's scope; every later one (and every regenerate) sends it again.
@@ -150,12 +150,12 @@ function AskConversation({
       onCite: (index: number, n: number) => {
         setSourcesTurn(index);
         setHighlight(n);
-        if (!window.matchMedia("(min-width: 1024px)").matches) setSheet("sources");
+        setSheet("sources");
       },
       onSources: (index: number) => {
         setSourcesTurn(index);
         setHighlight(null);
-        if (!window.matchMedia("(min-width: 1024px)").matches) setSheet("sources");
+        setSheet("sources");
       },
       onCopy: (index: number) => {
         const answer = latest.current.turns[index]?.answer ?? "";
@@ -247,12 +247,49 @@ function AskConversation({
         onSwitchThread={(id) => (running ? busyNotice("switch threads") : onOpenThread(id))}
         onDeleteThread={(id) => void onDeleteThread(id)}
         onNewThread={() => (running ? busyNotice("start a new thread") : onNewThread())}
+        onSources={() => {
+          if (sourcesTurn === null) setSourcesTurn(lastSourcedTurn(turns));
+          setHighlight(null);
+          setSheet("sources");
+        }}
         onUsage={() => setSheet("usage")}
       />
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <fieldset className="m-0 grid grid-cols-2 gap-2 border-0 p-0 lg:hidden">
+        <legend className="sr-only">Ask workspace view</legend>
+        <ActionButton
+          type="button"
+          aria-pressed={mobilePane === "conversation"}
+          onClick={() => setMobilePane("conversation")}
+          className="justify-center"
+        >
+          <MessageSquare aria-hidden data-icon="inline-start" />
+          Conversation
+        </ActionButton>
+        <ActionButton
+          type="button"
+          aria-pressed={mobilePane === "graph"}
+          onClick={() => setMobilePane("graph")}
+          className="justify-center"
+        >
+          <Workflow aria-hidden data-icon="inline-start" />
+          Graph
+        </ActionButton>
+      </fieldset>
+
+      <div className="grid gap-6 lg:grid-cols-[minmax(16rem,35fr)_minmax(0,65fr)]">
+        <aside
+          aria-label="Adaptive Agentic RAG graph"
+          className={`${mobilePane === "graph" ? "block" : "hidden"} min-w-0 lg:block`}
+        >
+          <div className="lg:sticky lg:top-[calc(var(--chrome-top)+1.5rem)] lg:max-h-[calc(100dvh-var(--chrome-top)-2.5rem)] lg:overflow-y-auto lg:pr-1">
+            <YcsAskAgenticGraph turn={turns.at(-1) ?? null} />
+          </div>
+        </aside>
         {/* Tall enough that the message box sits at the bottom of the screen even before there is a conversation. */}
-        <div className="flex min-h-[calc(100dvh-23rem)] min-w-0 flex-col sm:min-h-[calc(100dvh-18rem)]">
+        <div
+          className={`${mobilePane === "conversation" ? "flex" : "hidden"} min-h-[calc(100dvh-23rem)] min-w-0 flex-col sm:min-h-[calc(100dvh-18rem)] lg:flex`}
+        >
           {!hydrated ? <p className="text-sm text-muted-foreground">Loading the conversation…</p> : null}
           {hydrateError ? (
             <p role="alert" className="text-sm text-destructive-text">
@@ -325,30 +362,15 @@ function AskConversation({
             inputRef={inputRef}
           />
         </div>
-
-        {/* Nothing to say until the first question: the rail appears with the conversation, and an empty first screen
-            does not carry a "no sources" note. */}
-        {wide && turns.length > 0 ? (
-          <aside aria-label="Sources" className="min-w-0">
-            <div className="sticky top-[calc(var(--chrome-top)+1.5rem)] max-h-[calc(100dvh-var(--chrome-top)-2.5rem)] overflow-y-auto pr-1">
-              <h2 className="mt-0 mb-1 text-sm font-semibold">{railTitle}</h2>
-              {shown ? (
-                <p className="mt-0 mb-2 line-clamp-2 text-xs break-words text-muted-foreground">
-                  {shown.question}
-                </p>
-              ) : null}
-              <AskSources citations={shown?.citations ?? []} highlight={highlight} heading={railTitle} />
-            </div>
-          </aside>
-        ) : null}
       </div>
 
-      {sheet === "sources" && !wide ? (
+      {sheet === "sources" ? (
         <SideSheet
           title="Sources"
           subtitle={shown?.question}
           closeLabel="Close sources"
           onClose={() => setSheet(null)}
+          side="left"
         >
           <AskSources citations={shown?.citations ?? []} highlight={highlight} heading={railTitle} />
         </SideSheet>

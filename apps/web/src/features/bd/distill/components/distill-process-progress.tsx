@@ -127,7 +127,7 @@ export function RagProcessProgress({
                     ? "Stopped"
                     : "Queued";
   const detail = !distillComplete
-    ? "Starts after the Learning Guide is published"
+    ? ""
     : index?.current_stage === "graph_materialization"
       ? "Linking book knowledge"
       : index?.current_stage === "vector_index"
@@ -136,7 +136,7 @@ export function RagProcessProgress({
           ? "Pinning book sources"
           : statusText;
   const progressValue = !distillComplete
-    ? "Waiting for the Learning Guide"
+    ? "No index run yet"
     : index?.status === "done"
       ? "All indexing stages complete"
       : index?.status === "not_started" || !index
@@ -157,13 +157,6 @@ export function RagProcessProgress({
         index ? `${index.point_count.toLocaleString()} / ${index.graph_node_count.toLocaleString()}` : "—",
       ]}
       error={queryError ?? index?.error ?? capabilityError}
-      notice={
-        capabilitiesPending
-          ? "Checking Agentic RAG availability…"
-          : !executionEnabled
-            ? "Agentic RAG execution is unavailable in this environment."
-            : null
-      }
       controls={
         <>
           <RagAction
@@ -237,7 +230,6 @@ function ProgressCard({
   primaryMetric,
   secondaryMetric,
   error,
-  notice,
   controls,
   onOpenInfo,
   infoLabel,
@@ -251,7 +243,6 @@ function ProgressCard({
   primaryMetric: [string, string];
   secondaryMetric: [string, string];
   error?: string | null;
-  notice?: string | null;
   controls: ReactNode;
   onOpenInfo: () => void;
   infoLabel: string;
@@ -299,15 +290,10 @@ function ProgressCard({
         <Metric label={primaryMetric[0]} value={primaryMetric[1]} />
         <Metric label={secondaryMetric[0]} value={secondaryMetric[1]} />
       </dl>
-      <p className="mt-2 text-xs text-muted-foreground">{detail}</p>
+      {detail ? <p className="mt-2 text-xs text-muted-foreground">{detail}</p> : null}
       {error ? (
         <p role="alert" className="mt-2 break-words text-xs text-destructive-text">
           {error}
-        </p>
-      ) : null}
-      {notice ? (
-        <p role="status" className="mt-2 text-xs text-muted-foreground">
-          {notice}
         </p>
       ) : null}
     </section>

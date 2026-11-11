@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -11,6 +12,7 @@ from .... import graphs, prompts
 
 _CHAPTER_BATCH_SIZE = domains.bd.distill.params.MAX_CHAPTER_UNITS_PER_REQUEST
 _BOOK_BATCH_SIZE = domains.bd.distill.params.MAX_BOOK_SYNTHESIS_BATCH_SIZE
+logger = logging.getLogger(__name__)
 
 
 def _json_body(value: Any) -> str:
@@ -380,17 +382,36 @@ async def synthesize_chapter(
         + "\n\nWrite this section's learning guide. Every generated lesson, overview, question, diagram node/edge, and equation must use only the available learning_unit_ids.\n"
         + json.dumps({"section": chapter_input, "learning_units": units}, ensure_ascii = False)
     )
-    with domains.settings.llm_counter.service.llm_context(
-        ns = "bd", run_id = state["run_id"], node_id = "chapter_synthesizer", stage = "distill",
-    ):
-        synthesis, _ = await domains.settings.chat.service.chat_structured_async(
-            prompt,
-            domains.bd.distill.schemas.ChapterSynthesis,
-            max_tokens = 7000,
-            temperature = 0.0,
-            strict = False,
-            rotator_task = "bd_distill_chapter_synthesizer",
-        )
+    controls = dependencies.controls
+    async with controls.chapter_synthesis_semaphore:
+        async with controls.chapter_settle_lock:
+            if not controls.chapter_pool_settled:
+                domains.settings.chat.service.refresh_endpoint()
+                endpoint = domains.settings.chat.service.ENDPOINT
+                if domains.settings.chat.domain.rotator_health_url(endpoint.base_url):
+                    settled = await domains.settings.chat.service.wait_for_rotator_settle(
+                        domains.bd.distill.params.CHAPTER_SYNTHESIS_SETTLE_CAP_S,
+                    )
+                    logger.info("[bd-distill] chapter synthesis Rotator settle: %s", settled)
+                controls.chapter_pool_settled = True
+        try:
+            with domains.settings.llm_counter.service.llm_context(
+                ns = "bd", run_id = state["run_id"], node_id = "chapter_synthesizer", stage = "distill",
+            ):
+                synthesis, _ = await domains.settings.chat.service.chat_structured_async(
+                    prompt,
+                    domains.bd.distill.schemas.ChapterSynthesis,
+                    max_tokens = 7000,
+                    temperature = 0.0,
+                    timeout_s = domains.bd.distill.params.CHAPTER_SYNTHESIS_TIMEOUT_S,
+                    strict = False,
+                    rotator_task = "bd_distill_chapter_synthesizer",
+                )
+        except Exception as error:
+            if domains.settings.chat.domain.is_transient_provider_error(error):
+                async with controls.chapter_settle_lock:
+                    controls.chapter_pool_settled = False
+            raise
     allowed_ids = set(ref["unit_ids"])
     referenced_ids = _chapter_lesson_ids(synthesis)
     if referenced_ids - allowed_ids:
@@ -494,6 +515,7 @@ async def synthesize_book(
                     domains.bd.distill.schemas.BookSynthesis,
                     max_tokens = 6000,
                     temperature = 0.0,
+                    timeout_s = domains.bd.distill.params.BOOK_SYNTHESIS_TIMEOUT_S,
                     strict = False,
                     rotator_task = "bd_distill_book_synthesizer",
                 )

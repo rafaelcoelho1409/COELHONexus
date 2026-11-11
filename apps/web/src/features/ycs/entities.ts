@@ -320,6 +320,14 @@ const subResultSchema = z.looseObject({
   answer: z.string().catch(""),
 });
 
+const askGraphStateSchema = z.looseObject({
+  route: z.string().catch(""),
+  active_node: z.string().nullish().catch(null),
+  visited_nodes: z.array(z.string()).catch([]),
+  retrieval_sources: z.array(z.string()).catch([]),
+  status: z.enum(["idle", "running", "done", "failed"]).catch("idle"),
+});
+
 /** The persisted per-turn trace (Postgres `conversation_history.thinking_state` JSONB). */
 const thinkingStateSchema = z.looseObject({
   stages: z
@@ -334,6 +342,7 @@ const thinkingStateSchema = z.looseObject({
     })
     .nullish()
     .catch(null),
+  graph: askGraphStateSchema.nullish().catch(null),
   channel_ids: z.array(z.string()).nullish().catch(null),
   citations: z.array(citationSchema).nullish().catch(null),
   duration_ms: z.number().nullish().catch(null),
@@ -362,6 +371,10 @@ export const askEventSchema = z.looseObject({
   node: z.string().catch("unknown"),
   turn_id: z.number().nullish().catch(null),
   mode: z.string().nullish().catch(null),
+  intent: z.string().nullish().catch(null),
+  graph: askGraphStateSchema.nullish().catch(null),
+  status: z.string().nullish().catch(null),
+  retrieval_sources: z.array(z.string()).nullish().catch(null),
   documents: z.unknown().nullish().catch(null),
   document_count: z.number().nullish().catch(null),
   generation: z.string().nullish().catch(null),

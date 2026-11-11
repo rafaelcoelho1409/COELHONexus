@@ -11,6 +11,35 @@ type AskStageView = { status: AskStageStatus; action: string };
 type AskDeepCard = { question: string; status: "queued" | "done"; answer: string };
 export type AskDeep = { banner: string | null; planText: string; cards: AskDeepCard[] };
 export type UsageTotal = { calls: number; tokens_in: number; tokens_out: number };
+export type AskGraphState = {
+  route: string;
+  active_node: string | null;
+  visited_nodes: string[];
+  retrieval_sources: string[];
+  status: "idle" | "running" | "done" | "failed";
+};
+
+function normalizeGraph(
+  value:
+    | {
+        route?: string;
+        active_node?: string | null;
+        visited_nodes?: string[];
+        retrieval_sources?: string[];
+        status?: AskGraphState["status"];
+      }
+    | null
+    | undefined,
+  fallback: AskGraphState,
+): AskGraphState {
+  return {
+    route: value?.route ?? fallback.route,
+    active_node: value?.active_node === undefined ? fallback.active_node : value.active_node,
+    visited_nodes: value?.visited_nodes ?? fallback.visited_nodes,
+    retrieval_sources: value?.retrieval_sources ?? fallback.retrieval_sources,
+    status: value?.status ?? fallback.status,
+  };
+}
 
 /** One conversation turn — the same shape whether it streams in live, hydrates from history or is
  * recovered mid-stream after a refresh. */
@@ -19,6 +48,7 @@ export type AskTurn = {
   mode: string;
   stages: Record<AskStageId, AskStageView>;
   deep: AskDeep | null;
+  graph: AskGraphState;
   answer: string;
   citations: AskCitation[];
   usage: UsageTotal | null;
@@ -69,6 +99,7 @@ export function newLiveTurn(question: string, channelIds: string[] | null = null
     mode: "",
     stages: freshStages(),
     deep: null,
+    graph: { route: "", active_node: "prepare", visited_nodes: [], retrieval_sources: [], status: "running" },
     answer: "",
     citations: [],
     usage: null,
@@ -181,6 +212,11 @@ export function applyAskEvent(turn: AskTurn, event: AskEvent): AskTurn {
   if (event.node === "end") {
     return {
       ...turn,
+      graph: normalizeGraph(event.graph, {
+        ...turn.graph,
+        active_node: null,
+        status: event.status === "stalled" || event.status === "deadline" ? "failed" : "done",
+      }),
       streaming: false,
       stages: stageMark(turn.stages, "verify", "done"),
       followups: (turn.deep?.cards ?? []).map((card) => card.question),
@@ -189,10 +225,31 @@ export function applyAskEvent(turn: AskTurn, event: AskEvent): AskTurn {
     };
   }
   if (event.node === "error") {
-    return { ...turn, streaming: false, error: event.error ?? "stream error" };
+    return {
+      ...turn,
+      graph: normalizeGraph(event.graph, { ...turn.graph, active_node: null, status: "failed" }),
+      streaming: false,
+      error: event.error ?? "stream error",
+    };
   }
 
-  let next = turn;
+  const graph = normalizeGraph(event.graph, {
+    ...turn.graph,
+    route:
+      event.intent === "conversation"
+        ? "conversation"
+        : event.mode === "deep"
+          ? "deep"
+          : event.mode
+            ? "standard"
+            : turn.graph.route,
+    active_node: event.node,
+    visited_nodes: turn.graph.visited_nodes.includes(event.node)
+      ? turn.graph.visited_nodes
+      : [...turn.graph.visited_nodes, event.node],
+    status: "running" as const,
+  });
+  let next = { ...turn, graph };
   const mapped = STAGE_MAP[event.node];
   if (mapped) {
     next = {
@@ -205,6 +262,9 @@ export function applyAskEvent(turn: AskTurn, event: AskEvent): AskTurn {
     };
   }
   if (event.mode) next = { ...next, mode: event.mode };
+  if (event.retrieval_sources) {
+    next = { ...next, graph: { ...next.graph, retrieval_sources: [...event.retrieval_sources] } };
+  }
   if (event.documents != null && event.document_count != null) {
     next = { ...next, stages: stageMark(next.stages, "retrieve", "done") };
   }
@@ -400,7 +460,10 @@ export function snapshotKey(row: HistoryRow | null | undefined): string {
     return `${s.id}:${entry?.status ?? ""}:${entry?.action ?? ""}`;
   }).join("|");
   const subKey = (ts?.deep?.sub_questions ?? []).map((q) => q.status).join(",");
-  return `seq:${ts?._seq ?? ""}|${row.answer.length}|${stageKey}|${subKey}`;
+  const graphKey = ts?.graph
+    ? `${ts.graph.status}:${ts.graph.active_node ?? ""}:${ts.graph.visited_nodes.join(",")}:${ts.graph.route}`
+    : "";
+  return `seq:${ts?._seq ?? ""}|${row.answer.length}|${stageKey}|${subKey}|${graphKey}`;
 }
 
 export const STALLED_SUBTITLE = "Stalled — pipeline lost (likely backend restart)";
@@ -448,6 +511,13 @@ export function turnFromHistory(row: HistoryRow): AskTurn {
           })),
         }
       : null,
+    graph: normalizeGraph(ts?.graph, {
+      route: hasDeep ? "deep" : row.mode ? "standard" : "",
+      active_node: null,
+      visited_nodes: [],
+      retrieval_sources: [],
+      status: row.answer ? "done" : isTurnInProgress(ts, row.answer) ? "running" : "idle",
+    }),
     answer: row.answer,
     citations: ts?.citations ?? [],
     usage: ts?.usage?.total ?? null,

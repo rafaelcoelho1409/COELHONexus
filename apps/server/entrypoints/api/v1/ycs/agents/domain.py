@@ -30,6 +30,10 @@ def serialize_update(node_name: str, update: dict[str, Any]) -> dict[str, Any]:
         result["retry_count"] = update["retry_count"]
     if "mode" in update:
         result["mode"] = update["mode"]
+    if "intent" in update:
+        result["intent"] = update["intent"]
+    if "retrieval_sources" in update:
+        result["retrieval_sources"] = update["retrieval_sources"] or []
     if "sub_questions" in update and update["sub_questions"]:
         result["sub_questions"] = update["sub_questions"]
     if "research_plan" in update and update["research_plan"]:

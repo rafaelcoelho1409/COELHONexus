@@ -1,12 +1,12 @@
 # A repair is optional (the audited page is already valid), so it gets fewer tries than the audit: every extra try on
 # a failing provider holds the whole run open after the other pages are done.
 MAX_ATTEMPTS = 2
+RETRY_WAIT_BASE_S = 3.0
 MIN_PATCH_CONFIDENCE = 0.90
+MIN_AUDIT_CONFIDENCE = 0.95
 MIN_TITLE_CONFIDENCE = 0.85
 MAX_TITLE_CHARS = 120
 PATCHABLE_CATEGORIES = frozenset({
-    "duplicate_boilerplate",
-    "duplicate_section",
     "malformed_heading",
     "markdown_formatting",
     "generated_title",

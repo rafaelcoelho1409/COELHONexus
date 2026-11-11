@@ -43,6 +43,40 @@ def is_repeat(markdown: str, evidence: str, other_evidence: str) -> bool:
     return any(abs(start - other) >= min(len(first), len(second)) for start in starts for other in others)
 
 
+def evidence_is_only_in_code_fences(markdown: str, evidence: str) -> bool:
+    """Whether every exact occurrence of an issue's evidence is inside a fenced code block."""
+    if not evidence:
+        return False
+
+    spans: list[tuple[int, int]] = []
+    opening: tuple[str, int, int] | None = None
+    offset = 0
+    for raw_line in markdown.splitlines(keepends = True):
+        line = raw_line.rstrip("\r\n")
+        stripped = line.lstrip(" \t")
+        marker_match = patterns.FENCE_RE.match(stripped)
+        if opening is None:
+            if marker_match is not None:
+                marker = marker_match.group(1)
+                opening = (marker[0], len(marker), offset)
+        elif marker_match is not None:
+            marker = marker_match.group(1)
+            rest = stripped[len(marker):]
+            if marker[0] == opening[0] and len(marker) >= opening[1] and not rest.strip():
+                spans.append((opening[2], offset + len(raw_line)))
+                opening = None
+        offset += len(raw_line)
+
+    if opening is not None:
+        spans.append((opening[2], len(markdown)))
+
+    starts = [match.start() for match in re.finditer(re.escape(evidence), markdown)]
+    return bool(starts) and all(
+        any(start <= occurrence and occurrence + len(evidence) <= end for start, end in spans)
+        for occurrence in starts
+    )
+
+
 def sanitize_assessment(
     value: object,
     *,
@@ -61,10 +95,17 @@ def sanitize_assessment(
                 f"Discarded finding {issue.issue_id}: evidence was not a bounded exact source substring."
             )
             continue
-        if issue.category in params.CONVENTION_CATEGORIES and agents.ingestion.page_auditor.patterns.is_export_convention(issue.evidence):
+        if evidence_is_only_in_code_fences(markdown, issue.evidence):
             warnings.append(
-                f"Discarded finding {issue.issue_id}: its evidence is a documentation-export convention "
-                "(JSX component, HTML media tag, fence attribute, block-quote tab or callout, or a sound table head), not a page defect."
+                f"Discarded finding {issue.issue_id}: its evidence is inside a fenced code example, not page markup."
+            )
+            continue
+        if issue.category in params.CONVENTION_CATEGORIES and (
+            agents.ingestion.page_auditor.patterns.is_export_convention(issue.evidence, markdown=markdown)
+            or agents.ingestion.page_auditor.patterns.is_inside_export_component(markdown, issue.evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: its evidence is valid export syntax or raw HTML, not a page defect."
             )
             continue
         if issue.category in params.DUPLICATE_CATEGORIES and not is_repeat(markdown, issue.evidence, issue.other_evidence):

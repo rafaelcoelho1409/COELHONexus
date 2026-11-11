@@ -28,6 +28,17 @@ def _is_transient_provider_error(error: Exception) -> bool:
     return domains.settings.chat.domain.is_transient_provider_error(error)
 
 
+def _log_transient_provider_failure(ref: dict[str, Any], stage: str, error: Exception) -> None:
+    logger.warning(
+        "[bd-distill] transient provider failure stage=%s unit=%s page=%s kind=%s error=%s",
+        stage,
+        ref.get("unit_id"),
+        ref.get("page_number"),
+        domains.settings.chat.domain.classify_error(error),
+        type(error).__name__,
+    )
+
+
 async def prepare_units(
     dependencies: graphs.distill.entities.DistillDependencies,
     state: dict[str, Any],
@@ -218,6 +229,7 @@ async def extract_unit(
             extraction = domains.bd.distill.domain.learning_extraction_from_agent_result(result)
         except Exception as error:  # noqa: BLE001 — invalid agent output should fall back to native structured output.
             if _is_transient_provider_error(error):
+                _log_transient_provider_failure(ref, "agent", error)
                 raise
             extraction = None
             logger.warning(
@@ -282,6 +294,7 @@ async def extract_unit(
                 break
             except Exception as error:  # noqa: BLE001 — retry malformed output and transient provider failures.
                 if _is_transient_provider_error(error):
+                    _log_transient_provider_failure(ref, "structured_fallback", error)
                     raise
                 fallback_error = error
                 logger.warning(
@@ -335,6 +348,7 @@ async def extract_unit(
                     break
                 except Exception as error:  # noqa: BLE001 — preserve the source chunk rather than silently skipping it.
                     if _is_transient_provider_error(error):
+                        _log_transient_provider_failure(ref, "text_fallback", error)
                         raise
                     fallback_error = error
                     logger.warning(
@@ -401,17 +415,23 @@ async def extract_unit(
             with domains.settings.llm_counter.service.llm_context(
                 ns = "bd", run_id = state["run_id"], node_id = "evidence_verifier", stage = "distill",
             ):
-                review, _ = await domains.settings.chat.service.chat_structured_async(
-                    review_prompt,
-                    domains.bd.distill.schemas.EvidenceReview,
-                    max_tokens = 2500,
-                    temperature = 0.0,
-                    strict = False,
-                    rotator_task = "bd_distill_evidence_verifier",
+                review, _ = await domains.settings.chat.service.resilient_ainvoke(
+                    lambda: domains.settings.chat.service.chat_structured_async(
+                        review_prompt,
+                        domains.bd.distill.schemas.EvidenceReview,
+                        max_tokens = 2500,
+                        temperature = 0.0,
+                        strict = False,
+                        rotator_task = "bd_distill_evidence_verifier",
+                    ),
+                    attempts = extractor_params.MAX_PROVIDER_ATTEMPTS,
+                    wait_base_s = extractor_params.PROVIDER_RETRY_WAIT_BASE_S,
                 )
             verdicts = {item.lesson_index: item for item in review.verdicts}
         except Exception as error:  # noqa: BLE001 — unavailable semantic review must retain a review-marked citation.
             verdicts = {}
+            if _is_transient_provider_error(error):
+                _log_transient_provider_failure(ref, "evidence_verifier", error)
             review_flags.append(f"Evidence review was unavailable ({type(error).__name__}); supported quotes require human review.")
     else:
         verdicts = {}

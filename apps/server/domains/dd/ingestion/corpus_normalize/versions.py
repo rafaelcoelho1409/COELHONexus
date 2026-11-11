@@ -31,4 +31,5 @@ from __future__ import annotations
 # runs this normalizer on every page before its audit (it did not between 2026-11-03 and now, so the banner, footer and fence attributes
 # of every Tier 2-4 page stayed).
 # v13 (2026-11-08): strip non-whitespace Unicode control characters (`Cc`) before page audit and record the count for the page quality report.
-NORMALIZER_VERSION = 13
+# v14 (2026-11-11): add the missing separator after a leading GitBook emoji shortcode in a heading.
+NORMALIZER_VERSION = 14
