@@ -10,7 +10,7 @@ import logging
 import re
 import time
 
-import langgraph.runtime
+from langgraph.runtime import Runtime
 
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ def _facts(block, excerpt: str) -> list[str]:
     return facts[:4]
 
 
-async def ledger_prepare(state: graphs.pipeline.synth.states.SynthState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def ledger_prepare(state: graphs.pipeline.synth.states.SynthState, runtime: Runtime[Context]) -> dict:
     """Persist a digest-compatible artifact whose evidence assignments are fully determined by the ledger and outline."""
     context = runtime.context
     blobs = context.blobs

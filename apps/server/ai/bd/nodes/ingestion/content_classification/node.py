@@ -1,7 +1,7 @@
 """Thin LangGraph wrapper for the full-book content selection pass."""
 from __future__ import annotations
 
-import langgraph.runtime
+from langgraph.runtime import Runtime
 
 from .... import graphs
 from . import service
@@ -9,7 +9,7 @@ from . import service
 
 async def classify_content(
     graph_state: graphs.ingestion.states.IngestionRunState,
-    runtime: langgraph.runtime.Runtime[graphs.ingestion.entities.IngestionDependencies],
+    runtime: Runtime[graphs.ingestion.entities.IngestionDependencies],
 ) -> dict:
     context = runtime.context
     return await graphs.service.run_node(

@@ -4,10 +4,10 @@ from __future__ import annotations
 from .... import bd
 import domains
 
-import langgraph.runtime
+from langgraph.runtime import Runtime
 
 
-async def grade_evidence(state: dict, runtime: langgraph.runtime.Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
+async def grade_evidence(state: dict, runtime: Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
     documents = state.get("documents") or []
     domains.settings.llm_counter.service.set_node(node = "grade_documents")
     if not documents:

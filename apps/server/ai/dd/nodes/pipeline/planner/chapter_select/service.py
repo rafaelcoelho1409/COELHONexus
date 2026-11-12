@@ -15,7 +15,7 @@ import json
 import logging
 import time
 
-import langgraph.runtime
+from langgraph.runtime import Runtime
 
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 Context = graphs.pipeline.planner.entities.PlannerContext
 
 
-async def prepare(state: graphs.pipeline.planner.chapter_select.states.SelectState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.planner.chapter_select.states.SelectState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
@@ -224,7 +224,7 @@ async def prepare(state: graphs.pipeline.planner.chapter_select.states.SelectSta
     return {"finished": False, "manifest_hash": manifest, "plans": plans, "round": 1, "started": started}
 
 
-async def curate_chapter(state: graphs.pipeline.planner.chapter_select.entities.CurateInput, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def curate_chapter(state: graphs.pipeline.planner.chapter_select.entities.CurateInput, runtime: Runtime[Context]) -> dict:
     """Split one oversize chapter with a curator agent. Fail-soft: any problem leaves the chapter as it is."""
     context = runtime.context
     data = context.scratch[params.STEP]
@@ -288,7 +288,7 @@ async def curate_chapter(state: graphs.pipeline.planner.chapter_select.entities.
         return {"outcomes": [{"round": round_, "pos": pos, "chapters": None, "reason": f"{type(error).__name__}: {str(error)[:120]}"}]}
 
 
-def apply(state: graphs.pipeline.planner.chapter_select.states.SelectState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+def apply(state: graphs.pipeline.planner.chapter_select.states.SelectState, runtime: Runtime[Context]) -> dict:
     """Replace each split chapter by its parts, then plan the next round (parts still over the code-block cap)."""
     data = runtime.context.scratch[params.STEP]
     round_ = state.get("round") or 1
@@ -330,7 +330,7 @@ def apply(state: graphs.pipeline.planner.chapter_select.states.SelectState, runt
     return {"plans": plans, "round": round_ + 1}
 
 
-async def finalize(state: graphs.pipeline.planner.chapter_select.states.SelectState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.planner.chapter_select.states.SelectState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     data = context.scratch[params.STEP]

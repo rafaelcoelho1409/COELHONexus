@@ -1,10 +1,10 @@
 """Value objects of the Docs Distiller deep agents."""
 from __future__ import annotations
 
-import dataclasses
+from dataclasses import dataclass
 
 
-@dataclasses.dataclass(frozen = True, slots = True)
+@dataclass(frozen = True, slots = True)
 class ModelConfig:
     """How one role calls its model: the request bound, the sampling and the rotator task its bandit cell is keyed by."""
 

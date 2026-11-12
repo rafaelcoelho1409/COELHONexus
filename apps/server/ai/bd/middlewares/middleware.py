@@ -1,12 +1,12 @@
 """Behaviour that applies to every model call of a Book Distiller agent, so it lives next to the agent instead of in each node."""
 from __future__ import annotations
 
-import typing
+from typing import Any
 
-import langchain.agents.middleware
+from langchain.agents.middleware import AgentMiddleware, AgentState
 
 
-class ToolAllowlistMiddleware(langchain.agents.middleware.AgentMiddleware[langchain.agents.middleware.AgentState, typing.Any, typing.Any]):
+class ToolAllowlistMiddleware(AgentMiddleware[AgentState, Any, Any]):
     """Shows the model only the tools its role may use, and no others.
 
     A role's reach is its own: the filter belongs to the agent, not to the process. Deep Agents' harness profile is keyed by the
@@ -18,7 +18,7 @@ class ToolAllowlistMiddleware(langchain.agents.middleware.AgentMiddleware[langch
         self._allowed = frozenset(allowed)
 
     @staticmethod
-    def _name(tool: typing.Any) -> str | None:
+    def _name(tool: Any) -> str | None:
         name = tool.get("name") if isinstance(tool, dict) else getattr(tool, "name", None)
         return name if isinstance(name, str) else None
 

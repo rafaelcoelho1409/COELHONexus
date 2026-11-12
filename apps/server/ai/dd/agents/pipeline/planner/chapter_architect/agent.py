@@ -7,15 +7,21 @@ from .. import schemas
 from .... import service
 from ..... import middlewares, prompts, skills
 
-import collections.abc
-import typing
+from collections.abc import Sequence
+from typing import Any
 
-import deepagents
-import deepagents.profiles.harness
-import langchain.agents.middleware
+from deepagents import (
+    FilesystemPermission,
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    create_deep_agent,
+    register_harness_profile,
+)
+from deepagents.profiles.harness import harness_profiles
+from langchain.agents.middleware import ToolCallLimitMiddleware
 
 
-def chapter_architect(*, backend: typing.Any, tools: collections.abc.Sequence[typing.Any], model = None):
+def chapter_architect(*, backend: Any, tools: Sequence[Any], model = None):
     """Build the architect for one run. `backend` mounts the corpus on `/corpus/`; `tools` are the run's scoring tool (the architect
     and its critic share it). It plans with `write_todos`, searches and reads the corpus, delegates the review to `plan_critic`
     and writes nothing."""
@@ -51,15 +57,15 @@ def chapter_architect(*, backend: typing.Any, tools: collections.abc.Sequence[ty
     # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
     # before (by another role or other code in the process) hides tools from this agent.
     key = f"openai:{model_name}"
-    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
-    deepagents.register_harness_profile(
+    harness_profiles._HARNESS_PROFILES.pop(key, None)
+    register_harness_profile(
         key,
-        deepagents.HarnessProfile(
+        HarnessProfile(
             base_system_prompt = "",
-            general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
+            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    agent = deepagents.create_deep_agent(
+    agent = create_deep_agent(
         model = model,
         tools = architect_tools,
         system_prompt = prompts.pipeline.planner.chapter_architect.prompts.SYSTEM_PROMPT,
@@ -70,24 +76,24 @@ def chapter_architect(*, backend: typing.Any, tools: collections.abc.Sequence[ty
                 model_calls = params.MODEL_CALLS, 
                 with_tools = True),
             middlewares.middleware.ToolAllowlistMiddleware(params.STACK_TOOLS | tool_names),
-            langchain.agents.middleware.ToolCallLimitMiddleware(
+            ToolCallLimitMiddleware(
                 tool_name = "score_outline", 
                 run_limit = params.SCORE_CALL_LIMIT, 
                 exit_behavior = "continue"),
         ],
         permissions = [
             *[
-                deepagents.FilesystemPermission(
+                FilesystemPermission(
                     operations = ["read"], 
                     paths = [path], 
                     mode = "allow")
                 for path in [*params.READ_PATHS, f"{skills.params.VIRTUAL_ROOT}/**"]
             ],
-            deepagents.FilesystemPermission(
+            FilesystemPermission(
                 operations = ["read"], 
                 paths = ["/**"], 
                 mode = "deny"),
-            deepagents.FilesystemPermission(
+            FilesystemPermission(
                 operations = ["write"], 
                 paths = ["/**"], 
                 mode = "deny"),

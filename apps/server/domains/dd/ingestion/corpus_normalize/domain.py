@@ -74,6 +74,15 @@ def normalize_doc(
     text, n_media = _empty_media_pass(text)
     stats.empty_media_stripped = n_media
 
+    text, n_malformed_links = _unsloth_llama_link_pass(text)
+    stats.malformed_links_fixed = n_malformed_links
+
+    text, n_api_entries = _huggingface_optimum_api_export_pass(text)
+    stats.api_entries_repaired = n_api_entries
+
+    text, n_indented_lists = _indented_label_description_pass(text)
+    stats.indented_label_lists_repaired = n_indented_lists
+
     text, n_ent, n_blank, n_trail = _whitespace_entity_pass(text)
     stats.html_entities_decoded = n_ent
     stats.blank_lines_collapsed = n_blank
@@ -405,6 +414,92 @@ def _token_aware_passes(text: str) -> tuple[str, int, int, int, int, int, int]:
         out_lines.append(new_line)
 
     return "\n".join(out_lines), n_meta, n_admon, n_orphan, n_img, n_annot, n_copy
+
+
+def _unsloth_llama_link_pass(text: str) -> tuple[str, int]:
+    """Remove a known label duplicated into an Unsloth GitHub URL, outside fenced code only."""
+    fenced: set[int] = set()
+    for open_idx, close_idx, _kind in _identify_fence_ranges(text):
+        fenced.update(range(open_idx, close_idx))
+    lines = text.split("\n")
+    fixed = 0
+    for index, line in enumerate(lines):
+        if index in fenced:
+            continue
+        lines[index], count = patterns.UNSLOTH_LLAMA_CPP_LINK_RE.subn(r"](\g<url>)", line)
+        fixed += count
+    return "\n".join(lines), fixed
+
+
+def _huggingface_optimum_api_export_pass(text: str) -> tuple[str, int]:
+    """Restore the method heading/source link when HF's Optimum Markdown export concatenates its API metadata into one line."""
+    fenced: set[int] = set()
+    for open_idx, close_idx, _kind in _identify_fence_ranges(text):
+        fenced.update(range(open_idx, close_idx))
+    output: list[str] = []
+    repaired = 0
+    for index, line in enumerate(text.split("\n")):
+        match = None if index in fenced else patterns.HUGGINGFACE_OPTIMUM_API_EXPORT_RE.fullmatch(line)
+        if match is None:
+            output.append(line)
+            continue
+        output.extend((
+            f"#### {match.group('name')}",
+            "",
+            f"[Source]({match.group('source')})",
+        ))
+        repaired += 1
+    return "\n".join(output), repaired
+
+
+def _indented_label_description_pass(text: str) -> tuple[str, int]:
+    """Convert a clear run of three or more indented term/description pairs from code-block indentation to Markdown bullets."""
+    fenced: set[int] = set()
+    for open_idx, close_idx, _kind in _identify_fence_ranges(text):
+        fenced.update(range(open_idx, close_idx))
+    lines = text.split("\n")
+    output: list[str] = []
+    repaired = 0
+    index = 0
+    while index < len(lines):
+        if index in fenced or INDENTED_LABEL_RE.fullmatch(lines[index]) is None:
+            output.append(lines[index])
+            index += 1
+            continue
+
+        entries: list[tuple[str, str]] = []
+        cursor = index
+        trailing_blanks = 0
+        while cursor < len(lines):
+            term = INDENTED_LABEL_RE.fullmatch(lines[cursor])
+            if term is None or cursor in fenced or cursor + 1 >= len(lines):
+                break
+            description = INDENTED_DESCRIPTION_RE.fullmatch(lines[cursor + 1])
+            if description is None or cursor + 1 in fenced:
+                break
+            entries.append((term.group("label"), description.group("description").strip()))
+            cursor += 2
+            if cursor < len(lines) and lines[cursor].startswith("        ") and lines[cursor].strip():
+                entries.clear()
+                break
+            blanks = 0
+            while cursor < len(lines) and not lines[cursor].strip():
+                blanks += 1
+                cursor += 1
+            if cursor < len(lines) and INDENTED_LABEL_RE.fullmatch(lines[cursor]) is not None:
+                continue
+            trailing_blanks = blanks
+            break
+
+        if len(entries) < 3:
+            output.append(lines[index])
+            index += 1
+            continue
+        output.extend(f"- **{label}** — {description}" for label, description in entries)
+        output.extend([""] * trailing_blanks)
+        repaired += len(entries)
+        index = cursor
+    return "\n".join(output), repaired
 
 
 def _rewrite_fence_opener(line: str, kind: int) -> tuple[str, bool]:

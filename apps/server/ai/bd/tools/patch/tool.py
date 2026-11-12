@@ -1,17 +1,17 @@
-import langchain.tools
-import pydantic
+from langchain.tools import tool, ToolRuntime
+from pydantic import BaseModel
 
 
-class PatchCheck(pydantic.BaseModel):
+class PatchCheck(BaseModel):
     issue_id: str
     target_text: str
     replacement: str
 
 
-@langchain.tools.tool
+@tool
 def check_patches(
     patches: list[PatchCheck],
-    runtime: langchain.tools.ToolRuntime) -> str:
+    runtime: ToolRuntime) -> str:
     """Check all the patches you plan to send, in one call, before you answer.
 
     For each patch it says what the application would do with it: reject it (and why), keep it for human review, or apply

@@ -1,13 +1,13 @@
 """Thin graph wrappers for chapter and whole-book synthesis."""
 from __future__ import annotations
 
-import typing
+from typing import Any
 
 from .... import graphs
 from . import service
 
 
-async def prepare_chapters(dependencies: graphs.distill.entities.DistillDependencies, state: dict[str, typing.Any]) -> dict:
+async def prepare_chapters(dependencies: graphs.distill.entities.DistillDependencies, state: dict[str, Any]) -> dict:
     return await graphs.service.run_node(
         dependencies.progress_callback,
         "prepare_chapters",
@@ -15,7 +15,7 @@ async def prepare_chapters(dependencies: graphs.distill.entities.DistillDependen
     )
 
 
-async def synthesize_chapter(dependencies: graphs.distill.entities.DistillDependencies, state: dict[str, typing.Any]) -> dict:
+async def synthesize_chapter(dependencies: graphs.distill.entities.DistillDependencies, state: dict[str, Any]) -> dict:
     async def _synthesize_batch() -> dict:
         chapter_batch = state.get("chapter_batch", [])
         pending_refs = []
@@ -60,7 +60,7 @@ async def synthesize_chapter(dependencies: graphs.distill.entities.DistillDepend
     )
 
 
-async def synthesize_book(dependencies: graphs.distill.entities.DistillDependencies, state: dict[str, typing.Any]) -> dict:
+async def synthesize_book(dependencies: graphs.distill.entities.DistillDependencies, state: dict[str, Any]) -> dict:
     return await graphs.service.run_node(
         dependencies.progress_callback,
         "synthesize_book",

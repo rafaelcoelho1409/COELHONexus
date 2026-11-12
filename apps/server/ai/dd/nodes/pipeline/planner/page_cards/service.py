@@ -8,9 +8,9 @@ import asyncio
 import json
 import logging
 import time
-import typing
+from typing import Any
 
-import langgraph.runtime
+from langgraph.runtime import Runtime
 
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ def _manifest_entry_map(entries: list[dict]) -> dict[str, dict]:
     return {entry["key"]: entry for entry in entries if entry.get("key")}
 
 
-async def page_cards_run(state: graphs.pipeline.planner.states.PlannerState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def page_cards_run(state: graphs.pipeline.planner.states.PlannerState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug") or ""
@@ -76,7 +76,7 @@ async def page_cards_run(state: graphs.pipeline.planner.states.PlannerState, run
             "url": url,
             "page": body[:params.BODY_CHARS],
         }, ensure_ascii = False)
-        meta: dict[str, typing.Any] = {}
+        meta: dict[str, Any] = {}
         try:
             llm_digests.add(digest)
             async with semaphore:

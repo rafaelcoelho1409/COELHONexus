@@ -6,10 +6,10 @@ import re
 from .... import bd
 import domains
 
-import langgraph.runtime
+from langgraph.runtime import Runtime
 
 
-async def generate_answer(state: dict, runtime: langgraph.runtime.Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
+async def generate_answer(state: dict, runtime: Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
     domains.settings.llm_counter.service.set_node(node = "generate" if state.get("mode") != "deep" else "synthesize")
     documents = state.get("documents") or []
     answer = await bd.agents.ask.service.invoke(
@@ -27,7 +27,7 @@ async def generate_answer(state: dict, runtime: langgraph.runtime.Runtime[bd.gra
     return {"generation": answer.answer, "evidence_ids": answer.evidence_ids}
 
 
-def format_citations(state: dict, runtime: langgraph.runtime.Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
+def format_citations(state: dict, runtime: Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
     documents = state.get("documents") or []
     requested = set(state.get("evidence_ids") or [])
     selected = [item for item in documents if item.get("id") in requested]

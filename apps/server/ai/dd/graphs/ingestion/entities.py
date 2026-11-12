@@ -3,18 +3,18 @@ from __future__ import annotations
 from ... import graphs, nodes
 
 import asyncio
-import collections
-import dataclasses
-import typing
+from collections import Counter
+from dataclasses import dataclass, field
+from typing import Any, NotRequired, TypedDict
 
 
-class PageReference(typing.TypedDict):
+class PageReference(TypedDict):
     """Immutable source reference and metadata for one normalized page."""
 
     idx: int
     slug: str
     url: str
-    source_path: typing.NotRequired[str]
+    source_path: NotRequired[str]
     tier: str
     title: str
     section: str
@@ -25,27 +25,27 @@ class PageReference(typing.TypedDict):
     source_sha256: str
     source_key: str
     raw_key: str
-    mechanical_fixes: typing.NotRequired[dict[str, int]]
+    mechanical_fixes: NotRequired[dict[str, int]]
 
 
-class PageAssessmentResult(typing.TypedDict):
+class PageAssessmentResult(TypedDict):
     """Compact assessment result safe to retain in the graph checkpoint."""
 
     idx: int
     source_sha256: str
-    assessment: dict[str, typing.Any]
-    mechanical_fixes: typing.NotRequired[dict[str, int]]
-    warnings: typing.NotRequired[list[str]]
-    audit_status: typing.NotRequired[str]
-    audit_error: typing.NotRequired[str]
-    patches: typing.NotRequired[dict[str, typing.Any]]
-    normalization_status: typing.NotRequired[str]
-    output_key: typing.NotRequired[str]
-    output_sha256: typing.NotRequired[str]
-    output_title: typing.NotRequired[str]
+    assessment: dict[str, Any]
+    mechanical_fixes: NotRequired[dict[str, int]]
+    warnings: NotRequired[list[str]]
+    audit_status: NotRequired[str]
+    audit_error: NotRequired[str]
+    patches: NotRequired[dict[str, Any]]
+    normalization_status: NotRequired[str]
+    output_key: NotRequired[str]
+    output_sha256: NotRequired[str]
+    output_title: NotRequired[str]
 
 
-class PageOutputReference(typing.TypedDict):
+class PageOutputReference(TypedDict):
     """Published page reference; page Markdown remains in MinIO."""
 
     idx: int
@@ -63,19 +63,19 @@ class PageOutputReference(typing.TypedDict):
     raw_key: str
     key: str
     assessment_key: str
-    repair_status: typing.NotRequired[str]
+    repair_status: NotRequired[str]
 
 
-@dataclasses.dataclass
+@dataclass
 class IngestionTally:
     """How many pages each stage of one run has finished; the stages' parallel page tasks add to it under `lock`."""
 
     completed_pages: int = 0
-    completed_by_node: collections.Counter[str] = dataclasses.field(default_factory = collections.Counter)
-    lock: asyncio.Lock = dataclasses.field(default_factory = asyncio.Lock)
+    completed_by_node: Counter[str] = field(default_factory = Counter)
+    lock: asyncio.Lock = field(default_factory = asyncio.Lock)
 
 
-@dataclasses.dataclass(frozen = True, slots = True)
+@dataclass(frozen = True, slots = True)
 class IngestionDependencies:
     """What the nodes of one run need: where pages and artifacts live, the agents, and where progress goes."""
 
@@ -86,4 +86,4 @@ class IngestionDependencies:
     auditor: nodes.ingestion.audit_batch.service.Auditor
     repairer: nodes.ingestion.normalize_pages.service.Repairer
     progress: graphs.service.ProgressReporter | None = None
-    tally: IngestionTally = dataclasses.field(default_factory = IngestionTally)
+    tally: IngestionTally = field(default_factory = IngestionTally)

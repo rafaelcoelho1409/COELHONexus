@@ -12,7 +12,7 @@ import json
 import logging
 import time
 
-import langgraph.runtime
+from langgraph.runtime import Runtime
 
 
 logger = logging.getLogger(__name__)
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 Context = graphs.pipeline.synth.entities.SynthContext
 
 
-async def prepare(state: graphs.pipeline.synth.mgsr.states.MgsrState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.synth.mgsr.states.MgsrState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
@@ -114,7 +114,7 @@ async def prepare(state: graphs.pipeline.synth.mgsr.states.MgsrState, runtime: l
     return result
 
 
-async def review(state: graphs.pipeline.synth.mgsr.states.MgsrState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def review(state: graphs.pipeline.synth.mgsr.states.MgsrState, runtime: Runtime[Context]) -> dict:
     """The reviewer reads the failing sections and names the ones to write again; if it cannot answer, the loop rewrites the whole chapter."""
     context = runtime.context
     data = context.scratch[params.STEP]
@@ -163,7 +163,7 @@ async def review(state: graphs.pipeline.synth.mgsr.states.MgsrState, runtime: la
     return {"decision": decision.model_dump()}
 
 
-async def finalize(state: graphs.pipeline.synth.mgsr.states.MgsrState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.synth.mgsr.states.MgsrState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     slug, chapter_id = state["framework_slug"], state["chapter_id"]
     decision = schemas.MGSRDecision.model_validate(state["decision"])

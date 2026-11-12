@@ -1,3 +1,3 @@
-from . import agent
+from . import config, params, agent
 
-__all__ = ["agent"]
+__all__ = ["agent", "config", "params"]

@@ -2,16 +2,16 @@
 from __future__ import annotations
 from . import versions
 
-import typing
+from typing import Literal, Optional
 
-import pydantic
-
-
-
-ArtifactName = typing.Literal["README.md"]
+from pydantic import BaseModel, Field
 
 
-class RenderedArtifact(pydantic.BaseModel):
+
+ArtifactName = Literal["README.md"]
+
+
+class RenderedArtifact(BaseModel):
     """One persisted MinIO blob produced by this node."""
     name:       ArtifactName
     minio_key:  str
@@ -20,18 +20,18 @@ class RenderedArtifact(pydantic.BaseModel):
                        # vault-hash prefix). For audit/provenance.
 
 
-class CodeRefResolution(pydantic.BaseModel):
+class CodeRefResolution(BaseModel):
     """Per-code-ref audit detail. tier: 'verbatim'=byte-exact, 'derived'=AI-generated+AST-valid, 'hallucinated'=missing/drift/AST-fail."""
     hash:                str
     found_in_vault:      bool
-    source_key:          typing.Optional[str] = None
+    source_key:          Optional[str] = None
     byte_drift:          bool = False
     materialized_chars:  int = 0
     section_id:          str = ""        # which section referenced it
-    tier:                typing.Literal["verbatim", "derived", "hallucinated"] = "verbatim"
+    tier:                Literal["verbatim", "derived", "hallucinated"] = "verbatim"
 
 
-class AuditResult(pydantic.BaseModel):
+class AuditResult(BaseModel):
     """Round-trip audit summary. The `audit_passed` flag is the
     chapter-level go/no-go signal."""
     n_code_refs_referenced: int          # union across all sections
@@ -48,12 +48,12 @@ class AuditResult(pydantic.BaseModel):
     n_hallucinated:         int = 0
 
     # Per-ref details for downstream debugging. Cap to keep blob small.
-    resolution_details:     list[CodeRefResolution] = pydantic.Field(
+    resolution_details:     list[CodeRefResolution] = Field(
         default_factory = list,
     )
 
 
-class RenderResult(pydantic.BaseModel):
+class RenderResult(BaseModel):
     """Full render result — persisted as render-latest.json."""
     schema_version:        str = versions.RENDER_SCHEMA_VERSION
     template_version:      str = versions.RENDER_TEMPLATE_VERSION
@@ -73,7 +73,7 @@ class RenderResult(pydantic.BaseModel):
     # Persisted so the Study chapter strip can re-open the LangGraph canvas after a page refresh.
     thread_id:             str = ""
     # Tutorial chapters: the files of the chapter's `code/` folder (keys relative to the chapter's folder). Empty for a v1 chapter.
-    code_files:            list[str] = pydantic.Field(default_factory = list)
+    code_files:            list[str] = Field(default_factory = list)
     # Fingerprint of the plan chapter (title + sources) this render was built
     # from. Resume and the chapter list use it to tell a render from the CURRENT
     # plan from a leftover of an older one. A missing value is stale when a

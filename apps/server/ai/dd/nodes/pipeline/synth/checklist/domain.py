@@ -10,10 +10,10 @@ import ast
 import json
 import re
 import random
-import collections
+from collections import Counter
 import hashlib
 
-import pydantic
+from pydantic import ValidationError
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +285,7 @@ def check_code_uniqueness_ratio(sawc: dict) -> schemas.CriterionResult:
             feedback = "",
         )
 
-    top = collections.Counter(hashes).most_common(3)
+    top = Counter(hashes).most_common(3)
     sample = ", ".join(f"{h[:8]}…×{n}" for h, n in top if n > 1)
     feedback = (
         f"code uniqueness {ratio:.0%} ({n_unique} unique / {n_total} "
@@ -876,7 +876,7 @@ def fallback_llm_verdicts(reason: str) -> list[schemas.CriterionResult]:
     return out
 
 
-def shorten_pydantic_error(e: pydantic.ValidationError) -> str:
+def shorten_pydantic_error(e: ValidationError) -> str:
     errs = e.errors()
     if not errs:
         return "Pydantic validation failed (no detail)"

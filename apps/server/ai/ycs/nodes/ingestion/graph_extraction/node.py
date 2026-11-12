@@ -4,14 +4,14 @@ from __future__ import annotations
 import json
 
 import domains
-import langgraph.runtime
+from langgraph.runtime import Runtime
 
 from .... import agents, graphs
 
 
 async def extract_candidates(
     state: graphs.ingestion.graph_extraction.states.GraphExtractionState,
-    runtime: langgraph.runtime.Runtime[graphs.ingestion.graph_extraction.entities.GraphExtractionContext],
+    runtime: Runtime[graphs.ingestion.graph_extraction.entities.GraphExtractionContext],
 ) -> dict:
     if runtime.context.run_id:
         domains.settings.llm_counter.service.set_context(

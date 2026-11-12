@@ -4,16 +4,16 @@ import domains
 
 import logging
 import time
-import collections.abc
-import typing
+from collections.abc import Awaitable, Callable
+from typing import Any, Protocol
 
-import langgraph.config
+from langgraph.config import get_stream_writer
 
 
 logger = logging.getLogger(__name__)
 
 
-class ProgressReporter(typing.Protocol):
+class ProgressReporter(Protocol):
     async def raise_if_cancelled(self) -> None: ...
 
     async def update(self, *, current: int) -> None: ...
@@ -31,8 +31,8 @@ class ProgressReporter(typing.Protocol):
 async def run_node(
     progress: ProgressReporter | None,
     node: str,
-    operation: collections.abc.Callable[[], collections.abc.Awaitable[dict[str, typing.Any]]],
-) -> dict[str, typing.Any]:
+    operation: Callable[[], Awaitable[dict[str, Any]]],
+) -> dict[str, Any]:
     """Run one graph node's work and report it as running, then done, or failed if it raises."""
     if progress is not None:
         await progress.update_agentic_node(node, status = "running")
@@ -47,13 +47,13 @@ async def run_node(
     return result
 
 
-def emit(step: str, kind: str, **fields: typing.Any) -> None:
+def emit(step: str, kind: str, **fields: Any) -> None:
     """Send one progress event to the run's stream, in the shape the web reads (`step`, `kind`, ...fields).
 
     The run shell consumes the graph's `custom` stream and republishes each event on the run's channel. Outside a streamed run
     (a test that invokes the graph directly) there is no writer and the event is dropped."""
     try:
-        writer = langgraph.config.get_stream_writer()
+        writer = get_stream_writer()
     except RuntimeError:
         return
     writer({"step": step, "kind": kind, **fields})

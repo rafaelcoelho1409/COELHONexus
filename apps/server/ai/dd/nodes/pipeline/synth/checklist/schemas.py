@@ -3,20 +3,20 @@ from __future__ import annotations
 from . import params, versions
 
 import json
-import typing
+from typing import Literal, Optional
 
-import pydantic
+from pydantic import BaseModel, field_validator, model_validator
 
 
 
-class CriterionResult(pydantic.BaseModel):
+class CriterionResult(BaseModel):
     """One criterion verdict; feedback string is consumed by mgsr_replan as a repair instruction."""
     name:     str
     passed:   bool
-    kind:     typing.Literal["deterministic", "llm_judge"]
+    kind:     Literal["deterministic", "llm_judge"]
     feedback: str = ""
 
-    @pydantic.field_validator("feedback")
+    @field_validator("feedback")
     @classmethod
     def _validate_feedback(cls, v: str) -> str:
         s = " ".join((v or "").strip().split())
@@ -27,7 +27,7 @@ class CriterionResult(pydantic.BaseModel):
         return s
 
 
-class ChecklistEvaluation(pydantic.BaseModel):
+class ChecklistEvaluation(BaseModel):
     """Full per-chapter checklist evaluation — persisted to MinIO."""
     schema_version: str = versions.CHECKLIST_SCHEMA_VERSION
     prompt_version: str = versions.CHECKLIST_PROMPT_VERSION
@@ -42,16 +42,16 @@ class ChecklistEvaluation(pydantic.BaseModel):
     failed_feedback: list[str]              # extracted for mgsr_replan
     n_llm_judge_repairs: int = 0
     judge_unavailable:   bool = False        # the judge never answered; criteria are the deterministic gates only
-    deployment_judge:    typing.Optional[str] = None
-    wall_ms:             typing.Optional[int] = None
+    deployment_judge:    Optional[str] = None
+    wall_ms:             Optional[int] = None
 
 
-class LLMVerdict(pydantic.BaseModel):
+class LLMVerdict(BaseModel):
     """One verdict from the batched LLM-judge response."""
     passed:   bool
     feedback: str = ""
 
-    @pydantic.field_validator("feedback")
+    @field_validator("feedback")
     @classmethod
     def _validate_feedback(cls, v: str) -> str:
         s = " ".join((v or "").strip().split())
@@ -62,7 +62,7 @@ class LLMVerdict(pydantic.BaseModel):
         return s
 
 
-class LLMJudgePayload(pydantic.BaseModel):
+class LLMJudgePayload(BaseModel):
     """LLM-judge JSON response; field names MUST match keys in `LLM_CRITERIA`."""
     chapter_reads_coherently:           LLMVerdict
     claims_grounded_in_sources:         LLMVerdict
@@ -70,7 +70,7 @@ class LLMJudgePayload(pydantic.BaseModel):
     prose_code_first_not_meta_framing:  LLMVerdict
     code_refs_introduced_in_prose:      LLMVerdict
 
-    @pydantic.model_validator(mode = "before")
+    @model_validator(mode = "before")
     @classmethod
     def _unwrap_stringified_verdicts(cls, data):
         """Some judge models double-encode each verdict as a JSON string ('{"passed": true, "feedback": ""}'); asyncio ch-04 lost its whole

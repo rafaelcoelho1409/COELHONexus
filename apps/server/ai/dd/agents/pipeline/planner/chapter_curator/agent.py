@@ -7,15 +7,21 @@ from .. import schemas
 from .... import service
 from ..... import middlewares, prompts, skills
 
-import collections.abc
-import typing
+from collections.abc import Sequence
+from typing import Any
 
-import deepagents
-import deepagents.backends
-import deepagents.profiles.harness
+from deepagents import (
+    FilesystemPermission,
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    create_deep_agent,
+    register_harness_profile,
+)
+from deepagents.backends import StateBackend
+from deepagents.profiles.harness import harness_profiles
 
 
-def chapter_curator(*, tools: collections.abc.Sequence[typing.Any], model = None):
+def chapter_curator(*, tools: Sequence[Any], model = None):
     """Build the curator for one chapter. `tools` are that chapter's `cluster_units` and `validate_split`, bound to its units."""
     if model is None:
         model = domains.settings.chat.service.build_chat_model(
@@ -35,15 +41,15 @@ def chapter_curator(*, tools: collections.abc.Sequence[typing.Any], model = None
     # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
     # before (by another role or other code in the process) hides tools from this agent.
     key = f"openai:{model_name}"
-    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
-    deepagents.register_harness_profile(
+    harness_profiles._HARNESS_PROFILES.pop(key, None)
+    register_harness_profile(
         key,
-        deepagents.HarnessProfile(
+        HarnessProfile(
             base_system_prompt = "",
-            general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
+            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    agent = deepagents.create_deep_agent(
+    agent = create_deep_agent(
         model = model,
         tools = curator_tools,
         system_prompt = prompts.pipeline.planner.chapter_curator.prompts.SYSTEM_PROMPT,
@@ -55,20 +61,20 @@ def chapter_curator(*, tools: collections.abc.Sequence[typing.Any], model = None
             middlewares.middleware.ToolAllowlistMiddleware(params.STACK_TOOLS | tool_names),
         ],
         permissions = [
-            deepagents.FilesystemPermission(
+            FilesystemPermission(
                 operations = ["read"],
                 paths = [f"{skills.params.VIRTUAL_ROOT}/**"],
                 mode = "allow"),
-            deepagents.FilesystemPermission(
+            FilesystemPermission(
                 operations = ["read"],
                 paths = ["/**"],
                 mode = "deny"),
-            deepagents.FilesystemPermission(
+            FilesystemPermission(
                 operations = ["write"],
                 paths = ["/**"],
                 mode = "deny"),
         ],
-        backend = deepagents.backends.StateBackend(),
+        backend = StateBackend(),
         skills = [skills.domain.source_for("chapter_curator")],
         name = "dd_chapter_curator",
     )

@@ -1,23 +1,23 @@
 """What the steps of the sawc subgraph hand to each other."""
 from __future__ import annotations
 
-import typing
+from typing import NotRequired, TypedDict
 
 
-class WriteTask(typing.TypedDict):
+class WriteTask(TypedDict):
     """One section for a writer to write (or write again)."""
 
     sid: str
-    budget: typing.NotRequired[int]        # vault characters in the writer's request (a late retry uses a lighter bank)
+    budget: NotRequired[int]        # vault characters in the writer's request (a late retry uses a lighter bank)
 
 
-class WriteResult(typing.TypedDict):
+class WriteResult(TypedDict):
     sid: str
     attempts: int
     placeholder: bool
 
 
-class ExtendResult(typing.TypedDict):
+class ExtendResult(TypedDict):
     sid: str
     added: int
     outcome: str                    # 'ok' | 'failed' (every call raised: worth a salvage pass) | 'empty' (answered, nothing valid)

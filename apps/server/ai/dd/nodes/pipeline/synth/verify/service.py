@@ -9,14 +9,14 @@ import json
 import logging
 import time
 
-import langgraph.runtime
+from langgraph.runtime import Runtime
 
 
 logger = logging.getLogger(__name__)
 Context = graphs.pipeline.synth.entities.SynthContext
 
 
-async def verify_code(state: graphs.pipeline.synth.states.SynthState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def verify_code(state: graphs.pipeline.synth.states.SynthState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")

@@ -2,10 +2,10 @@
 from __future__ import annotations
 from .... import graphs
 
-import typing
+from typing import Any
 
 
-def failure(field: str, stats_field: str, reason: str, error: str, started: float, **extra: typing.Any) -> dict:
+def failure(field: str, stats_field: str, reason: str, error: str, started: float, **extra: Any) -> dict:
     """The patch a node returns when it cannot run: an empty output, the reason in its stats, and the run marked failed."""
     return {
         field: "",

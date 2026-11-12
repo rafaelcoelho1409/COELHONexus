@@ -4,7 +4,7 @@ from __future__ import annotations
 import domains
 from . import config, domain, params
 
-import langchain_openai
+from langchain_openai import ChatOpenAI
 
 
 def page_auditor(model = None):
@@ -18,6 +18,6 @@ def page_auditor(model = None):
             rotator_task = params.ROTATOR_TASK,
         )
     domain.validate_model_name(getattr(model, "model_name", None))
-    if not isinstance(model, langchain_openai.ChatOpenAI):
+    if not isinstance(model, ChatOpenAI):
         raise TypeError("the page auditor must use the COELHO Rotator ChatOpenAI model")
     return model

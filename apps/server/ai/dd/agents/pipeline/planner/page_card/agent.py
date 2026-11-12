@@ -6,9 +6,15 @@ from . import config, params, schemas
 from .... import service
 from ..... import middlewares, prompts
 
-import deepagents
-import deepagents.backends
-import deepagents.profiles.harness
+from deepagents import (
+    FilesystemPermission,
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    create_deep_agent,
+    register_harness_profile,
+)
+from deepagents.backends import StateBackend
+from deepagents.profiles.harness import harness_profiles
 
 
 def page_card(model = None):
@@ -24,12 +30,12 @@ def page_card(model = None):
     if not isinstance(model_name, str) or not model_name or ":" in model_name:
         raise ValueError("the page-card agent requires a named OpenAI-compatible Rotator model")
     key = f"openai:{model_name}"
-    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
-    deepagents.register_harness_profile(key, deepagents.HarnessProfile(
+    harness_profiles._HARNESS_PROFILES.pop(key, None)
+    register_harness_profile(key, HarnessProfile(
         base_system_prompt = "",
-        general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
+        general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
     ))
-    agent = deepagents.create_deep_agent(
+    agent = create_deep_agent(
         model = model,
         system_prompt = prompts.pipeline.planner.page_card.prompts.SYSTEM_PROMPT,
         response_format = schemas.PageCard,
@@ -38,16 +44,16 @@ def page_card(model = None):
             middlewares.middleware.ToolAllowlistMiddleware(frozenset()),
         ],
         permissions = [
-            deepagents.FilesystemPermission(
+            FilesystemPermission(
                 operations = ["read"], 
                 paths = ["/**"], 
                 mode = "deny"),
-            deepagents.FilesystemPermission(
+            FilesystemPermission(
                 operations = ["write"], 
                 paths = ["/**"], 
                 mode = "deny"),
         ],
-        backend = deepagents.backends.StateBackend(),
+        backend = StateBackend(),
         name = "dd_page_card",
     )
     tool_node = agent.nodes.get("tools")

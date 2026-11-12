@@ -16,7 +16,7 @@ import logging
 import re
 import time
 
-import langgraph.runtime
+from langgraph.runtime import Runtime
 
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ def summary(started: float, n_chapters: int, skipped: str | None, **extra) -> di
     }
 
 
-async def prepare(state: graphs.pipeline.synth.book_harmonize.states.HarmonizeState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.synth.book_harmonize.states.HarmonizeState, runtime: Runtime[Context]) -> dict:
     started = time.monotonic()
     chapters = runtime.context.scratch[params.STEP]["chapters"]
     if len(chapters) < params.MIN_CHAPTERS:
@@ -40,7 +40,7 @@ async def prepare(state: graphs.pipeline.synth.book_harmonize.states.HarmonizeSt
     return {"finished": False, "started": started, "chapter_ids": list(chapters)}
 
 
-async def extract(state: dict, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def extract(state: dict, runtime: Runtime[Context]) -> dict:
     """The atomic claims and key terms of one chapter. A chapter whose extraction fails contributes none (it keeps its prose)."""
     context = runtime.context
     chapter_id = state["chapter_id"]
@@ -61,7 +61,7 @@ async def extract(state: dict, runtime: langgraph.runtime.Runtime[Context]) -> d
     }]}
 
 
-async def canonicalize(state: graphs.pipeline.synth.book_harmonize.states.HarmonizeState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def canonicalize(state: graphs.pipeline.synth.book_harmonize.states.HarmonizeState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     data = context.scratch[params.STEP]
     claims_by_id = {e["chapter_id"]: e["claims"] for e in state.get("extracted") or []}
@@ -95,7 +95,7 @@ async def canonicalize(state: graphs.pipeline.synth.book_harmonize.states.Harmon
     return {"canonical_terms": data["canonical_terms"]}
 
 
-async def detect(state: dict, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def detect(state: dict, runtime: Runtime[Context]) -> dict:
     """Cross-chapter problems of one chapter, as the drift_detector reported them (validated later). A failure assumes none."""
     context = runtime.context
     data = context.scratch[params.STEP]
@@ -121,7 +121,7 @@ async def detect(state: dict, runtime: langgraph.runtime.Runtime[Context]) -> di
     return {"detections": [{"chapter_id": chapter_id, "violations": [v.model_dump() for v in answer.violations], "summary": answer.summary}]}
 
 
-async def plan_patches(state: graphs.pipeline.synth.book_harmonize.states.HarmonizeState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def plan_patches(state: graphs.pipeline.synth.book_harmonize.states.HarmonizeState, runtime: Runtime[Context]) -> dict:
     """Keep the grounded violations; group them by the paragraph that holds their quote: one edit per paragraph."""
     data = runtime.context.scratch[params.STEP]
     canonical = state.get("canonical_terms") or []
@@ -155,7 +155,7 @@ async def plan_patches(state: graphs.pipeline.synth.book_harmonize.states.Harmon
     return {"patch_todo": todo}
 
 
-async def patch(state: dict, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def patch(state: dict, runtime: Runtime[Context]) -> dict:
     """One paragraph, minimally edited; accepted only when its length stays close and it carries no fence."""
     context = runtime.context
     data = context.scratch[params.STEP]
@@ -184,7 +184,7 @@ async def patch(state: dict, runtime: langgraph.runtime.Runtime[Context]) -> dic
     return {"edits": [{"chapter_id": chapter_id, "paragraph": index, "text": edited if domain.paragraph_patch_ok(paragraph, edited) else None}]}
 
 
-async def finalize(state: graphs.pipeline.synth.book_harmonize.states.HarmonizeState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.synth.book_harmonize.states.HarmonizeState, runtime: Runtime[Context]) -> dict:
     data = runtime.context.scratch[params.STEP]
     slug = state["framework_slug"]
     edits_by_chapter: dict[str, dict[int, str]] = {}

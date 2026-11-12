@@ -4,17 +4,22 @@ import domains
 from . import domain, params
 from .. import middlewares
 
-import collections.abc
+from collections.abc import Callable
+from typing import Any, TypeVar
 import json
-import typing
 
-import deepagents.backends.utils
-import langchain.agents.middleware
-import langchain_core.messages
-import pydantic
+from deepagents.backends.utils import create_file_data
+from langchain.agents.middleware import (
+    ModelCallLimitMiddleware,
+    ModelRetryMiddleware,
+    ToolCallLimitMiddleware,
+    ToolErrorMiddleware,
+)
+from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel
 
 
-Schema = typing.TypeVar("Schema", bound = pydantic.BaseModel)
+Schema = TypeVar("Schema", bound = BaseModel)
 
 
 def _safe_error_summary(error: Exception) -> str:
@@ -28,12 +33,12 @@ def _safe_error_summary(error: Exception) -> str:
     return detail
 
 
-def resilience(*, model_calls: int, with_tools: bool) -> list[typing.Any]:
+def resilience(*, model_calls: int, with_tools: bool) -> list[Any]:
     """The middleware every agent carries, in order (the first is the outermost): transient provider failures are retried, a
     Rotator capacity wait is waited out, a run that never reaches an answer stops after `model_calls` calls, and a tool failure
     reaches the model as a message instead of ending the run."""
-    stack: list[typing.Any] = [
-        langchain.agents.middleware.ModelRetryMiddleware(
+    stack: list[Any] = [
+        ModelRetryMiddleware(
             max_retries = params.MODEL_RETRIES,
             retry_on = domain.is_transient,
             on_failure = "error",
@@ -42,24 +47,24 @@ def resilience(*, model_calls: int, with_tools: bool) -> list[typing.Any]:
             max_delay = params.MODEL_RETRY_MAX_DELAY_S,
         ),
         middlewares.middleware.CapacityWaitMiddleware(),
-        langchain.agents.middleware.ModelCallLimitMiddleware(run_limit = model_calls, exit_behavior = "end"),
+        ModelCallLimitMiddleware(run_limit = model_calls, exit_behavior = "end"),
     ]
     if with_tools:
         stack += [
-            langchain.agents.middleware.ToolCallLimitMiddleware(run_limit = params.TOOL_CALL_LIMIT, exit_behavior = "continue"),
-            langchain.agents.middleware.ToolErrorMiddleware(
+            ToolCallLimitMiddleware(run_limit = params.TOOL_CALL_LIMIT, exit_behavior = "continue"),
+            ToolErrorMiddleware(
                 lambda error, request: f"`{request.tool_call['name']}` failed with {type(error).__name__}: {str(error)[:params.TOOL_ERROR_CHARS]}",
             ),
         ]
     return stack
 
 
-def file(content: str) -> dict[str, typing.Any]:
+def file(content: str) -> dict[str, Any]:
     """A text file in the agent's virtual filesystem, for `ask(files=...)`."""
-    return deepagents.backends.utils.create_file_data(content)
+    return create_file_data(content)
 
 
-def request_config(extra: dict[str, typing.Any] | None = None) -> dict[str, typing.Any]:
+def request_config(extra: dict[str, Any] | None = None) -> dict[str, Any]:
     """The invoke config every agent call carries: usage is counted on the current (run, node) attribution."""
     merged = dict(extra or {})
     callbacks = list(merged.get("callbacks") or [])
@@ -71,16 +76,16 @@ def request_config(extra: dict[str, typing.Any] | None = None) -> dict[str, typi
 
 
 async def ask(
-    agent: typing.Any,
+    agent: Any,
     schema: type[Schema],
     payload: str,
     *,
     attempts: int,
     wait_base_s: float,
-    files: dict[str, typing.Any] | None = None,
-    config: dict[str, typing.Any] | None = None,
-    check: collections.abc.Callable[[Schema], bool] | None = None,
-    meta: dict[str, typing.Any] | None = None,
+    files: dict[str, Any] | None = None,
+    config: dict[str, Any] | None = None,
+    check: Callable[[Schema], bool] | None = None,
+    meta: dict[str, Any] | None = None,
 ) -> Schema:
     """Run `agent` on `payload` and return its answer as `schema`.
 
@@ -95,7 +100,7 @@ async def ask(
     }
     failures: list[str] = []
 
-    def usable(value: typing.Any) -> bool:
+    def usable(value: Any) -> bool:
         parsed = domain.structured_or_recovered(value, schema)
         if parsed is None:
             failures.append(domain.structured_failure_reason(value, schema))
@@ -119,14 +124,14 @@ async def ask(
 
 
 async def ask_chat_model(
-    model: typing.Any,
+    model: Any,
     schema: type[Schema],
     system_prompt: str,
     payload: str,
     *,
     attempts: int,
     wait_base_s: float,
-    config: dict[str, typing.Any] | None = None,
+    config: dict[str, Any] | None = None,
     recover_json_after_transient_error: bool = True,
 ) -> Schema:
     """Ask a tool-free model role for a schema, then make bounded JSON-text recovery attempts.
@@ -134,16 +139,16 @@ async def ask_chat_model(
     This path is for tasks that do not need an agent loop or executable tools. It keeps the structured call's raw
     message so function-call arguments and provider finish metadata remain inspectable when parsing fails.
     """
-    messages = [langchain_core.messages.SystemMessage(content = system_prompt), langchain_core.messages.HumanMessage(content = payload)]
+    messages = [SystemMessage(content = system_prompt), HumanMessage(content = payload)]
     failures: list[str] = []
 
-    def usable(result: typing.Any) -> bool:
+    def usable(result: Any) -> bool:
         parsed = domain.structured_or_recovered(result, schema)
         if parsed is None:
             failures.append(domain.structured_failure_reason(result, schema))
         return parsed is not None
 
-    structured_result: typing.Any = None
+    structured_result: Any = None
     structured_error: Exception | None = None
     try:
         structured = model.with_structured_output(schema, method = "function_calling", include_raw = True)
@@ -177,7 +182,7 @@ async def ask_chat_model(
         + json.dumps(schema.model_json_schema(), ensure_ascii = False)
     )
     try:
-        recovery_messages = [*messages, langchain_core.messages.HumanMessage(content = fallback_instruction)]
+        recovery_messages = [*messages, HumanMessage(content = fallback_instruction)]
         raw = await domains.settings.chat.service.resilient_ainvoke(
             lambda: model.ainvoke(recovery_messages, config = request_config(config)),
             attempts = attempts,

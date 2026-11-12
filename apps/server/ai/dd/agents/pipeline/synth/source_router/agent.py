@@ -7,16 +7,22 @@ from .. import schemas
 from .... import service
 from ..... import middlewares, prompts
 
-import collections.abc
-import typing
+from collections.abc import Sequence
+from typing import Any
 
-import deepagents
-import deepagents.backends
-import deepagents.profiles.harness
-import langchain.agents.middleware
+from deepagents import (
+    FilesystemPermission,
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    create_deep_agent,
+    register_harness_profile,
+)
+from deepagents.backends import StateBackend
+from deepagents.profiles.harness import harness_profiles
+from langchain.agents.middleware import ToolCallLimitMiddleware
 
 
-def source_router(*, tools: collections.abc.Sequence[typing.Any], model = None):
+def source_router(*, tools: Sequence[Any], model = None):
     """Build the router for one source. Its rubric is its system prompt (called once per source: no skill); `tools` hold the
     source's `check_digest`, which knows the outline's ids and the source's hashes."""
     if model is None:
@@ -37,15 +43,15 @@ def source_router(*, tools: collections.abc.Sequence[typing.Any], model = None):
     # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
     # before (by another role or other code in the process) hides tools from this agent.
     key = f"openai:{model_name}"
-    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
-    deepagents.register_harness_profile(
+    harness_profiles._HARNESS_PROFILES.pop(key, None)
+    register_harness_profile(
         key,
-        deepagents.HarnessProfile(
+        HarnessProfile(
             base_system_prompt = "",
-            general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
+            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    agent = deepagents.create_deep_agent(
+    agent = create_deep_agent(
         model = model,
         tools = router_tools,
         system_prompt = prompts.pipeline.synth.source_router.prompts.SYSTEM_PROMPT,
@@ -55,22 +61,22 @@ def source_router(*, tools: collections.abc.Sequence[typing.Any], model = None):
                 model_calls = params.MODEL_CALLS,
                 with_tools = True),
             middlewares.middleware.ToolAllowlistMiddleware(frozenset(tool_names)),
-            langchain.agents.middleware.ToolCallLimitMiddleware(
+            ToolCallLimitMiddleware(
                 tool_name = "check_digest",
                 run_limit = params.CHECK_CALL_LIMIT,
                 exit_behavior = "continue"),
         ],
         permissions = [
-            deepagents.FilesystemPermission(
+            FilesystemPermission(
                 operations = ["read"],
                 paths = ["/**"],
                 mode = "deny"),
-            deepagents.FilesystemPermission(
+            FilesystemPermission(
                 operations = ["write"],
                 paths = ["/**"],
                 mode = "deny"),
         ],
-        backend = deepagents.backends.StateBackend(),
+        backend = StateBackend(),
         name = "dd_source_router",
     )
     tool_node = agent.nodes.get("tools")

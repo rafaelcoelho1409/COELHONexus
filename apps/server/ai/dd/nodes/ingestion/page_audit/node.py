@@ -3,16 +3,16 @@ from __future__ import annotations
 from . import domain, params
 from .... import agents
 
-import typing
+from typing import Any
 
 
 async def audit_page(
     framework_slug: str,
-    page: dict[str, typing.Any],
+    page: dict[str, Any],
     markdown: str,
-    auditor: typing.Any,
+    auditor: Any,
     *,
-    config: dict[str, typing.Any] | None = None,
+    config: dict[str, Any] | None = None,
 ) -> tuple[agents.schemas.PageAssessment, list[str]]:
     if len(markdown) > params.MAX_PAGE_MARKDOWN_CHARS:
         raise ValueError(

@@ -1,10 +1,10 @@
 """Value objects of the read-only corpus backend."""
 from __future__ import annotations
 
-import dataclasses
+from dataclasses import dataclass
 
 
-@dataclasses.dataclass(frozen = True, slots = True)
+@dataclass(frozen = True, slots = True)
 class CorpusDoc:
     """One page of the corpus as the agent sees it: where it lives in its virtual filesystem and what is known about it."""
 

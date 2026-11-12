@@ -7,9 +7,15 @@ from .. import schemas
 from .... import service
 from ..... import middlewares, prompts
 
-import deepagents
-import deepagents.backends
-import deepagents.profiles.harness
+from deepagents import (
+    FilesystemPermission,
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    create_deep_agent,
+    register_harness_profile,
+)
+from deepagents.backends import StateBackend
+from deepagents.profiles.harness import harness_profiles
 
 
 def page_scorer(proposals: list[dict], *, fixed_keys: bool, model = None):
@@ -32,15 +38,15 @@ def page_scorer(proposals: list[dict], *, fixed_keys: bool, model = None):
     # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
     # before (by another role or other code in the process) hides tools from this agent.
     key = f"openai:{model_name}"
-    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
-    deepagents.register_harness_profile(
+    harness_profiles._HARNESS_PROFILES.pop(key, None)
+    register_harness_profile(
         key,
-        deepagents.HarnessProfile(
+        HarnessProfile(
             base_system_prompt = "",
-            general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
+            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    agent = deepagents.create_deep_agent(
+    agent = create_deep_agent(
         model = model,
         system_prompt = prompts.pipeline.planner.page_scorer.prompts.system_prompt(proposals),
         response_format = schemas.fixed_key_model(len(proposals)) if fixed_keys else schemas.DocAssignment,
@@ -51,16 +57,16 @@ def page_scorer(proposals: list[dict], *, fixed_keys: bool, model = None):
             middlewares.middleware.ToolAllowlistMiddleware(frozenset()),
         ],
         permissions = [
-            deepagents.FilesystemPermission(
+            FilesystemPermission(
                 operations = ["read"],
                 paths = ["/**"],
                 mode = "deny"),
-            deepagents.FilesystemPermission(
+            FilesystemPermission(
                 operations = ["write"],
                 paths = ["/**"],
                 mode = "deny"),
         ],
-        backend = deepagents.backends.StateBackend(),
+        backend = StateBackend(),
         name = "dd_page_scorer",
     )
     tool_node = agent.nodes.get("tools")

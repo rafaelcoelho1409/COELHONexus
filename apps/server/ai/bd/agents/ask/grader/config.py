@@ -1,0 +1,12 @@
+"""Model limits for BD Ask evidence grading."""
+from dataclasses import dataclass
+
+
+@dataclass(frozen = True, slots = True)
+class ModelConfig:
+    max_output_tokens: int = 1200
+    max_retries: int = 0
+    temperature: float = 0.0
+
+
+MODEL = ModelConfig()

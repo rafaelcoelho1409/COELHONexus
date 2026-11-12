@@ -3,17 +3,17 @@ from __future__ import annotations
 from . import entities
 
 import operator
-import typing
+from typing import Annotated, Optional, TypedDict
 
 
-class DigestState(typing.TypedDict, total = False):
+class DigestState(TypedDict, total = False):
     framework_slug: str
     chapter_id: str
     thread_id: str
-    digest_path: typing.Optional[str]
-    digest_stats: typing.Optional[dict]
-    status: typing.Optional[str]
-    error: typing.Optional[str]
+    digest_path: Optional[str]
+    digest_stats: Optional[dict]
+    status: Optional[str]
+    error: Optional[str]
 
     finished: bool                  # answered without the steps below (a failure, or the stage's blob is current)
     started: float
@@ -25,4 +25,4 @@ class DigestState(typing.TypedDict, total = False):
     items: list[entities.DigestItem]
     todo: list[entities.DigestItem]          # items still to route (the first wave, then the ones that failed)
     wave: int
-    results: typing.Annotated[list[entities.DigestResult], operator.add]
+    results: Annotated[list[entities.DigestResult], operator.add]

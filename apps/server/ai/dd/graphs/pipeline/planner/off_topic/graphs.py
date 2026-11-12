@@ -3,24 +3,24 @@ from __future__ import annotations
 from . import states
 from ..... import nodes
 
-import langgraph.graph
+from langgraph.graph import END, START, StateGraph
 
 
 def off_topic_graph():
-    workflow = langgraph.graph.StateGraph(states.OffTopicState)
+    workflow = StateGraph(states.OffTopicState)
     workflow.add_node("prepare", nodes.pipeline.planner.off_topic.node.prepare)
     workflow.add_node("judge_page", nodes.pipeline.planner.off_topic.node.judge_page)
     workflow.add_node("tally", nodes.pipeline.planner.off_topic.node.tally)
     workflow.add_node("finalize", nodes.pipeline.planner.off_topic.node.finalize)
-    workflow.add_edge(langgraph.graph.START, "prepare")
+    workflow.add_edge(START, "prepare")
     workflow.add_conditional_edges(
         "prepare", 
         nodes.pipeline.planner.off_topic.node.after_prepare, 
-        ["judge_page", "tally", langgraph.graph.END])
+        ["judge_page", "tally", END])
     workflow.add_edge("judge_page", "tally")
     workflow.add_conditional_edges(
         "tally", 
         nodes.pipeline.planner.off_topic.node.after_tally, 
         ["judge_page", "finalize"])
-    workflow.add_edge("finalize", langgraph.graph.END)
+    workflow.add_edge("finalize", END)
     return workflow.compile()

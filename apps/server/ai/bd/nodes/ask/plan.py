@@ -4,10 +4,10 @@ from __future__ import annotations
 from .... import bd
 import domains
 
-import langgraph.runtime
+from langgraph.runtime import Runtime
 
 
-async def plan_research(state: dict, runtime: langgraph.runtime.Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
+async def plan_research(state: dict, runtime: Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
     domains.settings.llm_counter.service.set_node(node = "plan_research")
     plan = await bd.agents.ask.service.invoke(
         runtime.context.planner,
@@ -35,7 +35,7 @@ async def plan_research(state: dict, runtime: langgraph.runtime.Runtime[bd.graph
     }
 
 
-async def rewrite_queries(state: dict, runtime: langgraph.runtime.Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
+async def rewrite_queries(state: dict, runtime: Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
     domains.settings.llm_counter.service.set_node(node = "rewrite_query")
     plan = await bd.agents.ask.service.invoke(
         runtime.context.planner,

@@ -3,24 +3,24 @@ from __future__ import annotations
 from . import entities
 
 import operator
-import typing
+from typing import Annotated, Optional, TypedDict
 
 
-class ChecklistState(typing.TypedDict, total = False):
+class ChecklistState(TypedDict, total = False):
     framework_slug: str
     chapter_id: str
     thread_id: str
     # Read from the chapter's state.
-    sawc_stats: typing.Optional[dict]
-    best_seen_score: typing.Optional[float]
-    best_seen_pregate: typing.Optional[int]
-    best_seen_sawc_path: typing.Optional[str]
-    consecutive_infra_degraded: typing.Optional[int]
+    sawc_stats: Optional[dict]
+    best_seen_score: Optional[float]
+    best_seen_pregate: Optional[int]
+    best_seen_sawc_path: Optional[str]
+    consecutive_infra_degraded: Optional[int]
     # What the node answers.
-    checklist_path: typing.Optional[str]
-    checklist_stats: typing.Optional[dict]
-    status: typing.Optional[str]
-    error: typing.Optional[str]
+    checklist_path: Optional[str]
+    checklist_stats: Optional[dict]
+    status: Optional[str]
+    error: Optional[str]
 
     finished: bool                  # answered without the steps below (a failure, or the stage's blob is current)
     started: float
@@ -31,6 +31,6 @@ class ChecklistState(typing.TypedDict, total = False):
     sawc_manifest_hash: str
     digest_manifest_hash: str
     pre_results: list[dict]         # the deterministic gates' criteria
-    judge: typing.Optional[entities.JudgeRun]       # the first judge run
-    opinions: typing.Annotated[list[entities.JudgeRun], operator.add]      # the second-opinion runs
-    merged: typing.Optional[list[dict]]    # the per-criterion majority of the runs (when there were opinions)
+    judge: Optional[entities.JudgeRun]       # the first judge run
+    opinions: Annotated[list[entities.JudgeRun], operator.add]      # the second-opinion runs
+    merged: Optional[list[dict]]    # the per-criterion majority of the runs (when there were opinions)

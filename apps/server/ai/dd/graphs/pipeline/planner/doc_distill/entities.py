@@ -1,19 +1,19 @@
 """What the steps of the doc_distill subgraph hand to each other."""
 from __future__ import annotations
 
-import typing
+from typing import NotRequired, TypedDict
 
 
-class DistillResult(typing.TypedDict):
+class DistillResult(TypedDict):
     """The outcome for one page: its distillate, or why it has none; `fallback` marks a deterministic stand-in."""
 
     key: str
     distillate: dict | None
     fallback: bool
-    reason: typing.NotRequired[str]
+    reason: NotRequired[str]
 
 
-class DistillInput(typing.TypedDict):
+class DistillInput(TypedDict):
     """What one `distill_page` branch is sent."""
 
     key: str

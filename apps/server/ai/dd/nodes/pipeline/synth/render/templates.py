@@ -1,13 +1,13 @@
 """render — Jinja2 environment + inline chapter template."""
 from __future__ import annotations
 
-import jinja2
+from jinja2 import Environment, StrictUndefined
 
 
 # StrictUndefined: unset template vars crash loudly instead of emitting silent None literals.
-JINJA_ENV = jinja2.Environment(
+JINJA_ENV = Environment(
     autoescape = False,
-    undefined = jinja2.StrictUndefined,
+    undefined = StrictUndefined,
     keep_trailing_newline = True,
     lstrip_blocks = True,
     trim_blocks = True,

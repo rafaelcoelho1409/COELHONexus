@@ -4,14 +4,14 @@ import domains.dd.pipeline.observability.service
 from . import domain, params, service
 from ..... import graphs
 
-import langgraph.graph
-import langgraph.runtime
+from langgraph.graph import END
+from langgraph.runtime import Runtime
 
 
 @domains.dd.pipeline.observability.service.traced_synth("outline_sdp")
 async def outline_sdp(
     state: graphs.pipeline.synth.states.SynthState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     result = await graphs.pipeline.synth.outline.graphs.outline_graph().ainvoke(
         {
@@ -29,27 +29,27 @@ async def outline_sdp(
 
 async def prepare(
     state: graphs.pipeline.synth.outline.states.OutlineState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.prepare(state, runtime)
 
 
 async def draft(
     state: graphs.pipeline.synth.outline.states.OutlineState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.draft(state, runtime)
 
 
 async def finalize(
     state: graphs.pipeline.synth.outline.states.OutlineState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.finalize(state, runtime)
 
 
 def after_prepare(graph_state: graphs.pipeline.synth.outline.states.OutlineState) -> str:
-    return langgraph.graph.END if graph_state.get("finished") else "draft"
+    return END if graph_state.get("finished") else "draft"
 
 
 def after_draft(graph_state: graphs.pipeline.synth.outline.states.OutlineState) -> str:

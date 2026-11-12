@@ -5,18 +5,18 @@ node built over the run's data (the outline's ids, a section's code bank, the so
 from __future__ import annotations
 from . import entities, schemas, service
 
-import langchain_core.tools
-import pydantic
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel
 
 
-def check_tool(name: str, description: str, args_schema: type[pydantic.BaseModel], check: entities.Check) -> langchain_core.tools.StructuredTool:
+def check_tool(name: str, description: str, args_schema: type[BaseModel], check: entities.Check) -> StructuredTool:
     async def run(**fields) -> str:
         return service.report(await check(args_schema(**fields).model_dump()))
 
-    return langchain_core.tools.StructuredTool.from_function(coroutine = run, name = name, description = description, args_schema = args_schema)
+    return StructuredTool.from_function(coroutine = run, name = name, description = description, args_schema = args_schema)
 
 
-def validate_outline_tool(check: entities.Check) -> langchain_core.tools.StructuredTool:
+def validate_outline_tool(check: entities.Check) -> StructuredTool:
     return check_tool(
         "validate_outline",
         "Checks a whole chapter outline with no model: section ids, heading and description rules, prerequisites (cycles, forward "
@@ -27,7 +27,7 @@ def validate_outline_tool(check: entities.Check) -> langchain_core.tools.Structu
     )
 
 
-def check_digest_tool(check: entities.Check) -> langchain_core.tools.StructuredTool:
+def check_digest_tool(check: entities.Check) -> StructuredTool:
     return check_tool(
         "check_digest",
         "Checks a source digest with no model: every section_id is in the outline, every code ref is a hash of this source, no hash is "
@@ -37,7 +37,7 @@ def check_digest_tool(check: entities.Check) -> langchain_core.tools.StructuredT
     )
 
 
-def check_section_tool(check: entities.Check) -> langchain_core.tools.StructuredTool:
+def check_section_tool(check: entities.Check) -> StructuredTool:
     return check_tool(
         "check_section",
         "Checks a whole section draft with the validator that judges the final answer, no model: the heading echo, code hashes that are "
@@ -48,7 +48,7 @@ def check_section_tool(check: entities.Check) -> langchain_core.tools.Structured
     )
 
 
-def check_code_tool(check: entities.Check) -> langchain_core.tools.StructuredTool:
+def check_code_tool(check: entities.Check) -> StructuredTool:
     return check_tool(
         "check_code",
         "Checks code with no model: that it parses, and for a derived example that its body is inside the length band. Call it with the "

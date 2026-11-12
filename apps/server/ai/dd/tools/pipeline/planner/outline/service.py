@@ -2,10 +2,10 @@
 from __future__ import annotations
 from . import params
 
-import collections.abc
+from collections.abc import Sequence
 
 
-def report(scored: dict, chapters: collections.abc.Sequence[dict], labels: collections.abc.Sequence[str], target: int) -> str:
+def report(scored: dict, chapters: Sequence[dict], labels: Sequence[str], target: int) -> str:
     """The score of one outline as the text the model reads: the three numbers, then the pages that match no chapter and the chapter sizes."""
     lines = [
         f"score {scored['score']} | {scored['n']} chapters (target {target}) | largest chapter "

@@ -9,21 +9,21 @@ import asyncio
 import hashlib
 import json
 import logging
-import collections.abc
-import typing
+from collections.abc import Awaitable, Callable, Coroutine, Iterable
+from typing import Any, Protocol
 
 
 logger = logging.getLogger(__name__)
 
 
-PageReader = collections.abc.Callable[[str], collections.abc.Awaitable[str]]
-ArtifactExists = collections.abc.Callable[[str], collections.abc.Awaitable[bool]]
-ArtifactReader = collections.abc.Callable[[str], collections.abc.Awaitable[str]]
-ArtifactWriter = collections.abc.Callable[[str, str, str], collections.abc.Awaitable[None]]
-PageProgress = collections.abc.Callable[[], collections.abc.Awaitable[None]]
+PageReader = Callable[[str], Awaitable[str]]
+ArtifactExists = Callable[[str], Awaitable[bool]]
+ArtifactReader = Callable[[str], Awaitable[str]]
+ArtifactWriter = Callable[[str, str, str], Awaitable[None]]
+PageProgress = Callable[[], Awaitable[None]]
 
 
-def _quality_row(audit: dict[str, typing.Any], patches: dict[str, typing.Any], repair: dict[str, typing.Any]) -> dict[str, typing.Any]:
+def _quality_row(audit: dict[str, Any], patches: dict[str, Any], repair: dict[str, Any]) -> dict[str, Any]:
     assessment = audit.get("assessment") or {}
     issues = assessment.get("issues") if isinstance(assessment, dict) else []
     issues = issues if isinstance(issues, list) else []
@@ -53,7 +53,7 @@ def _quality_row(audit: dict[str, typing.Any], patches: dict[str, typing.Any], r
     }
 
 
-def _quality_summary(rows: list[dict[str, typing.Any]]) -> dict[str, typing.Any]:
+def _quality_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     categories: dict[str, int] = {}
     severities: dict[str, int] = {}
     mechanical_fixes: dict[str, int] = {}
@@ -90,15 +90,15 @@ def _quality_summary(rows: list[dict[str, typing.Any]]) -> dict[str, typing.Any]
     }
 
 
-class Repairer(typing.Protocol):
+class Repairer(Protocol):
     async def ainvoke(
         self,
-        input: dict[str, typing.Any],
-        config: dict[str, typing.Any] | None = None,
-    ) -> dict[str, typing.Any]: ...
+        input: dict[str, Any],
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
 
 
-class CancellationCheck(typing.Protocol):
+class CancellationCheck(Protocol):
     async def raise_if_cancelled(self) -> None: ...
 
 
@@ -111,7 +111,7 @@ async def normalize_pages(
     repairer: Repairer,
     progress: CancellationCheck | None,
     page_done: PageProgress,
-) -> dict[str, typing.Any]:
+) -> dict[str, Any]:
     """Normalize all audited pages and retain rejected proposals for review."""
     framework_slug = state.get("framework_slug")
     run_id = state.get("run_id")
@@ -122,9 +122,9 @@ async def normalize_pages(
         for item in state.get("assessments", [])
     }
     semaphore = asyncio.Semaphore(params.PAGE_CONCURRENCY)
-    quality_rows: list[dict[str, typing.Any]] = []
+    quality_rows: list[dict[str, Any]] = []
 
-    async def normalize_page(page: graphs.ingestion.entities.PageReference) -> dict[str, typing.Any]:
+    async def normalize_page(page: graphs.ingestion.entities.PageReference) -> dict[str, Any]:
         if progress is not None:
             await progress.raise_if_cancelled()
         markdown = await read_page(page["source_key"])
@@ -276,7 +276,7 @@ async def normalize_pages(
             "repair_status": repair["status"],
         }
 
-    async def normalize_one(page: graphs.ingestion.entities.PageReference) -> dict[str, typing.Any]:
+    async def normalize_one(page: graphs.ingestion.entities.PageReference) -> dict[str, Any]:
         async with semaphore:
             return await normalize_page(page)
 
@@ -298,8 +298,8 @@ async def normalize_pages(
 
 
 async def _gather_cancel_on_failure(
-    awaitables: collections.abc.Iterable[collections.abc.Coroutine[typing.Any, typing.Any, typing.Any]],
-) -> list[typing.Any]:
+    awaitables: Iterable[Coroutine[Any, Any, Any]],
+) -> list[Any]:
     tasks = [asyncio.create_task(awaitable) for awaitable in awaitables]
     try:
         return await asyncio.gather(*tasks)

@@ -15,9 +15,9 @@ import asyncio
 import json
 import logging
 import time
-import typing
+from typing import Any
 
-import langgraph.runtime
+from langgraph.runtime import Runtime
 
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 Context = graphs.pipeline.planner.entities.PlannerContext
 
 
-def _valid_scores(assignment: typing.Any, n: int) -> list[dict]:
+def _valid_scores(assignment: Any, n: int) -> list[dict]:
     return [
         {"chapter_idx": s.chapter_idx, "confidence": s.confidence}
         for s in assignment.scores
@@ -37,7 +37,7 @@ def _best(scores: list[dict]) -> float:
     return max((s["confidence"] for s in scores), default = 0.0)
 
 
-async def prepare(state: graphs.pipeline.planner.chapter_assign.states.AssignState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.planner.chapter_assign.states.AssignState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
@@ -122,7 +122,7 @@ async def prepare(state: graphs.pipeline.planner.chapter_assign.states.AssignSta
     }
 
 
-async def _ask(context: typing.Any, data: dict, payload: str, meta: dict) -> typing.Any:
+async def _ask(context: Any, data: dict, payload: str, meta: dict) -> Any:
     """One request to the scorer, returned as a `DocAssignment`."""
     schemas = agents.pipeline.planner.schemas
     n = len(data["proposals"])
@@ -146,7 +146,7 @@ def _report_quality(meta: dict, scores: list[dict], closest: bool) -> None:
         pass
 
 
-async def _ladder(context: typing.Any, data: dict, request: dict) -> tuple[list[dict] | None, bool]:
+async def _ladder(context: Any, data: dict, request: dict) -> tuple[list[dict] | None, bool]:
     """Score one page: (scores, used_fallback). `scores` is None only for a page with no content at all."""
     proposals = data["proposals"]
     n = len(proposals)
@@ -215,7 +215,7 @@ async def _ladder(context: typing.Any, data: dict, request: dict) -> tuple[list[
     return scores, False
 
 
-async def score_page(state: graphs.pipeline.planner.chapter_assign.entities.ScoreInput, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def score_page(state: graphs.pipeline.planner.chapter_assign.entities.ScoreInput, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     data = context.scratch[params.STEP]
     key = state["key"]
@@ -257,7 +257,7 @@ async def score_page(state: graphs.pipeline.planner.chapter_assign.entities.Scor
     return {"results": [{"key": key, "scores": scores, "fallback": used_fallback, "round": state["round"]}]}
 
 
-def tally(state: graphs.pipeline.planner.chapter_assign.states.AssignState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+def tally(state: graphs.pipeline.planner.chapter_assign.states.AssignState, runtime: Runtime[Context]) -> dict:
     """After the main pass: the pages that ended on the lexical fallback get one more pass, unless too many failed (the Rotator is
     down and a sweep would only burn the time)."""
     if state.get("swept") or not params.SWEEP_ENABLED:
@@ -269,7 +269,7 @@ def tally(state: graphs.pipeline.planner.chapter_assign.states.AssignState, runt
     return {"sweep": failed, "swept": True}
 
 
-async def finalize(state: graphs.pipeline.planner.chapter_assign.states.AssignState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.planner.chapter_assign.states.AssignState, runtime: Runtime[Context]) -> dict:
     blobs = runtime.context.blobs
     slug = state["framework_slug"]
     relevant_files = state.get("relevant_files") or state.get("raw_files") or []

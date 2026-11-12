@@ -43,8 +43,8 @@ import asyncio
 import logging
 import os
 
-import langchain_core.runnables
-import langgraph.graph
+from langchain_core.runnables import RunnableConfig
+from langgraph.graph import END, StateGraph
 
 
 logger = logging.getLogger(__name__)
@@ -143,7 +143,7 @@ def build_adaptive_rag_graph(
             channel_ids = channel_ids or None,
         )
 
-    workflow = langgraph.graph.StateGraph(ycs.graphs.ask.adaptive.states.AdaptiveAskState)
+    workflow = StateGraph(ycs.graphs.ask.adaptive.states.AdaptiveAskState)
 
     # Bind deps via async closures — LangGraph requires the node value
     # to be a true async callable.
@@ -167,7 +167,7 @@ def build_adaptive_rag_graph(
     async def _direct(s):
         return await nodes.direct_answer.node.direct_answer(s, llm_fast or llm)
 
-    async def _run_standard(s, config: langchain_core.runnables.RunnableConfig):
+    async def _run_standard(s, config: RunnableConfig):
         # `config` arg is auto-injected by LangGraph so we
         # can forward the user's `max_retries` down to the scoped
         # STANDARD sub-graph (previously the override silently fell
@@ -260,11 +260,11 @@ def build_adaptive_rag_graph(
         "direct_answer",
         _route_after_direct,
         {
-            "end":            langgraph.graph.END,
+            "end":            END,
             "run_standard":   "run_standard",
         },
     )
-    workflow.add_edge("run_standard",  langgraph.graph.END)
+    workflow.add_edge("run_standard",  END)
     # DEEP: plan → run_subagents (bounded fan-out) → synthesize → critic
     # → END. Plain edge, not a conditional `Send()` fan-out — the
     # bounded-deadline orchestration happens INSIDE `_run_subagents`
@@ -273,6 +273,6 @@ def build_adaptive_rag_graph(
     workflow.add_edge("plan_research",  "run_subagents")
     workflow.add_edge("run_subagents",  "synthesize")
     workflow.add_edge("synthesize",     "critic")
-    workflow.add_edge("critic",         langgraph.graph.END)
+    workflow.add_edge("critic",         END)
 
     return workflow.compile()

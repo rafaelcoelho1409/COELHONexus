@@ -9,37 +9,37 @@ import asyncio
 import hashlib
 import json
 import logging
-import collections.abc
-import typing
+from collections.abc import Awaitable, Callable, Coroutine, Iterable
+from typing import Any, Protocol
 
 
 logger = logging.getLogger(__name__)
 
 
-PageReader = collections.abc.Callable[[str], collections.abc.Awaitable[str]]
-ArtifactExists = collections.abc.Callable[[str], collections.abc.Awaitable[bool]]
-ArtifactReader = collections.abc.Callable[[str], collections.abc.Awaitable[str]]
-ArtifactWriter = collections.abc.Callable[[str, str, str], collections.abc.Awaitable[None]]
-PageProgress = collections.abc.Callable[[], collections.abc.Awaitable[None]]
+PageReader = Callable[[str], Awaitable[str]]
+ArtifactExists = Callable[[str], Awaitable[bool]]
+ArtifactReader = Callable[[str], Awaitable[str]]
+ArtifactWriter = Callable[[str, str, str], Awaitable[None]]
+PageProgress = Callable[[], Awaitable[None]]
 
 
-class Auditor(typing.Protocol):
+class Auditor(Protocol):
     def with_structured_output(
         self,
         schema: type[agents.schemas.PageAssessment],
         *,
         method: str,
         include_raw: bool,
-    ) -> typing.Any: ...
+    ) -> Any: ...
 
     async def ainvoke(
         self,
-        input: typing.Any,
-        config: dict[str, typing.Any] | None = None,
-    ) -> typing.Any: ...
+        input: Any,
+        config: dict[str, Any] | None = None,
+    ) -> Any: ...
 
 
-class CancellationCheck(typing.Protocol):
+class CancellationCheck(Protocol):
     async def raise_if_cancelled(self) -> None: ...
 
 
@@ -52,7 +52,7 @@ async def audit_pages(
     auditor: Auditor,
     progress: CancellationCheck | None,
     page_done: PageProgress,
-) -> dict[str, typing.Any]:
+) -> dict[str, Any]:
     """Audit every frozen page reference and persist evidence-checked results."""
     framework_slug = state.get("framework_slug")
     run_id = state.get("run_id")
@@ -60,7 +60,7 @@ async def audit_pages(
         raise ValueError("the ingestion graph state has no framework or run identity")
     semaphore = asyncio.Semaphore(params.PAGE_CONCURRENCY)
 
-    async def audit_page(page: graphs.ingestion.entities.PageReference) -> dict[str, typing.Any]:
+    async def audit_page(page: graphs.ingestion.entities.PageReference) -> dict[str, Any]:
         if progress is not None:
             await progress.raise_if_cancelled()
         markdown = await read_page(page["source_key"])
@@ -142,7 +142,7 @@ async def audit_pages(
         await page_done()
         return record
 
-    async def audit_one(page: graphs.ingestion.entities.PageReference) -> dict[str, typing.Any]:
+    async def audit_one(page: graphs.ingestion.entities.PageReference) -> dict[str, Any]:
         async with semaphore:
             return await audit_page(page)
 
@@ -152,8 +152,8 @@ async def audit_pages(
 
 
 async def _gather_cancel_on_failure(
-    awaitables: collections.abc.Iterable[collections.abc.Coroutine[typing.Any, typing.Any, typing.Any]],
-) -> list[typing.Any]:
+    awaitables: Iterable[Coroutine[Any, Any, Any]],
+) -> list[Any]:
     tasks = [asyncio.create_task(awaitable) for awaitable in awaitables]
     try:
         return await asyncio.gather(*tasks)

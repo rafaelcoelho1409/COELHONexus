@@ -8,7 +8,7 @@ from __future__ import annotations
 from . import entities, params, states
 from .... import nodes
 
-import langgraph.graph
+from langgraph.graph import END, START, StateGraph
 
 
 def synth_graph(checkpointer = None):
@@ -16,7 +16,7 @@ def synth_graph(checkpointer = None):
     if params.is_v2():
         return synth_v2_graph(checkpointer)
 
-    workflow = langgraph.graph.StateGraph(states.SynthState, context_schema = entities.SynthContext)
+    workflow = StateGraph(states.SynthState, context_schema = entities.SynthContext)
     workflow.add_node("outline_sdp", nodes.pipeline.synth.outline.node.outline_sdp)
     workflow.add_node("digest_construct", nodes.pipeline.synth.digest.node.digest_construct)
     workflow.add_node("sawc_write", nodes.pipeline.synth.sawc.node.sawc_write)
@@ -24,7 +24,7 @@ def synth_graph(checkpointer = None):
     workflow.add_node("checklist_eval", nodes.pipeline.synth.checklist.node.checklist_eval)
     workflow.add_node("mgsr_replan", nodes.pipeline.synth.mgsr.node.mgsr_replan)
     workflow.add_node("render_audit_write", nodes.pipeline.synth.render.node.render_audit_write)
-    workflow.add_edge(langgraph.graph.START, "outline_sdp")
+    workflow.add_edge(START, "outline_sdp")
     workflow.add_edge("outline_sdp", "digest_construct")
     workflow.add_edge("digest_construct", "sawc_write")
     workflow.add_edge("sawc_write", "sawc_derive")
@@ -34,13 +34,13 @@ def synth_graph(checkpointer = None):
         "mgsr_replan",
         nodes.pipeline.synth.mgsr.node.route_after_mgsr,
         {"sawc_write": "sawc_write", "render_audit_write": "render_audit_write"})
-    workflow.add_edge("render_audit_write", langgraph.graph.END)
+    workflow.add_edge("render_audit_write", END)
     return workflow.compile(checkpointer = checkpointer, name = "dd_synth")
 
 
 def synth_v2_graph(checkpointer = None):
     """Compile Synth v2: outline → deterministic code ledger → write → capstone → verify → judge → one revision → render."""
-    workflow = langgraph.graph.StateGraph(states.SynthState, context_schema = entities.SynthContext)
+    workflow = StateGraph(states.SynthState, context_schema = entities.SynthContext)
     workflow.add_node("outline_sdp", nodes.pipeline.synth.outline.node.outline_sdp)
     workflow.add_node("ledger_prepare", nodes.pipeline.synth.ledger_prepare.node.ledger_prepare)
     workflow.add_node("sawc_write", nodes.pipeline.synth.sawc.node.sawc_write)
@@ -49,7 +49,7 @@ def synth_v2_graph(checkpointer = None):
     workflow.add_node("checklist_eval", nodes.pipeline.synth.checklist.node.checklist_eval)
     workflow.add_node("mgsr_replan", nodes.pipeline.synth.mgsr.node.mgsr_replan)
     workflow.add_node("render_audit_write", nodes.pipeline.synth.render.node.render_audit_write)
-    workflow.add_edge(langgraph.graph.START, "outline_sdp")
+    workflow.add_edge(START, "outline_sdp")
     workflow.add_edge("outline_sdp", "ledger_prepare")
     workflow.add_edge("ledger_prepare", "sawc_write")
     workflow.add_edge("sawc_write", "sawc_derive")
@@ -61,5 +61,5 @@ def synth_v2_graph(checkpointer = None):
         nodes.pipeline.synth.mgsr.node.route_after_mgsr_v2,
         {"sawc_write": "sawc_write", "render_audit_write": "render_audit_write"},
     )
-    workflow.add_edge("render_audit_write", langgraph.graph.END)
+    workflow.add_edge("render_audit_write", END)
     return workflow.compile(checkpointer = checkpointer, name = "dd_synth_v2")

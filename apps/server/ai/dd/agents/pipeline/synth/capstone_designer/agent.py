@@ -7,16 +7,22 @@ from .. import schemas
 from .... import service
 from ..... import middlewares, prompts, skills
 
-import collections.abc
-import typing
+from collections.abc import Sequence
+from typing import Any
 
-import deepagents
-import deepagents.backends
-import deepagents.profiles.harness
-import langchain.agents.middleware
+from deepagents import (
+    FilesystemPermission,
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    create_deep_agent,
+    register_harness_profile,
+)
+from deepagents.backends import StateBackend
+from deepagents.profiles.harness import harness_profiles
+from langchain.agents.middleware import ToolCallLimitMiddleware
 
 
-def capstone_designer(*, tools: collections.abc.Sequence[typing.Any], model = None):
+def capstone_designer(*, tools: Sequence[Any], model = None):
     """Build the designer for one chapter. `tools` hold `check_code` bound to the chapter (it parses the application, checks its size and that it
     uses the chapter's code); its skill says how to choose and shape the application."""
     if model is None:
@@ -37,15 +43,15 @@ def capstone_designer(*, tools: collections.abc.Sequence[typing.Any], model = No
     # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
     # before (by another role or other code in the process) hides tools from this agent.
     key = f"openai:{model_name}"
-    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
-    deepagents.register_harness_profile(
+    harness_profiles._HARNESS_PROFILES.pop(key, None)
+    register_harness_profile(
         key,
-        deepagents.HarnessProfile(
+        HarnessProfile(
             base_system_prompt = "",
-            general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
+            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    agent = deepagents.create_deep_agent(
+    agent = create_deep_agent(
         model = model,
         tools = designer_tools,
         system_prompt = prompts.pipeline.synth.capstone_designer.prompts.SYSTEM_PROMPT,
@@ -55,26 +61,26 @@ def capstone_designer(*, tools: collections.abc.Sequence[typing.Any], model = No
                 model_calls = params.MODEL_CALLS,
                 with_tools = True),
             middlewares.middleware.ToolAllowlistMiddleware(frozenset(tool_names)),
-            langchain.agents.middleware.ToolCallLimitMiddleware(
+            ToolCallLimitMiddleware(
                 tool_name = "check_code",
                 run_limit = params.CHECK_CALL_LIMIT,
                 exit_behavior = "continue"),
         ],
         permissions = [
-            deepagents.FilesystemPermission(
+            FilesystemPermission(
                 operations = ["read"],
                 paths = [f"{skills.params.VIRTUAL_ROOT}/**"],
                 mode = "allow"),
-            deepagents.FilesystemPermission(
+            FilesystemPermission(
                 operations = ["read"],
                 paths = ["/**"],
                 mode = "deny"),
-            deepagents.FilesystemPermission(
+            FilesystemPermission(
                 operations = ["write"],
                 paths = ["/**"],
                 mode = "deny"),
         ],
-        backend = deepagents.backends.StateBackend(),
+        backend = StateBackend(),
         skills = [skills.domain.source_for("capstone_designer")],
         name = "dd_capstone_designer",
     )

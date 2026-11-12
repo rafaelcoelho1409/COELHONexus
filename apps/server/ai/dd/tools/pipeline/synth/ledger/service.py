@@ -2,7 +2,7 @@
 from __future__ import annotations
 from . import params
 
-import difflib
+from difflib import unified_diff
 
 import domains
 
@@ -45,7 +45,7 @@ def diff(ledger: domains.dd.pipeline.ledger.entities.Ledger, first: str, second:
     for digest in (first, second):
         if digest not in ledger.blocks:
             return unknown(digest)
-    changes = difflib.unified_diff(
+    changes = unified_diff(
         ledger.blocks[first].body.splitlines(), ledger.blocks[second].body.splitlines(), fromfile = first, tofile = second, lineterm = "", n = 1,
     )
     text = "\n".join(changes)

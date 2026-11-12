@@ -42,6 +42,9 @@ async def normalize_source(source: str) -> tuple[str, dict[str, int]]:
                 "footer_links_stripped", "heading_anchors_stripped", "code_annotations_stripped",
                 "code_copy_lines_stripped", "toc_tables_stripped", "viewcode_links_stripped",
                 "trailing_rules_stripped", "blank_lines_collapsed", "trailing_ws_lines",
+                "malformed_links_fixed",
+                "api_entries_repaired",
+                "indented_label_lists_repaired",
             }
         }
         return normalized.body, mechanical_fixes

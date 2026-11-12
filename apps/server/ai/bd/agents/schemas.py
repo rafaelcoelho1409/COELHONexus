@@ -1,17 +1,24 @@
 """Pydantic contracts exchanged by Book Distiller ingestion agents."""
 from __future__ import annotations
 
-import enum
-import typing
+from enum import StrEnum
+from typing import Annotated
 
-import pydantic
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+    StringConstraints,
+)
 
 
-NonEmptyText = typing.Annotated[str, pydantic.StringConstraints(strip_whitespace = True, min_length = 1)]
-Confidence = typing.Annotated[float, pydantic.Field(ge = 0.0, le = 1.0, allow_inf_nan = False)]
+NonEmptyText = Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1)]
+Confidence = Annotated[float, Field(ge = 0.0, le = 1.0, allow_inf_nan = False)]
 
 
-class PageKind(enum.StrEnum):
+class PageKind(StrEnum):
     TEXT = "text"
     BLANK = "blank"
     IMAGE_ONLY = "image_only"
@@ -19,7 +26,7 @@ class PageKind(enum.StrEnum):
     UNKNOWN = "unknown"
 
 
-class ContentPageRole(enum.StrEnum):
+class ContentPageRole(StrEnum):
     """A page's role in the book, separate from extraction-quality findings."""
 
     CORE = "core"
@@ -31,7 +38,7 @@ class ContentPageRole(enum.StrEnum):
     UNKNOWN = "unknown"
 
 
-class IssueCode(enum.StrEnum):
+class IssueCode(StrEnum):
     CONTROL_CHARACTERS = "control_characters"
     NEAR_EMPTY = "near_empty"
     SPLIT_WORD = "split_word"
@@ -45,7 +52,7 @@ class IssueCode(enum.StrEnum):
     OTHER = "other"
 
 
-class AuditIssueCode(enum.StrEnum):
+class AuditIssueCode(StrEnum):
     """What the page auditor may report: sparseness is measured in code, and book metadata has its own stage."""
 
     CONTROL_CHARACTERS = "control_characters"
@@ -59,31 +66,31 @@ class AuditIssueCode(enum.StrEnum):
     OTHER = "other"
 
 
-class FindingVerdict(enum.StrEnum):
+class FindingVerdict(StrEnum):
     DEFECT = "defect"
     NOT_A_DEFECT = "not_a_defect"
 
 
-class IssueSeverity(enum.StrEnum):
+class IssueSeverity(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
 
 
-class EvidenceSource(enum.StrEnum):
+class EvidenceSource(StrEnum):
     PAGE_MARKDOWN = "page_markdown"
     BOOK_METADATA = "book_metadata"
 
 
-class PatchRisk(enum.StrEnum):
+class PatchRisk(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
 
 
-class SpecialistRole(enum.StrEnum):
+class SpecialistRole(StrEnum):
     TEXT_REPAIR = "text_repair"
     STRUCTURE = "structure"
 
@@ -108,41 +115,41 @@ ALLOWED_ISSUES_BY_ROLE = {
 }
 
 
-class EvidenceRef(pydantic.BaseModel):
+class EvidenceRef(BaseModel):
     """A source excerpt and optional locator supporting an agent finding."""
 
-    model_config = pydantic.ConfigDict(extra = "forbid")
+    model_config = ConfigDict(extra = "forbid")
 
     source: EvidenceSource
     excerpt: NonEmptyText
-    page_number: int | None = pydantic.Field(default = None, gt = 0)
+    page_number: int | None = Field(default = None, gt = 0)
     locator: NonEmptyText | None = None
 
 
-class PageIssue(pydantic.BaseModel):
+class PageIssue(BaseModel):
     """One evidence-backed quality issue found on a page."""
 
-    model_config = pydantic.ConfigDict(extra = "forbid")
+    model_config = ConfigDict(extra = "forbid")
 
     issue_id: NonEmptyText
     code: IssueCode
     severity: IssueSeverity
     description: NonEmptyText
     confidence: Confidence
-    evidence: list[EvidenceRef] = pydantic.Field(min_length = 1)
+    evidence: list[EvidenceRef] = Field(min_length = 1)
 
 
-class PageAssessment(pydantic.BaseModel):
+class PageAssessment(BaseModel):
     """Agent assessment for one physical page; pages are never omitted."""
 
-    model_config = pydantic.ConfigDict(extra = "forbid")
+    model_config = ConfigDict(extra = "forbid")
 
-    page_number: int = pydantic.Field(gt = 0)
+    page_number: int = Field(gt = 0)
     page_kind: PageKind
     confidence: Confidence
-    issues: list[PageIssue] = pydantic.Field(default_factory = list)
+    issues: list[PageIssue] = Field(default_factory = list)
 
-    @pydantic.model_validator(mode = "after")
+    @model_validator(mode = "after")
     def _validate_unique_issue_ids(self) -> PageAssessment:
         issue_ids = [issue.issue_id for issue in self.issues]
         if len(issue_ids) != len(set(issue_ids)):
@@ -150,79 +157,79 @@ class PageAssessment(pydantic.BaseModel):
         return self
 
 
-class ContentPageAssessment(pydantic.BaseModel):
+class ContentPageAssessment(BaseModel):
     """Content-role classification for one normalized physical page."""
 
-    model_config = pydantic.ConfigDict(extra = "forbid")
+    model_config = ConfigDict(extra = "forbid")
 
     role: ContentPageRole
     confidence: Confidence
-    rationale: typing.Annotated[str, pydantic.StringConstraints(strip_whitespace = True, min_length = 1, max_length = 600)]
+    rationale: Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1, max_length = 600)]
 
 
-class PageAuditFinding(pydantic.BaseModel):
+class PageAuditFinding(BaseModel):
     """Minimal model-facing finding; page locators and evidence objects are added by the application."""
 
-    model_config = pydantic.ConfigDict(extra = "forbid")
+    model_config = ConfigDict(extra = "forbid")
 
     code: AuditIssueCode
     severity: IssueSeverity
     description: NonEmptyText
     confidence: Confidence
-    evidence_excerpts: list[NonEmptyText] = pydantic.Field(min_length = 1, max_length = 8)
+    evidence_excerpts: list[NonEmptyText] = Field(min_length = 1, max_length = 8)
     # Decided last, after the evidence is written: a finding that on reflection is normal Docling output is marked so.
     verdict: FindingVerdict
 
 
-class FindingCheck(pydantic.BaseModel):
+class FindingCheck(BaseModel):
     """A second reader's decision on one finding."""
 
-    model_config = pydantic.ConfigDict(extra = "forbid")
+    model_config = ConfigDict(extra = "forbid")
 
     issue_id: NonEmptyText
     verdict: FindingVerdict
     reason: NonEmptyText
 
 
-class FindingCheckBatch(pydantic.BaseModel):
+class FindingCheckBatch(BaseModel):
     """The verifier's decisions, one per finding it was shown."""
 
-    model_config = pydantic.ConfigDict(extra = "forbid")
+    model_config = ConfigDict(extra = "forbid")
 
-    checks: list[FindingCheck] = pydantic.Field(default_factory = list, max_length = 32)
+    checks: list[FindingCheck] = Field(default_factory = list, max_length = 32)
 
 
-class PageAuditResponse(pydantic.BaseModel):
+class PageAuditResponse(BaseModel):
     """Minimal model-facing response for one physical page."""
 
-    model_config = pydantic.ConfigDict(extra = "forbid")
+    model_config = ConfigDict(extra = "forbid")
 
     page_kind: PageKind
     confidence: Confidence
-    findings: list[PageAuditFinding] = pydantic.Field(default_factory = list, max_length = 32)
+    findings: list[PageAuditFinding] = Field(default_factory = list, max_length = 32)
 
 
-class WorkIssueRef(pydantic.BaseModel):
+class WorkIssueRef(BaseModel):
     """A specialist assignment's exact page-local finding reference."""
 
-    model_config = pydantic.ConfigDict(extra = "forbid")
+    model_config = ConfigDict(extra = "forbid")
 
     issue_id: NonEmptyText
-    page_number: int = pydantic.Field(gt = 0)
+    page_number: int = Field(gt = 0)
     issue_code: IssueCode
 
 
-class WorkItem(pydantic.BaseModel):
+class WorkItem(BaseModel):
     """One bounded, evidence-backed assignment to an allowlisted specialist."""
 
-    model_config = pydantic.ConfigDict(extra = "forbid")
+    model_config = ConfigDict(extra = "forbid")
 
     role: SpecialistRole
-    issue_refs: list[WorkIssueRef] = pydantic.Field(min_length = 1, max_length = 32)
-    evidence: list[EvidenceRef] = pydantic.Field(min_length = 1)
+    issue_refs: list[WorkIssueRef] = Field(min_length = 1, max_length = 32)
+    evidence: list[EvidenceRef] = Field(min_length = 1)
     rationale: NonEmptyText
 
-    @pydantic.model_validator(mode = "after")
+    @model_validator(mode = "after")
     def _validate_role_issue_codes(self) -> WorkItem:
         allowed = ALLOWED_ISSUES_BY_ROLE[self.role]
         issue_refs = [
@@ -238,14 +245,14 @@ class WorkItem(pydantic.BaseModel):
         return self
 
 
-class PatchProposal(pydantic.BaseModel):
+class PatchProposal(BaseModel):
     """A minimal, source-version-bound text patch proposed by an agent."""
 
-    model_config = pydantic.ConfigDict(extra = "forbid")
+    model_config = ConfigDict(extra = "forbid")
 
-    page_number: int = pydantic.Field(gt = 0)
+    page_number: int = Field(gt = 0)
     issue_id: NonEmptyText
-    source_sha256: str = pydantic.Field(min_length = 64, max_length = 64)
+    source_sha256: str = Field(min_length = 64, max_length = 64)
     issue_code: IssueCode
     risk: PatchRisk
     context_before: str = ""
@@ -254,26 +261,26 @@ class PatchProposal(pydantic.BaseModel):
     replacement: str
     rationale: NonEmptyText
     confidence: Confidence
-    evidence: list[EvidenceRef] = pydantic.Field(min_length = 1)
+    evidence: list[EvidenceRef] = Field(min_length = 1)
 
-    @pydantic.field_validator("source_sha256")
+    @field_validator("source_sha256")
     @classmethod
     def _validate_source_sha256(cls, value: str) -> str:
         if any(character not in "0123456789abcdef" for character in value):
             raise ValueError("source_sha256 must be lowercase hexadecimal")
         return value
 
-    @pydantic.model_validator(mode = "after")
+    @model_validator(mode = "after")
     def _reject_no_op(self) -> PatchProposal:
         if self.target_text == self.replacement:
             raise ValueError("replacement must change target_text")
         return self
 
 
-class PatchDraft(pydantic.BaseModel):
+class PatchDraft(BaseModel):
     """Model-facing patch fields; page identity, issue code, and evidence are filled from trusted input."""
 
-    model_config = pydantic.ConfigDict(extra = "forbid")
+    model_config = ConfigDict(extra = "forbid")
 
     issue_id: NonEmptyText
     risk: PatchRisk
@@ -284,40 +291,40 @@ class PatchDraft(pydantic.BaseModel):
     rationale: NonEmptyText
     confidence: Confidence
 
-    @pydantic.model_validator(mode = "after")
+    @model_validator(mode = "after")
     def _reject_no_op(self) -> PatchDraft:
         if self.target_text == self.replacement:
             raise ValueError("replacement must change target_text")
         return self
 
 
-class PatchDraftBatch(pydantic.BaseModel):
+class PatchDraftBatch(BaseModel):
     """Bounded minimal specialist output for one physical page."""
 
-    model_config = pydantic.ConfigDict(extra = "forbid")
+    model_config = ConfigDict(extra = "forbid")
 
-    proposals: list[PatchDraft] = pydantic.Field(default_factory = list, max_length = 32)
+    proposals: list[PatchDraft] = Field(default_factory = list, max_length = 32)
 
 
-class PatchProposalBatch(pydantic.BaseModel):
+class PatchProposalBatch(BaseModel):
     """Bounded specialist output for one physical page."""
 
-    model_config = pydantic.ConfigDict(extra = "forbid")
+    model_config = ConfigDict(extra = "forbid")
 
-    proposals: list[PatchProposal] = pydantic.Field(default_factory = list, max_length = 32)
+    proposals: list[PatchProposal] = Field(default_factory = list, max_length = 32)
 
 
-class BookMetadataProposal(pydantic.BaseModel):
+class BookMetadataProposal(BaseModel):
     """Evidence-backed normalized book metadata proposed by the metadata agent."""
 
-    model_config = pydantic.ConfigDict(extra = "forbid")
+    model_config = ConfigDict(extra = "forbid")
 
     title: NonEmptyText
     subtitle: NonEmptyText | None = None
-    authors: list[NonEmptyText] = pydantic.Field(default_factory = list, max_length = 16)
+    authors: list[NonEmptyText] = Field(default_factory = list, max_length = 16)
     confidence: Confidence
     rationale: NonEmptyText
-    evidence: list[EvidenceRef] = pydantic.Field(min_length = 1, max_length = 16)
+    evidence: list[EvidenceRef] = Field(min_length = 1, max_length = 16)
 
 
 __all__ = [

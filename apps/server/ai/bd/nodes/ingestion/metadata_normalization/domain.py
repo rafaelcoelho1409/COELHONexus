@@ -2,13 +2,14 @@
 from __future__ import annotations
 from .... import agents
 
-import json
-import collections.abc
-import typing
-import pydantic
+from collections.abc import Iterator
+from json import JSONDecodeError, JSONDecoder
+from typing import Any
+
+from pydantic import ValidationError
 
 
-def extract_proposal(response: typing.Any) -> agents.schemas.BookMetadataProposal:
+def extract_proposal(response: Any) -> agents.schemas.BookMetadataProposal:
     """Validate structured output or recover a JSON proposal from the last assistant message."""
     structured = response.get("structured_response") if isinstance(response, dict) else None
     if structured is not None:
@@ -19,11 +20,11 @@ def extract_proposal(response: typing.Any) -> agents.schemas.BookMetadataProposa
     if content is None:
         raise ValueError("metadata normalizer returned no structured response or assistant message")
 
-    last_error: pydantic.ValidationError | json.JSONDecodeError | None = None
+    last_error: ValidationError | JSONDecodeError | None = None
     for value in _json_objects(content):
         try:
             return agents.schemas.BookMetadataProposal.model_validate(value)
-        except pydantic.ValidationError as error:
+        except ValidationError as error:
             last_error = error
 
     if last_error is not None:
@@ -31,7 +32,7 @@ def extract_proposal(response: typing.Any) -> agents.schemas.BookMetadataProposa
     raise ValueError("metadata normalizer returned no structured response and no JSON object")
 
 
-def _last_assistant_content(messages: typing.Any) -> str | None:
+def _last_assistant_content(messages: Any) -> str | None:
     if not isinstance(messages, list):
         return None
     for message in reversed(messages):
@@ -56,14 +57,14 @@ def _last_assistant_content(messages: typing.Any) -> str | None:
     return None
 
 
-def _json_objects(content: str) -> collections.abc.Iterator[dict[str, typing.Any]]:
-    decoder = json.JSONDecoder()
+def _json_objects(content: str) -> Iterator[dict[str, Any]]:
+    decoder = JSONDecoder()
     for start, character in enumerate(content):
         if character != "{":
             continue
         try:
             value, _ = decoder.raw_decode(content[start:])
-        except json.JSONDecodeError:
+        except JSONDecodeError:
             continue
         if isinstance(value, dict):
             yield value

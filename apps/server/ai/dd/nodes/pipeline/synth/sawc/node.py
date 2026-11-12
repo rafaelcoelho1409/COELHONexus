@@ -4,15 +4,15 @@ import domains.dd.pipeline.observability.service
 from . import params, service
 from ..... import graphs
 
-import langgraph.graph
-import langgraph.runtime
-import langgraph.types
+from langgraph.graph import END
+from langgraph.runtime import Runtime
+from langgraph.types import Send
 
 
 @domains.dd.pipeline.observability.service.traced_synth("sawc_write")
 async def sawc_write(
     state: graphs.pipeline.synth.states.SynthState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     result = await graphs.pipeline.synth.sawc.graphs.sawc_graph().ainvoke(
         {
@@ -39,76 +39,76 @@ async def sawc_write(
 
 async def prepare(
     state: graphs.pipeline.synth.sawc.states.SawcState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.prepare(state, runtime)
 
 
 async def start_stage(
     state: graphs.pipeline.synth.sawc.states.SawcState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.start_stage(state, runtime)
 
 
 async def write_section(
     state: dict,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.write_section(state, runtime)
 
 
 async def finish_stage(
     state: graphs.pipeline.synth.sawc.states.SawcState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.finish_stage(state, runtime)
 
 
 async def plan_coverage(
     state: graphs.pipeline.synth.sawc.states.SawcState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.plan_coverage(state, runtime)
 
 
 async def extend_coverage(
     state: dict,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.extend_coverage(state, runtime)
 
 
 async def merge_coverage(
     state: graphs.pipeline.synth.sawc.states.SawcState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.merge_coverage(state, runtime)
 
 
 async def plan_sources(
     state: graphs.pipeline.synth.sawc.states.SawcState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.plan_sources(state, runtime)
 
 
 async def extend_sources(
     state: dict,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.extend_sources(state, runtime)
 
 
 async def finalize(
     state: graphs.pipeline.synth.sawc.states.SawcState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.finalize(state, runtime)
 
 
 def after_prepare(graph_state: graphs.pipeline.synth.sawc.states.SawcState) -> str:
-    return langgraph.graph.END if graph_state.get("finished") else "start_stage"
+    return END if graph_state.get("finished") else "start_stage"
 
 
 def write_fan_out(graph_state: graphs.pipeline.synth.sawc.states.SawcState):
@@ -116,7 +116,7 @@ def write_fan_out(graph_state: graphs.pipeline.synth.sawc.states.SawcState):
     todo = graph_state.get("todo") or []
     if not todo:
         return "finish_stage"
-    return [langgraph.types.Send("write_section", {"task": task, "stage_pos": graph_state.get("stage_pos", 0)}) for task in todo]
+    return [Send("write_section", {"task": task, "stage_pos": graph_state.get("stage_pos", 0)}) for task in todo]
 
 
 def after_finish(graph_state: graphs.pipeline.synth.sawc.states.SawcState) -> str:
@@ -131,11 +131,11 @@ def coverage_fan_out(graph_state: graphs.pipeline.synth.sawc.states.SawcState):
     ids = graph_state.get("extend_todo") or []
     if not ids:
         return "merge_coverage"
-    return [langgraph.types.Send("extend_coverage", {"sid": sid}) for sid in ids]
+    return [Send("extend_coverage", {"sid": sid}) for sid in ids]
 
 
 def sources_fan_out(graph_state: graphs.pipeline.synth.sawc.states.SawcState):
     ids = graph_state.get("extend_todo") or []
     if not ids:
         return "finalize"
-    return [langgraph.types.Send("extend_sources", {"sid": sid}) for sid in ids]
+    return [Send("extend_sources", {"sid": sid}) for sid in ids]

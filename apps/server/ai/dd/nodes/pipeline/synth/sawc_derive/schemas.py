@@ -2,33 +2,33 @@
 from __future__ import annotations
 from . import versions
 
-import typing
+from typing import Literal, Optional
 
-import pydantic
+from pydantic import BaseModel, Field
 
 
 
-class DeriveAttempt(pydantic.BaseModel):
+class DeriveAttempt(BaseModel):
     """Per-subtopic derive record; decision: 'promoted'|'skipped_thin'|'rejected_ast'|'rejected_len'|'rotator_fail'|'disabled'."""
     section_id:        str
     subheading:        str
     code_ref_hash:     str
     original_chars:    int
     original_lines:    int
-    decision: typing.Literal[
+    decision: Literal[
         "promoted", "skipped_thin", "rejected_ast",
         "rejected_len", "rotator_fail", "disabled",
     ]
-    derived_chars:     typing.Optional[int] = None
-    derived_lines:     typing.Optional[int] = None
+    derived_chars:     Optional[int] = None
+    derived_lines:     Optional[int] = None
     n_samples_tried:   int = 0
     n_samples_valid:   int = 0
-    chosen_sample_idx: typing.Optional[int] = None
-    deployment:        typing.Optional[str] = None
+    chosen_sample_idx: Optional[int] = None
+    deployment:        Optional[str] = None
     wall_ms:           int = 0
 
 
-class DeriveStats(pydantic.BaseModel):
+class DeriveStats(BaseModel):
     """Per-chapter aggregate stats. Persisted to sawc_derive-latest.json
     and surfaced in the synth UI as KPIs."""
     schema_version:      str = versions.SAWC_DERIVE_SCHEMA_VERSION
@@ -43,4 +43,4 @@ class DeriveStats(pydantic.BaseModel):
     n_rejected_len:      int
     n_rotator_fail:      int
     wall_ms:             int
-    attempts:            list[DeriveAttempt] = pydantic.Field(default_factory = list)
+    attempts:            list[DeriveAttempt] = Field(default_factory = list)

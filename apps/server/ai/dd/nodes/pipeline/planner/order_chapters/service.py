@@ -10,7 +10,7 @@ import logging
 import time
 import hashlib
 
-import langgraph.runtime
+from langgraph.runtime import Runtime
 
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ def _blob(slug: str, mh: str) -> str:
     return domains.dd.pipeline.storage.keys.order_key(slug, mh)
 
 
-async def prepare(state: graphs.pipeline.planner.order_chapters.states.OrderState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.planner.order_chapters.states.OrderState, runtime: Runtime[Context]) -> dict:
     """Answer from the cache or by rule when possible; otherwise load what the samples need (chapters, composition, source order)."""
     blobs = runtime.context.blobs
     slug = state.get("framework_slug") or ""
@@ -141,7 +141,7 @@ async def prepare(state: graphs.pipeline.planner.order_chapters.states.OrderStat
     }
 
 
-async def sample_order(state: graphs.pipeline.planner.order_chapters.entities.SampleInput, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def sample_order(state: graphs.pipeline.planner.order_chapters.entities.SampleInput, runtime: Runtime[Context]) -> dict:
     """One sequencer sample: the model's chapter titles in reading order, mapped back to chapter indexes."""
     chapters = state["chapters"]
     labels = domain.chapter_labels(chapters)
@@ -186,7 +186,7 @@ def collect(state: graphs.pipeline.planner.order_chapters.states.OrderState) -> 
     return {"retry_samples": [params.N_SAMPLES + i for i in range(missing)], "retry_done": True}
 
 
-async def finalize(state: graphs.pipeline.planner.order_chapters.states.OrderState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.planner.order_chapters.states.OrderState, runtime: Runtime[Context]) -> dict:
     """Aggregate the valid orderings (and the docs' own order) by Borda, apply the pins, persist the blob and the stats."""
     blobs = runtime.context.blobs
     slug = state["framework_slug"]

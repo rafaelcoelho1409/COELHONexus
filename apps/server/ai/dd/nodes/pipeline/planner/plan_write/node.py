@@ -4,12 +4,12 @@ import domains.dd.pipeline.observability.service
 from . import service
 from ..... import graphs
 
-import langgraph.runtime
+from langgraph.runtime import Runtime
 
 
 @domains.dd.pipeline.observability.service.traced("plan_write")
 async def plan_write(
     state: graphs.pipeline.planner.states.PlannerState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     return await service.plan_write_run(state, runtime.context.blobs)

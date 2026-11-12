@@ -1,10 +1,10 @@
 """Transient LangGraph state for one bounded source-section extraction."""
 from __future__ import annotations
 
-import typing
+from typing import TypedDict
 
 
-class GraphExtractionState(typing.TypedDict, total = False):
+class GraphExtractionState(TypedDict, total = False):
     section_title: str
     source_material: str
     source_evidence: list[str]

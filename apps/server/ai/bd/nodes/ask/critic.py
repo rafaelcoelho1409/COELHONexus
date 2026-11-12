@@ -4,10 +4,10 @@ from __future__ import annotations
 from .... import bd
 import domains
 
-import langgraph.runtime
+from langgraph.runtime import Runtime
 
 
-async def verify_answer(state: dict, runtime: langgraph.runtime.Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
+async def verify_answer(state: dict, runtime: Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
     domains.settings.llm_counter.service.set_node(node = "critic")
     try:
         result = await bd.agents.ask.service.invoke(

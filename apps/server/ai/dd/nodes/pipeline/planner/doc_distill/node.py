@@ -4,15 +4,15 @@ import domains.dd.pipeline.observability.service
 from . import params, service
 from ..... import graphs
 
-import langgraph.graph
-import langgraph.runtime
-import langgraph.types
+from langgraph.graph import END
+from langgraph.runtime import Runtime
+from langgraph.types import Send
 
 
 @domains.dd.pipeline.observability.service.traced("doc_distill")
 async def doc_distill(
     state: graphs.pipeline.planner.states.PlannerState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     result = await graphs.pipeline.planner.doc_distill.graphs.doc_distill_graph().ainvoke(
         {
@@ -32,34 +32,34 @@ async def doc_distill(
 
 async def prepare(
     state: graphs.pipeline.planner.doc_distill.states.DistillState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     return await service.prepare(state, runtime)
 
 
 async def distill_page(
     state: graphs.pipeline.planner.doc_distill.entities.DistillInput,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     return await service.distill_page(state, runtime)
 
 
 async def finalize(
     state: graphs.pipeline.planner.doc_distill.states.DistillState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     return await service.finalize(state, runtime)
 
 
 def after_prepare(graph_state: graphs.pipeline.planner.doc_distill.states.DistillState):
     if graph_state.get("finished"):
-        return langgraph.graph.END
+        return END
     todo = graph_state.get("todo") or []
     if not todo:
         return "finalize"
     digests = graph_state.get("digests") or {}
     return [
-        langgraph.types.Send(
+        Send(
             "distill_page",
             {"key": key, "digest": digests[key], "framework_slug": graph_state["framework_slug"], "total": len(todo)},
         )

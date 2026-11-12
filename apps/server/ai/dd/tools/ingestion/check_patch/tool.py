@@ -7,11 +7,11 @@ every page of a run."""
 from __future__ import annotations
 from . import entities, schemas, service
 
-import langchain.tools
-import langchain_core.tools
+from langchain.tools import ToolRuntime
+from langchain_core.tools import StructuredTool
 
 
-def check_patch_tool(check: entities.Check) -> langchain_core.tools.StructuredTool:
+def check_patch_tool(check: entities.Check) -> StructuredTool:
     """`check_patch`, bound to the node's `check`."""
     def run(
         issue_id: str,
@@ -22,7 +22,7 @@ def check_patch_tool(check: entities.Check) -> langchain_core.tools.StructuredTo
         context_before: str = "",
         context_after: str = "",
         *,
-        runtime: langchain.tools.ToolRuntime,
+        runtime: ToolRuntime,
     ) -> str:
         fields = {
             "issue_id": issue_id,
@@ -35,7 +35,7 @@ def check_patch_tool(check: entities.Check) -> langchain_core.tools.StructuredTo
         }
         return service.verdict(runtime.state.get("files") or {}, check, fields)
 
-    return langchain_core.tools.StructuredTool.from_function(
+    return StructuredTool.from_function(
         func = run,
         name = "check_patch",
         description = (

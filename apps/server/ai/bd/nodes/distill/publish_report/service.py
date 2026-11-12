@@ -3,26 +3,26 @@ from __future__ import annotations
 
 import hashlib
 import json
-import typing
+from typing import Any
 
 import domains
 
 from .... import graphs
 
 
-def _json_body(value: typing.Any) -> str:
+def _json_body(value: Any) -> str:
     return json.dumps(value, ensure_ascii = False, separators = (",", ":"), sort_keys = True)
 
 
 async def publish_report(
     dependencies: graphs.distill.entities.DistillDependencies,
-    state: dict[str, typing.Any],
-) -> dict[str, typing.Any]:
+    state: dict[str, Any],
+) -> dict[str, Any]:
     storage = dependencies.storage
     book_id = state["book_id"]
     run_id = state["run_id"]
     ingestion_ai_run_id = state["ingestion_ai_run_id"]
-    learning_units: dict[str, dict[str, typing.Any]] = {}
+    learning_units: dict[str, dict[str, Any]] = {}
     unit_refs = state.get("completed_units", [])
     for ref in unit_refs:
         artifact_key = domains.bd.distill.keys.learning_unit_key(book_id, run_id, ref["unit_id"])
@@ -76,7 +76,7 @@ async def publish_report(
             return "agent_inference"
         return "book"
 
-    def report_lesson(item: dict[str, typing.Any]) -> domains.bd.distill.schemas.ReportLesson:
+    def report_lesson(item: dict[str, Any]) -> domains.bd.distill.schemas.ReportLesson:
         unit_ids = item["learning_unit_ids"]
         refs = source_refs(unit_ids)
         supporting = [learning_units[unit_id] for unit_id in unit_ids]

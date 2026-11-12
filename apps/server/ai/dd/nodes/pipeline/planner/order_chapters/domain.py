@@ -8,7 +8,7 @@ import json
 import math
 import random
 import re
-import collections
+from collections import Counter
 
 
 def load_outline(text: str) -> dict:
@@ -176,7 +176,7 @@ def order_payload(
 
 def chapter_labels(chapters: list[dict]) -> list[str]:
     """One unique display label per chapter (its title; a repeated title gets " (2)" …)."""
-    seen: collections.Counter = collections.Counter()
+    seen: Counter = Counter()
     out = []
     for i, ch in enumerate(chapters):
         t = " ".join(str(ch.get("title") or f"Chapter {i}").split())

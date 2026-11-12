@@ -13,7 +13,7 @@ import json
 import logging
 import time
 
-import langgraph.runtime
+from langgraph.runtime import Runtime
 
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ def skipped(reason: str, started: float, **extra) -> dict:
     return {"finished": True, "derive_stats": {"skipped": reason, "wall_ms": graphs.service.elapsed_ms(started), **extra}}
 
 
-async def prepare(state: graphs.pipeline.synth.sawc_derive.states.DeriveState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.synth.sawc_derive.states.DeriveState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
@@ -122,7 +122,7 @@ def derive_issues(code: str) -> list[str]:
     return issues
 
 
-async def derive_subtopic(state: dict, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def derive_subtopic(state: dict, runtime: Runtime[Context]) -> dict:
     """Derive one subtopic's example. Mutates the subtopic of the chapter draft in place on success; returns the attempt either way."""
     context = runtime.context
     data = context.scratch[params.STEP]
@@ -192,7 +192,7 @@ async def persist_payload(context: Context, data: dict, slug: str, chapter_id: s
             logger.error(f"[sawc_derive] failed to persist the mutated draft at {key!r}: {type(error).__name__}: {error}")
 
 
-async def finalize(state: graphs.pipeline.synth.sawc_derive.states.DeriveState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.synth.sawc_derive.states.DeriveState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     data = context.scratch[params.STEP]
     slug, chapter_id = state["framework_slug"], state["chapter_id"]
@@ -241,7 +241,7 @@ async def finalize(state: graphs.pipeline.synth.sawc_derive.states.DeriveState, 
     return {"derive_stats": stats.model_dump()}
 
 
-async def capstone(state: graphs.pipeline.synth.sawc_derive.states.DeriveState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def capstone(state: graphs.pipeline.synth.sawc_derive.states.DeriveState, runtime: Runtime[Context]) -> dict:
     """The last section of a tutorial chapter: one application that combines the code the steps taught, designed by the capstone designer and checked
     before it is kept (it parses, its size is in the band, it uses the key API of most steps, its code passes the static checks). A chapter whose designer
     fails keeps its steps and has no capstone; the judge says so. Off unless `TUTORIAL_MODE`."""

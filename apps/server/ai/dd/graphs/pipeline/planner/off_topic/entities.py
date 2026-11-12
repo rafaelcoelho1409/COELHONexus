@@ -1,19 +1,19 @@
 """What the steps of the off_topic subgraph hand to each other."""
 from __future__ import annotations
 
-import typing
+from typing import NotRequired, TypedDict
 
 
-class Verdict(typing.TypedDict):
+class Verdict(TypedDict):
     """The judge's verdict on one distinct page text (`digest`), in round 1 or in the second look at a drop."""
 
     digest: str
     keep: bool
     round: int
-    error: typing.NotRequired[str]
+    error: NotRequired[str]
 
 
-class JudgeInput(typing.TypedDict):
+class JudgeInput(TypedDict):
     """What one `judge_page` branch is sent: the digest of the page text, a page that has it, and the framework context."""
 
     digest: str

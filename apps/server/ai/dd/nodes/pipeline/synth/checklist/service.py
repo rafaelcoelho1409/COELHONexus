@@ -15,8 +15,8 @@ import json
 import logging
 import time
 
-import pydantic
-import langgraph.runtime
+from langgraph.runtime import Runtime
+from pydantic import ValidationError
 
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ async def run_judge(context: Context, frame: dict) -> dict:
             payload = schemas.LLMJudgePayload.model_validate(answer.model_dump())
             last_error = None
             break
-        except (pydantic.ValidationError, ValueError) as error:
+        except (ValidationError, ValueError) as error:
             # Content, not infrastructure: the judge answered, badly. The retry loop below is for infrastructure only.
             content_error = str(error)[:300]
             last_error = None
@@ -109,7 +109,7 @@ async def run_judge(context: Context, frame: dict) -> dict:
     return {"results": [r.model_dump() for r in results], "answered": True, "repaired": False, "wall_ms": wall_ms, "meta": meta}
 
 
-async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
@@ -274,7 +274,7 @@ async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, 
     }
 
 
-async def judge(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def judge(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: Runtime[Context]) -> dict:
     run = await run_judge(runtime.context, runtime.context.scratch[params.STEP]["frame"])
     results = run["results"]
     graphs.service.emit(
@@ -285,12 +285,12 @@ async def judge(state: graphs.pipeline.synth.checklist.states.ChecklistState, ru
     return {"judge": run}
 
 
-async def judge_again(state: dict, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def judge_again(state: dict, runtime: Runtime[Context]) -> dict:
     """A further opinion on a chapter the first judge failed (the Rotator may route it to another model)."""
     return {"opinions": [await run_judge(runtime.context, runtime.context.scratch[params.STEP]["frame"])]}
 
 
-async def majority(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def majority(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: Runtime[Context]) -> dict:
     first = [schemas.CriterionResult.model_validate(r) for r in state["judge"]["results"]]
     runs = [first] + [
         [schemas.CriterionResult.model_validate(r) for r in o["results"]] for o in state.get("opinions") or [] if o["answered"] and not unavailable([schemas.CriterionResult.model_validate(r) for r in o["results"]])
@@ -305,7 +305,7 @@ async def majority(state: graphs.pipeline.synth.checklist.states.ChecklistState,
     return {"merged": [r.model_dump() for r in merged]}
 
 
-async def finalize(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: Runtime[Context]) -> dict:
     context = runtime.context
     slug, chapter_id = state["framework_slug"], state["chapter_id"]
     run = state["judge"]

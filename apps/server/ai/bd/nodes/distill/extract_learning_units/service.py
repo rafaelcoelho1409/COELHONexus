@@ -4,10 +4,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import typing
+from typing import Any
 
 import domains
-import pydantic
+from pydantic import ValidationError
 
 from .... import agents, graphs, prompts
 
@@ -19,7 +19,7 @@ def _canonical_sha256(value: dict) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
-def _json_body(value: typing.Any) -> str:
+def _json_body(value: Any) -> str:
     return json.dumps(value, ensure_ascii = False, separators = (",", ":"), sort_keys = True)
 
 
@@ -27,7 +27,7 @@ def _is_transient_provider_error(error: Exception) -> bool:
     return domains.settings.chat.domain.is_transient_provider_error(error)
 
 
-def _log_transient_provider_failure(ref: dict[str, typing.Any], stage: str, error: Exception) -> None:
+def _log_transient_provider_failure(ref: dict[str, Any], stage: str, error: Exception) -> None:
     logger.warning(
         "[bd-distill] transient provider failure stage=%s unit=%s page=%s kind=%s error=%s",
         stage,
@@ -40,8 +40,8 @@ def _log_transient_provider_failure(ref: dict[str, typing.Any], stage: str, erro
 
 async def prepare_units(
     dependencies: graphs.distill.entities.DistillDependencies,
-    state: dict[str, typing.Any],
-) -> dict[str, typing.Any]:
+    state: dict[str, Any],
+) -> dict[str, Any]:
     storage = dependencies.storage
     source_manifest = await domains.bd.ingestion.storage.service.read_manifest(storage, state["book_id"])
     if source_manifest is None or source_manifest.get("status") != domains.bd.ingestion.storage.params.STATUS_DONE:
@@ -175,8 +175,8 @@ async def prepare_units(
 
 async def extract_unit(
     dependencies: graphs.distill.entities.DistillDependencies,
-    state: dict[str, typing.Any],
-) -> dict[str, typing.Any]:
+    state: dict[str, Any],
+) -> dict[str, Any]:
     ref = state["unit_ref"]
     storage = dependencies.storage
     input_record = json.loads(await storage.read_text(ref["input_key"]))
@@ -359,7 +359,7 @@ async def extract_unit(
                     )
 
         if extraction is None:
-            if not isinstance(fallback_error, (ValueError, pydantic.ValidationError)):
+            if not isinstance(fallback_error, (ValueError, ValidationError)):
                 raise ValueError(
                     "the learning extractor failed after agent, structured-output, and JSON-text retries"
                 ) from fallback_error
@@ -376,7 +376,7 @@ async def extract_unit(
             )
             extraction_needs_review = True
 
-    candidates: list[dict[str, typing.Any]] = []
+    candidates: list[dict[str, Any]] = []
     review_flags: list[str] = []
     if extraction_needs_review:
         review_flags.append(

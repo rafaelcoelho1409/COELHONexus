@@ -32,6 +32,9 @@ class NormalizeStats(BaseModel):
     emoji_shortcode_heading_spaces_inserted: int = 0
     frontmatter_extracted:      bool = False
     html_entities_decoded:      int  = 0
+    malformed_links_fixed:      int  = 0
+    api_entries_repaired:       int  = 0
+    indented_label_lists_repaired: int = 0
     blank_lines_collapsed:      int  = 0
     trailing_ws_lines:          int  = 0
     zero_width_chars_stripped:  int  = 0

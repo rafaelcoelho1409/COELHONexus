@@ -6,13 +6,13 @@ from ..... import graphs
 
 import logging
 import time
-import typing
+from typing import Any
 
 
 logger = logging.getLogger(__name__)
 
 
-async def corpus_load_run(state: graphs.pipeline.planner.states.PlannerState, blobs: typing.Any) -> dict:
+async def corpus_load_run(state: graphs.pipeline.planner.states.PlannerState, blobs: Any) -> dict:
     """Inventory the framework's ingested corpus: the page keys that go to the planner and the corpus stats.
 
     Changelog-release pages, course pages (`/course/`) and blog posts (`/blog/`) are kept in storage (still browsable in the

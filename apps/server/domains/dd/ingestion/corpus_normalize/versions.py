@@ -32,4 +32,7 @@ from __future__ import annotations
 # of every Tier 2-4 page stayed).
 # v13 (2026-11-08): strip non-whitespace Unicode control characters (`Cc`) before page audit and record the count for the page quality report.
 # v14 (2026-11-11): add the missing separator after a leading GitBook emoji shortcode in a heading.
-NORMALIZER_VERSION = 14
+# v15 (2026-11-12): repair the exact `llama.cpphttps://github.com/ggml-org/llama.cpp` URL corruption found in Unsloth's full bundle.
+# v16 (2026-11-12): restore method headings/source links for the exact concatenated API-export form seen in Optimum's llms.txt pages.
+# v17 (2026-11-12): turn three-or-more unambiguously indented label/description pairs into a readable Markdown list.
+NORMALIZER_VERSION = 17

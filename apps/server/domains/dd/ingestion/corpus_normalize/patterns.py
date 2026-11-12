@@ -7,6 +7,16 @@ import re
 
 
 
+UNSLOTH_LLAMA_CPP_LINK_RE = re.compile(
+    r"\]\(llama\.cpp(?P<url>https://github\.com/ggml-org/llama\.cpp(?:/[^)\s]*)?)\)"
+)
+HUGGINGFACE_OPTIMUM_API_EXPORT_RE = re.compile(
+    r"^(?P<name>[A-Za-z_]\w*)optimum\.(?:[A-Za-z_]\w*\.)*(?P=name)"
+    r"(?P<source>https://github\.com/huggingface/optimum/blob/[^)\s\[]+?\.py#L\d+)\[.*$"
+)
+INDENTED_LABEL_RE = re.compile(r" {4}(?P<label>[A-Z][A-Za-z0-9][A-Za-z0-9 /&.+()'-]{0,78})")
+INDENTED_DESCRIPTION_RE = re.compile(r" {6}(?P<description>[A-Z][^\n]*)")
+
 _MDX_TAGS_PATTERN = "|".join(re.escape(t) for t in params.MDX_WRAPPER_TAGS)
 
 # Whitespace-tolerant. Inner-text preserving (we match only the tag

@@ -1,16 +1,16 @@
 """What the model sends `score_outline`."""
 from __future__ import annotations
 
-import pydantic
+from pydantic import BaseModel, Field
 
 
-class OutlineChapter(pydantic.BaseModel):
+class OutlineChapter(BaseModel):
     """A chapter of the outline being scored; a draft may be incomplete, so nothing here is validated."""
 
-    title: str = pydantic.Field(description = "The chapter's title.")
-    description: str = pydantic.Field(default = "", description = "One sentence on what readers learn.")
-    key_concepts: list[str] = pydantic.Field(default_factory = list, description = "Specific concepts, identifiers or commands.")
+    title: str = Field(description = "The chapter's title.")
+    description: str = Field(default = "", description = "One sentence on what readers learn.")
+    key_concepts: list[str] = Field(default_factory = list, description = "Specific concepts, identifiers or commands.")
 
 
-class OutlineInput(pydantic.BaseModel):
-    chapters: list[OutlineChapter] = pydantic.Field(description = "The whole outline, every chapter.")
+class OutlineInput(BaseModel):
+    chapters: list[OutlineChapter] = Field(description = "The whole outline, every chapter.")

@@ -4,15 +4,15 @@ import domains.dd.pipeline.observability.service
 from . import params, service
 from ..... import graphs
 
-import langgraph.graph
-import langgraph.runtime
-import langgraph.types
+from langgraph.graph import END
+from langgraph.runtime import Runtime
+from langgraph.types import Send
 
 
 @domains.dd.pipeline.observability.service.traced("order_chapters")
 async def order_chapters(
     state: graphs.pipeline.planner.states.PlannerState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     result = await graphs.pipeline.planner.order_chapters.graphs.order_chapters_graph().ainvoke(
         {
@@ -31,14 +31,14 @@ async def order_chapters(
 
 async def prepare(
     state: graphs.pipeline.planner.order_chapters.states.OrderState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     return await service.prepare(state, runtime)
 
 
 async def sample_order(
     state: graphs.pipeline.planner.order_chapters.entities.SampleInput,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     return await service.sample_order(state, runtime)
 
@@ -49,7 +49,7 @@ def collect(state: graphs.pipeline.planner.order_chapters.states.OrderState) -> 
 
 async def finalize(
     state: graphs.pipeline.planner.order_chapters.states.OrderState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     return await service.finalize(state, runtime)
 
@@ -69,13 +69,13 @@ def sample_input(
 def after_prepare(graph_state: graphs.pipeline.planner.order_chapters.states.OrderState):
     """A node answered from its cache or by a rule ends here; otherwise one sequencer sample per Send."""
     if graph_state.get("finished"):
-        return langgraph.graph.END
-    return [langgraph.types.Send("sample_order", sample_input(graph_state, i)) for i in range(params.N_SAMPLES)]
+        return END
+    return [Send("sample_order", sample_input(graph_state, i)) for i in range(params.N_SAMPLES)]
 
 
 def after_collect(graph_state: graphs.pipeline.planner.order_chapters.states.OrderState):
     """A first round with fewer valid samples than MIN_VALID_SAMPLES is topped up once, for the missing indexes only."""
     retry = graph_state.get("retry_samples") or []
     if retry:
-        return [langgraph.types.Send("sample_order", sample_input(graph_state, i)) for i in retry]
+        return [Send("sample_order", sample_input(graph_state, i)) for i in retry]
     return "finalize"

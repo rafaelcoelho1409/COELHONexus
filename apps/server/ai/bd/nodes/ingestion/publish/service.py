@@ -9,13 +9,13 @@ import hashlib
 import inspect
 import json
 import time
-import collections
-import collections.abc
-import typing
+from collections import Counter
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 
-ArtifactWriter = collections.abc.Callable[[str, str, str], typing.Any]
-PageReader = collections.abc.Callable[[str], str | None | collections.abc.Awaitable[str | None]]
+ArtifactWriter = Callable[[str, str, str], Any]
+PageReader = Callable[[str], str | None | Awaitable[str | None]]
 
 
 async def verify_pages(
@@ -34,7 +34,7 @@ async def verify_pages(
             raise ValueError(f"{key} could not be read as Markdown text")
         return text
 
-    async def check(page: dict[str, typing.Any]) -> tuple[int, bool, int]:
+    async def check(page: dict[str, Any]) -> tuple[int, bool, int]:
         async with semaphore:
             source, normalized = await asyncio.gather(
                 read(source_keys[page["page"]]), read(page["normalized_key"]),
@@ -86,8 +86,8 @@ async def publish(
         )
 
     assessments = [agents.schemas.PageAssessment.model_validate(page["assessment"]) for page in page_results]
-    issue_counts = collections.Counter(issue.code.value for assessment in assessments for issue in assessment.issues)
-    page_kinds = collections.Counter(assessment.page_kind.value for assessment in assessments)
+    issue_counts = Counter(issue.code.value for assessment in assessments for issue in assessment.issues)
+    page_kinds = Counter(assessment.page_kind.value for assessment in assessments)
     review_pages = [page["page"] for page in page_results if page["status"] == "review_required"]
     unverified_pages = [
         page["page"] for page in state["page_audits"]
@@ -132,8 +132,8 @@ async def publish(
         )
         else "complete"
     )
-    review_reasons = collections.Counter()
-    mechanical_fixes = collections.Counter()
+    review_reasons = Counter()
+    mechanical_fixes = Counter()
     for page in page_results:
         mechanical_fixes.update(page.get("mechanical_fix_counts", {}))
         if page["status"] != "review_required":

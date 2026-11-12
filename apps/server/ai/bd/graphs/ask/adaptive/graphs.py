@@ -1,7 +1,7 @@
 """Adaptive LangGraph for book-scoped retrieval, synthesis, and verification."""
 from __future__ import annotations
 
-import langgraph.graph
+from langgraph.graph import END, START, StateGraph
 
 from ..... import bd
 
@@ -16,7 +16,7 @@ def _after_grade(state: dict) -> str:
 
 
 def build_adaptive_ask_graph():
-    workflow = langgraph.graph.StateGraph(
+    workflow = StateGraph(
         bd.graphs.ask.adaptive.states.AdaptiveAskState,
         context_schema = bd.graphs.ask.adaptive.entities.AskContext,
     )
@@ -28,7 +28,7 @@ def build_adaptive_ask_graph():
     workflow.add_node("synthesize", bd.nodes.ask.answer.generate_answer)
     workflow.add_node("critic", bd.nodes.ask.critic.verify_answer)
     workflow.add_node("format_citations", bd.nodes.ask.answer.format_citations)
-    workflow.add_edge(langgraph.graph.START, "plan_research")
+    workflow.add_edge(START, "plan_research")
     workflow.add_edge("plan_research", "run_subagent")
     workflow.add_edge("run_subagent", "grade_documents")
     workflow.add_conditional_edges("grade_documents", _after_grade, {
@@ -40,5 +40,5 @@ def build_adaptive_ask_graph():
     workflow.add_edge("generate", "critic")
     workflow.add_edge("synthesize", "critic")
     workflow.add_edge("critic", "format_citations")
-    workflow.add_edge("format_citations", langgraph.graph.END)
+    workflow.add_edge("format_citations", END)
     return workflow.compile()

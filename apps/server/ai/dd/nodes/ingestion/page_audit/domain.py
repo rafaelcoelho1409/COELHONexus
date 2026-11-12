@@ -5,7 +5,7 @@ from .... import agents
 
 import json
 import re
-import typing
+from typing import Any
 
 
 def user_payload(
@@ -14,7 +14,7 @@ def user_payload(
     page_url: str,
     page_title: str,
     markdown: str,
-    candidates: list[dict[str, typing.Any]],
+    candidates: list[dict[str, Any]],
 ) -> str:
     return json.dumps({
         "task": "Assess normalization quality for this one documentation page. `candidates` are leads from simple scans: judge each one, they are not findings.",
@@ -98,6 +98,73 @@ def sanitize_assessment(
         if evidence_is_only_in_code_fences(markdown, issue.evidence):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: its evidence is inside a fenced code example, not page markup."
+            )
+            continue
+        description = issue.description.casefold()
+        if (
+            issue.category == "markdown_formatting"
+            and agents.ingestion.page_auditor.patterns.contains_valid_escaped_ampersand(issue.evidence)
+            and "ampersand" in description
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: backslash-escaped ampersands are valid Markdown punctuation escapes."
+            )
+            continue
+        if (
+            issue.category == "markdown_formatting"
+            and agents.ingestion.page_auditor.patterns.evidence_is_valid_atx_heading(markdown, issue.evidence)
+            and (
+                "colon" in description
+                or ("underscore" in description and agents.ingestion.page_auditor.patterns.contains_escaped_identifier(issue.evidence))
+            )
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: the cited punctuation is part of a valid ATX heading."
+            )
+            continue
+        if (
+            issue.category == "markdown_formatting"
+            and agents.ingestion.page_auditor.patterns.is_valid_blockquote(issue.evidence)
+            and "blockquote" in description
+            and any(term in description for term in ("heading", "tagline", "unconventional", "descriptive statement"))
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: valid blockquote use is a source-style choice, not a Markdown defect."
+            )
+            continue
+        if (
+            issue.category == "markdown_formatting"
+            and "empty row" in description
+            and not any(re.fullmatch(r"\s*\|(?:\s*\|)?\s*", line) for line in issue.evidence.splitlines())
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: its evidence contains no empty table row to support the claim."
+            )
+            continue
+        if (
+            issue.category == "markdown_formatting"
+            and agents.ingestion.page_auditor.patterns.is_valid_table_row_context(markdown, issue.evidence)
+            and any(term in description for term in ("missing link formatting", "inconsistent presentation"))
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: link-style consistency in a valid table is editorial, not an ingestion defect."
+            )
+            continue
+        if (
+            issue.category == "markdown_formatting"
+            and "duplicate installation command" in description
+            and agents.ingestion.page_auditor.patterns.is_package_manager_alternative(issue.evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: equivalent pip and uv commands are alternative package-manager examples."
+            )
+            continue
+        if (
+            issue.category == "markdown_formatting"
+            and agents.ingestion.page_auditor.patterns.is_model_configuration_code_variant(issue.evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: equivalent fenced examples differ only by model configuration."
             )
             continue
         if (
@@ -194,7 +261,7 @@ def prose_blocks(markdown: str) -> list[tuple[int, int]]:
     return blocks
 
 
-def repeated_blocks(markdown: str) -> list[dict[str, typing.Any]]:
+def repeated_blocks(markdown: str) -> list[dict[str, Any]]:
     """A block of prose that appears more than once: its first copy as `evidence`, the second as `other_evidence`."""
     first: dict[str, tuple[int, int]] = {}
     seen_again: dict[str, tuple[int, int]] = {}
@@ -221,7 +288,7 @@ def repeated_blocks(markdown: str) -> list[dict[str, typing.Any]]:
     ]
 
 
-def heading_markers(markdown: str) -> list[dict[str, typing.Any]]:
+def heading_markers(markdown: str) -> list[dict[str, Any]]:
     """A heading marker with no space after it (`##Install`) and a heading with no text."""
     leads = []
     for _offset, line in prose_lines(markdown):
@@ -232,7 +299,7 @@ def heading_markers(markdown: str) -> list[dict[str, typing.Any]]:
     return leads
 
 
-def damaged_characters(markdown: str) -> list[dict[str, typing.Any]]:
+def damaged_characters(markdown: str) -> list[dict[str, Any]]:
     """Text that looks like UTF-8 read as another encoding, or has the replacement character: the matching stretch of its line."""
     leads = []
     for offset, line in prose_lines(markdown):
@@ -248,7 +315,7 @@ def damaged_characters(markdown: str) -> list[dict[str, typing.Any]]:
     return leads
 
 
-def candidates(markdown: str) -> list[dict[str, typing.Any]]:
+def candidates(markdown: str) -> list[dict[str, Any]]:
     """Every lead on the page, first in reading order, at most `params.MAX_CANDIDATES`."""
     leads = [*heading_markers(markdown), *damaged_characters(markdown), *repeated_blocks(markdown)]
     return [

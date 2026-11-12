@@ -1,27 +1,27 @@
 """Pure readers for what an agent answered (its structured response, or the JSON it wrote as plain text instead) and for how a model call failed."""
 from __future__ import annotations
 
-import collections.abc
+from collections.abc import Iterator
+from typing import Any, TypeVar
 import json
-import typing
 
-import httpx
-import openai
-import pydantic
+from httpx import TransportError
+from openai import APIConnectionError
+from pydantic import BaseModel, ValidationError
 
 
-Schema = typing.TypeVar("Schema", bound = pydantic.BaseModel)
+Schema = TypeVar("Schema", bound = BaseModel)
 
 
 def is_transient(error: BaseException) -> bool:
     """Whether a model call failed for a reason a new call can fix: a timeout, a dropped connection, a rate limit or a provider 5xx."""
-    if isinstance(error, (TimeoutError, openai.APIConnectionError, httpx.TransportError)):
+    if isinstance(error, (TimeoutError, APIConnectionError, TransportError)):
         return True
     status_code = getattr(error, "status_code", None)
     return status_code in (408, 429) or (isinstance(status_code, int) and 500 <= status_code <= 599)
 
 
-def rotator_meta(result: typing.Any) -> dict[str, typing.Any]:
+def rotator_meta(result: Any) -> dict[str, Any]:
     """What the Rotator told us about the call that produced `result`: its request id (a response header on the last assistant
     message), which `report_quality` needs to tell the Rotator how good the answer was. {} when the endpoint is not a Rotator."""
     messages = result.get("messages") if isinstance(result, dict) else None
@@ -37,7 +37,7 @@ def rotator_meta(result: typing.Any) -> dict[str, typing.Any]:
     return {}
 
 
-def structured_or_recovered(result: typing.Any, schema: type[Schema]) -> Schema | None:
+def structured_or_recovered(result: Any, schema: type[Schema]) -> Schema | None:
     """The agent's `structured_response`, else the first JSON object in its last assistant message that fits `schema`.
 
     Some models close their turn with the answer as a fenced JSON block instead of calling the structured-output tool,
@@ -51,14 +51,14 @@ def structured_or_recovered(result: typing.Any, schema: type[Schema]) -> Schema 
             continue
         try:
             return schema.model_validate(candidate)
-        except pydantic.ValidationError:
+        except ValidationError:
             pass
 
     raw = result.get("raw")
     for arguments in _tool_call_arguments(raw):
         try:
             return schema.model_validate(arguments)
-        except pydantic.ValidationError:
+        except ValidationError:
             continue
 
     content = _last_assistant_content([*(result.get("messages") or []), *([raw] if raw is not None else [])])
@@ -67,12 +67,12 @@ def structured_or_recovered(result: typing.Any, schema: type[Schema]) -> Schema 
     for value in _json_objects(content):
         try:
             return schema.model_validate(value)
-        except pydantic.ValidationError:
+        except ValidationError:
             continue
     return None
 
 
-def structured_failure_reason(result: typing.Any, schema: type[Schema]) -> str:
+def structured_failure_reason(result: Any, schema: type[Schema]) -> str:
     """Describe why a response failed schema parsing without persisting its text.
 
     Planner health is user-visible, so include concise validation locations but
@@ -89,7 +89,7 @@ def structured_failure_reason(result: typing.Any, schema: type[Schema]) -> str:
             continue
         try:
             schema.model_validate(candidate)
-        except pydantic.ValidationError as error:
+        except ValidationError as error:
             fields = [
                 f"{'.'.join(str(part) for part in item.get('loc') or ()) or '$'} ({item.get('type', 'invalid')})"
                 for item in error.errors(include_input = False)[:6]
@@ -102,7 +102,7 @@ def structured_failure_reason(result: typing.Any, schema: type[Schema]) -> str:
     for arguments in _tool_call_arguments(raw):
         try:
             schema.model_validate(arguments)
-        except pydantic.ValidationError as error:
+        except ValidationError as error:
             fields = [
                 f"{'.'.join(str(part) for part in item.get('loc') or ()) or '$'} ({item.get('type', 'invalid')})"
                 for item in error.errors(include_input = False)[:6]
@@ -139,7 +139,7 @@ def structured_failure_reason(result: typing.Any, schema: type[Schema]) -> str:
         json_seen = True
         try:
             schema.model_validate(value)
-        except pydantic.ValidationError as error:
+        except ValidationError as error:
             fields = [
                 f"{'.'.join(str(part) for part in item.get('loc') or ()) or '$'} ({item.get('type', 'invalid')})"
                 for item in error.errors(include_input = False)[:6]
@@ -150,7 +150,7 @@ def structured_failure_reason(result: typing.Any, schema: type[Schema]) -> str:
     return f"assistant returned non-JSON text ({len(content)} characters)"
 
 
-def _last_assistant_content(messages: typing.Any) -> str | None:
+def _last_assistant_content(messages: Any) -> str | None:
     if not isinstance(messages, list):
         return None
     for message in reversed(messages):
@@ -175,7 +175,7 @@ def _last_assistant_content(messages: typing.Any) -> str | None:
     return None
 
 
-def _tool_call_arguments(message: typing.Any) -> collections.abc.Iterator[dict[str, typing.Any]]:
+def _tool_call_arguments(message: Any) -> Iterator[dict[str, Any]]:
     """Yield structured arguments from LangChain tool calls without exposing their contents in diagnostics."""
     for call in getattr(message, "tool_calls", None) or []:
         if isinstance(call, dict) and isinstance(call.get("args"), dict):
@@ -197,7 +197,7 @@ def _tool_call_arguments(message: typing.Any) -> collections.abc.Iterator[dict[s
                 yield value
 
 
-def _json_objects(content: str) -> collections.abc.Iterator[dict[str, typing.Any]]:
+def _json_objects(content: str) -> Iterator[dict[str, Any]]:
     decoder = json.JSONDecoder()
     for start, character in enumerate(content):
         if character != "{":

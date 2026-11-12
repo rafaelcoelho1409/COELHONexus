@@ -8,13 +8,13 @@ from __future__ import annotations
 from . import entities, params, states
 from .... import nodes
 
-import langgraph.graph
+from langgraph.graph import END, START, StateGraph
 
 
 def planner_graph(checkpointer = None, planner_v2: bool | None = None):
     """Compile the selected planner graph, checkpointed when a saver is given."""
     use_v2 = params.PLANNER_V2 if planner_v2 is None else planner_v2
-    workflow = langgraph.graph.StateGraph(states.PlannerState, context_schema = entities.PlannerContext)
+    workflow = StateGraph(states.PlannerState, context_schema = entities.PlannerContext)
     workflow.add_node("corpus_load", nodes.pipeline.planner.corpus_load.node.corpus_load)
     if use_v2:
         workflow.add_node("page_cards", nodes.pipeline.planner.page_cards.node.page_cards)
@@ -22,13 +22,13 @@ def planner_graph(checkpointer = None, planner_v2: bool | None = None):
         workflow.add_node("chapter_select", nodes.pipeline.planner.chapter_select.node.chapter_select)
         workflow.add_node("order_chapters", nodes.pipeline.planner.order_chapters.node.order_chapters)
         workflow.add_node("plan_write", nodes.pipeline.planner.plan_write.node.plan_write)
-        workflow.add_edge(langgraph.graph.START, "corpus_load")
+        workflow.add_edge(START, "corpus_load")
         workflow.add_edge("corpus_load", "page_cards")
         workflow.add_edge("page_cards", "chapter_design")
         workflow.add_edge("chapter_design", "chapter_select")
         workflow.add_edge("chapter_select", "order_chapters")
         workflow.add_edge("order_chapters", "plan_write")
-        workflow.add_edge("plan_write", langgraph.graph.END)
+        workflow.add_edge("plan_write", END)
         return workflow.compile(checkpointer = checkpointer, name = "dd_planner_v2")
 
     workflow.add_node("off_topic", nodes.pipeline.planner.off_topic.node.off_topic)
@@ -38,7 +38,7 @@ def planner_graph(checkpointer = None, planner_v2: bool | None = None):
     workflow.add_node("chapter_select", nodes.pipeline.planner.chapter_select.node.chapter_select)
     workflow.add_node("order_chapters", nodes.pipeline.planner.order_chapters.node.order_chapters)
     workflow.add_node("plan_write", nodes.pipeline.planner.plan_write.node.plan_write)
-    workflow.add_edge(langgraph.graph.START, "corpus_load")
+    workflow.add_edge(START, "corpus_load")
     workflow.add_edge("corpus_load", "off_topic")
     workflow.add_edge("off_topic", "doc_distill")
     workflow.add_edge("doc_distill", "chapter_propose")
@@ -46,5 +46,5 @@ def planner_graph(checkpointer = None, planner_v2: bool | None = None):
     workflow.add_edge("chapter_assign", "chapter_select")
     workflow.add_edge("chapter_select", "order_chapters")
     workflow.add_edge("order_chapters", "plan_write")
-    workflow.add_edge("plan_write", langgraph.graph.END)
+    workflow.add_edge("plan_write", END)
     return workflow.compile(checkpointer = checkpointer, name = "dd_planner")

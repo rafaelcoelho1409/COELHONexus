@@ -8,9 +8,9 @@ import json
 import math
 import os
 import re
-import collections
+from collections import Counter
+from typing import Optional
 import hashlib
-import typing
 
 
 
@@ -43,7 +43,7 @@ def _extract_h12_headings(body: str, max_n: int) -> list[str]:
     return out
 
 
-def _namespace_from_key(source_key: str) -> typing.Optional[str]:
+def _namespace_from_key(source_key: str) -> Optional[str]:
     """Extract a 'namespace' from a source key. Captures CLI subcommand
     patterns + file-tree top-level directories under `commands/`."""
     m = patterns.CLI_PATTERN_RE.search(source_key)
@@ -62,13 +62,13 @@ def extract_structural_seeds(
     bodies_by_key: dict[str, str],
 ) -> dict:
     """Top-level headings + CLI namespace seeds from the corpus for chapter_propose."""
-    headings_counter: collections.Counter[str] = collections.Counter()
+    headings_counter: Counter[str] = Counter()
     for key in source_keys:
         body = bodies_by_key.get(key) or ""
         for h in _extract_h12_headings(body, max_n = 4):
             headings_counter[h] += 1
 
-    namespaces_counter: collections.Counter[str] = collections.Counter()
+    namespaces_counter: Counter[str] = Counter()
     for key in source_keys:
         ns = _namespace_from_key(key)
         if ns:
@@ -312,7 +312,7 @@ def match_words(text: str) -> set[str]:
     return _words(text)
 
 
-def doc_match_text(key: str, distillate: typing.Optional[dict], body: str = "") -> str:
+def doc_match_text(key: str, distillate: Optional[dict], body: str = "") -> str:
     """What a doc is matched on: page slug + distillate summary and terms (or the body head)."""
     slug = patterns.KEY_PREFIX_RE.sub("", os.path.basename(key or "").rsplit(".", 1)[0])
     d = distillate or {}
@@ -329,7 +329,7 @@ def score_outline(props: list[dict], doc_texts: list[str], target_chapters: int)
     {n, unmatched_pct, largest_share_pct, score, unmatched (doc indices), chapter_sizes (docs matched per chapter)}."""
     docs = [_words(t) for t in doc_texts]
     n_docs = len(docs)
-    df = collections.Counter(w for ws in docs for w in ws)
+    df = Counter(w for ws in docs for w in ws)
     idf = {w: math.log(1.0 + n_docs / c) for w, c in df.items()}
     doc_norm = [math.sqrt(sum(idf[w] ** 2 for w in ws)) or 1.0 for ws in docs]
     chapters = []
@@ -429,7 +429,7 @@ def manifest_hash(
     *,
     slug: str,
     source_keys: list[str],
-    distill_ref: typing.Optional[str],
+    distill_ref: Optional[str],
     distill_fp: str = "",
 ) -> str:
     h = hashlib.sha256()

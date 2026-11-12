@@ -1,53 +1,53 @@
 """What the model sends the synth check tools: its draft, as it wrote it, so every field is lenient."""
 from __future__ import annotations
 
-import pydantic
+from pydantic import BaseModel, Field
 
 
-class OutlineSectionInput(pydantic.BaseModel):
+class OutlineSectionInput(BaseModel):
     section_id: str = ""
     heading: str = ""
     description: str = ""
-    prerequisites: list[str] = pydantic.Field(default_factory = list)
+    prerequisites: list[str] = Field(default_factory = list)
     needs_code: bool = True
 
 
-class OutlineInput(pydantic.BaseModel):
-    sections: list[OutlineSectionInput] = pydantic.Field(description = "The whole outline, every section.")
+class OutlineInput(BaseModel):
+    sections: list[OutlineSectionInput] = Field(description = "The whole outline, every section.")
 
 
-class ContributionInput(pydantic.BaseModel):
+class ContributionInput(BaseModel):
     section_id: str = ""
     relevance: str = ""
     summary: str = ""
-    key_facts: list[str] = pydantic.Field(default_factory = list)
-    code_refs: list[str] = pydantic.Field(default_factory = list)
+    key_facts: list[str] = Field(default_factory = list)
+    code_refs: list[str] = Field(default_factory = list)
 
 
-class DigestInput(pydantic.BaseModel):
+class DigestInput(BaseModel):
     source_title: str = ""
     overall_summary: str = ""
-    contributes_to: list[ContributionInput] = pydantic.Field(default_factory = list)
-    unassigned_code_refs: list[str] = pydantic.Field(default_factory = list)
+    contributes_to: list[ContributionInput] = Field(default_factory = list)
+    unassigned_code_refs: list[str] = Field(default_factory = list)
 
 
-class SubtopicInput(pydantic.BaseModel):
+class SubtopicInput(BaseModel):
     code_ref_hash: str = ""
     subheading: str = ""
     explanation: str = ""
 
 
-class CitationInput(pydantic.BaseModel):
+class CitationInput(BaseModel):
     source_key: str = ""
     claim: str = ""
 
 
-class SectionInput(pydantic.BaseModel):
+class SectionInput(BaseModel):
     heading: str = ""
     intro: str = ""
-    subtopics: list[SubtopicInput] = pydantic.Field(default_factory = list)
-    citations: list[CitationInput] = pydantic.Field(default_factory = list)
+    subtopics: list[SubtopicInput] = Field(default_factory = list)
+    citations: list[CitationInput] = Field(default_factory = list)
 
 
-class CodeInput(pydantic.BaseModel):
-    code: str = pydantic.Field(default = "", description = "The code only, no fences.")
+class CodeInput(BaseModel):
+    code: str = Field(default = "", description = "The code only, no fences.")

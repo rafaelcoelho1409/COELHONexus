@@ -2,49 +2,49 @@
 from __future__ import annotations
 from . import params, patterns
 
-import pydantic
+from pydantic import BaseModel, Field, field_validator
 
 
 
-class OutlineSection(pydantic.BaseModel):
+class OutlineSection(BaseModel):
     """One pre-allocated section: scaffold only, no body or code yet."""
-    section_id: str = pydantic.Field(
+    section_id: str = Field(
         description = (
             "Stable lowercase identifier 's1', 's2', ... 's999'. MUST be "
             "unique within the chapter."
         ),
     )
-    heading: str = pydantic.Field(
+    heading: str = Field(
         description = (
             "Section heading WITHOUT leading '#'. 2-8 words, concrete."
         ),
     )
-    description: str = pydantic.Field(
+    description: str = Field(
         description = (
             "1-line topic description (20-400 chars). Specific enough "
             "for digest_construct to route source material accurately."
         ),
     )
-    prerequisites: list[str] = pydantic.Field(
+    prerequisites: list[str] = Field(
         default_factory = list,
         description = (
             "Section_ids of OTHER sections in this chapter that the "
             "reader must absorb BEFORE this one. List 0-3 ids."
         ),
     )
-    needs_code: bool = pydantic.Field(
+    needs_code: bool = Field(
         default = True,
         description = (
             "True if this section discusses code patterns / APIs / "
             "configs."
         ),
     )
-    code_refs: list[str] = pydantic.Field(
+    code_refs: list[str] = Field(
         default_factory = list,
         description = "Canonical code-ledger hashes assigned to this focused tutorial section; related examples may share one section.",
     )
 
-    @pydantic.field_validator("section_id")
+    @field_validator("section_id")
     @classmethod
     def _validate_id(cls, v: str) -> str:
         if not patterns.SECTION_ID_RE.match(v):
@@ -54,7 +54,7 @@ class OutlineSection(pydantic.BaseModel):
             )
         return v
 
-    @pydantic.field_validator("heading")
+    @field_validator("heading")
     @classmethod
     def _validate_heading(cls, v: str) -> str:
         words = v.strip().split()
@@ -67,7 +67,7 @@ class OutlineSection(pydantic.BaseModel):
             raise ValueError("heading must NOT start with '#'")
         return v.strip()
 
-    @pydantic.field_validator("description")
+    @field_validator("description")
     @classmethod
     def _validate_description(cls, v: str) -> str:
         s = " ".join(v.strip().split())
@@ -78,7 +78,7 @@ class OutlineSection(pydantic.BaseModel):
             )
         return s
 
-    @pydantic.field_validator("prerequisites")
+    @field_validator("prerequisites")
     @classmethod
     def _validate_prereqs(cls, v: list[str]) -> list[str]:
         if len(v) > params.MAX_PREREQS_PER_NODE:
@@ -95,7 +95,7 @@ class OutlineSection(pydantic.BaseModel):
             raise ValueError(f"duplicate prerequisites: {v}")
         return v
 
-    @pydantic.field_validator("code_refs")
+    @field_validator("code_refs")
     @classmethod
     def _validate_code_refs(cls, v: list[str]) -> list[str]:
         for digest in v:
@@ -106,20 +106,20 @@ class OutlineSection(pydantic.BaseModel):
         return v
 
 
-class ChapterOutline(pydantic.BaseModel):
+class ChapterOutline(BaseModel):
     """Phase output of `outline_sdp` for one chapter."""
-    sections: list[OutlineSection] = pydantic.Field(
+    sections: list[OutlineSection] = Field(
         min_length = params.SECTIONS_MIN,
         max_length = params.SECTIONS_MAX,
     )
 
 
-class OutlineDAG(pydantic.BaseModel):
+class OutlineDAG(BaseModel):
     """Post-LLM derivation: edges + stage assignment + cycle audit."""
     edges: list[tuple[str, str]]
     stage_index: dict[str, int]
     stages: dict[int, list[str]]
     max_stage: int
-    removed_edges: list[tuple[str, str]] = pydantic.Field(default_factory = list)
+    removed_edges: list[tuple[str, str]] = Field(default_factory = list)
 
 

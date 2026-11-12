@@ -4,14 +4,14 @@ from __future__ import annotations
 import json
 
 import domains
-import langgraph.runtime
+from langgraph.runtime import Runtime
 
 from .... import agents, graphs
 
 
 async def extract_candidates(
     state: graphs.rag.graph_extraction.states.GraphExtractionState,
-    runtime: langgraph.runtime.Runtime[graphs.rag.graph_extraction.entities.GraphExtractionContext],
+    runtime: Runtime[graphs.rag.graph_extraction.entities.GraphExtractionContext],
 ) -> dict:
     payload = json.dumps(
         {

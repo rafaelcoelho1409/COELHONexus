@@ -7,8 +7,8 @@ from ..... import graphs
 import logging
 import time
 
-import langgraph.graph
-import langgraph.runtime
+from langgraph.graph import END
+from langgraph.runtime import Runtime
 
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 @domains.dd.pipeline.observability.service.traced_synth("mgsr_replan")
 async def mgsr_replan(
     state: graphs.pipeline.synth.states.SynthState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     result = await graphs.pipeline.synth.mgsr.graphs.mgsr_graph().ainvoke(
         {
@@ -36,28 +36,28 @@ async def mgsr_replan(
 
 async def prepare(
     state: graphs.pipeline.synth.mgsr.states.MgsrState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.prepare(state, runtime)
 
 
 async def review(
     state: graphs.pipeline.synth.mgsr.states.MgsrState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.review(state, runtime)
 
 
 async def finalize(
     state: graphs.pipeline.synth.mgsr.states.MgsrState,
-    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.finalize(state, runtime)
 
 
 def after_prepare(graph_state: graphs.pipeline.synth.mgsr.states.MgsrState) -> str:
     if graph_state.get("finished"):
-        return langgraph.graph.END
+        return END
     return "finalize" if graph_state.get("trivial") else "review"
 
 

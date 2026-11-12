@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-import typing
+from typing import Any
 
 import domains
 
@@ -15,7 +15,7 @@ _BOOK_BATCH_SIZE = domains.bd.distill.params.MAX_BOOK_SYNTHESIS_BATCH_SIZE
 logger = logging.getLogger(__name__)
 
 
-def _json_body(value: typing.Any) -> str:
+def _json_body(value: Any) -> str:
     return json.dumps(value, ensure_ascii = False, separators = (",", ":"), sort_keys = True)
 
 
@@ -35,7 +35,7 @@ def _normalize_evidence_quote(value: str) -> str:
     return " ".join(value.split())
 
 
-def _evidence_matches(evidence, learning_unit_ids: list[str], units_by_id: dict[str, dict[str, typing.Any]]) -> bool:
+def _evidence_matches(evidence, learning_unit_ids: list[str], units_by_id: dict[str, dict[str, Any]]) -> bool:
     allowed = {
         (quote["page_number"], _normalize_evidence_quote(quote["quote"]))
         for unit_id in learning_unit_ids
@@ -47,7 +47,7 @@ def _evidence_matches(evidence, learning_unit_ids: list[str], units_by_id: dict[
     )
 
 
-def _number_occurs_in_evidence(value: float, evidence: list[typing.Any]) -> bool:
+def _number_occurs_in_evidence(value: float, evidence: list[Any]) -> bool:
     try:
         expected = float(value)
     except (TypeError, ValueError):
@@ -65,7 +65,7 @@ def _number_occurs_in_evidence(value: float, evidence: list[typing.Any]) -> bool
 
 def _visual_evidence_issues(
     synthesis: domains.bd.distill.schemas.ChapterSynthesis,
-    units: list[dict[str, typing.Any]],
+    units: list[dict[str, Any]],
 ) -> list[tuple[str, int, str, str]]:
     """Return unsupported optional visual items without invalidating chapter prose."""
     by_id = {unit["learning_unit_id"]: unit for unit in units}
@@ -209,7 +209,7 @@ async def read_learning_units(
     run_id: str,
     unit_ids: list[str],
     unit_sources: list[dict[str, str]] | None = None,
-) -> list[dict[str, typing.Any]]:
+) -> list[dict[str, Any]]:
     """Resolve lesson IDs through their persisted source-chunk artifacts.
 
     Older chapter checkpoints only carry lesson IDs, so unresolved IDs are
@@ -217,7 +217,7 @@ async def read_learning_units(
     """
     requested_ids = list(dict.fromkeys(unit_ids))
     wanted = set(requested_ids)
-    records_by_id: dict[str, dict[str, typing.Any]] = {}
+    records_by_id: dict[str, dict[str, Any]] = {}
     source_by_lesson = {
         item["learning_unit_id"]: item["source_unit_id"]
         for item in unit_sources or []
@@ -263,8 +263,8 @@ async def read_learning_units(
 
 async def prepare_chapters(
     dependencies: graphs.distill.entities.DistillDependencies,
-    state: dict[str, typing.Any],
-) -> dict[str, typing.Any]:
+    state: dict[str, Any],
+) -> dict[str, Any]:
     storage = dependencies.storage
     refs = []
     for ref in state.get("completed_units", []):
@@ -275,7 +275,7 @@ async def prepare_chapters(
             refs.append({**ref, "learning_unit_ids": unit_ids})
     refs.sort(key = lambda ref: (ref["page_number"], ref["char_start"], ref["unit_id"]))
     source_chapters = state.get("source_chapters", [])
-    groups: list[dict[str, typing.Any]] = []
+    groups: list[dict[str, Any]] = []
     assigned_unit_ids: set[str] = set()
     if isinstance(source_chapters, list):
         for chapter in sorted(
@@ -308,7 +308,7 @@ async def prepare_chapters(
             })
             assigned_unit_ids.update(ref["unit_id"] for ref in selected_refs)
 
-    unassigned_by_root: dict[str, list[dict[str, typing.Any]]] = {}
+    unassigned_by_root: dict[str, list[dict[str, Any]]] = {}
     for ref in refs:
         if ref["unit_id"] in assigned_unit_ids:
             continue
@@ -332,7 +332,7 @@ async def prepare_chapters(
         section_path = tuple(group["section_path"])
         section_refs = group["refs"]
         selected: list[str] = []
-        selected_refs_by_unit: dict[str, dict[str, typing.Any]] = {}
+        selected_refs_by_unit: dict[str, dict[str, Any]] = {}
         batch_index = 0
         for ref in section_refs:
             for unit_id in ref.get("learning_unit_ids", []):
@@ -377,7 +377,7 @@ async def prepare_chapters(
     return {"chapter_refs": chapter_refs}
 
 
-def _subsection_paths(unit_ids: list[str], refs_by_unit: dict[str, dict[str, typing.Any]]) -> list[list[str]]:
+def _subsection_paths(unit_ids: list[str], refs_by_unit: dict[str, dict[str, Any]]) -> list[list[str]]:
     paths = {
         tuple(path)
         for unit_id in unit_ids
@@ -399,7 +399,7 @@ async def _write_chapter_input(
     batch: int,
     unit_ids: list[str],
     unit_sources: list[dict[str, str]],
-) -> dict[str, typing.Any]:
+) -> dict[str, Any]:
     structure_id = domains.bd.distill.domain.stable_id(
         title, str(first_page), str(last_page),
     )
@@ -439,9 +439,9 @@ async def _write_chapter_input(
 
 async def synthesize_chapter(
     dependencies: graphs.distill.entities.DistillDependencies,
-    state: dict[str, typing.Any],
-    learning_units_by_id: dict[str, dict[str, typing.Any]] | None = None,
-) -> dict[str, typing.Any]:
+    state: dict[str, Any],
+    learning_units_by_id: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     storage = dependencies.storage
     ref = state["chapter_ref"]
     if await storage.exists(ref["artifact_key"]):
@@ -535,8 +535,8 @@ async def synthesize_chapter(
 
 async def synthesize_book(
     dependencies: graphs.distill.entities.DistillDependencies,
-    state: dict[str, typing.Any],
-) -> dict[str, typing.Any]:
+    state: dict[str, Any],
+) -> dict[str, Any]:
     storage = dependencies.storage
     chapter_summaries = []
     ordered_refs = sorted(
@@ -641,7 +641,7 @@ async def synthesize_book(
             raise ValueError("whole-book synthesis exceeded the hierarchy depth limit")
 
 
-def _book_summary(synthesis: domains.bd.distill.schemas.BookSynthesis) -> dict[str, typing.Any]:
+def _book_summary(synthesis: domains.bd.distill.schemas.BookSynthesis) -> dict[str, Any]:
     return {
         "central_thesis": synthesis.central_thesis[:1200],
         "central_thesis_attribution": synthesis.central_thesis_attribution,
