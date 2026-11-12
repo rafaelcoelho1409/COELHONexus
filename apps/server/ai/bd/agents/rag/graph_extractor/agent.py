@@ -1,17 +1,11 @@
 """Tool-restricted DeepAgent factory for book knowledge graph candidates."""
 from __future__ import annotations
 
-from deepagents import (
-    FilesystemPermission,
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
-from deepagents.backends import StateBackend
-from deepagents.profiles.harness import harness_profiles
-from langchain.agents.middleware import ModelCallLimitMiddleware
-from langchain_openai import ChatOpenAI
+import deepagents
+import deepagents.backends
+import deepagents.profiles.harness
+import langchain.agents.middleware
+import langchain_openai
 
 import domains
 
@@ -31,32 +25,32 @@ def graph_extractor(model = None):
     model_name = getattr(model, "model_name", None)
     if not isinstance(model_name, str) or not model_name or ":" in model_name:
         raise ValueError("the book graph extractor requires a named configured model")
-    if not isinstance(model, ChatOpenAI):
+    if not isinstance(model, langchain_openai.ChatOpenAI):
         raise TypeError("the book graph extractor requires the configured chat model")
 
     key = f"openai:{model_name}"
-    harness_profiles._HARNESS_PROFILES.pop(key, None)
-    register_harness_profile(
+    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
+    deepagents.register_harness_profile(
         key,
-        HarnessProfile(
+        deepagents.HarnessProfile(
             base_system_prompt = "",
-            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
+            general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    return create_deep_agent(
+    return deepagents.create_deep_agent(
         model = model,
         tools = [],
         system_prompt = prompts.rag.graph_extractor.prompts.SYSTEM_PROMPT,
         middleware = [
             middlewares.middleware.ToolAllowlistMiddleware(frozenset({"read_file"})),
-            ModelCallLimitMiddleware(run_limit = params.MAX_MODEL_CALLS, exit_behavior = "end"),
+            langchain.agents.middleware.ModelCallLimitMiddleware(run_limit = params.MAX_MODEL_CALLS, exit_behavior = "end"),
         ],
         response_format = schemas.GraphExtraction,
         permissions = [
-            FilesystemPermission(operations = ["read"], paths = ["/skills/**"], mode = "allow"),
-            FilesystemPermission(operations = ["read"], paths = ["/**"], mode = "deny"),
-            FilesystemPermission(operations = ["write"], paths = ["/**"], mode = "deny"),
+            deepagents.FilesystemPermission(operations = ["read"], paths = ["/skills/**"], mode = "allow"),
+            deepagents.FilesystemPermission(operations = ["read"], paths = ["/**"], mode = "deny"),
+            deepagents.FilesystemPermission(operations = ["write"], paths = ["/**"], mode = "deny"),
         ],
-        backend = StateBackend(),
+        backend = deepagents.backends.StateBackend(),
         name = "bd_book_graph_extractor",
     )

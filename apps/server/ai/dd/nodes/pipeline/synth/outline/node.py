@@ -1,17 +1,17 @@
 """outline_sdp graph node: runs the outline subgraph (the chapter_outliner agent, its validation tool and the deterministic passes), and the routes between its steps."""
 from __future__ import annotations
-from domains.dd.pipeline.observability.service import traced_synth
+import domains.dd.pipeline.observability.service
 from . import domain, params, service
 from ..... import graphs
 
-from langgraph.graph import END
-from langgraph.runtime import Runtime
+import langgraph.graph
+import langgraph.runtime
 
 
-@traced_synth("outline_sdp")
+@domains.dd.pipeline.observability.service.traced_synth("outline_sdp")
 async def outline_sdp(
     state: graphs.pipeline.synth.states.SynthState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     result = await graphs.pipeline.synth.outline.graphs.outline_graph().ainvoke(
         {
@@ -29,27 +29,27 @@ async def outline_sdp(
 
 async def prepare(
     state: graphs.pipeline.synth.outline.states.OutlineState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.prepare(state, runtime)
 
 
 async def draft(
     state: graphs.pipeline.synth.outline.states.OutlineState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.draft(state, runtime)
 
 
 async def finalize(
     state: graphs.pipeline.synth.outline.states.OutlineState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.finalize(state, runtime)
 
 
 def after_prepare(graph_state: graphs.pipeline.synth.outline.states.OutlineState) -> str:
-    return END if graph_state.get("finished") else "draft"
+    return langgraph.graph.END if graph_state.get("finished") else "draft"
 
 
 def after_draft(graph_state: graphs.pipeline.synth.outline.states.OutlineState) -> str:

@@ -8,28 +8,28 @@ import asyncio
 import hashlib
 import inspect
 import json
-from collections.abc import Awaitable, Callable, Coroutine, Iterable
-from typing import Any, Protocol
+import collections.abc
+import typing
 
 
-PageReader = Callable[[str], str | None | Awaitable[str | None]]
-ArtifactWriter = Callable[[str, str, str], Any]
+PageReader = collections.abc.Callable[[str], str | None | collections.abc.Awaitable[str | None]]
+ArtifactWriter = collections.abc.Callable[[str, str, str], typing.Any]
 
 
-class Specialist(Protocol):
+class Specialist(typing.Protocol):
     async def ainvoke(
         self,
-        input: dict[str, Any],
-        config: dict[str, Any] | None = None,
+        input: dict[str, typing.Any],
+        config: dict[str, typing.Any] | None = None,
         *,
         context: domains.bd.ingestion.ai.entities.SpecialistContext | None = None,
-    ) -> dict[str, Any]: ...
+    ) -> dict[str, typing.Any]: ...
 
 
 class BookIndex:
     """The book's source pages for the specialists' lookup tools: read once, and only if a specialist asks."""
 
-    def __init__(self, read_page: PageReader, page_refs: list[dict[str, Any]]):
+    def __init__(self, read_page: PageReader, page_refs: list[dict[str, typing.Any]]):
         self._read_page = read_page
         self._keys = {ref["page"]: ref["source_key"] for ref in page_refs}
         self._pages: dict[int, str] | None = None
@@ -308,7 +308,7 @@ async def _write(writer: ArtifactWriter, key: str, content: str, content_type: s
         await result
 
 
-async def _gather_cancel_on_failure(awaitables: Iterable[Coroutine[Any, Any, Any]]) -> list[Any]:
+async def _gather_cancel_on_failure(awaitables: collections.abc.Iterable[collections.abc.Coroutine[typing.Any, typing.Any, typing.Any]]) -> list[typing.Any]:
     tasks = [asyncio.create_task(awaitable) for awaitable in awaitables]
     try:
         return await asyncio.gather(*tasks)

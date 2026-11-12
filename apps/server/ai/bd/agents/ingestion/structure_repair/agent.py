@@ -5,17 +5,11 @@ from . import config, params
 from ... import schemas
 from .... import middlewares, prompts, skills, tools
 
-from deepagents import (
-    FilesystemPermission,
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
-from deepagents.backends import StateBackend
-from deepagents.profiles.harness import harness_profiles
-from langchain.agents.middleware import ModelCallLimitMiddleware
-from langchain_openai import ChatOpenAI
+import deepagents
+import deepagents.backends
+import deepagents.profiles.harness
+import langchain.agents.middleware
+import langchain_openai
 
 
 def structure_repair(model = None):
@@ -30,54 +24,54 @@ def structure_repair(model = None):
     model_name = getattr(model, "model_name", None)
     if not isinstance(model_name, str) or not model_name or ":" in model_name:
         raise ValueError("the structure-repair specialist requires a named Rotator model")
-    if not isinstance(model, ChatOpenAI):
+    if not isinstance(model, langchain_openai.ChatOpenAI):
         raise TypeError("the structure-repair specialist must use the COELHO Rotator ChatOpenAI model")
 
     # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
     # before (by another role or other code in the process) hides tools from this agent.
     key = f"openai:{model_name}"
-    harness_profiles._HARNESS_PROFILES.pop(key, None)
-    register_harness_profile(
+    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
+    deepagents.register_harness_profile(
         key,
-        HarnessProfile(
+        deepagents.HarnessProfile(
             base_system_prompt = "",
-            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
+            general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
     repair_tools = [
         tools.patch.tool.check_patches,
         tools.book.tool.adjacent_page_edges,
     ]
-    agent = create_deep_agent(
+    agent = deepagents.create_deep_agent(
         model = model,
         tools = repair_tools,
         system_prompt = prompts.ingestion.structure_repair.prompts.SYSTEM_PROMPT,
         context_schema = domains.bd.ingestion.ai.entities.SpecialistContext,
         middleware = [middlewares.middleware.ToolAllowlistMiddleware(
             frozenset({"read_file", *(tool.name for tool in repair_tools)}),
-        ), ModelCallLimitMiddleware(
+        ), langchain.agents.middleware.ModelCallLimitMiddleware(
             run_limit = domains.bd.ingestion.ai.params.SPECIALIST_MODEL_CALL_LIMIT,
             exit_behavior = "end",
         )],
         response_format = schemas.PatchDraftBatch,
         permissions = [
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["read"],
                 paths = ["/skills/**"],
                 mode = "allow",
             ),
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["read"],
                 paths = ["/**"],
                 mode = "deny",
             ),
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["write"],
                 paths = ["/**"],
                 mode = "deny",
             ),
         ],
-        backend = StateBackend(),
+        backend = deepagents.backends.StateBackend(),
         skills = [skills.domain.source_for("structure_repair")],
         name = "bd_structure_repair",
     )

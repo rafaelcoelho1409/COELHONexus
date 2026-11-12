@@ -7,14 +7,14 @@ from .... import agents
 import difflib
 import re
 import unicodedata
-from json import JSONDecodeError, JSONDecoder
-from collections.abc import Iterator
-from typing import Any
-from pydantic import ValidationError
+import json
+import collections.abc
+import typing
+import pydantic
 
 
 def extract_patch_response(
-    result: Any,
+    result: typing.Any,
     *,
     role: str,
 ) -> agents.schemas.PatchDraftBatch | agents.schemas.PatchProposalBatch:
@@ -30,11 +30,11 @@ def extract_patch_response(
     if "model call limit" in content.casefold():
         raise errors.ModelCallLimitReachedError(f"{role} specialist reached its model-call limit")
 
-    last_error: ValidationError | None = None
+    last_error: pydantic.ValidationError | None = None
     for value in _json_objects(content):
         try:
             return _validate_patch_response(value)
-        except ValidationError as error:
+        except pydantic.ValidationError as error:
             last_error = error
     if last_error is not None:
         raise ValueError(f"{role} specialist returned JSON that did not match its response schema") from last_error
@@ -42,15 +42,15 @@ def extract_patch_response(
 
 
 def _validate_patch_response(
-    value: Any,
+    value: typing.Any,
 ) -> agents.schemas.PatchDraftBatch | agents.schemas.PatchProposalBatch:
     try:
         return agents.schemas.PatchDraftBatch.model_validate(value)
-    except ValidationError:
+    except pydantic.ValidationError:
         return agents.schemas.PatchProposalBatch.model_validate(value)
 
 
-def _last_assistant_content(messages: Any) -> str | None:
+def _last_assistant_content(messages: typing.Any) -> str | None:
     if not isinstance(messages, list):
         return None
     for message in reversed(messages):
@@ -75,21 +75,21 @@ def _last_assistant_content(messages: Any) -> str | None:
     return None
 
 
-def _json_objects(content: str) -> Iterator[dict[str, Any]]:
-    decoder = JSONDecoder()
+def _json_objects(content: str) -> collections.abc.Iterator[dict[str, typing.Any]]:
+    decoder = json.JSONDecoder()
     for start, character in enumerate(content):
         if character != "{":
             continue
         try:
             value, _ = decoder.raw_decode(content[start:])
-        except JSONDecodeError:
+        except json.JSONDecodeError:
             continue
         if isinstance(value, dict):
             yield value
 
 
 def validate_proposals(
-    value: Any,
+    value: typing.Any,
     *,
     page_number: int,
     source_sha256: str,
@@ -107,7 +107,7 @@ def validate_proposals(
                 if isinstance(value, agents.schemas.PatchDraftBatch)
                 else agents.schemas.PatchDraftBatch.model_validate(value)
             )
-        except ValidationError:
+        except pydantic.ValidationError:
             # Keep stored runs and local callers using the previous full proposal shape readable.
             proposals_to_validate = agents.schemas.PatchProposalBatch.model_validate(value).proposals
         else:

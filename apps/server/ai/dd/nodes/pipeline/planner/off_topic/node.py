@@ -1,18 +1,18 @@
 """off_topic graph node: runs the relevance subgraph (one judge per distinct page text, in parallel), and the routes between its steps."""
 from __future__ import annotations
-from domains.dd.pipeline.observability.service import traced
+import domains.dd.pipeline.observability.service
 from . import params, service
 from ..... import graphs
 
-from langgraph.graph import END
-from langgraph.runtime import Runtime
-from langgraph.types import Send
+import langgraph.graph
+import langgraph.runtime
+import langgraph.types
 
 
-@traced("off_topic")
+@domains.dd.pipeline.observability.service.traced("off_topic")
 async def off_topic(
     state: graphs.pipeline.planner.states.PlannerState,
-    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     result = await graphs.pipeline.planner.off_topic.graphs.off_topic_graph().ainvoke(
         {
@@ -32,28 +32,28 @@ async def off_topic(
 
 async def prepare(
     state: graphs.pipeline.planner.off_topic.states.OffTopicState,
-    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     return await service.prepare(state, runtime)
 
 
 async def judge_page(
     state: graphs.pipeline.planner.off_topic.entities.JudgeInput,
-    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     return await service.judge_page(state, runtime)
 
 
 def tally(
     state: graphs.pipeline.planner.off_topic.states.OffTopicState,
-    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     return service.tally(state, runtime)
 
 
 async def finalize(
     state: graphs.pipeline.planner.off_topic.states.OffTopicState,
-    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     return await service.finalize(state, runtime)
 
@@ -80,16 +80,16 @@ def judge_input(
 
 def after_prepare(graph_state: graphs.pipeline.planner.off_topic.states.OffTopicState):
     if graph_state.get("finished"):
-        return END
+        return langgraph.graph.END
     todo = graph_state.get("todo") or []
     if not todo:
         return "tally"
-    return [Send("judge_page", judge_input(graph_state, digest, 1)) for digest in todo]
+    return [langgraph.types.Send("judge_page", judge_input(graph_state, digest, 1)) for digest in todo]
 
 
 def after_tally(graph_state: graphs.pipeline.planner.off_topic.states.OffTopicState):
     """Confident DROPs of substantial pages are judged a second time (one free-tier judge call is noisy); KEEP wins."""
     recheck = graph_state.get("recheck") or []
     if recheck:
-        return [Send("judge_page", judge_input(graph_state, digest, 2)) for digest in recheck]
+        return [langgraph.types.Send("judge_page", judge_input(graph_state, digest, 2)) for digest in recheck]
     return "finalize"

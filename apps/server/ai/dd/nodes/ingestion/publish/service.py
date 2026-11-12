@@ -4,24 +4,24 @@ from __future__ import annotations
 import domains
 from .... import graphs
 
-from collections.abc import Awaitable, Callable
+import collections.abc
 import json
-from typing import Any
+import typing
 
 
-ArtifactWriter = Callable[[str, str, str], Awaitable[None]]
+ArtifactWriter = collections.abc.Callable[[str, str, str], collections.abc.Awaitable[None]]
 
 
 def _order_by_source_pages(
-    items: list[dict[str, Any]],
+    items: list[dict[str, typing.Any]],
     expected_indices: list[int],
     label: str,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, typing.Any]]:
     """Require exact one-to-one page coverage, then restore source manifest order."""
     if len(set(expected_indices)) != len(expected_indices):
         raise ValueError("source pages contain duplicate page indices")
 
-    by_idx: dict[int, dict[str, Any]] = {}
+    by_idx: dict[int, dict[str, typing.Any]] = {}
     for item in items:
         idx = item.get("idx")
         if idx in by_idx:
@@ -40,7 +40,7 @@ def _order_by_source_pages(
 async def publish(
     state: graphs.ingestion.states.IngestionState,
     write_artifact: ArtifactWriter,
-) -> dict[str, Any]:
+) -> dict[str, typing.Any]:
     """Write an agentic manifest only after every source page has an output."""
     pages = state.get("pages", [])
     assessments = state.get("assessments", [])

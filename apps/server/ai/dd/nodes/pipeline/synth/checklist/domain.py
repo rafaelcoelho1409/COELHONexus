@@ -2,17 +2,18 @@
 chapter/digest rendering for the judge, the judge's request, LLM verdict
 coercion and manifest hashing."""
 from __future__ import annotations
-import ai, domains
+from ...... import dd
+import domains
 from . import params, schemas, versions
 
 import ast
 import json
 import re
 import random
-from collections import Counter
-from hashlib import sha256
+import collections
+import hashlib
 
-from pydantic import ValidationError
+import pydantic
 
 
 # ---------------------------------------------------------------------------
@@ -284,7 +285,7 @@ def check_code_uniqueness_ratio(sawc: dict) -> schemas.CriterionResult:
             feedback = "",
         )
 
-    top = Counter(hashes).most_common(3)
+    top = collections.Counter(hashes).most_common(3)
     sample = ", ".join(f"{h[:8]}…×{n}" for h, n in top if n > 1)
     feedback = (
         f"code uniqueness {ratio:.0%} ({n_unique} unique / {n_total} "
@@ -406,7 +407,7 @@ def check_code_coverage(sawc: dict) -> schemas.CriterionResult:
         covered = routed & used
         bodies = sawc.get("_vault_bodies") or {}
         if bodies:
-            covered |= ai.dd.nodes.pipeline.synth.sawc.domain.near_duplicate_hashes(
+            covered |= dd.nodes.pipeline.synth.sawc.domain.near_duplicate_hashes(
                 sorted(routed - used), sorted(used), bodies,
             )
         n_used = len(covered)
@@ -414,7 +415,7 @@ def check_code_coverage(sawc: dict) -> schemas.CriterionResult:
         if sections:
             need = min(
                 need,
-                params.COVERAGE_CAPACITY_SHARE * len(sections) * ai.dd.nodes.pipeline.synth.sawc.params.TOPUP_SECTION_MAX,
+                params.COVERAGE_CAPACITY_SHARE * len(sections) * dd.nodes.pipeline.synth.sawc.params.TOPUP_SECTION_MAX,
             )
         if n_used < need:
             problems.append(f"only {n_used} of {len(routed)} routed code blocks are printed (or repeated by a printed near-copy)")
@@ -436,7 +437,7 @@ def check_code_prose_alignment(sawc: dict) -> schemas.CriterionResult:
     bodies = sawc.get("_vault_bodies") or {}
     if not bodies:
         return schemas.CriterionResult(name = "code_prose_alignment", passed = True, kind = "deterministic", feedback = "")
-    match = ai.dd.nodes.pipeline.synth.sawc.domain.prose_matches_code
+    match = dd.nodes.pipeline.synth.sawc.domain.prose_matches_code
     bad: list[str] = []
     for s in sawc.get("sections") or []:
         for st in (s.get("subtopics") or []):
@@ -474,7 +475,7 @@ def check_best_code_taught(sawc: dict) -> schemas.CriterionResult:
     missing = [h for h in must if h not in taught]
     allowed = (1.0 - params.TUTORIAL_MIN_COVERAGE) * len(must)
     if steps:
-        allowed = max(allowed, len(must) - params.COVERAGE_CAPACITY_SHARE * len(steps) * ai.dd.nodes.pipeline.synth.sawc.params.TOPUP_SECTION_MAX)
+        allowed = max(allowed, len(must) - params.COVERAGE_CAPACITY_SHARE * len(steps) * dd.nodes.pipeline.synth.sawc.params.TOPUP_SECTION_MAX)
     passed = len(missing) <= allowed
     labels = sawc.get("_labels") or {}
     named = ", ".join(f"{labels.get(h, h[:8])}" for h in missing[:6])
@@ -604,7 +605,7 @@ def tutorial_token(sawc: dict) -> str:
     prefix = sawc.get("_capstone_prefix") or "Capstone"
     last = (sawc.get("sections") or [{}])[-1]
     code = [st.get("derived_code") or "" for st in last.get("subtopics") or []] if str(last.get("heading") or "").startswith(prefix) else []
-    return sha256(json.dumps([sawc.get("capstone"), code], sort_keys = True, ensure_ascii = False).encode("utf-8")).hexdigest()[:12]
+    return hashlib.sha256(json.dumps([sawc.get("capstone"), code], sort_keys = True, ensure_ascii = False).encode("utf-8")).hexdigest()[:12]
 
 
 def active_checks(tutorial: bool, verification_required: bool = False) -> tuple:
@@ -761,7 +762,7 @@ def criterion_order_for(chapter_id: str) -> list[str]:
     seed_material = (
         f"{chapter_id}|{versions.CHECKLIST_PROMPT_VERSION}".encode("utf-8")
     )
-    seed = int.from_bytes(sha256(seed_material).digest()[:8], "big")
+    seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:8], "big")
     rng = random.Random(seed)
     order = list(params.LLM_CRITERIA)
     rng.shuffle(order)
@@ -841,7 +842,7 @@ def compute_manifest_hash(
         f"prompt={versions.CHECKLIST_PROMPT_VERSION}|"
         f"schema={versions.CHECKLIST_SCHEMA_VERSION}"
     ) + (f"|tutorial={tutorial}" if tutorial else "")
-    return sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 def is_context_overflow_error(e: Exception) -> bool:
@@ -875,7 +876,7 @@ def fallback_llm_verdicts(reason: str) -> list[schemas.CriterionResult]:
     return out
 
 
-def shorten_pydantic_error(e: ValidationError) -> str:
+def shorten_pydantic_error(e: pydantic.ValidationError) -> str:
     errs = e.errors()
     if not errs:
         return "Pydantic validation failed (no detail)"

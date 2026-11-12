@@ -1,20 +1,15 @@
 """DeepAgent that judges one rendered chapter against the five checklist criteria."""
 from __future__ import annotations
-import ai, domains
+from ...... import dd
+import domains
 from . import config, params
 from .. import schemas
 from .... import service
 from ..... import middlewares, prompts
 
-from deepagents import (
-    FilesystemPermission,
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
-from deepagents.backends import StateBackend
-from deepagents.profiles.harness import harness_profiles
+import deepagents
+import deepagents.backends
+import deepagents.profiles.harness
 
 
 def chapter_judge(model = None):
@@ -34,15 +29,15 @@ def chapter_judge(model = None):
     # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
     # before (by another role or other code in the process) hides tools from this agent.
     key = f"openai:{model_name}"
-    harness_profiles._HARNESS_PROFILES.pop(key, None)
-    register_harness_profile(
+    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
+    deepagents.register_harness_profile(
         key,
-        HarnessProfile(
+        deepagents.HarnessProfile(
             base_system_prompt = "",
-            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
+            general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    agent = create_deep_agent(
+    agent = deepagents.create_deep_agent(
         model = model,
         system_prompt = prompts.pipeline.synth.chapter_judge.prompts.SYSTEM_PROMPT,
         response_format = schemas.JudgeAnswer,
@@ -53,16 +48,16 @@ def chapter_judge(model = None):
             middlewares.middleware.ToolAllowlistMiddleware(frozenset()),
         ],
         permissions = [
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["read"],
                 paths = ["/**"],
                 mode = "deny"),
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["write"],
                 paths = ["/**"],
                 mode = "deny"),
         ],
-        backend = StateBackend(),
+        backend = deepagents.backends.StateBackend(),
         name = "dd_chapter_judge",
     )
     tool_node = agent.nodes.get("tools")
@@ -70,6 +65,6 @@ def chapter_judge(model = None):
     error_message = "DeepAgents exposed an unreviewed tool to the chapter judge"
     if not isinstance(available_tools, dict):
         raise RuntimeError(error_message)
-    if set(available_tools) - ai.dd.agents.params.STACK_TOOLS:
+    if set(available_tools) - dd.agents.params.STACK_TOOLS:
         raise RuntimeError(error_message)
     return agent

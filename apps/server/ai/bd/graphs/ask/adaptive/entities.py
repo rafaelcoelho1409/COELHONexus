@@ -1,15 +1,15 @@
 """Runtime-only dependencies for one BD Ask graph invocation."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+import dataclasses
+import typing
 
 
-@dataclass(frozen = True, slots = True)
+@dataclasses.dataclass(frozen = True, slots = True)
 class AskContext:
     book_id: str
     run_id: str
-    planner: Any
-    grader: Any
-    answerer: Any
-    critic: Any
+    planner: typing.Any
+    grader: typing.Any
+    answerer: typing.Any
+    critic: typing.Any

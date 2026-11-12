@@ -18,8 +18,8 @@ import json
 import logging
 import time
 
-from deepagents.backends import CompositeBackend, StateBackend
-from langgraph.runtime import Runtime
+import deepagents.backends
+import langgraph.runtime
 
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ def section_target(n_pages: int) -> int:
     return max(1, min(agents.pipeline.planner.params.SECTION_PROPOSALS_MAX, round(n_pages / params.PROPOSALS_DIVISOR)))
 
 
-async def prepare(state: graphs.pipeline.planner.chapter_propose.states.ProposeState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.planner.chapter_propose.states.ProposeState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
@@ -114,7 +114,7 @@ async def prepare(state: graphs.pipeline.planner.chapter_propose.states.ProposeS
     }
 
 
-async def analyze_section(state: graphs.pipeline.planner.chapter_propose.entities.SectionInput, runtime: Runtime[Context]) -> dict:
+async def analyze_section(state: graphs.pipeline.planner.chapter_propose.entities.SectionInput, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     """One section analyst: the chapters its section supports, from the page summaries. A failed analyst costs its section's sketch only."""
     context = runtime.context
     data = context.scratch[params.STEP]
@@ -165,7 +165,7 @@ def _feedback(outline: dict, labels: list[str], target: int) -> str:
     return " ".join(lines)
 
 
-async def architect(state: graphs.pipeline.planner.chapter_propose.states.ProposeState, runtime: Runtime[Context]) -> dict:
+async def architect(state: graphs.pipeline.planner.chapter_propose.states.ProposeState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     """One architect attempt: the corpus as read-only files, the sketches as a working file, the score tool bound to this run's pages."""
     context = runtime.context
     blobs = context.blobs
@@ -189,8 +189,8 @@ async def architect(state: graphs.pipeline.planner.chapter_propose.states.Propos
             terms = tuple(distillate.get("key_terms") or []),
         ))
     labels = [backends.corpus.params.ROUTE.rstrip("/") + doc.path for doc in docs]
-    backend = CompositeBackend(
-        default = StateBackend(),
+    backend = deepagents.backends.CompositeBackend(
+        default = deepagents.backends.StateBackend(),
         routes = {backends.corpus.params.ROUTE: backends.corpus.service.CorpusBackend(docs, blobs.read_text)},
     )
     score = lambda outline: domain.score_outline(outline, data["doc_texts"], target)
@@ -247,7 +247,7 @@ async def architect(state: graphs.pipeline.planner.chapter_propose.states.Propos
     return {"attempt": attempt, "outlines": [{"attempt": attempt, "proposals": proposals, "scored": scored}]}
 
 
-async def finalize(state: graphs.pipeline.planner.chapter_propose.states.ProposeState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.planner.chapter_propose.states.ProposeState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     data = context.scratch[params.STEP]

@@ -110,7 +110,13 @@ The run made 937 LLM calls (8,591,191 input and 379,359 output tokens) and recor
 - Bound repair/check calls and use a shorter repair retry delay; only mark eligible unresolved repair issues for review.
 - Insert a separator after a leading GitBook emoji shortcode in a heading; corpus normalizer version is now 14 and the agentic normalizer version is v3.
 
-**Disposition:** the baseline pipeline completed, but Tier 1 has not converged. The fixes above need redeployment and a regression run. Tier 2–4 results are tracked below as they are run. Tier 5 remains out of scope.
+**Round `tier1-r1` disposition:** the baseline pipeline completed, but Tier 1 had not converged. The fixes above needed redeployment and a regression run. Tier 2–4 results are tracked below as they are run. Tier 5 remains out of scope.
+
+**Redeployed validation — round `dd-refine-2026-11-11-r3`:** run `daf55531bed44073a11d59865149507a` completed end to end with all 204 retained pages published and vault backfill done. Extraction took 60.94s, preparation 24.19s, Agentic processing 1,956.05s (~32m36s), backfill 50.72s, and total runtime was 2,092.19s (~34m52s). The run used normalizer v14 and `dd-ingestion-agentic-v3`. Preparation dropped the one empty split page identified in the prior pass; no empty pages were published.
+
+Quality recorded 99 findings on 35 pages (72 `duplicate_boilerplate`, 18 `duplicate_section`, 3 `encoding_artifact`, 1 `malformed_heading`, 4 `markdown_formatting`, 1 `other`), with 40 low- and 59 medium-severity findings. There were 22 audit-unavailable pages and 23 review-required pages; repairs had 0 accepted and 2 rejected patches. The run made 208 calls and recorded 62 provider errors (57 HTTP 504s, 1 connection error and 4 other API errors). It applied 322 blank-line collapses, 164 emoji-heading spacing fixes, 19 permalink removals, 3 trailing-rule removals and 10 zero-width-character removals.
+
+**Assessment and local fixes pending redeployment:** the issue scan confirmed real content problems on a lingering internal note and one inconsistent numbered heading. It also found false positives for repeated text under distinct model/configuration examples, GitBook block-marker repetition, valid HTML numeric entities, escaped model identifiers, and valid colon-aligned GFM tables. I added deterministic guards for standalone escaped identifiers, valid numeric entities, valid table-row context and duplicate findings made only of structural export tags; the auditor prompt now clarifies contextual repeats, export markers, HTML entities and alignment syntax. These refinements still need a deployed regression. The durable report is `dd-benchmarks/dd-refine-2026-11-11-r3/daf55531bed44073a11d59865149507a.json`.
 
 ### Tier 2 — Optimum (`llms_txt`)
 
@@ -129,6 +135,10 @@ The run made 937 LLM calls (8,591,191 input and 379,359 output tokens) and recor
 **Assessment:** extraction and preparation succeeded. The audit node returned the same number of assessments as source pages, but publish found their index sequence did not exactly match the source-page sequence. The current error does not report whether indices were merely reordered or whether there was a duplicate/missing pair, so the precise shape is unknown. Provider connectivity also degraded the audit quality; fallback assessments kept processing moving, but publication then failed on the coverage check.
 
 **Local fix applied; pending deployment and validation:** publish now checks unique, exact index coverage for both assessments and normalized outputs, then orders them to match the source manifest. This preserves strict missing/duplicate detection without requiring downstream lists to arrive in the same order. The isolated benchmark staging objects were cleaned up; the durable report remains available under `dd-benchmarks/dd-refine-2026-11-11-r2/`.
+
+**Redeployed validation — round `dd-refine-2026-11-11-r3`:** run `251663da35e24667bec7250a8c393383` completed successfully against normalizer v14 / agentic normalizer v3. All 11 pages published, vault backfill completed in 2.52 seconds, and total run time was 135.05 seconds. This confirms the prior publish-order failure is fixed on the deployed build. The finalized manifest keeps the intended navigation order, which differs from numeric page-index order.
+
+There were 13 audit calls and 10 provider errors (9 connection errors, 1 HTTP 504). One page (index 10) remained unaudited and was preserved unchanged. The 14 quality findings were low-severity duplicate-boilerplate findings across two pages; their exact repeated parameter descriptions were not auto-removed, appropriately avoiding loss of potentially meaningful API context. No code change is indicated by these findings. The durable report is `dd-benchmarks/dd-refine-2026-11-11-r3/251663da35e24667bec7250a8c393383.json`.
 
 ### Tier 3 — DeepAgents (`sitemap`)
 
@@ -155,7 +165,13 @@ The run made 937 LLM calls (8,591,191 input and 379,359 output tokens) and recor
 - Refine auditor guidance for escaped pipes, provider-specific examples, valid field-reference styling, shared content under heading sequences, and concise H2 titles on split pages.
 - When a split page has no H1, use its first ATX heading outside code fences as its display title before falling back to prose. This fixes the observed `System prompt` title mismatch and supports section titles such as `Productivity`.
 
-**Disposition:** extraction, normalization, publish and vault backfill succeeded, but Tier 3 has not converged because one page was unaudited and the page-title and auditor false-positive fixes still need a deployed regression run. The durable report remains under `dd-benchmarks/dd-refine-2026-11-11-r2/`.
+**Round r2 disposition:** extraction, normalization, publish and vault backfill succeeded, but that pass was not converged because one page was unaudited and the page-title and auditor false-positive fixes still needed a deployed regression run. The durable report remains under `dd-benchmarks/dd-refine-2026-11-11-r2/`.
+
+**Redeployed validation — round `dd-refine-2026-11-11-r3`:** run `d82f58b91dcf45008f0bd775a8ab0cbb` completed successfully: 70 sitemap pages became 110 Agentic pages, all 110 were normalized, all pages were published, and vault backfill completed. Extraction took 63.46s, preparation 33.16s, Agentic processing 982.07s, backfill 16.61s, and total runtime was 1,095.67s (~18m16s). The run used normalizer v14 and `dd-ingestion-agentic-v3`.
+
+The display-title fix is validated: the `customization` child now displays as **System prompt**, and the split integration page displays as **Productivity**. All seven sampled pages from the previous false-positive cases had no retained issues; the auditor correctly discarded fenced-code, export-syntax, and non-exact-evidence findings. The full run retained 3 findings on 2 pages: two issues on Checkpointer integrations (a plain-text section label and a missing diagram referenced by the source text) and one plain-text migration heading. These are present in the source export and are reasonable review findings; no automatic content rewrite is warranted.
+
+Provider reliability remains the main limitation: 12 of 110 pages (indices 20, 27, 35, 41, 46, 47, 48, 49, 50, 77, 104 and 106) were kept unchanged with audit unavailable after provider failures. Final counters show 103 calls, 29 errors (28 HTTP 504s and 1 connection error). The bounded retry behavior allowed the run to finish and publish, but this audit-unavailable rate is too high for convergence. The durable report is `dd-benchmarks/dd-refine-2026-11-11-r3/d82f58b91dcf45008f0bd775a8ab0cbb.json`.
 
 ### Tier 4 — Asyncio (`docs`)
 
@@ -178,12 +194,17 @@ The run made 937 LLM calls (8,591,191 input and 379,359 output tokens) and recor
 
 **Disposition:** Tier 4 extraction, preparation, audit and normalization worked; the pipeline did not complete publish or vault backfill. Tier 4 remains unvalidated until redeployment and a rerun. The Tier 2 and Tier 4 failures share the same fix and should both be rerun in the next round.
 
-### Tier 2–4 convergence status
+**Redeployed validation — round `dd-refine-2026-11-11-r3`:** run `e59c84dcc7cb40809ec28896cdcb575e` completed end to end with 118 pages published and vault backfill done. Extraction took 54.86s, preparation 4.54s, Agentic processing 283.95s, vault backfill 38.99s, and total runtime was 382.64s (~6m23s). The run used normalizer v14 and agentic normalizer v3. One audit (page 105) was unavailable; all source pages were preserved. Counters show 128 calls, 3 provider errors (one connection error and two HTTP 504s).
 
-- **Tier 2 Optimum:** extraction and preparation succeeded; publish failed on assessment ordering.
-- **Tier 3 DeepAgents:** full pipeline succeeded; one page's audit was unavailable, and findings exposed page-title and auditor false-positive fixes.
-- **Tier 4 Asyncio:** extraction through normalization succeeded; publish failed on the same assessment-ordering defect as Tier 2.
-- **Current disposition:** no tier is considered converged. Tier 3 completed successfully on this build, but shared auditor and title fixes remain unvalidated. Deploy the accumulated changes, then rerun Tiers 2–4 sequentially; Tier 1 also needs the normalizer-v14/v3 regression run documented above.
+There were 9 findings on 5 pages. Sampling all affected records shows the repeated sentences are valid method-specific text under separate asyncio API entries (for example, `asyncio.run` versus `runners.run`, `WriteTransport.write` versus `DatagramTransport.sendto`, and separate Future/Task methods). The remaining formatting finding targets valid escaped underscores in a Python signature (`create\\_subprocess\\_exec`). These are auditor false positives, not content defects. I updated the local auditor prompt to explicitly preserve repeated descriptions across distinct API entries and escaped underscores in Python identifiers; that prompt change is pending deployment and validation. The durable report is `dd-benchmarks/dd-refine-2026-11-11-r3/e59c84dcc7cb40809ec28896cdcb575e.json`.
+
+### Tier 1–4 convergence status
+
+- **Tier 1 Unsloth:** r3 confirmed extraction, empty-page dropping, publish and vault backfill; 22 pages were unaudited and the 99-finding review set exposed false positives addressed locally, pending a deployed regression.
+- **Tier 2 Optimum:** deployed rerun confirmed successful extraction, publish ordering and vault backfill; one page remains unaudited because of provider failures.
+- **Tier 3 DeepAgents:** deployed rerun confirmed the page-title and false-positive fixes and successful publishing; 12 pages remain unaudited because of provider failures.
+- **Tier 4 Asyncio:** deployed rerun confirmed extraction, audit, publish and vault backfill; one page's audit was unavailable. Sampling found nine audit false positives; explicit prompt guidance has been added locally and remains pending deployed validation.
+- **Current disposition:** all Tier 1–4 representatives completed extraction, Agentic processing, publish and vault backfill on the r3 deployed build. The publish-order, empty-page, title-selection and previous DeepAgents false-positive fixes are validated. The tier suite has not converged: audits were unavailable on 22 Unsloth, 1 Optimum, 12 DeepAgents and 1 Asyncio pages; Unsloth/Asyncio false-positive safeguards are now changed locally and need deployment validation. Provider 504s explain most unavailable audits, so keep provider stability separate from deterministic ingestion defects. After redeployment, rerun affected tiers (Tier 1 and Tier 4 first, then Tier 2–3 if shared prompt changes are included) before marking the tier suite converged.
 
 ## Benchmark acceptance record
 

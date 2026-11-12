@@ -1,18 +1,18 @@
 """Pure Planner v2 card helpers."""
 from __future__ import annotations
 
-from hashlib import sha256
+import hashlib
 
 from . import patterns
 
 
 def content_digest(body: str) -> str:
-    return sha256((body or "").encode("utf-8")).hexdigest()
+    return hashlib.sha256((body or "").encode("utf-8")).hexdigest()
 
 
 def manifest_digest(slug: str, source_keys: list[str], body_digests: dict[str, str], version: str) -> str:
     payload = "\n".join([slug, version, *[f"{key}:{body_digests.get(key, '')}" for key in source_keys]])
-    return sha256(payload.encode("utf-8")).hexdigest()[:20]
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:20]
 
 
 def fallback_card(*, key: str, title: str, body: str, url: str = "") -> dict:

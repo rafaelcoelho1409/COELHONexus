@@ -1,11 +1,11 @@
 """sawc_derive — MinIO key builders."""
 from __future__ import annotations
 
+from ..... import graphs
+
 
 def sawc_latest_key(slug: str, chapter_id: str) -> str:
-    from ai.dd.graphs.pipeline.synth import keys
-
-    return keys.latest_key(slug, chapter_id, "sawc")
+    return graphs.pipeline.synth.keys.latest_key(slug, chapter_id, "sawc")
 
 
 def derive_latest_key(slug: str, chapter_id: str) -> str:
@@ -13,10 +13,8 @@ def derive_latest_key(slug: str, chapter_id: str) -> str:
 
 
 def digest_latest_key(slug: str, chapter_id: str) -> str:
-    from ai.dd.graphs.pipeline.synth import keys
-    from ai.dd.graphs.pipeline.synth import params
-
-    return keys.latest_key(slug, chapter_id, "ledger" if params.is_v2() else "digest")
+    artifact = "ledger" if graphs.pipeline.synth.params.is_v2() else "digest"
+    return graphs.pipeline.synth.keys.latest_key(slug, chapter_id, artifact)
 
 
 def sawc_versioned_key(slug: str, chapter_id: str, manifest_hash: str) -> str:

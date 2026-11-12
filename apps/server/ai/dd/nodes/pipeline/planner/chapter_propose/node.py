@@ -1,18 +1,18 @@
 """chapter_propose graph node: runs the proposal subgraph (section analysts in parallel, then the architect and its score gate), and the routes between its steps."""
 from __future__ import annotations
-from domains.dd.pipeline.observability.service import traced
+import domains.dd.pipeline.observability.service
 from . import domain, params, service
 from ..... import graphs
 
-from langgraph.graph import END
-from langgraph.runtime import Runtime
-from langgraph.types import Send
+import langgraph.graph
+import langgraph.runtime
+import langgraph.types
 
 
-@traced("chapter_propose")
+@domains.dd.pipeline.observability.service.traced("chapter_propose")
 async def chapter_propose(
     state: graphs.pipeline.planner.states.PlannerState,
-    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     result = await graphs.pipeline.planner.chapter_propose.graphs.chapter_propose_graph().ainvoke(
         {
@@ -33,28 +33,28 @@ async def chapter_propose(
 
 async def prepare(
     state: graphs.pipeline.planner.chapter_propose.states.ProposeState,
-    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     return await service.prepare(state, runtime)
 
 
 async def analyze_section(
     state: graphs.pipeline.planner.chapter_propose.entities.SectionInput,
-    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     return await service.analyze_section(state, runtime)
 
 
 async def architect(
     state: graphs.pipeline.planner.chapter_propose.states.ProposeState,
-    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     return await service.architect(state, runtime)
 
 
 async def finalize(
     state: graphs.pipeline.planner.chapter_propose.states.ProposeState,
-    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     return await service.finalize(state, runtime)
 
@@ -62,12 +62,12 @@ async def finalize(
 def after_prepare(graph_state: graphs.pipeline.planner.chapter_propose.states.ProposeState):
     """A corpus of enough pages is read by one analyst per section; a small one goes straight to the architect."""
     if graph_state.get("finished"):
-        return END
+        return langgraph.graph.END
     shards = graph_state.get("shards") or []
     if not shards:
         return "architect"
     return [
-        Send(
+        langgraph.types.Send(
             "analyze_section",
             {
                 "section": shard["label"],

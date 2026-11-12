@@ -5,16 +5,10 @@ from . import config, params
 from ... import schemas
 from .... import middlewares, prompts, skills
 
-from deepagents import (
-    FilesystemPermission,
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
-from deepagents.backends import StateBackend
-from deepagents.profiles.harness import harness_profiles
-from langchain_openai import ChatOpenAI
+import deepagents
+import deepagents.backends
+import deepagents.profiles.harness
+import langchain_openai
 
 
 def metadata_normalizer(model = None):
@@ -29,44 +23,44 @@ def metadata_normalizer(model = None):
     model_name = getattr(model, "model_name", None)
     if not isinstance(model_name, str) or not model_name or ":" in model_name:
         raise ValueError("the metadata normalizer requires a named Rotator model")
-    if not isinstance(model, ChatOpenAI):
+    if not isinstance(model, langchain_openai.ChatOpenAI):
         raise TypeError("the metadata normalizer must use the COELHO Rotator ChatOpenAI model")
 
     # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
     # before (by another role or other code in the process) hides tools from this agent.
     key = f"openai:{model_name}"
-    harness_profiles._HARNESS_PROFILES.pop(key, None)
-    register_harness_profile(
+    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
+    deepagents.register_harness_profile(
         key,
-        HarnessProfile(
+        deepagents.HarnessProfile(
             base_system_prompt = "",
-            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
+            general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    agent = create_deep_agent(
+    agent = deepagents.create_deep_agent(
         model = model,
         tools = [],
         system_prompt = prompts.ingestion.metadata_normalizer.prompts.SYSTEM_PROMPT,
         middleware = [middlewares.middleware.ToolAllowlistMiddleware(frozenset({"read_file"}))],
         response_format = schemas.BookMetadataProposal,
         permissions = [
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["read"],
                 paths = ["/skills/**"],
                 mode = "allow",
             ),
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["read"],
                 paths = ["/**"],
                 mode = "deny",
             ),
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["write"],
                 paths = ["/**"],
                 mode = "deny",
             ),
         ],
-        backend = StateBackend(),
+        backend = deepagents.backends.StateBackend(),
         skills = [skills.domain.source_for("metadata_normalizer")],
         name = "bd_metadata_normalizer",
     )

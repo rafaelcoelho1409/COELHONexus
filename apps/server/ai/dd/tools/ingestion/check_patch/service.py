@@ -4,10 +4,10 @@ from . import domain, entities, params
 
 import hashlib
 import json
-from typing import Any
+import typing
 
 
-def verdict(files: dict[str, Any], check: entities.Check, fields: dict[str, Any]) -> str:
+def verdict(files: dict[str, typing.Any], check: entities.Check, fields: dict[str, typing.Any]) -> str:
     """Run `check` on the patch `fields` against the page and audit in `files`: OK, or why the patch would be refused and what to change."""
     markdown = domain.file_text(files, params.PAGE_PATH)
     if not markdown:

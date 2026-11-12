@@ -3,25 +3,25 @@ from __future__ import annotations
 from . import entities
 
 import operator
-from typing import Annotated, Optional, TypedDict
+import typing
 
 
-class SawcState(TypedDict, total = False):
+class SawcState(typing.TypedDict, total = False):
     framework_slug: str
     chapter_id: str
     thread_id: str
     synth_mode: str
     # Read from the chapter's state: the CoRefine loop's bookkeeping.
-    refine_iter: Optional[int]
-    checklist_stats: Optional[dict]
-    best_seen_score: Optional[float]
-    best_seen_sawc_path: Optional[str]
+    refine_iter: typing.Optional[int]
+    checklist_stats: typing.Optional[dict]
+    best_seen_score: typing.Optional[float]
+    best_seen_sawc_path: typing.Optional[str]
     # What the node answers.
-    sawc_path: Optional[str]
-    sawc_stats: Optional[dict]
-    prev_checklist_score: Optional[float]
-    status: Optional[str]
-    error: Optional[str]
+    sawc_path: typing.Optional[str]
+    sawc_stats: typing.Optional[dict]
+    prev_checklist_score: typing.Optional[float]
+    status: typing.Optional[str]
+    error: typing.Optional[str]
 
     finished: bool                  # answered without the steps below (a failure, or the stage's blob is current)
     started: float
@@ -34,9 +34,9 @@ class SawcState(TypedDict, total = False):
     phase: str                      # 'stage' | 'late'
     todo: list[entities.WriteTask]
     n_drafts: int                   # writer runs so far (every attempt of every section)
-    carried_prev_score: Optional[float]
-    incoming_best_score: Optional[float]
-    incoming_best_path: Optional[str]
+    carried_prev_score: typing.Optional[float]
+    incoming_best_score: typing.Optional[float]
+    incoming_best_path: typing.Optional[str]
     refine_iter_now: int
 
     # Coverage top-up: rounds 1..TOPUP_ROUNDS, then a salvage pass and one more round for what the salvage gained.
@@ -51,5 +51,5 @@ class SawcState(TypedDict, total = False):
     topup_touched: list[str]
     extend_todo: list[str]
 
-    writes: Annotated[list[entities.WriteResult], operator.add]
-    extends: Annotated[list[entities.ExtendResult], operator.add]
+    writes: typing.Annotated[list[entities.WriteResult], operator.add]
+    extends: typing.Annotated[list[entities.ExtendResult], operator.add]

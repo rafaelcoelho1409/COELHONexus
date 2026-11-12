@@ -1,6 +1,6 @@
 from . import domain, params
 
-from deepagents.backends.utils import create_file_data
+import deepagents.backends.utils
 
 
 def files_for(agent_name: str) -> dict[str, dict[str, str]]:
@@ -12,7 +12,7 @@ def files_for(agent_name: str) -> dict[str, dict[str, str]]:
     files = {}
     for path in sorted(local_root.rglob("*.md")):
         relative_path = path.relative_to(local_root).as_posix()
-        files[f"{source}{relative_path}"] = create_file_data(
+        files[f"{source}{relative_path}"] = deepagents.backends.utils.create_file_data(
             path.read_text(encoding = "utf-8"),
         )
 

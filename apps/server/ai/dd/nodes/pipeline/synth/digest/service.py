@@ -14,9 +14,9 @@ import hashlib
 import json
 import logging
 import time
-from typing import Optional
+import typing
 
-from langgraph.runtime import Runtime
+import langgraph.runtime
 
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ def chunk_id(key: str, chunk: int) -> str:
     return f"{key}#{chunk}"
 
 
-async def prepare(state: graphs.pipeline.synth.digest.states.DigestState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.synth.digest.states.DigestState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
@@ -191,7 +191,7 @@ def request_text(state: dict, item: dict, outline_sections: list[dict], text: st
     )
 
 
-async def route_source(state: dict, runtime: Runtime[Context]) -> dict:
+async def route_source(state: dict, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     """Route one chunk. Returns its digest (the router's, normalized), or why it has none."""
     context = runtime.context
     item = state["item"]
@@ -221,7 +221,7 @@ async def route_source(state: dict, runtime: Runtime[Context]) -> dict:
 
     frame = data["frame"]
     started = time.monotonic()
-    last_error: Optional[str] = None
+    last_error: typing.Optional[str] = None
     payload = None
     cap = params.MAX_SOURCE_CHARS
     for attempt in range(2):
@@ -291,7 +291,7 @@ async def route_source(state: dict, runtime: Runtime[Context]) -> dict:
     return {"results": [{"id": item["id"], "key": item["key"], "chunk": item["chunk"], "digest": digest}]}
 
 
-async def collect(state: graphs.pipeline.synth.digest.states.DigestState, runtime: Runtime[Context]) -> dict:
+async def collect(state: graphs.pipeline.synth.digest.states.DigestState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     """After a wave: the items that failed go back once, after a pause (the arms that just stalled are ejected for tens of seconds)."""
     done = {r["id"] for r in state.get("results") or [] if r.get("digest") is not None}
     failed = [item for item in state.get("todo") or [] if item["id"] not in done]
@@ -303,7 +303,7 @@ async def collect(state: graphs.pipeline.synth.digest.states.DigestState, runtim
     return {"todo": []}
 
 
-async def finalize(state: graphs.pipeline.synth.digest.states.DigestState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.synth.digest.states.DigestState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     context = runtime.context
     data = context.scratch[params.STEP]
     blobs = context.blobs

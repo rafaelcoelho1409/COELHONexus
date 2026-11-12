@@ -11,9 +11,9 @@ from ..... import agents, graphs
 import json
 import logging
 import time
-from typing import Any
+import typing
 
-from langgraph.runtime import Runtime
+import langgraph.runtime
 
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ def _request(framework: str, source_key: str, body: str, max_chars: int) -> str:
     )
 
 
-async def prepare(state: graphs.pipeline.planner.doc_distill.states.DistillState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.planner.doc_distill.states.DistillState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     blobs = runtime.context.blobs
     slug = state.get("framework_slug")
     relevant_files = state.get("relevant_files") or state.get("raw_files") or []
@@ -89,11 +89,11 @@ async def prepare(state: graphs.pipeline.planner.doc_distill.states.DistillState
     }
 
 
-async def distill_page(state: graphs.pipeline.planner.doc_distill.entities.DistillInput, runtime: Runtime[Context]) -> dict:
+async def distill_page(state: graphs.pipeline.planner.doc_distill.entities.DistillInput, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     """Distill one page. Returns its distillate (the model's, normalized), or a deterministic fallback with the reason the model gave none."""
     context = runtime.context
     key = state["key"]
-    result: dict[str, Any]
+    result: dict[str, typing.Any]
     try:
         body: str | None = await context.blobs.read_text(key)
     except Exception:
@@ -148,7 +148,7 @@ async def distill_page(state: graphs.pipeline.planner.doc_distill.entities.Disti
     return {"results": [result]}
 
 
-async def finalize(state: graphs.pipeline.planner.doc_distill.states.DistillState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.planner.doc_distill.states.DistillState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     """Assemble the node's blob (every page's distillate) and its stats; write the versioned blob and the latest pointer."""
     blobs = runtime.context.blobs
     slug = state["framework_slug"]

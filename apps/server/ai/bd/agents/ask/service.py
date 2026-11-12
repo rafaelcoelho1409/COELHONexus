@@ -3,73 +3,66 @@ from __future__ import annotations
 
 import asyncio
 import json
-from json import JSONDecodeError, JSONDecoder
-from typing import Any, TypeVar
+import typing
 
-from deepagents import (
-    FilesystemPermission,
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
-from deepagents.backends import StateBackend
-from deepagents.profiles.harness import harness_profiles
-from langchain.agents.middleware import ModelCallLimitMiddleware
-from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, ValidationError
+import deepagents
+import deepagents.backends
+import deepagents.profiles.harness
+import langchain.agents.middleware
+import langchain_openai
+import pydantic
 
-import ai
+from .... import bd
 import domains
 
-Schema = TypeVar("Schema", bound = BaseModel)
+Schema = typing.TypeVar("Schema", bound = pydantic.BaseModel)
 
 
 def build(
     *,
-    model: Any,
+    model: typing.Any,
     name: str,
     system_prompt: str,
     response_format: type[Schema],
     model_call_limit: int,
 ):
-    if not isinstance(model, ChatOpenAI):
+    if not isinstance(model, langchain_openai.ChatOpenAI):
         raise TypeError("BD Ask agents require the configured ChatOpenAI model")
     model_name = getattr(model, "model_name", None)
     if not isinstance(model_name, str) or not model_name or ":" in model_name:
         raise ValueError("BD Ask agents require a named configured model")
     key = f"openai:{model_name}"
-    harness_profiles._HARNESS_PROFILES.pop(key, None)
-    register_harness_profile(key, HarnessProfile(
+    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
+    deepagents.register_harness_profile(key, deepagents.HarnessProfile(
         base_system_prompt = "",
-        general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
+        general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
     ))
-    return create_deep_agent(
+    return deepagents.create_deep_agent(
         model = model,
         tools = [],
         system_prompt = system_prompt,
         response_format = response_format,
         middleware = [
-            ModelCallLimitMiddleware(run_limit = model_call_limit, exit_behavior = "end"),
-            ai.bd.middlewares.middleware.ToolAllowlistMiddleware(frozenset()),
+            langchain.agents.middleware.ModelCallLimitMiddleware(run_limit = model_call_limit, exit_behavior = "end"),
+            bd.middlewares.middleware.ToolAllowlistMiddleware(frozenset()),
         ],
         permissions = [
-            FilesystemPermission(operations = ["read"], paths = ["/**"], mode = "deny"),
-            FilesystemPermission(operations = ["write"], paths = ["/**"], mode = "deny"),
+            deepagents.FilesystemPermission(operations = ["read"], paths = ["/**"], mode = "deny"),
+            deepagents.FilesystemPermission(operations = ["write"], paths = ["/**"], mode = "deny"),
         ],
-        backend = StateBackend(),
+        backend = deepagents.backends.StateBackend(),
         name = name,
     )
 
 
-def _parse_result(result: Any, schema: type[Schema]) -> Schema | None:
+def _parse_result(result: typing.Any, schema: type[Schema]) -> Schema | None:
     if not isinstance(result, dict):
         return None
     structured = result.get("structured_response")
     if structured is not None:
         try:
             return schema.model_validate(structured)
-        except ValidationError:
+        except pydantic.ValidationError:
             pass
     messages = result.get("messages")
     if not isinstance(messages, list):
@@ -90,21 +83,21 @@ def _parse_result(result: Any, schema: type[Schema]) -> Schema | None:
             if character != "{":
                 continue
             try:
-                value, _ = JSONDecoder().raw_decode(content[offset:])
+                value, _ = json.JSONDecoder().raw_decode(content[offset:])
                 return schema.model_validate(value)
-            except (JSONDecodeError, ValidationError):
+            except (json.JSONDecodeError, pydantic.ValidationError):
                 continue
     return None
 
 
-async def invoke(agent: Any, schema: type[Schema], payload: dict[str, Any]) -> Schema:
-    text = json.dumps(payload, ensure_ascii = False, default = str)[:ai.bd.agents.ask.params.MAX_INPUT_CHARS]
+async def invoke(agent: typing.Any, schema: type[Schema], payload: dict[str, typing.Any]) -> Schema:
+    text = json.dumps(payload, ensure_ascii = False, default = str)[:bd.agents.ask.params.MAX_INPUT_CHARS]
     last_error: Exception | None = None
-    for _ in range(ai.bd.agents.ask.params.MAX_RETRIES):
+    for _ in range(bd.agents.ask.params.MAX_RETRIES):
         try:
             result = await asyncio.wait_for(
                 agent.ainvoke({"messages": [{"role": "user", "content": text}], "files": {}}),
-                timeout = ai.bd.agents.ask.params.AGENT_TIMEOUT_S,
+                timeout = bd.agents.ask.params.AGENT_TIMEOUT_S,
             )
             messages = result.get("messages") if isinstance(result, dict) else None
             if isinstance(messages, list):

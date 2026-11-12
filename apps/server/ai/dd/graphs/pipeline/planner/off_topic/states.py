@@ -3,10 +3,10 @@ from __future__ import annotations
 from . import entities
 
 import operator
-from typing import Annotated, TypedDict
+import typing
 
 
-class OffTopicState(TypedDict, total = False):
+class OffTopicState(typing.TypedDict, total = False):
     framework_slug: str
     thread_id: str
     raw_files: list[str]
@@ -27,4 +27,4 @@ class OffTopicState(TypedDict, total = False):
     recheck: list[str]              # digests of confident DROPs of substantial pages, judged a second time
     rechecked: bool
     started: float
-    verdicts: Annotated[list[entities.Verdict], operator.add]
+    verdicts: typing.Annotated[list[entities.Verdict], operator.add]

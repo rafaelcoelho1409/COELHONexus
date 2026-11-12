@@ -5,7 +5,7 @@ from . import params, patterns, versions
 
 import json
 import re
-from hashlib import sha256
+import hashlib
 
 
 def score_payload(
@@ -86,7 +86,7 @@ def fallback_assign_scores(
     if len(tied) == 1:
         best_i = tied[0]
     else:
-        h = int(sha256((source_key or doc_summary).encode()).hexdigest(), 16)
+        h = int(hashlib.sha256((source_key or doc_summary).encode()).hexdigest(), 16)
         best_i = tied[h % len(tied)]
     return [{
         "chapter_idx": best_i,
@@ -144,7 +144,7 @@ def manifest_hash(
     source_keys: list[str],
     content_fp: str = "",
 ) -> str:
-    h = sha256()
+    h = hashlib.sha256()
     h.update(versions.PROMPT_VERSION.encode())
     h.update(slug.encode())
     h.update(b"|")

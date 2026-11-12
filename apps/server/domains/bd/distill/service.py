@@ -251,6 +251,7 @@ async def queue_resume(book_id: str, run_id: str) -> dict[str, Any]:
         await progress.service.clear_cancel(book_id, run_id)
         manifest["status"] = "queued"
         manifest["workflow_version"] = versions.WORKFLOW_VERSION
+        manifest["prompt_version"] = versions.PROMPT_VERSION
         manifest["finished_at"] = None
         manifest["error"] = None
         manifest["updated_at"] = time.time()

@@ -14,8 +14,8 @@ import hashlib
 import json
 import logging
 import time
-from datetime import datetime, timezone
-from typing import Any
+import datetime
+import typing
 
 import numpy as np
 
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 async def add_reading_time(
-    blobs: Any, slug: str, chapters: list[dict], *, exclude_reference_appendix: bool = False,
+    blobs: typing.Any, slug: str, chapters: list[dict], *, exclude_reference_appendix: bool = False,
 ) -> None:
     """Tutorial mode: each chapter records the minutes its pages take to read, the best code it must teach and the minutes its tutorial is estimated to take
     (`reading_minutes`, `n_best_code`, `tutorial_minutes`). The figures are for the reader and the review of the plan; a chapter whose pages cannot be read just has none."""
@@ -44,7 +44,7 @@ async def add_reading_time(
             logger.warning(f"[plan_write] {slug}: no reading time for {chapter.get('id')!r} ({type(error).__name__}: {error})")
 
 
-async def persist_plan(blobs: Any, *, versioned_key: str, latest_key: str, plan: dict) -> None:
+async def persist_plan(blobs: typing.Any, *, versioned_key: str, latest_key: str, plan: dict) -> None:
     """Hash-keyed versioned blob + mutable latest pointer (no S3 symlink), written together."""
     body = json.dumps(plan, indent = 2, ensure_ascii = False)
     await asyncio.gather(
@@ -53,7 +53,7 @@ async def persist_plan(blobs: Any, *, versioned_key: str, latest_key: str, plan:
     )
 
 
-async def plan_write_run(state: graphs.pipeline.planner.states.PlannerState, blobs: Any) -> dict:
+async def plan_write_run(state: graphs.pipeline.planner.states.PlannerState, blobs: typing.Any) -> dict:
     """Final-plan persist: load outline → pedagogical reorder → sanitize → versioned + latest."""
     slug = state.get("framework_slug")
     chapter_plan_ref = state.get("chapter_plan_ref") or ""
@@ -244,7 +244,7 @@ async def plan_write_run(state: graphs.pipeline.planner.states.PlannerState, blo
         **({"planner_version": planner_version} if is_v2 else {}),
         "framework_slug": slug,
         "manifest_hash":  manifest_hash,
-        "generated_at":   datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generated_at":   datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "chapters":       chapters,
         "unassigned":     unassigned_keys,
         "provenance": {

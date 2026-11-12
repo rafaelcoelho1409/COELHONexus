@@ -1,10 +1,10 @@
 """What the steps of the chapter_assign subgraph hand to each other."""
 from __future__ import annotations
 
-from typing import TypedDict
+import typing
 
 
-class ScoreResult(TypedDict):
+class ScoreResult(typing.TypedDict):
     """One page's chapter confidences (`scores` is None for a page with no content at all); `fallback` marks a lexical stand-in."""
 
     key: str
@@ -13,7 +13,7 @@ class ScoreResult(TypedDict):
     round: int
 
 
-class ScoreInput(TypedDict):
+class ScoreInput(typing.TypedDict):
     """What one `score_page` branch is sent."""
 
     key: str

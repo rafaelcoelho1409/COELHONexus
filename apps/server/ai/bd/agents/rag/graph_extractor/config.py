@@ -1,10 +1,10 @@
 """Model limits for evidence-grounded book graph extraction."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+import dataclasses
 
 
-@dataclass(frozen = True, slots = True)
+@dataclasses.dataclass(frozen = True, slots = True)
 class ModelConfig:
     max_output_tokens: int = 5000
     max_retries: int = 1

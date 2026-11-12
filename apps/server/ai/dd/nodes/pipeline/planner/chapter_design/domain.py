@@ -4,7 +4,7 @@ from __future__ import annotations
 import heapq
 import math
 import re
-from collections import Counter, defaultdict
+import collections
 
 from . import params
 
@@ -45,8 +45,8 @@ def card_text(card: dict) -> str:
 
 def local_tfidf(cards: list[dict]) -> list[dict[str, float]]:
     """A deterministic fallback when the configured embedding endpoint is unavailable."""
-    documents = [Counter(tokens(card_text(card))) for card in cards]
-    df = Counter(token for doc in documents for token in doc)
+    documents = [collections.Counter(tokens(card_text(card))) for card in cards]
+    df = collections.Counter(token for doc in documents for token in doc)
     n = max(1, len(documents))
     out: list[dict[str, float]] = []
     for doc in documents:
@@ -146,7 +146,7 @@ def _hierarchical_cuts(cards: list[dict], vectors, wanted: set[int], url_weight:
 
 
 def _reference_groups(cards: list[dict]) -> list[list[int]]:
-    groups: dict[str, list[int]] = defaultdict(list)
+    groups: dict[str, list[int]] = collections.defaultdict(list)
     for index, card in enumerate(cards):
         url = card.get("url") or card.get("key") or ""
         directory = url.rstrip("/").rsplit("/", 1)[0]
@@ -345,7 +345,7 @@ def build_candidate_partitions(
                     "best_code": list((best_code_by_page or {}).get(card["key"], [])),
                     "reading_minutes": float(card.get("reading_minutes") or 0.0),
                 })
-            top_topics = Counter(row["topic"] for row in page_rows if row["topic"])
+            top_topics = collections.Counter(row["topic"] for row in page_rows if row["topic"])
             group_rows.append({
                 "group_id": group_id,
                 "kind": "reference" if all(cards[index].get("kind") == "reference" for index in group) else "teaching",
@@ -663,7 +663,7 @@ def reconcile_design(answer: dict | None, candidates: dict, cards: list[dict]) -
     title_index: dict[str, int] = {}
     for index, chapter in enumerate(out):
         title_index.setdefault(chapter["title"].casefold(), index)
-    edges: dict[int, set[int]] = defaultdict(set)
+    edges: dict[int, set[int]] = collections.defaultdict(set)
     cycle_drops = []
     for index, chapter in enumerate(out):
         accepted = []
@@ -677,7 +677,7 @@ def reconcile_design(answer: dict | None, candidates: dict, cards: list[dict]) -
         chapter["prerequisites"] = accepted
 
     # Ensure titles and page membership are unique before the deterministic selector sees the proposal set.
-    seen_titles: Counter[str] = Counter()
+    seen_titles: collections.Counter[str] = collections.Counter()
     seen_pages: set[str] = set()
     duplicate_titles = 0
     for chapter in out:

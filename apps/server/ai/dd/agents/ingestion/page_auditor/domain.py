@@ -1,5 +1,5 @@
 from __future__ import annotations
-import ai
+from ..... import dd
 from . import params, patterns
 from .... import prompts
 
@@ -16,5 +16,5 @@ def validate_model_name(model_name: object) -> str:
 
 
 def validate_tool_names(tool_names: set[str]) -> None:
-    if tool_names - ai.dd.agents.params.STACK_TOOLS:
+    if tool_names - dd.agents.params.STACK_TOOLS:
         raise RuntimeError("DeepAgents exposed an unreviewed tool to the page auditor")

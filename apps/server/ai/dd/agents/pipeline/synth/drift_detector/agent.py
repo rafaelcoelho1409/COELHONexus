@@ -1,24 +1,19 @@
 """DeepAgent that audits one chapter for cross-chapter consistency, verifying conflicts in the sibling chapters' text."""
 from __future__ import annotations
-import ai, domains
+from ...... import dd
+import domains
 from . import config, params
 from .. import schemas
 from .... import service
 from ..... import middlewares, prompts, skills
 
-from typing import Any
+import typing
 
-from deepagents import (
-    FilesystemPermission,
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
-from deepagents.profiles.harness import harness_profiles
+import deepagents
+import deepagents.profiles.harness
 
 
-def drift_detector(*, backend: Any, model = None):
+def drift_detector(*, backend: typing.Any, model = None):
     """Build the detector for one study. `backend` mounts the rendered chapters on `/chapters/`; it reads its skill, greps the siblings and writes nothing."""
     if model is None:
         model = domains.settings.chat.service.build_chat_model(
@@ -35,15 +30,15 @@ def drift_detector(*, backend: Any, model = None):
     # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
     # before (by another role or other code in the process) hides tools from this agent.
     key = f"openai:{model_name}"
-    harness_profiles._HARNESS_PROFILES.pop(key, None)
-    register_harness_profile(
+    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
+    deepagents.register_harness_profile(
         key,
-        HarnessProfile(
+        deepagents.HarnessProfile(
             base_system_prompt = "",
-            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
+            general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    agent = create_deep_agent(
+    agent = deepagents.create_deep_agent(
         model = model,
         system_prompt = prompts.pipeline.synth.drift_detector.prompts.SYSTEM_PROMPT,
         response_format = schemas.ViolationsAnswer,
@@ -55,17 +50,17 @@ def drift_detector(*, backend: Any, model = None):
         ],
         permissions = [
             *[
-                FilesystemPermission(
+                deepagents.FilesystemPermission(
                     operations = ["read"],
                     paths = [path],
                     mode = "allow")
                 for path in [*params.READ_PATHS, f"{skills.params.VIRTUAL_ROOT}/**"]
             ],
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["read"],
                 paths = ["/**"],
                 mode = "deny"),
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["write"],
                 paths = ["/**"],
                 mode = "deny"),
@@ -79,6 +74,6 @@ def drift_detector(*, backend: Any, model = None):
     error_message = "DeepAgents exposed an unreviewed tool to the drift detector"
     if not isinstance(available_tools, dict):
         raise RuntimeError(error_message)
-    if set(available_tools) - ai.dd.agents.params.STACK_TOOLS:
+    if set(available_tools) - dd.agents.params.STACK_TOOLS:
         raise RuntimeError(error_message)
     return agent

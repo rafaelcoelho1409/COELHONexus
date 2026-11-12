@@ -3,10 +3,10 @@ from __future__ import annotations
 from . import entities
 
 import operator
-from typing import Annotated, TypedDict
+import typing
 
 
-class OrderState(TypedDict, total = False):
+class OrderState(typing.TypedDict, total = False):
     framework_slug: str
     thread_id: str
     chapter_plan_ref: str
@@ -23,4 +23,4 @@ class OrderState(TypedDict, total = False):
     finished: bool            # the node was answered without asking the model (cache hit, trivial plan, unreadable outline)
     retry_samples: list[int]  # sample indexes asked again after a thin first round
     retry_done: bool
-    samples: Annotated[list[entities.OrderSample], operator.add]
+    samples: typing.Annotated[list[entities.OrderSample], operator.add]

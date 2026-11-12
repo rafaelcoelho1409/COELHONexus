@@ -3,18 +3,18 @@ from __future__ import annotations
 
 import asyncio
 
-import ai
+from .... import bd
 import domains
 
-from langgraph.config import get_stream_writer
-from langgraph.runtime import Runtime
+import langgraph.config
+import langgraph.runtime
 
 
-async def retrieve_evidence(state: dict, runtime: Runtime[ai.bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
+async def retrieve_evidence(state: dict, runtime: langgraph.runtime.Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
     domains.settings.llm_counter.service.set_node(node = "retrieve")
     queries = list(dict.fromkeys(str(item).strip() for item in state.get("queries", []) if str(item).strip()))[:4]
     try:
-        writer = get_stream_writer()
+        writer = langgraph.config.get_stream_writer()
     except RuntimeError:
         writer = None
 

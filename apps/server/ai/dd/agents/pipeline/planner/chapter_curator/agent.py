@@ -1,27 +1,21 @@
 """DeepAgent that splits one oversize chapter, checking its split with tools."""
 from __future__ import annotations
-import ai
+from ...... import dd
 import domains
 from . import config, params
 from .. import schemas
 from .... import service
 from ..... import middlewares, prompts, skills
 
-from collections.abc import Sequence
-from typing import Any
+import collections.abc
+import typing
 
-from deepagents import (
-    FilesystemPermission,
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
-from deepagents.backends import StateBackend
-from deepagents.profiles.harness import harness_profiles
+import deepagents
+import deepagents.backends
+import deepagents.profiles.harness
 
 
-def chapter_curator(*, tools: Sequence[Any], model = None):
+def chapter_curator(*, tools: collections.abc.Sequence[typing.Any], model = None):
     """Build the curator for one chapter. `tools` are that chapter's `cluster_units` and `validate_split`, bound to its units."""
     if model is None:
         model = domains.settings.chat.service.build_chat_model(
@@ -41,15 +35,15 @@ def chapter_curator(*, tools: Sequence[Any], model = None):
     # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
     # before (by another role or other code in the process) hides tools from this agent.
     key = f"openai:{model_name}"
-    harness_profiles._HARNESS_PROFILES.pop(key, None)
-    register_harness_profile(
+    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
+    deepagents.register_harness_profile(
         key,
-        HarnessProfile(
+        deepagents.HarnessProfile(
             base_system_prompt = "",
-            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
+            general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    agent = create_deep_agent(
+    agent = deepagents.create_deep_agent(
         model = model,
         tools = curator_tools,
         system_prompt = prompts.pipeline.planner.chapter_curator.prompts.SYSTEM_PROMPT,
@@ -61,20 +55,20 @@ def chapter_curator(*, tools: Sequence[Any], model = None):
             middlewares.middleware.ToolAllowlistMiddleware(params.STACK_TOOLS | tool_names),
         ],
         permissions = [
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["read"],
                 paths = [f"{skills.params.VIRTUAL_ROOT}/**"],
                 mode = "allow"),
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["read"],
                 paths = ["/**"],
                 mode = "deny"),
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["write"],
                 paths = ["/**"],
                 mode = "deny"),
         ],
-        backend = StateBackend(),
+        backend = deepagents.backends.StateBackend(),
         skills = [skills.domain.source_for("chapter_curator")],
         name = "dd_chapter_curator",
     )
@@ -83,6 +77,6 @@ def chapter_curator(*, tools: Sequence[Any], model = None):
     error_message = "DeepAgents exposed an unreviewed tool to the chapter curator"
     if not isinstance(available_tools, dict):
         raise RuntimeError(error_message)
-    if set(available_tools) - ai.dd.agents.params.STACK_TOOLS - tool_names:
+    if set(available_tools) - dd.agents.params.STACK_TOOLS - tool_names:
         raise RuntimeError(error_message)
     return agent

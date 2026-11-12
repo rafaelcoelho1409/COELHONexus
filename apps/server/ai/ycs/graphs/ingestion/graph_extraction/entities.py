@@ -1,11 +1,11 @@
 """Dependencies injected into the graph extraction subgraph."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+import dataclasses
+import typing
 
 
-@dataclass(frozen = True, slots = True)
+@dataclasses.dataclass(frozen = True, slots = True)
 class GraphExtractionContext:
-    agent: Any
+    agent: typing.Any
     run_id: str | None = None

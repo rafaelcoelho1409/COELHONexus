@@ -1,26 +1,21 @@
 """DeepAgent that writes one section of a chapter as a cookbook, checked with the validator that judges its answer."""
 from __future__ import annotations
-import ai, domains
+from ...... import dd
+import domains
 from . import config, params
 from .. import schemas
 from .... import service
 from ..... import middlewares, prompts
 
-from collections.abc import Sequence
-from typing import Any
+import collections.abc
+import typing
 
-from deepagents import (
-    FilesystemPermission,
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
-from deepagents.profiles.harness import harness_profiles
-from langchain.agents.middleware import ToolCallLimitMiddleware
+import deepagents
+import deepagents.profiles.harness
+import langchain.agents.middleware
 
 
-def section_writer(*, backend: Any, tools: Sequence[Any], model = None):
+def section_writer(*, backend: typing.Any, tools: collections.abc.Sequence[typing.Any], model = None):
     """Build the writer for one section. `backend` mounts the section's code bank on `/vault/`; `tools` hold the section's
     `check_section` (it knows the bank, the valid source keys and the heading). Called once per section: no skill, the rubric is the system prompt."""
     if model is None:
@@ -41,15 +36,15 @@ def section_writer(*, backend: Any, tools: Sequence[Any], model = None):
     # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
     # before (by another role or other code in the process) hides tools from this agent.
     key = f"openai:{model_name}"
-    harness_profiles._HARNESS_PROFILES.pop(key, None)
-    register_harness_profile(
+    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
+    deepagents.register_harness_profile(
         key,
-        HarnessProfile(
+        deepagents.HarnessProfile(
             base_system_prompt = "",
-            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
+            general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    agent = create_deep_agent(
+    agent = deepagents.create_deep_agent(
         model = model,
         tools = writer_tools,
         system_prompt = prompts.pipeline.synth.section_writer.prompts.SYSTEM_PROMPT,
@@ -59,24 +54,24 @@ def section_writer(*, backend: Any, tools: Sequence[Any], model = None):
                 model_calls = params.MODEL_CALLS,
                 with_tools = True),
             middlewares.middleware.ToolAllowlistMiddleware(params.STACK_TOOLS | tool_names),
-            ToolCallLimitMiddleware(
+            langchain.agents.middleware.ToolCallLimitMiddleware(
                 tool_name = "check_section",
                 run_limit = params.CHECK_CALL_LIMIT,
                 exit_behavior = "continue"),
         ],
         permissions = [
             *[
-                FilesystemPermission(
+                deepagents.FilesystemPermission(
                     operations = ["read"],
                     paths = [path],
                     mode = "allow")
                 for path in params.READ_PATHS
             ],
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["read"],
                 paths = ["/**"],
                 mode = "deny"),
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["write"],
                 paths = ["/**"],
                 mode = "deny"),
@@ -89,6 +84,6 @@ def section_writer(*, backend: Any, tools: Sequence[Any], model = None):
     error_message = "DeepAgents exposed an unreviewed tool to the section writer"
     if not isinstance(available_tools, dict):
         raise RuntimeError(error_message)
-    if set(available_tools) - ai.dd.agents.params.STACK_TOOLS - tool_names:
+    if set(available_tools) - dd.agents.params.STACK_TOOLS - tool_names:
         raise RuntimeError(error_message)
     return agent

@@ -3,15 +3,15 @@ from __future__ import annotations
 from . import service
 from .... import graphs
 
-from typing import Any
+import typing
 
-from langgraph.runtime import Runtime
+import langgraph.runtime
 
 
 async def audit_pages(
     state: graphs.ingestion.states.IngestionState,
-    runtime: Runtime[graphs.ingestion.entities.IngestionDependencies],
-) -> dict[str, Any]:
+    runtime: langgraph.runtime.Runtime[graphs.ingestion.entities.IngestionDependencies],
+) -> dict[str, typing.Any]:
     """Run the batch audit service as the ingestion graph's audit node, under progress reporting."""
     total = len(state.get("pages", []))
     return await graphs.service.run_node(

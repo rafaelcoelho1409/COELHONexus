@@ -1,18 +1,18 @@
 """digest_construct graph node: runs the digest subgraph (one source_router per source chunk, in parallel), and the routes between its steps."""
 from __future__ import annotations
-from domains.dd.pipeline.observability.service import traced_synth
+import domains.dd.pipeline.observability.service
 from . import params, service
 from ..... import graphs
 
-from langgraph.graph import END
-from langgraph.runtime import Runtime
-from langgraph.types import Send
+import langgraph.graph
+import langgraph.runtime
+import langgraph.types
 
 
-@traced_synth("digest_construct")
+@domains.dd.pipeline.observability.service.traced_synth("digest_construct")
 async def digest_construct(
     state: graphs.pipeline.synth.states.SynthState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     result = await graphs.pipeline.synth.digest.graphs.digest_graph().ainvoke(
         {
@@ -31,28 +31,28 @@ async def digest_construct(
 
 async def prepare(
     state: graphs.pipeline.synth.digest.states.DigestState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.prepare(state, runtime)
 
 
 async def route_source(
     state: dict,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.route_source(state, runtime)
 
 
 async def collect(
     state: graphs.pipeline.synth.digest.states.DigestState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.collect(state, runtime)
 
 
 async def finalize(
     state: graphs.pipeline.synth.digest.states.DigestState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.finalize(state, runtime)
 
@@ -62,10 +62,10 @@ def fan_out(graph_state: graphs.pipeline.synth.digest.states.DigestState):
     todo = graph_state.get("todo") or []
     if not todo:
         return "finalize"
-    return [Send("route_source", {"item": item, "total": len(todo), "wave": graph_state.get("wave", 0)}) for item in todo]
+    return [langgraph.types.Send("route_source", {"item": item, "total": len(todo), "wave": graph_state.get("wave", 0)}) for item in todo]
 
 
 def after_prepare(graph_state: graphs.pipeline.synth.digest.states.DigestState):
     if graph_state.get("finished"):
-        return END
+        return langgraph.graph.END
     return fan_out(graph_state)

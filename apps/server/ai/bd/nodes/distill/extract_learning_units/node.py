@@ -1,13 +1,13 @@
 """Thin graph wrappers for source preparation and learning extraction."""
 from __future__ import annotations
 
-from typing import Any
+import typing
 
 from .... import graphs
 from . import service
 
 
-async def prepare_units(dependencies: graphs.distill.entities.DistillDependencies, state: dict[str, Any]) -> dict:
+async def prepare_units(dependencies: graphs.distill.entities.DistillDependencies, state: dict[str, typing.Any]) -> dict:
     return await graphs.service.run_node(
         dependencies.progress_callback,
         "prepare_units",
@@ -15,7 +15,7 @@ async def prepare_units(dependencies: graphs.distill.entities.DistillDependencie
     )
 
 
-async def extract_unit(dependencies: graphs.distill.entities.DistillDependencies, state: dict[str, Any]) -> dict:
+async def extract_unit(dependencies: graphs.distill.entities.DistillDependencies, state: dict[str, typing.Any]) -> dict:
     async def _extract_batch() -> dict:
         completed = []
         for ref in state.get("unit_batch", []):

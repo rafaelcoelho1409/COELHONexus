@@ -4,26 +4,26 @@ from __future__ import annotations
 from . import states
 from ..... import nodes
 
-from langgraph.graph import END, START, StateGraph
+import langgraph.graph
 
 
 def checklist_graph():
-    workflow = StateGraph(states.ChecklistState)
+    workflow = langgraph.graph.StateGraph(states.ChecklistState)
     workflow.add_node("prepare", nodes.pipeline.synth.checklist.node.prepare)
     workflow.add_node("judge", nodes.pipeline.synth.checklist.node.judge)
     workflow.add_node("judge_again", nodes.pipeline.synth.checklist.node.judge_again)
     workflow.add_node("majority", nodes.pipeline.synth.checklist.node.majority)
     workflow.add_node("finalize", nodes.pipeline.synth.checklist.node.finalize)
-    workflow.add_edge(START, "prepare")
+    workflow.add_edge(langgraph.graph.START, "prepare")
     workflow.add_conditional_edges(
         "prepare", 
         nodes.pipeline.synth.checklist.node.after_prepare, 
-        ["judge", END])
+        ["judge", langgraph.graph.END])
     workflow.add_conditional_edges(
         "judge", 
         nodes.pipeline.synth.checklist.node.after_judge, 
         ["judge_again", "finalize"])
     workflow.add_edge("judge_again", "majority")
     workflow.add_edge("majority", "finalize")
-    workflow.add_edge("finalize", END)
+    workflow.add_edge("finalize", langgraph.graph.END)
     return workflow.compile()

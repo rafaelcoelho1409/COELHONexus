@@ -9,12 +9,12 @@ from . import params, patterns, schemas, versions
 
 import json
 import re
-from collections import defaultdict, deque
-from difflib import SequenceMatcher
-from hashlib import sha256
-from typing import Optional
+import collections
+import difflib
+import hashlib
+import typing
 
-from pydantic import ValidationError
+import pydantic
 
 
 # ---------------------------------------------------------------------------
@@ -35,15 +35,15 @@ def build_edges(sections: list[schemas.OutlineSection]) -> list[tuple[str, str]]
 
 def find_cycle(
     nodes: list[str], edges: list[tuple[str, str]],
-) -> Optional[list[str]]:
+) -> typing.Optional[list[str]]:
     """One cycle (nodes in order) or None. Iterative DFS — sections cap at 40."""
-    adj: dict[str, list[str]] = defaultdict(list)
+    adj: dict[str, list[str]] = collections.defaultdict(list)
     for u, v in edges:
         adj[u].append(v)
 
     WHITE, GRAY, BLACK = 0, 1, 2
     color: dict[str, int] = {n: WHITE for n in nodes}
-    parent: dict[str, Optional[str]] = {n: None for n in nodes}
+    parent: dict[str, typing.Optional[str]] = {n: None for n in nodes}
 
     for start in nodes:
         if color[start] != WHITE:
@@ -112,7 +112,7 @@ def compute_stage_indices(
         in_edges[v].append(u)
     indeg = {n: len(in_edges[n]) for n in nodes}
     stage: dict[str, int] = {n: 0 for n in nodes}
-    queue: deque[str] = deque(n for n in nodes if indeg[n] == 0)
+    queue: collections.deque[str] = collections.deque(n for n in nodes if indeg[n] == 0)
     while queue:
         u = queue.popleft()
         for v in out_edges[u]:
@@ -129,7 +129,7 @@ def derive_dag(sections: list[schemas.OutlineSection]) -> schemas.OutlineDAG:
     raw_edges = build_edges(sections)
     edges, removed = break_cycles_fas(nodes, raw_edges)
     stage_index = compute_stage_indices(nodes, edges)
-    stages: dict[int, list[str]] = defaultdict(list)
+    stages: dict[int, list[str]] = collections.defaultdict(list)
     for n, i in stage_index.items():
         stages[i].append(n)
     # Stable within-stage order = LLM-emitted section order.
@@ -175,7 +175,7 @@ def validate_outline_structure(
     outline: schemas.ChapterOutline,
     dag: schemas.OutlineDAG,
     *,
-    n_sources: Optional[int] = None,
+    n_sources: typing.Optional[int] = None,
     n_blocks: int = 0,
 ) -> tuple[bool, list[str]]:
     """(ok, issues): cross-section checks Pydantic can't handle (unique ids/headings, banned headings, valid prereqs, DAG depth cap, fuzzy-dup H2, adaptive section count)."""
@@ -210,7 +210,7 @@ def validate_outline_structure(
     n = len(outline.sections)
     for i in range(n):
         for j in range(i + 1, n):
-            ratio = SequenceMatcher(
+            ratio = difflib.SequenceMatcher(
                 None,
                 outline.sections[i].heading.casefold(),
                 outline.sections[j].heading.casefold(),
@@ -375,7 +375,7 @@ def source_path(n: int, key: str) -> str:
     return f"/{n}-{stem}.md"
 
 
-def parse_json_response(text: str) -> Optional[dict]:
+def parse_json_response(text: str) -> typing.Optional[dict]:
     """Best-effort JSON extraction. Tolerates ```json fences + leading
     prose. Same approach as planner/reduce/service.py."""
     if not text:
@@ -472,20 +472,20 @@ def normalize_outline_dict(raw: dict) -> dict:
 
 def try_parse_outline(
     raw: dict,
-) -> tuple[Optional[schemas.ChapterOutline], Optional[str]]:
+) -> tuple[typing.Optional[schemas.ChapterOutline], typing.Optional[str]]:
     """Normalize known format-only violations, then Pydantic-validate.
     Returns (outline, error)."""
     raw = normalize_outline_dict(raw)
     try:
         outline = schemas.ChapterOutline.model_validate(raw)
         return outline, None
-    except ValidationError as e:
+    except pydantic.ValidationError as e:
         return None, shorten_pydantic_error(e)
     except Exception as e:
         return None, f"{type(e).__name__}: {str(e)[:200]}"
 
 
-def shorten_pydantic_error(e: ValidationError) -> str:
+def shorten_pydantic_error(e: pydantic.ValidationError) -> str:
     """Compact a Pydantic ValidationError into a 200-char summary that's
     still actionable in repair-prompt feedback."""
     errs = e.errors()
@@ -664,10 +664,10 @@ def compute_manifest_hash(
         sort_keys = True,
         separators = (",", ":"),
     )
-    return sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def find_chapter(plan: dict, chapter_id: str) -> Optional[dict]:
+def find_chapter(plan: dict, chapter_id: str) -> typing.Optional[dict]:
     """Look up a chapter by id in plan-latest.json. Returns None if
     not found."""
     chapters = (plan or {}).get("chapters") or []

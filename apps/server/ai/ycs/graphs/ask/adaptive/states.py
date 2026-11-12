@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import operator
-from typing import Annotated, TypedDict
+import typing
 
-from langchain_core.documents import Document
+import langchain_core.documents
 
 
-class AdaptiveAskState(TypedDict, total = False):
+class AdaptiveAskState(typing.TypedDict, total = False):
     question: str
     thread_id: str
     route: str
@@ -16,8 +16,8 @@ class AdaptiveAskState(TypedDict, total = False):
     mode: str
     force_mode: str
     generation: str
-    documents: list[Document]
-    pre_grade_documents: list[Document]
+    documents: list[langchain_core.documents.Document]
+    pre_grade_documents: list[langchain_core.documents.Document]
     citations: list[dict]
     grounded: bool
     retrieval_sources: list[str]
@@ -28,6 +28,6 @@ class AdaptiveAskState(TypedDict, total = False):
     skipped_arms: list[str]
     arm_empty_streaks: dict[str, int]
     sub_questions: list[str]
-    sub_results: Annotated[list[dict], operator.add]
+    sub_results: typing.Annotated[list[dict], operator.add]
     research_plan: str
     confidence_score: float

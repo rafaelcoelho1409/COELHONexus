@@ -2,8 +2,8 @@
 from __future__ import annotations
 from .... import agents
 
-from dataclasses import dataclass, field
-from typing import Any
+import dataclasses
+import typing
 
 
 class SynthAgents:
@@ -14,18 +14,18 @@ class SynthAgents:
     only compiles a small graph. `overrides` replaces a role by name (an agent, or any object with `.ainvoke`): a test passes fakes,
     a run passes none."""
 
-    def __init__(self, **overrides: Any) -> None:
+    def __init__(self, **overrides: typing.Any) -> None:
         self._overrides = overrides
-        self._built: dict[str, Any] = {}
+        self._built: dict[str, typing.Any] = {}
 
-    def _once(self, name: str, build) -> Any:
+    def _once(self, name: str, build) -> typing.Any:
         if name in self._overrides:
             return self._overrides[name]
         if name not in self._built:
             self._built[name] = build()
         return self._built[name]
 
-    def _per_call(self, name: str, build) -> Any:
+    def _per_call(self, name: str, build) -> typing.Any:
         return self._overrides[name] if name in self._overrides else build()
 
     @property
@@ -50,41 +50,41 @@ class SynthAgents:
     def paragraph_patcher(self):
         return self._once("paragraph_patcher", lambda: self.roles.paragraph_patcher.agent.paragraph_patcher())
 
-    def chapter_outliner(self, *, backend: Any, tools: list[Any]):
+    def chapter_outliner(self, *, backend: typing.Any, tools: list[typing.Any]):
         return self._per_call("chapter_outliner", lambda: self.roles.chapter_outliner.agent.chapter_outliner(backend = backend, tools = tools))
 
-    def source_router(self, *, tools: list[Any]):
+    def source_router(self, *, tools: list[typing.Any]):
         return self._per_call("source_router", lambda: self.roles.source_router.agent.source_router(tools = tools))
 
-    def section_writer(self, *, backend: Any, tools: list[Any]):
+    def section_writer(self, *, backend: typing.Any, tools: list[typing.Any]):
         return self._per_call("section_writer", lambda: self.roles.section_writer.agent.section_writer(backend = backend, tools = tools))
 
-    def code_deriver(self, *, tools: list[Any]):
+    def code_deriver(self, *, tools: list[typing.Any]):
         return self._per_call("code_deriver", lambda: self.roles.code_deriver.agent.code_deriver(tools = tools))
 
-    def code_normalizer(self, *, tools: list[Any]):
+    def code_normalizer(self, *, tools: list[typing.Any]):
         return self._per_call("code_normalizer", lambda: self.roles.code_normalizer.agent.code_normalizer(tools = tools))
 
-    def capstone_designer(self, *, tools: list[Any]):
+    def capstone_designer(self, *, tools: list[typing.Any]):
         return self._per_call("capstone_designer", lambda: self.roles.capstone_designer.agent.capstone_designer(tools = tools))
 
-    def chapter_reviewer(self, *, tools: list[Any]):
+    def chapter_reviewer(self, *, tools: list[typing.Any]):
         return self._per_call("chapter_reviewer", lambda: self.roles.chapter_reviewer.agent.chapter_reviewer(tools = tools))
 
-    def drift_detector(self, *, backend: Any):
+    def drift_detector(self, *, backend: typing.Any):
         return self._per_call("drift_detector", lambda: self.roles.drift_detector.agent.drift_detector(backend = backend))
 
 
-@dataclass
+@dataclasses.dataclass
 class SynthContext:
     """`blobs` is the run's object storage (read_text, read_many, write, exists, list); `agents` its agent registry."""
 
-    blobs: Any
-    agents: SynthAgents = field(default_factory = SynthAgents)
+    blobs: typing.Any
+    agents: SynthAgents = dataclasses.field(default_factory = SynthAgents)
     # Runs a chapter's code in isolation (`domains.dd.pipeline.verify.entities.Executor`), or None: the code is then only checked, not run.
-    executor: Any = None
+    executor: typing.Any = None
     # Running totals the parallel branches of a fan-out node add to, per node, for its progress events (a branch cannot see its siblings).
-    counters: dict[str, dict[str, int]] = field(default_factory = dict)
+    counters: dict[str, dict[str, int]] = dataclasses.field(default_factory = dict)
     # Data a node's `prepare` loads once for its parallel branches (a branch is sent only a key, not the chapter's sources). Not
     # checkpointed: a resume re-runs `prepare`, which loads it again.
-    scratch: dict[str, Any] = field(default_factory = dict)
+    scratch: dict[str, typing.Any] = dataclasses.field(default_factory = dict)

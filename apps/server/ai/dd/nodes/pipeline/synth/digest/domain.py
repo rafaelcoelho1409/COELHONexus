@@ -4,12 +4,12 @@ from . import params, patterns, schemas, versions
 
 import math
 import re
-from hashlib import sha256
-from typing import Optional
+import hashlib
+import typing
 
-from pydantic import ValidationError
+import pydantic
 
-from collections import defaultdict
+import collections
 
 
 def _best_relevance(a: str, b: str) -> str:
@@ -64,7 +64,7 @@ def merge_overlapping_sections(
     }
 
     def pools(merged: dict[str, str]) -> dict[str, set[str]]:
-        prim: dict[str, set[str]] = defaultdict(set)
+        prim: dict[str, set[str]] = collections.defaultdict(set)
         for src in per_source:
             for c in src.contributes_to:
                 if c.relevance == "primary":
@@ -80,7 +80,7 @@ def merge_overlapping_sections(
     }
 
     def blocks(merged: dict[str, str]) -> dict[str, set[str]]:
-        out: dict[str, set[str]] = defaultdict(set)
+        out: dict[str, set[str]] = collections.defaultdict(set)
         for src in per_source:
             for c in src.contributes_to:
                 out[_resolve_merge(merged, c.section_id)].update(c.code_refs)
@@ -268,7 +268,7 @@ def route_unrouted_sources(
                 summary = summary[:params.SUMMARY_MAX_CHARS], key_facts = facts,
                 code_refs = extract_vault_hashes(bodies.get(src.source_key) or ""),
             )
-        except ValidationError:
+        except pydantic.ValidationError:
             out.append(src)
             continue
         out.append(src.model_copy(update = {"contributes_to": [contrib], "unassigned_code_refs": []}))
@@ -306,7 +306,7 @@ def _plain_excerpt(md_text: str, limit: int) -> str:
     return t[:limit].rsplit(" ", 1)[0]
 
 
-def stub_digest_for_failed(source_key: str, md_text: str) -> Optional[schemas.SourceDigest]:
+def stub_digest_for_failed(source_key: str, md_text: str) -> typing.Optional[schemas.SourceDigest]:
     """A source whose digest call failed every attempt keeps its place: its title and the opening of its text stand in for the LLM
     summary, with no contribution yet, so `route_unrouted_sources` gives it to the section it resembles most together with ALL of its
     code blocks (fastmcp ch-01: the one failed page, mcp-json-configuration, took ~30 blocks out of the chapter in every run). None
@@ -319,7 +319,7 @@ def stub_digest_for_failed(source_key: str, md_text: str) -> Optional[schemas.So
             source_key = source_key, source_title = derive_source_title_fallback(md_text, source_key),
             overall_summary = summary, contributes_to = [], unassigned_code_refs = extract_vault_hashes(md_text),
         )
-    except ValidationError:
+    except pydantic.ValidationError:
         return None
 
 
@@ -494,7 +494,7 @@ def is_context_overflow_error(e: Exception) -> bool:
     return any(marker in msg for marker in params.CONTEXT_OVERFLOW_MARKERS)
 
 
-def shorten_pydantic_error(e: ValidationError) -> str:
+def shorten_pydantic_error(e: pydantic.ValidationError) -> str:
     errs = e.errors()
     if not errs:
         return "Pydantic validation failed (no detail)"
@@ -534,10 +534,10 @@ def trim_key_facts(raw: dict) -> dict:
 
 def try_parse_payload(
     raw: dict,
-) -> tuple[Optional[schemas.LLMDigestPayload], Optional[str]]:
+) -> tuple[typing.Optional[schemas.LLMDigestPayload], typing.Optional[str]]:
     try:
         return schemas.LLMDigestPayload.model_validate(trim_key_facts(raw)), None
-    except ValidationError as e:
+    except pydantic.ValidationError as e:
         return None, shorten_pydantic_error(e)
     except Exception as e:
         return None, f"{type(e).__name__}: {str(e)[:200]}"
@@ -557,4 +557,4 @@ def compute_manifest_hash(
         f"prompt = {versions.DIGEST_PROMPT_VERSION}|"
         f"schema = {versions.DIGEST_SCHEMA_VERSION}"
     )
-    return sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]

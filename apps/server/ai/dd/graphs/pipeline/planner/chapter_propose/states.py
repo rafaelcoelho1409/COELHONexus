@@ -3,10 +3,10 @@ from __future__ import annotations
 from . import entities
 
 import operator
-from typing import Annotated, TypedDict
+import typing
 
 
-class ProposeState(TypedDict, total = False):
+class ProposeState(typing.TypedDict, total = False):
     framework_slug: str
     thread_id: str
     raw_files: list[str]
@@ -22,5 +22,5 @@ class ProposeState(TypedDict, total = False):
     attempt: int                    # architect attempts made so far
     architect_errors: list[str]
     started: float
-    sketches: Annotated[list[entities.Sketch], operator.add]
-    outlines: Annotated[list[entities.Outline], operator.add]
+    sketches: typing.Annotated[list[entities.Sketch], operator.add]
+    outlines: typing.Annotated[list[entities.Outline], operator.add]

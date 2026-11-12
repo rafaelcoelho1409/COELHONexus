@@ -1,20 +1,15 @@
 """DeepAgent that scores one documentation page against every chapter of a plan."""
 from __future__ import annotations
-import ai, domains
+from ...... import dd
+import domains
 from . import config, params
 from .. import schemas
 from .... import service
 from ..... import middlewares, prompts
 
-from deepagents import (
-    FilesystemPermission,
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
-from deepagents.backends import StateBackend
-from deepagents.profiles.harness import harness_profiles
+import deepagents
+import deepagents.backends
+import deepagents.profiles.harness
 
 
 def page_scorer(proposals: list[dict], *, fixed_keys: bool, model = None):
@@ -37,15 +32,15 @@ def page_scorer(proposals: list[dict], *, fixed_keys: bool, model = None):
     # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
     # before (by another role or other code in the process) hides tools from this agent.
     key = f"openai:{model_name}"
-    harness_profiles._HARNESS_PROFILES.pop(key, None)
-    register_harness_profile(
+    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
+    deepagents.register_harness_profile(
         key,
-        HarnessProfile(
+        deepagents.HarnessProfile(
             base_system_prompt = "",
-            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
+            general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    agent = create_deep_agent(
+    agent = deepagents.create_deep_agent(
         model = model,
         system_prompt = prompts.pipeline.planner.page_scorer.prompts.system_prompt(proposals),
         response_format = schemas.fixed_key_model(len(proposals)) if fixed_keys else schemas.DocAssignment,
@@ -56,16 +51,16 @@ def page_scorer(proposals: list[dict], *, fixed_keys: bool, model = None):
             middlewares.middleware.ToolAllowlistMiddleware(frozenset()),
         ],
         permissions = [
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["read"],
                 paths = ["/**"],
                 mode = "deny"),
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["write"],
                 paths = ["/**"],
                 mode = "deny"),
         ],
-        backend = StateBackend(),
+        backend = deepagents.backends.StateBackend(),
         name = "dd_page_scorer",
     )
     tool_node = agent.nodes.get("tools")
@@ -73,6 +68,6 @@ def page_scorer(proposals: list[dict], *, fixed_keys: bool, model = None):
     error_message = "DeepAgents exposed an unreviewed tool to the page scorer"
     if not isinstance(available_tools, dict):
         raise RuntimeError(error_message)
-    if set(available_tools) - ai.dd.agents.params.STACK_TOOLS:
+    if set(available_tools) - dd.agents.params.STACK_TOOLS:
         raise RuntimeError(error_message)
     return agent

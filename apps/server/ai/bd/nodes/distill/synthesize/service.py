@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any
+import typing
 
 import domains
 
@@ -15,45 +15,39 @@ _BOOK_BATCH_SIZE = domains.bd.distill.params.MAX_BOOK_SYNTHESIS_BATCH_SIZE
 logger = logging.getLogger(__name__)
 
 
-def _json_body(value: Any) -> str:
+def _json_body(value: typing.Any) -> str:
     return json.dumps(value, ensure_ascii = False, separators = (",", ":"), sort_keys = True)
 
 
-def _chapter_lesson_ids(synthesis: domains.bd.distill.schemas.ChapterSynthesis) -> set[str]:
+def _chapter_required_text_ids(synthesis: domains.bd.distill.schemas.ChapterSynthesis) -> set[str]:
+    """Collect IDs for required chapter prose, leaving optional visuals independently checkable."""
     ids = set(synthesis.overview_learning_unit_ids)
     for lesson in [*synthesis.lessons, *synthesis.open_questions]:
         ids.update(lesson.learning_unit_ids)
-    for diagram in synthesis.diagrams:
-        node_ids = {node.node_id for node in diagram.nodes}
-        if any(edge.source_id not in node_ids or edge.target_id not in node_ids for edge in diagram.edges):
-            raise ValueError("a generated diagram contains an edge to an unknown node")
-        for node in diagram.nodes:
-            ids.update(node.learning_unit_ids)
-        for edge in diagram.edges:
-            ids.update(edge.learning_unit_ids)
-    for equation in synthesis.equations:
-        ids.update(equation.learning_unit_ids)
-    for chart in synthesis.charts:
-        ids.update(chart.learning_unit_ids)
-        ids.update(chart.dataset.learning_unit_ids)
-        for row in chart.dataset.rows:
-            ids.update(row.learning_unit_ids)
     return ids
 
 
 _NUMBER_RE = re.compile(r"(?<![A-Za-z])[-+]?\d[\d,]*(?:\.\d+)?%?(?![A-Za-z])")
 
 
-def _evidence_matches(evidence, learning_unit_ids: list[str], units_by_id: dict[str, dict[str, Any]]) -> bool:
+def _normalize_evidence_quote(value: str) -> str:
+    """Match harmless line-wrap/spacing changes while preserving quote wording and punctuation."""
+    return " ".join(value.split())
+
+
+def _evidence_matches(evidence, learning_unit_ids: list[str], units_by_id: dict[str, dict[str, typing.Any]]) -> bool:
     allowed = {
-        (quote["page_number"], quote["quote"])
+        (quote["page_number"], _normalize_evidence_quote(quote["quote"]))
         for unit_id in learning_unit_ids
         for quote in units_by_id[unit_id]["evidence"]
     }
-    return bool(evidence) and all((item.page_number, item.quote) in allowed for item in evidence)
+    return bool(evidence) and all(
+        (item.page_number, _normalize_evidence_quote(item.quote)) in allowed
+        for item in evidence
+    )
 
 
-def _number_occurs_in_evidence(value: float, evidence: list[Any]) -> bool:
+def _number_occurs_in_evidence(value: float, evidence: list[typing.Any]) -> bool:
     try:
         expected = float(value)
     except (TypeError, ValueError):
@@ -69,45 +63,144 @@ def _number_occurs_in_evidence(value: float, evidence: list[Any]) -> bool:
     return False
 
 
-def _validate_visual_evidence(
+def _visual_evidence_issues(
     synthesis: domains.bd.distill.schemas.ChapterSynthesis,
-    units: list[dict[str, Any]],
-) -> None:
+    units: list[dict[str, typing.Any]],
+) -> list[tuple[str, int, str, str]]:
+    """Return unsupported optional visual items without invalidating chapter prose."""
     by_id = {unit["learning_unit_id"]: unit for unit in units}
-    for diagram in synthesis.diagrams:
+    available_ids = set(by_id)
+    issues: list[tuple[str, int, str, str]] = []
+
+    for index, diagram in enumerate(synthesis.diagrams):
+        issue = None
         for node in diagram.nodes:
-            if not set(node.learning_unit_ids) <= set(by_id) or not _evidence_matches(node.evidence, node.learning_unit_ids, by_id):
-                raise ValueError("diagram nodes must cite exact evidence from available learning units")
-        for edge in diagram.edges:
-            if not set(edge.learning_unit_ids) <= set(by_id) or not _evidence_matches(edge.evidence, edge.learning_unit_ids, by_id):
-                raise ValueError("diagram edges must cite exact evidence from available learning units")
-    for equation in synthesis.equations:
-        if not set(equation.learning_unit_ids) <= set(by_id) or not _evidence_matches(
+            if not set(node.learning_unit_ids) <= available_ids:
+                issue = "diagram node cites an unavailable learning unit"
+                break
+            if not _evidence_matches(node.evidence, node.learning_unit_ids, by_id):
+                issue = "diagram node evidence does not match its cited learning units"
+                break
+        if issue is None:
+            node_ids = {node.node_id for node in diagram.nodes}
+            for edge in diagram.edges:
+                if edge.source_id not in node_ids or edge.target_id not in node_ids:
+                    issue = "diagram edge refers to an undeclared node"
+                    break
+                if not set(edge.learning_unit_ids) <= available_ids:
+                    issue = "diagram edge cites an unavailable learning unit"
+                    break
+                if not _evidence_matches(edge.evidence, edge.learning_unit_ids, by_id):
+                    issue = "diagram edge evidence does not match its cited learning units"
+                    break
+        if issue is not None:
+            issues.append(("diagram", index, diagram.title, issue))
+
+    for index, equation in enumerate(synthesis.equations):
+        issue = None
+        if not set(equation.learning_unit_ids) <= available_ids or not _evidence_matches(
             equation.evidence, equation.learning_unit_ids, by_id,
         ):
-            raise ValueError("equations must cite exact evidence from available learning units")
+            issue = "equation evidence does not match its cited learning units"
         numeric_tokens = _NUMBER_RE.findall(equation.latex)
-        for token in numeric_tokens:
-            if not _number_occurs_in_evidence(float(token.rstrip("%").replace(",", "")), equation.evidence):
-                raise ValueError("equation numeric literals must appear in their cited source evidence")
-    for chart in synthesis.charts:
-        if not set(chart.learning_unit_ids) <= set(by_id):
-            raise ValueError("charts must cite available learning units")
-        if not set(chart.dataset.learning_unit_ids) <= set(by_id):
-            raise ValueError("chart datasets must cite available learning units")
+        if issue is None:
+            for token in numeric_tokens:
+                if not _number_occurs_in_evidence(float(token.rstrip("%").replace(",", "")), equation.evidence):
+                    issue = "equation contains a number absent from its cited evidence"
+                    break
+        if issue is not None:
+            issues.append(("equation", index, equation.title, issue))
+
+    for index, chart in enumerate(synthesis.charts):
+        issue = None
+        if not set(chart.learning_unit_ids) <= available_ids:
+            issue = "chart cites an unavailable learning unit"
+        elif not set(chart.dataset.learning_unit_ids) <= available_ids:
+            issue = "chart dataset cites an unavailable learning unit"
         for row in chart.dataset.rows:
+            if issue is not None:
+                break
             if not set(row.learning_unit_ids) <= set(by_id) or not _evidence_matches(
                 row.evidence, row.learning_unit_ids, by_id,
             ):
-                raise ValueError("chart rows must cite exact evidence from available learning units")
+                issue = "chart row evidence does not match its cited learning units"
+                break
             for value in row.values.values():
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
                     if not _number_occurs_in_evidence(value, row.evidence):
-                        raise ValueError("chart numeric values must appear in their cited source evidence")
+                        issue = "chart row contains a number absent from its cited evidence"
+                        break
                 elif isinstance(value, str) and not any(
-                    value.casefold() in item.quote.casefold() for item in row.evidence
+                    _normalize_evidence_quote(value).casefold()
+                    in _normalize_evidence_quote(item.quote).casefold()
+                    for item in row.evidence
                 ):
-                    raise ValueError("chart text values must appear in their cited source evidence")
+                    issue = "chart row contains text absent from its cited evidence"
+                    break
+        if issue is not None:
+            issues.append(("chart", index, chart.title, issue))
+    return issues
+
+
+def _omit_unsupported_visuals(
+    synthesis: domains.bd.distill.schemas.ChapterSynthesis,
+    issues: list[tuple[str, int, str, str]],
+) -> tuple[domains.bd.distill.schemas.ChapterSynthesis, list[str]]:
+    invalid = {(kind, index) for kind, index, _, _ in issues}
+    updated = synthesis.model_copy(update = {
+        "diagrams": [
+            item for index, item in enumerate(synthesis.diagrams) if ("diagram", index) not in invalid
+        ],
+        "equations": [
+            item for index, item in enumerate(synthesis.equations) if ("equation", index) not in invalid
+        ],
+        "charts": [
+            item for index, item in enumerate(synthesis.charts) if ("chart", index) not in invalid
+        ],
+    })
+    notes = [
+        f"Omitted unsupported {kind} '{title}' ({reason})."
+        for kind, _, title, reason in issues
+    ]
+    return updated, notes
+
+
+async def _synthesize_chapter_with_llm(
+    dependencies: graphs.distill.entities.DistillDependencies,
+    run_id: str,
+    prompt: str,
+) -> domains.bd.distill.schemas.ChapterSynthesis:
+    controls = dependencies.controls
+    async with controls.chapter_synthesis_semaphore:
+        async with controls.chapter_settle_lock:
+            if not controls.chapter_pool_settled:
+                domains.settings.chat.service.refresh_endpoint()
+                endpoint = domains.settings.chat.service.ENDPOINT
+                if domains.settings.chat.domain.rotator_health_url(endpoint.base_url):
+                    settled = await domains.settings.chat.service.wait_for_rotator_settle(
+                        domains.bd.distill.params.CHAPTER_SYNTHESIS_SETTLE_CAP_S,
+                    )
+                    logger.info("[bd-distill] chapter synthesis Rotator settle: %s", settled)
+                controls.chapter_pool_settled = True
+        try:
+            with domains.settings.llm_counter.service.llm_context(
+                ns = "bd", run_id = run_id, node_id = "chapter_synthesizer", stage = "distill",
+            ):
+                synthesis, _ = await domains.settings.chat.service.chat_structured_async(
+                    prompt,
+                    domains.bd.distill.schemas.ChapterSynthesis,
+                    max_tokens = 7000,
+                    temperature = 0.0,
+                    timeout_s = domains.bd.distill.params.CHAPTER_SYNTHESIS_TIMEOUT_S,
+                    strict = False,
+                    rotator_task = "bd_distill_chapter_synthesizer",
+                )
+        except Exception as error:
+            if domains.settings.chat.domain.is_transient_provider_error(error):
+                async with controls.chapter_settle_lock:
+                    controls.chapter_pool_settled = False
+            raise
+    return synthesis
 
 
 async def read_learning_units(
@@ -116,7 +209,7 @@ async def read_learning_units(
     run_id: str,
     unit_ids: list[str],
     unit_sources: list[dict[str, str]] | None = None,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, typing.Any]]:
     """Resolve lesson IDs through their persisted source-chunk artifacts.
 
     Older chapter checkpoints only carry lesson IDs, so unresolved IDs are
@@ -124,7 +217,7 @@ async def read_learning_units(
     """
     requested_ids = list(dict.fromkeys(unit_ids))
     wanted = set(requested_ids)
-    records_by_id: dict[str, dict[str, Any]] = {}
+    records_by_id: dict[str, dict[str, typing.Any]] = {}
     source_by_lesson = {
         item["learning_unit_id"]: item["source_unit_id"]
         for item in unit_sources or []
@@ -170,8 +263,8 @@ async def read_learning_units(
 
 async def prepare_chapters(
     dependencies: graphs.distill.entities.DistillDependencies,
-    state: dict[str, Any],
-) -> dict[str, Any]:
+    state: dict[str, typing.Any],
+) -> dict[str, typing.Any]:
     storage = dependencies.storage
     refs = []
     for ref in state.get("completed_units", []):
@@ -182,7 +275,7 @@ async def prepare_chapters(
             refs.append({**ref, "learning_unit_ids": unit_ids})
     refs.sort(key = lambda ref: (ref["page_number"], ref["char_start"], ref["unit_id"]))
     source_chapters = state.get("source_chapters", [])
-    groups: list[dict[str, Any]] = []
+    groups: list[dict[str, typing.Any]] = []
     assigned_unit_ids: set[str] = set()
     if isinstance(source_chapters, list):
         for chapter in sorted(
@@ -215,7 +308,7 @@ async def prepare_chapters(
             })
             assigned_unit_ids.update(ref["unit_id"] for ref in selected_refs)
 
-    unassigned_by_root: dict[str, list[dict[str, Any]]] = {}
+    unassigned_by_root: dict[str, list[dict[str, typing.Any]]] = {}
     for ref in refs:
         if ref["unit_id"] in assigned_unit_ids:
             continue
@@ -239,7 +332,7 @@ async def prepare_chapters(
         section_path = tuple(group["section_path"])
         section_refs = group["refs"]
         selected: list[str] = []
-        selected_refs_by_unit: dict[str, dict[str, Any]] = {}
+        selected_refs_by_unit: dict[str, dict[str, typing.Any]] = {}
         batch_index = 0
         for ref in section_refs:
             for unit_id in ref.get("learning_unit_ids", []):
@@ -284,7 +377,7 @@ async def prepare_chapters(
     return {"chapter_refs": chapter_refs}
 
 
-def _subsection_paths(unit_ids: list[str], refs_by_unit: dict[str, dict[str, Any]]) -> list[list[str]]:
+def _subsection_paths(unit_ids: list[str], refs_by_unit: dict[str, dict[str, typing.Any]]) -> list[list[str]]:
     paths = {
         tuple(path)
         for unit_id in unit_ids
@@ -306,7 +399,7 @@ async def _write_chapter_input(
     batch: int,
     unit_ids: list[str],
     unit_sources: list[dict[str, str]],
-) -> dict[str, Any]:
+) -> dict[str, typing.Any]:
     structure_id = domains.bd.distill.domain.stable_id(
         title, str(first_page), str(last_page),
     )
@@ -346,9 +439,9 @@ async def _write_chapter_input(
 
 async def synthesize_chapter(
     dependencies: graphs.distill.entities.DistillDependencies,
-    state: dict[str, Any],
-    learning_units_by_id: dict[str, dict[str, Any]] | None = None,
-) -> dict[str, Any]:
+    state: dict[str, typing.Any],
+    learning_units_by_id: dict[str, dict[str, typing.Any]] | None = None,
+) -> dict[str, typing.Any]:
     storage = dependencies.storage
     ref = state["chapter_ref"]
     if await storage.exists(ref["artifact_key"]):
@@ -379,50 +472,56 @@ async def synthesize_chapter(
         units = [learning_units_by_id[unit_id] for unit_id in ref["unit_ids"]]
     prompt = (
         prompts.distill.chapter_synthesizer.prompts.SYSTEM_PROMPT
-        + "\n\nWrite this section's learning guide. Every generated lesson, overview, question, diagram node/edge, and equation must use only the available learning_unit_ids.\n"
+        + "\n\nWrite this section's learning guide. "
+        + "Every generated lesson, overview, question, diagram node/edge, and equation "
+        + "must use only the available learning_unit_ids.\n"
         + json.dumps({"section": chapter_input, "learning_units": units}, ensure_ascii = False)
     )
-    controls = dependencies.controls
-    async with controls.chapter_synthesis_semaphore:
-        async with controls.chapter_settle_lock:
-            if not controls.chapter_pool_settled:
-                domains.settings.chat.service.refresh_endpoint()
-                endpoint = domains.settings.chat.service.ENDPOINT
-                if domains.settings.chat.domain.rotator_health_url(endpoint.base_url):
-                    settled = await domains.settings.chat.service.wait_for_rotator_settle(
-                        domains.bd.distill.params.CHAPTER_SYNTHESIS_SETTLE_CAP_S,
-                    )
-                    logger.info("[bd-distill] chapter synthesis Rotator settle: %s", settled)
-                controls.chapter_pool_settled = True
-        try:
-            with domains.settings.llm_counter.service.llm_context(
-                ns = "bd", run_id = state["run_id"], node_id = "chapter_synthesizer", stage = "distill",
-            ):
-                synthesis, _ = await domains.settings.chat.service.chat_structured_async(
-                    prompt,
-                    domains.bd.distill.schemas.ChapterSynthesis,
-                    max_tokens = 7000,
-                    temperature = 0.0,
-                    timeout_s = domains.bd.distill.params.CHAPTER_SYNTHESIS_TIMEOUT_S,
-                    strict = False,
-                    rotator_task = "bd_distill_chapter_synthesizer",
-                )
-        except Exception as error:
-            if domains.settings.chat.domain.is_transient_provider_error(error):
-                async with controls.chapter_settle_lock:
-                    controls.chapter_pool_settled = False
-            raise
+    synthesis = await _synthesize_chapter_with_llm(dependencies, state["run_id"], prompt)
     allowed_ids = set(ref["unit_ids"])
-    referenced_ids = _chapter_lesson_ids(synthesis)
+    referenced_ids = _chapter_required_text_ids(synthesis)
     if referenced_ids - allowed_ids:
         raise ValueError("chapter synthesis referenced a learning unit outside its input section")
-    _validate_visual_evidence(synthesis, units)
+
+    visual_issues = _visual_evidence_issues(synthesis, units)
+    for _ in range(domains.bd.distill.params.CHAPTER_VISUAL_REPAIR_ATTEMPTS):
+        if not visual_issues:
+            break
+        repair_prompt = (
+            prompt
+            + "\n\nCorrection required: the previous response included visual evidence that did not "
+            + "match the cited learning units. Return a complete corrected chapter guide. "
+            + "Copy each visual evidence quote and page number from the supplied learning-unit "
+            + "evidence exactly; omit any diagram, equation, or chart that cannot meet this requirement. "
+            + "Validation findings: "
+            + json.dumps([
+                {"kind": kind, "title": title, "reason": reason}
+                for kind, _, title, reason in visual_issues
+            ], ensure_ascii = False)
+            + "\nPrevious response: "
+            + json.dumps(synthesis.model_dump(mode = "json"), ensure_ascii = False)
+        )
+        synthesis = await _synthesize_chapter_with_llm(dependencies, state["run_id"], repair_prompt)
+        referenced_ids = _chapter_required_text_ids(synthesis)
+        if referenced_ids - allowed_ids:
+            raise ValueError("chapter synthesis referenced a learning unit outside its input section")
+        visual_issues = _visual_evidence_issues(synthesis, units)
+
+    visual_review_flags: list[str] = []
+    if visual_issues:
+        synthesis, visual_review_flags = _omit_unsupported_visuals(synthesis, visual_issues)
+        logger.warning(
+            "[bd-distill] omitted unsupported chapter visuals chapter=%s items=%s",
+            ref["chapter_id"],
+            visual_review_flags,
+        )
     artifact = {
         "chapter_id": ref["chapter_id"],
         "title": chapter_input["title"],
         "section_path": ref["section_path"],
         "unit_ids": ref["unit_ids"],
         "synthesis": synthesis.model_dump(mode = "json"),
+        "visual_review_flags": visual_review_flags,
     }
     await storage.write(ref["artifact_key"], _json_body(artifact), content_type = domains.bd.distill.params.JSON_TYPE)
     await graphs.service.report(
@@ -436,8 +535,8 @@ async def synthesize_chapter(
 
 async def synthesize_book(
     dependencies: graphs.distill.entities.DistillDependencies,
-    state: dict[str, Any],
-) -> dict[str, Any]:
+    state: dict[str, typing.Any],
+) -> dict[str, typing.Any]:
     storage = dependencies.storage
     chapter_summaries = []
     ordered_refs = sorted(
@@ -542,7 +641,7 @@ async def synthesize_book(
             raise ValueError("whole-book synthesis exceeded the hierarchy depth limit")
 
 
-def _book_summary(synthesis: domains.bd.distill.schemas.BookSynthesis) -> dict[str, Any]:
+def _book_summary(synthesis: domains.bd.distill.schemas.BookSynthesis) -> dict[str, typing.Any]:
     return {
         "central_thesis": synthesis.central_thesis[:1200],
         "central_thesis_attribution": synthesis.central_thesis_attribution,

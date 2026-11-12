@@ -2,6 +2,7 @@
 from __future__ import annotations
 import domains
 from . import versions
+from ..... import graphs
 
 
 
@@ -14,9 +15,7 @@ def versioned_blob_key(slug: str, chapter_id: str, manifest_hash: str) -> str:
 
 
 def latest_blob_key(slug: str, chapter_id: str) -> str:
-    from ai.dd.graphs.pipeline.synth import keys
-
-    return keys.latest_key(slug, chapter_id, "render")
+    return graphs.pipeline.synth.keys.latest_key(slug, chapter_id, "render")
 
 
 def artifact_key(slug: str, chapter_id: str, artifact_name: str) -> str:
@@ -24,15 +23,11 @@ def artifact_key(slug: str, chapter_id: str, artifact_name: str) -> str:
 
 
 def sawc_latest_key(slug: str, chapter_id: str) -> str:
-    from ai.dd.graphs.pipeline.synth import keys
-
-    return keys.latest_key(slug, chapter_id, "sawc")
+    return graphs.pipeline.synth.keys.latest_key(slug, chapter_id, "sawc")
 
 
 def mgsr_latest_key(slug: str, chapter_id: str) -> str:
-    from ai.dd.graphs.pipeline.synth import keys
-
-    return keys.latest_key(slug, chapter_id, "mgsr")
+    return graphs.pipeline.synth.keys.latest_key(slug, chapter_id, "mgsr")
 
 
 def planner_latest_key(slug: str) -> str:
@@ -52,13 +47,9 @@ def source_key_to_vault_key(source_key: str, framework_slug: str) -> str:
 
 
 def checklist_latest_key(slug: str, chapter_id: str) -> str:
-    from ai.dd.graphs.pipeline.synth import keys
-
-    return keys.latest_key(slug, chapter_id, "checklist")
+    return graphs.pipeline.synth.keys.latest_key(slug, chapter_id, "checklist")
 
 
 def checklist_best_key(slug: str, chapter_id: str) -> str:
     """The evaluation of the best-seen iteration (the one render ships); checklist-latest.json is whatever ran last."""
-    from ai.dd.graphs.pipeline.synth import keys
-
-    return keys.latest_key(slug, chapter_id, "checklist-best")
+    return graphs.pipeline.synth.keys.latest_key(slug, chapter_id, "checklist-best")

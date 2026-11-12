@@ -9,21 +9,21 @@ import inspect
 import json
 import re
 import unicodedata
-from collections.abc import Awaitable, Callable
-from pathlib import PurePath
-from typing import Any, Protocol
+import collections.abc
+import pathlib
+import typing
 
 
-PageReader = Callable[[str], str | None | Awaitable[str | None]]
-ArtifactWriter = Callable[[str, str, str], Any]
+PageReader = collections.abc.Callable[[str], str | None | collections.abc.Awaitable[str | None]]
+ArtifactWriter = collections.abc.Callable[[str, str, str], typing.Any]
 
 
-class Normalizer(Protocol):
+class Normalizer(typing.Protocol):
     async def ainvoke(
         self,
-        input: dict[str, Any],
-        config: dict[str, Any] | None = None,
-    ) -> dict[str, Any]: ...
+        input: dict[str, typing.Any],
+        config: dict[str, typing.Any] | None = None,
+    ) -> dict[str, typing.Any]: ...
 
 
 async def normalize_metadata(
@@ -160,7 +160,7 @@ def _metadata_values(value: object) -> list[str]:
     return []
 
 
-def _fallback_title(metadata: dict[str, object], sources: list[dict[str, Any]]) -> str:
+def _fallback_title(metadata: dict[str, object], sources: list[dict[str, typing.Any]]) -> str:
     filename = metadata.get("filename") or metadata.get("source_filename")
     filename_title = _filename_title(filename)
     supplied_title = metadata.get("title")
@@ -187,7 +187,7 @@ def _fallback_title(metadata: dict[str, object], sources: list[dict[str, Any]]) 
 def _filename_title(value: object) -> str:
     if not isinstance(value, str) or not value.strip():
         return ""
-    title = PurePath(value.strip().replace("\\", "/")).stem
+    title = pathlib.PurePath(value.strip().replace("\\", "/")).stem
     return re.sub(r"\s+", " ", title.replace("_", " ")).strip()
 
 

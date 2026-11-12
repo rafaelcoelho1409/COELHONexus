@@ -1,10 +1,10 @@
 """Transient, book-scoped state for one adaptive BD Ask run."""
 from __future__ import annotations
 
-from typing import TypedDict
+import typing
 
 
-class AdaptiveAskState(TypedDict, total = False):
+class AdaptiveAskState(typing.TypedDict, total = False):
     question: str
     thread_id: str
     conversation_history: list[dict]

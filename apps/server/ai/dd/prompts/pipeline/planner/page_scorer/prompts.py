@@ -1,7 +1,7 @@
-from pathlib import Path
+import pathlib
 
 
-_TEMPLATE = (Path(__file__).parent / "SYSTEM.md").read_text(encoding = "utf-8").strip()
+_TEMPLATE = (pathlib.Path(__file__).parent / "SYSTEM.md").read_text(encoding = "utf-8").strip()
 
 
 def system_prompt(proposals: list[dict]) -> str:

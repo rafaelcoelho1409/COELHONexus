@@ -4,13 +4,13 @@ from __future__ import annotations
 import asyncio
 import json
 
-import ai
+from .... import ycs
 import domains
 
 
 async def critic(state: dict, model) -> dict:
     domains.settings.llm_counter.service.set_node(node = "critic")
-    params = ai.ycs.agents.ask.research_critic.params
+    params = ycs.agents.ask.research_critic.params
     evidence = [
         {
             "question": str(item.get("sub_question", "")),
@@ -29,11 +29,11 @@ async def critic(state: dict, model) -> dict:
         ensure_ascii = False,
     )[:params.MAX_EVIDENCE_CHARS]
     try:
-        agent = ai.ycs.agents.ask.research_critic.agent.research_critic(model)
+        agent = ycs.agents.ask.research_critic.agent.research_critic(model)
         result = await asyncio.wait_for(
-            ai.ycs.agents.service.ask(
+            ycs.agents.service.ask(
                 agent,
-                ai.ycs.agents.ask.research_critic.schemas.CriticAssessment,
+                ycs.agents.ask.research_critic.schemas.CriticAssessment,
                 payload,
                 attempts = 2,
             ),

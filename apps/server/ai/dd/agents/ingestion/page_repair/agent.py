@@ -5,21 +5,11 @@ from . import config, domain, params
 from ... import schemas
 from .... import middlewares, prompts, tools
 
-from deepagents import (
-    FilesystemPermission,
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
-from deepagents.backends import StateBackend
-from deepagents.profiles.harness import harness_profiles
-from langchain.agents.middleware import (
-    ModelCallLimitMiddleware, 
-    ToolCallLimitMiddleware, 
-    ToolErrorMiddleware
-)
-from langchain_openai import ChatOpenAI
+import deepagents
+import deepagents.backends
+import deepagents.profiles.harness
+import langchain.agents.middleware
+import langchain_openai
 
 
 def page_repair(*, check: tools.ingestion.check_patch.entities.Check, model = None):
@@ -35,46 +25,46 @@ def page_repair(*, check: tools.ingestion.check_patch.entities.Check, model = No
         )
     model_name = domain.validate_model_name(getattr(model, "model_name", None))
 
-    if not isinstance(model, ChatOpenAI):
+    if not isinstance(model, langchain_openai.ChatOpenAI):
         raise TypeError("the page repair specialist must use the COELHO Rotator ChatOpenAI model")
 
     check_patch = tools.ingestion.check_patch.tool.check_patch_tool(check)
     # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
     # before (by another role or other code in the process) hides tools from this agent.
     key = f"openai:{model_name}"
-    harness_profiles._HARNESS_PROFILES.pop(key, None)
-    register_harness_profile(
+    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
+    deepagents.register_harness_profile(
         key,
-        HarnessProfile(
+        deepagents.HarnessProfile(
             base_system_prompt = "",
-            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
+            general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    agent = create_deep_agent(
+    agent = deepagents.create_deep_agent(
         model = model,
         tools = [check_patch],
         system_prompt = prompts.ingestion.page_repair.prompts.SYSTEM_PROMPT,
         response_format = schemas.PagePatchBatch,
         permissions = [
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["read"], 
                 paths = ["/**"], 
                 mode = "deny"),
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["write"], 
                 paths = ["/**"], 
                 mode = "deny"),
         ],
-        backend = StateBackend(),
+        backend = deepagents.backends.StateBackend(),
         middleware = [
-            ModelCallLimitMiddleware(
+            langchain.agents.middleware.ModelCallLimitMiddleware(
                 run_limit = params.MODEL_CALLS, 
                 exit_behavior = "end"),
-            ToolCallLimitMiddleware(
+            langchain.agents.middleware.ToolCallLimitMiddleware(
                 tool_name = check_patch.name, 
                 run_limit = params.CHECK_CALLS, 
                 exit_behavior = "continue"),
-            ToolErrorMiddleware(lambda error, request: f"`{request.tool_call['name']}` failed with {type(error).__name__}: {str(error)[:300]}"),
+            langchain.agents.middleware.ToolErrorMiddleware(lambda error, request: f"`{request.tool_call['name']}` failed with {type(error).__name__}: {str(error)[:300]}"),
             middlewares.middleware.ToolAllowlistMiddleware(frozenset({check_patch.name})),
         ],
         name = "dd_page_repair",

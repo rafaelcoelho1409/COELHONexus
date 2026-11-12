@@ -6,27 +6,27 @@ from .. import page_audit
 from .... import agents, tools
 
 import json
-from typing import Any, Protocol
+import typing
 
 
-class PageRepairer(Protocol):
+class PageRepairer(typing.Protocol):
     async def ainvoke(
         self,
-        input: dict[str, Any],
-        config: dict[str, Any] | None = None,
-    ) -> dict[str, Any]: ...
+        input: dict[str, typing.Any],
+        config: dict[str, typing.Any] | None = None,
+    ) -> dict[str, typing.Any]: ...
 
 
 async def repair_page(
     framework_slug: str,
-    page: dict[str, Any],
+    page: dict[str, typing.Any],
     markdown: str,
     source_sha256: str,
-    assessment: dict[str, Any],
+    assessment: dict[str, typing.Any],
     repairer: PageRepairer,
     *,
-    config: dict[str, Any] | None = None,
-) -> tuple[str, dict[str, Any]]:
+    config: dict[str, typing.Any] | None = None,
+) -> tuple[str, dict[str, typing.Any]]:
     if len(markdown) > page_audit.params.MAX_PAGE_MARKDOWN_CHARS:
         raise ValueError(
             f"page {page['idx']} exceeds the {page_audit.params.MAX_PAGE_MARKDOWN_CHARS}-character repair limit; "

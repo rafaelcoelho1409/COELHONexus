@@ -2,7 +2,7 @@
 from __future__ import annotations
 from . import params, schemas, versions
 
-from hashlib import sha256
+import hashlib
 
 
 def is_trivial_pass(checklist: dict) -> bool:
@@ -108,4 +108,4 @@ def compute_manifest_hash(*, checklist_manifest_hash: str, outline_manifest_hash
         f"prompt={versions.MGSR_PROMPT_VERSION}|"
         f"schema={versions.MGSR_SCHEMA_VERSION}"
     )
-    return sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]

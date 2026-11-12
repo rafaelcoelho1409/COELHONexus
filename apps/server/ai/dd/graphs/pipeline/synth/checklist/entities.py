@@ -1,10 +1,10 @@
 """What the steps of the checklist subgraph hand to each other."""
 from __future__ import annotations
 
-from typing import TypedDict
+import typing
 
 
-class JudgeRun(TypedDict):
+class JudgeRun(typing.TypedDict):
     """One judge run: the five LLM verdicts (as criterion dicts), whether the judge answered at all, and what the Rotator told about the call."""
 
     results: list[dict]

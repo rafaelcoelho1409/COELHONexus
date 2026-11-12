@@ -4,11 +4,11 @@ from __future__ import annotations
 from . import states
 from ..... import nodes
 
-from langgraph.graph import END, START, StateGraph
+import langgraph.graph
 
 
 def sawc_graph():
-    workflow = StateGraph(states.SawcState)
+    workflow = langgraph.graph.StateGraph(states.SawcState)
     workflow.add_node("prepare", nodes.pipeline.synth.sawc.node.prepare)
     workflow.add_node("start_stage", nodes.pipeline.synth.sawc.node.start_stage)
     workflow.add_node("write_section", nodes.pipeline.synth.sawc.node.write_section)
@@ -19,11 +19,11 @@ def sawc_graph():
     workflow.add_node("plan_sources", nodes.pipeline.synth.sawc.node.plan_sources)
     workflow.add_node("extend_sources", nodes.pipeline.synth.sawc.node.extend_sources)
     workflow.add_node("finalize", nodes.pipeline.synth.sawc.node.finalize)
-    workflow.add_edge(START, "prepare")
+    workflow.add_edge(langgraph.graph.START, "prepare")
     workflow.add_conditional_edges(
         "prepare", 
         nodes.pipeline.synth.sawc.node.after_prepare, 
-        ["start_stage", END])
+        ["start_stage", langgraph.graph.END])
     workflow.add_conditional_edges(
         "start_stage", 
         nodes.pipeline.synth.sawc.node.write_fan_out, 
@@ -44,5 +44,5 @@ def sawc_graph():
         nodes.pipeline.synth.sawc.node.sources_fan_out, 
         ["extend_sources", "finalize"])
     workflow.add_edge("extend_sources", "finalize")
-    workflow.add_edge("finalize", END)
+    workflow.add_edge("finalize", langgraph.graph.END)
     return workflow.compile()

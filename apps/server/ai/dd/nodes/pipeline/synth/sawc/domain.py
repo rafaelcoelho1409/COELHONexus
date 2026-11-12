@@ -12,11 +12,11 @@ import ast
 import json
 import math
 import re
-from collections import defaultdict
-from hashlib import sha256
-from typing import Optional
+import collections
+import hashlib
+import typing
 
-from pydantic import ValidationError
+import pydantic
 
 
 def ast_identifiers(code: str) -> set[str]:
@@ -1257,7 +1257,7 @@ def dedupe_vault_hashes_across_sections(
 
     # Pass 2: group by hash; only hashes claimed by ≥2 distinct sections
     # need deduplication.
-    hash_section_options: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    hash_section_options: dict[str, list[tuple[str, str]]] = collections.defaultdict(list)
     for (h, sid), rel in hash_section_best_rel.items():
         hash_section_options[h].append((sid, rel))
 
@@ -1297,8 +1297,8 @@ def placeholder_section(
     section_id: str,
     heading: str,
     n_repairs: int,
-    deployment_writer: Optional[str],
-    error_tags: Optional[list[str]] = None,
+    deployment_writer: typing.Optional[str],
+    error_tags: typing.Optional[list[str]] = None,
 ) -> schemas.Section:
     """Fallback when all writer drafts and repairs fail. Keeps chapter assemblable; empty subtopics triggers checklist density gate → mgsr_replan retargets or merges this section."""
     issues = ["placeholder"]
@@ -1339,10 +1339,10 @@ def compute_manifest_hash(
         f"schema={versions.SAWC_SCHEMA_VERSION}|"
         f"iter={refine_iter}"
     )
-    return sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def parse_json_response(text: str) -> Optional[dict]:
+def parse_json_response(text: str) -> typing.Optional[dict]:
     if not text:
         return None
     cleaned = text.strip()
@@ -1413,8 +1413,8 @@ def trim_lists(raw: dict) -> dict:
 def try_parse_draft(
     raw: dict,
     *,
-    expected_heading: Optional[str] = None,
-) -> tuple[Optional[schemas.LLMSectionDraft], Optional[str]]:
+    expected_heading: typing.Optional[str] = None,
+) -> tuple[typing.Optional[schemas.LLMSectionDraft], typing.Optional[str]]:
     """Pydantic-validate a writer draft. `heading` is only an echo of the
     outline's H2, so when `expected_heading` is given the authoritative copy
     replaces whatever the LLM emitted — a writer that trims or rewrites a
@@ -1430,13 +1430,13 @@ def try_parse_draft(
         raw = trim_lists(raw)
     try:
         return schemas.LLMSectionDraft.model_validate(raw), None
-    except ValidationError as e:
+    except pydantic.ValidationError as e:
         return None, shorten_pydantic_error(e)
     except Exception as e:
         return None, f"{type(e).__name__}: {str(e)[:200]}"
 
 
-def shorten_pydantic_error(e: ValidationError) -> str:
+def shorten_pydantic_error(e: pydantic.ValidationError) -> str:
     errs = e.errors()
     if not errs:
         return "Pydantic validation failed (no detail)"

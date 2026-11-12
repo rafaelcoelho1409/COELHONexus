@@ -2,23 +2,23 @@
 from __future__ import annotations
 from . import schemas, service
 
-from collections.abc import Callable, Sequence
+import collections.abc
 
-from langchain_core.tools import StructuredTool
+import langchain_core.tools
 
 
 def score_outline_tool(
-    score: Callable[[list[dict]], dict],
-    labels: Sequence[str],
+    score: collections.abc.Callable[[list[dict]], dict],
+    labels: collections.abc.Sequence[str],
     target: int,
-) -> StructuredTool:
+) -> langchain_core.tools.StructuredTool:
     """`score_outline(chapters)` over `score` (an outline → `domain.score_outline` result). `labels[i]` names page i by its path in the corpus."""
 
     async def score_outline(chapters: list[schemas.OutlineChapter]) -> str:
         outline = [chapter.model_dump() for chapter in chapters]
         return service.report(score(outline), outline, labels, target)
 
-    return StructuredTool.from_function(
+    return langchain_core.tools.StructuredTool.from_function(
         coroutine = score_outline,
         name = "score_outline",
         description = (

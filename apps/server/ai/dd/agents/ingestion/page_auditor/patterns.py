@@ -2,8 +2,9 @@
 and the audit drops a finding that quotes one (`EXPORT_CONVENTION_RE`); a test checks every example below against the pattern."""
 from __future__ import annotations
 
-from collections import Counter
-from html.parser import HTMLParser
+import collections
+import html
+import html.parser
 import re
 
 
@@ -48,14 +49,16 @@ HTML_TAG_ONLY_RE = re.compile(
     r"\A\s*</?[A-Za-z][A-Za-z0-9:-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s\"'<>`]+))?)*\s*/?>\s*\Z",
     re.DOTALL,
 )
+HTML_NUMERIC_ENTITY_RE = re.compile(r"&#(?:[0-9]{1,7}|[xX][0-9a-fA-F]{1,6});")
+ESCAPED_IDENTIFIER_RE = re.compile(r"[A-Za-z0-9]+(?:\\_[A-Za-z0-9]+)+")
 VOID_HTML_TAGS = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"})
 
 
-class _HTMLTagCounter(HTMLParser):
+class _HTMLTagCounter(html.parser.HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=False)
-        self.open_tags: Counter[str] = Counter()
-        self.close_tags: Counter[str] = Counter()
+        self.open_tags: collections.Counter[str] = collections.Counter()
+        self.close_tags: collections.Counter[str] = collections.Counter()
 
     def handle_starttag(self, tag: str, attrs) -> None:
         if tag not in VOID_HTML_TAGS:
@@ -97,9 +100,56 @@ def is_sound_table_head(evidence: str) -> bool:
     return all(table_cells(line) == width for index, line in enumerate(lines) if index != at)
 
 
+def is_valid_table_row_context(markdown: str, evidence: str) -> bool:
+    """Whether a cited table row sits next to a valid GFM delimiter row of the same width."""
+    cited = evidence.strip()
+    if not cited.startswith("|") or "\n" in cited:
+        return False
+    lines = markdown.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() != cited:
+            continue
+        for neighbor in (index - 1, index + 1):
+            if (
+                0 <= neighbor < len(lines)
+                and "|" in lines[neighbor]
+                and TABLE_DELIMITER_RE.fullmatch(lines[neighbor].strip())
+                and table_cells(line) == table_cells(lines[neighbor])
+            ):
+                return True
+    return False
+
+
+def is_valid_escaped_identifier(evidence: str) -> bool:
+    """Whether evidence is just an identifier whose underscores are correctly backslash-escaped in Markdown."""
+    return ESCAPED_IDENTIFIER_RE.fullmatch(evidence.strip()) is not None
+
+
+def is_valid_numeric_entity_text(evidence: str) -> bool:
+    """Whether an alleged encoding defect is valid HTML numeric character-reference text."""
+    if not HTML_NUMERIC_ENTITY_RE.search(evidence):
+        return False
+    decoded = html.unescape(evidence)
+    return decoded != evidence and "\ufffd" not in decoded
+
+
+def is_structural_export_markup_only(evidence: str) -> bool:
+    """Whether repeated evidence contains only HTML or GitBook block markers, with no reader-facing content."""
+    lines = [line.strip() for line in evidence.splitlines() if line.strip()]
+    return bool(lines) and all(
+        GITBOOK_COMPONENT_TAG_RE.fullmatch(line) is not None
+        or HTML_TAG_ONLY_RE.fullmatch(line) is not None
+        for line in lines
+    )
+
+
 def is_export_convention(evidence: str, *, markdown: str = "") -> bool:
     """Whether evidence is valid site-export syntax or raw HTML, not a page defect."""
-    if EXPORT_CONVENTION_RE.match(evidence) or is_sound_table_head(evidence):
+    if (
+        EXPORT_CONVENTION_RE.match(evidence)
+        or is_sound_table_head(evidence)
+        or (markdown and is_valid_table_row_context(markdown, evidence))
+    ):
         return True
     if GITBOOK_COMPONENT_TAG_RE.search(evidence) or HTML_TAG_ONLY_RE.fullmatch(evidence):
         return True

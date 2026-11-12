@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 
+from ... import pipeline
+
 
 # Canonical order of the nodes. corpus_normalize and the code vaults are ingestion-time work; the per-stage MinIO caches are inside each node.
 NODE_ORDER = (
@@ -41,9 +43,7 @@ def is_v2() -> bool:
 
 def tutorial_mode() -> bool:
     """Enable tutorial behavior for Synth v2 without changing Planner's version selection."""
-    from .. import params as pipeline_params
-
-    return is_v2() or pipeline_params.TUTORIAL_MODE
+    return is_v2() or pipeline.params.TUTORIAL_MODE
 
 
 def node_order() -> tuple[str, ...]:

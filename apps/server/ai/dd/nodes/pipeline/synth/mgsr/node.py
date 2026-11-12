@@ -1,23 +1,23 @@
 """mgsr_replan graph node: runs the mgsr subgraph (the chapter_reviewer agent and its decision), and the routes after it: between its own steps and, for the chapter, the CoRefine loop."""
 from __future__ import annotations
-from domains.dd.pipeline.observability.service import traced_synth
+import domains.dd.pipeline.observability.service
 from . import service
 from ..... import graphs
 
 import logging
 import time
 
-from langgraph.graph import END
-from langgraph.runtime import Runtime
+import langgraph.graph
+import langgraph.runtime
 
 
 logger = logging.getLogger(__name__)
 
 
-@traced_synth("mgsr_replan")
+@domains.dd.pipeline.observability.service.traced_synth("mgsr_replan")
 async def mgsr_replan(
     state: graphs.pipeline.synth.states.SynthState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     result = await graphs.pipeline.synth.mgsr.graphs.mgsr_graph().ainvoke(
         {
@@ -36,28 +36,28 @@ async def mgsr_replan(
 
 async def prepare(
     state: graphs.pipeline.synth.mgsr.states.MgsrState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.prepare(state, runtime)
 
 
 async def review(
     state: graphs.pipeline.synth.mgsr.states.MgsrState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.review(state, runtime)
 
 
 async def finalize(
     state: graphs.pipeline.synth.mgsr.states.MgsrState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.finalize(state, runtime)
 
 
 def after_prepare(graph_state: graphs.pipeline.synth.mgsr.states.MgsrState) -> str:
     if graph_state.get("finished"):
-        return END
+        return langgraph.graph.END
     return "finalize" if graph_state.get("trivial") else "review"
 
 

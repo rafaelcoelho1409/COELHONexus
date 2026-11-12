@@ -1,26 +1,21 @@
 """DeepAgent that decides which sections of a failed chapter are written again, reading them first."""
 from __future__ import annotations
-import ai, domains
+from ...... import dd
+import domains
 from . import config, params
 from .. import schemas
 from .... import service
 from ..... import middlewares, prompts, skills
 
-from collections.abc import Sequence
-from typing import Any
+import collections.abc
+import typing
 
-from deepagents import (
-    FilesystemPermission,
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
-from deepagents.backends import StateBackend
-from deepagents.profiles.harness import harness_profiles
+import deepagents
+import deepagents.backends
+import deepagents.profiles.harness
 
 
-def chapter_reviewer(*, tools: Sequence[Any], model = None):
+def chapter_reviewer(*, tools: collections.abc.Sequence[typing.Any], model = None):
     """Build the reviewer for one chapter. `tools` hold the chapter's `inspect_section`; its skill says how to map a failure to sections."""
     if model is None:
         model = domains.settings.chat.service.build_chat_model(
@@ -40,15 +35,15 @@ def chapter_reviewer(*, tools: Sequence[Any], model = None):
     # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
     # before (by another role or other code in the process) hides tools from this agent.
     key = f"openai:{model_name}"
-    harness_profiles._HARNESS_PROFILES.pop(key, None)
-    register_harness_profile(
+    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
+    deepagents.register_harness_profile(
         key,
-        HarnessProfile(
+        deepagents.HarnessProfile(
             base_system_prompt = "",
-            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
+            general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    agent = create_deep_agent(
+    agent = deepagents.create_deep_agent(
         model = model,
         tools = reviewer_tools,
         system_prompt = prompts.pipeline.synth.chapter_reviewer.prompts.SYSTEM_PROMPT,
@@ -60,20 +55,20 @@ def chapter_reviewer(*, tools: Sequence[Any], model = None):
             middlewares.middleware.ToolAllowlistMiddleware(frozenset(tool_names)),
         ],
         permissions = [
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["read"],
                 paths = [f"{skills.params.VIRTUAL_ROOT}/**"],
                 mode = "allow"),
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["read"],
                 paths = ["/**"],
                 mode = "deny"),
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["write"],
                 paths = ["/**"],
                 mode = "deny"),
         ],
-        backend = StateBackend(),
+        backend = deepagents.backends.StateBackend(),
         skills = [skills.domain.source_for("chapter_reviewer")],
         name = "dd_chapter_reviewer",
     )
@@ -82,6 +77,6 @@ def chapter_reviewer(*, tools: Sequence[Any], model = None):
     error_message = "DeepAgents exposed an unreviewed tool to the chapter reviewer"
     if not isinstance(available_tools, dict):
         raise RuntimeError(error_message)
-    if set(available_tools) - ai.dd.agents.params.STACK_TOOLS - tool_names:
+    if set(available_tools) - dd.agents.params.STACK_TOOLS - tool_names:
         raise RuntimeError(error_message)
     return agent

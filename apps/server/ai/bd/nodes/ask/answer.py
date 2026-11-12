@@ -3,18 +3,18 @@ from __future__ import annotations
 
 import re
 
-import ai
+from .... import bd
 import domains
 
-from langgraph.runtime import Runtime
+import langgraph.runtime
 
 
-async def generate_answer(state: dict, runtime: Runtime[ai.bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
+async def generate_answer(state: dict, runtime: langgraph.runtime.Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
     domains.settings.llm_counter.service.set_node(node = "generate" if state.get("mode") != "deep" else "synthesize")
     documents = state.get("documents") or []
-    answer = await ai.bd.agents.ask.service.invoke(
+    answer = await bd.agents.ask.service.invoke(
         runtime.context.answerer,
-        ai.bd.agents.ask.schemas.EvidenceAnswer,
+        bd.agents.ask.schemas.EvidenceAnswer,
         {
             "book_id": runtime.context.book_id,
             "question": state.get("question", ""),
@@ -27,7 +27,7 @@ async def generate_answer(state: dict, runtime: Runtime[ai.bd.graphs.ask.adaptiv
     return {"generation": answer.answer, "evidence_ids": answer.evidence_ids}
 
 
-def format_citations(state: dict, runtime: Runtime[ai.bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
+def format_citations(state: dict, runtime: langgraph.runtime.Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
     documents = state.get("documents") or []
     requested = set(state.get("evidence_ids") or [])
     selected = [item for item in documents if item.get("id") in requested]

@@ -1,4 +1,4 @@
 """Per-transcript graph extraction subgraph."""
-from . import entities, graphs, params, states
+from . import domain, entities, graphs, params, states
 
-__all__ = ["entities", "graphs", "params", "states"]
+__all__ = ["domain", "entities", "graphs", "params", "states"]

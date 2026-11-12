@@ -16,7 +16,7 @@ from ..... import agents, graphs
 import logging
 import time
 
-from langgraph.runtime import Runtime
+import langgraph.runtime
 
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 Context = graphs.pipeline.planner.entities.PlannerContext
 
 
-async def prepare(state: graphs.pipeline.planner.off_topic.states.OffTopicState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.planner.off_topic.states.OffTopicState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     blobs = runtime.context.blobs
     slug = state.get("framework_slug")
     raw_files = state.get("raw_files") or []
@@ -87,7 +87,7 @@ async def prepare(state: graphs.pipeline.planner.off_topic.states.OffTopicState,
     }
 
 
-async def judge_page(state: graphs.pipeline.planner.off_topic.entities.JudgeInput, runtime: Runtime[Context]) -> dict:
+async def judge_page(state: graphs.pipeline.planner.off_topic.entities.JudgeInput, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     """One judge call for one distinct page text. A call that cannot be answered counts as KEEP (quality over speed)."""
     context = runtime.context
     try:
@@ -132,7 +132,7 @@ async def judge_page(state: graphs.pipeline.planner.off_topic.entities.JudgeInpu
     return {"verdicts": [verdict]}
 
 
-def tally(state: graphs.pipeline.planner.off_topic.states.OffTopicState, runtime: Runtime[Context]) -> dict:
+def tally(state: graphs.pipeline.planner.off_topic.states.OffTopicState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     """After round 1: the confident DROPs of substantial pages that a second call must confirm."""
     if state.get("rechecked"):
         return {"recheck": []}
@@ -150,7 +150,7 @@ def tally(state: graphs.pipeline.planner.off_topic.states.OffTopicState, runtime
     return {"recheck": recheck, "rechecked": True}
 
 
-async def finalize(state: graphs.pipeline.planner.off_topic.states.OffTopicState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.planner.off_topic.states.OffTopicState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     context = runtime.context
     slug = state["framework_slug"]
     raw_files = state["raw_files"]

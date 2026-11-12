@@ -3,10 +3,10 @@ from __future__ import annotations
 from . import entities
 
 import operator
-from typing import Annotated, TypedDict
+import typing
 
 
-class AssignState(TypedDict, total = False):
+class AssignState(typing.TypedDict, total = False):
     framework_slug: str
     thread_id: str
     raw_files: list[str]
@@ -25,4 +25,4 @@ class AssignState(TypedDict, total = False):
     sweep: list[str]                # pages that ended on the lexical fallback, scored once more after a settle
     swept: bool
     started: float
-    results: Annotated[list[entities.ScoreResult], operator.add]
+    results: typing.Annotated[list[entities.ScoreResult], operator.add]

@@ -1,18 +1,18 @@
 """doc_distill graph node: runs the distillation subgraph (one distiller per page, in parallel), and the routes between its steps."""
 from __future__ import annotations
-from domains.dd.pipeline.observability.service import traced
+import domains.dd.pipeline.observability.service
 from . import params, service
 from ..... import graphs
 
-from langgraph.graph import END
-from langgraph.runtime import Runtime
-from langgraph.types import Send
+import langgraph.graph
+import langgraph.runtime
+import langgraph.types
 
 
-@traced("doc_distill")
+@domains.dd.pipeline.observability.service.traced("doc_distill")
 async def doc_distill(
     state: graphs.pipeline.planner.states.PlannerState,
-    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     result = await graphs.pipeline.planner.doc_distill.graphs.doc_distill_graph().ainvoke(
         {
@@ -32,34 +32,34 @@ async def doc_distill(
 
 async def prepare(
     state: graphs.pipeline.planner.doc_distill.states.DistillState,
-    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     return await service.prepare(state, runtime)
 
 
 async def distill_page(
     state: graphs.pipeline.planner.doc_distill.entities.DistillInput,
-    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     return await service.distill_page(state, runtime)
 
 
 async def finalize(
     state: graphs.pipeline.planner.doc_distill.states.DistillState,
-    runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext],
 ) -> dict:
     return await service.finalize(state, runtime)
 
 
 def after_prepare(graph_state: graphs.pipeline.planner.doc_distill.states.DistillState):
     if graph_state.get("finished"):
-        return END
+        return langgraph.graph.END
     todo = graph_state.get("todo") or []
     if not todo:
         return "finalize"
     digests = graph_state.get("digests") or {}
     return [
-        Send(
+        langgraph.types.Send(
             "distill_page",
             {"key": key, "digest": digests[key], "framework_slug": graph_state["framework_slug"], "total": len(todo)},
         )

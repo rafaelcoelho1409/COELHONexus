@@ -16,7 +16,7 @@ import json
 import logging
 import time
 
-from langgraph.runtime import Runtime
+import langgraph.runtime
 
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ def _vault():
     return domains.dd.ingestion.vault
 
 
-async def prepare(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
@@ -465,7 +465,7 @@ async def write_one(context: Context, sid: str, budget: int | None) -> dict:
     return {"sid": sid, "attempts": attempts, "placeholder": False}
 
 
-async def start_stage(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: Runtime[Context]) -> dict:
+async def start_stage(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     """Open the next stage: the sections of a stage all see the memory and the printed hashes of the stages before it. After the last stage, the late retry."""
     data = runtime.context.scratch[params.STEP]
     pos = state.get("stage_pos", 0)
@@ -484,7 +484,7 @@ async def start_stage(state: graphs.pipeline.synth.sawc.states.SawcState, runtim
     return {"phase": "late", "todo": [{"sid": sid, "budget": params.LATE_RETRY_VAULT_CHARS} for sid in lost]}
 
 
-async def write_section(state: dict, runtime: Runtime[Context]) -> dict:
+async def write_section(state: dict, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     task = state["task"]
     result = await write_one(runtime.context, task["sid"], task.get("budget"))
     return {"writes": [result]}
@@ -503,7 +503,7 @@ def remember(data: dict, sid: str) -> None:
             data["used"].add(st.code_ref_hash)
 
 
-async def finish_stage(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: Runtime[Context]) -> dict:
+async def finish_stage(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     data = runtime.context.scratch[params.STEP]
     pos = state.get("stage_pos", 0)
     if state.get("phase") == "late":
@@ -543,7 +543,7 @@ def ordered_sections(data: dict) -> list[schemas.Section]:
     return [data["completed"][s["section_id"]] for s in data["outline_sections"] if data["completed"].get(s["section_id"]) is not None]
 
 
-async def plan_coverage(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: Runtime[Context]) -> dict:
+async def plan_coverage(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     """The next coverage round that has work: code blocks routed to a section but not printed get an extra call (rounds 1-2, a salvage pass for sections whose
     calls all failed, and one more round for what the salvage gained). A block that is a near-copy of a printed one counts as covered."""
     data = runtime.context.scratch[params.STEP]
@@ -587,7 +587,7 @@ async def plan_coverage(state: graphs.pipeline.synth.sawc.states.SawcState, runt
     return {"topup_done": True, "extend_todo": []}
 
 
-async def extend_coverage(state: dict, runtime: Runtime[Context]) -> dict:
+async def extend_coverage(state: dict, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     """Extra subtopics for one section's unused routed code blocks (the coverage_extender agent), merged when they validate."""
     context = runtime.context
     data = context.scratch[params.STEP]
@@ -639,7 +639,7 @@ async def extend_coverage(state: dict, runtime: Runtime[Context]) -> dict:
     return {"extends": [{"sid": sid, "added": 0, "outcome": "failed" if raised == params.TOPUP_ATTEMPTS else "empty"}]}
 
 
-async def merge_coverage(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: Runtime[Context]) -> dict:
+async def merge_coverage(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     data = runtime.context.scratch[params.STEP]
     steps: list = [*range(1, params.TOPUP_ROUNDS + 1), "salvage", "after-salvage"]
     cursor = state.get("topup_cursor", 0)
@@ -672,7 +672,7 @@ async def merge_coverage(state: graphs.pipeline.synth.sawc.states.SawcState, run
     }
 
 
-async def plan_sources(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: Runtime[Context]) -> dict:
+async def plan_sources(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     """One call per section that was routed sources the chapter never cites: prose subtopics grounded in their key facts, and for cited sources the prose leaves unsaid."""
     data = runtime.context.scratch[params.STEP]
     if not params.TOPUP_SRC_ENABLED:
@@ -683,7 +683,7 @@ async def plan_sources(state: graphs.pipeline.synth.sawc.states.SawcState, runti
     return {"extend_todo": [sec.section_id for sec in sections if pending.get(sec.section_id)], "topup_done": True}
 
 
-async def extend_sources(state: dict, runtime: Runtime[Context]) -> dict:
+async def extend_sources(state: dict, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     context = runtime.context
     data = context.scratch[params.STEP]
     sid = state["sid"]
@@ -723,7 +723,7 @@ async def extend_sources(state: dict, runtime: Runtime[Context]) -> dict:
 
 # ---- finalize ----------------------------------------------------------------------------------------------------------------------------
 
-async def finalize(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     context = runtime.context
     data = context.scratch[params.STEP]
     slug, chapter_id = data["slug"], data["chapter_id"]

@@ -1,17 +1,17 @@
 """Adaptive effort classification and bounded query planning."""
 from __future__ import annotations
 
-import ai
+from .... import bd
 import domains
 
-from langgraph.runtime import Runtime
+import langgraph.runtime
 
 
-async def plan_research(state: dict, runtime: Runtime[ai.bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
+async def plan_research(state: dict, runtime: langgraph.runtime.Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
     domains.settings.llm_counter.service.set_node(node = "plan_research")
-    plan = await ai.bd.agents.ask.service.invoke(
+    plan = await bd.agents.ask.service.invoke(
         runtime.context.planner,
-        ai.bd.agents.ask.schemas.AskPlan,
+        bd.agents.ask.schemas.AskPlan,
         {
             "book_id": runtime.context.book_id,
             "question": state.get("question", ""),
@@ -35,11 +35,11 @@ async def plan_research(state: dict, runtime: Runtime[ai.bd.graphs.ask.adaptive.
     }
 
 
-async def rewrite_queries(state: dict, runtime: Runtime[ai.bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
+async def rewrite_queries(state: dict, runtime: langgraph.runtime.Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
     domains.settings.llm_counter.service.set_node(node = "rewrite_query")
-    plan = await ai.bd.agents.ask.service.invoke(
+    plan = await bd.agents.ask.service.invoke(
         runtime.context.planner,
-        ai.bd.agents.ask.schemas.AskPlan,
+        bd.agents.ask.schemas.AskPlan,
         {
             "book_id": runtime.context.book_id,
             "question": state.get("question", ""),

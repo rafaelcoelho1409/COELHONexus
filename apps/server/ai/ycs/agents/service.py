@@ -3,40 +3,34 @@ from __future__ import annotations
 
 import domains
 
-from collections.abc import Callable
-from json import JSONDecodeError, JSONDecoder
-from typing import Any, TypeVar
+import collections.abc
+import json
+import typing
 
-from deepagents import (
-    FilesystemPermission,
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
-from deepagents.backends import StateBackend
-from deepagents.profiles.harness import harness_profiles
-from langchain.agents.middleware import ModelCallLimitMiddleware
-from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, ValidationError
+import deepagents
+import deepagents.backends
+import deepagents.profiles.harness
+import langchain.agents.middleware
+import langchain_openai
+import pydantic
 
 from . import params
 from .. import middlewares
 
 
-Schema = TypeVar("Schema", bound = BaseModel)
+Schema = typing.TypeVar("Schema", bound = pydantic.BaseModel)
 
 
 def build(
     *,
-    model: Any,
+    model: typing.Any,
     name: str,
     system_prompt: str,
     response_format: type[Schema],
     model_call_limit: int = 3,
 ):
     """Build a no-tool DeepAgent with a typed result and locked-down filesystem."""
-    if not isinstance(model, ChatOpenAI):
+    if not isinstance(model, langchain_openai.ChatOpenAI):
         raise TypeError("YCS agents must use the configured ChatOpenAI model")
     model_name = getattr(model, "model_name", None)
     if not isinstance(model_name, str) or not model_name or ":" in model_name:
@@ -45,29 +39,29 @@ def build(
     # A DeepAgents harness is registered process-wide by model name. Clear the
     # entry before registering this role so another role cannot grant tools.
     key = f"openai:{model_name}"
-    harness_profiles._HARNESS_PROFILES.pop(key, None)
-    register_harness_profile(
+    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
+    deepagents.register_harness_profile(
         key,
-        HarnessProfile(
+        deepagents.HarnessProfile(
             base_system_prompt = "",
-            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
+            general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    agent = create_deep_agent(
+    agent = deepagents.create_deep_agent(
         model = model,
         tools = [],
         system_prompt = system_prompt,
         response_format = response_format,
         middleware = [
-            ModelCallLimitMiddleware(run_limit = model_call_limit, exit_behavior = "end"),
+            langchain.agents.middleware.ModelCallLimitMiddleware(run_limit = model_call_limit, exit_behavior = "end"),
             middlewares.middleware.CapacityWaitMiddleware(),
             middlewares.middleware.ToolAllowlistMiddleware(frozenset()),
         ],
         permissions = [
-            FilesystemPermission(operations = ["read"], paths = ["/**"], mode = "deny"),
-            FilesystemPermission(operations = ["write"], paths = ["/**"], mode = "deny"),
+            deepagents.FilesystemPermission(operations = ["read"], paths = ["/**"], mode = "deny"),
+            deepagents.FilesystemPermission(operations = ["write"], paths = ["/**"], mode = "deny"),
         ],
-        backend = StateBackend(),
+        backend = deepagents.backends.StateBackend(),
         name = name,
     )
     tool_node = agent.nodes.get("tools")
@@ -77,7 +71,7 @@ def build(
     return agent
 
 
-def structured_or_recovered(result: Any, schema: type[Schema]) -> Schema | None:
+def structured_or_recovered(result: typing.Any, schema: type[Schema]) -> Schema | None:
     """Read the typed response, recovering JSON text when a model skips structured output."""
     if not isinstance(result, dict):
         return None
@@ -85,7 +79,7 @@ def structured_or_recovered(result: Any, schema: type[Schema]) -> Schema | None:
     if structured is not None:
         try:
             return schema.model_validate(structured)
-        except ValidationError:
+        except pydantic.ValidationError:
             pass
     messages = result.get("messages")
     if not isinstance(messages, list):
@@ -113,37 +107,37 @@ def structured_or_recovered(result: Any, schema: type[Schema]) -> Schema | None:
                 break
     if not content:
         return None
-    decoder = JSONDecoder()
+    decoder = json.JSONDecoder()
     for start, character in enumerate(content):
         if character != "{":
             continue
         try:
             value, _ = decoder.raw_decode(content[start:])
-        except JSONDecodeError:
+        except json.JSONDecodeError:
             continue
         if not isinstance(value, dict):
             continue
         try:
             return schema.model_validate(value)
-        except ValidationError:
+        except pydantic.ValidationError:
             continue
     return None
 
 
 async def ask(
-    agent: Any,
+    agent: typing.Any,
     schema: type[Schema],
     payload: str,
     *,
     attempts: int = 2,
     wait_base_s: float = 1.0,
-    config: dict[str, Any] | None = None,
-    check: Callable[[Schema], bool] | None = None,
+    config: dict[str, typing.Any] | None = None,
+    check: collections.abc.Callable[[Schema], bool] | None = None,
 ) -> Schema:
     """Invoke a YCS DeepAgent, retrying transient failures and unusable structured answers."""
     request = {"messages": [{"role": "user", "content": payload}], "files": {}}
 
-    def usable(result: Any) -> bool:
+    def usable(result: typing.Any) -> bool:
         parsed = structured_or_recovered(result, schema)
         return parsed is not None and (check is None or check(parsed))
 

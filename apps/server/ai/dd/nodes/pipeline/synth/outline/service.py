@@ -12,10 +12,10 @@ from ..... import agents, backends, graphs, skills, tools
 import json
 import logging
 import time
-from hashlib import sha256
+import hashlib
 
 import numpy as np
-from langgraph.runtime import Runtime
+import langgraph.runtime
 
 
 logger = logging.getLogger(__name__)
@@ -71,7 +71,7 @@ async def outline_issues(
     return dag, issues + await semantic_h2_duplicates(outline)
 
 
-async def prepare(state: graphs.pipeline.synth.outline.states.OutlineState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.synth.outline.states.OutlineState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
@@ -125,7 +125,7 @@ async def prepare(state: graphs.pipeline.synth.outline.states.OutlineState, runt
             missing_sources = missing_sources,
         )}
     texts = [body for _, body in pairs]
-    source_digests = {key: sha256(body.encode("utf-8")).hexdigest() for key, body in pairs}
+    source_digests = {key: hashlib.sha256(body.encode("utf-8")).hexdigest() for key, body in pairs}
     sources_concat_md, truncated = domain.concat_sources(texts)
     n_vault_hashes = domain.count_code_blocks(texts)
     graphs.service.emit(
@@ -200,7 +200,7 @@ def source_files(pairs: list[tuple[str, str]]) -> dict[str, str]:
     return {domain.source_path(n, key): body for n, (key, body) in enumerate(pairs, start = 1)}
 
 
-async def draft(state: graphs.pipeline.synth.outline.states.OutlineState, runtime: Runtime[Context]) -> dict:
+async def draft(state: graphs.pipeline.synth.outline.states.OutlineState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     """One outliner run. Returns the new best outline (by `accept_repair`) and what is still wrong with it."""
     context = runtime.context
     data = context.scratch[params.STEP]
@@ -337,7 +337,7 @@ def hard_trim(outline: schemas.ChapterOutline, dag: schemas.OutlineDAG, cap: int
     return outline.model_copy(update = {"sections": kept})
 
 
-async def finalize(state: graphs.pipeline.synth.outline.states.OutlineState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.synth.outline.states.OutlineState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     """The best outline (else the heuristic fallback), flattened and trimmed, written under its content hash and as the latest pointer."""
     context = runtime.context
     data = context.scratch[params.STEP]

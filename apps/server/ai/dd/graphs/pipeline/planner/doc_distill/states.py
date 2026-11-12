@@ -3,10 +3,10 @@ from __future__ import annotations
 from . import entities
 
 import operator
-from typing import Annotated, TypedDict
+import typing
 
 
-class DistillState(TypedDict, total = False):
+class DistillState(typing.TypedDict, total = False):
     framework_slug: str
     thread_id: str
     raw_files: list[str]
@@ -20,4 +20,4 @@ class DistillState(TypedDict, total = False):
     cached: dict[str, dict]         # page key → distillate stored by an earlier run
     todo: list[str]                 # page keys still to distill
     started: float
-    results: Annotated[list[entities.DistillResult], operator.add]
+    results: typing.Annotated[list[entities.DistillResult], operator.add]

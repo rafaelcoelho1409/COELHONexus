@@ -2,12 +2,12 @@
 from __future__ import annotations
 from . import versions
 
-from typing import Literal, Optional
+import typing
 
-from pydantic import BaseModel, Field
+import pydantic
 
 
-HaltReason = Literal[
+HaltReason = typing.Literal[
     "chapter_passed",          # score threshold and all required gates pass: nothing to review
     "reviewer_halt",           # the reviewer found no rewrite that would help: ship the best draft so far
     "targeted_revision",       # the reviewer named the sections to write again
@@ -16,22 +16,22 @@ HaltReason = Literal[
 ]
 
 
-class Revision(BaseModel):
+class Revision(pydantic.BaseModel):
     """One section the next iteration writes again, and what it must fix."""
     section_id: str
     instruction: str
 
 
-class MGSRDecision(BaseModel):
+class MGSRDecision(pydantic.BaseModel):
     """What the CoRefine loop does with the chapter: halt (render it) or rewrite the named sections / the whole chapter."""
     halt:              bool
     halt_reason:       HaltReason
     confidence:        float
-    revisions:         list[Revision] = Field(default_factory = list)
+    revisions:         list[Revision] = pydantic.Field(default_factory = list)
     rationale_overall: str = ""
 
 
-class MGSRReplan(BaseModel):
+class MGSRReplan(pydantic.BaseModel):
     """Full replan blob persisted to MinIO."""
     schema_version:           str = versions.MGSR_SCHEMA_VERSION
     prompt_version:           str = versions.MGSR_PROMPT_VERSION
@@ -40,8 +40,8 @@ class MGSRReplan(BaseModel):
     framework_slug:           str
     iteration:                int = 0
     decision:                 MGSRDecision
-    deployment:               Optional[str] = None
-    wall_ms:                  Optional[int] = None
+    deployment:               typing.Optional[str] = None
+    wall_ms:                  typing.Optional[int] = None
     # Triggering input snapshot (for downstream debugging).
     checklist_pass_rate:      float
     checklist_chapter_passed: bool

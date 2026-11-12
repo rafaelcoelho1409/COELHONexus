@@ -1,18 +1,18 @@
 """sawc_derive graph node: runs the derive subgraph (a code_deriver agent per thin code block), and the routes between its steps."""
 from __future__ import annotations
-from domains.dd.pipeline.observability.service import traced_synth
+import domains.dd.pipeline.observability.service
 from . import params, service
 from ..... import graphs
 
-from langgraph.graph import END
-from langgraph.runtime import Runtime
-from langgraph.types import Send
+import langgraph.graph
+import langgraph.runtime
+import langgraph.types
 
 
-@traced_synth("sawc_derive")
+@domains.dd.pipeline.observability.service.traced_synth("sawc_derive")
 async def sawc_derive(
     state: graphs.pipeline.synth.states.SynthState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     result = await graphs.pipeline.synth.sawc_derive.graphs.sawc_derive_graph().ainvoke(
         {
@@ -28,36 +28,36 @@ async def sawc_derive(
 
 async def prepare(
     state: graphs.pipeline.synth.sawc_derive.states.DeriveState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.prepare(state, runtime)
 
 
 async def derive_subtopic(
     state: dict,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.derive_subtopic(state, runtime)
 
 
 async def finalize(
     state: graphs.pipeline.synth.sawc_derive.states.DeriveState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.finalize(state, runtime)
 
 
 async def capstone(
     state: graphs.pipeline.synth.sawc_derive.states.DeriveState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.capstone(state, runtime)
 
 
 def after_prepare(graph_state: graphs.pipeline.synth.sawc_derive.states.DeriveState):
     if graph_state.get("finished"):
-        return END
+        return langgraph.graph.END
     count = graph_state.get("n_candidates", 0)
     if not count:
         return "finalize"
-    return [Send("derive_subtopic", {"index": index}) for index in range(count)]
+    return [langgraph.types.Send("derive_subtopic", {"index": index}) for index in range(count)]

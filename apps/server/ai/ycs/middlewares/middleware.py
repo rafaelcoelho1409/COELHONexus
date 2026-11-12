@@ -5,15 +5,15 @@ import domains
 
 import asyncio
 import logging
-from typing import Any
+import typing
 
-from langchain.agents.middleware import AgentMiddleware, AgentState
+import langchain.agents.middleware
 
 
 logger = logging.getLogger(__name__)
 
 
-class CapacityWaitMiddleware(AgentMiddleware[AgentState, Any, Any]):
+class CapacityWaitMiddleware(langchain.agents.middleware.AgentMiddleware[langchain.agents.middleware.AgentState, typing.Any, typing.Any]):
     """Wait for the configured Rotator pool's Retry-After when no arm is available."""
 
     def __init__(self) -> None:
@@ -49,7 +49,7 @@ class CapacityWaitMiddleware(AgentMiddleware[AgentState, Any, Any]):
         raise AssertionError("unreachable capacity-wait state")
 
 
-class ToolAllowlistMiddleware(AgentMiddleware[AgentState, Any, Any]):
+class ToolAllowlistMiddleware(langchain.agents.middleware.AgentMiddleware[langchain.agents.middleware.AgentState, typing.Any, typing.Any]):
     """Expose only the role's explicitly allowed tools to the model."""
 
     def __init__(self, allowed: frozenset[str]) -> None:
@@ -57,7 +57,7 @@ class ToolAllowlistMiddleware(AgentMiddleware[AgentState, Any, Any]):
         self._allowed = frozenset(allowed)
 
     @staticmethod
-    def _name(tool: Any) -> str | None:
+    def _name(tool: typing.Any) -> str | None:
         name = tool.get("name") if isinstance(tool, dict) else getattr(tool, "name", None)
         return name if isinstance(name, str) else None
 

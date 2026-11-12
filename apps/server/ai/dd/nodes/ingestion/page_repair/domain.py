@@ -6,13 +6,13 @@ from .. import page_audit
 from .... import agents
 
 import re
-from collections.abc import Callable
-from typing import Any
+import collections.abc
+import typing
 
-from pydantic import ValidationError
+import pydantic
 
 
-def repairable_assessment(assessment: dict[str, Any]) -> dict[str, Any]:
+def repairable_assessment(assessment: dict[str, typing.Any]) -> dict[str, typing.Any]:
     """The audit narrowed to findings a patch could pass: an eligible category the auditor is confident enough about."""
     return {
         **assessment,
@@ -73,7 +73,7 @@ def duplicate_survives(markdown: str, evidence: str, target: str, replacement: s
 def patch_rejection(
     markdown: str,
     source_sha256: str,
-    known_issues: dict[str, dict[str, Any]],
+    known_issues: dict[str, dict[str, typing.Any]],
     patch: agents.schemas.PagePatch,
 ) -> tuple[str, int, int]:
     """Why `patch` cannot be applied to `markdown` on its own ("" when it can) and the span it would replace. The same rules decide
@@ -115,12 +115,12 @@ def patch_rejection(
     return "", start, end
 
 
-def check_patch(markdown: str, source_sha256: str, assessment: dict[str, Any], fields: dict[str, Any]) -> str:
+def check_patch(markdown: str, source_sha256: str, assessment: dict[str, typing.Any], fields: dict[str, typing.Any]) -> str:
     """Why a patch built from `fields` would not be applied to `markdown`, with what to change ("" when it would be). This is the repairer's
     `check_patch` tool; the final gate (`apply_patches`) applies the same rules to its answer."""
     try:
         patch = agents.schemas.PagePatch(source_sha256 = source_sha256, rationale = "checked by the repairer", **fields)
-    except ValidationError as error:
+    except pydantic.ValidationError as error:
         return "; ".join(f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}" for item in error.errors())
     known_issues = {issue["issue_id"]: issue for issue in assessment.get("issues", [])}
     reason, _, _ = patch_rejection(markdown, source_sha256, known_issues, patch)
@@ -133,9 +133,9 @@ def check_patch(markdown: str, source_sha256: str, assessment: dict[str, Any], f
 def apply_patches(
     markdown: str,
     source_sha256: str,
-    assessment: dict[str, Any],
+    assessment: dict[str, typing.Any],
     value: object,
-) -> tuple[str, dict[str, Any]]:
+) -> tuple[str, dict[str, typing.Any]]:
     batch = agents.schemas.PagePatchBatch.model_validate(value)
     known_issues = {issue["issue_id"]: issue for issue in assessment["issues"]}
     accepted = []
@@ -172,9 +172,9 @@ def apply_patches(
 def output_title(
     markdown: str,
     slug: str,
-    assessment: dict[str, Any],
+    assessment: dict[str, typing.Any],
     *,
-    fallback: Callable[[str, str], str],
+    fallback: collections.abc.Callable[[str, str], str],
 ) -> str:
     # The auditor is told to quote the title from the page, and some quote the heading line with its `# ` marker.
     proposed = re.sub(r"^#{1,6}\s+", "", str(assessment.get("title") or "").strip()).strip()

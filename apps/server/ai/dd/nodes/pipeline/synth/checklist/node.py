@@ -1,18 +1,18 @@
 """checklist_eval graph node: runs the checklist subgraph (the deterministic gates and the chapter_judge agent), and the routes between its steps."""
 from __future__ import annotations
-from domains.dd.pipeline.observability.service import traced_synth
+import domains.dd.pipeline.observability.service
 from . import domain, params, service
 from ..... import graphs
 
-from langgraph.graph import END
-from langgraph.runtime import Runtime
-from langgraph.types import Send
+import langgraph.graph
+import langgraph.runtime
+import langgraph.types
 
 
-@traced_synth("checklist_eval")
+@domains.dd.pipeline.observability.service.traced_synth("checklist_eval")
 async def checklist_eval(
     state: graphs.pipeline.synth.states.SynthState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     result = await graphs.pipeline.synth.checklist.graphs.checklist_graph().ainvoke(
         {
@@ -38,41 +38,41 @@ async def checklist_eval(
 
 async def prepare(
     state: graphs.pipeline.synth.checklist.states.ChecklistState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.prepare(state, runtime)
 
 
 async def judge(
     state: graphs.pipeline.synth.checklist.states.ChecklistState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.judge(state, runtime)
 
 
 async def judge_again(
     state: dict,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.judge_again(state, runtime)
 
 
 async def majority(
     state: graphs.pipeline.synth.checklist.states.ChecklistState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.majority(state, runtime)
 
 
 async def finalize(
     state: graphs.pipeline.synth.checklist.states.ChecklistState,
-    runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
+    runtime: langgraph.runtime.Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
     return await service.finalize(state, runtime)
 
 
 def after_prepare(graph_state: graphs.pipeline.synth.checklist.states.ChecklistState) -> str:
-    return END if graph_state.get("finished") else "judge"
+    return langgraph.graph.END if graph_state.get("finished") else "judge"
 
 
 def after_judge(graph_state: graphs.pipeline.synth.checklist.states.ChecklistState):
@@ -81,5 +81,5 @@ def after_judge(graph_state: graphs.pipeline.synth.checklist.states.ChecklistSta
     results = [domain.schemas.CriterionResult.model_validate(r) for r in run.get("results") or []]
     pre = graph_state.get("pre_results") or []
     if run.get("answered") and domain.wants_second_opinions(results, pre_passed = sum(1 for r in pre if r["passed"]), pre_total = len(pre)):
-        return [Send("judge_again", {"run": n}) for n in range(1, params.JUDGE_SECOND_OPINIONS + 1)]
+        return [langgraph.types.Send("judge_again", {"run": n}) for n in range(1, params.JUDGE_SECOND_OPINIONS + 1)]
     return "finalize"

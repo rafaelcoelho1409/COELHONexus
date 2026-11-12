@@ -4,16 +4,16 @@ from . import params, patterns, versions
 
 import hashlib
 import re
-from collections import Counter
-from typing import Optional
+import collections
+import typing
 
 
 
 
 def code_blocks_preserved(original: str, patched: str) -> bool:
     """True when every fenced code block in `original` appears byte-identical in `patched` (as a multiset). Chapter code is materialized byte-exact from the vault; a prose patch that reflows or rewrites it silently breaks that guarantee, so such a patch must be rejected rather than shipped."""
-    before = Counter(m.group(0) for m in patterns.FENCED_BLOCK_RE.finditer(original or ""))
-    after = Counter(m.group(0) for m in patterns.FENCED_BLOCK_RE.finditer(patched or ""))
+    before = collections.Counter(m.group(0) for m in patterns.FENCED_BLOCK_RE.finditer(original or ""))
+    after = collections.Counter(m.group(0) for m in patterns.FENCED_BLOCK_RE.finditer(patched or ""))
     return not (before - after)
 
 
@@ -61,7 +61,7 @@ def editable_paragraph(par: str) -> bool:
     return bool(p) and not p.startswith(("```", "~~~", "#", "- ", "* ", "|", ">", "<!--", "!["))
 
 
-def paragraph_for_quote(paragraphs: list[str], quote: str) -> Optional[int]:
+def paragraph_for_quote(paragraphs: list[str], quote: str) -> typing.Optional[int]:
     """Index of the first editable paragraph that contains the quoted words."""
     q = _norm(quote)
     for i, par in enumerate(paragraphs):
@@ -70,7 +70,7 @@ def paragraph_for_quote(paragraphs: list[str], quote: str) -> Optional[int]:
     return None
 
 
-def paragraph_patch_ok(original: str, edited: Optional[str]) -> bool:
+def paragraph_patch_ok(original: str, edited: typing.Optional[str]) -> bool:
     """The edited paragraph is non-empty prose of about the original's length with no code fence."""
     if not edited or not edited.strip() or "```" in edited or "~~~" in edited:
         return False

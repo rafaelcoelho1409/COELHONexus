@@ -1,13 +1,13 @@
 """Factory for the BD evidence-relevance grading DeepAgent."""
 from __future__ import annotations
 
-import ai
+from ..... import bd
 
 
 def grader(model):
-    return ai.bd.agents.ask.service.build(
+    return bd.agents.ask.service.build(
         model = model, name = "bd_ask_evidence_grader",
-        system_prompt = ai.bd.prompts.ask.grader.prompts.SYSTEM_PROMPT,
-        response_format = ai.bd.agents.ask.schemas.EvidenceGrades,
-        model_call_limit = ai.bd.agents.ask.params.GRADER_MODEL_CALLS,
+        system_prompt = bd.prompts.ask.grader.prompts.SYSTEM_PROMPT,
+        response_format = bd.agents.ask.schemas.EvidenceGrades,
+        model_call_limit = bd.agents.ask.params.GRADER_MODEL_CALLS,
     )

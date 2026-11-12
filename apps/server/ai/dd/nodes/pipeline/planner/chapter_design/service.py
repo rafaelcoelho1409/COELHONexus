@@ -8,10 +8,10 @@ import asyncio
 import json
 import logging
 import time
-from collections import Counter, defaultdict
-from hashlib import sha256
+import collections
+import hashlib
 
-from langgraph.runtime import Runtime
+import langgraph.runtime
 
 
 logger = logging.getLogger(__name__)
@@ -151,7 +151,7 @@ def _answer_issues(answer: dict | None, candidates: dict, cards: list[dict]) -> 
             f"{valid_ids}. Assign groups only from that same partition."
         ]
     groups = {group["group_id"]: group for group in selected["groups"]}
-    counts: dict[str, int] = defaultdict(int)
+    counts: dict[str, int] = collections.defaultdict(int)
     issues = []
     titles = []
     for chapter in (answer or {}).get("chapters") or []:
@@ -169,7 +169,7 @@ def _answer_issues(answer: dict | None, candidates: dict, cards: list[dict]) -> 
         issues.append(f"Each group may appear once; repeated: {repeated[:12]}.")
     if unknown:
         issues.append(f"Use only supplied group ids; unknown: {unknown[:12]}.")
-    duplicate_titles = sorted(title for title, count in Counter(titles).items() if count > 1)
+    duplicate_titles = sorted(title for title, count in collections.Counter(titles).items() if count > 1)
     if duplicate_titles:
         issues.append(f"Give each chapter a unique title so prerequisite references resolve: {duplicate_titles[:8]}.")
     chapters = (answer or {}).get("chapters") or []
@@ -228,8 +228,8 @@ def _answer_issues(answer: dict | None, candidates: dict, cards: list[dict]) -> 
 
 
 def _code_ledger_facts(ledger, page_order: dict[str, int], tutorial_keys: set[str]) -> tuple[dict[str, int], dict[str, list[dict]]]:
-    count_by_page: dict[str, int] = defaultdict(int)
-    facts_by_page: dict[str, list[dict]] = defaultdict(list)
+    count_by_page: dict[str, int] = collections.defaultdict(int)
+    facts_by_page: dict[str, list[dict]] = collections.defaultdict(list)
     for digest in ledger.must_teach:
         block = ledger.blocks[digest]
         owners = sorted((key for key in block.pages if key in tutorial_keys), key = lambda key: page_order.get(key, 1 << 30))
@@ -444,7 +444,7 @@ def _repair_request(
     return request, [requested_index]
 
 
-async def chapter_design_run(state: graphs.pipeline.planner.states.PlannerState, runtime: Runtime[Context]) -> dict:
+async def chapter_design_run(state: graphs.pipeline.planner.states.PlannerState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug") or ""
@@ -639,7 +639,7 @@ async def chapter_design_run(state: graphs.pipeline.planner.states.PlannerState,
             })
             proposals[best_idx]["reading_minutes"] += float(page.get("reading_minutes") or 0.0)
 
-    manifest = sha256(json.dumps({
+    manifest = hashlib.sha256(json.dumps({
         "cards": card_ref, "candidate": candidates, "design": design_answer,
         "version": versions.PROMPT_VERSION,
     }, sort_keys = True, ensure_ascii = False).encode("utf-8")).hexdigest()[:20]

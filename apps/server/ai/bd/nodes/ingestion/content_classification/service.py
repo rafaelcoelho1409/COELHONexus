@@ -7,8 +7,8 @@ import inspect
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable
-from typing import Any, Protocol
+import collections.abc
+import typing
 
 import domains
 
@@ -17,16 +17,16 @@ from . import domain
 
 
 logger = logging.getLogger(__name__)
-PageReader = Callable[[str], str | None | Awaitable[str | None]]
-ArtifactWriter = Callable[[str, str, str], Any]
-ArtifactExists = Callable[[str], Awaitable[bool]]
+PageReader = collections.abc.Callable[[str], str | None | collections.abc.Awaitable[str | None]]
+ArtifactWriter = collections.abc.Callable[[str, str, str], typing.Any]
+ArtifactExists = collections.abc.Callable[[str], collections.abc.Awaitable[bool]]
 
 
-class ContentClassifier(Protocol):
-    async def ainvoke(self, input: dict[str, Any], config: dict[str, Any] | None = None) -> dict[str, Any]: ...
+class ContentClassifier(typing.Protocol):
+    async def ainvoke(self, input: dict[str, typing.Any], config: dict[str, typing.Any] | None = None) -> dict[str, typing.Any]: ...
 
 
-def _json_body(value: Any) -> str:
+def _json_body(value: typing.Any) -> str:
     return json.dumps(value, ensure_ascii = False, separators = (",", ":"), sort_keys = True)
 
 
@@ -54,7 +54,7 @@ async def classify_content(
     artifact_exists: ArtifactExists,
     classifier: ContentClassifier,
     progress_callback = None,
-) -> dict[str, Any]:
+) -> dict[str, typing.Any]:
     """Classify all completed normalized pages; failures and uncertainty keep pages in the Distill set."""
     book_id = state.get("book_id")
     extraction_run_id = state.get("extraction_run_id")
@@ -114,7 +114,7 @@ async def classify_content(
     title = str(state.get("book_metadata", {}).get("title") or state.get("source_metadata", {}).get("title") or "")
     run_id = agentic_run_id
 
-    async def classify_one(page_result: dict[str, Any]) -> dict[str, Any]:
+    async def classify_one(page_result: dict[str, typing.Any]) -> dict[str, typing.Any]:
         page_number = page_result.get("page")
         if type(page_number) is not int or page_number not in refs_by_page:
             raise ValueError("a normalized page is missing its physical page number")
@@ -201,7 +201,7 @@ async def classify_content(
                 progress_callback, kind = "content_classification", page = page_number, status = status,
             )
 
-    async def classify_bounded(page_result: dict[str, Any]) -> dict[str, Any]:
+    async def classify_bounded(page_result: dict[str, typing.Any]) -> dict[str, typing.Any]:
         async with semaphore:
             return await classify_one(page_result)
 

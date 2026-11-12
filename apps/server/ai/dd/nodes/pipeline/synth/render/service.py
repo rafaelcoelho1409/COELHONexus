@@ -13,7 +13,7 @@ import json
 import logging
 import time
 
-from langgraph.runtime import Runtime
+import langgraph.runtime
 
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ def normalizable(fence_text: str) -> tuple | None:
     return open_marker, info_string, body, close_marker, lang
 
 
-async def prepare(state: graphs.pipeline.synth.render.states.RenderState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.synth.render.states.RenderState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
@@ -209,7 +209,7 @@ async def prepare(state: graphs.pipeline.synth.render.states.RenderState, runtim
     }
 
 
-async def normalize_block(state: dict, runtime: Runtime[Context]) -> dict:
+async def normalize_block(state: dict, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     """Repair one distinct code block. The repaired fence is cached by content hash; a block the agent cannot repair, or answers badly, ships as it came (still byte-exact for the audit)."""
     context = runtime.context
     data = context.scratch[params.STEP]
@@ -275,7 +275,7 @@ async def publish_best_checklist(blobs, slug: str, chapter_id: str) -> bool:
         return False
 
 
-async def finalize(state: graphs.pipeline.synth.render.states.RenderState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.synth.render.states.RenderState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     data = context.scratch[params.STEP]

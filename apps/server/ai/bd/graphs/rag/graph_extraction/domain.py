@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from ai.bd.agents.rag.graph_extractor import schemas
+from .... import agents
 import domains
 
 
@@ -11,9 +11,9 @@ _SPACE = re.compile(r"\s+")
 
 
 def validate_extraction(
-    extraction: schemas.GraphExtraction,
+    extraction: agents.rag.graph_extractor.schemas.GraphExtraction,
     source_evidence: list[str],
-) -> tuple[schemas.GraphExtraction, list[str]]:
+) -> tuple[agents.rag.graph_extractor.schemas.GraphExtraction, list[str]]:
     """Retain only entities and relationships with exact source quotations and known endpoints."""
     def is_supported(quote: str) -> bool:
         return any(domains.bd.distill.domain.quote_is_supported(quote, item) for item in source_evidence)
@@ -44,5 +44,5 @@ def validate_extraction(
             continue
         accepted_relations.append(relation)
 
-    accepted = schemas.GraphExtraction(entities = accepted_entities, relationships = accepted_relations)
+    accepted = agents.rag.graph_extractor.schemas.GraphExtraction(entities = accepted_entities, relationships = accepted_relations)
     return accepted, issues

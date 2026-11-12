@@ -1,4 +1,4 @@
-from pathlib import Path
+import pathlib
 
 
 # What the architect reads to decide when to hand work over; the critic itself sees SYSTEM_PROMPT.
@@ -8,4 +8,4 @@ DESCRIPTION = (
     "lens 'structure'. Include the whole outline (every chapter's title, description and key concepts) in the text: it sees only "
     "that text and the files under /work/ and /corpus/. It changes nothing."
 )
-SYSTEM_PROMPT = (Path(__file__).parent / "SYSTEM.md").read_text(encoding = "utf-8").strip()
+SYSTEM_PROMPT = (pathlib.Path(__file__).parent / "SYSTEM.md").read_text(encoding = "utf-8").strip()

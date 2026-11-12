@@ -2,18 +2,18 @@
 from __future__ import annotations
 
 import operator
-from typing import Annotated, Optional, TypedDict
+import typing
 
 
-class RenderState(TypedDict, total = False):
+class RenderState(typing.TypedDict, total = False):
     framework_slug: str
     chapter_id: str
     thread_id: str
-    best_seen_sawc_path: Optional[str]
-    chapter_path: Optional[str]
-    chapter_stats: Optional[dict]
-    status: Optional[str]
-    error: Optional[str]
+    best_seen_sawc_path: typing.Optional[str]
+    chapter_path: typing.Optional[str]
+    chapter_stats: typing.Optional[dict]
+    status: typing.Optional[str]
+    error: typing.Optional[str]
 
     finished: bool                  # answered without the steps below (a failure, or the stage's blob is current)
     started: float
@@ -24,4 +24,4 @@ class RenderState(TypedDict, total = False):
     mgsr_manifest_hash: str
     chapter_title: str
     todo: list[str]                 # vault hashes whose code is still to be normalized
-    normalized: Annotated[list[dict], operator.add]
+    normalized: typing.Annotated[list[dict], operator.add]

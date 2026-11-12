@@ -37,14 +37,14 @@ always starts on time regardless of how many sub-questions are still
 in flight."""
 from __future__ import annotations
 import domains
-import ai
+from ..... import ycs
 
 import asyncio
 import logging
 import os
 
-from langchain_core.runnables import RunnableConfig
-from langgraph.graph import END, StateGraph
+import langchain_core.runnables
+import langgraph.graph
 
 
 logger = logging.getLogger(__name__)
@@ -143,7 +143,7 @@ def build_adaptive_rag_graph(
             channel_ids = channel_ids or None,
         )
 
-    workflow = StateGraph(ai.ycs.graphs.ask.adaptive.states.AdaptiveAskState)
+    workflow = langgraph.graph.StateGraph(ycs.graphs.ask.adaptive.states.AdaptiveAskState)
 
     # Bind deps via async closures — LangGraph requires the node value
     # to be a true async callable.
@@ -167,7 +167,7 @@ def build_adaptive_rag_graph(
     async def _direct(s):
         return await nodes.direct_answer.node.direct_answer(s, llm_fast or llm)
 
-    async def _run_standard(s, config: RunnableConfig):
+    async def _run_standard(s, config: langchain_core.runnables.RunnableConfig):
         # `config` arg is auto-injected by LangGraph so we
         # can forward the user's `max_retries` down to the scoped
         # STANDARD sub-graph (previously the override silently fell
@@ -178,7 +178,7 @@ def build_adaptive_rag_graph(
 
     async def _plan(s):
         try:
-            return await ai.ycs.nodes.ask.planner.plan_research(s, llm)
+            return await ycs.nodes.ask.planner.plan_research(s, llm)
         except Exception as error:  # noqa: BLE001 — retain the existing bounded fallback planner.
             logger.warning(
                 f"[ycs:adaptive] DeepAgents planner unavailable; using legacy planner: "
@@ -235,7 +235,7 @@ def build_adaptive_rag_graph(
         return await nodes.synthesize.node.synthesize(s, llm)
 
     async def _critic(s):
-        return await ai.ycs.nodes.ask.critic.critic(s, llm)
+        return await ycs.nodes.ask.critic.critic(s, llm)
 
     workflow.add_node("prepare",         _prepare)
     workflow.add_node("direct_answer",   _direct)
@@ -260,11 +260,11 @@ def build_adaptive_rag_graph(
         "direct_answer",
         _route_after_direct,
         {
-            "end":            END,
+            "end":            langgraph.graph.END,
             "run_standard":   "run_standard",
         },
     )
-    workflow.add_edge("run_standard",  END)
+    workflow.add_edge("run_standard",  langgraph.graph.END)
     # DEEP: plan → run_subagents (bounded fan-out) → synthesize → critic
     # → END. Plain edge, not a conditional `Send()` fan-out — the
     # bounded-deadline orchestration happens INSIDE `_run_subagents`
@@ -273,6 +273,6 @@ def build_adaptive_rag_graph(
     workflow.add_edge("plan_research",  "run_subagents")
     workflow.add_edge("run_subagents",  "synthesize")
     workflow.add_edge("synthesize",     "critic")
-    workflow.add_edge("critic",         END)
+    workflow.add_edge("critic",         langgraph.graph.END)
 
     return workflow.compile()

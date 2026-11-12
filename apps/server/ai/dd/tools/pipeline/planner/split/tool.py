@@ -2,12 +2,12 @@
 from __future__ import annotations
 from . import schemas
 
-from collections.abc import Callable
+import collections.abc
 
-from langchain_core.tools import StructuredTool
+import langchain_core.tools
 
 
-def cluster_units_tool(cluster: Callable[[int], list[list[int]] | None], describe: Callable[[list[int]], str]) -> StructuredTool:
+def cluster_units_tool(cluster: collections.abc.Callable[[int], list[list[int]] | None], describe: collections.abc.Callable[[list[int]], str]) -> langchain_core.tools.StructuredTool:
     """`cluster_units(n_parts)`: `cluster` returns the groups of unit ids (None when the units do not cluster), `describe` renders one group's units."""
 
     async def cluster_units(n_parts: int) -> str:
@@ -16,7 +16,7 @@ def cluster_units_tool(cluster: Callable[[int], list[list[int]] | None], describ
             return "The units do not cluster into groups of the minimum size: partition them yourself by topic."
         return "\n\n".join(f"group {i} ({len(ids)} units):\n{describe(ids)}" for i, ids in enumerate(groups))
 
-    return StructuredTool.from_function(
+    return langchain_core.tools.StructuredTool.from_function(
         coroutine = cluster_units,
         name = "cluster_units",
         description = (
@@ -27,14 +27,14 @@ def cluster_units_tool(cluster: Callable[[int], list[list[int]] | None], describ
     )
 
 
-def validate_split_tool(check: Callable[[list[dict]], tuple[bool, str]]) -> StructuredTool:
+def validate_split_tool(check: collections.abc.Callable[[list[dict]], tuple[bool, str]]) -> langchain_core.tools.StructuredTool:
     """`validate_split(groups)`: `check` takes the proposed groups and returns (ok, reason)."""
 
     async def validate_split(groups: list[schemas.SplitGroupInput]) -> str:
         ok, reason = check([group.model_dump() for group in groups])
         return "The split is valid." if ok else f"The split is not valid: {reason}. Fix it and call validate_split again."
 
-    return StructuredTool.from_function(
+    return langchain_core.tools.StructuredTool.from_function(
         coroutine = validate_split,
         name = "validate_split",
         description = (

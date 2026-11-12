@@ -3,10 +3,10 @@ from __future__ import annotations
 from . import entities
 
 import operator
-from typing import Annotated, TypedDict
+import typing
 
 
-class SelectState(TypedDict, total = False):
+class SelectState(typing.TypedDict, total = False):
     framework_slug: str
     thread_id: str
     chapter_proposals_ref: str | None
@@ -22,4 +22,4 @@ class SelectState(TypedDict, total = False):
     round: int
     plans: list[entities.SplitPlanItem]      # chapters the next round of curators splits
     started: float
-    outcomes: Annotated[list[entities.SplitOutcome], operator.add]
+    outcomes: typing.Annotated[list[entities.SplitOutcome], operator.add]

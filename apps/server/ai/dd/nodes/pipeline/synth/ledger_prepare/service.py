@@ -1,6 +1,7 @@
 """Build the writer's section evidence from the chapter's canonical code ledger, without a source-router LLM call."""
 from __future__ import annotations
-import ai, domains
+from ...... import dd
+import domains
 from ..... import graphs
 
 import hashlib
@@ -9,7 +10,7 @@ import logging
 import re
 import time
 
-from langgraph.runtime import Runtime
+import langgraph.runtime
 
 
 logger = logging.getLogger(__name__)
@@ -53,7 +54,7 @@ def _facts(block, excerpt: str) -> list[str]:
     return facts[:4]
 
 
-async def ledger_prepare(state: graphs.pipeline.synth.states.SynthState, runtime: Runtime[Context]) -> dict:
+async def ledger_prepare(state: graphs.pipeline.synth.states.SynthState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     """Persist a digest-compatible artifact whose evidence assignments are fully determined by the ledger and outline."""
     context = runtime.context
     blobs = context.blobs
@@ -65,7 +66,7 @@ async def ledger_prepare(state: graphs.pipeline.synth.states.SynthState, runtime
             "ledger_path", "ledger_stats", "no_slug_or_chapter_id", "framework_slug or chapter_id missing from SynthState", started,
         )
 
-    outline_key = ai.dd.nodes.pipeline.synth.outline.keys.latest_blob_key(slug, chapter_id)
+    outline_key = dd.nodes.pipeline.synth.outline.keys.latest_blob_key(slug, chapter_id)
     outline = await domains.dd.pipeline.storage.service.load_json(blobs, outline_key)
     if outline is None:
         return graphs.pipeline.synth.service.failure(
@@ -143,8 +144,8 @@ async def ledger_prepare(state: graphs.pipeline.synth.states.SynthState, runtime
         "assignments": [(section_id, section.get("code_refs") or []) for section_id, section in section_by_id.items()],
     }
     manifest_hash = hashlib.sha256(json.dumps(manifest_payload, sort_keys = True).encode("utf-8")).hexdigest()[:16]
-    latest_key = ai.dd.nodes.pipeline.synth.ledger_prepare.keys.latest_blob_key(slug, chapter_id)
-    versioned_key = ai.dd.nodes.pipeline.synth.ledger_prepare.keys.versioned_blob_key(slug, chapter_id, manifest_hash)
+    latest_key = dd.nodes.pipeline.synth.ledger_prepare.keys.latest_blob_key(slug, chapter_id)
+    versioned_key = dd.nodes.pipeline.synth.ledger_prepare.keys.versioned_blob_key(slug, chapter_id, manifest_hash)
     payload = {
         "schema_version": "synth-v2-code-ledger-1",
         "prompt_version": "deterministic-code-ledger-v1",

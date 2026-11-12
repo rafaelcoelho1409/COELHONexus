@@ -1,12 +1,12 @@
 """Planner v2 chapter-design graph node."""
 from __future__ import annotations
-from domains.dd.pipeline.observability.service import traced
+import domains.dd.pipeline.observability.service
 from . import service
 from ..... import graphs
 
-from langgraph.runtime import Runtime
+import langgraph.runtime
 
 
-@traced("chapter_design")
-async def chapter_design(state: graphs.pipeline.planner.states.PlannerState, runtime: Runtime[graphs.pipeline.planner.entities.PlannerContext]) -> dict:
+@domains.dd.pipeline.observability.service.traced("chapter_design")
+async def chapter_design(state: graphs.pipeline.planner.states.PlannerState, runtime: langgraph.runtime.Runtime[graphs.pipeline.planner.entities.PlannerContext]) -> dict:
     return await service.chapter_design_run(state, runtime)

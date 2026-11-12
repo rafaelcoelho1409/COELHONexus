@@ -3,26 +3,26 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+import typing
 
 import domains
 
 from .... import graphs
 
 
-def _json_body(value: Any) -> str:
+def _json_body(value: typing.Any) -> str:
     return json.dumps(value, ensure_ascii = False, separators = (",", ":"), sort_keys = True)
 
 
 async def publish_report(
     dependencies: graphs.distill.entities.DistillDependencies,
-    state: dict[str, Any],
-) -> dict[str, Any]:
+    state: dict[str, typing.Any],
+) -> dict[str, typing.Any]:
     storage = dependencies.storage
     book_id = state["book_id"]
     run_id = state["run_id"]
     ingestion_ai_run_id = state["ingestion_ai_run_id"]
-    learning_units: dict[str, dict[str, Any]] = {}
+    learning_units: dict[str, dict[str, typing.Any]] = {}
     unit_refs = state.get("completed_units", [])
     for ref in unit_refs:
         artifact_key = domains.bd.distill.keys.learning_unit_key(book_id, run_id, ref["unit_id"])
@@ -76,7 +76,7 @@ async def publish_report(
             return "agent_inference"
         return "book"
 
-    def report_lesson(item: dict[str, Any]) -> domains.bd.distill.schemas.ReportLesson:
+    def report_lesson(item: dict[str, typing.Any]) -> domains.bd.distill.schemas.ReportLesson:
         unit_ids = item["learning_unit_ids"]
         refs = source_refs(unit_ids)
         supporting = [learning_units[unit_id] for unit_id in unit_ids]
@@ -102,6 +102,7 @@ async def publish_report(
 
     chapters = []
     chapter_charts = []
+    visual_review_notes = []
     ordered_chapters = []
     for ref in state.get("completed_chapters", []):
         artifact = json.loads(await storage.read_text(ref["artifact_key"]))
@@ -112,6 +113,11 @@ async def publish_report(
         ), artifact, chapter))
     ordered_chapters.sort(key = lambda item: item[0])
     for _, artifact, chapter in ordered_chapters:
+        visual_review_notes.extend(
+            f"Chapter {artifact['title']}: {flag}"
+            for flag in artifact.get("visual_review_flags", [])
+            if isinstance(flag, str) and flag
+        )
         diagrams = [
             diagram.model_copy(update = {
                 "nodes": [
@@ -158,7 +164,8 @@ async def publish_report(
     source_pages = state.get("source_pages", [])
     uncovered_pages = sorted({page["page_number"] for page in source_pages} - set(covered_pages))
     review_notes = [
-        "This is an automated draft. No representative human-reviewed evaluation set has been run for this book."
+        "This is an automated draft. No representative human-reviewed evaluation set has been run for this book.",
+        *visual_review_notes,
     ]
     review_notes.append(
         f"Distill processed {state['selected_page_count']} of {state['expected_page_count']} physical pages "

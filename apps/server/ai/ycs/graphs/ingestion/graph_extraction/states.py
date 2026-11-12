@@ -1,10 +1,10 @@
 """Typed transient state for one transcript graph extraction."""
 from __future__ import annotations
 
-from typing import TypedDict
+import typing
 
 
-class GraphExtractionState(TypedDict, total = False):
+class GraphExtractionState(typing.TypedDict, total = False):
     transcript: str
     metadata: dict[str, str]
     candidate_extraction: dict

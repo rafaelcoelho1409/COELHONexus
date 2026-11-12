@@ -1,18 +1,18 @@
 """State of the mgsr subgraph."""
 from __future__ import annotations
 
-from typing import Optional, TypedDict
+import typing
 
 
-class MgsrState(TypedDict, total = False):
+class MgsrState(typing.TypedDict, total = False):
     framework_slug: str
     chapter_id: str
     thread_id: str
-    refine_iter: Optional[int]
-    mgsr_path: Optional[str]
-    mgsr_stats: Optional[dict]
-    status: Optional[str]
-    error: Optional[str]
+    refine_iter: typing.Optional[int]
+    mgsr_path: typing.Optional[str]
+    mgsr_stats: typing.Optional[dict]
+    status: typing.Optional[str]
+    error: typing.Optional[str]
 
     finished: bool                  # answered without the steps below (a failure, or the stage's blob is current)
     trivial: bool                   # the chapter passed: no review
@@ -27,5 +27,5 @@ class MgsrState(TypedDict, total = False):
     chapter_passed: bool
     failed_names: list[str]
     n_failed: int
-    decision: Optional[dict]
-    deployment: Optional[str]
+    decision: typing.Optional[dict]
+    deployment: typing.Optional[str]

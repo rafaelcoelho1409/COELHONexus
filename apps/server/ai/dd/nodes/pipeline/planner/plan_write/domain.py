@@ -4,7 +4,7 @@ from __future__ import annotations
 from . import params, patterns, versions
 
 import json
-from hashlib import sha256
+import hashlib
 
 import numpy as np
 
@@ -279,7 +279,7 @@ def sanitize_chapters(
     for i, ch in enumerate(sanitized, start = 1):
         ch["order"] = i
         if stable_identity:
-            identity = sha256("\n".join(ch["sources"]).encode("utf-8")).hexdigest()[:12]
+            identity = hashlib.sha256("\n".join(ch["sources"]).encode("utf-8")).hexdigest()[:12]
             ch["id"] = f"ch-{identity}"
         else:
             ch["id"] = f"ch-{i:02d}-{slugify(ch['title'])}"
@@ -296,4 +296,4 @@ def compute_manifest_hash(
         f"chapter_plan={chapter_plan_ref}|"
         f"schema={schema_version}|prompt={versions.PROMPT_VERSION}"
     )
-    return sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]

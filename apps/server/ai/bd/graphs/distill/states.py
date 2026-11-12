@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import operator
-from typing import Annotated, Any, TypedDict
+import typing
 
 import domains
 
 
-class DistillRunState(TypedDict, total = False):
+class DistillRunState(typing.TypedDict, total = False):
     book_id: str
     run_id: str
     extraction_run_id: str
@@ -23,17 +23,17 @@ class DistillRunState(TypedDict, total = False):
     selected_page_count: int
     run_created_at: float
     title: str
-    source_chapters: list[dict[str, Any]]
+    source_chapters: list[dict[str, typing.Any]]
     source_pages: list[domains.bd.distill.entities.SourcePage]
     unit_refs: list[domains.bd.distill.entities.UnitRef]
-    completed_units: Annotated[list[domains.bd.distill.entities.UnitRef], operator.add]
+    completed_units: typing.Annotated[list[domains.bd.distill.entities.UnitRef], operator.add]
     unit_ref: domains.bd.distill.entities.UnitRef
     unit_batch: list[domains.bd.distill.entities.UnitRef]
     chapter_refs: list[domains.bd.distill.entities.ChapterRef]
-    completed_chapters: Annotated[list[domains.bd.distill.entities.ChapterRef], operator.add]
+    completed_chapters: typing.Annotated[list[domains.bd.distill.entities.ChapterRef], operator.add]
     chapter_ref: domains.bd.distill.entities.ChapterRef
     chapter_batch: list[domains.bd.distill.entities.ChapterRef]
     book_synthesis_key: str
     report_key: str
     html_key: str
-    structural_quality: dict[str, Any]
+    structural_quality: dict[str, typing.Any]

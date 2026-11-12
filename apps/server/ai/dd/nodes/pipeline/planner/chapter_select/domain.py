@@ -7,8 +7,8 @@ import json
 import math
 import os
 import re
-from collections import Counter, defaultdict
-from hashlib import sha256
+import collections
+import hashlib
 
 
 
@@ -19,7 +19,7 @@ from hashlib import sha256
 
 def _word_idf(word_sets: list[set[str]]) -> tuple[dict[str, float], float]:
     n = max(1, len(word_sets))
-    df = Counter(w for ws in word_sets for w in ws)
+    df = collections.Counter(w for ws in word_sets for w in ws)
     return {w: math.log(1.0 + n / c) for w, c in df.items()}, math.log(1.0 + n)
 
 
@@ -320,7 +320,7 @@ def _is_page_family(f: str, docs: list[str], doc_title: dict[str, str]) -> bool:
     titles = [_page_title(doc_title.get(k)) for k in docs if doc_title.get(k)]
     if not titles:
         return True          # nothing to judge by: keep the URL-derived name
-    top = Counter(titles).most_common(1)[0][1]
+    top = collections.Counter(titles).most_common(1)[0][1]
     return top / len(docs) >= params.GAP_FAMILY_TITLE_SHARE
 
 
@@ -420,12 +420,12 @@ def consolidate_placements(
         "n_leftover_placed": 0, "n_leftover_appendix": 0, "n_unplaced_final": 0,
     }
 
-    families: dict[str, list[str]] = defaultdict(list)
+    families: dict[str, list[str]] = collections.defaultdict(list)
     for k in sorted(assignments):
         families[doc_family.get(k) or k].append(k)
 
     def family_title(f: str) -> str:
-        c = Counter(
+        c = collections.Counter(
             (doc_title.get(k) or "").split(" — ")[0].strip()
             for k in families.get(f, []) if doc_title.get(k)
         )
@@ -440,7 +440,7 @@ def consolidate_placements(
         docs = families[f]
         if len(docs) < params.TORN_FAMILY_MIN_DOCS:
             continue
-        counts = Counter(place[k] for k in docs if k in place)
+        counts = collections.Counter(place[k] for k in docs if k in place)
         if len(counts) < 2:
             continue
         (a, na), (b, nb) = sorted(counts.items(), key = lambda kv: (-kv[1], kv[0]))[:2]
@@ -473,7 +473,7 @@ def consolidate_placements(
     #   weak:   weak/unplaced docs whose best proposal is p (conf ≥ thr) — the trigger
     #   prefer: confidently placed docs that strictly prefer p (conf ≥ PREFER_MIN_CONF,
     #           above their current chapter's score) — they move along once triggered
-    unsel: dict[int, dict[str, list[str]]] = defaultdict(lambda: {"weak": [], "prefer": []})
+    unsel: dict[int, dict[str, list[str]]] = collections.defaultdict(lambda: {"weak": [], "prefer": []})
     for k in sorted(assignments):
         ci, c = best_proposal(k)
         if ci < 0 or ci in slots or c < thr:
@@ -501,7 +501,7 @@ def consolidate_placements(
         # catch-all chapter): the family has to be mostly confidently placed.
         if not strong or len(strong) / len(fam_docs) < params.FAMILY_MIN_STRONG_SHARE:
             continue
-        dom, n = Counter(strong).most_common(1)[0]
+        dom, n = collections.Counter(strong).most_common(1)[0]
         if n / len(strong) >= params.FAMILY_DOMINANCE:
             if place.get(k) != dom:
                 stats["n_rehomed_to_family"] += 1
@@ -509,7 +509,7 @@ def consolidate_placements(
             cands.discard(k)
 
     # (3) gap chapters for families nobody proposed a chapter for.
-    gap_fams: dict[str, list[str]] = defaultdict(list)
+    gap_fams: dict[str, list[str]] = collections.defaultdict(list)
     for k in sorted(cands):
         if k not in place:                       # weak docs keep their placement
             gap_fams[doc_family.get(k) or k].append(k)
@@ -541,7 +541,7 @@ def consolidate_placements(
     # (3a) a doc no proposal fits, whose URL directory is mostly confidently placed in ONE chapter,
     # joins that chapter (langfuse: self-hosting/configuration/observability went to "Framework and
     # Model Provider Integrations" on the title word "observability"; its 8 siblings were in "Administration").
-    hold: dict[tuple, Counter] = defaultdict(Counter)
+    hold: dict[tuple, collections.Counter] = collections.defaultdict(collections.Counter)
     if key_dir:
         for k, sid in place.items():
             if k in cands or slots[sid].get("role") == "appendix":
@@ -596,7 +596,7 @@ def consolidate_placements(
         stats["n_leftover_appendix"] = len(nofit)
 
     # (4) leftovers → lexically nearest chapter; no overlap anywhere → the largest (catch-all) chapter.
-    sizes = Counter(place.values())
+    sizes = collections.Counter(place.values())
     slot_toks = {sid: _slot_tokens(sl) for sid, sl in slots.items()}
     for k in sorted(k for k in cands if k not in place):
         owner = dir_owner(k)
@@ -621,7 +621,7 @@ def consolidate_placements(
     # chapter doesn't beat it by much — a strong, specific disagreement stays.
     # (asyncio: subprocess 6/1, queue 3/1, exceptions 2/1 split across chapters.)
     if anchored_family:
-        fam_docs: dict[str, list[str]] = defaultdict(list)
+        fam_docs: dict[str, list[str]] = collections.defaultdict(list)
         for k in sorted(assignments):
             f = anchored_family.get(k)
             if f:
@@ -635,7 +635,7 @@ def consolidate_placements(
             placed = [k for k in docs if k in place]
             if len(placed) < params.FAMILY_HARMONIZE_MIN_DOCS:
                 continue
-            counts = Counter(place[k] for k in placed)
+            counts = collections.Counter(place[k] for k in placed)
             (maj, n_maj), = counts.most_common(1)
             if len(counts) < 2 or n_maj / len(placed) < params.FAMILY_HARMONIZE_MAJORITY:
                 continue
@@ -650,7 +650,7 @@ def consolidate_placements(
 
     stats["n_unplaced_final"] = sum(1 for k in assignments if k not in place)
 
-    members: dict[int, list[str]] = defaultdict(list)
+    members: dict[int, list[str]] = collections.defaultdict(list)
     for k, sid in place.items():
         members[sid].append(k)
     order = [sid for sid in slots if members.get(sid)]
@@ -739,7 +739,7 @@ def apply_foundations(
     order), never from a chapter that would drop below MIN_DOCS_PER_CHAPTER, and
     nothing happens below FOUNDATIONS_MIN_DOCS. Returns (chapters, stats)."""
     total = sum(len(c["member_doc_keys"]) for c in out_chapters)
-    fam_size = Counter(doc_family.get(k) or k for c in out_chapters for k in c["member_doc_keys"])
+    fam_size = collections.Counter(doc_family.get(k) or k for c in out_chapters for k in c["member_doc_keys"])
     cands = [
         (c_i, k)
         for c_i, c in enumerate(out_chapters)
@@ -749,8 +749,8 @@ def apply_foundations(
     # Catalog guard: candidates piled up under one URL directory are a list of like
     # pages (providers, integrations, loaders), not orientation material.
     dir_of = lambda k: (doc_family.get(k) or k).rsplit("/", 1)[0]
-    dir_docs = Counter(dir_of(k) for c in out_chapters for k in c["member_doc_keys"])
-    dir_cands = Counter(dir_of(k) for _, k in cands)
+    dir_docs = collections.Counter(dir_of(k) for c in out_chapters for k in c["member_doc_keys"])
+    dir_cands = collections.Counter(dir_of(k) for _, k in cands)
     catalog_dirs = {
         d for d, n in dir_cands.items()
         if n >= params.FOUNDATIONS_CATALOG_MIN
@@ -813,7 +813,7 @@ def harmonize_catalog_dirs(
     migration and appendix chapters neither give nor take.
     Returns (chapters, {"n_catalog_rehomed": n, "catalog_dirs": [...]})."""
     locked = lambda c: c.get("origin") in ("foundations", "migration") or c.get("role") in ("foundations", "appendix")
-    by_dir: dict[tuple, list[tuple[int, str]]] = defaultdict(list)
+    by_dir: dict[tuple, list[tuple[int, str]]] = collections.defaultdict(list)
     for ci, c in enumerate(chapters):
         for k in c["member_doc_keys"]:
             d = tuple(key_dir.get(k) or ())
@@ -826,7 +826,7 @@ def harmonize_catalog_dirs(
     for d, pages in sorted(by_dir.items(), key = lambda kv: -len(kv[1])):
         if len(pages) < params.CATALOG_MIN_PAGES:
             continue
-        per = Counter(ci for ci, _ in pages)
+        per = collections.Counter(ci for ci, _ in pages)
         home, n_home = max(((ci, n) for ci, n in per.items() if not locked(chapters[ci])), key = lambda x: x[1], default = (None, 0))
         if home is None or n_home < params.CATALOG_MAJORITY * len(pages) or n_home == len(pages):
             continue
@@ -858,9 +858,9 @@ def harmonize_catalog_dirs(
 
 
 def _home_dir(chapter: dict, key_dir: dict[str, tuple]) -> tuple | None:
-    cnt = Counter(tuple((key_dir.get(k) or ())[:2]) for k in chapter["member_doc_keys"])
+    cnt = collections.Counter(tuple((key_dir.get(k) or ())[:2]) for k in chapter["member_doc_keys"])
     cnt.pop((), None)
-    cnt = Counter({d: n for d, n in cnt.items() if len(d) == 2})
+    cnt = collections.Counter({d: n for d, n in cnt.items() if len(d) == 2})
     if not cnt:
         return None
     d, n = cnt.most_common(1)[0]
@@ -874,7 +874,7 @@ def merge_micro_chapters(chapters: list[dict], key_dir: dict[str, tuple]) -> tup
     (chapters, {"n_micro_merged": n, "micro_merged": [titles]})."""
     total = sum(len(c["member_doc_keys"]) for c in chapters)
     locked = lambda c: c.get("origin") in ("foundations", "migration", "gap", "split") or c.get("role") in ("foundations", "appendix")
-    corpus_dirs = Counter(tuple((key_dir.get(k) or ())[:2]) for c in chapters for k in c["member_doc_keys"])
+    corpus_dirs = collections.Counter(tuple((key_dir.get(k) or ())[:2]) for c in chapters for k in c["member_doc_keys"])
     trunk = {d for d, n in corpus_dirs.items() if n > params.MICRO_MERGE_TRUNK_SHARE * total}      # the site's trunk says nothing
     homes = [None if locked(c) else _home_dir(c, key_dir) for c in chapters]
     homes = [None if h in trunk else h for h in homes]
@@ -883,7 +883,7 @@ def merge_micro_chapters(chapters: list[dict], key_dir: dict[str, tuple]) -> tup
     for i, c in enumerate(chapters):
         if locked(c) or size[i] >= params.MICRO_MERGE_MAX_DOCS or not c["member_doc_keys"]:
             continue
-        cnt = Counter(tuple((key_dir.get(k) or ())[:2]) for k in c["member_doc_keys"])
+        cnt = collections.Counter(tuple((key_dir.get(k) or ())[:2]) for k in c["member_doc_keys"])
         best, best_n = None, 0
         for j, h in enumerate(homes):
             if j == i or h is None or j in merged or size[j] < params.MICRO_MERGE_MAX_DOCS:
@@ -1124,7 +1124,7 @@ def build_split_units(
     """The items an oversize chapter is partitioned over: anchored sibling
     sub-pages of one page are ONE unit (so a split can never tear a family);
     every other doc is its own unit. Ordered by position in the source docs."""
-    groups: dict[str, list[str]] = defaultdict(list)
+    groups: dict[str, list[str]] = collections.defaultdict(list)
     for k in member_keys:
         groups[anchored_family.get(k) or k].append(k)
     units = []
@@ -1133,7 +1133,7 @@ def build_split_units(
         summ = " ".join(
             ((distillates.get(k) or {}).get("summary") or "").strip() for k in keys[:3]
         ).strip()
-        roles = Counter((distillates.get(k) or {}).get("role") for k in keys)
+        roles = collections.Counter((distillates.get(k) or {}).get("role") for k in keys)
         roles.pop(None, None)
         units.append({
             "keys":    keys,
@@ -1354,7 +1354,7 @@ def fallback_group_titles(
     used = {t.casefold() for t in taken}
     out = []
     for g in groups:
-        cnt = Counter(w for i in g for w in ws[i])
+        cnt = collections.Counter(w for i in g for w in ws[i])
         ranked = sorted(cnt, key = lambda w: (-cnt[w] * idf.get(w, unseen), w))
         top = ranked[:max(params.SPLIT_NAME_FALLBACK_TERMS + 3, 6)]
         n_words = params.SPLIT_NAME_FALLBACK_TERMS
@@ -1482,7 +1482,7 @@ def manifest_hash(
     *, slug: str, proposals_ref: str, assignments_ref: str, tutorial: bool = False, planner_version: str = "v1",
 ) -> str:
     """`tutorial` (the lower block cap) is part of the hash only when on, so a v1 plan's hash is unchanged."""
-    h = sha256()
+    h = hashlib.sha256()
     h.update(versions.PROMPT_VERSION.encode())
     h.update(slug.encode())
     h.update(b"|")

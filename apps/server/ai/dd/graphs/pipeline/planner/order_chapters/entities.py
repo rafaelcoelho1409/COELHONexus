@@ -1,18 +1,18 @@
 """What the steps of the order_chapters subgraph hand to each other."""
 from __future__ import annotations
 
-from typing import NotRequired, TypedDict
+import typing
 
 
-class OrderSample(TypedDict):
+class OrderSample(typing.TypedDict):
     """One sequencer sample: the chapter order it produced, or why it produced none."""
 
     sample: int
     order: list[int] | None
-    error: NotRequired[str]
+    error: typing.NotRequired[str]
 
 
-class SampleInput(TypedDict):
+class SampleInput(typing.TypedDict):
     """What one `sample_order` branch is sent."""
 
     sample_idx: int

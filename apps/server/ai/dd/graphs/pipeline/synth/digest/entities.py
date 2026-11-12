@@ -1,10 +1,10 @@
 """What the steps of the digest subgraph hand to each other."""
 from __future__ import annotations
 
-from typing import NotRequired, Optional, TypedDict
+import typing
 
 
-class DigestItem(TypedDict):
+class DigestItem(typing.TypedDict):
     """One unit of routing work: a source page, or one chunk of a page with many code blocks."""
 
     id: str                  # `<source key>#<chunk index>`
@@ -14,11 +14,11 @@ class DigestItem(TypedDict):
     digest: str              # identity of the stored result (prompt version, outline, source, chunk text)
 
 
-class DigestResult(TypedDict):
+class DigestResult(typing.TypedDict):
     """The outcome of one item: its digest, or why it has none."""
 
     id: str
     key: str
     chunk: int
-    digest: Optional[dict]
-    error: NotRequired[str]
+    digest: typing.Optional[dict]
+    error: typing.NotRequired[str]

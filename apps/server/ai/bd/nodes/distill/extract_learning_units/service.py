@@ -4,13 +4,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from typing import Any
+import typing
 
 import domains
-from pydantic import ValidationError
+import pydantic
 
-from .... import graphs, prompts
-from ....agents.distill.learning_extractor import config as extractor_config, params as extractor_params
+from .... import agents, graphs, prompts
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +19,7 @@ def _canonical_sha256(value: dict) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
-def _json_body(value: Any) -> str:
+def _json_body(value: typing.Any) -> str:
     return json.dumps(value, ensure_ascii = False, separators = (",", ":"), sort_keys = True)
 
 
@@ -28,7 +27,7 @@ def _is_transient_provider_error(error: Exception) -> bool:
     return domains.settings.chat.domain.is_transient_provider_error(error)
 
 
-def _log_transient_provider_failure(ref: dict[str, Any], stage: str, error: Exception) -> None:
+def _log_transient_provider_failure(ref: dict[str, typing.Any], stage: str, error: Exception) -> None:
     logger.warning(
         "[bd-distill] transient provider failure stage=%s unit=%s page=%s kind=%s error=%s",
         stage,
@@ -41,8 +40,8 @@ def _log_transient_provider_failure(ref: dict[str, Any], stage: str, error: Exce
 
 async def prepare_units(
     dependencies: graphs.distill.entities.DistillDependencies,
-    state: dict[str, Any],
-) -> dict[str, Any]:
+    state: dict[str, typing.Any],
+) -> dict[str, typing.Any]:
     storage = dependencies.storage
     source_manifest = await domains.bd.ingestion.storage.service.read_manifest(storage, state["book_id"])
     if source_manifest is None or source_manifest.get("status") != domains.bd.ingestion.storage.params.STATUS_DONE:
@@ -176,8 +175,8 @@ async def prepare_units(
 
 async def extract_unit(
     dependencies: graphs.distill.entities.DistillDependencies,
-    state: dict[str, Any],
-) -> dict[str, Any]:
+    state: dict[str, typing.Any],
+) -> dict[str, typing.Any]:
     ref = state["unit_ref"]
     storage = dependencies.storage
     input_record = json.loads(await storage.read_text(ref["input_key"]))
@@ -209,7 +208,7 @@ async def extract_unit(
     }
     extraction = None
     extraction_needs_review = False
-    response_attempts = extractor_params.MAX_STRUCTURED_RESPONSE_ATTEMPTS
+    response_attempts = agents.distill.learning_extractor.params.MAX_STRUCTURED_RESPONSE_ATTEMPTS
     for attempt in range(response_attempts):
         result = None
         try:
@@ -223,8 +222,8 @@ async def extract_unit(
                     }]}, config = {
                         "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
                     }),
-                    attempts = extractor_params.MAX_PROVIDER_ATTEMPTS,
-                    wait_base_s = extractor_params.PROVIDER_RETRY_WAIT_BASE_S,
+                    attempts = agents.distill.learning_extractor.params.MAX_PROVIDER_ATTEMPTS,
+                    wait_base_s = agents.distill.learning_extractor.params.PROVIDER_RETRY_WAIT_BASE_S,
                 )
             extraction = domains.bd.distill.domain.learning_extraction_from_agent_result(result)
         except Exception as error:  # noqa: BLE001 — invalid agent output should fall back to native structured output.
@@ -263,7 +262,7 @@ async def extract_unit(
             response_attempts,
         )
         fallback_error: Exception | None = None
-        for attempt in range(extractor_params.MAX_DIRECT_STRUCTURED_ATTEMPTS):
+        for attempt in range(agents.distill.learning_extractor.params.MAX_DIRECT_STRUCTURED_ATTEMPTS):
             if attempt > 0:
                 prompt_payload["response_retry"] = (
                     "The previous structured response was invalid. Return valid LearningExtraction JSON now. "
@@ -283,13 +282,13 @@ async def extract_unit(
                         lambda: domains.settings.chat.service.chat_structured_async(
                             fallback_prompt,
                             domains.bd.distill.schemas.LearningExtraction,
-                            max_tokens = extractor_config.MODEL.max_output_tokens,
-                            temperature = extractor_config.MODEL.temperature,
+                            max_tokens = agents.distill.learning_extractor.config.MODEL.max_output_tokens,
+                            temperature = agents.distill.learning_extractor.config.MODEL.temperature,
                             strict = False,
-                            rotator_task = extractor_params.ROTATOR_TASK,
+                            rotator_task = agents.distill.learning_extractor.params.ROTATOR_TASK,
                         ),
-                        attempts = extractor_params.MAX_PROVIDER_ATTEMPTS,
-                        wait_base_s = extractor_params.PROVIDER_RETRY_WAIT_BASE_S,
+                        attempts = agents.distill.learning_extractor.params.MAX_PROVIDER_ATTEMPTS,
+                        wait_base_s = agents.distill.learning_extractor.params.PROVIDER_RETRY_WAIT_BASE_S,
                     )
                 break
             except Exception as error:  # noqa: BLE001 — retry malformed output and transient provider failures.
@@ -301,7 +300,7 @@ async def extract_unit(
                     "[bd-distill] structured fallback failed for unit=%s attempt=%s/%s error=%s",
                     ref["unit_id"],
                     attempt + 1,
-                    extractor_params.MAX_DIRECT_STRUCTURED_ATTEMPTS,
+                    agents.distill.learning_extractor.params.MAX_DIRECT_STRUCTURED_ATTEMPTS,
                     type(error).__name__,
                 )
 
@@ -310,7 +309,7 @@ async def extract_unit(
                 "[bd-distill] using JSON-text fallback for unit=%s after structured-output retries",
                 ref["unit_id"],
             )
-            for attempt in range(extractor_params.MAX_TEXT_FALLBACK_ATTEMPTS):
+            for attempt in range(agents.distill.learning_extractor.params.MAX_TEXT_FALLBACK_ATTEMPTS):
                 prompt_payload["response_retry"] = (
                     "The previous JSON-only response did not validate. Return one native JSON object with exactly "
                     "the lessons and omitted_material arrays. Every lesson must include kind, title, claim, explanation, "
@@ -333,12 +332,12 @@ async def extract_unit(
                         response, _ = await domains.settings.chat.service.resilient_ainvoke(
                             lambda: domains.settings.chat.service.chat_text_async(
                                 text_prompt,
-                                max_tokens = extractor_config.MODEL.max_output_tokens,
-                                temperature = extractor_config.MODEL.temperature,
-                                rotator_task = extractor_params.ROTATOR_TASK,
+                                max_tokens = agents.distill.learning_extractor.config.MODEL.max_output_tokens,
+                                temperature = agents.distill.learning_extractor.config.MODEL.temperature,
+                                rotator_task = agents.distill.learning_extractor.params.ROTATOR_TASK,
                             ),
-                            attempts = extractor_params.MAX_PROVIDER_ATTEMPTS,
-                            wait_base_s = extractor_params.PROVIDER_RETRY_WAIT_BASE_S,
+                            attempts = agents.distill.learning_extractor.params.MAX_PROVIDER_ATTEMPTS,
+                            wait_base_s = agents.distill.learning_extractor.params.PROVIDER_RETRY_WAIT_BASE_S,
                         )
                     extraction = domains.bd.distill.domain.learning_extraction_from_agent_result({
                         "messages": [{"role": "assistant", "content": response}],
@@ -355,12 +354,12 @@ async def extract_unit(
                         "[bd-distill] JSON-text fallback failed for unit=%s attempt=%s/%s error=%s",
                         ref["unit_id"],
                         attempt + 1,
-                        extractor_params.MAX_TEXT_FALLBACK_ATTEMPTS,
+                        agents.distill.learning_extractor.params.MAX_TEXT_FALLBACK_ATTEMPTS,
                         type(error).__name__,
                     )
 
         if extraction is None:
-            if not isinstance(fallback_error, (ValueError, ValidationError)):
+            if not isinstance(fallback_error, (ValueError, pydantic.ValidationError)):
                 raise ValueError(
                     "the learning extractor failed after agent, structured-output, and JSON-text retries"
                 ) from fallback_error
@@ -377,7 +376,7 @@ async def extract_unit(
             )
             extraction_needs_review = True
 
-    candidates: list[dict[str, Any]] = []
+    candidates: list[dict[str, typing.Any]] = []
     review_flags: list[str] = []
     if extraction_needs_review:
         review_flags.append(
@@ -424,8 +423,8 @@ async def extract_unit(
                         strict = False,
                         rotator_task = "bd_distill_evidence_verifier",
                     ),
-                    attempts = extractor_params.MAX_PROVIDER_ATTEMPTS,
-                    wait_base_s = extractor_params.PROVIDER_RETRY_WAIT_BASE_S,
+                    attempts = agents.distill.learning_extractor.params.MAX_PROVIDER_ATTEMPTS,
+                    wait_base_s = agents.distill.learning_extractor.params.PROVIDER_RETRY_WAIT_BASE_S,
                 )
             verdicts = {item.lesson_index: item for item in review.verdicts}
         except Exception as error:  # noqa: BLE001 — unavailable semantic review must retain a review-marked citation.

@@ -1,15 +1,15 @@
 """Progress reporting shared by Book Distiller graphs and their nodes."""
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+import collections.abc
 import inspect
-from typing import Any
+import typing
 
 
-ProgressReporter = Callable[[dict[str, Any]], Any]
+ProgressReporter = collections.abc.Callable[[dict[str, typing.Any]], typing.Any]
 
 
-async def report(progress_callback: ProgressReporter | None, **event: Any) -> None:
+async def report(progress_callback: ProgressReporter | None, **event: typing.Any) -> None:
     if progress_callback is None:
         return
     result = progress_callback(event)
@@ -20,7 +20,7 @@ async def report(progress_callback: ProgressReporter | None, **event: Any) -> No
 async def run_node(
     progress_callback: ProgressReporter | None,
     node: str,
-    operation: Callable[[], dict | Awaitable[dict]],
+    operation: collections.abc.Callable[[], dict | collections.abc.Awaitable[dict]],
 ) -> dict:
     """Run one graph node's work and report it as running, then done, or failed if it raises."""
     await report(progress_callback, kind = "node", node = node, status = "running")

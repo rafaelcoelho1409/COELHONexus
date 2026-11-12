@@ -1,7 +1,7 @@
 """Pure evidence checks for candidate knowledge-graph facts."""
 from __future__ import annotations
 
-from ai.ycs.agents import schemas
+from .... import agents
 
 
 def _normalized_excerpt(value: str) -> str:
@@ -9,13 +9,13 @@ def _normalized_excerpt(value: str) -> str:
 
 
 def validate_extraction(
-    candidate: schemas.GraphExtraction,
+    candidate: agents.schemas.GraphExtraction,
     transcript: str,
-) -> tuple[schemas.GraphExtraction, list[str]]:
+) -> tuple[agents.schemas.GraphExtraction, list[str]]:
     """Keep only candidates with transcript evidence and relations with valid endpoints."""
     source = _normalized_excerpt(transcript)
     issues: list[str] = []
-    entities: list[schemas.GraphEntityCandidate] = []
+    entities: list[agents.schemas.GraphEntityCandidate] = []
     entity_ids: dict[str, str] = {}
     for entity in candidate.entities:
         entity_id = entity.entity_id.strip()
@@ -41,7 +41,7 @@ def validate_extraction(
         }))
 
     ids_by_name = set(entity_ids)
-    relationships: list[schemas.GraphRelationshipCandidate] = []
+    relationships: list[agents.schemas.GraphRelationshipCandidate] = []
     seen_relationships: set[tuple[str, str, str]] = set()
     for relation in candidate.relationships:
         source_id = relation.source_id.strip()
@@ -69,4 +69,4 @@ def validate_extraction(
             "relationship_type": relation_type,
             "evidence": evidence,
         }))
-    return schemas.GraphExtraction(entities = entities, relationships = relationships), issues
+    return agents.schemas.GraphExtraction(entities = entities, relationships = relationships), issues

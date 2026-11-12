@@ -7,14 +7,13 @@ from .... import agents
 import json
 import hashlib
 import unicodedata
-from json import JSONDecodeError, JSONDecoder
-from collections.abc import Iterator
-from typing import Any
-from pydantic import ValidationError
+import collections.abc
+import typing
+import pydantic
 
 
 def extract_assessment_response(
-    result: Any,
+    result: typing.Any,
 ) -> agents.schemas.PageAuditResponse | agents.schemas.PageAssessment:
     """Validate structured auditor output or recover a JSON response from its last message."""
     structured = result.get("structured_response") if isinstance(result, dict) else None
@@ -28,11 +27,11 @@ def extract_assessment_response(
     if "model call limit" in content.casefold():
         raise errors.ModelCallLimitReachedError("page auditor reached its model-call limit")
 
-    last_error: ValidationError | None = None
+    last_error: pydantic.ValidationError | None = None
     for value in _json_objects(content):
         try:
             return _validate_assessment_response(value)
-        except ValidationError as error:
+        except pydantic.ValidationError as error:
             last_error = error
     if last_error is not None:
         raise ValueError("page auditor returned JSON that did not match its response schema") from last_error
@@ -40,15 +39,15 @@ def extract_assessment_response(
 
 
 def _validate_assessment_response(
-    value: Any,
+    value: typing.Any,
 ) -> agents.schemas.PageAuditResponse | agents.schemas.PageAssessment:
     try:
         return agents.schemas.PageAuditResponse.model_validate(value)
-    except ValidationError:
+    except pydantic.ValidationError:
         return agents.schemas.PageAssessment.model_validate(value)
 
 
-def _last_assistant_content(messages: Any) -> str | None:
+def _last_assistant_content(messages: typing.Any) -> str | None:
     if not isinstance(messages, list):
         return None
     for message in reversed(messages):
@@ -73,14 +72,14 @@ def _last_assistant_content(messages: Any) -> str | None:
     return None
 
 
-def _json_objects(content: str) -> Iterator[dict[str, Any]]:
-    decoder = JSONDecoder()
+def _json_objects(content: str) -> collections.abc.Iterator[dict[str, typing.Any]]:
+    decoder = json.JSONDecoder()
     for start, character in enumerate(content):
         if character != "{":
             continue
         try:
             value, _ = decoder.raw_decode(content[start:])
-        except JSONDecodeError:
+        except json.JSONDecodeError:
             continue
         if isinstance(value, dict):
             yield value
@@ -96,7 +95,7 @@ def user_payload(page_number: int, pictures: int, markdown: str) -> str:
 
 
 def validate_assessment(
-    value: Any,
+    value: typing.Any,
     *,
     page_number: int,
     pictures: int,
@@ -133,7 +132,7 @@ def validate_assessment(
 
 
 def sanitize_assessment(
-    value: Any,
+    value: typing.Any,
     *,
     page_number: int,
     pictures: int,
@@ -326,13 +325,13 @@ def build_verification_payload(page_number: int, candidates: list[agents.schemas
     }, ensure_ascii = False)
 
 
-def extract_checks(result: Any) -> agents.schemas.FindingCheckBatch:
+def extract_checks(result: typing.Any) -> agents.schemas.FindingCheckBatch:
     structured = result.get("structured_response") if isinstance(result, dict) else None
     if structured is None:
         raise ValueError("the finding verifier returned no structured response")
     try:
         return agents.schemas.FindingCheckBatch.model_validate(structured)
-    except ValidationError as error:
+    except pydantic.ValidationError as error:
         raise ValueError("the finding verifier returned a response that did not match its schema") from error
 
 

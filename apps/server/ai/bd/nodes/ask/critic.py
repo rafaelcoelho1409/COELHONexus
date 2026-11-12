@@ -1,18 +1,18 @@
 """DeepAgent evidence verifier for BD Ask answers."""
 from __future__ import annotations
 
-import ai
+from .... import bd
 import domains
 
-from langgraph.runtime import Runtime
+import langgraph.runtime
 
 
-async def verify_answer(state: dict, runtime: Runtime[ai.bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
+async def verify_answer(state: dict, runtime: langgraph.runtime.Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
     domains.settings.llm_counter.service.set_node(node = "critic")
     try:
-        result = await ai.bd.agents.ask.service.invoke(
+        result = await bd.agents.ask.service.invoke(
             runtime.context.critic,
-            ai.bd.agents.ask.schemas.EvidenceAssessment,
+            bd.agents.ask.schemas.EvidenceAssessment,
             {
                 "question": state.get("question", ""),
                 "answer": state.get("generation", ""),

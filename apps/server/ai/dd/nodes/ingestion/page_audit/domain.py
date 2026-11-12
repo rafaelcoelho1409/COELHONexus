@@ -5,7 +5,7 @@ from .... import agents
 
 import json
 import re
-from typing import Any
+import typing
 
 
 def user_payload(
@@ -14,7 +14,7 @@ def user_payload(
     page_url: str,
     page_title: str,
     markdown: str,
-    candidates: list[dict[str, Any]],
+    candidates: list[dict[str, typing.Any]],
 ) -> str:
     return json.dumps({
         "task": "Assess normalization quality for this one documentation page. `candidates` are leads from simple scans: judge each one, they are not findings.",
@@ -100,6 +100,22 @@ def sanitize_assessment(
                 f"Discarded finding {issue.issue_id}: its evidence is inside a fenced code example, not page markup."
             )
             continue
+        if (
+            issue.category == "markdown_formatting"
+            and agents.ingestion.page_auditor.patterns.is_valid_escaped_identifier(issue.evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: escaped underscores are valid in a Markdown identifier."
+            )
+            continue
+        if (
+            issue.category == "encoding_artifact"
+            and agents.ingestion.page_auditor.patterns.is_valid_numeric_entity_text(issue.evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: HTML numeric character references render as their intended characters."
+            )
+            continue
         if issue.category in params.CONVENTION_CATEGORIES and (
             agents.ingestion.page_auditor.patterns.is_export_convention(issue.evidence, markdown=markdown)
             or agents.ingestion.page_auditor.patterns.is_inside_export_component(markdown, issue.evidence)
@@ -111,6 +127,14 @@ def sanitize_assessment(
         if issue.category in params.DUPLICATE_CATEGORIES and not is_repeat(markdown, issue.evidence, issue.other_evidence):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: its evidence occurs once on the page and no second copy was found, so nothing is repeated."
+            )
+            continue
+        if (
+            issue.category in params.DUPLICATE_CATEGORIES
+            and agents.ingestion.page_auditor.patterns.is_structural_export_markup_only(issue.evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: repeated export-block markers are structural syntax, not duplicate page content."
             )
             continue
         # Two findings on the same text can only produce overlapping patches, so keep the more confident one.
@@ -170,7 +194,7 @@ def prose_blocks(markdown: str) -> list[tuple[int, int]]:
     return blocks
 
 
-def repeated_blocks(markdown: str) -> list[dict[str, Any]]:
+def repeated_blocks(markdown: str) -> list[dict[str, typing.Any]]:
     """A block of prose that appears more than once: its first copy as `evidence`, the second as `other_evidence`."""
     first: dict[str, tuple[int, int]] = {}
     seen_again: dict[str, tuple[int, int]] = {}
@@ -197,7 +221,7 @@ def repeated_blocks(markdown: str) -> list[dict[str, Any]]:
     ]
 
 
-def heading_markers(markdown: str) -> list[dict[str, Any]]:
+def heading_markers(markdown: str) -> list[dict[str, typing.Any]]:
     """A heading marker with no space after it (`##Install`) and a heading with no text."""
     leads = []
     for _offset, line in prose_lines(markdown):
@@ -208,7 +232,7 @@ def heading_markers(markdown: str) -> list[dict[str, Any]]:
     return leads
 
 
-def damaged_characters(markdown: str) -> list[dict[str, Any]]:
+def damaged_characters(markdown: str) -> list[dict[str, typing.Any]]:
     """Text that looks like UTF-8 read as another encoding, or has the replacement character: the matching stretch of its line."""
     leads = []
     for offset, line in prose_lines(markdown):
@@ -224,7 +248,7 @@ def damaged_characters(markdown: str) -> list[dict[str, Any]]:
     return leads
 
 
-def candidates(markdown: str) -> list[dict[str, Any]]:
+def candidates(markdown: str) -> list[dict[str, typing.Any]]:
     """Every lead on the page, first in reading order, at most `params.MAX_CANDIDATES`."""
     leads = [*heading_markers(markdown), *damaged_characters(markdown), *repeated_blocks(markdown)]
     return [

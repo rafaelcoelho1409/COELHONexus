@@ -2,10 +2,10 @@
 from __future__ import annotations
 from . import entities
 
-from typing import Any, TypedDict
+import typing
 
 
-class IngestionState(TypedDict, total = False):
+class IngestionState(typing.TypedDict, total = False):
     """Graph state carries references and compact findings, never page Markdown."""
 
     framework_slug: str
@@ -13,5 +13,5 @@ class IngestionState(TypedDict, total = False):
     pages: list[entities.PageReference]
     assessments: list[entities.PageAssessmentResult]
     output_pages: list[entities.PageOutputReference]
-    quality_summary: dict[str, Any]
-    summary: dict[str, Any]
+    quality_summary: dict[str, typing.Any]
+    summary: dict[str, typing.Any]

@@ -5,7 +5,6 @@ import type { ReactNode } from "react";
 import { ActionButton } from "../../components/action-button";
 import type { RagIndexStatus } from "../../rag/index-entities";
 import type { DistillRun } from "../entities";
-import { DISTILL_NODES } from "../domain/distill-progress";
 
 export function DistillProcessProgress({
   status,
@@ -25,15 +24,12 @@ export function DistillProcessProgress({
   const total = progress?.total_units ?? 0;
   const completed = progress ? Math.min(progress.completed_units, total) : 0;
   const percent = total > 0 ? Math.round((completed / total) * 100) : status === "done" ? 100 : 0;
-  const activeNode = DISTILL_NODES.find((node) => node.id === progress?.current_node);
 
   return (
     <ProgressCard
       title="Distill Agentic AI"
       status={statusText}
-      detail={
-        activeNode?.label ?? (status === "done" ? "Learning Guide published" : "Learning unit extraction")
-      }
+      detail=""
       percent={percent}
       progressLabel="Learning units"
       progressValue={

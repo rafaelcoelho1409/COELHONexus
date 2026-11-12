@@ -1,27 +1,22 @@
 """DeepAgent that routes one source page to the sections of a chapter's outline."""
 from __future__ import annotations
-import ai, domains
+from ...... import dd
+import domains
 from . import config, params
 from .. import schemas
 from .... import service
 from ..... import middlewares, prompts
 
-from collections.abc import Sequence
-from typing import Any
+import collections.abc
+import typing
 
-from deepagents import (
-    FilesystemPermission,
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
-from deepagents.backends import StateBackend
-from deepagents.profiles.harness import harness_profiles
-from langchain.agents.middleware import ToolCallLimitMiddleware
+import deepagents
+import deepagents.backends
+import deepagents.profiles.harness
+import langchain.agents.middleware
 
 
-def source_router(*, tools: Sequence[Any], model = None):
+def source_router(*, tools: collections.abc.Sequence[typing.Any], model = None):
     """Build the router for one source. Its rubric is its system prompt (called once per source: no skill); `tools` hold the
     source's `check_digest`, which knows the outline's ids and the source's hashes."""
     if model is None:
@@ -42,15 +37,15 @@ def source_router(*, tools: Sequence[Any], model = None):
     # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
     # before (by another role or other code in the process) hides tools from this agent.
     key = f"openai:{model_name}"
-    harness_profiles._HARNESS_PROFILES.pop(key, None)
-    register_harness_profile(
+    deepagents.profiles.harness.harness_profiles._HARNESS_PROFILES.pop(key, None)
+    deepagents.register_harness_profile(
         key,
-        HarnessProfile(
+        deepagents.HarnessProfile(
             base_system_prompt = "",
-            general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
+            general_purpose_subagent = deepagents.GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    agent = create_deep_agent(
+    agent = deepagents.create_deep_agent(
         model = model,
         tools = router_tools,
         system_prompt = prompts.pipeline.synth.source_router.prompts.SYSTEM_PROMPT,
@@ -60,22 +55,22 @@ def source_router(*, tools: Sequence[Any], model = None):
                 model_calls = params.MODEL_CALLS,
                 with_tools = True),
             middlewares.middleware.ToolAllowlistMiddleware(frozenset(tool_names)),
-            ToolCallLimitMiddleware(
+            langchain.agents.middleware.ToolCallLimitMiddleware(
                 tool_name = "check_digest",
                 run_limit = params.CHECK_CALL_LIMIT,
                 exit_behavior = "continue"),
         ],
         permissions = [
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["read"],
                 paths = ["/**"],
                 mode = "deny"),
-            FilesystemPermission(
+            deepagents.FilesystemPermission(
                 operations = ["write"],
                 paths = ["/**"],
                 mode = "deny"),
         ],
-        backend = StateBackend(),
+        backend = deepagents.backends.StateBackend(),
         name = "dd_source_router",
     )
     tool_node = agent.nodes.get("tools")
@@ -83,6 +78,6 @@ def source_router(*, tools: Sequence[Any], model = None):
     error_message = "DeepAgents exposed an unreviewed tool to the source router"
     if not isinstance(available_tools, dict):
         raise RuntimeError(error_message)
-    if set(available_tools) - ai.dd.agents.params.STACK_TOOLS - tool_names:
+    if set(available_tools) - dd.agents.params.STACK_TOOLS - tool_names:
         raise RuntimeError(error_message)
     return agent

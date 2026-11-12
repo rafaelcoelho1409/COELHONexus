@@ -5,7 +5,7 @@ from . import params, patterns, versions
 from ..... import agents
 
 import re
-from hashlib import sha256
+import hashlib
 
 
 schemas = agents.pipeline.planner.schemas
@@ -158,11 +158,11 @@ def corpus_content_fingerprint(relevant_files: list[str], manifest_entries: list
     if not sizes:
         return ""
     payload = "|".join(f"{k}:{sizes.get(k)}" for k in sorted(relevant_files))
-    return sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 def manifest_hash(*, slug: str, relevant_files: list[str], content_fp: str = "") -> str:
-    h = sha256()
+    h = hashlib.sha256()
     h.update(versions.PROMPT_VERSION.encode())
     h.update(slug.encode())
     for k in sorted(relevant_files):

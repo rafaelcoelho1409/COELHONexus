@@ -4,15 +4,14 @@ from __future__ import annotations
 import json
 
 import domains
-from langgraph.runtime import Runtime
+import langgraph.runtime
 
-from ai.bd.agents.rag.graph_extractor import schemas
-from ai.bd.graphs.rag.graph_extraction import domain, entities, params, states
+from .... import agents, graphs
 
 
 async def extract_candidates(
-    state: states.GraphExtractionState,
-    runtime: Runtime[entities.GraphExtractionContext],
+    state: graphs.rag.graph_extraction.states.GraphExtractionState,
+    runtime: langgraph.runtime.Runtime[graphs.rag.graph_extraction.entities.GraphExtractionContext],
 ) -> dict:
     payload = json.dumps(
         {
@@ -20,7 +19,7 @@ async def extract_candidates(
             "prompt_version": runtime.context.prompt_version,
             "source_material": state.get("source_material", ""),
             "source_evidence": state.get("source_evidence", [])[:80],
-            "validation_feedback": state.get("validation_issues", [])[:params.MAX_VALIDATION_FEEDBACK_ITEMS],
+            "validation_feedback": state.get("validation_issues", [])[:graphs.rag.graph_extraction.params.MAX_VALIDATION_FEEDBACK_ITEMS],
             "previous_candidates": state.get("candidate_extraction", {}),
         },
         ensure_ascii = False,
@@ -37,23 +36,23 @@ async def extract_candidates(
             config = {"callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()]},
         )
     structured = result.get("structured_response") if isinstance(result, dict) else None
-    extraction = schemas.GraphExtraction.model_validate(structured)
+    extraction = agents.rag.graph_extractor.schemas.GraphExtraction.model_validate(structured)
     return {
         "candidate_extraction": extraction.model_dump(mode = "json"),
         "attempt": state.get("attempt", 0) + 1,
     }
 
 
-def validate_evidence(state: states.GraphExtractionState) -> dict:
-    candidate = schemas.GraphExtraction.model_validate(state.get("candidate_extraction", {}))
-    accepted, issues = domain.validate_extraction(candidate, state.get("source_evidence", []))
+def validate_evidence(state: graphs.rag.graph_extraction.states.GraphExtractionState) -> dict:
+    candidate = agents.rag.graph_extractor.schemas.GraphExtraction.model_validate(state.get("candidate_extraction", {}))
+    accepted, issues = graphs.rag.graph_extraction.domain.validate_extraction(candidate, state.get("source_evidence", []))
     return {
         "accepted_extraction": accepted.model_dump(mode = "json"),
         "validation_issues": issues,
     }
 
 
-def retry_if_needed(state: states.GraphExtractionState) -> str:
-    if state.get("validation_issues") and state.get("attempt", 0) <= params.MAX_EVIDENCE_RETRIES:
+def retry_if_needed(state: graphs.rag.graph_extraction.states.GraphExtractionState) -> str:
+    if state.get("validation_issues") and state.get("attempt", 0) <= graphs.rag.graph_extraction.params.MAX_EVIDENCE_RETRIES:
         return "retry"
     return "done"

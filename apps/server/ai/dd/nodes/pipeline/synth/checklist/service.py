@@ -5,7 +5,7 @@ The chapter is scored on 11 deterministic gates plus the five LLM criteria of th
 per-criterion majority stands. A judge that never answers leaves the chapter scored on its gates and does not send it back for the outage. The
 best-seen iteration (every gate passing first, then the score) is tracked here, so the render step ships it even when the loop stops on a worse one."""
 from __future__ import annotations
-import ai
+from ...... import dd
 import domains
 from . import domain, keys, params, schemas, versions
 from ..... import agents, graphs
@@ -15,8 +15,8 @@ import json
 import logging
 import time
 
-from pydantic import ValidationError
-from langgraph.runtime import Runtime
+import pydantic
+import langgraph.runtime
 
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ async def run_judge(context: Context, frame: dict) -> dict:
             payload = schemas.LLMJudgePayload.model_validate(answer.model_dump())
             last_error = None
             break
-        except (ValidationError, ValueError) as error:
+        except (pydantic.ValidationError, ValueError) as error:
             # Content, not infrastructure: the judge answered, badly. The retry loop below is for infrastructure only.
             content_error = str(error)[:300]
             last_error = None
@@ -109,7 +109,7 @@ async def run_judge(context: Context, frame: dict) -> dict:
     return {"results": [r.model_dump() for r in results], "answered": True, "repaired": False, "wall_ms": wall_ms, "meta": meta}
 
 
-async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: Runtime[Context]) -> dict:
+async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     context = runtime.context
     blobs = context.blobs
     slug = state.get("framework_slug")
@@ -141,7 +141,7 @@ async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, 
     tutorial = graphs.pipeline.synth.params.tutorial_mode()
     verification_required = graphs.pipeline.synth.params.is_v2()
     checks = domain.active_checks(tutorial, verification_required)
-    verification_key = ai.dd.graphs.pipeline.synth.keys.latest_key(slug, chapter_id, "verification")
+    verification_key = dd.graphs.pipeline.synth.keys.latest_key(slug, chapter_id, "verification")
     verification_report = await domains.dd.pipeline.storage.service.load_json(blobs, verification_key) if verification_required else {}
     graphs.service.emit(
         params.STEP, "start",
@@ -203,7 +203,7 @@ async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, 
             if incoming_score is None or domain.best_seen_key(stats["pass_rate"], n_pregate_passed, n_gates) > domain.best_seen_key(incoming_score, incoming_pregate or 0, n_gates):
                 patch.update({
                     "best_seen_score": stats["pass_rate"], "best_seen_pregate": n_pregate_passed,
-                    "best_seen_sawc_path": ai.dd.nodes.pipeline.synth.sawc.keys.versioned_blob_key(
+                    "best_seen_sawc_path": dd.nodes.pipeline.synth.sawc.keys.versioned_blob_key(
                         slug, chapter_id, sawc_manifest_hash,
                     ),
                 })
@@ -236,7 +236,7 @@ async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, 
             "_must_teach": list(ledger.must_teach),
             "_variant_of": {digest_: family.canonical for family in ledger.families for digest_ in family.hashes},
             "_labels": {h: (ledger.blocks[h].defines[0] if ledger.blocks[h].defines else ledger.blocks[h].body.strip().splitlines()[0][:40]) for h in ledger.must_teach if ledger.blocks[h].body.strip()},
-            "_capstone_prefix": ai.dd.nodes.pipeline.synth.sawc_derive.params.CAPSTONE_PREFIX,
+            "_capstone_prefix": dd.nodes.pipeline.synth.sawc_derive.params.CAPSTONE_PREFIX,
         })
     if verification_required:
         for_checks["_verification_report"] = verification_report or {"missing": True}
@@ -274,7 +274,7 @@ async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, 
     }
 
 
-async def judge(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: Runtime[Context]) -> dict:
+async def judge(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     run = await run_judge(runtime.context, runtime.context.scratch[params.STEP]["frame"])
     results = run["results"]
     graphs.service.emit(
@@ -285,12 +285,12 @@ async def judge(state: graphs.pipeline.synth.checklist.states.ChecklistState, ru
     return {"judge": run}
 
 
-async def judge_again(state: dict, runtime: Runtime[Context]) -> dict:
+async def judge_again(state: dict, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     """A further opinion on a chapter the first judge failed (the Rotator may route it to another model)."""
     return {"opinions": [await run_judge(runtime.context, runtime.context.scratch[params.STEP]["frame"])]}
 
 
-async def majority(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: Runtime[Context]) -> dict:
+async def majority(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     first = [schemas.CriterionResult.model_validate(r) for r in state["judge"]["results"]]
     runs = [first] + [
         [schemas.CriterionResult.model_validate(r) for r in o["results"]] for o in state.get("opinions") or [] if o["answered"] and not unavailable([schemas.CriterionResult.model_validate(r) for r in o["results"]])
@@ -305,7 +305,7 @@ async def majority(state: graphs.pipeline.synth.checklist.states.ChecklistState,
     return {"merged": [r.model_dump() for r in merged]}
 
 
-async def finalize(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: Runtime[Context]) -> dict:
+async def finalize(state: graphs.pipeline.synth.checklist.states.ChecklistState, runtime: langgraph.runtime.Runtime[Context]) -> dict:
     context = runtime.context
     slug, chapter_id = state["framework_slug"], state["chapter_id"]
     run = state["judge"]
@@ -345,7 +345,7 @@ async def finalize(state: graphs.pipeline.synth.checklist.states.ChecklistState,
     is_better = incoming_score is None or domain.best_seen_key(pass_rate, n_pre_passed, len(pre)) > domain.best_seen_key(incoming_score, incoming_pregate or 0, len(pre))
     if is_better:
         best_score, best_pregate = pass_rate, n_pre_passed
-        best_path = ai.dd.nodes.pipeline.synth.sawc.keys.versioned_blob_key(slug, chapter_id, sawc_manifest_hash)
+        best_path = dd.nodes.pipeline.synth.sawc.keys.versioned_blob_key(slug, chapter_id, sawc_manifest_hash)
 
     answered = bool(run["answered"])
     evaluation = schemas.ChecklistEvaluation(

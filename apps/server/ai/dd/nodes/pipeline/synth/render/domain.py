@@ -8,7 +8,7 @@ import hashlib
 import json
 import re
 import textwrap
-from typing import Optional
+import typing
 
 
 
@@ -300,7 +300,7 @@ def _is_fence_line(ln: str) -> bool:
     return ln.lstrip().startswith(("```", "~~~"))
 
 
-def plan_sources_hash(chapter: Optional[dict]) -> str:
+def plan_sources_hash(chapter: typing.Optional[dict]) -> str:
     """Fingerprint every plan field that can change what this chapter teaches or which source bytes it uses."""
     if not chapter:
         return ""
@@ -322,7 +322,7 @@ def plan_sources_hash(chapter: Optional[dict]) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
 
 
-def render_is_stale(render_blob: dict, chapter: Optional[dict]) -> bool:
+def render_is_stale(render_blob: dict, chapter: typing.Optional[dict]) -> bool:
     """A known current chapter is stale if its render has no matching plan fingerprint."""
     stored = (render_blob or {}).get("plan_sources_hash") or ""
     current = plan_sources_hash(chapter)

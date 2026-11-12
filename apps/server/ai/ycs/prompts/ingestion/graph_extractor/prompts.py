@@ -1,4 +1,4 @@
 """Load the graph extractor's system instructions."""
-from pathlib import Path
+import pathlib
 
-SYSTEM_PROMPT = Path(__file__).with_name("SYSTEM.md").read_text(encoding = "utf-8")
+SYSTEM_PROMPT = pathlib.Path(__file__).with_name("SYSTEM.md").read_text(encoding = "utf-8")

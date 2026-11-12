@@ -8,28 +8,28 @@ import asyncio
 import hashlib
 import inspect
 import logging
-from collections.abc import Awaitable, Callable, Coroutine, Iterable
-from typing import Any, Protocol
+import collections.abc
+import typing
 
 
-PageReader = Callable[[str], str | None | Awaitable[str | None]]
+PageReader = collections.abc.Callable[[str], str | None | collections.abc.Awaitable[str | None]]
 logger = logging.getLogger(__name__)
 
 
-class Auditor(Protocol):
+class Auditor(typing.Protocol):
     async def ainvoke(
         self,
-        input: dict[str, Any],
-        config: dict[str, Any] | None = None,
-    ) -> dict[str, Any]: ...
+        input: dict[str, typing.Any],
+        config: dict[str, typing.Any] | None = None,
+    ) -> dict[str, typing.Any]: ...
 
 
-class Verifier(Protocol):
+class Verifier(typing.Protocol):
     async def ainvoke(
         self,
-        input: dict[str, Any],
-        config: dict[str, Any] | None = None,
-    ) -> dict[str, Any]: ...
+        input: dict[str, typing.Any],
+        config: dict[str, typing.Any] | None = None,
+    ) -> dict[str, typing.Any]: ...
 
 
 async def verify_findings(
@@ -69,7 +69,7 @@ async def audit_page(
     *,
     run_id: str,
     verifier: Verifier | None = None,
-) -> dict[str, Any]:
+) -> dict[str, typing.Any]:
     """Audit one page: the deterministic inventory, the model's findings (retried, then checked by a second reader) and
     their merge. A model that fails every attempt degrades to the deterministic findings instead of raising, and the
     result says so in `audit_mode`. The full-book audit and the auditor evaluation both call this."""
@@ -256,7 +256,7 @@ async def audit_pages(
     }
 
 
-async def _gather_cancel_on_failure(awaitables: Iterable[Coroutine[Any, Any, Any]]) -> list[Any]:
+async def _gather_cancel_on_failure(awaitables: collections.abc.Iterable[collections.abc.Coroutine[typing.Any, typing.Any, typing.Any]]) -> list[typing.Any]:
     tasks = [asyncio.create_task(awaitable) for awaitable in awaitables]
     try:
         return await asyncio.gather(*tasks)

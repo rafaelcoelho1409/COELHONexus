@@ -2,26 +2,26 @@
 from __future__ import annotations
 from ... import graphs, nodes
 
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
-from typing import Any, NotRequired, TypedDict
+import collections.abc
+import dataclasses
+import typing
 
 
-PageReader = Callable[[str], str | None | Awaitable[str | None]]
-ArtifactWriter = Callable[[str, str, str], Any]
-ArtifactExists = Callable[[str], Awaitable[bool]]
+PageReader = collections.abc.Callable[[str], str | None | collections.abc.Awaitable[str | None]]
+ArtifactWriter = collections.abc.Callable[[str, str, str], typing.Any]
+ArtifactExists = collections.abc.Callable[[str], collections.abc.Awaitable[bool]]
 
 
-class PageReference(TypedDict):
+class PageReference(typing.TypedDict):
     """Small manifest reference to one immutable raw Markdown page."""
 
     page: int
     key: str
-    pictures: NotRequired[int]
-    section_path: NotRequired[list[str]]
+    pictures: typing.NotRequired[int]
+    section_path: typing.NotRequired[list[str]]
 
 
-class IngestionPageReference(TypedDict):
+class IngestionPageReference(typing.TypedDict):
     """Pinned page inputs and output locations; never contains Markdown text."""
 
     page: int
@@ -30,11 +30,11 @@ class IngestionPageReference(TypedDict):
     normalized_key: str
     assessment_key: str
     patch_proposals_key: str
-    pictures: NotRequired[int]
-    section_path: NotRequired[list[str]]
+    pictures: typing.NotRequired[int]
+    section_path: typing.NotRequired[list[str]]
 
 
-class IngestionPageAuditResult(TypedDict):
+class IngestionPageAuditResult(typing.TypedDict):
     """One page's audit as kept in graph checkpoints."""
 
     page: int
@@ -42,12 +42,12 @@ class IngestionPageAuditResult(TypedDict):
     markdown_chars: int
     pictures: int
     assessment: dict[str, object]
-    warnings: NotRequired[list[str]]
-    audit_mode: NotRequired[str]
-    structured_output_fallback: NotRequired[bool]
+    warnings: typing.NotRequired[list[str]]
+    audit_mode: typing.NotRequired[str]
+    structured_output_fallback: typing.NotRequired[bool]
 
 
-class IngestionPageResult(TypedDict, total = False):
+class IngestionPageResult(typing.TypedDict, total = False):
     """Compact page result safe to keep in graph checkpoints."""
 
     page: int
@@ -76,7 +76,7 @@ class IngestionPageResult(TypedDict, total = False):
     content_decision_source: str
 
 
-@dataclass(frozen = True, slots = True)
+@dataclasses.dataclass(frozen = True, slots = True)
 class IngestionDependencies:
     """What the nodes of one run need, handed to them as the graph's `context`: where pages and artifacts live, the agents, and where progress goes."""
 
@@ -88,4 +88,4 @@ class IngestionDependencies:
     metadata_normalizer: nodes.ingestion.metadata_normalization.service.Normalizer
     content_classifier: nodes.ingestion.content_classification.service.ContentClassifier
     progress_callback: graphs.service.ProgressReporter | None = None
-    finding_verifier: Any | None = None
+    finding_verifier: typing.Any | None = None

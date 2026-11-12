@@ -2,10 +2,10 @@
 from __future__ import annotations
 from . import entities
 
-from typing import TypedDict
+import typing
 
 
-class IngestionRunState(TypedDict, total = False):
+class IngestionRunState(typing.TypedDict, total = False):
     """Versioned book run state; large source and output text stays in MinIO."""
 
     book_id: str

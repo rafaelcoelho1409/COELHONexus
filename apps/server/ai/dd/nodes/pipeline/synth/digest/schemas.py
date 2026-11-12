@@ -2,18 +2,18 @@
 from __future__ import annotations
 from . import params, patterns, versions
 
-from typing import Literal, Optional
+import typing
 
-from pydantic import BaseModel, Field, field_validator
-
-
-
-Relevance = Literal["primary", "supporting", "tangential"]
+import pydantic
 
 
-class SectionContribution(BaseModel):
+
+Relevance = typing.Literal["primary", "supporting", "tangential"]
+
+
+class SectionContribution(pydantic.BaseModel):
     """One source's contribution to ONE outline section."""
-    section_id: str = Field(
+    section_id: str = pydantic.Field(
         description = (
             "Outline section id this contribution targets. MUST be one "
             "of the section_ids listed in the prompt outline (s1..sN)."
@@ -28,11 +28,11 @@ class SectionContribution(BaseModel):
     # sawc_write's per-section routing — which reads exactly this field —
     # found nothing to route, 100% of the time, on every chapter, in
     # every run, regardless of digest's own success rate.
-    source_key: str = Field(
+    source_key: str = pydantic.Field(
         default = "",
         description = "Populated programmatically, not by the LLM.",
     )
-    relevance: Relevance = Field(
+    relevance: Relevance = pydantic.Field(
         description = (
             "How central this source is to the section: 'primary' = "
             "source is a main authority; 'supporting' = useful detail "
@@ -40,19 +40,19 @@ class SectionContribution(BaseModel):
             "passing."
         ),
     )
-    summary: str = Field(
+    summary: str = pydantic.Field(
         description = (
             "1-3 sentences (20-600 chars) summarizing exactly what THIS "
             "source contributes to THIS section."
         ),
     )
-    key_facts: list[str] = Field(
+    key_facts: list[str] = pydantic.Field(
         description = (
             "1-5 concrete extractable claims (6-300 chars each), one per "
             "line. Each fact should be standalone."
         ),
     )
-    code_refs: list[str] = Field(
+    code_refs: list[str] = pydantic.Field(
         default_factory = list,
         description = (
             "Vault hashes from THIS source that belong to THIS section. "
@@ -60,7 +60,7 @@ class SectionContribution(BaseModel):
         ),
     )
 
-    @field_validator("section_id")
+    @pydantic.field_validator("section_id")
     @classmethod
     def _validate_id(cls, v: str) -> str:
         if not patterns.SECTION_ID_RE.match(v):
@@ -69,7 +69,7 @@ class SectionContribution(BaseModel):
             )
         return v
 
-    @field_validator("summary")
+    @pydantic.field_validator("summary")
     @classmethod
     def _validate_summary(cls, v: str) -> str:
         s = " ".join(v.strip().split())
@@ -80,7 +80,7 @@ class SectionContribution(BaseModel):
             )
         return s
 
-    @field_validator("key_facts")
+    @pydantic.field_validator("key_facts")
     @classmethod
     def _validate_facts(cls, v: list[str]) -> list[str]:
         if not (
@@ -101,7 +101,7 @@ class SectionContribution(BaseModel):
             cleaned.append(s)
         return cleaned
 
-    @field_validator("code_refs")
+    @pydantic.field_validator("code_refs")
     @classmethod
     def _validate_refs(cls, v: list[str]) -> list[str]:
         for h in v:
@@ -116,28 +116,28 @@ class SectionContribution(BaseModel):
         return v
 
 
-class LLMDigestPayload(BaseModel):
+class LLMDigestPayload(pydantic.BaseModel):
     """What the LLM returns. The source_key is injected by the node code
     (we know it; LLM doesn't need to echo it). Other fields are pure LLM
     output."""
-    source_title: str = Field(
+    source_title: str = pydantic.Field(
         description = (
             "A concise title for this source page (3-200 chars)."
         ),
     )
-    overall_summary: str = Field(
+    overall_summary: str = pydantic.Field(
         description = (
             "1-paragraph overall summary (30-800 chars). NOT keyed to "
             "any section."
         ),
     )
-    contributes_to: list[SectionContribution] = Field(
+    contributes_to: list[SectionContribution] = pydantic.Field(
         description = (
             "List of contributions, one per outline section this source "
             "ACTUALLY contributes to. 0-20 entries."
         ),
     )
-    unassigned_code_refs: list[str] = Field(
+    unassigned_code_refs: list[str] = pydantic.Field(
         default_factory = list,
         description = (
             "Vault hashes present in this source that you couldn't "
@@ -145,7 +145,7 @@ class LLMDigestPayload(BaseModel):
         ),
     )
 
-    @field_validator("source_title")
+    @pydantic.field_validator("source_title")
     @classmethod
     def _validate_title(cls, v: str) -> str:
         s = " ".join(v.strip().split())
@@ -158,7 +158,7 @@ class LLMDigestPayload(BaseModel):
             )
         return s
 
-    @field_validator("overall_summary")
+    @pydantic.field_validator("overall_summary")
     @classmethod
     def _validate_overall(cls, v: str) -> str:
         s = " ".join(v.strip().split())
@@ -172,7 +172,7 @@ class LLMDigestPayload(BaseModel):
             )
         return s
 
-    @field_validator("contributes_to")
+    @pydantic.field_validator("contributes_to")
     @classmethod
     def _validate_contribs(
         cls, v: list[SectionContribution],
@@ -189,7 +189,7 @@ class LLMDigestPayload(BaseModel):
             )
         return v
 
-    @field_validator("unassigned_code_refs")
+    @pydantic.field_validator("unassigned_code_refs")
     @classmethod
     def _validate_unassigned(cls, v: list[str]) -> list[str]:
         for h in v:
@@ -202,18 +202,18 @@ class LLMDigestPayload(BaseModel):
         return v
 
 
-class SourceDigest(BaseModel):
+class SourceDigest(pydantic.BaseModel):
     """A single source's digest. Persisted in the chapter digest blob."""
     source_key: str
     source_title: str
     overall_summary: str
     contributes_to: list[SectionContribution]
-    unassigned_code_refs: list[str] = Field(default_factory = list)
-    deployment: Optional[str] = None
-    wall_ms: Optional[int] = None
+    unassigned_code_refs: list[str] = pydantic.Field(default_factory = list)
+    deployment: typing.Optional[str] = None
+    wall_ms: typing.Optional[int] = None
 
 
-class CoverageStats(BaseModel):
+class CoverageStats(pydantic.BaseModel):
     """Aggregate coverage metrics over the chapter digest."""
     n_sources:                int
     n_sections:               int
@@ -225,7 +225,7 @@ class CoverageStats(BaseModel):
     avg_sections_per_source:  float
 
 
-class ChapterDigest(BaseModel):
+class ChapterDigest(pydantic.BaseModel):
     """Full chapter digest — what gets persisted to MinIO."""
     schema_version: str = versions.DIGEST_SCHEMA_VERSION
     prompt_version: str = versions.DIGEST_PROMPT_VERSION
@@ -237,4 +237,4 @@ class ChapterDigest(BaseModel):
     per_section: dict[str, list[SectionContribution]]
     coverage_stats: CoverageStats
     # source-pool merge result.
-    merged_sections: dict[str, str] = Field(default_factory = dict)
+    merged_sections: dict[str, str] = pydantic.Field(default_factory = dict)
