@@ -168,6 +168,12 @@ class BookSynthesis(BaseModel):
     cross_chapter_connections: list[ChapterLesson] = Field(max_length = 12)
     limitations: list[ChapterLesson] = Field(max_length = 12)
 
+    @model_validator(mode = "before")
+    @classmethod
+    def _unwrap_stringified_collections(cls, data):
+        """Normalize JSON-stringified citation arrays while keeping all schema limits."""
+        return _normalize_stringified_collections(data)
+
 
 class SourceRef(BaseModel):
     model_config = ConfigDict(extra = "forbid")

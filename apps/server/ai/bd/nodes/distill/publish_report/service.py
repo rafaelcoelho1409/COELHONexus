@@ -1,11 +1,13 @@
 """Compose and persist one citation-resolvable Learning Guide."""
 from __future__ import annotations
-import domains
-from .... import graphs
 
 import hashlib
 import json
 from typing import Any
+
+import domains
+
+from .... import graphs
 
 
 def _json_body(value: Any) -> str:
@@ -101,6 +103,7 @@ async def publish_report(
     chapters = []
     chapter_charts = []
     visual_review_notes = []
+    citation_review_notes = []
     ordered_chapters = []
     for ref in state.get("completed_chapters", []):
         artifact = json.loads(await storage.read_text(ref["artifact_key"]))
@@ -114,6 +117,11 @@ async def publish_report(
         visual_review_notes.extend(
             f"Chapter {artifact['title']}: {flag}"
             for flag in artifact.get("visual_review_flags", [])
+            if isinstance(flag, str) and flag
+        )
+        citation_review_notes.extend(
+            f"Chapter {artifact['title']}: {flag}"
+            for flag in artifact.get("citation_review_flags", [])
             if isinstance(flag, str) and flag
         )
         diagrams = [
@@ -164,6 +172,7 @@ async def publish_report(
     review_notes = [
         "This is an automated draft. No representative human-reviewed evaluation set has been run for this book.",
         *visual_review_notes,
+        *citation_review_notes,
     ]
     review_notes.append(
         f"Distill processed {state['selected_page_count']} of {state['expected_page_count']} physical pages "

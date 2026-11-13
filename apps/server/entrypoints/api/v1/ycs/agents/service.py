@@ -28,7 +28,7 @@ async def build_graph_from_request(request: Request):
     BYOK exclusive-override was dropped — routing one user key through a shared
     fallback defeats explicit provider choice; same workload as Planner/Synth so same endpoint path."""
     app = request.app
-    return ai.ycs.graphs.ask.adaptive.graphs.build_adaptive_rag_graph(
+    return ai.ycs.graphs.ask.adaptive.graphs.adaptive_rag_graph(
         retriever    = app.state.smart_retriever,
         grader       = app.state.grader,
         llm          = app.state.llm,

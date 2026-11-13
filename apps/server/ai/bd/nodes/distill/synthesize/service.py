@@ -1,13 +1,17 @@
 """Chapter and whole-book synthesis over independently verified learning units."""
 from __future__ import annotations
-import domains
-from . import domain
-from .... import graphs, prompts
 
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
+from pydantic import ValidationError
+
+import domains
+
+from .... import graphs, prompts
+from . import domain
 
 logger = logging.getLogger(__name__)
 
@@ -18,39 +22,267 @@ def _json_body(value: Any) -> str:
 async def _synthesize_chapter_with_llm(
     dependencies: graphs.distill.entities.DistillDependencies,
     run_id: str,
+    chapter_id: str,
     prompt: str,
 ) -> domains.bd.distill.schemas.ChapterSynthesis:
     controls = dependencies.controls
-    async with controls.chapter_synthesis_semaphore:
-        async with controls.chapter_settle_lock:
-            if not controls.chapter_pool_settled:
-                domains.settings.chat.service.refresh_endpoint()
-                endpoint = domains.settings.chat.service.ENDPOINT
-                if domains.settings.chat.domain.rotator_health_url(endpoint.base_url):
-                    settled = await domains.settings.chat.service.wait_for_rotator_settle(
-                        domains.bd.distill.params.CHAPTER_SYNTHESIS_SETTLE_CAP_S,
-                    )
-                    logger.info("[bd-distill] chapter synthesis Rotator settle: %s", settled)
-                controls.chapter_pool_settled = True
+
+    async def run_model_call(call: Callable[[], Awaitable[Any]]) -> Any:
+        async with controls.chapter_synthesis_semaphore:
+            async with controls.chapter_settle_lock:
+                if not controls.chapter_pool_settled:
+                    domains.settings.chat.service.refresh_endpoint()
+                    endpoint = domains.settings.chat.service.ENDPOINT
+                    if domains.settings.chat.domain.rotator_health_url(endpoint.base_url):
+                        settled = await domains.settings.chat.service.wait_for_rotator_settle(
+                            domains.bd.distill.params.CHAPTER_SYNTHESIS_SETTLE_CAP_S,
+                        )
+                        logger.info("[bd-distill] chapter synthesis Rotator settle: %s", settled)
+                    controls.chapter_pool_settled = True
+            try:
+                with domains.settings.llm_counter.service.llm_context(
+                    ns = "bd", run_id = run_id, node_id = "chapter_synthesizer", stage = "distill",
+                ):
+                    return await call()
+            except Exception as error:
+                if domains.settings.chat.domain.is_transient_provider_error(error):
+                    async with controls.chapter_settle_lock:
+                        controls.chapter_pool_settled = False
+                raise
+
+    current_prompt = prompt
+    last_error: Exception | None = None
+    structured_attempts = domains.bd.distill.params.CHAPTER_SCHEMA_REPAIR_ATTEMPTS + 1
+    for attempt in range(structured_attempts):
         try:
-            with domains.settings.llm_counter.service.llm_context(
-                ns = "bd", run_id = run_id, node_id = "chapter_synthesizer", stage = "distill",
-            ):
-                synthesis, _ = await domains.settings.chat.service.chat_structured_async(
-                    prompt,
+            synthesis, _ = await run_model_call(
+                lambda request_prompt = current_prompt: domains.settings.chat.service.chat_structured_async(
+                    request_prompt,
                     domains.bd.distill.schemas.ChapterSynthesis,
                     max_tokens = 7000,
                     temperature = 0.0,
                     timeout_s = domains.bd.distill.params.CHAPTER_SYNTHESIS_TIMEOUT_S,
                     strict = False,
                     rotator_task = "bd_distill_chapter_synthesizer",
+                ),
+            )
+            return synthesis
+        except (ValidationError, ValueError) as error:
+            last_error = error
+            logger.warning(
+                "[bd-distill] chapter synthesizer returned invalid structured output "
+                "run=%s chapter=%s attempt=%s/%s error_type=%s",
+                run_id,
+                chapter_id,
+                attempt + 1,
+                structured_attempts,
+                type(error).__name__,
+            )
+            if attempt + 1 < structured_attempts:
+                current_prompt = (
+                    prompt
+                    + "\n\nThe previous response was empty or did not validate as a complete "
+                    + "ChapterSynthesis object. Return the full required JSON object now, with "
+                    + "overview, overview_attribution, overview_learning_unit_ids, lessons, and "
+                    + "open_questions at the root. Do not return an empty object or an envelope."
+                    + f"\nValidation issue: {str(error)[:1200]}"
                 )
-        except Exception as error:
-            if domains.settings.chat.domain.is_transient_provider_error(error):
-                async with controls.chapter_settle_lock:
-                    controls.chapter_pool_settled = False
-            raise
-    return synthesis
+
+    text_attempts = domains.bd.distill.params.CHAPTER_TEXT_FALLBACK_ATTEMPTS
+    for attempt in range(text_attempts):
+        retry_instruction = (
+            "Return only one complete JSON object matching the ChapterSynthesis contract. "
+            "Do not use markdown fences, omit required fields, or return an empty object."
+            if attempt == 0
+            else "The previous JSON response was invalid. Correct it and return only the complete "
+            "ChapterSynthesis JSON object at the root, with all required fields."
+        )
+        text_prompt = current_prompt + "\n\n" + retry_instruction
+        response, _ = await run_model_call(
+            lambda request_prompt = text_prompt: domains.settings.chat.service.chat_text_async(
+                request_prompt,
+                max_tokens = 7000,
+                temperature = 0.0,
+                timeout_s = domains.bd.distill.params.CHAPTER_SYNTHESIS_TIMEOUT_S,
+                rotator_task = "bd_distill_chapter_synthesizer",
+            ),
+        )
+
+        synthesis = domains.bd.distill.domain.chapter_synthesis_from_agent_result({
+            "messages": [{"role": "assistant", "content": response}],
+        })
+        if synthesis is not None:
+            return synthesis
+        last_error = ValueError("the JSON-text fallback did not contain a valid ChapterSynthesis")
+        current_prompt = (
+            prompt
+            + "\n\nThe previous response did not contain valid ChapterSynthesis JSON. Return only "
+            + "one complete JSON object at the root with all required fields. Previous response: "
+            + response[:4000]
+        )
+        logger.warning(
+            "[bd-distill] chapter JSON-text fallback returned invalid output run=%s attempt=%s/%s",
+            run_id,
+            attempt + 1,
+            text_attempts,
+        )
+
+    raise ValueError(
+        "chapter synthesizer returned no valid ChapterSynthesis after structured and JSON-text retries"
+    ) from last_error
+
+
+async def _synthesize_book_batch_with_llm(
+    run_id: str,
+    batch_id: str,
+    prompt: str,
+) -> domains.bd.distill.schemas.BookSynthesis:
+    """Recover from invalid whole-book structured output without weakening its schema."""
+    current_prompt = prompt
+    last_error: Exception | None = None
+    structured_attempts = domains.bd.distill.params.BOOK_SCHEMA_REPAIR_ATTEMPTS + 1
+    for attempt in range(structured_attempts):
+        try:
+            with domains.settings.llm_counter.service.llm_context(
+                ns = "bd", run_id = run_id, node_id = "book_synthesizer", stage = "distill",
+            ):
+                synthesis, _ = await domains.settings.chat.service.chat_structured_async(
+                    current_prompt,
+                    domains.bd.distill.schemas.BookSynthesis,
+                    max_tokens = 6000,
+                    temperature = 0.0,
+                    timeout_s = domains.bd.distill.params.BOOK_SYNTHESIS_TIMEOUT_S,
+                    strict = False,
+                    rotator_task = "bd_distill_book_synthesizer",
+                )
+            return synthesis
+        except (ValidationError, ValueError) as error:
+            last_error = error
+            logger.warning(
+                "[bd-distill] book synthesizer returned invalid structured output "
+                "run=%s batch=%s attempt=%s/%s error_type=%s",
+                run_id,
+                batch_id,
+                attempt + 1,
+                structured_attempts,
+                type(error).__name__,
+            )
+            if attempt + 1 < structured_attempts:
+                current_prompt = (
+                    prompt
+                    + "\n\nThe previous response did not satisfy the BookSynthesis schema. "
+                    + "Return a complete corrected object. Keep central_thesis_learning_unit_ids "
+                    + "between 1 and 24 IDs, and keep each key_takeaways, "
+                    + "cross_chapter_connections, and limitations item's learning_unit_ids "
+                    + "between 1 and 12 IDs. Select only the smallest set of supplied IDs that "
+                    + "directly supports each claim; do not repeat the entire input ID list. "
+                    + f"\nValidation issue: {str(error)[:1200]}"
+                )
+
+    text_attempts = domains.bd.distill.params.BOOK_TEXT_FALLBACK_ATTEMPTS
+    for attempt in range(text_attempts):
+        retry_instruction = (
+            "Return only one complete JSON object matching BookSynthesis. Keep the thesis citation "
+            "list to 1–24 IDs and each claim citation list to 1–12 IDs; select only directly "
+            "supporting IDs from the supplied guides. Do not use markdown fences or an envelope."
+            if attempt == 0
+            else "Correct the previous response and return only a complete BookSynthesis JSON object. "
+            "Keep every citation list within its schema limit and use only supplied IDs."
+        )
+        text_prompt = current_prompt + "\n\n" + retry_instruction
+        with domains.settings.llm_counter.service.llm_context(
+            ns = "bd", run_id = run_id, node_id = "book_synthesizer", stage = "distill",
+        ):
+            response, _ = await domains.settings.chat.service.chat_text_async(
+                text_prompt,
+                max_tokens = 6000,
+                temperature = 0.0,
+                timeout_s = domains.bd.distill.params.BOOK_SYNTHESIS_TIMEOUT_S,
+                rotator_task = "bd_distill_book_synthesizer",
+            )
+
+        synthesis = domains.bd.distill.domain.book_synthesis_from_agent_result({
+            "messages": [{"role": "assistant", "content": response}],
+        })
+        if synthesis is not None:
+            return synthesis
+        last_error = ValueError("the JSON-text fallback did not contain a valid BookSynthesis")
+        current_prompt = (
+            prompt
+            + "\n\nThe previous response did not contain valid BookSynthesis JSON. Return only "
+            + "one complete root-level JSON object, using the supplied IDs and respecting all "
+            + "citation-list limits. Previous response: "
+            + response[:4000]
+        )
+        logger.warning(
+            "[bd-distill] book JSON-text fallback returned invalid output "
+            "run=%s batch=%s attempt=%s/%s",
+            run_id,
+            batch_id,
+            attempt + 1,
+            text_attempts,
+        )
+
+    raise ValueError(
+        "book synthesizer returned no valid BookSynthesis after structured and JSON-text retries"
+    ) from last_error
+
+
+async def _ensure_chapter_citations(
+    dependencies: graphs.distill.entities.DistillDependencies,
+    run_id: str,
+    chapter_id: str,
+    prompt: str,
+    synthesis: domains.bd.distill.schemas.ChapterSynthesis,
+    allowed_ids: set[str],
+) -> tuple[domains.bd.distill.schemas.ChapterSynthesis, list[str]]:
+    """Correct model-invented prose citations, then retain only source-resolvable output."""
+    issues = domain.chapter_citation_issues(synthesis, allowed_ids)
+    for _ in range(domains.bd.distill.params.CHAPTER_CITATION_REPAIR_ATTEMPTS):
+        if not issues:
+            break
+        repair_prompt = (
+            prompt
+            + "\n\nCitation correction required. The previous response used learning-unit IDs "
+            + "that are not present in this section's input. Return a complete corrected chapter "
+            + "guide. Preserve supported prose, but use only exact IDs from the supplied section; "
+            + "never invent, infer, or copy an ID from another section. Every overview, lesson, "
+            + "and open question must cite at least one allowed ID.\nAllowed IDs: "
+            + json.dumps(sorted(allowed_ids), ensure_ascii = False)
+            + "\nValidation findings: "
+            + json.dumps(issues, ensure_ascii = False)
+            + "\nPrevious response: "
+            + json.dumps(synthesis.model_dump(mode = "json"), ensure_ascii = False)
+        )
+        try:
+            synthesis = await _synthesize_chapter_with_llm(
+                dependencies,
+                run_id,
+                chapter_id,
+                repair_prompt,
+            )
+        except Exception as error:  # noqa: BLE001 — sanitize citations when the optional repair call fails.
+            logger.warning(
+                "[bd-distill] chapter citation correction call failed; using deterministic repair "
+                "chapter=%s error_type=%s",
+                chapter_id,
+                type(error).__name__,
+            )
+            break
+        issues = domain.chapter_citation_issues(synthesis, allowed_ids)
+
+    if not issues:
+        return synthesis, []
+
+    repaired, review_flags = domain.repair_chapter_citations(synthesis, allowed_ids)
+    logger.warning(
+        "[bd-distill] normalized unresolved chapter citations chapter=%s repair_attempts=%s issues=%s flags=%s",
+        chapter_id,
+        domains.bd.distill.params.CHAPTER_CITATION_REPAIR_ATTEMPTS,
+        issues,
+        review_flags,
+    )
+    return repaired, review_flags
 
 
 async def read_learning_units(
@@ -317,12 +549,25 @@ async def synthesize_chapter(
         + "must use only the available learning_unit_ids.\n"
         + json.dumps({"section": chapter_input, "learning_units": units}, ensure_ascii = False)
     )
-    synthesis = await _synthesize_chapter_with_llm(dependencies, state["run_id"], prompt)
+    synthesis = await _synthesize_chapter_with_llm(
+        dependencies,
+        state["run_id"],
+        ref["chapter_id"],
+        prompt,
+    )
     allowed_ids = set(ref["unit_ids"])
-    referenced_ids = domain.chapter_required_text_ids(synthesis)
-    if referenced_ids - allowed_ids:
-        raise ValueError("chapter synthesis referenced a learning unit outside its input section")
+    citation_review_flags: list[str] = []
+    synthesis, citation_flags = await _ensure_chapter_citations(
+        dependencies,
+        state["run_id"],
+        ref["chapter_id"],
+        prompt,
+        synthesis,
+        allowed_ids,
+    )
+    citation_review_flags.extend(citation_flags)
 
+    visual_review_flags: list[str] = []
     visual_issues = domain.visual_evidence_issues(synthesis, units)
     for _ in range(domains.bd.distill.params.CHAPTER_VISUAL_REPAIR_ATTEMPTS):
         if not visual_issues:
@@ -342,15 +587,39 @@ async def synthesize_chapter(
             + "\nPrevious response: "
             + json.dumps(synthesis.model_dump(mode = "json"), ensure_ascii = False)
         )
-        synthesis = await _synthesize_chapter_with_llm(dependencies, state["run_id"], repair_prompt)
-        referenced_ids = domain.chapter_required_text_ids(synthesis)
-        if referenced_ids - allowed_ids:
-            raise ValueError("chapter synthesis referenced a learning unit outside its input section")
+        try:
+            repaired_synthesis = await _synthesize_chapter_with_llm(
+                dependencies,
+                state["run_id"],
+                ref["chapter_id"],
+                repair_prompt,
+            )
+        except Exception as error:  # noqa: BLE001 — optional visuals must not fail a valid chapter guide.
+            visual_review_flags.append(
+                f"Visual repair could not be completed ({type(error).__name__}); unsupported visuals were omitted."
+            )
+            logger.warning(
+                "[bd-distill] chapter visual repair failed; retaining the valid guide and omitting "
+                "unsupported visuals chapter=%s error_type=%s",
+                ref["chapter_id"],
+                type(error).__name__,
+            )
+            break
+        synthesis = repaired_synthesis
+        synthesis, citation_flags = await _ensure_chapter_citations(
+            dependencies,
+            state["run_id"],
+            ref["chapter_id"],
+            prompt,
+            synthesis,
+            allowed_ids,
+        )
+        citation_review_flags.extend(citation_flags)
         visual_issues = domain.visual_evidence_issues(synthesis, units)
 
-    visual_review_flags: list[str] = []
     if visual_issues:
-        synthesis, visual_review_flags = domain.omit_unsupported_visuals(synthesis, visual_issues)
+        synthesis, omitted_visual_flags = domain.omit_unsupported_visuals(synthesis, visual_issues)
+        visual_review_flags.extend(omitted_visual_flags)
         logger.warning(
             "[bd-distill] omitted unsupported chapter visuals chapter=%s items=%s",
             ref["chapter_id"],
@@ -362,7 +631,8 @@ async def synthesize_chapter(
         "section_path": ref["section_path"],
         "unit_ids": ref["unit_ids"],
         "synthesis": synthesis.model_dump(mode = "json"),
-        "visual_review_flags": visual_review_flags,
+        "citation_review_flags": list(dict.fromkeys(citation_review_flags)),
+        "visual_review_flags": list(dict.fromkeys(visual_review_flags)),
     }
     await storage.write(ref["artifact_key"], _json_body(artifact), content_type = domains.bd.distill.params.JSON_TYPE)
     await graphs.service.report(
@@ -450,18 +720,11 @@ async def synthesize_book(
                 + "\n\nSynthesize the provided section guides. Every central thesis, takeaway, connection, and limitation must cite supplied learning-unit IDs.\n"
                 + json.dumps({"scope": synthesis_scope, "section_guides": batch}, ensure_ascii = False)
             )
-            with domains.settings.llm_counter.service.llm_context(
-                ns = "bd", run_id = state["run_id"], node_id = "book_synthesizer", stage = "distill",
-            ):
-                synthesis, _ = await domains.settings.chat.service.chat_structured_async(
-                    prompt,
-                    domains.bd.distill.schemas.BookSynthesis,
-                    max_tokens = 6000,
-                    temperature = 0.0,
-                    timeout_s = domains.bd.distill.params.BOOK_SYNTHESIS_TIMEOUT_S,
-                    strict = False,
-                    rotator_task = "bd_distill_book_synthesizer",
-                )
+            synthesis = await _synthesize_book_batch_with_llm(
+                state["run_id"],
+                f"{level}-{batch_index}",
+                prompt,
+            )
             referenced_ids = set(synthesis.central_thesis_learning_unit_ids)
             for item in [*synthesis.key_takeaways, *synthesis.cross_chapter_connections, *synthesis.limitations]:
                 referenced_ids.update(item.learning_unit_ids)

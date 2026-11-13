@@ -64,10 +64,43 @@ def chapter_synthesis_from_agent_result(result: Any) -> schemas.ChapterSynthesis
     return None
 
 
+def book_synthesis_from_agent_result(result: Any) -> schemas.BookSynthesis | None:
+    """Parse a whole-book guide from provider output, including a known wrapper object."""
+    if not isinstance(result, dict):
+        return None
+
+    for candidate in (result.get("structured_response"), result.get("parsed")):
+        synthesis = _validate_book_synthesis(candidate)
+        if synthesis is not None:
+            return synthesis
+
+    raw = result.get("raw")
+    for message in [*(result.get("messages") or []), *([raw] if raw is not None else [])]:
+        for candidate in _tool_call_arguments(message):
+            synthesis = _validate_book_synthesis(candidate)
+            if synthesis is not None:
+                return synthesis
+        content = _assistant_content(message)
+        for candidate in _json_objects(content):
+            synthesis = _validate_book_synthesis(candidate)
+            if synthesis is not None:
+                return synthesis
+    return None
+
+
 def _validate_chapter_synthesis(value: Any) -> schemas.ChapterSynthesis | None:
     for candidate in _chapter_synthesis_candidates(value):
         try:
             return schemas.ChapterSynthesis.model_validate(candidate)
+        except ValidationError:
+            continue
+    return None
+
+
+def _validate_book_synthesis(value: Any) -> schemas.BookSynthesis | None:
+    for candidate in _book_synthesis_candidates(value):
+        try:
+            return schemas.BookSynthesis.model_validate(candidate)
         except ValidationError:
             continue
     return None
@@ -84,6 +117,21 @@ def _chapter_synthesis_candidates(value: Any) -> Iterator[dict[str, Any]]:
             return
         key, nested = next(iter(candidate.items()))
         if key not in {"chapter", "output", "result", "section", "synthesis"} or not isinstance(nested, dict):
+            return
+        candidate = nested
+
+
+def _book_synthesis_candidates(value: Any) -> Iterator[dict[str, Any]]:
+    """Yield the root response and unwrap one recognized whole-book response envelope."""
+    candidate = value
+    for _ in range(4):
+        if not isinstance(candidate, dict):
+            return
+        yield candidate
+        if len(candidate) != 1:
+            return
+        key, nested = next(iter(candidate.items()))
+        if key not in {"book", "output", "result", "synthesis"} or not isinstance(nested, dict):
             return
         candidate = nested
 

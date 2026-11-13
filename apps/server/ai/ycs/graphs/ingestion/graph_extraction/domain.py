@@ -1,6 +1,5 @@
 """Pure evidence checks for candidate knowledge-graph facts."""
 from __future__ import annotations
-
 from .... import agents
 
 

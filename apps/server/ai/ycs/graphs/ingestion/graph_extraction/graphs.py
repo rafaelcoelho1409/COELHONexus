@@ -1,15 +1,17 @@
 """Compile the YCS per-transcript extraction and evidence-validation graph."""
 from __future__ import annotations
-
-from .... import nodes
 from . import entities, states
+from .... import nodes
 
 from langgraph.graph import END, START, StateGraph
 
 
 def graph_extraction_graph():
     """Extract candidates, validate evidence, and retry once with grounded feedback."""
-    workflow = StateGraph(states.GraphExtractionState, context_schema = entities.GraphExtractionContext)
+    workflow = StateGraph(
+        states.GraphExtractionState,
+        context_schema = entities.GraphExtractionContext,
+    )
     workflow.add_node("extract_candidates", nodes.ingestion.graph_extraction.node.extract_candidates)
     workflow.add_node("validate_evidence", nodes.ingestion.graph_extraction.node.validate_evidence)
     workflow.add_edge(START, "extract_candidates")

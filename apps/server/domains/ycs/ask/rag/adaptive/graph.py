@@ -6,4 +6,4 @@ def build_adaptive_rag_graph(*args, **kwargs):
     """Delegate legacy callers to the application-specific AI graph."""
     import ai
 
-    return ai.ycs.graphs.ask.adaptive.graphs.build_adaptive_rag_graph(*args, **kwargs)
+    return ai.ycs.graphs.ask.adaptive.graphs.adaptive_rag_graph(*args, **kwargs)

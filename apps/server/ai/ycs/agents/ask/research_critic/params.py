@@ -1,5 +1,6 @@
 """YCS evidence critic limits."""
 
+ROTATOR_TASK = "ycs_ask_research_critic"
 MAX_MODEL_CALLS = 2
 AGENT_TIMEOUT_S = 120.0
 MAX_SYNTHESIS_CHARS = 12000

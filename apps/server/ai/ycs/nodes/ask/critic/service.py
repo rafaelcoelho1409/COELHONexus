@@ -1,16 +1,18 @@
-"""DeepAgent-backed evidence critic node for the YCS adaptive graph."""
+"""Evidence assessment and fallback handling for YCS Ask."""
 from __future__ import annotations
+import domains
+from .... import agents, graphs
 
 import asyncio
 import json
 
-from .... import ycs
-import domains
 
-
-async def critic(state: dict, model) -> dict:
+async def critic(
+    state: graphs.ask.adaptive.states.AdaptiveAskState,
+    model,
+) -> dict:
+    """Assess whether the synthesized answer is supported by retrieved evidence."""
     domains.settings.llm_counter.service.set_node(node = "critic")
-    params = ycs.agents.ask.research_critic.params
     evidence = [
         {
             "question": str(item.get("sub_question", "")),
@@ -23,21 +25,21 @@ async def critic(state: dict, model) -> dict:
     payload = json.dumps(
         {
             "question": str(state.get("question", ""))[:2000],
-            "answer": str(state.get("generation", ""))[:params.MAX_SYNTHESIS_CHARS],
+            "answer": str(state.get("generation", ""))[:agents.ask.research_critic.params.MAX_SYNTHESIS_CHARS],
             "evidence": evidence,
         },
         ensure_ascii = False,
-    )[:params.MAX_EVIDENCE_CHARS]
+    )[:agents.ask.research_critic.params.MAX_EVIDENCE_CHARS]
     try:
-        agent = ycs.agents.ask.research_critic.agent.research_critic(model)
+        agent = agents.ask.research_critic.agent.research_critic(model)
         result = await asyncio.wait_for(
-            ycs.agents.service.ask(
+            agents.service.ask(
                 agent,
-                ycs.agents.ask.research_critic.schemas.CriticAssessment,
+                agents.ask.research_critic.schemas.CriticAssessment,
                 payload,
-                attempts = 2,
+                attempts = agents.ask.research_critic.params.MAX_MODEL_CALLS,
             ),
-            timeout = params.AGENT_TIMEOUT_S,
+            timeout = agents.ask.research_critic.params.AGENT_TIMEOUT_S,
         )
     except Exception:
         # A reviewer failure is unknown evidence status, never a positive verification.

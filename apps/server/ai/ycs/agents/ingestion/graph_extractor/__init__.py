@@ -1,4 +1,4 @@
 """Transcript-grounded knowledge graph extraction agent."""
-from . import agent, params
+from . import agent, config, params
 
-__all__ = ["agent", "params"]
+__all__ = ["agent", "config", "params"]

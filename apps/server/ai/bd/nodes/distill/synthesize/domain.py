@@ -1,9 +1,11 @@
 """Pure validation and transformation rules for BD Distill synthesis."""
 from __future__ import annotations
-import domains
-from . import patterns
 
 from typing import Any
+
+import domains
+
+from . import patterns
 
 
 def chapter_required_text_ids(synthesis: domains.bd.distill.schemas.ChapterSynthesis) -> set[str]:
@@ -12,6 +14,99 @@ def chapter_required_text_ids(synthesis: domains.bd.distill.schemas.ChapterSynth
     for lesson in [*synthesis.lessons, *synthesis.open_questions]:
         ids.update(lesson.learning_unit_ids)
     return ids
+
+
+def chapter_citation_issues(
+    synthesis: domains.bd.distill.schemas.ChapterSynthesis,
+    available_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Describe prose citations that do not resolve to this chapter's input units."""
+    fields = [("overview_learning_unit_ids", synthesis.overview_learning_unit_ids)]
+    fields.extend(
+        [
+            (f"lessons[{index}].learning_unit_ids", lesson.learning_unit_ids)
+            for index, lesson in enumerate(synthesis.lessons)
+        ]
+    )
+    fields.extend(
+        [
+            (f"open_questions[{index}].learning_unit_ids", question.learning_unit_ids)
+            for index, question in enumerate(synthesis.open_questions)
+        ]
+    )
+    return [
+        {"field": field, "unknown_ids": sorted(set(unit_ids) - available_ids)}
+        for field, unit_ids in fields
+        if set(unit_ids) - available_ids
+    ]
+
+
+def repair_chapter_citations(
+    synthesis: domains.bd.distill.schemas.ChapterSynthesis,
+    available_ids: set[str],
+) -> tuple[domains.bd.distill.schemas.ChapterSynthesis, list[str]]:
+    """Keep only resolvable prose citations and omit lessons left without support."""
+    if not available_ids:
+        raise ValueError("chapter synthesis cannot be repaired without input learning-unit IDs")
+
+    review_flags: list[str] = []
+
+    def retain_supported(
+        items: list[domains.bd.distill.schemas.ChapterLesson],
+        field: str,
+    ) -> list[domains.bd.distill.schemas.ChapterLesson]:
+        item_label = "lesson" if field == "lessons" else "open question"
+        retained = []
+        for item in items:
+            valid_ids = list(dict.fromkeys(
+                unit_id for unit_id in item.learning_unit_ids if unit_id in available_ids
+            ))
+            unknown_count = len(set(item.learning_unit_ids) - available_ids)
+            if unknown_count:
+                review_flags.append(
+                    f"Removed {unknown_count} unresolved citation(s) from {field}."
+                )
+            if not valid_ids:
+                review_flags.append(
+                    f"Omitted {item_label} without a resolvable source citation: {item.title}."
+                )
+                continue
+            retained.append(item.model_copy(update = {"learning_unit_ids": valid_ids}))
+        return retained
+
+    lessons = retain_supported(synthesis.lessons, "lessons")
+    open_questions = retain_supported(synthesis.open_questions, "open_questions")
+    overview_ids = list(dict.fromkeys(
+        unit_id for unit_id in synthesis.overview_learning_unit_ids if unit_id in available_ids
+    ))
+    unknown_overview_count = len(set(synthesis.overview_learning_unit_ids) - available_ids)
+    if unknown_overview_count:
+        review_flags.append(
+            f"Removed {unknown_overview_count} unresolved citation(s) from the overview."
+        )
+    overview_attribution = synthesis.overview_attribution
+    if not overview_ids:
+        overview_ids = list(dict.fromkeys(
+            unit_id
+            for item in [*lessons, *open_questions]
+            for unit_id in item.learning_unit_ids
+        ))
+        if not overview_ids:
+            # The overview summarizes this supplied section; broad source refs are safer than
+            # attaching an invented ID or failing all otherwise completed chapter work.
+            overview_ids = sorted(available_ids)
+        overview_attribution = "agent_inference"
+        review_flags.append(
+            "Rebuilt overview citations from resolvable section sources; review its attribution."
+        )
+
+    repaired = synthesis.model_copy(update = {
+        "overview_attribution": overview_attribution,
+        "overview_learning_unit_ids": overview_ids,
+        "lessons": lessons,
+        "open_questions": open_questions,
+    })
+    return repaired, review_flags
 
 
 def _normalize_evidence_quote(value: str) -> str:
