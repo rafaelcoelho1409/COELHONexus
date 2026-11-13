@@ -6,7 +6,7 @@ indentation), so each distinct code block is repaired once by a code_normalizer 
 every later chapter. A block it cannot repair ships as it came, and still passes the audit."""
 from __future__ import annotations
 import domains
-from . import domain, keys, params, schemas, versions
+from . import domain, keys, params, schemas, templates, versions
 from ..... import agents, graphs, tools
 
 import json
@@ -305,7 +305,7 @@ async def finalize(state: graphs.pipeline.synth.render.states.RenderState, runti
 
     n_subtopics_total = sum(len(s.get("subtopics") or []) for s in sections)
     n_citations_total = sum(len(s.get("citations") or []) for s in sections)
-    chapter_md = domain.render_chapter_md(chapter_title, sections_ctx)
+    chapter_md = templates.render_chapter_md(chapter_title, sections_ctx)
     # Audit AFTER rendering: sentinels_in_output is measured on the rendered markdown.
     audit = domain.compute_audit(resolution_log = resolution_log, vault = vault, rendered_chapter_md = chapter_md)
     coverage = domain.coverage_metrics(sections, data["source_keys"], len(vault), len(audit.n_orphan_unused))

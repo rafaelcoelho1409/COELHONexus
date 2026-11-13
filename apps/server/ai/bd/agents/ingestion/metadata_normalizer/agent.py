@@ -47,7 +47,8 @@ def metadata_normalizer(model = None):
         model = model,
         tools = [],
         system_prompt = prompts.ingestion.metadata_normalizer.prompts.SYSTEM_PROMPT,
-        middleware = [middlewares.middleware.ToolAllowlistMiddleware(frozenset({"read_file"}))],
+        middleware = [
+            middlewares.middleware.ToolAllowlistMiddleware(frozenset({"read_file"}))],
         response_format = schemas.BookMetadataProposal,
         permissions = [
             FilesystemPermission(

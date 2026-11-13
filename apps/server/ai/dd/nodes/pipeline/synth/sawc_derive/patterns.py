@@ -1,6 +1,6 @@
-"""sawc_derive — pre-compiled regex (signature detection + fence
-extraction + import detection)."""
+"""sawc_derive — pre-compiled regex for signatures, fences, imports, and capstones."""
 from __future__ import annotations
+from . import params
 
 import re
 
@@ -33,3 +33,12 @@ LONE_ELLIPSIS_RE = re.compile(r"^\s*\.{3}\s*$", re.MULTILINE)
 
 # JSON envelope extractor for the re-explain call.
 JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+# Identifier extraction used to compare capstone code with the APIs taught by each step.
+IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+# Remove the optional heading prefix from a generated capstone title.
+CAPSTONE_TITLE_PREFIX_RE = re.compile(
+    rf"^{re.escape(params.CAPSTONE_PREFIX)}\s*:?\s*",
+    re.IGNORECASE,
+)

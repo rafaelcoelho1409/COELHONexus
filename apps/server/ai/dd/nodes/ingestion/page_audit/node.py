@@ -28,14 +28,12 @@ async def audit_page(
         markdown,
         domain.candidates(markdown),
     )
-    assessment = await agents.service.ask_chat_model(
+    assessment = await agents.service.ask(
         auditor,
         agents.schemas.PageAssessment,
-        agents.ingestion.page_auditor.domain.system_prompt(),
         request,
         attempts = params.MAX_ATTEMPTS,
         wait_base_s = params.RETRY_WAIT_BASE_S,
-        recover_json_after_transient_error = False,
         config = config,
     )
     return domain.sanitize_assessment(assessment, markdown = markdown)

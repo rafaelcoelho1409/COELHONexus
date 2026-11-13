@@ -5,9 +5,9 @@ The chapter is scored on 11 deterministic gates plus the five LLM criteria of th
 per-criterion majority stands. A judge that never answers leaves the chapter scored on its gates and does not send it back for the outage. The
 best-seen iteration (every gate passing first, then the score) is tracked here, so the render step ships it even when the loop stops on a worse one."""
 from __future__ import annotations
-from ...... import dd
 import domains
 from . import domain, keys, params, schemas, versions
+from .. import sawc, sawc_derive
 from ..... import agents, graphs
 
 import asyncio
@@ -130,18 +130,18 @@ async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, 
         return {"finished": True, **graphs.pipeline.synth.service.failure(
             "checklist_path", "checklist_stats", "digest_not_found", f"digest {digest_key!r} not in MinIO — run digest_construct first", started, digest_key = digest_key,
         )}
-    sawc = await domains.dd.pipeline.storage.service.load_json(blobs, sawc_key)
+    sawc_data = await domains.dd.pipeline.storage.service.load_json(blobs, sawc_key)
     digest = await domains.dd.pipeline.storage.service.load_json(blobs, digest_key)
-    if sawc is None or digest is None:
+    if sawc_data is None or digest is None:
         return {"finished": True, **graphs.pipeline.synth.service.failure("checklist_path", "checklist_stats", "inputs_unreadable", "sawc/digest unreadable", started)}
 
-    chapter_title = sawc.get("chapter_title") or chapter_id
-    sawc_manifest_hash = sawc.get("sawc_manifest_hash") or ""
+    chapter_title = sawc_data.get("chapter_title") or chapter_id
+    sawc_manifest_hash = sawc_data.get("sawc_manifest_hash") or ""
     digest_manifest_hash = digest.get("digest_manifest_hash") or ""
     tutorial = graphs.pipeline.synth.params.tutorial_mode()
     verification_required = graphs.pipeline.synth.params.is_v2()
     checks = domain.active_checks(tutorial, verification_required)
-    verification_key = dd.graphs.pipeline.synth.keys.latest_key(slug, chapter_id, "verification")
+    verification_key = graphs.pipeline.synth.keys.latest_key(slug, chapter_id, "verification")
     verification_report = await domains.dd.pipeline.storage.service.load_json(blobs, verification_key) if verification_required else {}
     graphs.service.emit(
         params.STEP, "start",
@@ -150,7 +150,7 @@ async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, 
     manifest_hash = domain.compute_manifest_hash(
         sawc_manifest_hash = sawc_manifest_hash,
         digest_manifest_hash = digest_manifest_hash,
-        tutorial = (domain.tutorial_token(sawc) + ":" + str((verification_report or {}).get("manifest_hash", "missing"))) if verification_required else domain.tutorial_token(sawc) if tutorial else "",
+        tutorial = (domain.tutorial_token(sawc_data) + ":" + str((verification_report or {}).get("manifest_hash", "missing"))) if verification_required else domain.tutorial_token(sawc_data) if tutorial else "",
     )
     versioned_key = keys.versioned_blob_key(slug, chapter_id, manifest_hash)
     latest_key = keys.latest_blob_key(slug, chapter_id)
@@ -203,7 +203,7 @@ async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, 
             if incoming_score is None or domain.best_seen_key(stats["pass_rate"], n_pregate_passed, n_gates) > domain.best_seen_key(incoming_score, incoming_pregate or 0, n_gates):
                 patch.update({
                     "best_seen_score": stats["pass_rate"], "best_seen_pregate": n_pregate_passed,
-                    "best_seen_sawc_path": dd.nodes.pipeline.synth.sawc.keys.versioned_blob_key(
+                    "best_seen_sawc_path": sawc.keys.versioned_blob_key(
                         slug, chapter_id, sawc_manifest_hash,
                     ),
                 })
@@ -213,7 +213,7 @@ async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, 
 
     # Signals for the gates only (not persisted): does the chapter's source material contain ANY code block, which blocks were routed, their bodies.
     n_vault = digest.get("n_total_vault_hashes")
-    used_hashes = {st.get("code_ref_hash") for s in (sawc.get("sections") or []) for st in (s.get("subtopics") or []) if (st or {}).get("code_ref_hash")}
+    used_hashes = {st.get("code_ref_hash") for s in (sawc_data.get("sections") or []) for st in (s.get("subtopics") or []) if (st or {}).get("code_ref_hash")}
     routed = {h for cs in (digest.get("per_section") or {}).values() for c in cs for h in (c.get("code_refs") or [])}
     vault_bodies: dict[str, str] = {}
     if used_hashes:
@@ -223,7 +223,7 @@ async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, 
         except Exception as error:
             logger.info(f"[checklist_eval] {slug}/{chapter_id}: vault bodies unavailable for the alignment gate ({type(error).__name__})")
     for_checks = {
-        **sawc,
+        **sawc_data,
         "_chapter_has_code": (int(n_vault) > 0) if isinstance(n_vault, (int, float)) else None,
         "_routed_hashes": sorted(routed),
         "_digest_sources": list(digest.get("source_keys") or []),
@@ -236,7 +236,7 @@ async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, 
             "_must_teach": list(ledger.must_teach),
             "_variant_of": {digest_: family.canonical for family in ledger.families for digest_ in family.hashes},
             "_labels": {h: (ledger.blocks[h].defines[0] if ledger.blocks[h].defines else ledger.blocks[h].body.strip().splitlines()[0][:40]) for h in ledger.must_teach if ledger.blocks[h].body.strip()},
-            "_capstone_prefix": dd.nodes.pipeline.synth.sawc_derive.params.CAPSTONE_PREFIX,
+            "_capstone_prefix": sawc_derive.params.CAPSTONE_PREFIX,
         })
     if verification_required:
         for_checks["_verification_report"] = verification_report or {"missing": True}
@@ -252,12 +252,12 @@ async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, 
     graphs.service.emit(
         params.STEP, "pregates_done", n_pregate = len(pre), n_passed = sum(1 for r in pre if r.passed), names_failed = [r.name for r in pre if not r.passed],
     )
-    chapter, truncated = domain.render_chapter_for_judge(sawc)
+    chapter, truncated = domain.render_chapter_for_judge(sawc_data)
     grounding = domain.render_digest_for_grounding(digest)
     graphs.service.emit(params.STEP, "judge_request", chapter_chars = len(chapter), digest_chars = len(grounding), truncated = truncated)
     context.scratch[params.STEP] = {
         "frame": {
-            "chapter_id": chapter_id, "chapter_title": chapter_title, "framework": slug, "sawc": sawc, "digest": digest,
+            "chapter_id": chapter_id, "chapter_title": chapter_title, "framework": slug, "sawc": sawc_data, "digest": digest,
             "chapter": chapter, "grounding": grounding, "truncated": truncated,
         },
     }
@@ -345,7 +345,7 @@ async def finalize(state: graphs.pipeline.synth.checklist.states.ChecklistState,
     is_better = incoming_score is None or domain.best_seen_key(pass_rate, n_pre_passed, len(pre)) > domain.best_seen_key(incoming_score, incoming_pregate or 0, len(pre))
     if is_better:
         best_score, best_pregate = pass_rate, n_pre_passed
-        best_path = dd.nodes.pipeline.synth.sawc.keys.versioned_blob_key(slug, chapter_id, sawc_manifest_hash)
+        best_path = sawc.keys.versioned_blob_key(slug, chapter_id, sawc_manifest_hash)
 
     answered = bool(run["answered"])
     evaluation = schemas.ChecklistEvaluation(

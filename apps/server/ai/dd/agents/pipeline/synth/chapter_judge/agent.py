@@ -1,11 +1,10 @@
 """DeepAgent that judges one rendered chapter against the five checklist criteria."""
 from __future__ import annotations
-from ...... import dd
 import domains
 from . import config, params
 from .. import schemas
 from .... import service
-from ..... import middlewares, prompts
+from ..... import agents, middlewares, prompts
 
 from deepagents import (
     FilesystemPermission,
@@ -16,6 +15,7 @@ from deepagents import (
 )
 from deepagents.backends import StateBackend
 from deepagents.profiles.harness import harness_profiles
+from langchain_openai import ChatOpenAI
 
 
 def chapter_judge(model = None):
@@ -31,6 +31,8 @@ def chapter_judge(model = None):
     model_name = getattr(model, "model_name", None)
     if not isinstance(model_name, str) or not model_name or ":" in model_name:
         raise ValueError("the chapter judge requires a named OpenAI-compatible Rotator model")
+    if not isinstance(model, ChatOpenAI):
+        raise TypeError("the chapter judge must use the configured ChatOpenAI model")
 
     # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
     # before (by another role or other code in the process) hides tools from this agent.
@@ -45,6 +47,7 @@ def chapter_judge(model = None):
     )
     agent = create_deep_agent(
         model = model,
+        tools = [],
         system_prompt = prompts.pipeline.synth.chapter_judge.prompts.SYSTEM_PROMPT,
         response_format = schemas.JudgeAnswer,
         middleware = [
@@ -71,6 +74,6 @@ def chapter_judge(model = None):
     error_message = "DeepAgents exposed an unreviewed tool to the chapter judge"
     if not isinstance(available_tools, dict):
         raise RuntimeError(error_message)
-    if set(available_tools) - dd.agents.params.STACK_TOOLS:
+    if set(available_tools) - agents.params.STACK_TOOLS:
         raise RuntimeError(error_message)
     return agent

@@ -46,7 +46,9 @@ def content_classifier(model = None):
         system_prompt = prompts.ingestion.content_classifier.prompts.SYSTEM_PROMPT,
         middleware = [
             middlewares.middleware.ToolAllowlistMiddleware(frozenset({"read_file"})),
-            ModelCallLimitMiddleware(run_limit = 2, exit_behavior = "end"),
+            ModelCallLimitMiddleware(
+                run_limit = 2, 
+                exit_behavior = "end"),
         ],
         response_format = agents.schemas.ContentPageAssessment,
         permissions = [

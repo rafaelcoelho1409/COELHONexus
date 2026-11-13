@@ -53,11 +53,11 @@ def structure_repair(model = None):
         tools = repair_tools,
         system_prompt = prompts.ingestion.structure_repair.prompts.SYSTEM_PROMPT,
         context_schema = domains.bd.ingestion.ai.entities.SpecialistContext,
-        middleware = [middlewares.middleware.ToolAllowlistMiddleware(
-            frozenset({"read_file", *(tool.name for tool in repair_tools)}),
-        ), ModelCallLimitMiddleware(
-            run_limit = domains.bd.ingestion.ai.params.SPECIALIST_MODEL_CALL_LIMIT,
-            exit_behavior = "end",
+        middleware = [
+            middlewares.middleware.ToolAllowlistMiddleware(frozenset({"read_file", *(tool.name for tool in repair_tools)}),), 
+            ModelCallLimitMiddleware(
+                run_limit = domains.bd.ingestion.ai.params.SPECIALIST_MODEL_CALL_LIMIT,
+                exit_behavior = "end",
         )],
         response_format = schemas.PatchDraftBatch,
         permissions = [

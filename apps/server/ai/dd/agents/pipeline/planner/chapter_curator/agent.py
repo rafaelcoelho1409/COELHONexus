@@ -1,11 +1,10 @@
 """DeepAgent that splits one oversize chapter, checking its split with tools."""
 from __future__ import annotations
-from ...... import dd
 import domains
 from . import config, params
 from .. import schemas
 from .... import service
-from ..... import middlewares, prompts, skills
+from ..... import agents, middlewares, prompts, skills
 
 from collections.abc import Sequence
 from typing import Any
@@ -19,6 +18,7 @@ from deepagents import (
 )
 from deepagents.backends import StateBackend
 from deepagents.profiles.harness import harness_profiles
+from langchain_openai import ChatOpenAI
 
 
 def chapter_curator(*, tools: Sequence[Any], model = None):
@@ -34,7 +34,8 @@ def chapter_curator(*, tools: Sequence[Any], model = None):
     model_name = getattr(model, "model_name", None)
     if not isinstance(model_name, str) or not model_name or ":" in model_name:
         raise ValueError("the chapter curator requires a named OpenAI-compatible Rotator model")
-
+    if not isinstance(model, ChatOpenAI):
+        raise TypeError("the chapter curator must use the configured ChatOpenAI model")
     curator_tools = list(tools)
     tool_names = {tool.name for tool in curator_tools}
 
@@ -83,6 +84,6 @@ def chapter_curator(*, tools: Sequence[Any], model = None):
     error_message = "DeepAgents exposed an unreviewed tool to the chapter curator"
     if not isinstance(available_tools, dict):
         raise RuntimeError(error_message)
-    if set(available_tools) - dd.agents.params.STACK_TOOLS - tool_names:
+    if set(available_tools) - agents.params.STACK_TOOLS - tool_names:
         raise RuntimeError(error_message)
     return agent

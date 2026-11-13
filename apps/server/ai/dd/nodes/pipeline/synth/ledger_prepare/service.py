@@ -1,7 +1,8 @@
 """Build the writer's section evidence from the chapter's canonical code ledger, without a source-router LLM call."""
 from __future__ import annotations
-from ...... import dd
 import domains
+from . import keys
+from .. import outline
 from ..... import graphs
 
 import hashlib
@@ -66,14 +67,14 @@ async def ledger_prepare(state: graphs.pipeline.synth.states.SynthState, runtime
             "ledger_path", "ledger_stats", "no_slug_or_chapter_id", "framework_slug or chapter_id missing from SynthState", started,
         )
 
-    outline_key = dd.nodes.pipeline.synth.outline.keys.latest_blob_key(slug, chapter_id)
-    outline = await domains.dd.pipeline.storage.service.load_json(blobs, outline_key)
-    if outline is None:
+    outline_key = outline.keys.latest_blob_key(slug, chapter_id)
+    outline_data = await domains.dd.pipeline.storage.service.load_json(blobs, outline_key)
+    if outline_data is None:
         return graphs.pipeline.synth.service.failure(
             "ledger_path", "ledger_stats", "outline_not_found", f"outline {outline_key!r} not in MinIO", started, outline_key = outline_key,
         )
-    source_keys = sorted(set(outline.get("source_keys") or []))
-    sections = (outline.get("outline") or {}).get("sections") or []
+    source_keys = sorted(set(outline_data.get("source_keys") or []))
+    sections = (outline_data.get("outline") or {}).get("sections") or []
     if not source_keys or not sections:
         return graphs.pipeline.synth.service.failure(
             "ledger_path", "ledger_stats", "empty_outline_or_sources", "outline must contain at least one source and section", started,
@@ -139,18 +140,18 @@ async def ledger_prepare(state: graphs.pipeline.synth.states.SynthState, runtime
         "avg_sections_per_source": sum(len(item["contributes_to"]) for item in per_source.values()) / max(len(per_source), 1),
     }
     manifest_payload = {
-        "outline": outline.get("manifest_hash") or "",
+        "outline": outline_data.get("manifest_hash") or "",
         "ledger": [(digest, ledger.blocks[digest].pages) for digest in ledger.must_teach],
         "assignments": [(section_id, section.get("code_refs") or []) for section_id, section in section_by_id.items()],
     }
     manifest_hash = hashlib.sha256(json.dumps(manifest_payload, sort_keys = True).encode("utf-8")).hexdigest()[:16]
-    latest_key = dd.nodes.pipeline.synth.ledger_prepare.keys.latest_blob_key(slug, chapter_id)
-    versioned_key = dd.nodes.pipeline.synth.ledger_prepare.keys.versioned_blob_key(slug, chapter_id, manifest_hash)
+    latest_key = keys.latest_blob_key(slug, chapter_id)
+    versioned_key = keys.versioned_blob_key(slug, chapter_id, manifest_hash)
     payload = {
         "schema_version": "synth-v2-code-ledger-1",
         "prompt_version": "deterministic-code-ledger-v1",
         "chapter_id": chapter_id,
-        "chapter_title": outline.get("chapter_title") or chapter_id,
+        "chapter_title": outline_data.get("chapter_title") or chapter_id,
         "framework_slug": slug,
         "source_keys": source_keys,
         "n_total_vault_hashes": len(ledger.blocks),
@@ -159,7 +160,7 @@ async def ledger_prepare(state: graphs.pipeline.synth.states.SynthState, runtime
         "merged_sections": {},
         "coverage_stats": coverage,
         "digest_manifest_hash": manifest_hash,
-        "outline_manifest_hash": outline.get("manifest_hash") or "",
+        "outline_manifest_hash": outline_data.get("manifest_hash") or "",
         "ledger_manifest_hash": manifest_hash,
         "must_teach": list(ledger.must_teach),
         "orphaned_must_teach": orphaned,

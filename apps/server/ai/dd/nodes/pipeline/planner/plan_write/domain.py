@@ -6,7 +6,7 @@ from . import params, patterns, versions
 import json
 import hashlib
 
-from numpy import ndarray
+import numpy as np
 
 
 
@@ -195,7 +195,7 @@ def trim_description(desc: str) -> str:
 
 
 def build_cluster_to_keys(
-    refined_assignments: ndarray, keys: list[str],
+    refined_assignments: np.ndarray, keys: list[str],
 ) -> dict[int, list[str]]:
     """Group MinIO doc keys by refined cluster_id. Noise (-1) included
     so the sanitizer can decide whether to drop it."""

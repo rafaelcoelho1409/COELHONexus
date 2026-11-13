@@ -1,9 +1,8 @@
 """Pure Planner v2 card helpers."""
 from __future__ import annotations
+from . import patterns
 
 import hashlib
-
-from . import patterns
 
 
 def content_digest(body: str) -> str:

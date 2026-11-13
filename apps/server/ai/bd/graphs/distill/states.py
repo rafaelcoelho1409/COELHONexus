@@ -1,10 +1,9 @@
 """Compact LangGraph state for resumable Book Distiller reports."""
 from __future__ import annotations
+import domains
 
 import operator
 from typing import Annotated, Any, TypedDict
-
-import domains
 
 
 class DistillRunState(TypedDict, total = False):

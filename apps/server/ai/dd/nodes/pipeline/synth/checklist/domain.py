@@ -2,9 +2,9 @@
 chapter/digest rendering for the judge, the judge's request, LLM verdict
 coercion and manifest hashing."""
 from __future__ import annotations
-from ...... import dd
 import domains
 from . import params, schemas, versions
+from .. import sawc
 
 import ast
 import json
@@ -394,20 +394,20 @@ def majority_verdicts(runs: list[list[schemas.CriterionResult]]) -> list[schemas
     return out
 
 
-def check_code_coverage(sawc: dict) -> schemas.CriterionResult:
+def check_code_coverage(chapter_sawc: dict) -> schemas.CriterionResult:
     """The chapter prints most of the code blocks the digest routed to its sections and cites most of its sources.
     Inputs injected by the service (not persisted): `_routed_hashes`, `_digest_sources`."""
-    routed = set(sawc.get("_routed_hashes") or [])
-    sources = list(sawc.get("_digest_sources") or [])
-    sections = sawc.get("sections") or []
+    routed = set(chapter_sawc.get("_routed_hashes") or [])
+    sources = list(chapter_sawc.get("_digest_sources") or [])
+    sections = chapter_sawc.get("sections") or []
     used = {st.get("code_ref_hash") for s in sections for st in (s.get("subtopics") or []) if (st or {}).get("code_ref_hash")}
     cited = {c.get("source_key") for s in sections for c in (s.get("citations") or []) if (c or {}).get("source_key")}
     problems: list[str] = []
     if len(routed) >= params.COVERAGE_MIN_ROUTED:
         covered = routed & used
-        bodies = sawc.get("_vault_bodies") or {}
+        bodies = chapter_sawc.get("_vault_bodies") or {}
         if bodies:
-            covered |= dd.nodes.pipeline.synth.sawc.domain.near_duplicate_hashes(
+            covered |= sawc.domain.near_duplicate_hashes(
                 sorted(routed - used), sorted(used), bodies,
             )
         n_used = len(covered)
@@ -415,7 +415,7 @@ def check_code_coverage(sawc: dict) -> schemas.CriterionResult:
         if sections:
             need = min(
                 need,
-                params.COVERAGE_CAPACITY_SHARE * len(sections) * dd.nodes.pipeline.synth.sawc.params.TOPUP_SECTION_MAX,
+                params.COVERAGE_CAPACITY_SHARE * len(sections) * sawc.params.TOPUP_SECTION_MAX,
             )
         if n_used < need:
             problems.append(f"only {n_used} of {len(routed)} routed code blocks are printed (or repeated by a printed near-copy)")
@@ -431,15 +431,15 @@ def check_code_coverage(sawc: dict) -> schemas.CriterionResult:
     )
 
 
-def check_code_prose_alignment(sawc: dict) -> schemas.CriterionResult:
+def check_code_prose_alignment(chapter_sawc: dict) -> schemas.CriterionResult:
     """Every verbatim code block shares at least one identifier with the prose written for it (the render step's own
     misroute rule). Input injected by the service: `_vault_bodies` (hash -> fence text); vacuous without it."""
-    bodies = sawc.get("_vault_bodies") or {}
+    bodies = chapter_sawc.get("_vault_bodies") or {}
     if not bodies:
         return schemas.CriterionResult(name = "code_prose_alignment", passed = True, kind = "deterministic", feedback = "")
-    match = dd.nodes.pipeline.synth.sawc.domain.prose_matches_code
+    match = sawc.domain.prose_matches_code
     bad: list[str] = []
-    for s in sawc.get("sections") or []:
+    for s in chapter_sawc.get("sections") or []:
         for st in (s.get("subtopics") or []):
             st = st or {}
             body = bodies.get(st.get("code_ref_hash") or "")
@@ -464,20 +464,20 @@ def tutorial_sections(sawc: dict) -> list[dict]:
     return [s for s in sawc.get("sections") or [] if not str(s.get("heading") or "").startswith(prefix)]
 
 
-def check_best_code_taught(sawc: dict) -> schemas.CriterionResult:
+def check_best_code_taught(chapter_sawc: dict) -> schemas.CriterionResult:
     """Every best code of the chapter's pages is taught by a step: the canonical block of each family of examples (a printed variant counts for its
     family). Never more than the steps can print at all, as for `code_coverage`."""
-    must = list(sawc.get("_must_teach") or [])
-    variant_of = sawc.get("_variant_of") or {}
-    steps = tutorial_sections(sawc)
+    must = list(chapter_sawc.get("_must_teach") or [])
+    variant_of = chapter_sawc.get("_variant_of") or {}
+    steps = tutorial_sections(chapter_sawc)
     used = {st.get("code_ref_hash") for s in steps for st in (s.get("subtopics") or []) if (st or {}).get("code_ref_hash")}
     taught = {variant_of.get(h, h) for h in used}
     missing = [h for h in must if h not in taught]
     allowed = (1.0 - params.TUTORIAL_MIN_COVERAGE) * len(must)
     if steps:
-        allowed = max(allowed, len(must) - params.COVERAGE_CAPACITY_SHARE * len(steps) * dd.nodes.pipeline.synth.sawc.params.TOPUP_SECTION_MAX)
+        allowed = max(allowed, len(must) - params.COVERAGE_CAPACITY_SHARE * len(steps) * sawc.params.TOPUP_SECTION_MAX)
     passed = len(missing) <= allowed
-    labels = sawc.get("_labels") or {}
+    labels = chapter_sawc.get("_labels") or {}
     named = ", ".join(f"{labels.get(h, h[:8])}" for h in missing[:6])
     return schemas.CriterionResult(
         name = "best_code_taught", passed = passed, kind = "deterministic",

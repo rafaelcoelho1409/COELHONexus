@@ -1,9 +1,9 @@
 """The tools a synth agent reads the chapter's code ledger with: the variants of an example, one block, the difference between two variants, and a
 search by the names a block uses. The ledger is built by the node, so the agent works from the same facts the judge checks against."""
 from __future__ import annotations
+import domains
 from . import schemas, service
 
-import domains
 from langchain_core.tools import StructuredTool
 
 

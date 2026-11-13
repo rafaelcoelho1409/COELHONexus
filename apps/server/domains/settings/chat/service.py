@@ -8,12 +8,10 @@ Every caller (DD planner/synth, YCS Ask/query/graph, Langfuse judges)
 builds through `build_chat_model()` or calls `chat_text_async()` directly.
 
 SOTA Sept 2026 optimizations (kept from the previous adapter):
-- Singleton pooled httpx.AsyncClient (Limits 200/100, http2, keepalive
-  30s) shared by every `ChatOpenAI` built here → reuses TCP connections
-  across 135+ corpus calls, avoids per-call client construction (~15 ms
-  + TLS overhead). `ChatOpenAI` itself IS constructed fresh per call
-  (see `build_chat_model`) since it's a thin config wrapper — the
-  actual network client underneath is the one shared singleton.
+- A pooled httpx.AsyncClient (Limits 200/100, http2, keepalive 30s) is
+  shared by `ChatOpenAI` instances created on the same event loop. Celery
+  starts a fresh event loop per task, so pools are isolated per loop and
+  explicitly closed at task completion rather than reused across loops.
 - MinIO I/O decoupled from the LLM semaphore (see doc_distill service)
   — the semaphore gates only the network-bound LLM hop.
 
@@ -33,6 +31,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
+import weakref
 
 import httpx
 from langchain_core.messages import HumanMessage
@@ -188,38 +187,71 @@ _TIMEOUT_KWARGS = {
 # Helpers — ChatOpenAI via endpoint (every caller, agent + hot-loop alike)
 # ---------------------------------------------------------------------------
 
-_SHARED_HTTP_CLIENT: object | None = None
+_SHARED_HTTP_CLIENTS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, httpx.AsyncClient]" = (
+    weakref.WeakKeyDictionary()
+)
 
 
 def _get_shared_http_client():
-    """Module-level pooled `httpx.AsyncClient` shared by every `ChatOpenAI`
-    built below (lazily created, no lock — worst case two racing callers
-    each build one and one wins; both are functionally identical pools).
+    """Return a pooled `httpx.AsyncClient` for the current event loop.
 
     The pool is transport-agnostic (per-request base_url comes from the
     SDK client, not this transport), so a Settings-page endpoint move
     needs no rebuild here — `build_chat_model` reads the current
-    `ENDPOINT` global fresh on every call, it just reuses this same
-    pooled transport underneath."""
-    global _SHARED_HTTP_CLIENT
-    if _SHARED_HTTP_CLIENT is not None:
-        return _SHARED_HTTP_CLIENT
+    `ENDPOINT` global fresh on every call. Celery uses `asyncio.run()` per
+    task, so a process-wide pool would retain asyncio primitives bound to
+    a closed event loop and fail when the next task reuses it.
+    """
     try:
-        client = httpx.AsyncClient(
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # A model may be configured during synchronous application setup.
+        # That client is owned by the model and is first used on its runtime
+        # loop; async callers always use the loop-local cache below.
+        return _new_shared_http_client()
+
+    client = _SHARED_HTTP_CLIENTS.get(loop)
+    if client is not None:
+        return client
+    client = _new_shared_http_client()
+    _SHARED_HTTP_CLIENTS[loop] = client
+    logger.info("[chat-endpoint] HTTP client initialized for event loop %x", id(loop))
+    return client
+
+
+def _new_shared_http_client() -> httpx.AsyncClient:
+    try:
+        return httpx.AsyncClient(
             limits=domain.build_pool_limits(**_POOL_KWARGS),
             http2=True,
             timeout=domain.build_client_timeout(None, **_TIMEOUT_KWARGS),
             follow_redirects=True,
         )
     except ImportError:
-        client = httpx.AsyncClient(
+        return httpx.AsyncClient(
             limits=domain.build_pool_limits(**_POOL_KWARGS),
             http2=False,
             timeout=domain.build_client_timeout(None, **_TIMEOUT_KWARGS),
             follow_redirects=True,
         )
-    _SHARED_HTTP_CLIENT = client
-    return client
+
+
+async def close_shared_http_client() -> None:
+    """Close and evict the pooled client for the current event loop.
+
+    Celery task wrappers should call this before their `asyncio.run()` loop
+    exits. It is safe to call when no chat model was used in the task.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    client = _SHARED_HTTP_CLIENTS.pop(loop, None)
+    if client is not None:
+        try:
+            await client.aclose()
+        except Exception as error:
+            logger.warning("[chat-endpoint] HTTP client close failed: %s", error)
 
 
 def build_chat_model(
@@ -243,9 +275,9 @@ def build_chat_model(
     `resilient_ainvoke`, the model stays a bare `BaseChatModel` and retries
     remain visible at the caller's operation boundary.
 
-    Every instance shares ONE module-level pooled `httpx.AsyncClient`
-    (same pool shape as the raw hot path's client). Per-request
-    `timeout_s` still governs each call."""
+    Instances on the same event loop share one pooled `httpx.AsyncClient`
+    (same pool shape as the raw hot path's client). Per-request `timeout_s`
+    still governs each call."""
     kwargs: dict = {
         "base_url":          ENDPOINT.base_url,
         "api_key":           ENDPOINT.api_key,
@@ -627,10 +659,12 @@ def report_quality(meta: dict | None, quality: float) -> bool:
 
 
 def reset_chat_client(*args, **kwargs) -> None:
-    """Re-resolve the endpoint (Settings page just changed it). No pooled
-    client to drop — `build_chat_model` constructs a fresh `ChatOpenAI`
-    off the current `ENDPOINT` global on every call; only the shared
-    httpx transport underneath is reused, and it's base_url-agnostic."""
+    """Re-resolve the endpoint after a Settings-page update.
+
+    `build_chat_model` constructs a fresh `ChatOpenAI` from the current
+    `ENDPOINT` on every call. The shared httpx transport is base-url
+    agnostic, so existing per-loop pools do not need to be invalidated.
+    """
     try:
         _apply_endpoint(force=True)
     except Exception:

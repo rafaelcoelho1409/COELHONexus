@@ -47,7 +47,9 @@ def graph_extractor(model = None):
         system_prompt = prompts.rag.graph_extractor.prompts.SYSTEM_PROMPT,
         middleware = [
             middlewares.middleware.ToolAllowlistMiddleware(frozenset({"read_file"})),
-            ModelCallLimitMiddleware(run_limit = params.MAX_MODEL_CALLS, exit_behavior = "end"),
+            ModelCallLimitMiddleware(
+                max_run_limit = params.MAX_MODEL_CALLS, 
+                exit_behavior = "end"),
         ],
         response_format = schemas.GraphExtraction,
         permissions = [

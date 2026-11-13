@@ -47,7 +47,9 @@ def grader(model = None):
         system_prompt = prompts.ask.grader.prompts.SYSTEM_PROMPT,
         middleware = [
             middlewares.middleware.ToolAllowlistMiddleware(frozenset()),
-            ModelCallLimitMiddleware(run_limit = params.MAX_MODEL_CALLS, exit_behavior = "end"),
+            ModelCallLimitMiddleware(
+                run_limit = params.MAX_MODEL_CALLS, 
+                exit_behavior = "end"),
         ],
         response_format = agents.ask.schemas.EvidenceGrades,
         permissions = [

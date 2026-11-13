@@ -1,10 +1,10 @@
 """Thin graph wrappers for source preparation and learning extraction."""
 from __future__ import annotations
+import domains
 from . import service
 from .. import domain
 from .... import graphs
 
-import domains
 from langgraph.types import Send
 
 

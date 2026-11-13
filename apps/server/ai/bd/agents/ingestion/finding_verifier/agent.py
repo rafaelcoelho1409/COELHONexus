@@ -48,9 +48,11 @@ def finding_verifier(model = None):
         model = model,
         tools = [],
         system_prompt = prompts.ingestion.finding_verifier.prompts.SYSTEM_PROMPT,
-        middleware = [middlewares.middleware.ToolAllowlistMiddleware(frozenset()), ModelCallLimitMiddleware(
-            run_limit = domains.bd.ingestion.ai.params.AGENT_MODEL_CALL_LIMIT,
-            exit_behavior = "end",
+        middleware = [
+            middlewares.middleware.ToolAllowlistMiddleware(frozenset()), 
+            ModelCallLimitMiddleware(
+                run_limit = domains.bd.ingestion.ai.params.AGENT_MODEL_CALL_LIMIT,
+                exit_behavior = "end",
         )],
         response_format = schemas.FindingCheckBatch,
         permissions = [

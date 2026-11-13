@@ -1,9 +1,8 @@
 """Tunable scalars of the chapter graph (when the CoRefine loop stops) and of the study around it."""
 from __future__ import annotations
+from ... import pipeline
 
 import os
-
-from ... import pipeline
 
 
 # Canonical order of the nodes. corpus_normalize and the code vaults are ingestion-time work; the per-stage MinIO caches are inside each node.

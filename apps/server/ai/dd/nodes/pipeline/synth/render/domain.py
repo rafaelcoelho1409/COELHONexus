@@ -1,12 +1,11 @@
-"""Pure render helpers: section context build, dedup/align, chapter template rendering, vault merge, audit, and SHA hashing."""
+"""Pure render helpers: section context, code alignment, vault audit and hashes."""
 from __future__ import annotations
-from . import params, patterns, schemas, templates, versions
+from . import params, patterns, schemas, versions
 from .. import sawc_derive
 
 import ast
 import hashlib
 import json
-import re
 import textwrap
 from typing import Optional
 
@@ -21,14 +20,58 @@ def _basename(key: str) -> str:
 
 def _slugify(s: str) -> str:
     """Markdown-anchor-friendly slug for TOC links."""
-    out = re.sub(r"[^a-zA-Z0-9\s-]", "", (s or "")).strip().lower()
-    return re.sub(r"\s+", "-", out)
+    out = patterns.SLUG_UNSAFE_RE.sub("", (s or "")).strip().lower()
+    return patterns.WHITESPACE_RE.sub("-", out)
 
 
-CODE_EXTENSIONS = {
-    "python": "py", "py": "py", "bash": "sh", "sh": "sh", "shell": "sh", "json": "json", "yaml": "yaml", "yml": "yaml", "toml": "toml",
-    "javascript": "js", "js": "js", "typescript": "ts", "ts": "ts", "sql": "sql", "dockerfile": "Dockerfile",
-}
+def build_toc(sections_ctx: list[dict]) -> list[dict]:
+    """Build the nested table-of-contents context from rendered sections."""
+    toc = []
+    for section in sections_ctx:
+        subtopics = section.get("subtopics") or []
+        toc.append({
+            "heading": section.get("heading") or "?",
+            "anchor": section.get("anchor") or "",
+            "subtopics": [
+                {
+                    "subheading": item.get("subheading") or "?",
+                    "anchor": item.get("anchor") or "",
+                }
+                for item in subtopics
+                if (item.get("subheading") or "").strip()
+            ],
+        })
+    return toc
+
+
+def _is_fence_line(line: str) -> bool:
+    return line.lstrip().startswith(("```", "~~~"))
+
+
+def strip_outer_wrapper_fences(markdown: str) -> str:
+    """Remove an outer Markdown fence only when it wraps an entire chapter.
+
+    The template begins with a heading, so a leading fence cannot be a legitimate chapter code block. Drop a matching final fence
+    only when it follows that wrapper; ordinary chapter-ending code fences remain intact.
+    """
+    try:
+        lines = (markdown or "").split("\n")
+        if not lines or not _is_fence_line(lines[0]):
+            return markdown
+        rest = lines[1:]
+        while rest and not rest[0].strip():
+            rest = rest[1:]
+        if not rest or not rest[0].lstrip().startswith("#"):
+            return markdown
+        lines = lines[1:]
+        end = len(lines) - 1
+        while end >= 0 and not lines[end].strip():
+            end -= 1
+        if end >= 0 and _is_fence_line(lines[end]) and not lines[end].strip("`~ ").strip():
+            lines = lines[:end] + lines[end + 1:]
+        return "\n".join(lines)
+    except Exception:
+        return markdown
 
 
 def code_files(sections_ctx: list[dict]) -> dict[str, str]:
@@ -52,7 +95,7 @@ def code_files(sections_ctx: list[dict]) -> dict[str, str]:
             body = _fence_inner(block)
             if not body:
                 continue
-            extension = CODE_EXTENSIONS.get(lang, "txt")
+            extension = params.CODE_EXTENSIONS.get(lang, "txt")
             name = _slugify(sub.get("subheading") or "") or f"example-{number}"
             if is_capstone:
                 path = f"code/capstone/{number:02d}-{name}.{extension}"
@@ -279,27 +322,6 @@ def dedupe_and_align_sections(
     return {"n_dedup": n_dedup, "n_mismatch": n_mismatch}
 
 
-def _build_toc(sections_ctx: list[dict]) -> list[dict]:
-    """Nested TOC for the chapter template; omitted when fewer than 2 sections."""
-    toc = []
-    for s in sections_ctx:
-        subs = s.get("subtopics") or []
-        toc.append({
-            "heading": s.get("heading") or "?",
-            "anchor":  s.get("anchor") or "",
-            "subtopics": [
-                {"subheading": x.get("subheading") or "?",
-                 "anchor":     x.get("anchor") or ""}
-                for x in subs if (x.get("subheading") or "").strip()
-            ],
-        })
-    return toc
-
-
-def _is_fence_line(ln: str) -> bool:
-    return ln.lstrip().startswith(("```", "~~~"))
-
-
 def plan_sources_hash(chapter: Optional[dict]) -> str:
     """Fingerprint every plan field that can change what this chapter teaches or which source bytes it uses."""
     if not chapter:
@@ -344,54 +366,6 @@ def coverage_metrics(
         "n_code_available": max(int(n_vault), 0),
         "n_code_used":      max(int(n_vault) - int(n_orphan_unused), 0),
     }
-
-
-def strip_outer_wrapper_fences(md: str) -> str:
-    """Drop a leading wrapper fence and its stray trailing closer.
-
-    LLM-written sections sometimes arrive wrapped in ```markdown fences; the
-    chapter template always starts with `# title`, so a fence on line 0 is
-    never legitimate — it pairs with the last fence line and swallows the
-    whole chapter into one code block (observed live: 10/16 langfuse
-    chapters; inner blocks are otherwise well-formed). The trailing drop
-    only fires when a leading wrapper was dropped, so legit docs ending in
-    a code block are untouched.
-    """
-    try:
-        lines = (md or "").split("\n")
-        if not lines or not _is_fence_line(lines[0]):
-            return md
-        rest = lines[1:]
-        while rest and not rest[0].strip():
-            rest = rest[1:]
-        if not rest or not rest[0].lstrip().startswith("#"):
-            return md
-        lines = lines[1:]
-        end = len(lines) - 1
-        while end >= 0 and not lines[end].strip():
-            end -= 1
-        if end >= 0 and _is_fence_line(lines[end]) and not lines[end].strip("`~ ").strip():
-            lines = lines[:end] + lines[end + 1:]
-        return "\n".join(lines)
-    except Exception:
-        return md
-
-
-def render_chapter_md(
-    chapter_title: str,
-    sections_ctx: list[dict],
-) -> str:
-    """Render full cookbook chapter markdown. Deterministic given identical inputs."""
-    toc = _build_toc(sections_ctx) if len(sections_ctx) >= 2 else []
-    tpl = templates.JINJA_ENV.from_string(templates.CHAPTER_MD_TEMPLATE)
-    md = tpl.render(
-        chapter_title = chapter_title,
-        sections = sections_ctx,
-        toc = toc,
-    )
-    md = re.sub(r"\n{4,}", "\n\n\n", md)
-    md = strip_outer_wrapper_fences(md)
-    return md.rstrip() + "\n"
 
 
 def merge_vault_entries(per_source_manifests: list[dict]) -> dict[str, str]:

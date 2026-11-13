@@ -161,15 +161,54 @@ function reconcileRunState(
   snapshot: DistillRun,
   streamed: ReturnType<typeof initialDistillRunState>,
 ): ReturnType<typeof initialDistillRunState> {
-  const snapshotAdvancesRun =
-    (streamed.status === "queued" && snapshot.status === "running") ||
-    (isDistillLive(streamed.status) && !isDistillLive(snapshot.status));
-  if (!snapshotAdvancesRun) return streamed;
+  const snapshotIsLive = isDistillLive(snapshot.status);
+  const streamedIsLive = isDistillLive(streamed.status);
+
+  // A Resume reuses the run id. When the server moves that run from a
+  // terminal state back to queued/running, discard the old stream state so
+  // it cannot keep the page stuck on the previous failure.
+  if (snapshotIsLive && !streamedIsLive) {
+    return initialDistillRunState(snapshot);
+  }
+
+  const progress = {
+    ...streamed.progress,
+    ...snapshot.progress,
+    current_node: snapshot.progress.current_node ?? streamed.progress.current_node,
+    node_status: {
+      ...streamed.progress.node_status,
+      ...snapshot.progress.node_status,
+    },
+    completed_units: Math.max(streamed.progress.completed_units, snapshot.progress.completed_units),
+    total_units: Math.max(streamed.progress.total_units, snapshot.progress.total_units),
+    completed_chapters: Math.max(streamed.progress.completed_chapters, snapshot.progress.completed_chapters),
+    total_chapters: Math.max(streamed.progress.total_chapters, snapshot.progress.total_chapters),
+  };
+
+  // The run manifest is authoritative after a terminal transition. SSE may
+  // have missed its last progress event, so prefer its final node statuses
+  // and error while keeping the greatest persisted progress counters.
+  if (!snapshotIsLive) {
+    return {
+      ...streamed,
+      status: snapshot.status,
+      progress: {
+        ...snapshot.progress,
+        completed_units: progress.completed_units,
+        total_units: progress.total_units,
+        completed_chapters: progress.completed_chapters,
+        total_chapters: progress.total_chapters,
+      },
+      error: snapshot.error ?? (snapshot.status === "failed" ? streamed.error : null),
+    };
+  }
+
+  const snapshotAdvancesStatus = streamed.status === "queued" && snapshot.status === "running";
   return {
     ...streamed,
-    status: snapshot.status,
-    progress: snapshot.progress,
-    error: snapshot.error ?? streamed.error,
+    status: snapshotAdvancesStatus ? snapshot.status : streamed.status,
+    progress,
+    error: snapshot.error,
   };
 }
 

@@ -33,6 +33,25 @@ NOISE_IDENTS = frozenset({
 
 BLOB_PREFIX = "synth"
 
+# Source languages mapped to extensions in the tutorial code export.
+CODE_EXTENSIONS = {
+    "python": "py",
+    "py": "py",
+    "bash": "sh",
+    "sh": "sh",
+    "shell": "sh",
+    "json": "json",
+    "yaml": "yaml",
+    "yml": "yaml",
+    "toml": "toml",
+    "javascript": "js",
+    "js": "js",
+    "typescript": "ts",
+    "ts": "ts",
+    "sql": "sql",
+    "dockerfile": "Dockerfile",
+}
+
 
 # Languages where the LLM call is skipped — content is either plain
 # text (no formatting concept) or terminal output (whitespace is

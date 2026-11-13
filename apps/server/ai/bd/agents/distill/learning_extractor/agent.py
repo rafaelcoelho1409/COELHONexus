@@ -47,7 +47,9 @@ def learning_extractor(model = None):
         system_prompt = prompts.distill.learning_extractor.prompts.SYSTEM_PROMPT,
         middleware = [
             middlewares.middleware.ToolAllowlistMiddleware(frozenset({"read_file"})),
-            ModelCallLimitMiddleware(run_limit = params.MAX_MODEL_CALLS, exit_behavior = "end"),
+            ModelCallLimitMiddleware(
+                run_limit = params.MAX_MODEL_CALLS, 
+                exit_behavior = "end"),
         ],
         response_format = domains.bd.distill.schemas.LearningExtraction,
         permissions = [

@@ -1,5 +1,4 @@
-"""render — pre-compiled regex (vault-sentinel detection, identifier
-extraction)."""
+"""render — pre-compiled regex for anchors, whitespace, fences and sentinels."""
 from __future__ import annotations
 
 import re
@@ -9,6 +8,10 @@ import re
 SENTINEL_RE = re.compile(
     r'<code-ref hash="([0-9a-f]{16})"(?:\s+lang="[^"]*")?\s*/>'
 )
+
+SLUG_UNSAFE_RE = re.compile(r"[^a-zA-Z0-9\s-]")
+WHITESPACE_RE = re.compile(r"\s+")
+EXCESSIVE_NEWLINES_RE = re.compile(r"\n{4,}")
 
 IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
 

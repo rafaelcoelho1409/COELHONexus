@@ -592,27 +592,27 @@ check("a clean page has no leads", page_audit.domain.candidates("# Title\n\nA cl
 
 check("every export convention example is one the audit drops",
       [example for _, examples in auditor_patterns.EXPORT_CONVENTIONS for example in examples
-       if not auditor_patterns.is_export_convention(example)], [])
+       if not page_audit.domain.is_export_convention(example)], [])
 
 # the Mintlify exports that auditors took for defects on the DeepAgents run: block-quote tabs, cards and callouts, and sound tables
 check("a block-quote tab, card, step or callout is an export convention",
-      [auditor_patterns.is_export_convention(text) for text in (
+      [page_audit.domain.is_export_convention(text) for text in (
           "> [tab] StateBackend\n>\n> A thread-scoped filesystem backend.", "> [card] [View example trace](https://x.dev)", "> [step] Install",
           "> > [!WARNING]\n> >\n> > This backend grants access.", "> [!note]\n> Text")],
       [True] * 5)
 check("an ordinary block quote is not",
-      [auditor_patterns.is_export_convention(text) for text in ("> A quoted sentence.", "> [link text](https://x.dev) is quoted", "> ## A heading in a quote")],
+      [page_audit.domain.is_export_convention(text) for text in ("> A quoted sentence.", "> [link text](https://x.dev) is quoted", "> ## A heading in a quote")],
       [False] * 3)
 check("a table head with an alignment row or plain dashes is sound",
-      [auditor_patterns.is_sound_table_head(text) for text in (
+      [page_audit.domain.is_sound_table_head(text) for text in (
           "| Integration | Downloads |\n| :- | :- |", "| a | b | c |\n| - | - | - |", "| a | b |\n| :-: | -: |\n| 1 | 2 |", "| :- | :- |")],
       [True] * 4)
 check("a table with a ragged row, no delimiter row or no pipes is not",
-      [auditor_patterns.is_sound_table_head(text) for text in (
+      [page_audit.domain.is_sound_table_head(text) for text in (
           "| a | b | c |\n| - | - |", "| a | b |\n| - | - |\n| 1 | 2 | 3 |", "| a | b |\n| 1 | 2 |", "- | -", "just text")],
       [False] * 5)
 check("an escaped pipe and a pipe in a code span are not cell edges",
-      auditor_patterns.is_sound_table_head("| a | b |\n| - | - |\n| x \\| y | `p|q` |"), True)
+      page_audit.domain.is_sound_table_head("| a | b |\n| - | - |\n| x \\| y | `p|q` |"), True)
 table_page = "| Integration | Downloads |\n| :- | :- |\n| A | 1 |\n"
 table_findings = schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATION, confidence = 0.9, issues = [
     finding_on("markdown_formatting", "| Integration | Downloads |\n| :- | :- |", "table"),

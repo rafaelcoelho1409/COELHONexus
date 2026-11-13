@@ -3,7 +3,7 @@ from __future__ import annotations
 import domains
 from .... import agents, graphs
 
-from langchain.runtime import Runtime
+from langgraph.runtime import Runtime
 
 
 async def plan_research(

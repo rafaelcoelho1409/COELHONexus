@@ -50,7 +50,7 @@ async def agentic_graph(response: Response) -> dict:
     """The compiled Ingestion Agentic AI topology, with no page processing or model calls."""
     response.headers["Cache-Control"] = "no-store"
     graph = ai.dd.graphs.ingestion.graphs.ingestion_graph(checkpointer = None)
-    return {"graph_mermaid": ai.dd.graphs.topology.mermaid_source(graph)}
+    return {"graph_mermaid": ai.dd.graphs.service.mermaid_source(graph)}
 
 
 @router.get("/{slug}/manifest")

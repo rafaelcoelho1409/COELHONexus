@@ -57,22 +57,22 @@ def page_repair(*, check: tools.ingestion.check_patch.entities.Check, model = No
         response_format = schemas.PagePatchBatch,
         permissions = [
             FilesystemPermission(
-                operations = ["read"], 
-                paths = ["/**"], 
+                operations = ["read"],
+                paths = ["/**"],
                 mode = "deny"),
             FilesystemPermission(
-                operations = ["write"], 
-                paths = ["/**"], 
+                operations = ["write"],
+                paths = ["/**"],
                 mode = "deny"),
         ],
         backend = StateBackend(),
         middleware = [
             ModelCallLimitMiddleware(
-                run_limit = params.MODEL_CALLS, 
+                run_limit = params.MODEL_CALLS,
                 exit_behavior = "end"),
             ToolCallLimitMiddleware(
-                tool_name = check_patch.name, 
-                run_limit = params.CHECK_CALLS, 
+                tool_name = check_patch.name,
+                run_limit = params.CHECK_CALLS,
                 exit_behavior = "continue"),
             ToolErrorMiddleware(lambda error, request: f"`{request.tool_call['name']}` failed with {type(error).__name__}: {str(error)[:300]}"),
             middlewares.middleware.ToolAllowlistMiddleware(frozenset({check_patch.name})),

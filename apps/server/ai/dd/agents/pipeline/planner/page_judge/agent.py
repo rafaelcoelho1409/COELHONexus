@@ -1,11 +1,10 @@
 """DeepAgent that returns the KEEP/DROP verdict of one documentation page."""
 from __future__ import annotations
-from ...... import dd
 import domains
 from . import config, params
 from .. import schemas
 from .... import service
-from ..... import middlewares, prompts
+from ..... import agents, middlewares, prompts
 
 from deepagents import (
     FilesystemPermission,
@@ -16,6 +15,7 @@ from deepagents import (
 )
 from deepagents.backends import StateBackend
 from deepagents.profiles.harness import harness_profiles
+from langchain_openai import ChatOpenAI
 
 
 def page_judge(model = None):
@@ -31,6 +31,8 @@ def page_judge(model = None):
     model_name = getattr(model, "model_name", None)
     if not isinstance(model_name, str) or not model_name or ":" in model_name:
         raise ValueError("the page judge requires a named OpenAI-compatible Rotator model")
+    if not isinstance(model, ChatOpenAI):
+        raise TypeError("the page judge must use the configured ChatOpenAI model")
 
     # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
     # before (by another role or other code in the process) hides tools from this agent.
@@ -45,6 +47,7 @@ def page_judge(model = None):
     )
     agent = create_deep_agent(
         model = model,
+        tools = [],
         system_prompt = prompts.pipeline.planner.page_judge.prompts.SYSTEM_PROMPT,
         response_format = schemas.PageRelevance,
         middleware = [
@@ -71,6 +74,6 @@ def page_judge(model = None):
     error_message = "DeepAgents exposed an unreviewed tool to the page judge"
     if not isinstance(available_tools, dict):
         raise RuntimeError(error_message)
-    if set(available_tools) - dd.agents.params.STACK_TOOLS:
+    if set(available_tools) - agents.params.STACK_TOOLS:
         raise RuntimeError(error_message)
     return agent

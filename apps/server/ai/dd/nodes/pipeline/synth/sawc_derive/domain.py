@@ -1,11 +1,8 @@
-"""sawc_derive — pure helpers (thin-block detection, fence parsing, AST
-validation, structural scoring, MPSC ranker, derive-gate predicate)."""
+"""sawc_derive — pure derivation and capstone composition logic."""
 from __future__ import annotations
 from . import params, patterns
 
 import ast
-import builtins
-import re
 
 
 
@@ -137,19 +134,8 @@ def rank_mpsc_samples(
     return chosen, scores
 
 
-# ---- the capstone: the application that ends a tutorial chapter ---------------------------------------------------------------------------------
-
-# Names a call or an import can have without saying what the example is about.
-COMMON_CALLS = frozenset(dir(builtins)) | frozenset({
-    "append", "extend", "get", "items", "keys", "values", "join", "format", "split", "strip", "lower", "upper", "replace", "update", "copy", "pop",
-    "run", "main", "start", "close", "read", "write", "load", "dump", "dumps", "loads",
-})
-EMPTY_INTRO = "This application combines the steps of the chapter into one program that runs."
-EMPTY_PART = "This part uses the code of the earlier steps."
-
-
 def api_names(code: str) -> frozenset[str]:
-    """What a block is about: the names it imports from a package and the functions and classes it calls. A block that does not parse is about nothing."""
+    """Return imported and called API names, excluding names common to most examples."""
     try:
         tree = ast.parse(code)
     except (SyntaxError, ValueError):
@@ -164,19 +150,21 @@ def api_names(code: str) -> frozenset[str]:
                 names.add(target.id)
             elif isinstance(target, ast.Attribute):
                 names.add(target.attr)
-    return frozenset(name for name in names if len(name) >= 3 and not name.startswith("_") and name not in COMMON_CALLS)
+    return frozenset(
+        name for name in names
+        if len(name) >= 3 and not name.startswith("_") and name not in params.COMMON_API_NAMES
+    )
 
 
-def truncated(code: str, chars: int) -> str:
-    """`code` cut at a line end inside `chars` characters."""
+def _truncate_code(code: str, chars: int) -> str:
+    """Cut code at a line end while staying within the character limit."""
     if len(code) <= chars:
         return code
     return code[:chars].rsplit("\n", 1)[0]
 
 
 def collect_steps(sections: list[dict], vault: dict) -> tuple[list[dict], list[frozenset[str]]]:
-    """The chapter as the capstone designer reads it, and what each of its examples is about. Every example's code is its derived code or the
-    vault block it cites; the code is cut per example, and past a total the later examples keep only their first lines."""
+    """Build the chapter context shown to the capstone designer and its API-name sets."""
     steps: list[dict] = []
     names: list[frozenset[str]] = []
     spent = 0
@@ -188,8 +176,9 @@ def collect_steps(sections: list[dict], vault: dict) -> tuple[list[dict], list[f
         for subtopic in section.get("subtopics") or []:
             code = subtopic.get("derived_code") or ""
             if not code and subtopic.get("code_ref_hash") in vault:
-                code = fence_inner(vault[subtopic["code_ref_hash"]].fence_text or "")
-            code = truncated(code, params.CAPSTONE_BLOCK_CHARS)
+                entry = vault[subtopic["code_ref_hash"]]
+                code = fence_inner(entry.fence_text or "")
+            code = _truncate_code(code, params.CAPSTONE_BLOCK_CHARS)
             if spent + len(code) > params.CAPSTONE_CODE_CHARS:
                 code = "\n".join(code.splitlines()[:6])
             spent += len(code)
@@ -203,18 +192,18 @@ def collect_steps(sections: list[dict], vault: dict) -> tuple[list[dict], list[f
     return steps, names
 
 
-def use_share(steps_names: list[frozenset[str]], capstone: str) -> tuple[float, list[str]]:
-    """`(share of the steps whose key API the capstone uses, one name from each step it leaves out)`. A step that has no key API counts for nothing."""
+def use_share(steps_names: list[frozenset[str]], capstone_code: str) -> tuple[float, list[str]]:
+    """Return the share of steps whose key API the capstone uses and names from omitted steps."""
     about = [names for names in steps_names if names]
     if not about:
         return 1.0, []
-    used = api_names(capstone) | frozenset(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", capstone))
+    used = api_names(capstone_code) | frozenset(patterns.IDENTIFIER_RE.findall(capstone_code))
     left_out = [names for names in about if not names & used]
     return (len(about) - len(left_out)) / len(about), sorted({sorted(names)[0] for names in left_out})
 
 
 def capstone_issues(code: str, steps_names: list[frozenset[str]]) -> list[str]:
-    """What is wrong with a capstone application: it must parse, sit inside the size band, and use the key API of most of the chapter's steps."""
+    """Check that a capstone parses, fits its size band, and uses most chapter step APIs."""
     body = parse_code_block(code or "") or (code or "").strip()
     if not body:
         return ["The code is empty."]
@@ -233,31 +222,30 @@ def capstone_issues(code: str, steps_names: list[frozenset[str]]) -> list[str]:
     return issues
 
 
-def trim_words(text: str, limit: int) -> str:
+def _trim_words(text: str, limit: int) -> str:
     return " ".join((text or "").split()[:limit])
 
 
 def build_section(answer: dict, sections: list[dict]) -> dict | None:
-    """The chapter's last section from the designer's answer: each part becomes a subtopic of derived code, the citations are the chapter's own
-    (one per source, the first claim each section made). None when the answer has no code."""
+    """Build the chapter's final section from the capstone designer's response."""
     subtopics = []
     for part in (answer.get("parts") or [])[:params.CAPSTONE_MAX_PARTS]:
         code = parse_code_block(part.get("code") or "") or (part.get("code") or "").strip()
         if not code:
             continue
-        explanation = trim_words(part.get("explanation") or "", 80)
+        explanation = _trim_words(part.get("explanation") or "", 80)
         if len(explanation.split()) < 8:
-            explanation = f"{explanation} {EMPTY_PART}".strip()
+            explanation = f"{explanation} {params.EMPTY_CAPSTONE_PART}".strip()
         subtopics.append({
             "code_ref_hash": "",
-            "subheading": trim_words(part.get("subheading") or "", 10) or "Build the application",
+            "subheading": _trim_words(part.get("subheading") or "", 10) or "Build the application",
             "explanation": explanation,
             "code_source": "derived",
             "derived_code": code,
         })
     if not subtopics:
         return None
-    title = trim_words(re.sub(rf"^{params.CAPSTONE_PREFIX}\s*:?\s*", "", answer.get("title") or "", flags = re.IGNORECASE), 7)
+    title = _trim_words(patterns.CAPSTONE_TITLE_PREFIX_RE.sub("", answer.get("title") or ""), 7)
     intro = " ".join((answer.get("intro") or "").split())[:params.INTRO_MAX_CHARS]
     seen: set[str] = set()
     citations = []
@@ -274,7 +262,7 @@ def build_section(answer: dict, sections: list[dict]) -> dict | None:
     return {
         "section_id": f"s{number}",
         "heading": f"{params.CAPSTONE_PREFIX}: {title}" if title else params.CAPSTONE_PREFIX,
-        "intro": intro if len(intro) >= params.INTRO_MIN_CHARS else EMPTY_INTRO,
+        "intro": intro if len(intro) >= params.INTRO_MIN_CHARS else params.EMPTY_CAPSTONE_INTRO,
         "subtopics": subtopics,
         "citations": citations,
     }

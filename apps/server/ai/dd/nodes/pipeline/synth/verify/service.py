@@ -1,8 +1,7 @@
 """Verify canonical chapter examples and generated code, and persist an honest status report."""
 from __future__ import annotations
-from ...... import dd
 import domains
-from ..... import graphs
+from ..... import graphs, nodes
 
 import hashlib
 import json
@@ -27,8 +26,8 @@ async def verify_code(state: graphs.pipeline.synth.states.SynthState, runtime: R
             "verify_path", "verify_stats", "no_slug_or_chapter_id", "framework_slug or chapter_id missing from SynthState", started,
         )
 
-    digest_key = dd.nodes.pipeline.synth.ledger_prepare.keys.latest_blob_key(slug, chapter_id)
-    sawc_key = dd.nodes.pipeline.synth.sawc.keys.latest_blob_key(slug, chapter_id)
+    digest_key = nodes.pipeline.synth.ledger_prepare.keys.latest_blob_key(slug, chapter_id)
+    sawc_key = nodes.pipeline.synth.sawc.keys.latest_blob_key(slug, chapter_id)
     digest_payload = await domains.dd.pipeline.storage.service.load_json(blobs, digest_key)
     sawc_payload = await domains.dd.pipeline.storage.service.load_json(blobs, sawc_key)
     if digest_payload is None or sawc_payload is None:
@@ -43,7 +42,7 @@ async def verify_code(state: graphs.pipeline.synth.states.SynthState, runtime: R
         for digest in ledger.must_teach
         if digest in ledger.blocks
     }
-    capstone_prefix = dd.nodes.pipeline.synth.sawc_derive.params.CAPSTONE_PREFIX
+    capstone_prefix = nodes.pipeline.synth.sawc_derive.params.CAPSTONE_PREFIX
     for section in sawc_payload.get("sections") or []:
         is_capstone = str(section.get("heading") or "").startswith(capstone_prefix)
         for subtopic in section.get("subtopics") or []:
@@ -69,7 +68,7 @@ async def verify_code(state: graphs.pipeline.synth.states.SynthState, runtime: R
     summary = report.summary()
     status = "failed" if summary["failed"] else "unverified" if summary["unverified"] or not summary["total"] else "verified"
     verification_manifest = hashlib.sha256(json.dumps(results, sort_keys = True).encode("utf-8")).hexdigest()[:16]
-    latest_key = dd.graphs.pipeline.synth.keys.latest_key(slug, chapter_id, "verification")
+    latest_key = graphs.pipeline.synth.keys.latest_key(slug, chapter_id, "verification")
     versioned_key = f"dd/{slug}/synth/{chapter_id}/verification/{verification_manifest}.json"
     payload = {
         "chapter_id": chapter_id,

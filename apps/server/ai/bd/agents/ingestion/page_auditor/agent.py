@@ -47,9 +47,11 @@ def page_auditor(model = None):
         model = model,
         tools = [],
         system_prompt = prompts.ingestion.page_auditor.prompts.SYSTEM_PROMPT,
-        middleware = [middlewares.middleware.ToolAllowlistMiddleware(frozenset({"read_file"})), ModelCallLimitMiddleware(
-            run_limit = domains.bd.ingestion.ai.params.AGENT_MODEL_CALL_LIMIT,
-            exit_behavior = "end",
+        middleware = [
+            middlewares.middleware.ToolAllowlistMiddleware(frozenset({"read_file"})), 
+            ModelCallLimitMiddleware(
+                run_limit = domains.bd.ingestion.ai.params.AGENT_MODEL_CALL_LIMIT,
+                exit_behavior = "end",
         )],
         response_format = schemas.PageAuditResponse,
         permissions = [

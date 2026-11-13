@@ -2,7 +2,7 @@
 from __future__ import annotations
 import domains
 from . import domain, params, versions
-from ..... import agents, graphs, prompts, skills
+from ..... import agents, graphs
 
 import asyncio
 import json
@@ -290,26 +290,12 @@ async def _embed(context: Context, cards: list[dict]) -> tuple[list, str]:
 
 
 async def _ask_designer(context: Context, payload: str, *, attempts: int = params.ATTEMPTS):
-    skill_files = skills.service.files_for("chapter_designer")
-    skill = next(
-        (file_data.get("content", "") for path, file_data in skill_files.items() if path.endswith("/SKILL.md")),
-        "",
-    )
-    if not skill:
-        raise RuntimeError("the chapter-designer skill is missing or empty")
-    system_prompt = (
-        prompts.pipeline.planner.chapter_designer.prompts.SYSTEM_PROMPT
-        + "\n\nChapter-design skill:\n\n"
-        + skill
-    )
-    return await agents.service.ask_chat_model(
+    return await agents.service.ask(
         context.agents.chapter_designer(),
         agents.pipeline.planner.chapter_designer.schemas.ChapterDesignAnswer,
-        system_prompt,
         payload,
         attempts = attempts,
         wait_base_s = params.RETRY_WAIT_S,
-        recover_json_after_transient_error = False,
     )
 
 

@@ -1,6 +1,7 @@
-"""sawc_derive — tunables (thin-block heuristics, derived-body LOC band, fan-out)."""
+"""sawc_derive — limits, defaults, and tunables for derivation and capstone generation."""
 from __future__ import annotations
 
+import builtins
 import os
 
 
@@ -48,6 +49,12 @@ CAPSTONE_MAX_PARTS = 4
 CAPSTONE_CITATIONS = 3
 INTRO_MIN_CHARS = 20
 INTRO_MAX_CHARS = 400
+COMMON_API_NAMES = frozenset(dir(builtins)) | frozenset({
+    "append", "extend", "get", "items", "keys", "values", "join", "format", "split", "strip", "lower", "upper", "replace", "update", "copy", "pop",
+    "run", "main", "start", "close", "read", "write", "load", "dump", "dumps", "loads",
+})
+EMPTY_CAPSTONE_INTRO = "This application combines the steps of the chapter into one program that runs."
+EMPTY_CAPSTONE_PART = "This part uses the code of the earlier steps."
 
 # Env flag — default ON. Set KD_ENABLE_SAWC_DERIVE=false to disable.
 ENV_ENABLED = "KD_ENABLE_SAWC_DERIVE"

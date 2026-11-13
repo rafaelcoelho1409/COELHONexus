@@ -5,7 +5,7 @@ from .... import graphs
 
 from typing import Literal
 
-from langchain.runtime import Runtime
+from langgraph.runtime import Runtime
 
 
 async def grade_evidence(

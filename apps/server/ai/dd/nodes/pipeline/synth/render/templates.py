@@ -1,5 +1,6 @@
-"""render — Jinja2 environment + inline chapter template."""
+"""render — chapter template and pure markdown rendering helpers."""
 from __future__ import annotations
+from . import domain, patterns
 
 from jinja2 import Environment, StrictUndefined
 
@@ -58,3 +59,16 @@ CHAPTER_MD_TEMPLATE = """\
 {% endif -%}
 {% endfor %}
 """
+
+
+def render_chapter_md(chapter_title: str, sections_ctx: list[dict]) -> str:
+    """Render chapter Markdown deterministically from section contexts."""
+    toc = domain.build_toc(sections_ctx) if len(sections_ctx) >= 2 else []
+    template = JINJA_ENV.from_string(CHAPTER_MD_TEMPLATE)
+    markdown = template.render(
+        chapter_title = chapter_title,
+        sections = sections_ctx,
+        toc = toc,
+    )
+    markdown = patterns.EXCESSIVE_NEWLINES_RE.sub("\n\n\n", markdown)
+    return domain.strip_outer_wrapper_fences(markdown).rstrip() + "\n"

@@ -3,7 +3,7 @@ from __future__ import annotations
 from . import domain, service
 from .... import graphs
 
-from langchain.runtime import Runtime
+from langgraph.runtime import Runtime
 
 
 async def generate_answer(

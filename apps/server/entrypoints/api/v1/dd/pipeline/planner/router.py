@@ -29,7 +29,7 @@ async def planner_info(response: Response) -> dict:
         "planner_version": "v2" if "page_cards" in node_order else "v1",
         "node_order": node_order,
         "implemented": node_order,
-        "graph_mermaid": ai.dd.graphs.topology.mermaid_source(graph),
+        "graph_mermaid": ai.dd.graphs.service.mermaid_source(graph),
         "modes": [
             {"key": "llm",       "label": "LLM-only",        "enabled": True},
             {"key": "classical", "label": "Classical + LLM", "enabled": False},

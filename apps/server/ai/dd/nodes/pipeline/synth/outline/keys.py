@@ -1,6 +1,5 @@
 """outline_sdp — MinIO key builders."""
 from __future__ import annotations
-
 from ..... import graphs
 
 

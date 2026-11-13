@@ -3,7 +3,7 @@ from __future__ import annotations
 from . import service
 from .... import graphs
 
-from langchain.runtime import Runtime
+from langgraph.runtime import Runtime
 
 
 async def verify_answer(

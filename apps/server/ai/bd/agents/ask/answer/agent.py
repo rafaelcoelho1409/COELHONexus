@@ -47,7 +47,9 @@ def answerer(model = None):
         system_prompt = prompts.ask.answer.prompts.SYSTEM_PROMPT,
         middleware = [
             middlewares.middleware.ToolAllowlistMiddleware(frozenset()),
-            ModelCallLimitMiddleware(run_limit = params.MAX_MODEL_CALLS, exit_behavior = "end"),
+            ModelCallLimitMiddleware(
+                run_limit = params.MAX_MODEL_CALLS, 
+                exit_behavior = "end"),
         ],
         response_format = agents.ask.schemas.EvidenceAnswer,
         permissions = [

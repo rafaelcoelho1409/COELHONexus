@@ -8,12 +8,6 @@ import re
 import hashlib
 
 
-schemas = agents.pipeline.planner.schemas
-
-
-
-
-
 # String-match classifier: provider clients raise different exception types for the same condition (LiteLLM vs httpx vs Google); transient = rate_limit/timeout/connection → retry.
 def classify_error(exc: Exception) -> str:
     name = type(exc).__name__
@@ -43,7 +37,10 @@ def doc_title(source_key: str, body: str) -> str:
     return " ".join(w.capitalize() for w in base.split("-")) or source_key
 
 
-def build_fallback_distillate(source_key: str, body: str) -> schemas.DocDistillate:
+def build_fallback_distillate(
+    source_key: str,
+    body: str,
+) -> agents.pipeline.planner.schemas.DocDistillate:
     """Deterministic minimal distillate so content-bearing docs reach
     downstream even when LLM distill fails (silent-drop caused 6-18 doc
     losses in earlier runs). Derived from H1/filename + identifier tokens."""
@@ -82,7 +79,7 @@ def build_fallback_distillate(source_key: str, body: str) -> schemas.DocDistilla
         if g not in seen:
             seen.add(g)
             terms.append(g)
-    return schemas.DocDistillate(
+    return agents.pipeline.planner.schemas.DocDistillate(
         summary = summary, key_terms = terms[:params.KEY_TERMS_MAX],
     )
 
@@ -102,7 +99,7 @@ def _clip_summary(summary: str) -> str:
 def normalize_distillate(
     summary: str, key_terms: list[str], source_key: str, body: str,
     role: str = agents.pipeline.planner.params.DEFAULT_ROLE,
-) -> schemas.DocDistillate:
+) -> agents.pipeline.planner.schemas.DocDistillate:
     """Normalize-then-validate for the LLM's distillate: clip an over-long
     summary, top up a too-short one and a key-term shortfall from the doc itself
     (identifier tokens, then title words — the same sources the deterministic
@@ -149,7 +146,11 @@ def normalize_distillate(
         if len(terms) >= params.KEY_TERMS_MIN:
             break
         _add(g)
-    return schemas.DocDistillate(summary = clipped, key_terms = terms, role = role)
+    return agents.pipeline.planner.schemas.DocDistillate(
+        summary = clipped,
+        key_terms = terms,
+        role = role,
+    )
 
 
 def corpus_content_fingerprint(relevant_files: list[str], manifest_entries: list[dict]) -> str:

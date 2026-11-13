@@ -4,10 +4,9 @@ A code block that is only a bare signature teaches nothing, so a code_deriver ag
 that goes with it. The agent checks its code with `check_code` (it parses; its body is inside the length band) before answering, so a bad example is
 repaired inside the run, not discarded after N samples. The chapter draft is updated in place with the derived code."""
 from __future__ import annotations
-from ...... import dd
 import domains
 from . import domain, keys, params, schemas
-from ..... import agents, graphs, skills, tools
+from ..... import agents, graphs, nodes, skills, tools
 
 import json
 import logging
@@ -298,7 +297,7 @@ async def capstone(state: graphs.pipeline.synth.sawc_derive.states.DeriveState, 
     if built is None:
         return await outcome("no_code_in_answer")
     try:
-        section = dd.nodes.pipeline.synth.sawc.schemas.Section.model_validate(built).model_dump(mode = "json")
+        section = nodes.pipeline.synth.sawc.schemas.Section.model_validate(built).model_dump(mode = "json")
     except Exception as error:
         return await outcome("invalid_section", error = str(error)[:200])
     code = "\n\n".join(subtopic["derived_code"] for subtopic in section["subtopics"])

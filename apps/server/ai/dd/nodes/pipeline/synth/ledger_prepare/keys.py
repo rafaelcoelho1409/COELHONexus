@@ -1,6 +1,5 @@
 """Synth v2's isolated code-ledger artifact keys."""
 from __future__ import annotations
-
 from ..... import graphs
 
 

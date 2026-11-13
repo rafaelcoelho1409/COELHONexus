@@ -1,11 +1,10 @@
 """DeepAgent that repairs the whitespace of one mangled code block, with a parser tool for Python."""
 from __future__ import annotations
-from ...... import dd
 import domains
 from . import config, params
 from .. import schemas
 from .... import service
-from ..... import middlewares, prompts
+from ..... import agents, middlewares, prompts
 
 from collections.abc import Sequence
 from typing import Any
@@ -20,6 +19,7 @@ from deepagents import (
 from deepagents.backends import StateBackend
 from deepagents.profiles.harness import harness_profiles
 from langchain.agents.middleware import ToolCallLimitMiddleware
+from langchain_openai import ChatOpenAI
 
 
 def code_normalizer(*, tools: Sequence[Any], model = None):
@@ -35,6 +35,8 @@ def code_normalizer(*, tools: Sequence[Any], model = None):
     model_name = getattr(model, "model_name", None)
     if not isinstance(model_name, str) or not model_name or ":" in model_name:
         raise ValueError("the code normalizer requires a named OpenAI-compatible Rotator model")
+    if not isinstance(model, ChatOpenAI):
+        raise TypeError("the code normalizer must use the configured ChatOpenAI model")
 
     normalizer_tools = list(tools)
     tool_names = {tool.name for tool in normalizer_tools}
@@ -83,6 +85,6 @@ def code_normalizer(*, tools: Sequence[Any], model = None):
     error_message = "DeepAgents exposed an unreviewed tool to the code normalizer"
     if not isinstance(available_tools, dict):
         raise RuntimeError(error_message)
-    if set(available_tools) - dd.agents.params.STACK_TOOLS - tool_names:
+    if set(available_tools) - agents.params.STACK_TOOLS - tool_names:
         raise RuntimeError(error_message)
     return agent

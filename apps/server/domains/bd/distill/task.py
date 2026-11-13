@@ -60,7 +60,10 @@ def run_distill(self, book_id: str, run_id: str) -> dict:
                 logger.exception("[bd-distill-task] unable to persist failure for %s", run_id)
             raise
         finally:
-            if checkpointer_initialized:
-                await infra.postgres.service.close_checkpointer()
+            try:
+                if checkpointer_initialized:
+                    await infra.postgres.service.close_checkpointer()
+            finally:
+                await domains.settings.chat.service.close_shared_http_client()
 
     return asyncio.run(execute())

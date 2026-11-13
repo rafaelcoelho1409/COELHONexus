@@ -1,10 +1,9 @@
 """What the ledger tools tell the model, as text."""
 from __future__ import annotations
+import domains
 from . import params
 
 from difflib import unified_diff
-
-import domains
 
 
 def unknown(digest: str) -> str:

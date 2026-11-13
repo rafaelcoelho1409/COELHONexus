@@ -1,11 +1,10 @@
 """DeepAgent that scores one documentation page against every chapter of a plan."""
 from __future__ import annotations
-from ...... import dd
 import domains
 from . import config, params
 from .. import schemas
 from .... import service
-from ..... import middlewares, prompts
+from ..... import agents, middlewares, prompts
 
 from deepagents import (
     FilesystemPermission,
@@ -16,6 +15,7 @@ from deepagents import (
 )
 from deepagents.backends import StateBackend
 from deepagents.profiles.harness import harness_profiles
+from langchain_openai import ChatOpenAI
 
 
 def page_scorer(proposals: list[dict], *, fixed_keys: bool, model = None):
@@ -34,6 +34,8 @@ def page_scorer(proposals: list[dict], *, fixed_keys: bool, model = None):
     model_name = getattr(model, "model_name", None)
     if not isinstance(model_name, str) or not model_name or ":" in model_name:
         raise ValueError("the page scorer requires a named OpenAI-compatible Rotator model")
+    if not isinstance(model, ChatOpenAI):
+        raise TypeError("the page scorer must use the configured ChatOpenAI model")
 
     # Deep Agents keys the harness profile by model and registrations are additive: clear this model's key, so nothing registered
     # before (by another role or other code in the process) hides tools from this agent.
@@ -48,6 +50,7 @@ def page_scorer(proposals: list[dict], *, fixed_keys: bool, model = None):
     )
     agent = create_deep_agent(
         model = model,
+        tools = [],
         system_prompt = prompts.pipeline.planner.page_scorer.prompts.system_prompt(proposals),
         response_format = schemas.fixed_key_model(len(proposals)) if fixed_keys else schemas.DocAssignment,
         middleware = [
@@ -74,6 +77,6 @@ def page_scorer(proposals: list[dict], *, fixed_keys: bool, model = None):
     error_message = "DeepAgents exposed an unreviewed tool to the page scorer"
     if not isinstance(available_tools, dict):
         raise RuntimeError(error_message)
-    if set(available_tools) - dd.agents.params.STACK_TOOLS:
+    if set(available_tools) - agents.params.STACK_TOOLS:
         raise RuntimeError(error_message)
     return agent

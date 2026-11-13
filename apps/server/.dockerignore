@@ -50,6 +50,7 @@
 # below; in a Docker .dockerignore a later `!negation` overrides an earlier ignore.
 **/*.md
 !ai/bd/prompts/ingestion/**/SYSTEM.md
+!ai/bd/prompts/ask/**/SYSTEM.md
 !ai/bd/prompts/distill/**/SYSTEM.md
 !ai/bd/prompts/rag/**/SYSTEM.md
 !ai/bd/skills/ingestion/**/*.md

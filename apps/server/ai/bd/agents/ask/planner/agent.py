@@ -47,7 +47,9 @@ def planner(model = None):
         system_prompt = prompts.ask.planner.prompts.SYSTEM_PROMPT,
         middleware = [
             middlewares.middleware.ToolAllowlistMiddleware(frozenset()),
-            ModelCallLimitMiddleware(run_limit = params.MAX_MODEL_CALLS, exit_behavior = "end"),
+            ModelCallLimitMiddleware(
+                max_run_limit = params.MAX_MODEL_CALLS, 
+                exit_behavior = "end"),
         ],
         response_format = agents.ask.schemas.AskPlan,
         permissions = [

@@ -134,7 +134,7 @@ async def synth_info(response: Response) -> dict:
         "node_order":  list(domains.dd.pipeline.ai.synth.service.node_order()),
         "implemented": list(domains.dd.pipeline.ai.synth.service.node_order()),
         "synth_version": ai.dd.graphs.pipeline.synth.params.version(),
-        "graph_mermaid": ai.dd.graphs.topology.mermaid_source(graph),
+        "graph_mermaid": ai.dd.graphs.service.mermaid_source(graph),
         "modes": [
             {"key": "quality", "label": "Quality (default)", "enabled": True},
             {"key": "fast",    "label": "Fast (3 iters)",    "enabled": False},

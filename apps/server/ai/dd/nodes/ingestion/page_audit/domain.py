@@ -3,9 +3,238 @@ from __future__ import annotations
 from . import params, patterns
 from .... import agents
 
+from collections import Counter
+import html
+import html.parser
 import json
 import re
+import shlex
 from typing import Any
+
+
+class _HTMLTagCounter(html.parser.HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs = False)
+        self.open_tags: Counter[str] = Counter()
+        self.close_tags: Counter[str] = Counter()
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag not in patterns.VOID_HTML_TAGS:
+            self.open_tags[tag] += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag not in patterns.VOID_HTML_TAGS:
+            self.close_tags[tag] += 1
+
+
+def table_cells(row: str) -> int:
+    """Count table cells outside escaped pipes and code spans, excluding optional edge pipes."""
+    cells = 1
+    in_code = False
+    escaped = False
+    for char in row.strip():
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == "`":
+            in_code = not in_code
+        elif char == "|" and not in_code:
+            cells += 1
+    stripped = row.strip()
+    return cells - (stripped.startswith("|") + (stripped.endswith("|") and not stripped.endswith("\\|")))
+
+
+def is_sound_table_head(evidence: str) -> bool:
+    """Whether the evidence contains a valid GFM header and delimiter row."""
+    lines = [line.strip() for line in evidence.strip().splitlines() if line.strip()]
+    if not lines or not lines[0].startswith("|"):
+        return False
+    at = next((
+        index
+        for index in (0, 1)
+        if index < len(lines)
+        and patterns.TABLE_DELIMITER_RE.fullmatch(lines[index])
+        and "|" in lines[index]
+    ), None)
+    if at is None:
+        return False
+    width = table_cells(lines[at])
+    header_is_well_formed = at == 0 or table_cells(lines[0]) == width
+    return header_is_well_formed and all(
+        table_cells(line) <= width
+        for index, line in enumerate(lines)
+        if index != at
+    )
+
+
+def is_valid_table_row_context(markdown: str, evidence: str) -> bool:
+    """Whether a cited row is part of a valid GFM table, including short body rows."""
+    cited = evidence.strip()
+    if not cited.startswith("|") or "\n" in cited:
+        return False
+    lines = markdown.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() != cited:
+            continue
+        for delimiter_index in (index - 1, index + 1):
+            if not (
+                0 <= delimiter_index < len(lines)
+                and "|" in lines[delimiter_index]
+                and patterns.TABLE_DELIMITER_RE.fullmatch(lines[delimiter_index].strip())
+            ):
+                continue
+            width = table_cells(lines[delimiter_index])
+            header_index = delimiter_index - 1
+            if (
+                header_index >= 0
+                and "|" in lines[header_index]
+                and table_cells(lines[header_index]) == width
+                and table_cells(line) <= width
+            ):
+                return True
+    return False
+
+
+def contains_valid_escaped_ampersand(evidence: str) -> bool:
+    """Whether evidence includes Markdown's valid backslash escape for an ampersand."""
+    return r"\&" in evidence
+
+
+def contains_escaped_identifier(evidence: str) -> bool:
+    """Whether evidence includes an identifier whose escaped underscores render literally."""
+    return patterns.ESCAPED_IDENTIFIER_RE.search(evidence) is not None
+
+
+def evidence_is_valid_atx_heading(markdown: str, evidence: str) -> bool:
+    """Whether evidence occurs on a syntactically valid ATX heading line."""
+    for line in markdown.splitlines():
+        if evidence not in line:
+            continue
+        match = patterns.ATX_HEADING_LINE_RE.match(line)
+        if match is None:
+            continue
+        content = (match.group(2) or "").strip()
+        if content and not patterns.ATX_CLOSING_HASHES_RE.fullmatch(content):
+            return True
+    return False
+
+
+def is_valid_blockquote(evidence: str) -> bool:
+    """Whether the cited lines use valid blockquote markers, regardless of editorial intent."""
+    lines = [line for line in evidence.splitlines() if line.strip()]
+    return bool(lines) and all(patterns.BLOCKQUOTE_LINE_RE.match(line) for line in lines)
+
+
+def is_package_manager_alternative(evidence: str) -> bool:
+    """Whether fenced examples repeat identical requirements for pip and uv installation options."""
+    blocks = patterns.FENCED_CODE_BLOCK_RE.findall(evidence)
+    installs: list[tuple[str, tuple[str, ...]]] = []
+    for block in blocks:
+        commands = [line.strip() for line in block.splitlines() if line.strip()]
+        if len(commands) != 1:
+            continue
+        try:
+            parts = shlex.split(commands[0])
+        except ValueError:
+            continue
+        if len(parts) < 3 or parts[:2] not in (["pip", "install"], ["pip3", "install"], ["uv", "add"]):
+            continue
+        installs.append(("pip" if parts[0] in {"pip", "pip3"} else "uv", tuple(parts[2:])))
+
+    managers = {manager for manager, _requirements in installs}
+    requirement_sets = {requirements for _manager, requirements in installs}
+    return len(installs) >= 2 and managers == {"pip", "uv"} and len(requirement_sets) == 1
+
+
+def is_model_configuration_code_variant(evidence: str) -> bool:
+    """Whether fenced examples are otherwise identical and differ only by model configuration."""
+    blocks = patterns.FENCED_CODE_BLOCK_RE.findall(evidence)
+    values: list[str] = []
+    normalized: list[str] = []
+    for block in blocks:
+        matches = list(patterns.MODEL_CONFIGURATION_LINE_RE.finditer(block))
+        if len(matches) != 1:
+            return False
+        values.append(matches[0].group(2) or matches[0].group(3) or "")
+        normalized.append(
+            patterns.MODEL_CONFIGURATION_LINE_RE.sub(r'\1"<MODEL>"', block)
+        )
+    return len(blocks) >= 2 and len(set(values)) > 1 and len(set(normalized)) == 1
+
+
+def is_valid_escaped_identifier(evidence: str) -> bool:
+    """Whether the cited identifier uses valid Markdown escapes for its underscores."""
+    return patterns.ESCAPED_IDENTIFIER_RE.fullmatch(evidence.strip()) is not None
+
+
+def is_valid_numeric_entity_text(evidence: str) -> bool:
+    """Whether an alleged encoding defect is valid HTML numeric character-reference text."""
+    if not patterns.HTML_NUMERIC_ENTITY_RE.search(evidence):
+        return False
+    decoded = html.unescape(evidence)
+    return decoded != evidence and "\ufffd" not in decoded
+
+
+def is_structural_export_markup_only(evidence: str) -> bool:
+    """Whether repeated evidence contains only HTML or GitBook block markers."""
+    lines = [line.strip() for line in evidence.splitlines() if line.strip()]
+    return bool(lines) and all(
+        patterns.GITBOOK_COMPONENT_TAG_RE.fullmatch(line) is not None
+        or patterns.HTML_TAG_ONLY_RE.fullmatch(line) is not None
+        for line in lines
+    )
+
+
+def is_export_convention(evidence: str, *, markdown: str = "") -> bool:
+    """Whether evidence is valid site-export syntax or raw HTML, not a page defect."""
+    if (
+        patterns.EXPORT_CONVENTION_RE.match(evidence)
+        or is_sound_table_head(evidence)
+        or (markdown and is_valid_table_row_context(markdown, evidence))
+    ):
+        return True
+    if patterns.GITBOOK_COMPONENT_TAG_RE.search(evidence) or patterns.HTML_TAG_ONLY_RE.fullmatch(evidence):
+        return True
+    if not markdown:
+        return False
+    evidence_tags = {match.group(1).lower() for match in patterns.HTML_TAG_RE.finditer(evidence)}
+    if not evidence_tags:
+        return False
+    counts = _HTMLTagCounter()
+    try:
+        counts.feed(markdown)
+        counts.close()
+    except Exception:
+        return False
+    return all(
+        tag in patterns.VOID_HTML_TAGS
+        or (counts.open_tags[tag] > 0 and counts.open_tags[tag] == counts.close_tags[tag])
+        for tag in evidence_tags
+    )
+
+
+def is_inside_export_component(markdown: str, evidence: str) -> bool:
+    """Whether a heading or syntax finding sits inside a balanced GitBook component block."""
+    start = markdown.find(evidence)
+    if start < 0:
+        return False
+    stack: list[tuple[str, int]] = []
+    spans: list[tuple[int, int]] = []
+    for match in patterns.GITBOOK_COMPONENT_TAG_RE.finditer(markdown):
+        name = match.group("name").lower()
+        if name not in patterns.GITBOOK_COMPONENT_NAMES:
+            continue
+        if match.group("end"):
+            for index in range(len(stack) - 1, -1, -1):
+                if stack[index][0] == name:
+                    _opened_name, opened_at = stack.pop(index)
+                    spans.append((opened_at, match.start()))
+                    del stack[index:]
+                    break
+        else:
+            stack.append((name, match.end()))
+    return any(opened_at <= start < closed_at for opened_at, closed_at in spans)
 
 
 def user_payload(
@@ -103,7 +332,7 @@ def sanitize_assessment(
         description = issue.description.casefold()
         if (
             issue.category == "markdown_formatting"
-            and agents.ingestion.page_auditor.patterns.contains_valid_escaped_ampersand(issue.evidence)
+            and contains_valid_escaped_ampersand(issue.evidence)
             and "ampersand" in description
         ):
             warnings.append(
@@ -112,10 +341,10 @@ def sanitize_assessment(
             continue
         if (
             issue.category == "markdown_formatting"
-            and agents.ingestion.page_auditor.patterns.evidence_is_valid_atx_heading(markdown, issue.evidence)
+            and evidence_is_valid_atx_heading(markdown, issue.evidence)
             and (
                 "colon" in description
-                or ("underscore" in description and agents.ingestion.page_auditor.patterns.contains_escaped_identifier(issue.evidence))
+                or ("underscore" in description and contains_escaped_identifier(issue.evidence))
             )
         ):
             warnings.append(
@@ -124,7 +353,7 @@ def sanitize_assessment(
             continue
         if (
             issue.category == "markdown_formatting"
-            and agents.ingestion.page_auditor.patterns.is_valid_blockquote(issue.evidence)
+            and is_valid_blockquote(issue.evidence)
             and "blockquote" in description
             and any(term in description for term in ("heading", "tagline", "unconventional", "descriptive statement"))
         ):
@@ -135,7 +364,7 @@ def sanitize_assessment(
         if (
             issue.category == "markdown_formatting"
             and "empty row" in description
-            and not any(re.fullmatch(r"\s*\|(?:\s*\|)?\s*", line) for line in issue.evidence.splitlines())
+            and not any(patterns.EMPTY_TABLE_ROW_RE.fullmatch(line) for line in issue.evidence.splitlines())
         ):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: its evidence contains no empty table row to support the claim."
@@ -143,7 +372,7 @@ def sanitize_assessment(
             continue
         if (
             issue.category == "markdown_formatting"
-            and agents.ingestion.page_auditor.patterns.is_valid_table_row_context(markdown, issue.evidence)
+            and is_valid_table_row_context(markdown, issue.evidence)
             and any(term in description for term in ("missing link formatting", "inconsistent presentation"))
         ):
             warnings.append(
@@ -153,7 +382,7 @@ def sanitize_assessment(
         if (
             issue.category == "markdown_formatting"
             and "duplicate installation command" in description
-            and agents.ingestion.page_auditor.patterns.is_package_manager_alternative(issue.evidence)
+            and is_package_manager_alternative(issue.evidence)
         ):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: equivalent pip and uv commands are alternative package-manager examples."
@@ -161,7 +390,7 @@ def sanitize_assessment(
             continue
         if (
             issue.category == "markdown_formatting"
-            and agents.ingestion.page_auditor.patterns.is_model_configuration_code_variant(issue.evidence)
+            and is_model_configuration_code_variant(issue.evidence)
         ):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: equivalent fenced examples differ only by model configuration."
@@ -169,7 +398,7 @@ def sanitize_assessment(
             continue
         if (
             issue.category == "markdown_formatting"
-            and agents.ingestion.page_auditor.patterns.is_valid_escaped_identifier(issue.evidence)
+            and is_valid_escaped_identifier(issue.evidence)
         ):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: escaped underscores are valid in a Markdown identifier."
@@ -177,15 +406,15 @@ def sanitize_assessment(
             continue
         if (
             issue.category == "encoding_artifact"
-            and agents.ingestion.page_auditor.patterns.is_valid_numeric_entity_text(issue.evidence)
+            and is_valid_numeric_entity_text(issue.evidence)
         ):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: HTML numeric character references render as their intended characters."
             )
             continue
         if issue.category in params.CONVENTION_CATEGORIES and (
-            agents.ingestion.page_auditor.patterns.is_export_convention(issue.evidence, markdown=markdown)
-            or agents.ingestion.page_auditor.patterns.is_inside_export_component(markdown, issue.evidence)
+            is_export_convention(issue.evidence, markdown=markdown)
+            or is_inside_export_component(markdown, issue.evidence)
         ):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: its evidence is valid export syntax or raw HTML, not a page defect."
@@ -198,7 +427,7 @@ def sanitize_assessment(
             continue
         if (
             issue.category in params.DUPLICATE_CATEGORIES
-            and agents.ingestion.page_auditor.patterns.is_structural_export_markup_only(issue.evidence)
+            and is_structural_export_markup_only(issue.evidence)
         ):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: repeated export-block markers are structural syntax, not duplicate page content."

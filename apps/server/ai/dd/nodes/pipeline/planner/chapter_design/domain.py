@@ -1,26 +1,19 @@
 """Deterministic candidate grouping, score summaries, and assignment repair."""
 from __future__ import annotations
+from . import params, patterns
+
 
 import heapq
 import math
-import re
 from collections import Counter, defaultdict
-
-from . import params
-
-
-TOKEN_RE = re.compile(r"[a-z][a-z0-9_]{1,}", re.IGNORECASE)
-STOP = frozenset({
-    "the", "and", "for", "this", "that", "with", "from", "into", 
-    "your", "you", "are", "was", "use", "using", "how", "can", 
-    "will", "not", "but", "its", "has", "have", "guide", "docs",
-    "page", "overview", "reference", "documentation", "chapter", 
-    "learn", "learns",
-})
 
 
 def tokens(text: str) -> list[str]:
-    return [token.lower() for token in TOKEN_RE.findall(text or "") if token.lower() not in STOP]
+    return [
+        token.lower()
+        for token in patterns.TOKEN_RE.findall(text or "")
+        if token.lower() not in patterns.STOP_WORDS
+    ]
 
 
 def card_text(card: dict) -> str:
@@ -391,13 +384,13 @@ def _reachable(start: int, goal: int, edges: dict[int, set[int]]) -> bool:
 
 
 def _concept_key(value) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).strip()
+    return patterns.CONCEPT_RE.sub(" ", str(value or "").casefold()).strip()
 
 
 def _reference_title(value: str) -> str:
     """Append one consistent reference suffix, even when source topics already include it."""
     title = " ".join(str(value or "").split())
-    title = re.sub(r"(?:\s+(?:api\s+)?reference)+$", "", title, flags = re.IGNORECASE).strip()
+    title = patterns.REFERENCE_SUFFIX_RE.sub("", title).strip()
     return f"{title or 'API'} Reference"
 
 

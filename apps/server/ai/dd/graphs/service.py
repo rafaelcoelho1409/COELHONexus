@@ -13,6 +13,11 @@ from langgraph.config import get_stream_writer
 logger = logging.getLogger(__name__)
 
 
+def mermaid_source(compiled_graph: Any) -> str:
+    """Render a compiled graph's topology, including nested subgraphs, without invoking its nodes."""
+    return compiled_graph.get_graph(xray = True).draw_mermaid()
+
+
 class ProgressReporter(Protocol):
     async def raise_if_cancelled(self) -> None: ...
 
