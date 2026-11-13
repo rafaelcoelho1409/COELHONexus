@@ -5,7 +5,6 @@ from . import errors, patterns
 from .... import agents
 
 import difflib
-import re
 import unicodedata
 import json
 from collections.abc import Iterator
@@ -196,12 +195,12 @@ def _invents_text(proposal: agents.schemas.PatchProposal) -> bool:
     # A page may end mid-sentence because its paragraph continues on the next page; added words are invented text.
     if replacement.startswith(target) and len(replacement[len(target):].split()) > 1:
         return True
-    squeezed_target = patterns._SPACE_RE.sub("", target)
+    squeezed_target = patterns.SPACE_RE.sub("", target)
     return any(
-        patterns._SPACE_RE.sub("", introduced) not in squeezed_target
+        patterns.SPACE_RE.sub("", introduced) not in squeezed_target
         for introduced in (
-            *patterns._LINK_DESTINATION_RE.findall(replacement),
-            *patterns._HTML_COMMENT_RE.findall(replacement),
+            *patterns.LINK_DESTINATION_RE.findall(replacement),
+            *patterns.HTML_COMMENT_RE.findall(replacement),
         )
     )
 
@@ -265,7 +264,7 @@ def count_variants(text: str, variants: list[str], *, max_variants: int, max_cha
         wanted = _squeeze(variant)[:max_chars]
         if not wanted:
             continue
-        count = len(re.findall(rf"(?<!\w){re.escape(wanted)}(?!\w)", squeezed))
+        count = patterns.count_whole_word_occurrences(squeezed, wanted)
         lines.append(f"{wanted!r}: {count}")
     return "\n".join(lines) or "no spelling was given"
 
@@ -278,7 +277,7 @@ def edge_lines(markdown: str, lines: int, *, from_end: bool, max_chars: int) -> 
 
 def _squeeze(text: str) -> str:
     """Casefold, drop soft hyphens, and collapse every whitespace run, so a line break reads as a space."""
-    return re.sub(r"\s+", " ", text.replace("­", "")).strip().casefold()
+    return patterns.WHITESPACE_RE.sub(" ", text.replace("­", "")).strip().casefold()
 
 
 def apply_proposals(
@@ -389,7 +388,7 @@ def _apply_mechanical_fixes(markdown: str) -> tuple[str, dict[str, int], list[tu
     control_characters = sum(_is_control_noise(character) for character in markdown)
     soft_hyphens = markdown.count("­")
     cleaned = "".join(
-        character for character in patterns._SOFT_HYPHEN_BREAK_RE.sub("", markdown)
+        character for character in patterns.SOFT_HYPHEN_BREAK_RE.sub("", markdown)
         if character != "­" and not _is_control_noise(character)
     )
     cleaned, table_count, table_changes = _normalize_markdown_tables(cleaned)
@@ -418,7 +417,7 @@ def _normalize_markdown_tables(markdown: str) -> tuple[str, int, list[tuple[str,
         separator = _split_table_cells(lines[index])
         header = _split_table_cells(lines[index - 1])
         if len(separator) < 2 or len(header) != len(separator) or not all(
-            patterns._TABLE_SEPARATOR_CELL_RE.fullmatch(cell) for cell in separator
+            patterns.TABLE_SEPARATOR_CELL_RE.fullmatch(cell) for cell in separator
         ):
             index += 1
             continue
@@ -497,17 +496,17 @@ def _remove_table_toc_leaders(rows: list[list[str]]) -> list[list[str]]:
             continue
         last = nonempty[-1]
         last_cell = row[last].strip()
-        leader_page = patterns._LEADING_DOT_LEADER_PAGE_REFERENCE_RE.fullmatch(last_cell)
+        leader_page = patterns.LEADING_DOT_LEADER_PAGE_REFERENCE_RE.fullmatch(last_cell)
         if leader_page:
             row[last] = leader_page.group("page")
             last_cell = row[last]
-        if patterns._PAGE_REFERENCE_RE.fullmatch(last_cell):
+        if patterns.PAGE_REFERENCE_RE.fullmatch(last_cell):
             for column in nonempty[:-1]:
-                title = patterns._TRAILING_LEADERS_RE.sub("", row[column]).rstrip()
+                title = patterns.TRAILING_LEADERS_RE.sub("", row[column]).rstrip()
                 if title != row[column].strip():
                     row[column] = title
         for column, cell in enumerate(row):
-            match = patterns._INLINE_TOC_ROW_RE.fullmatch(cell.strip())
+            match = patterns.INLINE_TOC_ROW_RE.fullmatch(cell.strip())
             if match:
                 row[column] = f"{match.group('title').rstrip()} {match.group('page')}"
     return cleaned
@@ -567,9 +566,9 @@ def _evidence_was_changed_in_table(excerpt: str, changes: list[tuple[str, str]])
 def _evidence_was_changed_with_toc_cleanup(excerpt: str, changes: list[tuple[str, str]]) -> bool:
     cells = _split_table_cells(excerpt) if "|" in excerpt else [excerpt]
     has_toc_markers = any(
-        patterns._TRAILING_LEADERS_RE.search(cell)
-        or patterns._INLINE_TOC_ROW_RE.fullmatch(cell.strip())
-        or patterns._LEADING_DOT_LEADER_PAGE_REFERENCE_RE.fullmatch(cell.strip())
+        patterns.TRAILING_LEADERS_RE.search(cell)
+        or patterns.INLINE_TOC_ROW_RE.fullmatch(cell.strip())
+        or patterns.LEADING_DOT_LEADER_PAGE_REFERENCE_RE.fullmatch(cell.strip())
         for cell in cells
     )
     return bool(has_toc_markers) and _evidence_was_changed_in_table(excerpt, changes)
@@ -598,11 +597,11 @@ def _is_spacing_repair(proposal: agents.schemas.PatchProposal, markdown: str, st
     if (
         target[:len(target) - len(target.lstrip())] != replacement[:len(replacement) - len(replacement.lstrip())]
         or target[len(target.rstrip()):] != replacement[len(replacement.rstrip()):]
-        or patterns._MARKDOWN_MARKER_RE.findall(target) != patterns._MARKDOWN_MARKER_RE.findall(replacement)
+        or patterns.MARKDOWN_MARKER_RE.findall(target) != patterns.MARKDOWN_MARKER_RE.findall(replacement)
     ):
         return False
     squeezed_target, squeezed_replacement = (
-        patterns._SPACE_RE.sub("", text) for text in (target, replacement)
+        patterns.SPACE_RE.sub("", text) for text in (target, replacement)
     )
     if squeezed_target == squeezed_replacement:
         return True
@@ -612,17 +611,17 @@ def _is_spacing_repair(proposal: agents.schemas.PatchProposal, markdown: str, st
         return not _inside_code(markdown, start)
     # Words the edit leaves alone (a domain name beside the repaired word, say) are not part of it: judge what changes.
     target, replacement = _changed_words(target, replacement)
-    if not all(patterns._PLAIN_PROSE_RE.fullmatch(text) for text in (target, replacement)):
+    if not all(patterns.PLAIN_PROSE_RE.fullmatch(text) for text in (target, replacement)):
         return False
     if "­" in target and replacement.count("-") > target.count("-"):
         # A soft hyphen only marks where a line may break; turning it into a visible hyphen claims a compound the page never showed.
         return False
     # A hyphen may be added, or dropped where the source left it dangling before a space ("engineer- ing");
     # a hyphen that is already part of a word is never removed.
-    joined_target = patterns._DANGLING_HYPHEN_RE.sub("", target)
+    joined_target = patterns.DANGLING_HYPHEN_RE.sub("", target)
     return (
-        patterns._INTRA_WORD_HYPHEN_RE.sub("", patterns._SPACE_RE.sub("", joined_target))
-        == patterns._INTRA_WORD_HYPHEN_RE.sub("", patterns._SPACE_RE.sub("", replacement))
+        patterns.INTRA_WORD_HYPHEN_RE.sub("", patterns.SPACE_RE.sub("", joined_target))
+        == patterns.INTRA_WORD_HYPHEN_RE.sub("", patterns.SPACE_RE.sub("", replacement))
         and replacement.count("-") >= joined_target.count("-")
     )
 
@@ -648,7 +647,7 @@ def _changed_words(target: str, replacement: str) -> tuple[str, str]:
 def _inserts_space(target: str, replacement: str) -> bool:
     matcher = difflib.SequenceMatcher(None, target, replacement, autojunk = False)
     return any(
-        tag in {"insert", "replace"} and patterns._SPACE_RE.search(replacement[j1:j2])
+        tag in {"insert", "replace"} and patterns.SPACE_RE.search(replacement[j1:j2])
         for tag, _, _, j1, j2 in matcher.get_opcodes()
     )
 

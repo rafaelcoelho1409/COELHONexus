@@ -9,9 +9,15 @@ from langgraph.graph import END, START, StateGraph
 
 
 def ingestion_graph(checkpointer: Any | None = None):
-    """Compile the full-book, versioned and review-aware ingestion workflow. What a run needs (pages, agents, progress) reaches
-    the nodes at run time through the graph's `context` (`IngestionDependencies`), so building the graph needs nothing but a checkpointer."""
-    workflow = StateGraph(states.IngestionRunState, context_schema = entities.IngestionDependencies)
+    """Compile the full-book audit, repair, metadata, classification, and publication workflow.
+
+    Runtime dependencies such as page access, agents, and progress reporting arrive through the graph context,
+    so graph construction only needs an optional checkpointer.
+    """
+    workflow = StateGraph(
+        states.IngestionRunState,
+        context_schema = entities.IngestionDependencies,
+    )
     workflow.add_node("audit_batch", nodes.ingestion.audit_batch.node.audit_pages)
     workflow.add_node("plan_repairs", nodes.ingestion.plan_repairs.node.plan_repairs)
     workflow.add_node("repair_pages", nodes.ingestion.repair_pages.node.repair_pages)

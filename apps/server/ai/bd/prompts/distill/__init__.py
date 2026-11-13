@@ -8,4 +8,9 @@ from . import (
     learning_extractor,
 )
 
-__all__ = ["book_synthesizer", "chapter_synthesizer", "evidence_verifier", "learning_extractor"]
+__all__ = [
+    "book_synthesizer",
+    "chapter_synthesizer",
+    "evidence_verifier",
+    "learning_extractor",
+]

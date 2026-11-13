@@ -18,7 +18,13 @@ from . import keys, params, progress, schemas, versions
 logger = logging.getLogger(__name__)
 
 
+class DistillWorkerVersionMismatch(RuntimeError):
+    """Raised when Celery receives a run created for a newer Distill workflow."""
+
+
 def _failure_message(error: Exception) -> str:
+    if isinstance(error, DistillWorkerVersionMismatch):
+        return str(error)
     provider_kind = domains.settings.chat.domain.classify_error(error)
     provider_reasons = {
         "timeout": "repeated LLM provider timeouts",
@@ -249,6 +255,23 @@ async def queue_resume(book_id: str, run_id: str) -> dict[str, Any]:
         if any(run["run_id"] != run_id for run in active):
             raise ValueError("another Distill run is already active for this book")
         await progress.service.clear_cancel(book_id, run_id)
+        if manifest.get("resume_from_node") not in params.GRAPH_NODES:
+            failed_nodes = [
+                node
+                for node in params.GRAPH_NODES
+                if manifest["progress"]["node_status"].get(node) in {"failed", "running"}
+            ]
+            unfinished_nodes = [
+                node
+                for node in params.GRAPH_NODES
+                if manifest["progress"]["node_status"].get(node) != "done"
+            ]
+            manifest["resume_from_node"] = (
+                failed_nodes[0]
+                if failed_nodes
+                else manifest["progress"].get("current_node")
+                or (unfinished_nodes[0] if unfinished_nodes else "prepare_units")
+            )
         manifest["status"] = "queued"
         manifest["workflow_version"] = versions.WORKFLOW_VERSION
         manifest["prompt_version"] = versions.PROMPT_VERSION
@@ -409,6 +432,43 @@ async def read_html(book_id: str, run_id: str) -> str:
     return content
 
 
+async def _restore_chapter_resume_state(
+    ai_module: Any,
+    dependencies: Any,
+    initial_state: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Rehydrate chapter-stage state from durable source and lesson artifacts."""
+    prepared = await ai_module.bd.nodes.distill.extract_learning_units.service.prepare_units(
+        dependencies,
+        initial_state,
+    )
+    completed_units = []
+    for ref in prepared.get("unit_refs", []):
+        artifact_key = keys.learning_unit_key(
+            initial_state["book_id"], initial_state["run_id"], ref["unit_id"],
+        )
+        if not await dependencies.storage.exists(artifact_key):
+            return None
+        artifact = json.loads(await dependencies.storage.read_text(artifact_key))
+        if artifact.get("text_sha256") != ref.get("text_sha256"):
+            raise ValueError("a persisted learning-unit artifact no longer matches its source input")
+        lesson_ids = [
+            item["learning_unit_id"]
+            for item in artifact.get("lessons", [])
+            if isinstance(item, dict) and isinstance(item.get("learning_unit_id"), str)
+        ]
+        completed_units.append({
+            **ref,
+            "learning_unit_ids": lesson_ids,
+            "existing_artifact": True,
+        })
+    return {
+        **initial_state,
+        **prepared,
+        "completed_units": completed_units,
+    }
+
+
 async def mark_run_started(book_id: str, run_id: str) -> dict[str, Any]:
     """Promote a queued run as soon as a worker accepts it, before checkpointer setup."""
     storage = infra.minio.service.get_storage()
@@ -499,6 +559,25 @@ async def run_distill(
         return manifest
     if manifest["status"] not in {"queued", "running"}:
         raise ValueError("only queued or running Distill runs can execute")
+    worker_workflow_version = versions.WORKFLOW_VERSION
+    worker_prompt_version = versions.PROMPT_VERSION
+    run_workflow_version = manifest.get("workflow_version")
+    run_prompt_version = manifest.get("prompt_version")
+    logger.info(
+        "[bd-distill] worker versions workflow=%s prompt=%s run=%s expected_workflow=%s expected_prompt=%s",
+        worker_workflow_version,
+        worker_prompt_version,
+        run_id,
+        run_workflow_version,
+        run_prompt_version,
+    )
+    if (run_workflow_version, run_prompt_version) != (worker_workflow_version, worker_prompt_version):
+        raise DistillWorkerVersionMismatch(
+            "Distill worker code is out of date "
+            f"(worker workflow {worker_workflow_version}/prompt {worker_prompt_version}; "
+            f"run requires {run_workflow_version}/prompt {run_prompt_version}). "
+            "Redeploy the Celery worker before resuming."
+        )
 
     source_manifest = await domains.bd.ingestion.storage.service.read_manifest(storage, book_id)
     if source_manifest is None or source_manifest.get("extraction_id") != manifest["extraction_run_id"]:
@@ -568,6 +647,10 @@ async def run_distill(
                 node = event.get("node")
                 if isinstance(node, str) and node in current["node_status"] and status in {"running", "done", "failed"}:
                     current["node_status"][node] = status
+                    if status == "failed":
+                        manifest["resume_from_node"] = node
+                    elif status == "done" and manifest.get("resume_from_node") == node:
+                        manifest["resume_from_node"] = None
                     current["current_node"] = node if status == "running" else (
                         None if current.get("current_node") == node else current.get("current_node")
                     )
@@ -618,6 +701,7 @@ async def run_distill(
             "expected_page_count": manifest["expected_page_count"],
             "selected_page_count": manifest.get("selected_page_count", manifest["expected_page_count"]),
             "run_created_at": manifest["created_at"],
+            "resume_from_node": manifest.get("resume_from_node"),
             "completed_units": [],
             "completed_chapters": [],
         }
@@ -627,9 +711,43 @@ async def run_distill(
         }
         if checkpointer is not None:
             snapshot = await graph.aget_state(graph_config)
-            graph_input = None if snapshot.next else initial_state
+            if snapshot.next:
+                graph_input = None
+                logger.info(
+                    "[bd-distill] resuming LangGraph checkpoint run=%s pending_nodes=%s",
+                    run_id,
+                    snapshot.next,
+                )
+            else:
+                graph_input = initial_state
         else:
             graph_input = initial_state
+        resume_from_node = manifest.get("resume_from_node")
+        chapter_stage_nodes = {"prepare_chapters", "synthesize_chapter", "synthesize_book", "publish_report"}
+        if graph_input is not None and resume_from_node in chapter_stage_nodes:
+            restored_state = await _restore_chapter_resume_state(ai, dependencies, initial_state)
+            if restored_state is None:
+                resume_from_node = "prepare_units"
+                manifest["resume_from_node"] = resume_from_node
+                manifest = await _write_manifest(storage, manifest)
+                graph_input = {**initial_state, "resume_from_node": resume_from_node}
+                logger.warning(
+                    "[bd-distill] chapter-stage resume lacked complete learning-unit artifacts; "
+                    "restarting at extraction with artifact reuse run=%s",
+                    run_id,
+                )
+            else:
+                graph_input = {
+                    **restored_state,
+                    "resume_from_node": resume_from_node,
+                }
+                logger.info(
+                    "[bd-distill] restoring %s persisted learning-unit artifacts and "
+                    "resuming at chapter mapping run=%s failed_node=%s",
+                    len(restored_state["completed_units"]),
+                    run_id,
+                    resume_from_node,
+                )
         result = await graph.ainvoke(graph_input, config = graph_config)
         required = ("report_key", "report_sha256", "html_key", "html_sha256")
         if any(not isinstance(result.get(field), str) for field in required):

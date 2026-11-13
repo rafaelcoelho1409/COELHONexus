@@ -1,21 +1,23 @@
 """DeepAgent relevance grading and minimum-evidence gate for BD Ask."""
 from __future__ import annotations
-
-from .... import bd
 import domains
+from .... import agents, graphs
 
-from langgraph.runtime import Runtime
+from langchain.runtime import Runtime
 
 
-async def grade_evidence(state: dict, runtime: Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
+async def grade_evidence(
+    state: dict,
+    runtime: Runtime[graphs.ask.adaptive.entities.AskContext],
+) -> dict:
     documents = state.get("documents") or []
     domains.settings.llm_counter.service.set_node(node = "grade_documents")
     if not documents:
         return {"retrieval_sufficient": False, "document_count": 0, "documents": []}
     try:
-        assessment = await bd.agents.ask.service.invoke(
+        assessment = await agents.ask.service.invoke(
             runtime.context.grader,
-            bd.agents.ask.schemas.EvidenceGrades,
+            agents.ask.schemas.EvidenceGrades,
             {
                 "question": state.get("question", ""),
                 "sub_questions": state.get("sub_questions", []),

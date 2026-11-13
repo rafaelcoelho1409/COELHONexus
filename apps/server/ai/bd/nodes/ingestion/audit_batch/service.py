@@ -146,8 +146,8 @@ async def audit_page(
                 "deterministic findings were retained for review."
             ]
     merged_issues = domains.bd.ingestion.ai.inventory.domain.merge_issues(
-        deterministic.issues, 
-        proposed.issues, 
+        deterministic.issues,
+        proposed.issues,
         markdown)
     assessment = agents.schemas.PageAssessment(
         page_number = page_ref["page"],

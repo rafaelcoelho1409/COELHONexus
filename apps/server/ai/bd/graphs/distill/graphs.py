@@ -1,57 +1,21 @@
-"""Build the source-only, resumable Distill workflow."""
+"""The source-only Distill workflow: extract units, synthesize chapters and the book, then publish the report."""
 from __future__ import annotations
+import domains
+from . import entities, states
+from ... import nodes
 
 import functools
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import RetryPolicy, Send
-
-import domains
-
-from ... import nodes
-from . import entities, states
-
-
-def _identity(state: states.DistillRunState) -> dict[str, Any]:
-    return {
-        key: state[key]
-        for key in (
-            "book_id", "run_id", "extraction_run_id", "ingestion_ai_run_id", "source_manifest_key",
-            "source_manifest_sha256", "ingestion_ai_manifest_key", "ingestion_ai_manifest_sha256",
-            "content_selection_key", "content_selection_sha256", "content_selection_revision",
-            "expected_page_count", "selected_page_count", "run_created_at",
-        )
-        if key in state
-    }
-
-
-def _dispatch_units(state: states.DistillRunState) -> list[Send] | str:
-    refs = state.get("unit_refs", [])
-    if not refs:
-        return "prepare_chapters"
-    size = domains.bd.distill.params.FANOUT_UNIT_BATCH_SIZE
-    return [
-        Send("extract_unit", {**_identity(state), "unit_batch": refs[index:index + size]})
-        for index in range(0, len(refs), size)
-    ]
-
-
-def _dispatch_chapters(state: states.DistillRunState) -> list[Send] | str:
-    refs = state.get("chapter_refs", [])
-    if not refs:
-        raise ValueError("the completed extraction did not contain readable learning material")
-    size = domains.bd.distill.params.FANOUT_CHAPTER_BATCH_SIZE
-    return [
-        Send("synthesize_chapter", {**_identity(state), "chapter_batch": refs[index:index + size]})
-        for index in range(0, len(refs), size)
-    ]
+from langgraph.types import RetryPolicy
 
 
 def distill_graph(
     dependencies: entities.DistillDependencies,
     checkpointer: Any | None = None,
 ):
+    """Compile the resumable Distill workflow with bounded retries for provider failures."""
     provider_retry_policy = RetryPolicy(
         max_attempts = domains.bd.distill.params.TRANSIENT_NODE_RETRY_ATTEMPTS,
         initial_interval = domains.bd.distill.params.TRANSIENT_NODE_RETRY_INITIAL_INTERVAL_S,
@@ -61,28 +25,61 @@ def distill_graph(
         retry_on = domains.settings.chat.domain.is_transient_provider_error,
     )
     workflow = StateGraph(states.DistillRunState)
-    workflow.add_node("prepare_units", functools.partial(nodes.distill.extract_learning_units.node.prepare_units, dependencies))
+    workflow.add_node(
+        "prepare_units",
+        functools.partial(
+            nodes.distill.extract_learning_units.node.prepare_units, 
+            dependencies),
+    )
     workflow.add_node(
         "extract_unit",
-        functools.partial(nodes.distill.extract_learning_units.node.extract_unit, dependencies),
+        functools.partial(
+            nodes.distill.extract_learning_units.node.extract_unit, 
+            dependencies),
         retry_policy = provider_retry_policy,
     )
-    workflow.add_node("prepare_chapters", functools.partial(nodes.distill.synthesize.node.prepare_chapters, dependencies))
+    workflow.add_node(
+        "prepare_chapters",
+        functools.partial(
+            nodes.distill.synthesize.node.prepare_chapters, 
+            dependencies),
+    )
     workflow.add_node(
         "synthesize_chapter",
-        functools.partial(nodes.distill.synthesize.node.synthesize_chapter, dependencies),
+        functools.partial(
+            nodes.distill.synthesize.node.synthesize_chapter, 
+            dependencies),
         retry_policy = provider_retry_policy,
     )
     workflow.add_node(
         "synthesize_book",
-        functools.partial(nodes.distill.synthesize.node.synthesize_book, dependencies),
+        functools.partial(
+            nodes.distill.synthesize.node.synthesize_book, 
+            dependencies),
         retry_policy = provider_retry_policy,
     )
-    workflow.add_node("publish_report", functools.partial(nodes.distill.publish_report.node.publish_report, dependencies))
-    workflow.add_edge(START, "prepare_units")
-    workflow.add_conditional_edges("prepare_units", _dispatch_units, ["extract_unit", "prepare_chapters"])
+    workflow.add_node(
+        "publish_report",
+        functools.partial(
+            nodes.distill.publish_report.node.publish_report, 
+            dependencies),
+    )
+    workflow.add_conditional_edges(
+        START,
+        nodes.distill.extract_learning_units.node.after_start,
+        ["prepare_units", "prepare_chapters"],
+    )
+    workflow.add_conditional_edges(
+        "prepare_units",
+        nodes.distill.extract_learning_units.node.dispatch_units,
+        ["extract_unit", "prepare_chapters"],
+    )
     workflow.add_edge("extract_unit", "prepare_chapters")
-    workflow.add_conditional_edges("prepare_chapters", _dispatch_chapters, ["synthesize_chapter", "synthesize_book"])
+    workflow.add_conditional_edges(
+        "prepare_chapters",
+        nodes.distill.synthesize.node.dispatch_chapters,
+        ["synthesize_chapter", "synthesize_book"],
+    )
     workflow.add_edge("synthesize_chapter", "synthesize_book")
     workflow.add_edge("synthesize_book", "publish_report")
     workflow.add_edge("publish_report", END)

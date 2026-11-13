@@ -1,10 +1,9 @@
 """Thin LangGraph wrapper for the full-book content selection pass."""
 from __future__ import annotations
+from . import service
+from .... import graphs
 
 from langgraph.runtime import Runtime
-
-from .... import graphs
-from . import service
 
 
 async def classify_content(

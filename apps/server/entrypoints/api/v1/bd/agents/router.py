@@ -190,7 +190,7 @@ async def ask_stream(payload: schemas.AskRequest, request: Request) -> Streaming
     grader = ai.bd.agents.ask.grader.agent.grader(model)
     answerer = ai.bd.agents.ask.answer.agent.answerer(model)
     critic = ai.bd.agents.ask.critic.agent.critic(model)
-    graph = ai.bd.graphs.ask.adaptive.graphs.build_adaptive_ask_graph()
+    graph = ai.bd.graphs.ask.adaptive.graphs.adaptive_ask_graph()
     context = ai.bd.graphs.ask.adaptive.entities.AskContext(
         book_id = payload.book_id,
         run_id = run["run_id"],

@@ -1,5 +1,8 @@
 """Bounded content classification over normalized pages and append-only selection artifacts."""
 from __future__ import annotations
+import domains
+from . import domain
+from .... import agents, graphs
 
 import asyncio
 import hashlib
@@ -9,11 +12,6 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
-
-import domains
-
-from .... import agents, graphs
-from . import domain
 
 
 logger = logging.getLogger(__name__)
@@ -37,14 +35,6 @@ async def _read_page(reader: PageReader, key: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"normalized page {key} could not be read")
     return value
-
-
-def _excerpt(markdown: str) -> str:
-    limit = domains.bd.ingestion.ai.params.CONTENT_CLASSIFICATION_EXCERPT_CHARS
-    if len(markdown) <= limit:
-        return markdown
-    first = int(limit * 0.75)
-    return f"{markdown[:first]}\n\n[Middle omitted for bounded page classification]\n\n{markdown[-(limit - first):]}"
 
 
 async def classify_content(
@@ -146,7 +136,7 @@ async def classify_content(
                     "book_title": title,
                     "physical_page": page_number,
                     "section_path": source_ref.get("section_path", []),
-                    "page_markdown_excerpt": _excerpt(markdown),
+                    "page_markdown_excerpt": domain.excerpt(markdown),
                 }
                 try:
                     with domains.settings.llm_counter.service.llm_context(

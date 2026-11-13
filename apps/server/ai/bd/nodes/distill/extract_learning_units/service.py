@@ -1,15 +1,15 @@
 """Persist bounded source chunks and extract cited learning units from them."""
 from __future__ import annotations
+import domains
+from .... import agents, graphs, prompts
 
 import hashlib
 import json
 import logging
 from typing import Any
 
-import domains
 from pydantic import ValidationError
 
-from .... import agents, graphs, prompts
 
 logger = logging.getLogger(__name__)
 
@@ -474,3 +474,15 @@ async def extract_unit(
         lesson_count = len(persisted_lessons),
     )
     return {"completed_units": [ref]}
+
+
+async def extract_unit_batch(
+    dependencies: graphs.distill.entities.DistillDependencies,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    """Extract every unit assigned to one fan-out graph invocation."""
+    completed = []
+    for ref in state.get("unit_batch", []):
+        output = await extract_unit(dependencies, {**state, "unit_ref": ref})
+        completed.extend(output.get("completed_units", []))
+    return {"completed_units": completed}

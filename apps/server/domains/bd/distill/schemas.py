@@ -226,7 +226,7 @@ class DiagramNode(BaseModel):
     label: NonEmptyText
     attribution: Literal["book", "agent_inference"] = "book"
     learning_unit_ids: list[SafeSegment] = Field(min_length = 1)
-    evidence: list[EvidenceQuote] = Field(min_length = 1, max_length = 4)
+    evidence: list[EvidenceQuote] = Field(min_length = 1, max_length = 8)
 
 
 class DiagramEdge(BaseModel):
@@ -237,7 +237,7 @@ class DiagramEdge(BaseModel):
     relation: Literal["supports", "requires", "defines", "contrasts", "sequence", "example_of"]
     attribution: Literal["book", "agent_inference"] = "book"
     learning_unit_ids: list[SafeSegment] = Field(min_length = 1)
-    evidence: list[EvidenceQuote] = Field(min_length = 1, max_length = 4)
+    evidence: list[EvidenceQuote] = Field(min_length = 1, max_length = 8)
 
 
 class DiagramSpec(BaseModel):
@@ -268,7 +268,7 @@ class EquationBlock(BaseModel):
     attribution: Literal["book", "agent_inference"] = "book"
     assumptions: list[str] = Field(default_factory = list)
     learning_unit_ids: list[SafeSegment] = Field(min_length = 1)
-    evidence: list[EvidenceQuote] = Field(min_length = 1, max_length = 4)
+    evidence: list[EvidenceQuote] = Field(min_length = 1, max_length = 8)
 
 
 class DataColumn(BaseModel):
@@ -284,7 +284,7 @@ class DatasetRow(BaseModel):
 
     values: dict[str, str | int | float | None]
     learning_unit_ids: list[SafeSegment] = Field(min_length = 1)
-    evidence: list[EvidenceQuote] = Field(min_length = 1, max_length = 4)
+    evidence: list[EvidenceQuote] = Field(min_length = 1, max_length = 8)
 
 
 class Dataset(BaseModel):
@@ -429,6 +429,7 @@ class DistillRunManifest(BaseModel):
     content_selection_sha256: Sha256Hex | None = None
     content_selection_revision: int | None = Field(default = None, ge = 1, strict = True)
     status: Literal["queued", "running", "done", "failed", "cancelled"] = "queued"
+    resume_from_node: str | None = None
     progress: DistillProgress = Field(default_factory = DistillProgress)
     report_key: NonEmptyText | None = None
     report_sha256: Sha256Hex | None = None

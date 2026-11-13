@@ -1,16 +1,18 @@
-"""Book-scoped bounded parallel retrieval node."""
+"""Book-scoped bounded parallel evidence retrieval for BD Ask."""
 from __future__ import annotations
+import domains
+from .... import graphs
 
 import asyncio
-
-from .... import bd
-import domains
 
 from langgraph.config import get_stream_writer
 from langgraph.runtime import Runtime
 
 
-async def retrieve_evidence(state: dict, runtime: Runtime[bd.graphs.ask.adaptive.entities.AskContext]) -> dict:
+async def retrieve_evidence(
+    state: dict,
+    runtime: Runtime[graphs.ask.adaptive.entities.AskContext],
+) -> dict:
     domains.settings.llm_counter.service.set_node(node = "retrieve")
     queries = list(dict.fromkeys(str(item).strip() for item in state.get("queries", []) if str(item).strip()))[:4]
     try:

@@ -1,13 +1,11 @@
 """Compose and persist one citation-resolvable Learning Guide."""
 from __future__ import annotations
+import domains
+from .... import graphs
 
 import hashlib
 import json
 from typing import Any
-
-import domains
-
-from .... import graphs
 
 
 def _json_body(value: Any) -> str:

@@ -1,12 +1,11 @@
 """Dependencies injected into a single Distill graph run."""
 from __future__ import annotations
+import infra
 
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
-
-import infra
 
 ProgressReporter = Callable[[dict[str, Any]], Awaitable[None]]
 

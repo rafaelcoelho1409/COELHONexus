@@ -5,8 +5,18 @@ from collections.abc import Awaitable, Callable
 from inspect import isawaitable
 from typing import Any
 
+from langgraph.config import get_stream_writer
+
 
 ProgressReporter = Callable[[dict[str, Any]], Any]
+
+
+def stream_progress_callback() -> ProgressReporter | None:
+    """Return the active LangGraph custom-stream writer when one is available."""
+    try:
+        return get_stream_writer()
+    except RuntimeError:
+        return None
 
 
 async def report(progress_callback: ProgressReporter | None, **event: Any) -> None:

@@ -1,168 +1,18 @@
 """Chapter and whole-book synthesis over independently verified learning units."""
 from __future__ import annotations
+import domains
+from . import domain
+from .... import graphs, prompts
 
 import json
 import logging
-import re
 from typing import Any
 
-import domains
 
-from .... import graphs, prompts
-
-_CHAPTER_BATCH_SIZE = domains.bd.distill.params.MAX_CHAPTER_UNITS_PER_REQUEST
-_BOOK_BATCH_SIZE = domains.bd.distill.params.MAX_BOOK_SYNTHESIS_BATCH_SIZE
 logger = logging.getLogger(__name__)
-
 
 def _json_body(value: Any) -> str:
     return json.dumps(value, ensure_ascii = False, separators = (",", ":"), sort_keys = True)
-
-
-def _chapter_required_text_ids(synthesis: domains.bd.distill.schemas.ChapterSynthesis) -> set[str]:
-    """Collect IDs for required chapter prose, leaving optional visuals independently checkable."""
-    ids = set(synthesis.overview_learning_unit_ids)
-    for lesson in [*synthesis.lessons, *synthesis.open_questions]:
-        ids.update(lesson.learning_unit_ids)
-    return ids
-
-
-_NUMBER_RE = re.compile(r"(?<![A-Za-z])[-+]?\d[\d,]*(?:\.\d+)?%?(?![A-Za-z])")
-
-
-def _normalize_evidence_quote(value: str) -> str:
-    """Match harmless line-wrap/spacing changes while preserving quote wording and punctuation."""
-    return " ".join(value.split())
-
-
-def _evidence_matches(evidence, learning_unit_ids: list[str], units_by_id: dict[str, dict[str, Any]]) -> bool:
-    allowed = {
-        (quote["page_number"], _normalize_evidence_quote(quote["quote"]))
-        for unit_id in learning_unit_ids
-        for quote in units_by_id[unit_id]["evidence"]
-    }
-    return bool(evidence) and all(
-        (item.page_number, _normalize_evidence_quote(item.quote)) in allowed
-        for item in evidence
-    )
-
-
-def _number_occurs_in_evidence(value: float, evidence: list[Any]) -> bool:
-    try:
-        expected = float(value)
-    except (TypeError, ValueError):
-        return False
-    for item in evidence:
-        for match in _NUMBER_RE.findall(item.quote):
-            normalized = match.rstrip("%").replace(",", "")
-            try:
-                if float(normalized) == expected:
-                    return True
-            except ValueError:
-                continue
-    return False
-
-
-def _visual_evidence_issues(
-    synthesis: domains.bd.distill.schemas.ChapterSynthesis,
-    units: list[dict[str, Any]],
-) -> list[tuple[str, int, str, str]]:
-    """Return unsupported optional visual items without invalidating chapter prose."""
-    by_id = {unit["learning_unit_id"]: unit for unit in units}
-    available_ids = set(by_id)
-    issues: list[tuple[str, int, str, str]] = []
-
-    for index, diagram in enumerate(synthesis.diagrams):
-        issue = None
-        for node in diagram.nodes:
-            if not set(node.learning_unit_ids) <= available_ids:
-                issue = "diagram node cites an unavailable learning unit"
-                break
-            if not _evidence_matches(node.evidence, node.learning_unit_ids, by_id):
-                issue = "diagram node evidence does not match its cited learning units"
-                break
-        if issue is None:
-            node_ids = {node.node_id for node in diagram.nodes}
-            for edge in diagram.edges:
-                if edge.source_id not in node_ids or edge.target_id not in node_ids:
-                    issue = "diagram edge refers to an undeclared node"
-                    break
-                if not set(edge.learning_unit_ids) <= available_ids:
-                    issue = "diagram edge cites an unavailable learning unit"
-                    break
-                if not _evidence_matches(edge.evidence, edge.learning_unit_ids, by_id):
-                    issue = "diagram edge evidence does not match its cited learning units"
-                    break
-        if issue is not None:
-            issues.append(("diagram", index, diagram.title, issue))
-
-    for index, equation in enumerate(synthesis.equations):
-        issue = None
-        if not set(equation.learning_unit_ids) <= available_ids or not _evidence_matches(
-            equation.evidence, equation.learning_unit_ids, by_id,
-        ):
-            issue = "equation evidence does not match its cited learning units"
-        numeric_tokens = _NUMBER_RE.findall(equation.latex)
-        if issue is None:
-            for token in numeric_tokens:
-                if not _number_occurs_in_evidence(float(token.rstrip("%").replace(",", "")), equation.evidence):
-                    issue = "equation contains a number absent from its cited evidence"
-                    break
-        if issue is not None:
-            issues.append(("equation", index, equation.title, issue))
-
-    for index, chart in enumerate(synthesis.charts):
-        issue = None
-        if not set(chart.learning_unit_ids) <= available_ids:
-            issue = "chart cites an unavailable learning unit"
-        elif not set(chart.dataset.learning_unit_ids) <= available_ids:
-            issue = "chart dataset cites an unavailable learning unit"
-        for row in chart.dataset.rows:
-            if issue is not None:
-                break
-            if not set(row.learning_unit_ids) <= set(by_id) or not _evidence_matches(
-                row.evidence, row.learning_unit_ids, by_id,
-            ):
-                issue = "chart row evidence does not match its cited learning units"
-                break
-            for value in row.values.values():
-                if isinstance(value, (int, float)) and not isinstance(value, bool):
-                    if not _number_occurs_in_evidence(value, row.evidence):
-                        issue = "chart row contains a number absent from its cited evidence"
-                        break
-                elif isinstance(value, str) and not any(
-                    _normalize_evidence_quote(value).casefold()
-                    in _normalize_evidence_quote(item.quote).casefold()
-                    for item in row.evidence
-                ):
-                    issue = "chart row contains text absent from its cited evidence"
-                    break
-        if issue is not None:
-            issues.append(("chart", index, chart.title, issue))
-    return issues
-
-
-def _omit_unsupported_visuals(
-    synthesis: domains.bd.distill.schemas.ChapterSynthesis,
-    issues: list[tuple[str, int, str, str]],
-) -> tuple[domains.bd.distill.schemas.ChapterSynthesis, list[str]]:
-    invalid = {(kind, index) for kind, index, _, _ in issues}
-    updated = synthesis.model_copy(update = {
-        "diagrams": [
-            item for index, item in enumerate(synthesis.diagrams) if ("diagram", index) not in invalid
-        ],
-        "equations": [
-            item for index, item in enumerate(synthesis.equations) if ("equation", index) not in invalid
-        ],
-        "charts": [
-            item for index, item in enumerate(synthesis.charts) if ("chart", index) not in invalid
-        ],
-    })
-    notes = [
-        f"Omitted unsupported {kind} '{title}' ({reason})."
-        for kind, _, title, reason in issues
-    ]
-    return updated, notes
 
 
 async def _synthesize_chapter_with_llm(
@@ -338,8 +188,8 @@ async def prepare_chapters(
             for unit_id in ref.get("learning_unit_ids", []):
                 selected.append(unit_id)
                 selected_refs_by_unit[unit_id] = ref
-                if len(selected) == _CHAPTER_BATCH_SIZE:
-                    subsection_paths = _subsection_paths(selected, selected_refs_by_unit)
+                if len(selected) == domains.bd.distill.params.MAX_CHAPTER_UNITS_PER_REQUEST:
+                    subsection_paths = domain.subsection_paths(selected, selected_refs_by_unit)
                     chapter_refs.append(await _write_chapter_input(
                         storage, state["book_id"], state["run_id"], title, section_path,
                         group["first_page"], group["last_page"], subsection_paths, batch_index, selected,
@@ -355,7 +205,7 @@ async def prepare_chapters(
                     selected_refs_by_unit = {}
                     batch_index += 1
         if selected:
-            subsection_paths = _subsection_paths(selected, selected_refs_by_unit)
+            subsection_paths = domain.subsection_paths(selected, selected_refs_by_unit)
             chapter_refs.append(await _write_chapter_input(
                 storage, state["book_id"], state["run_id"], title, section_path,
                 group["first_page"], group["last_page"], subsection_paths, batch_index, selected,
@@ -375,16 +225,6 @@ async def prepare_chapters(
         total_chapters = len(chapter_refs),
     )
     return {"chapter_refs": chapter_refs}
-
-
-def _subsection_paths(unit_ids: list[str], refs_by_unit: dict[str, dict[str, Any]]) -> list[list[str]]:
-    paths = {
-        tuple(path)
-        for unit_id in unit_ids
-        for path in [refs_by_unit[unit_id].get("section_path", [])]
-        if isinstance(path, list) and all(isinstance(item, str) for item in path)
-    }
-    return [list(path) for path in sorted(paths)]
 
 
 async def _write_chapter_input(
@@ -479,11 +319,11 @@ async def synthesize_chapter(
     )
     synthesis = await _synthesize_chapter_with_llm(dependencies, state["run_id"], prompt)
     allowed_ids = set(ref["unit_ids"])
-    referenced_ids = _chapter_required_text_ids(synthesis)
+    referenced_ids = domain.chapter_required_text_ids(synthesis)
     if referenced_ids - allowed_ids:
         raise ValueError("chapter synthesis referenced a learning unit outside its input section")
 
-    visual_issues = _visual_evidence_issues(synthesis, units)
+    visual_issues = domain.visual_evidence_issues(synthesis, units)
     for _ in range(domains.bd.distill.params.CHAPTER_VISUAL_REPAIR_ATTEMPTS):
         if not visual_issues:
             break
@@ -492,7 +332,8 @@ async def synthesize_chapter(
             + "\n\nCorrection required: the previous response included visual evidence that did not "
             + "match the cited learning units. Return a complete corrected chapter guide. "
             + "Copy each visual evidence quote and page number from the supplied learning-unit "
-            + "evidence exactly; omit any diagram, equation, or chart that cannot meet this requirement. "
+            + "evidence exactly, using no more than eight quotes per visual item; omit any diagram, "
+            + "equation, or chart that cannot meet this requirement. "
             + "Validation findings: "
             + json.dumps([
                 {"kind": kind, "title": title, "reason": reason}
@@ -502,14 +343,14 @@ async def synthesize_chapter(
             + json.dumps(synthesis.model_dump(mode = "json"), ensure_ascii = False)
         )
         synthesis = await _synthesize_chapter_with_llm(dependencies, state["run_id"], repair_prompt)
-        referenced_ids = _chapter_required_text_ids(synthesis)
+        referenced_ids = domain.chapter_required_text_ids(synthesis)
         if referenced_ids - allowed_ids:
             raise ValueError("chapter synthesis referenced a learning unit outside its input section")
-        visual_issues = _visual_evidence_issues(synthesis, units)
+        visual_issues = domain.visual_evidence_issues(synthesis, units)
 
     visual_review_flags: list[str] = []
     if visual_issues:
-        synthesis, visual_review_flags = _omit_unsupported_visuals(synthesis, visual_issues)
+        synthesis, visual_review_flags = domain.omit_unsupported_visuals(synthesis, visual_issues)
         logger.warning(
             "[bd-distill] omitted unsupported chapter visuals chapter=%s items=%s",
             ref["chapter_id"],
@@ -581,7 +422,10 @@ async def synthesize_book(
     current = chapter_summaries
     level = 0
     while True:
-        batches = [current[index:index + _BOOK_BATCH_SIZE] for index in range(0, len(current), _BOOK_BATCH_SIZE)]
+        batches = [
+            current[index:index + domains.bd.distill.params.MAX_BOOK_SYNTHESIS_BATCH_SIZE]
+            for index in range(0, len(current), domains.bd.distill.params.MAX_BOOK_SYNTHESIS_BATCH_SIZE)
+        ]
         next_level = []
         for batch_index, batch in enumerate(batches):
             key = domains.bd.distill.keys.synthesis_key(state["book_id"], state["run_id"], level, batch_index)
@@ -596,7 +440,7 @@ async def synthesize_book(
                     referenced_ids.update(item.learning_unit_ids)
                 if referenced_ids - self_ids:
                     raise ValueError("a persisted whole-book synthesis contains unresolved source IDs")
-                next_level.append({**record, "summary": _book_summary(synthesis)})
+                next_level.append({**record, "summary": domain.book_summary(synthesis)})
                 continue
 
             unit_ids = sorted({unit_id for item in batch for unit_id in item["unit_ids"]})
@@ -630,7 +474,7 @@ async def synthesize_book(
                 "synthesis": synthesis.model_dump(mode = "json"),
             }
             await storage.write(key, _json_body(record), content_type = domains.bd.distill.params.JSON_TYPE)
-            next_level.append({**record, "summary": _book_summary(synthesis)})
+            next_level.append({**record, "summary": domain.book_summary(synthesis)})
         if len(next_level) == 1:
             return {"book_synthesis_key": domains.bd.distill.keys.synthesis_key(
                 state["book_id"], state["run_id"], level, 0,
@@ -641,36 +485,44 @@ async def synthesize_book(
             raise ValueError("whole-book synthesis exceeded the hierarchy depth limit")
 
 
-def _book_summary(synthesis: domains.bd.distill.schemas.BookSynthesis) -> dict[str, Any]:
-    return {
-        "central_thesis": synthesis.central_thesis[:1200],
-        "central_thesis_attribution": synthesis.central_thesis_attribution,
-        "central_thesis_learning_unit_ids": synthesis.central_thesis_learning_unit_ids,
-        "key_takeaways": [
-            {
-                "title": item.title,
-                "explanation": item.explanation[:400],
-                "attribution": item.attribution,
-                "learning_unit_ids": item.learning_unit_ids,
-            }
-            for item in synthesis.key_takeaways[:8]
-        ],
-        "cross_chapter_connections": [
-            {
-                "title": item.title,
-                "explanation": item.explanation[:400],
-                "attribution": item.attribution,
-                "learning_unit_ids": item.learning_unit_ids,
-            }
-            for item in synthesis.cross_chapter_connections[:6]
-        ],
-        "limitations": [
-            {
-                "title": item.title,
-                "explanation": item.explanation[:400],
-                "attribution": item.attribution,
-                "learning_unit_ids": item.learning_unit_ids,
-            }
-            for item in synthesis.limitations[:6]
-        ],
-    }
+async def synthesize_chapter_batch(
+    dependencies: graphs.distill.entities.DistillDependencies,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    """Synthesize every chapter assigned to one fan-out graph invocation."""
+    chapter_batch = state.get("chapter_batch", [])
+    pending_refs = []
+    for ref in chapter_batch:
+        if not await dependencies.storage.exists(ref["artifact_key"]):
+            pending_refs.append(ref)
+
+    learning_units_by_id = None
+    if pending_refs:
+        unit_ids = list(dict.fromkeys(
+            unit_id
+            for ref in pending_refs
+            for unit_id in ref["unit_ids"]
+        ))
+        unit_sources = [
+            source
+            for ref in pending_refs
+            for source in ref.get("unit_sources", [])
+        ]
+        units = await read_learning_units(
+            dependencies.storage,
+            state["book_id"],
+            state["run_id"],
+            unit_ids,
+            unit_sources,
+        )
+        learning_units_by_id = dict(zip(unit_ids, units, strict = True))
+
+    completed = []
+    for ref in chapter_batch:
+        output = await synthesize_chapter(
+            dependencies,
+            {**state, "chapter_ref": ref},
+            learning_units_by_id = learning_units_by_id,
+        )
+        completed.extend(output.get("completed_chapters", []))
+    return {"completed_chapters": completed}

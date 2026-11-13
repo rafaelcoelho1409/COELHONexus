@@ -22,6 +22,7 @@ class DistillRunState(TypedDict, total = False):
     expected_page_count: int
     selected_page_count: int
     run_created_at: float
+    resume_from_node: str | None
     title: str
     source_chapters: list[dict[str, Any]]
     source_pages: list[domains.bd.distill.entities.SourcePage]

@@ -14,7 +14,8 @@ class GraphEntityCandidate(BaseModel):
 
     entity_id: NonEmptyText = Field(max_length = 240)
     entity_type: Literal[
-        "concept", "method", "person", "organization", "technology", "principle", "event", "metric", "other",
+        "concept", "method", "person", "organization", "technology", 
+        "principle", "event", "metric", "other",
     ]
     evidence: NonEmptyText = Field(max_length = 800)
 

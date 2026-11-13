@@ -1,6 +1,6 @@
-"""Evidence-grounded book graph extraction nodes."""
+"""Evidence-grounded book graph extraction node adapters and service."""
 from __future__ import annotations
 
-from . import node
+from . import domain, node, service
 
-__all__ = ["node"]
+__all__ = ["domain", "node", "service"]

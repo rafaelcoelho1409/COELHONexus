@@ -1,4 +1,5 @@
-"""Bounded LangGraph nodes for BD Ask."""
+"""LangGraph node packages for BD Ask."""
+from __future__ import annotations
 
 from . import answer, critic, grade, plan, retrieve
 

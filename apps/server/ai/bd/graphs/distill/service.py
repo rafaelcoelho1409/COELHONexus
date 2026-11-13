@@ -6,5 +6,5 @@ from typing import Any
 from . import entities, graphs
 
 
-def build_graph(dependencies: entities.DistillDependencies, checkpointer: Any | None = None):
+def distill_graph(dependencies: entities.DistillDependencies, checkpointer: Any | None = None):
     return graphs.distill_graph(dependencies, checkpointer = checkpointer)

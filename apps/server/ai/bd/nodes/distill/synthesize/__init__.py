@@ -1,5 +1,6 @@
+"""Chapter and whole-book synthesis node modules."""
 from __future__ import annotations
 
-from . import node, service
+from . import domain, node, patterns, service
 
-__all__ = ["node", "service"]
+__all__ = ["domain", "node", "patterns", "service"]
