@@ -10,6 +10,11 @@ from langgraph.types import Send
 
 def after_start(state: graphs.distill.states.DistillRunState) -> str:
     """Resume chapter-stage failures from their persisted unit inputs when possible."""
+    if state.get("resume_from_node") == "publish_report" and all(
+        field in state
+        for field in ("book_synthesis_key", "source_pages", "completed_units", "completed_chapters")
+    ):
+        return "publish_report"
     if state.get("resume_from_node") in {
         "prepare_chapters",
         "synthesize_chapter",

@@ -269,6 +269,8 @@ async def queue_resume(book_id: str, run_id: str) -> dict[str, Any]:
             manifest["resume_from_node"] = (
                 failed_nodes[0]
                 if failed_nodes
+                else "publish_report"
+                if not unfinished_nodes
                 else manifest["progress"].get("current_node")
                 or (unfinished_nodes[0] if unfinished_nodes else "prepare_units")
             )
@@ -709,6 +711,7 @@ async def run_distill(
             "configurable": {"thread_id": f"bd-distill:{book_id}:{manifest['extraction_run_id']}:{run_id}"},
             "max_concurrency": params.GRAPH_CONCURRENCY,
         }
+        completed_checkpoint_state = None
         if checkpointer is not None:
             snapshot = await graph.aget_state(graph_config)
             if snapshot.next:
@@ -717,6 +720,27 @@ async def run_distill(
                     "[bd-distill] resuming LangGraph checkpoint run=%s pending_nodes=%s",
                     run_id,
                     snapshot.next,
+                )
+            elif manifest.get("resume_from_node") == "publish_report":
+                required_resume_fields = (
+                    "book_id",
+                    "run_id",
+                    "extraction_run_id",
+                    "ingestion_ai_run_id",
+                    "book_synthesis_key",
+                    "source_pages",
+                    "completed_units",
+                    "completed_chapters",
+                )
+                if not isinstance(snapshot.values, dict) or any(
+                    field not in snapshot.values for field in required_resume_fields
+                ):
+                    raise ValueError("the completed Distill checkpoint cannot resume report publication")
+                completed_checkpoint_state = snapshot.values
+                graph_input = None
+                logger.info(
+                    "[bd-distill] rerunning report publication from completed checkpoint run=%s",
+                    run_id,
                 )
             else:
                 graph_input = initial_state
@@ -748,10 +772,20 @@ async def run_distill(
                     run_id,
                     resume_from_node,
                 )
-        result = await graph.ainvoke(graph_input, config = graph_config)
+        if completed_checkpoint_state is not None:
+            result = await ai.bd.nodes.distill.publish_report.node.publish_report(
+                dependencies,
+                completed_checkpoint_state,
+            )
+        else:
+            result = await graph.ainvoke(graph_input, config = graph_config)
         required = ("report_key", "report_sha256", "html_key", "html_sha256")
-        if any(not isinstance(result.get(field), str) for field in required):
-            raise ValueError("the completed graph did not publish every required report artifact")
+        missing = [field for field in required if not isinstance(result.get(field), str)]
+        if missing:
+            raise ValueError(
+                "the completed graph did not publish every required report artifact: "
+                + ", ".join(missing)
+            )
         for key_field, hash_field in (("report_key", "report_sha256"), ("html_key", "html_sha256")):
             content = await storage.read_text(result[key_field])
             if hashlib.sha256(content.encode("utf-8")).hexdigest() != result[hash_field]:

@@ -1,5 +1,8 @@
 """Chapter and whole-book synthesis over independently verified learning units."""
 from __future__ import annotations
+import domains
+from . import domain
+from .... import graphs, prompts
 
 import json
 import logging
@@ -8,10 +11,6 @@ from typing import Any
 
 from pydantic import ValidationError
 
-import domains
-
-from .... import graphs, prompts
-from . import domain
 
 logger = logging.getLogger(__name__)
 
@@ -148,64 +147,119 @@ async def _synthesize_book_batch_with_llm(
             ):
                 synthesis, _ = await domains.settings.chat.service.chat_structured_async(
                     current_prompt,
-                    domains.bd.distill.schemas.BookSynthesis,
-                    max_tokens = 6000,
+                    domains.bd.distill.schemas.BookSynthesisOutput,
+                    max_tokens = domains.bd.distill.params.BOOK_SYNTHESIS_MAX_TOKENS,
                     temperature = 0.0,
                     timeout_s = domains.bd.distill.params.BOOK_SYNTHESIS_TIMEOUT_S,
                     strict = False,
                     rotator_task = "bd_distill_book_synthesizer",
                 )
-            return synthesis
+            return domains.bd.distill.schemas.BookSynthesis.model_validate(
+                synthesis.model_dump(mode = "json"),
+            )
         except (ValidationError, ValueError) as error:
             last_error = error
+            issues = [
+                f"{'.'.join(str(part) for part in item['loc'])}:{item['type']}"
+                for item in error.errors(include_input = False)
+            ][:8] if isinstance(error, ValidationError) else [type(error).__name__]
             logger.warning(
                 "[bd-distill] book synthesizer returned invalid structured output "
-                "run=%s batch=%s attempt=%s/%s error_type=%s",
+                "run=%s batch=%s attempt=%s/%s error_type=%s issues=%s",
                 run_id,
                 batch_id,
                 attempt + 1,
                 structured_attempts,
                 type(error).__name__,
+                issues,
             )
             if attempt + 1 < structured_attempts:
                 current_prompt = (
                     prompt
-                    + "\n\nThe previous response did not satisfy the BookSynthesis schema. "
-                    + "Return a complete corrected object. Keep central_thesis_learning_unit_ids "
-                    + "between 1 and 24 IDs, and keep each key_takeaways, "
-                    + "cross_chapter_connections, and limitations item's learning_unit_ids "
-                    + "between 1 and 12 IDs. Select only the smallest set of supplied IDs that "
-                    + "directly supports each claim; do not repeat the entire input ID list. "
+                    + "\n\nThe previous response did not satisfy the BookSynthesisOutput schema. "
+                    + "Return a concise complete corrected object. Keep every citation list "
+                    + "between 1 and 6 IDs. Return no more than 4 key takeaways, 3 connections, "
+                    + "and 2 limitations; keep each explanation to one concise sentence. Include "
+                    + "a short title for every item. "
+                    + "Select only IDs that directly support each claim; do not repeat the full input. "
                     + f"\nValidation issue: {str(error)[:1200]}"
                 )
+        except Exception as error:
+            if not domains.settings.chat.domain.is_length_error(error):
+                raise
+            last_error = error
+            logger.warning(
+                "[bd-distill] book synthesizer response reached its output limit "
+                "run=%s batch=%s attempt=%s/%s; switching to compact JSON recovery",
+                run_id,
+                batch_id,
+                attempt + 1,
+                structured_attempts,
+            )
+            current_prompt = (
+                prompt
+                + "\n\nThe previous response exceeded the output limit. Return a compact JSON "
+                + "BookSynthesisOutput: one short thesis, at most 4 key takeaways, 3 connections, and "
+                + "2 limitations. Keep each explanation to one concise sentence and cite "
+                + "only the smallest supporting set of supplied IDs."
+            )
+            break
 
     text_attempts = domains.bd.distill.params.BOOK_TEXT_FALLBACK_ATTEMPTS
     for attempt in range(text_attempts):
         retry_instruction = (
-            "Return only one complete JSON object matching BookSynthesis. Keep the thesis citation "
-            "list to 1–24 IDs and each claim citation list to 1–12 IDs; select only directly "
-            "supporting IDs from the supplied guides. Do not use markdown fences or an envelope."
+            "Return only one compact complete JSON object matching BookSynthesisOutput: at most 4 "
+            "takeaways, 3 connections, and 2 limitations; each explanation is one concise sentence "
+            "of at most 320 characters. Give every item a short title. Keep every citation list to "
+            "1–6 IDs selected from the supplied guides. "
+            "Do not use markdown fences or an envelope."
             if attempt == 0
-            else "Correct the previous response and return only a complete BookSynthesis JSON object. "
-            "Keep every citation list within its schema limit and use only supplied IDs."
+            else "Correct the previous response and return only compact BookSynthesisOutput JSON. "
+            "Include short titles, respect item counts, text lengths, and citation limits, and use "
+            "only supplied IDs."
         )
         text_prompt = current_prompt + "\n\n" + retry_instruction
-        with domains.settings.llm_counter.service.llm_context(
-            ns = "bd", run_id = run_id, node_id = "book_synthesizer", stage = "distill",
-        ):
-            response, _ = await domains.settings.chat.service.chat_text_async(
-                text_prompt,
-                max_tokens = 6000,
-                temperature = 0.0,
-                timeout_s = domains.bd.distill.params.BOOK_SYNTHESIS_TIMEOUT_S,
-                rotator_task = "bd_distill_book_synthesizer",
+        try:
+            with domains.settings.llm_counter.service.llm_context(
+                ns = "bd", run_id = run_id, node_id = "book_synthesizer", stage = "distill",
+            ):
+                response, _ = await domains.settings.chat.service.chat_text_async(
+                    text_prompt,
+                    max_tokens = domains.bd.distill.params.BOOK_SYNTHESIS_MAX_TOKENS,
+                    temperature = 0.0,
+                    timeout_s = domains.bd.distill.params.BOOK_SYNTHESIS_TIMEOUT_S,
+                    rotator_task = "bd_distill_book_synthesizer",
+                )
+        except Exception as error:
+            if not domains.settings.chat.domain.is_length_error(error):
+                raise
+            last_error = error
+            current_prompt = (
+                prompt
+                + "\n\nReturn an extremely compact BookSynthesisOutput JSON object: one short thesis, "
+                + "at most 3 key takeaways, no connections, no limitations, and only the minimum "
+                + "supporting citation IDs."
             )
+            logger.warning(
+                "[bd-distill] book JSON-text fallback reached its output limit "
+                "run=%s batch=%s attempt=%s/%s",
+                run_id,
+                batch_id,
+                attempt + 1,
+                text_attempts,
+            )
+            continue
 
-        synthesis = domains.bd.distill.domain.book_synthesis_from_agent_result({
+        output = domains.bd.distill.domain.book_synthesis_output_from_agent_result({
             "messages": [{"role": "assistant", "content": response}],
         })
-        if synthesis is not None:
-            return synthesis
+        if output is not None:
+            return domains.bd.distill.schemas.BookSynthesis.model_validate(
+                output.model_dump(mode = "json"),
+            )
+        issues = domains.bd.distill.domain.book_synthesis_validation_issues({
+            "messages": [{"role": "assistant", "content": response}],
+        })
         last_error = ValueError("the JSON-text fallback did not contain a valid BookSynthesis")
         current_prompt = (
             prompt
@@ -216,11 +270,12 @@ async def _synthesize_book_batch_with_llm(
         )
         logger.warning(
             "[bd-distill] book JSON-text fallback returned invalid output "
-            "run=%s batch=%s attempt=%s/%s",
+            "run=%s batch=%s attempt=%s/%s issues=%s",
             run_id,
             batch_id,
             attempt + 1,
             text_attempts,
+            issues[:8],
         )
 
     raise ValueError(
@@ -667,6 +722,7 @@ async def synthesize_book(
             "summary": {
                 "overview": chapter.overview[:1600],
                 "overview_attribution": chapter.overview_attribution,
+                "overview_learning_unit_ids": chapter.overview_learning_unit_ids,
                 "lessons": [
                     {
                         "title": lesson.title,
@@ -714,11 +770,21 @@ async def synthesize_book(
                 continue
 
             unit_ids = sorted({unit_id for item in batch for unit_id in item["unit_ids"]})
+            citation_ids, prompt_guides = domain.book_synthesis_context(
+                batch,
+                domains.bd.distill.params.MAX_BOOK_SYNTHESIS_CONTEXT_CITATION_IDS,
+            )
+            if not citation_ids:
+                raise ValueError("whole-book synthesis batch has no cited summary evidence")
             synthesis_scope = "whole_book" if len(batches) == 1 else "partial_book_batch"
             prompt = (
                 prompts.distill.book_synthesizer.prompts.SYSTEM_PROMPT
-                + "\n\nSynthesize the provided section guides. Every central thesis, takeaway, connection, and limitation must cite supplied learning-unit IDs.\n"
-                + json.dumps({"scope": synthesis_scope, "section_guides": batch}, ensure_ascii = False)
+                + "\n\nSynthesize the provided section guides. Every central thesis, takeaway, connection, and limitation must cite supplied learning-unit IDs. Use only IDs in available_learning_unit_ids; the list is intentionally compact and representative.\n"
+                + json.dumps({
+                    "scope": synthesis_scope,
+                    "available_learning_unit_ids": citation_ids,
+                    "section_guides": prompt_guides,
+                }, ensure_ascii = False)
             )
             synthesis = await _synthesize_book_batch_with_llm(
                 state["run_id"],
@@ -728,7 +794,7 @@ async def synthesize_book(
             referenced_ids = set(synthesis.central_thesis_learning_unit_ids)
             for item in [*synthesis.key_takeaways, *synthesis.cross_chapter_connections, *synthesis.limitations]:
                 referenced_ids.update(item.learning_unit_ids)
-            if referenced_ids - set(unit_ids):
+            if referenced_ids - set(citation_ids):
                 raise ValueError("whole-book synthesis referenced a learning unit outside its supplied guides")
             record = {
                 "synthesis_id": f"{level}-{batch_index}",

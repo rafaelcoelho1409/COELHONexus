@@ -35,4 +35,6 @@ from __future__ import annotations
 # v15 (2026-11-12): repair the exact `llama.cpphttps://github.com/ggml-org/llama.cpp` URL corruption found in Unsloth's full bundle.
 # v16 (2026-11-12): restore method headings/source links for the exact concatenated API-export form seen in Optimum's llms.txt pages.
 # v17 (2026-11-12): turn three-or-more unambiguously indented label/description pairs into a readable Markdown list.
-NORMALIZER_VERSION = 17
+# v18 (2026-11-13): resolve the v17 pass's regexes through the shared patterns module so normalization can complete;
+# also rerun the intended v17 list repair against existing stored corpora.
+NORMALIZER_VERSION = 18

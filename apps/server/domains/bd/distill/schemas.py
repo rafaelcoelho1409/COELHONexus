@@ -158,6 +158,34 @@ class ChapterSynthesis(BaseModel):
         return _normalize_stringified_collections(data)
 
 
+class BookSynthesisOutputLesson(BaseModel):
+    """Compact model output for whole-book orientation, separate from persisted schema limits."""
+    model_config = ConfigDict(extra = "forbid")
+
+    title: NonEmptyText = Field(max_length = 100)
+    explanation: NonEmptyText = Field(max_length = 320)
+    attribution: Literal["book", "agent_inference"] = "book"
+    learning_unit_ids: list[SafeSegment] = Field(min_length = 1, max_length = 6)
+
+
+class BookSynthesisOutput(BaseModel):
+    """Bounded LLM response shape for the concise whole-book summary."""
+    model_config = ConfigDict(extra = "forbid")
+
+    central_thesis: NonEmptyText = Field(max_length = 500)
+    central_thesis_attribution: Literal["book", "agent_inference"] = "book"
+    central_thesis_learning_unit_ids: list[SafeSegment] = Field(min_length = 1, max_length = 6)
+    key_takeaways: list[BookSynthesisOutputLesson] = Field(max_length = 4)
+    cross_chapter_connections: list[BookSynthesisOutputLesson] = Field(max_length = 3)
+    limitations: list[BookSynthesisOutputLesson] = Field(max_length = 2)
+
+    @model_validator(mode = "before")
+    @classmethod
+    def _unwrap_stringified_collections(cls, data):
+        """Normalize JSON-stringified citation arrays while keeping output bounded."""
+        return _normalize_stringified_collections(data)
+
+
 class BookSynthesis(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 

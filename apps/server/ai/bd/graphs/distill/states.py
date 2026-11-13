@@ -1,9 +1,10 @@
 """Compact LangGraph state for resumable Book Distiller reports."""
 from __future__ import annotations
-import domains
 
 import operator
 from typing import Annotated, Any, TypedDict
+
+import domains
 
 
 class DistillRunState(TypedDict, total = False):
@@ -35,5 +36,10 @@ class DistillRunState(TypedDict, total = False):
     chapter_batch: list[domains.bd.distill.entities.ChapterRef]
     book_synthesis_key: str
     report_key: str
+    report_sha256: str
     html_key: str
+    html_sha256: str
+    covered_page_count: int
+    uncovered_pages: list[int]
+    review_required: bool
     structural_quality: dict[str, Any]

@@ -232,6 +232,16 @@ Quality recorded 56 findings on 29 pages: 2 `duplicate_boilerplate`, 3 `duplicat
 - **Tier 4 Asyncio:** latest r1 run published all 118 pages; two audits and one repair were unavailable, leaving 3 pages review-required. The sampled findings were false positives; local prompt safeguards need deployment validation.
 - **Current disposition:** the complete r1 representative pass for Tiers 1–4 succeeded operationally, including publish and vault backfill. It has not converged: provider errors left unavailable audits/repairs, and the r1 runs preceded the latest local auditor changes. The changes now cover recurring false positives across table syntax, escaped punctuation, headings, code alternatives and source styling. After a manual redeploy, rerun all four representatives in order to confirm the shared auditor changes and reassess provider availability. Tier 5 remains out of scope.
 
+## Refinement round `dd-refine-2026-11-13-r1`
+
+The deployed build reported corpus normalizer v17. The Tier 1 Unsloth benchmark (`19e1356c6f7f43dc9b6932772e2a8525`) selected the expected `llms_full` source and downloaded 3,249,260 bytes in 50.43 seconds, but terminated after 71.46 seconds with `NameError: name 'INDENTED_LABEL_RE' is not defined`. Agentic auditing, normalization, publishing and vault backfill did not start. No visible framework corpus was changed; the failed run and its isolated storage slug are recorded at `dd-benchmarks/dd-refine-2026-11-13-r1/19e1356c6f7f43dc9b6932772e2a8525.json`.
+
+**Root cause and local fix:** the v17 corpus-normalization pass referenced `INDENTED_LABEL_RE` and `INDENTED_DESCRIPTION_RE` as globals, although both patterns are defined in the imported `patterns` module. All four references in `_indented_label_description_pass` now use `patterns.*`. The normalizer version is v18 so existing corpora re-run the intended v17 list repair during backfill.
+
+**Validation:** the isolated indented-label pass smoke check passed for three label/description pairs, and the module source compiled. Importing the full normalizer package in the host Python environment was unavailable because `langchain` is not installed there. The deployed benchmark exposed this shared preprocessing failure before tier-specific extraction output could reach Agentic AI. Tiers 2–4 were therefore not run against the same broken build, since they would fail in the same normalizer pass without providing useful tier coverage.
+
+**Disposition:** v18 is local and pending redeployment. After the manual redeploy, start a fresh round (do not reuse r1) and rerun Tier 1 through Tier 4 in order; confirm normalization, Agentic completion, publish and vault backfill for every tier before assessing convergence. Tier 5 remains out of scope.
+
 ## Benchmark acceptance record
 
 For every run, record:

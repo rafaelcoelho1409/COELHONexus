@@ -1,11 +1,100 @@
 """Pure validation and transformation rules for BD Distill synthesis."""
 from __future__ import annotations
+import domains
+from . import patterns
 
 from typing import Any
 
-import domains
 
-from . import patterns
+def book_synthesis_context(
+    guides: list[dict[str, Any]],
+    max_citation_ids: int,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Build a compact, citation-grounded context for whole-book synthesis."""
+    ids_by_guide = [
+        list(dict.fromkeys(_book_citation_ids(guide.get("summary", {}))))
+        for guide in guides
+    ]
+    selected_ids: list[str] = []
+    seen_ids: set[str] = set()
+    for offset in range(max((len(ids) for ids in ids_by_guide), default = 0)):
+        for ids in ids_by_guide:
+            if offset >= len(ids):
+                continue
+            unit_id = ids[offset]
+            if unit_id in seen_ids:
+                continue
+            selected_ids.append(unit_id)
+            seen_ids.add(unit_id)
+            if len(selected_ids) >= max_citation_ids:
+                break
+        if len(selected_ids) >= max_citation_ids:
+            break
+
+    allowed_ids = set(selected_ids)
+    prompt_guides = []
+    for guide in guides:
+        summary = _filter_book_summary(guide.get("summary", {}), allowed_ids)
+        if not isinstance(summary, dict) or not _book_citation_ids(summary):
+            continue
+        prompt_guide = {
+            key: guide[key]
+            for key in ("chapter_id", "synthesis_id", "title", "section_path", "first_page", "last_page")
+            if key in guide
+        }
+        prompt_guide["summary"] = summary
+        prompt_guides.append(prompt_guide)
+    return selected_ids, prompt_guides
+
+
+def _book_citation_ids(value: Any) -> list[str]:
+    """Collect only citations already present in a chapter or partial-book summary."""
+    found: list[str] = []
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            for key, child in item.items():
+                if key in domains.bd.distill.params.BOOK_CITATION_FIELDS and isinstance(child, list):
+                    found.extend(unit_id for unit_id in child if isinstance(unit_id, str))
+                else:
+                    visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    return found
+
+
+def _filter_book_summary(value: Any, allowed_ids: set[str]) -> Any:
+    """Remove summary claims whose citations are outside the compact prompt evidence set."""
+    if isinstance(value, list):
+        return [filtered for item in value if (filtered := _filter_book_summary(item, allowed_ids)) is not None]
+    if not isinstance(value, dict):
+        return value
+
+    filtered = {}
+    for key, item in value.items():
+        if key in domains.bd.distill.params.BOOK_CITATION_FIELDS:
+            retained = list(dict.fromkeys(
+                unit_id for unit_id in item if isinstance(unit_id, str) and unit_id in allowed_ids
+            )) if isinstance(item, list) else []
+            if retained:
+                filtered[key] = retained
+            continue
+        child = _filter_book_summary(item, allowed_ids)
+        if child is not None:
+            filtered[key] = child
+
+    if "learning_unit_ids" in value and not filtered.get("learning_unit_ids"):
+        return None
+    if "overview_learning_unit_ids" in value and not filtered.get("overview_learning_unit_ids"):
+        filtered.pop("overview", None)
+        filtered.pop("overview_attribution", None)
+    if "central_thesis_learning_unit_ids" in value and not filtered.get("central_thesis_learning_unit_ids"):
+        filtered.pop("central_thesis", None)
+        filtered.pop("central_thesis_attribution", None)
+    return filtered
 
 
 def chapter_required_text_ids(synthesis: domains.bd.distill.schemas.ChapterSynthesis) -> set[str]:

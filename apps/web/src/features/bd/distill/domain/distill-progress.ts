@@ -48,15 +48,15 @@ export const DISTILL_NODES = [
 ] as const;
 
 export const DISTILL_LANGGRAPH_TOPOLOGY = `flowchart TD
-  start([Start]) --> resume_route{"Resume target?"}
-  resume_route -->|Fresh or extraction stage| prepare_units["Prepare the book"]
-  resume_route -->|Chapter stage · restore saved units| prepare_chapters["Map chapters"]
-  prepare_units --> extract_unit["Extract lessons"]
-  extract_unit --> prepare_chapters["Map chapters"]
-  prepare_chapters --> synthesize_chapter["Explain chapters · reuse saved outputs on resume"]
-  synthesize_chapter --> synthesize_book["Connect the book"]
-  synthesize_book --> publish_report["Publish the guide"]
-  publish_report --> finish([End])`;
+  __start__([__start__]) --> resume_route{"resume_route"}
+  resume_route --> prepare_units["prepare_units"]
+  resume_route --> prepare_chapters["prepare_chapters"]
+  prepare_units --> extract_unit["extract_unit"]
+  extract_unit --> prepare_chapters["prepare_chapters"]
+  prepare_chapters --> synthesize_chapter["synthesize_chapter"]
+  synthesize_chapter --> synthesize_book["synthesize_book"]
+  synthesize_book --> publish_report["publish_report"]
+  publish_report --> __end__([__end__])`;
 
 export type DistillNode = (typeof DISTILL_NODES)[number];
 

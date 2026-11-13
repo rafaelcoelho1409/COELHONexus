@@ -10,13 +10,13 @@ export const AGENTIC_NODES = [
 ] as const;
 
 export const AGENTIC_LANGGRAPH_TOPOLOGY = `flowchart TD
-  start([Start]) --> audit_batch["Audit pages"]
-  audit_batch --> plan_repairs["Plan repairs"]
-  plan_repairs --> repair_pages["Repair pages"]
-  repair_pages --> normalize_metadata["Normalize metadata"]
-  normalize_metadata --> classify_content["Select Distill pages"]
-  classify_content --> publish["Publish results"]
-  publish --> finish([End])`;
+  __start__([__start__]) --> audit_batch["audit_batch"]
+  audit_batch --> plan_repairs["plan_repairs"]
+  plan_repairs --> repair_pages["repair_pages"]
+  repair_pages --> normalize_metadata["normalize_metadata"]
+  normalize_metadata --> classify_content["classify_content"]
+  classify_content --> publish["publish"]
+  publish --> __end__([__end__])`;
 
 export type AgenticNodeId = (typeof AGENTIC_NODES)[number]["id"];
 export type AgenticNodeStatus = "pending" | "running" | "done" | "failed";

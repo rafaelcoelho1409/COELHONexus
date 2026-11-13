@@ -4,6 +4,7 @@ import domains
 from . import entities, states
 from ... import nodes
 
+
 import functools
 from typing import Any
 
@@ -67,7 +68,7 @@ def distill_graph(
     workflow.add_conditional_edges(
         START,
         nodes.distill.extract_learning_units.node.after_start,
-        ["prepare_units", "prepare_chapters"],
+        ["prepare_units", "prepare_chapters", "publish_report"],
     )
     workflow.add_conditional_edges(
         "prepare_units",

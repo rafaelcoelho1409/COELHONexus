@@ -14,6 +14,12 @@ from pydantic import ValidationError
 from . import entities, params, schemas
 
 _WHITESPACE_RE = re.compile(r"\s+")
+_BOOK_SYNTHESIS_OUTPUT_ALIASES = {"connections": "cross_chapter_connections"}
+_BOOK_SYNTHESIS_OUTPUT_ITEMS = {
+    "key_takeaways": "Key takeaway",
+    "cross_chapter_connections": "Cross-chapter connection",
+    "limitations": "Limitation",
+}
 
 
 def learning_extraction_from_agent_result(result: Any) -> schemas.LearningExtraction | None:
@@ -66,26 +72,86 @@ def chapter_synthesis_from_agent_result(result: Any) -> schemas.ChapterSynthesis
 
 def book_synthesis_from_agent_result(result: Any) -> schemas.BookSynthesis | None:
     """Parse a whole-book guide from provider output, including a known wrapper object."""
-    if not isinstance(result, dict):
-        return None
-
-    for candidate in (result.get("structured_response"), result.get("parsed")):
+    for candidate in _book_synthesis_output_candidates(result):
         synthesis = _validate_book_synthesis(candidate)
         if synthesis is not None:
             return synthesis
-
-    raw = result.get("raw")
-    for message in [*(result.get("messages") or []), *([raw] if raw is not None else [])]:
-        for candidate in _tool_call_arguments(message):
-            synthesis = _validate_book_synthesis(candidate)
-            if synthesis is not None:
-                return synthesis
-        content = _assistant_content(message)
-        for candidate in _json_objects(content):
-            synthesis = _validate_book_synthesis(candidate)
-            if synthesis is not None:
-                return synthesis
     return None
+
+
+def book_synthesis_validation_issues(result: Any) -> list[str]:
+    """Return safe schema paths/types for invalid model output without logging its content."""
+    issues = []
+    for value in _book_synthesis_output_candidates(result):
+        for candidate in _book_synthesis_candidates(value):
+            try:
+                schemas.BookSynthesisOutput.model_validate(
+                    _normalize_book_synthesis_output(candidate),
+                )
+            except ValidationError as error:
+                issues.extend(
+                    f"{'.'.join(str(part) for part in item['loc'])}:{item['type']}"
+                    for item in error.errors(include_input = False)
+                )
+            else:
+                return []
+    return list(dict.fromkeys(issues)) or ["no_valid_json_object"]
+
+
+def book_synthesis_output_from_agent_result(result: Any) -> schemas.BookSynthesisOutput | None:
+    """Parse a bounded whole-book synthesis response from provider output."""
+    for candidate in _book_synthesis_output_candidates(result):
+        for unwrapped in _book_synthesis_candidates(candidate):
+            try:
+                return schemas.BookSynthesisOutput.model_validate(
+                    _normalize_book_synthesis_output(unwrapped),
+                )
+            except ValidationError:
+                continue
+    return None
+
+
+def _normalize_book_synthesis_output(value: Any) -> Any:
+    """Normalize known provider shape drift while retaining strict schema validation."""
+    if not isinstance(value, dict):
+        return value
+
+    normalized = dict(value)
+    for alias, canonical in _BOOK_SYNTHESIS_OUTPUT_ALIASES.items():
+        if canonical not in normalized and alias in normalized:
+            normalized[canonical] = normalized[alias]
+        normalized.pop(alias, None)
+
+    for field, label in _BOOK_SYNTHESIS_OUTPUT_ITEMS.items():
+        items = normalized.get(field)
+        if not isinstance(items, list):
+            continue
+        normalized_items = []
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                normalized_items.append(item)
+                continue
+            normalized_item = dict(item)
+            title = normalized_item.get("title")
+            if not isinstance(title, str) or not title.strip():
+                explanation = normalized_item.get("explanation")
+                normalized_item["title"] = (
+                    _book_synthesis_title(explanation)
+                    if isinstance(explanation, str) and explanation.strip()
+                    else f"{label} {index + 1}"
+                )
+            normalized_items.append(normalized_item)
+        normalized[field] = normalized_items
+    return normalized
+
+
+def _book_synthesis_title(explanation: str) -> str:
+    """Derive a readable short title from an explanation omitted by the model."""
+    first_sentence = re.split(r"(?<=[.!?])\s+", explanation.strip(), maxsplit = 1)[0]
+    title = _WHITESPACE_RE.sub(" ", first_sentence).strip(" -*\t\r\n")
+    if len(title) > 100:
+        title = title[:97].rsplit(" ", 1)[0].rstrip(" ,;:-") + "…"
+    return title or "Book insight"
 
 
 def _validate_chapter_synthesis(value: Any) -> schemas.ChapterSynthesis | None:
@@ -104,6 +170,18 @@ def _validate_book_synthesis(value: Any) -> schemas.BookSynthesis | None:
         except ValidationError:
             continue
     return None
+
+
+def _book_synthesis_output_candidates(result: Any) -> Iterator[Any]:
+    if not isinstance(result, dict):
+        return
+
+    yield result.get("structured_response")
+    yield result.get("parsed")
+    raw = result.get("raw")
+    for message in [*(result.get("messages") or []), *([raw] if raw is not None else [])]:
+        yield from _tool_call_arguments(message)
+        yield from _json_objects(_assistant_content(message))
 
 
 def _chapter_synthesis_candidates(value: Any) -> Iterator[dict[str, Any]]:

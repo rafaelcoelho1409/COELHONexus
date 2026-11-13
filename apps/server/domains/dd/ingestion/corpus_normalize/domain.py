@@ -462,7 +462,7 @@ def _indented_label_description_pass(text: str) -> tuple[str, int]:
     repaired = 0
     index = 0
     while index < len(lines):
-        if index in fenced or INDENTED_LABEL_RE.fullmatch(lines[index]) is None:
+        if index in fenced or patterns.INDENTED_LABEL_RE.fullmatch(lines[index]) is None:
             output.append(lines[index])
             index += 1
             continue
@@ -471,10 +471,10 @@ def _indented_label_description_pass(text: str) -> tuple[str, int]:
         cursor = index
         trailing_blanks = 0
         while cursor < len(lines):
-            term = INDENTED_LABEL_RE.fullmatch(lines[cursor])
+            term = patterns.INDENTED_LABEL_RE.fullmatch(lines[cursor])
             if term is None or cursor in fenced or cursor + 1 >= len(lines):
                 break
-            description = INDENTED_DESCRIPTION_RE.fullmatch(lines[cursor + 1])
+            description = patterns.INDENTED_DESCRIPTION_RE.fullmatch(lines[cursor + 1])
             if description is None or cursor + 1 in fenced:
                 break
             entries.append((term.group("label"), description.group("description").strip()))
@@ -486,7 +486,7 @@ def _indented_label_description_pass(text: str) -> tuple[str, int]:
             while cursor < len(lines) and not lines[cursor].strip():
                 blanks += 1
                 cursor += 1
-            if cursor < len(lines) and INDENTED_LABEL_RE.fullmatch(lines[cursor]) is not None:
+            if cursor < len(lines) and patterns.INDENTED_LABEL_RE.fullmatch(lines[cursor]) is not None:
                 continue
             trailing_blanks = blanks
             break

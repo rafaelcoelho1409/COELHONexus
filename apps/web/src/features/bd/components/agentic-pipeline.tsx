@@ -346,7 +346,6 @@ export function AgenticPipelineOverview({
               <MermaidTopology
                 title="Ingestion Agentic AI"
                 source={AGENTIC_LANGGRAPH_TOPOLOGY}
-                note="Configured node flow, in execution order."
               />
             )}
           </div>

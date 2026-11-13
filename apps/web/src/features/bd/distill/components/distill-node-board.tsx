@@ -117,7 +117,6 @@ export function DistillNodeBoard({
               <MermaidTopology
                 title="Distill pipeline"
                 source={DISTILL_LANGGRAPH_TOPOLOGY}
-                note="Configured node flow, in execution order."
               />
             )}
           </div>

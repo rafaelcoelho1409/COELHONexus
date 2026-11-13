@@ -8,6 +8,12 @@ MAX_SOURCE_UNIT_CHARS = 9000
 MAX_LEARNING_UNITS_PER_CHUNK = 8
 MAX_CHAPTER_UNITS_PER_REQUEST = 8
 MAX_BOOK_SYNTHESIS_BATCH_SIZE = 8
+MAX_BOOK_SYNTHESIS_CONTEXT_CITATION_IDS = 12
+BOOK_CITATION_FIELDS = frozenset({
+    "central_thesis_learning_unit_ids",
+    "learning_unit_ids",
+    "overview_learning_unit_ids",
+})
 # Chapter synthesis can return a large structured guide and routinely outlives the
 # shared chat adapter's 30-second default. Match the long-running Distill stage to
 # the Rotator's supported wall budget while limiting its simultaneous requests.
@@ -20,6 +26,7 @@ CHAPTER_CITATION_REPAIR_ATTEMPTS = 1
 CHAPTER_VISUAL_REPAIR_ATTEMPTS = 1
 BOOK_SCHEMA_REPAIR_ATTEMPTS = 1
 BOOK_TEXT_FALLBACK_ATTEMPTS = 2
+BOOK_SYNTHESIS_MAX_TOKENS = 2500
 BOOK_SYNTHESIS_TIMEOUT_S = 240.0
 # Keep LLM fan-out bounded; high parallelism caused repeated upstream 504s on long book runs.
 GRAPH_CONCURRENCY = 4

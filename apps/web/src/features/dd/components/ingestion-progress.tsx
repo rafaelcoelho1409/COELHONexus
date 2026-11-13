@@ -166,9 +166,6 @@ export function ExtractionProgress({
           {finishedText}
         </p>
       ) : null}
-      <p className="mt-2 text-xs text-muted-foreground">
-        Wipe removes the ingested pages and everything built on them. The framework stays in the catalog.
-      </p>
     </section>
   );
 }
@@ -310,11 +307,7 @@ export function AgenticProgress({
           Stop takes effect at a safe page or graph-stage boundary. Wipe becomes available after the run
           stops.
         </p>
-      ) : (
-        <p className="mt-1 text-xs text-muted-foreground">
-          Agentic AI starts automatically after extraction. Start runs a new candidate against saved pages.
-        </p>
-      )}
+      ) : null}
     </section>
   );
 }

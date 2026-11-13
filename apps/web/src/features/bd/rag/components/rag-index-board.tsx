@@ -32,11 +32,11 @@ const MODES = [
 ] as const;
 
 const RAG_LANGGRAPH_TOPOLOGY = `flowchart TD
-  start([Start]) --> pin_sources["Pin book sources"]
-  pin_sources --> build_vector_index["Build hybrid index"]
-  build_vector_index --> materialize_knowledge_graph["Link book knowledge"]
-  materialize_knowledge_graph --> publish_retrieval_index["Publish retrieval index"]
-  publish_retrieval_index --> finish([End])`;
+  __start__([__start__]) --> pin_sources["pin_sources"]
+  pin_sources --> build_vector_index["build_vector_index"]
+  build_vector_index --> materialize_knowledge_graph["materialize_knowledge_graph"]
+  materialize_knowledge_graph --> publish_retrieval_index["publish_retrieval_index"]
+  publish_retrieval_index --> __end__([__end__])`;
 
 const NODES = [
   {
@@ -138,7 +138,6 @@ export function RagIndexBoard({
             <MermaidTopology
               title="Agentic RAG"
               source={RAG_LANGGRAPH_TOPOLOGY}
-              note="Configured node flow, in execution order."
             />
           )}
         </div>
