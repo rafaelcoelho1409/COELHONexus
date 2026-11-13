@@ -67,7 +67,9 @@ def cuts_block_quote(markdown: str, start: int, end: int, replacement: str) -> b
 def duplicate_survives(markdown: str, evidence: str, target: str, replacement: str) -> bool:
     """Whether the text a removal claims is repeated is still on the page once the patch is applied: a duplicate has a
     surviving copy, and an edit that deletes the only one is a deletion, not a deduplication."""
-    return evidence.strip() in markdown.replace(target, replacement, 1)
+    remaining = markdown.replace(target, replacement, 1)
+    cited = " ".join(evidence.split())
+    return bool(cited) and cited in " ".join(remaining.split())
 
 
 def patch_rejection(

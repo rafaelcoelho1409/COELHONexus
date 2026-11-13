@@ -55,6 +55,9 @@ def normalize_doc(
     text, n_emoji_heading_spaces = _emoji_shortcode_heading_spacing_pass(text)
     stats.emoji_shortcode_heading_spaces_inserted = n_emoji_heading_spaces
 
+    text, n_escaped_table_pipes = _escaped_table_row_pipe_pass(text)
+    stats.escaped_table_row_pipes_fixed = n_escaped_table_pipes
+
     text, n_meta, n_admon, n_orphan, n_img, n_annot, n_copy = _token_aware_passes(text)
     stats.fence_meta_stripped       = n_meta
     stats.container_admonitions     = n_admon
@@ -97,7 +100,11 @@ def normalize_doc(
 
 
 def _emoji_shortcode_heading_spacing_pass(text: str) -> tuple[str, int]:
-    """Separate a leading GitBook emoji shortcode from heading text, outside code fences."""
+    """Normalize a leading emoji shortcode and separate it from heading text, outside code fences.
+
+    Some GitBook exports put an HTML space entity before the shortcode and escape its underscore, which leaves the icon glued
+    to the following heading word even after the regular spacing repair.
+    """
     lines = text.split("\n")
     fenced_lines: set[int] = set()
     for start, end, _kind in _identify_fence_ranges(text):
@@ -110,9 +117,62 @@ def _emoji_shortcode_heading_spacing_pass(text: str) -> tuple[str, int]:
         match = patterns.EMOJI_SHORTCODE_HEADING_RE.match(line)
         if match is None:
             continue
-        lines[idx] = f"{match.group('prefix')}{match.group('shortcode')} {match.group('text')}"
+        shortcode = match.group("shortcode").replace(r"\_", "_")
+        lines[idx] = f"{match.group('prefix')}{shortcode} {match.group('text')}"
         changed += 1
     return "\n".join(lines), changed
+
+
+def _escaped_table_row_pipe_pass(text: str) -> tuple[str, int]:
+    """Unescape a table row's first pipe only inside a structurally recognized Markdown table."""
+    lines = text.split("\n")
+    fenced_lines: set[int] = set()
+    for start, end, _kind in _identify_fence_ranges(text):
+        fenced_lines.update(range(start, end))
+
+    def cell_count(line: str) -> int:
+        cells = 1
+        in_code = False
+        escaped = False
+        for character in line.strip():
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == "`":
+                in_code = not in_code
+            elif character == "|" and not in_code:
+                cells += 1
+        stripped = line.strip()
+        return cells - int(stripped.startswith("|")) - int(stripped.endswith("|") and not stripped.endswith(r"\|"))
+
+    fixed = 0
+    index = 0
+    while index + 1 < len(lines):
+        if (
+            index in fenced_lines
+            or index + 1 in fenced_lines
+            or patterns.MARKDOWN_TABLE_ROW_RE.match(lines[index]) is None
+            or patterns.MARKDOWN_TABLE_DELIMITER_RE.fullmatch(lines[index + 1]) is None
+        ):
+            index += 1
+            continue
+
+        width = cell_count(lines[index])
+        cursor = index + 2
+        while cursor < len(lines) and lines[cursor].strip() and cursor not in fenced_lines:
+            escaped_pipe = patterns.ESCAPED_TABLE_ROW_PIPE_RE.match(lines[cursor])
+            if escaped_pipe is not None:
+                indent_length = len(escaped_pipe.group("indent"))
+                candidate = lines[cursor][:indent_length] + lines[cursor][indent_length + 1:]
+                if cell_count(candidate) <= width:
+                    lines[cursor] = candidate
+                    fixed += 1
+            if patterns.MARKDOWN_TABLE_ROW_RE.match(lines[cursor]) is None or cell_count(lines[cursor]) > width:
+                break
+            cursor += 1
+        index = cursor
+    return "\n".join(lines), fixed
 
 
 def _control_character_pass(text: str) -> tuple[str, int]:

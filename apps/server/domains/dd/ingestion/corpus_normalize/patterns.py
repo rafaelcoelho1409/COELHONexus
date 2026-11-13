@@ -58,12 +58,19 @@ H1_LINE_RE = re.compile(r"^#[ \t]+\S")
 
 # A GitBook emoji shortcode at the beginning of a heading needs separation
 # from the heading text: `## :sparkles:How` otherwise keeps the text inside
-# the shortcode-looking token in several Markdown renderers.
+# the shortcode-looking token in several Markdown renderers. Some exports put
+# an HTML space entity before the shortcode and escape its underscore.
 EMOJI_SHORTCODE_HEADING_RE = re.compile(
     r"^(?P<prefix>[ \t]{0,3}(?:>[ \t]?)*#{1,6}[ \t]+)"
+    r"(?:&#(?:x0*20|0*32);[ \t]*)?"
     r"(?P<shortcode>:[A-Za-z][A-Za-z0-9_\\+-]*:)"
     r"(?P<text>\S.*)$"
 )
+MARKDOWN_TABLE_ROW_RE = re.compile(r"^[ \t]*\|")
+MARKDOWN_TABLE_DELIMITER_RE = re.compile(
+    r"^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)+\|?[ \t]*$"
+)
+ESCAPED_TABLE_ROW_PIPE_RE = re.compile(r"^(?P<indent>[ \t]*)\\\|")
 
 # Container admonitions (Docusaurus / VitePress / MkDocs Material subset).
 ADMON_OPEN_RE = re.compile(

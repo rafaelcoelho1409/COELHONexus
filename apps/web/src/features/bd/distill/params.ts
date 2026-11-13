@@ -2,6 +2,7 @@ import { BOOK_PARAM, PAGE_PARAM } from "../params";
 
 export const DISTILL_RUN_PARAM = "run";
 export const DISTILL_REFRESH_MS = 4_000;
+export const STUDY_LAST_SECTION_STORAGE_PREFIX = "bd:study:section:";
 
 /** Run controls and history stay on the Distill Agents stage. */
 export function distillHref(bookId?: string | null, runId?: string | null): string {

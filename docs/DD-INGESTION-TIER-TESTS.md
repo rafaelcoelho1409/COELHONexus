@@ -242,6 +242,46 @@ The deployed build reported corpus normalizer v17. The Tier 1 Unsloth benchmark 
 
 **Disposition:** v18 is local and pending redeployment. After the manual redeploy, start a fresh round (do not reuse r1) and rerun Tier 1 through Tier 4 in order; confirm normalization, Agentic completion, publish and vault backfill for every tier before assessing convergence. Tier 5 remains out of scope.
 
+## Refinement round `dd-refine-2026-11-13-r2`
+
+This round used the manually redeployed build, which reports corpus normalizer v18 and `dd-ingestion-agentic-v3`. Its reported Git SHA is blank. The four representative tiers are being run sequentially in isolated benchmark storage; Tier 5 remains excluded.
+
+### Tier 1 — Unsloth (`llms_full`)
+
+Run `b556d6766fc14eb1b515294f5481265b` selected the intended source, downloaded 3,249,260 bytes and split it into 205 pages. Preparation produced 205 non-empty pages. Audit, normalization, publish and vault backfill all completed; all 205 pages were published. Timings were 48.69s extraction, 22.58s preparation, 1,278.44s Agentic processing, 21.67s backfill and 1,371.53s total (~22m52s).
+
+Quality reported 143 findings on 64 pages: 29 duplicate-boilerplate, 50 duplicate-section, 1 encoding, 5 malformed-heading, 48 Markdown-formatting and 10 other. It recorded 47 low- and 96 medium-severity findings. Four audits were unavailable (pages 48, 55, 114 and 166); repair was unavailable for pages 46 and 169; 6 pages require review. The 241 LLM calls used 1,938,412 input and 160,675 output tokens; 28 auditor requests returned HTTP 504. Page 114's audit error was a 504. Pages 48, 55 and 166 returned incompatible JSON shapes and could not be validated as `PageAssessment`; those source pages were retained without an audit. Repair made 20 calls with no provider errors.
+
+**Sample assessment and local fixes:** page 46's reported solitary `!` is the valid image marker inside a `<figure>![](...)` block, so the finding is a false positive and its failed repair should not require review. A narrow sanitizer rule now drops that exact claim when the image syntax is present. Page 169 has a real heading export defect: `### &#x20;:mag\\_right:Training ...`; the HTML entity denotes a space, while the escaped shortcode underscore and missing separator leave the icon text glued to “Training.” I updated the corpus normalizer to recognize this export form, restore the shortcode underscore, and insert the heading separator. These fixes are local and need redeployment; the three unavailable structured audits remain open.
+
+The durable report is `dd-benchmarks/dd-refine-2026-11-13-r2/b556d6766fc14eb1b515294f5481265b.json`.
+
+### Tier 2 — Optimum (`llms_txt`)
+
+Run `b5df2db0b1f746a0ac2929bc67a624a5` selected `https://huggingface.co/docs/optimum/llms.txt`, extracted 11 pages / 86,659 bytes, prepared 11 pages without drops, completed audit, normalization, publish and vault backfill, and published all 11 pages. Timings were 1.86s extraction, 1.03s preparation, 55.36s Agentic processing, 1.41s backfill and 59.79s total. All 11 auditor calls succeeded; there were no audit or repair unavailability, rejected patches or review-required pages. Quality reported 9 findings across pages 0, 5, 6 and 10 (3 duplicate-section and 6 Markdown-formatting; 5 low and 4 medium); no repair patch was accepted. The durable report is `dd-benchmarks/dd-refine-2026-11-13-r2/b5df2db0b1f746a0ac2929bc67a624a5.json`.
+
+**Sample assessment and local fix:** pages 0, 6 and 10 retain genuine Hugging Face API-export concatenation, including a stray `0` joining parameter/return descriptions and adjacent prose. The existing exact Optimum repair handled four entries but missed these contexts, so the specialized pass needs a broader, still evidence-bounded repair. Page 5's findings about code styling and spacing are not defects; one description claims backticks that are absent from its evidence. Page 6's ``bool`` return type is valid Markdown. Page 10's repeated parameter and explanatory text occurs under separate transformation classes, so those duplicate findings are false positives. A sanitizer rule now rejects repeated evidence when each occurrence is scoped under a distinct source-linked API heading. This safeguard is local and must be redeployed; the Optimum export fragments still need a narrowly safe content repair.
+
+### Tier 3 — DeepAgents (`sitemap`)
+
+Run `72962397567f43ed89152b7cea753c99` selected the catalog sitemap (70 URLs / 2,029,530 bytes), split those URLs into 110 non-empty pages, and completed audit, normalization, publish and vault backfill. All 110 pages were published. Timings were 30.59s extraction, 16.90s preparation, 405.02s Agentic processing, 12.17s backfill and 464.87s total (~7m45s).
+
+Quality reported 26 findings on 17 pages: 1 duplicate-boilerplate, 2 duplicate-section, 3 malformed-heading, 19 Markdown-formatting and 1 other; 12 were low and 14 medium severity. Page 65's audit was unavailable and remains review-required. The 123 auditor calls used 1,026,397 input and 55,990 output tokens; 8 calls returned HTTP 504. No repair calls or patches were recorded. The durable report is `dd-benchmarks/dd-refine-2026-11-13-r2/72962397567f43ed89152b7cea753c99.json`.
+
+**Sample assessment and local fixes:** page 30's four rows beginning `\\|` immediately follow a valid table header and delimiter; they are intended table rows but render as escaped prose. A normalizer pass now removes the first escape only when a real table header/delimiter and compatible row width establish the context. This is local v20 and needs deployment. Page 27 contains upstream typos (“agenet”, “Agnets”, “laets”); these are editorial source defects, so the ingestion repairer correctly does not silently rewrite them. Page 33 repeats a long paragraph prefix immediately before its complete version; the sanitizer now identifies this as a duplicate section, and duplicate deletion is enabled only through the existing exact-source, confidence, unique-target and surviving-copy gates. Page 84's repeated “usage example” link is under different integration headings and is contextual, not page furniture. Additional local audit filters reject verified false positives from valid table rows, wrapped list items, normal spacing between code examples, configured-model variants, shared integration links and curated/all-items table overlap. Other sampled findings were false positives or diagram/export labels: valid block-wrapped table rows, provider-specific rubric examples, intentional model listings, concise headings, and a migration prompt supplied as documentation. Page 65 returned the audit request envelope instead of a `PageAssessment`; the extracted source was preserved.
+
+### Tier 4 — Asyncio (`docs`)
+
+Run `71aac097a89b406c97f97e47dc743d6e` selected `https://docs.python.org/3/library/asyncio.html`, extracted 118 pages / 350,860 bytes from the 20-page documentation tree, and prepared all 118 without splitting or drops. Audit, normalization, publish and vault backfill completed; all 118 pages were published. Timings were 51.61s extraction, 3.92s preparation, 200.86s Agentic processing, 11.75s backfill and 268.30s total (~4m28s).
+
+Quality reported 45 findings across 22 pages: 1 duplicate-boilerplate, 13 duplicate-section, 4 malformed-heading, 26 Markdown-formatting and 1 other; 23 were low and 22 medium severity. Every audit completed; there were no unavailable repairs, rejected patches or review-required pages. The 125 auditor calls used 544,315 input and 31,372 output tokens; 3 calls returned HTTP 504 and recovered. The durable report is `dd-benchmarks/dd-refine-2026-11-13-r2/71aac097a89b406c97f97e47dc743d6e.json`.
+
+**Sample assessment and local fixes:** most findings concern valid escaped Python identifiers, Sphinx definition-list signatures/descriptions, or shared text under distinct methods. Examples include repeated `Future`/`Task` behavior across separate methods, the `WriteTransport.write()`/`writelines()` explanations, and `asyncio.run()` versus `Runner.run()` descriptions. These are contextual API documentation, not repeated blocks within one entry. The local audit sanitizer now recognizes colon-prefixed Sphinx API definition lists, accepts valid heading evidence and escaped identifiers, scopes duplicate checks to Sphinx signature entries, and drops a parameter-name style claim unsupported by an ingestion defect. High-confidence exact duplicate repair is enabled behind the surviving-copy and unique-target validation gate. No deterministic Tier 4 source transformation was indicated; its Sphinx term/definition structure and content were preserved.
+
+### Round disposition
+
+All four representative tiers completed operationally, including publication and vault backfill. Tier 2 and Tier 4 had no unavailable pages or review-required records. Tier 1 had four unavailable audits and two repairs; Tier 3 had one unavailable audit. Tier 1's auditor returned 28 provider 504s, Tier 3 had 8, and Tier 4 had 3 recovered 504s. Local v19 and v20 address sampled Unsloth heading and DeepAgents table defects. The local audit changes suppress source-context false positives, retain editorial source typos for review, and allow high-confidence duplicate repair only under exact evidence and surviving-copy guards. These changes were not part of the deployed v18 round. A manual redeploy and a fresh Tiers 1–4 pass are required to validate them and establish convergence. Tier 5 remains out of scope.
+
 ## Benchmark acceptance record
 
 For every run, record:
@@ -254,3 +294,9 @@ For every run, record:
 - sampled content checks and any regression found.
 
 Compare runs within a round before attributing changes to code. Compare different rounds only when the source and meaningful upstream content are unchanged; otherwise treat the upstream change as a confounder.
+
+## Refinement round `dd-refine-2026-11-13-r3` — preflight stopped
+
+After the reported redeploy, the first isolated Unsloth benchmark (`931926bfdd734993b2a859d8e9ef7711`) returned `normalizer_version: 18`, while the workspace build is at v20. The run downloaded the 3,249,260-byte source bundle, then was canceled before preparation or Agentic processing; no pages were published and no catalog corpus was changed. The canceled report remains at `dd-benchmarks/dd-refine-2026-11-13-r3/931926bfdd734993b2a859d8e9ef7711.json`.
+
+**Disposition:** this is a stale-build preflight, not a validation of the local v19/v20 fixes. Do not run Tiers 1–4 again until the server reports normalizer v20. Then use a new round ID and continue sequentially. Tier 5 remains out of scope.

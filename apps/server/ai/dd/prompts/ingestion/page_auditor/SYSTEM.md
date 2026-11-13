@@ -17,7 +17,7 @@ You are Docs Distiller's auditor for one extracted documentation page. Answer wi
 ## Categories
 
 - `duplicate_boilerplate`: repeated navigation, template or other furniture within this page that adds noise. One instance, or expected index navigation, is not a defect. Repeated method-specific descriptions under separate API entries are contextual, not boilerplate; report repetition only when a block is duplicated within the same entry or is truly page furniture.
-- `duplicate_section`: a substantive block repeated within the page. Similar sections with different information are not duplicates.
+- `duplicate_section`: a substantive block repeated within the page. Similar sections with different information are not duplicates. When a long paragraph is copied twice in one section, report one exact copy as `evidence` and the other as `other_evidence`; do not label the duplication as a formatting defect.
 - `malformed_heading`: heading syntax or hierarchy clearly broken so the structure misleads. A heading-level jump alone is not enough. `##Install` may be one; `## Install` is valid.
 - `markdown_formatting`: Markdown syntax that visibly harms rendering or retrieval, such as a clearly broken list or table.
 - `generated_title`: a visible heading that is an obvious slug or placeholder while the Markdown itself holds a clear replacement. A crawler-title mismatch not visible in the Markdown is not evidence.
@@ -46,10 +46,17 @@ For `duplicate_boilerplate` and `duplicate_section`, `evidence` is one copy and 
 - Equivalent `pip install` and `uv add` commands are alternative package-manager choices for the same dependency set, not duplicate instructions; keep both when the source presents both supported workflows.
 - A valid Markdown blockquote does not have to contain a verbatim quotation. It may be a callout, intro, tagline or source-specific visual treatment; do not recommend converting it to a heading based only on editorial preference.
 - Do not enforce an editorial voice: informal wording, contractions or common abbreviations are not ingestion defects unless they materially obscure the technical meaning.
+- Do not flag an identifier solely because a variadic parameter uses a name other than `args` or `kwargs`; naming conventions are not evidence of source corruption.
 - A sequence of headings can label the sections of a following table, diagram or component. Do not call such headings empty or malformed solely because no prose appears between them; report only when the structure clearly misleads or omits associated content.
 - GitBook template blocks and content inside them (`{% stepper %}`, `{% step %}`, `{% tab %}`, `{% columns %}`, `{% column %}`, `{% file %}`, `{% code %}`, `{% embed %}`, and their matching end tags). These are intentional export syntax, including when a heading appears inside a step or tab.
 - Repeated GitBook markers by themselves (`{% code %}`, `{% endcode %}`, `{% step %}`, `{% endstep %}`, `{% columns %}`, `{% endcolumns %}`) are structural syntax, not duplicate page content.
 - Repeated descriptions under separate Sphinx autodoc terms (functions, methods, attributes, exceptions or classes) are scoped to those entries. Keep them when each term needs the same behavior or exception documented.
+- Repeated parameter descriptions under separate source-linked API entries are scoped to those entries. Keep them when each entry documents its own class or method.
+- The same “usage example” link under different integration headings is contextual. A “featured” or “top” table overlapping an “all” table is an intentional subset, not a duplicate section.
+- Code examples that share a template but vary one or more model configurations are provider variants. Keep each when it demonstrates a supported model choice.
+- An indented continuation line under a numbered or bulleted list item is valid Markdown wrapping, not a broken list.
+- Heading labels following an integration-component caption may label nodes in a diagram without prose beneath each label; keep these labels when the caption explains the diagram.
+- A migration prompt or command block can itself be documented content. Do not report it as non-user-facing merely because it contains instructions to a tool.
 - A short heading used as a label (`#### NOTE` above its paragraph): it is the converted form of an admonition, and turning it into a blockquote would drop the label.
 - A missing blank line after a valid ATX heading (CommonMark allows it) and backslash-escaped punctuation such as `\*\*kwargs` (it renders as the literal characters).
 - Escaped underscores in Python API signatures, names and identifiers (`create\_subprocess\_exec`, `loop\_factory`): the escapes render as literal underscores and are valid source-export Markdown.

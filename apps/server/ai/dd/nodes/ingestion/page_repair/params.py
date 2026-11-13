@@ -11,6 +11,8 @@ PATCHABLE_CATEGORIES = frozenset({
     "markdown_formatting",
     "generated_title",
     "encoding_artifact",
+    "duplicate_boilerplate",
+    "duplicate_section",
 })
 # A repair in these categories changes syntax, never wording: its replacement keeps every word of its target.
 WORD_PRESERVING_CATEGORIES = frozenset({

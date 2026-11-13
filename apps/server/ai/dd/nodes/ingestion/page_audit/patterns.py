@@ -34,6 +34,12 @@ ESCAPED_IDENTIFIER_RE = re.compile(r"[A-Za-z0-9]+(?:\\_[A-Za-z0-9]+)+")
 VOID_HTML_TAGS = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"})
 ATX_HEADING_LINE_RE = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*)|[ \t]*)$")
 ATX_CLOSING_HASHES_RE = re.compile(r"#+")
+API_SOURCE_LINK_RE = re.compile(r"^\[Source\]\(https?://[^)\s]+\)[ \t]*$")
+SPHINX_TERM_LINE_RE = re.compile(
+    r"^[ \t]{0,12}(?:(?:async[ \t]+)?class[ \t]+)?(?:async[ \t]+)?"
+    r"[A-Za-z_][A-Za-z0-9_.\\]*(?:\([^()\n]*\))?[ \t]*$"
+)
+SPHINX_DEFINITION_LINE_RE = re.compile(r"^[ \t]{0,12}:[ \t]+(?:\S.*)?$")
 BLOCKQUOTE_LINE_RE = re.compile(r"^ {0,3}>")
 FENCED_CODE_BLOCK_RE = re.compile(r"```[^\n]*\n(.*?)\n```", re.DOTALL)
 MODEL_CONFIGURATION_LINE_RE = re.compile(r"(?m)^(\s*model\s*=\s*)(?:\"([^\"]*)\"|'([^']*)')")

@@ -30,6 +30,7 @@ class NormalizeStats(BaseModel):
     trailing_rules_stripped:    int  = 0
     title_promoted:             bool = False
     emoji_shortcode_heading_spaces_inserted: int = 0
+    escaped_table_row_pipes_fixed: int = 0
     frontmatter_extracted:      bool = False
     html_entities_decoded:      int  = 0
     malformed_links_fixed:      int  = 0

@@ -71,27 +71,22 @@ def is_sound_table_head(evidence: str) -> bool:
 def is_valid_table_row_context(markdown: str, evidence: str) -> bool:
     """Whether a cited row is part of a valid GFM table, including short body rows."""
     cited = evidence.strip()
-    if not cited.startswith("|") or "\n" in cited:
+    if not cited or "\n" in cited:
         return False
     lines = markdown.splitlines()
     for index, line in enumerate(lines):
-        if line.strip() != cited:
+        if cited not in line.strip() or not line.strip().startswith("|"):
             continue
-        for delimiter_index in (index - 1, index + 1):
-            if not (
-                0 <= delimiter_index < len(lines)
-                and "|" in lines[delimiter_index]
-                and patterns.TABLE_DELIMITER_RE.fullmatch(lines[delimiter_index].strip())
-            ):
-                continue
+        table_start = index
+        while table_start > 0 and lines[table_start - 1].strip().startswith("|"):
+            table_start -= 1
+        delimiter_index = table_start + 1
+        if (
+            delimiter_index < len(lines)
+            and patterns.TABLE_DELIMITER_RE.fullmatch(lines[delimiter_index].strip())
+        ):
             width = table_cells(lines[delimiter_index])
-            header_index = delimiter_index - 1
-            if (
-                header_index >= 0
-                and "|" in lines[header_index]
-                and table_cells(lines[header_index]) == width
-                and table_cells(line) <= width
-            ):
+            if table_cells(lines[table_start]) == width and table_cells(line) <= width:
                 return True
     return False
 
@@ -116,6 +111,43 @@ def evidence_is_valid_atx_heading(markdown: str, evidence: str) -> bool:
             continue
         content = (match.group(2) or "").strip()
         if content and not patterns.ATX_CLOSING_HASHES_RE.fullmatch(content):
+            return True
+    return False
+
+
+def is_all_evidence_valid_atx_headings(markdown: str, evidence: str) -> bool:
+    """Whether every non-empty cited line is a valid ATX heading in the source."""
+    lines = [line for line in evidence.splitlines() if line.strip()]
+    return bool(lines) and all(
+        patterns.ATX_HEADING_LINE_RE.match(line) is not None
+        and evidence_is_valid_atx_heading(markdown, line.strip())
+        for line in lines
+    )
+
+
+def is_sphinx_definition_list_fragment(markdown: str, evidence: str) -> bool:
+    """Whether the finding cites a Sphinx API term or its colon-prefixed definition body."""
+    source_lines = markdown.splitlines()
+    evidence_lines = evidence.splitlines()
+    start = markdown.find(evidence)
+    if start < 0:
+        return False
+    source_index = markdown.count("\n", 0, start)
+    for offset, line in enumerate(evidence_lines):
+        index = source_index + offset
+        if index >= len(source_lines):
+            break
+        if (
+            patterns.SPHINX_TERM_LINE_RE.fullmatch(source_lines[index]) is not None
+            and index + 1 < len(source_lines)
+            and patterns.SPHINX_DEFINITION_LINE_RE.match(source_lines[index + 1]) is not None
+        ):
+            return True
+        if (
+            patterns.SPHINX_DEFINITION_LINE_RE.match(source_lines[index]) is not None
+            and index > 0
+            and patterns.SPHINX_TERM_LINE_RE.fullmatch(source_lines[index - 1]) is not None
+        ):
             return True
     return False
 
@@ -148,24 +180,20 @@ def is_package_manager_alternative(evidence: str) -> bool:
 
 
 def is_model_configuration_code_variant(evidence: str) -> bool:
-    """Whether fenced examples are otherwise identical and differ only by model configuration."""
+    """Whether every fenced example belongs to a repeated template that differs only in model configuration."""
     blocks = patterns.FENCED_CODE_BLOCK_RE.findall(evidence)
-    values: list[str] = []
-    normalized: list[str] = []
+    groups: dict[str, list[tuple[str, ...]]] = {}
     for block in blocks:
         matches = list(patterns.MODEL_CONFIGURATION_LINE_RE.finditer(block))
-        if len(matches) != 1:
+        if not matches:
             return False
-        values.append(matches[0].group(2) or matches[0].group(3) or "")
-        normalized.append(
-            patterns.MODEL_CONFIGURATION_LINE_RE.sub(r'\1"<MODEL>"', block)
-        )
-    return len(blocks) >= 2 and len(set(values)) > 1 and len(set(normalized)) == 1
-
-
-def is_valid_escaped_identifier(evidence: str) -> bool:
-    """Whether the cited identifier uses valid Markdown escapes for its underscores."""
-    return patterns.ESCAPED_IDENTIFIER_RE.fullmatch(evidence.strip()) is not None
+        values = tuple(match.group(2) or match.group(3) or "" for match in matches)
+        normalized = patterns.MODEL_CONFIGURATION_LINE_RE.sub(r'\1"<MODEL>"', block)
+        groups.setdefault(normalized, []).append(values)
+    return len(blocks) >= 2 and bool(groups) and all(
+        len(variants) >= 2 and len(set(variants)) > 1
+        for variants in groups.values()
+    )
 
 
 def is_valid_numeric_entity_text(evidence: str) -> bool:
@@ -272,6 +300,217 @@ def is_repeat(markdown: str, evidence: str, other_evidence: str) -> bool:
     return any(abs(start - other) >= min(len(first), len(second)) for start in starts for other in others)
 
 
+def repeated_prefix_copies(evidence: str) -> tuple[str, str] | None:
+    """Find two adjacent, long paragraph copies whose only difference is Markdown line wrapping."""
+    tokens = list(re.finditer(r"\S+", evidence))
+    minimum_tokens = 25
+    if len(tokens) < minimum_tokens * 2:
+        return None
+    for boundary in range(minimum_tokens, len(tokens) // 2 + 1):
+        first_tokens = [match.group() for match in tokens[:boundary]]
+        second_tokens = [match.group() for match in tokens[boundary:boundary * 2]]
+        first = evidence[tokens[0].start():tokens[boundary - 1].end()]
+        second = evidence[tokens[boundary].start():tokens[boundary * 2 - 1].end()]
+        if (
+            first_tokens == second_tokens
+            and len(" ".join(first.split())) >= 160
+            and first.strip() != second.strip()
+        ):
+            return first, second
+    return None
+
+
+def _heading_scope_at(markdown: str, offset: int) -> tuple[str, int] | None:
+    """Return the closest preceding ATX heading and its line index for one source offset."""
+    line_starts = [0]
+    line_starts.extend(match.end() for match in re.finditer("\n", markdown))
+    lines = markdown.splitlines()
+    line_index = max(
+        (index for index, start in enumerate(line_starts) if start <= offset),
+        default = 0,
+    )
+    heading_index = next((
+        index
+        for index in range(line_index, -1, -1)
+        if patterns.ATX_HEADING_LINE_RE.match(lines[index]) is not None
+    ), None)
+    return (lines[heading_index].strip(), heading_index) if heading_index is not None else None
+
+
+def is_usage_example_link_scoped_to_distinct_sections(markdown: str, evidence: str) -> bool:
+    """Whether a repeated usage-example link is separately scoped under distinct integration headings."""
+    if re.fullmatch(r"See a \[usage example\]\([^\s)]+\)\.", evidence.strip(), re.IGNORECASE) is None:
+        return False
+    scopes = [
+        _heading_scope_at(markdown, match.start())
+        for match in re.finditer(re.escape(evidence.strip()), markdown)
+    ]
+    return len(scopes) >= 2 and all(scope is not None for scope in scopes) and len(set(scopes)) == len(scopes)
+
+
+def is_curated_table_overlap(markdown: str, evidence: str, other_evidence: str) -> bool:
+    """Whether repeated table rows appear under a curated/top heading and the broader all-items table."""
+    if not evidence.strip().startswith("|") or not other_evidence.strip().startswith("|"):
+        return False
+    first_row = next((line.strip() for line in evidence.splitlines() if line.strip()), "")
+    second_row = next((line.strip() for line in other_evidence.splitlines() if line.strip()), "")
+    if not first_row or not second_row or not (
+        is_valid_table_row_context(markdown, first_row)
+        and is_valid_table_row_context(markdown, second_row)
+    ):
+        return False
+    first_at = markdown.find(first_row)
+    second_at = markdown.find(second_row, first_at + len(first_row)) if first_at >= 0 else -1
+    if first_at < 0 or second_at < 0:
+        return False
+    first_scope = _heading_scope_at(markdown, first_at)
+    second_scope = _heading_scope_at(markdown, second_at)
+    if first_scope is None or second_scope is None or first_scope == second_scope:
+        return False
+    headings = (first_scope[0].casefold(), second_scope[0].casefold())
+    has_curated = any(re.search(r"\b(?:featured|top|recommended)\b", heading) for heading in headings)
+    has_all = any(re.search(r"\b(?:all|available|complete)\b", heading) for heading in headings)
+    return has_curated and has_all
+
+
+def is_valid_wrapped_list_item(evidence: str) -> bool:
+    """Whether lines after an ordered/unordered list marker are valid indented continuations."""
+    lines = evidence.splitlines()
+    if len(lines) < 2:
+        return False
+    first = re.match(r"^(?P<indent>[ \t]*)(?P<marker>(?:\d+[.)]|[-+*])[ \t]+)\S", lines[0])
+    if first is None:
+        return False
+    continuation_indent = len(first.group("indent")) + len(first.group("marker"))
+    return all(
+        not line.strip() or (line.startswith(" ") and len(line) - len(line.lstrip(" ")) >= continuation_indent)
+        for line in lines[1:]
+    )
+
+
+def is_normal_spacing_between_code_blocks(evidence: str) -> bool:
+    """Whether multiple fenced examples are separated by the single blank line Markdown normally uses."""
+    lines = evidence.splitlines()
+    ranges: list[tuple[int, int]] = []
+    opening: tuple[str, int, int] | None = None
+    for index, line in enumerate(lines):
+        match = patterns.FENCE_RE.match(line.lstrip(" \t"))
+        if match is None:
+            continue
+        marker = match.group(1)
+        if opening is None:
+            opening = (marker[0], len(marker), index)
+        elif marker[0] == opening[0] and len(marker) >= opening[1]:
+            rest = line.lstrip(" \t")[len(marker):]
+            if not rest.strip():
+                ranges.append((opening[2], index))
+                opening = None
+    if len(ranges) < 2:
+        return False
+    for previous, current in zip(ranges, ranges[1:]):
+        gap = lines[previous[1] + 1:current[0]]
+        if gap != [""]:
+            return False
+    return True
+
+
+def is_scoped_repeat_across_api_entries(markdown: str, evidence: str) -> bool:
+    """Whether repeated evidence belongs to separate source-linked API entries rather than one duplicated entry."""
+    if not evidence:
+        return False
+
+    line_starts = [0]
+    line_starts.extend(match.end() for match in re.finditer("\n", markdown))
+    lines = markdown.splitlines()
+    scoped_headings: set[str] = set()
+    occurrence_count = 0
+    for occurrence in re.finditer(re.escape(evidence), markdown):
+        occurrence_count += 1
+        line_index = max(
+            (index for index, start in enumerate(line_starts) if start <= occurrence.start()),
+            default = 0,
+        )
+        heading_index = next((
+            index
+            for index in range(line_index, -1, -1)
+            if patterns.ATX_HEADING_LINE_RE.match(lines[index]) is not None
+        ), None)
+        if heading_index is None:
+            return False
+        heading = lines[heading_index].strip()
+        source_link_found = False
+        for line in lines[heading_index + 1:min(heading_index + 5, len(lines))]:
+            if not line.strip():
+                continue
+            if patterns.API_SOURCE_LINK_RE.fullmatch(line.strip()):
+                source_link_found = True
+            break
+        if not source_link_found or heading in scoped_headings:
+            return False
+        scoped_headings.add(heading)
+
+    return occurrence_count >= 2 and len(scoped_headings) == occurrence_count
+
+
+def _sphinx_scope_at(markdown: str, offset: int) -> tuple[str, str] | None:
+    """Return a Sphinx API term and enclosing heading for one source offset."""
+    line_starts = [0]
+    line_starts.extend(match.end() for match in re.finditer("\n", markdown))
+    lines = markdown.splitlines()
+    line_index = max(
+        (index for index, start in enumerate(line_starts) if start <= offset),
+        default = 0,
+    )
+    term_index = next((
+        index
+        for index in range(line_index, -1, -1)
+        if patterns.SPHINX_TERM_LINE_RE.fullmatch(lines[index]) is not None
+        and index + 1 < len(lines)
+        and patterns.SPHINX_DEFINITION_LINE_RE.match(lines[index + 1]) is not None
+    ), None)
+    if term_index is None:
+        return None
+    heading = next((
+        lines[index].strip()
+        for index in range(term_index, -1, -1)
+        if patterns.ATX_HEADING_LINE_RE.match(lines[index]) is not None
+    ), "")
+    term = " ".join(lines[term_index].split()).casefold()
+    return heading.casefold(), term
+
+
+def is_scoped_repeat_across_sphinx_entries(markdown: str, evidence: str, other_evidence: str) -> bool:
+    """Whether duplicate evidence belongs to separate Sphinx signature/definition-list entries."""
+    offsets = sorted({
+        match.start()
+        for value in (evidence.strip(), other_evidence.strip())
+        if value
+        for match in re.finditer(re.escape(value), markdown)
+    })
+    scopes = [_sphinx_scope_at(markdown, offset) for offset in offsets]
+    return len(scopes) >= 2 and all(scope is not None for scope in scopes) and len(set(scopes)) == len(scopes)
+
+
+def is_reported_exclamation_mark_a_figure_image(markdown: str, evidence: str, description: str) -> bool:
+    """Reject a claimed stray `!` when it is the image marker in a valid stored figure and the claim says it is solitary."""
+    if evidence.strip() != "!" or not re.search(r"\b(?:solitary|stray)\s+exclamation\b", description, re.IGNORECASE):
+        return False
+    return any(
+        "![](" in line and re.search(r"!\[\]\([^\s)]+\)", line)
+        for line in markdown.splitlines()
+    )
+
+
+def is_variadic_parameter_naming_preference(description: str) -> bool:
+    """Whether an alleged source defect is only a preference for `args`/`kwargs` naming conventions."""
+    normalized = description.casefold()
+    return (
+        any(term in normalized for term in ("parameter name", "argument name", "variadic positional"))
+        and "convention" in normalized
+        and any(term in normalized for term in ("args", "kwargs"))
+    )
+
+
 def evidence_is_only_in_code_fences(markdown: str, evidence: str) -> bool:
     """Whether every exact occurrence of an issue's evidence is inside a fenced code block."""
     if not evidence:
@@ -331,6 +570,29 @@ def sanitize_assessment(
             continue
         description = issue.description.casefold()
         if (
+            issue.category in {"markdown_formatting", "other"}
+            and is_variadic_parameter_naming_preference(issue.description)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: a parameter naming convention is not an ingestion defect."
+            )
+            continue
+        repeated_copies = (
+            repeated_prefix_copies(issue.evidence)
+            if issue.category == "markdown_formatting"
+            and re.search(r"(?:duplicate|repeated).{0,40}paragraph", description)
+            else None
+        )
+        if repeated_copies is not None:
+            issue = issue.model_copy(update = {
+                "issue_id": re.sub(r"-markdown_formatting(-\d+)$", r"-duplicate_section\1", issue.issue_id),
+                "category": agents.schemas.IssueCategory.DUPLICATE_SECTION,
+                "description": "A long paragraph prefix is repeated in the same section; the complete later copy should be kept.",
+                "evidence": repeated_copies[0],
+                "other_evidence": repeated_copies[1],
+            })
+            description = issue.description.casefold()
+        if (
             issue.category == "markdown_formatting"
             and contains_valid_escaped_ampersand(issue.evidence)
             and "ampersand" in description
@@ -340,15 +602,34 @@ def sanitize_assessment(
             )
             continue
         if (
-            issue.category == "markdown_formatting"
+            issue.category in {"markdown_formatting", "malformed_heading"}
             and evidence_is_valid_atx_heading(markdown, issue.evidence)
             and (
                 "colon" in description
                 or ("underscore" in description and contains_escaped_identifier(issue.evidence))
+                or any(term in description for term in ("lacks a space", "no space after", "malformed heading", "heading hierarchy", "no h1"))
             )
         ):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: the cited punctuation is part of a valid ATX heading."
+            )
+            continue
+        if (
+            issue.category in {"markdown_formatting", "malformed_heading"}
+            and is_all_evidence_valid_atx_headings(markdown, issue.evidence)
+            and any(term in description for term in ("heading", "h1", "hierarchy", "malformed"))
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: the cited heading lines are valid ATX headings in the source."
+            )
+            continue
+        if (
+            issue.category in {"markdown_formatting", "malformed_heading"}
+            and is_sphinx_definition_list_fragment(markdown, issue.evidence)
+            and any(term in description for term in ("format", "syntax", "heading", "colon", "space", "indent", "definition"))
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: the cited API signature uses Sphinx definition-list syntax."
             )
             continue
         if (
@@ -381,11 +662,36 @@ def sanitize_assessment(
             continue
         if (
             issue.category == "markdown_formatting"
-            and "duplicate installation command" in description
             and is_package_manager_alternative(issue.evidence)
         ):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: equivalent pip and uv commands are alternative package-manager examples."
+            )
+            continue
+        if (
+            issue.category == "markdown_formatting"
+            and is_valid_wrapped_list_item(issue.evidence)
+            and any(term in description for term in ("line break", "visual flow", "wrap"))
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: the numbered list item uses a valid indented continuation line."
+            )
+            continue
+        if (
+            issue.category == "markdown_formatting"
+            and "consecutive blank lines" in description
+            and is_normal_spacing_between_code_blocks(issue.evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: the code examples are separated by one normal Markdown blank line."
+            )
+            continue
+        if (
+            issue.category == "markdown_formatting"
+            and is_reported_exclamation_mark_a_figure_image(markdown, issue.evidence, issue.description)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: the cited exclamation mark is a valid image marker inside a figure."
             )
             continue
         if (
@@ -398,7 +704,8 @@ def sanitize_assessment(
             continue
         if (
             issue.category == "markdown_formatting"
-            and is_valid_escaped_identifier(issue.evidence)
+            and contains_escaped_identifier(issue.evidence)
+            and any(term in description for term in ("underscore", "escape", "backslash"))
         ):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: escaped underscores are valid in a Markdown identifier."
@@ -423,6 +730,38 @@ def sanitize_assessment(
         if issue.category in params.DUPLICATE_CATEGORIES and not is_repeat(markdown, issue.evidence, issue.other_evidence):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: its evidence occurs once on the page and no second copy was found, so nothing is repeated."
+            )
+            continue
+        if (
+            issue.category in params.DUPLICATE_CATEGORIES
+            and is_usage_example_link_scoped_to_distinct_sections(markdown, issue.evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: the usage-example link appears under separate integration sections."
+            )
+            continue
+        if (
+            issue.category in params.DUPLICATE_CATEGORIES
+            and is_curated_table_overlap(markdown, issue.evidence, issue.other_evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: the repeated table entries are shared by curated and all-items listings."
+            )
+            continue
+        if (
+            issue.category in params.DUPLICATE_CATEGORIES
+            and is_scoped_repeat_across_api_entries(markdown, issue.evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: repeated text is scoped to separate source-linked API entries."
+            )
+            continue
+        if (
+            issue.category in params.DUPLICATE_CATEGORIES
+            and is_scoped_repeat_across_sphinx_entries(markdown, issue.evidence, issue.other_evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: repeated method text belongs to separate Sphinx API entries."
             )
             continue
         if (

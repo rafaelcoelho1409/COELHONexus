@@ -8,7 +8,7 @@ import { learningGuideHtmlUrl, learningGuidePdfUrl } from "../api";
 import type { DistillRunViewState } from "../domain/run-state";
 import type { DistillRun } from "../entities";
 import { useLearningGuide } from "../hooks/use-distill-data";
-import { LearningGuideView } from "./learning-guide";
+import { LearningGuideReader } from "./learning-guide-reader";
 
 export function DistillRunPanel({
   bookId,
@@ -116,7 +116,7 @@ export function DistillRunPanel({
         </section>
       ) : (
         <div className="mt-4">
-          <LearningGuideView report={report.data} quality={run.structural_quality} />
+          <LearningGuideReader report={report.data} quality={run.structural_quality} />
         </div>
       )}
     </section>

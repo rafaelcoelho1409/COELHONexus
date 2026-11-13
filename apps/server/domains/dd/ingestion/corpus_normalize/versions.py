@@ -37,4 +37,8 @@ from __future__ import annotations
 # v17 (2026-11-12): turn three-or-more unambiguously indented label/description pairs into a readable Markdown list.
 # v18 (2026-11-13): resolve the v17 pass's regexes through the shared patterns module so normalization can complete;
 # also rerun the intended v17 list repair against existing stored corpora.
-NORMALIZER_VERSION = 18
+# v19 (2026-11-13): normalize an exported HTML-space entity and escaped underscore before a leading GitBook emoji shortcode,
+# then separate it from heading text (found in the Unsloth `Vision Fine-tuning` page).
+# v20 (2026-11-13): unescape a table row's leading pipe only when its surrounding header and delimiter identify a real Markdown
+# table (found in DeepAgents' fault-tolerance page).
+NORMALIZER_VERSION = 20
