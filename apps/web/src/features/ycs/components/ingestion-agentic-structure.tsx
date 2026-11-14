@@ -45,22 +45,23 @@ export type IngestionWorkflowActions = {
   wipe: IngestionWorkflowAction;
 };
 
+const DEFAULT_CAPTION =
+  "Playwright retrieves transcripts → Elasticsearch indexes them → Qdrant writes vectors while Neo4j writes graph data.";
+
 const INGESTION_TOPOLOGY = `flowchart TD
-  finish([End])
-  start([Start]) --> playwright["Playwright transcripts"]
-  playwright --> elasticsearch["Elasticsearch indexing"]
-  elasticsearch --> qdrant["Qdrant vector index"]
-  elasticsearch --> neo4j["Neo4j entity graph"]
-  elasticsearch -. done .-> finish
-  qdrant --> finish
-  neo4j --> finish`;
+  __start__([Start]) --> playwright["Playwright"]
+  playwright --> elasticsearch["Elasticsearch"]
+  elasticsearch --> qdrant["Qdrant"]
+  elasticsearch --> neo4j["Neo4j"]
+  qdrant --> __end__([End])
+  neo4j --> __end__`;
 
 export function IngestionAgenticStructure({
   steps,
   actions,
   onOpenUsage,
   ariaLabel = "Agentic ingestion workflow",
-  caption = "Target flow: Playwright transcript retrieval → Elasticsearch → Qdrant and Neo4j.",
+  caption = DEFAULT_CAPTION,
 }: {
   steps: ReadonlyArray<Step>;
   actions: IngestionWorkflowActions;
@@ -74,10 +75,7 @@ export function IngestionAgenticStructure({
 
   return (
     <>
-      <section
-        aria-label={ariaLabel}
-        className="flex min-w-0 flex-col gap-3 rounded-md border border-border bg-card p-3"
-      >
+      <div className="flex min-w-0 flex-col gap-3">
         <fieldset className="m-0 grid min-w-0 grid-cols-3 gap-2 border-0 p-0">
           <legend className="sr-only">Ingestion run controls</legend>
           {(["start", "stop", "wipe"] as const).map((key) => {
@@ -108,41 +106,45 @@ export function IngestionAgenticStructure({
           LLM usage
         </ActionButton>
 
-        <fieldset className="m-0 flex w-full overflow-hidden rounded-sm border border-border bg-background p-0">
-          <legend className="sr-only">Ingestion workflow shown as</legend>
-          {MODES.map((entry) => (
-            <ActionButton
-              key={entry.id}
-              type="button"
-              aria-pressed={mode === entry.id}
-              onClick={() => setMode(entry.id)}
-              className="min-w-0 flex-1 justify-center whitespace-nowrap rounded-none border-0 border-r border-r-border px-1.5 last:border-r-0"
-            >
-              {entry.label}
-            </ActionButton>
-          ))}
-        </fieldset>
-
-        <p
-          aria-live="polite"
-          title={caption}
-          className="line-clamp-2 text-xs leading-4 text-muted-foreground"
+        <section
+          aria-label={ariaLabel}
+          className="flex min-w-0 flex-col gap-3 rounded-md border border-border bg-card p-3"
         >
-          {caption}
-        </p>
+          <header>
+            <h3 className="text-sm font-medium">Agentic pipeline</h3>
+            <p aria-live="polite" title={caption} className="mt-1 text-xs leading-4 text-muted-foreground">
+              {caption}
+            </p>
+          </header>
 
-        {mode === "graph" ? (
-          <IngestionAgenticFlow steps={steps} onOpen={setSelectedKey} />
-        ) : mode === "list" ? (
-          <PipelineSteps steps={steps} onOpen={(step) => setSelectedKey(step.key)} />
-        ) : (
-          <MermaidTopology
-            title="YCS ingestion workflow"
-            source={INGESTION_TOPOLOGY}
-            note="The compiled graph indexes transcripts in Elasticsearch, then runs the Qdrant and Neo4j nodes in parallel."
-          />
-        )}
-      </section>
+          <fieldset className="m-0 flex w-full overflow-hidden rounded-sm border border-border bg-background p-0">
+            <legend className="sr-only">Ingestion workflow shown as</legend>
+            {MODES.map((entry) => (
+              <ActionButton
+                key={entry.id}
+                type="button"
+                aria-pressed={mode === entry.id}
+                onClick={() => setMode(entry.id)}
+                className="min-h-9 min-w-0 flex-1 justify-center whitespace-nowrap rounded-none border-0 border-r border-r-border px-1.5 last:border-r-0"
+              >
+                {entry.label}
+              </ActionButton>
+            ))}
+          </fieldset>
+
+          {mode === "graph" ? (
+            <IngestionAgenticFlow steps={steps} onOpen={setSelectedKey} />
+          ) : mode === "list" ? (
+            <PipelineSteps steps={steps} onOpen={(step) => setSelectedKey(step.key)} />
+          ) : (
+            <MermaidTopology
+              title="YCS ingestion workflow"
+              source={INGESTION_TOPOLOGY}
+              note="Elasticsearch branches to separate Qdrant vector and Neo4j graph writes."
+            />
+          )}
+        </section>
+      </div>
 
       {selected ? (
         <SideSheet

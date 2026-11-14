@@ -377,7 +377,6 @@ export function PipelinePanel({
         }}
         onOpenUsage={() => setSheet("usage")}
         ariaLabel="Pipeline progress"
-        caption="Target flow: Playwright transcripts → Elasticsearch → Qdrant and Neo4j."
       />
 
       {stop.isError ? (

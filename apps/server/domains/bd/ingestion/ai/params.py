@@ -9,7 +9,7 @@ MAX_PAGE_MARKDOWN_CHARS = 30000
 REPAIR_CONTEXT_CHARS_PER_ISSUE = 1800
 MAX_REPAIR_CONTEXT_CHARS = 10000
 AUTO_APPLY_CONFIDENCE = 0.98
-SPACING_REPAIR_CONFIDENCE = 0.8
+VERIFIED_PATCH_MIN_CONFIDENCE = 0.9
 METADATA_ACCEPT_CONFIDENCE = 0.85
 # A specialist checks its patches itself (`check_patches`), so a second full attempt only covers a failed or unreadable answer.
 SPECIALIST_ATTEMPTS = 2
@@ -36,15 +36,20 @@ CONTENT_CLASSIFICATION_CONCURRENCY = 8
 PROCESSED_BOOK_READ_CONCURRENCY = 16
 CONTENTS_RECONCILIATION_BATCH_SIZE = 40
 CONTENT_CLASSIFICATION_EXCERPT_CHARS = 8000
-CONTENT_EXCLUSION_CONFIDENCE = 0.94
+SOURCE_PDF_VERIFY_MAX_BYTES = 48 * 1024 * 1024
+SOURCE_PAGE_IMAGE_SCALE = 1.6
+SOURCE_PAGE_IMAGE_MAX_DIMENSION = 1800
+SOURCE_PAGE_IMAGE_JPEG_QUALITY = 82
+CONTENT_EXCLUSION_CONFIDENCE = 0.98
+CONTENT_SELECTION_REVISION = 2
 TASK_NAME = "domains.bd.ingestion.ai.task.run_ingestion_ai"
 AUTO_RUN_ID_PREFIX = "auto-"
 GRAPH_NODES = (
     "audit_batch",
+    "classify_content",
     "plan_repairs",
     "repair_pages",
     "normalize_metadata",
-    "classify_content",
     "materialize_processed_book",
     "reconcile_contents",
     "publish",

@@ -96,11 +96,11 @@ export function shownPage(
   return picked !== null && rows.some((row) => row.page === picked) ? picked : (rows[0]?.page ?? null);
 }
 
-/** A page-list state for known review work, an unverified audit, or a page left out of delivered text. */
+/** A page-list state for unresolved findings, an unverified audit, or a page left out of delivered text. */
 export type PageFlag = "review" | "unverified" | "blank" | "image";
 
 export const PAGE_FLAG_LABELS: Record<PageFlag, string> = {
-  review: "Needs review",
+  review: "Findings noted",
   unverified: "Audit unverified",
   blank: "Blank · not delivered",
   image: "Image only",
@@ -122,7 +122,7 @@ export function pageFlags(
   return flags;
 }
 
-/** The next (or previous) page that needs review, wrapping around the book; null when none needs it other than the one shown. */
+/** The next (or previous) page with unresolved findings, wrapping around the book. */
 export function neighbourReviewPage(
   reviewPages: readonly number[],
   current: number | null,

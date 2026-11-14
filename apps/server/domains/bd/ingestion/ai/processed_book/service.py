@@ -117,11 +117,17 @@ async def make_candidate(
     ))
     pages = [page for page, _ in built_pages]
     evidence = [page_evidence for _, page_evidence in built_pages]
-    outline = source_manifest.get("outline", [])
-    if not isinstance(outline, list):
-        outline = []
+    raw_outline = source_manifest.get("outline", [])
+    outline = [
+        item for item in raw_outline
+        if isinstance(item, dict)
+        and isinstance(item.get("title"), str)
+        and item["title"].strip()
+        and type(item.get("page")) is int
+        and item["page"] > 0
+        and item["page"] <= selection.expected_page_count
+    ] if isinstance(raw_outline, list) else []
     if not outline:
-        outline = []
         seen = set()
         for page in evidence:
             for level, title in enumerate(page["evidence"], start = 1):

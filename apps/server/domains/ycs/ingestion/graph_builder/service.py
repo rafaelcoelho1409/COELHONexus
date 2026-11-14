@@ -3,9 +3,8 @@
 Imperative Shell (`docs/CODE-CONVENTIONS.md` §4): I/O + Cypher writes +
 LLM dispatch. Pure decisions delegated to `domain.py`.
 Public API:
-  create_graph_transformer(llm) → legacy LLMGraphTransformer helper
   extract_and_store_graph(transcripts, metadata_map, llm, neo4j_graph, batch_size)
-    → DeepAgent + LangGraph evidence-checked extraction, then Neo4j writes
+    → LLMGraphTransformer extraction, evidence checks, then Neo4j writes
   resolve_entities(neo4j_graph) → int (merged count)
   discover_schema(sample_transcripts, llm) → dict
   get_graph_stats(neo4j_graph) → dict
@@ -25,7 +24,6 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Callable
 
 from langchain_core.documents import Document
-from langchain_experimental.graph_transformers import LLMGraphTransformer
 from rapidfuzz import fuzz
 
 
@@ -66,59 +64,6 @@ async def _embed_ids_for_resolution(ids: list[str]) -> dict[str, list[float]]:
 
 
 logger = logging.getLogger(__name__)
-
-
-
-def create_graph_transformer(llm: Any) -> LLMGraphTransformer:
-    """Build the LLMGraphTransformer with `ignore_tool_usage=True`
-    (June 2026 SOTA for cross-provider compatibility).
-
-    Why this matters operationally — observed across 4+ providers
-    during 2026-06-08 runs, all silently producing `0 nodes` from
-    valid transcripts:
-
-      groq/openai/gpt-oss-120b      BadRequestError: 'DynamicGraph':
-                                    /properties/nodes/anyOf/0/items/
-                                    required: `required` is required
-      gemini/gemini-2.5-pro         GeminiException BadRequestError on
-                                    nested anyOf in DynamicGraph
-      nvidia_nim/qwen/qwen3.5-397b  HTTP 200 with `{nodes:[], rels:[]}`
-      nvidia_nim/stepfun/step-3.5   HTTP 200 with `{nodes:[], rels:[]}`
-
-    Same fundamental cause: LangChain's default path is
-    `with_structured_output(method="function_calling")`, which fights
-    each provider's function-calling schema validator. Groq + Gemini
-    reject `anyOf` arms without `required`; NIM-hosted weaker models
-    accept the schema but interpret the function-call wrapper as
-    "respond with empty arrays".
-
-    The maintainer-mentioned workaround (LangChain issues #26624,
-    #27100): `ignore_tool_usage=True` switches to a plain-text
-    prompt + `json_repair.loads()` parsing path. Works on any model
-    that emits JSON in response to a prompt.
-
-    Trade-offs:
-      - Requires `json-repair` dep (added to pyproject.toml)
-      - Drops `node_properties=True` / `relationship_properties=True`
-        (incompatible with the unstructured path; we don't read those
-        downstream anyway — graph_builder + resolver only use
-        node.id + node.type + relationship.type)
-      - Keeps `additional_instructions` (our prompts.EXTRACTION_INSTRUCTIONS)
-        — the unstructured prompt still honors it via the system
-        message append.
-
-    With this change the YCS Neo4j bandit can fairly explore the full
-    SYNTH_GROUP pool — `_YCS_NEO4J_ARM_BLOCKLIST` is no longer needed
-    (kept as an empty frozenset for env-override emergencies)."""
-    return LLMGraphTransformer(
-        llm = llm,
-        # `ignore_tool_usage=True` — switches to the unstructured
-        # plain-text-prompt path. See docstring above for rationale.
-        ignore_tool_usage = True,
-        strict_mode = False,
-        additional_instructions = prompts.EXTRACTION_INSTRUCTIONS,
-    )
-
 
 async def _acquire_extract_slot(
     redis: Any, key: str, limit: int, lease_s: float, poll_s: float = 0.5,
@@ -213,10 +158,10 @@ async def extract_and_store_graph(
     that come back in `failed_video_ids`, not the whole batch.
 
     Returns counters dict suitable for the API response envelope."""
-    # One DeepAgent + LangGraph graph per Celery task. Their state is
-    # transient and per-transcript; the surrounding streaming pool,
-    # retry loop, and Neo4j writes remain the existing run shell.
-    graph_extractor = domains.ycs.ingestion.ai.service.build_graph_extractor(
+    # One reusable LangChain transformer runtime per Celery task. The
+    # surrounding streaming pool, retry loop, and Neo4j writes remain
+    # the existing run shell.
+    graph_transformer = domains.ycs.ingestion.ai.service.build_graph_transformer(
         llm, run_id = extract_id,
     )
     concurrency = (
@@ -405,7 +350,7 @@ async def extract_and_store_graph(
             ):
                 graph_document = await asyncio.wait_for(
                     domains.ycs.ingestion.ai.service.extract_graph_document(
-                        graph_extractor, doc,
+                        graph_transformer, doc,
                     ),
                     timeout = params.GRAPH_BATCH_TIMEOUT_S,
                 )

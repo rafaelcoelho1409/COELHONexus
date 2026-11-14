@@ -1,4 +1,4 @@
-"""Compose YCS DeepAgents and LangGraph with the existing ingestion domain."""
+"""Run LangChain graph extraction and validate transcript grounding."""
 from __future__ import annotations
 
 import ai
@@ -10,66 +10,212 @@ import logging
 import threading
 from typing import Any
 
-from langchain_community.graphs.graph_document import GraphDocument, Node, Relationship
 from langchain_core.documents import Document
+from langchain_neo4j import LLMGraphTransformer
+from langchain_neo4j.graphs.graph_document import GraphDocument, Node, Relationship
 
 
 logger = logging.getLogger(__name__)
 
 
-def build_graph_extractor(model: Any, *, run_id: str | None = None) -> entities.GraphExtractor:
-    """Build one DeepAgent and one reusable transcript-extraction graph per Neo4j task."""
-    return entities.GraphExtractor(
-        graph = ai.ycs.graphs.ingestion.graph_extraction.graphs.graph_extraction_graph(),
-        agent = ai.ycs.agents.ingestion.graph_extractor.agent.graph_extractor(model),
-        run_id = run_id,
+def build_graph_transformer(
+    model: Any,
+    *,
+    run_id: str | None = None,
+) -> entities.GraphTransformerRuntime:
+    """Create a per-task runtime for transcript graph transformation."""
+    if run_id:
+        model = model.with_config(config = {
+            "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
+        })
+    return entities.GraphTransformerRuntime(model = model, run_id = run_id)
+
+
+def _transformer(
+    runtime: entities.GraphTransformerRuntime,
+    *,
+    additional_instructions: str = "",
+    unstructured: bool = False,
+) -> LLMGraphTransformer:
+    from domains.ycs.ingestion.graph_builder import prompts
+
+    instructions = prompts.EXTRACTION_INSTRUCTIONS
+    if additional_instructions:
+        instructions = f"{instructions}\n\n{additional_instructions}"
+    options: dict[str, Any] = {
+        "llm": runtime.model,
+        "strict_mode": False,
+        "additional_instructions": instructions,
+    }
+    if unstructured:
+        # Some configured providers reject LangChain's nested structured
+        # graph schema or return an empty graph for it. This path omits
+        # property schemas; the caller applies conservative text checks.
+        options["ignore_tool_usage"] = True
+    else:
+        options["node_properties"] = ["evidence"]
+        options["relationship_properties"] = ["evidence"]
+    return LLMGraphTransformer(**options)
+
+
+def _validated_graph_document(
+    candidate: GraphDocument,
+    source: Document,
+    *,
+    require_evidence: bool,
+) -> tuple[GraphDocument, list[str]]:
+    """Validate candidates in the domain and adapt accepted facts to LangChain."""
+    from domains.ycs.ingestion.graph_builder import domain
+
+    nodes, relations, issues = domain.validate_graph_candidates(
+        candidate,
+        source.page_content or "",
+        require_evidence = require_evidence,
     )
+    nodes_by_id = {
+        item["id"].casefold(): Node(id = item["id"], type = item["type"])
+        for item in nodes
+    }
+    accepted_relationships = [
+        Relationship(
+            source = nodes_by_id[relation["source_id"].casefold()],
+            target = nodes_by_id[relation["target_id"].casefold()],
+            type = relation["type"],
+        )
+        for relation in relations
+    ]
+    return GraphDocument(
+        nodes = list(nodes_by_id.values()),
+        relationships = accepted_relationships,
+        source = source,
+    ), issues
+
+
+def _is_structured_schema_error(error: Exception) -> bool:
+    message = f"{type(error).__name__}: {error}".casefold()
+    return any(marker in message for marker in (
+        "dynamicgraph",
+        "anyof",
+        "json schema",
+        "structured output",
+        "invalid schema",
+        "schema validation",
+        "function_calling",
+        "function calling",
+        "tool call schema",
+    ))
+
+
+async def _process(
+    runtime: entities.GraphTransformerRuntime,
+    document: Document,
+    *,
+    additional_instructions: str = "",
+) -> tuple[GraphDocument, bool]:
+    """Return a candidate and whether provider compatibility fallback ran."""
+    try:
+        transformer = _transformer(
+            runtime,
+            additional_instructions = additional_instructions,
+        )
+        result = await transformer.aprocess_response(document)
+        return result, False
+    except Exception as error:
+        if not _is_structured_schema_error(error):
+            raise
+        logger.warning(
+            "[ycs:neo4j] provider rejected structured graph output; "
+            "retrying with the compatibility parser (%s)",
+            type(error).__name__,
+        )
+    transformer = _transformer(
+        runtime,
+        additional_instructions = additional_instructions,
+        unstructured = True,
+    )
+    return await transformer.aprocess_response(document), True
 
 
 async def extract_graph_document(
-    extractor: entities.GraphExtractor,
+    runtime: entities.GraphTransformerRuntime,
     document: Document,
 ) -> GraphDocument:
-    """Run the evidence-checked graph and adapt accepted candidates to LangChain graph objects."""
-    metadata = document.metadata if isinstance(document.metadata, dict) else {}
-    state = await extractor.graph.ainvoke(
-        {
-            "transcript": document.page_content or "",
-            "metadata": {
-                key: str(metadata.get(key) or "")
-                for key in ("video_id", "title", "channel")
-            },
-        },
-        context = ai.ycs.graphs.ingestion.graph_extraction.entities.GraphExtractionContext(
-            agent = extractor.agent,
-            run_id = extractor.run_id,
-        ),
+    """Transform one transcript, validate facts, and preserve its source tag."""
+    candidate, compatibility_fallback = await _process(runtime, document)
+    if not compatibility_fallback and not (candidate.nodes or candidate.relationships):
+        # Known provider behavior: some endpoints accept the structured
+        # request but silently emit an empty graph. Try the compatibility
+        # mode once; the caller still rejects an empty result as a failure.
+        candidate = await _transformer(runtime, unstructured = True).aprocess_response(document)
+        compatibility_fallback = True
+        logger.warning("[ycs:neo4j] structured graph output was empty; used compatibility parser")
+
+    accepted, issues = _validated_graph_document(
+        candidate,
+        document,
+        require_evidence = not compatibility_fallback,
     )
-    accepted = ai.ycs.agents.schemas.GraphExtraction.model_validate(
-        state.get("accepted_extraction", {}),
-    )
-    nodes_by_id: dict[str, Node] = {}
-    for entity in accepted.entities:
-        nodes_by_id.setdefault(
-            entity.entity_id.casefold(),
-            Node(id = entity.entity_id, type = entity.entity_type),
+    if issues and not compatibility_fallback:
+        feedback = (
+            f"{len(issues)} candidate(s) were rejected because they lacked "
+            "exact source evidence, referenced missing endpoints, had "
+            "conflicting types, or exceeded extraction limits."
         )
-    relationships: list[Relationship] = []
-    for relation in accepted.relationships:
-        source = nodes_by_id.get(relation.source_id.casefold())
-        target = nodes_by_id.get(relation.target_id.casefold())
-        if source is None or target is None:
-            continue
-        relationships.append(Relationship(
-            source = source,
-            target = target,
-            type = relation.relationship_type,
-        ))
-    return GraphDocument(
-        nodes = list(nodes_by_id.values()),
-        relationships = relationships,
-        source = document,
-    )
+        retry_candidate, retry_fallback = await _process(
+            runtime,
+            document,
+            additional_instructions = (
+                "Correct the prior unsupported candidates using only exact "
+                "transcript evidence. Every node and relationship must have "
+                "an evidence property copied verbatim from the transcript. "
+                "Validation feedback:\n" + feedback
+            ),
+        )
+        retried, retry_issues = _validated_graph_document(
+            retry_candidate,
+            document,
+            require_evidence = not retry_fallback,
+        )
+        if (
+            len(retried.nodes) + len(retried.relationships)
+            > len(accepted.nodes) + len(accepted.relationships)
+        ):
+            accepted = retried
+        if retry_issues:
+            logger.info(
+                "[ycs:neo4j] transformer retained %d unsupported candidate(s) after evidence retry",
+                len(retry_issues),
+            )
+        if (
+            not retry_fallback
+            and not retried.nodes
+            and not retried.relationships
+            and (retry_candidate.nodes or retry_candidate.relationships)
+        ):
+            # A provider may accept the structured schema yet omit its
+            # evidence properties. Keep a conservative recovery path for
+            # that case; its weaker grounding checks are isolated here.
+            fallback_candidate = await _transformer(
+                runtime,
+                additional_instructions = (
+                    "Return only transcript-supported entities and direct "
+                    "relationships. Omit facts whose named endpoints do not "
+                    "appear together in one sentence."
+                ),
+                unstructured = True,
+            ).aprocess_response(document)
+            fallback_graph, _ = _validated_graph_document(
+                fallback_candidate,
+                document,
+                require_evidence = False,
+            )
+            if fallback_graph.nodes or fallback_graph.relationships:
+                accepted = fallback_graph
+                logger.warning(
+                    "[ycs:neo4j] evidence validation yielded no facts; "
+                    "accepted locally grounded compatibility output",
+                )
+    return accepted
 
 
 class _IngestionProgressReporter:
@@ -152,7 +298,7 @@ class _IngestionProgressReporter:
         for phase in ("qdrant", "neo4j"):
             for video_id in self.dispatched_ids:
                 try:
-                    await ai.ycs.nodes.ingestion.support.mark_failed_if_unreported(
+                    await domains.ycs.ingestion.pipeline_task.service.mark_failed_if_unreported(
                         redis,
                         extract_id,
                         phase,

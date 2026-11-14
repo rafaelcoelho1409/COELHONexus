@@ -1,6 +1,6 @@
 "use client";
 
-/** Fixed, read-only workflow graph. Both store nodes share Elasticsearch as their parent in the target flow. */
+/** Fixed, read-only workflow graph. Both store nodes branch from Elasticsearch. */
 
 import "@xyflow/react/dist/style.css";
 import "./ingestion-agentic-flow.css";
@@ -8,18 +8,18 @@ import "./ingestion-agentic-flow.css";
 import { type Edge, Handle, MarkerType, type Node, type NodeProps, Position, ReactFlow } from "@xyflow/react";
 
 import { STATUS_WORD_LABEL, type StatusWord, statusWord } from "../domain";
-import { IngestionStatusGlyph } from "./ingestion-status-glyph";
 import { type Step, StepProgress } from "./pipeline-steps";
+import { StatusBadge } from "./status-badge";
 
-const NODE_WIDTH = 154;
-const NODE_HEIGHT = 80;
-const FLOW_WIDTH = 348;
-const FLOW_HEIGHT = 370;
+const NODE_WIDTH = 168;
+const NODE_HEIGHT = 96;
+const FLOW_WIDTH = 368;
+const FLOW_HEIGHT = 388;
 const POSITIONS: Record<string, { x: number; y: number }> = {
-  playwright: { x: 97, y: 12 },
-  elasticsearch: { x: 97, y: 122 },
-  qdrant: { x: 10, y: 256 },
-  neo4j: { x: 184, y: 256 },
+  playwright: { x: 100, y: 8 },
+  elasticsearch: { x: 100, y: 132 },
+  qdrant: { x: 8, y: 260 },
+  neo4j: { x: 192, y: 260 },
 };
 
 type IngestionFlowNodeData = {
@@ -42,7 +42,7 @@ function IngestionNodeCard({ data }: NodeProps<IngestionFlowNode>) {
         aria-haspopup="dialog"
         data-status={data.status}
         style={{ width: NODE_WIDTH, height: NODE_HEIGHT, pointerEvents: "auto" }}
-        className={`nodrag nopan flex flex-col justify-center overflow-hidden rounded-md border bg-card px-3 py-2.5 text-left transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ${
+        className={`nodrag nopan flex flex-col justify-between overflow-hidden rounded-md border bg-card px-3 py-2 text-left transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ${
           data.status === "running"
             ? "border-running"
             : data.status === "failed"
@@ -54,13 +54,15 @@ function IngestionNodeCard({ data }: NodeProps<IngestionFlowNode>) {
       >
         <span className="flex min-w-0 items-center justify-between gap-1.5">
           <span className="flex min-w-0 items-center gap-1.5">
-            <IngestionStatusGlyph status={data.status} />
-            <span className="min-w-0 truncate text-sm">{data.label}</span>
-            <span className="sr-only">— {status}</span>
+            <span className="min-w-0 truncate text-sm font-medium">{data.label}</span>
           </span>
+          <StatusBadge tone={data.status} label={status} className="shrink-0" />
+        </span>
+        <span className="block truncate font-mono text-xs text-muted-foreground">{data.step.key}</span>
+        <span title={data.detail} className="block truncate font-mono text-xs text-muted-foreground">
+          {data.detail}
         </span>
         <StepProgress step={data.step} />
-        <span className="mt-1 block truncate font-mono text-xs text-muted-foreground">{data.detail}</span>
       </button>
       <Handle type="source" position={Position.Bottom} isConnectable={false} />
     </>
@@ -84,7 +86,7 @@ export function IngestionAgenticFlow({
     return {
       id: key,
       type: "ingestion",
-      position: POSITIONS[key] ?? { x: 97, y: 12 },
+      position: POSITIONS[key] ?? { x: 100, y: 8 },
       width: NODE_WIDTH,
       height: NODE_HEIGHT,
       data: {
@@ -124,7 +126,7 @@ export function IngestionAgenticFlow({
       className="ycs-ingestion-flow mx-auto max-w-full"
       style={{ width: FLOW_WIDTH, height: FLOW_HEIGHT }}
       data-testid="ycs-ingestion-flow"
-      aria-label="Playwright transcript retrieval, Elasticsearch indexing, Qdrant vector writes, and Neo4j graph writes"
+      aria-label="Playwright transcript retrieval followed by Elasticsearch indexing, then Qdrant and Neo4j writes"
     >
       <ReactFlow
         nodes={nodes}

@@ -45,7 +45,7 @@ export function PageList({
   following: boolean;
   /** A run is in flight, so there is something to follow. */
   live: boolean;
-  /** Whether the page needs review, has an unverified audit, is blank, or contains only an image. */
+  /** Whether a page has unresolved findings, an unverified audit, is blank, or contains only an image. */
   flags: ReadonlyMap<number, PageFlag>;
   /** Current reviewed Distill input selection. The source archive remains complete. */
   selection: ContentSelection | null;
@@ -136,7 +136,7 @@ export function PageList({
             checked={onlyReview}
             onChange={(event) => setOnlyReview(event.target.checked)}
           />
-          Only {units.plural} that need review · {reviewCount}
+          Only {units.plural} with findings · {reviewCount}
         </label>
       ) : null}
       {query.trim() || (onlyReview && reviewCount > 0) || showExcluded ? (

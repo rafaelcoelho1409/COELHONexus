@@ -8,4 +8,6 @@ streaming-coordination live together there — see `docs/CODE-CONVENTIONS.md`
 `import infra.celery.service` (use `infra.celery.service.app`) at module level); reach it via a direct
 `from domains.ycs.ingestion.pipeline_task.task import full_channel_pipeline`."""
 from __future__ import annotations
-from . import keys, params, service
+from . import domain, keys, params, service
+
+__all__ = ["domain", "keys", "params", "service"]

@@ -1,4 +1,4 @@
-"""Load the graph extractor's system instructions."""
+"""Prompt text for source-image verification of proposed text patches."""
 from pathlib import Path
 
 

@@ -5,6 +5,7 @@ from . import domain
 from .... import agents, graphs, skills
 
 import asyncio
+import base64
 import hashlib
 import inspect
 import json
@@ -23,6 +24,14 @@ class Specialist(Protocol):
         config: dict[str, Any] | None = None,
         *,
         context: domains.bd.ingestion.ai.entities.SpecialistContext | None = None,
+    ) -> dict[str, Any]: ...
+
+
+class PatchVerifier(Protocol):
+    async def ainvoke(
+        self,
+        input: dict[str, Any],
+        config: dict[str, Any] | None = None,
     ) -> dict[str, Any]: ...
 
 
@@ -76,16 +85,126 @@ class BookIndex:
         return "\n\n".join(parts)
 
 
+async def verify_source_patches(
+    proposals: list[agents.schemas.PatchProposal],
+    *,
+    markdown: str,
+    page_number: int,
+    run_id: str,
+    verifier: PatchVerifier | None,
+    read_source_page_image: graphs.ingestion.entities.SourcePageImageReader | None,
+) -> tuple[set[str], list[dict[str, object]], list[str], int]:
+    """Confirm eligible corrections against the original page image; any doubt leaves text unchanged."""
+    candidates = domain.source_verification_candidates(markdown, proposals)
+    if not candidates:
+        return set(), [], [], 0
+
+    def unavailable(reason: str) -> tuple[set[str], list[dict[str, object]], list[str], int]:
+        return set(), [{
+            "issue_id": proposal.issue_id,
+            "status": "unavailable",
+            "reason": reason,
+        } for proposal in candidates], [
+            f"{len(candidates)} text patch candidate(s) were left unchanged because source-page verification was unavailable.",
+        ], len(candidates)
+
+    if verifier is None or read_source_page_image is None:
+        return unavailable("visual verifier or source-page renderer is unavailable")
+
+    try:
+        image_result = read_source_page_image(page_number)
+        if inspect.isawaitable(image_result):
+            image_result = await image_result
+    except Exception as error:
+        return unavailable(f"original page image could not be read ({type(error).__name__})")
+    if not isinstance(image_result, bytes) or not image_result:
+        return unavailable("original page image could not be rendered")
+
+    image_sha256 = hashlib.sha256(image_result).hexdigest()
+    payload = {
+        "page_number": page_number,
+        "source_sha256": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+        "patches": [{
+            "issue_id": proposal.issue_id,
+            "issue_code": proposal.issue_code.value,
+            "target_text": proposal.target_text,
+            "context_before": proposal.context_before,
+            "context_after": proposal.context_after,
+            "proposed_replacement": proposal.replacement,
+            "rationale": proposal.rationale,
+        } for proposal in candidates],
+    }
+    image_url = "data:image/jpeg;base64," + base64.b64encode(image_result).decode("ascii")
+    try:
+        with domains.settings.llm_counter.service.llm_context(
+            ns = "bd", run_id = run_id, node_id = "text_patch_verifier",
+        ):
+            response = await verifier.ainvoke({"messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": json.dumps(payload, ensure_ascii = False)},
+                    {"type": "image_url", "image_url": {"url": image_url, "detail": "high"}},
+                ],
+            }]}, config = {
+                "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
+            })
+        structured = response.get("structured_response") if isinstance(response, dict) else None
+        batch = agents.schemas.PatchVerificationBatch.model_validate(structured)
+        checks = {check.issue_id: check for check in batch.verifications}
+        expected_ids = {proposal.issue_id for proposal in candidates}
+        if len(checks) != len(batch.verifications) or set(checks) != expected_ids:
+            return unavailable("visual verifier returned an incomplete or mismatched result")
+    except Exception as error:
+        return unavailable(f"visual verifier failed ({type(error).__name__})")
+
+    verified_issue_ids = set()
+    results = []
+    for proposal in candidates:
+        check = checks[proposal.issue_id]
+        confirmed = (
+            check.verdict == agents.schemas.PatchVerificationVerdict.CONFIRMED
+            and check.source_reading == proposal.replacement
+        )
+        if confirmed:
+            verified_issue_ids.add(proposal.issue_id)
+            status = "confirmed"
+        elif check.verdict == agents.schemas.PatchVerificationVerdict.CONTRADICTED:
+            status = "source_mismatch"
+        elif check.verdict == agents.schemas.PatchVerificationVerdict.CONFIRMED:
+            status = "reading_mismatch"
+        else:
+            status = "uncertain"
+        results.append({
+            "issue_id": proposal.issue_id,
+            "status": status,
+            "source_reading": check.source_reading,
+            "reason": check.reason,
+            "source_image_sha256": image_sha256,
+        })
+
+    not_confirmed = len(candidates) - len(verified_issue_ids)
+    warnings = [
+        f"{not_confirmed} text patch candidate(s) were left unchanged because the source image did not confirm them."
+    ] if not_confirmed else []
+    return verified_issue_ids, results, warnings, 0
+
+
 async def repair_pages(
     state: graphs.ingestion.states.IngestionRunState,
     read_page: PageReader,
     write_artifact: ArtifactWriter,
     specialists: dict[str, Specialist],
     progress_callback = None,
+    patch_verifier: PatchVerifier | None = None,
+    read_source_page_image: graphs.ingestion.entities.SourcePageImageReader | None = None,
 ) -> dict:
     """Run bounded specialists, apply only unambiguous low-risk proposals, and persist every page."""
     page_refs = state["page_refs"]
     audits = {page["page"]: page for page in state["page_audits"]}
+    selection = state.get("content_selection")
+    if not isinstance(selection, list) or len(selection) != state.get("expected_page_count"):
+        raise ValueError("page repair requires a complete early content selection")
+    selection_by_page = {page["page_number"]: page for page in selection}
     work_by_page: dict[int, list[dict[str, object]]] = {}
     for item in state.get("work_items", []):
         work_by_page.setdefault(item["page"], []).append(item)
@@ -128,10 +247,12 @@ async def repair_pages(
         node_id = "structure_repair" if role == "structure" else "text_repair"
         skill_role = "structure_repair" if role == "structure" else role
         specialist_context = domains.bd.ingestion.ai.entities.SpecialistContext(
-            check_patch = lambda issue_id, target_text, replacement: domain.check_draft(
+            check_patch = lambda issue_id, risk, target_text, replacement, confidence: domain.check_draft(
                 issue_id = issue_id,
+                risk = agents.schemas.PatchRisk(risk),
                 target_text = target_text,
                 replacement = replacement,
+                confidence = confidence,
                 markdown = markdown,
                 page_number = page_number,
                 source_sha256 = source_sha256,
@@ -189,18 +310,23 @@ async def repair_pages(
             source_sha256 = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
             if source_sha256 != page_ref["source_sha256"]:
                 raise ValueError(f"source page {page_number} changed after its quality audit")
+            selected = selection_by_page.get(page_number)
+            if selected is None:
+                raise ValueError(f"source page {page_number} has no early content-selection result")
+            repair_skipped = selected.get("disposition") == "exclude"
             oversized = (
                 domains.bd.ingestion.ai.inventory.domain.effective_length(markdown)
                 > domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS
-            )
+            ) and not repair_skipped
 
             issue_list = agents.schemas.PageAssessment.model_validate(
                 audits[page_number]["assessment"],
             ).issues
             issues = {issue.issue_id: issue for issue in issue_list}
-            _, _, mechanically_resolved_before_repair = domain.apply_mechanical_fixes_for_issues(
-                markdown,
-                issue_list,
+            _, _, mechanically_resolved_before_repair = (
+                (markdown, {}, [])
+                if repair_skipped
+                else domain.apply_mechanical_fixes_for_issues(markdown, issue_list)
             )
             mechanically_resolved = set(mechanically_resolved_before_repair)
             assigned_items = []
@@ -211,30 +337,49 @@ async def repair_pages(
                 ]
                 if remaining_refs:
                     assigned_items.append({**item, "issue_refs": remaining_refs})
-            responses = [] if oversized else await asyncio.gather(*(
+            responses = [] if oversized or repair_skipped else await asyncio.gather(*(
                 run_specialist(item, markdown, page_number, source_sha256, issues)
                 for item in assigned_items
             ))
             proposals = [proposal for batch, _, _, _ in responses for proposal in batch]
             audit_warnings = list(audits[page_number].get("warnings", []))
             errors = [error for _, error, _, _ in responses if error]
+            source_verified_ids, source_verification_results, source_verification_warnings, source_verification_unavailable_count = (
+                await verify_source_patches(
+                    proposals,
+                    markdown = markdown,
+                    page_number = page_number,
+                    run_id = state["agentic_run_id"],
+                    verifier = patch_verifier,
+                    read_source_page_image = read_source_page_image,
+                )
+            )
+            audit_warnings.extend(source_verification_warnings)
             if oversized:
                 errors.append(
                     f"Page exceeds the {domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS}-character "
-                    "repair limit; the original Markdown was preserved for manual review."
+                    "repair limit; the original Markdown was preserved and the run continued."
                 )
-            try:
-                normalized, auto_applied, proposal_reviews = domain.apply_proposals(markdown, proposals)
-            except ValueError as error:
-                normalized = markdown
-                auto_applied = []
-                proposal_reviews = [proposal.issue_id for proposal in proposals]
-                errors.append(str(error))
+            if repair_skipped:
+                normalized, auto_applied, proposal_reviews = markdown, [], []
+            else:
+                try:
+                    normalized, auto_applied, proposal_reviews = domain.apply_proposals(
+                        markdown,
+                        proposals,
+                        source_verified_issue_ids = source_verified_ids,
+                    )
+                except ValueError as error:
+                    normalized = markdown
+                    auto_applied = []
+                    proposal_reviews = [proposal.issue_id for proposal in proposals]
+                    errors.append(str(error))
 
             # Mechanical normalization follows model patches, so specialist anchors always refer to the source page.
-            normalized, mechanical_counts, mechanical_ids = domain.apply_mechanical_fixes_for_issues(
-                normalized,
-                issue_list,
+            normalized, mechanical_counts, mechanical_ids = (
+                (normalized, {}, [])
+                if repair_skipped
+                else domain.apply_mechanical_fixes_for_issues(normalized, issue_list)
             )
             auto_applied = auto_applied + sorted(mechanical_ids)
 
@@ -246,7 +391,7 @@ async def repair_pages(
             }
             unresolved = (assigned_ids - represented) | set(proposal_reviews)
             unsupported = set(issues) - assigned_ids - set(mechanical_ids)
-            review_ids = sorted(unresolved | unsupported)
+            review_ids = [] if repair_skipped else sorted(unresolved | unsupported)
             normalized_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
             assessment_content = json.dumps(
                 audits[page_number]["assessment"], ensure_ascii = False,
@@ -261,6 +406,10 @@ async def repair_pages(
                 "mechanical_fixes": mechanical_counts,
                 "audit_warnings": audit_warnings,
                 "errors": errors,
+                "source_verification_results": source_verification_results,
+                "repair_skipped_reason": (
+                    "page excluded by the pre-repair content selection" if repair_skipped else ""
+                ),
             }
             proposal_content = json.dumps(
                 proposal_payload, ensure_ascii = False, separators = (",", ":"), sort_keys = True,
@@ -294,6 +443,17 @@ async def repair_pages(
                 "audit_warnings": audit_warnings,
                 "status": "review_required" if review_ids or errors else "done",
                 "error": "; ".join(errors) if errors else "",
+                "content_role": selected["role"],
+                "content_confidence": selected["confidence"],
+                "content_rationale": selected["rationale"],
+                "content_disposition": selected["disposition"],
+                "content_decision_source": selected["decision_source"],
+                "repair_skipped_reason": (
+                    "page excluded by the pre-repair content selection" if repair_skipped else ""
+                ),
+                "source_verified_issue_ids": sorted(source_verified_ids),
+                "source_verification_results": source_verification_results,
+                "source_verification_unavailable_count": source_verification_unavailable_count,
             }
             await graphs.service.report(progress_callback, kind = "page_repair", page = page_number, status = "done")
             return result

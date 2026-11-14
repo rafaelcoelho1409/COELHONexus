@@ -92,6 +92,8 @@ const patchSuggestionSchema = z.object({
   rationale: z.string().catch(""),
   confidence: z.number().catch(0),
   risk: z.string().catch(""),
+  verification_status: z.string().nullable().catch(null),
+  verification_reason: z.string().nullable().catch(null),
 });
 
 const pageIssueSchema = z.object({

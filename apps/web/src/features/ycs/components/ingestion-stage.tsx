@@ -97,7 +97,6 @@ export function IngestionStage(): JSX.Element {
                 },
               }}
               onOpenUsage={() => setUsageOpen(true)}
-              caption="Target flow: Playwright transcript retrieval → Elasticsearch → Qdrant and Neo4j."
             />
             {usageOpen ? (
               <PipelineUsageSheet

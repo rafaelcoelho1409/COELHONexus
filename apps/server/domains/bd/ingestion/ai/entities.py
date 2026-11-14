@@ -12,8 +12,8 @@ class SpecialistContext:
     The tools only call what it holds: the patch check is the same one the final gate runs, and the book lookups read
     the whole book's source pages."""
 
-    # (issue_id, target_text, replacement) -> what the application would do with that patch.
-    check_patch: Callable[[str, str, str], str]
+    # (issue_id, risk, target_text, replacement, confidence) -> what the application would do with that patch.
+    check_patch: Callable[[str, str, str, str, float], str]
     # (variants) -> how often each spelling occurs in the whole book.
     term_counts: Callable[[list[str]], Awaitable[str]]
     # (page_number, lines) -> the last lines of the previous page and the first lines of the next.

@@ -210,6 +210,8 @@ class PatchSuggestion(BaseModel):
     rationale: str
     confidence: float
     risk: str
+    verification_status: str | None = None
+    verification_reason: str | None = None
 
 
 class PageIssueView(BaseModel):

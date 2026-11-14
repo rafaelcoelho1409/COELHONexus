@@ -10,6 +10,7 @@ from __future__ import annotations
 from . import params, patterns
 
 import math
+import re
 import unicodedata
 from typing import Any, Sequence
 
@@ -202,3 +203,139 @@ def is_overflow_error(err: str | None) -> bool:
         or "too many tokens" in m or "max_tokens" in m
         or "context_length" in m or "contextwindow" in m
     )
+
+
+def _graph_value(candidate: Any, name: str, default: Any = None) -> Any:
+    return candidate.get(name, default) if isinstance(candidate, dict) else getattr(candidate, name, default)
+
+
+def _normalized_excerpt(value: Any) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _contains_normalized_entity(entity_key: str, text_key: str) -> bool:
+    return bool(
+        entity_key
+        and re.search(rf"(?<!\w){re.escape(entity_key)}(?!\w)", text_key)
+    )
+
+
+def _fallback_relation_is_local(source_id: str, target_id: str, transcript: str) -> bool:
+    source_key = normalize_entity_id(source_id)
+    target_key = normalize_entity_id(target_id)
+    if not source_key or not target_key:
+        return False
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", transcript):
+        sentence_key = normalize_entity_id(sentence)
+        if (
+            _contains_normalized_entity(source_key, sentence_key)
+            and _contains_normalized_entity(target_key, sentence_key)
+        ):
+            return True
+    return False
+
+
+def validate_graph_candidates(
+    candidate: Any,
+    transcript: str,
+    *,
+    require_evidence: bool,
+) -> tuple[list[dict[str, str]], list[dict[str, str]], list[str]]:
+    """Return bounded graph facts grounded in a transcript.
+
+    Structured transformer output must include exact evidence properties.
+    The provider compatibility path has no property schema, so it instead
+    requires each entity name to occur in the transcript and both relation
+    endpoints to occur in one sentence. Graph library objects stay outside
+    this functional core; the return values are plain fact dictionaries.
+    """
+    transcript_key = _normalized_excerpt(transcript)
+    nodes_by_id: dict[str, dict[str, str]] = {}
+    issues: list[str] = []
+    for node in _graph_value(candidate, "nodes", []) or []:
+        entity_id = coerce_entity_id(_graph_value(node, "id")).strip()
+        entity_type = sanitize_neo4j_label(_graph_value(node, "type"))
+        properties = _graph_value(node, "properties", {})
+        properties = properties if isinstance(properties, dict) else {}
+        evidence_value = properties.get("evidence")
+        if isinstance(evidence_value, (list, tuple)):
+            evidence = " ".join(str(item) for item in evidence_value if item is not None).strip()
+        else:
+            evidence = str(evidence_value or "").strip()
+        if require_evidence:
+            grounded = bool(evidence) and _normalized_excerpt(evidence) in transcript_key
+        else:
+            entity_key = normalize_entity_id(entity_id)
+            grounded = _contains_normalized_entity(entity_key, normalize_entity_id(transcript))
+        if (
+            not entity_id
+            or len(entity_id) > 300
+            or len(entity_type) > 100
+            or len(evidence) > 800
+            or not grounded
+        ):
+            issues.append(f"Entity {entity_id!r} has no supported transcript evidence.")
+            continue
+        key = entity_id.casefold()
+        existing = nodes_by_id.get(key)
+        if existing:
+            if existing["type"].casefold() != entity_type.casefold():
+                issues.append(
+                    f"Entity {entity_id!r} was assigned conflicting types "
+                    f"{existing['type']!r} and {entity_type!r}."
+                )
+            continue
+        if len(nodes_by_id) >= params.MAX_EXTRACTED_NODES:
+            issues.append("The extraction exceeded the node limit.")
+            continue
+        nodes_by_id[key] = {"id": entity_id, "type": entity_type}
+
+    accepted_relationships: list[dict[str, str]] = []
+    seen_relationships: set[tuple[str, str, str]] = set()
+    for relation in _graph_value(candidate, "relationships", []) or []:
+        source = _graph_value(relation, "source")
+        target = _graph_value(relation, "target")
+        source_id = coerce_entity_id(_graph_value(source, "id")).strip()
+        target_id = coerce_entity_id(_graph_value(target, "id")).strip()
+        relation_type = sanitize_neo4j_label(
+            _graph_value(relation, "type"), fallback = "RELATED_TO",
+        )
+        properties = _graph_value(relation, "properties", {})
+        properties = properties if isinstance(properties, dict) else {}
+        evidence_value = properties.get("evidence")
+        if isinstance(evidence_value, (list, tuple)):
+            evidence = " ".join(str(item) for item in evidence_value if item is not None).strip()
+        else:
+            evidence = str(evidence_value or "").strip()
+        source_node = nodes_by_id.get(source_id.casefold())
+        target_node = nodes_by_id.get(target_id.casefold())
+        if require_evidence:
+            grounded = bool(evidence) and _normalized_excerpt(evidence) in transcript_key
+        else:
+            grounded = _fallback_relation_is_local(source_id, target_id, transcript)
+        if (
+            not source_node
+            or not target_node
+            or len(source_id) > 300
+            or len(target_id) > 300
+            or len(relation_type) > 100
+            or len(evidence) > 800
+            or not grounded
+        ):
+            issues.append(
+                f"Relationship {source_id!r} -> {target_id!r} has unsupported evidence or endpoints."
+            )
+            continue
+        key = (source_id.casefold(), relation_type.casefold(), target_id.casefold())
+        if key in seen_relationships:
+            continue
+        if len(accepted_relationships) >= params.MAX_EXTRACTED_RELATIONSHIPS:
+            issues.append("The extraction exceeded the relationship limit.")
+            continue
+        seen_relationships.add(key)
+        accepted_relationships.append({
+            "source_id": source_node["id"],
+            "target_id": target_node["id"],
+            "type": relation_type,
+        })
+    return list(nodes_by_id.values()), accepted_relationships, issues

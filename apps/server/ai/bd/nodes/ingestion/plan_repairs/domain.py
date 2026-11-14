@@ -20,9 +20,18 @@ def plan_repairs(state: graphs.ingestion.states.IngestionRunState) -> dict:
     assessments = state.get("page_audits")
     if not isinstance(assessments, list) or len(assessments) != state.get("expected_page_count"):
         raise ValueError("repair planning requires a complete page audit")
+    selection = state.get("content_selection")
+    if not isinstance(selection, list) or len(selection) != state.get("expected_page_count"):
+        raise ValueError("repair planning requires a complete early content selection")
+    excluded_pages = {
+        page["page_number"] for page in selection
+        if isinstance(page, dict) and page.get("disposition") == "exclude"
+    }
 
     work_items = []
     for page in assessments:
+        if page["page"] in excluded_pages:
+            continue
         assessment = agents.schemas.PageAssessment.model_validate(page["assessment"])
         for role, issue_codes in (
             (agents.schemas.SpecialistRole.TEXT_REPAIR, TEXT_ISSUES),

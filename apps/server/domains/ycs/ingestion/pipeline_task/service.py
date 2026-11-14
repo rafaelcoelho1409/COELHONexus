@@ -524,6 +524,47 @@ async def mark_video_or_partition_done(
     )
 
 
+async def mark_failed_if_unreported(
+    redis: infra.redis.service.Redis,
+    extract_id: str,
+    phase: str,
+    video_id: str,
+    error: str,
+    part_total: int | None = None,
+) -> None:
+    """Record a failed store outcome only if no video or partition outcome exists."""
+    parent_video_id = domains.ycs.ingestion.domain.parent_video_id(video_id)
+    if parent_video_id == video_id:
+        existing = await redis.hget(
+            keys.phase_status_key(extract_id, phase),
+            parent_video_id,
+        )
+    else:
+        existing = await redis.hget(
+            keys.partition_group_key(extract_id, phase, parent_video_id),
+            video_id,
+        )
+        parent_status = await redis.hget(
+            keys.phase_status_key(extract_id, phase),
+            parent_video_id,
+        )
+        if parent_status:
+            return
+    if existing:
+        return
+    await mark_video_or_partition_done(
+        redis,
+        extract_id,
+        phase,
+        video_id,
+        success = False,
+        extra = {"error": error},
+        parent_video_id = parent_video_id,
+        part_total = part_total,
+    )
+    await maybe_finalize(redis, extract_id)
+
+
 async def update_video_extra(
     redis: infra.redis.service.Redis, extract_id: str, phase: str, video_id: str, extra: dict[str, Any],
 ) -> None:

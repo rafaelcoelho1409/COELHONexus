@@ -837,7 +837,6 @@ dependencies = [
     { name = "json-repair" },
     { name = "langchain" },
     { name = "langchain-core" },
-    { name = "langchain-experimental" },
     { name = "langchain-mcp-adapters" },
     { name = "langchain-neo4j" },
     { name = "langchain-openai" },
@@ -910,9 +909,8 @@ requires-dist = [
     { name = "json-repair", specifier = ">=0.30,<1.0" },
     { name = "langchain", specifier = ">=1.3,<2.0" },
     { name = "langchain-core", specifier = ">=1.4,<2.0" },
-    { name = "langchain-experimental", specifier = ">=0.3,<1.0" },
     { name = "langchain-mcp-adapters", specifier = ">=0.3,<1.0" },
-    { name = "langchain-neo4j", specifier = ">=0.1,<1.0" },
+    { name = "langchain-neo4j", specifier = ">=0.11,<1.0" },
     { name = "langchain-openai", specifier = ">=1.1,<2.0" },
     { name = "langchain-qdrant", specifier = ">=1.1,<2.0" },
     { name = "langchain-text-splitters", specifier = ">=1.1,<2.0" },
@@ -2420,28 +2418,6 @@ wheels = [
 ]
 
 [[package]]
-name = "langchain-community"
-version = "0.4.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "httpx-sse" },
-    { name = "langchain-classic" },
-    { name = "langchain-core" },
-    { name = "langsmith" },
-    { name = "numpy" },
-    { name = "pydantic-settings" },
-    { name = "pyyaml" },
-    { name = "requests" },
-    { name = "sqlalchemy" },
-    { name = "tenacity" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ea/0c/e3aca1f2b1c5b95f8b87cb2b6e81a6f20d538c07a128419dc01cef0617b6/langchain_community-0.4.2.tar.gz", hash = "sha256:a99308160d53d7e9b5965ee665e5173709914338210089fd5788ad724432c21e", size = 33268708, upload-time = "2026-05-22T19:42:59.374Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/8f/39/5d97e42a3e95dc2a6d71b2f902a3fae71786131e11d01bddb604accb0ebe/langchain_community-0.4.2-py3-none-any.whl", hash = "sha256:84dd8c5122532394d5b6849a5fc9995ef28e4f77227daeb09f24b3d942e9e466", size = 2364406, upload-time = "2026-05-22T19:42:57.103Z" },
-]
-
-[[package]]
 name = "langchain-core"
 version = "1.6.12"
 source = { registry = "https://pypi.org/simple" }
@@ -2460,19 +2436,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/12/c2/9779d64322d4e270f6d5392bc86b30f735581a87b5eefd6ad15a0828a169/langchain_core-1.6.12.tar.gz", hash = "sha256:dc6b2a965c351b4cc94df1c80220bcf3c5472e14437d2186c8290ea22f4d0219", size = 1015639, upload-time = "2026-10-16T19:28:31.055Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c6/7b/49de1d4d6b9ff62e7c40a6fceb6aeecd8c190ac5f49dd7a99948c6650c16/langchain_core-1.6.12-py3-none-any.whl", hash = "sha256:39b07aed976baac14c47b7a21e3c7d4073362bccf06cf8799c585dcc9548547d", size = 573838, upload-time = "2026-10-16T19:28:29.466Z" },
-]
-
-[[package]]
-name = "langchain-experimental"
-version = "0.4.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "langchain-community" },
-    { name = "langchain-core" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d9/1c/8240195c1b27f2c45b2ee93a07b2a5a466c92dec8881fc1213ec8e3cb6a8/langchain_experimental-0.4.2.tar.gz", hash = "sha256:1130fa7ecad5959e687295b2f7850ae3e5d8eeee6796bf9e99910806475d8acc", size = 172068, upload-time = "2026-05-22T20:38:42.184Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f1/ce/5c56f08407648ab897b119a4add46391560a144285cf89e060091bc793e9/langchain_experimental-0.4.2-py3-none-any.whl", hash = "sha256:fd98b9948cb6f991e0f632ea3d5fb839bcfe21e6d5a190a51126a76270a66d40", size = 211226, upload-time = "2026-05-22T20:38:40.678Z" },
 ]
 
 [[package]]
@@ -2506,7 +2469,7 @@ wheels = [
 
 [[package]]
 name = "langchain-neo4j"
-version = "0.9.0"
+version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "langchain-classic" },
@@ -2515,9 +2478,9 @@ dependencies = [
     { name = "neo4j" },
     { name = "neo4j-graphrag" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1f/60/1a857cdeada3e3ec0f30eab0b6b5a4d05f14554ee854f8823398cb01e97e/langchain_neo4j-0.9.0.tar.gz", hash = "sha256:ea12abe315dccd3e2d2a2190fe117a2a668cdd60b4c09e699c9a4e55f8de3920", size = 204688, upload-time = "2026-03-30T13:38:50.906Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/57/87/167a7f5ddb827e100c02b465512816b056b92cf899e0e9abb05053595fa4/langchain_neo4j-0.11.0.tar.gz", hash = "sha256:ea9973e96a1bee923edae13595448329435b6b91fea3d26ce38f9c1e039c051e", size = 224077, upload-time = "2026-10-09T12:42:20.267Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6d/74/64672f1a44fcee4f7fd53054d0b799dfcf8204f52c69b368a82d0fef7b2d/langchain_neo4j-0.9.0-py3-none-any.whl", hash = "sha256:58366dae7c691229ccf3979f0ea9e5d473f46199dfa96791b87b315daabbc141", size = 48569, upload-time = "2026-03-30T13:38:49.728Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/5f/b6eed23e4b6c69078c88e07cb16c9bc5a24387bc340a6f4ddc72bd190dba/langchain_neo4j-0.11.0-py3-none-any.whl", hash = "sha256:19665ef9e5bddd84de1797c6c862d06564c130b8b495da815a7fd93a6c008705", size = 58706, upload-time = "2026-10-09T12:42:18.771Z" },
 ]
 
 [[package]]

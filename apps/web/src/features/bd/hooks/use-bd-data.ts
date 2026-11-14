@@ -52,7 +52,7 @@ export function useAgenticGraph(enabled: boolean) {
     queryFn: fetchAgenticGraph,
     enabled,
     retry: false,
-    staleTime: Number.POSITIVE_INFINITY,
+    staleTime: 0,
   });
 }
 

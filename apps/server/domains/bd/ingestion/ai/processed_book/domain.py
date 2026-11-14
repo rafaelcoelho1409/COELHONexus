@@ -35,16 +35,27 @@ def _similarity(title: str, evidence: list[str]) -> float:
     return best
 
 
-def contents_candidates(outline: list[dict[str, Any]], page_evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def contents_candidates(outline: list[Any], page_evidence: list[Any]) -> list[dict[str, Any]]:
     """Restrict each outline entry to a small, evidence-ranked set of selected source pages."""
-    valid_pages = [
-        row for row in page_evidence
-        if type(row.get("source_page_number")) is int and isinstance(row.get("evidence"), list)
-    ]
+    valid_pages = []
+    for row in page_evidence:
+        if (
+            not isinstance(row, dict)
+            or type(row.get("source_page_number")) is not int
+            or row["source_page_number"] < 1
+            or not isinstance(row.get("evidence"), list)
+        ):
+            continue
+        valid_pages.append({
+            "source_page_number": row["source_page_number"],
+            "evidence": [value for value in row["evidence"] if isinstance(value, str)],
+        })
     if not valid_pages:
         return []
     result = []
     for index, item in enumerate(outline):
+        if not isinstance(item, dict):
+            continue
         title = item.get("title")
         source_page = item.get("page")
         if not isinstance(title, str) or not title.strip() or type(source_page) is not int or source_page < 1:
@@ -58,7 +69,7 @@ def contents_candidates(outline: list[dict[str, Any]], page_evidence: list[dict[
                 pair[1]["source_page_number"],
             ),
         )
-        matching = [row for score, row in ranked if score >= 0.28]
+        matching = [(score, row) for score, row in ranked if score >= 0.28]
         chosen = matching[:5] if matching else ranked[:3]
         result.append({
             "outline_index": index,

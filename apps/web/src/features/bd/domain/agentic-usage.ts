@@ -17,7 +17,7 @@ export type AgenticUsageRow = ModelCounts & {
 const COUNTERS_BY_NODE: Record<AgenticNodeId, readonly string[]> = {
   audit_batch: ["audit_batch", "page_auditor", "finding_verifier"],
   plan_repairs: ["plan_repairs"],
-  repair_pages: ["repair_pages", "structure_repair", "text_repair"],
+  repair_pages: ["repair_pages", "structure_repair", "text_repair", "text_patch_verifier"],
   normalize_metadata: ["normalize_metadata", "metadata_normalizer"],
   classify_content: ["classify_content", "content_classifier"],
   materialize_processed_book: ["materialize_processed_book"],
@@ -33,6 +33,7 @@ const AGENT_LABELS: Readonly<Record<string, string>> = {
   repair_pages: "Repair pages",
   structure_repair: "Structure repair",
   text_repair: "Text repair",
+  text_patch_verifier: "Source-page patch verifier",
   normalize_metadata: "Normalize metadata",
   metadata_normalizer: "Metadata normalizer",
   classify_content: "Select Distill pages",

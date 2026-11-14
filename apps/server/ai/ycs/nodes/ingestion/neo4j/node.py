@@ -2,8 +2,7 @@
 from __future__ import annotations
 
 import domains
-from ....graphs.ingestion import entities, states
-from .. import support
+from .... import graphs
 
 import logging
 from typing import Any
@@ -15,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 async def extract_graph(
-    state: states.IngestionChunkState,
-    runtime: Runtime[entities.IngestionContext],
+    state: graphs.ingestion.states.IngestionChunkState,
+    runtime: Runtime[graphs.ingestion.entities.IngestionContext],
 ) -> dict[str, Any]:
     context = runtime.context
     extract_id = state.get("extract_id")
@@ -40,10 +39,12 @@ async def extract_graph(
             return {"neo4j_result": result}
         except Exception as error:
             redis = domains.ycs.ingestion.pipeline_task.service.build_redis_client()
-            part_totals = support.partition_totals(state.get("transcript_docs", []))
+            part_totals = domains.ycs.ingestion.pipeline_task.domain.partition_totals(
+                state.get("transcript_docs", []),
+            )
             try:
                 for video_id in video_ids:
-                    await support.mark_failed_if_unreported(
+                    await domains.ycs.ingestion.pipeline_task.service.mark_failed_if_unreported(
                         redis,
                         extract_id,
                         "neo4j",

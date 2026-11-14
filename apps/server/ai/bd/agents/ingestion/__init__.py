@@ -5,7 +5,8 @@ from . import (
     metadata_normalizer, 
     page_auditor, 
     structure_repair, 
-    text_repair
+    text_patch_verifier,
+    text_repair,
 )
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "metadata_normalizer", 
     "page_auditor", 
     "structure_repair", 
+    "text_patch_verifier",
     "text_repair"
 ]

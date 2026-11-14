@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import domains
-from ....graphs.ingestion import entities, states
+from .... import graphs
 
 from typing import Any
 
@@ -10,8 +10,8 @@ from langgraph.runtime import Runtime
 
 
 async def fetch_transcripts(
-    state: states.IngestionChunkState,
-    runtime: Runtime[entities.IngestionContext],
+    state: graphs.ingestion.states.IngestionChunkState,
+    runtime: Runtime[graphs.ingestion.entities.IngestionContext],
 ) -> dict[str, Any]:
     context = runtime.context
     video_ids = state.get("video_ids", [])

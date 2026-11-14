@@ -35,17 +35,16 @@ dependencies = [
     # YCS persistence: Elasticsearch (video metadata/transcripts), Neo4j (entity graph).
     "elasticsearch[async]>=8,<9",
     "neo4j>=5,<6",
-    "langchain_neo4j>=0.1,<1.0",
+    "langchain_neo4j>=0.11,<1.0",     # Maintained home of LLMGraphTransformer
     "flashrank>=0.2,<1.0",             # cross-encoder reranker
     "langchain-qdrant>=1.1,<2.0",      # 1.x needed for langchain-core 1.x compat
     "fastembed>=0.9.0,<1.0",             # BM25 sparse encoder behind FastEmbedSparse (CPU build; optional extra, pin explicitly)
-    "langchain-experimental>=0.3,<1.0", # LLMGraphTransformer for YCS graph_builder
+    "json-repair>=0.30,<1.0",           # LLMGraphTransformer's provider-compatibility parser
     "langchain-openai>=1.1,<2.0",      # ChatOpenAI client for the with_fallbacks LLM chain
     # cryptography floor 50.0.0 fixes every advisory open on 46.0.7 (wheel OpenSSL, PKCS#7 Bleichenbacher oracle, path building).
     "cryptography>=50.0.0,<51",
     "numpy>=1.26,<3.0",                 # LinUCB sufficient-statistics matrix algebra
     "rapidfuzz>=3.0,<4.0",             # benchmarks L2 model-name canonicalization (token_set_ratio)
-    "json-repair>=0.30,<1.0",          # LangChain LLMGraphTransformer's ignore_tool_usage path needs this
     # OpenTelemetry — emits LLM call spans to Alloy (gRPC) and LangFuse (HTTP/OTLP).
     "opentelemetry-api>=1.30,<2.0",
     "opentelemetry-sdk>=1.30,<2.0",

@@ -204,7 +204,7 @@ export function AgenticProgressBar({
         />
         <ProgressMetric label="Audited" value={progress ? String(progress.audited_pages.length) : "—"} />
         <ProgressMetric
-          label="Needs review"
+          label="Pages with findings"
           value={status === "done" ? String(reviewPageCount) : hasRun ? "Pending" : "—"}
         />
         <ProgressMetric
@@ -225,8 +225,9 @@ export function AgenticProgressBar({
       ) : null}
       {qualityStatus === "complete_with_review" ? (
         <p className="mt-1 text-xs text-warning-text">
-          Run needs attention · {reviewPageCount}{" "}
-          {reviewPageCount === 1 ? "page needs review" : "pages need review"} · {unverifiedPageCount}{" "}
+          Completed with notes · {reviewPageCount}{" "}
+          {reviewPageCount === 1 ? "page has retained findings" : "pages have retained findings"} ·{" "}
+          {unverifiedPageCount}{" "}
           {unverifiedPageCount === 1 ? "audit unverified" : "audits unverified"} · {deliveredPageCount}{" "}
           delivered · {discardedBlankPageCount} blank excluded
         </p>

@@ -15,17 +15,29 @@ const RESOLUTION_STYLE = {
   none: "text-muted-foreground",
 } as const;
 
+function autonomousPatchStatus(status: string | null | undefined): string {
+  if (status === "source_mismatch") return "Source image disagreed; original retained: ";
+  if (status === "reading_mismatch") return "Source reading was not exact; original retained: ";
+  if (status === "confirmed") return "Source confirmed it, but safety checks kept the original: ";
+  if (status === "uncertain") return "Source image was unclear; original retained: ";
+  if (status === "unavailable") return "Source verification was unavailable; original retained: ";
+  return "Safety checks did not allow automatic application; original retained: ";
+}
+
 /** Shared quality report UI used by both Book Distiller and Docs Distiller page readers. */
 export function PageQualityDisplay({
   report,
   unit,
   page,
   defaultOpen = false,
+  autonomous = false,
 }: {
   report: PageQualityReport;
   unit: string;
   page: number;
   defaultOpen?: boolean;
+  /** BD leaves uncertain source text unchanged automatically; this mode explains that no approval is required. */
+  autonomous?: boolean;
 }) {
   const counts = issueCounts(report);
   const note = dispositionNote(report);
@@ -38,14 +50,16 @@ export function PageQualityDisplay({
         <summary className="flex min-h-10 cursor-pointer flex-wrap items-center gap-x-3 gap-y-1">
           <span className="font-medium">Quality</span>
           {report.status === "review_required" ? (
-            <span className="text-xs font-medium text-warning-text">Needs review</span>
+            <span className="text-xs font-medium text-warning-text">
+              {autonomous ? "No approval needed · original retained where uncertain" : "Needs review"}
+            </span>
           ) : (
             <span className="text-xs font-medium text-success-text">Checked</span>
           )}
           <span className="text-xs tabular-nums text-muted-foreground">
             {report.issues.length === 0
               ? "No issues found"
-              : `${report.issues.length} ${report.issues.length === 1 ? "issue" : "issues"} · ${counts.fixed} fixed automatically · ${counts.review} to review`}
+              : `${report.issues.length} ${report.issues.length === 1 ? "issue" : "issues"} · ${counts.fixed} fixed automatically · ${autonomous ? `${counts.review} left unchanged` : `${counts.review} to review`}`}
           </span>
         </summary>
         <div className="pb-3">
@@ -58,7 +72,9 @@ export function PageQualityDisplay({
                   <p className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                     <span className="font-medium">{issueLabel(issue.code)}</span>
                     <span className={`text-xs font-medium ${RESOLUTION_STYLE[issue.resolution]}`}>
-                      {RESOLUTION_LABELS[issue.resolution]}
+                      {autonomous && issue.resolution === "review"
+                        ? "Original retained"
+                        : RESOLUTION_LABELS[issue.resolution]}
                     </span>
                     {issue.severity ? (
                       <span className="text-xs text-muted-foreground">{issue.severity}</span>
@@ -77,13 +93,22 @@ export function PageQualityDisplay({
                   ))}
                   {issue.proposal && issue.resolution !== "auto_applied" ? (
                     <p className="mt-1 break-words text-xs">
-                      <span className="text-muted-foreground">Suggested fix, not applied: </span>
+                      <span className="text-muted-foreground">
+                        {autonomous
+                          ? autonomousPatchStatus(issue.proposal.verification_status)
+                          : "Suggested fix, not applied: "}
+                      </span>
                       <del className="font-mono text-destructive-text">{issue.proposal.target_text}</del>
                       <span aria-hidden="true"> → </span>
                       <span className="sr-only"> replaced by </span>
                       <ins className="font-mono text-success-text no-underline">
                         {issue.proposal.replacement}
                       </ins>
+                    </p>
+                  ) : null}
+                  {autonomous && issue.proposal?.verification_reason ? (
+                    <p className="mt-1 break-words text-xs text-muted-foreground">
+                      {issue.proposal.verification_reason}
                     </p>
                   ) : null}
                 </li>

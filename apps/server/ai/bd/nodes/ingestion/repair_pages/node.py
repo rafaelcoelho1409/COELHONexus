@@ -19,5 +19,7 @@ async def repair_pages(
             runtime.context.write_artifact,
             runtime.context.specialists,
             runtime.context.progress_callback,
+            patch_verifier = runtime.context.patch_verifier,
+            read_source_page_image = runtime.context.read_source_page_image,
         ),
     )

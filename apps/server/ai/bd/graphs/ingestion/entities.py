@@ -8,6 +8,7 @@ from typing import Any, NotRequired, TypedDict
 
 
 PageReader = Callable[[str], str | None | Awaitable[str | None]]
+SourcePageImageReader = Callable[[int], bytes | None | Awaitable[bytes | None]]
 ArtifactWriter = Callable[[str, str, str], Any]
 ArtifactExists = Callable[[str], Awaitable[bool]]
 
@@ -74,6 +75,10 @@ class IngestionPageResult(TypedDict, total = False):
     content_rationale: str
     content_disposition: str
     content_decision_source: str
+    repair_skipped_reason: str
+    source_verified_issue_ids: list[str]
+    source_verification_results: list[dict[str, object]]
+    source_verification_unavailable_count: int
 
 
 @dataclass(frozen = True, slots = True)
@@ -90,3 +95,5 @@ class IngestionDependencies:
     contents_reconciler: nodes.ingestion.reconcile_contents.service.ContentsReconciler
     progress_callback: graphs.service.ProgressReporter | None = None
     finding_verifier: Any | None = None
+    patch_verifier: Any | None = None
+    read_source_page_image: SourcePageImageReader | None = None

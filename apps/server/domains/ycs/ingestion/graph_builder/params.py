@@ -90,14 +90,17 @@ NEO4J_EXTRACT_SEM_LEASE_S = GRAPH_BATCH_TIMEOUT_S + 30.0
 # fuzz.ratio pre-filter; embedding cosine gate at 0.85 catches false positives like Astronomia↔Gastronomia.
 FUZZ_MERGE_CUTOFF = 75
 
-# 2026-09-14: extraction fingerprint version, stored on every
+# Extraction fingerprint version, stored on every
 # source Document alongside `transcript_sha`. Bump when the extraction
 # prompt/schema changes in a way that makes previously-extracted graphs
 # stale — the skip-on-video_id check then re-extracts instead of
-# trusting outdated entities (DD's manifest_hash pattern, adapted:
-# DD versions prompt+inputs per node; here one version covers the
-# single DeepAgent extraction contract).
-EXTRACT_PROMPT_VERSION = 2
+# trusting outdated entities. This version marks the move from the
+# custom DeepAgent output contract to LLMGraphTransformer with evidence
+# properties.
+EXTRACT_PROMPT_VERSION = 3
+
+MAX_EXTRACTED_NODES = 150
+MAX_EXTRACTED_RELATIONSHIPS = 300
 
 # Inter-retry-pass backoff (jittered): immediate retries hammer an
 # already-exhausted free-tier pool (DD: 2-5s+jitter per item; scaled up

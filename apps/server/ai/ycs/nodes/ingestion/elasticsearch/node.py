@@ -1,8 +1,7 @@
 """Persist fetched video metadata and transcripts before store fan-out."""
 from __future__ import annotations
-
 import domains
-from ....graphs.ingestion import entities, states
+from .... import graphs
 
 import logging
 from collections import defaultdict
@@ -15,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 async def index_documents(
-    state: states.IngestionChunkState,
-    runtime: Runtime[entities.IngestionContext],
+    state: graphs.ingestion.states.IngestionChunkState,
+    runtime: Runtime[graphs.ingestion.entities.IngestionContext],
 ) -> dict[str, Any]:
     context = runtime.context
     context.reporter.elasticsearch_started()

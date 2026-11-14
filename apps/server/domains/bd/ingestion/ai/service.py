@@ -137,6 +137,8 @@ def _safe_error_message(error: Exception | str) -> str:
         message = str(current).lower()
         if isinstance(current, ValueError) and "http:// or https://" in message:
             return "The configured language-model endpoint URL is invalid. Add an http:// or https:// scheme in Settings, then retry."
+        if isinstance(current, ValueError) and "older ingestion graph checkpoint" in message:
+            return str(current)
         if type(current).__name__ == "UnsupportedProtocol" and (
             "missing an 'http://' or 'https://' protocol" in message
             or "unsupported protocol" in message
@@ -394,6 +396,11 @@ async def read_page_quality(
     auto_applied = set(proposals.get("auto_applied_issue_ids", []))
     review_required = set(proposals.get("review_required_issue_ids", []))
     proposal_by_issue = {proposal["issue_id"]: proposal for proposal in proposals.get("proposals", [])}
+    verification_by_issue = {
+        result["issue_id"]: result
+        for result in proposals.get("source_verification_results", [])
+        if isinstance(result, dict) and isinstance(result.get("issue_id"), str)
+    }
     return {
         "book_id": book_id,
         "agentic_run_id": run["agentic_run_id"],
@@ -420,6 +427,16 @@ async def read_page_quality(
                         "rationale": proposal["rationale"],
                         "confidence": proposal["confidence"],
                         "risk": proposal["risk"],
+                        "verification_status": (
+                            verification["status"]
+                            if (verification := verification_by_issue.get(issue["issue_id"])) is not None
+                            else None
+                        ),
+                        "verification_reason": (
+                            verification.get("reason")
+                            if (verification := verification_by_issue.get(issue["issue_id"])) is not None
+                            else None
+                        ),
                     }
                     if (proposal := proposal_by_issue.get(issue["issue_id"])) is not None
                     else None
@@ -1069,6 +1086,7 @@ async def run_ingestion_ai(
     content_classifier: Any | None = None,
     contents_reconciler: Any | None = None,
     finding_verifier: Any | None = None,
+    patch_verifier: Any | None = None,
     checkpointer: Any | None = None,
     resume: bool = False,
     cancel_check: Callable[[], Awaitable[bool]] | None = None,
@@ -1242,6 +1260,8 @@ async def run_ingestion_ai(
         await persist_manifest(domains.bd.ingestion.ai.schemas.AgenticRunStatus.QUEUED)
     await persist_manifest(domains.bd.ingestion.ai.schemas.AgenticRunStatus.RUNNING)
 
+    source_page_images = None
+    default_text_repair = text_repair is None
     try:
         if auditor is None and finding_verifier is None:
             finding_verifier = ai.bd.agents.ingestion.finding_verifier.agent.finding_verifier()
@@ -1249,6 +1269,14 @@ async def run_ingestion_ai(
             auditor = ai.bd.agents.ingestion.page_auditor.agent.page_auditor()
         if text_repair is None:
             text_repair = ai.bd.agents.ingestion.text_repair.agent.text_repair()
+        if patch_verifier is None and default_text_repair:
+            try:
+                patch_verifier = ai.bd.agents.ingestion.text_patch_verifier.agent.text_patch_verifier()
+            except Exception as error:
+                logger.warning(
+                    f"[bd-page-evidence] visual verifier unavailable for {book_id}/{agentic_run_id}: "
+                    f"{type(error).__name__}"
+                )
         if structure_repair is None:
             structure_repair = ai.bd.agents.ingestion.structure_repair.agent.structure_repair()
         if metadata_normalizer is None:
@@ -1274,6 +1302,29 @@ async def run_ingestion_ai(
             for key in ("filename", "title", "subtitle", "authors", "source_format")
             if key in source_manifest
         }
+        read_source_page_image = None
+        if (
+            patch_verifier is not None
+            and source_manifest.get("source_format", "pdf") == "pdf"
+            and (
+                type(source_manifest.get("size_bytes")) is not int
+                or source_manifest["size_bytes"] <= domains.bd.ingestion.ai.params.SOURCE_PDF_VERIFY_MAX_BYTES
+            )
+        ):
+            try:
+                from .source_pages import service as source_page_service
+
+                source_page_images = source_page_service.PdfPageImageReader(
+                    lambda: domains.bd.ingestion.storage.service.read_source(storage, book_id, "pdf"),
+                    source_size_bytes = source_manifest.get("size_bytes"),
+                    expected_page_count = len(source_page_refs),
+                )
+                read_source_page_image = source_page_images.read_page
+            except Exception as error:
+                logger.warning(
+                    f"[bd-page-evidence] source-page renderer unavailable for {book_id}/{agentic_run_id}: "
+                    f"{type(error).__name__}"
+                )
         graph_state: ai.bd.graphs.ingestion.states.IngestionRunState = {
             "book_id": book_id,
             "extraction_run_id": extraction_id,
@@ -1304,6 +1355,8 @@ async def run_ingestion_ai(
             contents_reconciler = contents_reconciler,
             progress_callback = report_progress,
             finding_verifier = finding_verifier,
+            patch_verifier = patch_verifier,
+            read_source_page_image = read_source_page_image,
         )
         config = {"configurable": {
             "thread_id": f"bd-ingestion-agentic:{book_id}:{extraction_id}:{agentic_run_id}",
@@ -1312,8 +1365,40 @@ async def run_ingestion_ai(
             result = await graph.ainvoke(graph_state, context = dependencies)
         else:
             snapshot = await graph.aget_state(config)
-            graph_input = None if snapshot.next else graph_state
-            result = await graph.ainvoke(graph_input, config = config, context = dependencies)
+            if snapshot.next:
+                if manifest_fields.get("workflow_version") != domains.bd.ingestion.ai.versions.WORKFLOW_VERSION:
+                    raise ValueError(
+                        "This run uses an older ingestion graph checkpoint. Wipe this run and start a new "
+                        "Agentic AI run to use the updated pre-repair content selection."
+                    )
+                graph_input = None
+                pending_nodes = tuple(snapshot.next)
+                checkpoint_id = snapshot.config.get("configurable", {}).get("checkpoint_id")
+                logger.info(
+                    f"[bd-agentic] resuming checkpoint book_id={book_id} agentic_run_id={agentic_run_id} "
+                    f"pending_nodes={pending_nodes} checkpoint_id={checkpoint_id}"
+                )
+                reported_node = progress_state.get("current_node")
+                if reported_node and reported_node not in pending_nodes:
+                    logger.warning(
+                        f"[bd-agentic] saved progress node {reported_node!r} differs from checkpoint "
+                        f"pending nodes {pending_nodes!r} for run {agentic_run_id}; checkpoint is authoritative"
+                    )
+            else:
+                manifest_fields["workflow_version"] = domains.bd.ingestion.ai.versions.WORKFLOW_VERSION
+                graph_input = graph_state
+                logger.info(
+                    f"[bd-agentic] starting graph from entry for book_id={book_id} "
+                    f"agentic_run_id={agentic_run_id}; no pending checkpoint task exists"
+                )
+            # Sync durability makes each completed node checkpoint durable before the graph
+            # advances, so a worker stop or node exception can resume at the pending node.
+            result = await graph.ainvoke(
+                graph_input,
+                config = config,
+                context = dependencies,
+                durability = "sync",
+            )
         final_manifest = json.loads(await storage.read_text(output_manifest_key))
         final_manifest["progress"] = domains.bd.ingestion.ai.schemas.AgenticRunProgress.model_validate(
             progress_state,
@@ -1411,3 +1496,12 @@ async def run_ingestion_ai(
         except Exception:
             pass
         raise
+    finally:
+        if source_page_images is not None:
+            try:
+                await source_page_images.close()
+            except Exception as error:
+                logger.warning(
+                    f"[bd-page-evidence] cleanup failed for {book_id}/{agentic_run_id}: "
+                    f"{type(error).__name__}"
+                )

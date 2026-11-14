@@ -137,6 +137,11 @@ async def publish(
     )
     review_reasons = Counter()
     mechanical_fixes = Counter()
+    source_verification_statuses = Counter(
+        result.get("status", "unknown")
+        for page in page_results
+        for result in page.get("source_verification_results", [])
+    )
     for page in page_results:
         mechanical_fixes.update(page.get("mechanical_fix_counts", {}))
         if page["status"] != "review_required":
@@ -161,6 +166,12 @@ async def publish(
         "distill_excluded_pages": [
             page["page_number"] for page in selection if page.get("disposition") == "exclude"
         ],
+        "pages_skipped_for_content_selection": [
+            page["page"] for page in page_results if page.get("repair_skipped_reason")
+        ],
+        "pages_skipped_for_content_selection_count": sum(
+            bool(page.get("repair_skipped_reason")) for page in page_results
+        ),
         "processed_page_count": state.get("processed_page_count", 0),
         "processed_book_revision": state.get("processed_book_revision"),
         "contents_status": state.get("contents_status"),
@@ -192,6 +203,14 @@ async def publish(
         "issues_by_code": dict(sorted(issue_counts.items())),
         "proposals_total": sum(page["patch_proposal_count"] for page in page_results),
         "patches_auto_applied": sum(len(page["auto_applied_issue_ids"]) for page in page_results),
+        "patches_source_verified": sum(len(page.get("source_verified_issue_ids", [])) for page in page_results),
+        "patches_source_unconfirmed": sum(
+            count for status, count in source_verification_statuses.items() if status != "confirmed"
+        ),
+        "source_verification_statuses": dict(sorted(source_verification_statuses.items())),
+        "source_verification_unavailable_count": sum(
+            page.get("source_verification_unavailable_count", 0) for page in page_results
+        ),
         "unresolved_issue_count": sum(len(page["review_required_issue_ids"]) for page in page_results),
         "repair_context_chars": repair_context_chars,
         "estimated_unbounded_repair_context_chars": unbounded_repair_context_chars,

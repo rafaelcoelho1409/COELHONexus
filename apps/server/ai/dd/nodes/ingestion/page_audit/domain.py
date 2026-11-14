@@ -161,6 +161,37 @@ def is_valid_table_row_context(markdown: str, evidence: str) -> bool:
     return False
 
 
+def is_table_cell_count_claim_contradicted(markdown: str, evidence: str, description: str) -> bool:
+    """Whether a cited table row has the header's full cell count despite a short-row claim."""
+    normalized = description.casefold()
+    claims_short_row = re.search(
+        r"\b(?:rows?|row)\b.{0,80}\b(?:fewer|less|missing)\b.{0,40}\b(?:cells?|columns?)\b"
+        r"|\b(?:fewer|less|missing)\b.{0,40}\b(?:cells?|columns?)\b.{0,40}\b(?:header|table|rows?)\b",
+        normalized,
+    ) is not None
+    cited = strip_blockquote_prefix(evidence.strip()).strip()
+    if not claims_short_row or not cited or "\n" in cited:
+        return False
+
+    lines = markdown.splitlines()
+    for index, line in enumerate(lines):
+        normalized_line = strip_blockquote_prefix(line).strip()
+        if normalized_line != cited or not normalized_line.startswith("|"):
+            continue
+        table_start = index
+        while table_start > 0 and strip_blockquote_prefix(lines[table_start - 1]).strip().startswith("|"):
+            table_start -= 1
+        delimiter_index = table_start + 1
+        if delimiter_index >= len(lines) or not patterns.TABLE_DELIMITER_RE.fullmatch(
+            strip_blockquote_prefix(lines[delimiter_index]).strip()
+        ):
+            continue
+        header_width = table_cells(strip_blockquote_prefix(lines[table_start]))
+        delimiter_width = table_cells(strip_blockquote_prefix(lines[delimiter_index]))
+        return header_width == delimiter_width == table_cells(normalized_line)
+    return False
+
+
 def contains_valid_escaped_ampersand(evidence: str) -> bool:
     """Whether evidence includes Markdown's valid backslash escape for an ampersand."""
     return r"\&" in evidence
@@ -181,7 +212,14 @@ def describes_escaped_character_missing_from_evidence(description: str, evidence
         "exclamation mark": r"\!",
     }
     for name, escaped in escaped_characters.items():
-        claim = re.search(rf"\b(?:backslash[- ]?)?escaped {re.escape(name)}\b", description, re.IGNORECASE)
+        escaped_name = re.escape(name)
+        claim = re.search(
+            rf"\b(?:backslash[- ]?)?escaped {escaped_name}\b"
+            rf"|\b{escaped_name}\b.{{0,50}}\b(?:is|was|has been|gets|got) escaped\b"
+            rf"|\bescap(?:e|es|ed|ing) (?:the )?{escaped_name}\b",
+            description,
+            re.IGNORECASE,
+        )
         if claim is not None and escaped not in evidence:
             return True
     return False
@@ -271,7 +309,10 @@ def is_sphinx_definition_list_fragment(markdown: str, evidence: str) -> bool:
                     ):
                         return True
                     break
-                if not previous_line[:1].isspace():
+                if (
+                    not previous_line[:1].isspace()
+                    and patterns.SPHINX_DEFINITION_LINE_RE.match(previous_line) is None
+                ):
                     break
     return False
 
@@ -611,6 +652,21 @@ def is_curated_table_overlap(markdown: str, evidence: str, other_evidence: str) 
     return has_curated and has_all
 
 
+def is_repeated_valid_table_row(markdown: str, evidence: str, other_evidence: str) -> bool:
+    """Whether a claimed duplicate is backed by two occurrences of the same valid table row."""
+    first = strip_blockquote_prefix(evidence.strip()).strip()
+    second = strip_blockquote_prefix(other_evidence.strip()).strip()
+    return (
+        bool(first)
+        and bool(second)
+        and first.startswith("|")
+        and second.startswith("|")
+        and is_valid_table_row_context(markdown, first)
+        and is_valid_table_row_context(markdown, second)
+        and is_repeat(markdown, first, second)
+    )
+
+
 def is_valid_wrapped_list_item(evidence: str) -> bool:
     """Whether lines after an ordered/unordered list marker are valid indented continuations."""
     lines = evidence.splitlines()
@@ -797,20 +853,74 @@ def is_contextual_repeat_across_document_sections(markdown: str, evidence: str, 
     return False
 
 
-def _installation_choice_at(markdown: str, offset: int) -> tuple[str, frozenset[str]] | None:
-    """Return a package-install method and shared heading scope for one occurrence."""
+def _heading_section_body(markdown: str, heading_index: int) -> str:
+    """Return the content governed by a heading, stopping before its next peer or parent."""
+    lines = markdown.splitlines()
+    heading = patterns.ATX_HEADING_LINE_RE.match(lines[heading_index])
+    if heading is None:
+        return ""
+    level = len(heading.group(1))
+    end = next((
+        index
+        for index in range(heading_index + 1, len(lines))
+        if (match := patterns.ATX_HEADING_LINE_RE.match(lines[index])) is not None
+        and len(match.group(1)) <= level
+    ), len(lines))
+    return "\n".join(lines[heading_index + 1:end])
+
+
+def _normalized_heading_context(title: str) -> str:
+    """Strip package-manager labels and generic setup words from one heading."""
+    normalized = re.sub(
+        r"\b(?:uv|pip3?|conda|mamba|poetry|installation|install|setup|set up|via|with|using|for|and|or)\b",
+        " ",
+        title.casefold(),
+    )
+    return " ".join(re.findall(r"[a-z0-9]+", normalized))
+
+
+def _heading_parent_context(markdown: str, heading_index: int) -> tuple[str, ...]:
+    """Return normalized ancestor headings for a source heading."""
+    lines = markdown.splitlines()
+    heading = patterns.ATX_HEADING_LINE_RE.match(lines[heading_index])
+    if heading is None:
+        return ()
+    current_level = len(heading.group(1))
+    ancestors: list[str] = []
+    for line in reversed(lines[:heading_index]):
+        match = patterns.ATX_HEADING_LINE_RE.match(line)
+        if match is None:
+            continue
+        level = len(match.group(1))
+        if level >= current_level:
+            continue
+        title = _normalized_heading_context((match.group(2) or "").strip())
+        if title:
+            ancestors.append(title)
+        current_level = level
+        if level == 1:
+            break
+    return tuple(reversed(ancestors))
+
+
+def _installation_choice_at(markdown: str, offset: int) -> tuple[tuple[str, ...], str, frozenset[str]] | None:
+    """Return a package-install method, parent context and normalized choice label."""
     scope = _heading_scope_at(markdown, offset)
     if scope is None:
         return None
     title = scope[0].casefold()
-    if not re.search(r"\b(?:install(?:ation)?|setup|set up)\b", title):
-        return None
     methods = frozenset(re.findall(r"\b(?:uv|pip|pip3|conda|mamba|poetry)\b", title))
     if not methods:
         return None
-    shared = re.sub(r"\b(?:uv|pip3?|conda|mamba|poetry|via|with|using|for)\b", " ", title)
-    shared = " ".join(re.findall(r"[a-z0-9]+", shared))
-    return (shared, methods) if shared else None
+    body = _heading_section_body(markdown, scope[1])
+    if not re.search(r"\b(?:install(?:ation)?|setup|set up)\b", title + "\n" + body):
+        return None
+    match = patterns.ATX_HEADING_LINE_RE.match(markdown.splitlines()[scope[1]])
+    parent_context = _heading_parent_context(markdown, scope[1])
+    if match is None:
+        return None
+    shared = _normalized_heading_context((match.group(2) or "").strip())
+    return (parent_context, shared, methods)
 
 
 def is_repeat_across_distinct_installation_choices(markdown: str, evidence: str, other_evidence: str) -> bool:
@@ -824,9 +934,21 @@ def is_repeat_across_distinct_installation_choices(markdown: str, evidence: str,
     scopes = [_installation_choice_at(markdown, offset) for offset in offsets]
     if len(scopes) < 2 or any(scope is None for scope in scopes):
         return False
-    shared_scopes = {scope[0] for scope in scopes if scope is not None}
-    choices = {scope[1] for scope in scopes if scope is not None}
-    return len(shared_scopes) == 1 and len(choices) == len(scopes)
+    resolved = [scope for scope in scopes if scope is not None]
+    parents = {scope[0] for scope in resolved}
+    shared_scopes = {scope[1] for scope in resolved}
+    choices = [scope[2] for scope in resolved]
+    choices_are_distinct = all(
+        not (choices[left] & choices[right])
+        for left in range(len(choices))
+        for right in range(left + 1, len(choices))
+    )
+    return (
+        len(parents) == 1
+        and len(shared_scopes) == 1
+        and len(set(choices)) == len(scopes)
+        and choices_are_distinct
+    )
 
 
 def is_table_presentation_only_finding(description: str) -> bool:
@@ -1015,6 +1137,16 @@ def sanitize_assessment(
             description = issue.description.casefold()
         if (
             issue.category == "markdown_formatting"
+            and any(term in description for term in ("duplicate", "duplicated", "repeated", "repeats"))
+            and is_repeated_valid_table_row(markdown, issue.evidence, issue.other_evidence)
+        ):
+            issue = issue.model_copy(update = {
+                "issue_id": re.sub(r"-markdown_formatting(-\d+)?$", r"-duplicate_section\1", issue.issue_id),
+                "category": agents.schemas.IssueCategory.DUPLICATE_SECTION,
+            })
+            description = issue.description.casefold()
+        if (
+            issue.category == "markdown_formatting"
             and contains_valid_escaped_ampersand(issue.evidence)
             and "ampersand" in description
         ):
@@ -1165,6 +1297,14 @@ def sanitize_assessment(
         ):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: its evidence contains no empty table row to support the claim."
+            )
+            continue
+        if (
+            issue.category == "markdown_formatting"
+            and is_table_cell_count_claim_contradicted(markdown, issue.evidence, issue.description)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: the cited table row has the same cell count as its header."
             )
             continue
         if (

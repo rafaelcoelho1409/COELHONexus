@@ -1,4 +1,3 @@
-"""YCS ingestion DeepAgents."""
-from . import graph_extractor
+"""DeepAgents used by the YCS Ingestion graph."""
 
-__all__ = ["graph_extractor"]
+__all__: list[str] = []

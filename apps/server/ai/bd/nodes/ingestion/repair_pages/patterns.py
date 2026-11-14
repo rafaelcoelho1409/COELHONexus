@@ -26,6 +26,12 @@ HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 PLAIN_PROSE_RE = re.compile(r"[A-Za-z' ­\-]+")
 MARKDOWN_MARKER_RE = re.compile(r"(?m)^[ \t]*(?:[-*+>]|\d+[.)]|#{1,6})[ \t]+")
 WHITESPACE_RE = re.compile(r"\s+")
+PROTECTED_CYBER_TOKEN_RE = re.compile(
+    r"https?://\S+|www\.\S+|\b(?:\d{1,3}\.){3}\d{1,3}\b|"
+    r"\bCVE-\d{4}-\d+\b|\b[A-Fa-f0-9]{32,}\b|"
+    r"\b[\w.-]+\.(?:exe|dll|sys|bat|cmd|ps1|vbs|js|jar|apk|msi|conf|config|bin)\b",
+    re.IGNORECASE,
+)
 
 
 def count_whole_word_occurrences(text: str, word: str) -> int:

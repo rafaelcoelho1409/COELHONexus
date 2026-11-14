@@ -71,6 +71,12 @@ class FindingVerdict(StrEnum):
     NOT_A_DEFECT = "not_a_defect"
 
 
+class PatchVerificationVerdict(StrEnum):
+    CONFIRMED = "confirmed"
+    CONTRADICTED = "contradicted"
+    UNCERTAIN = "uncertain"
+
+
 class IssueSeverity(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
@@ -220,6 +226,25 @@ class FindingCheckBatch(BaseModel):
     checks: list[FindingCheck] = Field(default_factory = list, max_length = 32)
 
 
+class PatchVerification(BaseModel):
+    """A visual verifier's literal reading of a proposed source-page correction."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    issue_id: NonEmptyText
+    verdict: PatchVerificationVerdict
+    source_reading: str = ""
+    reason: NonEmptyText
+
+
+class PatchVerificationBatch(BaseModel):
+    """Visual verification decisions for the bounded proposals on one page."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    verifications: list[PatchVerification] = Field(default_factory = list, max_length = 32)
+
+
 class PageAuditResponse(BaseModel):
     """Minimal model-facing response for one physical page."""
 
@@ -367,6 +392,9 @@ __all__ = [
     "PageAuditResponse",
     "PageIssue",
     "PageKind",
+    "PatchVerification",
+    "PatchVerificationBatch",
+    "PatchVerificationVerdict",
     "PatchProposalBatch",
     "PatchDraftBatch",
     "PatchDraft",

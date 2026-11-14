@@ -1,9 +1,9 @@
-"""Factory for the evidence-grounded YCS transcript graph extractor."""
+"""DeepAgent that checks proposed text patches against the original PDF page image."""
 from __future__ import annotations
 import domains
 from . import config, params
 from ... import schemas
-from .... import agents, middlewares, prompts
+from .... import middlewares, prompts
 
 from deepagents import (
     FilesystemPermission,
@@ -18,8 +18,8 @@ from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain_openai import ChatOpenAI
 
 
-def graph_extractor(model = None):
-    """Build a tool-free DeepAgent that proposes entities and relations from a transcript."""
+def text_patch_verifier(model = None):
+    """Build the configured multimodal DeepAgent for source-page patch verification."""
     if model is None:
         model = domains.settings.chat.service.build_chat_model(
             max_tokens = config.MODEL.max_output_tokens,
@@ -29,9 +29,9 @@ def graph_extractor(model = None):
         )
     model_name = getattr(model, "model_name", None)
     if not isinstance(model_name, str) or not model_name or ":" in model_name:
-        raise ValueError("the YCS graph extractor requires a named configured model")
+        raise ValueError("the text-patch verifier requires a named Rotator model")
     if not isinstance(model, ChatOpenAI):
-        raise TypeError("the YCS graph extractor requires the configured ChatOpenAI model")
+        raise TypeError("the text-patch verifier must use the COELHO Rotator ChatOpenAI model")
 
     key = f"openai:{model_name}"
     harness_profiles._HARNESS_PROFILES.pop(key, None)
@@ -45,30 +45,27 @@ def graph_extractor(model = None):
     agent = create_deep_agent(
         model = model,
         tools = [],
-        system_prompt = prompts.ingestion.graph_extractor.prompts.SYSTEM_PROMPT,
-        response_format = schemas.GraphExtraction,
+        system_prompt = prompts.ingestion.text_patch_verifier.prompts.SYSTEM_PROMPT,
         middleware = [
-            ModelCallLimitMiddleware(
-                run_limit = params.MAX_MODEL_CALLS, 
-                exit_behavior = "end"),
-            middlewares.middleware.CapacityWaitMiddleware(),
             middlewares.middleware.ToolAllowlistMiddleware(frozenset()),
+            ModelCallLimitMiddleware(
+                run_limit = domains.bd.ingestion.ai.params.AGENT_MODEL_CALL_LIMIT,
+                exit_behavior = "end",
+            ),
         ],
+        response_format = schemas.PatchVerificationBatch,
         permissions = [
-            FilesystemPermission(
-                operations = ["read"], 
-                paths = ["/**"], 
-                mode = "deny"),
-            FilesystemPermission(
-                operations = ["write"], 
-                paths = ["/**"], 
-                mode = "deny"),
+            FilesystemPermission(operations = ["read"], paths = ["/**"], mode = "deny"),
+            FilesystemPermission(operations = ["write"], paths = ["/**"], mode = "deny"),
         ],
         backend = StateBackend(),
-        name = "ycs_graph_extractor",
+        name = "bd_text_patch_verifier",
     )
     tool_node = agent.nodes.get("tools")
     available_tools = getattr(getattr(tool_node, "bound", None), "_tools_by_name", None)
-    if not isinstance(available_tools, dict) or set(available_tools) - agents.params.STACK_TOOLS:
-        raise RuntimeError("DeepAgents exposed an unreviewed tool to the YCS graph extractor")
+    error_message = "DeepAgents exposed an unreviewed tool to the text-patch verifier"
+    if not isinstance(available_tools, dict):
+        raise RuntimeError(error_message)
+    if set(available_tools) - params.EXCLUDED_TOOLS - params.INERT_TOOLS:
+        raise RuntimeError(error_message)
     return agent

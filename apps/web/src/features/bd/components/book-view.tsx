@@ -449,13 +449,13 @@ function BookDetail({
       </ActionButton>
       {reviewPages.length > 0 ? (
         <ActionButton
-          aria-label={`Next to review: the next ${units.singular} that needs review`}
-          title={`Jump to the next ${units.singular} that needs review`}
+          aria-label={`Next with findings: the next ${units.singular} with retained findings`}
+          title={`Jump to the next ${units.singular} with retained findings`}
           disabled={nextReview === null}
           onClick={() => nextReview !== null && choosePage(nextReview)}
         >
           <TriangleAlert aria-hidden />
-          <span className="hidden sm:inline">Next to review</span>
+          <span className="hidden sm:inline">Next with findings</span>
         </ActionButton>
       ) : null}
       {layout.contents ? null : (

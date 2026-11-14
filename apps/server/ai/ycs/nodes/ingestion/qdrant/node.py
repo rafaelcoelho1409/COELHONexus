@@ -1,10 +1,7 @@
 """Chunk and embed indexed transcript documents into Qdrant."""
 from __future__ import annotations
-
 import domains
-import domains.ycs.ingestion.qdrant_task.service
-from ....graphs.ingestion import entities, states
-from .. import support
+from .... import graphs
 
 import asyncio
 import logging
@@ -17,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 async def index_vectors(
-    state: states.IngestionChunkState,
-    runtime: Runtime[entities.IngestionContext],
+    state: graphs.ingestion.states.IngestionChunkState,
+    runtime: Runtime[graphs.ingestion.entities.IngestionContext],
 ) -> dict[str, Any]:
     context = runtime.context
     extract_id = state.get("extract_id")
@@ -27,7 +24,9 @@ async def index_vectors(
         return {"qdrant_result": {"processed_ids": [], "failed_ids": []}}
 
     redis = domains.ycs.ingestion.pipeline_task.service.build_redis_client()
-    part_totals = support.partition_totals(state.get("transcript_docs", []))
+    part_totals = domains.ycs.ingestion.pipeline_task.domain.partition_totals(
+        state.get("transcript_docs", []),
+    )
 
     async def process(video_id: str) -> dict[str, Any]:
         async with context.qdrant_semaphore:
@@ -46,7 +45,7 @@ async def index_vectors(
                     }
                 return {"video_id": video_id, "result": result}
             except Exception as error:
-                await support.mark_failed_if_unreported(
+                await domains.ycs.ingestion.pipeline_task.service.mark_failed_if_unreported(
                     redis,
                     extract_id,
                     "qdrant",

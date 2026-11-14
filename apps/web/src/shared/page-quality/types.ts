@@ -12,6 +12,8 @@ export type PageQualityIssue = {
     rationale: string;
     confidence: number;
     risk: string;
+    verification_status?: string | null;
+    verification_reason?: string | null;
   } | null;
 };
 

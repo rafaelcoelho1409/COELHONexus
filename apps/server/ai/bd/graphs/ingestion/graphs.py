@@ -9,7 +9,7 @@ from langgraph.graph import END, START, StateGraph
 
 
 def ingestion_graph(checkpointer: Any | None = None):
-    """Compile the full-book audit, repair, metadata, classification, and publication workflow.
+    """Compile the audit, early content selection, repair, metadata, and publication workflow.
 
     Runtime dependencies such as page access, agents, and progress reporting arrive through the graph context,
     so graph construction only needs an optional checkpointer.
@@ -19,10 +19,10 @@ def ingestion_graph(checkpointer: Any | None = None):
         context_schema = entities.IngestionDependencies,
     )
     workflow.add_node("audit_batch", nodes.ingestion.audit_batch.node.audit_pages)
+    workflow.add_node("classify_content", nodes.ingestion.content_classification.node.classify_content)
     workflow.add_node("plan_repairs", nodes.ingestion.plan_repairs.node.plan_repairs)
     workflow.add_node("repair_pages", nodes.ingestion.repair_pages.node.repair_pages)
     workflow.add_node("normalize_metadata", nodes.ingestion.metadata_normalization.node.normalize_metadata)
-    workflow.add_node("classify_content", nodes.ingestion.content_classification.node.classify_content)
     workflow.add_node(
         "materialize_processed_book",
         nodes.ingestion.materialize_processed_book.node.materialize_processed_book,
@@ -30,11 +30,11 @@ def ingestion_graph(checkpointer: Any | None = None):
     workflow.add_node("reconcile_contents", nodes.ingestion.reconcile_contents.node.reconcile_contents)
     workflow.add_node("publish", nodes.ingestion.publish.node.publish)
     workflow.add_edge(START, "audit_batch")
-    workflow.add_edge("audit_batch", "plan_repairs")
+    workflow.add_edge("audit_batch", "classify_content")
+    workflow.add_edge("classify_content", "plan_repairs")
     workflow.add_edge("plan_repairs", "repair_pages")
     workflow.add_edge("repair_pages", "normalize_metadata")
-    workflow.add_edge("normalize_metadata", "classify_content")
-    workflow.add_edge("classify_content", "materialize_processed_book")
+    workflow.add_edge("normalize_metadata", "materialize_processed_book")
     workflow.add_edge("materialize_processed_book", "reconcile_contents")
     workflow.add_edge("reconcile_contents", "publish")
     workflow.add_edge("publish", END)
