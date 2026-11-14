@@ -87,5 +87,6 @@ class IngestionDependencies:
     specialists: dict[str, nodes.ingestion.repair_pages.service.Specialist]
     metadata_normalizer: nodes.ingestion.metadata_normalization.service.Normalizer
     content_classifier: nodes.ingestion.content_classification.service.ContentClassifier
+    contents_reconciler: nodes.ingestion.reconcile_contents.service.ContentsReconciler
     progress_callback: graphs.service.ProgressReporter | None = None
     finding_verifier: Any | None = None

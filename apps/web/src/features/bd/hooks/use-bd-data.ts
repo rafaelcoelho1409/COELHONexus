@@ -9,8 +9,8 @@ import {
   client,
   deleteBdIngestionBookId,
   getBdIngestionActiveQueryKey,
-  getBdIngestionBookIdOptions,
   getBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionOptions,
+  getBdIngestionBookIdOptions,
   getBdIngestionBookIdPagesPageNoOptions,
   getBdIngestionBookIdPagesPageNoQualityOptions,
   getBdIngestionBookIdQueryKey,
@@ -21,6 +21,8 @@ import {
 
 import {
   cancelAgenticRun,
+  fetchAgenticGraph,
+  fetchProcessedBook,
   resumeAgenticRun,
   startAgenticRun,
   uploadBook,
@@ -32,15 +34,27 @@ import {
   type AgenticRunCancelResponse,
   type AgenticRunWipeResponse,
   agenticRunStatusSchema,
-  contentSelectionSchema,
   type BookSnapshot,
+  contentSelectionSchema,
   type ExtractionWipeResponse,
+  type ProcessedBook,
   pageBodySchema,
   pageQualitySchema,
   type StartResponse,
   startResponseSchema,
 } from "../entities";
 import { LIBRARY_REFRESH_MS, SNAPSHOT_REFRESH_MS } from "../params";
+
+/** GET /bd/ingestion/agentic-graph — Mermaid source from the compiled LangGraph. */
+export function useAgenticGraph(enabled: boolean) {
+  return useQuery({
+    queryKey: ["bd", "ingestion", "agentic-graph"],
+    queryFn: fetchAgenticGraph,
+    enabled,
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+}
 
 /** GET /bd/ingestion — the library, re-read while any book is being extracted. */
 export function useLibrary() {
@@ -118,6 +132,17 @@ export function useContentSelection(bookId: string, agenticRunId: string | null)
   });
 }
 
+/** The compact page numbering and corrected contents for the completed processed book. */
+export function useProcessedBook(bookId: string, agenticRunId: string | null, enabled = true) {
+  return useQuery<ProcessedBook>({
+    queryKey: ["bd", "processed-book", bookId, agenticRunId],
+    queryFn: () => fetchProcessedBook(bookId, agenticRunId ?? ""),
+    enabled: enabled && agenticRunId !== null,
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+}
+
 /** Everything a run can change: the library row, this book's snapshot, the active-runs list. */
 export function useRefreshBook() {
   const queryClient = useQueryClient();
@@ -131,6 +156,15 @@ export function useRefreshBook() {
     void queryClient.invalidateQueries(
       {
         predicate: (query) => isBookPageQuery(query.queryKey, bookId),
+      },
+      keepGoing,
+    );
+    void queryClient.invalidateQueries(
+      {
+        predicate: (query) =>
+          query.queryKey[0] === "bd" &&
+          query.queryKey[1] === "processed-book" &&
+          query.queryKey[2] === bookId,
       },
       keepGoing,
     );

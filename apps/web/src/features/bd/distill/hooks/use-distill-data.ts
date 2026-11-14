@@ -100,12 +100,29 @@ export function useSaveContentSelection(bookId: string) {
       });
       queryClient.setQueryData(queryKey, selection);
       void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
+      void queryClient.invalidateQueries(
+        {
+          predicate: (query) =>
+            query.queryKey[0] === "bd" &&
+            query.queryKey[1] === "processed-book" &&
+            query.queryKey[2] === bookId &&
+            query.queryKey[3] === selection.agentic_run_id,
+        },
+        { cancelRefetch: false },
+      );
     },
     onError: (_error, variables) => {
       const queryKey = getBdIngestionBookIdAgenticRunsAgenticRunIdContentSelectionQueryKey({
         path: { book_id: bookId, agentic_run_id: variables.agenticRunId },
       });
       void queryClient.invalidateQueries({ queryKey });
+      void queryClient.invalidateQueries({
+        predicate: (query) =>
+          query.queryKey[0] === "bd" &&
+          query.queryKey[1] === "processed-book" &&
+          query.queryKey[2] === bookId &&
+          query.queryKey[3] === variables.agenticRunId,
+      });
     },
   });
 }

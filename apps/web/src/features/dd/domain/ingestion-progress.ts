@@ -14,6 +14,39 @@ export const INGESTION_NODES = [
   { id: "publish", label: "Publish pages" },
 ] as const;
 
+export type IngestionNodeDetails = {
+  title: string;
+  agents: readonly string[];
+  skills: readonly string[];
+  tools: readonly string[];
+  pageProgressLabel: string | null;
+};
+
+/** Operational details shown on the compiled Ingestion graph's node cards. */
+export const INGESTION_NODE_DETAILS: Readonly<Record<string, IngestionNodeDetails>> = {
+  audit_pages: {
+    title: "Audit source pages",
+    agents: ["dd_page_auditor"],
+    skills: [],
+    tools: [],
+    pageProgressLabel: "pages audited",
+  },
+  normalize_pages: {
+    title: "Repair and normalize pages",
+    agents: ["dd_page_repair"],
+    skills: [],
+    tools: ["check_patch"],
+    pageProgressLabel: "pages normalized",
+  },
+  publish: {
+    title: "Publish the run manifest",
+    agents: [],
+    skills: [],
+    tools: [],
+    pageProgressLabel: null,
+  },
+};
+
 export type IngestionNodeId = (typeof INGESTION_NODES)[number]["id"];
 export type IngestionNodeStatus = "pending" | "running" | "done" | "failed" | "stopped";
 

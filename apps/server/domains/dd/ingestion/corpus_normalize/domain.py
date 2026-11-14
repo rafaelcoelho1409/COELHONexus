@@ -83,6 +83,15 @@ def normalize_doc(
     text, n_api_entries = _huggingface_optimum_api_export_pass(text)
     stats.api_entries_repaired = n_api_entries
 
+    text, n_create_register_returns = _huggingface_optimum_create_register_return_pass(text)
+    stats.optimum_create_register_returns_repaired = n_create_register_returns
+
+    text, n_optimum_returns = _huggingface_optimum_fx_return_pass(text)
+    stats.optimum_fx_return_sections_repaired = n_optimum_returns
+
+    text, n_api_return_duplicates = _duplicate_inline_api_return_pass(text)
+    stats.api_return_export_duplicates_removed = n_api_return_duplicates
+
     text, n_indented_lists = _indented_label_description_pass(text)
     stats.indented_label_lists_repaired = n_indented_lists
 
@@ -124,11 +133,13 @@ def _emoji_shortcode_heading_spacing_pass(text: str) -> tuple[str, int]:
 
 
 def _escaped_table_row_pipe_pass(text: str) -> tuple[str, int]:
-    """Unescape a table row's first pipe only inside a structurally recognized Markdown table."""
+    """Unescape table rows only when their width and surrounding table structure agree."""
     lines = text.split("\n")
     fenced_lines: set[int] = set()
     for start, end, _kind in _identify_fence_ranges(text):
         fenced_lines.update(range(start, end))
+    replacements: dict[int, str] = {}
+    removed_blanks: set[int] = set()
 
     def cell_count(line: str) -> int:
         cells = 1
@@ -160,19 +171,48 @@ def _escaped_table_row_pipe_pass(text: str) -> tuple[str, int]:
 
         width = cell_count(lines[index])
         cursor = index + 2
-        while cursor < len(lines) and lines[cursor].strip() and cursor not in fenced_lines:
+        while cursor < len(lines) and cursor not in fenced_lines:
+            if not lines[cursor].strip():
+                # Some exports insert one blank line before a continuation of the same table and escape every
+                # leading row pipe. Rejoin only a multi-row run whose unescaped rows exactly match the table width.
+                run: list[tuple[int, str]] = []
+                lookahead = cursor + 1
+                while lookahead < len(lines) and lookahead not in fenced_lines:
+                    escaped_pipe = patterns.ESCAPED_TABLE_ROW_PIPE_RE.match(lines[lookahead])
+                    if escaped_pipe is None:
+                        break
+                    indent_length = len(escaped_pipe.group("indent"))
+                    candidate = lines[lookahead][:indent_length] + lines[lookahead][indent_length + 1:]
+                    if cell_count(candidate) != width:
+                        break
+                    run.append((lookahead, candidate))
+                    lookahead += 1
+                if len(run) >= 2:
+                    removed_blanks.add(cursor)
+                    for row_index, candidate in run:
+                        replacements[row_index] = candidate
+                        fixed += 1
+                    cursor = lookahead
+                    continue
+                break
+
             escaped_pipe = patterns.ESCAPED_TABLE_ROW_PIPE_RE.match(lines[cursor])
             if escaped_pipe is not None:
                 indent_length = len(escaped_pipe.group("indent"))
                 candidate = lines[cursor][:indent_length] + lines[cursor][indent_length + 1:]
                 if cell_count(candidate) <= width:
-                    lines[cursor] = candidate
+                    replacements[cursor] = candidate
                     fixed += 1
-            if patterns.MARKDOWN_TABLE_ROW_RE.match(lines[cursor]) is None or cell_count(lines[cursor]) > width:
+            current_line = replacements.get(cursor, lines[cursor])
+            if patterns.MARKDOWN_TABLE_ROW_RE.match(current_line) is None or cell_count(current_line) > width:
                 break
             cursor += 1
         index = cursor
-    return "\n".join(lines), fixed
+    return "\n".join(
+        replacements.get(index, line)
+        for index, line in enumerate(lines)
+        if index not in removed_blanks
+    ), fixed
 
 
 def _control_character_pass(text: str) -> tuple[str, int]:
@@ -510,6 +550,134 @@ def _huggingface_optimum_api_export_pass(text: str) -> tuple[str, int]:
         ))
         repaired += 1
     return "\n".join(output), repaired
+
+
+def _huggingface_optimum_create_register_return_pass(text: str) -> tuple[str, int]:
+    """Restore the exact Returns boundary lost in the Optimum TasksManager.create_register export."""
+    if "optimum.exporters.tasks.TasksManager" not in text:
+        return text, 0
+
+    heading = re.search(r"^#{1,6}[ \t]+create_register[ \t]*#*[ \t]*$", text, re.MULTILINE)
+    if heading is None:
+        return text, 0
+
+    section_start = heading.end()
+    next_heading = re.search(r"^#{1,6}[ \t]+", text[section_start:], re.MULTILINE)
+    section_end = section_start + next_heading.start() if next_heading else len(text)
+    section = text[section_start:section_end]
+    match = patterns.HUGGINGFACE_OPTIMUM_CREATE_REGISTER_RETURN_RE.search(section)
+    if match is None:
+        return text, 0
+
+    fenced_lines: set[int] = set()
+    for start, end, _kind in _identify_fence_ranges(section):
+        fenced_lines.update(range(start, end))
+    match_line = section.count("\n", 0, match.start())
+    if match_line in fenced_lines:
+        return text, 0
+
+    # Keep the source wording intact; replace the export-added indentation/ordinal with a Returns boundary.
+    replacement = (
+        f"{match.group('summary')}.\n\n**Returns:**\n\n"
+        f"{match.group('return_type')}\n\n"
+        f"{match.group('description')} supported tasks."
+    )
+    repaired_section = section[:match.start()] + replacement + section[match.end():]
+    return text[:section_start] + repaired_section + text[section_end:], 1
+
+
+def _huggingface_optimum_fx_return_pass(text: str) -> tuple[str, int]:
+    """Restore one exact Return/Parameters boundary corrupted in Optimum's `Transformation.__call__` export."""
+    if "optimum.fx.optimization.Transformation" not in text or "#### __call__" not in text:
+        return text, 0
+
+    lines = text.split("\n")
+    fenced_lines: set[int] = set()
+    for start, end, _kind in _identify_fence_ranges(text):
+        fenced_lines.update(range(start, end))
+
+    output: list[str] = []
+    repaired = 0
+    index = 0
+    while index < len(lines):
+        if index + 2 < len(lines) and index not in fenced_lines:
+            candidate = "\n".join(lines[index:index + 3])
+            replacement, count = patterns.HUGGINGFACE_OPTIMUM_FX_RETURN_CONCAT_RE.subn(
+                "only once.\n\n**Returns:**\n\n``torch.fx.GraphModule`` The transformed module.\n\n**Parameters:**",
+                candidate,
+            )
+            if count:
+                output.extend(replacement.split("\n"))
+                repaired += count
+                index += 3
+                continue
+        output.append(lines[index])
+        index += 1
+    return "\n".join(output), repaired
+
+
+def _duplicate_inline_api_return_pass(text: str) -> tuple[str, int]:
+    """Remove an inline export fragment only when a later Returns block preserves the same complete content."""
+    headings = list(re.finditer(r"(?m)^#{1,6}[ \t]+", text))
+    if not headings:
+        return text, 0
+
+    output: list[str] = []
+    cursor = 0
+    removed = 0
+
+    for heading_index, heading in enumerate(headings):
+        section_end = headings[heading_index + 1].start() if heading_index + 1 < len(headings) else len(text)
+        output.append(text[cursor:heading.start()])
+        section = text[heading.start():section_end]
+
+        while True:
+            fenced_lines: set[int] = set()
+            for start, end, _kind in _identify_fence_ranges(section):
+                fenced_lines.update(range(start, end))
+            return_headings = list(re.finditer(r"(?m)^\*\*Returns:\*\*[ \t]*$", section))
+            candidate_to_remove: re.Match[str] | None = None
+
+            for candidate in patterns.API_INLINE_DUPLICATE_RETURN_RE.finditer(section):
+                candidate_line = section.count("\n", 0, candidate.start())
+                if candidate_line in fenced_lines:
+                    continue
+
+                payload = re.sub(r"[\s`*_~]+", "", candidate.group("payload"))
+                if not payload:
+                    continue
+
+                for returns_heading in return_headings:
+                    if returns_heading.start() <= candidate.end():
+                        continue
+                    body_start = returns_heading.end()
+                    next_field = re.search(
+                        r"(?m)^\*\*(?:Parameters|Returns):\*\*[ \t]*$",
+                        section[body_start:],
+                    )
+                    body_end = body_start + next_field.start() if next_field else len(section)
+                    return_body = re.sub(r"[\s`*_~]+", "", section[body_start:body_end])
+                    if payload in return_body:
+                        candidate_to_remove = candidate
+                        break
+                if candidate_to_remove is not None:
+                    break
+
+            if candidate_to_remove is None:
+                break
+
+            section = (
+                section[:candidate_to_remove.start()]
+                + candidate_to_remove.group("sentence_end")
+                + section[candidate_to_remove.end():]
+            )
+            removed += 1
+
+        output.append(section)
+        cursor = section_end
+
+    output.append(text[cursor:])
+    return "".join(output), removed
 
 
 def _indented_label_description_pass(text: str) -> tuple[str, int]:

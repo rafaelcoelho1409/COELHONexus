@@ -150,9 +150,9 @@ result, warnings = asyncio.run(audit(good))
 check("an auditor that answers first time is asked once", good.calls, 1)
 check("its assessment is returned", result.page_kind, schemas.PageKind.DOCUMENTATION)
 
-slips = FakeAgent({"structured_response": None}, {"messages": []}, {"structured_response": assessment})
+slips = FakeAgent({"structured_response": None}, {"structured_response": assessment})
 result, warnings = asyncio.run(audit(slips))
-check("an empty or missing structured response is asked again", slips.calls, 3)
+check("an empty structured response is retried within the configured attempt budget", slips.calls, attempts)
 check("the answer that follows is used", result.confidence, 0.9)
 
 never = FakeAgent({"structured_response": None})
@@ -169,17 +169,28 @@ async def capture_sleep(delay):
 
 chat_service.asyncio.sleep = capture_sleep
 try:
-    recovers = FakeAgent(FakeProviderError(504), FakeProviderError(429), {"structured_response": assessment})
+    recovers = FakeAgent(FakeProviderError(504), {"structured_response": assessment})
     result, _ = asyncio.run(audit(recovers))
-    check("the auditor retries 5xx and 429 responses, then accepts a structured result", recovers.calls, 3)
-    check("transient retries use 20-second then 40-second pauses", waits, [20.0, 40.0])
+    check("the auditor retries a 5xx response and accepts a structured result", recovers.calls, 2)
+    check("the single transient retry uses the configured short pause", waits, [3.0])
     check("the auditor returns the recovered result", result.page_kind, schemas.PageKind.DOCUMENTATION)
+
+    waits.clear()
+    recovers_429 = FakeAgent(FakeProviderError(429), {"structured_response": assessment})
+    asyncio.run(audit(recovers_429))
+    check("the auditor retries a 429 response within its attempt budget", recovers_429.calls, 2)
+    check("the 429 retry also uses the configured short pause", waits, [3.0])
 
     waits.clear()
     timeout_error = APITimeoutError(request = httpx.Request("POST", "https://rotator.test"))
     repairs = FakeAgent(timeout_error, {"structured_response": batch})
-    asyncio.run(repair(repairs))
-    check("the repairer retries a timeout once", (repairs.calls, waits), (2, [20.0]))
+    try:
+        asyncio.run(repair(repairs))
+    except APITimeoutError:
+        pass
+    else:
+        raise AssertionError("the optional repair timeout should be surfaced after its one attempt")
+    check("an optional repair does not spend a second call after timeout", (repairs.calls, waits), (1, []))
 
     waits.clear()
     bad_request = FakeAgent(FakeProviderError(400), {"structured_response": assessment})
@@ -206,7 +217,7 @@ try:
         )
     else:
         raise AssertionError("an exhausted transient failure should be raised")
-    check("the exhausted page uses bounded backoff", waits, [20.0, 40.0])
+    check("the exhausted page uses bounded backoff", waits, [3.0])
 finally:
     chat_service.asyncio.sleep = real_sleep
 
@@ -222,14 +233,14 @@ good = FakeAgent({"structured_response": batch})
 asyncio.run(repair(good))
 check("a repairer that answers first time is asked once", good.calls, 1)
 
-slips = FakeAgent({"structured_response": None}, {"structured_response": batch})
-asyncio.run(repair(slips))
-check("a repairer with an empty structured response is asked again", slips.calls, 2)
+slips = FakeAgent({"structured_response": None})
+rejects("an optional repair with invalid output ends after one attempt", lambda: asyncio.run(repair(slips)))
+check("the optional repair attempt budget is one", slips.calls, 1)
 
 never = FakeAgent({"structured_response": None})
 rejects("a repairer that never answers fails", lambda: asyncio.run(repair(never)))
 check("it is asked as many times as allowed, no more", never.calls, repair_attempts)
-check("a repair is allowed fewer tries than an audit", repair_attempts < attempts, True)
+check("an optional repair is allowed fewer tries than an audit", repair_attempts < attempts, True)
 
 # --- repair eligibility, finding dedupe, and a repairer that cannot be reached
 from ai.dd.nodes.ingestion import normalize_pages
@@ -245,10 +256,10 @@ def finding(issue_id: str, category: str, confidence: float, evidence: str = "(\
 mixed = {"page_kind": "documentation", "issues": [
     finding("a", "markdown_formatting", 0.8),
     finding("b", "other", 0.95),
-    finding("c", "malformed_heading", 0.9),
+    finding("c", "malformed_heading", 0.95),
 ]}
 check(
-    "only a patchable category at or above the patch confidence reaches the repairer",
+    "only a patchable category at or above the audit-confidence threshold reaches the repairer",
     [issue["issue_id"] for issue in page_repair.domain.repairable_assessment(mixed)["issues"]],
     ["c"],
 )
@@ -424,8 +435,9 @@ body, report = one_patch("b", "[Troubleshooting Installation]()", "[Troubleshoot
 check("a formatting patch that only adds a destination is applied", (len(report["accepted"]), "(#troubleshooting-installation)" in body), (1, True))
 
 body, report = one_patch("c", "#### NOTE\nBecause it matters.", "Because it matters.", "\n\n", "\n\nSee", category = "duplicate_boilerplate")
-check("a repeat removal is rejected when the page holds only one copy",
-      (len(report["accepted"]), report["rejected"][0]["reason"]), (0, "removing it would leave no copy of the text"))
+check("duplicate findings are review-only",
+      (len(report["accepted"]), report["rejected"][0]["reason"]),
+      (0, "finding category is not eligible for automatic repair"))
 
 TWICE_SOURCE = "# T\n\nIntro.\n\nSee docs.\n\nMiddle.\n\nSee docs.\n"
 twice_sha = hashlib.sha256(TWICE_SOURCE.encode("utf-8")).hexdigest()
@@ -436,7 +448,7 @@ twice_patch = schemas.PagePatch(
 twice_issue = [{"issue_id": "d", "category": "duplicate_boilerplate", "severity": "low", "description": "d",
                 "evidence": "See docs.", "confidence": 0.95}]
 body, report = page_repair.domain.apply_patches(TWICE_SOURCE, twice_sha, {"issues": twice_issue}, schemas.PagePatchBatch(patches = [twice_patch]))
-check("a repeat removal is applied when another copy stays", (len(report["accepted"]), body.count("See docs.")), (1, 1))
+check("duplicate text stays untouched even when another copy remains", (len(report["accepted"]), body.count("See docs.")), (0, 2))
 
 titled = {"title": "# aiolocust / asyncio", "title_confidence": 0.9}
 check(
@@ -620,19 +632,306 @@ table_findings = schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATI
 ])
 kept_tables, _ = page_audit.domain.sanitize_assessment(table_findings, markdown = table_page)
 check("a finding that calls a sound table head malformed is dropped; one about a data row is kept", [issue.issue_id for issue in kept_tables.issues], ["row"])
+
+# Cross-format false-positive guards preserve source semantics while validating quoted Markdown.
+quoted_code = "> Background\n>\n> ```bash\n> ##Install\n> echo safe\n> ```\n"
+quoted_code_issue = schemas.PageIssue(
+    issue_id = "quoted-code", category = "markdown_formatting", severity = "medium",
+    description = "A malformed heading appears in the quoted code sample.",
+    evidence = "> ##Install", confidence = 0.99,
+)
+quoted_code_assessment, _ = page_audit.domain.sanitize_assessment(
+    schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATION, confidence = 0.9, issues = [quoted_code_issue]),
+    markdown = quoted_code,
+)
+check("a fence inside a block quote protects its code from heading findings", quoted_code_assessment.issues, [])
+check("the candidate scan ignores headings inside quoted fences", page_audit.domain.heading_markers(quoted_code), [])
+
+quoted_table = "> | Name | Value |\n> | --- | --- |\n> | item | 1 |\n"
+check("a quoted GFM header and alignment row are valid table syntax",
+      page_audit.domain.is_sound_table_head("> | Name | Value |\n> | --- | --- |"), True)
+check("a quoted body row is recognized in its source table",
+      page_audit.domain.is_valid_table_row_context(quoted_table, "> | item | 1 |"), True)
+
+figure = '<figure>![](/api/v1/dd/ingestion/slug/artifacts/chart.png)<figcaption>Chart</figcaption></figure>'
+image_issue = schemas.PageIssue(
+    issue_id = "image", category = "markdown_formatting", severity = "medium",
+    description = "The image syntax is missing a closing parenthesis.",
+    evidence = "![](/api/v1/dd/ingestion/slug/artifacts/chart.png)", confidence = 0.99,
+)
+image_assessment, _ = page_audit.domain.sanitize_assessment(
+    schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATION, confidence = 0.9, issues = [image_issue]),
+    markdown = figure,
+)
+check("a complete image inside an HTML figure is not reported as malformed", image_assessment.issues, [])
+check("a cited exclamation is suppressed only when it is the figure image marker",
+      page_audit.domain.is_reported_exclamation_mark_a_figure_image(
+          figure, "!", "a solitary exclamation mark appears before the figure image",
+      ), True)
+check("an unrelated exclamation is not hidden by another figure image",
+      page_audit.domain.is_reported_exclamation_mark_a_figure_image(
+          figure + "\nAn unrelated ! remains.\n", "!", "a stray exclamation was reported",
+      ), False)
+broken_image = "![](images/chart.png\n"
+broken_image_issue = image_issue.model_copy(update = {"evidence": "![](images/chart.png"})
+broken_image_assessment, _ = page_audit.domain.sanitize_assessment(
+    schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATION, confidence = 0.9, issues = [broken_image_issue]),
+    markdown = broken_image,
+)
+check("an actually unclosed image remains available for review", [issue.issue_id for issue in broken_image_assessment.issues], ["image"])
+
+plain_heading_assessment, _ = page_audit.domain.sanitize_assessment(
+    schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATION, confidence = 0.9, issues = [
+        schemas.PageIssue(
+            issue_id = "plain-heading", category = "malformed_heading", severity = "medium",
+            description = "Malformed heading because the plain text label has no ATX heading marker.",
+            evidence = "Reference", confidence = 0.99,
+        ),
+    ]),
+    markdown = "Reference\n\nThe API reference follows.\n",
+)
+check("plain text labels alone do not prove that Markdown heading syntax is malformed", plain_heading_assessment.issues, [])
+
+sphinx_source = (
+    "asyncio.EventLoop\n"
+    "    : abstract base class for event loops\n"
+    "\n"
+    "        Added in version 3.13.\n"
+)
+sphinx_version_issue = schemas.PageIssue(
+    issue_id = "sphinx-version", category = "markdown_formatting", severity = "medium",
+    description = "The indentation in this API documentation is malformed.",
+    evidence = "        Added in version 3.13.", confidence = 0.99,
+)
+sphinx_version_assessment, _ = page_audit.domain.sanitize_assessment(
+    schemas.PageAssessment(page_kind = schemas.PageKind.API_REFERENCE, confidence = 0.9, issues = [sphinx_version_issue]),
+    markdown = sphinx_source,
+)
+check("an indented Sphinx version annotation is part of its definition list", sphinx_version_assessment.issues, [])
+
+escaped_signature = "asyncio.eager\\_task\\_factory\n    : task factory\n"
+escaped_signature_issue = schemas.PageIssue(
+    issue_id = "escaped-signature", category = "encoding_artifact", severity = "medium",
+    description = "Escaped underscores in this identifier are an encoding artifact.",
+    evidence = "asyncio.eager\\_task\\_factory", confidence = 0.99,
+)
+escaped_signature_assessment, _ = page_audit.domain.sanitize_assessment(
+    schemas.PageAssessment(page_kind = schemas.PageKind.API_REFERENCE, confidence = 0.9, issues = [escaped_signature_issue]),
+    markdown = escaped_signature,
+)
+check("valid escaped identifiers in Sphinx signatures are not encoding artifacts", escaped_signature_assessment.issues, [])
+
+sphinx_wrapped_source = (
+    "asyncio.Queue.get()\n"
+    "    : Retrieve an item when one is available and wait\n"
+    "      until an item has been put into the queue.\n"
+)
+sphinx_wrapped_issue = schemas.PageIssue(
+    issue_id = "sphinx-wrapped-prose", category = "markdown_formatting", severity = "medium",
+    description = "This line break in the wrapped sentence harms its rendering and readability.",
+    evidence = "    : Retrieve an item when one is available and wait\n      until an item has been put into the queue.",
+    confidence = 0.99,
+)
+sphinx_wrapped_assessment, _ = page_audit.domain.sanitize_assessment(
+    schemas.PageAssessment(page_kind = schemas.PageKind.API_REFERENCE, confidence = 0.9, issues = [sphinx_wrapped_issue]),
+    markdown = sphinx_wrapped_source,
+)
+check("ordinary wrapped prose in Sphinx API descriptions is not a formatting defect", sphinx_wrapped_assessment.issues, [])
+
+sphinx_asterisk_source = "class asyncio.Semaphore(*value=1*)\n    : A semaphore object.\n"
+sphinx_asterisk_issue = schemas.PageIssue(
+    issue_id = "sphinx-asterisk-style", category = "markdown_formatting", severity = "medium",
+    description = "The unusual asterisk placement around the default parameter is malformed.",
+    evidence = "class asyncio.Semaphore(*value=1*)",
+    confidence = 0.99,
+)
+sphinx_asterisk_assessment, _ = page_audit.domain.sanitize_assessment(
+    schemas.PageAssessment(page_kind = schemas.PageKind.API_REFERENCE, confidence = 0.9, issues = [sphinx_asterisk_issue]),
+    markdown = sphinx_asterisk_source,
+)
+check("valid Sphinx italic default-parameter signatures are not flagged for asterisk style", sphinx_asterisk_assessment.issues, [])
+
+sphinx_repeat_source = (
+    "# Future.result\n"
+    "asyncio.Future.result()\n"
+    "    : Raises CancelledError if the future is cancelled.\n"
+    "\n"
+    "# Future.exception\n"
+    "asyncio.Future.exception()\n"
+    "    : Raises CancelledError if the future is cancelled.\n"
+)
+sphinx_repeat_issue = schemas.PageIssue(
+    issue_id = "sphinx-context-repeat", category = "markdown_formatting", severity = "medium",
+    description = "The same cancellation explanation is repeated across these API methods.",
+    evidence = "Raises CancelledError if the future is cancelled.",
+    other_evidence = "Raises CancelledError if the future is cancelled.",
+    confidence = 0.99,
+)
+sphinx_repeat_assessment, _ = page_audit.domain.sanitize_assessment(
+    schemas.PageAssessment(page_kind = schemas.PageKind.API_REFERENCE, confidence = 0.9, issues = [sphinx_repeat_issue]),
+    markdown = sphinx_repeat_source,
+)
+check("repeated Sphinx explanation in separate API entries is contextual, not a formatting issue", sphinx_repeat_assessment.issues, [])
+
+sphinx_same_entry_source = (
+    "# Future.result\n"
+    "asyncio.Future.result()\n"
+    "    : Raises CancelledError if the future is cancelled.\n"
+    "      Raises CancelledError if the future is cancelled.\n"
+)
+sphinx_same_entry_assessment, _ = page_audit.domain.sanitize_assessment(
+    schemas.PageAssessment(page_kind = schemas.PageKind.API_REFERENCE, confidence = 0.9, issues = [sphinx_repeat_issue]),
+    markdown = sphinx_same_entry_source,
+)
+check("same-entry Sphinx repetition remains reviewable", [issue.issue_id for issue in sphinx_same_entry_assessment.issues], ["sphinx-context-repeat"])
+
+escaped_emphasis_issue = schemas.PageIssue(
+    issue_id = "missing-escaped-literal", category = "markdown_formatting", severity = "medium",
+    description = "The source identifier *return\\_when* is visual noise and should be removed.",
+    evidence = "The result is returned when the operation completes.", confidence = 0.99,
+)
+escaped_emphasis_assessment, _ = page_audit.domain.sanitize_assessment(
+    schemas.PageAssessment(page_kind = schemas.PageKind.API_REFERENCE, confidence = 0.9, issues = [escaped_emphasis_issue]),
+    markdown = "The result is returned when the operation completes.\n",
+)
+check("an emphasized escaped identifier absent from evidence invalidates the finding", escaped_emphasis_assessment.issues, [])
+
+sphinx_parameter_claim = schemas.PageIssue(
+    issue_id = "sphinx-parameter-literal", category = "markdown_formatting", severity = "medium",
+    description = "The parameter description uses backslash-escaped characters (*timeout*, *return\\_when*) that are unnecessary in this context and create visual noise.",
+    evidence = "*timeout* (a float or int), if specified, can be used to control",
+    confidence = 0.99,
+)
+sphinx_parameter_assessment, _ = page_audit.domain.sanitize_assessment(
+    schemas.PageAssessment(page_kind = schemas.PageKind.API_REFERENCE, confidence = 0.9, issues = [sphinx_parameter_claim]),
+    markdown = "*timeout* (a float or int), if specified, can be used to control the wait.\n",
+)
+check("an emphasized escaped identifier missing from a Sphinx parameter excerpt is rejected", sphinx_parameter_assessment.issues, [])
+
+valid_link_source = (
+    "> Integrate with Browserbase using LangChain Python.\n\n"
+    "[Browserbase](https://www.browserbase.com)\n\n"
+    "with [session recordings](https://docs.browserbase.com/platform/browser/observability/observability) "
+    "and a [live view](https://docs.browserbase.com/platform/browser/observability/session-live-view)\n\n"
+    "The same API key covers [Search](https://docs.browserbase.com/platform/search/overview) and "
+    "[Fetch](https://docs.browserbase.com/platform/fetch/overview).\n"
+)
+valid_link_issues = [
+    schemas.PageIssue(
+        issue_id = "broken-link-1", category = "markdown_formatting", severity = "low",
+        description = "The blockquote contains broken link syntax because a closing bracket is missing.",
+        evidence = "> Integrate with Browserbase using LangChain Python.\n\n[Browserbase](https://www.browserbase.com)",
+        confidence = 0.99,
+    ),
+    schemas.PageIssue(
+        issue_id = "broken-link-2", category = "markdown_formatting", severity = "low",
+        description = "The text has a broken link due to a missing closing bracket.",
+        evidence = "with [session recordings](https://docs.browserbase.com/platform/browser/observability/observability) and a [live view](https://docs.browserbase.com/platform/browser/observability/session-live-view)",
+        confidence = 0.99,
+    ),
+    schemas.PageIssue(
+        issue_id = "broken-link-3", category = "markdown_formatting", severity = "low",
+        description = "This line has broken link syntax; a closing bracket is missing.",
+        evidence = "The same API key covers [Search](https://docs.browserbase.com/platform/search/overview) and [Fetch](https://docs.browserbase.com/platform/fetch/overview)",
+        confidence = 0.99,
+    ),
+]
+valid_link_assessment, _ = page_audit.domain.sanitize_assessment(
+    schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATION, confidence = 0.9, issues = valid_link_issues),
+    markdown = valid_link_source,
+)
+check("claims of missing brackets are discarded when cited inline links are complete", valid_link_assessment.issues, [])
+
+broken_link_text = "[Browserbase(https://www.browserbase.com)"
+broken_link_issue = schemas.PageIssue(
+    issue_id = "actually-broken-link", category = "markdown_formatting", severity = "medium",
+    description = "This link has broken syntax because its closing bracket is missing.",
+    evidence = broken_link_text, confidence = 0.99,
+)
+broken_link_assessment, _ = page_audit.domain.sanitize_assessment(
+    schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATION, confidence = 0.9, issues = [broken_link_issue]),
+    markdown = broken_link_text,
+)
+check("a genuinely missing Markdown link bracket remains reviewable", [issue.issue_id for issue in broken_link_assessment.issues], ["actually-broken-link"])
+
+callout_heading = "### Execution and state\n\n> [!TIP]\n> State is checkpointed.\n"
+empty_heading_issue = schemas.PageIssue(
+    issue_id = "empty-heading", category = "malformed_heading", severity = "medium",
+    description = "This is an empty heading because no prose follows it.",
+    evidence = "### Execution and state\n\n> [!TIP]", confidence = 0.99,
+)
+callout_assessment, _ = page_audit.domain.sanitize_assessment(
+    schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATION, confidence = 0.9, issues = [empty_heading_issue]),
+    markdown = callout_heading,
+)
+check("a valid heading followed by a callout is not an empty heading", callout_assessment.issues, [])
+
+unsupported_literal_issue = schemas.PageIssue(
+    issue_id = "unsupported-literal", category = "markdown_formatting", severity = "medium",
+    description = "The source line contains the identifier ``kwargs``, which is not formatted correctly.",
+    evidence = "The method accepts keyword arguments.", confidence = 0.99,
+)
+unsupported_literal_assessment, _ = page_audit.domain.sanitize_assessment(
+    schemas.PageAssessment(page_kind = schemas.PageKind.API_REFERENCE, confidence = 0.9, issues = [unsupported_literal_issue]),
+    markdown = "The method accepts keyword arguments.\n",
+)
+check("character-level claims must quote text that appears in their evidence", unsupported_literal_assessment.issues, [])
+
+blank_line_source = "# Title\n\n## Section\n\n| Name | Value |\n| --- | --- |\n"
+blank_line_issues = schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATION, confidence = 0.9, issues = [
+    schemas.PageIssue(
+        issue_id = "heading-blank", category = "malformed_heading", severity = "medium",
+        description = "A blank line is missing before this heading.",
+        evidence = "## Section", confidence = 0.99,
+    ),
+    schemas.PageIssue(
+        issue_id = "table-blank", category = "markdown_formatting", severity = "medium",
+        description = "A blank line is missing before this table.",
+        evidence = "| Name | Value |\n| --- | --- |", confidence = 0.99,
+    ),
+])
+blank_line_assessment, _ = page_audit.domain.sanitize_assessment(blank_line_issues, markdown = blank_line_source)
+check("missing-blank-line claims contradicted by source context are dropped", blank_line_assessment.issues, [])
+
+tabs_source = (
+    "{% tabs %}\n{% tab title=\"macOS\" %}\nInstall the dependency.\n{% endtab %}\n"
+    "{% tab title=\"Windows\" %}\nInstall the dependency.\n{% endtab %}\n{% endtabs %}\n"
+)
+tab_repeat = schemas.PageIssue(
+    issue_id = "tab-repeat", category = "duplicate_section", severity = "medium",
+    description = "The same instruction is duplicated.",
+    evidence = "Install the dependency.", other_evidence = "Install the dependency.", confidence = 0.99,
+)
+tabs_assessment, _ = page_audit.domain.sanitize_assessment(
+    schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATION, confidence = 0.9, issues = [tab_repeat]),
+    markdown = tabs_source,
+)
+check("repeated instructions in different GitBook choice tabs are contextual", tabs_assessment.issues, [])
+
+cosmetic_assessment, _ = page_audit.domain.sanitize_assessment(
+    schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATION, confidence = 0.9, issues = [
+        schemas.PageIssue(
+            issue_id = "spacing", category = "markdown_formatting", severity = "low",
+            description = "Minor punctuation inconsistency is only a cosmetic style issue.",
+            evidence = "A sentence.", confidence = 0.99,
+        ),
+    ]),
+    markdown = "A sentence.\n",
+)
+check("low-severity cosmetic punctuation is not actionable ingestion quality", cosmetic_assessment.issues, [])
 rendered = auditor_domain.system_prompt()
 check("the auditor prompt carries every example and no placeholder",
       (auditor_params.CONVENTIONS_MARKER in rendered, all(example in rendered for _, examples in auditor_patterns.EXPORT_CONVENTIONS for example in examples)),
       (False, True))
 
 REPAIR_PAGE = "# T\n\nA line.\n\nSee the guide.\n\nA line.\n"
-repair_assessment = {"issues": [{"issue_id": "d", "category": "duplicate_boilerplate", "severity": "low", "description": "d",
+repair_assessment = {"issues": [{"issue_id": "d", "category": "markdown_formatting", "severity": "low", "description": "redundant blank line between prose paragraphs",
                                   "evidence": "A line.", "confidence": 0.95}]}
 repair_sha = hashlib.sha256(REPAIR_PAGE.encode("utf-8")).hexdigest()
 
 
 def patch_fields(**changes):
-    fields = {"issue_id": "d", "evidence": "A line.", "target_text": "A line.\n\nSee the guide.", "replacement": "",
+    fields = {"issue_id": "d", "evidence": "A line.", "target_text": "A line.\n\nSee the guide.", "replacement": "A line.\nSee the guide.",
               "confidence": 0.95, "context_before": "\n\n", "context_after": "\n\nA line.\n"}
     return {**fields, **changes}
 
@@ -642,9 +941,12 @@ check("a patch the final gate would apply passes the check",
 non_unique = page_repair.domain.check_patch(REPAIR_PAGE, repair_sha, repair_assessment, patch_fields(target_text = "A line."))
 check("a target that repeats is refused with the count and what to do",
       ("occurs 2 times" in non_unique, "Extend target_text" in non_unique), (True, True))
-check("a patch that deletes the only copy is refused",
-      page_repair.domain.check_patch("# T\n\nA line.\n", hashlib.sha256(b"# T\n\nA line.\n").hexdigest(), repair_assessment,
-                                     patch_fields(target_text = "A line.", context_before = "\n\n", context_after = "\n")).startswith("removing it would leave no copy"),
+check("a duplicate finding cannot be patched, even when its evidence occurs twice",
+      page_repair.domain.check_patch(
+          REPAIR_PAGE, repair_sha,
+          {"issues": [{"issue_id": "d", "category": "duplicate_section", "evidence": "A line.", "confidence": 0.95}]},
+          patch_fields(),
+      ).startswith("finding category is not eligible"),
       True)
 check("a patch that changes nothing is explained, not raised",
       "replacement must change target_text" in page_repair.domain.check_patch(REPAIR_PAGE, repair_sha, repair_assessment, patch_fields(replacement = "A line.\n\nSee the guide.")),

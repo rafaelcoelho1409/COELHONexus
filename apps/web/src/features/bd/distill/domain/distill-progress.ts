@@ -1,4 +1,4 @@
-import type { AgenticNodeStatus, AgenticNodeView } from "../../domain/agentic-progress";
+import type { AgenticNodeProgress, AgenticNodeStatus, AgenticNodeView } from "../../domain/agentic-progress";
 import type { DistillRun } from "../entities";
 
 export const DISTILL_NODES = [
@@ -8,6 +8,7 @@ export const DISTILL_NODES = [
     detail: "Create source-linked learning units from the extracted book pages.",
     reads: ["Extracted pages", "Ingestion quality result"],
     writes: ["Learning units with page references"],
+    resources: { agents: [], skills: [], tools: [] },
   },
   {
     id: "extract_unit",
@@ -15,6 +16,7 @@ export const DISTILL_NODES = [
     detail: "Find the book’s central claims, methods, evidence, and useful examples in each learning unit.",
     reads: ["Learning units", "Source page references"],
     writes: ["Candidate lessons", "Evidence quotes"],
+    resources: { agents: ["learning_extractor", "evidence_verifier"], skills: [], tools: [] },
   },
   {
     id: "prepare_chapters",
@@ -22,6 +24,7 @@ export const DISTILL_NODES = [
     detail: "Group source-backed lessons by chapter and topic while preserving their source locations.",
     reads: ["Candidate lessons", "Book chapter outline"],
     writes: ["Chapter lesson groups"],
+    resources: { agents: [], skills: [], tools: [] },
   },
   {
     id: "synthesize_chapter",
@@ -29,6 +32,7 @@ export const DISTILL_NODES = [
     detail: "Turn each chapter’s supported lessons into a concise explanation and chapter-level guide.",
     reads: ["Chapter lesson groups", "Evidence quotes"],
     writes: ["Chapter explanations", "Chapter-level learning models"],
+    resources: { agents: ["chapter_synthesizer"], skills: [], tools: [] },
   },
   {
     id: "synthesize_book",
@@ -37,6 +41,7 @@ export const DISTILL_NODES = [
       "Connect chapter findings into the book’s thesis, key takeaways, and cross-chapter relationships.",
     reads: ["Chapter explanations", "Verified lessons"],
     writes: ["Central thesis", "Key takeaways", "Cross-chapter connections"],
+    resources: { agents: ["book_synthesizer"], skills: [], tools: [] },
   },
   {
     id: "publish_report",
@@ -44,6 +49,7 @@ export const DISTILL_NODES = [
     detail: "Check source coverage and citation integrity, then render the Learning Guide and its visuals.",
     reads: ["Synthesized book and chapters", "Source references"],
     writes: ["Learning Guide", "Coverage and citation checks"],
+    resources: { agents: [], skills: [], tools: [] },
   },
 ] as const;
 
@@ -78,8 +84,35 @@ export function distillNodeViews(
       status: nodeStatus,
       kpi: nodeKpi(node.id, nodeStatus, progress),
       liveLine: nodeLiveLine(node.id, status, progress),
+      resources: node.resources,
+      progress: nodeProgress(node.id, nodeStatus, progress),
     };
   });
+}
+
+function nodeProgress(
+  nodeId: DistillNode["id"],
+  status: AgenticNodeStatus,
+  progress: DistillRun["progress"] | null,
+): AgenticNodeProgress | null {
+  if (progress === null || status === "pending") return null;
+  if (nodeId === "extract_unit" && progress.total_units > 0) {
+    return {
+      current: Math.min(progress.completed_units, progress.total_units),
+      total: progress.total_units,
+      label: "units extracted",
+      active: 0,
+    };
+  }
+  if (nodeId === "synthesize_chapter" && progress.total_chapters > 0) {
+    return {
+      current: Math.min(progress.completed_chapters, progress.total_chapters),
+      total: progress.total_chapters,
+      label: "chapters explained",
+      active: 0,
+    };
+  }
+  return null;
 }
 
 export function distillNodeStatus(

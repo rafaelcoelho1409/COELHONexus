@@ -86,6 +86,73 @@ class ContentSelectionManifest(BaseModel):
         return self
 
 
+class ProcessedBookPage(BaseModel):
+    """A selected, densely numbered page with its immutable physical source identity."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    processed_page_number: int = Field(gt = 0, strict = True)
+    source_page_number: int = Field(gt = 0, strict = True)
+    source_key: ObjectKey
+    source_sha256: Sha256Hex
+    content_key: ObjectKey
+    content_sha256: Sha256Hex
+    section_path: list[str] = Field(default_factory = list)
+    role: Literal["core", "preface", "reference", "navigation", "legal", "noise", "unknown"]
+
+
+class ProcessedContentsEntry(BaseModel):
+    """One reconciled contents item; source page identity is retained for citations and review."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    level: int = Field(ge = 1, le = 8, strict = True)
+    title: NonEmptyText = Field(max_length = 300)
+    processed_page_number: int = Field(gt = 0, strict = True)
+    source_page_number: int = Field(gt = 0, strict = True)
+    confidence: float = Field(ge = 0, le = 1, allow_inf_nan = False)
+    review_required: bool = False
+
+
+class ProcessedBookManifest(BaseModel):
+    """Canonical processed book page set pinned to one content-selection revision."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    schema_version: Literal["1.0"] = "1.0"
+    book_id: SafeSegment
+    extraction_run_id: SafeSegment
+    agentic_run_id: SafeSegment
+    selection_key: ObjectKey
+    selection_sha256: Sha256Hex
+    selection_revision: int = Field(gt = 0, strict = True)
+    expected_source_page_count: int = Field(gt = 0, strict = True)
+    source_page_count: int = Field(gt = 0, strict = True)
+    pages: list[ProcessedBookPage]
+    contents: list[ProcessedContentsEntry] = Field(default_factory = list)
+    contents_status: Literal["complete", "needs_review", "unavailable"]
+    contents_agent_version: NonEmptyText
+    created_at: float = Field(gt = 0, allow_inf_nan = False)
+
+    @model_validator(mode = "after")
+    def _validate_processed_book(self) -> ProcessedBookManifest:
+        processed_numbers = [page.processed_page_number for page in self.pages]
+        source_numbers = [page.source_page_number for page in self.pages]
+        if processed_numbers != list(range(1, len(self.pages) + 1)):
+            raise ValueError("processed pages must have contiguous numbers starting at one")
+        if source_numbers != sorted(set(source_numbers)):
+            raise ValueError("processed page source identities must be unique and ordered")
+        if self.source_page_count != len(self.pages):
+            raise ValueError("source_page_count must match the processed page set")
+        included = set(source_numbers)
+        page_map = {page.source_page_number: page.processed_page_number for page in self.pages}
+        if any(entry.source_page_number not in included for entry in self.contents):
+            raise ValueError("contents entries must point to included source pages")
+        if any(page_map[entry.source_page_number] != entry.processed_page_number for entry in self.contents):
+            raise ValueError("contents page numbers must match the processed page map")
+        return self
+
+
 class IngestionPageArtifact(BaseModel):
     """Source identity and versioned output references for one physical page."""
 
@@ -120,7 +187,7 @@ class IngestionAIRunManifest(BaseModel):
 
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = versions.MANIFEST_SCHEMA_VERSION
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4"] = versions.MANIFEST_SCHEMA_VERSION
     workflow_version: NonEmptyText = versions.WORKFLOW_VERSION
     agentic_run_id: SafeSegment
     book_id: SafeSegment
@@ -146,6 +213,11 @@ class IngestionAIRunManifest(BaseModel):
     content_selection_revision: int | None = Field(default = None, ge = 1, strict = True)
     selected_page_count: int | None = Field(default = None, ge = 0, strict = True)
     excluded_page_count: int | None = Field(default = None, ge = 0, strict = True)
+    processed_book_key: ObjectKey | None = None
+    processed_book_sha256: Sha256Hex | None = None
+    processed_book_revision: int | None = Field(default = None, ge = 1, strict = True)
+    processed_page_count: int | None = Field(default = None, ge = 1, strict = True)
+    contents_status: Literal["complete", "needs_review", "unavailable"] | None = None
     created_at: float = Field(gt = 0, allow_inf_nan = False)
     updated_at: float = Field(gt = 0, allow_inf_nan = False)
     finished_at: float | None = Field(default = None, gt = 0, allow_inf_nan = False)
@@ -190,7 +262,7 @@ class IngestionAIRunManifest(BaseModel):
                 raise ValueError("completed runs may contain only completed or review-required pages")
             if self.book_metadata_sha256 is None or self.quality_report_sha256 is None:
                 raise ValueError("completed runs must include hashes for book metadata and quality report")
-            if self.schema_version in {"1.1", "1.2", "1.3"}:
+            if self.schema_version in {"1.1", "1.2", "1.3", "1.4"}:
                 if self.quality_status is None:
                     raise ValueError("completed 1.1 runs must include a quality status")
                 if self.delivered_page_count != sum(
@@ -205,14 +277,14 @@ class IngestionAIRunManifest(BaseModel):
                     page.status == AgenticPageStatus.REVIEW_REQUIRED for page in self.pages
                 ):
                     raise ValueError("review_page_count must match page review statuses")
-            if self.schema_version in {"1.2", "1.3"}:
+            if self.schema_version in {"1.2", "1.3", "1.4"}:
                 if len(self.unverified_pages) != self.unverified_page_count:
                     raise ValueError("unverified_page_count must match unverified_pages")
                 if len(self.unverified_pages) != len(set(self.unverified_pages)):
                     raise ValueError("unverified_pages must contain unique page numbers")
                 if any(page_number < 1 or page_number > self.expected_page_count for page_number in self.unverified_pages):
                     raise ValueError("unverified_pages must be within the expected page range")
-            if self.schema_version == "1.3":
+            if self.schema_version in {"1.3", "1.4"}:
                 if any(value is None for value in (
                     self.content_selection_key,
                     self.content_selection_sha256,
@@ -223,6 +295,14 @@ class IngestionAIRunManifest(BaseModel):
                     raise ValueError("completed 1.3 runs must pin a complete content-selection revision")
                 if self.selected_page_count + self.excluded_page_count != self.expected_page_count:
                     raise ValueError("content-selection counts must cover every physical page")
+            if self.schema_version == "1.4" and any(value is None for value in (
+                self.processed_book_key,
+                self.processed_book_sha256,
+                self.processed_book_revision,
+                self.processed_page_count,
+                self.contents_status,
+            )):
+                raise ValueError("completed 1.4 runs must pin the processed-book manifest")
 
         return self
 

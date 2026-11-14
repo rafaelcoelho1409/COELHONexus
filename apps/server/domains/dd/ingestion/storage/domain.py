@@ -134,7 +134,8 @@ def framework_slugs(folders: list[str]) -> list[str]:
     return [
         slug
         for slug in (f.rstrip("/").rsplit("/", 1)[-1] for f in folders if f.strip("/"))
-        if slug not in reserved and not slug.startswith("__dd_benchmark__-")
+        if slug not in reserved
+        and not slug.startswith(("__dd_benchmark__-", "__dd_evaluation__-"))
     ]
 
 

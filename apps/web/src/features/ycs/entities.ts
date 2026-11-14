@@ -70,6 +70,15 @@ export const pipelineStartSchema = z.looseObject({
 /** Running counters of the shared extract task (`meta` slot). The sub-phase string walks
  * metadata → metadata_done → transcription → es_indexing; `all_items` arrives once yt-dlp metadata is
  * done, seeding the per-video table with titles. */
+const taskNodeProgressSchema = z.looseObject({
+  phase: z.string().catch(""),
+  current: z.number().catch(0),
+  total: z.number().catch(0),
+  completed_ids: z.array(z.string()).catch([]),
+  failed_ids: z.array(z.string()).catch([]),
+  no_transcript_ids: z.array(z.string()).catch([]),
+});
+
 const taskMetaSchema = z.looseObject({
   phase: z.string().nullish().catch(null),
   current: z.number().nullish().catch(null),
@@ -79,6 +88,13 @@ const taskMetaSchema = z.looseObject({
   failed_ids: z.array(z.string()).nullish().catch(null),
   completed_ids: z.array(z.string()).nullish().catch(null),
   no_transcript_ids: z.array(z.string()).nullish().catch(null),
+  node_progress: z
+    .looseObject({
+      playwright: taskNodeProgressSchema.nullish().catch(null),
+      elasticsearch: taskNodeProgressSchema.nullish().catch(null),
+    })
+    .nullish()
+    .catch(null),
   current_item: z
     .looseObject({ id: z.string().catch(""), title: z.string().nullish().catch(null) })
     .nullish()

@@ -6,7 +6,6 @@ import { useState } from "react";
 import { MermaidTopology } from "@/shared/markdown/mermaid-topology";
 import type { StreamStatus } from "@/shared/sse";
 import {
-  AGENTIC_LANGGRAPH_TOPOLOGY,
   AGENTIC_NODE_DETAILS,
   AGENTIC_NODES,
   type AgenticNodeStatus,
@@ -24,9 +23,10 @@ import { type AgenticUsageMode, agenticUsageRows, nodeUsageForAgenticStep } from
 import type { BookUnits } from "../domain/books";
 import type { AgenticProgress, AgenticRunStatus, AgenticUsage, ChapterRange } from "../entities";
 import { useAgenticUsage } from "../hooks/use-agentic-run";
+import { useAgenticGraph } from "../hooks/use-bd-data";
 import { useModalDialog } from "../hooks/use-modal-dialog";
 import { ActionButton } from "./action-button";
-import { AgenticNodeList, AgenticPills, AgenticStatusBadge } from "./agentic-parts";
+import { AgenticNodeDetailsList, AgenticNodeList, AgenticPills, AgenticStatusBadge } from "./agentic-parts";
 import { ToggleGroup } from "./toggle-group";
 
 // The graph library is only needed once a graph is on screen.
@@ -308,6 +308,7 @@ export function AgenticPipelineOverview({
         }
       : null;
   const views = agenticNodeViews(graphProgress, runStatus, total, units.plural, summary);
+  const graphQuery = useAgenticGraph(mode === "langgraph");
   const caption = agenticBoardCaption(
     graphProgress,
     runStatus,
@@ -342,11 +343,14 @@ export function AgenticPipelineOverview({
               <AgenticFlow views={views} onOpenNode={setSelectedNodeId} />
             ) : mode === "list" ? (
               <AgenticNodeList rows={views} onOpen={setSelectedNodeId} />
+            ) : graphQuery.data ? (
+              <MermaidTopology title="Ingestion Agentic AI" source={graphQuery.data.graph_mermaid} />
             ) : (
-              <MermaidTopology
-                title="Ingestion Agentic AI"
-                source={AGENTIC_LANGGRAPH_TOPOLOGY}
-              />
+              <p role="status" className="text-xs text-muted-foreground">
+                {graphQuery.isPending
+                  ? "Loading compiled LangGraph topology…"
+                  : "Compiled LangGraph topology is unavailable."}
+              </p>
             )}
           </div>
           <div className="flex min-w-0 flex-col">
@@ -526,6 +530,7 @@ function AgenticNodeSheet({
               <li key={action}>{action}</li>
             ))}
           </ul>
+          <AgenticNodeDetailsList resources={details.resources} />
           <div className="grid grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-2 text-xs text-muted-foreground">
             <span>Reads</span>
             <AgenticPills items={details.reads} />

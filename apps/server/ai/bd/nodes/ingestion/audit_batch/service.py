@@ -183,17 +183,30 @@ async def audit_pages(
     expected_page_count = state.get("expected_page_count")
     if not isinstance(book_id, str) or not isinstance(extraction_run_id, str):
         raise ValueError("the ingestion run has no book or extraction identity")
+    if not isinstance(page_refs, list) or len(page_refs) != expected_page_count:
+        raise ValueError("the page audit requires the complete source page list")
+    if any(not isinstance(page_ref, dict) for page_ref in page_refs):
+        raise ValueError("the source page list contains an invalid page reference")
+
+    extraction_page_refs = [
+        {key: page_ref[key] for key in ("page", "key", "pictures") if key in page_ref}
+        for page_ref in page_refs
+    ]
     request = domains.bd.ingestion.ai.schemas.ExtractionRequest(
         book_id = book_id,
         extraction_run_id = extraction_run_id,
         extraction_status = "done",
         expected_page_count = expected_page_count,
-        page_refs = page_refs,
+        page_refs = extraction_page_refs,
     )
-    section_paths = {
-        page_ref["page"]: page_ref.get("section_path", [])
-        for page_ref in page_refs
-    }
+    section_paths = {}
+    for page_ref in page_refs:
+        section_path = page_ref.get("section_path")
+        section_paths[page_ref["page"]] = (
+            [item for item in section_path if isinstance(item, str)]
+            if isinstance(section_path, list)
+            else []
+        )
     validated_refs = [
         {**page_ref, "section_path": section_paths.get(page_ref["page"], [])}
         for page_ref in request.page_references()

@@ -93,7 +93,7 @@ export function shownPage(
   rows: readonly PageRow[],
 ): number | null {
   if (follow) return newest ?? rows.at(-1)?.page ?? null;
-  return picked ?? rows[0]?.page ?? null;
+  return picked !== null && rows.some((row) => row.page === picked) ? picked : (rows[0]?.page ?? null);
 }
 
 /** A page-list state for known review work, an unverified audit, or a page left out of delivered text. */

@@ -58,7 +58,9 @@ class PageIssue(BaseModel):
         default = "",
         description = "For a duplicate: the second copy of the evidence, copied exactly from a different place on the page. Empty otherwise.",
     )
-    confidence: Confidence
+    # Keep a finding review-only when a provider omits its score; a missing
+    # optional calibration value must not make the entire page unauditable.
+    confidence: Confidence = 0.0
 
 
 class PageAssessment(BaseModel):
@@ -67,7 +69,9 @@ class PageAssessment(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
     page_kind: PageKind
-    confidence: Confidence
+    # Some compatible structured-output backends omit this top-level score.
+    # Zero is conservative and keeps title/repair decisions from being trusted.
+    confidence: Confidence = 0.0
     title: str = Field(default = "", description = "The page's title as written in the text, without a leading `#` marker.")
     title_confidence: Confidence = 0.0
     summary: str = ""

@@ -187,7 +187,25 @@ async def create_distill_run(
             or selection.expected_page_count != page_count
         ):
             raise ValueError("the content selection is pinned to a different extraction or page count")
-        selected_page_count = sum(page.disposition == "include" for page in selection.pages)
+        processed, processed_book_key, processed_book_sha256 = (
+            await domains.bd.ingestion.ai.processed_book.service.ensure_for_selection(
+                book_id,
+                qa_run_id,
+                selection,
+                selection_key,
+                selection_sha256,
+                storage = storage,
+            )
+        )
+        await domains.bd.ingestion.ai.processed_book.service.write_current_pointer(
+            book_id,
+            qa_run_id,
+            processed.selection_revision,
+            processed_book_key,
+            processed_book_sha256,
+            storage,
+        )
+        selected_page_count = processed.source_page_count
         if selected_page_count < 1:
             raise ValueError("at least one page must be included in the Distill selection")
 
@@ -218,6 +236,10 @@ async def create_distill_run(
             content_selection_key = selection_key,
             content_selection_sha256 = selection_sha256,
             content_selection_revision = selection.revision,
+            processed_book_key = processed_book_key,
+            processed_book_sha256 = processed_book_sha256,
+            processed_book_revision = processed.selection_revision,
+            processed_page_count = processed.source_page_count,
             prompt_version = versions.PROMPT_VERSION,
             model_name = domains.settings.chat.service.ENDPOINT.model,
             created_at = now,
@@ -589,7 +611,7 @@ async def run_distill(
     qa_content = await storage.read_text(manifest["ingestion_ai_manifest_key"])
     if hashlib.sha256(qa_content.encode("utf-8")).hexdigest() != manifest["ingestion_ai_manifest_sha256"]:
         raise ValueError("the ingestion QA manifest changed after this Distill run was created")
-    if manifest.get("schema_version") == "1.1":
+    if manifest.get("schema_version") in {"1.1", "1.2"}:
         selection_content = await storage.read_text(manifest["content_selection_key"])
         if hashlib.sha256(selection_content.encode("utf-8")).hexdigest() != manifest["content_selection_sha256"]:
             raise ValueError("the content-selection revision changed after this Distill run was created")
@@ -599,9 +621,27 @@ async def run_distill(
             or selection.extraction_run_id != manifest["extraction_run_id"]
             or selection.agentic_run_id != manifest["ingestion_ai_run_id"]
             or selection.revision != manifest["content_selection_revision"]
-            or sum(page.disposition == "include" for page in selection.pages) != manifest["selected_page_count"]
+            or (
+                manifest.get("schema_version") == "1.1"
+                and sum(page.disposition == "include" for page in selection.pages) != manifest["selected_page_count"]
+            )
         ):
             raise ValueError("the pinned content-selection revision does not match this Distill run")
+    if manifest.get("schema_version") == "1.2":
+        processed_content = await storage.read_text(manifest["processed_book_key"])
+        if hashlib.sha256(processed_content.encode("utf-8")).hexdigest() != manifest["processed_book_sha256"]:
+            raise ValueError("the pinned processed-book manifest failed its integrity check")
+        processed = domains.bd.ingestion.ai.schemas.ProcessedBookManifest.model_validate_json(processed_content)
+        if (
+            processed.book_id != book_id
+            or processed.agentic_run_id != manifest["ingestion_ai_run_id"]
+            or processed.extraction_run_id != manifest["extraction_run_id"]
+            or processed.selection_revision != manifest["processed_book_revision"]
+            or processed.source_page_count != manifest["processed_page_count"]
+            or processed.selection_key != manifest["content_selection_key"]
+            or processed.selection_sha256 != manifest["content_selection_sha256"]
+        ):
+            raise ValueError("the pinned processed-book manifest does not match this Distill run")
 
     async with (
         infra.redis.service.client() as redis,
@@ -700,6 +740,13 @@ async def run_distill(
             "content_selection_key": manifest.get("content_selection_key"),
             "content_selection_sha256": manifest.get("content_selection_sha256"),
             "content_selection_revision": manifest.get("content_selection_revision", 1),
+            "processed_book_key": manifest.get("processed_book_key"),
+            "processed_book_sha256": manifest.get("processed_book_sha256"),
+            "processed_book_revision": manifest.get("processed_book_revision", 1),
+            "processed_page_count": manifest.get(
+                "processed_page_count",
+                manifest.get("selected_page_count", manifest["expected_page_count"]),
+            ),
             "expected_page_count": manifest["expected_page_count"],
             "selected_page_count": manifest.get("selected_page_count", manifest["expected_page_count"]),
             "run_created_at": manifest["created_at"],

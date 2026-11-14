@@ -60,11 +60,11 @@ async def audit_pages(
         if source_sha256 != page["source_sha256"]:
             raise ValueError(f"page {page['idx']} changed after its immutable agent input was frozen")
         max_page_chars = page_audit.params.MAX_PAGE_MARKDOWN_CHARS
-        if len(markdown) > max_page_chars:
-            raise ValueError(
-                f"page {page['idx']} exceeds the {max_page_chars}-character audit limit; "
-                "split or escalate it instead of truncating"
-            )
+        oversized_error = (
+            f"page exceeds the {max_page_chars}-character audit limit; retained without truncation"
+            if len(markdown) > max_page_chars
+            else None
+        )
 
         audit_key = domains.dd.ingestion.storage.keys.agentic_audit_key(
             framework_slug,
@@ -78,6 +78,7 @@ async def audit_pages(
                 if (
                     candidate.get("source_sha256") == source_sha256
                     and isinstance(candidate.get("assessment"), dict)
+                    and (not oversized_error or candidate.get("audit_status") == "unavailable")
                 ):
                     agents.schemas.PageAssessment.model_validate(candidate["assessment"])
                     record = candidate
@@ -86,33 +87,44 @@ async def audit_pages(
 
         if record is None:
             # A page the auditor cannot assess is still a valid extracted page: it goes on unaudited, and the record says so.
-            audit_error = None
-            with domains.settings.llm_counter.service.llm_context(
-                ns = "dd",
-                run_id = run_id,
-                node_id = "page_auditor",
-            ):
-                try:
-                    assessment, warnings = await page_audit.node.audit_page(
-                        framework_slug,
-                        page,
-                        markdown,
-                        auditor,
-                        config = {
-                            "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
-                        },
-                    )
-                except Exception as error:
-                    audit_error = f"{type(error).__name__}: {error}"
-                    logger.warning(
-                        f"[dd-agentic] {framework_slug}: page {page['idx']} audit unavailable, "
-                        f"kept the page as extracted ({audit_error})"
-                    )
-                    assessment = agents.schemas.PageAssessment(
-                        page_kind = agents.schemas.PageKind.OTHER,
-                        confidence = 0.0,
-                    )
-                    warnings = [f"Page auditor unavailable ({audit_error}); the page was kept as extracted."]
+            audit_error = oversized_error
+            if audit_error:
+                assessment = agents.schemas.PageAssessment(
+                    page_kind = agents.schemas.PageKind.OTHER,
+                    confidence = 0.0,
+                )
+                warnings = [f"Page auditor unavailable ({audit_error}); the page was retained unchanged."]
+                logger.warning(
+                    f"[dd-agentic] {framework_slug}: page {page['idx']} audit skipped, "
+                    f"kept the page unchanged ({audit_error})"
+                )
+            else:
+                with domains.settings.llm_counter.service.llm_context(
+                    ns = "dd",
+                    run_id = run_id,
+                    node_id = "page_auditor",
+                ):
+                    try:
+                        assessment, warnings = await page_audit.node.audit_page(
+                            page.get("agent_framework_slug") or framework_slug,
+                            page,
+                            markdown,
+                            auditor,
+                            config = {
+                                "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
+                            },
+                        )
+                    except Exception as error:
+                        audit_error = f"{type(error).__name__}: {error}"
+                        logger.warning(
+                            f"[dd-agentic] {framework_slug}: page {page['idx']} audit unavailable, "
+                            f"kept the page as extracted ({audit_error})"
+                        )
+                        assessment = agents.schemas.PageAssessment(
+                            page_kind = agents.schemas.PageKind.OTHER,
+                            confidence = 0.0,
+                        )
+                        warnings = [f"Page auditor unavailable ({audit_error}); the page was kept as extracted."]
             record = {
                 "idx": page["idx"],
                 "source_sha256": source_sha256,

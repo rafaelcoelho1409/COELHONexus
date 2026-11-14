@@ -213,6 +213,7 @@ class SourceRef(BaseModel):
     chunk_id: SafeSegment
     source_key: NonEmptyText
     page_number: int = Field(gt = 0, strict = True)
+    processed_page_number: int | None = Field(default = None, gt = 0, strict = True)
     section_path: list[str]
     source_sha256: Sha256Hex
     quote: NonEmptyText = Field(max_length = 800)
@@ -383,7 +384,7 @@ class ChartSpec(BaseModel):
 class StudyGuideDocument(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0", "1.1"] = versions.REPORT_SCHEMA_VERSION
+    schema_version: Literal["1.0", "1.1", "1.2"] = versions.REPORT_SCHEMA_VERSION
     title: NonEmptyText
     book_id: SafeSegment
     extraction_run_id: SafeSegment
@@ -393,6 +394,8 @@ class StudyGuideDocument(BaseModel):
     selected_page_count: int = Field(default = 0, ge = 0, strict = True)
     excluded_page_count: int = Field(default = 0, ge = 0, strict = True)
     content_selection_revision: int = Field(default = 1, ge = 1, strict = True)
+    processed_page_count: int = Field(default = 0, ge = 0, strict = True)
+    processed_book_revision: int = Field(default = 1, ge = 1, strict = True)
     generated_at: float = Field(gt = 0)
     report_scope: Literal["book_only"] = "book_only"
     central_thesis: NonEmptyText
@@ -444,7 +447,7 @@ class StructuralQuality(BaseModel):
 class DistillRunManifest(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0", "1.1"] = versions.MANIFEST_SCHEMA_VERSION
+    schema_version: Literal["1.0", "1.1", "1.2"] = versions.MANIFEST_SCHEMA_VERSION
     workflow_version: NonEmptyText = versions.WORKFLOW_VERSION
     prompt_version: NonEmptyText = versions.PROMPT_VERSION
     renderer_version: NonEmptyText = "1.0"
@@ -462,6 +465,10 @@ class DistillRunManifest(BaseModel):
     content_selection_key: NonEmptyText | None = None
     content_selection_sha256: Sha256Hex | None = None
     content_selection_revision: int | None = Field(default = None, ge = 1, strict = True)
+    processed_book_key: NonEmptyText | None = None
+    processed_book_sha256: Sha256Hex | None = None
+    processed_book_revision: int | None = Field(default = None, ge = 1, strict = True)
+    processed_page_count: int | None = Field(default = None, ge = 1, strict = True)
     status: Literal["queued", "running", "done", "failed", "cancelled"] = "queued"
     resume_from_node: str | None = None
     progress: DistillProgress = Field(default_factory = DistillProgress)
@@ -489,6 +496,17 @@ class DistillRunManifest(BaseModel):
             self.content_selection_revision,
         )):
             raise ValueError("1.1 Distill runs must pin their content-selection revision")
+        if self.schema_version == "1.2" and any(value is None for value in (
+            self.selected_page_count,
+            self.content_selection_key,
+            self.content_selection_sha256,
+            self.content_selection_revision,
+            self.processed_book_key,
+            self.processed_book_sha256,
+            self.processed_book_revision,
+            self.processed_page_count,
+        )):
+            raise ValueError("1.2 Distill runs must pin the processed-book page set")
         if self.status in {"done", "failed", "cancelled"} and self.finished_at is None:
             raise ValueError("terminal Distill runs require finished_at")
         if self.status == "done" and (self.report_key is None or self.html_key is None):

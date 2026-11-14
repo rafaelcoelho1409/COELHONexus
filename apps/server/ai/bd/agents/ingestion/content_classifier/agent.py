@@ -1,6 +1,7 @@
 """DeepAgent factory for classifying the learning value of one normalized page."""
 from __future__ import annotations
 import domains
+from . import params
 from .... import agents, middlewares, prompts
 
 from deepagents import (
@@ -23,7 +24,7 @@ def content_classifier(model = None):
             max_tokens = 1200,
             temperature = 0.0,
             max_retries = 2,
-            rotator_task = "bd_content_page_classifier",
+            rotator_task = params.ROTATOR_TASK,
         )
     model_name = getattr(model, "model_name", None)
     if not isinstance(model_name, str) or not model_name or ":" in model_name:
@@ -45,17 +46,13 @@ def content_classifier(model = None):
         tools = [],
         system_prompt = prompts.ingestion.content_classifier.prompts.SYSTEM_PROMPT,
         middleware = [
-            middlewares.middleware.ToolAllowlistMiddleware(frozenset({"read_file"})),
+            middlewares.middleware.ToolAllowlistMiddleware(frozenset()),
             ModelCallLimitMiddleware(
                 run_limit = 2, 
                 exit_behavior = "end"),
         ],
         response_format = agents.schemas.ContentPageAssessment,
         permissions = [
-            FilesystemPermission(
-                operations = ["read"],
-                paths = ["/skills/**"],
-                mode = "allow"),
             FilesystemPermission(
                 operations = ["read"],
                 paths = ["/**"],
@@ -70,6 +67,9 @@ def content_classifier(model = None):
     )
     tool_node = agent.nodes.get("tools")
     available_tools = getattr(getattr(tool_node, "bound", None), "_tools_by_name", None)
-    if not isinstance(available_tools, dict) or set(available_tools) - {"read_file"}:
+    if (
+        not isinstance(available_tools, dict)
+        or set(available_tools) - params.EXCLUDED_TOOLS - params.INERT_TOOLS
+    ):
         raise RuntimeError("DeepAgents exposed an unreviewed tool to the content classifier")
     return agent

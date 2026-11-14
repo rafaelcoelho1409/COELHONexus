@@ -39,18 +39,24 @@ const LOOPS: Record<FlowStage, { from: string; to: string } | null> = {
 };
 
 /** One vertical column in node order, with room on the right for the loop arc when the stage has one. */
-export function flowLayout(stage: FlowStage, ids: readonly string[]): FlowLayout {
+export function flowLayout(
+  stage: FlowStage,
+  ids: readonly string[],
+  dimensions: { nodeWidth?: number; nodeHeight?: number } = {},
+): FlowLayout {
+  const nodeWidth = dimensions.nodeWidth ?? NODE_WIDTH;
+  const nodeHeight = dimensions.nodeHeight ?? NODE_HEIGHT;
   const positions: Record<string, FlowPoint> = {};
   ids.forEach((id, index) => {
-    positions[id] = { x: PADDING, y: PADDING + index * (NODE_HEIGHT + NODE_GAP) };
+    positions[id] = { x: PADDING, y: PADDING + index * (nodeHeight + NODE_GAP) };
   });
   const wanted = LOOPS[stage];
   const loop = wanted && ids.includes(wanted.from) && ids.includes(wanted.to) ? wanted : null;
   const rows = ids.length;
   return {
     positions,
-    width: PADDING * 2 + NODE_WIDTH + (loop ? LOOP_BULGE : 0),
-    height: PADDING * 2 + rows * NODE_HEIGHT + Math.max(0, rows - 1) * NODE_GAP + CREDIT_ROOM,
+    width: PADDING * 2 + nodeWidth + (loop ? LOOP_BULGE : 0),
+    height: PADDING * 2 + rows * nodeHeight + Math.max(0, rows - 1) * NODE_GAP + CREDIT_ROOM,
     loop,
   };
 }

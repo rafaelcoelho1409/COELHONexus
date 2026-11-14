@@ -1,8 +1,16 @@
 "use client";
 
-import { Markdown } from "@/shared/markdown";
+import { MermaidDiagram } from "@/shared/markdown";
 
-export function LangGraphTopology({ title, source }: { title: string; source: string | null }) {
+export function LangGraphTopology({
+  title,
+  source,
+  loading = false,
+}: {
+  title: string;
+  source: string | null;
+  loading?: boolean;
+}) {
   return (
     <section
       aria-label={`${title} compiled LangGraph topology`}
@@ -11,10 +19,12 @@ export function LangGraphTopology({ title, source }: { title: string; source: st
       className="min-w-0 overflow-x-auto rounded-sm border border-border bg-background p-3"
     >
       {source ? (
-        <Markdown text={["```mermaid", source, "```"].join("\n")} />
+        <div className="markdown">
+          <MermaidDiagram source={source} label={`${title} original LangGraph Mermaid graph`} />
+        </div>
       ) : (
         <p role="status" className="text-xs text-muted-foreground">
-          Compiled LangGraph topology is unavailable.
+          {loading ? "Loading compiled LangGraph topology…" : "Compiled LangGraph topology is unavailable."}
         </p>
       )}
     </section>

@@ -5,7 +5,7 @@ import { useEffect, useId, useState } from "react";
 type Drawn = { svg: string } | { failed: true };
 
 /** The mermaid library is large, so it is fetched the first time a diagram appears, not with the page. */
-export function MermaidDiagram({ source }: { source: string }) {
+export function MermaidDiagram({ source, label = "Diagram" }: { source: string; label?: string }) {
   const id = `mermaid-${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const [drawn, setDrawn] = useState<Drawn | null>(null);
 
@@ -53,7 +53,7 @@ export function MermaidDiagram({ source }: { source: string }) {
     <figure
       className="md-diagram"
       role="img"
-      aria-label="Diagram"
+      aria-label={label}
       // The SVG is mermaid's own output from a `strict` render, never raw user HTML.
       // biome-ignore lint/security/noDangerouslySetInnerHtml: mermaid's sanitised SVG
       dangerouslySetInnerHTML={{ __html: drawn.svg }}

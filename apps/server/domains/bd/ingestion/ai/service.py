@@ -1,7 +1,7 @@
 """Run integration between completed Book Distiller extractions and the AI graph."""
 from __future__ import annotations
 import ai, domains, infra
-from . import domain, schemas, versions
+from . import domain, schemas
 
 
 import asyncio
@@ -642,6 +642,14 @@ async def _apply_selection_overrides_unlocked(
     content = domain.selection_json(updated)
     digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
     await storage.write(key, content, content_type = "application/json")
+    processed, processed_key, processed_sha256 = await domains.bd.ingestion.ai.processed_book.service.ensure_for_selection(
+        book_id,
+        agentic_run_id,
+        updated,
+        key,
+        digest,
+        storage = storage,
+    )
     pointer_key = domains.bd.ingestion.storage.keys.agentic_current_content_selection_key(
         book_id, agentic_run_id,
     )
@@ -653,6 +661,14 @@ async def _apply_selection_overrides_unlocked(
             sort_keys = True,
         ),
         content_type = "application/json",
+    )
+    await domains.bd.ingestion.ai.processed_book.service.write_current_pointer(
+        book_id,
+        agentic_run_id,
+        processed.selection_revision,
+        processed_key,
+        processed_sha256,
+        storage,
     )
     return updated
 
@@ -1050,6 +1066,8 @@ async def run_ingestion_ai(
     text_repair: Any | None = None,
     structure_repair: Any | None = None,
     metadata_normalizer: Any | None = None,
+    content_classifier: Any | None = None,
+    contents_reconciler: Any | None = None,
     finding_verifier: Any | None = None,
     checkpointer: Any | None = None,
     resume: bool = False,
@@ -1237,6 +1255,8 @@ async def run_ingestion_ai(
             metadata_normalizer = ai.bd.agents.ingestion.metadata_normalizer.agent.metadata_normalizer()
         if content_classifier is None:
             content_classifier = ai.bd.agents.ingestion.content_classifier.agent.content_classifier()
+        if contents_reconciler is None:
+            contents_reconciler = ai.bd.agents.ingestion.contents_reconciler.agent.contents_reconciler()
 
         async def write_artifact(key: str, content: str, content_type: str) -> None:
             if key == output_manifest_key:
@@ -1264,6 +1284,7 @@ async def run_ingestion_ai(
             "run_created_at": now,
             "expected_page_count": len(source_page_refs),
             "source_page_refs": source_page_refs,
+            "source_outline": source_manifest.get("outline", []) if isinstance(source_manifest.get("outline"), list) else [],
             "page_refs": [],
             "page_audits": [],
             "work_items": [],
@@ -1280,6 +1301,7 @@ async def run_ingestion_ai(
             specialists = {"text_repair": text_repair, "structure": structure_repair},
             metadata_normalizer = metadata_normalizer,
             content_classifier = content_classifier,
+            contents_reconciler = contents_reconciler,
             progress_callback = report_progress,
             finding_verifier = finding_verifier,
         )

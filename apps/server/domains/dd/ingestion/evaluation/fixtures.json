@@ -1,0 +1,362 @@
+{
+  "schema_version": 1,
+  "description": "Human-reviewed cases from the 2026-11-13 r2 tier runs. Source reports and page inputs are immutable benchmark artifacts.",
+  "fixtures": [
+    {
+      "id": "unsloth-page-46-figure-marker",
+      "round_id": "dd-refine-2026-11-13-r2",
+      "run_id": "b556d6766fc14eb1b515294f5481265b",
+      "tier": "llms_full",
+      "page_idx": 46,
+      "labels": ["source_export_missing_image_target", "expected_audit_finding"],
+      "expected": {"expected_issue_categories": ["markdown_formatting"], "max_accepted_repairs": 0},
+      "human_rubric": "The frozen llms-full export has bare image markers where the official page contains image targets. Report the missing image syntax as markdown_formatting, preserve the captured source, and do not invent URLs or repair it automatically."
+    },
+    {
+      "id": "unsloth-page-169-emoji-heading",
+      "round_id": "dd-refine-2026-11-13-r2",
+      "run_id": "b556d6766fc14eb1b515294f5481265b",
+      "tier": "llms_full",
+      "page_idx": 169,
+      "labels": ["export_artifact", "deterministic_normalizer_regression"],
+      "expected": {"normalizer_stats": {"emoji_shortcode_heading_spaces_inserted": {"gte": 1}}, "forbidden_evidence": ["Q\\&A"], "max_accepted_repairs": 0},
+      "human_rubric": "Repair the malformed exported heading deterministically while preserving the shortcode and heading text. The cited Q\\&A punctuation escape is valid and must not be reported as an escaped underscore."
+    },
+    {
+      "id": "optimum-page-0-api-export",
+      "round_id": "dd-refine-2026-11-13-r2",
+      "run_id": "b5df2db0b1f746a0ac2929bc67a624a5",
+      "tier": "llms_txt",
+      "page_idx": 0,
+      "labels": ["huggingface_api_export", "concatenated_return_boundary"],
+      "expected": {
+        "normalizer_stats": {"optimum_create_register_returns_repaired": {"gte": 1}},
+        "max_accepted_repairs": 0
+      },
+      "human_rubric": "Restore the documented Returns boundary and remove only the stray export ordinal; preserve the signature and explanatory wording. The repeated library_name parameter is present in the official page and must not be deleted automatically."
+    },
+    {
+      "id": "optimum-page-5-style-false-positive",
+      "round_id": "dd-refine-2026-11-13-r2",
+      "run_id": "b5df2db0b1f746a0ac2929bc67a624a5",
+      "tier": "llms_txt",
+      "page_idx": 5,
+      "labels": ["valid_markdown", "auditor_false_positive"],
+      "expected": {"max_accepted_repairs": 0},
+      "human_rubric": "Backtick style, spacing preferences and claims unsupported by the cited evidence are not defects."
+    },
+    {
+      "id": "optimum-page-6-api-export",
+      "round_id": "dd-refine-2026-11-13-r2",
+      "run_id": "b5df2db0b1f746a0ac2929bc67a624a5",
+      "tier": "llms_txt",
+      "page_idx": 6,
+      "labels": ["huggingface_api_export", "valid_markdown", "valid_return_type"],
+      "expected": {"normalizer_stats": {"api_return_export_duplicates_removed": {"gte": 1}}, "max_accepted_repairs": 0},
+      "human_rubric": "Remove the malformed inline return fragment only because its complete text is preserved in the later Returns block. Keep the structured Returns content and all valid Markdown unchanged."
+    },
+    {
+      "id": "optimum-page-10-transformation-return-boundary",
+      "round_id": "dd-refine-2026-11-13-r2",
+      "run_id": "b5df2db0b1f746a0ac2929bc67a624a5",
+      "tier": "llms_txt",
+      "page_idx": 10,
+      "labels": ["huggingface_api_export", "return_parameters_boundary", "contextual_duplicate_text"],
+      "expected": {"normalizer_stats": {"optimum_fx_return_sections_repaired": {"gte": 1}}},
+      "human_rubric": "Restore the exact Returns/Parameters boundary and retain repeated text scoped to distinct transformation classes."
+    },
+    {
+      "id": "deepagents-page-30-table-continuation",
+      "round_id": "dd-refine-2026-11-13-r2",
+      "run_id": "72962397567f43ed89152b7cea753c99",
+      "tier": "sitemap",
+      "page_idx": 30,
+      "labels": ["escaped_gfm_table_rows", "deterministic_normalizer_regression"],
+      "expected": {"normalizer_stats": {"escaped_table_row_pipes_fixed": {"gte": 2}}},
+      "human_rubric": "Rejoin escaped continuation rows only when a preceding table and matching row widths prove the structure."
+    },
+    {
+      "id": "deepagents-page-33-repeated-section",
+      "round_id": "dd-refine-2026-11-13-r2",
+      "run_id": "72962397567f43ed89152b7cea753c99",
+      "tier": "sitemap",
+      "page_idx": 33,
+      "labels": ["possible_exact_duplicate_section", "repair_safety"],
+      "expected": {"max_accepted_repairs": 1},
+      "human_rubric": "Only remove a verified exact duplicate when the surviving copy and unique target checks pass; otherwise retain and request review."
+    },
+    {
+      "id": "deepagents-page-65-structured-audit-outage",
+      "round_id": "dd-refine-2026-11-13-r2",
+      "run_id": "72962397567f43ed89152b7cea753c99",
+      "tier": "sitemap",
+      "page_idx": 65,
+      "labels": ["provider_or_structured_output_failure", "source_preservation"],
+      "replay_faults": {"audit_provider_error": true},
+      "expected": {"audit_status": "unavailable", "max_accepted_repairs": 0},
+      "human_rubric": "The source must remain byte-identical when the audit call fails or its response cannot be validated. Do not count an unavailable audit as a content-quality pass."
+    },
+    {
+      "id": "deepagents-page-80-valid-inline-links",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "3324037265224d729cc08baf0355a013",
+      "tier": "sitemap",
+      "page_idx": 80,
+      "labels": ["valid_inline_markdown_links", "auditor_false_positive"],
+      "expected": {
+        "forbidden_evidence": [
+          "[Browserbase](https://www.browserbase.com)",
+          "[session recordings](https://docs.browserbase.com/platform/browser/observability/observability)",
+          "[Search](https://docs.browserbase.com/platform/search/overview)"
+        ],
+        "max_accepted_repairs": 0
+      },
+      "human_rubric": "The cited evidence contains complete inline Markdown links. Do not describe these links as missing a closing bracket or repair the source. Keep the page text byte-identical; unrelated real findings may remain reviewable."
+    },
+    {
+      "id": "asyncio-page-0-sphinx-signature",
+      "round_id": "dd-refine-2026-11-13-r2",
+      "run_id": "71aac097a89b406c97f97e47dc743d6e",
+      "tier": "docs",
+      "page_idx": 0,
+      "labels": ["valid_escaped_identifier", "auditor_false_positive"],
+      "expected": {"max_accepted_repairs": 0},
+      "human_rubric": "Escaped underscores in Sphinx/Python signatures are valid; preserve them."
+    },
+    {
+      "id": "asyncio-page-13-sphinx-heading",
+      "round_id": "dd-refine-2026-11-13-r2",
+      "run_id": "71aac097a89b406c97f97e47dc743d6e",
+      "tier": "docs",
+      "page_idx": 13,
+      "labels": ["valid_atx_heading", "auditor_false_positive"],
+      "expected": {"max_accepted_repairs": 0},
+      "human_rubric": "The heading already has correct ATX spacing. Do not report or repair it."
+    },
+    {
+      "id": "asyncio-page-69-sphinx-definition-list",
+      "round_id": "dd-refine-2026-11-13-r2",
+      "run_id": "71aac097a89b406c97f97e47dc743d6e",
+      "tier": "docs",
+      "page_idx": 69,
+      "labels": ["sphinx_definition_list", "contextual_api_text", "auditor_false_positive"],
+      "expected": {"max_accepted_repairs": 0},
+      "human_rubric": "Sphinx definition-list terms are not missing Markdown headings. Repeated explanations under separate API entries are contextual."
+    },
+    {
+      "id": "asyncio-r3-page-0-wrapped-description",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "84a14914693e4d24bc94034e23aac1fa",
+      "tier": "docs",
+      "page_idx": 0,
+      "labels": ["sphinx_wrapped_prose", "auditor_false_positive"],
+      "expected": {
+        "forbidden_evidence": ["If *debug* is `True`, the event loop will be run in debug mode."],
+        "max_accepted_repairs": 0
+      },
+      "human_rubric": "The line break is ordinary source wrapping inside the asyncio.run Sphinx definition body. Preserve the original lines and do not report readability or rendering defects based only on the wrap."
+    },
+    {
+      "id": "asyncio-r3-page-4-wrapped-descriptions",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "84a14914693e4d24bc94034e23aac1fa",
+      "tier": "docs",
+      "page_idx": 4,
+      "labels": ["sphinx_wrapped_prose", "auditor_false_positive"],
+      "expected": {
+        "forbidden_evidence": ["Raises [`QueueShutDown`](#asyncio.QueueShutDown", "If *immediate* is true, the queue is terminated immediately."],
+        "max_accepted_repairs": 0
+      },
+      "human_rubric": "The Queue.get and Queue.shutdown description lines are valid Sphinx prose wrapping. Preserve the API text and do not require the exported source lines to be joined."
+    },
+    {
+      "id": "asyncio-r3-page-42-signature-markup",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "84a14914693e4d24bc94034e23aac1fa",
+      "tier": "docs",
+      "page_idx": 42,
+      "labels": ["sphinx_signature_markup", "auditor_false_positive"],
+      "expected": {
+        "forbidden_evidence": ["class asyncio.Semaphore(*value=1*)"],
+        "max_accepted_repairs": 0
+      },
+      "human_rubric": "The asterisks mark a valid Sphinx default parameter in the class signature. Do not rewrite the signature or classify its style as malformed."
+    },
+    {
+      "id": "asyncio-r3-page-54-contextual-api-repeat",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "84a14914693e4d24bc94034e23aac1fa",
+      "tier": "docs",
+      "page_idx": 54,
+      "labels": ["contextual_sphinx_api_repeat", "auditor_false_positive"],
+      "expected": {
+        "forbidden_evidence": ["a [`CancelledError`](asyncio-exceptions.html#asyncio.CancelledError"],
+        "max_accepted_repairs": 0
+      },
+      "human_rubric": "The repeated cancellation explanation belongs to distinct Future.result and Future.exception entries. Keep each method's behavior explanation in its own API scope."
+    },
+    {
+      "id": "asyncio-r3-page-99-unsupported-escaped-literal",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "84a14914693e4d24bc94034e23aac1fa",
+      "tier": "docs",
+      "page_idx": 99,
+      "labels": ["evidence_mismatch", "auditor_false_positive"],
+      "expected": {
+        "forbidden_evidence": ["*timeout* (a float or int), if specified, can be used to control"],
+        "max_accepted_repairs": 0
+      },
+      "human_rubric": "The claim names an escaped return_when identifier that is absent from its cited timeout excerpt. Reject the finding on evidence mismatch and preserve source bytes."
+    },
+    {
+      "id": "unsloth-r3-page-22-repair-structured-output",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "e599457f8f984058a2274318362cb53e",
+      "tier": "llms_full",
+      "page_idx": 22,
+      "labels": ["repair_output_recovery", "source_preservation"],
+      "expected": {
+        "audit_status": "completed",
+        "repair_status": "completed"
+      },
+      "human_rubric": "The prior optional repair could not produce a structured PagePatchBatch. Confirm the retry returns a valid bounded batch. Inspect any accepted edit against the exact backslash lines; retain the page unchanged if their intended meaning is uncertain."
+    },
+    {
+      "id": "asyncio-r3-page-49-audit-structured-output",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "84a14914693e4d24bc94034e23aac1fa",
+      "tier": "docs",
+      "page_idx": 49,
+      "labels": ["audit_output_recovery", "source_preservation"],
+      "expected": {"audit_status": "completed"},
+      "human_rubric": "The prior audit response omitted a confidence field. A missing calibration score must not invalidate the complete page audit; default it conservatively and preserve the source unless a separately verified safe patch is justified."
+    },
+    {
+      "id": "asyncio-r3-page-96-audit-non-json",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "84a14914693e4d24bc94034e23aac1fa",
+      "tier": "docs",
+      "page_idx": 96,
+      "labels": ["audit_output_recovery", "source_preservation"],
+      "expected": {"audit_status": "completed"},
+      "human_rubric": "The prior auditor returned non-JSON text on both attempts. Verify schema-specific retry feedback recovers a valid PageAssessment; unavailable output must continue to preserve the source byte-for-byte."
+    },
+    {
+      "id": "deepagents-r3-page-70-valid-empty-table-cells",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "3324037265224d729cc08baf0355a013",
+      "tier": "sitemap",
+      "page_idx": 70,
+      "labels": ["valid_gfm_table", "auditor_false_positive"],
+      "expected": {"forbidden_descriptions": ["valid Markdown but may indicate missing data"]},
+      "human_rubric": "The source is a structurally valid GFM integration table; empty cells are rendered as empty values and the audit itself describes the row as valid Markdown. Do not report speculative missing data as a formatting defect."
+    },
+    {
+      "id": "deepagents-r3-page-71-table-link-style",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "3324037265224d729cc08baf0355a013",
+      "tier": "sitemap",
+      "page_idx": 71,
+      "labels": ["valid_gfm_table", "auditor_false_positive"],
+      "expected": {"forbidden_descriptions": ["missing markdown link syntax around"]},
+      "human_rubric": "The AWS name is plain text in a valid table row and other cells link to packages. Link-style consistency is editorial; retain any genuine malformed-link finding."
+    },
+    {
+      "id": "deepagents-r3-page-90-table-na-values",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "3324037265224d729cc08baf0355a013",
+      "tier": "sitemap",
+      "page_idx": 90,
+      "labels": ["valid_gfm_table", "auditor_false_positive"],
+      "expected": {"forbidden_descriptions": ["N/A instead of a download badge"]},
+      "human_rubric": "N/A is explicit source table content, not malformed Markdown. Do not infer missing download metadata from the presentation."
+    },
+    {
+      "id": "deepagents-r3-page-104-table-na-values",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "3324037265224d729cc08baf0355a013",
+      "tier": "sitemap",
+      "page_idx": 104,
+      "labels": ["valid_gfm_table", "auditor_false_positive"],
+      "expected": {"forbidden_descriptions": ["N/A in the Downloads column"]},
+      "human_rubric": "N/A is explicit source table content, not malformed Markdown. Do not infer missing download metadata from the presentation."
+    },
+    {
+      "id": "unsloth-r3-page-197-installation-variants",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "e599457f8f984058a2274318362cb53e",
+      "tier": "llms_full",
+      "page_idx": 197,
+      "labels": ["alternative_installation_methods", "contextual_repetition"],
+      "expected": {
+        "forbidden_descriptions": ["once in the uv section", "once in the conda/mamba section"],
+        "forbidden_evidence": [
+          "Note that we have to specify `cu128`, otherwise `vllm` will install",
+          "4. Download and build `xformers` (Optional)",
+          "Xformers is optional, but it is definitely faster and uses less memory.",
+          "Make sure you are inside the activated conda/mamba environment."
+        ]
+      },
+      "human_rubric": "The repeated notes and steps occur under separate uv and conda/mamba workflows. Preserve them when each install path needs its own instructions; duplicates within one workflow remain reviewable."
+    },
+    {
+      "id": "optimum-r3-page-0-source-duplicate",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "89b31b242c2e4272972a115d4686d6de",
+      "tier": "llms_txt",
+      "page_idx": 0,
+      "labels": ["upstream_api_content", "source_preservation"],
+      "expected": {
+        "expected_issue_categories": ["duplicate_section"],
+        "max_accepted_repairs": 0
+      },
+      "human_rubric": "The repeated library_name mention is present in the upstream Optimum API reference and belongs to distinct parameter contexts. Preserve the source and do not deduplicate it automatically."
+    },
+    {
+      "id": "deepagents-r3-page-27-source-typos",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "3324037265224d729cc08baf0355a013",
+      "tier": "sitemap",
+      "page_idx": 27,
+      "labels": ["source_editorial_defects", "source_preservation"],
+      "expected": {
+        "expected_issue_categories": ["markdown_formatting"],
+        "max_accepted_repairs": 0
+      },
+      "human_rubric": "The captured guide contains the cited misspellings in ordinary prose. Report them for source-owner review; automatic Markdown repair must not rewrite editorial wording."
+    },
+    {
+      "id": "deepagents-r3-page-41-duplicate-card-review",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "3324037265224d729cc08baf0355a013",
+      "tier": "sitemap",
+      "page_idx": 41,
+      "labels": ["repeated_card_content", "human_disposition"],
+      "expected": {"max_accepted_repairs": 0},
+      "human_rubric": "The two card excerpts share a title and lead sentence, but the second includes additional deployment details. Decide whether the repeated teaser is intended page structure; preserve both copies until that is clear."
+    },
+    {
+      "id": "deepagents-r3-page-74-external-handle-review",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "3324037265224d729cc08baf0355a013",
+      "tier": "sitemap",
+      "page_idx": 74,
+      "labels": ["external_identifier", "human_disposition"],
+      "expected": {"max_accepted_repairs": 0},
+      "human_rubric": "The cited GitHub owner string may be an intentional account name. The page alone cannot prove that Tghez is a typo for Thez; preserve the URL and do not make an external identity correction."
+    },
+    {
+      "id": "deepagents-r3-page-105-source-grammar",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "3324037265224d729cc08baf0355a013",
+      "tier": "sitemap",
+      "page_idx": 105,
+      "labels": ["source_editorial_defect", "source_preservation"],
+      "expected": {
+        "expected_issue_categories": ["other"],
+        "max_accepted_repairs": 0
+      },
+      "human_rubric": "The cited 'A vector stores' sentence is grammatically suspect source prose. Preserve wording for source-owner review; do not rewrite tutorial meaning during Markdown repair."
+    }
+  ]
+}

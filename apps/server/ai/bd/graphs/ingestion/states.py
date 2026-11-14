@@ -17,6 +17,7 @@ class IngestionRunState(TypedDict, total = False):
     run_created_at: float
     expected_page_count: int
     source_page_refs: list[entities.PageReference]
+    source_outline: list[dict[str, object]]
     page_refs: list[entities.IngestionPageReference]
     page_audits: list[entities.IngestionPageAuditResult]
     work_items: list[dict[str, object]]
@@ -32,4 +33,10 @@ class IngestionRunState(TypedDict, total = False):
     content_selection_revision: int
     selected_page_count: int
     excluded_page_count: int
+    processed_book_candidate_key: str
+    processed_book_key: str
+    processed_book_sha256: str
+    processed_book_revision: int
+    processed_page_count: int
+    contents_status: str
     status: str

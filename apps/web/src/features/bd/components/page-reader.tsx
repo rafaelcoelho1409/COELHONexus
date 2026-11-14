@@ -39,6 +39,8 @@ export function PageReader({
   page,
   row,
   nPages,
+  processedPageNumber,
+  processedPageCount,
   units,
   content,
   framed = true,
@@ -53,6 +55,8 @@ export function PageReader({
   page: number | null;
   row: PageRow | undefined;
   nPages: number;
+  processedPageNumber?: number;
+  processedPageCount?: number;
   units: BookUnits;
   content: PageContent;
   framed?: boolean;
@@ -133,8 +137,9 @@ export function PageReader({
         >
           <div className="min-w-0 flex-1">
             <p className="mono-label">
-              {unitName} {page}
-              {nPages > 0 ? ` of ${nPages}` : ""}
+              {unitName} {processedPageNumber ?? page}
+              {(processedPageCount ?? nPages) > 0 ? " of " + (processedPageCount ?? nPages) : ""}
+              {processedPageNumber !== undefined ? " · source " + page : ""}
             </p>
             <p className="mt-1 text-xs text-muted-foreground" aria-live="polite">
               {hasAi

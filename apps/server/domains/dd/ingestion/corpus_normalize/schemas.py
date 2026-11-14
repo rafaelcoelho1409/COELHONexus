@@ -35,6 +35,9 @@ class NormalizeStats(BaseModel):
     html_entities_decoded:      int  = 0
     malformed_links_fixed:      int  = 0
     api_entries_repaired:       int  = 0
+    optimum_create_register_returns_repaired: int = 0
+    optimum_fx_return_sections_repaired: int = 0
+    api_return_export_duplicates_removed: int = 0
     indented_label_lists_repaired: int = 0
     blank_lines_collapsed:      int  = 0
     trailing_ws_lines:          int  = 0

@@ -92,11 +92,49 @@ export function NodeStatusBadge({ status }: { status: NodeStatus }) {
   );
 }
 
+export type StageNodeDetails = {
+  agents: readonly string[];
+  skills: readonly string[];
+  tools: readonly string[];
+};
+
+const NODE_DETAIL_ROWS = [
+  { label: "Agent", key: "agents" },
+  { label: "Skills", key: "skills" },
+  { label: "Tools", key: "tools" },
+] as const;
+
+/** Agent, skill, and tool names shown consistently on graph and list nodes. */
+export function NodeDetailsList({
+  details,
+  compact = false,
+}: {
+  details: StageNodeDetails;
+  compact?: boolean;
+}) {
+  return (
+    <span className={`grid min-w-0 gap-y-0.5 text-xs leading-4 ${compact ? "px-3 pt-1" : "mt-2"}`}>
+      {NODE_DETAIL_ROWS.map(({ label, key }) => {
+        const value = details[key].join(", ") || "None";
+        return (
+          <span key={key} className="grid min-w-0 grid-cols-[3.5rem_minmax(0,1fr)] gap-2">
+            <span className="text-muted-foreground">{label}</span>
+            <span title={value} className={`min-w-0 ${compact ? "truncate" : "break-words"}`}>
+              {value}
+            </span>
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
 /** One card per graph node; it opens that node's drawer. */
 export function StageNodes({
   views,
   liveLines,
   kpis,
+  nodeDetails = {},
   onOpen,
   label = "Stage nodes",
 }: {
@@ -104,6 +142,8 @@ export function StageNodes({
   liveLines: Record<string, string>;
   /** A node's headline number once it has committed ("1,200 files"). */
   kpis: Record<string, string>;
+  /** Agent, skills, and tools associated with each node. */
+  nodeDetails?: Readonly<Record<string, StageNodeDetails>>;
   onOpen: (nodeId: string) => void;
   /** What the list is called to assistive technology. */
   label?: string;
@@ -111,36 +151,40 @@ export function StageNodes({
   return (
     // One node per row, top to bottom in run order — the same order as the graph.
     <ul aria-label={label} className="flex flex-col gap-1.5">
-      {views.map((view) => (
-        <li key={view.node.id} data-status={view.status} data-node={view.node.id}>
-          <button
-            type="button"
-            onClick={() => onOpen(view.node.id)}
-            aria-haspopup="dialog"
-            className={`block min-h-9 w-full rounded-sm border bg-card px-3 py-2 text-left hover:bg-muted ${
-              view.status === "running" ? "border-running" : "border-border"
-            }`}
-          >
-            <span className="flex items-center justify-between gap-3">
-              <span className="flex min-w-0 items-center gap-1.5">
-                <StatusGlyph status={view.status} />
-                <span className="text-sm">{view.node.label}</span>
-                <span className="sr-only">— {NODE_STATUS_LABEL[view.status]}</span>
+      {views.map((view) => {
+        const details = nodeDetails[view.node.id];
+        return (
+          <li key={view.node.id} data-status={view.status} data-node={view.node.id}>
+            <button
+              type="button"
+              onClick={() => onOpen(view.node.id)}
+              aria-haspopup="dialog"
+              className={`block min-h-9 w-full rounded-sm border bg-card px-3 py-2 text-left hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ${
+                view.status === "running" ? "border-running" : "border-border"
+              }`}
+            >
+              <span className="flex items-center justify-between gap-3">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <StatusGlyph status={view.status} />
+                  <span className="text-sm">{view.node.label}</span>
+                  <span className="sr-only">— {NODE_STATUS_LABEL[view.status]}</span>
+                </span>
+                {kpis[view.node.id] ? (
+                  <span className="min-w-0 truncate text-xs text-muted-foreground tabular-nums">
+                    {kpis[view.node.id]}
+                  </span>
+                ) : null}
               </span>
-              {kpis[view.node.id] ? (
-                <span className="min-w-0 truncate text-xs text-muted-foreground tabular-nums">
-                  {kpis[view.node.id]}
+              {liveLines[view.node.id] ? (
+                <span className="mt-1 block font-mono text-xs break-all text-muted-foreground">
+                  {liveLines[view.node.id]}
                 </span>
               ) : null}
-            </span>
-            {liveLines[view.node.id] ? (
-              <span className="mt-1 block font-mono text-xs break-all text-muted-foreground">
-                {liveLines[view.node.id]}
-              </span>
-            ) : null}
-          </button>
-        </li>
-      ))}
+              {details ? <NodeDetailsList details={details} /> : null}
+            </button>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -362,10 +406,7 @@ export function PipelineStageProgress({
   const busy = controls.running || controls.starting;
 
   return (
-    <section
-      aria-label={`${title} progress`}
-      className="min-w-0 rounded-md border border-border bg-card p-3"
-    >
+    <section aria-label={`${title} progress`} className="min-w-0 rounded-md border border-border bg-card p-3">
       <div className="flex min-h-9 flex-wrap items-center justify-between gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-medium">
           {title}
@@ -423,13 +464,7 @@ export function PipelineStageProgress({
       >
         <div
           className={`h-full bg-primary ${indeterminate && !hasTotal ? "w-1/3 animate-pulse" : ""}`}
-          style={
-            percent === null
-              ? indeterminate
-                ? undefined
-                : { width: 0 }
-              : { width: `${percent}%` }
-          }
+          style={percent === null ? (indeterminate ? undefined : { width: 0 }) : { width: `${percent}%` }}
         />
       </div>
       <p className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">

@@ -4,10 +4,15 @@ import { useQuery } from "@tanstack/react-query";
 import { ChartNoAxesColumn, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useState } from "react";
-import { MermaidTopology } from "@/shared/markdown/mermaid-topology";
 import { apiErrorMessage } from "@/shared/lib/api-error";
+import { MermaidTopology } from "@/shared/markdown/mermaid-topology";
 import { ActionButton } from "../../components/action-button";
-import { AgenticNodeList, AgenticPills, AgenticStatusBadge } from "../../components/agentic-parts";
+import {
+  AgenticNodeDetailsList,
+  AgenticNodeList,
+  AgenticPills,
+  AgenticStatusBadge,
+} from "../../components/agentic-parts";
 import { ToggleGroup } from "../../components/toggle-group";
 import type { AgenticNodeStatus } from "../../domain/agentic-progress";
 import { useModalDialog } from "../../hooks/use-modal-dialog";
@@ -114,10 +119,7 @@ export function DistillNodeBoard({
                 <AgenticNodeList rows={views} onOpen={setSelectedNodeId} label="Distill pipeline nodes" />
               </div>
             ) : (
-              <MermaidTopology
-                title="Distill pipeline"
-                source={DISTILL_LANGGRAPH_TOPOLOGY}
-              />
+              <MermaidTopology title="Distill pipeline" source={DISTILL_LANGGRAPH_TOPOLOGY} />
             )}
           </div>
         </div>
@@ -321,6 +323,7 @@ function DistillNodeSheet({
         <section aria-label="What this stage does" className="flex flex-col gap-3">
           <p className="text-sm">{node.detail}</p>
           <p className="text-sm text-muted-foreground">{detail}</p>
+          <AgenticNodeDetailsList resources={node.resources} />
           <div className="grid grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-2 text-xs text-muted-foreground">
             <span>Reads</span>
             <AgenticPills items={node.reads} />

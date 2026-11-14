@@ -78,6 +78,8 @@ async def publish(
         raise ValueError("a complete content selection must be persisted before run publication")
     if not state.get("content_selection_key") or not state.get("content_selection_sha256"):
         raise ValueError("content selection must be persisted before run publication")
+    if not state.get("processed_book_key") or not state.get("processed_book_sha256"):
+        raise ValueError("the processed-book manifest must be persisted before run publication")
 
     verification = await verify_pages(state, read_page) if read_page is not None else None
     if verification is not None and verification["integrity_failure_pages"]:
@@ -129,6 +131,7 @@ async def publish(
             or state["book_metadata"].get("review_required")
             or (verification is not None and verification["text_loss_pages"])
             or content_selection_review_pages
+            or state.get("contents_status") != "complete"
         )
         else "complete"
     )
@@ -158,6 +161,9 @@ async def publish(
         "distill_excluded_pages": [
             page["page_number"] for page in selection if page.get("disposition") == "exclude"
         ],
+        "processed_page_count": state.get("processed_page_count", 0),
+        "processed_book_revision": state.get("processed_book_revision"),
+        "contents_status": state.get("contents_status"),
         "content_selection_review_pages": content_selection_review_pages,
         "discarded_blank_pages": discarded_blank_pages,
         "discarded_blank_page_count": len(discarded_blank_pages),
@@ -241,6 +247,11 @@ async def publish(
         content_selection_revision = state["content_selection_revision"],
         selected_page_count = state["selected_page_count"],
         excluded_page_count = state["excluded_page_count"],
+        processed_book_key = state["processed_book_key"],
+        processed_book_sha256 = state["processed_book_sha256"],
+        processed_book_revision = state["processed_book_revision"],
+        processed_page_count = state["processed_page_count"],
+        contents_status = state["contents_status"],
         delivered_page_count = len(delivered_page_numbers),
         discarded_blank_page_count = len(discarded_blank_pages),
         review_page_count = len(review_pages),

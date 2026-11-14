@@ -11,6 +11,11 @@ from langgraph.config import get_stream_writer
 ProgressReporter = Callable[[dict[str, Any]], Any]
 
 
+def mermaid_source(compiled_graph: Any) -> str:
+    """Render the compiled graph's main topology as LangGraph Mermaid source."""
+    return compiled_graph.get_graph().draw_mermaid()
+
+
 def stream_progress_callback() -> ProgressReporter | None:
     """Return the active LangGraph custom-stream writer when one is available."""
     try:

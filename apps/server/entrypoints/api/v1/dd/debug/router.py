@@ -5,16 +5,19 @@ but isolate their MinIO output. Other debug routes retain their direct dev
 behavior. This router is not gated and is intended for the single-user dev cluster.
 """
 import domains, infra
+import domains.dd.ingestion.evaluation
 import domains.dd.ingestion.task
 from . import params, schemas
 from .. import catalog
 
 import json
+import hashlib
 import logging
 import re
 import time
+from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
 
 router = APIRouter()
@@ -26,6 +29,18 @@ def _valid_benchmark_round(round_id: str) -> bool:
         domains.dd.ingestion.runtime.dispatch.params.BENCHMARK_ROUND_ID_PATTERN,
         round_id,
     ) is not None
+
+
+def _valid_ingestion_run_id(run_id: str) -> bool:
+    return re.fullmatch(r"[a-f0-9]{32}", run_id) is not None
+
+
+@router.get("/provenance")
+async def get_agentic_provenance(response: Response) -> dict:
+    """Identify the DD Ingestion normalizer, prompts, agent settings and code in this server build."""
+    response.headers["Cache-Control"] = "no-store"
+    domains.settings.chat.service.refresh_endpoint(force=True)
+    return domains.dd.ingestion.evaluation.domain.provenance()
 
 
 @router.post("/benchmarks/{slug}")
@@ -186,6 +201,230 @@ async def get_tier_benchmark(round_id: str, run_id: str) -> dict:
     if not isinstance(report, dict):
         raise HTTPException(status_code=500, detail="benchmark report is malformed")
     return report
+
+
+@router.post("/replays/{source_round_id}/{source_run_id}")
+async def start_ingestion_replay(
+    source_round_id: str,
+    source_run_id: str,
+    body: schemas.IngestionReplayBody,
+) -> dict:
+    """Queue a fixed-input audit/repair replay for curated pages; it never extracts or publishes."""
+    if not _valid_benchmark_round(source_round_id) or not _valid_ingestion_run_id(source_run_id):
+        raise HTTPException(status_code=400, detail="invalid source round or run id")
+    try:
+        fixtures = domains.dd.ingestion.evaluation.domain.select_fixtures(
+            source_round_id, source_run_id, body.page_indices,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if not fixtures:
+        raise HTTPException(
+            status_code=400,
+            detail="this source run has no curated replay fixtures; add reviewed cases before replaying it",
+        )
+
+    minio = infra.minio.service.get_storage()
+    source_report_key = domains.dd.ingestion.storage.keys.benchmark_report_key(
+        source_round_id, source_run_id,
+    )
+    try:
+        if not await minio.exists(source_report_key):
+            raise HTTPException(status_code=404, detail="source benchmark report not found")
+        source_report = json.loads(await minio.read_text(source_report_key))
+        if not isinstance(source_report, dict):
+            raise HTTPException(status_code=500, detail="source benchmark report is malformed")
+    except HTTPException:
+        raise
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail="source benchmark report not found") from error
+    except Exception as error:
+        raise HTTPException(status_code=503, detail=f"could not read source report: {type(error).__name__}") from error
+    if source_report.get("status") != "done":
+        raise HTTPException(status_code=409, detail="source benchmark must finish successfully before replay")
+    if any(fixture.get("tier") != source_report.get("requested_tier") for fixture in fixtures):
+        raise HTTPException(status_code=409, detail="curated fixture tier does not match the source report")
+
+    lock_slug = f"__dd_evaluation__-{source_run_id[:20]}"
+    gate = await domains.dd.ingestion.runtime.dispatch.service.reserve_run(lock_slug, refresh=True)
+    if gate["status"] != "reserved":
+        return gate
+    replay_id = gate["run_id"]
+    report = {
+        "schema_version": 1,
+        "replay_id": replay_id,
+        "evaluation_round_id": body.evaluation_round_id,
+        "source": {
+            "round_id": source_round_id,
+            "run_id": source_run_id,
+            "framework_slug": source_report.get("framework_slug"),
+            "requested_tier": source_report.get("requested_tier"),
+            "source_url": source_report.get("source_url"),
+            "build": source_report.get("build", {}),
+            "benchmark_report_key": source_report_key,
+        },
+        "fixtures": [
+            {key: fixture.get(key) for key in ("id", "tier", "page_idx", "labels", "expected", "human_rubric")}
+            for fixture in fixtures
+        ],
+        "status": "queued",
+        "queued_at": time.time(),
+        "build": {
+            "service_version": infra.opentelemetry.params.SERVICE_VERSION,
+            "git_sha": infra.opentelemetry.params.GIT_SHA,
+            "corpus_normalizer_version": domains.dd.ingestion.corpus_normalize.versions.NORMALIZER_VERSION,
+        },
+        "publishes": False,
+    }
+    report_key = domains.dd.ingestion.storage.keys.evaluation_report_key(
+        body.evaluation_round_id, replay_id,
+    )
+    try:
+        await minio.write(
+            report_key,
+            json.dumps(report, ensure_ascii=False, separators=(",", ":")),
+            content_type=domains.dd.ingestion.storage.params.JSON_TYPE,
+        )
+    except Exception as error:
+        await domains.dd.ingestion.runtime.dispatch.service.release_run(lock_slug, replay_id)
+        raise HTTPException(
+            status_code=503,
+            detail=f"could not persist evaluation report: {type(error).__name__}",
+        ) from error
+
+    try:
+        task = domains.dd.ingestion.task.run_ingestion_replay.delay(
+            replay_id,
+            body.evaluation_round_id,
+            source_round_id,
+            source_run_id,
+            [fixture["id"] for fixture in fixtures],
+            lock_slug,
+        )
+    except Exception as error:
+        report.update(
+            status="failed",
+            error=f"enqueue failed: {type(error).__name__}: {error}"[:500],
+            finished_at=time.time(),
+        )
+        try:
+            await minio.write(
+                report_key,
+                json.dumps(report, ensure_ascii=False, separators=(",", ":")),
+                content_type=domains.dd.ingestion.storage.params.JSON_TYPE,
+            )
+        finally:
+            await domains.dd.ingestion.runtime.dispatch.service.release_run(lock_slug, replay_id)
+        raise HTTPException(status_code=503, detail="could not queue the ingestion replay") from error
+
+    try:
+        infra.opentelemetry.service.tag_celery_task(task.id)
+    except Exception:
+        logger.warning("could not attach the ingestion replay Celery trace tag", exc_info=True)
+
+    return {
+        "status": "queued",
+        "replay_id": replay_id,
+        "evaluation_round_id": body.evaluation_round_id,
+        "source_run_id": source_run_id,
+        "fixtures": [fixture["id"] for fixture in fixtures],
+        "report_key": report_key,
+        "publishes": False,
+    }
+
+
+@router.get("/replays/{evaluation_round_id}/{replay_id}")
+async def get_ingestion_replay(evaluation_round_id: str, replay_id: str) -> dict:
+    if not _valid_benchmark_round(evaluation_round_id) or not _valid_ingestion_run_id(replay_id):
+        raise HTTPException(status_code=400, detail="invalid evaluation round or replay id")
+    minio = infra.minio.service.get_storage()
+    key = domains.dd.ingestion.storage.keys.evaluation_report_key(evaluation_round_id, replay_id)
+    try:
+        if not await minio.exists(key):
+            raise HTTPException(status_code=404, detail="evaluation report not found")
+        report = json.loads(await minio.read_text(key))
+    except HTTPException:
+        raise
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail="evaluation report not found") from error
+    except Exception as error:
+        raise HTTPException(status_code=503, detail=f"could not read evaluation report: {type(error).__name__}") from error
+    if not isinstance(report, dict):
+        raise HTTPException(status_code=500, detail="evaluation report is malformed")
+    return report
+
+
+@router.get("/replays/{evaluation_round_id}")
+async def list_ingestion_replays(evaluation_round_id: str) -> dict:
+    if not _valid_benchmark_round(evaluation_round_id):
+        raise HTTPException(status_code=400, detail="invalid evaluation round id")
+    minio = infra.minio.service.get_storage()
+    prefix = domains.dd.ingestion.storage.keys.evaluation_report_prefix(evaluation_round_id)
+    try:
+        reports = []
+        for key in await minio.list(prefix):
+            if not key.endswith(".json"):
+                continue
+            try:
+                report = json.loads(await minio.read_text(key))
+            except (ValueError, UnicodeDecodeError):
+                logger.warning("skipping malformed DD ingestion evaluation report %s", key)
+                continue
+            if isinstance(report, dict):
+                reports.append(report)
+    except Exception as error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"could not read evaluation reports: {type(error).__name__}",
+        ) from error
+    reports.sort(key=lambda item: item.get("started_at") or item.get("queued_at") or 0)
+    return {"evaluation_round_id": evaluation_round_id, "runs": reports}
+
+
+@router.get("/replays/{evaluation_round_id}/{replay_id}/pages/{page_idx}")
+async def get_ingestion_replay_page(
+    evaluation_round_id: str,
+    replay_id: str,
+    page_idx: int,
+    version: Literal["source", "input", "output"] = "output",
+) -> dict:
+    """Read a pinned source page or its isolated replay input/output for human review."""
+    if (
+        not _valid_benchmark_round(evaluation_round_id)
+        or not _valid_ingestion_run_id(replay_id)
+        or page_idx < 0
+    ):
+        raise HTTPException(status_code=400, detail="invalid evaluation round, replay id or page index")
+    minio = infra.minio.service.get_storage()
+    report_key = domains.dd.ingestion.storage.keys.evaluation_report_key(evaluation_round_id, replay_id)
+    try:
+        if not await minio.exists(report_key):
+            raise HTTPException(status_code=404, detail="evaluation report not found")
+        report = json.loads(await minio.read_text(report_key))
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=503, detail=f"could not read evaluation report: {type(error).__name__}") from error
+    page = next(
+        (row for row in report.get("pages", []) if isinstance(row, dict) and row.get("idx") == page_idx),
+        None,
+    ) if isinstance(report, dict) else None
+    if page is None:
+        raise HTTPException(status_code=404, detail=f"page {page_idx} is not present in this replay report")
+    key = (page.get("artifacts") or {}).get(f"{version}_key")
+    if not isinstance(key, str) or not key:
+        raise HTTPException(status_code=404, detail=f"{version} page content is unavailable")
+    try:
+        body_text = await minio.read_text(key)
+    except Exception as error:
+        raise HTTPException(status_code=503, detail=f"could not read replay page: {type(error).__name__}") from error
+    return {
+        "replay_id": replay_id,
+        "page_idx": page_idx,
+        "version": version,
+        "sha256": hashlib.sha256(body_text.encode("utf-8")).hexdigest(),
+        "markdown": body_text,
+    }
 
 
 

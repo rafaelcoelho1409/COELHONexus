@@ -49,12 +49,41 @@ async def repair_page(
             tools.ingestion.check_patch.params.ASSESSMENT_PATH: agents.service.file(json.dumps(assessment, ensure_ascii = False)),
         },
     }
-    # Retry transient provider failures and occasional non-structured answers in one bounded loop.
+    last_failure: str | None = None
+
+    async def invoke() -> Any:
+        call_request = request
+        if last_failure:
+            call_request = {
+                **request,
+                "messages": [
+                    *request["messages"],
+                    {
+                        "role": "user",
+                        "content": (
+                            "Your previous response did not validate as PagePatchBatch: "
+                            f"{last_failure}. Return a complete corrected PagePatchBatch matching the configured schema. "
+                            "If no patch passes every safety rule, return an empty patches list. Return no commentary."
+                        ),
+                    },
+                ],
+            }
+        return await repairer.ainvoke(call_request, config = config)
+
+    def usable(value: Any) -> bool:
+        nonlocal last_failure
+        if agents.domain.structured_or_recovered(value, agents.schemas.PagePatchBatch) is not None:
+            return True
+        last_failure = agents.domain.structured_failure_reason(value, agents.schemas.PagePatchBatch)
+        return False
+
+    # Retry transient provider failures and give malformed output one bounded,
+    # schema-specific correction attempt. The patch gate still validates every edit.
     result = await domains.settings.chat.service.resilient_ainvoke(
-        lambda: repairer.ainvoke(request, config = config),
+        invoke,
         attempts = params.MAX_ATTEMPTS,
         wait_base_s = params.RETRY_WAIT_BASE_S,
-        accept = lambda value: agents.domain.structured_or_recovered(value, agents.schemas.PagePatchBatch) is not None,
+        accept = usable,
     )
     batch = agents.domain.structured_or_recovered(result, agents.schemas.PagePatchBatch)
     if batch is not None:

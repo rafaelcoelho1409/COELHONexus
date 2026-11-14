@@ -5,14 +5,18 @@
 import dynamic from "next/dynamic";
 import { useState } from "react";
 
-import { nodeKpi } from "../domain/node-details";
-import type { StageNodeView } from "../domain/stages";
+import { compiledTopology } from "../domain/compiled-topology";
+import { nodeDetails as getNodeDetails, nodeKpi } from "../domain/node-details";
+import { nodeProgress } from "../domain/node-progress";
+import { nodeResources } from "../domain/node-resources";
+import { plannerNodesFor, synthNodesFor, type StageNode, type StageNodeView } from "../domain/stages";
 import type { StageEvent } from "../entities";
-import { useStageInfo } from "../hooks/use-stage-queries";
+import { useStageInfoQuery } from "../hooks/use-stage-queries";
 import type { RunStage } from "../params";
 import { LangGraphTopology } from "./langgraph-topology";
 import { NodeDrawer } from "./node-drawer";
 import { StageNodes } from "./stage-parts";
+import type { StageFlowNodeDetails } from "./stage-flow";
 import { ToggleGroup } from "./toggle-group";
 
 // The graph library is only needed once a graph is on screen.
@@ -64,20 +68,48 @@ export function StageNodeBoard({
     setOpenedAt({ ...openedAt, [nodeId]: Date.now() });
     setOpenId(nodeId);
   };
-  const [mode, setMode] = useState<ViewMode | null>(null);
-  const activeMode: ViewMode = mode ?? (views.length > 0 ? "graph" : "langgraph");
-  const stageInfo = useStageInfo(stage);
-  const open = views.find((view) => view.node.id === openId);
+  const [mode, setMode] = useState<ViewMode>("graph");
+  const stageInfoQuery = useStageInfoQuery(stage);
+  const stageInfo = stageInfoQuery.data;
+  const activeMode = mode;
+  const topology = compiledTopology(stageInfo?.graph_mermaid, stage);
+  const definitions =
+    stage === "planner" ? plannerNodesFor(stageInfo?.implemented) : synthNodesFor(stageInfo?.implemented);
+  const currentViews = new Map(views.map((view) => [view.node.id, view]));
+  const nodeDefinitions = new Map(definitions.map((node) => [node.id, node]));
+  const visibleNodeIds = topology?.nodeIds ?? [];
+  const graphViews: StageNodeView[] = visibleNodeIds.map((id) => {
+    const current = currentViews.get(id);
+    const fallbackNode: StageNode = {
+      id,
+      label: id.split("_").map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`).join(" "),
+      field: id,
+      stats: `${id}_stats`,
+    };
+    const node = current?.node ?? nodeDefinitions.get(id) ?? fallbackNode;
+    return {
+      node: { ...node, label: getNodeDetails(stage, id)?.title ?? node.label },
+      status: current?.status ?? "pending",
+    };
+  });
+  const graphNodeDetails: Record<string, StageFlowNodeDetails> = {};
+  for (const view of graphViews) {
+    graphNodeDetails[view.node.id] = {
+      ...nodeResources(stage, view.node.id, stageInfo?.implemented),
+      progress: nodeProgress(stage, view.node.id, events, values, view.status),
+    };
+  }
+  const open = graphViews.find((view) => view.node.id === openId);
 
   const kpis: Record<string, string> = {};
-  for (const view of views) {
+  for (const view of graphViews) {
     const kpi = view.status === "done" ? nodeKpi(stage, view.node.id, values) : null;
     if (kpi) kpis[view.node.id] = kpi;
   }
 
   return (
     <>
-      {/* The graph uses Ingestion's run views and topology source inside the enclosing stage card. */}
+      {/* The graph and list use this stage's run state and the server's compiled topology. */}
       <section
         aria-label={`${STAGE_TITLE[stage]} pipeline`}
         className={`flex min-w-0 flex-1 flex-col gap-3 ${
@@ -104,24 +136,41 @@ export function StageNodeBoard({
           </div>
         </div>
         {activeMode === "langgraph" ? (
-          <LangGraphTopology title={STAGE_TITLE[stage]} source={stageInfo?.graph_mermaid ?? null} />
-        ) : views.length === 0 ? (
-          <p className="flex min-h-36 items-center justify-center rounded-sm border border-border bg-background p-3 text-center text-xs text-muted-foreground">
-            Run {STAGE_TITLE[stage]} to see execution status for its nodes.
+          <LangGraphTopology
+            title={STAGE_TITLE[stage]}
+            source={stageInfo?.graph_mermaid ?? null}
+            loading={stageInfoQuery.isPending}
+          />
+        ) : !topology ? (
+          <p
+            role="status"
+            className="flex min-h-36 items-center justify-center rounded-sm border border-border bg-background p-3 text-center text-xs text-muted-foreground"
+          >
+            {stageInfoQuery.isPending
+              ? `Loading compiled ${STAGE_TITLE[stage]} topology…`
+              : `Compiled ${STAGE_TITLE[stage]} topology is unavailable.`}
           </p>
         ) : activeMode === "graph" ? (
           <StageFlow
             stage={stage}
             title={STAGE_TITLE[stage]}
-            views={views}
+            views={graphViews}
             kpis={kpis}
             liveLines={liveLines}
             values={values}
             live={live}
             onOpen={openNode}
+            edges={topology?.edges}
+            nodeDetails={graphNodeDetails}
           />
         ) : (
-          <StageNodes views={views} liveLines={liveLines} kpis={kpis} onOpen={openNode} />
+          <StageNodes
+            views={graphViews}
+            liveLines={liveLines}
+            kpis={kpis}
+            nodeDetails={graphNodeDetails}
+            onOpen={openNode}
+          />
         )}
       </section>
       {open ? (

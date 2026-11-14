@@ -593,13 +593,14 @@ def _disambiguate_duplicate_slugs(
 
 
 def _looks_like_changelog(h1_text: str, body: str) -> bool:
-    # Substring, not exact match — real headings vary ("Claude Code
-    # changelog", "FastMCP Changelog"); the `<Update label=...>` count is
-    # the real signal, the title just gates against false positives on an
-    # unrelated oversized section that happens to contain a couple of them.
+    # Real heading text varies. Require a changelog title plus multiple
+    # structural release markers so unrelated prose cannot trigger this path.
     return (
         params.CHANGELOG_TITLE_WORD in h1_text.strip().lower()
-        and len(patterns.UPDATE_TAG_RE.findall(body)) >= 2
+        and (
+            len(patterns.UPDATE_TAG_RE.findall(body)) >= 2
+            or len(patterns.CHANGELOG_VERSION_LINE_RE.findall(body)) >= 2
+        )
     )
 
 
@@ -609,38 +610,96 @@ def _split_changelog_releases(
     source_path: str,
     h1_prefix: str,
 ) -> list[tuple[str, str, str]] | None:
-    """Split a `# Changelog` section on `<Update label="vX.Y.Z">` boundaries
-    instead of its internal (repeating, non-unique) H2s. Gives each release
-    its own real identity — `slug` carries CHANGELOG_RELEASE_MARKER so
-    post.service can tag these `tier = "changelog"` for corpus_load to drop
-    from the Planner/Synth path without spending an off_topic LLM call on
-    ~dozens of near-duplicate "New Contributors" fragments per release."""
+    """Split changelogs on release boundaries rather than repeating H2s.
+
+    Mintlify Update tags retain one release per page. Bold-version changelogs
+    are grouped into bounded pages while keeping complete releases together.
+    Generated slugs mark these pages as lookup-only for Planner/Synth.
+    """
     matches = list(patterns.UPDATE_TAG_RE.finditer(body))
+    if len(matches) >= 2:
+        out: list[tuple[str, str, str]] = []
+        seen_slugs: set[str] = set()
+        base = slug.removesuffix(params.CHANGELOG_SLUG_SUFFIX)
+        for i, match in enumerate(matches):
+            start = match.start()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+            release_body = body[start:end]
+            if h1_prefix and not release_body.startswith(h1_prefix):
+                release_body = h1_prefix + release_body
+            version_slug = slugify_heading(match.group(1), f"release-{i}")
+            new_slug = f"{base}{patterns.CHANGELOG_RELEASE_MARKER}{version_slug}"
+            if new_slug in seen_slugs:
+                new_slug = f"{new_slug}-{i}"
+            seen_slugs.add(new_slug)
+            out.append((new_slug, release_body, source_path))
+        return out
+
+    matches = list(patterns.CHANGELOG_VERSION_LINE_RE.finditer(body))
     if len(matches) < 2:
         return None
-    out: list[tuple[str, str, str]] = []
+
+    base = slug.removesuffix(params.CHANGELOG_SLUG_SUFFIX)
     seen_slugs: set[str] = set()
-    for i, m in enumerate(matches):
-        start = m.start()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
-        release_body = body[start:end]
-        if h1_prefix and not release_body.startswith(h1_prefix):
-            release_body = h1_prefix + release_body
-        version_slug = slugify_heading(m.group(1), f"release-{i}")
-        base = slug.removesuffix(params.CHANGELOG_SLUG_SUFFIX)
-        new_slug = f"{base}{patterns.CHANGELOG_RELEASE_MARKER}{version_slug}"
+
+    def unique_slug(label: str, fallback: str) -> str:
+        new_slug = f"{base}{patterns.CHANGELOG_RELEASE_MARKER}{slugify_heading(label, fallback)}"
         if new_slug in seen_slugs:
-            new_slug = f"{new_slug}-{i}"
+            new_slug = f"{new_slug}-{fallback}"
         seen_slugs.add(new_slug)
-        out.append((new_slug, release_body, source_path))
+        return new_slug
+
+    out: list[tuple[str, str, str]] = []
+    preamble = body[:matches[0].start()]
+    if h1_prefix and preamble.startswith(h1_prefix):
+        preamble = preamble[len(h1_prefix):]
+    # Keep the source preamble verbatim; the overview heading is additive
+    # context, not a cleanup pass over the author's text or whitespace.
+    if preamble:
+        overview = f"{h1_prefix}## Overview\n\n{preamble}"
+        out.append((unique_slug("overview", "overview"), overview, source_path))
+
+    releases = [
+        (
+            match.group("label"),
+            body[match.start():matches[index + 1].start() if index + 1 < len(matches) else len(body)],
+        )
+        for index, match in enumerate(matches)
+    ]
+    target_chars = params.CHANGELOG_GROUP_TARGET_CHARS
+    group: list[tuple[str, str]] = []
+    group_chars = 0
+
+    def flush_group() -> None:
+        if not group:
+            return
+        first_label, last_label = group[0][0], group[-1][0]
+        range_label = f"{first_label}-to-{last_label}"
+        heading = f"## Releases {first_label}–{last_label}\n\n"
+        group_body = f"{h1_prefix}{heading}" + "".join(block for _label, block in group)
+        out.append((unique_slug(range_label, f"group-{len(out)}"), group_body, source_path))
+        group.clear()
+
+    for label, block in releases:
+        proposed_chars = group_chars + len(block)
+        first_label = group[0][0] if group else label
+        added_heading_chars = len(h1_prefix) + len(f"## Releases {first_label}–{label}\n\n")
+        if group and added_heading_chars + proposed_chars > target_chars:
+            flush_group()
+            group_chars = 0
+        group.append((label, block))
+        group_chars += len(block)
+    flush_group()
     return out
 
 
 def _is_fragmented_changelog(h1_text: str, sub_pages: list[tuple[str, str, str]]) -> bool:
-    """Whether a changelog's sub-pages are fragments rather than releases. A changelog without `<Update>` tags is cut on
-    its internal H2s, which in FastMCP's are `## New Contributors` / `## What's Changed` under every release: 126 pages
-    with three titles between them, none of which says which release it belongs to. One per version (Dask's
-    `## 2024.5.0`) is what the split is for and is kept."""
+    """Detect generic H2 fragments when no structural release markers were found.
+
+    FastMCP repeats `## New Contributors` / `## What's Changed` under every
+    release, yielding fragments with only a few repeated titles. A page per
+    version, such as Dask's `## 2024.5.0`, carries its release identity.
+    """
     if params.CHANGELOG_TITLE_WORD not in h1_text.lower() or len(sub_pages) < 2:
         return False
     titles = {display_title(body, slug).casefold() for slug, body, _source in sub_pages}
@@ -653,8 +712,9 @@ def _h2_subsplit_oversized(
 ) -> list[tuple[str, str, str]]:
     """Recursive H2→H3 sub-split of oversized sections; parent `# Title`
     prepended so sub-pages remain self-contained. A `# Changelog` section
-    with ≥2 `<Update label=...>` releases splits on those instead — its
-    internal H2s repeat every release and carry no real identity."""
+    with ≥2 `<Update label=...>` releases or standalone bold version lines
+    splits on those instead — its internal H2s repeat every release and carry
+    no real identity."""
     expanded: list[tuple[str, str, str]] = []
     n_expanded = 0
     n_added_subsections = 0
@@ -665,7 +725,11 @@ def _h2_subsplit_oversized(
         sub_pages = None
         oversized = len(b.encode("utf-8")) > params.SPLIT_MAX_SECTION_BYTES
         if oversized and _looks_like_changelog(h1_text, b):
-            sub_pages = _split_changelog_releases(s, b, sp, h1_prefix)
+            # Changelog chunks retain the exact source H1 prefix, including its
+            # original line breaks; other recursive splits keep their existing
+            # normalized separator behavior.
+            source_h1_prefix = h1_match.group(0) if h1_match else ""
+            sub_pages = _split_changelog_releases(s, b, sp, source_h1_prefix)
         if sub_pages is None:
             sub_pages = _size_aware_recursive_split(
                 s, b, sp, h1_prefix = h1_prefix, levels = params.SUBSPLIT_LEVELS,

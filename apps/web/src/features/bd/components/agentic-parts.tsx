@@ -6,7 +6,12 @@
 
 import { Check, Circle, CircleDot, X } from "lucide-react";
 
-import type { AgenticNodeStatus, AgenticNodeView } from "../domain/agentic-progress";
+import type {
+  AgenticNodeProgress,
+  AgenticNodeResources,
+  AgenticNodeStatus,
+  AgenticNodeView,
+} from "../domain/agentic-progress";
 
 const GLYPH_CLASS = "size-3 shrink-0";
 
@@ -72,15 +77,90 @@ export function AgenticNodeList({
                 <span className="min-w-0 truncate text-xs text-muted-foreground tabular-nums">{row.kpi}</span>
               ) : null}
             </span>
+            <span className="mt-0.5 block font-mono text-xs text-muted-foreground">{row.id}</span>
             {row.liveLine ? (
               <span className="mt-1 block font-mono text-xs break-all text-muted-foreground">
                 {row.liveLine}
               </span>
             ) : null}
+            <AgenticNodeDetailsList resources={row.resources} />
+            {row.progress ? <AgenticNodeProgressBar label={row.label} progress={row.progress} /> : null}
           </button>
         </li>
       ))}
     </ol>
+  );
+}
+
+const RESOURCE_ROWS = [
+  { label: "Agent", key: "agents" },
+  { label: "Skills", key: "skills" },
+  { label: "Tools", key: "tools" },
+] as const;
+
+export function AgenticNodeDetailsList({
+  resources,
+  compact = false,
+}: {
+  resources: AgenticNodeResources;
+  compact?: boolean;
+}) {
+  return (
+    <span className={`grid min-w-0 gap-y-0.5 text-xs leading-4 ${compact ? "" : "mt-1"}`}>
+      {RESOURCE_ROWS.map(({ label, key }) => {
+        const items = resources[key];
+        return (
+          <span key={key} className="grid min-w-0 grid-cols-[3.5rem_minmax(0,1fr)] gap-2">
+            <span className="text-muted-foreground">{label}</span>
+            <span className="flex min-w-0 flex-col">
+              {items.length > 0 ? (
+                items.map((item) => (
+                  <span key={item} title={item} className={`min-w-0 ${compact ? "truncate" : "break-words"}`}>
+                    {item}
+                  </span>
+                ))
+              ) : (
+                <span>None</span>
+              )}
+            </span>
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+export function AgenticNodeProgressBar({
+  label,
+  progress,
+}: {
+  label: string;
+  progress: AgenticNodeProgress;
+}) {
+  const current = Math.max(0, Math.min(progress.current, progress.total));
+  const percent = progress.total > 0 ? Math.round((current / progress.total) * 100) : 0;
+  const active = progress.active > 0 ? ` · ${progress.active} active` : "";
+  return (
+    <span className="mt-1 block">
+      <span className="flex items-center justify-between gap-2 text-xs">
+        <span className="min-w-0 truncate text-muted-foreground">{progress.label}</span>
+        <span className="shrink-0 tabular-nums">
+          {current} / {progress.total}
+          {active}
+        </span>
+      </span>
+      <span
+        role="progressbar"
+        aria-label={`${label} ${progress.label}`}
+        aria-valuemin={0}
+        aria-valuemax={progress.total}
+        aria-valuenow={current}
+        aria-valuetext={`${current} of ${progress.total} ${progress.label}${active}`}
+        className="mt-1 block h-1.5 w-full overflow-hidden rounded-sm bg-muted"
+      >
+        <span aria-hidden="true" className="block h-full bg-primary" style={{ width: `${percent}%` }} />
+      </span>
+    </span>
   );
 }
 

@@ -45,6 +45,33 @@ export const contentSelectionSchema = z.looseObject({
 export type ContentSelection = z.infer<typeof contentSelectionSchema>;
 export type ContentSelectionPage = z.infer<typeof contentSelectionPageSchema>;
 
+export const processedBookPageSchema = z.object({
+  processed_page_number: z.number().int().positive(),
+  source_page_number: z.number().int().positive(),
+  section_path: z.array(z.string()).catch([]),
+  role: z.string(),
+});
+export const processedContentsEntrySchema = z.object({
+  level: z.number().int().min(1).max(8),
+  title: z.string(),
+  processed_page_number: z.number().int().positive(),
+  source_page_number: z.number().int().positive(),
+  confidence: z.number().min(0).max(1),
+  review_required: z.boolean(),
+});
+export const processedBookSchema = z.object({
+  book_id: z.string(),
+  extraction_run_id: z.string(),
+  agentic_run_id: z.string(),
+  selection_revision: z.number().int().positive(),
+  expected_source_page_count: z.number().int().positive(),
+  source_page_count: z.number().int().positive(),
+  contents_status: z.enum(["complete", "needs_review", "unavailable"]),
+  contents: z.array(processedContentsEntrySchema).catch([]),
+  pages: z.array(processedBookPageSchema),
+});
+export type ProcessedBook = z.infer<typeof processedBookSchema>;
+
 /** What the stored reader layout holds. Every field falls back on its own, so a value from an older version or a
  * hand-edited one still gives a usable layout. */
 export const readerLayoutSchema = z.object({
@@ -116,6 +143,9 @@ export const agenticRunStatusSchema = z.looseObject({
   selected_page_count: z.number().catch(0),
   excluded_page_count: z.number().catch(0),
   content_selection_revision: z.number().nullable().catch(null),
+  processed_page_count: z.number().catch(0),
+  processed_book_revision: z.number().nullable().catch(null),
+  contents_status: z.enum(["complete", "needs_review", "unavailable"]).nullable().catch(null),
   review_page_count: z.number().catch(0),
   review_pages: z.array(z.number()).catch([]),
   unverified_page_count: z.number().catch(0),
@@ -154,6 +184,9 @@ export const agenticRunWipeResponseSchema = z.object({
   objects_deleted: count,
 });
 export type AgenticRunWipeResponse = z.infer<typeof agenticRunWipeResponseSchema>;
+
+export const agenticGraphSchema = z.looseObject({ graph_mermaid: z.string() });
+export type AgenticGraph = z.infer<typeof agenticGraphSchema>;
 
 export const extractionWipeResponseSchema = z.object({
   book_id: z.string(),

@@ -94,6 +94,9 @@ class AgenticRunStatus(BaseModel):
     selected_page_count: int = 0
     excluded_page_count: int = 0
     content_selection_revision: int | None = None
+    processed_page_count: int = 0
+    processed_book_revision: int | None = None
+    contents_status: Literal["complete", "needs_review", "unavailable"] | None = None
     review_page_count: int = 0
     review_pages: list[int] = []
     unverified_page_count: int = 0
@@ -148,6 +151,34 @@ class ContentSelectionOverride(BaseModel):
 class ContentSelectionUpdate(BaseModel):
     expected_revision: int = Field(gt = 0, strict = True)
     overrides: list[ContentSelectionOverride]
+
+
+class ProcessedBookPage(BaseModel):
+    processed_page_number: int
+    source_page_number: int
+    section_path: list[str]
+    role: str
+
+
+class ProcessedContentsEntry(BaseModel):
+    level: int
+    title: str
+    processed_page_number: int
+    source_page_number: int
+    confidence: float
+    review_required: bool
+
+
+class ProcessedBookResponse(BaseModel):
+    book_id: str
+    extraction_run_id: str
+    agentic_run_id: str
+    selection_revision: int
+    expected_source_page_count: int
+    source_page_count: int
+    contents_status: Literal["complete", "needs_review", "unavailable"]
+    contents: list[ProcessedContentsEntry]
+    pages: list[ProcessedBookPage]
 
 
 class Snapshot(BaseModel):

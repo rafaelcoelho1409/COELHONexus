@@ -5,6 +5,12 @@ import re
 
 
 FENCE_RE = re.compile(r"(`{3,}|~{3,})")
+GITBOOK_TAB_MARKER_RE = re.compile(r"\{%\s*(?P<end>end)?tab\b(?P<attrs>.*?)%\}", re.IGNORECASE)
+GITBOOK_TAB_TITLE_RE = re.compile(r"\btitle\s*=\s*([\"'])(?P<title>.*?)\1", re.IGNORECASE)
+MARKDOWN_IMAGE_RE = re.compile(
+    r"""!\[(?:\\.|[^\]\\\n])*\]\(\s*(?:<[^>\n]+>|(?:\\.|[^()\s]|\([^()\n]*\))+)(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?[ \t]*\)"""
+)
+MARKDOWN_IMAGE_MARKER_RE = re.compile(r"(?<!\\)!\[")
 HEADING_WITHOUT_SPACE_RE = re.compile(r"#{1,6}[A-Za-z]")
 EMPTY_HEADING_RE = re.compile(r"#{1,6}\s*$")
 # UTF-8 text read as Latin-1/Windows-1252 (`Ã©`, `Â `, `â€™`), and the replacement character.
@@ -21,7 +27,7 @@ GITBOOK_COMPONENT_NAMES = frozenset({
     "embed", "content-ref", "hint", "update", "callout", "expand", "details",
 })
 GITBOOK_COMPONENT_TAG_RE = re.compile(
-    r"\{%\s*(?P<end>end)?(?P<name>stepper|step|tabs?|columns?|column|file|code|embed|content-ref|hint|update|callout|expand|details)\b[^%]*%\}",
+    r"\{%\s*(?P<end>end)?(?P<name>stepper|step|tabs?|columns?|column|file|code|embed|content-ref|hint|update|callout|expand|details)\b.*?%\}",
     re.IGNORECASE,
 )
 HTML_TAG_RE = re.compile(r"</?([A-Za-z][A-Za-z0-9:-]*)\b[^<>]*?/?>")

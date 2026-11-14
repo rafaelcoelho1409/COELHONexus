@@ -46,11 +46,14 @@ export type IngestionWorkflowActions = {
 };
 
 const INGESTION_TOPOLOGY = `flowchart TD
+  finish([End])
   start([Start]) --> playwright["Playwright transcripts"]
   playwright --> elasticsearch["Elasticsearch indexing"]
   elasticsearch --> qdrant["Qdrant vector index"]
-  qdrant --> neo4j["Neo4j entity graph"]
-  neo4j --> finish([End])`;
+  elasticsearch --> neo4j["Neo4j entity graph"]
+  elasticsearch -. done .-> finish
+  qdrant --> finish
+  neo4j --> finish`;
 
 export function IngestionAgenticStructure({
   steps,
@@ -136,7 +139,7 @@ export function IngestionAgenticStructure({
           <MermaidTopology
             title="YCS ingestion workflow"
             source={INGESTION_TOPOLOGY}
-            note="YCS extraction runs as task phases, not a LangGraph. This shows its current phase sequence."
+            note="The compiled graph indexes transcripts in Elasticsearch, then runs the Qdrant and Neo4j nodes in parallel."
           />
         )}
       </section>

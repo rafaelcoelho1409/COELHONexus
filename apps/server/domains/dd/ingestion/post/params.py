@@ -72,6 +72,10 @@ TITLE_SKIP_SEGMENTS = frozenset({
 # (Dask's, one section per version).
 CHANGELOG_MIN_DISTINCT_RATIO = 0.5
 
+# Group versioned changelog entries into bounded, self-contained pages. This stays below the Agentic auditor's character
+# ceiling with room for the parent heading and metadata, without creating one LLM call per short release note.
+CHANGELOG_GROUP_TARGET_CHARS = 120_000
+
 # Relative links are made absolute against the page's own URL — except on hosts where "relative" means something else
 # (a raw GitHub file's `/x` is the repository's, not the host's).
 LINK_REWRITE_SKIP_HOSTS = ("raw.githubusercontent.com",)

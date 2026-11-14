@@ -81,17 +81,55 @@ async def prepare_units(
         ):
             raise ValueError("the pinned content-selection revision does not match this Distill run")
         selection_by_page = {page.page_number: page for page in selection.pages}
-        if sum(page.disposition == "include" for page in selection.pages) != state["selected_page_count"]:
-            raise ValueError("the pinned content-selection count does not match this Distill run")
+
+    if state.get("processed_book_key"):
+        processed_content = await storage.read_text(state["processed_book_key"])
+        if hashlib.sha256(processed_content.encode("utf-8")).hexdigest() != state["processed_book_sha256"]:
+            raise ValueError("the pinned processed-book manifest failed its integrity check")
+        processed_book = domains.bd.ingestion.ai.schemas.ProcessedBookManifest.model_validate_json(
+            processed_content,
+        )
+        if (
+            processed_book.book_id != state["book_id"]
+            or processed_book.extraction_run_id != state["extraction_run_id"]
+            or processed_book.agentic_run_id != state["ingestion_ai_run_id"]
+            or processed_book.selection_revision != state["processed_book_revision"]
+            or processed_book.selection_key != state.get("content_selection_key")
+            or processed_book.selection_sha256 != state.get("content_selection_sha256")
+            or processed_book.source_page_count != state["processed_page_count"]
+        ):
+            raise ValueError("the processed-book page map does not match this Distill run")
+        page_number_map = [
+            (item.source_page_number, item.processed_page_number)
+            for item in processed_book.pages
+        ]
+    else:
+        selected_pages = [
+            page for page in qa_manifest.pages
+            if (
+                (selection_by_page is None or selection_by_page[page.page_number].disposition == "include")
+                and page.delivery_disposition != "discarded_blank"
+            )
+        ]
+        page_number_map = [
+            (page.page_number, processed_page_number)
+            for processed_page_number, page in enumerate(selected_pages, start = 1)
+        ]
+    if state.get("processed_book_key") and len(page_number_map) != state["selected_page_count"]:
+        raise ValueError("the processed page count does not match this Distill run")
 
     page_by_number = {
         page.get("page"): page
         for page in source_manifest.get("pages", [])
         if isinstance(page, dict) and type(page.get("page")) is int
     }
+    qa_by_number = {page.page_number: page for page in qa_manifest.pages}
     source_pages = []
     unit_refs = []
-    for qa_page in qa_manifest.pages:
+    for source_page_number, processed_page_number in page_number_map:
+        qa_page = qa_by_number.get(source_page_number)
+        if qa_page is None:
+            raise ValueError(f"the processed book references unknown source page {source_page_number}")
         content_page = selection_by_page.get(qa_page.page_number) if selection_by_page is not None else None
         if selection_by_page is not None and content_page is None:
             raise ValueError(f"content selection has no page {qa_page.page_number}")
@@ -105,6 +143,7 @@ async def prepare_units(
             section_path = []
         source_page = {
             "page_number": qa_page.page_number,
+            "processed_page_number": processed_page_number,
             "source_key": qa_page.normalized_key,
             "source_sha256": qa_page.normalized_sha256,
             "section_path": section_path,
@@ -126,11 +165,13 @@ async def prepare_units(
             section_path = section_path,
         )
         for ref, chunk in chunks:
+            ref["processed_page_number"] = processed_page_number
             input_key = domains.bd.distill.keys.input_unit_key(state["book_id"], state["run_id"], ref["unit_id"])
             ref["input_key"] = input_key
             input_record = {
                 "unit_id": ref["unit_id"],
                 "page_number": ref["page_number"],
+                "processed_page_number": processed_page_number,
                 "section_path": section_path,
                 "source_key": qa_page.normalized_key,
                 "source_sha256": qa_page.normalized_sha256,
@@ -454,6 +495,7 @@ async def extract_unit(
     artifact = {
         "unit_id": ref["unit_id"],
         "page_number": ref["page_number"],
+        "processed_page_number": input_record.get("processed_page_number"),
         "source_key": input_record["source_key"],
         "section_path": ref["section_path"],
         "source_sha256": ref["source_sha256"],

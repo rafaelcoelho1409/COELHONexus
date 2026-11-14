@@ -14,6 +14,17 @@ HUGGINGFACE_OPTIMUM_API_EXPORT_RE = re.compile(
     r"^(?P<name>[A-Za-z_]\w*)optimum\.(?:[A-Za-z_]\w*\.)*(?P=name)"
     r"(?P<source>https://github\.com/huggingface/optimum/blob/[^)\s\[]+?\.py#L\d+)\[.*$"
 )
+HUGGINGFACE_OPTIMUM_CREATE_REGISTER_RETURN_RE = re.compile(
+    r"(?m)^[ \t]{0,3}(?P<summary>Whether or not the register function is allowed to overwrite an already existing config)\.0"
+    r"(?P<return_type>`Callable\[\[str,\s*Tuple\[str,\s*\.\.\.\]\],\s*Callable\[\[Type\],\s*Type\]\]`)"
+    r"(?P<description>A decorator taking the model type and a the)\s+supported tasks\."
+)
+HUGGINGFACE_OPTIMUM_FX_RETURN_CONCAT_RE = re.compile(
+    r"only once\.0`torch\.fx\.GraphModule`The transformed module\.\n\n\*\*Parameters:\*\*"
+)
+API_INLINE_DUPLICATE_RETURN_RE = re.compile(
+    r"(?P<sentence_end>[.!?])0(?P<payload>[A-Z`][^\n]*(?:\n(?![ \t]*\n)[^\n]*)*)"
+)
 INDENTED_LABEL_RE = re.compile(r" {4}(?P<label>[A-Z][A-Za-z0-9][A-Za-z0-9 /&.+()'-]{0,78})")
 INDENTED_DESCRIPTION_RE = re.compile(r" {6}(?P<description>[A-Z][^\n]*)")
 

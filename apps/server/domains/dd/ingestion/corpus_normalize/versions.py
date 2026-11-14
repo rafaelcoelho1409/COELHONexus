@@ -40,5 +40,10 @@ from __future__ import annotations
 # v19 (2026-11-13): normalize an exported HTML-space entity and escaped underscore before a leading GitBook emoji shortcode,
 # then separate it from heading text (found in the Unsloth `Vision Fine-tuning` page).
 # v20 (2026-11-13): unescape a table row's leading pipe only when its surrounding header and delimiter identify a real Markdown
-# table (found in DeepAgents' fault-tolerance page).
-NORMALIZER_VERSION = 20
+# table (found in DeepAgents' fault-tolerance page). The first deployed pass missed a multi-row run separated by one blank line.
+# v21 (2026-11-13): rejoin that escaped continuation only when at least two rows match the recognized table width.
+# v22 (2026-11-13): restore the exact return-type/Parameters boundary concatenation in Optimum's Transformation.__call__ export.
+# v23 (2026-11-13): restore the exact Returns boundary and remove its stray export ordinal in TasksManager.create_register.
+# v24 (2026-11-13): match the actual indented "Whether or not" wording in page 0; the v23 signature was too narrow and did not fire.
+# v25 (2026-11-13): remove an inline `.0` return fragment only when the same complete content appears later in that heading's Returns block.
+NORMALIZER_VERSION = 25

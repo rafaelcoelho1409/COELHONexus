@@ -167,6 +167,27 @@ class ContentPageAssessment(BaseModel):
     rationale: Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1, max_length = 600)]
 
 
+class ContentsEntryProposal(BaseModel):
+    """A contents heading mapped to one supplied physical page candidate."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    outline_index: int = Field(ge = 0, strict = True)
+    title: Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1, max_length = 300)]
+    level: int = Field(ge = 1, le = 8, strict = True)
+    source_page_number: int = Field(gt = 0, strict = True)
+    confidence: Confidence
+    rationale: Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1, max_length = 600)]
+
+
+class ContentsReconciliationProposal(BaseModel):
+    """Bounded, evidence-grounded correction of a batch of table-of-contents entries."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    entries: list[ContentsEntryProposal] = Field(max_length = 100)
+
+
 class PageAuditFinding(BaseModel):
     """Minimal model-facing finding; page locators and evidence objects are added by the application."""
 

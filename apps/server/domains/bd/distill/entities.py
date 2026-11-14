@@ -6,6 +6,7 @@ from typing import NotRequired, TypedDict
 
 class SourcePage(TypedDict):
     page_number: int
+    processed_page_number: NotRequired[int]
     source_key: str
     source_sha256: str
     section_path: list[str]
@@ -18,6 +19,7 @@ class UnitRef(TypedDict):
     unit_id: str
     input_key: str
     page_number: int
+    processed_page_number: NotRequired[int]
     section_path: list[str]
     source_sha256: str
     text_sha256: str

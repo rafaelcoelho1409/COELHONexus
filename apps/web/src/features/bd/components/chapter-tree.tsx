@@ -8,12 +8,14 @@ export function ChapterTree({
   unitLabel,
   isExtracted,
   onOpenPage,
+  pageLabels,
 }: {
   tree: readonly ChapterNode[];
   activePage: number | null;
   unitLabel: "page" | "section";
   isExtracted: (page: number) => boolean;
   onOpenPage: (page: number) => void;
+  pageLabels?: ReadonlyMap<number, number>;
 }) {
   const activeChapter = activeChapterIndex(tree, activePage);
   return (
@@ -41,7 +43,9 @@ export function ChapterTree({
                 >
                   <span className="min-w-0 flex-1 truncate">{chapter.title}</span>{" "}
                   <span className="tabular shrink-0 text-xs text-muted-foreground">
-                    {unitLabel === "page" ? `p. ${chapter.firstPage}` : `Section ${chapter.firstPage}`}
+                    {unitLabel === "page"
+                      ? "p. " + (pageLabels?.get(chapter.firstPage) ?? chapter.firstPage)
+                      : "Section " + chapter.firstPage}
                   </span>
                 </button>
                 {chapter.entries.length > 0 ? (
@@ -62,7 +66,9 @@ export function ChapterTree({
                         >
                           <span className="min-w-0 flex-1 truncate">{entry.title}</span>{" "}
                           <span className="tabular shrink-0">
-                            {unitLabel === "page" ? `p. ${entry.page}` : `Section ${entry.page}`}
+                            {unitLabel === "page"
+                              ? "p. " + (pageLabels?.get(entry.page) ?? entry.page)
+                              : "Section " + entry.page}
                           </span>
                         </button>
                       </li>

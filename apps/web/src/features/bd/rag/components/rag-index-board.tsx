@@ -1,16 +1,24 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import { ChartNoAxesColumn } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useState } from "react";
+import { apiErrorMessage } from "@/shared/lib/api-error";
 import { MermaidTopology } from "@/shared/markdown/mermaid-topology";
 
 import { ActionButton } from "../../components/action-button";
-import { AgenticNodeList, AgenticPills, AgenticStatusBadge } from "../../components/agentic-parts";
+import {
+  AgenticNodeDetailsList,
+  AgenticNodeList,
+  AgenticPills,
+  AgenticStatusBadge,
+} from "../../components/agentic-parts";
 import { ToggleGroup } from "../../components/toggle-group";
-import type { AgenticNodeStatus, AgenticNodeView } from "../../domain/agentic-progress";
+import type { AgenticNodeResources, AgenticNodeStatus, AgenticNodeView } from "../../domain/agentic-progress";
+import { fetchPipelineUsage } from "../api";
 import type { RagIndexStatus } from "../index-entities";
-import { PipelineUsageSheet } from "./pipeline-usage-sheet";
+import { PipelineUsageBreakdown, PipelineUsageSheet } from "./pipeline-usage-sheet";
 import { SideSheet } from "./side-sheet";
 
 const AgenticFlow = dynamic(
@@ -38,6 +46,8 @@ const RAG_LANGGRAPH_TOPOLOGY = `flowchart TD
   materialize_knowledge_graph --> publish_retrieval_index["publish_retrieval_index"]
   publish_retrieval_index --> __end__([__end__])`;
 
+const emptyResources: AgenticNodeResources = { agents: [], skills: [], tools: [] };
+
 const NODES = [
   {
     id: "pin_sources",
@@ -46,6 +56,8 @@ const NODES = [
       "Bind the retrieval run to all extracted pages, the published Learning Guide, and the page-selection metadata.",
     reads: ["Ingestion pages", "Page selection", "Learning Guide"],
     writes: ["Pinned source manifest"],
+    resources: emptyResources,
+    usageNodeIds: [],
   },
   {
     id: "build_vector_index",
@@ -54,6 +66,8 @@ const NODES = [
       "Index all extracted pages, learning units, and guide passages for semantic and lexical retrieval, retaining each page’s selection metadata.",
     reads: ["Pinned source manifest", "Normalized book text"],
     writes: ["Passage vectors", "Page-level citations"],
+    resources: emptyResources,
+    usageNodeIds: [],
   },
   {
     id: "materialize_knowledge_graph",
@@ -62,6 +76,8 @@ const NODES = [
       "Connect chapters, lessons, glossary concepts, diagrams, and cited source pages in a book-scoped graph.",
     reads: ["Verified Learning Guide", "Citation references"],
     writes: ["Book-scoped concepts", "Evidence-linked relationships"],
+    resources: { agents: ["rag_graph_extractor"], skills: [], tools: [] },
+    usageNodeIds: ["rag_graph_extractor"],
   },
   {
     id: "publish_retrieval_index",
@@ -69,6 +85,8 @@ const NODES = [
     detail: "Record both retrieval stores and source counts for later book-search workflows.",
     reads: ["Hybrid index", "Evidence-linked graph"],
     writes: ["Retrieval manifest", "Index quality counters"],
+    resources: emptyResources,
+    usageNodeIds: [],
   },
 ] as const;
 
@@ -93,6 +111,14 @@ export function RagIndexBoard({
   const views = nodeViews(index);
   const selectedNode = NODES.find((node) => node.id === selectedNodeId);
   const active = index?.status === "queued" || index?.status === "running";
+  const runId = index && index.status !== "not_started" ? index.distill_run_id : null;
+  const usageQuery = useQuery({
+    queryKey: ["bd", "pipeline", "usage", bookId, runId] as const,
+    queryFn: () => fetchPipelineUsage(bookId, runId ?? ""),
+    enabled: runId !== null && infoOpen,
+    refetchInterval: active && infoOpen ? 3_000 : false,
+    retry: false,
+  });
 
   return (
     <section
@@ -135,10 +161,7 @@ export function RagIndexBoard({
               <AgenticNodeList rows={views} onOpen={selectNode} label="Agentic RAG pipeline nodes" />
             </div>
           ) : (
-            <MermaidTopology
-              title="Agentic RAG"
-              source={RAG_LANGGRAPH_TOPOLOGY}
-            />
+            <MermaidTopology title="Agentic RAG" source={RAG_LANGGRAPH_TOPOLOGY} />
           )}
         </div>
       </div>
@@ -162,6 +185,30 @@ export function RagIndexBoard({
                 <span>Writes</span>
                 <AgenticPills items={selectedNode.writes} />
               </div>
+              <AgenticNodeDetailsList resources={selectedNode.resources} />
+            </section>
+            <section aria-label="Node LLM usage" className="flex flex-col gap-3">
+              <div>
+                <h3 className="text-sm font-medium">LLM usage</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Calls and token counts recorded for this graph stage.
+                </p>
+              </div>
+              <PipelineUsageBreakdown
+                usage={usageQuery.data}
+                nodeIds={selectedNode.usageNodeIds}
+                hasRun={runId !== null}
+                loading={usageQuery.isPending}
+                failed={usageQuery.isError}
+                errorMessage={usageQuery.isError ? apiErrorMessage(usageQuery.error) : null}
+                onRetry={() => void usageQuery.refetch()}
+                emptyMessage="Usage appears here when retrieval indexing has a run."
+                noCallsMessage={
+                  selectedNode.usageNodeIds.length === 0
+                    ? "This stage does not make LLM calls."
+                    : "No LLM calls have been recorded for this stage yet."
+                }
+              />
             </section>
             <section
               aria-label="Retrieval index counts"
@@ -178,7 +225,7 @@ export function RagIndexBoard({
       {usageOpen ? (
         <PipelineUsageSheet
           bookId={bookId}
-          runId={index && index.status !== "not_started" ? index.distill_run_id : null}
+          runId={runId}
           nodeIds={["rag_graph_extractor"]}
           live={active}
           title="Agentic RAG LLM usage"
@@ -226,7 +273,15 @@ function nodeViews(index: RagIndexStatus | null): AgenticNodeView[] {
           ? `${index.point_count.toLocaleString()} passages`
           : `${index.graph_node_count.toLocaleString()} nodes · ${index.graph_relationship_count.toLocaleString()} links`;
     }
-    return { id: node.id, label: node.label, status, kpi, liveLine };
+    return {
+      id: node.id,
+      label: node.label,
+      status,
+      kpi,
+      liveLine,
+      resources: node.resources,
+      progress: null,
+    };
   });
 }
 

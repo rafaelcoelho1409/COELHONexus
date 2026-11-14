@@ -44,9 +44,12 @@ class Store:
         framework_slug: str,
         r: infra.redis.service.Redis,
         minio: infra.minio.service.MinIOStorage,
+        *,
+        agent_framework_slug: str | None = None,
     ) -> None:
         self.run_id = run_id
         self.framework_slug = framework_slug
+        self.agent_framework_slug = agent_framework_slug or framework_slug
         self.r = r
         self.minio = minio
         self._cached_manifest: list[entities.ManifestEntry] = []

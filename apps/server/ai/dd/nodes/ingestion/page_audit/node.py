@@ -35,5 +35,6 @@ async def audit_page(
         attempts = params.MAX_ATTEMPTS,
         wait_base_s = params.RETRY_WAIT_BASE_S,
         config = config,
+        retry_with_schema_feedback = True,
     )
     return domain.sanitize_assessment(assessment, markdown = markdown)

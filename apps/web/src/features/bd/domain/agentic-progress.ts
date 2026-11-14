@@ -6,17 +6,10 @@ export const AGENTIC_NODES = [
   { id: "repair_pages", label: "Repair pages" },
   { id: "normalize_metadata", label: "Normalize metadata" },
   { id: "classify_content", label: "Select Distill pages" },
+  { id: "materialize_processed_book", label: "Build processed pages" },
+  { id: "reconcile_contents", label: "Reconcile contents" },
   { id: "publish", label: "Publish results" },
 ] as const;
-
-export const AGENTIC_LANGGRAPH_TOPOLOGY = `flowchart TD
-  __start__([__start__]) --> audit_batch["audit_batch"]
-  audit_batch --> plan_repairs["plan_repairs"]
-  plan_repairs --> repair_pages["repair_pages"]
-  repair_pages --> normalize_metadata["normalize_metadata"]
-  normalize_metadata --> classify_content["classify_content"]
-  classify_content --> publish["publish"]
-  publish --> __end__([__end__])`;
 
 export type AgenticNodeId = (typeof AGENTIC_NODES)[number]["id"];
 export type AgenticNodeStatus = "pending" | "running" | "done" | "failed";
@@ -30,7 +23,23 @@ export type AgenticNodeDetails = {
   reads: readonly string[];
   writes: readonly string[];
   llm: string;
+  resources: AgenticNodeResources;
 };
+
+export type AgenticNodeResources = {
+  agents: readonly string[];
+  skills: readonly string[];
+  tools: readonly string[];
+};
+
+export type AgenticNodeProgress = {
+  current: number;
+  total: number;
+  label: string;
+  active: number;
+};
+
+const noResources: AgenticNodeResources = { agents: [], skills: [], tools: [] };
 
 export const AGENTIC_NODE_DETAILS: Record<AgenticNodeId, AgenticNodeDetails> = {
   audit_batch: {
@@ -46,6 +55,7 @@ export const AGENTIC_NODE_DETAILS: Record<AgenticNodeId, AgenticNodeDetails> = {
     reads: ["extracted pages"],
     writes: ["page assessments"],
     llm: "Page auditor agent, one call per page, retried before a page is marked unverified.",
+    resources: { agents: ["page_auditor", "finding_verifier"], skills: [], tools: [] },
   },
   plan_repairs: {
     title: "Plan repairs",
@@ -59,6 +69,7 @@ export const AGENTIC_NODE_DETAILS: Record<AgenticNodeId, AgenticNodeDetails> = {
     reads: ["page assessments"],
     writes: ["repair work items"],
     llm: "No model call. The routing is a fixed table.",
+    resources: noResources,
   },
   repair_pages: {
     title: "Repair pages",
@@ -72,6 +83,7 @@ export const AGENTIC_NODE_DETAILS: Record<AgenticNodeId, AgenticNodeDetails> = {
     reads: ["extracted pages", "page assessments"],
     writes: ["AI-processed pages", "patch proposals"],
     llm: "Text-repair and structure-repair agents, called only for the findings assigned to them.",
+    resources: { agents: ["text_repair", "structure_repair"], skills: [], tools: [] },
   },
   normalize_metadata: {
     title: "Normalize metadata",
@@ -84,6 +96,7 @@ export const AGENTIC_NODE_DETAILS: Record<AgenticNodeId, AgenticNodeDetails> = {
     reads: ["first extracted pages", "file name"],
     writes: ["book metadata"],
     llm: "Metadata normalizer agent, one call.",
+    resources: { agents: ["metadata_normalizer"], skills: [], tools: [] },
   },
   classify_content: {
     title: "Select Distill pages",
@@ -98,6 +111,36 @@ export const AGENTIC_NODE_DETAILS: Record<AgenticNodeId, AgenticNodeDetails> = {
     reads: ["AI-processed pages", "book metadata", "book outline"],
     writes: ["versioned Distill page selection"],
     llm: "Content classifier agent, one bounded page at a time; uncertain or failed classifications are kept.",
+    resources: { agents: ["content_classifier"], skills: [], tools: [] },
+  },
+  materialize_processed_book: {
+    title: "Build processed pages",
+    subtitle:
+      "Creates a dense page map from selected, nonblank pages while retaining each original source page.",
+    kind: "deterministic materialization",
+    actions: [
+      "Keeps pages selected for Distill and omits pages classified as blank.",
+      "Assigns contiguous processed page numbers in source order.",
+      "Checks normalized page content against its stored hash and gathers heading evidence for contents reconciliation.",
+    ],
+    reads: ["versioned page selection", "AI-processed pages", "book outline"],
+    writes: ["immutable processed-page candidate"],
+    llm: "No model call.",
+    resources: noResources,
+  },
+  reconcile_contents: {
+    title: "Reconcile contents",
+    subtitle: "Checks each contents entry against selected page headings and maps it to processed numbering.",
+    kind: "structured AI reconciliation + validation",
+    actions: [
+      "Provides the reconciler only a bounded set of likely selected source pages for each entry.",
+      "Accepts only exact entries and page choices from the supplied candidates.",
+      "Maps source page references to processed page numbers and flags uncertain or failed mappings for review.",
+    ],
+    reads: ["contents outline", "selected page headings", "processed-page candidate"],
+    writes: ["processed contents map", "contents review status"],
+    llm: "Contents reconciler agent, one structured call per bounded batch.",
+    resources: { agents: ["contents_reconciler"], skills: [], tools: [] },
   },
   publish: {
     title: "Publish results",
@@ -111,6 +154,7 @@ export const AGENTIC_NODE_DETAILS: Record<AgenticNodeId, AgenticNodeDetails> = {
     reads: ["AI-processed pages", "book metadata"],
     writes: ["quality report", "run manifest"],
     llm: "No model call.",
+    resources: noResources,
   },
 };
 
@@ -256,7 +300,43 @@ export type AgenticNodeView = {
   status: AgenticNodeStatus;
   kpi: string | null;
   liveLine: string | null;
+  resources: AgenticNodeResources;
+  progress: AgenticNodeProgress | null;
 };
+
+function agenticNodeProgress(
+  progress: AgenticProgress,
+  nodeId: AgenticNodeId,
+  status: AgenticNodeStatus,
+  total: number,
+): AgenticNodeProgress | null {
+  if (total <= 0 || status === "pending") return null;
+  if (nodeId === "audit_batch") {
+    return {
+      current: Math.min(progress.audited_pages.length, total),
+      total,
+      label: "pages audited",
+      active: progress.active_audit_pages.length,
+    };
+  }
+  if (nodeId === "repair_pages") {
+    return {
+      current: Math.min(progress.processed_pages.length, total),
+      total,
+      label: "pages repaired",
+      active: progress.active_repair_pages.length,
+    };
+  }
+  if (nodeId === "classify_content") {
+    return {
+      current: Math.min(progress.classified_pages?.length ?? 0, total),
+      total,
+      label: "pages classified",
+      active: progress.active_classification_pages?.length ?? 0,
+    };
+  }
+  return null;
+}
 
 export function agenticNodeViews(
   progress: AgenticProgress,
@@ -273,6 +353,8 @@ export function agenticNodeViews(
       status,
       kpi: agenticNodeKpi(progress, node.id, status, unitPlural, summary),
       liveLine: agenticNodeLiveLine(progress, node.id, status, total),
+      resources: AGENTIC_NODE_DETAILS[node.id].resources,
+      progress: agenticNodeProgress(progress, node.id, status, total),
     };
   });
 }

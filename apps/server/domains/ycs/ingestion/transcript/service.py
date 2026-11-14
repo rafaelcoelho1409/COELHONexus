@@ -1502,8 +1502,9 @@ async def fetch_transcriptions_batch(
     progress_cb:        Callable[[int, int, str | None, bool], None] | None = None,
     es_progress_cb:     Callable[[int, int], None] | None = None,
     on_video_indexed:   Callable[[str], None] | None      = None,
-    stats:              dict[str, int] | None             = None,
+    stats:              dict[str, Any] | None             = None,
     cancel_check:       Callable[[], Any] | None          = None,
+    index_transcripts:  bool                              = True,
 ) -> list[dict[str, Any]]:
     """Fetch transcriptions for videos with ES caching + chunked processing.
 
@@ -1537,8 +1538,9 @@ async def fetch_transcriptions_batch(
     fire-and-forget `asyncio.Task`s (the callback that schedules them
     is sync, called from within `fetch_batch`'s own completion loop)
     and are all awaited via `asyncio.gather` before this function
-    returns, so a caller relying on the return value still sees a
-    fully-indexed batch either way.
+    returns. With `index_transcripts=False`, it returns fetched docs
+    without writing them so the ingestion graph's Elasticsearch node
+    owns that persistence step.
 
     `es_progress_cb(indexed_so_far, total_to_index)` fires after each
     per-video ES write completes — separate from `progress_cb`, which
@@ -1546,9 +1548,11 @@ async def fetch_transcriptions_batch(
     Phase 1 (Playwright) / Phase 2 (ElasticSearch) bars; now ticks
     per-video instead of per-chunk-of-10, same as Phase 1.
 
-    `on_video_indexed(video_id)` (2026-09-13) fires once per
-    successfully-indexed video — the hook `extract/task.py` uses to
-    dispatch that video's Neo4j/Qdrant streaming tasks immediately.
+    `on_video_indexed(video_id)` fires once per successfully-indexed
+    video when `index_transcripts=True`. The YCS ingestion LangGraph
+    sets that flag to False so Playwright and Elasticsearch remain
+    separate graph nodes; its Elasticsearch node commits these returned
+    documents before routing work to Qdrant and Neo4j.
 
     `cancel_check()` (2026-09-14, optional async callable → bool),
     checked once at the START of each chunk (never mid-chunk — a chunk
@@ -1587,6 +1591,8 @@ async def fetch_transcriptions_batch(
                 f"[transcription-cache] HIT {vid} langs={existing_langs}",
             )
     cached_count = len(cached_ids)
+    if stats is not None:
+        stats["cached_ids"] = list(cached_ids)
     total_videos = len(video_ids)
     if cached_count > 0:
         log.info(
@@ -1617,7 +1623,7 @@ async def fetch_transcriptions_batch(
         # old design didn't need this hook to exist at all; the new
         # per-video fan-out does, or a Rerun over mostly-cached videos
         # would fire downstream work for 0 of them.
-        if on_video_indexed:
+        if index_transcripts and on_video_indexed:
             try:
                 on_video_indexed(vid)
             except Exception as cb_err:
@@ -1666,7 +1672,7 @@ async def fetch_transcriptions_batch(
 
     async def _index_and_notify(doc: dict[str, Any], vid: str) -> None:
         nonlocal total_success, total_index_write_failed
-        if es_client:
+        if index_transcripts and es_client:
             try:
                 index_result = await domains.ycs.ingestion.es_index.service.index_transcriptions_to_elasticsearch(
                     es_client, [doc],
@@ -1698,7 +1704,7 @@ async def fetch_transcriptions_batch(
                     f"[fetch_transcriptions_batch] es_progress_cb raised: "
                     f"{type(cb_err).__name__}: {cb_err}"
                 )
-        if on_video_indexed:
+        if index_transcripts and on_video_indexed:
             try:
                 on_video_indexed(vid)
             except Exception as cb_err:

@@ -11,22 +11,29 @@ import "./agentic-flow.css";
 import { type Edge, Handle, MarkerType, type Node, type NodeProps, Position, ReactFlow } from "@xyflow/react";
 
 import type { AgenticNodeStatus, AgenticNodeView } from "../domain/agentic-progress";
-import { AGENTIC_STATUS_LABEL, AgenticStatusGlyph } from "./agentic-parts";
+import {
+  AGENTIC_STATUS_LABEL,
+  AgenticNodeDetailsList,
+  AgenticNodeProgressBar,
+  AgenticStatusGlyph,
+} from "./agentic-parts";
 
-/** A node can show three lines — its label (a 20px line), a headline number and a live line (18px each), 2px apart —
- * so the height keeps 10px of air above and below them. */
-const NODE_WIDTH = 216;
-const NODE_HEIGHT = 80;
+/** A node keeps room for its id, resource names, reported progress, and optional live counters. */
+const NODE_WIDTH = 232;
+const NODE_HEIGHT = 216;
 const NODE_GAP = 30;
 const PADDING = 16;
 /** A strip under the last node for React Flow's small credit line, so it never covers a node. */
 const CREDIT_ROOM = 32;
 
 type AgenticFlowData = {
+  nodeId: string;
   label: string;
   status: AgenticNodeStatus;
   kpi: string | null;
   liveLine: string | null;
+  resources: AgenticNodeView["resources"];
+  progress: AgenticNodeView["progress"];
   onOpen: () => void;
 };
 type AgenticFlowNode = Node<AgenticFlowData, "agentic">;
@@ -45,7 +52,7 @@ function AgenticNodeCard({ data }: NodeProps<AgenticFlowNode>) {
         // inherit that; the button is the one thing here that must stay clickable.
         style={{ width: NODE_WIDTH, height: NODE_HEIGHT, pointerEvents: "auto" }}
         // `overflow-hidden` is the guard: whatever a line holds, nothing paints outside the node's shape (every line also truncates).
-        className={`nodrag nopan flex flex-col justify-center overflow-hidden rounded-md border bg-card px-3 py-2.5 text-left transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ${
+        className={`nodrag nopan flex flex-col justify-start overflow-hidden rounded-md border bg-card px-3 py-2.5 text-left transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ${
           data.status === "running"
             ? "border-running"
             : data.status === "failed"
@@ -53,15 +60,24 @@ function AgenticNodeCard({ data }: NodeProps<AgenticFlowNode>) {
               : "border-border"
         }`}
       >
-        <span className="flex items-center gap-1.5">
-          <AgenticStatusGlyph status={data.status} />
-          <span className="min-w-0 truncate text-sm">{data.label}</span>
-          <span className="sr-only">— {AGENTIC_STATUS_LABEL[data.status]}</span>
+        <span className="flex min-w-0 flex-col gap-y-1">
+          <span className="flex items-center gap-1.5">
+            <AgenticStatusGlyph status={data.status} />
+            <span className="min-w-0 truncate text-sm">{data.label}</span>
+            <span className="sr-only">— {AGENTIC_STATUS_LABEL[data.status]}</span>
+          </span>
+          <span className="truncate font-mono text-xs text-muted-foreground">{data.nodeId}</span>
+          {data.kpi ? <span className="truncate text-xs text-muted-foreground">{data.kpi}</span> : null}
+          {data.liveLine ? (
+            <span className="truncate font-mono text-xs text-muted-foreground">{data.liveLine}</span>
+          ) : null}
+          <AgenticNodeDetailsList resources={data.resources} compact />
+          {data.progress ? (
+            <span className="mt-auto block">
+              <AgenticNodeProgressBar label={data.label} progress={data.progress} />
+            </span>
+          ) : null}
         </span>
-        {data.kpi ? <span className="mt-0.5 truncate text-xs text-muted-foreground">{data.kpi}</span> : null}
-        {data.liveLine ? (
-          <span className="mt-0.5 truncate font-mono text-xs text-muted-foreground">{data.liveLine}</span>
-        ) : null}
       </button>
       <Handle type="source" position={Position.Bottom} isConnectable={false} />
     </>
@@ -89,10 +105,13 @@ export function AgenticFlow({
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     data: {
+      nodeId: view.id,
       label: view.label,
       status: view.status,
       kpi: view.kpi,
       liveLine: view.liveLine,
+      resources: view.resources,
+      progress: view.progress,
       onOpen: () => onOpenNode(view.id),
     },
   }));

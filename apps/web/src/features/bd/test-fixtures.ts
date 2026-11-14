@@ -134,6 +134,9 @@ export function agenticRun(over: Partial<AgenticRunStatus> = {}): AgenticRunStat
     excluded_page_count: over.excluded_page_count ?? 0,
     content_selection_revision:
       over.content_selection_revision === undefined ? 1 : over.content_selection_revision,
+    processed_page_count: over.processed_page_count ?? 1,
+    processed_book_revision: over.processed_book_revision === undefined ? 1 : over.processed_book_revision,
+    contents_status: over.contents_status === undefined ? "complete" : over.contents_status,
   };
 }
 

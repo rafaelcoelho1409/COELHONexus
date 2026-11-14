@@ -1,16 +1,9 @@
-"""ycs/ingestion/extract — Celery tasks: yt-dlp metadata + Playwright transcripts → ES.
-Three tasks
-(one per ingestion mode: by video IDs, by channel, by playlist). Each:
-  1. opens a fresh `AsyncElasticsearch` for the worker process
-  2. dispatches `YtDlpExtractor.extract_{batch,channel,playlist}`
-  3. bulk-indexes metadata via `domains.ycs.ingestion.es_index`
-  4. (if `include_transcription`) initializes Playwright service,
-     runs `domains.ycs.ingestion.transcript.service.fetch_transcriptions_batch`, and bulk-indexes transcripts
-  5. always closes ES (and the transcript service when used)
-
-Celery is sync; async work is wrapped in `asyncio.run(...)`. The
-`@app.task(bind=True)` decorator gives access to `self.update_state(...)`
-for progress reporting, which Flower and `GET /tasks/{id}` consume.
+"""YCS extraction Celery entrypoints.
+`extract_videos` runs the Playwright, Elasticsearch, Qdrant, and Neo4j
+nodes through the standalone YCS ingestion LangGraph. The channel and
+playlist tasks retain their existing domain-service flow. Celery is
+sync; each task wraps its async work in `asyncio.run(...)` and reports
+progress through `self.update_state(meta=...)`.
 """
 from __future__ import annotations
 import domains
@@ -60,7 +53,7 @@ def extract_videos(
                 "ycs.include_transcription":   include_transcription,
             },
         ):
-            return await service.extract_videos_async(
+            return await domains.ycs.ingestion.ai.service.run_ingestion_graph_async(
                 video_ids, include_transcription, languages,
                 progress_cb = _progress,
                 extract_id  = self.request.id,

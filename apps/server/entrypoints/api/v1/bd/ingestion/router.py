@@ -1,6 +1,6 @@
 """Book ingestion over HTTP: upload a PDF or EPUB, follow extraction by reader unit (SSE), and read the extracted content. The extraction itself runs in the
 `bd` Celery queue; this router is HTTP only (see `domains.bd.ingestion.runtime.dispatch`)."""
-import domains, infra
+import ai, domains, infra
 import domains.bd.ingestion.task
 import domains.bd.ingestion.ai.task
 from . import params, schemas
@@ -66,6 +66,14 @@ async def list_books() -> list[dict]:
 @router.get("/active", response_model = schemas.ActiveRuns)
 async def list_active() -> dict:
     return {"active": await domains.bd.ingestion.runtime.dispatch.service.read_active()}
+
+
+@router.get("/agentic-graph", include_in_schema = False)
+async def agentic_graph(response: Response) -> dict:
+    """Return the compiled Book Distiller Ingestion graph without running its nodes."""
+    response.headers["Cache-Control"] = "no-store"
+    graph = ai.bd.graphs.ingestion.graphs.ingestion_graph(checkpointer = None)
+    return {"graph_mermaid": ai.bd.graphs.service.mermaid_source(graph)}
 
 
 @router.get("/{book_id}", response_model = schemas.Snapshot)
@@ -286,6 +294,62 @@ async def update_agentic_content_selection(
         raise HTTPException(status_code = 404, detail = str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code = 409, detail = str(error)) from error
+
+
+@router.get(
+    "/{book_id}/agentic/runs/{agentic_run_id}/processed-book",
+    response_model = schemas.ProcessedBookResponse,
+)
+async def get_processed_book(book_id: str, agentic_run_id: str) -> dict:
+    """Read selected pages with compact numbering and the reconciled contents map."""
+    try:
+        async with infra.redis.service.client() as redis:
+            async with redis.lock(
+                domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+                timeout = 120,
+                blocking_timeout = 30,
+            ):
+                manifest = await domains.bd.ingestion.ai.service.read_ingestion_ai_run(
+                    book_id,
+                    agentic_run_id,
+                )
+                if manifest is None or manifest["status"] != "done":
+                    raise HTTPException(
+                        status_code = 404,
+                        detail = "Completed Agentic ingestion run not found",
+                    )
+                selection_result = await domains.bd.ingestion.ai.service.read_selection(
+                    book_id,
+                    agentic_run_id,
+                )
+                if selection_result is None:
+                    raise HTTPException(
+                        status_code = 409,
+                        detail = "The processed page selection is not available",
+                    )
+                selection, selection_key, selection_sha256 = selection_result
+                processed, processed_key, processed_sha256 = (
+                    await domains.bd.ingestion.ai.processed_book.service.ensure_for_selection(
+                        book_id,
+                        agentic_run_id,
+                        selection,
+                        selection_key,
+                        selection_sha256,
+                    )
+                )
+                await domains.bd.ingestion.ai.processed_book.service.write_current_pointer(
+                    book_id,
+                    agentic_run_id,
+                    processed.selection_revision,
+                    processed_key,
+                    processed_sha256,
+                    infra.minio.service.get_storage(),
+                )
+    except infra.redis.service.LockError as error:
+        raise HTTPException(status_code = 409, detail = "The book page selection is being updated") from error
+    except (FileNotFoundError, ValueError) as error:
+        raise HTTPException(status_code = 409, detail = str(error)) from error
+    return processed.model_dump(mode = "json")
 
 
 def _content_selection_response(selection, digest: str) -> dict:
@@ -529,6 +593,9 @@ async def _agentic_status(manifest: dict) -> dict:
     excluded_page_count = manifest.get("excluded_page_count")
     if type(excluded_page_count) is not int or excluded_page_count < 0:
         excluded_page_count = 0
+    processed_page_count = manifest.get("processed_page_count")
+    if type(processed_page_count) is not int or processed_page_count < 0:
+        processed_page_count = 0
     selection_revision = manifest.get("content_selection_revision")
     if manifest.get("status") == "done":
         try:
@@ -559,6 +626,9 @@ async def _agentic_status(manifest: dict) -> dict:
         "selected_page_count": selected_page_count,
         "excluded_page_count": excluded_page_count,
         "content_selection_revision": selection_revision,
+        "processed_page_count": processed_page_count,
+        "processed_book_revision": manifest.get("processed_book_revision"),
+        "contents_status": manifest.get("contents_status"),
         "review_page_count": manifest.get("review_page_count", 0),
         "review_pages": _pages_where(manifest, lambda page: page["status"] == "review_required"),
         "unverified_page_count": manifest.get("unverified_page_count", 0),

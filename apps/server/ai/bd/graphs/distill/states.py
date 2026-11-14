@@ -19,6 +19,10 @@ class DistillRunState(TypedDict, total = False):
     content_selection_key: str
     content_selection_sha256: str
     content_selection_revision: int
+    processed_book_key: str
+    processed_book_sha256: str
+    processed_book_revision: int
+    processed_page_count: int
     expected_page_count: int
     selected_page_count: int
     run_created_at: float

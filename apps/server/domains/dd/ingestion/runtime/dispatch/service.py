@@ -7,6 +7,7 @@ from . import domain, params
 from ... import tiers
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -439,7 +440,13 @@ async def _run_inner(
     r = infra.redis.service.new_redis(op_timeout_s=params.REDIS_OP_TIMEOUT_S)
     minio = infra.minio.service.get_storage()
     storage_slug = benchmark_slug or slug
-    store = domains.dd.ingestion.storage.service.Store(run_id, storage_slug, r, minio)
+    store = domains.dd.ingestion.storage.service.Store(
+        run_id,
+        storage_slug,
+        r,
+        minio,
+        agent_framework_slug=slug,
+    )
 
     base_result = domain.base_result(run_id, slug, entry, best)
     source_attempts: list[dict] = []
@@ -481,6 +488,10 @@ async def _run_inner(
             "requested_tier": source_kind,
             "storage_slug": storage_slug,
         }
+        domains.settings.chat.service.refresh_endpoint(force=True)
+        from domains.dd.ingestion.evaluation import domain as evaluation_domain
+
+        benchmark_report["build"].update(evaluation_domain.provenance())
         await _persist_benchmark_report(progress, minio, benchmark_report)
 
     # Spawn watcher BEFORE the main try so it's active from the first await.
@@ -558,6 +569,41 @@ async def _run_inner(
                 "bytes": sum(entry.bytes for entry in store.manifest),
                 "source_attempts": [dict(row) for row in source_attempts],
             }
+            try:
+                capture_key = domains.dd.ingestion.storage.keys.raw_capture_key(
+                    storage_slug, run_id, source_kind or "",
+                )
+                capture = json.loads(await minio.read_text(capture_key))
+                captured_files = capture.get("files") if isinstance(capture, dict) else None
+                if isinstance(captured_files, list):
+                    file_snapshot = sorted(
+                        (
+                            {
+                                "name": item.get("name", ""),
+                                "sha256": item.get("sha256", ""),
+                                "bytes": int(item.get("bytes") or 0),
+                                "status": int(item.get("status") or 0),
+                                "stored": bool(item.get("stored", False)),
+                            }
+                            for item in captured_files
+                            if isinstance(item, dict)
+                        ),
+                        key=lambda item: item["name"],
+                    )
+                    snapshot_json = json.dumps(
+                        file_snapshot, sort_keys=True, separators=(",", ":"),
+                    )
+                    benchmark_report["extraction"]["captured_source_snapshot"] = {
+                        "sha256": hashlib.sha256(snapshot_json.encode("utf-8")).hexdigest(),
+                        "files": len(file_snapshot),
+                        "stored_files": sum(item["stored"] for item in file_snapshot),
+                        "bytes": sum(item["bytes"] for item in file_snapshot),
+                    }
+            except Exception as error:
+                benchmark_report["extraction"]["captured_source_snapshot"] = {
+                    "status": "unavailable",
+                    "error": type(error).__name__,
+                }
             benchmark_report.setdefault("timings_ms", {})["extraction"] = max(
                 0, int((time.monotonic() - extraction_started) * 1000)
             )
@@ -592,6 +638,16 @@ async def _run_inner(
             benchmark_report.setdefault("timings_ms", {})["agentic"] = max(
                 0, int((time.monotonic() - phase_started) * 1000)
             )
+            try:
+                benchmark_report["llm_counters"] = await domains.settings.llm_counter.service.read_counters(
+                    "dd", run_id,
+                )
+            except Exception as error:
+                logger.warning(
+                    "[dispatch] benchmark LLM counters unavailable for %s: %s",
+                    run_id,
+                    type(error).__name__,
+                )
             await _persist_benchmark_report(progress, minio, benchmark_report)
 
         # Vaults are derived from the final agentic page version and live beneath that agentic run.

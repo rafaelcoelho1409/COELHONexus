@@ -86,6 +86,7 @@ async def ask(
     config: dict[str, Any] | None = None,
     check: Callable[[Schema], bool] | None = None,
     meta: dict[str, Any] | None = None,
+    retry_with_schema_feedback: bool = False,
 ) -> Schema:
     """Run `agent` on `payload` and return its answer as `schema`.
 
@@ -99,15 +100,37 @@ async def ask(
         "files": files or {},
     }
     failures: list[str] = []
+    last_failure: str | None = None
+
+    async def invoke() -> Any:
+        call_request = request
+        if retry_with_schema_feedback and last_failure:
+            call_request = {
+                **request,
+                "messages": [
+                    *request["messages"],
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Your previous response did not validate as {schema.__name__}: {last_failure}. "
+                            f"Return a complete corrected {schema.__name__} matching the configured schema. "
+                            "Return only the structured answer; do not add commentary."
+                        ),
+                    },
+                ],
+            }
+        return await agent.ainvoke(call_request, config = request_config(config))
 
     def usable(value: Any) -> bool:
+        nonlocal last_failure
         parsed = domain.structured_or_recovered(value, schema)
         if parsed is None:
-            failures.append(domain.structured_failure_reason(value, schema))
+            last_failure = domain.structured_failure_reason(value, schema)
+            failures.append(last_failure)
         return parsed is not None and (check is None or check(parsed))
 
     result = await domains.settings.chat.service.resilient_ainvoke(
-        lambda: agent.ainvoke(request, config = request_config(config)),
+        invoke,
         attempts = attempts,
         wait_base_s = wait_base_s,
         accept = usable,

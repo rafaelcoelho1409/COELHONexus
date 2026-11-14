@@ -133,22 +133,41 @@ async def queue_index(book_id: str, run_id: str) -> dict[str, Any]:
                     timeout = params.INDEX_LOCK_TIMEOUT_S,
                     blocking_timeout = 30,
                 ):
-                    return await _dispatch_index_unlocked(book_id, run_id, run, existing, storage)
+                    return await _dispatch_index_unlocked(
+                        book_id,
+                        run_id,
+                        run,
+                        existing,
+                        storage,
+                        redis,
+                    )
             except infra.redis.service.LockError:
                 current = await read_index(book_id, run_id, storage = storage)
                 return current or existing
 
 
-async def _dispatch_index_unlocked(book_id: str, run_id: str, run: dict[str, Any], existing, storage):
+async def _dispatch_index_unlocked(
+    book_id: str,
+    run_id: str,
+    run: dict[str, Any],
+    existing,
+    storage,
+    redis,
+):
     now = time.time()
     vector_done = existing is not None and existing.get("vector_status") == "done"
     manifest = schemas.RagIndexManifest(
+        schema_version = "3.0" if run.get("processed_book_key") else "2.0",
         book_id = book_id,
         distill_run_id = run_id,
         extraction_run_id = run["extraction_run_id"],
         status = "queued",
         workflow_version = versions.WORKFLOW_VERSION,
         graph_extraction_prompt_version = versions.GRAPH_EXTRACTION_PROMPT_VERSION,
+        processed_book_key = run.get("processed_book_key"),
+        processed_book_sha256 = run.get("processed_book_sha256"),
+        processed_book_revision = run.get("processed_book_revision"),
+        processed_page_count = run.get("processed_page_count", run.get("selected_page_count", 0)),
         attempt = (existing["attempt"] + 1) if existing is not None else 1,
         collection_name = existing.get("collection_name") if existing else None,
         embedding_model = existing.get("embedding_model") if existing else None,
@@ -248,6 +267,7 @@ def _source_record(
     section_path: list[str],
     page_number: int | None,
     page_numbers: list[int],
+    processed_page_number: int | None = None,
     content_role: str = "unknown",
     content_disposition: str = "include",
     unit_id: str | None = None,
@@ -264,12 +284,57 @@ def _source_record(
         "text": text,
         "section_path": section_path,
         "page_number": page_number,
+        "processed_page_number": processed_page_number,
         "page_numbers": page_numbers,
         "content_role": content_role,
         "content_disposition": content_disposition,
         "learning_unit_id": unit_id,
         "source_record_id": source_record_id,
     }
+
+
+async def _processed_page_inputs(storage, run, qa_manifest, selection_by_page):
+    """Return the exact dense page set pinned to this Learning Guide, retaining source page objects."""
+    page_by_source = {page.page_number: page for page in qa_manifest.pages}
+    if run.get("processed_book_key"):
+        content = await storage.read_text(run["processed_book_key"])
+        if hashlib.sha256(content.encode("utf-8")).hexdigest() != run.get("processed_book_sha256"):
+            raise ValueError("the pinned processed-book manifest failed its integrity check")
+        processed = domains.bd.ingestion.ai.schemas.ProcessedBookManifest.model_validate_json(content)
+        if (
+            processed.book_id != run["book_id"]
+            or processed.agentic_run_id != run["ingestion_ai_run_id"]
+            or processed.extraction_run_id != run["extraction_run_id"]
+            or processed.selection_revision != run.get("processed_book_revision")
+            or processed.source_page_count != run.get("processed_page_count")
+            or processed.selection_key != run.get("content_selection_key")
+            or processed.selection_sha256 != run.get("content_selection_sha256")
+        ):
+            raise ValueError("the processed-book manifest does not match the Learning Guide run")
+        result = []
+        for item in processed.pages:
+            page = page_by_source.get(item.source_page_number)
+            if page is None:
+                raise ValueError(f"processed page references missing source page {item.source_page_number}")
+            if item.content_key != page.normalized_key or item.content_sha256 != page.normalized_sha256:
+                raise ValueError(f"processed page {item.processed_page_number} differs from its pinned QA page")
+            if selection_by_page and selection_by_page[item.source_page_number].disposition != "include":
+                raise ValueError("the processed book contains a page excluded by the pinned selection")
+            result.append((page, item.processed_page_number))
+        if len(result) != run.get("processed_page_count"):
+            raise ValueError("the processed-book page count does not match the Learning Guide run")
+        return result
+
+    # Compatibility for older Learning Guide manifests created before the canonical page map existed.
+    result = []
+    for page in qa_manifest.pages:
+        selected = selection_by_page.get(page.page_number)
+        if selected is not None and selected.disposition != "include":
+            continue
+        if page.delivery_disposition == "discarded_blank":
+            continue
+        result.append((page, len(result) + 1))
+    return result
 
 
 def _guide_records(report: domains.bd.distill.schemas.StudyGuideDocument, report_key: str,
@@ -386,6 +451,8 @@ async def _build_records(storage, run: dict[str, Any]) -> AsyncIterator[dict[str
             raise ValueError("the pinned content selection does not match the Learning Guide run")
         selection_by_page = {page.page_number: page for page in selection.pages}
 
+    processed_inputs = await _processed_page_inputs(storage, run, qa_manifest, selection_by_page)
+
     report_content = await storage.read_text(run["report_key"])
     report_sha256 = hashlib.sha256(report_content.encode("utf-8")).hexdigest()
     if report_sha256 != run["report_sha256"]:
@@ -394,7 +461,7 @@ async def _build_records(storage, run: dict[str, Any]) -> AsyncIterator[dict[str
     if report.distill_run_id != run["run_id"] or report.extraction_run_id != run["extraction_run_id"]:
         raise ValueError("the Learning Guide does not match the selected source run")
 
-    for page in qa_manifest.pages:
+    for page, processed_page_number in processed_inputs:
         if page.status not in {
             domains.bd.ingestion.ai.schemas.AgenticPageStatus.DONE,
             domains.bd.ingestion.ai.schemas.AgenticPageStatus.REVIEW_REQUIRED,
@@ -420,6 +487,7 @@ async def _build_records(storage, run: dict[str, Any]) -> AsyncIterator[dict[str
             section_path = section_path,
             page_number = page.page_number,
             page_numbers = [page.page_number],
+            processed_page_number = processed_page_number,
             content_role = selected.role if selected is not None else "unknown",
             content_disposition = disposition,
         )
@@ -451,6 +519,7 @@ async def _build_records(storage, run: dict[str, Any]) -> AsyncIterator[dict[str
                     section_path = artifact.get("section_path", []),
                     page_number = page_number,
                     page_numbers = [page_number],
+                    processed_page_number = artifact.get("processed_page_number"),
                     content_role = "core",
                     content_disposition = "include",
                     unit_id = lesson.get("learning_unit_id"),
@@ -520,10 +589,12 @@ async def _graph_source_batches(
             raise ValueError("the pinned content selection does not match the retrieval run")
         selection_by_page = {page.page_number: page for page in selection.pages}
 
+    processed_inputs = await _processed_page_inputs(storage, run, qa_manifest, selection_by_page)
+
     pending: list[entities.GraphSourceRef] = []
     pending_chars = 0
     pending_title = ""
-    for page in qa_manifest.pages:
+    for page, processed_page_number in processed_inputs:
         if page.status not in {
             domains.bd.ingestion.ai.schemas.AgenticPageStatus.DONE,
             domains.bd.ingestion.ai.schemas.AgenticPageStatus.REVIEW_REQUIRED,

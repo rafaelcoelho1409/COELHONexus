@@ -19,6 +19,14 @@ def benchmark_report_key(round_id: str, run_id: str) -> str:
     return f"{benchmark_report_prefix(round_id)}{run_id}.json"
 
 
+def evaluation_report_prefix(round_id: str) -> str:
+    return f"dd-evaluations/{round_id.strip().strip('/')}/"
+
+
+def evaluation_report_key(round_id: str, replay_id: str) -> str:
+    return f"{evaluation_report_prefix(round_id)}{replay_id}.json"
+
+
 def ingestion_prefix(framework_slug: str) -> str:
     return f"{framework_prefix(framework_slug)}ingestion/"
 

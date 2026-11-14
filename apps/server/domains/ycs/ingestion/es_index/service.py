@@ -36,10 +36,12 @@ async def index_videos_to_elasticsearch(
         logger.info("[elasticsearch] skip indexing, no videos")
         return {"indexed": 0, "failed": 0}
     operations: list[dict[str, Any]] = []
+    valid_videos: list[dict[str, Any]] = []
     for video in videos:
         video_id = video.get("id")
         if not video_id:
             continue
+        valid_videos.append(video)
         operations.append({"index": {"_index": index, "_id": video_id}})
         operations.append(video)
     if not operations:
@@ -58,12 +60,20 @@ async def index_videos_to_elasticsearch(
                 refresh = params.BULK_REFRESH,
             )
         elapsed = time.time() - start_time
-        indexed = sum(
-            1
-            for item in response["items"]
-            if item["index"]["status"] in params.INDEXED_STATUSES
+        indexed_ids: list[str] = []
+        failed_ids: list[str] = []
+        for video, item in zip(valid_videos, response.get("items", [])):
+            video_id = str(video["id"])
+            status = item.get("index", {}).get("status")
+            (indexed_ids if status in params.INDEXED_STATUSES else failed_ids).append(video_id)
+        accounted_ids = set(indexed_ids) | set(failed_ids)
+        failed_ids.extend(
+            str(video["id"])
+            for video in valid_videos
+            if str(video["id"]) not in accounted_ids
         )
-        failed = len(response["items"]) - indexed
+        indexed = len(indexed_ids)
+        failed = len(failed_ids)
         logger.info(
             f"[elasticsearch] OK indexed={indexed} failed={failed} "
             f"time={elapsed:.2f}s",
@@ -72,6 +82,8 @@ async def index_videos_to_elasticsearch(
             "indexed": indexed,
             "failed":  failed,
             "errors":  response.get("errors", False),
+            "indexed_ids": indexed_ids,
+            "failed_ids": failed_ids,
         }
     except Exception as e:
         elapsed = time.time() - start_time
@@ -79,7 +91,12 @@ async def index_videos_to_elasticsearch(
             f"[elasticsearch] ERROR time={elapsed:.2f}s "
             f"error={str(e)[:200]}",
         )
-        return {"indexed": 0, "failed": len(videos), "error": str(e)}
+        return {
+            "indexed": 0,
+            "failed": len(valid_videos),
+            "failed_ids": [str(video["id"]) for video in valid_videos],
+            "error": str(e),
+        }
 
 
 async def index_transcriptions_to_elasticsearch(
@@ -95,10 +112,12 @@ async def index_transcriptions_to_elasticsearch(
         logger.info("[elasticsearch] skip indexing, no transcriptions")
         return {"indexed": 0, "failed": 0}
     operations: list[dict[str, Any]] = []
+    valid_transcriptions: list[dict[str, Any]] = []
     for trans in transcriptions:
         doc_id = trans.get("id")
         if not doc_id:
             continue
+        valid_transcriptions.append(trans)
         operations.append({"index": {"_index": index, "_id": doc_id}})
         operations.append(trans)
     if not operations:
@@ -120,12 +139,26 @@ async def index_transcriptions_to_elasticsearch(
                 refresh = params.BULK_REFRESH,
             )
         elapsed = time.time() - start_time
+        indexed_ids: list[str] = []
+        failed_ids: list[str] = []
+        response_items = response.get("items", [])
+        for transcript, item in zip(valid_transcriptions, response_items):
+            video_id = str(transcript.get("video_id") or "")
+            status = item.get("index", {}).get("status")
+            if not video_id:
+                continue
+            (indexed_ids if status in params.INDEXED_STATUSES else failed_ids).append(video_id)
+        failed_ids.extend(
+            str(transcript["video_id"])
+            for transcript in valid_transcriptions[len(response_items):]
+            if transcript.get("video_id")
+        )
         indexed = sum(
             1
-            for item in response["items"]
-            if item["index"]["status"] in params.INDEXED_STATUSES
+            for item in response.get("items", [])
+            if item.get("index", {}).get("status") in params.INDEXED_STATUSES
         )
-        failed = len(response["items"]) - indexed
+        failed = max(0, len(valid_transcriptions) - indexed)
         logger.info(
             f"[elasticsearch] OK indexed={indexed} failed={failed} "
             f"time={elapsed:.2f}s",
@@ -134,6 +167,8 @@ async def index_transcriptions_to_elasticsearch(
             "indexed": indexed,
             "failed":  failed,
             "errors":  response.get("errors", False),
+            "indexed_ids": list(dict.fromkeys(indexed_ids)),
+            "failed_ids": list(dict.fromkeys(failed_ids)),
         }
     except Exception as e:
         elapsed = time.time() - start_time
@@ -143,7 +178,12 @@ async def index_transcriptions_to_elasticsearch(
         )
         return {
             "indexed": 0,
-            "failed":  len(transcriptions),
+            "failed":  len(valid_transcriptions),
+            "failed_ids": list(dict.fromkeys(
+                str(transcript["video_id"])
+                for transcript in valid_transcriptions
+                if transcript.get("video_id")
+            )),
             "error":   str(e),
         }
 

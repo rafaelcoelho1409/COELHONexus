@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { BookUnits } from "../domain/books";
-import type { ContentSelection } from "../entities";
 import {
   breadcrumb,
   filterPageRows,
@@ -12,6 +11,7 @@ import {
   type PageRow,
   pageChips,
 } from "../domain/pages";
+import type { ContentSelection } from "../entities";
 
 const FLAG_STYLE: Record<PageFlag, string> = {
   review: "text-warning-text",
@@ -33,6 +33,8 @@ export function PageList({
   selection,
   selectionPending,
   selectionError,
+  processedNumbers,
+  showExcludedPages = true,
   onFollow,
   onPick,
 }: {
@@ -49,6 +51,8 @@ export function PageList({
   selection: ContentSelection | null;
   selectionPending: boolean;
   selectionError: boolean;
+  processedNumbers?: ReadonlyMap<number, number>;
+  showExcludedPages?: boolean;
   onFollow: (follow: boolean) => void;
   onPick: (page: number) => void;
 }) {
@@ -77,9 +81,11 @@ export function PageList({
     <section aria-labelledby="units-title">
       <div className="flex items-center justify-between gap-3">
         <h3 id="units-title" className="mono-label">
-          {selection
-            ? `Pages for Distill · ${includedRows.length} of ${selection.included_page_count}`
-            : `${units.plural[0]?.toUpperCase()}${units.plural.slice(1)} · ${count}${total > 0 ? ` of ${total}` : ""}`}
+          {processedNumbers && processedNumbers.size > 0
+            ? `Processed pages · ${count}`
+            : selection
+              ? `Pages for Distill · ${includedRows.length} of ${selection.included_page_count}`
+              : `${units.plural[0]?.toUpperCase()}${units.plural.slice(1)} · ${count}${total > 0 ? ` of ${total}` : ""}`}
         </h3>
         {live ? (
           <label className="flex min-h-9 items-center gap-2 text-xs text-muted-foreground">
@@ -99,9 +105,11 @@ export function PageList({
       {selection ? (
         <>
           <p className="mt-2 text-xs text-muted-foreground">
-            The list starts with pages selected for Distill. Original pages are retained in the book archive.
+            {processedNumbers && processedNumbers.size > 0
+              ? "Blank and excluded pages are omitted. The original pages remain in the book archive."
+              : "The list starts with pages selected for Distill. Original pages are retained in the book archive."}
           </p>
-          {selection.excluded_page_count > 0 ? (
+          {showExcludedPages && selection.excluded_page_count > 0 ? (
             <label className="mt-2 flex min-h-9 items-center gap-2 text-xs text-muted-foreground">
               <input
                 type="checkbox"
@@ -162,7 +170,11 @@ export function PageList({
                 >
                   <span className="flex items-baseline gap-2">
                     <span className="tabular shrink-0 font-medium">
-                      {units.singular === "page" ? `p. ${row.page}` : `Section ${row.page}`}
+                      {units.singular === "page"
+                        ? "p. " +
+                          (processedNumbers?.get(row.page) ?? row.page) +
+                          (processedNumbers?.has(row.page) ? " · source " + row.page : "")
+                        : "Section " + row.page}
                     </span>{" "}
                     {where ? (
                       <span className="min-w-0 truncate text-xs text-muted-foreground">{where}</span>

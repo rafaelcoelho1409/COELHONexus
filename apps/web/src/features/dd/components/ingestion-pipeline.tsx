@@ -3,9 +3,10 @@
 import { ChartNoAxesColumn } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useState } from "react";
-
+import { compiledTopology } from "../domain/compiled-topology";
 import { isRunTerminal, tierLabel } from "../domain/ingestion";
 import {
+  INGESTION_NODE_DETAILS,
   INGESTION_NODES,
   ingestionNodeCaption,
   ingestionNodeKpis,
@@ -23,6 +24,7 @@ import { ActionButton } from "./action-button";
 import { AgenticProgress, ExtractionProgress } from "./ingestion-progress";
 import { IngestionNodeSheet, IngestionUsageSheet, PipelineUsageTotal } from "./ingestion-usage";
 import { LangGraphTopology } from "./langgraph-topology";
+import type { StageFlowNodeDetails } from "./stage-flow";
 import { StageNodes } from "./stage-parts";
 import { ToggleGroup } from "./toggle-group";
 
@@ -35,6 +37,13 @@ const StageFlow = dynamic(() => import("./stage-flow").then((module) => module.S
 // Ingestion has no per-node live line or graph state; the shared graph still asks for them.
 const NO_LIVE_LINES: Record<string, string> = {};
 const NO_VALUES: Record<string, unknown> = {};
+
+function fallbackNodeTitle(id: string): string {
+  return id
+    .split("_")
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
 
 const MODES = [
   { id: "graph", label: "Graph" },
@@ -89,7 +98,8 @@ export function IngestionPipeline({
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
-  const graphTopology = useIngestionGraph();
+  const graphQuery = useIngestionGraph();
+  const graphTopology = graphQuery.source;
   const runStatus = progress?.status ?? null;
   const hasRun = runId !== null;
   const terminal = isRunTerminal(runStatus);
@@ -123,6 +133,36 @@ export function IngestionPipeline({
       : "Waiting";
   const nodeViews = ingestionNodeViews(agentic, runStatus);
   const nodeKpis = ingestionNodeKpis(agentic);
+  const topology = compiledTopology(graphTopology, "ingestion");
+  const graphNodeViews =
+    topology?.nodeIds.map((id) => ({
+      node: { id, label: INGESTION_NODE_DETAILS[id]?.title ?? fallbackNodeTitle(id) },
+      status: ingestionNodeStatus(agentic, id, runStatus),
+    })) ?? [];
+  const graphNodeDetails: Record<string, StageFlowNodeDetails> = {};
+  const fallbackPageTotal = agentic?.total && agentic.total > 0 ? agentic.total : extractionTotal;
+  for (const node of INGESTION_NODES) {
+    const description = INGESTION_NODE_DETAILS[node.id];
+    const reported = agentic?.node_progress[node.id];
+    const total = reported?.total && reported.total > 0 ? reported.total : fallbackPageTotal;
+    const current =
+      ingestionNodeStatus(agentic, node.id, runStatus) === "done" && total > 0
+        ? total
+        : Math.min(Math.max(reported?.current ?? 0, 0), total);
+    graphNodeDetails[node.id] = {
+      agents: description?.agents ?? [],
+      skills: description?.skills ?? [],
+      tools: description?.tools ?? [],
+      progress: description?.pageProgressLabel
+        ? {
+            current,
+            total,
+            percent: ingestionPercent(current, total) ?? 0,
+            label: description.pageProgressLabel,
+          }
+        : null,
+    };
+  }
   const agenticCurrent = agentic?.current ?? 0;
   const agenticTotal = agentic?.total ?? 0;
   const auditTotal = agentic?.node_progress.audit_pages;
@@ -201,28 +241,42 @@ export function IngestionPipeline({
           </header>
           <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-[minmax(0,3fr)_minmax(16rem,1fr)]">
             <div className="min-w-0">
-              {/* The same run views as Planner and Synth, fed Ingestion's three nodes and compiled graph. */}
               {mode === "graph" ? (
-                <StageFlow
-                  stage="ingestion"
-                  title="Agentic AI ingestion"
-                  views={nodeViews}
-                  kpis={nodeKpis}
-                  liveLines={NO_LIVE_LINES}
-                  values={NO_VALUES}
-                  live={live}
-                  onOpen={setSelectedNodeId}
-                />
+                topology ? (
+                  <StageFlow
+                    stage="ingestion"
+                    title="Agentic AI ingestion"
+                    views={graphNodeViews}
+                    kpis={nodeKpis}
+                    liveLines={NO_LIVE_LINES}
+                    values={NO_VALUES}
+                    live={live}
+                    edges={topology.edges}
+                    nodeDetails={graphNodeDetails}
+                    onOpen={setSelectedNodeId}
+                  />
+                ) : (
+                  <p role="status" className="text-xs text-muted-foreground">
+                    {graphQuery.loading
+                      ? "Loading compiled graph…"
+                      : "Compiled graph topology is unavailable."}
+                  </p>
+                )
               ) : mode === "list" ? (
                 <StageNodes
                   label="Agentic pipeline nodes"
                   views={nodeViews}
                   kpis={nodeKpis}
                   liveLines={NO_LIVE_LINES}
+                  nodeDetails={graphNodeDetails}
                   onOpen={setSelectedNodeId}
                 />
               ) : (
-                <LangGraphTopology title="Ingestion Agentic AI" source={graphTopology} />
+                <LangGraphTopology
+                  title="Ingestion Agentic AI"
+                  source={graphTopology}
+                  loading={graphQuery.loading}
+                />
               )}
             </div>
             <div className="flex min-w-0 flex-col">

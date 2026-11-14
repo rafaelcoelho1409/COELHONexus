@@ -20,6 +20,8 @@ const COUNTERS_BY_NODE: Record<AgenticNodeId, readonly string[]> = {
   repair_pages: ["repair_pages", "structure_repair", "text_repair"],
   normalize_metadata: ["normalize_metadata", "metadata_normalizer"],
   classify_content: ["classify_content", "content_classifier"],
+  materialize_processed_book: ["materialize_processed_book"],
+  reconcile_contents: ["reconcile_contents", "contents_reconciler"],
   publish: ["publish"],
 };
 
@@ -35,6 +37,9 @@ const AGENT_LABELS: Readonly<Record<string, string>> = {
   metadata_normalizer: "Metadata normalizer",
   classify_content: "Select Distill pages",
   content_classifier: "Content classifier",
+  materialize_processed_book: "Build processed pages",
+  reconcile_contents: "Reconcile contents",
+  contents_reconciler: "Contents reconciler",
   publish: "Publish results",
 };
 

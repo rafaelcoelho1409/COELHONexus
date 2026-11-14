@@ -45,9 +45,73 @@ def table_cells(row: str) -> int:
     return cells - (stripped.startswith("|") + (stripped.endswith("|") and not stripped.endswith("\\|")))
 
 
+def strip_blockquote_prefix(line: str) -> str:
+    """Remove CommonMark blockquote markers so nested quoted syntax can be validated as Markdown."""
+    rest = line
+    while True:
+        marker = re.match(r"^[ \t]{0,3}>[ \t]?", rest)
+        if marker is None:
+            return rest
+        rest = rest[marker.end():]
+
+
+def contains_only_valid_markdown_images(evidence: str) -> bool:
+    """Whether every unescaped image marker in the cited evidence belongs to a complete inline image."""
+    marker_count = len(patterns.MARKDOWN_IMAGE_MARKER_RE.findall(evidence))
+    return marker_count > 0 and len(list(patterns.MARKDOWN_IMAGE_RE.finditer(evidence))) == marker_count
+
+
+def contains_only_complete_inline_links(evidence: str) -> bool:
+    """Whether every unescaped bracketed label in evidence forms a complete inline link."""
+    link_count = 0
+    cursor = 0
+    while cursor < len(evidence):
+        if evidence[cursor] != "[" or is_escaped_markdown_character(evidence, cursor):
+            cursor += 1
+            continue
+        label_end = cursor + 1
+        depth = 1
+        while label_end < len(evidence) and depth:
+            char = evidence[label_end]
+            if char in "[]" and not is_escaped_markdown_character(evidence, label_end):
+                depth += 1 if char == "[" else -1
+            label_end += 1
+        if depth:
+            return False
+        closing_bracket = label_end - 1
+        if closing_bracket + 1 >= len(evidence) or evidence[closing_bracket + 1] != "(":
+            return False
+        paren_depth = 1
+        link_end = closing_bracket + 2
+        while link_end < len(evidence) and paren_depth:
+            char = evidence[link_end]
+            if char in "()" and not is_escaped_markdown_character(evidence, link_end):
+                paren_depth += 1 if char == "(" else -1
+            link_end += 1
+        if paren_depth:
+            return False
+        link_count += 1
+        cursor = link_end
+    return link_count > 0
+
+
+def is_escaped_markdown_character(text: str, index: int) -> bool:
+    """Whether a Markdown punctuation character is escaped by an odd run of backslashes."""
+    backslashes = 0
+    index -= 1
+    while index >= 0 and text[index] == "\\":
+        backslashes += 1
+        index -= 1
+    return backslashes % 2 == 1
+
+
 def is_sound_table_head(evidence: str) -> bool:
     """Whether the evidence contains a valid GFM header and delimiter row."""
-    lines = [line.strip() for line in evidence.strip().splitlines() if line.strip()]
+    lines = [
+        strip_blockquote_prefix(line).strip()
+        for line in evidence.strip().splitlines()
+        if strip_blockquote_prefix(line).strip()
+    ]
     if not lines or not lines[0].startswith("|"):
         return False
     at = next((
@@ -70,23 +134,29 @@ def is_sound_table_head(evidence: str) -> bool:
 
 def is_valid_table_row_context(markdown: str, evidence: str) -> bool:
     """Whether a cited row is part of a valid GFM table, including short body rows."""
-    cited = evidence.strip()
+    cited = strip_blockquote_prefix(evidence.strip()).strip()
     if not cited or "\n" in cited:
         return False
     lines = markdown.splitlines()
     for index, line in enumerate(lines):
-        if cited not in line.strip() or not line.strip().startswith("|"):
+        normalized_line = strip_blockquote_prefix(line).strip()
+        if cited not in normalized_line or not normalized_line.startswith("|"):
             continue
         table_start = index
-        while table_start > 0 and lines[table_start - 1].strip().startswith("|"):
+        while table_start > 0 and strip_blockquote_prefix(lines[table_start - 1]).strip().startswith("|"):
             table_start -= 1
         delimiter_index = table_start + 1
         if (
             delimiter_index < len(lines)
-            and patterns.TABLE_DELIMITER_RE.fullmatch(lines[delimiter_index].strip())
+            and patterns.TABLE_DELIMITER_RE.fullmatch(
+                strip_blockquote_prefix(lines[delimiter_index]).strip()
+            )
         ):
-            width = table_cells(lines[delimiter_index])
-            if table_cells(lines[table_start]) == width and table_cells(line) <= width:
+            width = table_cells(strip_blockquote_prefix(lines[delimiter_index]))
+            if (
+                table_cells(strip_blockquote_prefix(lines[table_start])) == width
+                and table_cells(normalized_line) <= width
+            ):
                 return True
     return False
 
@@ -99,6 +169,22 @@ def contains_valid_escaped_ampersand(evidence: str) -> bool:
 def contains_escaped_identifier(evidence: str) -> bool:
     """Whether evidence includes an identifier whose escaped underscores render literally."""
     return patterns.ESCAPED_IDENTIFIER_RE.search(evidence) is not None
+
+
+def describes_escaped_character_missing_from_evidence(description: str, evidence: str) -> bool:
+    """Whether an explicit escaped-character claim is contradicted by its cited source text."""
+    escaped_characters = {
+        "underscore": r"\_",
+        "ampersand": r"\&",
+        "asterisk": r"\*",
+        "pipe": r"\|",
+        "exclamation mark": r"\!",
+    }
+    for name, escaped in escaped_characters.items():
+        claim = re.search(rf"\b(?:backslash[- ]?)?escaped {re.escape(name)}\b", description, re.IGNORECASE)
+        if claim is not None and escaped not in evidence:
+            return True
+    return False
 
 
 def evidence_is_valid_atx_heading(markdown: str, evidence: str) -> bool:
@@ -125,8 +211,30 @@ def is_all_evidence_valid_atx_headings(markdown: str, evidence: str) -> bool:
     )
 
 
+def evidence_contains_valid_atx_heading(markdown: str, evidence: str) -> bool:
+    """Whether at least one cited line is a non-empty, valid ATX heading in the source."""
+    return any(
+        evidence_is_valid_atx_heading(markdown, line.strip())
+        for line in evidence.splitlines()
+        if line.strip()
+    )
+
+
+def source_has_blank_line_before(markdown: str, evidence: str) -> bool:
+    """Whether every exact occurrence of the cited source begins after a blank line."""
+    starts = [match.start() for match in re.finditer(re.escape(evidence), markdown)] if evidence else []
+    if not starts:
+        return False
+    lines = markdown.splitlines()
+    return all(
+        (line_index := markdown.count("\n", 0, start)) > 0
+        and not lines[line_index - 1].strip()
+        for start in starts
+    )
+
+
 def is_sphinx_definition_list_fragment(markdown: str, evidence: str) -> bool:
-    """Whether the finding cites a Sphinx API term or its colon-prefixed definition body."""
+    """Whether the finding cites a Sphinx API term or an indented definition-list body."""
     source_lines = markdown.splitlines()
     evidence_lines = evidence.splitlines()
     start = markdown.find(evidence)
@@ -149,7 +257,138 @@ def is_sphinx_definition_list_fragment(markdown: str, evidence: str) -> bool:
             and patterns.SPHINX_TERM_LINE_RE.fullmatch(source_lines[index - 1]) is not None
         ):
             return True
+        if source_lines[index][:1].isspace() and source_lines[index].strip():
+            # Sphinx often nests version annotations and their prose inside a definition body.
+            # Walk back only through that local indented body; unrelated prose is not an API entry.
+            for previous in range(index - 1, max(-1, index - 13), -1):
+                previous_line = source_lines[previous]
+                if not previous_line.strip():
+                    continue
+                if patterns.SPHINX_TERM_LINE_RE.fullmatch(previous_line) is not None:
+                    if any(
+                        patterns.SPHINX_DEFINITION_LINE_RE.match(source_lines[body]) is not None
+                        for body in range(previous + 1, index + 1)
+                    ):
+                        return True
+                    break
+                if not previous_line[:1].isspace():
+                    break
     return False
+
+
+def is_sphinx_wrapped_prose(markdown: str, evidence: str) -> bool:
+    """Whether cited line breaks are ordinary wrapped prose inside a Sphinx definition body."""
+    start = markdown.find(evidence)
+    if start < 0 or not is_sphinx_definition_list_fragment(markdown, evidence):
+        return False
+    evidence_lines = evidence.splitlines()
+    source_lines = markdown.splitlines()
+    first_line = markdown.count("\n", 0, start)
+    for offset, (left, right) in enumerate(zip(evidence_lines, evidence_lines[1:])):
+        source_index = first_line + offset
+        if source_index + 1 >= len(source_lines):
+            continue
+        source_left, source_right = source_lines[source_index:source_index + 2]
+        if source_left.strip() != left.strip() or source_right.strip() != right.strip():
+            continue
+        if not source_left[:1].isspace() or not source_right[:1].isspace():
+            continue
+        left_text = re.sub(r"^[ \t]*:[ \t]+", "", source_left).strip()
+        right_text = source_right.strip()
+        if not left_text or not right_text:
+            continue
+        if any(re.match(r"(?:[-+*]|\d+[.)])[ \t]+|[:|>{]", text) for text in (left_text, right_text)):
+            continue
+        if (
+            patterns.SPHINX_TERM_LINE_RE.fullmatch(left_text)
+            or re.fullmatch(r"[ \t]*:[ \t]*", source_left)
+        ):
+            continue
+        # A line-ending word followed by another word is a source wrap; Markdown renderers
+        # treat this as a space, so line length alone is not a formatting defect.
+        if re.search(r"[\w,)\]]$", left_text) and re.match(r"^[a-zA-Z(\[]", right_text):
+            return True
+    return False
+
+
+def is_sphinx_signature_asterisk_style_claim(markdown: str, evidence: str, description: str) -> bool:
+    """Whether a reported odd asterisk style is a valid Sphinx italicized default parameter."""
+    claim = description.casefold()
+    if not is_sphinx_definition_list_fragment(markdown, evidence):
+        return False
+    if "asterisk" not in claim or not any(term in claim for term in ("unusual", "placement", "style", "format")):
+        return False
+    return re.search(r"\*[A-Za-z_][A-Za-z0-9_]*=[^*\n]+\*", evidence) is not None
+
+
+def is_unlabelled_plain_text_heading_claim(description: str, evidence: str) -> bool:
+    """Reject claims that treat plain text alone as proof that a heading lacks Markdown syntax."""
+    claim = description.casefold()
+    absent_marker_claim = any(phrase in claim for phrase in (
+        "missing heading marker",
+        "lacks a heading marker",
+        "without a heading marker",
+        "missing atx",
+        "not an atx heading",
+        "no atx heading marker",
+        "no markdown heading marker",
+        "not marked with #",
+        "lacks a #",
+        "missing # marker",
+        "plain text heading",
+    ))
+    if not absent_marker_claim:
+        return False
+    lines = [line.strip() for line in evidence.splitlines() if line.strip()]
+    if not lines:
+        return False
+    return all(
+        not re.match(r"^(?:#{1,6}|>|[-+*]\s|\d+[.)]\s|[\x60]{3,}|~{3,}|<)", line)
+        for line in lines
+    )
+
+
+def is_cosmetic_spacing_or_punctuation_claim(issue: agents.schemas.PageIssue) -> bool:
+    """Whether a low-severity finding asks only for whitespace or punctuation consistency."""
+    if issue.category != agents.schemas.IssueCategory.MARKDOWN_FORMATTING:
+        return False
+    if issue.severity != agents.schemas.IssueSeverity.LOW:
+        return False
+    description = issue.description.casefold()
+    cosmetic_terms = (
+        "spacing inconsistency",
+        "punctuation inconsistency",
+        "inconsistent spacing",
+        "inconsistent punctuation",
+        "extra whitespace",
+        "redundant whitespace",
+        "cosmetic spacing",
+        "cosmetic punctuation",
+        "style-only spacing",
+        "stylistic punctuation",
+        "double blank line",
+        "consecutive blank lines",
+        "blank-line spacing",
+    )
+    return any(term in description for term in cosmetic_terms)
+
+
+def description_quotes_text_missing_from_evidence(description: str, evidence: str) -> bool:
+    """Whether a source-character claim quotes a literal that is absent from its cited evidence."""
+    quoted = re.findall(r"[\x60]([^\x60\n]+)[\x60]", description)
+    # Sphinx audit explanations sometimes italicize an escaped identifier instead of
+    # putting it in code ticks. Only treat emphasis as a literal quote when it contains
+    # an escaped underscore, avoiding ordinary prose emphasis.
+    escaped_emphasis = re.findall(r"(?<!\*)\*([^*\n]*\\_[^*\n]*)\*(?!\*)", description)
+    quoted.extend(escaped_emphasis)
+    has_source_context = re.search(
+        r"\b(?:evidence|source|text|character|identifier|token|snippet|line|heading)\b",
+        description,
+        re.IGNORECASE,
+    ) is not None
+    if not quoted or not (has_source_context or escaped_emphasis):
+        return False
+    return any(value not in evidence for value in quoted)
 
 
 def is_valid_blockquote(evidence: str) -> bool:
@@ -219,7 +458,6 @@ def is_export_convention(evidence: str, *, markdown: str = "") -> bool:
     if (
         patterns.EXPORT_CONVENTION_RE.match(evidence)
         or is_sound_table_head(evidence)
-        or (markdown and is_valid_table_row_context(markdown, evidence))
     ):
         return True
     if patterns.GITBOOK_COMPONENT_TAG_RE.search(evidence) or patterns.HTML_TAG_ONLY_RE.fullmatch(evidence):
@@ -422,7 +660,12 @@ def is_scoped_repeat_across_api_entries(markdown: str, evidence: str) -> bool:
     line_starts = [0]
     line_starts.extend(match.end() for match in re.finditer("\n", markdown))
     lines = markdown.splitlines()
-    scoped_headings: set[str] = set()
+    heading_rows = []
+    for index, line in enumerate(lines):
+        match = patterns.ATX_HEADING_LINE_RE.match(line)
+        if match is not None:
+            heading_rows.append((index, len(match.group(1)), (match.group(2) or "").strip()))
+    scoped_headings: set[tuple[str, ...]] = set()
     occurrence_count = 0
     for occurrence in re.finditer(re.escape(evidence), markdown):
         occurrence_count += 1
@@ -430,14 +673,16 @@ def is_scoped_repeat_across_api_entries(markdown: str, evidence: str) -> bool:
             (index for index, start in enumerate(line_starts) if start <= occurrence.start()),
             default = 0,
         )
-        heading_index = next((
-            index
-            for index in range(line_index, -1, -1)
-            if patterns.ATX_HEADING_LINE_RE.match(lines[index]) is not None
-        ), None)
-        if heading_index is None:
+        heading_stack: list[tuple[int, str, int]] = []
+        for heading_index, level, title in heading_rows:
+            if heading_index > line_index:
+                break
+            while heading_stack and heading_stack[-1][0] >= level:
+                heading_stack.pop()
+            heading_stack.append((level, title, heading_index))
+        if not heading_stack:
             return False
-        heading = lines[heading_index].strip()
+        heading_index = heading_stack[-1][2]
         source_link_found = False
         for line in lines[heading_index + 1:min(heading_index + 5, len(lines))]:
             if not line.strip():
@@ -445,9 +690,10 @@ def is_scoped_repeat_across_api_entries(markdown: str, evidence: str) -> bool:
             if patterns.API_SOURCE_LINK_RE.fullmatch(line.strip()):
                 source_link_found = True
             break
-        if not source_link_found or heading in scoped_headings:
+        scope = tuple(title.casefold() for _level, title, _index in heading_stack)
+        if not source_link_found or scope in scoped_headings:
             return False
-        scoped_headings.add(heading)
+        scoped_headings.add(scope)
 
     return occurrence_count >= 2 and len(scoped_headings) == occurrence_count
 
@@ -491,13 +737,167 @@ def is_scoped_repeat_across_sphinx_entries(markdown: str, evidence: str, other_e
     return len(scopes) >= 2 and all(scope is not None for scope in scopes) and len(set(scopes)) == len(scopes)
 
 
+def _repeat_context_at(markdown: str, offset: int, kind: str) -> tuple | None:
+    """Return a narrowly recognized dated-update, model-variant, or tutorial scope for a source offset."""
+    prefix = markdown[:offset]
+    if kind == "update":
+        starts = list(re.finditer(r"(?m)^[ \t]*{%[ \t]*update\b[^\n]*%}[ \t]*$", prefix))
+        ends = list(re.finditer(r"(?m)^[ \t]*{%[ \t]*endupdate[ \t]*%}[ \t]*$", prefix))
+        if starts and (not ends or starts[-1].start() > ends[-1].start()):
+            return ("update", starts[-1].start())
+        return None
+
+    headings = list(re.finditer(r"(?m)^ {0,3}#{1,6}[ \t]+(?P<title>.*)$", prefix))
+    if kind == "tutorial":
+        tutorial_headings = [
+            match for match in headings
+            if (number := re.search(r"\bTUTORIAL[ \t]*#?[ \t]*(\d+)\b", match.group("title"), re.IGNORECASE))
+        ]
+        if tutorial_headings:
+            latest = tutorial_headings[-1]
+            number = re.search(r"\bTUTORIAL[ \t]*#?[ \t]*(\d+)\b", latest.group("title"), re.IGNORECASE)
+            return ("tutorial", number.group(1), latest.start()) if number else None
+        return None
+
+    if kind == "model_variant":
+        variant_re = re.compile(r"\b(?:instruct(?:ion)?|thinking|reasoning|base|chat|coder|vision|multimodal)\b", re.IGNORECASE)
+        for heading in reversed(headings):
+            title = heading.group("title").casefold()
+            variants = tuple(sorted(set(variant_re.findall(title))))
+            if not variants:
+                continue
+            base = variant_re.sub(" ", title)
+            base = re.sub(r"\b(?:guide|run|model|models|tutorial)\b", " ", base)
+            base = " ".join(re.findall(r"[a-z0-9]+", base))
+            if base:
+                return ("model_variant", base, variants, heading.start())
+    return None
+
+
+def is_contextual_repeat_across_document_sections(markdown: str, evidence: str, other_evidence: str) -> bool:
+    """Whether exact repeated blocks live in distinct dated updates, model variants, or numbered tutorials."""
+    values = {value.strip() for value in (evidence, other_evidence) if value and value.strip()}
+    offsets = sorted({
+        match.start()
+        for value in values
+        for match in re.finditer(re.escape(value), markdown)
+    })
+    if len(offsets) < 2:
+        return False
+
+    for kind in ("update", "model_variant", "tutorial"):
+        contexts = [_repeat_context_at(markdown, offset, kind) for offset in offsets]
+        if any(context is None for context in contexts) or len(set(contexts)) != len(contexts):
+            continue
+        if kind != "model_variant" or (
+            len({context[1] for context in contexts if context is not None}) == 1
+            and len({context[2] for context in contexts if context is not None}) == len(contexts)
+        ):
+            return True
+    return False
+
+
+def _installation_choice_at(markdown: str, offset: int) -> tuple[str, frozenset[str]] | None:
+    """Return a package-install method and shared heading scope for one occurrence."""
+    scope = _heading_scope_at(markdown, offset)
+    if scope is None:
+        return None
+    title = scope[0].casefold()
+    if not re.search(r"\b(?:install(?:ation)?|setup|set up)\b", title):
+        return None
+    methods = frozenset(re.findall(r"\b(?:uv|pip|pip3|conda|mamba|poetry)\b", title))
+    if not methods:
+        return None
+    shared = re.sub(r"\b(?:uv|pip3?|conda|mamba|poetry|via|with|using|for)\b", " ", title)
+    shared = " ".join(re.findall(r"[a-z0-9]+", shared))
+    return (shared, methods) if shared else None
+
+
+def is_repeat_across_distinct_installation_choices(markdown: str, evidence: str, other_evidence: str) -> bool:
+    """Whether repeated instructions are separately required by distinct install-method sections."""
+    values = {value.strip() for value in (evidence, other_evidence) if value and value.strip()}
+    offsets = sorted({
+        match.start()
+        for value in values
+        for match in re.finditer(re.escape(value), markdown)
+    })
+    scopes = [_installation_choice_at(markdown, offset) for offset in offsets]
+    if len(scopes) < 2 or any(scope is None for scope in scopes):
+        return False
+    shared_scopes = {scope[0] for scope in scopes if scope is not None}
+    choices = {scope[1] for scope in scopes if scope is not None}
+    return len(shared_scopes) == 1 and len(choices) == len(scopes)
+
+
+def is_table_presentation_only_finding(description: str) -> bool:
+    """Whether a table complaint is about optional values or link styling, not Markdown structure."""
+    normalized = description.casefold()
+    if "empty cell" in normalized and any(term in normalized for term in (
+        "valid markdown", "may indicate", "inconsistent table structure", "visual inconsistency",
+    )):
+        return True
+    if re.search(r"\bn/?a\b", normalized) and "download" in normalized and any(term in normalized for term in (
+        "badge", "instead of", "downloads column", "download count",
+    )):
+        return True
+    return (
+        any(term in normalized for term in ("missing markdown link syntax", "missing link formatting", "link style"))
+        and any(term in normalized for term in ("inconsistent", "presentation", "other rows"))
+        and not any(term in normalized for term in ("broken link", "unclosed link", "missing closing bracket"))
+    )
+
+
+def _gitbook_tab_scope_at(markdown: str, offset: int) -> tuple[str, ...] | None:
+    """Return explicit GitBook tab titles enclosing one source offset."""
+    stack: list[str] = []
+    for match in patterns.GITBOOK_TAB_MARKER_RE.finditer(markdown):
+        if match.start() >= offset:
+            break
+        if match.group("end"):
+            if stack:
+                stack.pop()
+            continue
+        title = patterns.GITBOOK_TAB_TITLE_RE.search(match.group("attrs") or "")
+        stack.append(
+            " ".join(title.group("title").split()).casefold()
+            if title is not None
+            else f"untitled-tab-{match.start()}"
+        )
+    return tuple(stack) if stack else None
+
+
+def is_repeat_across_distinct_gitbook_tabs(markdown: str, evidence: str, other_evidence: str) -> bool:
+    """Whether duplicate evidence is repeated under separately titled choice tabs."""
+    values = {value.strip() for value in (evidence, other_evidence) if value and value.strip()}
+    offsets = sorted({
+        match.start()
+        for value in values
+        for match in re.finditer(re.escape(value), markdown)
+    })
+    scopes = [_gitbook_tab_scope_at(markdown, offset) for offset in offsets]
+    return (
+        len(scopes) >= 2
+        and all(scope is not None for scope in scopes)
+        and len(set(scopes)) == len(scopes)
+    )
+
+
 def is_reported_exclamation_mark_a_figure_image(markdown: str, evidence: str, description: str) -> bool:
-    """Reject a claimed stray `!` when it is the image marker in a valid stored figure and the claim says it is solitary."""
+    """Reject a claimed stray exclamation only when it is the marker in a valid stored figure."""
     if evidence.strip() != "!" or not re.search(r"\b(?:solitary|stray)\s+exclamation\b", description, re.IGNORECASE):
         return False
-    return any(
-        "![](" in line and re.search(r"!\[\]\([^\s)]+\)", line)
-        for line in markdown.splitlines()
+    images = list(patterns.MARKDOWN_IMAGE_RE.finditer(markdown))
+    exclamations = [match.start() for match in re.finditer(r"(?<!\\)!", markdown)]
+    if not exclamations or any(
+        not any(image.start() == offset for image in images)
+        for offset in exclamations
+    ):
+        return False
+    return all(
+        (figure_open := markdown.rfind("<figure", 0, offset)) >= 0
+        and (figure_close := re.search(r"</figure\s*>", markdown[offset:], re.IGNORECASE)) is not None
+        and figure_open < offset < offset + figure_close.start()
+        for offset in exclamations
     )
 
 
@@ -521,7 +921,7 @@ def evidence_is_only_in_code_fences(markdown: str, evidence: str) -> bool:
     offset = 0
     for raw_line in markdown.splitlines(keepends = True):
         line = raw_line.rstrip("\r\n")
-        stripped = line.lstrip(" \t")
+        stripped = strip_blockquote_prefix(line).lstrip(" \t")
         marker_match = patterns.FENCE_RE.match(stripped)
         if opening is None:
             if marker_match is not None:
@@ -569,6 +969,27 @@ def sanitize_assessment(
             )
             continue
         description = issue.description.casefold()
+        if is_cosmetic_spacing_or_punctuation_claim(issue):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: low-severity spacing or punctuation preferences do not affect source structure."
+            )
+            continue
+        if (
+            issue.category in {"markdown_formatting", "malformed_heading", "encoding_artifact"}
+            and description_quotes_text_missing_from_evidence(issue.description, issue.evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: its quoted source literal is absent from the cited evidence."
+            )
+            continue
+        if (
+            issue.category in {"markdown_formatting", "malformed_heading"}
+            and is_unlabelled_plain_text_heading_claim(issue.description, issue.evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: plain text alone does not establish a malformed Markdown heading."
+            )
+            continue
         if (
             issue.category in {"markdown_formatting", "other"}
             and is_variadic_parameter_naming_preference(issue.description)
@@ -603,6 +1024,14 @@ def sanitize_assessment(
             continue
         if (
             issue.category in {"markdown_formatting", "malformed_heading"}
+            and describes_escaped_character_missing_from_evidence(description, issue.evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: the cited evidence does not contain the escaped character named in its description."
+            )
+            continue
+        if (
+            issue.category in {"markdown_formatting", "malformed_heading"}
             and evidence_is_valid_atx_heading(markdown, issue.evidence)
             and (
                 "colon" in description
@@ -625,8 +1054,75 @@ def sanitize_assessment(
             continue
         if (
             issue.category in {"markdown_formatting", "malformed_heading"}
+            and evidence_contains_valid_atx_heading(markdown, issue.evidence)
+            and any(term in description for term in ("empty heading", "heading has no text", "heading is empty"))
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: the evidence contains a valid non-empty ATX heading."
+            )
+            continue
+        if (
+            issue.category in {"markdown_formatting", "malformed_heading"}
+            and "blank line" in description
+            and "before" in description
+            and "heading" in description
+            and evidence_contains_valid_atx_heading(markdown, issue.evidence)
+            and source_has_blank_line_before(markdown, issue.evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: the cited heading already has a blank line before it."
+            )
+            continue
+        if (
+            issue.category == "markdown_formatting"
+            and "blank line" in description
+            and "before" in description
+            and "table" in description
+            and is_sound_table_head(issue.evidence)
+            and source_has_blank_line_before(markdown, issue.evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: the cited table already has a blank line before it."
+            )
+            continue
+        if (
+            issue.category == "markdown_formatting"
+            and "alignment" in description
+            and "row" in description
+            and not any(
+                patterns.TABLE_DELIMITER_RE.fullmatch(strip_blockquote_prefix(line).strip())
+                for line in issue.evidence.splitlines()
+            )
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: the cited evidence contains no table alignment delimiter row."
+            )
+            continue
+        if (
+            issue.category in {"markdown_formatting", "other"}
+            and any(term in description for term in ("image", "parenthesis", "absolute path", "adjacent image"))
+            and contains_only_valid_markdown_images(issue.evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: every cited Markdown image marker has complete inline syntax."
+            )
+            continue
+        if (
+            issue.category == "markdown_formatting"
+            and any(term in description for term in ("broken link", "missing closing bracket", "unclosed link"))
+            and contains_only_complete_inline_links(issue.evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: every cited bracketed label forms a complete inline Markdown link."
+            )
+            continue
+        if (
+            issue.category in {"markdown_formatting", "malformed_heading", "encoding_artifact"}
             and is_sphinx_definition_list_fragment(markdown, issue.evidence)
-            and any(term in description for term in ("format", "syntax", "heading", "colon", "space", "indent", "definition"))
+            and any(term in description for term in (
+                "format", "syntax", "heading", "colon", "space", "indent", "definition",
+                "encoding", "escape", "underscore", "backslash",
+            ))
         ):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: the cited API signature uses Sphinx definition-list syntax."
@@ -634,9 +1130,29 @@ def sanitize_assessment(
             continue
         if (
             issue.category == "markdown_formatting"
+            and is_sphinx_signature_asterisk_style_claim(markdown, issue.evidence, issue.description)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: the asterisk markup is a valid Sphinx default-parameter signature."
+            )
+            continue
+        if (
+            issue.category == "markdown_formatting"
+            and is_sphinx_wrapped_prose(markdown, issue.evidence)
+            and any(term in description for term in (
+                "line break", "line-break", "line wrap", "wrapped", "wrapping", "paragraph flow",
+                "readability", "visual flow", "rendering",
+            ))
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: the cited line break is ordinary wrapped prose in a Sphinx definition body."
+            )
+            continue
+        if (
+            issue.category == "markdown_formatting"
             and is_valid_blockquote(issue.evidence)
             and "blockquote" in description
-            and any(term in description for term in ("heading", "tagline", "unconventional", "descriptive statement"))
+            and any(term in description for term in ("heading", "tagline", "unconventional", "descriptive statement", "unusual"))
         ):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: valid blockquote use is a source-style choice, not a Markdown defect."
@@ -654,10 +1170,10 @@ def sanitize_assessment(
         if (
             issue.category == "markdown_formatting"
             and is_valid_table_row_context(markdown, issue.evidence)
-            and any(term in description for term in ("missing link formatting", "inconsistent presentation"))
+            and is_table_presentation_only_finding(issue.description)
         ):
             warnings.append(
-                f"Discarded finding {issue.issue_id}: link-style consistency in a valid table is editorial, not an ingestion defect."
+                f"Discarded finding {issue.issue_id}: optional table values or link styling in a valid GFM row are not a Markdown defect."
             )
             continue
         if (
@@ -703,12 +1219,22 @@ def sanitize_assessment(
             )
             continue
         if (
-            issue.category == "markdown_formatting"
+            issue.category in {"markdown_formatting", "malformed_heading", "encoding_artifact"}
             and contains_escaped_identifier(issue.evidence)
-            and any(term in description for term in ("underscore", "escape", "backslash"))
+            and any(term in description for term in ("underscore", "escape", "backslash", "encoding"))
         ):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: escaped underscores are valid in a Markdown identifier."
+            )
+            continue
+        if (
+            issue.category == "markdown_formatting"
+            and r"\*" in issue.evidence
+            and "asterisk" in description
+            and any(term in description for term in ("unnecessary", "unneeded"))
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: the cited escaped asterisk is valid Markdown punctuation."
             )
             continue
         if (
@@ -730,6 +1256,30 @@ def sanitize_assessment(
         if issue.category in params.DUPLICATE_CATEGORIES and not is_repeat(markdown, issue.evidence, issue.other_evidence):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: its evidence occurs once on the page and no second copy was found, so nothing is repeated."
+            )
+            continue
+        if (
+            issue.category in params.DUPLICATE_CATEGORIES
+            and is_contextual_repeat_across_document_sections(markdown, issue.evidence, issue.other_evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: repeated content appears under distinct dated updates, model variants, or tutorials."
+            )
+            continue
+        if (
+            issue.category in params.DUPLICATE_CATEGORIES
+            and is_repeat_across_distinct_installation_choices(markdown, issue.evidence, issue.other_evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: repeated setup instructions belong to distinct package-installation choices."
+            )
+            continue
+        if (
+            issue.category in params.DUPLICATE_CATEGORIES
+            and is_repeat_across_distinct_gitbook_tabs(markdown, issue.evidence, issue.other_evidence)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: repeated content appears under distinct GitBook choice tabs."
             )
             continue
         if (
@@ -757,7 +1307,13 @@ def sanitize_assessment(
             )
             continue
         if (
-            issue.category in params.DUPLICATE_CATEGORIES
+            (
+                issue.category in params.DUPLICATE_CATEGORIES
+                or (
+                    issue.category == "markdown_formatting"
+                    and any(term in description for term in ("duplicate", "duplicated", "repeated", "repeats"))
+                )
+            )
             and is_scoped_repeat_across_sphinx_entries(markdown, issue.evidence, issue.other_evidence)
         ):
             warnings.append(
@@ -796,7 +1352,7 @@ def prose_lines(markdown: str) -> list[tuple[int, str]]:
     opening: tuple[str, int] | None = None
     for raw in markdown.splitlines(keepends = True):
         line = raw.rstrip("\r\n")
-        stripped = line.lstrip(" \t")
+        stripped = strip_blockquote_prefix(line).lstrip(" \t")
         fence = patterns.FENCE_RE.match(stripped)
         if opening is None and fence:
             opening = (fence.group(1)[0], len(fence.group(1)))

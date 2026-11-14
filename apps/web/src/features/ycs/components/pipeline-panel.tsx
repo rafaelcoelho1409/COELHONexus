@@ -94,6 +94,23 @@ function toSnapshot(query: { data: unknown; isError: boolean; error: unknown }):
   return taskSnapshotSchema.parse(query.data ?? {});
 }
 
+function nodeSnapshot(snapshot: PhaseSnapshot, node: "playwright" | "elasticsearch"): PhaseSnapshot {
+  const progress = snapshot.meta?.node_progress?.[node];
+  if (!progress) return snapshot;
+  return {
+    ...snapshot,
+    meta: {
+      ...(snapshot.meta ?? {}),
+      phase: progress.phase,
+      current: progress.current,
+      total: progress.total,
+      completed_ids: progress.completed_ids,
+      failed_ids: progress.failed_ids,
+      no_transcript_ids: progress.no_transcript_ids,
+    },
+  };
+}
+
 export function PipelinePanel({
   tracking,
   onPhaseDone,
@@ -130,8 +147,8 @@ export function PipelinePanel({
   const qdrantSnap = toSnapshot(qdrantQuery);
   const neo4jSnap = toSnapshot(neo4jQuery);
   const snapshots: Record<PipelinePrefix, PhaseSnapshot> = {
-    playwright: extractSnap,
-    elasticsearch: extractSnap,
+    playwright: nodeSnapshot(extractSnap, "playwright"),
+    elasticsearch: nodeSnapshot(extractSnap, "elasticsearch"),
     qdrant: qdrantSnap,
     neo4j: neo4jSnap,
   };
@@ -173,10 +190,7 @@ export function PipelinePanel({
   const [wipeLine, setWipeLine] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (allTerminal || stopped) {
-      setNow(Date.now());
-      return;
-    }
+    if (allTerminal || stopped) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [allTerminal, stopped]);

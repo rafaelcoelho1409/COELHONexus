@@ -23,12 +23,19 @@ def ingestion_graph(checkpointer: Any | None = None):
     workflow.add_node("repair_pages", nodes.ingestion.repair_pages.node.repair_pages)
     workflow.add_node("normalize_metadata", nodes.ingestion.metadata_normalization.node.normalize_metadata)
     workflow.add_node("classify_content", nodes.ingestion.content_classification.node.classify_content)
+    workflow.add_node(
+        "materialize_processed_book",
+        nodes.ingestion.materialize_processed_book.node.materialize_processed_book,
+    )
+    workflow.add_node("reconcile_contents", nodes.ingestion.reconcile_contents.node.reconcile_contents)
     workflow.add_node("publish", nodes.ingestion.publish.node.publish)
     workflow.add_edge(START, "audit_batch")
     workflow.add_edge("audit_batch", "plan_repairs")
     workflow.add_edge("plan_repairs", "repair_pages")
     workflow.add_edge("repair_pages", "normalize_metadata")
     workflow.add_edge("normalize_metadata", "classify_content")
-    workflow.add_edge("classify_content", "publish")
+    workflow.add_edge("classify_content", "materialize_processed_book")
+    workflow.add_edge("materialize_processed_book", "reconcile_contents")
+    workflow.add_edge("reconcile_contents", "publish")
     workflow.add_edge("publish", END)
     return workflow.compile(checkpointer = checkpointer)

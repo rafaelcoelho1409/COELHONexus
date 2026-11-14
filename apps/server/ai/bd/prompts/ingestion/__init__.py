@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from . import (
     content_classifier,
+    contents_reconciler,
     finding_verifier,
     metadata_normalizer,
     page_auditor,
@@ -12,6 +13,7 @@ from . import (
 
 __all__ = [
     "content_classifier",
+    "contents_reconciler",
     "finding_verifier",
     "metadata_normalizer",
     "page_auditor",

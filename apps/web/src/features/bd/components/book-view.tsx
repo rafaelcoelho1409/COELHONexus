@@ -29,6 +29,7 @@ import {
   useCancelAgenticRun,
   useCancelBook,
   useContentSelection,
+  useProcessedBook,
   useResumeAgenticRun,
   useRunBook,
   useSnapshot,
@@ -126,6 +127,11 @@ function BookDetail({
     bookId,
     agentic.status === "done" ? (agentic.run?.agentic_run_id ?? null) : null,
   );
+  const processedBook = useProcessedBook(
+    bookId,
+    agentic.status === "done" ? (agentic.run?.agentic_run_id ?? null) : null,
+    activeView === "materials",
+  );
   const runBook = useRunBook();
   const cancelBook = useCancelBook();
   const cancelAgentic = useCancelAgenticRun();
@@ -139,17 +145,51 @@ function BookDetail({
   const { state, status } = run;
   const live = isLive(status);
 
-  const rows = mergePages(manifest.pages, state.pages);
+  const allRows = mergePages(manifest.pages, state.pages);
+  const flags = pageFlags(agentic.run);
+  const includedSourcePages = new Set(
+    contentSelection.data?.pages
+      .filter((item) => item.disposition === "include")
+      .map((item) => item.page_number) ?? [],
+  );
+  const sourceRowsByPage = new Map(allRows.map((row) => [row.page, row]));
+  const rows =
+    activeView === "materials" && agentic.status === "done"
+      ? processedBook.data
+        ? processedBook.data.pages
+            .map((item) => sourceRowsByPage.get(item.source_page_number))
+            .filter((row): row is NonNullable<typeof row> => row !== undefined)
+        : contentSelection.data
+          ? allRows.filter((row) => includedSourcePages.has(row.page) && flags.get(row.page) !== "blank")
+          : allRows
+      : allRows;
+  const processedNumbers = new Map(
+    processedBook.data
+      ? processedBook.data.pages.map((item) => [item.source_page_number, item.processed_page_number] as const)
+      : activeView === "materials" && agentic.status === "done"
+        ? rows.map((row, index) => [row.page, index + 1] as const)
+        : [],
+  );
   const extracted = new Set(rows.map((row) => row.page));
   const title = (state.title ?? manifest.title).trim() || manifest.filename;
   const nPages = state.nPages ?? manifest.n_pages;
   const total = Math.max(state.total, nPages);
   const completed = Math.max(state.completed, snapshot.progress?.completed ?? 0, rows.length);
   // The stream's `started` event is newer than the manifest; before it arrives (or when nothing is live) the manifest has them.
-  const tree = chapterTree(
+  const originalTree = chapterTree(
     state.chapters.length > 0 ? state.chapters : manifest.chapters,
     state.outline.length > 0 ? state.outline : manifest.outline,
   );
+  const processedOutline =
+    processedBook.data?.contents.map((entry) => ({
+      level: entry.level,
+      title: entry.title,
+      page: entry.source_page_number,
+    })) ?? [];
+  const tree =
+    activeView === "materials" && processedBook.data && processedOutline.length > 0
+      ? chapterTree([], processedOutline)
+      : originalTree;
 
   // Follow the newest page while the run is live when the book is opened; a reader's own choice turns it off.
   const [view, setView] = useState<{ follow: boolean; picked: number | null }>(() => {
@@ -163,7 +203,7 @@ function BookDetail({
         (remembered !== null && rows.some((candidate) => candidate.page === remembered) ? remembered : null),
     };
   });
-  const page = shownPage(view, state.newest, rows);
+  const page = shownPage(view, view.follow ? (rows.at(-1)?.page ?? state.newest) : state.newest, rows);
   const row = rows.find((candidate) => candidate.page === page);
   const { layout, update: updateLayout } = useReaderLayout();
   // The reading window: null while closed, else the heading the reader was at on the page.
@@ -185,9 +225,12 @@ function BookDetail({
   });
   const activeHeading = useScrollSpy(content.outlineIds, `${reading !== null}:${page}:${content.version}`);
   const hasOutline = content.outline.length >= 2;
-  const flags = pageFlags(agentic.run);
   const reviewPages = agentic.run?.review_pages ?? [];
-  const nextReview = neighbourReviewPage(reviewPages, page, 1);
+  const nextReview = neighbourReviewPage(
+    reviewPages.filter((candidate) => rows.some((item) => item.page === candidate)),
+    page,
+    1,
+  );
 
   // After a search jumps to a heading on another page, scroll there once that page has rendered.
   const pendingHeading = useRef<string | null>(null);
@@ -330,6 +373,7 @@ function BookDetail({
           tree={tree}
           activePage={page}
           unitLabel={units.singular}
+          pageLabels={processedNumbers}
           isExtracted={(candidate) => extracted.has(candidate)}
           onOpenPage={choosePage}
         />
@@ -346,13 +390,26 @@ function BookDetail({
           selection={contentSelection.data ?? null}
           selectionPending={agentic.status === "done" && contentSelection.isPending}
           selectionError={agentic.status === "done" && contentSelection.isError}
+          processedNumbers={processedNumbers}
+          showExcludedPages={false}
           onFollow={(follow) => setView({ follow, picked: null })}
           onPick={choosePage}
         />
       </div>
     </>
   );
-  const position = `${page ?? 0} / ${nPages > 0 ? nPages : total || rows.length}`;
+  const currentProcessedPage =
+    page === null
+      ? 0
+      : (processedNumbers.get(page) ??
+        (activeView === "materials" ? rows.findIndex((item) => item.page === page) + 1 : page));
+  const displayedPageCount =
+    activeView === "materials" && agentic.status === "done"
+      ? (processedBook.data?.source_page_count ?? rows.length)
+      : nPages > 0
+        ? nPages
+        : total || rows.length;
+  const position = `${currentProcessedPage} / ${displayedPageCount}`;
   const unitLabel = `${units.singular[0]?.toUpperCase()}${units.singular.slice(1)}`;
   const outlineView = hasOutline ? <PageOutline entries={content.outline} activeId={activeHeading} /> : null;
   const showOutlineColumn = layout.outline && hasOutline;
@@ -628,6 +685,18 @@ function BookDetail({
         />
       </section>
       <section aria-label="Pages" hidden={activeView !== "materials"} className="mt-4">
+        {agentic.status === "done" && processedBook.isError ? (
+          <p role="status" className="mb-3 text-sm text-warning-text">
+            The processed page map is unavailable. Showing selected pages in original source order.
+          </p>
+        ) : null}
+        {processedBook.data && processedBook.data.contents_status !== "complete" ? (
+          <p role="status" className="mb-3 text-sm text-warning-text">
+            {processedBook.data.contents_status === "unavailable"
+              ? "The contents outline could not be reconciled. Processed pages and source citations are preserved."
+              : "Some contents page links need review. Processed pages and source citations are preserved."}
+          </p>
+        ) : null}
         {!reading ? (
           <div className={`flex flex-col gap-4 lg:grid ${columns}`}>
             {layout.contents ? (
@@ -652,11 +721,17 @@ function BookDetail({
               bookMetadata={{
                 status,
                 sizeBytes: manifest.size_bytes,
-                pageCount: nPages,
+                pageCount: displayedPageCount,
               }}
               page={page}
               row={row}
-              nPages={nPages}
+              nPages={displayedPageCount}
+              processedPageNumber={
+                activeView === "materials" && agentic.status === "done" ? currentProcessedPage : undefined
+              }
+              processedPageCount={
+                activeView === "materials" && agentic.status === "done" ? displayedPageCount : undefined
+              }
               units={units}
               content={content}
               toolbar={toolbar}
@@ -689,7 +764,13 @@ function BookDetail({
               bookId={bookId}
               page={page}
               row={row}
-              nPages={nPages}
+              nPages={displayedPageCount}
+              processedPageNumber={
+                activeView === "materials" && agentic.status === "done" ? currentProcessedPage : undefined
+              }
+              processedPageCount={
+                activeView === "materials" && agentic.status === "done" ? displayedPageCount : undefined
+              }
               units={units}
               content={content}
               framed={false}

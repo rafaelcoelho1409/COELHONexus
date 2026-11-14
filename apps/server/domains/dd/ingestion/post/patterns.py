@@ -55,6 +55,14 @@ H1_PREFIX_RE = re.compile(r"^(#\s+[^\n]+)\n+", re.MULTILINE)
 # collide under the same handful of slugs. Split on this instead when present.
 UPDATE_TAG_RE = re.compile(r'<Update\s+label="([^"]+)"')
 
+# Changelogs such as Claude Code use a standalone bold semantic-version line
+# instead of a heading or Mintlify Update tag. Anchoring the full line avoids
+# treating inline version mentions as release boundaries.
+CHANGELOG_VERSION_LINE_RE = re.compile(
+    r"^[ \t]*\*\*(?P<label>v?\d+(?:\.\d+){1,3}(?:[-+][A-Za-z0-9.-]+)?)\*\*[ \t]*$",
+    re.MULTILINE,
+)
+
 # Slug marker for a changelog-release sub-page — post.service reads this back
 # to tag the manifest entry `tier = "changelog"` (see domain.split_monolith's
 # changelog branch); corpus_load filters on that tier.

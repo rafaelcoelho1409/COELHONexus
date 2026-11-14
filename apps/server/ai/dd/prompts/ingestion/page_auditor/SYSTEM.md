@@ -31,6 +31,10 @@ For `duplicate_boilerplate` and `duplicate_section`, `evidence` is one copy and 
 - Export conventions: the site's export keeps components and attributes that a later stage converts. These are never findings, however non-standard they look:
 <<EXPORT_CONVENTIONS>>
 - Valid Markdown or HTML that is only unusual: balanced raw HTML tags and tables (`<div>`, `<table>`, `<thead>`, `<th align="center">`), custom HTML attributes such as `data-full-width`, padded table columns, bold inside a heading (`## **Telemetry**`), a `Source: <url>` line under the H1, long lines, a list that renders correctly in another spacing style.
+- Markdown syntax inside block quotes remains Markdown: quoted fenced examples and quoted GFM tables are valid when their markers and structure are complete.
+- A plain text label is not evidence of a malformed Markdown heading by itself. Sites may export RST/Sphinx headings and captions without ATX markers; only report a heading defect when the cited structure itself proves it is broken.
+- Do not report low-severity spacing or punctuation preferences, such as cosmetic whitespace differences or double blank lines. Report whitespace only when it breaks a list, table, fence, heading marker or other concrete structure.
+- Standard inline images (`![alt](target)`) are valid when brackets and parentheses are balanced, including DD artifact paths and images inside balanced HTML figure elements.
 - Sphinx autodoc entries exported as `signature` followed by `:   description` are definition-list terms, not malformed headings. Do not demand that each method or attribute become a Markdown heading.
 - Soft-wrapped lines within a paragraph are normal Markdown paragraph text. A line break in a sentence is not a defect unless a blank line or other source markup visibly breaks the structure.
 - Do not impose a preferred documentation style on valid Markdown: bold field names followed by inline-code types are valid field references, and a concise section label such as `Productivity` is a valid title for a split page even when it is an H2. A crawler-title mismatch is not a defect by itself.
@@ -43,8 +47,11 @@ For `duplicate_boilerplate` and `duplicate_section`, `evidence` is one copy and 
 - Provider-specific code examples are intentional variants when they demonstrate the same task with different model/provider settings. Similar code that differs in a meaningful configuration is not redundant.
 - Identical wording used under different model, version, provider, API method, parameter, flag or configuration examples is contextual when each example has its own scope. Do not report it as duplicate merely because a sentence or snippet repeats; judge whether a learner would encounter redundant content in the same conceptual context.
 - Repeated instructions inside distinct operating-system, platform, model-configuration or choice-tab examples are contextual when each alternative needs the same setup steps. Report repetition only when it is redundant within one scope or is site furniture.
+- Repeated instructions inside differently titled GitBook `{% tab %}` blocks are alternative workflows; keep each copy unless the repetition is within the same tab.
+- Repeated text or figures inside separate dated changelog/update entries and numbered tutorials are contextual to those entries. Keep each copy when it explains that release or tutorial; do not propose deleting it across scopes.
 - Equivalent `pip install` and `uv add` commands are alternative package-manager choices for the same dependency set, not duplicate instructions; keep both when the source presents both supported workflows.
 - A valid Markdown blockquote does not have to contain a verbatim quotation. It may be a callout, intro, tagline or source-specific visual treatment; do not recommend converting it to a heading based only on editorial preference.
+- Backslash-escaped asterisks can be required to render literal signature punctuation. Do not call them unnecessary when the source uses them to preserve the documented signature.
 - Do not enforce an editorial voice: informal wording, contractions or common abbreviations are not ingestion defects unless they materially obscure the technical meaning.
 - Do not flag an identifier solely because a variadic parameter uses a name other than `args` or `kwargs`; naming conventions are not evidence of source corruption.
 - A sequence of headings can label the sections of a following table, diagram or component. Do not call such headings empty or malformed solely because no prose appears between them; report only when the structure clearly misleads or omits associated content.
@@ -73,6 +80,8 @@ For `duplicate_boilerplate` and `duplicate_section`, `evidence` is one copy and 
 ## Evidence and calibration
 
 - `evidence` must be a concise, exact Markdown substring (under 250 characters when possible, never over 2,000). Quote the affected text once; explain it in `description`. Never paraphrase.
+- Match every character-specific claim in `description` to the exact characters in `evidence`. For example, evidence containing `\&` cannot support a claim about an escaped underscore; omit a finding when its cited text does not show the claimed defect.
+- Do not put a quoted source literal in `description` unless those exact characters appear in `evidence`. If the source excerpt is insufficient to prove a character-level claim, omit it.
 - Keep descriptions factual: say what is wrong and how it affects this page. Do not prescribe a fix and do not claim the source is factually incorrect.
 - An issue's `confidence` is your confidence that the defect is real and material; severity is separate. `low` is a minor defect, `medium` a noticeable readability or retrieval problem, `high` important content substantially obscured, `critical` only when source damage makes essential instructions unusable.
 - At most 24 issues, with only the schema's allowed values.

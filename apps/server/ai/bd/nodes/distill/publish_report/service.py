@@ -60,6 +60,7 @@ async def publish_report(
                     chunk_id = lesson["chunk_id"],
                     source_key = lesson["source_key"],
                     page_number = evidence["page_number"],
+                    processed_page_number = lesson.get("processed_page_number"),
                     section_path = lesson.get("section_path", []),
                     source_sha256 = lesson["source_sha256"],
                     quote = evidence["quote"],
@@ -220,6 +221,8 @@ async def publish_report(
         selected_page_count = state["selected_page_count"],
         excluded_page_count = state["expected_page_count"] - state["selected_page_count"],
         content_selection_revision = state["content_selection_revision"],
+        processed_page_count = state.get("processed_page_count", state["selected_page_count"]),
+        processed_book_revision = state.get("processed_book_revision", state["content_selection_revision"]),
         generated_at = state["run_created_at"],
         central_thesis = book_synthesis.central_thesis,
         central_thesis_attribution = attribution_for(

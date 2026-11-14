@@ -44,7 +44,11 @@ async def normalize_source(source: str) -> tuple[str, dict[str, int]]:
                 "trailing_rules_stripped", "blank_lines_collapsed", "trailing_ws_lines",
                 "malformed_links_fixed",
                 "api_entries_repaired",
+                "optimum_create_register_returns_repaired",
+                "optimum_fx_return_sections_repaired",
+                "api_return_export_duplicates_removed",
                 "indented_label_lists_repaired",
+                "escaped_table_row_pipes_fixed",
             }
         }
         return normalized.body, mechanical_fixes
@@ -267,6 +271,7 @@ async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> d
             {
                 "idx": entry.idx,
                 "slug": entry.slug,
+                "agent_framework_slug": getattr(store, "agent_framework_slug", store.framework_slug),
                 "url": entry.url,
                 "source_path": entry.source_path,
                 "tier": entry.tier,
@@ -289,6 +294,12 @@ async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> d
 
     candidate_digest = domain.candidate_digest(
         [(page["idx"], page["source_sha256"]) for page in page_refs]
+    )
+    source_snapshot = domain.sha256_text(
+        json.dumps(
+            [(page["idx"], page["source_sha256"]) for page in sorted(page_refs, key=lambda item: item["idx"])],
+            separators=(",", ":"),
+        )
     )
     if progress is not None:
         await progress.start(tier="agentic_normalization", total=len(page_refs))
@@ -363,6 +374,10 @@ async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> d
         "pages": len(outputs),
         "empty_pages_dropped": empty_pages_dropped,
         "normalizer": params.NORMALIZER_VERSION,
+        "source_snapshot": {
+            "sha256": source_snapshot,
+            "page_count": len(page_refs),
+        },
         "quality": result.get("quality_summary") or {},
     }
 

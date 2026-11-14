@@ -134,11 +134,18 @@ async def normalize_pages(
         source_sha256 = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
         if source_sha256 != audit["source_sha256"]:
             raise ValueError(f"page {page['idx']} changed after its audit")
-        if len(markdown) > page_audit.params.MAX_PAGE_MARKDOWN_CHARS:
-            raise ValueError(
-                f"page {page['idx']} exceeds the {page_audit.params.MAX_PAGE_MARKDOWN_CHARS}-character "
-                "repair limit; split or escalate it instead of truncating"
+        oversized = len(markdown) > page_audit.params.MAX_PAGE_MARKDOWN_CHARS
+        if oversized and audit.get("audit_status") != "unavailable":
+            audit_error = (
+                f"page exceeds the {page_audit.params.MAX_PAGE_MARKDOWN_CHARS}-character audit/repair limit; "
+                "retained without truncation"
             )
+            audit = {
+                **audit,
+                "audit_status": "unavailable",
+                "audit_error": audit_error,
+                "warnings": [*(audit.get("warnings") or []), audit_error],
+            }
 
         output_key = domains.dd.ingestion.storage.keys.agentic_page_key(
             framework_slug,
@@ -205,7 +212,11 @@ async def normalize_pages(
         patch_report = {"accepted": [], "rejected": []}
         # Only findings a patch could pass reach the repairer; a repair that cannot be obtained must not fail the run,
         # because the audited original is already a valid page.
-        repair_input = page_repair.domain.repairable_assessment(audit["assessment"])
+        repair_input = (
+            {"issues": []}
+            if oversized or audit.get("audit_status") == "unavailable"
+            else page_repair.domain.repairable_assessment(audit["assessment"])
+        )
         repair = {
             "status": "not_needed",
             "total_issues": len(audit["assessment"]["issues"]),
@@ -220,7 +231,7 @@ async def normalize_pages(
             ):
                 try:
                     normalized, patch_report = await page_repair.node.repair_page(
-                        framework_slug,
+                        page.get("agent_framework_slug") or framework_slug,
                         page,
                         markdown,
                         audit["source_sha256"],

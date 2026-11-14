@@ -13,6 +13,7 @@ class PageReference(TypedDict):
 
     idx: int
     slug: str
+    agent_framework_slug: NotRequired[str]
     url: str
     source_path: NotRequired[str]
     tier: str
